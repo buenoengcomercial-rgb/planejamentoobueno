@@ -199,29 +199,30 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
               </td>
             </tr>
           )}
-          {c.inputs.map(i => {
+          {c.inputs.map((i, rowIdx) => {
             const unitDisc = money2(i.unitPrice * discFactor);
             const totalDisc = money2(i.coefficient * unitDisc);
+            const gridId = `additive-analytic-${c.id}`;
             return (
               <tr key={i.id} className="border-t border-border/50">
                 <td className="px-1.5 py-1 font-mono align-middle">
                   {editable ? (
-                    <TextCell value={i.code} onCommit={v => patchInput(i.id, { code: v })} className="h-6 w-full text-[11px] font-mono px-1" />
+                    <TextCell value={i.code} onCommit={v => patchInput(i.id, { code: v })} className="h-6 w-full text-[11px] font-mono px-1" gridId={gridId} rowIndex={rowIdx} colIndex={0} />
                   ) : i.code}
                 </td>
                 <td className="px-1.5 py-1 align-middle">
                   {editable ? (
-                    <TextCell value={i.bank} onCommit={v => patchInput(i.id, { bank: v })} className="h-6 w-full text-[11px] px-1" />
+                    <TextCell value={i.bank} onCommit={v => patchInput(i.id, { bank: v })} className="h-6 w-full text-[11px] px-1" gridId={gridId} rowIndex={rowIdx} colIndex={1} />
                   ) : i.bank}
                 </td>
                 <td className="px-1.5 py-1 align-middle">
                   {editable ? (
-                    <TextCell value={i.description} onCommit={v => patchInput(i.id, { description: v })} className="h-6 w-full text-[11px] px-1" />
+                    <TextCell value={i.description} onCommit={v => patchInput(i.id, { description: v })} className="h-6 w-full text-[11px] px-1" gridId={gridId} rowIndex={rowIdx} colIndex={2} />
                   ) : i.description}
                 </td>
                 <td className="px-1.5 py-1 align-middle">
                   {editable ? (
-                    <TextCell value={i.unit} onCommit={v => patchInput(i.id, { unit: v })} className="h-6 w-full text-[11px] px-1" />
+                    <TextCell value={i.unit} onCommit={v => patchInput(i.id, { unit: v })} className="h-6 w-full text-[11px] px-1" gridId={gridId} rowIndex={rowIdx} colIndex={3} />
                   ) : i.unit}
                 </td>
                 <td className="px-1.5 py-1 text-right align-middle">
@@ -230,6 +231,7 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
                       value={i.coefficient}
                       onCommit={n => patchInput(i.id, { coefficient: n })}
                       className="h-6 w-full text-[11px] text-right px-1"
+                      gridId={gridId} rowIndex={rowIdx} colIndex={4}
                     />
                   ) : i.coefficient.toLocaleString('pt-BR')}
                 </td>
@@ -239,6 +241,7 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
                       value={i.unitPrice}
                       onCommit={n => patchInput(i.id, { unitPrice: n })}
                       className="h-6 w-full text-[11px] text-right px-1"
+                      gridId={gridId} rowIndex={rowIdx} colIndex={5}
                     />
                   ) : fmtBRL(i.unitPrice)}
                 </td>
