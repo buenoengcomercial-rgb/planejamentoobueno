@@ -185,6 +185,15 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
         active={active}
       />
 
+      <AdditiveSyntheticConflictDialog
+        open={actions.syntheticConflict.open}
+        onOpenChange={actions.syntheticConflict.setOpen}
+        blocked={actions.syntheticConflict.blocked}
+        onCancel={actions.syntheticConflict.onCancel}
+        onCreateNew={actions.syntheticConflict.onCreateNew}
+        onMergePreserving={actions.syntheticConflict.onMergePreserving}
+      />
+
       <AlertDialog open={!!confirmDeleteId} onOpenChange={o => !o && setConfirmDeleteId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
