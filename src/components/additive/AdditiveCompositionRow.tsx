@@ -155,25 +155,25 @@ function AdditiveCompositionRowImpl({
             className="h-7 w-full text-xs text-right"
           />
         </td>
-        <td className={`px-2 py-2 text-right ${G_BG.qty}`}>
+        <td className={`px-2 py-2 text-right ${G_BG.suppressed} text-rose-700`}>
           <Input
             type="number" step="0.0001" min={0}
             value={c.suppressedQuantity ?? 0}
             disabled={isLocked || isNew || hasMemory}
             onChange={e => onUpdateComposition(c.id, { suppressedQuantity: Number(e.target.value) || 0 })}
             onBlur={e => onUpdateQuantity(c.id, 'suppressedQuantity', Number(e.target.value) || 0)}
-            className="h-7 w-full text-xs text-right border-rose-200"
+            className="h-7 w-full text-xs text-right border-rose-200 text-rose-700"
             title={hasMemory ? 'Calculado pela memória de cálculo' : undefined}
           />
         </td>
-        <td className={`px-2 py-2 text-right ${G_BG.qty}`}>
+        <td className={`px-2 py-2 text-right ${G_BG.added} text-emerald-700`}>
           <Input
             type="number" step="0.0001" min={0}
             value={c.addedQuantity ?? 0}
             disabled={isLocked || hasMemory}
             onChange={e => onUpdateComposition(c.id, { addedQuantity: Number(e.target.value) || 0 })}
             onBlur={e => onUpdateQuantity(c.id, 'addedQuantity', Number(e.target.value) || 0)}
-            className="h-7 w-full text-xs text-right border-emerald-200"
+            className="h-7 w-full text-xs text-right border-emerald-200 text-emerald-700"
             title={hasMemory ? 'Calculado pela memória de cálculo' : undefined}
           />
         </td>
