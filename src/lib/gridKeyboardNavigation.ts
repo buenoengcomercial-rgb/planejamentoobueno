@@ -115,15 +115,17 @@ export function handleGridKeyDown(e: React.KeyboardEvent<HTMLElement>) {
 
   const cells = getCells(gridId);
   if (cells.length === 0) return;
+  const idx = cells.findIndex(c => c.el === el);
+  if (idx < 0) return;
 
   let target: HTMLElement | null = null;
-  if (k === 'ArrowDown') target = findInCol(cells, row, col, +1);
-  else if (k === 'ArrowUp') target = findInCol(cells, row, col, -1);
-  else if (k === 'ArrowRight') target = findInRow(cells, row, col, +1) || findInCol(cells, row, col, +1);
-  else if (k === 'ArrowLeft') target = findInRow(cells, row, col, -1) || findInCol(cells, row, col, -1);
+  if (k === 'ArrowDown') target = findInCol(cells, idx, row, col, +1);
+  else if (k === 'ArrowUp') target = findInCol(cells, idx, row, col, -1);
+  else if (k === 'ArrowRight') target = findInRow(cells, idx, row, col, +1) || findInCol(cells, idx, row, col, +1);
+  else if (k === 'ArrowLeft') target = findInRow(cells, idx, row, col, -1) || findInCol(cells, idx, row, col, -1);
   else if (k === 'Enter' || k === 'Tab') {
     const dir: 1 | -1 = e.shiftKey ? -1 : 1;
-    target = findInRow(cells, row, col, dir) || findInCol(cells, row, col, dir);
+    target = findInRow(cells, idx, row, col, dir) || findInCol(cells, idx, row, col, dir);
   }
 
   if (target) {
