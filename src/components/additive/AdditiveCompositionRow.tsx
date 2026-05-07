@@ -25,7 +25,7 @@ interface Props {
   onChangeMemory: (id: string, rows: AdditiveCalculationMemoryRow[]) => void;
 }
 
-export default function AdditiveCompositionRow({
+function AdditiveCompositionRowImpl({
   c, bdi, globalDiscount, isLocked, isOpen, isMemoryOpen, showAnalytic,
   onToggleExpand, onToggleMemory, onUpdateComposition, onUpdateQuantity,
   onRemoveComposition, onChangeMemory,
