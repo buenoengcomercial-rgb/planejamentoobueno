@@ -207,7 +207,14 @@ export default function AdditiveCompositionRow({
         <tr className="bg-muted/20 border-b">
           <td />
           <td colSpan={COL_COUNT - 1} className="px-3 py-2">
-            <AdditiveAnalyticRows c={c} bdi={bdi} globalDiscount={globalDiscount} cb={cb} />
+            <AdditiveAnalyticRows
+              c={c}
+              bdi={bdi}
+              globalDiscount={globalDiscount}
+              isLocked={isLocked}
+              cb={cb}
+              onUpdateComposition={onUpdateComposition}
+            />
           </td>
         </tr>
       )}
