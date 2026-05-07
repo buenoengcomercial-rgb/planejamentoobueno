@@ -1,4 +1,4 @@
-import { Fragment } from 'react';
+import { Fragment, memo } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { AdditiveComposition, AdditiveCalculationMemoryRow } from '@/types/project';
 import type { CompGroup } from './types';
@@ -24,7 +24,7 @@ interface Props {
   onChangeMemory: (id: string, rows: AdditiveCalculationMemoryRow[]) => void;
 }
 
-export default function AdditiveGroupRow(props: Props) {
+function AdditiveGroupRowImpl(props: Props) {
   const { group: g, isLocked, collapsed, onToggleCollapsed, onAddNewService } = props;
   const indent = g.depth * 14;
   const isCollapsed = collapsed.has(g.phaseId);
@@ -96,3 +96,6 @@ export default function AdditiveGroupRow(props: Props) {
     </Fragment>
   );
 }
+
+const AdditiveGroupRow = memo(AdditiveGroupRowImpl);
+export default AdditiveGroupRow;

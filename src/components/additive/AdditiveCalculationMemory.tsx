@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Plus, Copy, Trash2, AlertTriangle } from 'lucide-react';
@@ -94,7 +94,7 @@ function ensureSingleTrailingDraftRow(
   return [...filled, makeMemoryRow(lastType)];
 }
 
-export default function AdditiveCalculationMemory({
+function AdditiveCalculationMemoryImpl({
   c, isLocked, onChange, onChangeColumns,
 }: Props) {
   const labels = resolveMemoryColumnLabels(c.calculationMemoryColumns);
@@ -472,3 +472,5 @@ export default function AdditiveCalculationMemory({
     </div>
   );
 }
+
+export default memo(AdditiveCalculationMemoryImpl);

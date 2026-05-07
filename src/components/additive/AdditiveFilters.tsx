@@ -14,10 +14,13 @@ interface Props {
   banks: string[];
   showAnalytic: boolean;
   toggleAnalytic: () => void;
+  onCollapseAll?: () => void;
+  onExpandAll?: () => void;
 }
 
 export default function AdditiveFilters({
   search, setSearch, bankFilter, setBankFilter, banks, showAnalytic, toggleAnalytic,
+  onCollapseAll, onExpandAll,
 }: Props) {
   return (
     <Card className="p-3 flex flex-wrap items-center gap-2">
@@ -37,6 +40,16 @@ export default function AdditiveFilters({
           {banks.map(b => <SelectItem key={b} value={b}>{b}</SelectItem>)}
         </SelectContent>
       </Select>
+      {onExpandAll && (
+        <Button size="sm" variant="outline" onClick={onExpandAll} title="Expandir todos os capítulos">
+          Expandir tudo
+        </Button>
+      )}
+      {onCollapseAll && (
+        <Button size="sm" variant="outline" onClick={onCollapseAll} title="Recolher todos os capítulos">
+          Recolher tudo
+        </Button>
+      )}
       <Button
         size="sm"
         variant={showAnalytic ? 'default' : 'outline'}

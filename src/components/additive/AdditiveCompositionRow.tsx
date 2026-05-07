@@ -1,4 +1,4 @@
-import { Fragment } from 'react';
+import { Fragment, memo } from 'react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ChevronRight, ChevronDown, Trash2, Calculator } from 'lucide-react';
@@ -25,7 +25,7 @@ interface Props {
   onChangeMemory: (id: string, rows: AdditiveCalculationMemoryRow[]) => void;
 }
 
-export default function AdditiveCompositionRow({
+function AdditiveCompositionRowImpl({
   c, bdi, globalDiscount, isLocked, isOpen, isMemoryOpen, showAnalytic,
   onToggleExpand, onToggleMemory, onUpdateComposition, onUpdateQuantity,
   onRemoveComposition, onChangeMemory,
@@ -246,3 +246,5 @@ export default function AdditiveCompositionRow({
     </Fragment>
   );
 }
+
+export default memo(AdditiveCompositionRowImpl);

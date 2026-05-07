@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import type {
   Project, Additive as AdditiveModel, AdditiveComposition,
@@ -45,22 +45,23 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
     }));
   };
 
-  const updateAdditive = (mutator: (a: AdditiveModel) => AdditiveModel) => {
+  const updateAdditive = useCallback((mutator: (a: AdditiveModel) => AdditiveModel) => {
     if (!active) return;
+    const id = active.id;
     onProjectChange(prev => ({
       ...prev,
-      additives: (prev.additives ?? []).map(a => a.id === active.id ? mutator(a) : a),
+      additives: (prev.additives ?? []).map(a => a.id === id ? mutator(a) : a),
     }));
-  };
+  }, [active, onProjectChange]);
 
-  const updateComposition = (compId: string, patch: Partial<AdditiveComposition>) => {
+  const updateComposition = useCallback((compId: string, patch: Partial<AdditiveComposition>) => {
     updateAdditive(a => ({
       ...a,
       compositions: a.compositions.map(c => c.id === compId ? { ...c, ...patch } : c),
     }));
-  };
+  }, [updateAdditive]);
 
-  const updateCompositionQuantity = (
+  const updateCompositionQuantity = useCallback((
     compId: string,
     field: 'addedQuantity' | 'suppressedQuantity',
     nextValue: number,
@@ -86,7 +87,8 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
       before,
       after: nextValue,
     });
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, updateComposition]);
 
   const handleFileSelected = (f: File | null) => {
     if (!f) return;

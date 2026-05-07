@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Project, Additive as AdditiveModel, AdditiveStatus, AdditiveUiState } from '@/types/project';
 
 interface Options {
@@ -38,7 +38,7 @@ export function useAdditiveState(project: Project, opts: Options = {}) {
     setCollapsed(new Set(ui?.collapsedGroupIds ?? []));
   }, [active?.id, active?.uiState]);
 
-  const persistUi = (patch: Partial<AdditiveUiState>) => {
+  const persistUi = useCallback((patch: Partial<AdditiveUiState>) => {
     if (!onProjectChange) return;
     const id = active?.id;
     if (!id) return;
@@ -50,39 +50,50 @@ export function useAdditiveState(project: Project, opts: Options = {}) {
           : a,
       ),
     }));
-  };
+  }, [onProjectChange, active?.id]);
 
-  const setShowAnalytic: typeof setShowAnalyticState = (value) => {
+  const setShowAnalytic: typeof setShowAnalyticState = useCallback((value) => {
     setShowAnalyticState(prev => {
       const next = typeof value === 'function' ? (value as (p: boolean) => boolean)(prev) : value;
       if (next !== prev) persistUi({ showAnalytic: next });
       return next;
     });
-  };
+  }, [persistUi]);
 
-  const toggleExpand = (id: string) =>
+  const toggleExpand = useCallback((id: string) =>
     setExpanded(prev => {
       const n = new Set(prev);
       if (n.has(id)) n.delete(id); else n.add(id);
       persistUi({ expandedCompositionIds: Array.from(n) });
       return n;
-    });
+    }), [persistUi]);
 
-  const toggleCollapsed = (id: string) =>
+  const toggleCollapsed = useCallback((id: string) =>
     setCollapsed(prev => {
       const n = new Set(prev);
       if (n.has(id)) n.delete(id); else n.add(id);
       persistUi({ collapsedGroupIds: Array.from(n) });
       return n;
-    });
+    }), [persistUi]);
 
-  const toggleExpandMemory = (id: string) =>
+  const toggleExpandMemory = useCallback((id: string) =>
     setExpandedMemory(prev => {
       const n = new Set(prev);
       if (n.has(id)) n.delete(id); else n.add(id);
       persistUi({ expandedMemoryIds: Array.from(n) });
       return n;
-    });
+    }), [persistUi]);
+
+  const collapseAllGroups = useCallback((allPhaseIds: string[]) => {
+    const n = new Set(allPhaseIds);
+    setCollapsed(n);
+    persistUi({ collapsedGroupIds: Array.from(n) });
+  }, [persistUi]);
+
+  const expandAllGroups = useCallback(() => {
+    setCollapsed(new Set());
+    persistUi({ collapsedGroupIds: [] });
+  }, [persistUi]);
 
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [importName, setImportName] = useState('SINTÉTICA CORREÇÃO 02');
@@ -116,7 +127,7 @@ export function useAdditiveState(project: Project, opts: Options = {}) {
     showAnalytic, setShowAnalytic,
     expanded, toggleExpand,
     expandedMemory, toggleExpandMemory,
-    collapsed, toggleCollapsed,
+    collapsed, toggleCollapsed, collapseAllGroups, expandAllGroups,
     importDialogOpen, setImportDialogOpen,
     importName, setImportName,
     pendingFile, setPendingFile,

@@ -48,7 +48,7 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
     reviewNotes, setReviewNotes, approvedBy, setApprovedBy,
     historyOpen, setHistoryOpen,
     setActiveId, search, setSearch, bankFilter, setBankFilter,
-    toggleExpand, toggleExpandMemory, toggleCollapsed,
+    toggleExpand, toggleExpandMemory, toggleCollapsed, collapseAllGroups, expandAllGroups,
   } = state;
 
   const totals = active ? additiveTotals(active) : null;
@@ -123,6 +123,8 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
             banks={banks}
             showAnalytic={showAnalytic}
             toggleAnalytic={() => setShowAnalytic(s => !s)}
+            onCollapseAll={() => collapseAllGroups((groupTree ?? []).flatMap(function gather(g): string[] { return [g.phaseId, ...g.children.flatMap(gather)]; }))}
+            onExpandAll={expandAllGroups}
           />
 
           <AdditiveTable

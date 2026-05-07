@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { memo, useState, useEffect } from 'react';
 import { Plus, Trash2, Copy } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -78,7 +78,7 @@ function NumCell({
   );
 }
 
-export default function AdditiveAnalyticRows({ c, bdi, globalDiscount, isLocked, cb, onUpdateComposition }: Props) {
+function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpdateComposition }: Props) {
   const isNew = !!c.isNewService;
   const editable = isNew && !isLocked && !!onUpdateComposition;
   const showDiscount = isNew && globalDiscount > 0;
@@ -264,3 +264,5 @@ export default function AdditiveAnalyticRows({ c, bdi, globalDiscount, isLocked,
     </div>
   );
 }
+
+export default memo(AdditiveAnalyticRowsImpl);
