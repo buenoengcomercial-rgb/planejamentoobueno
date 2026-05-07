@@ -1,5 +1,10 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import {
+  hasAdditiveUserWork,
+  isAdditiveReplacementBlocked,
+  mergeAdditiveWithSynthetic,
+} from '@/lib/additiveUserWork';
 import type {
   Project, Additive as AdditiveModel, AdditiveComposition,
   AdditiveStatus, AdditiveApprovalSnapshot,
@@ -406,7 +411,9 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
     toast.success('Aditivo voltou para rascunho — itens removidos da Medição');
   };
 
-  const handleUseSyntheticFromMeasurement = () => {
+  const [syntheticConflictOpen, setSyntheticConflictOpen] = useState(false);
+
+  const performCreateNewFromSynthetic = useCallback(() => {
     const built = buildAdditiveFromSyntheticBudgetItems(project, 'Aditivo (a partir da Sintética da Medição)');
     if (!built) {
       toast.error('Nenhuma Sintética encontrada na Medição. Importe a Sintética primeiro na aba Tarefas/EAP.');
@@ -428,6 +435,59 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
     });
     setActiveId(built.id);
     toast.success(`Sintética da Medição reaproveitada (${built.compositions.length} composições).`);
+  }, [project, onProjectChange, auditUser, setActiveId]);
+
+  const performMergePreservingSynthetic = useCallback(() => {
+    if (!active) return;
+    const built = buildAdditiveFromSyntheticBudgetItems(project, active.name);
+    if (!built) {
+      toast.error('Nenhuma Sintética encontrada na Medição.');
+      return;
+    }
+    const { merged, stats } = mergeAdditiveWithSynthetic(active, built);
+    const id = active.id;
+    onProjectChange(prev => {
+      const next = {
+        ...prev,
+        additives: (prev.additives ?? []).map(a => a.id === id ? merged : a),
+      };
+      return logToProject(next, {
+        ...auditUser,
+        entityType: 'additive',
+        entityId: id,
+        action: 'updated',
+        title: 'Sintética da Medição reaplicada (preservando alterações)',
+        metadata: { ...stats, source: 'sintetica_medicao_merge' },
+      });
+    });
+    toast.success(
+      `Sintética reaplicada: ${stats.refreshedFromSynthetic} atualizadas, ${stats.addedFromSynthetic} novas, ${stats.preservedNewServices} novos serviços preservados.`,
+    );
+  }, [active, project, onProjectChange, auditUser]);
+
+  const handleUseSyntheticFromMeasurement = () => {
+    // Sem aditivo ativo ou sem trabalho → cria direto
+    if (!active || !hasAdditiveUserWork(active)) {
+      performCreateNewFromSynthetic();
+      return;
+    }
+    // Aditivo com edições → abre diálogo de proteção
+    setSyntheticConflictOpen(true);
+  };
+
+  const syntheticConflict = {
+    open: syntheticConflictOpen,
+    setOpen: setSyntheticConflictOpen,
+    blocked: isAdditiveReplacementBlocked(active),
+    onCancel: () => setSyntheticConflictOpen(false),
+    onCreateNew: () => {
+      setSyntheticConflictOpen(false);
+      performCreateNewFromSynthetic();
+    },
+    onMergePreserving: () => {
+      setSyntheticConflictOpen(false);
+      performMergePreservingSynthetic();
+    },
   };
 
   const handleChangeGlobalDiscount = (value: string) => {
@@ -567,6 +627,7 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
     handleAddNewService,
     handleRemoveComposition,
     handleContractAdditive,
+    syntheticConflict,
   };
 }
 

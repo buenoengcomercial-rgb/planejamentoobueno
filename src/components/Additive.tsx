@@ -23,6 +23,7 @@ import AdditiveTotalsBlock from '@/components/additive/AdditiveTotalsBlock';
 import AdditiveImportDialog from '@/components/additive/AdditiveImportDialog';
 import AdditiveIssuesDialog from '@/components/additive/AdditiveIssuesDialog';
 import AdditiveReviewDialog from '@/components/additive/AdditiveReviewDialog';
+import AdditiveSyntheticConflictDialog from '@/components/additive/AdditiveSyntheticConflictDialog';
 
 interface Props {
   project: Project;
@@ -182,6 +183,15 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
         open={issuesOpen}
         onOpenChange={setIssuesOpen}
         active={active}
+      />
+
+      <AdditiveSyntheticConflictDialog
+        open={actions.syntheticConflict.open}
+        onOpenChange={actions.syntheticConflict.setOpen}
+        blocked={actions.syntheticConflict.blocked}
+        onCancel={actions.syntheticConflict.onCancel}
+        onCreateNew={actions.syntheticConflict.onCreateNew}
+        onMergePreserving={actions.syntheticConflict.onMergePreserving}
       />
 
       <AlertDialog open={!!confirmDeleteId} onOpenChange={o => !o && setConfirmDeleteId(null)}>
