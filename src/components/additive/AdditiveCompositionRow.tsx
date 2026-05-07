@@ -22,13 +22,16 @@ const parseDec = (s: string): number | null => {
 
 /** Célula numérica com estado local. Mostra vazio quando valor=0 e allowEmptyZero. */
 function QtyCell({
-  value, disabled, onCommit, className, allowEmptyZero,
+  value, disabled, onCommit, className, allowEmptyZero, gridId, rowIndex, colIndex,
 }: {
   value: number;
   disabled?: boolean;
   onCommit: (n: number) => void;
   className?: string;
   allowEmptyZero?: boolean;
+  gridId?: string;
+  rowIndex?: number;
+  colIndex?: number;
 }) {
   const fmtView = (n: number) =>
     n === 0 && allowEmptyZero ? '' : fmtQty2(n);
@@ -41,6 +44,9 @@ function QtyCell({
       inputMode="decimal"
       value={local}
       disabled={disabled}
+      data-grid-id={gridId}
+      data-row-index={rowIndex}
+      data-col-index={colIndex}
       onFocus={e => { setFocused(true); e.currentTarget.select(); }}
       onChange={e => {
         const v = e.target.value;
@@ -54,6 +60,8 @@ function QtyCell({
         if (final !== value) onCommit(final);
       }}
       onKeyDown={e => {
+        handleGridKeyDown(e);
+        if (e.defaultPrevented) return;
         if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
       }}
       className={`no-spinner ${className ?? ''}`}
@@ -63,13 +71,16 @@ function QtyCell({
 
 /** Célula numérica (R$) com estado local — sem formatação especial. */
 function MoneyCell({
-  value, disabled, onCommit, className, title,
+  value, disabled, onCommit, className, title, gridId, rowIndex, colIndex,
 }: {
   value: number;
   disabled?: boolean;
   onCommit: (n: number) => void;
   className?: string;
   title?: string;
+  gridId?: string;
+  rowIndex?: number;
+  colIndex?: number;
 }) {
   const fmtView = (n: number) => (n ? String(n).replace('.', ',') : '');
   const [local, setLocal] = useState<string>(() => fmtView(value));
@@ -82,6 +93,9 @@ function MoneyCell({
       value={local}
       disabled={disabled}
       title={title}
+      data-grid-id={gridId}
+      data-row-index={rowIndex}
+      data-col-index={colIndex}
       onFocus={e => { setFocused(true); e.currentTarget.select(); }}
       onChange={e => {
         const v = e.target.value;
@@ -94,6 +108,8 @@ function MoneyCell({
         if (final !== value) onCommit(final);
       }}
       onKeyDown={e => {
+        handleGridKeyDown(e);
+        if (e.defaultPrevented) return;
         if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
       }}
       className={`no-spinner ${className ?? ''}`}
