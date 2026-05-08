@@ -234,7 +234,7 @@ function AdditiveCompositionRowImpl({
 
   return (
     <Fragment>
-      <tr className={`border-b align-top hover:bg-slate-100/60 ${isNew ? 'bg-sky-50/30' : (rowIndex % 2 === 1 ? 'bg-slate-50/50' : 'bg-white')}`}>
+      <tr className={`border-b align-top ${isNew ? 'bg-sky-50 hover:bg-sky-100/70 border-l-4 border-l-sky-500' : `hover:bg-slate-100/60 ${rowIndex % 2 === 1 ? 'bg-slate-50/50' : 'bg-white'}`}`}>
         <td className="px-1 py-2 text-center">
           <button
             onClick={() => onToggleExpand(c.id)}
@@ -284,8 +284,8 @@ function AdditiveCompositionRowImpl({
           )}
           <div className="flex flex-wrap gap-1 mt-1 items-center">
             {isNew && (
-              <Badge variant="outline" className="text-[9px] text-sky-700 border-sky-400 bg-sky-50">
-                Novo serviço
+              <Badge variant="outline" className="text-[10px] font-semibold text-sky-800 border-sky-500 bg-sky-100 px-2">
+                Novo serviço aditivado
               </Badge>
             )}
             {noAnalytic && <Badge variant="outline" className="text-[9px] text-amber-700 border-amber-400">Sem analítico</Badge>}
