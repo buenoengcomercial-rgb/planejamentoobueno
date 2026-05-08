@@ -283,7 +283,10 @@ function AdditiveCompositionRowImpl({
             gridId={MAIN_GRID} rowIndex={rowIndex} colIndex={4}
           />
         </td>
-        <td className={`px-1 py-1 text-right ${G_BG.suppressed} text-rose-700`}>
+        <td
+          className={`px-1 py-1 text-right ${G_BG.suppressed} text-rose-700`}
+          onClick={isLocked ? undefined : () => openMemoryFor('suprimida')}
+        >
           <QtyCell
             value={c.suppressedQuantity ?? 0}
             disabled={isLocked || hasMemory}
@@ -291,9 +294,13 @@ function AdditiveCompositionRowImpl({
             onCommit={n => { onUpdateComposition(c.id, { suppressedQuantity: n }); onUpdateQuantity(c.id, 'suppressedQuantity', n); }}
             className="h-7 w-full text-xs text-right px-1 border-rose-200 text-rose-700"
             gridId={MAIN_GRID} rowIndex={rowIndex} colIndex={5}
+            onFocusCell={isLocked ? undefined : () => openMemoryFor('suprimida')}
           />
         </td>
-        <td className={`px-1 py-1 text-right ${G_BG.added} text-emerald-700`}>
+        <td
+          className={`px-1 py-1 text-right ${G_BG.added} text-emerald-700`}
+          onClick={isLocked ? undefined : () => openMemoryFor('acrescida')}
+        >
           <QtyCell
             value={c.addedQuantity ?? 0}
             disabled={isLocked || hasMemory}
@@ -301,6 +308,7 @@ function AdditiveCompositionRowImpl({
             onCommit={n => { onUpdateComposition(c.id, { addedQuantity: n }); onUpdateQuantity(c.id, 'addedQuantity', n); }}
             className="h-7 w-full text-xs text-right px-1 border-emerald-200 text-emerald-700"
             gridId={MAIN_GRID} rowIndex={rowIndex} colIndex={6}
+            onFocusCell={isLocked ? undefined : () => openMemoryFor('acrescida')}
           />
         </td>
         <td className={`px-1 py-1 text-right font-medium ${G_BG.qty}`}>{fmtQty2(r.qtdFinal)}</td>
