@@ -276,6 +276,30 @@ function AdditiveCalculationMemoryImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /**
+   * Integração com Qtd Suprimida / Qtd Acrescida da composição:
+   * - No mount, consome qualquer "tipo preferido" pendente e ajusta a linha vazia.
+   * - Enquanto montada, escuta novos pedidos para a mesma composição e
+   *   atualiza o tipo da linha vazia + foca o Comentário.
+   */
+  useEffect(() => {
+    if (isLocked) return;
+    const apply = (type: 'acrescida' | 'suprimida') => {
+      setRows(prev => {
+        const filled = prev.filter(isMemoryRowFilled);
+        const next = [...filled, makeMemoryRow(type)];
+        focusCellByCoords(next.length - 1, 1);
+        return next;
+      });
+    };
+    const initial = consumeMemoryPreferredType(c.id);
+    if (initial) apply(initial);
+    const off = onMemoryFocus((id, t) => {
+      if (id === c.id) apply(t);
+    });
+    return off;
+  }, [c.id, isLocked]);
+
   return (
     <div className="border rounded-md bg-background p-2 space-y-2">
       <div className="flex items-center justify-between">
