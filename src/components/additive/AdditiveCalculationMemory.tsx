@@ -232,6 +232,11 @@ function AdditiveCalculationMemoryImpl({
     else if (e.key === 'ArrowUp') dir = 'up';
     if (!dir) return;
 
+    // Bloqueia ANTES de qualquer outra coisa — impede scroll da página
+    // e saída do escopo da grade, mesmo que não exista célula destino.
+    e.preventDefault();
+    e.stopPropagation();
+
     let nextRow = rowIndex;
     let nextField = fieldIndex;
     if (dir === 'next') {
@@ -249,13 +254,9 @@ function AdditiveCalculationMemoryImpl({
     // Reconcilia (cria linha vazia se necessário) ANTES de focar.
     const finalRows = reconcile();
 
-    // Sempre bloqueia o comportamento padrão das setas/Enter/Tab dentro da grade
-    // — impede scroll da página e saída do escopo da memória.
-    e.preventDefault();
-    e.stopPropagation();
-
+    // Clampa nos limites: se nextRow < 0 mantém o foco; se passar do fim, fica na última.
     if (nextRow < 0) return;
-    const safeRow = Math.min(nextRow, finalRows.length - 1);
+    const safeRow = Math.min(Math.max(nextRow, 0), finalRows.length - 1);
     const tgt = finalRows[safeRow];
     if (tgt) focusCell(tgt.id, EDIT_FIELDS[nextField]);
   };
@@ -442,14 +443,17 @@ function AdditiveCalculationMemoryImpl({
                     <td key={k} className="px-1.5 py-1">
                       <Input
                         ref={setCellRef(r.id, k) as any}
-                        type="number"
-                        step="0.0001"
-                        value={r[k] ?? ''}
+                        type="text"
+                        inputMode="decimal"
+                        value={r[k] == null ? '' : String(r[k]).replace('.', ',')}
                         disabled={isLocked}
                         data-grid-id={`additive-memory-${c.id}`}
                         data-row-index={rowIndex}
                         data-col-index={3 + kIdx}
-                        onChange={e => onCellChange(r.id, k, e.target.value)}
+                        onChange={e => {
+                          const v = e.target.value;
+                          if (v === '' || /^-?[0-9]*[.,]?[0-9]*$/.test(v)) onCellChange(r.id, k, v);
+                        }}
                         onBlur={handleBlur}
                         onKeyDown={e => handleKeyDown(e, rowIndex, 3 + kIdx)}
                         onFocus={e => e.currentTarget.select()}

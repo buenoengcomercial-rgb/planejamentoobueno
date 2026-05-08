@@ -186,6 +186,7 @@ if (typeof window !== 'undefined' && !(window as any).__gridKeyGuardInstalled) {
       }
       // ArrowUp/Down/PageUp/PageDown sempre bloqueados na grade — evita scroll.
       e.preventDefault();
+      e.stopPropagation();
     },
     { capture: true },
   );
