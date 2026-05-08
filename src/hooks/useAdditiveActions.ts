@@ -61,11 +61,17 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
 
   const updateComposition = useCallback((compId: string, patch: Partial<AdditiveComposition>) => {
     const normCode = (s: string) => String(s ?? '').trim().toLowerCase();
+    const normInputCode = (s: string) => String(s ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
+    const money2 = (n: number) => Math.round((Number.isFinite(n) ? n : 0) * 100) / 100;
     const genId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
       ? crypto.randomUUID()
       : `inp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 
     let autofillLog: { code: string; sourceId: string; sourceDesc: string; targetId: string; targetChain?: string } | null = null;
+    const priceSyncLogs: Array<{
+      code: string; previousPrice: number; newPrice: number;
+      occurrences: number; affectedCompositions: Array<{ id: string; item?: string; description: string }>;
+    }> = [];
 
     updateAdditive(a => {
       const target = a.compositions.find(c => c.id === compId);
@@ -112,10 +118,68 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
         }
       }
 
-      return {
-        ...a,
-        compositions: a.compositions.map(c => c.id === compId ? { ...c, ...effectivePatch } : c),
-      };
+      // Sincronização de preço de insumos: somente em novos serviços, quando inputs foram alterados.
+      // Detecta insumos cujo unitPrice mudou e propaga para todos insumos com mesmo código
+      // em outras novas composições aditivadas.
+      type PriceChange = { code: string; prev: number; next: number };
+      const priceChanges: PriceChange[] = [];
+      if (isNew && Array.isArray(effectivePatch.inputs)) {
+        const prevById = new Map(target.inputs.map(i => [i.id, i]));
+        for (const ni of effectivePatch.inputs) {
+          const prev = prevById.get(ni.id);
+          if (!prev) continue;
+          const code = normInputCode(ni.code);
+          if (!code) continue;
+          if (money2(prev.unitPrice) !== money2(ni.unitPrice)) {
+            priceChanges.push({ code, prev: prev.unitPrice, next: ni.unitPrice });
+          }
+        }
+      }
+
+      const updatedCompositions = a.compositions.map(c =>
+        c.id === compId ? { ...c, ...effectivePatch } : c,
+      );
+
+      let finalCompositions = updatedCompositions;
+      if (priceChanges.length > 0) {
+        // Última alteração por código vence (caso usuário edite múltiplas linhas no mesmo commit)
+        const byCode = new Map<string, PriceChange>();
+        for (const ch of priceChanges) byCode.set(ch.code, ch);
+
+        finalCompositions = updatedCompositions.map(c => {
+          if (c.id === compId) return c;
+          if (!c.isNewService) return c;
+          let mutated = false;
+          const newInputs = c.inputs.map(i => {
+            const code = normInputCode(i.code);
+            if (!code) return i;
+            const ch = byCode.get(code);
+            if (!ch) return i;
+            if (money2(i.unitPrice) === money2(ch.next)) return i;
+            mutated = true;
+            const unitPrice = ch.next;
+            return { ...i, unitPrice, total: money2((i.coefficient || 0) * unitPrice) };
+          });
+          return mutated ? { ...c, inputs: newInputs } : c;
+        });
+
+        // Coleta logs/toasts (uma entrada por código alterado)
+        for (const ch of byCode.values()) {
+          const affected = finalCompositions
+            .filter(c => c.id !== compId && c.isNewService &&
+              c.inputs.some(i => normInputCode(i.code) === ch.code))
+            .map(c => ({ id: c.id, item: c.item || c.itemNumber, description: c.description }));
+          priceSyncLogs.push({
+            code: ch.code,
+            previousPrice: ch.prev,
+            newPrice: ch.next,
+            occurrences: affected.length,
+            affectedCompositions: affected,
+          });
+        }
+      }
+
+      return { ...a, compositions: finalCompositions };
     });
 
     if (autofillLog && active) {
@@ -124,6 +188,20 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
         title: 'Composição aditivada preenchida automaticamente por código',
         metadata: autofillLog,
       });
+    }
+    if (priceSyncLogs.length > 0 && active) {
+      for (const ps of priceSyncLogs) {
+        if (ps.occurrences > 0) {
+          toast.success(`Preço do insumo ${ps.code} atualizado em ${ps.occurrences} ocorrência(s) de novas composições.`);
+        } else {
+          toast.success('Preço do insumo atualizado.');
+        }
+        logAdd(active.id, {
+          action: 'updated',
+          title: 'Preço de insumo sincronizado nas novas composições',
+          metadata: ps,
+        });
+      }
     }
   }, [updateAdditive, active]);
 
