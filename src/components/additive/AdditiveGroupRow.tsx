@@ -2,7 +2,7 @@ import { Fragment, memo } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import type { AdditiveComposition, AdditiveCalculationMemoryRow } from '@/types/project';
 import type { CompGroup } from './types';
-import { fmtBRL, COL_COUNT } from './types';
+import { fmtBRL, fmtPct, COL_COUNT } from './types';
 import AdditiveCompositionRow from './AdditiveCompositionRow';
 
 interface Props {
@@ -29,23 +29,56 @@ function AdditiveGroupRowImpl(props: Props) {
   const indent = g.depth * 14;
   const isCollapsed = collapsed.has(g.phaseId);
 
+  const pctVar = g.subtotalContratado > 0 ? g.subtotalDiferenca / g.subtotalContratado : 0;
+  const bgByDepth = g.depth === 0 ? 'bg-primary/10' : 'bg-primary/5';
+
   return (
     <Fragment>
-      <tr className="bg-primary/5 border-b border-primary/20 font-semibold">
-        <td colSpan={COL_COUNT} className="px-2 py-1.5">
-          <div className="flex items-center gap-2" style={{ paddingLeft: indent }}>
-            <button
-              type="button"
-              onClick={() => onToggleCollapsed(g.phaseId)}
-              className="inline-flex items-center justify-center w-4 h-4 hover:bg-primary/10 rounded"
-              aria-label={isCollapsed ? 'Expandir' : 'Recolher'}
-            >
-              {isCollapsed
-                ? <ChevronRight className="w-3.5 h-3.5" />
-                : <ChevronDown className="w-3.5 h-3.5" />}
-            </button>
-            <span className="text-[12px]">{g.number} {g.name}</span>
-          </div>
+      <tr
+        className={`${bgByDepth} border-b border-primary/20 font-semibold cursor-pointer hover:bg-primary/15`}
+        onClick={() => onToggleCollapsed(g.phaseId)}
+      >
+        {/* chevron col */}
+        <td className="px-1 py-1.5 align-middle">
+          <span className="inline-flex items-center justify-center w-4 h-4">
+            {isCollapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </span>
+        </td>
+        {/* Item */}
+        <td className="px-1 py-1.5 text-[12px]" style={{ paddingLeft: indent + 4 }}>{g.number}</td>
+        {/* Código */}
+        <td />
+        {/* Banco */}
+        <td />
+        {/* Descrição */}
+        <td className="px-1 py-1.5 text-[12px] truncate" title={g.name}>{g.name}</td>
+        {/* Und */}
+        <td />
+        {/* Quantidades (4) */}
+        <td /><td /><td /><td />
+        {/* Valor Unit / Valor Unit c/ BDI */}
+        <td /><td />
+        {/* Total Fonte */}
+        <td className="px-1 py-1.5 text-right text-[12px]">{fmtBRL(g.subtotalTotalFonte)}</td>
+        {/* Valor Contratado */}
+        <td className="px-1 py-1.5 text-right text-[12px]">{fmtBRL(g.subtotalContratado)}</td>
+        {/* Valor Suprimido */}
+        <td className="px-1 py-1.5 text-right text-[12px] bg-rose-50 text-rose-700">
+          {g.subtotalSuprimido ? fmtBRL(g.subtotalSuprimido) : ''}
+        </td>
+        {/* Valor Acrescido */}
+        <td className="px-1 py-1.5 text-right text-[12px] bg-emerald-50 text-emerald-700">
+          {g.subtotalAcrescido ? fmtBRL(g.subtotalAcrescido) : ''}
+        </td>
+        {/* Valor Final */}
+        <td className="px-1 py-1.5 text-right text-[12px] font-bold">{fmtBRL(g.subtotalFinal)}</td>
+        {/* Diferença */}
+        <td className={`px-1 py-1.5 text-right text-[12px] ${g.subtotalDiferenca < 0 ? 'text-rose-700' : g.subtotalDiferenca > 0 ? 'text-emerald-700' : ''}`}>
+          {g.subtotalDiferenca ? fmtBRL(g.subtotalDiferenca) : ''}
+        </td>
+        {/* % Var */}
+        <td className={`px-1 py-1.5 text-right text-[12px] ${pctVar < 0 ? 'text-rose-700' : pctVar > 0 ? 'text-emerald-700' : ''}`}>
+          {pctVar ? fmtPct(pctVar) : ''}
         </td>
       </tr>
       {!isCollapsed && g.rows.map((c, idx) => (
@@ -85,15 +118,6 @@ function AdditiveGroupRowImpl(props: Props) {
       {!isCollapsed && g.children.map(child => (
         <AdditiveGroupRow key={child.phaseId} {...props} group={child} />
       ))}
-      <tr className="border-b bg-muted/30 font-medium">
-        <td colSpan={13} className="px-2 py-1 text-right text-[11px]" style={{ paddingLeft: indent }}>
-          Subtotal {g.number} {g.name}
-        </td>
-        <td className="px-2 py-1 text-right text-[11px]">{fmtBRL(g.subtotalContratado)}</td>
-        <td colSpan={3} />
-        <td className="px-2 py-1 text-right text-[11px]">{fmtBRL(g.subtotalFinal)}</td>
-        <td colSpan={2} />
-      </tr>
     </Fragment>
   );
 }
