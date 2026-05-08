@@ -301,6 +301,11 @@ function AdditiveCompositionRowImpl({
                 Novo serviço aditivado
               </Badge>
             )}
+            {isAlteredContracted && (
+              <Badge variant="outline" className="text-[10px] font-semibold text-amber-800 border-amber-500 bg-amber-100 px-2">
+                Item contratado alterado
+              </Badge>
+            )}
             {noAnalytic && <Badge variant="outline" className="text-[9px] text-amber-700 border-amber-400">Sem analítico</Badge>}
             {hasDiff && (
               <Badge variant="outline" className="text-[9px] text-rose-700 border-rose-400">
