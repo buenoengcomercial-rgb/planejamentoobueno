@@ -270,7 +270,7 @@ function AdditiveCalculationMemoryImpl({
     if (isLocked) return;
     if (displayed.length > 0 && !isMemoryRowFilled(displayed[displayed.length - 1])) {
       didInitialFocusRef.current = true;
-      focusCell(displayed[displayed.length - 1].id, 'comment');
+      focusCellByCoords(displayed.length - 1, 1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -348,15 +348,14 @@ function AdditiveCalculationMemoryImpl({
                   </td>
                   <td className="px-1.5 py-1">
                     <select
-                      ref={setCellRef(r.id, 'type') as any}
                       value={r.type}
                       disabled={isLocked}
-                      data-grid-id={`additive-memory-${c.id}`}
+                      data-grid-id={gridId}
                       data-row-index={rowIndex}
                       data-col-index={0}
                       onChange={e => onCellChange(r.id, 'type', e.target.value)}
                       onBlur={handleBlur}
-                      onKeyDown={e => handleKeyDown(e, rowIndex, 0)}
+                      onKeyDown={onCellKeyDown}
                       className="h-7 w-full text-[11px] border border-input rounded-md bg-background px-1"
                     >
                       <option value="acrescida">Acrescida</option>
@@ -365,30 +364,28 @@ function AdditiveCalculationMemoryImpl({
                   </td>
                   <td className="px-1.5 py-1">
                     <Input
-                      ref={setCellRef(r.id, 'comment') as any}
                       value={r.comment ?? ''}
                       disabled={isLocked}
-                      data-grid-id={`additive-memory-${c.id}`}
+                      data-grid-id={gridId}
                       data-row-index={rowIndex}
                       data-col-index={1}
                       onChange={e => onCellChange(r.id, 'comment', e.target.value)}
                       onBlur={handleBlur}
-                      onKeyDown={e => handleKeyDown(e, rowIndex, 1)}
+                      onKeyDown={onCellKeyDown}
                       className="h-7 text-[11px]"
                       placeholder={isDraftRow ? 'Justificativa (digite para iniciar)' : 'Justificativa'}
                     />
                   </td>
                   <td className="px-1.5 py-1">
                     <Input
-                      ref={setCellRef(r.id, 'formula') as any}
                       value={r.formula ?? ''}
                       disabled={isLocked}
-                      data-grid-id={`additive-memory-${c.id}`}
+                      data-grid-id={gridId}
                       data-row-index={rowIndex}
                       data-col-index={2}
                       onChange={e => onCellChange(r.id, 'formula', e.target.value)}
                       onBlur={handleBlur}
-                      onKeyDown={e => handleKeyDown(e, rowIndex, 2)}
+                      onKeyDown={onCellKeyDown}
                       className={`h-7 text-[11px] font-mono ${isInvalid ? 'border-rose-400' : ''}`}
                       placeholder={placeholder}
                       title={isInvalid ? ev.error : `Fórmula opcional. Use A, B, C, D, +, -, *, /, ( ). Padrão: ${placeholder}`}
@@ -397,12 +394,11 @@ function AdditiveCalculationMemoryImpl({
                   {(['a', 'b', 'c', 'd'] as const).map((k, kIdx) => (
                     <td key={k} className="px-1.5 py-1">
                       <Input
-                        ref={setCellRef(r.id, k) as any}
                         type="text"
                         inputMode="decimal"
                         value={r[k] == null ? '' : String(r[k]).replace('.', ',')}
                         disabled={isLocked}
-                        data-grid-id={`additive-memory-${c.id}`}
+                        data-grid-id={gridId}
                         data-row-index={rowIndex}
                         data-col-index={3 + kIdx}
                         onChange={e => {
@@ -410,7 +406,7 @@ function AdditiveCalculationMemoryImpl({
                           if (v === '' || /^-?[0-9]*[.,]?[0-9]*$/.test(v)) onCellChange(r.id, k, v);
                         }}
                         onBlur={handleBlur}
-                        onKeyDown={e => handleKeyDown(e, rowIndex, 3 + kIdx)}
+                        onKeyDown={onCellKeyDown}
                         onFocus={e => e.currentTarget.select()}
                         className="h-7 text-[11px] text-right px-1 no-spinner"
                       />
