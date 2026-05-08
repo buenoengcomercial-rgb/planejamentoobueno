@@ -216,14 +216,14 @@ function AdditiveCalculationMemoryImpl({
   };
 
   /**
-   * Navegação 100% delegada ao helper global (mesmo padrão da Analítica).
-   * Após Enter/Tab/ArrowDown também garantimos a linha vazia no fim,
-   * para preservar a regra "criar nova linha apenas após confirmar/navegar".
+   * Navegação delegada ao helper global. Setas APENAS navegam — não reconciliam,
+   * pois reconciliar pode remontar inputs e perder o foco. Enter/Tab confirmam
+   * (commit) preservando o id da linha vazia existente.
    */
   const onCellKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
     if (isLocked) return;
     handleGridKeyDown(e);
-    if (e.key === 'Enter' || e.key === 'Tab' || e.key === 'ArrowDown') {
+    if (e.key === 'Enter' || e.key === 'Tab') {
       reconcile();
     }
   };
