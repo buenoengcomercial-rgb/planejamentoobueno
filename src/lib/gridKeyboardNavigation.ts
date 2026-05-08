@@ -148,3 +148,45 @@ export function gridCellProps(gridId: string, rowIndex: number, colIndex: number
     onKeyDown: handleGridKeyDown,
   } as Record<string, unknown>;
 }
+
+/* ------------------------------------------------------------------ *
+ * Trava global em capture-phase: enquanto o foco estiver numa célula
+ * com [data-grid-id] (ou dentro de uma), as teclas de navegação NUNCA
+ * podem rolar a página. Roda antes dos handlers React, então funciona
+ * mesmo que algum componente esqueça de chamar preventDefault.
+ * ------------------------------------------------------------------ */
+const SCROLL_KEYS = new Set([
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'PageUp', 'PageDown', 'Home', 'End', ' ', 'Spacebar',
+]);
+
+function isInGridCell(el: EventTarget | null): HTMLElement | null {
+  if (!el || !(el instanceof HTMLElement)) return null;
+  if (el.hasAttribute(ATTR_GRID)) return el;
+  return el.closest?.(`[${ATTR_GRID}]`) as HTMLElement | null;
+}
+
+if (typeof window !== 'undefined' && !(window as any).__gridKeyGuardInstalled) {
+  (window as any).__gridKeyGuardInstalled = true;
+  window.addEventListener(
+    'keydown',
+    (e: KeyboardEvent) => {
+      if (!SCROLL_KEYS.has(e.key)) return;
+      const cell = isInGridCell(e.target);
+      if (!cell) return;
+      const target = e.target as HTMLElement;
+      // Em inputs/textarea de texto, NÃO bloqueamos ArrowLeft/Right/Home/End/Space
+      // — são usadas para mover o cursor dentro do texto e não rolam a página.
+      if (isTextLike(target)) {
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight'
+            || e.key === 'Home' || e.key === 'End'
+            || e.key === ' ' || e.key === 'Spacebar') {
+          return;
+        }
+      }
+      // ArrowUp/Down/PageUp/PageDown sempre bloqueados na grade — evita scroll.
+      e.preventDefault();
+    },
+    { capture: true },
+  );
+}
