@@ -60,11 +60,72 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
   }, [active, onProjectChange]);
 
   const updateComposition = useCallback((compId: string, patch: Partial<AdditiveComposition>) => {
-    updateAdditive(a => ({
-      ...a,
-      compositions: a.compositions.map(c => c.id === compId ? { ...c, ...patch } : c),
-    }));
-  }, [updateAdditive]);
+    const normCode = (s: string) => String(s ?? '').trim().toLowerCase();
+    const genId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+      ? crypto.randomUUID()
+      : `inp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+
+    let autofillLog: { code: string; sourceId: string; sourceDesc: string; targetId: string; targetChain?: string } | null = null;
+
+    updateAdditive(a => {
+      const target = a.compositions.find(c => c.id === compId);
+      if (!target) return a;
+
+      let effectivePatch: Partial<AdditiveComposition> = { ...patch };
+
+      // Autofill por código: somente em novos serviços, quando o código for alterado
+      // e existir outra nova composição aditivada com o mesmo código (case/space-insensitive).
+      const codeChanged = Object.prototype.hasOwnProperty.call(patch, 'code');
+      const isNew = !!target.isNewService;
+      if (codeChanged && isNew) {
+        const newCode = normCode(patch.code ?? '');
+        if (newCode) {
+          const source = a.compositions.find(c =>
+            c.id !== compId &&
+            !!c.isNewService &&
+            normCode(c.code) === newCode,
+          );
+          if (source) {
+            const clonedInputs = (source.inputs ?? []).map(i => ({ ...i, id: genId() }));
+            effectivePatch = {
+              ...effectivePatch,
+              bank: source.bank,
+              description: source.description,
+              unit: source.unit,
+              unitPriceNoBDIInformed: source.unitPriceNoBDIInformed,
+              unitPriceNoBDI: source.unitPriceNoBDI,
+              unitPriceWithBDI: source.unitPriceWithBDI,
+              analyticUnitPriceWithBDI: source.analyticUnitPriceWithBDI,
+              inputs: clonedInputs,
+              calculationMemoryColumns: source.calculationMemoryColumns
+                ? { ...source.calculationMemoryColumns }
+                : target.calculationMemoryColumns,
+            };
+            autofillLog = {
+              code: source.code,
+              sourceId: source.id,
+              sourceDesc: source.description,
+              targetId: target.id,
+              targetChain: target.phaseChain,
+            };
+          }
+        }
+      }
+
+      return {
+        ...a,
+        compositions: a.compositions.map(c => c.id === compId ? { ...c, ...effectivePatch } : c),
+      };
+    });
+
+    if (autofillLog && active) {
+      logAdd(active.id, {
+        action: 'updated',
+        title: 'Composição aditivada preenchida automaticamente por código',
+        metadata: autofillLog,
+      });
+    }
+  }, [updateAdditive, active]);
 
   const updateCompositionQuantity = useCallback((
     compId: string,
