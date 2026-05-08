@@ -27,11 +27,92 @@ interface Props {
   onChangeColumns?: (cols: AdditiveCalculationMemoryColumns) => void;
 }
 
-const numOrUndef = (v: string): number | undefined => {
-  if (v === '' || v == null) return undefined;
-  const n = Number(String(v).replace(',', '.'));
+const DECIMAL_INPUT_RE = /^-?\d*([,.]\d*)?$/;
+
+function parsePtDecimal(value: string): number | undefined {
+  const s = (value ?? '').trim();
+  if (s === '' || s === '-' || s === ',' || s === '.') return undefined;
+  // Remove separador de milhar pt-BR: pontos como milhar quando há vírgula decimal.
+  let normalized = s;
+  if (s.includes(',')) {
+    normalized = s.replace(/\./g, '').replace(',', '.');
+  } else {
+    // Sem vírgula: trata como número padrão (ponto = decimal).
+    normalized = s;
+  }
+  const n = Number(normalized);
   return Number.isFinite(n) ? n : undefined;
-};
+}
+
+function formatPtDecimal(n: number | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '';
+  // Preserva até 4 casas; se for inteiro, mostra inteiro.
+  const s = n.toLocaleString('pt-BR', {
+    maximumFractionDigits: 4,
+    useGrouping: false,
+  });
+  return s;
+}
+
+const numOrUndef = parsePtDecimal;
+
+interface MemoryNumberCellProps {
+  value: number | undefined;
+  disabled?: boolean;
+  gridId: string;
+  rowIndex: number;
+  colIndex: number;
+  onCommit: (n: number | undefined) => void;
+  onBlur?: (e: React.FocusEvent<HTMLInputElement>) => void;
+}
+
+function MemoryNumberCell({
+  value, disabled, gridId, rowIndex, colIndex, onCommit, onBlur,
+}: MemoryNumberCellProps) {
+  const [local, setLocal] = useState<string>(() => formatPtDecimal(value));
+  const editingRef = useRef(false);
+
+  // Sincroniza com prop quando não está editando (ex.: troca de composição, recalc externo).
+  useEffect(() => {
+    if (!editingRef.current) {
+      setLocal(formatPtDecimal(value));
+    }
+  }, [value]);
+
+  const commit = () => {
+    editingRef.current = false;
+    const parsed = parsePtDecimal(local);
+    onCommit(parsed);
+    setLocal(formatPtDecimal(parsed));
+  };
+
+  return (
+    <Input
+      type="text"
+      inputMode="decimal"
+      value={local}
+      disabled={disabled}
+      data-grid-id={gridId}
+      data-row-index={rowIndex}
+      data-col-index={colIndex}
+      onChange={e => {
+        const v = e.target.value;
+        if (v === '' || DECIMAL_INPUT_RE.test(v)) {
+          editingRef.current = true;
+          setLocal(v);
+        }
+      }}
+      onFocus={e => { editingRef.current = true; e.currentTarget.select(); }}
+      onBlur={e => { commit(); onBlur?.(e); }}
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          commit();
+        }
+      }}
+      className="h-7 text-[11px] text-right px-1 no-spinner"
+    />
+  );
+}
 
 /** Campos editáveis por índice de coluna (igual à grade do DOM). */
 type EditField = 'type' | 'comment' | 'formula' | 'a' | 'b' | 'c' | 'd';
