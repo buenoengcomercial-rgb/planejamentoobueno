@@ -708,6 +708,39 @@ function AdditiveCalculationMemoryImpl({
           )}
         </table>
       </div>
+
+      <Dialog open={!!pasteDialog} onOpenChange={(o) => { if (!o) setPasteDialog(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Memória já preenchida</DialogTitle>
+            <DialogDescription>
+              Esta composição já possui memória preenchida. Deseja substituir ou acrescentar as linhas coladas?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex flex-row justify-end gap-2">
+            <Button variant="outline" onClick={() => setPasteDialog(null)}>Cancelar</Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                const wq = pasteDialog?.withQuantities ?? false;
+                setPasteDialog(null);
+                applyPaste('append', wq);
+              }}
+            >
+              Acrescentar ao final
+            </Button>
+            <Button
+              onClick={() => {
+                const wq = pasteDialog?.withQuantities ?? false;
+                setPasteDialog(null);
+                applyPaste('replace', wq);
+              }}
+            >
+              Substituir memória atual
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
