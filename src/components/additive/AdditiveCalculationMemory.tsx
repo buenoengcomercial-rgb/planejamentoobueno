@@ -1,7 +1,22 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Plus, Copy, Trash2, AlertTriangle } from 'lucide-react';
+import { Plus, Copy, Trash2, AlertTriangle, Clipboard, ClipboardPaste } from 'lucide-react';
+import { toast } from 'sonner';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import type {
   AdditiveComposition,
   AdditiveCalculationMemoryRow,
@@ -18,6 +33,27 @@ import {
 import { handleGridContainerKeyDownCapture } from '@/lib/gridKeyboardNavigation';
 import { fmtNum } from './types';
 import { consumeMemoryPreferredType, onMemoryFocus } from '@/lib/additiveMemoryFocus';
+
+// ===== Clipboard local da Memória de Cálculo (escopo Aditivo / sessão) =====
+type MemoryClip = {
+  rows: AdditiveCalculationMemoryRow[];
+  columns?: AdditiveCalculationMemoryColumns;
+};
+let _memoryClip: MemoryClip | null = null;
+const _clipListeners = new Set<() => void>();
+function setMemoryClip(clip: MemoryClip | null) {
+  _memoryClip = clip;
+  _clipListeners.forEach(fn => { try { fn(); } catch { /* noop */ } });
+}
+function getMemoryClip(): MemoryClip | null { return _memoryClip; }
+function subscribeMemoryClip(fn: () => void) {
+  _clipListeners.add(fn);
+  return () => { _clipListeners.delete(fn); };
+}
+function useMemoryClip(): MemoryClip | null {
+  return useSyncExternalStore(subscribeMemoryClip, getMemoryClip, () => null);
+}
+const newRowId = () => Math.random().toString(36).slice(2, 10);
 
 interface Props {
   c: AdditiveComposition;
@@ -346,6 +382,86 @@ function AdditiveCalculationMemoryImpl({
     onChangeColumns({ ...(c.calculationMemoryColumns ?? {}), [k]: value });
   };
 
+  // ===== Copiar / Colar memória =====
+  const clip = useMemoryClip();
+  const filledCount = rows.filter(isMemoryRowFilled).length;
+
+  const handleCopyMemory = useCallback(() => {
+    const filled = rows.filter(isMemoryRowFilled);
+    if (filled.length === 0) {
+      toast('Não há linhas preenchidas para copiar');
+      return;
+    }
+    setMemoryClip({
+      rows: filled.map(r => ({ ...r })),
+      columns: c.calculationMemoryColumns ? { ...c.calculationMemoryColumns } : undefined,
+    });
+    toast.success('Memória copiada', { description: `${filled.length} linha(s)` });
+  }, [rows, c.calculationMemoryColumns]);
+
+  const [pasteDialog, setPasteDialog] = useState<null | { withQuantities: boolean }>(null);
+
+  const buildPastedRows = useCallback((withQuantities: boolean): AdditiveCalculationMemoryRow[] => {
+    const src = getMemoryClip();
+    if (!src) return [];
+    return src.rows.map(r => {
+      const base: AdditiveCalculationMemoryRow = {
+        id: newRowId(),
+        type: r.type,
+        loc: '',
+        comment: r.comment ?? '',
+        formula: r.formula ?? '',
+        a: withQuantities ? r.a : undefined,
+        b: withQuantities ? r.b : undefined,
+        c: withQuantities ? r.c : undefined,
+        d: withQuantities ? r.d : undefined,
+        partial: 0,
+      };
+      return recalcMemoryRow(base);
+    });
+  }, []);
+
+  const applyPaste = useCallback((mode: 'replace' | 'append', withQuantities: boolean) => {
+    const src = getMemoryClip();
+    if (!src) return;
+    const pasted = buildPastedRows(withQuantities);
+    if (pasted.length === 0) return;
+    // Mescla títulos das colunas se disponíveis e a célula destino estiver vazia/padrão
+    if (onChangeColumns && src.columns) {
+      const cur = c.calculationMemoryColumns ?? {};
+      const merged: AdditiveCalculationMemoryColumns = { ...cur };
+      (['a', 'b', 'c', 'd'] as const).forEach(k => {
+        const v = (src.columns as any)[k];
+        if (v && !((cur as any)[k] && (cur as any)[k].trim())) {
+          (merged as any)[k] = v;
+        }
+      });
+      onChangeColumns(merged);
+    }
+    setRows(prev => {
+      const filledPrev = prev.filter(isMemoryRowFilled);
+      const next = mode === 'replace' ? pasted : [...filledPrev, ...pasted];
+      const reconciled = ensureSingleTrailingDraftRow(next, pasted[pasted.length - 1].type);
+      requestAnimationFrame(() => commit(reconciled));
+      return reconciled;
+    });
+    toast.success('Memória colada', {
+      description: `${pasted.length} linha(s)${withQuantities ? ' com quantidades' : ''}`,
+    });
+  }, [buildPastedRows, commit, onChangeColumns, c.calculationMemoryColumns]);
+
+  const handlePaste = useCallback((withQuantities: boolean) => {
+    if (!getMemoryClip()) {
+      toast('Copie uma memória antes de colar');
+      return;
+    }
+    if (filledCount > 0) {
+      setPasteDialog({ withQuantities });
+      return;
+    }
+    applyPaste('replace', withQuantities);
+  }, [applyPaste, filledCount]);
+
   // Totais visuais ignoram linhas vazias.
   const totalAcrescida = rows
     .filter(r => isMemoryRowFilled(r) && r.type !== 'suprimida')
@@ -409,6 +525,37 @@ function AdditiveCalculationMemoryImpl({
             <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => addManual('suprimida')}>
               <Plus className="w-3 h-3 mr-1" /> Suprimida
             </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-[11px]"
+              onClick={handleCopyMemory}
+              disabled={filledCount === 0}
+              title="Copiar linhas preenchidas desta memória"
+            >
+              <Clipboard className="w-3 h-3 mr-1" /> Copiar memória
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-[11px]"
+                  disabled={!clip}
+                  title={clip ? 'Colar memória copiada' : 'Copie uma memória antes de colar'}
+                >
+                  <ClipboardPaste className="w-3 h-3 mr-1" /> Colar memória
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="text-[11px]">
+                <DropdownMenuItem onClick={() => handlePaste(false)}>
+                  Colar somente descrição/fórmula
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handlePaste(true)}>
+                  Colar descrição + quantidades
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         )}
       </div>
@@ -561,6 +708,39 @@ function AdditiveCalculationMemoryImpl({
           )}
         </table>
       </div>
+
+      <Dialog open={!!pasteDialog} onOpenChange={(o) => { if (!o) setPasteDialog(null); }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Memória já preenchida</DialogTitle>
+            <DialogDescription>
+              Esta composição já possui memória preenchida. Deseja substituir ou acrescentar as linhas coladas?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex flex-row justify-end gap-2">
+            <Button variant="outline" onClick={() => setPasteDialog(null)}>Cancelar</Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                const wq = pasteDialog?.withQuantities ?? false;
+                setPasteDialog(null);
+                applyPaste('append', wq);
+              }}
+            >
+              Acrescentar ao final
+            </Button>
+            <Button
+              onClick={() => {
+                const wq = pasteDialog?.withQuantities ?? false;
+                setPasteDialog(null);
+                applyPaste('replace', wq);
+              }}
+            >
+              Substituir memória atual
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
