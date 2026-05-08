@@ -153,6 +153,12 @@ function AdditiveCompositionRowImpl({
   const canOpenAnalytic = hasInputs || isNew;
   const shouldShowAnalyticRows = isOpen && (showAnalytic || isNew) && canOpenAnalytic;
 
+  const openMemoryFor = (type: AdditiveMemoryQtyType) => {
+    if (isLocked) return;
+    requestMemoryFocus(c.id, type);
+    if (!isMemoryOpen) onToggleMemory(c.id);
+  };
+
   return (
     <Fragment>
       <tr className={`border-b align-top hover:bg-slate-100/60 ${isNew ? 'bg-sky-50/30' : (rowIndex % 2 === 1 ? 'bg-slate-50/50' : 'bg-white')}`}>
