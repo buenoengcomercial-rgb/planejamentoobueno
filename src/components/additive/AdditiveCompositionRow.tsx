@@ -35,8 +35,17 @@ function TextCommitCell({
 }) {
   const [local, setLocal] = useState<string>(value ?? '');
   const [focused, setFocused] = useState(false);
-  useEffect(() => { if (!focused) setLocal(value ?? ''); }, [value, focused]);
-  const commit = () => { if ((local ?? '') !== (value ?? '')) onCommit(local); };
+  const [dirty, setDirty] = useState(false);
+  // Sincroniza com valor externo quando não focado, OU quando focado mas o
+  // usuário ainda não editou (ex.: autofill por código atualiza Banco enquanto
+  // o foco já se moveu para esse campo).
+  useEffect(() => {
+    if (!focused || !dirty) setLocal(value ?? '');
+  }, [value, focused, dirty]);
+  const commit = () => {
+    if (!dirty) return;
+    if ((local ?? '') !== (value ?? '')) onCommit(local);
+  };
   return (
     <Input
       value={local}
@@ -44,9 +53,9 @@ function TextCommitCell({
       data-grid-id={gridId}
       data-row-index={rowIndex}
       data-col-index={colIndex}
-      onFocus={() => setFocused(true)}
-      onChange={e => setLocal(e.target.value)}
-      onBlur={() => { setFocused(false); commit(); }}
+      onFocus={() => { setFocused(true); setDirty(false); }}
+      onChange={e => { setDirty(true); setLocal(e.target.value); }}
+      onBlur={() => { setFocused(false); commit(); setDirty(false); }}
       onKeyDown={e => {
         handleGridKeyDown(e);
         if (e.defaultPrevented) return;
@@ -72,8 +81,14 @@ function TextareaCommitCell({
 }) {
   const [local, setLocal] = useState<string>(value ?? '');
   const [focused, setFocused] = useState(false);
-  useEffect(() => { if (!focused) setLocal(value ?? ''); }, [value, focused]);
-  const commit = () => { if ((local ?? '') !== (value ?? '')) onCommit(local); };
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    if (!focused || !dirty) setLocal(value ?? '');
+  }, [value, focused, dirty]);
+  const commit = () => {
+    if (!dirty) return;
+    if ((local ?? '') !== (value ?? '')) onCommit(local);
+  };
   return (
     <textarea
       value={local}
@@ -82,9 +97,9 @@ function TextareaCommitCell({
       data-grid-id={gridId}
       data-row-index={rowIndex}
       data-col-index={colIndex}
-      onFocus={() => setFocused(true)}
-      onChange={e => setLocal(e.target.value)}
-      onBlur={() => { setFocused(false); commit(); }}
+      onFocus={() => { setFocused(true); setDirty(false); }}
+      onChange={e => { setDirty(true); setLocal(e.target.value); }}
+      onBlur={() => { setFocused(false); commit(); setDirty(false); }}
       onKeyDown={e => {
         handleGridKeyDown(e);
         if (e.defaultPrevented) return;
