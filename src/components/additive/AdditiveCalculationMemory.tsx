@@ -84,15 +84,22 @@ function EditableHeader({
 }
 
 /**
- * Garante exatamente UMA linha vazia ao final.
- * - Remove linhas vazias intermediárias (mantém preenchidas).
- * - Adiciona uma única linha vazia no fim com tipo herdado.
+ * Garante exatamente UMA linha vazia ao final, PRESERVANDO o id da linha vazia
+ * existente quando ela já estiver no fim — isso evita remontar inputs e perder foco
+ * durante navegação por teclado.
  */
 function ensureSingleTrailingDraftRow(
   rows: AdditiveCalculationMemoryRow[],
   preferredType?: 'acrescida' | 'suprimida',
 ): AdditiveCalculationMemoryRow[] {
   const filled = rows.filter(isMemoryRowFilled);
+  const last = rows[rows.length - 1];
+  const hasTrailingEmpty = last && !isMemoryRowFilled(last);
+  if (hasTrailingEmpty) {
+    // Mantém o MESMO id; aplica preferredType se vier explicito.
+    const kept = preferredType ? { ...last, type: preferredType } : last;
+    return [...filled, kept];
+  }
   const lastType = preferredType
     ?? (filled.length > 0 ? filled[filled.length - 1].type : 'acrescida');
   return [...filled, makeMemoryRow(lastType)];
