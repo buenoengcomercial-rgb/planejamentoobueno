@@ -306,6 +306,7 @@ function AdditiveCalculationMemoryImpl({
   return (
     <div
       className="border rounded-md bg-background p-2 space-y-2"
+      onKeyDownCapture={handleGridContainerKeyDownCapture}
     >
       <div className="flex items-center justify-between">
         <div className="text-[11px] font-semibold text-muted-foreground">
@@ -385,7 +386,6 @@ function AdditiveCalculationMemoryImpl({
                       data-col-index={0}
                       onChange={e => onCellChange(r.id, 'type', e.target.value)}
                       onBlur={handleBlur}
-                      onKeyDown={e => handleMemoryKeyDown(e, rowIndex, 0)}
                       className="h-7 w-full text-[11px] border border-input rounded-md bg-background px-1"
                     >
                       <option value="acrescida">Acrescida</option>
@@ -401,7 +401,6 @@ function AdditiveCalculationMemoryImpl({
                       data-col-index={1}
                       onChange={e => onCellChange(r.id, 'comment', e.target.value)}
                       onBlur={handleBlur}
-                      onKeyDown={e => handleMemoryKeyDown(e, rowIndex, 1)}
                       className="h-7 text-[11px]"
                       placeholder={isDraftRow ? 'Justificativa (digite para iniciar)' : 'Justificativa'}
                     />
@@ -415,7 +414,6 @@ function AdditiveCalculationMemoryImpl({
                       data-col-index={2}
                       onChange={e => onCellChange(r.id, 'formula', e.target.value)}
                       onBlur={handleBlur}
-                      onKeyDown={e => handleMemoryKeyDown(e, rowIndex, 2)}
                       className={`h-7 text-[11px] font-mono ${isInvalid ? 'border-rose-400' : ''}`}
                       placeholder={placeholder}
                       title={isInvalid ? ev.error : `Fórmula opcional. Use A, B, C, D, +, -, *, /, ( ). Padrão: ${placeholder}`}
@@ -436,7 +434,6 @@ function AdditiveCalculationMemoryImpl({
                           if (v === '' || /^-?[0-9]*[.,]?[0-9]*$/.test(v)) onCellChange(r.id, k, v);
                         }}
                         onBlur={handleBlur}
-                        onKeyDown={e => handleMemoryKeyDown(e, rowIndex, 3 + kIdx)}
                         onFocus={e => e.currentTarget.select()}
                         className="h-7 text-[11px] text-right px-1 no-spinner"
                       />
