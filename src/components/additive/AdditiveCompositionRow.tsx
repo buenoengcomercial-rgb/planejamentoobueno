@@ -9,6 +9,7 @@ import { fmtBRL, fmtNum, fmtQty2, fmtPct, COL_COUNT, G_BG, BORDER_L } from './ty
 import AdditiveAnalyticRows from './AdditiveAnalyticRows';
 import AdditiveCalculationMemory from './AdditiveCalculationMemory';
 import { handleGridKeyDown } from '@/lib/gridKeyboardNavigation';
+import { requestMemoryFocus, type AdditiveMemoryQtyType } from '@/lib/additiveMemoryFocus';
 
 const MAIN_GRID = 'additive-main-table';
 
