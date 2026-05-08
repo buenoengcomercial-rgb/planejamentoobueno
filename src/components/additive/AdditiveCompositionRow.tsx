@@ -1,7 +1,15 @@
 import { Fragment, memo, useEffect, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { ChevronRight, ChevronDown, Trash2, Calculator } from 'lucide-react';
+import { ChevronRight, ChevronDown, Trash2, Calculator, MoreVertical } from 'lucide-react';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { buttonVariants } from '@/components/ui/button';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import type { AdditiveComposition, AdditiveCalculationMemoryRow } from '@/types/project';
 import { computeAdditiveRow, computeCompositionWithBDI } from '@/lib/additiveImport';
 import { memoryTotals } from '@/lib/calculationMemory';
@@ -214,6 +222,7 @@ function AdditiveCompositionRowImpl({
   onToggleExpand, onToggleMemory, onUpdateComposition, onUpdateQuantity,
   onRemoveComposition, onChangeMemory,
 }: Props) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const r = computeAdditiveRow(c, bdi, globalDiscount);
   const cb = computeCompositionWithBDI(c, bdi);
   const hasInputs = c.inputs.length > 0;
@@ -337,15 +346,55 @@ function AdditiveCompositionRowImpl({
               Memória {hasMemory ? `(${(c.calculationMemory ?? []).length})` : ''}
             </button>
             {isNew && !isLocked && (
-              <button
-                onClick={() => onRemoveComposition(c.id)}
-                className="text-[10px] text-rose-600 hover:underline ml-1"
-                title="Remover novo serviço"
-              >
-                <Trash2 className="w-3 h-3 inline" />
-              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="text-[10px] inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:bg-muted ml-1"
+                    title="Ações do novo serviço"
+                  >
+                    <MoreVertical className="w-3 h-3" />
+                    Ações
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuItem
+                    onSelect={(e) => { e.preventDefault(); setConfirmDelete(true); }}
+                    className="text-rose-700 focus:text-rose-700 focus:bg-rose-50"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-2" />
+                    Excluir serviço
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
           </div>
+          {isNew && !isLocked && (
+            <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Excluir novo serviço aditivado?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Esta ação removerá a composição, seus insumos analíticos e sua memória de cálculo. Essa ação não pode ser desfeita.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <div className="rounded-md border bg-muted/30 p-3 text-xs space-y-1">
+                  <div><span className="font-medium">Item:</span> {c.itemNumber || c.item || '—'}</div>
+                  <div><span className="font-medium">Código:</span> <span className="font-mono">{c.code || '—'}</span></div>
+                  <div><span className="font-medium">Descrição:</span> {c.description || '—'}</div>
+                </div>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                  <AlertDialogAction
+                    className={buttonVariants({ variant: 'destructive' })}
+                    onClick={() => { onRemoveComposition(c.id); setConfirmDelete(false); }}
+                  >
+                    Excluir serviço
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
         </td>
         <td className={`px-1 py-1 ${G_BG.id}`}>
           {isNew && !isLocked ? (

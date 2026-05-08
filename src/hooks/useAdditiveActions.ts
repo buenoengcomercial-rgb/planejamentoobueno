@@ -595,6 +595,8 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
           item: comp.item || comp.itemNumber,
           code: comp.code,
           description: comp.description,
+          inputsCount: (comp.inputs ?? []).length,
+          memoryRowsCount: (comp.calculationMemory ?? []).length,
         },
       });
     }
