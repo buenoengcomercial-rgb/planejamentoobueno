@@ -446,6 +446,9 @@ function AdditiveCalculationMemoryImpl({
                         step="0.0001"
                         value={r[k] ?? ''}
                         disabled={isLocked}
+                        data-grid-id={`additive-memory-${c.id}`}
+                        data-row-index={rowIndex}
+                        data-col-index={3 + kIdx}
                         onChange={e => onCellChange(r.id, k, e.target.value)}
                         onBlur={handleBlur}
                         onKeyDown={e => handleKeyDown(e, rowIndex, 3 + kIdx)}
