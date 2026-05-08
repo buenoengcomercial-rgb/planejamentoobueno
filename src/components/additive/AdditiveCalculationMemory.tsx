@@ -17,6 +17,7 @@ import {
 } from '@/lib/calculationMemory';
 import { fmtNum } from './types';
 import { handleGridKeyDown } from '@/lib/gridKeyboardNavigation';
+import { consumeMemoryPreferredType, onMemoryFocus } from '@/lib/additiveMemoryFocus';
 
 interface Props {
   c: AdditiveComposition;
