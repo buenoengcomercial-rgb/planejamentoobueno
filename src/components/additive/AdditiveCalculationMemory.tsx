@@ -303,8 +303,27 @@ function AdditiveCalculationMemoryImpl({
     return off;
   }, [c.id, isLocked]);
 
+  const handleContainerBlurCapture = (e: React.FocusEvent<HTMLDivElement>) => {
+    if (isLocked) return;
+    if (!onAutoClose) return;
+    const next = e.relatedTarget as Node | null;
+    if (next && containerRef.current?.contains(next)) return;
+    // Salva antes de fechar.
+    reconcile();
+    // Defere para permitir que cliques em botões internos (mousedown sem foco) sejam processados.
+    setTimeout(() => {
+      const active = document.activeElement;
+      if (active && containerRef.current?.contains(active)) return;
+      onAutoClose();
+    }, 0);
+  };
+
   return (
-    <div className="border rounded-md bg-background p-2 space-y-2">
+    <div
+      ref={containerRef}
+      className="border rounded-md bg-background p-2 space-y-2"
+      onBlurCapture={handleContainerBlurCapture}
+    >
       <div className="flex items-center justify-between">
         <div className="text-[11px] font-semibold text-muted-foreground">
           Memória de cálculo — {c.itemNumber || c.item} {c.description}
