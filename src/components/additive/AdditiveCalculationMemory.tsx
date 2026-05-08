@@ -293,8 +293,7 @@ function AdditiveCalculationMemoryImpl({
     if (isLocked) return;
     const apply = (type: 'acrescida' | 'suprimida') => {
       setRows(prev => {
-        const filled = prev.filter(isMemoryRowFilled);
-        const next = [...filled, makeMemoryRow(type)];
+        const next = ensureSingleTrailingDraftRow(prev, type);
         focusCellByCoords(next.length - 1, 1);
         return next;
       });
