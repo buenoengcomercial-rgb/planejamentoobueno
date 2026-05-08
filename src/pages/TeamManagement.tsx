@@ -28,6 +28,9 @@ export default function TeamManagement() {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<OrgRole>('field_user');
   const [submitting, setSubmitting] = useState(false);
+  const [createMode, setCreateMode] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createPassword, setCreatePassword] = useState('');
 
   useEffect(() => {
     if (!authLoading && !user) navigate('/auth', { replace: true });
