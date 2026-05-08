@@ -7,8 +7,12 @@ export interface CompGroup {
   depth: number;
   rows: AdditiveComposition[];
   children: CompGroup[];
+  subtotalTotalFonte: number;
   subtotalContratado: number;
+  subtotalSuprimido: number;
+  subtotalAcrescido: number;
   subtotalFinal: number;
+  subtotalDiferenca: number;
 }
 
 export const STATUS_LABEL: Record<AdditiveStatus, string> = {
