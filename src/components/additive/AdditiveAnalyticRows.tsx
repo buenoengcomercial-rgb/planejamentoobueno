@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import type { AdditiveComposition, AdditiveInput } from '@/types/project';
 import { sumAnalyticTotalNoBDI, money2, truncar2 } from '@/lib/additiveImport';
 import { fmtBRL } from './types';
-import { handleGridKeyDown } from '@/lib/gridKeyboardNavigation';
+import { handleGridContainerKeyDownCapture } from '@/lib/gridKeyboardNavigation';
 
 interface Props {
   c: AdditiveComposition;
@@ -73,8 +73,6 @@ function NumCell({
       }}
       onBlur={() => { setFocused(false); commit(); }}
       onKeyDown={e => {
-        handleGridKeyDown(e);
-        if (e.defaultPrevented) return;
         if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
       }}
       className={`no-spinner ${className ?? ''}`}
@@ -109,8 +107,6 @@ function TextCell({
       onChange={e => setLocal(e.target.value)}
       onBlur={() => { setFocused(false); if (local !== value) onCommit(local); }}
       onKeyDown={e => {
-        handleGridKeyDown(e);
-        if (e.defaultPrevented) return;
         if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
       }}
       className={className}
@@ -159,7 +155,7 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
   const colCount = (showDiscount ? 9 : 7) + (editable ? 1 : 0);
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" onKeyDownCapture={handleGridContainerKeyDownCapture}>
       <table className="w-full text-[11px] table-fixed border-collapse">
         <colgroup>
           <col style={{ width: '110px' }} />
