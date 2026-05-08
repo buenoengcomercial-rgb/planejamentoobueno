@@ -510,21 +510,14 @@ function AdditiveCalculationMemoryImpl({
                   </td>
                   {(['a', 'b', 'c', 'd'] as const).map((k, kIdx) => (
                     <td key={k} className="px-1.5 py-1">
-                      <Input
-                        type="text"
-                        inputMode="decimal"
-                        value={r[k] == null ? '' : String(r[k]).replace('.', ',')}
+                      <MemoryNumberCell
+                        value={r[k]}
                         disabled={isLocked}
-                        data-grid-id={gridId}
-                        data-row-index={rowIndex}
-                        data-col-index={3 + kIdx}
-                        onChange={e => {
-                          const v = e.target.value;
-                          if (v === '' || /^-?[0-9]*[.,]?[0-9]*$/.test(v)) onCellChange(r.id, k, v);
-                        }}
+                        gridId={gridId}
+                        rowIndex={rowIndex}
+                        colIndex={3 + kIdx}
+                        onCommit={(n) => onCellChange(r.id, k, n == null ? '' : String(n))}
                         onBlur={handleBlur}
-                        onFocus={e => e.currentTarget.select()}
-                        className="h-7 text-[11px] text-right px-1 no-spinner"
                       />
                     </td>
                   ))}
