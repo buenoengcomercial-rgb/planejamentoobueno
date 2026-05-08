@@ -382,6 +382,86 @@ function AdditiveCalculationMemoryImpl({
     onChangeColumns({ ...(c.calculationMemoryColumns ?? {}), [k]: value });
   };
 
+  // ===== Copiar / Colar memória =====
+  const clip = useMemoryClip();
+  const filledCount = rows.filter(isMemoryRowFilled).length;
+
+  const handleCopyMemory = useCallback(() => {
+    const filled = rows.filter(isMemoryRowFilled);
+    if (filled.length === 0) {
+      toast('Não há linhas preenchidas para copiar');
+      return;
+    }
+    setMemoryClip({
+      rows: filled.map(r => ({ ...r })),
+      columns: c.calculationMemoryColumns ? { ...c.calculationMemoryColumns } : undefined,
+    });
+    toast.success('Memória copiada', { description: `${filled.length} linha(s)` });
+  }, [rows, c.calculationMemoryColumns]);
+
+  const [pasteDialog, setPasteDialog] = useState<null | { withQuantities: boolean }>(null);
+
+  const buildPastedRows = useCallback((withQuantities: boolean): AdditiveCalculationMemoryRow[] => {
+    const src = getMemoryClip();
+    if (!src) return [];
+    return src.rows.map(r => {
+      const base: AdditiveCalculationMemoryRow = {
+        id: newRowId(),
+        type: r.type,
+        loc: '',
+        comment: r.comment ?? '',
+        formula: r.formula ?? '',
+        a: withQuantities ? r.a : undefined,
+        b: withQuantities ? r.b : undefined,
+        c: withQuantities ? r.c : undefined,
+        d: withQuantities ? r.d : undefined,
+        partial: 0,
+      };
+      return recalcMemoryRow(base);
+    });
+  }, []);
+
+  const applyPaste = useCallback((mode: 'replace' | 'append', withQuantities: boolean) => {
+    const src = getMemoryClip();
+    if (!src) return;
+    const pasted = buildPastedRows(withQuantities);
+    if (pasted.length === 0) return;
+    // Mescla títulos das colunas se disponíveis e a célula destino estiver vazia/padrão
+    if (onChangeColumns && src.columns) {
+      const cur = c.calculationMemoryColumns ?? {};
+      const merged: AdditiveCalculationMemoryColumns = { ...cur };
+      (['a', 'b', 'c', 'd'] as const).forEach(k => {
+        const v = (src.columns as any)[k];
+        if (v && !((cur as any)[k] && (cur as any)[k].trim())) {
+          (merged as any)[k] = v;
+        }
+      });
+      onChangeColumns(merged);
+    }
+    setRows(prev => {
+      const filledPrev = prev.filter(isMemoryRowFilled);
+      const next = mode === 'replace' ? pasted : [...filledPrev, ...pasted];
+      const reconciled = ensureSingleTrailingDraftRow(next, pasted[pasted.length - 1].type);
+      requestAnimationFrame(() => commit(reconciled));
+      return reconciled;
+    });
+    toast.success('Memória colada', {
+      description: `${pasted.length} linha(s)${withQuantities ? ' com quantidades' : ''}`,
+    });
+  }, [buildPastedRows, commit, onChangeColumns, c.calculationMemoryColumns]);
+
+  const handlePaste = useCallback((withQuantities: boolean) => {
+    if (!getMemoryClip()) {
+      toast('Copie uma memória antes de colar');
+      return;
+    }
+    if (filledCount > 0) {
+      setPasteDialog({ withQuantities });
+      return;
+    }
+    applyPaste('replace', withQuantities);
+  }, [applyPaste, filledCount]);
+
   // Totais visuais ignoram linhas vazias.
   const totalAcrescida = rows
     .filter(r => isMemoryRowFilled(r) && r.type !== 'suprimida')
