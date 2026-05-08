@@ -25,6 +25,8 @@ interface Props {
   /** Recebe SOMENTE linhas preenchidas (a linha vazia visual é estado local). */
   onChange: (rows: AdditiveCalculationMemoryRow[]) => void;
   onChangeColumns?: (cols: AdditiveCalculationMemoryColumns) => void;
+  /** Disparado quando o foco sai completamente do container da memória. */
+  onAutoClose?: () => void;
 }
 
 const numOrUndef = (v: string): number | undefined => {
