@@ -374,6 +374,7 @@ function AdditiveCompositionRowImpl({
               isLocked={isLocked}
               onChange={rows => onChangeMemory(c.id, rows)}
               onChangeColumns={cols => onUpdateComposition(c.id, { calculationMemoryColumns: cols })}
+              onAutoClose={() => { if (isMemoryOpen) onToggleMemory(c.id); }}
             />
           </td>
         </tr>
