@@ -63,21 +63,35 @@ export default function TeamManagement() {
     e.preventDefault();
     if (!orgId) return;
     setSubmitting(true);
-    const res = await inviteMemberByEmail(orgId, inviteEmail, inviteRole);
-    setSubmitting(false);
-    if (res.ok === true) {
-      toast.success('Usuário liberado.');
-      setInviteEmail('');
-      void reload();
-      return;
-    }
-    const reason = res.reason;
-    if (reason === 'not_registered') {
-      toast.error('Este e-mail ainda não tem cadastro. Peça que a pessoa crie a conta primeiro.');
-    } else if (reason === 'already_member') {
-      toast.error('Esta pessoa já é membro da empresa.');
-    } else {
-      toast.error(res.message || 'Erro ao liberar acesso.');
+    try {
+      if (createMode) {
+        const res = await createMemberWithPassword(orgId, inviteEmail, createPassword, inviteRole, createName);
+        if (res.ok === true) {
+          toast.success('Acesso criado com sucesso.');
+          setInviteEmail(''); setCreateName(''); setCreatePassword('');
+          void reload();
+          return;
+        }
+        if (res.reason === 'already_member') toast.error('Esta pessoa já é membro da empresa.');
+        else toast.error(res.message || 'Erro ao criar acesso.');
+        return;
+      }
+      const res = await inviteMemberByEmail(orgId, inviteEmail, inviteRole);
+      if (res.ok === true) {
+        toast.success('Usuário liberado.');
+        setInviteEmail('');
+        void reload();
+        return;
+      }
+      if (res.reason === 'not_registered') {
+        toast.error('Este e-mail ainda não tem cadastro. Use "Criar acesso" para cadastrar diretamente.');
+      } else if (res.reason === 'already_member') {
+        toast.error('Esta pessoa já é membro da empresa.');
+      } else {
+        toast.error(res.message || 'Erro ao liberar acesso.');
+      }
+    } finally {
+      setSubmitting(false);
     }
   };
 
