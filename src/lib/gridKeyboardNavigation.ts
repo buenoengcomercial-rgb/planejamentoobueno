@@ -143,6 +143,73 @@ export function handleGridKeyDown(e: React.KeyboardEvent<HTMLElement>) {
   // Sem destino: mantém foco atual; default já foi prevenido.
 }
 
+export function handleGridContainerKeyDownCapture(e: React.KeyboardEvent) {
+  const target = e.target as HTMLElement | null;
+  if (!target) return;
+
+  const cell = target.closest(`[${ATTR_GRID}][${ATTR_ROW}][${ATTR_COL}]`) as HTMLElement | null;
+  if (!cell) return;
+
+  const gridId = cell.getAttribute(ATTR_GRID);
+  const row = Number(cell.getAttribute(ATTR_ROW));
+  const col = Number(cell.getAttribute(ATTR_COL));
+
+  if (!gridId || !Number.isFinite(row) || !Number.isFinite(col)) return;
+
+  const keys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Tab'];
+  if (!keys.includes(e.key)) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  const cells = getCells(gridId)
+    .sort((a, b) => a.row - b.row || a.col - b.col);
+
+  if (cells.length === 0) return;
+
+  let nextRow = row;
+  let nextCol = col;
+
+  if (e.key === 'ArrowUp') nextRow = row - 1;
+  if (e.key === 'ArrowDown') nextRow = row + 1;
+  if (e.key === 'ArrowLeft') nextCol = col - 1;
+  if (e.key === 'ArrowRight') nextCol = col + 1;
+
+  if (e.key === 'Enter' || e.key === 'Tab') {
+    nextCol = e.shiftKey ? col - 1 : col + 1;
+  }
+
+  const cols = [...new Set(cells.map(c => c.col))].sort((a, b) => a - b);
+  const rows = [...new Set(cells.map(c => c.row))].sort((a, b) => a - b);
+  const minCol = cols[0] ?? 0;
+  const maxCol = cols[cols.length - 1] ?? 0;
+  const minRow = rows[0] ?? 0;
+  const maxRow = rows[rows.length - 1] ?? 0;
+
+  if (nextCol > maxCol) {
+    nextCol = minCol;
+    nextRow = row + 1;
+  }
+
+  if (nextCol < minCol) {
+    nextCol = maxCol;
+    nextRow = row - 1;
+  }
+
+  if (nextRow < minRow) nextRow = minRow;
+  if (nextRow > maxRow) nextRow = maxRow;
+
+  let next = findCell(cells, nextRow, nextCol);
+
+  if (!next) {
+    const sameRow = cells.filter(c => c.row === nextRow);
+    next = sameRow
+      .sort((a, b) => Math.abs(a.col - nextCol) - Math.abs(b.col - nextCol))[0]?.el ?? null;
+  }
+
+  if (next) focusCell(next);
+}
+
 /** Helper para gerar props das células. */
 export function gridCellProps(gridId: string, rowIndex: number, colIndex: number) {
   return {
