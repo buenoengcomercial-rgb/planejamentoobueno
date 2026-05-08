@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useOrganization } from '@/hooks/useOrganization';
 import {
-  listOrgMembers, inviteMemberByEmail, updateMemberRole, updateMemberStatus, removeMember,
+  listOrgMembers, inviteMemberByEmail, createMemberWithPassword, updateMemberRole, updateMemberStatus, removeMember,
   OrgMember, OrgRole, MemberStatus, ROLE_LABELS, STATUS_LABELS, canManageMembers,
 } from '@/lib/organizations';
 import { Button } from '@/components/ui/button';
@@ -28,6 +28,9 @@ export default function TeamManagement() {
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<OrgRole>('field_user');
   const [submitting, setSubmitting] = useState(false);
+  const [createMode, setCreateMode] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createPassword, setCreatePassword] = useState('');
 
   useEffect(() => {
     if (!authLoading && !user) navigate('/auth', { replace: true });
@@ -60,21 +63,35 @@ export default function TeamManagement() {
     e.preventDefault();
     if (!orgId) return;
     setSubmitting(true);
-    const res = await inviteMemberByEmail(orgId, inviteEmail, inviteRole);
-    setSubmitting(false);
-    if (res.ok === true) {
-      toast.success('Usuário liberado.');
-      setInviteEmail('');
-      void reload();
-      return;
-    }
-    const reason = res.reason;
-    if (reason === 'not_registered') {
-      toast.error('Este e-mail ainda não tem cadastro. Peça que a pessoa crie a conta primeiro.');
-    } else if (reason === 'already_member') {
-      toast.error('Esta pessoa já é membro da empresa.');
-    } else {
-      toast.error(res.message || 'Erro ao liberar acesso.');
+    try {
+      if (createMode) {
+        const res = await createMemberWithPassword(orgId, inviteEmail, createPassword, inviteRole, createName);
+        if (res.ok === true) {
+          toast.success('Acesso criado com sucesso.');
+          setInviteEmail(''); setCreateName(''); setCreatePassword('');
+          void reload();
+          return;
+        }
+        if (res.reason === 'already_member') toast.error('Esta pessoa já é membro da empresa.');
+        else toast.error(res.message || 'Erro ao criar acesso.');
+        return;
+      }
+      const res = await inviteMemberByEmail(orgId, inviteEmail, inviteRole);
+      if (res.ok === true) {
+        toast.success('Usuário liberado.');
+        setInviteEmail('');
+        void reload();
+        return;
+      }
+      if (res.reason === 'not_registered') {
+        toast.error('Este e-mail ainda não tem cadastro. Use "Criar acesso" para cadastrar diretamente.');
+      } else if (res.reason === 'already_member') {
+        toast.error('Esta pessoa já é membro da empresa.');
+      } else {
+        toast.error(res.message || 'Erro ao liberar acesso.');
+      }
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -142,13 +159,33 @@ export default function TeamManagement() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Liberar acesso</CardTitle>
-            <CardDescription>
-              Informe o e-mail de uma pessoa que já criou a conta no sistema. Ela será adicionada como membro ativo da empresa.
-            </CardDescription>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <CardTitle className="text-base">{createMode ? 'Criar novo acesso' : 'Liberar acesso'}</CardTitle>
+                <CardDescription>
+                  {createMode
+                    ? 'Cadastre uma nova pessoa diretamente: ela já entra ativa na empresa com a senha que você definir.'
+                    : 'Adicione uma pessoa que já tem conta no sistema usando o e-mail dela.'}
+                </CardDescription>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={() => setCreateMode(v => !v)}>
+                {createMode ? 'Liberar existente' : 'Criar acesso novo'}
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleInvite} className="grid gap-3 md:grid-cols-[1fr_180px_auto] items-end">
+              {createMode && (
+                <div className="space-y-1 md:col-span-3">
+                  <Label htmlFor="create-name">Nome</Label>
+                  <Input
+                    id="create-name"
+                    value={createName}
+                    onChange={e => setCreateName(e.target.value)}
+                    placeholder="Nome completo"
+                  />
+                </div>
+              )}
               <div className="space-y-1">
                 <Label htmlFor="invite-email">E-mail</Label>
                 <Input
@@ -160,6 +197,20 @@ export default function TeamManagement() {
                   placeholder="usuario@empresa.com"
                 />
               </div>
+              {createMode && (
+                <div className="space-y-1">
+                  <Label htmlFor="create-password">Senha</Label>
+                  <Input
+                    id="create-password"
+                    type="text"
+                    required
+                    minLength={6}
+                    value={createPassword}
+                    onChange={e => setCreatePassword(e.target.value)}
+                    placeholder="Mín. 6 caracteres"
+                  />
+                </div>
+              )}
               <div className="space-y-1">
                 <Label>Função</Label>
                 <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as OrgRole)}>
@@ -172,7 +223,7 @@ export default function TeamManagement() {
                 </Select>
               </div>
               <Button type="submit" disabled={submitting}>
-                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <><UserPlus className="w-4 h-4 mr-1" /> Liberar</>}
+                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <><UserPlus className="w-4 h-4 mr-1" /> {createMode ? 'Criar acesso' : 'Liberar'}</>}
               </Button>
             </form>
           </CardContent>

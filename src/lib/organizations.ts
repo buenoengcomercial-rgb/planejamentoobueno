@@ -149,6 +149,35 @@ export async function inviteMemberByEmail(
   return { ok: true };
 }
 
+/**
+ * Cria diretamente um novo usuário (auth + profile + membership ativa) na organização.
+ * Requer que quem chama seja owner/admin. Usa a edge function admin-create-member.
+ */
+export async function createMemberWithPassword(
+  orgId: string,
+  email: string,
+  password: string,
+  role: OrgRole,
+  name?: string,
+): Promise<{ ok: true } | { ok: false; reason: 'already_member' | 'error'; message?: string }> {
+  const { data, error } = await supabase.functions.invoke('admin-create-member', {
+    body: {
+      organization_id: orgId,
+      email: email.trim().toLowerCase(),
+      password,
+      role,
+      name: name?.trim() || null,
+    },
+  });
+  if (error) {
+    const msg = (data as any)?.error || error.message;
+    if (msg === 'already_member') return { ok: false, reason: 'already_member' };
+    return { ok: false, reason: 'error', message: msg };
+  }
+  if (data && (data as any).ok) return { ok: true };
+  return { ok: false, reason: 'error', message: (data as any)?.error };
+}
+
 export async function updateMemberRole(memberId: string, role: OrgRole): Promise<void> {
   const { error } = await supabase
     .from('organization_members')
