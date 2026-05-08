@@ -525,6 +525,37 @@ function AdditiveCalculationMemoryImpl({
             <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => addManual('suprimida')}>
               <Plus className="w-3 h-3 mr-1" /> Suprimida
             </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-[11px]"
+              onClick={handleCopyMemory}
+              disabled={filledCount === 0}
+              title="Copiar linhas preenchidas desta memória"
+            >
+              <Clipboard className="w-3 h-3 mr-1" /> Copiar memória
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-[11px]"
+                  disabled={!clip}
+                  title={clip ? 'Colar memória copiada' : 'Copie uma memória antes de colar'}
+                >
+                  <ClipboardPaste className="w-3 h-3 mr-1" /> Colar memória
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="text-[11px]">
+                <DropdownMenuItem onClick={() => handlePaste(false)}>
+                  Colar somente descrição/fórmula
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handlePaste(true)}>
+                  Colar descrição + quantidades
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         )}
       </div>
