@@ -284,8 +284,8 @@ function AdditiveCompositionRowImpl({
           )}
           <div className="flex flex-wrap gap-1 mt-1 items-center">
             {isNew && (
-              <Badge variant="outline" className="text-[9px] text-sky-700 border-sky-400 bg-sky-50">
-                Novo serviço
+              <Badge variant="outline" className="text-[10px] font-semibold text-sky-800 border-sky-500 bg-sky-100 px-2">
+                Novo serviço aditivado
               </Badge>
             )}
             {noAnalytic && <Badge variant="outline" className="text-[9px] text-amber-700 border-amber-400">Sem analítico</Badge>}
