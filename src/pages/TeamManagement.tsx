@@ -159,13 +159,33 @@ export default function TeamManagement() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Liberar acesso</CardTitle>
-            <CardDescription>
-              Informe o e-mail de uma pessoa que já criou a conta no sistema. Ela será adicionada como membro ativo da empresa.
-            </CardDescription>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <CardTitle className="text-base">{createMode ? 'Criar novo acesso' : 'Liberar acesso'}</CardTitle>
+                <CardDescription>
+                  {createMode
+                    ? 'Cadastre uma nova pessoa diretamente: ela já entra ativa na empresa com a senha que você definir.'
+                    : 'Adicione uma pessoa que já tem conta no sistema usando o e-mail dela.'}
+                </CardDescription>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={() => setCreateMode(v => !v)}>
+                {createMode ? 'Liberar existente' : 'Criar acesso novo'}
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleInvite} className="grid gap-3 md:grid-cols-[1fr_180px_auto] items-end">
+              {createMode && (
+                <div className="space-y-1 md:col-span-3">
+                  <Label htmlFor="create-name">Nome</Label>
+                  <Input
+                    id="create-name"
+                    value={createName}
+                    onChange={e => setCreateName(e.target.value)}
+                    placeholder="Nome completo"
+                  />
+                </div>
+              )}
               <div className="space-y-1">
                 <Label htmlFor="invite-email">E-mail</Label>
                 <Input
@@ -177,6 +197,20 @@ export default function TeamManagement() {
                   placeholder="usuario@empresa.com"
                 />
               </div>
+              {createMode && (
+                <div className="space-y-1">
+                  <Label htmlFor="create-password">Senha</Label>
+                  <Input
+                    id="create-password"
+                    type="text"
+                    required
+                    minLength={6}
+                    value={createPassword}
+                    onChange={e => setCreatePassword(e.target.value)}
+                    placeholder="Mín. 6 caracteres"
+                  />
+                </div>
+              )}
               <div className="space-y-1">
                 <Label>Função</Label>
                 <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as OrgRole)}>
@@ -189,7 +223,7 @@ export default function TeamManagement() {
                 </Select>
               </div>
               <Button type="submit" disabled={submitting}>
-                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <><UserPlus className="w-4 h-4 mr-1" /> Liberar</>}
+                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <><UserPlus className="w-4 h-4 mr-1" /> {createMode ? 'Criar acesso' : 'Liberar'}</>}
               </Button>
             </form>
           </CardContent>
