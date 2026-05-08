@@ -249,13 +249,10 @@ function AdditiveCompositionRowImpl({
         <td className={`px-1 py-1 ${G_BG.id}`}>{c.itemNumber || c.item}</td>
         <td className={`px-1 py-1 font-mono text-[11px] break-words whitespace-normal ${G_BG.id}`}>
           {isNew && !isLocked ? (
-            <Input
+            <TextCommitCell
               value={c.code}
-              data-grid-id={MAIN_GRID}
-              data-row-index={rowIndex}
-              data-col-index={0}
-              onKeyDown={handleGridKeyDown}
-              onChange={e => onUpdateComposition(c.id, { code: e.target.value })}
+              gridId={MAIN_GRID} rowIndex={rowIndex} colIndex={0}
+              onCommit={v => onUpdateComposition(c.id, { code: v })}
               className="h-7 w-full text-[11px] font-mono"
               placeholder="Código"
             />
@@ -263,13 +260,10 @@ function AdditiveCompositionRowImpl({
         </td>
         <td className={`px-1 py-1 break-words whitespace-normal ${G_BG.id}`}>
           {isNew && !isLocked ? (
-            <Input
+            <TextCommitCell
               value={c.bank}
-              data-grid-id={MAIN_GRID}
-              data-row-index={rowIndex}
-              data-col-index={1}
-              onKeyDown={handleGridKeyDown}
-              onChange={e => onUpdateComposition(c.id, { bank: e.target.value })}
+              gridId={MAIN_GRID} rowIndex={rowIndex} colIndex={1}
+              onCommit={v => onUpdateComposition(c.id, { bank: v })}
               className="h-7 w-full text-xs"
               placeholder="Banco"
             />
