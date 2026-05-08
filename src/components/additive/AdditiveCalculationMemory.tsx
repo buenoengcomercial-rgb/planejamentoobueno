@@ -99,8 +99,9 @@ function ensureSingleTrailingDraftRow(
 }
 
 function AdditiveCalculationMemoryImpl({
-  c, isLocked, onChange, onChangeColumns,
+  c, isLocked, onChange, onChangeColumns, onAutoClose,
 }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const labels = resolveMemoryColumnLabels(c.calculationMemoryColumns);
   const placeholder = `${labels.a}*${labels.b}*${labels.c}*${labels.d}`;
 
