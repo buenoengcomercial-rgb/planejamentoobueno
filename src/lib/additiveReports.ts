@@ -49,6 +49,41 @@ const FMT_BRL = 'R$ #,##0.00;[Red](R$ #,##0.00);-';
 const FMT_QTD = '#,##0.00';
 const FMT_PCT = '0.00%';
 
+function downloadXlsxBlob(XLSX: any, wb: any, fileName: string) {
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([wbout], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.rel = 'noopener';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  window.setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 1000);
+}
+
+function downloadPdfBlob(doc: any, fileName: string) {
+  const blob = doc.output('blob');
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.rel = 'noopener';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  window.setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 1000);
+}
+
 function safeFile(name: string): string {
   return (name || 'aditivo').replace(/[^\w\d-]+/g, '_').replace(/^_+|_+$/g, '');
 }
