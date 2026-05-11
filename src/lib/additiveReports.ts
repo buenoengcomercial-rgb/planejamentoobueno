@@ -890,8 +890,8 @@ export async function exportAdditiveCalculationMemoryPro(project: Project, add: 
         ]);
         merges.push({ s: { r: rS, c: 0 }, e: { r: rS, c: 7 } });
         rowHeights.push(18);
-        grandAcr = money2(grandAcr + totA);
-        grandSup = money2(grandSup + totS);
+        grandAcr = trunc2(grandAcr + totA);
+        grandSup = trunc2(grandSup + totS);
       }
       // separador
       rows.push(Array(totalCols).fill(''));
