@@ -16,6 +16,7 @@ import {
   totalAfterAdditive,
   money2,
 } from './additiveImport';
+import { trunc2 } from './financialEngine';
 import { resolveMemoryColumnLabels, validMemoryRows } from './calculationMemory';
 import { getChapterTree, getChapterNumbering, type ChapterNode } from './chapters';
 import { loadCompanyLogoForPdf, company } from './companyBranding';
