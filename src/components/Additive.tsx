@@ -88,6 +88,8 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
         onExportSyntheticCompletePdf={actions.handleExportSyntheticCompletePdf}
         onExportNewServicesPdf={actions.handleExportNewServicesPdf}
         onExportCalculationMemoryPdf={actions.handleExportCalculationMemoryPdf}
+        onExportPackageExcel={actions.handleExportPackageExcel}
+        onExportPackagePdf={actions.handleExportPackagePdf}
         onOpenHistory={() => setHistoryOpen(true)}
       />
 
