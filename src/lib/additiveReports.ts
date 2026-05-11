@@ -1000,8 +1000,8 @@ export async function exportAdditiveCalculationMemoryPro(project: Project, add: 
     if (cell && typeof cell === 'object') ws[XLSX.utils.encode_cell({ r, c })] = cell;
   }
   ws['!cols'] = [
-    { wch: 6 }, { wch: 12 }, { wch: 32 }, { wch: 22 },
-    { wch: 9 }, { wch: 9 }, { wch: 9 }, { wch: 9 }, { wch: 12 },
+    { wch: 6 }, { wch: 14 }, { wch: 36 }, { wch: 32 },
+    { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 },
   ];
   ws['!merges'] = merges;
   ws['!rows'] = rowHeights.map(h => ({ hpt: h }));
