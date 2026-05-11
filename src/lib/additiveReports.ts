@@ -49,6 +49,31 @@ const FMT_BRL = 'R$ #,##0.00;[Red](R$ #,##0.00);-';
 const FMT_QTD = '#,##0.00';
 const FMT_PCT = '0.00%';
 
+// ---------- Normalizadores numéricos para a planilha ----------
+// Truncam (não arredondam) para evitar números do tipo 32.996846999999995.
+function q2(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.trunc(n * 100) / 100;
+}
+function moneyExcel(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.trunc(n * 100) / 100;
+}
+function pctExcel(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.trunc(n * 10000) / 10000;
+}
+function estimateRowHeight(description: string): number {
+  const len = (description || '').length;
+  if (len <= 60) return 22;
+  if (len <= 120) return 34;
+  if (len <= 220) return 46;
+  return 58;
+}
+
 function downloadXlsxBlob(XLSX: any, wb: any, fileName: string) {
   const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
   const blob = new Blob([wbout], {
