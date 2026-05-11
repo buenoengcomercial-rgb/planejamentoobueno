@@ -792,6 +792,14 @@ export function additiveTotals(add: Additive, project?: Project | null) {
     }
     valorFinal = truncar2(valorFinal + r.valorFinal);
   }
+  // Total contratado oficial: prioriza a Sintética/Medição (project.budgetItems source==='sintetica').
+  // Só cai no fallback (reconstrução por linhas) se não houver Sintética importada.
+  const officialContracted = getOfficialContractedTotal(project ?? null);
+  if (officialContracted != null) {
+    totalContratadoOriginal = officialContracted;
+  }
+  // Recalcula valorFinal a partir do total oficial: oficial - suprimido + acrescido
+  valorFinal = truncar2(totalContratadoOriginal - totalSuprimido + totalAcrescido);
   const diferencaLiquida = truncar2(valorFinal - totalContratadoOriginal);
   const percentVariacaoLiquida = totalContratadoOriginal > 0 ? diferencaLiquida / totalContratadoOriginal : 0;
   const percentSupressao = totalContratadoOriginal > 0 ? totalSuprimido / totalContratadoOriginal : 0;
@@ -812,6 +820,8 @@ export function additiveTotals(add: Additive, project?: Project | null) {
     diferencaLiquida, percentVariacaoLiquida,
     percentSupressao, percentAcrescimo, percentImpactoLiquido,
     limitPercent, limitStatus,
+    /** True quando o total veio da Sintética/Medição (oficial) e não da reconstrução. */
+    contractedSource: (officialContracted != null ? 'sintetica' : 'fallback') as 'sintetica' | 'fallback',
   };
 }
 
