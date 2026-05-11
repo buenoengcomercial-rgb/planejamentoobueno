@@ -694,8 +694,8 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
         tCell(obs, rowFill),
       ]);
       rowHeights.push(estimateRowHeight(c.description || ''));
-      totAcr = money2(totAcr + r.valorAcrescido);
-      totFinal = money2(totFinal + r.valorFinal);
+      totAcr = trunc2(totAcr + r.valorAcrescido);
+      totFinal = trunc2(totFinal + r.valorFinal);
     },
     onOrphanStart: () => {
       const r0 = rows.length;
