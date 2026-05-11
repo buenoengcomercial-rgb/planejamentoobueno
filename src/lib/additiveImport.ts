@@ -1748,7 +1748,7 @@ export async function exportAdditiveToPdf(
   });
   cursorY = ((doc as any).lastAutoTable?.finalY ?? cursorY) + 2.5;
 
-  const totals = additiveTotals(add);
+  const totals = additiveTotals(add, project);
   doc.setFontSize(8);
   const fmtBRL = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   const summary = `Composições: ${totals.compCount} (acrescidas: ${totals.acrescidos} | suprimidas: ${totals.suprimidos})   |   Insumos: ${totals.inputCount}   |   Impacto s/BDI: ${fmtBRL(totals.impactoSemBDI)}   |   Impacto c/BDI: ${fmtBRL(totals.impactoComBDI)}`;
