@@ -11,13 +11,18 @@ import type {
 } from '@/types/project';
 import {
   importAdditiveFromExcel, exportAdditiveToExcel, exportAdditiveToPdf,
-  exportAdditiveSyntheticCompleteToExcel,
-  exportAdditiveNewServicesToExcel,
-  exportAdditiveCalculationMemoryToExcel,
   additiveTotals, getApprovedAdditiveBudgetItems,
   buildAdditiveFromSyntheticBudgetItems,
   createNewServiceComposition, contractAdditive,
 } from '@/lib/additiveImport';
+import {
+  exportAdditiveSyntheticCompletePro,
+  exportAdditiveNewServicesPro,
+  exportAdditiveCalculationMemoryPro,
+  exportAdditiveSyntheticCompletePdf,
+  exportAdditiveNewServicesPdf,
+  exportAdditiveCalculationMemoryPdf,
+} from '@/lib/additiveReports';
 import { useAuth } from '@/hooks/useAuth';
 import { logToProject, userInfoFromSupabaseUser } from '@/lib/audit';
 import type { AdditiveStateApi } from '@/hooks/useAdditiveState';
