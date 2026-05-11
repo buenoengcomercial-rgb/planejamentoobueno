@@ -304,7 +304,7 @@ function buildFormalHeaderBlock(
     ['Nº Contrato:', ci.contractNumber || '-', 'Nº ART:', ci.artNumber || '-'],
     ['Fonte de orçamento:', ci.budgetSource || '-', 'Nome do aditivo:', add.name || '-'],
     ['BDI %:', `${(add.bdiPercent ?? 0).toFixed(2)}%`, 'Desconto Licit. %:', `${(add.globalDiscountPercent ?? 0).toFixed(2)}%`],
-    ['Data emissão:', fmtDateBR(new Date()), 'Responsável:', add.approvedBy || '-'],
+    ['Data emissão:', fmtDateBR(add.headerIssueDate || new Date()), 'Responsável:', add.headerResponsible || add.approvedBy || '-'],
   ];
 
   const headerStartRow = rows.length;
