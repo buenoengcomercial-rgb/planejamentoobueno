@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,18 +19,90 @@ interface Props {
   onUpdateAdditive: (mutator: (a: Additive) => Additive) => void;
 }
 
+interface Draft {
+  name: string;
+  contractor: string;
+  contracted: string;
+  location: string;
+  contractObject: string;
+  contractNumber: string;
+  artNumber: string;
+  budgetSource: string;
+  bdi: string;
+  globalDiscount: string;
+  issueDate: string;
+  responsible: string;
+}
+
+function buildDraft(project: Project, active: Additive, bdi: number, globalDiscount: number): Draft {
+  const ci: ContractInfo = project.contractInfo || {};
+  return {
+    name: project.name || '',
+    contractor: ci.contractor || '',
+    contracted: ci.contracted || '',
+    location: ci.location || '',
+    contractObject: ci.contractObject || '',
+    contractNumber: ci.contractNumber || '',
+    artNumber: ci.artNumber || '',
+    budgetSource: ci.budgetSource || '',
+    bdi: String(Number.isFinite(bdi) ? bdi : 0),
+    globalDiscount: String(Number.isFinite(globalDiscount) ? globalDiscount : 0),
+    issueDate: (active.headerIssueDate || '').slice(0, 10),
+    responsible: active.headerResponsible ?? active.approvedBy ?? '',
+  };
+}
+
 export default function AdditiveHeaderInfo({
   project, active, bdi, globalDiscount, isLocked,
   onProjectChange, onChangeBdi, onChangeGlobalDiscount, onUpdateAdditive,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const ci: ContractInfo = project.contractInfo || {};
+  const saved = useMemo(
+    () => buildDraft(project, active, bdi, globalDiscount),
+    [project, active, bdi, globalDiscount],
+  );
+  const [draft, setDraft] = useState<Draft>(saved);
 
-  const patchContract = (patch: Partial<ContractInfo>) => {
-    onProjectChange(prev => ({ ...prev, contractInfo: { ...(prev.contractInfo || {}), ...patch } }));
+  // Reset draft when the underlying additive changes (switch tabs).
+  useEffect(() => {
+    setDraft(saved);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active.id]);
+
+  const dirty = useMemo(() => {
+    return (Object.keys(saved) as (keyof Draft)[]).some(k => saved[k] !== draft[k]);
+  }, [saved, draft]);
+
+  const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft(d => ({ ...d, [k]: v }));
+
+  const save = () => {
+    // Project + contractInfo (single batched update)
+    onProjectChange(prev => ({
+      ...prev,
+      name: draft.name,
+      contractInfo: {
+        ...(prev.contractInfo || {}),
+        contractor: draft.contractor,
+        contracted: draft.contracted,
+        location: draft.location,
+        contractObject: draft.contractObject,
+        contractNumber: draft.contractNumber,
+        artNumber: draft.artNumber,
+        budgetSource: draft.budgetSource,
+      },
+    }));
+    if (!isLocked) {
+      if (String(bdi) !== draft.bdi) onChangeBdi(draft.bdi);
+      if (String(globalDiscount) !== draft.globalDiscount) onChangeGlobalDiscount(draft.globalDiscount);
+    }
+    onUpdateAdditive(a => ({
+      ...a,
+      headerIssueDate: draft.issueDate ? new Date(draft.issueDate).toISOString() : undefined,
+      headerResponsible: draft.responsible || undefined,
+    }));
   };
 
-  const issueDateValue = (active.headerIssueDate || '').slice(0, 10);
+  const reset = () => setDraft(saved);
 
   return (
     <Card className="border-dashed">
@@ -46,6 +118,11 @@ export default function AdditiveHeaderInfo({
               <span className="text-xs text-muted-foreground hidden md:inline">
                 — usado em todas as exportações Excel/PDF
               </span>
+              {dirty && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+                  Alterações pendentes
+                </span>
+              )}
             </div>
             <ChevronDown className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''}`} />
           </button>
@@ -53,92 +130,57 @@ export default function AdditiveHeaderInfo({
         <CollapsibleContent>
           <div className="p-4 pt-2 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             <Field label="Obra">
-              <Input
-                value={project.name || ''}
-                onChange={e => onProjectChange(prev => ({ ...prev, name: e.target.value }))}
-              />
+              <Input value={draft.name} onChange={e => set('name', e.target.value)} />
             </Field>
             <Field label="Contratante">
-              <Input
-                value={ci.contractor || ''}
-                onChange={e => patchContract({ contractor: e.target.value })}
-              />
+              <Input value={draft.contractor} onChange={e => set('contractor', e.target.value)} />
             </Field>
             <Field label="Contratada">
-              <Input
-                value={ci.contracted || ''}
-                onChange={e => patchContract({ contracted: e.target.value })}
-              />
+              <Input value={draft.contracted} onChange={e => set('contracted', e.target.value)} />
             </Field>
             <Field label="Local / Município">
-              <Input
-                value={ci.location || ''}
-                onChange={e => patchContract({ location: e.target.value })}
-              />
+              <Input value={draft.location} onChange={e => set('location', e.target.value)} />
             </Field>
             <Field label="Objeto" className="md:col-span-2">
-              <Input
-                value={ci.contractObject || ''}
-                onChange={e => patchContract({ contractObject: e.target.value })}
-              />
+              <Input value={draft.contractObject} onChange={e => set('contractObject', e.target.value)} />
             </Field>
             <Field label="Nº do Contrato">
-              <Input
-                value={ci.contractNumber || ''}
-                onChange={e => patchContract({ contractNumber: e.target.value })}
-              />
+              <Input value={draft.contractNumber} onChange={e => set('contractNumber', e.target.value)} />
             </Field>
             <Field label="Nº ART">
-              <Input
-                value={ci.artNumber || ''}
-                onChange={e => patchContract({ artNumber: e.target.value })}
-              />
+              <Input value={draft.artNumber} onChange={e => set('artNumber', e.target.value)} />
             </Field>
             <Field label="Fonte de Orçamento">
-              <Input
-                value={ci.budgetSource || ''}
-                onChange={e => patchContract({ budgetSource: e.target.value })}
-              />
+              <Input value={draft.budgetSource} onChange={e => set('budgetSource', e.target.value)} />
             </Field>
             <Field label="BDI (%)">
               <Input
-                type="number"
-                inputMode="decimal"
-                step="0.01"
-                value={Number.isFinite(bdi) ? bdi : 0}
-                disabled={isLocked}
-                onChange={e => onChangeBdi(e.target.value)}
+                type="number" inputMode="decimal" step="0.01"
+                value={draft.bdi} disabled={isLocked}
+                onChange={e => set('bdi', e.target.value)}
               />
             </Field>
             <Field label="Desconto Licit. (%)">
               <Input
-                type="number"
-                inputMode="decimal"
-                step="0.01"
-                value={Number.isFinite(globalDiscount) ? globalDiscount : 0}
-                disabled={isLocked}
-                onChange={e => onChangeGlobalDiscount(e.target.value)}
+                type="number" inputMode="decimal" step="0.01"
+                value={draft.globalDiscount} disabled={isLocked}
+                onChange={e => set('globalDiscount', e.target.value)}
               />
             </Field>
             <Field label="Data de Emissão">
               <Input
-                type="date"
-                value={issueDateValue}
-                onChange={e => {
-                  const v = e.target.value;
-                  onUpdateAdditive(a => ({ ...a, headerIssueDate: v ? new Date(v).toISOString() : undefined }));
-                }}
+                type="date" value={draft.issueDate}
+                onChange={e => set('issueDate', e.target.value)}
               />
             </Field>
             <Field label="Responsável">
-              <Input
-                value={active.headerResponsible ?? active.approvedBy ?? ''}
-                onChange={e => onUpdateAdditive(a => ({ ...a, headerResponsible: e.target.value }))}
-              />
+              <Input value={draft.responsible} onChange={e => set('responsible', e.target.value)} />
             </Field>
           </div>
-          <div className="px-4 pb-4 flex justify-end">
+          <div className="px-4 pb-4 flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={reset} disabled={!dirty}>Descartar</Button>
             <Button variant="outline" size="sm" onClick={() => setOpen(false)}>Fechar</Button>
+            <Button size="sm" onClick={save} disabled={!dirty}>Salvar cabeçalho</Button>
           </div>
         </CollapsibleContent>
       </Collapsible>
