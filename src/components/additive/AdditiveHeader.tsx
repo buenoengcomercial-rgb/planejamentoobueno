@@ -33,6 +33,8 @@ interface Props {
   onExportSyntheticCompletePdf: () => void;
   onExportNewServicesPdf: () => void;
   onExportCalculationMemoryPdf: () => void;
+  onExportPackageExcel: () => void;
+  onExportPackagePdf: () => void;
   onOpenHistory: () => void;
 }
 
@@ -42,6 +44,7 @@ export default function AdditiveHeader({
   onContract, onExportExcel, onExportSyntheticComplete, onExportNewServices,
   onExportCalculationMemory, onExportPdf,
   onExportSyntheticCompletePdf, onExportNewServicesPdf, onExportCalculationMemoryPdf,
+  onExportPackageExcel, onExportPackagePdf,
   onOpenHistory,
 }: Props) {
   const lastLog = active ? (project.auditLogs ?? [])
@@ -170,6 +173,9 @@ export default function AdditiveHeader({
             <DropdownMenuItem onSelect={(e) => { e.preventDefault(); void onExportCalculationMemory(); }}>
               Exportar Memória de Cálculo
             </DropdownMenuItem>
+            <DropdownMenuItem onSelect={(e) => { e.preventDefault(); void onExportPackageExcel(); }}>
+              Exportar Pacote Completo
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
         <DropdownMenu>
@@ -191,6 +197,9 @@ export default function AdditiveHeader({
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={(e) => { e.preventDefault(); void onExportPdf(); }}>
               PDF Completo (com analítica)
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={(e) => { e.preventDefault(); void onExportPackagePdf(); }}>
+              Pacote Completo (PDF)
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

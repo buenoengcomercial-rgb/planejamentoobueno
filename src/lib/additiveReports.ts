@@ -697,6 +697,56 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
       rowHeights.push(estimateRowHeight(c.description || ''));
       totAcr = trunc2(totAcr + r.valorAcrescido);
       totFinal = trunc2(totFinal + r.valorFinal);
+
+      // ---- Insumos analíticos da composição (formação de preço) ----
+      const inputs = c.inputs ?? [];
+      if (inputs.length > 0) {
+        const insBg = COLOR.brandBg;
+        const insFg = '475569';
+        // Sub-header dos insumos (14 colunas)
+        rows.push([
+          tCell('  ↳', insBg, true, insFg),
+          tCell('Cód. Insumo', insBg, true, insFg),
+          tCell('Banco', insBg, true, insFg),
+          tCell('Descrição do insumo', insBg, true, insFg),
+          tCell('Und', insBg, true, insFg, 'center'),
+          tCell('Coef.', insBg, true, insFg, 'center'),
+          tCell('V.Unit Ref. s/ BDI', insBg, true, insFg, 'center'),
+          tCell('Desc. %', insBg, true, insFg, 'center'),
+          tCell('V.Unit s/ BDI c/ Desc.', insBg, true, insFg, 'center'),
+          tCell('', insBg),
+          tCell('', insBg),
+          tCell('Total s/ BDI Ref.', insBg, true, insFg, 'center'),
+          tCell('Total s/ BDI c/ Desc.', insBg, true, insFg, 'center'),
+          tCell('Insumo', insBg, true, insFg),
+        ]);
+        rowHeights.push(20);
+        const dPct = (discount || 0) / 100;
+        inputs.forEach(ip => {
+          const ref = Number(ip.unitPrice) || 0;
+          const coef = Number(ip.coefficient) || 0;
+          const unitDisc = trunc2(ref * (1 - dPct));
+          const totRef = trunc2(coef * ref);
+          const totDisc = trunc2(coef * unitDisc);
+          rows.push([
+            tCell(''),
+            tCell(ip.code || ''),
+            tCell(ip.bank || ''),
+            tCell(ip.description || ''),
+            tCell(ip.unit || '', undefined, false, undefined, 'center'),
+            nCell(q2(coef), FMT_QTD),
+            nCell(moneyExcel(ref), FMT_BRL),
+            nCell(pctExcel(dPct), FMT_PCT),
+            nCell(moneyExcel(unitDisc), FMT_BRL),
+            tCell(''),
+            tCell(''),
+            nCell(moneyExcel(totRef), FMT_BRL),
+            nCell(moneyExcel(totDisc), FMT_BRL),
+            tCell('Insumo', undefined, false, insFg),
+          ]);
+          rowHeights.push(estimateRowHeight(ip.description || ''));
+        });
+      }
     },
     onOrphanStart: () => {
       const r0 = rows.length;
@@ -1189,6 +1239,38 @@ export async function exportAdditiveNewServicesPdf(project: Project, add: Additi
         { content: obs, styles: { fillColor: fill } },
       ]);
       totAcr += r.valorAcrescido; totFinal += r.valorFinal;
+
+      const inputs = c.inputs ?? [];
+      if (inputs.length > 0) {
+        const insBg: [number, number, number] = [248, 250, 252];
+        body.push([
+          { content: '↳ Insumos analíticos (formação de preço)', colSpan: 14, styles: { fillColor: insBg, textColor: [71, 85, 105], fontStyle: 'bold', fontSize: 6.4 } },
+        ]);
+        const dPct = (discount || 0) / 100;
+        inputs.forEach(ip => {
+          const ref = Number(ip.unitPrice) || 0;
+          const coef = Number(ip.coefficient) || 0;
+          const unitDisc = trunc2(ref * (1 - dPct));
+          const totRef = trunc2(coef * ref);
+          const totDisc = trunc2(coef * unitDisc);
+          body.push([
+            { content: '', styles: { fillColor: insBg } },
+            { content: ip.code || '', styles: { fillColor: insBg } },
+            { content: ip.bank || '', styles: { fillColor: insBg } },
+            { content: ip.description || '', styles: { fillColor: insBg } },
+            { content: ip.unit || '', styles: { fillColor: insBg, halign: 'center' } },
+            { content: fmtQ(coef), styles: { fillColor: insBg, halign: 'right' } },
+            { content: fmtBRL(ref), styles: { fillColor: insBg, halign: 'right' } },
+            { content: `${(discount || 0).toFixed(2)}%`, styles: { fillColor: insBg, halign: 'right' } },
+            { content: fmtBRL(unitDisc), styles: { fillColor: insBg, halign: 'right' } },
+            { content: '', styles: { fillColor: insBg } },
+            { content: '', styles: { fillColor: insBg } },
+            { content: fmtBRL(totRef), styles: { fillColor: insBg, halign: 'right' } },
+            { content: fmtBRL(totDisc), styles: { fillColor: insBg, halign: 'right' } },
+            { content: 'Insumo', styles: { fillColor: insBg, textColor: [71, 85, 105] } },
+          ]);
+        });
+      }
     },
   });
   body.push([
@@ -1320,4 +1402,27 @@ export async function exportAdditiveCalculationMemoryPdf(project: Project, add: 
 
   pdfFooter(doc);
   downloadPdfBlob(doc, `aditivo_memoria_calculo_${safeFile(add.name)}.pdf`);
+}
+
+// ============================================================
+// PACOTE COMPLETO — gera os 3 documentos sequencialmente
+// ============================================================
+function delay(ms: number) {
+  return new Promise<void>(resolve => window.setTimeout(resolve, ms));
+}
+
+export async function exportAdditivePackagePro(project: Project, add: Additive) {
+  await exportAdditiveSyntheticCompletePro(project, add);
+  await delay(400);
+  await exportAdditiveNewServicesPro(project, add);
+  await delay(400);
+  await exportAdditiveCalculationMemoryPro(project, add);
+}
+
+export async function exportAdditivePackagePdf(project: Project, add: Additive) {
+  await exportAdditiveSyntheticCompletePdf(project, add);
+  await delay(400);
+  await exportAdditiveNewServicesPdf(project, add);
+  await delay(400);
+  await exportAdditiveCalculationMemoryPdf(project, add);
 }
