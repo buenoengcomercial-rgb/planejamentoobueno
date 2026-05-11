@@ -45,7 +45,7 @@ const COLOR = {
   border: 'CBD5E1',
 };
 
-const FMT_BRL = 'R$ #,##0.00;[Red](R$ #,##0.00);-';
+const FMT_BRL = 'R$ #,##0.00;[Red]-R$ #,##0.00;R$ 0.00';
 const FMT_QTD = '#,##0.00';
 const FMT_PCT = '0.00%';
 
