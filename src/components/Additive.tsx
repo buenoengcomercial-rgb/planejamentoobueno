@@ -121,6 +121,18 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
             onBackToDraft={actions.handleBackToDraft}
           />
 
+          <AdditiveHeaderInfo
+            project={project}
+            active={active}
+            bdi={bdi}
+            globalDiscount={globalDiscount}
+            isLocked={isLocked}
+            onProjectChange={onProjectChange}
+            onChangeBdi={actions.handleChangeBdi}
+            onChangeGlobalDiscount={actions.handleChangeGlobalDiscount}
+            onUpdateAdditive={actions.updateAdditive}
+          />
+
           <AdditiveSummaryCards totals={totals} />
 
           <AdditiveFilters
