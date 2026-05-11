@@ -23,6 +23,8 @@ import {
   exportAdditiveSyntheticCompletePdf,
   exportAdditiveNewServicesPdf,
   exportAdditiveCalculationMemoryPdf,
+  exportAdditivePackagePro,
+  exportAdditivePackagePdf,
 } from '@/lib/additiveReports';
 import { useAuth } from '@/hooks/useAuth';
 import { logToProject, userInfoFromSupabaseUser } from '@/lib/audit';
