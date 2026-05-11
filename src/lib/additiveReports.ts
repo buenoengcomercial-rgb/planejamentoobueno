@@ -437,9 +437,9 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
   ];
   const subFills = [
     COLOR.ident, COLOR.ident, COLOR.ident, COLOR.ident, COLOR.ident,
-    COLOR.qty, COLOR.qty, COLOR.qty, COLOR.qty,
+    COLOR.qty, COLOR.suprimidoBg, COLOR.acrescidoBg, COLOR.qty,
     COLOR.val, COLOR.val, COLOR.val, COLOR.val,
-    COLOR.impact, COLOR.impact, COLOR.impact, COLOR.impact, COLOR.impact,
+    COLOR.suprimidoBg, COLOR.acrescidoBg, COLOR.impact, COLOR.impact, COLOR.impact,
     COLOR.ident,
   ];
 
