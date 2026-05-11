@@ -1239,6 +1239,38 @@ export async function exportAdditiveNewServicesPdf(project: Project, add: Additi
         { content: obs, styles: { fillColor: fill } },
       ]);
       totAcr += r.valorAcrescido; totFinal += r.valorFinal;
+
+      const inputs = c.inputs ?? [];
+      if (inputs.length > 0) {
+        const insBg: [number, number, number] = [248, 250, 252];
+        body.push([
+          { content: '↳ Insumos analíticos (formação de preço)', colSpan: 14, styles: { fillColor: insBg, textColor: [71, 85, 105], fontStyle: 'bold', fontSize: 6.4 } },
+        ]);
+        const dPct = (discount || 0) / 100;
+        inputs.forEach(ip => {
+          const ref = Number(ip.unitPrice) || 0;
+          const coef = Number(ip.coefficient) || 0;
+          const unitDisc = trunc2(ref * (1 - dPct));
+          const totRef = trunc2(coef * ref);
+          const totDisc = trunc2(coef * unitDisc);
+          body.push([
+            { content: '', styles: { fillColor: insBg } },
+            { content: ip.code || '', styles: { fillColor: insBg } },
+            { content: ip.bank || '', styles: { fillColor: insBg } },
+            { content: ip.description || '', styles: { fillColor: insBg } },
+            { content: ip.unit || '', styles: { fillColor: insBg, halign: 'center' } },
+            { content: fmtQ(coef), styles: { fillColor: insBg, halign: 'right' } },
+            { content: fmtBRL(ref), styles: { fillColor: insBg, halign: 'right' } },
+            { content: `${(discount || 0).toFixed(2)}%`, styles: { fillColor: insBg, halign: 'right' } },
+            { content: fmtBRL(unitDisc), styles: { fillColor: insBg, halign: 'right' } },
+            { content: '', styles: { fillColor: insBg } },
+            { content: '', styles: { fillColor: insBg } },
+            { content: fmtBRL(totRef), styles: { fillColor: insBg, halign: 'right' } },
+            { content: fmtBRL(totDisc), styles: { fillColor: insBg, halign: 'right' } },
+            { content: 'Insumo', styles: { fillColor: insBg, textColor: [71, 85, 105] } },
+          ]);
+        });
+      }
     },
   });
   body.push([
