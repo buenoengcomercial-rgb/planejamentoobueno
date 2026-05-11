@@ -2,7 +2,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import {
-  Upload, Download, Printer, CheckCircle2, Lock, XCircle, History,
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
+} from '@/components/ui/dropdown-menu';
+import {
+  Upload, Download, Printer, CheckCircle2, Lock, XCircle, History, ChevronDown,
 } from 'lucide-react';
 import type { Project, Additive as AdditiveModel, AdditiveStatus } from '@/types/project';
 import { STATUS_BADGE, STATUS_LABEL } from './types';
