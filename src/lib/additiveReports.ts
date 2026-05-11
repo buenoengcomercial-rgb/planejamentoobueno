@@ -787,11 +787,11 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
     if (cell && typeof cell === 'object') ws[XLSX.utils.encode_cell({ r, c })] = cell;
   }
   ws['!cols'] = [
-    { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 38 }, { wch: 6 },
-    { wch: 12 },
-    { wch: 14 }, { wch: 11 }, { wch: 16 }, { wch: 8 }, { wch: 13 },
-    { wch: 14 }, { wch: 14 },
-    { wch: 22 },
+    { wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 52 }, { wch: 10 },
+    { wch: 14 },
+    { wch: 16 }, { wch: 12 }, { wch: 16 }, { wch: 10 }, { wch: 16 },
+    { wch: 16 }, { wch: 16 },
+    { wch: 24 },
   ];
   ws['!merges'] = merges;
   ws['!rows'] = rowHeights.map(h => ({ hpt: h }));
