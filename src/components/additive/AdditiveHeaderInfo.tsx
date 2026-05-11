@@ -117,7 +117,7 @@ export default function AdditiveHeaderInfo({
                 step="0.01"
                 value={Number.isFinite(globalDiscount) ? globalDiscount : 0}
                 disabled={isLocked}
-                onChange={e => onChangeGlobalDiscount(Number(e.target.value))}
+                onChange={e => onChangeGlobalDiscount(e.target.value)}
               />
             </Field>
             <Field label="Data de Emissão">
