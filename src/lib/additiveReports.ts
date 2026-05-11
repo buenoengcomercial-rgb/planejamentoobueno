@@ -710,7 +710,7 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
   rows.push([
     tCell('TOTAL NOVAS COMPOSIÇÕES', fillT, true, fgT, 'left'),
     ...Array(10).fill({ v: '', s: { fill: { patternType: 'solid', fgColor: { rgb: fillT } } } }),
-    nCell(moneyExcel(totAcr), FMT_BRL, fillT, fgT, true),
+    nCell(moneyExcel(totAcr), FMT_BRL, COLOR.acrescidoBg, COLOR.acrescidoFg, true),
     nCell(moneyExcel(totFinal), FMT_BRL, fillT, fgT, true),
     tCell('', fillT),
   ]);
