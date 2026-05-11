@@ -24,6 +24,7 @@ import AdditiveImportDialog from '@/components/additive/AdditiveImportDialog';
 import AdditiveIssuesDialog from '@/components/additive/AdditiveIssuesDialog';
 import AdditiveReviewDialog from '@/components/additive/AdditiveReviewDialog';
 import AdditiveSyntheticConflictDialog from '@/components/additive/AdditiveSyntheticConflictDialog';
+import AdditiveHeaderInfo from '@/components/additive/AdditiveHeaderInfo';
 
 interface Props {
   project: Project;
@@ -118,6 +119,18 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
             onSend={actions.handleSendForReview}
             onOpenReview={openReview}
             onBackToDraft={actions.handleBackToDraft}
+          />
+
+          <AdditiveHeaderInfo
+            project={project}
+            active={active}
+            bdi={bdi}
+            globalDiscount={globalDiscount}
+            isLocked={isLocked}
+            onProjectChange={onProjectChange}
+            onChangeBdi={actions.handleChangeBdi}
+            onChangeGlobalDiscount={actions.handleChangeGlobalDiscount}
+            onUpdateAdditive={actions.updateAdditive}
           />
 
           <AdditiveSummaryCards totals={totals} />

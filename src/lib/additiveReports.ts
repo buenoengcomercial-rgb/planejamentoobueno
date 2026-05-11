@@ -45,7 +45,7 @@ const COLOR = {
   border: 'CBD5E1',
 };
 
-const FMT_BRL = 'R$ #,##0.00;[Red](R$ #,##0.00);-';
+const FMT_BRL = 'R$ #,##0.00;[Red]-R$ #,##0.00;R$ 0.00';
 const FMT_QTD = '#,##0.00';
 const FMT_PCT = '0.00%';
 
@@ -210,10 +210,24 @@ function tCell(v: string | number, fill?: string, bold = false, color?: string, 
   return { v, s };
 }
 
-function nCell(v: number, fmt: string, fill?: string, color?: string, bold = false): any {
-  const c = tCell(v, fill, bold, color, 'right');
+function nCell(v: number, fmt: string, fill?: string, color?: string, bold = false, hAlign: 'left' | 'center' | 'right' = 'center'): any {
+  const c = tCell(v, fill, bold, color, hAlign);
   c.z = fmt;
   return c;
+}
+
+// ---------- Helpers tipados (mantêm formatação consistente) ----------
+function textCell(v: string | number, fill?: string, bold = false, color?: string, hAlign?: 'left' | 'center' | 'right'): any {
+  return tCell(v, fill, bold, color, hAlign);
+}
+function moneyCell(v: unknown, fill?: string, color?: string, bold = false): any {
+  return nCell(moneyExcel(v), FMT_BRL, fill, color, bold, 'center');
+}
+function qtyCell(v: unknown, fill?: string, color?: string, bold = false): any {
+  return nCell(q2(v), FMT_QTD, fill, color, bold, 'center');
+}
+function percentCell(v: unknown, fill?: string, color?: string, bold = false): any {
+  return nCell(pctExcel(v), FMT_PCT, fill, color, bold, 'center');
 }
 
 function buildFormalHeaderBlock(
@@ -290,7 +304,7 @@ function buildFormalHeaderBlock(
     ['Nº Contrato:', ci.contractNumber || '-', 'Nº ART:', ci.artNumber || '-'],
     ['Fonte de orçamento:', ci.budgetSource || '-', 'Nome do aditivo:', add.name || '-'],
     ['BDI %:', `${(add.bdiPercent ?? 0).toFixed(2)}%`, 'Desconto Licit. %:', `${(add.globalDiscountPercent ?? 0).toFixed(2)}%`],
-    ['Data emissão:', fmtDateBR(new Date()), 'Responsável:', add.approvedBy || '-'],
+    ['Data emissão:', fmtDateBR(add.headerIssueDate || new Date()), 'Responsável:', add.headerResponsible || add.approvedBy || '-'],
   ];
 
   const headerStartRow = rows.length;
@@ -940,7 +954,7 @@ async function drawPdfFormalHeader(
   let cursorY = Math.max(margin + 16, margin + logoH + 1);
 
   const cw = [usable * 0.16, usable * 0.34, usable * 0.16, usable * 0.34];
-  const issueStr = fmtDateBR(new Date());
+  const issueStr = fmtDateBR(add.headerIssueDate || new Date());
   const headerRows: [string, string, string, string][] = [
     ['Obra:', project.name || '-', 'Aditivo:', add.name || '-'],
     ['Contratante:', ci.contractor || '-', 'Contratada:', ci.contracted || '-'],
@@ -948,7 +962,7 @@ async function drawPdfFormalHeader(
     ['Nº Contrato:', ci.contractNumber || '-', 'Nº ART:', ci.artNumber || '-'],
     ['Fonte de orçamento:', ci.budgetSource || '-', 'Status:', statusLabel(add.status)],
     ['BDI %:', `${(add.bdiPercent ?? 0).toFixed(2)}`, 'Desconto Licit. %:', `${(add.globalDiscountPercent ?? 0).toFixed(2)}`],
-    ['Data emissão:', issueStr, 'Responsável:', add.approvedBy || '-'],
+    ['Data emissão:', issueStr, 'Responsável:', add.headerResponsible || add.approvedBy || '-'],
   ];
   autoTable(doc, {
     startY: cursorY, body: headerRows, theme: 'grid',
