@@ -33,6 +33,8 @@ interface Props {
   onExportSyntheticCompletePdf: () => void;
   onExportNewServicesPdf: () => void;
   onExportCalculationMemoryPdf: () => void;
+  onExportPackageExcel: () => void;
+  onExportPackagePdf: () => void;
   onOpenHistory: () => void;
 }
 
@@ -42,6 +44,7 @@ export default function AdditiveHeader({
   onContract, onExportExcel, onExportSyntheticComplete, onExportNewServices,
   onExportCalculationMemory, onExportPdf,
   onExportSyntheticCompletePdf, onExportNewServicesPdf, onExportCalculationMemoryPdf,
+  onExportPackageExcel, onExportPackagePdf,
   onOpenHistory,
 }: Props) {
   const lastLog = active ? (project.auditLogs ?? [])
