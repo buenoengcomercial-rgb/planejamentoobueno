@@ -69,10 +69,20 @@ function pctExcel(v: unknown): number {
 }
 function estimateRowHeight(description: string): number {
   const len = (description || '').length;
-  if (len <= 60) return 22;
-  if (len <= 120) return 34;
-  if (len <= 220) return 46;
-  return 58;
+  if (len <= 50) return 22;
+  if (len <= 100) return 34;
+  if (len <= 180) return 48;
+  if (len <= 280) return 64;
+  return 82;
+}
+// Recebe vários textos e usa o de maior comprimento para estimar altura.
+function estimateRowHeightFromTexts(...texts: Array<string | undefined | null>): number {
+  let maxLen = 0;
+  for (const t of texts) {
+    const l = (t || '').length;
+    if (l > maxLen) maxLen = l;
+  }
+  return estimateRowHeight('x'.repeat(maxLen));
 }
 
 function downloadXlsxBlob(XLSX: any, wb: any, fileName: string) {
@@ -199,7 +209,7 @@ type Row = Cell[];
 function tCell(v: string | number, fill?: string, bold = false, color?: string, hAlign?: 'left' | 'center' | 'right'): any {
   const s: any = {
     font: { name: 'Arial', sz: 10, bold, color: color ? { rgb: color } : { rgb: '111827' } },
-    alignment: { vertical: 'center', horizontal: hAlign ?? (typeof v === 'number' ? 'right' : 'left'), wrapText: true },
+    alignment: { vertical: typeof v === 'number' ? 'center' : 'top', horizontal: hAlign ?? (typeof v === 'number' ? 'right' : 'left'), wrapText: true },
     border: {
       top: { style: 'thin', color: { rgb: COLOR.border } },
       bottom: { style: 'thin', color: { rgb: COLOR.border } },
@@ -484,7 +494,7 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
       },
     }, ...Array(totalCols - 1).fill({ v: '', s: { fill: { patternType: 'solid', fgColor: { rgb: COLOR.chapter } } } })]);
     merges.push({ s: { r: r0, c: 0 }, e: { r: r0, c: totalCols - 1 } });
-    rowHeights.push(20);
+    rowHeights.push(26);
   };
 
   const pushComp = (c: AdditiveComposition) => {
@@ -551,7 +561,7 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
       tCell('', fill), tCell('', fill),
     ]);
     merges.push({ s: { r: r0, c: 0 }, e: { r: r0, c: 10 } });
-    rowHeights.push(18);
+    rowHeights.push(24);
   };
 
   walkByChapters(project, add, () => true, {
@@ -592,11 +602,11 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
     }
   }
   ws['!cols'] = [
-    { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 38 }, { wch: 6 },
-    { wch: 11 }, { wch: 11 }, { wch: 11 }, { wch: 10 },
-    { wch: 12 }, { wch: 13 }, { wch: 13 }, { wch: 14 },
-    { wch: 13 }, { wch: 13 }, { wch: 13 }, { wch: 13 }, { wch: 8 },
-    { wch: 18 },
+    { wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 52 }, { wch: 10 },
+    { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+    { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 },
+    { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 10 },
+    { wch: 24 },
   ];
   ws['!merges'] = merges;
   ws['!rows'] = rowHeights.map(h => ({ hpt: h }));
@@ -672,7 +682,7 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
         },
       }, ...Array(totalCols - 1).fill({ v: '', s: { fill: { patternType: 'solid', fgColor: { rgb: COLOR.chapter } } } })]);
       merges.push({ s: { r: r0, c: 0 }, e: { r: r0, c: totalCols - 1 } });
-      rowHeights.push(20);
+      rowHeights.push(26);
     },
     onComposition: c => {
       const r = computeAdditiveRow(c, bdi, discount);
@@ -703,12 +713,15 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
       if (inputs.length > 0) {
         const insBg = COLOR.brandBg;
         const insFg = '475569';
-        // Sub-header dos insumos (14 colunas)
+        // Espaçador visual antes do bloco analítico
+        rows.push(Array(totalCols).fill(''));
+        rowHeights.push(6);
+        // Sub-header dos insumos (14 colunas) — altura fixa maior + wrap central
         rows.push([
-          tCell('  ↳', insBg, true, insFg),
-          tCell('Cód. Insumo', insBg, true, insFg),
-          tCell('Banco', insBg, true, insFg),
-          tCell('Descrição do insumo', insBg, true, insFg),
+          tCell('  ↳', insBg, true, insFg, 'center'),
+          tCell('Cód. Insumo', insBg, true, insFg, 'center'),
+          tCell('Banco', insBg, true, insFg, 'center'),
+          tCell('Descrição do insumo', insBg, true, insFg, 'center'),
           tCell('Und', insBg, true, insFg, 'center'),
           tCell('Coef.', insBg, true, insFg, 'center'),
           tCell('V.Unit Ref. s/ BDI', insBg, true, insFg, 'center'),
@@ -718,9 +731,9 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
           tCell('', insBg),
           tCell('Total s/ BDI Ref.', insBg, true, insFg, 'center'),
           tCell('Total s/ BDI c/ Desc.', insBg, true, insFg, 'center'),
-          tCell('Insumo', insBg, true, insFg),
+          tCell('Insumo', insBg, true, insFg, 'center'),
         ]);
-        rowHeights.push(20);
+        rowHeights.push(30);
         const dPct = (discount || 0) / 100;
         inputs.forEach(ip => {
           const ref = Number(ip.unitPrice) || 0;
@@ -774,11 +787,11 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
     if (cell && typeof cell === 'object') ws[XLSX.utils.encode_cell({ r, c })] = cell;
   }
   ws['!cols'] = [
-    { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 38 }, { wch: 6 },
-    { wch: 12 },
-    { wch: 14 }, { wch: 11 }, { wch: 16 }, { wch: 8 }, { wch: 13 },
-    { wch: 14 }, { wch: 14 },
-    { wch: 22 },
+    { wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 60 }, { wch: 10 },
+    { wch: 14 },
+    { wch: 16 }, { wch: 12 }, { wch: 16 }, { wch: 10 }, { wch: 16 },
+    { wch: 16 }, { wch: 16 },
+    { wch: 24 },
   ];
   ws['!merges'] = merges;
   ws['!rows'] = rowHeights.map(h => ({ hpt: h }));
@@ -889,7 +902,7 @@ export async function exportAdditiveCalculationMemoryPro(project: Project, add: 
         },
       }, ...Array(totalCols - 1).fill({ v: '', s: { fill: { patternType: 'solid', fgColor: { rgb: COLOR.chapter } } } })]);
       merges.push({ s: { r: r0, c: 0 }, e: { r: r0, c: totalCols - 1 } });
-      rowHeights.push(20);
+      rowHeights.push(26);
     },
     onComposition: c => {
       pushIdent(c);
@@ -902,7 +915,7 @@ export async function exportAdditiveCalculationMemoryPro(project: Project, add: 
           tCell('Sem memória de cálculo preenchida'),
           tCell(''), tCell(''), tCell(''), tCell(''), tCell(''), tCell(''),
         ]);
-        rowHeights.push(18);
+        rowHeights.push(22);
       } else {
         let totA = 0, totS = 0;
         list.forEach((m, idx) => {
@@ -921,7 +934,7 @@ export async function exportAdditiveCalculationMemoryPro(project: Project, add: 
             tCell(m.d ?? '', undefined, false, undefined, 'right'),
             nCell(q2(partial), FMT_QTD, fill, fg, true),
           ]);
-          rowHeights.push(18);
+          rowHeights.push(estimateRowHeightFromTexts(m.comment, m.formula));
           if (isSup) totS += partial; else totA += partial;
         });
         const rA = rows.length;
@@ -931,7 +944,7 @@ export async function exportAdditiveCalculationMemoryPro(project: Project, add: 
           nCell(q2(totA), FMT_QTD, COLOR.subtotal, COLOR.acrescidoFg, true),
         ]);
         merges.push({ s: { r: rA, c: 0 }, e: { r: rA, c: 7 } });
-        rowHeights.push(18);
+        rowHeights.push(24);
         const rS = rows.length;
         rows.push([
           tCell('Total Suprimida', COLOR.subtotal, true, COLOR.suprimidoFg, 'right'),
@@ -939,7 +952,7 @@ export async function exportAdditiveCalculationMemoryPro(project: Project, add: 
           nCell(q2(totS), FMT_QTD, COLOR.subtotal, COLOR.suprimidoFg, true),
         ]);
         merges.push({ s: { r: rS, c: 0 }, e: { r: rS, c: 7 } });
-        rowHeights.push(18);
+        rowHeights.push(24);
         grandAcr = trunc2(grandAcr + totA);
         grandSup = trunc2(grandSup + totS);
       }
@@ -987,8 +1000,8 @@ export async function exportAdditiveCalculationMemoryPro(project: Project, add: 
     if (cell && typeof cell === 'object') ws[XLSX.utils.encode_cell({ r, c })] = cell;
   }
   ws['!cols'] = [
-    { wch: 6 }, { wch: 12 }, { wch: 32 }, { wch: 22 },
-    { wch: 9 }, { wch: 9 }, { wch: 9 }, { wch: 9 }, { wch: 12 },
+    { wch: 6 }, { wch: 14 }, { wch: 36 }, { wch: 32 },
+    { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 },
   ];
   ws['!merges'] = merges;
   ws['!rows'] = rowHeights.map(h => ({ hpt: h }));
