@@ -697,6 +697,56 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
       rowHeights.push(estimateRowHeight(c.description || ''));
       totAcr = trunc2(totAcr + r.valorAcrescido);
       totFinal = trunc2(totFinal + r.valorFinal);
+
+      // ---- Insumos analíticos da composição (formação de preço) ----
+      const inputs = c.inputs ?? [];
+      if (inputs.length > 0) {
+        const insBg = COLOR.brandBg;
+        const insFg = '475569';
+        // Sub-header dos insumos (14 colunas)
+        rows.push([
+          tCell('  ↳', insBg, true, insFg),
+          tCell('Cód. Insumo', insBg, true, insFg),
+          tCell('Banco', insBg, true, insFg),
+          tCell('Descrição do insumo', insBg, true, insFg),
+          tCell('Und', insBg, true, insFg, 'center'),
+          tCell('Coef.', insBg, true, insFg, 'center'),
+          tCell('V.Unit Ref. s/ BDI', insBg, true, insFg, 'center'),
+          tCell('Desc. %', insBg, true, insFg, 'center'),
+          tCell('V.Unit s/ BDI c/ Desc.', insBg, true, insFg, 'center'),
+          tCell('', insBg),
+          tCell('', insBg),
+          tCell('Total s/ BDI Ref.', insBg, true, insFg, 'center'),
+          tCell('Total s/ BDI c/ Desc.', insBg, true, insFg, 'center'),
+          tCell('Insumo', insBg, true, insFg),
+        ]);
+        rowHeights.push(20);
+        const dPct = (discount || 0) / 100;
+        inputs.forEach(ip => {
+          const ref = Number(ip.unitPrice) || 0;
+          const coef = Number(ip.coefficient) || 0;
+          const unitDisc = trunc2(ref * (1 - dPct));
+          const totRef = trunc2(coef * ref);
+          const totDisc = trunc2(coef * unitDisc);
+          rows.push([
+            tCell(''),
+            tCell(ip.code || ''),
+            tCell(ip.bank || ''),
+            tCell(ip.description || ''),
+            tCell(ip.unit || '', undefined, false, undefined, 'center'),
+            nCell(q2(coef), FMT_QTD),
+            nCell(moneyExcel(ref), FMT_BRL),
+            nCell(pctExcel(dPct), FMT_PCT),
+            nCell(moneyExcel(unitDisc), FMT_BRL),
+            tCell(''),
+            tCell(''),
+            nCell(moneyExcel(totRef), FMT_BRL),
+            nCell(moneyExcel(totDisc), FMT_BRL),
+            tCell('Insumo', undefined, false, insFg),
+          ]);
+          rowHeights.push(estimateRowHeight(ip.description || ''));
+        });
+      }
     },
     onOrphanStart: () => {
       const r0 = rows.length;
