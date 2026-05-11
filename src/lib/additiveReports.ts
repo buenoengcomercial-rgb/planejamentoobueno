@@ -213,7 +213,25 @@ function tCell(v: string | number, fill?: string, bold = false, color?: string, 
 function nCell(v: number, fmt: string, fill?: string, color?: string, bold = false, hAlign: 'left' | 'center' | 'right' = 'center'): any {
   const c = tCell(v, fill, bold, color, hAlign);
   c.z = fmt;
+  c.t = 'n';
+  c.s.numFmt = fmt;
   return c;
+}
+
+// Cria uma célula "vazia" mas com fundo (preserva cor de coluna em linhas mescladas/subtotais).
+function fillCell(fill?: string): any {
+  return {
+    v: '',
+    s: {
+      fill: fill ? { patternType: 'solid', fgColor: { rgb: fill } } : undefined,
+      border: {
+        top: { style: 'thin', color: { rgb: COLOR.border } },
+        bottom: { style: 'thin', color: { rgb: COLOR.border } },
+        left: { style: 'thin', color: { rgb: COLOR.border } },
+        right: { style: 'thin', color: { rgb: COLOR.border } },
+      },
+    },
+  };
 }
 
 // ---------- Helpers tipados (mantêm formatação consistente) ----------
