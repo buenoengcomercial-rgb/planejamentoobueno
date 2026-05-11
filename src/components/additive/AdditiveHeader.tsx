@@ -2,7 +2,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import {
-  Upload, Download, Printer, CheckCircle2, Lock, XCircle, History,
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
+} from '@/components/ui/dropdown-menu';
+import {
+  Upload, Download, Printer, CheckCircle2, Lock, XCircle, History, ChevronDown,
 } from 'lucide-react';
 import type { Project, Additive as AdditiveModel, AdditiveStatus } from '@/types/project';
 import { STATUS_BADGE, STATUS_LABEL } from './types';
@@ -23,6 +26,9 @@ interface Props {
   onUseSynthetic: () => void;
   onContract: () => void;
   onExportExcel: () => void;
+  onExportSyntheticComplete: () => void;
+  onExportNewServices: () => void;
+  onExportCalculationMemory: () => void;
   onExportPdf: () => void;
   onOpenHistory: () => void;
 }
@@ -30,7 +36,8 @@ interface Props {
 export default function AdditiveHeader({
   project, active, status, bdi, globalDiscount, isLocked, fileRef, undoButton,
   onChangeBdi, onChangeGlobalDiscount, onFileSelected, onUseSynthetic,
-  onContract, onExportExcel, onExportPdf, onOpenHistory,
+  onContract, onExportExcel, onExportSyntheticComplete, onExportNewServices,
+  onExportCalculationMemory, onExportPdf, onOpenHistory,
 }: Props) {
   const lastLog = active ? (project.auditLogs ?? [])
     .filter(l => l.entityType === 'additive' && l.entityId === active.id)
@@ -141,9 +148,25 @@ export default function AdditiveHeader({
             {active.isContracted ? 'Aditivo Contratado' : 'Marcar como Contratado'}
           </Button>
         )}
-        <Button variant="outline" size="sm" disabled={!active} onClick={onExportExcel}>
-          <Download className="w-4 h-4 mr-1" /> Exportar Excel
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" disabled={!active}>
+              <Download className="w-4 h-4 mr-1" /> Exportar Excel
+              <ChevronDown className="w-3 h-3 ml-1 opacity-70" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-64">
+            <DropdownMenuItem onClick={onExportSyntheticComplete}>
+              Exportar Sintética Completa
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onExportNewServices}>
+              Exportar Novas Composições
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onExportCalculationMemory}>
+              Exportar Memória de Cálculo
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <Button variant="outline" size="sm" disabled={!active} onClick={onExportPdf}>
           <Printer className="w-4 h-4 mr-1" /> Imprimir / PDF
         </Button>

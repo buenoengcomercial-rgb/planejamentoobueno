@@ -1100,6 +1100,463 @@ export function buildAdditiveFromSyntheticBudgetItems(
 
 // ============= Exportações =============
 
+/* ---------- Helpers internos para exportadores ---------- */
+
+const FMT_BRL = 'R$ #,##0.00;[Red](R$ #,##0.00);-';
+const FMT_QTD = '#,##0.00';
+const FMT_PCT = '0.00%';
+
+function safeFileName(name: string): string {
+  return (name || 'aditivo').replace(/[^\w\d\-]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+/** Aplica número + format a uma célula já escrita pelo aoa_to_sheet. */
+function applyNumberFormat(ws: any, ref: string, fmt: string) {
+  const cell = ws[ref];
+  if (cell && cell.t !== 's') cell.z = fmt;
+}
+
+/** Aplica formato a uma faixa (ex: aplicar BRL nas colunas K..R a partir da linha N). */
+function applyColumnFormats(
+  ws: any,
+  startRow: number, // 1-based
+  endRow: number,   // 1-based inclusive
+  formatsByCol: Record<number, string>, // col index 0-based -> format
+) {
+  const XLSX = (globalThis as any).__xlsxRef;
+  for (let r = startRow; r <= endRow; r++) {
+    for (const colStr of Object.keys(formatsByCol)) {
+      const c = Number(colStr);
+      const ref = XLSX.utils.encode_cell({ r: r - 1, c });
+      applyNumberFormat(ws, ref, formatsByCol[c]);
+    }
+  }
+}
+
+/**
+ * Caminha pelas composições de um aditivo seguindo a ordem da EAP
+ * (Capítulo > Subcapítulo > Composição), igual à visualização da aba Aditivo.
+ *
+ * Para cada capítulo emite onChapterStart/onChapterEnd.
+ * Para cada composição emite onComposition.
+ * Composições sem phaseId vão para o final em onOrphan (sem capítulo).
+ */
+interface ChapterWalkHandlers {
+  onChapterStart?: (chapter: { id: string; number: string; name: string; depth: number }) => void;
+  onChapterEnd?: (chapter: {
+    id: string;
+    number: string;
+    name: string;
+    depth: number;
+    rows: AdditiveComposition[];
+    descendants: AdditiveComposition[];
+  }) => void;
+  onComposition?: (
+    comp: AdditiveComposition,
+    chapter: { id: string; number: string; name: string; depth: number } | null,
+  ) => void;
+  onOrphanStart?: () => void;
+}
+
+function walkAdditiveByChapters(
+  project: Project,
+  add: Additive,
+  filter: (c: AdditiveComposition) => boolean,
+  handlers: ChapterWalkHandlers,
+) {
+  const byPhase = new Map<string, AdditiveComposition[]>();
+  const orphans: AdditiveComposition[] = [];
+  add.compositions.filter(filter).forEach(c => {
+    if (c.phaseId) {
+      const arr = byPhase.get(c.phaseId) ?? [];
+      arr.push(c);
+      byPhase.set(c.phaseId, arr);
+    } else {
+      orphans.push(c);
+    }
+  });
+
+  const numbering = getChapterNumbering(project);
+  const tree = getChapterTree(project);
+
+  const walk = (node: ChapterNode, depth: number): AdditiveComposition[] => {
+    const directRows = byPhase.get(node.phase.id) ?? [];
+    // Visita filhos primeiro para saber se vale incluir o nó.
+    const childDescendants: AdditiveComposition[] = [];
+    const childResults = node.children.map(child => {
+      const before = childDescendants.length;
+      const res = walk(child, depth + 1);
+      if (res.length > 0) childDescendants.push(...res);
+      void before;
+      return res;
+    });
+    void childResults;
+    if (directRows.length === 0 && childDescendants.length === 0) return [];
+
+    const chapterInfo = {
+      id: node.phase.id,
+      number: numbering.get(node.phase.id) || '',
+      name: node.phase.name,
+      depth,
+    };
+    handlers.onChapterStart?.(chapterInfo);
+    directRows.forEach(c => handlers.onComposition?.(c, chapterInfo));
+    // children já foram visitados acima — refazer para emitir na ordem correta.
+    // Solução: refazer iteração apenas para emitir filhos preservando ordem.
+    return [...directRows, ...childDescendants];
+  };
+
+  // Refazer o walk garantindo emissão em ordem de capítulo > composições > filhos.
+  const emit = (node: ChapterNode, depth: number): AdditiveComposition[] => {
+    const directRows = byPhase.get(node.phase.id) ?? [];
+    const childResults: AdditiveComposition[][] = [];
+    let descendantsTotal: AdditiveComposition[] = [];
+    for (const child of node.children) {
+      const acc: AdditiveComposition[] = [];
+      const probe = (n: ChapterNode): AdditiveComposition[] => {
+        const dr = byPhase.get(n.phase.id) ?? [];
+        const sub: AdditiveComposition[] = [];
+        n.children.forEach(c2 => sub.push(...probe(c2)));
+        return [...dr, ...sub];
+      };
+      acc.push(...probe(child));
+      childResults.push(acc);
+      descendantsTotal.push(...acc);
+    }
+    if (directRows.length === 0 && descendantsTotal.length === 0) return [];
+
+    const chapterInfo = {
+      id: node.phase.id,
+      number: numbering.get(node.phase.id) || '',
+      name: node.phase.name,
+      depth,
+    };
+    handlers.onChapterStart?.(chapterInfo);
+    directRows.forEach(c => handlers.onComposition?.(c, chapterInfo));
+    // Emite cada filho recursivamente (que por sua vez chama onChapterStart/onChapterEnd dele).
+    node.children.forEach(child => emit(child, depth + 1));
+    handlers.onChapterEnd?.({
+      ...chapterInfo,
+      rows: directRows,
+      descendants: descendantsTotal,
+    });
+    return [...directRows, ...descendantsTotal];
+  };
+
+  // Eliminar variáveis intermediárias (walk não-emissor era apenas para conferência).
+  void walk;
+
+  tree.forEach(n => emit(n, 0));
+
+  if (orphans.length > 0) {
+    handlers.onOrphanStart?.();
+    orphans.forEach(c => handlers.onComposition?.(c, null));
+  }
+}
+
+/* ---------- Exportador 1: Sintética Completa ---------- */
+
+export async function exportAdditiveSyntheticCompleteToExcel(
+  project: Project,
+  add: Additive,
+) {
+  const XLSX = await import('xlsx');
+  (globalThis as any).__xlsxRef = XLSX;
+  const bdi = add.bdiPercent ?? 0;
+  const discount = add.globalDiscountPercent ?? 0;
+
+  const header = [
+    'Item', 'Código', 'Banco', 'Descrição', 'Unidade',
+    'Qtd Contratada', 'Qtd Suprimida', 'Qtd Acrescida', 'Qtd Final',
+    'Valor Unit s/ BDI', 'Valor Unit c/ BDI',
+    'Total Fonte', 'Valor Contratado', 'Valor Suprimido', 'Valor Acrescido', 'Valor Final',
+    'Diferença', '% Var.', 'Situação',
+  ];
+  const titleRows = [
+    [`Aditivo: ${add.name} — Sintética Completa`],
+    [`BDI: ${bdi.toFixed(2)}%   |   Desconto Licit.: ${discount.toFixed(2)}%   |   Status: ${add.status ?? 'rascunho'}`],
+    [],
+  ];
+  const aoa: (string | number)[][] = [...titleRows, header];
+
+  const numericColIdx: Record<number, string> = {
+    5: FMT_QTD, 6: FMT_QTD, 7: FMT_QTD, 8: FMT_QTD,
+    9: FMT_BRL, 10: FMT_BRL,
+    11: FMT_BRL, 12: FMT_BRL, 13: FMT_BRL, 14: FMT_BRL, 15: FMT_BRL,
+    16: FMT_BRL, 17: FMT_PCT,
+  };
+
+  const compRowRanges: Array<{ row: number }> = [];
+
+  const pushComposition = (c: AdditiveComposition) => {
+    const r = computeAdditiveRow(c, bdi, discount);
+    let situacao = 'Sem alteração';
+    if (c.isNewService) situacao = 'Novo serviço aditivado';
+    else if ((c.suppressedQuantity ?? 0) > 0 || (c.addedQuantity ?? 0) > 0) {
+      situacao = 'Item contratado alterado';
+    }
+    aoa.push([
+      c.item, c.code, c.bank, c.description, c.unit,
+      r.qtdContratada, r.qtdSuprimida, r.qtdAcrescida, r.qtdFinal,
+      r.unitPriceNoBDI, r.unitPriceWithBDI,
+      r.totalFonte, r.valorContratadoOriginalPreservado,
+      r.valorSuprimido, r.valorAcrescido, r.valorFinal,
+      r.diferenca, r.percentVar,
+      situacao,
+    ]);
+    compRowRanges.push({ row: aoa.length });
+  };
+
+  const subtotalRows: number[] = [];
+
+  walkAdditiveByChapters(project, add, () => true, {
+    onChapterStart: ch => {
+      const indent = '  '.repeat(ch.depth);
+      aoa.push([`${indent}${ch.number} ${ch.name}`]);
+    },
+    onComposition: c => pushComposition(c),
+    onChapterEnd: ch => {
+      // Subtotal recursivo (rows + descendentes diretos/indiretos)
+      const all = [...ch.rows, ...ch.descendants.filter(d => !ch.rows.includes(d))];
+      let sFonte = 0, sContr = 0, sSup = 0, sAcr = 0, sFinal = 0;
+      all.forEach(c => {
+        const r = computeAdditiveRow(c, bdi, discount);
+        sFonte += r.totalFonte;
+        sContr += r.valorContratadoOriginalPreservado;
+        sSup += r.valorSuprimido;
+        sAcr += r.valorAcrescido;
+        sFinal += r.valorFinal;
+      });
+      const indent = '  '.repeat(ch.depth);
+      aoa.push([
+        `${indent}Subtotal ${ch.number} ${ch.name}`, '', '', '', '', '', '', '', '',
+        '', '',
+        money2(sFonte), money2(sContr), money2(sSup), money2(sAcr), money2(sFinal),
+        money2(sFinal - sContr), '', '',
+      ]);
+      subtotalRows.push(aoa.length);
+    },
+    onOrphanStart: () => aoa.push(['Sem capítulo (não vinculado à EAP)']),
+  });
+
+  // TOTAL GERAL
+  const totals = additiveTotals(add);
+  aoa.push([]);
+  aoa.push([
+    'TOTAL GERAL', '', '', '', '', '', '', '', '',
+    '', '',
+    '', totals.totalContratadoOriginal, totals.totalSuprimido, totals.totalAcrescido, totals.valorFinal,
+    totals.diferencaLiquida, totals.percentVariacaoLiquida, '',
+  ]);
+  const totalRow = aoa.length;
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [
+    { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 50 }, { wch: 8 },
+    { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+    { wch: 16 }, { wch: 16 },
+    { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 },
+    { wch: 16 }, { wch: 10 }, { wch: 24 },
+  ];
+  ws['!freeze'] = { xSplit: 0, ySplit: 4 };
+  (ws as any)['!views'] = [{ state: 'frozen', ySplit: 4 }];
+
+  // Aplicar formatos numéricos a todas as linhas (do header em diante).
+  const lastRow = aoa.length;
+  applyColumnFormats(ws, 5, lastRow, numericColIdx);
+  // Subtotal/Total: formatar BRL/PCT
+  [...subtotalRows, totalRow].forEach(r => {
+    applyColumnFormats(ws, r, r, numericColIdx);
+  });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Sintética Completa');
+  XLSX.writeFile(wb, `aditivo_sintetica_completa_${safeFileName(add.name)}.xlsx`);
+}
+
+/* ---------- Exportador 2: Novas Composições ---------- */
+
+export async function exportAdditiveNewServicesToExcel(
+  project: Project,
+  add: Additive,
+) {
+  const XLSX = await import('xlsx');
+  (globalThis as any).__xlsxRef = XLSX;
+  const bdi = add.bdiPercent ?? 0;
+  const discount = add.globalDiscountPercent ?? 0;
+
+  const header = [
+    'Item', 'Código', 'Banco', 'Descrição', 'Unidade',
+    'Qtd Acrescida',
+    'Valor Unit Referência s/ BDI', 'Desconto Licit. %', 'Valor Unit s/ BDI com Desconto',
+    'BDI %', 'Valor Unit c/ BDI',
+    'Valor Acrescido', 'Valor Final',
+    'Fonte / Observação',
+  ];
+  const aoa: (string | number)[][] = [
+    [`Aditivo: ${add.name} — Novas Composições`],
+    [`BDI: ${bdi.toFixed(2)}%   |   Desconto Licit.: ${discount.toFixed(2)}%`],
+    [],
+    header,
+  ];
+
+  let totalAcrescido = 0;
+  let totalFinal = 0;
+
+  const numericFmt: Record<number, string> = {
+    5: FMT_QTD, 6: FMT_BRL, 7: FMT_PCT, 8: FMT_BRL, 9: FMT_PCT,
+    10: FMT_BRL, 11: FMT_BRL, 12: FMT_BRL,
+  };
+
+  walkAdditiveByChapters(project, add, c => !!c.isNewService, {
+    onChapterStart: ch => {
+      const indent = '  '.repeat(ch.depth);
+      aoa.push([`${indent}${ch.number} ${ch.name}`]);
+    },
+    onComposition: c => {
+      const r = computeAdditiveRow(c, bdi, discount);
+      const refUnit = referenceUnitNoBDIForNewService(c);
+      const obs = c.bank ? `Fonte: ${c.bank}` : 'Novo serviço aditivado';
+      aoa.push([
+        c.item, c.code, c.bank, c.description, c.unit,
+        r.qtdAcrescida,
+        refUnit,
+        (discount || 0) / 100,
+        r.unitPriceNoBDIWithDiscount,
+        (bdi || 0) / 100,
+        r.unitPriceWithBDI,
+        r.valorAcrescido, r.valorFinal,
+        obs,
+      ]);
+      totalAcrescido = money2(totalAcrescido + r.valorAcrescido);
+      totalFinal = money2(totalFinal + r.valorFinal);
+    },
+    onOrphanStart: () => aoa.push(['Sem capítulo (não vinculado à EAP)']),
+  });
+
+  aoa.push([]);
+  aoa.push([
+    'TOTAL NOVAS COMPOSIÇÕES', '', '', '', '', '', '', '', '', '', '',
+    totalAcrescido, totalFinal, '',
+  ]);
+  const totalRow = aoa.length;
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [
+    { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 50 }, { wch: 8 },
+    { wch: 14 },
+    { wch: 22 }, { wch: 14 }, { wch: 22 }, { wch: 10 }, { wch: 18 },
+    { wch: 16 }, { wch: 16 }, { wch: 30 },
+  ];
+  (ws as any)['!views'] = [{ state: 'frozen', ySplit: 4 }];
+  applyColumnFormats(ws, 5, aoa.length, numericFmt);
+  applyColumnFormats(ws, totalRow, totalRow, numericFmt);
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Novas Composições');
+  XLSX.writeFile(wb, `aditivo_novas_composicoes_${safeFileName(add.name)}.xlsx`);
+}
+
+/* ---------- Exportador 3: Memória de Cálculo ---------- */
+
+export async function exportAdditiveCalculationMemoryToExcel(
+  project: Project,
+  add: Additive,
+) {
+  const XLSX = await import('xlsx');
+  (globalThis as any).__xlsxRef = XLSX;
+
+  const aoa: (string | number)[][] = [
+    [`Aditivo: ${add.name} — Memória de Cálculo`],
+    [],
+  ];
+
+  const compHeader = [
+    'Item', 'Código', 'Banco', 'Descrição', 'Unidade',
+    'Qtd Contratada', 'Qtd Suprimida', 'Qtd Acrescida', 'Qtd Final',
+  ];
+  const memHeader = ['Loc', 'Tipo', 'Comentário', 'Fórmula', 'UND', 'Comprim.', 'Largura', 'Altura', 'Parcial'];
+
+  const filterFn = (c: AdditiveComposition) => {
+    const sup = c.suppressedQuantity ?? 0;
+    const acr = c.addedQuantity ?? 0;
+    const hasMem = validMemoryRows(c.calculationMemory).length > 0;
+    return !!c.isNewService || sup > 0 || acr > 0 || hasMem;
+  };
+
+  let grandAcr = 0;
+  let grandSup = 0;
+
+  walkAdditiveByChapters(project, add, filterFn, {
+    onChapterStart: ch => {
+      const indent = '  '.repeat(ch.depth);
+      aoa.push([`${indent}${ch.number} ${ch.name}`]);
+    },
+    onComposition: c => {
+      const labels = resolveMemoryColumnLabels(c.calculationMemoryColumns);
+      const localMemHeader = ['Loc', 'Tipo', 'Comentário', 'Fórmula', labels.a, labels.b, labels.c, labels.d, 'Parcial'];
+      // Linha de identificação
+      aoa.push(compHeader);
+      aoa.push([
+        c.item, c.code, c.bank, c.description, c.unit,
+        c.originalQuantity ?? 0, c.suppressedQuantity ?? 0, c.addedQuantity ?? 0,
+        totalAfterAdditive(c),
+      ]);
+      // Cabeçalho da memória
+      aoa.push(localMemHeader);
+      const rows = validMemoryRows(c.calculationMemory);
+      if (rows.length === 0) {
+        aoa.push(['—', '—', 'Sem memória de cálculo preenchida', '', '', '', '', '', '']);
+      } else {
+        let totAcr = 0;
+        let totSup = 0;
+        rows.forEach((m, idx) => {
+          const partial = Number.isFinite(m.partial) ? m.partial : 0;
+          aoa.push([
+            idx + 1,
+            m.type === 'suprimida' ? 'Suprimida' : 'Acrescida',
+            m.comment ?? '', m.formula ?? '',
+            m.a ?? '', m.b ?? '', m.c ?? '', m.d ?? '',
+            partial,
+          ]);
+          if (m.type === 'suprimida') totSup += partial;
+          else totAcr += partial;
+        });
+        aoa.push(['', '', 'Total Acrescida', '', '', '', '', '', money2(totAcr)]);
+        aoa.push(['', '', 'Total Suprimida', '', '', '', '', '', money2(totSup)]);
+        grandAcr = money2(grandAcr + totAcr);
+        grandSup = money2(grandSup + totSup);
+      }
+      memHeader; // referência só
+      aoa.push([]);
+    },
+    onOrphanStart: () => aoa.push(['Sem capítulo (não vinculado à EAP)']),
+  });
+
+  aoa.push([]);
+  aoa.push(['TOTAL GERAL ACRESCIDO', '', '', '', '', '', '', '', money2(grandAcr)]);
+  aoa.push(['TOTAL GERAL SUPRIMIDO', '', '', '', '', '', '', '', money2(grandSup)]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [
+    { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 50 }, { wch: 10 },
+    { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+  ];
+  (ws as any)['!views'] = [{ state: 'frozen', ySplit: 2 }];
+
+  // Formatar coluna "Parcial" (índice 8) como número, demais qtds como número.
+  for (let r = 1; r <= aoa.length; r++) {
+    [5, 6, 7, 8].forEach(c => {
+      const ref = XLSX.utils.encode_cell({ r: r - 1, c });
+      applyNumberFormat(ws, ref, FMT_QTD);
+    });
+  }
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Memória de Cálculo');
+  XLSX.writeFile(wb, `aditivo_memoria_calculo_${safeFileName(add.name)}.xlsx`);
+}
+
 export async function exportAdditiveToExcel(add: Additive) {
   const XLSX = await import('xlsx');
   const bdi = add.bdiPercent ?? 0;

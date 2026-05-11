@@ -79,6 +79,9 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
         onUseSynthetic={actions.handleUseSyntheticFromMeasurement}
         onContract={actions.handleContractAdditive}
         onExportExcel={actions.handleExportExcel}
+        onExportSyntheticComplete={actions.handleExportSyntheticCompleteExcel}
+        onExportNewServices={actions.handleExportNewServicesExcel}
+        onExportCalculationMemory={actions.handleExportCalculationMemoryExcel}
         onExportPdf={() => actions.handleExportPdf(showAnalytic)}
         onOpenHistory={() => setHistoryOpen(true)}
       />
