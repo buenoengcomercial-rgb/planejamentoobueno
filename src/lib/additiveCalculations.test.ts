@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { trunc2, calculateUnitPriceWithBDI, calculateLineTotal, calculateNewServiceUnitPrices } from './financialEngine';
-import { computeAdditiveRow, additiveTotals } from './additiveImport';
+import { computeAdditiveRow, additiveTotals, getOfficialContractedTotal } from './additiveImport';
+import type { Project, BudgetItem } from '@/types/project';
 import type { Additive, AdditiveComposition } from '@/types/project';
 
 describe('financialEngine truncation', () => {
