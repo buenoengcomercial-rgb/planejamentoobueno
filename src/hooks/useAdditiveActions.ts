@@ -390,7 +390,7 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
   const handleExportSyntheticCompleteExcel = async () => {
     if (!active) return;
     try {
-      await exportAdditiveSyntheticCompleteToExcel(project, active);
+      await exportAdditiveSyntheticCompletePro(project, active);
       toast.success('Sintética Completa exportada');
       logAdd(active.id, { action: 'exported', title: 'Sintética Completa exportada em Excel' });
     } catch (e) { console.error(e); toast.error('Falha ao gerar Sintética Completa'); }
@@ -399,7 +399,7 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
   const handleExportNewServicesExcel = async () => {
     if (!active) return;
     try {
-      await exportAdditiveNewServicesToExcel(project, active);
+      await exportAdditiveNewServicesPro(project, active);
       toast.success('Novas Composições exportadas');
       logAdd(active.id, { action: 'exported', title: 'Novas Composições exportadas em Excel' });
     } catch (e) { console.error(e); toast.error('Falha ao gerar Novas Composições'); }
@@ -408,7 +408,7 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
   const handleExportCalculationMemoryExcel = async () => {
     if (!active) return;
     try {
-      await exportAdditiveCalculationMemoryToExcel(project, active);
+      await exportAdditiveCalculationMemoryPro(project, active);
       toast.success('Memória de Cálculo exportada');
       logAdd(active.id, { action: 'exported', title: 'Memória de Cálculo exportada em Excel' });
     } catch (e) { console.error(e); toast.error('Falha ao gerar Memória de Cálculo'); }
@@ -425,6 +425,34 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
       toast.error('Falha ao gerar PDF do aditivo. Verifique o console para detalhes.');
     }
   };
+
+  const handleExportSyntheticCompletePdf = async () => {
+    if (!active) return;
+    try {
+      await exportAdditiveSyntheticCompletePdf(project, active);
+      toast.success('Sintética Completa (PDF) gerada');
+      logAdd(active.id, { action: 'exported', title: 'Sintética Completa exportada em PDF' });
+    } catch (e) { console.error(e); toast.error('Falha ao gerar PDF da Sintética Completa'); }
+  };
+
+  const handleExportNewServicesPdf = async () => {
+    if (!active) return;
+    try {
+      await exportAdditiveNewServicesPdf(project, active);
+      toast.success('Novas Composições (PDF) gerada');
+      logAdd(active.id, { action: 'exported', title: 'Novas Composições exportadas em PDF' });
+    } catch (e) { console.error(e); toast.error('Falha ao gerar PDF das Novas Composições'); }
+  };
+
+  const handleExportCalculationMemoryPdf = async () => {
+    if (!active) return;
+    try {
+      await exportAdditiveCalculationMemoryPdf(project, active);
+      toast.success('Memória de Cálculo (PDF) gerada');
+      logAdd(active.id, { action: 'exported', title: 'Memória de Cálculo exportada em PDF' });
+    } catch (e) { console.error(e); toast.error('Falha ao gerar PDF da Memória de Cálculo'); }
+  };
+
 
   const handleDeleteAdditive = (id: string) => {
     const target = (project.additives ?? []).find(a => a.id === id);
