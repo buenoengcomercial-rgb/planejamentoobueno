@@ -474,7 +474,7 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
       nCell(moneyExcel(r.valorAcrescido), FMT_BRL, acrBg, acrFg),
       nCell(moneyExcel(r.valorFinal), FMT_BRL, rowFill),
       nCell(moneyExcel(r.diferenca), FMT_BRL, rowFill),
-      nCell(pctExcel((r.percentVar ?? 0) / 100), FMT_PCT, rowFill),
+      nCell(pctExcel(r.percentVar), FMT_PCT, rowFill),
       tCell(situacao, rowFill, false, undefined, 'left'),
     ]);
     rowHeights.push(estimateRowHeight(c.description || ''));
