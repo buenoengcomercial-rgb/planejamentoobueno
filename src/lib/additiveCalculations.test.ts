@@ -47,5 +47,51 @@ describe('Aditivo trunc2 nas operações', () => {
     // não deve haver dízima — sempre 2 casas
     expect(Math.round(t.totalAcrescido * 100) / 100).toBe(t.totalAcrescido);
     expect(Math.round(t.valorFinal * 100) / 100).toBe(t.valorFinal);
+});
+
+describe('Total contratado oficial vem da Sintética', () => {
+  const mkBudget = (id: string, totalWithBDI: number): BudgetItem => ({
+    id, item: id, code: id, bank: 'SINAPI', description: id, unit: 'un',
+    quantity: 1, unitPriceNoBDI: 0, unitPriceWithBDI: 0,
+    totalNoBDI: 0, totalWithBDI, source: 'sintetica',
   });
+  it('soma totalWithBDI dos itens source==="sintetica" (R$ 5.815.613,52)', () => {
+    const project = {
+      budgetItems: [
+        mkBudget('a', 2_000_000.17),
+        mkBudget('b', 3_000_000.33),
+        mkBudget('c', 815_613.02),
+        // item de aditivo não entra
+        { ...mkBudget('z', 999_999.99), source: 'aditivo' as const },
+      ],
+    } as unknown as Project;
+    expect(getOfficialContractedTotal(project)).toBe(5_815_613.52);
+  });
+  it('additiveTotals usa o oficial e não 5.815.613,18', () => {
+    const project = {
+      budgetItems: [
+        mkBudget('a', 5_815_613.52),
+      ],
+    } as unknown as Project;
+    const add: Additive = {
+      id: 'a', name: 't', importedAt: '',
+      // composições com somatório que daria 5.815.613,18 (centavos truncados)
+      compositions: [comp({ id: 'x', quantity: 1, unitPriceWithBDI: 5_815_613.18, total: 5_815_613.18, originalQuantity: 1 })],
+      issues: [], bdiPercent: 0, status: 'rascunho',
+    } as Additive;
+    const t = additiveTotals(add, project);
+    expect(t.totalContratadoOriginal).toBe(5_815_613.52);
+    expect(t.totalContratadoOriginal).not.toBe(5_815_613.18);
+    expect(t.contractedSource).toBe('sintetica');
+  });
+  it('fallback quando não há Sintética', () => {
+    const add: Additive = {
+      id: 'a', name: 't', importedAt: '',
+      compositions: [comp({ id: 'x', quantity: 1, unitPriceWithBDI: 100, total: 100, originalQuantity: 1 })],
+      issues: [], bdiPercent: 0, status: 'rascunho',
+    } as Additive;
+    const t = additiveTotals(add, null);
+    expect(t.contractedSource).toBe('fallback');
+  });
+});
 });
