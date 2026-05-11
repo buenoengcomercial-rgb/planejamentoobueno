@@ -799,8 +799,8 @@ export async function exportAdditiveCalculationMemoryPro(project: Project, add: 
       tCell(c.description || '', fillRow),
       tCell(c.unit || '', fillRow, false, undefined, 'center'),
       nCell(q2(c.originalQuantity ?? 0), FMT_QTD, fillRow),
-      nCell(q2(c.suppressedQuantity ?? 0), FMT_QTD, (c.suppressedQuantity ?? 0) > 0 ? COLOR.suprimidoBg : fillRow, (c.suppressedQuantity ?? 0) > 0 ? COLOR.suprimidoFg : undefined),
-      nCell(q2(c.addedQuantity ?? 0), FMT_QTD, (c.addedQuantity ?? 0) > 0 ? COLOR.acrescidoBg : fillRow, (c.addedQuantity ?? 0) > 0 ? COLOR.acrescidoFg : undefined),
+      nCell(q2(c.suppressedQuantity ?? 0), FMT_QTD, COLOR.suprimidoBg, COLOR.suprimidoFg),
+      nCell(q2(c.addedQuantity ?? 0), FMT_QTD, COLOR.acrescidoBg, COLOR.acrescidoFg),
       nCell(q2(totalAfterAdditive(c)), FMT_QTD, fillRow),
     ]);
     rowHeights.push(estimateRowHeight(c.description || ''));
