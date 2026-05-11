@@ -1364,7 +1364,7 @@ export async function exportAdditiveSyntheticCompleteToExcel(
   });
 
   // TOTAL GERAL
-  const totals = additiveTotals(add);
+  const totals = additiveTotals(add, project);
   aoa.push([]);
   aoa.push([
     'TOTAL GERAL', '', '', '', '', '', '', '', '',
