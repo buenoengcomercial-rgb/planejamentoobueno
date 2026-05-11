@@ -11,6 +11,9 @@ import type {
 } from '@/types/project';
 import {
   importAdditiveFromExcel, exportAdditiveToExcel, exportAdditiveToPdf,
+  exportAdditiveSyntheticCompleteToExcel,
+  exportAdditiveNewServicesToExcel,
+  exportAdditiveCalculationMemoryToExcel,
   additiveTotals, getApprovedAdditiveBudgetItems,
   buildAdditiveFromSyntheticBudgetItems,
   createNewServiceComposition, contractAdditive,
