@@ -915,7 +915,7 @@ export async function exportAdditiveCalculationMemoryPro(project: Project, add: 
           tCell('Sem memória de cálculo preenchida'),
           tCell(''), tCell(''), tCell(''), tCell(''), tCell(''), tCell(''),
         ]);
-        rowHeights.push(18);
+        rowHeights.push(22);
       } else {
         let totA = 0, totS = 0;
         list.forEach((m, idx) => {
