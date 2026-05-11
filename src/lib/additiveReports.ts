@@ -632,17 +632,17 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
         tCell(c.bank || '', rowFill),
         tCell(c.description || '', rowFill),
         tCell(c.unit || '', rowFill, false, undefined, 'center'),
-        nCell(r.qtdAcrescida, FMT_QTD, COLOR.acrescidoBg, COLOR.acrescidoFg),
-        nCell(refUnit, FMT_BRL, rowFill),
-        nCell((discount || 0) / 100, FMT_PCT, rowFill),
-        nCell(r.unitPriceNoBDIWithDiscount, FMT_BRL, rowFill),
-        nCell((bdi || 0) / 100, FMT_PCT, rowFill),
-        nCell(r.unitPriceWithBDI, FMT_BRL, rowFill),
-        nCell(r.valorAcrescido, FMT_BRL, COLOR.acrescidoBg, COLOR.acrescidoFg),
-        nCell(r.valorFinal, FMT_BRL, rowFill),
+        nCell(q2(r.qtdAcrescida), FMT_QTD, COLOR.acrescidoBg, COLOR.acrescidoFg),
+        nCell(moneyExcel(refUnit), FMT_BRL, rowFill),
+        nCell(pctExcel((discount || 0) / 100), FMT_PCT, rowFill),
+        nCell(moneyExcel(r.unitPriceNoBDIWithDiscount), FMT_BRL, rowFill),
+        nCell(pctExcel((bdi || 0) / 100), FMT_PCT, rowFill),
+        nCell(moneyExcel(r.unitPriceWithBDI), FMT_BRL, rowFill),
+        nCell(moneyExcel(r.valorAcrescido), FMT_BRL, COLOR.acrescidoBg, COLOR.acrescidoFg),
+        nCell(moneyExcel(r.valorFinal), FMT_BRL, rowFill),
         tCell(obs, rowFill),
       ]);
-      rowHeights.push(18);
+      rowHeights.push(estimateRowHeight(c.description || ''));
       totAcr = money2(totAcr + r.valorAcrescido);
       totFinal = money2(totFinal + r.valorFinal);
     },
@@ -655,14 +655,15 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
   });
 
   const fillT = COLOR.totalGeralBg, fgT = COLOR.totalGeralFg;
+  const totalRowIdx = rows.length;
   rows.push([
-    tCell('TOTAL NOVAS COMPOSIÇÕES', fillT, true, fgT), tCell('', fillT), tCell('', fillT), tCell('', fillT), tCell('', fillT),
-    tCell('', fillT),
-    tCell('', fillT), tCell('', fillT), tCell('', fillT), tCell('', fillT), tCell('', fillT),
-    nCell(totAcr, FMT_BRL, fillT, fgT, true),
-    nCell(totFinal, FMT_BRL, fillT, fgT, true),
+    tCell('TOTAL NOVAS COMPOSIÇÕES', fillT, true, fgT, 'left'),
+    ...Array(10).fill({ v: '', s: { fill: { patternType: 'solid', fgColor: { rgb: fillT } } } }),
+    nCell(moneyExcel(totAcr), FMT_BRL, fillT, fgT, true),
+    nCell(moneyExcel(totFinal), FMT_BRL, fillT, fgT, true),
     tCell('', fillT),
   ]);
+  merges.push({ s: { r: totalRowIdx, c: 0 }, e: { r: totalRowIdx, c: 10 } });
   rowHeights.push(24);
 
   const ws = XLSX.utils.aoa_to_sheet(rows.map(r => r.map(c => (c && typeof c === 'object') ? (c as any).v : c)));
@@ -671,15 +672,21 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
     if (cell && typeof cell === 'object') ws[XLSX.utils.encode_cell({ r, c })] = cell;
   }
   ws['!cols'] = [
-    { wch: 9 }, { wch: 14 }, { wch: 10 }, { wch: 48 }, { wch: 7 },
-    { wch: 14 },
-    { wch: 18 }, { wch: 12 }, { wch: 20 }, { wch: 9 }, { wch: 16 },
-    { wch: 16 }, { wch: 16 },
-    { wch: 28 },
+    { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 38 }, { wch: 6 },
+    { wch: 12 },
+    { wch: 14 }, { wch: 11 }, { wch: 16 }, { wch: 8 }, { wch: 13 },
+    { wch: 14 }, { wch: 14 },
+    { wch: 22 },
   ];
   ws['!merges'] = merges;
   ws['!rows'] = rowHeights.map(h => ({ hpt: h }));
-  (ws as any)['!views'] = [{ state: 'frozen', ySplit: 11 }];
+  const subHeaderRowIdx = hdr.rows.length + 1;
+  const firstDataRowIdx = subHeaderRowIdx + 1;
+  (ws as any)['!views'] = [{ state: 'frozen', ySplit: firstDataRowIdx }];
+  const lastRowIdx = rows.length - 1;
+  ws['!autofilter'] = {
+    ref: `${XLSX.utils.encode_cell({ r: subHeaderRowIdx, c: 0 })}:${XLSX.utils.encode_cell({ r: lastRowIdx, c: totalCols - 1 })}`,
+  };
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Novas Composições');
