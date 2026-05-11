@@ -456,7 +456,14 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
   merges.push(...hdr.merges);
   rowHeights.push(...hdr.rowHeights);
 
-  pushGroupHeader(rows, merges, rowHeights, groups, SUB, subFills);
+  const subFontColors: (string | undefined)[] = [
+    undefined, undefined, undefined, undefined, undefined,
+    undefined, COLOR.suprimidoFg, COLOR.acrescidoFg, undefined,
+    undefined, undefined, undefined, undefined,
+    COLOR.suprimidoFg, COLOR.acrescidoFg, undefined, undefined, undefined,
+    undefined,
+  ];
+  pushGroupHeader(rows, merges, rowHeights, groups, SUB, subFills, subFontColors);
 
   const pushChapter = (number: string, name: string, depth: number) => {
     const r0 = rows.length;
@@ -487,10 +494,11 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
     else if ((c.suppressedQuantity ?? 0) > 0 || (c.addedQuantity ?? 0) > 0) {
       situacao = 'Item contratado alterado'; rowFill = COLOR.itemAlterado;
     }
-    const supBg = (c.suppressedQuantity ?? 0) > 0 ? COLOR.suprimidoBg : rowFill;
-    const acrBg = (c.addedQuantity ?? 0) > 0 ? COLOR.acrescidoBg : rowFill;
-    const supFg = (c.suppressedQuantity ?? 0) > 0 ? COLOR.suprimidoFg : undefined;
-    const acrFg = (c.addedQuantity ?? 0) > 0 ? COLOR.acrescidoFg : undefined;
+    // Cor de coluna sempre aplicada (igual ao painel), independente do valor.
+    const supBg = COLOR.suprimidoBg;
+    const acrBg = COLOR.acrescidoBg;
+    const supFg = COLOR.suprimidoFg;
+    const acrFg = COLOR.acrescidoFg;
 
     rows.push([
       tCell(c.item || '', rowFill),
@@ -535,8 +543,8 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
       ...Array(10).fill({ v: '', s: { fill: { patternType: 'solid', fgColor: { rgb: fill } } } }),
       nCell(moneyExcel(sFonte), FMT_BRL, fill, undefined, true),
       nCell(moneyExcel(sContr), FMT_BRL, fill, undefined, true),
-      nCell(moneyExcel(sSup), FMT_BRL, fill, COLOR.suprimidoFg, true),
-      nCell(moneyExcel(sAcr), FMT_BRL, fill, COLOR.acrescidoFg, true),
+      nCell(moneyExcel(sSup), FMT_BRL, COLOR.suprimidoBg, COLOR.suprimidoFg, true),
+      nCell(moneyExcel(sAcr), FMT_BRL, COLOR.acrescidoBg, COLOR.acrescidoFg, true),
       nCell(moneyExcel(sFinal), FMT_BRL, fill, undefined, true),
       nCell(moneyExcel(sDif), FMT_BRL, fill, undefined, true),
       tCell('', fill), tCell('', fill),
@@ -562,8 +570,8 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
     ...Array(10).fill({ v: '', s: { fill: { patternType: 'solid', fgColor: { rgb: fillT } } } }),
     tCell('', fillT),
     nCell(moneyExcel(t.totalContratadoOriginal), FMT_BRL, fillT, fgT, true),
-    nCell(moneyExcel(t.totalSuprimido), FMT_BRL, fillT, fgT, true),
-    nCell(moneyExcel(t.totalAcrescido), FMT_BRL, fillT, fgT, true),
+    nCell(moneyExcel(t.totalSuprimido), FMT_BRL, COLOR.suprimidoBg, COLOR.suprimidoFg, true),
+    nCell(moneyExcel(t.totalAcrescido), FMT_BRL, COLOR.acrescidoBg, COLOR.acrescidoFg, true),
     nCell(moneyExcel(t.valorFinal), FMT_BRL, fillT, fgT, true),
     nCell(moneyExcel(t.diferencaLiquida), FMT_BRL, fillT, fgT, true),
     nCell(pctExcel(t.percentVariacaoLiquida), FMT_PCT, fillT, fgT, true),
