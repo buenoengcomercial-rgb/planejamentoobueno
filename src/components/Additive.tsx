@@ -54,7 +54,7 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
     toggleExpand, toggleExpandMemory, toggleCollapsed, collapseAllGroups, expandAllGroups,
   } = state;
 
-  const totals = useMemo(() => (active ? additiveTotals(active) : null), [active]);
+  const totals = useMemo(() => (active ? additiveTotals(active, project) : null), [active, project]);
 
   const openReview = (preset: 'approve' | 'reject') => {
     if (preset === 'approve') {
