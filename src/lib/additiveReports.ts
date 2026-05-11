@@ -602,11 +602,11 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
     }
   }
   ws['!cols'] = [
-    { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 38 }, { wch: 6 },
-    { wch: 11 }, { wch: 11 }, { wch: 11 }, { wch: 10 },
-    { wch: 12 }, { wch: 13 }, { wch: 13 }, { wch: 14 },
-    { wch: 13 }, { wch: 13 }, { wch: 13 }, { wch: 13 }, { wch: 8 },
-    { wch: 18 },
+    { wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 52 }, { wch: 10 },
+    { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+    { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 },
+    { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 10 },
+    { wch: 24 },
   ];
   ws['!merges'] = merges;
   ws['!rows'] = rowHeights.map(h => ({ hpt: h }));
