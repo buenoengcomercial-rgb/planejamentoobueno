@@ -533,7 +533,7 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Sintética Completa');
-  XLSX.writeFile(wb, `aditivo_sintetica_completa_${safeFile(add.name)}.xlsx`);
+  downloadXlsxBlob(XLSX, wb, `aditivo_sintetica_completa_${safeFile(add.name)}.xlsx`);
 }
 
 // ---------- Exportador 2: Novas Composições (Excel) ----------
@@ -651,7 +651,7 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Novas Composições');
-  XLSX.writeFile(wb, `aditivo_novas_composicoes_${safeFile(add.name)}.xlsx`);
+  downloadXlsxBlob(XLSX, wb, `aditivo_novas_composicoes_${safeFile(add.name)}.xlsx`);
 }
 
 // ---------- Exportador 3: Memória de Cálculo (Excel) ----------
@@ -837,7 +837,7 @@ export async function exportAdditiveCalculationMemoryPro(project: Project, add: 
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Memória de Cálculo');
-  XLSX.writeFile(wb, `aditivo_memoria_calculo_${safeFile(add.name)}.xlsx`);
+  downloadXlsxBlob(XLSX, wb, `aditivo_memoria_calculo_${safeFile(add.name)}.xlsx`);
 }
 
 // ============================================================
@@ -1033,7 +1033,7 @@ export async function exportAdditiveSyntheticCompletePdf(project: Project, add: 
   });
 
   pdfFooter(doc);
-  doc.save(`aditivo_sintetica_completa_${safeFile(add.name)}.pdf`);
+  downloadPdfBlob(doc, `aditivo_sintetica_completa_${safeFile(add.name)}.pdf`);
 }
 
 // ---- PDF Novas Composições ----
@@ -1097,7 +1097,7 @@ export async function exportAdditiveNewServicesPdf(project: Project, add: Additi
   });
 
   pdfFooter(doc);
-  doc.save(`aditivo_novas_composicoes_${safeFile(add.name)}.pdf`);
+  downloadPdfBlob(doc, `aditivo_novas_composicoes_${safeFile(add.name)}.pdf`);
 }
 
 // ---- PDF Memória de Cálculo ----
@@ -1209,5 +1209,5 @@ export async function exportAdditiveCalculationMemoryPdf(project: Project, add: 
   });
 
   pdfFooter(doc);
-  doc.save(`aditivo_memoria_calculo_${safeFile(add.name)}.pdf`);
+  downloadPdfBlob(doc, `aditivo_memoria_calculo_${safeFile(add.name)}.pdf`);
 }
