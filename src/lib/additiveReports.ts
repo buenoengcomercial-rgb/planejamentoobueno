@@ -954,7 +954,7 @@ async function drawPdfFormalHeader(
   let cursorY = Math.max(margin + 16, margin + logoH + 1);
 
   const cw = [usable * 0.16, usable * 0.34, usable * 0.16, usable * 0.34];
-  const issueStr = fmtDateBR(new Date());
+  const issueStr = fmtDateBR(add.headerIssueDate || new Date());
   const headerRows: [string, string, string, string][] = [
     ['Obra:', project.name || '-', 'Aditivo:', add.name || '-'],
     ['Contratante:', ci.contractor || '-', 'Contratada:', ci.contracted || '-'],
@@ -962,7 +962,7 @@ async function drawPdfFormalHeader(
     ['Nº Contrato:', ci.contractNumber || '-', 'Nº ART:', ci.artNumber || '-'],
     ['Fonte de orçamento:', ci.budgetSource || '-', 'Status:', statusLabel(add.status)],
     ['BDI %:', `${(add.bdiPercent ?? 0).toFixed(2)}`, 'Desconto Licit. %:', `${(add.globalDiscountPercent ?? 0).toFixed(2)}`],
-    ['Data emissão:', issueStr, 'Responsável:', add.approvedBy || '-'],
+    ['Data emissão:', issueStr, 'Responsável:', add.headerResponsible || add.approvedBy || '-'],
   ];
   autoTable(doc, {
     startY: cursorY, body: headerRows, theme: 'grid',
