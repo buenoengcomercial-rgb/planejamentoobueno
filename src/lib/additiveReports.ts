@@ -1123,7 +1123,7 @@ export async function exportAdditiveSyntheticCompletePdf(project: Project, add: 
     },
   });
 
-  const t = additiveTotals(add);
+  const t = additiveTotals(add, project);
   body.push([
     { content: 'TOTAL GERAL', colSpan: 11, styles: { fillColor: [31, 41, 55], textColor: [255, 255, 255], fontStyle: 'bold' } },
     { content: fmtBRL(t.totalSuprimido), styles: { fillColor: [31, 41, 55], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'right' } },
