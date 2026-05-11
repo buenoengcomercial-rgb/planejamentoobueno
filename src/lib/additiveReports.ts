@@ -362,6 +362,7 @@ function pushGroupHeader(
   groups: Array<{ label: string; span: number; fill: string }>,
   subHeaders: string[],
   fillsBySubCol: string[],
+  fontColorsBySubCol?: (string | undefined)[],
 ) {
   const r0 = rows.length;
   const groupRow: Row = [];
@@ -391,20 +392,23 @@ function pushGroupHeader(
   rowHeights.push(20);
 
   // Sub-headers
-  rows.push(subHeaders.map((h, i) => ({
-    v: h,
-    s: {
-      font: { name: 'Arial', sz: 9, bold: true, color: { rgb: '0F172A' } },
-      alignment: { vertical: 'center', horizontal: 'center', wrapText: true },
-      fill: { patternType: 'solid', fgColor: { rgb: fillsBySubCol[i] || COLOR.ident } },
-      border: {
-        top: { style: 'thin', color: { rgb: COLOR.border } },
-        bottom: { style: 'thin', color: { rgb: COLOR.border } },
-        left: { style: 'thin', color: { rgb: COLOR.border } },
-        right: { style: 'thin', color: { rgb: COLOR.border } },
+  rows.push(subHeaders.map((h, i) => {
+    const fg = fontColorsBySubCol?.[i] || '0F172A';
+    return {
+      v: h,
+      s: {
+        font: { name: 'Arial', sz: 9, bold: true, color: { rgb: fg } },
+        alignment: { vertical: 'center', horizontal: 'center', wrapText: true },
+        fill: { patternType: 'solid', fgColor: { rgb: fillsBySubCol[i] || COLOR.ident } },
+        border: {
+          top: { style: 'thin', color: { rgb: COLOR.border } },
+          bottom: { style: 'thin', color: { rgb: COLOR.border } },
+          left: { style: 'thin', color: { rgb: COLOR.border } },
+          right: { style: 'thin', color: { rgb: COLOR.border } },
+        },
       },
-    },
-  })));
+    };
+  }));
   rowHeights.push(28);
 }
 
