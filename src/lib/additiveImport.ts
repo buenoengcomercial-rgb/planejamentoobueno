@@ -329,7 +329,6 @@ export function parseAdditiveSyntheticWorkbook(
   const { items: synthItems, issues: synthIssues, bdi } = parseSyntheticSheet(rows);
   const issues: AdditiveImportIssue[] = [...synthIssues];
   const bdiPercent = bdi ?? 0;
-  const fator = 1 + bdiPercent / 100;
 
   const compositions: AdditiveComposition[] = synthItems.map(s => {
     // Preserva EXATAMENTE os valores vindos da Sintética (planilha pronta).
@@ -700,7 +699,6 @@ export function referenceUnitNoBDIForNewService(comp: AdditiveComposition): numb
 }
 
 export function computeAdditiveRow(comp: AdditiveComposition, bdiPercent: number, globalDiscountPercent = 0) {
-  const fator = 1 + (bdiPercent || 0) / 100;
   const isNew = !!comp.isNewService;
   // Para novos serviços: o valor unitário s/ BDI exibido é a REFERÊNCIA (SINAPI), sem desconto.
   // O desconto global da licitação é aplicado em uma coluna separada e propaga para o BDI.
