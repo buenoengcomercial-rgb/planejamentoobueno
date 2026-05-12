@@ -1,7 +1,7 @@
 /**
  * Exportadores formais (Excel + PDF) da aba Aditivo.
  *
- * Não recalcula valores: reaproveita computeAdditiveRow, additiveTotals,
+ * Não recalcula valores: reaproveita computeAdditiveRow,
  * referenceUnitNoBDIForNewService, validMemoryRows e resolveMemoryColumnLabels.
  *
  * Visual semelhante ao painel da aba Aditivo (grupos de colunas coloridos,
@@ -11,7 +11,6 @@
 import type { Project, Additive, AdditiveComposition } from '@/types/project';
 import {
   computeAdditiveRow,
-  additiveTotals,
   referenceUnitNoBDIForNewService,
   totalAfterAdditive,
   money2,
@@ -203,7 +202,7 @@ function walkByChapters(
 // EXCEL (xlsx-js-style)
 // ============================================================
 
-type Cell = string | number | { v: string | number; s?: any; z?: string };
+type Cell = string | number | { v: string | number; f?: string; t?: string; s?: any; z?: string };
 type Row = Cell[];
 
 function tCell(v: string | number, fill?: string, bold = false, color?: string, hAlign?: 'left' | 'center' | 'right'): any {
@@ -227,6 +226,33 @@ function nCell(v: number, fmt: string, fill?: string, color?: string, bold = fal
   c.t = 'n';
   c.s.numFmt = fmt;
   return c;
+}
+
+function formulaCell(formula: string, fmt: string, fill?: string, color?: string, bold = false): any {
+  const c = nCell(0, fmt, fill, color, bold, 'center');
+  c.f = formula;
+  return c;
+}
+
+function buildCompositionSumFormula(column: string, excelRows: number[]): string {
+  if (excelRows.length === 0) return '0';
+  const ranges: string[] = [];
+  let start = excelRows[0];
+  let previous = excelRows[0];
+
+  for (let i = 1; i < excelRows.length; i += 1) {
+    const row = excelRows[i];
+    if (row === previous + 1) {
+      previous = row;
+      continue;
+    }
+    ranges.push(start === previous ? `${column}${start}` : `${column}${start}:${column}${previous}`);
+    start = row;
+    previous = row;
+  }
+
+  ranges.push(start === previous ? `${column}${start}` : `${column}${start}:${column}${previous}`);
+  return `SUM(${ranges.join(',')})`;
 }
 
 // Cria uma célula "vazia" mas com fundo (preserva cor de coluna em linhas mescladas/subtotais).
