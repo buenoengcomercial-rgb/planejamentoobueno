@@ -707,19 +707,21 @@ export function computeAdditiveRow(comp: AdditiveComposition, bdiPercent: number
   const discountFactor = isNew ? (1 - (globalDiscountPercent || 0) / 100) : 1;
   const referenceUnitNoBDI = isNew
     ? referenceUnitNoBDIForNewService(comp)
-    : money2(comp.unitPriceNoBDI);
+    : truncar2(comp.unitPriceNoBDI);
   // Valor unitário s/ BDI exibido na coluna principal:
   //  - novos serviços: REFERÊNCIA SINAPI (sem desconto), para rastreabilidade;
   //  - existentes: valor importado da Sintética/Medição.
   const unitPriceNoBDI = referenceUnitNoBDI;
   // Valor com desconto licitatório (somente novos serviços; nos demais é igual à referência).
   const unitPriceNoBDIWithDiscount = isNew
-    ? truncar2(referenceUnitNoBDI * discountFactor)
+    ? calculateDiscountedUnitNoBDI(referenceUnitNoBDI, globalDiscountPercent || 0)
     : referenceUnitNoBDI;
   // Valor c/ BDI: aplicado SOBRE o valor já com desconto (novos) ou sobre o contratado (existentes).
   const unitPriceWithBDI = isNew
-    ? truncar2(unitPriceNoBDIWithDiscount * fator)
-    : money2(comp.unitPriceWithBDI ?? truncar2(unitPriceNoBDI * fator));
+    ? calculateUnitPriceWithBDI(unitPriceNoBDIWithDiscount, bdiPercent || 0)
+    : hasReadyValue(comp.unitPriceWithBDI)
+      ? truncar2(comp.unitPriceWithBDI)
+      : calculateUnitPriceWithBDI(unitPriceNoBDI, bdiPercent || 0);
   const qtdContratada = comp.originalQuantity ?? comp.quantity ?? 0;
   const qtdSuprimida = comp.suppressedQuantity ?? 0;
   const qtdAcrescida = comp.addedQuantity ?? 0;
@@ -729,18 +731,20 @@ export function computeAdditiveRow(comp: AdditiveComposition, bdiPercent: number
     ? 0
     : (comp.totalWithBDI != null
         ? money2(comp.totalWithBDI)
-        : money2(comp.total ?? truncar2(unitPriceWithBDI * (comp.quantity ?? qtdContratada))));
+        : hasReadyValue(comp.total)
+          ? money2(comp.total)
+          : calculateLineTotal(unitPriceWithBDI, comp.quantity ?? qtdContratada));
   // Valor contratado original PRESERVADO (fonte). Para novos serviços = 0 (não havia contrato original).
   const valorContratadoOriginalPreservado = isNew
     ? 0
     : (comp.totalWithBDI != null
         ? money2(comp.totalWithBDI)
-        : comp.total != null
+        : hasReadyValue(comp.total)
           ? money2(comp.total)
-          : money2(unitPriceWithBDI * qtdContratada));
-  const valorContratadoCalc = truncar2(unitPriceWithBDI * qtdContratada);
-  const valorSuprimido = truncar2(unitPriceWithBDI * qtdSuprimida);
-  const valorAcrescido = truncar2(unitPriceWithBDI * qtdAcrescida);
+          : calculateLineTotal(unitPriceWithBDI, qtdContratada));
+  const valorContratadoCalc = calculateLineTotal(unitPriceWithBDI, qtdContratada);
+  const valorSuprimido = calculateLineTotal(unitPriceWithBDI, qtdSuprimida);
+  const valorAcrescido = calculateLineTotal(unitPriceWithBDI, qtdAcrescida);
   // Valor final preservando a fonte: original + acrescido − suprimido.
   const valorFinal = truncar2(valorContratadoOriginalPreservado + valorAcrescido - valorSuprimido);
   const diferenca = truncar2(valorFinal - valorContratadoOriginalPreservado);
