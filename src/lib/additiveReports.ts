@@ -298,95 +298,132 @@ function buildFormalHeaderBlock(
   const rowHeights: number[] = [];
   const cw = totalCols;
 
-  // Linha 1: título (mesclada total)
+  // Formatador BR para percentuais (vírgula decimal).
+  const fmtPctBR = (n: number | null | undefined) =>
+    `${(Number(n) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+
+  // ---------- Linha 1: título principal (mesclar A:cw) ----------
+  const titleFill = { patternType: 'solid', fgColor: { rgb: COLOR.headerBlack } };
   const titleCell = {
     v: `${(company?.name || 'Empresa').toUpperCase()} — ${reportTitle}`,
     s: {
       font: { name: 'Arial', sz: 14, bold: true, color: { rgb: COLOR.headerWhite } },
-      alignment: { vertical: 'center', horizontal: 'center' },
-      fill: { patternType: 'solid', fgColor: { rgb: COLOR.headerBlack } },
+      alignment: { vertical: 'center', horizontal: 'center', wrapText: true },
+      fill: titleFill,
     },
   };
-  rows.push([titleCell, ...Array(cw - 1).fill({ v: '', s: { fill: { patternType: 'solid', fgColor: { rgb: COLOR.headerBlack } } } })]);
+  rows.push([titleCell, ...Array(cw - 1).fill({ v: '', s: { fill: titleFill } })]);
   merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: cw - 1 } });
   rowHeights.push(28);
 
-  // Linha 2: subtítulo / nome obra
-  const sub = {
-    v: `Obra: ${project.name || '-'}   |   Aditivo: ${add.name || '-'}   |   Status: ${statusLabel(add.status)}`,
+  // ---------- Linha 2: subtítulo (Obra | Aditivo | Status) ----------
+  const subFill = { patternType: 'solid', fgColor: { rgb: 'F1F5F9' } }; // cinza muito claro
+  const subText = `Obra: ${project.name || '-'}   |   Aditivo: ${add.name || '-'}   |   Status: ${statusLabel(add.status)}`;
+  const subCell = {
+    v: subText,
     s: {
       font: { name: 'Arial', sz: 10, bold: true, color: { rgb: '0F172A' } },
-      alignment: { vertical: 'center', horizontal: 'center' },
-      fill: { patternType: 'solid', fgColor: { rgb: COLOR.brandBg } },
+      alignment: { vertical: 'center', horizontal: 'center', wrapText: true },
+      fill: subFill,
     },
   };
-  rows.push([sub, ...Array(cw - 1).fill({ v: '', s: { fill: { patternType: 'solid', fgColor: { rgb: COLOR.brandBg } } } })]);
+  rows.push([subCell, ...Array(cw - 1).fill({ v: '', s: { fill: subFill } })]);
   merges.push({ s: { r: 1, c: 0 }, e: { r: 1, c: cw - 1 } });
-  rowHeights.push(20);
+  rowHeights.push(Math.max(26, estimateRowHeightFromTexts(subText)));
 
-  // Bloco de dados em grade — 4 colunas lógicas (label | value | label | value),
-  // distribuídas em quartos da largura.
-  const q = Math.max(1, Math.floor(cw / 4));
-  const lab = (txt: string) => ({
-    v: txt, s: {
-      font: { name: 'Arial', sz: 9, bold: true, color: { rgb: '334155' } },
-      alignment: { vertical: 'center', horizontal: 'left' },
-      fill: { patternType: 'solid', fgColor: { rgb: COLOR.ident } },
-      border: {
-        top: { style: 'thin', color: { rgb: COLOR.border } },
-        bottom: { style: 'thin', color: { rgb: COLOR.border } },
-        left: { style: 'thin', color: { rgb: COLOR.border } },
-        right: { style: 'thin', color: { rgb: COLOR.border } },
-      },
+  // ---------- Bloco de dados: 4 colunas lógicas com ranges fixos ----------
+  // Para 19 cols (Sintética Completa A:S):
+  //   labelL = A:B (2)  | valueL = C:I (7)  | labelR = J:K (2)  | valueR = L:S (8)
+  // Para outras larguras, mantemos 2 cols para cada rótulo e dividimos o restante
+  // entre os valores na proporção 7/15 e 8/15.
+  const labLCols = Math.min(2, Math.max(1, Math.floor(cw * 0.11)));
+  const labRCols = Math.min(2, Math.max(1, Math.floor(cw * 0.11)));
+  const valTotal = Math.max(2, cw - labLCols - labRCols);
+  const valLCols = Math.max(1, Math.floor((valTotal * 7) / 15));
+  const valRCols = Math.max(1, valTotal - valLCols);
+
+  const cLabL0 = 0;
+  const cLabL1 = cLabL0 + labLCols - 1;
+  const cValL0 = cLabL1 + 1;
+  const cValL1 = cValL0 + valLCols - 1;
+  const cLabR0 = cValL1 + 1;
+  const cLabR1 = cLabR0 + labRCols - 1;
+  const cValR0 = cLabR1 + 1;
+  const cValR1 = cw - 1; // ocupa até o final
+
+  const labelStyle = {
+    font: { name: 'Arial', sz: 10, bold: true, color: { rgb: '1E293B' } },
+    alignment: { vertical: 'center', horizontal: 'left', wrapText: true, indent: 1 },
+    fill: { patternType: 'solid', fgColor: { rgb: 'DBEAFE' } }, // azul claro
+    border: {
+      top: { style: 'thin', color: { rgb: COLOR.border } },
+      bottom: { style: 'thin', color: { rgb: COLOR.border } },
+      left: { style: 'thin', color: { rgb: COLOR.border } },
+      right: { style: 'thin', color: { rgb: COLOR.border } },
     },
-  });
-  const val = (txt: string) => ({
-    v: txt, s: {
-      font: { name: 'Arial', sz: 9, color: { rgb: '0F172A' } },
-      alignment: { vertical: 'center', horizontal: 'left', wrapText: true },
-      border: {
-        top: { style: 'thin', color: { rgb: COLOR.border } },
-        bottom: { style: 'thin', color: { rgb: COLOR.border } },
-        left: { style: 'thin', color: { rgb: COLOR.border } },
-        right: { style: 'thin', color: { rgb: COLOR.border } },
-      },
+  };
+  const valueStyle = {
+    font: { name: 'Arial', sz: 10, color: { rgb: '0F172A' } },
+    alignment: { vertical: 'center', horizontal: 'left', wrapText: true, indent: 1 },
+    fill: { patternType: 'solid', fgColor: { rgb: 'FFFFFF' } },
+    border: {
+      top: { style: 'thin', color: { rgb: COLOR.border } },
+      bottom: { style: 'thin', color: { rgb: COLOR.border } },
+      left: { style: 'thin', color: { rgb: COLOR.border } },
+      right: { style: 'thin', color: { rgb: COLOR.border } },
     },
-  });
+  };
+  const lab = (txt: string) => ({ v: txt, s: labelStyle });
+  const val = (txt: string) => ({ v: txt, s: valueStyle });
+  const blank = (style: any) => ({ v: '', s: style });
 
   const pairs: Array<[string, string, string, string]> = [
     ['Contratante:', ci.contractor || '-', 'Contratada:', ci.contracted || '-'],
     ['Local/Município:', ci.location || '-', 'Objeto:', ci.contractObject || '-'],
     ['Nº Contrato:', ci.contractNumber || '-', 'Nº ART:', ci.artNumber || '-'],
     ['Fonte de orçamento:', ci.budgetSource || '-', 'Nome do aditivo:', add.name || '-'],
-    ['BDI %:', `${(add.bdiPercent ?? 0).toFixed(2)}%`, 'Desconto Licit. %:', `${(add.globalDiscountPercent ?? 0).toFixed(2)}%`],
+    ['BDI %:', fmtPctBR(add.bdiPercent), 'Desconto Licit. %:', fmtPctBR(add.globalDiscountPercent)],
     ['Data emissão:', fmtDateBR(add.headerIssueDate || new Date()), 'Responsável:', add.headerResponsible || add.approvedBy || '-'],
   ];
 
   const headerStartRow = rows.length;
-  pairs.forEach(([l1, v1, l2, v2]) => {
+  pairs.forEach(([l1, v1, l2, v2], idx) => {
     const row: Row = Array(cw).fill('');
-    row[0] = lab(l1);
-    row[q] = val(v1);
-    row[2 * q] = lab(l2);
-    row[3 * q] = val(v2);
+    // Preencher fundos das células vazias dentro de cada bloco mesclado para
+    // garantir bordas/cores em todas as colunas (fallback de renderização).
+    for (let c = cLabL0; c <= cLabL1; c++) row[c] = blank(labelStyle);
+    for (let c = cValL0; c <= cValL1; c++) row[c] = blank(valueStyle);
+    for (let c = cLabR0; c <= cLabR1; c++) row[c] = blank(labelStyle);
+    for (let c = cValR0; c <= cValR1; c++) row[c] = blank(valueStyle);
+    row[cLabL0] = lab(l1);
+    row[cValL0] = val(v1);
+    row[cLabR0] = lab(l2);
+    row[cValR0] = val(v2);
     rows.push(row);
-    rowHeights.push(18);
+
+    // Altura: linhas com Objeto/Fonte de orçamento podem ser mais altas.
+    const baseH = 22;
+    const longText = [v1, v2].some((t) => (t || '').length > 60);
+    let h = Math.max(baseH, estimateRowHeightFromTexts(v1, v2));
+    if (longText && h < 34) h = 34;
+    if (idx === 1 || idx === 3) h = Math.max(h, 34);
+    if (h > 64) h = 64;
+    rowHeights.push(h);
   });
+
   // Merges dos campos
   for (let i = 0; i < pairs.length; i++) {
     const r = headerStartRow + i;
-    merges.push({ s: { r, c: 0 }, e: { r, c: q - 1 } });
-    merges.push({ s: { r, c: q }, e: { r, c: 2 * q - 1 } });
-    merges.push({ s: { r, c: 2 * q }, e: { r, c: 3 * q - 1 } });
-    merges.push({ s: { r, c: 3 * q }, e: { r, c: cw - 1 } });
+    if (cLabL1 > cLabL0) merges.push({ s: { r, c: cLabL0 }, e: { r, c: cLabL1 } });
+    if (cValL1 > cValL0) merges.push({ s: { r, c: cValL0 }, e: { r, c: cValL1 } });
+    if (cLabR1 > cLabR0) merges.push({ s: { r, c: cLabR0 }, e: { r, c: cLabR1 } });
+    if (cValR1 > cValR0) merges.push({ s: { r, c: cValR0 }, e: { r, c: cValR1 } });
   }
 
   // Linha em branco separadora
   rows.push(Array(cw).fill(''));
   rowHeights.push(8);
 
-  // Logo (best-effort): se houver, ocupa célula A1..B2 visualmente — sheetjs não embute imagens.
-  // Mantemos identidade no título; logo aparece no PDF.
   void logoDataUrl;
 
   return { rows, merges, rowHeights };
