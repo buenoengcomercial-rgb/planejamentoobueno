@@ -129,7 +129,14 @@ export function memoryTotals(comp: AdditiveComposition): {
     if (r.type === 'suprimida') suppressed += p;
     else added += p;
   }
-  return { added, suppressed, hasMemory: true };
+  // Truncar em 2 casas: as quantidades resultantes alimentam cálculos financeiros.
+  const t2 = (n: number) => {
+    if (!Number.isFinite(n)) return 0;
+    const scaled = n * 100;
+    const eps = scaled >= 0 ? 1e-9 : -1e-9;
+    return Math.trunc(scaled + eps) / 100;
+  };
+  return { added: t2(added), suppressed: t2(suppressed), hasMemory: true };
 }
 
 /**
