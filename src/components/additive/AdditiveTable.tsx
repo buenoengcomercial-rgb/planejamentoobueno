@@ -53,12 +53,12 @@ export default function AdditiveTable(props: Props) {
   return (
     <Card className="overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full text-xs border-collapse" style={{ minWidth: 1280, tableLayout: 'fixed' }}>
+        <table className="w-full text-xs border-collapse" style={{ minWidth: 1340, tableLayout: 'fixed' }}>
           <colgroup>
             <col style={{ width: 22 }} />
             <col style={{ width: 44 }} />
-            <col style={{ width: 60 }} />
-            <col style={{ width: 70 }} />
+            <col style={{ width: 100 }} />
+            <col style={{ width: 90 }} />
             <col style={{ width: 240 }} />
             <col style={{ width: 36 }} />
             <col style={{ width: 62 }} />
