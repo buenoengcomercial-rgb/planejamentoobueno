@@ -1167,6 +1167,16 @@ export async function exportAdditiveSyntheticCompletePdf(project: Project, add: 
   ];
   const body: any[] = [];
 
+  // Acumuladores: TOTAL GERAL == soma das linhas exportadas.
+  const lineValuesByCompId = new Map<string, {
+    valorSuprimido: number; valorAcrescido: number; valorFinal: number; diferenca: number;
+  }>();
+  let exportTotalContratado = 0;
+  let exportTotalSuprimido = 0;
+  let exportTotalAcrescido = 0;
+  let exportTotalFinal = 0;
+  let exportTotalDiferenca = 0;
+
   walkByChapters(project, add, () => true, {
     onChapterStart: ch => {
       body.push([{
@@ -1177,6 +1187,23 @@ export async function exportAdditiveSyntheticCompletePdf(project: Project, add: 
     },
     onComposition: c => {
       const r = computeAdditiveRow(c, bdi, discount);
+      const lineValorContratado = trunc2(r.valorContratadoOriginalPreservado);
+      const lineValorSuprimido = trunc2(r.valorSuprimido);
+      const lineValorAcrescido = trunc2(r.valorAcrescido);
+      const lineValorFinal = trunc2(r.valorFinal);
+      const lineDiferenca = trunc2(r.diferenca);
+      lineValuesByCompId.set(c.id, {
+        valorSuprimido: lineValorSuprimido,
+        valorAcrescido: lineValorAcrescido,
+        valorFinal: lineValorFinal,
+        diferenca: lineDiferenca,
+      });
+      exportTotalContratado = trunc2(exportTotalContratado + lineValorContratado);
+      exportTotalSuprimido = trunc2(exportTotalSuprimido + lineValorSuprimido);
+      exportTotalAcrescido = trunc2(exportTotalAcrescido + lineValorAcrescido);
+      exportTotalFinal = trunc2(exportTotalFinal + lineValorFinal);
+      exportTotalDiferenca = trunc2(exportTotalDiferenca + lineDiferenca);
+
       const rowFill: [number, number, number] | undefined = c.isNewService
         ? [239, 246, 255]
         : ((c.suppressedQuantity ?? 0) > 0 || (c.addedQuantity ?? 0) > 0) ? [254, 249, 195] : undefined;
@@ -1199,19 +1226,22 @@ export async function exportAdditiveSyntheticCompletePdf(project: Project, add: 
         { content: fmtQ(r.qtdFinal), styles: { ...baseStyles, halign: 'right' } },
         { content: fmtBRL(r.unitPriceNoBDI), styles: { ...baseStyles, halign: 'right' } },
         { content: fmtBRL(r.unitPriceWithBDI), styles: { ...baseStyles, halign: 'right' } },
-        { content: fmtBRL(r.valorSuprimido), styles: { ...supStyles, halign: 'right' } },
-        { content: fmtBRL(r.valorAcrescido), styles: { ...acrStyles, halign: 'right' } },
-        { content: fmtBRL(r.valorFinal), styles: { ...baseStyles, halign: 'right' } },
-        { content: fmtBRL(r.diferenca), styles: { ...baseStyles, halign: 'right' } },
+        { content: fmtBRL(lineValorSuprimido), styles: { ...supStyles, halign: 'right' } },
+        { content: fmtBRL(lineValorAcrescido), styles: { ...acrStyles, halign: 'right' } },
+        { content: fmtBRL(lineValorFinal), styles: { ...baseStyles, halign: 'right' } },
+        { content: fmtBRL(lineDiferenca), styles: { ...baseStyles, halign: 'right' } },
         { content: fmtPctBR(r.percentVar), styles: { ...baseStyles, halign: 'right' } },
       ]);
     },
     onChapterEnd: (ch, descendants) => {
       let sSup = 0, sAcr = 0, sFinal = 0, sDif = 0;
       descendants.forEach(c => {
-        const r = computeAdditiveRow(c, bdi, discount);
-        sSup += r.valorSuprimido; sAcr += r.valorAcrescido;
-        sFinal += r.valorFinal; sDif += r.diferenca;
+        const lv = lineValuesByCompId.get(c.id);
+        if (!lv) return;
+        sSup = trunc2(sSup + lv.valorSuprimido);
+        sAcr = trunc2(sAcr + lv.valorAcrescido);
+        sFinal = trunc2(sFinal + lv.valorFinal);
+        sDif = trunc2(sDif + lv.diferenca);
       });
       body.push([
         { content: `${'    '.repeat(ch.depth)}Subtotal ${ch.number} ${ch.name}`, colSpan: 11, styles: { fillColor: [229, 231, 235], fontStyle: 'bold' } },
@@ -1224,14 +1254,16 @@ export async function exportAdditiveSyntheticCompletePdf(project: Project, add: 
     },
   });
 
-  const t = additiveTotals(add, project);
+  const percentVarLiquida = exportTotalContratado > 0
+    ? (exportTotalDiferenca / exportTotalContratado)
+    : 0;
   body.push([
     { content: 'TOTAL GERAL', colSpan: 11, styles: { fillColor: [31, 41, 55], textColor: [255, 255, 255], fontStyle: 'bold' } },
-    { content: fmtBRL(t.totalSuprimido), styles: { fillColor: [31, 41, 55], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'right' } },
-    { content: fmtBRL(t.totalAcrescido), styles: { fillColor: [31, 41, 55], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'right' } },
-    { content: fmtBRL(t.valorFinal), styles: { fillColor: [31, 41, 55], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'right' } },
-    { content: fmtBRL(t.diferencaLiquida), styles: { fillColor: [31, 41, 55], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'right' } },
-    { content: fmtPctBR(t.percentVariacaoLiquida), styles: { fillColor: [31, 41, 55], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'right' } },
+    { content: fmtBRL(exportTotalSuprimido), styles: { fillColor: [31, 41, 55], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'right' } },
+    { content: fmtBRL(exportTotalAcrescido), styles: { fillColor: [31, 41, 55], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'right' } },
+    { content: fmtBRL(exportTotalFinal), styles: { fillColor: [31, 41, 55], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'right' } },
+    { content: fmtBRL(exportTotalDiferenca), styles: { fillColor: [31, 41, 55], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'right' } },
+    { content: fmtPctBR(percentVarLiquida), styles: { fillColor: [31, 41, 55], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'right' } },
   ]);
 
   autoTable(doc, {
