@@ -82,29 +82,39 @@ function TextareaCommitCell({
   const [local, setLocal] = useState<string>(value ?? '');
   const [focused, setFocused] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  const autoResize = () => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  };
   useEffect(() => {
     if (!focused || !dirty) setLocal(value ?? '');
   }, [value, focused, dirty]);
+  useLayoutEffect(() => { autoResize(); }, [local]);
   const commit = () => {
     if (!dirty) return;
     if ((local ?? '') !== (value ?? '')) onCommit(local);
   };
   return (
     <textarea
+      ref={ref}
       value={local}
       placeholder={placeholder}
-      rows={rows}
+      rows={rows ?? 1}
       data-grid-id={gridId}
       data-row-index={rowIndex}
       data-col-index={colIndex}
       onFocus={() => { setFocused(true); setDirty(false); }}
-      onChange={e => { setDirty(true); setLocal(e.target.value); }}
+      onChange={e => { setDirty(true); setLocal(e.target.value); autoResize(); }}
       onBlur={() => { setFocused(false); commit(); setDirty(false); }}
       onKeyDown={e => {
         handleGridKeyDown(e);
         if (e.defaultPrevented) return;
       }}
       className={className}
+      style={{ resize: 'none', overflow: 'hidden' }}
     />
   );
 }
