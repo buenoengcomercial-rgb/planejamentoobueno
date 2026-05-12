@@ -627,13 +627,13 @@ export function effectiveQuantity(c: AdditiveComposition): number {
   const hasNewFields =
     c.addedQuantity != null || c.suppressedQuantity != null || c.originalQuantity != null;
   if (hasNewFields) {
-    const add = c.addedQuantity ?? 0;
-    const sup = c.suppressedQuantity ?? 0;
-    return add - sup;
+    const add = truncar2(c.addedQuantity ?? 0);
+    const sup = truncar2(c.suppressedQuantity ?? 0);
+    return truncar2(add - sup);
   }
-  if (c.changeKind === 'suprimido') return -(c.quantity ?? 0);
+  if (c.changeKind === 'suprimido') return truncar2(-(c.quantity ?? 0));
   if (c.changeKind === 'sem_alteracao') return 0;
-  return c.quantity ?? 0;
+  return truncar2(c.quantity ?? 0);
 }
 
 /** Quantidade total após o aditivo (originalQuantity + addedQuantity − suppressedQuantity). */
