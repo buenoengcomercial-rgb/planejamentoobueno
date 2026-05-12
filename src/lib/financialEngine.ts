@@ -9,12 +9,20 @@
  * Não criar regra paralela de BDI, desconto ou truncamento em outros arquivos.
  */
 
-/** Trunca em 2 casas decimais. Nunca arredonda para cima. */
+/**
+ * Trunca em 2 casas decimais. Nunca arredonda para cima.
+ *
+ * O pequeno ajuste abaixo corrige apenas resíduos binários do JavaScript
+ * (ex.: 9601.97 * 2 vira 19203.939999999995), sem transformar
+ * valores reais com terceira casa decimal em arredondamento.
+ */
 export function trunc2(value: number | null | undefined): number {
   if (value === null || value === undefined) return 0;
   const n = Number(value);
   if (!Number.isFinite(n)) return 0;
-  return Math.trunc(n * 100) / 100;
+  const scaled = n * 100;
+  const epsilon = scaled >= 0 ? 1e-9 : -1e-9;
+  return Math.trunc(scaled + epsilon) / 100;
 }
 
 /**
