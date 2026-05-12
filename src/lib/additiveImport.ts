@@ -35,7 +35,13 @@ function asString(v: unknown): string {
 }
 
 // Motor financeiro único — não duplicar regras aqui.
-import { trunc2 as _trunc2, money2 as _money2 } from './financialEngine';
+import {
+  trunc2 as _trunc2,
+  money2 as _money2,
+  calculateUnitPriceWithBDI,
+  calculateLineTotal,
+  calculateDiscountedUnitNoBDI,
+} from './financialEngine';
 
 /** Alias histórico — usar trunc2 do financialEngine. */
 export function truncar2(v: number): number {
@@ -45,6 +51,9 @@ export function truncar2(v: number): number {
 export function money2(value: number | null | undefined): number {
   return _money2(value);
 }
+
+const hasReadyValue = (value: unknown): value is number =>
+  value !== null && value !== undefined && Number.isFinite(Number(value));
 
 const norm = (s: string) =>
   s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
@@ -320,19 +329,18 @@ export function parseAdditiveSyntheticWorkbook(
   const { items: synthItems, issues: synthIssues, bdi } = parseSyntheticSheet(rows);
   const issues: AdditiveImportIssue[] = [...synthIssues];
   const bdiPercent = bdi ?? 0;
-  const fator = 1 + bdiPercent / 100;
 
   const compositions: AdditiveComposition[] = synthItems.map(s => {
     // Preserva EXATAMENTE os valores vindos da Sintética (planilha pronta).
     // Só recalcula como fallback quando a planilha não trouxer o valor.
-    const upNoBDI = money2(s.unitPriceNoBDI);
+    const upNoBDI = truncar2(s.unitPriceNoBDI);
     const upWithBDI = s.unitPriceWithBDI > 0
-      ? money2(s.unitPriceWithBDI)
-      : truncar2(upNoBDI * fator);
+      ? truncar2(s.unitPriceWithBDI)
+      : calculateUnitPriceWithBDI(upNoBDI, bdiPercent);
     const tWithBDI = s.total > 0
       ? money2(s.total)
-      : truncar2(upWithBDI * s.quantity);
-    const tNoBDI = truncar2(upNoBDI * s.quantity);
+      : calculateLineTotal(upWithBDI, s.quantity);
+    const tNoBDI = calculateLineTotal(upNoBDI, s.quantity);
     return {
       id: uid(),
       item: s.item,
@@ -691,26 +699,27 @@ export function referenceUnitNoBDIForNewService(comp: AdditiveComposition): numb
 }
 
 export function computeAdditiveRow(comp: AdditiveComposition, bdiPercent: number, globalDiscountPercent = 0) {
-  const fator = 1 + (bdiPercent || 0) / 100;
   const isNew = !!comp.isNewService;
   // Para novos serviços: o valor unitário s/ BDI exibido é a REFERÊNCIA (SINAPI), sem desconto.
   // O desconto global da licitação é aplicado em uma coluna separada e propaga para o BDI.
   const discountFactor = isNew ? (1 - (globalDiscountPercent || 0) / 100) : 1;
   const referenceUnitNoBDI = isNew
     ? referenceUnitNoBDIForNewService(comp)
-    : money2(comp.unitPriceNoBDI);
+    : truncar2(comp.unitPriceNoBDI);
   // Valor unitário s/ BDI exibido na coluna principal:
   //  - novos serviços: REFERÊNCIA SINAPI (sem desconto), para rastreabilidade;
   //  - existentes: valor importado da Sintética/Medição.
   const unitPriceNoBDI = referenceUnitNoBDI;
   // Valor com desconto licitatório (somente novos serviços; nos demais é igual à referência).
   const unitPriceNoBDIWithDiscount = isNew
-    ? truncar2(referenceUnitNoBDI * discountFactor)
+    ? calculateDiscountedUnitNoBDI(referenceUnitNoBDI, globalDiscountPercent || 0)
     : referenceUnitNoBDI;
   // Valor c/ BDI: aplicado SOBRE o valor já com desconto (novos) ou sobre o contratado (existentes).
   const unitPriceWithBDI = isNew
-    ? truncar2(unitPriceNoBDIWithDiscount * fator)
-    : money2(comp.unitPriceWithBDI ?? truncar2(unitPriceNoBDI * fator));
+    ? calculateUnitPriceWithBDI(unitPriceNoBDIWithDiscount, bdiPercent || 0)
+    : hasReadyValue(comp.unitPriceWithBDI)
+      ? truncar2(comp.unitPriceWithBDI)
+      : calculateUnitPriceWithBDI(unitPriceNoBDI, bdiPercent || 0);
   const qtdContratada = comp.originalQuantity ?? comp.quantity ?? 0;
   const qtdSuprimida = comp.suppressedQuantity ?? 0;
   const qtdAcrescida = comp.addedQuantity ?? 0;
@@ -720,18 +729,20 @@ export function computeAdditiveRow(comp: AdditiveComposition, bdiPercent: number
     ? 0
     : (comp.totalWithBDI != null
         ? money2(comp.totalWithBDI)
-        : money2(comp.total ?? truncar2(unitPriceWithBDI * (comp.quantity ?? qtdContratada))));
+        : hasReadyValue(comp.total)
+          ? money2(comp.total)
+          : calculateLineTotal(unitPriceWithBDI, comp.quantity ?? qtdContratada));
   // Valor contratado original PRESERVADO (fonte). Para novos serviços = 0 (não havia contrato original).
   const valorContratadoOriginalPreservado = isNew
     ? 0
     : (comp.totalWithBDI != null
         ? money2(comp.totalWithBDI)
-        : comp.total != null
+        : hasReadyValue(comp.total)
           ? money2(comp.total)
-          : money2(unitPriceWithBDI * qtdContratada));
-  const valorContratadoCalc = truncar2(unitPriceWithBDI * qtdContratada);
-  const valorSuprimido = truncar2(unitPriceWithBDI * qtdSuprimida);
-  const valorAcrescido = truncar2(unitPriceWithBDI * qtdAcrescida);
+          : calculateLineTotal(unitPriceWithBDI, qtdContratada));
+  const valorContratadoCalc = calculateLineTotal(unitPriceWithBDI, qtdContratada);
+  const valorSuprimido = calculateLineTotal(unitPriceWithBDI, qtdSuprimida);
+  const valorAcrescido = calculateLineTotal(unitPriceWithBDI, qtdAcrescida);
   // Valor final preservando a fonte: original + acrescido − suprimido.
   const valorFinal = truncar2(valorContratadoOriginalPreservado + valorAcrescido - valorSuprimido);
   const diferenca = truncar2(valorFinal - valorContratadoOriginalPreservado);
@@ -1072,12 +1083,14 @@ export function buildAdditiveFromSyntheticBudgetItems(
 
   const compositions: AdditiveComposition[] = items.map(b => {
     // Preserva EXATAMENTE os valores já normalizados na Medição — não recalcula com BDI.
-    const upNoBDI = money2(b.unitPriceNoBDI);
-    const upWithBDI = money2(b.unitPriceWithBDI);
+    const upNoBDI = truncar2(b.unitPriceNoBDI);
+    const upWithBDI = hasReadyValue(b.unitPriceWithBDI)
+      ? truncar2(b.unitPriceWithBDI)
+      : calculateUnitPriceWithBDI(upNoBDI, bdi);
     const hasTotalNoBDI = b.totalNoBDI !== null && b.totalNoBDI !== undefined;
     const hasTotalWithBDI = b.totalWithBDI !== null && b.totalWithBDI !== undefined;
-    const tNoBDI = hasTotalNoBDI ? money2(b.totalNoBDI) : money2(truncar2(upNoBDI * b.quantity));
-    const tWithBDI = hasTotalWithBDI ? money2(b.totalWithBDI) : money2(truncar2(upWithBDI * b.quantity));
+    const tNoBDI = hasTotalNoBDI ? money2(b.totalNoBDI) : calculateLineTotal(upNoBDI, b.quantity);
+    const tWithBDI = hasTotalWithBDI ? money2(b.totalWithBDI) : calculateLineTotal(upWithBDI, b.quantity);
     if (!hasTotalNoBDI || !hasTotalWithBDI) {
       issues.push({
         level: 'warning',
