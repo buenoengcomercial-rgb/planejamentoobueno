@@ -55,12 +55,12 @@ const FMT_PCT = '0.00%';
 function q2(v: unknown): number {
   const n = Number(v);
   if (!Number.isFinite(n)) return 0;
-  return Math.trunc(n * 100) / 100;
+  return trunc2(n);
 }
 function moneyExcel(v: unknown): number {
   const n = Number(v);
   if (!Number.isFinite(n)) return 0;
-  return Math.trunc(n * 100) / 100;
+  return trunc2(n);
 }
 function pctExcel(v: unknown): number {
   const n = Number(v);
