@@ -1,7 +1,7 @@
 /**
  * Exportadores formais (Excel + PDF) da aba Aditivo.
  *
- * Não recalcula valores: reaproveita computeAdditiveRow, additiveTotals,
+ * Não recalcula valores: reaproveita computeAdditiveRow,
  * referenceUnitNoBDIForNewService, validMemoryRows e resolveMemoryColumnLabels.
  *
  * Visual semelhante ao painel da aba Aditivo (grupos de colunas coloridos,
@@ -11,7 +11,6 @@
 import type { Project, Additive, AdditiveComposition } from '@/types/project';
 import {
   computeAdditiveRow,
-  additiveTotals,
   referenceUnitNoBDIForNewService,
   totalAfterAdditive,
   money2,
@@ -203,7 +202,7 @@ function walkByChapters(
 // EXCEL (xlsx-js-style)
 // ============================================================
 
-type Cell = string | number | { v: string | number; s?: any; z?: string };
+type Cell = string | number | { v: string | number; f?: string; t?: string; s?: any; z?: string };
 type Row = Cell[];
 
 function tCell(v: string | number, fill?: string, bold = false, color?: string, hAlign?: 'left' | 'center' | 'right'): any {
@@ -227,6 +226,33 @@ function nCell(v: number, fmt: string, fill?: string, color?: string, bold = fal
   c.t = 'n';
   c.s.numFmt = fmt;
   return c;
+}
+
+function formulaCell(formula: string, fmt: string, fill?: string, color?: string, bold = false): any {
+  const c = nCell(0, fmt, fill, color, bold, 'center');
+  c.f = formula;
+  return c;
+}
+
+function buildCompositionSumFormula(column: string, excelRows: number[]): string {
+  if (excelRows.length === 0) return '0';
+  const ranges: string[] = [];
+  let start = excelRows[0];
+  let previous = excelRows[0];
+
+  for (let i = 1; i < excelRows.length; i += 1) {
+    const row = excelRows[i];
+    if (row === previous + 1) {
+      previous = row;
+      continue;
+    }
+    ranges.push(start === previous ? `${column}${start}` : `${column}${start}:${column}${previous}`);
+    start = row;
+    previous = row;
+  }
+
+  ranges.push(start === previous ? `${column}${start}` : `${column}${start}:${column}${previous}`);
+  return `SUM(${ranges.join(',')})`;
 }
 
 // Cria uma célula "vazia" mas com fundo (preserva cor de coluna em linhas mescladas/subtotais).
@@ -497,17 +523,12 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
     rowHeights.push(26);
   };
 
-  // Acumuladores da exportação: garantem que TOTAL GERAL == soma das linhas exportadas.
+  // Linhas de composição exportadas: TOTAL GERAL usa fórmula Excel somando somente estas linhas.
+  const compositionExcelRows: number[] = [];
   const lineValuesByCompId = new Map<string, {
     totalFonte: number; valorContratado: number; valorSuprimido: number;
     valorAcrescido: number; valorFinal: number; diferenca: number;
   }>();
-  let exportTotalContratado = 0;
-  let exportTotalSuprimido = 0;
-  let exportTotalAcrescido = 0;
-  let exportTotalFinal = 0;
-  let exportTotalDiferenca = 0;
-  let exportTotalFonte = 0;
 
   const pushComp = (c: AdditiveComposition) => {
     const r = computeAdditiveRow(c, bdi, discount);
@@ -527,12 +548,6 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
       valorFinal: lineValorFinal,
       diferenca: lineDiferenca,
     });
-    exportTotalFonte = trunc2(exportTotalFonte + lineTotalFonte);
-    exportTotalContratado = trunc2(exportTotalContratado + lineValorContratado);
-    exportTotalSuprimido = trunc2(exportTotalSuprimido + lineValorSuprimido);
-    exportTotalAcrescido = trunc2(exportTotalAcrescido + lineValorAcrescido);
-    exportTotalFinal = trunc2(exportTotalFinal + lineValorFinal);
-    exportTotalDiferenca = trunc2(exportTotalDiferenca + lineDiferenca);
 
     let situacao = 'Sem alteração';
     let rowFill: string | undefined = undefined;
@@ -566,6 +581,7 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
       nCell(pctExcel(r.percentVar), FMT_PCT, rowFill),
       tCell(situacao, rowFill, false, undefined, 'left'),
     ]);
+    compositionExcelRows.push(rows.length);
     rowHeights.push(estimateRowHeight(c.description || ''));
   };
 
@@ -607,23 +623,27 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
     onOrphanStart: () => pushChapter('—', 'Sem capítulo (não vinculado à EAP)', 0),
   });
 
-  // TOTAL GERAL — consequência da soma das linhas exportadas (não recalcula).
+  // TOTAL GERAL — fórmula Excel que soma somente as linhas de composição exportadas.
   const fillT = COLOR.totalGeralBg;
   const fgT = COLOR.totalGeralFg;
   const totalRowIdx = rows.length;
-  const percentVarLiquida = exportTotalContratado > 0
-    ? (exportTotalDiferenca / exportTotalContratado)
-    : 0;
+  const totalExcelRow = totalRowIdx + 1;
+  const totalFonteFormula = buildCompositionSumFormula('L', compositionExcelRows);
+  const totalContratadoFormula = buildCompositionSumFormula('M', compositionExcelRows);
+  const totalSuprimidoFormula = buildCompositionSumFormula('N', compositionExcelRows);
+  const totalAcrescidoFormula = buildCompositionSumFormula('O', compositionExcelRows);
+  const totalFinalFormula = buildCompositionSumFormula('P', compositionExcelRows);
+  const totalDiferencaFormula = buildCompositionSumFormula('Q', compositionExcelRows);
   rows.push([
     tCell('TOTAL GERAL', fillT, true, fgT, 'left'),
     ...Array(10).fill({ v: '', s: { fill: { patternType: 'solid', fgColor: { rgb: fillT } } } }),
-    nCell(exportTotalFonte, FMT_BRL, fillT, fgT, true),
-    nCell(exportTotalContratado, FMT_BRL, fillT, fgT, true),
-    nCell(exportTotalSuprimido, FMT_BRL, COLOR.suprimidoBg, COLOR.suprimidoFg, true),
-    nCell(exportTotalAcrescido, FMT_BRL, COLOR.acrescidoBg, COLOR.acrescidoFg, true),
-    nCell(exportTotalFinal, FMT_BRL, fillT, fgT, true),
-    nCell(exportTotalDiferenca, FMT_BRL, fillT, fgT, true),
-    nCell(pctExcel(percentVarLiquida), FMT_PCT, fillT, fgT, true),
+    formulaCell(totalFonteFormula, FMT_BRL, fillT, fgT, true),
+    formulaCell(totalContratadoFormula, FMT_BRL, fillT, fgT, true),
+    formulaCell(totalSuprimidoFormula, FMT_BRL, COLOR.suprimidoBg, COLOR.suprimidoFg, true),
+    formulaCell(totalAcrescidoFormula, FMT_BRL, COLOR.acrescidoBg, COLOR.acrescidoFg, true),
+    formulaCell(totalFinalFormula, FMT_BRL, fillT, fgT, true),
+    formulaCell(totalDiferencaFormula, FMT_BRL, fillT, fgT, true),
+    formulaCell(`IF(M${totalExcelRow}=0,0,Q${totalExcelRow}/M${totalExcelRow})`, FMT_PCT, fillT, fgT, true),
     tCell('', fillT),
   ]);
   merges.push({ s: { r: totalRowIdx, c: 0 }, e: { r: totalRowIdx, c: 10 } });
@@ -657,6 +677,7 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
   };
 
   const wb = XLSX.utils.book_new();
+  wb.Workbook = { ...(wb.Workbook ?? {}), CalcPr: { fullCalcOnLoad: true } };
   XLSX.utils.book_append_sheet(wb, ws, 'Sintética Completa');
   downloadXlsxBlob(XLSX, wb, `aditivo_sintetica_completa_${safeFile(add.name)}.xlsx`);
 }
