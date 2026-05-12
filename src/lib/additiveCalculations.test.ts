@@ -9,6 +9,10 @@ describe('financialEngine truncation', () => {
   it('trunc2(16069.379) → 16069.37', () => expect(trunc2(16069.379)).toBe(16069.37));
   it('BDI 27.58 sobre 424.83 → 541.99', () => expect(calculateUnitPriceWithBDI(424.83, 27.58)).toBe(541.99));
   it('linha unit×qty trunca', () => expect(calculateLineTotal(5313.52, 6)).toBe(31881.12));
+  it('BOINC1: BDI truncado e total sem perda de centavo', () => {
+    expect(calculateUnitPriceWithBDI(7526.24, 27.58)).toBe(9601.97);
+    expect(calculateLineTotal(9601.97, 2)).toBe(19203.94);
+  });
   it('novo serviço aplica desconto e BDI com trunc2', () => {
     const r = calculateNewServiceUnitPrices({ referenceUnitNoBDI: 4430.70, discountPercent: 6, bdiPercent: 27.58 });
     expect(r.unitPriceNoBDIWithDiscount).toBe(4164.85);
@@ -35,6 +39,19 @@ describe('Aditivo trunc2 nas operações', () => {
     const r = computeAdditiveRow(comp({ addedQuantity: 2, suppressedQuantity: 1 }), 27.58, 0);
     const expected = trunc2(r.valorContratadoOriginalPreservado + r.valorAcrescido - r.valorSuprimido);
     expect(r.valorFinal).toBe(expected);
+  });
+  it('BOINC1 existente preserva Total Fonte e Valor Contratado sem divergência', () => {
+    const r = computeAdditiveRow(comp({
+      item: '2.2.1', code: 'BOINC1', unitPriceNoBDI: 7526.24,
+      unitPriceWithBDI: undefined as unknown as number,
+      quantity: 2, originalQuantity: 2, total: 19203.94, totalWithBDI: 19203.94,
+    }), 27.58, 0);
+    expect(r.unitPriceWithBDI).toBe(9601.97);
+    expect(r.valorContratadoCalc).toBe(19203.94);
+    expect(r.valorContratadoOriginalPreservado).toBe(19203.94);
+    expect(r.totalFonte).toBe(19203.94);
+    expect(r.valorFinal).toBe(19203.94);
+    expect(r.diferenca).toBe(0);
   });
   it('additiveTotals soma com trunc2', () => {
     const add: Additive = {
