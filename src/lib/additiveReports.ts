@@ -677,6 +677,7 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
   };
 
   const wb = XLSX.utils.book_new();
+  wb.Workbook = { ...(wb.Workbook ?? {}), CalcPr: { fullCalcOnLoad: true } };
   XLSX.utils.book_append_sheet(wb, ws, 'Sintética Completa');
   downloadXlsxBlob(XLSX, wb, `aditivo_sintetica_completa_${safeFile(add.name)}.xlsx`);
 }
