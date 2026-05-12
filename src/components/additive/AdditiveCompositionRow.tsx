@@ -488,7 +488,7 @@ function AdditiveCompositionRowImpl({
         </td>
         <td className={`px-1 py-1 text-right ${G_BG.val}`}>{fmtBRL(r.unitPriceWithBDI)}</td>
         <td className={`px-1 py-1 text-right text-muted-foreground ${G_BG.val}`}>{fmtBRL(r.totalFonte)}</td>
-        <td className={`px-1 py-1 text-right ${G_BG.val}`}>{fmtBRL(r.valorContratadoCalc)}</td>
+        <td className={`px-1 py-1 text-right ${G_BG.val}`}>{fmtBRL(isNew ? 0 : r.valorContratadoOriginalPreservado)}</td>
         {/* Impacto */}
         <td className={`px-1 py-1 text-right text-rose-700 font-medium ${G_BG.suppressed} ${BORDER_L}`}>
           {r.valorSuprimido > 0 ? fmtBRL(-r.valorSuprimido) : fmtBRL(0)}
