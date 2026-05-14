@@ -425,7 +425,7 @@ export function useMeasurementRows({
     }
 
     return [...eapRows, ...orphanRows];
-  }, [isSnapshotMode, activeMeasurement, orderedTasks, effStart, effEnd, effBdi, effBdiFactor, priorAccumByTask, hasSyntheticBudget, syntheticBudgetItems]);
+  }, [isSnapshotMode, activeMeasurement, orderedTasks, effStart, effEnd, effBdi, effBdiFactor, priorAccumByTask, hasSyntheticBudget, syntheticBudgetItems, taskById]);
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
