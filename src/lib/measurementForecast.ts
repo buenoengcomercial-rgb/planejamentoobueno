@@ -170,7 +170,7 @@ export function computeTaskForecast(input: TaskForecastInput): TaskForecast {
 
   return {
     plannedDaily,
-    plannedDaysInPeriod: overlapDays,
+    plannedDaysInPeriod,
     qtyForecast,
     valueForecast,
     valueForecastNoBDI,
