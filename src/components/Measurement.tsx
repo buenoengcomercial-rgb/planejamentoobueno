@@ -209,6 +209,7 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
     patchSnapshotItem,
     generateMeasurement,
     unlockForEdit,
+    resendForReview,
     setStatus,
     deleteMeasurement,
     newMeasurementDraft,
