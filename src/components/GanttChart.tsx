@@ -1368,12 +1368,10 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                         {(() => {
                                           const sel = parseISODateLocal(task.startDate);
                                           return (
-                                            <Calendar
-                                              mode="single"
-                                              selected={sel}
-                                              defaultMonth={sel}
+                                            <GanttDatePickerCalendar
+                                              title="Alterar início"
+                                              valueDate={sel}
                                               onSelect={(d) => handleDateChange(task.id, 'start', d)}
-                                              className={cn("p-3 pointer-events-auto")}
                                             />
                                           );
                                         })()}
