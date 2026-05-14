@@ -73,7 +73,7 @@ export interface GroupNode {
 
 export const STATUS_LABEL: Record<MeasurementStatus, string> = {
   draft: 'Rascunho',
-  generated: 'Gerada',
+  generated: 'Previsão',
   in_review: 'Em análise fiscal',
   approved: 'Aprovada',
   rejected: 'Reprovada / Ajustar',
