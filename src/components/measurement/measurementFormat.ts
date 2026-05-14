@@ -26,6 +26,7 @@ export const emptyTotals = (): GroupTotals => ({
   contracted: 0, period: 0, accum: 0, balance: 0,
   contractedNoBDI: 0, periodNoBDI: 0, accumNoBDI: 0, balanceNoBDI: 0,
   qtyContracted: 0, qtyAccum: 0,
+  forecast: 0, forecastNoBDI: 0, diffForecast: 0,
 });
 
 export function estimateTaskValue(task: Task): number {

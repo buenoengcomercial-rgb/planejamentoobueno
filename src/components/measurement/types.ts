@@ -30,6 +30,12 @@ export interface Row {
   valuePeriod: number;
   valueAccum: number;
   valueBalance: number;
+  // ─────── Previsão (baseada no Cronograma/Gantt; não altera medição real) ───────
+  qtyForecast: number;
+  valueForecast: number;
+  valueForecastNoBDI: number;
+  /** Subtotal real - Subtotal previsto (positivo = real superou previsto). */
+  diffForecastVsReal: number;
   hasNoLogsInPeriod: boolean;
   hasNoLogsAtAll: boolean;
   notes?: string;
@@ -46,6 +52,10 @@ export interface GroupTotals {
   balanceNoBDI: number;
   qtyContracted: number;
   qtyAccum: number;
+  // Previsão
+  forecast: number;
+  forecastNoBDI: number;
+  diffForecast: number;
   pctPeriod?: number;
   pctAccum?: number;
   pctBalance?: number;
