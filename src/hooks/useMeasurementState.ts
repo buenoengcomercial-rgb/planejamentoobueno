@@ -138,7 +138,7 @@ export function useMeasurementState({ project, onProjectChange }: UseMeasurement
   useEffect(() => {
     if (activeId !== 'live') return;
     if (startDate && endDate && endDate < startDate) {
-      setEndDate(isoAddDays(startDate, 30));
+      setEndDate(isoAddDays(startDate, 29));
     }
   }, [activeId, startDate, endDate]);
 
