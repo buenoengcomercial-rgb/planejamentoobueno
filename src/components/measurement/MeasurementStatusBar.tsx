@@ -38,6 +38,7 @@ export default function MeasurementStatusBar({
   setStatus,
   validationHasBlocking,
   onSendToReview,
+  onResendForReview,
 }: MeasurementStatusBarProps) {
   const nextNumber = (measurements[measurements.length - 1]?.number || 0) + 1;
 
