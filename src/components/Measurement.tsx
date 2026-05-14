@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Project } from '@/types/project';
 import {
   fmtDateBR,
@@ -151,6 +151,43 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
     });
   }, [activeMeasurement, startDate, endDate, measurementNumber, rows, measurements, contractor, contracted, contractNumber, contractObject, location, budgetSource, bdiPercent, dailyReportsSummary]);
   const validationSummary = useMemo(() => summarizeIssues(validationIssues), [validationIssues]);
+
+  // ───────── Validação para envio à fiscalização (modo mais rigoroso) ─────────
+  const [confirmSendToReview, setConfirmSendToReview] = useState(false);
+  const fiscalReviewIssues: ValidationIssue[] = useMemo(() => {
+    if (!activeMeasurement) return [];
+    return validateMeasurement(
+      {
+        startDate: activeMeasurement.startDate,
+        endDate: activeMeasurement.endDate,
+        measurementNumber: activeMeasurement.number,
+        rows: rows.map(r => ({
+          taskId: r.taskId,
+          description: r.description,
+          itemCode: r.itemCode,
+          priceBank: r.priceBank,
+          unitPriceNoBDI: r.unitPriceNoBDI,
+          qtyContracted: r.qtyContracted,
+          qtyPeriod: r.qtyPeriod,
+          qtyPriorAccum: r.qtyPriorAccum,
+          qtyCurrentAccum: r.qtyCurrentAccum,
+          qtyBalance: r.qtyBalance,
+        })),
+        measurements: measurements.filter(m => m.id !== activeMeasurement.id),
+        contract: {
+          contractor, contracted, contractNumber, contractObject, location,
+          budgetSource, bdiPercent,
+        },
+        dailyReports: {
+          missingReports: dailyReportsSummary.missingReports,
+          productionWithoutReportDays: dailyReportsSummary.productionWithoutReportDates.length,
+          impedimentDays: dailyReportsSummary.impedimentDays,
+        },
+      },
+      { mode: 'fiscal-review' },
+    );
+  }, [activeMeasurement, rows, measurements, contractor, contracted, contractNumber, contractObject, location, budgetSource, bdiPercent, dailyReportsSummary]);
+  const fiscalReviewSummary = useMemo(() => summarizeIssues(fiscalReviewIssues), [fiscalReviewIssues]);
 
   /** Tem avisos não-bloqueantes específicos de diário/impedimento que requerem confirmação extra. */
   const hasDailyWarnings =
@@ -349,6 +386,7 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
         onConfirmDelete={() => setConfirmDelete(true)}
         setStatus={setStatus}
         validationHasBlocking={validationSummary.hasBlocking}
+        onSendToReview={() => setConfirmSendToReview(true)}
       />
 
       {/* Painel de validação (somente em modo "live") */}
@@ -539,7 +577,67 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Diálogo: Excluir */}
+      {/* Diálogo: Enviar para Fiscal */}
+      <AlertDialog open={confirmSendToReview} onOpenChange={setConfirmSendToReview}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {fiscalReviewSummary.hasBlocking
+                ? 'Não é possível enviar para fiscalização'
+                : (fiscalReviewSummary.warnings + fiscalReviewSummary.infos > 0
+                    ? 'Esta medição possui avisos antes do envio para fiscalização. Deseja continuar mesmo assim?'
+                    : `Enviar medição nº ${activeMeasurement?.number} para fiscalização?`)}
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                {fiscalReviewSummary.hasBlocking && (
+                  <div className="rounded border border-destructive/30 bg-destructive/10 p-2">
+                    <p className="font-medium text-destructive mb-1">
+                      Erros bloqueantes ({fiscalReviewSummary.errors}):
+                    </p>
+                    <ul className="list-disc pl-5 space-y-0.5 text-xs">
+                      {fiscalReviewIssues
+                        .filter(i => i.level === 'error')
+                        .map((i, idx) => <li key={idx}>{i.message}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {(fiscalReviewSummary.warnings + fiscalReviewSummary.infos) > 0 && (
+                  <div className="rounded border border-warning/30 bg-warning/10 p-2">
+                    <p className="font-medium text-warning mb-1">
+                      Avisos ({fiscalReviewSummary.warnings + fiscalReviewSummary.infos}):
+                    </p>
+                    <ul className="list-disc pl-5 space-y-0.5 text-xs">
+                      {fiscalReviewIssues
+                        .filter(i => i.level !== 'error')
+                        .map((i, idx) => <li key={idx}>{i.message}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {!fiscalReviewSummary.hasBlocking && (
+                  <p>O status passará para "Em análise fiscal".</p>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            {!fiscalReviewSummary.hasBlocking && (
+              <AlertDialogAction
+                onClick={() => {
+                  setStatus('in_review');
+                  setConfirmSendToReview(false);
+                }}
+              >
+                {(fiscalReviewSummary.warnings + fiscalReviewSummary.infos) > 0
+                  ? 'Enviar mesmo assim'
+                  : 'Enviar para Fiscal'}
+              </AlertDialogAction>
+            )}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent>
           <AlertDialogHeader>

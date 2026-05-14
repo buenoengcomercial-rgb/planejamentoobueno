@@ -19,6 +19,8 @@ interface MeasurementStatusBarProps {
   onConfirmDelete: () => void;
   setStatus: (status: SavedMeasurement['status']) => void;
   validationHasBlocking: boolean;
+  /** Quando informado, intercepta o clique em "Enviar p/ Fiscal" (ex.: para abrir confirmação). */
+  onSendToReview?: () => void;
 }
 
 export default function MeasurementStatusBar({
@@ -33,6 +35,7 @@ export default function MeasurementStatusBar({
   onConfirmDelete,
   setStatus,
   validationHasBlocking,
+  onSendToReview,
 }: MeasurementStatusBarProps) {
   const nextNumber = (measurements[measurements.length - 1]?.number || 0) + 1;
 
@@ -102,7 +105,7 @@ export default function MeasurementStatusBar({
                   <Unlock className="w-4 h-4 mr-1" /> Editar Medição
                 </Button>
                 {activeMeasurement.status === 'generated' && (
-                  <Button size="sm" variant="outline" onClick={() => setStatus('in_review')}>
+                  <Button size="sm" variant="outline" onClick={() => (onSendToReview ? onSendToReview() : setStatus('in_review'))}>
                     Enviar p/ Fiscal
                   </Button>
                 )}

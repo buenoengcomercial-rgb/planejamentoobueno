@@ -23,6 +23,8 @@ export interface MinimalRow {
   qtyBalance: number;
 }
 
+export type ValidationMode = 'generation' | 'fiscal-review';
+
 export interface ValidationContext {
   startDate: string;
   endDate: string;
@@ -52,8 +54,19 @@ function intervalsOverlap(aStart: string, aEnd: string, bStart: string, bEnd: st
   return aStart <= bEnd && bStart <= aEnd;
 }
 
-/** Roda toda a bateria de validações da medição. */
-export function validateMeasurement(ctx: ValidationContext): ValidationIssue[] {
+/**
+ * Roda toda a bateria de validações da medição.
+ *
+ * - mode = 'generation' (default): permite gerar medição apenas para planejamento.
+ *   "Sem itens medidos" vira info, e diários/impedimentos são apenas avisos.
+ * - mode = 'fiscal-review': validação mais rigorosa para envio à fiscalização.
+ *   "Sem itens medidos" vira erro bloqueante.
+ */
+export function validateMeasurement(
+  ctx: ValidationContext,
+  options: { mode?: ValidationMode } = {},
+): ValidationIssue[] {
+  const mode: ValidationMode = options.mode || 'generation';
   const issues: ValidationIssue[] = [];
   const { startDate, endDate, measurementNumber, rows, measurements, contract, dailyReports } = ctx;
 
@@ -89,9 +102,21 @@ export function validateMeasurement(ctx: ValidationContext): ValidationIssue[] {
   // Itens medidos no período
   const measuredRows = rows.filter(r => (r.qtyPeriod || 0) > 0);
 
-  // 9) Sem itens medidos
+  // 9) Sem itens medidos — bloqueia apenas no envio à fiscalização.
   if (measuredRows.length === 0) {
-    issues.push({ level: 'error', code: 'no-items', message: 'Não há itens medidos neste período.' });
+    if (mode === 'fiscal-review') {
+      issues.push({
+        level: 'error',
+        code: 'no-items',
+        message: 'Não há itens medidos neste período. Não é possível enviar à fiscalização sem produção.',
+      });
+    } else {
+      issues.push({
+        level: 'info',
+        code: 'no-items',
+        message: 'Não há itens medidos neste período. A medição será gerada apenas para planejamento/previsão.',
+      });
+    }
   }
 
   // 5) Itens sem preço
@@ -186,9 +211,20 @@ export function validateMeasurement(ctx: ValidationContext): ValidationIssue[] {
   return issues;
 }
 
+/** Helper: validação para gerar a medição (modo planejamento). */
+export function validateMeasurementForGeneration(ctx: ValidationContext): ValidationIssue[] {
+  return validateMeasurement(ctx, { mode: 'generation' });
+}
+
+/** Helper: validação para envio à fiscalização (mais rigorosa). */
+export function validateMeasurementForFiscalReview(ctx: ValidationContext): ValidationIssue[] {
+  return validateMeasurement(ctx, { mode: 'fiscal-review' });
+}
+
 export function summarizeIssues(issues: ValidationIssue[]) {
   const errors = issues.filter(i => i.level === 'error').length;
   const warnings = issues.filter(i => i.level === 'warning').length;
   const infos = issues.filter(i => i.level === 'info').length;
   return { errors, warnings, infos, hasBlocking: errors > 0 };
 }
+
