@@ -34,6 +34,12 @@ export default function TeamManagement() {
   const [createName, setCreateName] = useState('');
   const [createPassword, setCreatePassword] = useState('');
 
+  const [pwdOpen, setPwdOpen] = useState(false);
+  const [pwdNew, setPwdNew] = useState('');
+  const [pwdConfirm, setPwdConfirm] = useState('');
+  const [pwdSubmitting, setPwdSubmitting] = useState(false);
+  const [resetSubmittingId, setResetSubmittingId] = useState<string | null>(null);
+
   useEffect(() => {
     if (!authLoading && !user) navigate('/auth', { replace: true });
   }, [authLoading, user, navigate]);
