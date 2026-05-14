@@ -230,6 +230,8 @@ export interface SavedMeasurement {
   generatedAt?: string;
   /** Resumo dos Diários de Obra do período da medição (capturado na geração). */
   dailyReportSnapshot?: DailyReportSnapshotData;
+  /** Quando true e status='rejected', libera edição controlada do snapshot. */
+  editUnlocked?: boolean;
 }
 
 /** Rascunho da medição em preparação (filtros não-persistidos em snapshot). */
