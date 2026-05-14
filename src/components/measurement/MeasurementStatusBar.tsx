@@ -105,7 +105,7 @@ export default function MeasurementStatusBar({
                   <Unlock className="w-4 h-4 mr-1" /> Editar Medição
                 </Button>
                 {activeMeasurement.status === 'generated' && (
-                  <Button size="sm" variant="outline" onClick={() => setStatus('in_review')}>
+                  <Button size="sm" variant="outline" onClick={() => (onSendToReview ? onSendToReview() : setStatus('in_review'))}>
                     Enviar p/ Fiscal
                   </Button>
                 )}
