@@ -50,6 +50,24 @@ export default function Auth() {
     else toast.success('Sua conta foi criada. Aguarde liberação de acesso pela empresa.', { duration: 6000 });
   };
 
+  const handleForgot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const email = forgotEmail.trim();
+    if (!email) return;
+    setSubmitting(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+    setSubmitting(false);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+    toast.success('Se o e-mail existir, enviaremos um link para redefinir a senha.', { duration: 6000 });
+    setForgotOpen(false);
+    setForgotEmail('');
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
