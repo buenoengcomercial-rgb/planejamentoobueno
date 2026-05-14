@@ -6,6 +6,19 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { DailyReportAttachment } from '@/types/project';
 import { GENERAL_TASK_VALUE } from '@/components/dailyReport/dailyReportFormat';
+import { usePhotoSrc } from '@/lib/photoUrl';
+
+function PhotoThumb({ att }: { att: DailyReportAttachment }) {
+  const src = usePhotoSrc(att);
+  if (!src) {
+    return (
+      <div className="w-full h-full flex items-center justify-center text-muted-foreground text-xs">Sem preview</div>
+    );
+  }
+  return (
+    <img src={src} alt={att.caption || att.fileName || 'foto'} className="w-full h-full object-cover" loading="lazy" />
+  );
+}
 
 export interface PhotoTaskOption {
   value: string;
