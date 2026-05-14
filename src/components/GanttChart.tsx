@@ -1225,12 +1225,10 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                             {(() => {
                               const sel = phaseRange.end ? parseISODateLocal(phaseRange.end) : undefined;
                               return (
-                                <Calendar
-                                  mode="single"
-                                  selected={sel}
-                                  defaultMonth={sel}
+                                <GanttDatePickerCalendar
+                                  title="Alterar fim do capítulo"
+                                  valueDate={sel}
                                   onSelect={(d) => handleChapterDateChange(phase.id, 'end', d)}
-                                  className={cn("p-3 pointer-events-auto")}
                                 />
                               );
                             })()}
