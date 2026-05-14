@@ -103,29 +103,31 @@ export default function MeasurementStatusBar({
             )}
             {activeMeasurement && isLocked && (
               <>
-                <Button size="sm" variant="outline" onClick={onConfirmEdit}>
-                  <Unlock className="w-4 h-4 mr-1" /> Editar Medição
-                </Button>
                 {activeMeasurement.status === 'generated' && (
-                  <Button size="sm" variant="outline" onClick={() => (onSendToReview ? onSendToReview() : setStatus('in_review'))}>
-                    Enviar p/ Fiscal
+                  <Button size="sm" variant="default" onClick={() => (onSendToReview ? onSendToReview() : setStatus('in_review'))}>
+                    <Send className="w-4 h-4 mr-1" /> Enviar p/ Fiscal
                   </Button>
                 )}
                 {activeMeasurement.status === 'in_review' && (
                   <>
                     <Button size="sm" variant="outline" onClick={() => setStatus('approved')}>
-                      <CheckCircle2 className="w-4 h-4 mr-1 text-success" /> Aprovar
+                      <CheckCircle2 className="w-4 h-4 mr-1 text-success" /> Aprovar Medição
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => setStatus('rejected')}>
-                      <XCircle className="w-4 h-4 mr-1 text-destructive" /> Reprovar
+                      <XCircle className="w-4 h-4 mr-1 text-destructive" /> Reprovar / Ajustar
                     </Button>
                   </>
+                )}
+                {activeMeasurement.status === 'rejected' && (
+                  <Button size="sm" variant="default" onClick={onConfirmEdit}>
+                    <Unlock className="w-4 h-4 mr-1" /> Editar Medição
+                  </Button>
                 )}
               </>
             )}
             {activeMeasurement && !isLocked && activeMeasurement.status === 'rejected' && (
-              <Button size="sm" variant="default" onClick={() => setStatus('generated')}>
-                <Lock className="w-4 h-4 mr-1" /> Reaprovar (bloquear)
+              <Button size="sm" variant="default" onClick={onResendForReview}>
+                <Send className="w-4 h-4 mr-1" /> Reenviar p/ Fiscal
               </Button>
             )}
             {activeMeasurement && (
@@ -149,15 +151,10 @@ export default function MeasurementStatusBar({
                 emitida em {fmtDateBR(activeMeasurement.issueDate)}
               </span>
             </div>
-            {isLocked ? (
-              <span className="flex items-center gap-1 text-muted-foreground">
-                <Lock className="w-3.5 h-3.5" /> Snapshot bloqueado
-              </span>
-            ) : activeMeasurement.status === 'generated' ? (
-              <span className="text-muted-foreground">
-                Previsão — atualiza com apontamentos
-              </span>
-            ) : null}
+            <span className="flex items-center gap-1 text-muted-foreground">
+              {isLocked && <Lock className="w-3.5 h-3.5" />}
+              {STATUS_DESCRIPTION[activeMeasurement.status]}
+            </span>
           </div>
         )}
       </CardContent>
