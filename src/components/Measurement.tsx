@@ -614,9 +614,9 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
           <AlertDialogHeader>
             <AlertDialogTitle>Liberar medição para ajustes?</AlertDialogTitle>
             <AlertDialogDescription>
-              A medição nº {activeMeasurement?.number} sairá do bloqueio e o status passará para “Reprovada / Ajustar”.
-              A medição é somente leitura: para ajustar valores, lance produção em Tarefas/EAP/Diário de Obra
-              e gere uma nova medição. O snapshot original será preservado e cada alteração ficará registrada no histórico.
+              A medição nº {activeMeasurement?.number} terá o snapshot destravado para edição controlada.
+              Após o ajuste, clique em "Reenviar p/ Fiscal" para que volte à análise.
+              Cada alteração ficará registrada no histórico.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="px-1">
