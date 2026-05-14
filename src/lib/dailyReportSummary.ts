@@ -100,8 +100,8 @@ export function summarizeDailyReportsForPeriod(
     let status: DailyEntryStatus;
     if (hasImpediment) status = 'impediment';
     else if (hasReport) status = 'filled';
-    else if (hasProduction) status = 'noProduction'; // produção sem diário
-    else status = 'pending';
+    else if (hasProduction) status = 'pending'; // produção sem diário => pendente
+    else status = 'noProduction'; // sem produção e sem diário => sem produção
 
     return {
       date,
@@ -120,7 +120,7 @@ export function summarizeDailyReportsForPeriod(
     endDate,
     totalDays: dates.length,
     filledReports,
-    missingReports: dates.length - filledReports,
+    missingReports: productionWithoutReportDates.length,
     productionDays,
     noProductionDays: dates.length - productionDays,
     impedimentDays,

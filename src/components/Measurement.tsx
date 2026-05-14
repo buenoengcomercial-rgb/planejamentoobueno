@@ -520,7 +520,7 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
             <AlertDialogTitle>Liberar medição para ajustes?</AlertDialogTitle>
             <AlertDialogDescription>
               A medição nº {activeMeasurement?.number} sairá do bloqueio e o status passará para “Reprovada / Ajustar”.
-              Os campos editáveis serão: Quantidade da medição (aprovada), Código, Banco e Valor unitário.
+              Os campos editáveis serão: Quantidade da medição (aprovada) e Valor unitário.
               O snapshot original será preservado e cada alteração ficará registrada no histórico.
             </AlertDialogDescription>
           </AlertDialogHeader>

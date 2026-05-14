@@ -50,28 +50,14 @@ export default function MeasurementItemRow({
         {r.item}
       </td>
       <td className={`px-1 py-1 align-top text-center ${stickyBg}`}>
-        <Input
-          className="h-7 px-1.5 text-[11px] text-center border-transparent hover:border-input focus-visible:ring-1 print:hidden"
-          value={r.itemCode}
-          disabled={isLocked}
-          onChange={e => isSnapshotMode
-            ? patchSnapshotItem(r.taskId, { itemCode: e.target.value }, 'Código')
-            : updateTaskField(r.taskId, { itemCode: e.target.value })}
-          placeholder="—"
-        />
-        <span className="hidden print:inline">{r.itemCode || '—'}</span>
+        <span className="block text-[11px] font-mono tabular-nums text-foreground">
+          {r.itemCode || '—'}
+        </span>
       </td>
       <td className={`px-1 py-1 align-top text-center ${stickyBg}`}>
-        <Input
-          className="h-7 px-1.5 text-[11px] text-center border-transparent hover:border-input focus-visible:ring-1 print:hidden"
-          value={r.priceBank}
-          disabled={isLocked}
-          onChange={e => isSnapshotMode
-            ? patchSnapshotItem(r.taskId, { priceBank: e.target.value }, 'Banco')
-            : updateTaskField(r.taskId, { priceBank: e.target.value })}
-          placeholder="—"
-        />
-        <span className="hidden print:inline">{r.priceBank || '—'}</span>
+        <span className="block text-[11px] font-mono tabular-nums text-foreground">
+          {r.priceBank || '—'}
+        </span>
       </td>
       <td className={`px-2 py-1.5 text-foreground align-top cell-desc ${stickyBg}`}>
         <div className="flex items-start gap-1.5">
