@@ -41,8 +41,8 @@ export function useMeasurementState({ project, onProjectChange }: UseMeasurement
   const initialDraft = project.measurementDraft;
   const initialDraftMatches = !!(initialDraft && initialDraft.number === defaultNextNumber);
 
-  // Período sugerido (caso não exista rascunho válido)
-  const initialSuggested = suggestPeriodForNext(measurements, today, monthAgo);
+  // Período sugerido (caso não exista rascunho válido) — usa início da obra do Gantt como base.
+  const initialSuggested = suggestPeriodForNext(measurements, today, monthAgo, getProjectStartDate(project));
 
   // Form de filtros
   const [startDate, setStartDate] = useState(
@@ -110,7 +110,7 @@ export function useMeasurementState({ project, onProjectChange }: UseMeasurement
       setChapterFilter(d.chapterFilter || 'all');
       setSearch(d.search || '');
     } else {
-      const s = suggestPeriodForNext(sortedMs, today, monthAgo);
+      const s = suggestPeriodForNext(sortedMs, today, monthAgo, getProjectStartDate(project));
       setStartDate(s.startDate);
       setEndDate(s.endDate);
     }
@@ -127,7 +127,7 @@ export function useMeasurementState({ project, onProjectChange }: UseMeasurement
       setStartDate(d.startDate);
       setEndDate(d.endDate);
     } else {
-      const s = suggestPeriodForNext(measurements, today, monthAgo);
+      const s = suggestPeriodForNext(measurements, today, monthAgo, getProjectStartDate(project));
       setStartDate(s.startDate);
       setEndDate(s.endDate);
     }
