@@ -317,6 +317,23 @@ export default function TeamManagement() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right space-x-1">
+                          {isMe ? (
+                            <Button size="sm" variant="outline" onClick={() => { setPwdNew(''); setPwdConfirm(''); setPwdOpen(true); }}>
+                              <KeyRound className="w-3.5 h-3.5 mr-1" /> Alterar minha senha
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleSendReset(m)}
+                              disabled={!m.email || resetSubmittingId === m.id}
+                            >
+                              {resetSubmittingId === m.id
+                                ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                                : <Mail className="w-3.5 h-3.5 mr-1" />}
+                              Enviar redefinição
+                            </Button>
+                          )}
                           {m.status === 'blocked' ? (
                             <Button size="sm" variant="outline" onClick={() => handleStatusChange(m.id, 'active')} disabled={isMe}>
                               <ShieldCheck className="w-3.5 h-3.5 mr-1" /> Reativar
