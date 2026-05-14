@@ -102,29 +102,25 @@ export default function MeasurementStatusBar({
                 <Plus className="w-3.5 h-3.5 mr-1" /> Continuar próxima medição
               </Button>
             )}
-            {activeMeasurement && isLocked && (
+            {activeMeasurement && activeMeasurement.status === 'generated' && (
+              <Button size="sm" variant="default" onClick={() => (onSendToReview ? onSendToReview() : setStatus('in_review'))}>
+                <Send className="w-4 h-4 mr-1" /> Enviar p/ Fiscal
+              </Button>
+            )}
+            {activeMeasurement && activeMeasurement.status === 'in_review' && (
               <>
-                {activeMeasurement.status === 'generated' && (
-                  <Button size="sm" variant="default" onClick={() => (onSendToReview ? onSendToReview() : setStatus('in_review'))}>
-                    <Send className="w-4 h-4 mr-1" /> Enviar p/ Fiscal
-                  </Button>
-                )}
-                {activeMeasurement.status === 'in_review' && (
-                  <>
-                    <Button size="sm" variant="outline" onClick={() => setStatus('approved')}>
-                      <CheckCircle2 className="w-4 h-4 mr-1 text-success" /> Aprovar Medição
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => setStatus('rejected')}>
-                      <XCircle className="w-4 h-4 mr-1 text-destructive" /> Reprovar / Ajustar
-                    </Button>
-                  </>
-                )}
-                {activeMeasurement.status === 'rejected' && (
-                  <Button size="sm" variant="default" onClick={onConfirmEdit}>
-                    <Unlock className="w-4 h-4 mr-1" /> Editar Medição
-                  </Button>
-                )}
+                <Button size="sm" variant="outline" onClick={() => setStatus('approved')}>
+                  <CheckCircle2 className="w-4 h-4 mr-1 text-success" /> Aprovar Medição
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setStatus('rejected')}>
+                  <XCircle className="w-4 h-4 mr-1 text-destructive" /> Reprovar / Ajustar
+                </Button>
               </>
+            )}
+            {activeMeasurement && activeMeasurement.status === 'rejected' && isLocked && (
+              <Button size="sm" variant="default" onClick={onConfirmEdit}>
+                <Unlock className="w-4 h-4 mr-1" /> Editar Medição
+              </Button>
             )}
             {activeMeasurement && !isLocked && activeMeasurement.status === 'rejected' && (
               <Button size="sm" variant="default" onClick={onResendForReview}>
