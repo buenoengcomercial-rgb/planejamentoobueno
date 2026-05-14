@@ -211,9 +211,20 @@ export function validateMeasurement(
   return issues;
 }
 
+/** Helper: validação para gerar a medição (modo planejamento). */
+export function validateMeasurementForGeneration(ctx: ValidationContext): ValidationIssue[] {
+  return validateMeasurement(ctx, { mode: 'generation' });
+}
+
+/** Helper: validação para envio à fiscalização (mais rigorosa). */
+export function validateMeasurementForFiscalReview(ctx: ValidationContext): ValidationIssue[] {
+  return validateMeasurement(ctx, { mode: 'fiscal-review' });
+}
+
 export function summarizeIssues(issues: ValidationIssue[]) {
   const errors = issues.filter(i => i.level === 'error').length;
   const warnings = issues.filter(i => i.level === 'warning').length;
   const infos = issues.filter(i => i.level === 'info').length;
   return { errors, warnings, infos, hasBlocking: errors > 0 };
 }
+
