@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Project } from '@/types/project';
 import {
   fmtDateBR,
+  getProjectGanttStartDate,
+  syncMeasurementDatesWithGantt,
 } from '@/components/measurement/measurementFormat';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
