@@ -8,6 +8,7 @@ import type {
 } from '@/types/project';
 import { summarizeDailyReportsForPeriod } from '@/lib/dailyReportSummary';
 import { loadCompanyLogoForPdf } from '@/lib/companyBranding';
+import { resolvePhotoUrl } from '@/lib/photoUrl';
 import {
   GENERAL_TASK_VALUE,
   WEATHER_OPTIONS,

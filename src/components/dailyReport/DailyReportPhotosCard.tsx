@@ -130,15 +130,11 @@ export function DailyReportPhotosCard({
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {visiblePhotos.map(p => {
-              const src = p.publicUrl || p.dataUrl;
               return (
                 <div key={p.id} className="border border-border rounded-md overflow-hidden bg-card group">
                   <div className="relative aspect-[4/3] bg-muted cursor-pointer" onClick={() => setLightbox(p)}>
-                    {src ? (
-                      <img src={src} alt={p.caption || p.fileName || 'foto'} className="w-full h-full object-cover" loading="lazy" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-muted-foreground text-xs">Sem preview</div>
-                    )}
+                    <PhotoThumb att={p} />
+
                     <button
                       type="button"
                       className="absolute top-1 right-1 w-6 h-6 rounded-full bg-destructive/90 text-destructive-foreground opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
