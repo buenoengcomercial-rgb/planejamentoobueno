@@ -30,10 +30,18 @@ export function DailyReportGeneralInfo({ currentReport, updateField }: DailyRepo
             <Label className="text-xs">Clima</Label>
             <Select
               value={currentReport.weather || ''}
-              onValueChange={(v) => updateField('weather', v as WeatherCondition)}
+              onValueChange={(v) => {
+                if (v === '__clear__') {
+                  updateField('weather', undefined);
+                  updateField('weatherOther', '');
+                } else {
+                  updateField('weather', v as WeatherCondition);
+                }
+              }}
             >
               <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
               <SelectContent>
+                <SelectItem value="__clear__">Sem seleção</SelectItem>
                 {WEATHER_OPTIONS.map(o => {
                   const Icon = o.icon;
                   return (
@@ -59,10 +67,18 @@ export function DailyReportGeneralInfo({ currentReport, updateField }: DailyRepo
             <Label className="text-xs">Condição de trabalho</Label>
             <Select
               value={currentReport.workCondition || ''}
-              onValueChange={(v) => updateField('workCondition', v as WorkCondition)}
+              onValueChange={(v) => {
+                if (v === '__clear__') {
+                  updateField('workCondition', undefined);
+                  updateField('workConditionOther', '');
+                } else {
+                  updateField('workCondition', v as WorkCondition);
+                }
+              }}
             >
               <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
               <SelectContent>
+                <SelectItem value="__clear__">Sem seleção</SelectItem>
                 {WORK_OPTIONS.map(o => (
                   <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
                 ))}
