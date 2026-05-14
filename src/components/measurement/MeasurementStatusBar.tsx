@@ -19,6 +19,8 @@ interface MeasurementStatusBarProps {
   onConfirmDelete: () => void;
   setStatus: (status: SavedMeasurement['status']) => void;
   validationHasBlocking: boolean;
+  /** Quando informado, intercepta o clique em "Enviar p/ Fiscal" (ex.: para abrir confirmação). */
+  onSendToReview?: () => void;
 }
 
 export default function MeasurementStatusBar({
