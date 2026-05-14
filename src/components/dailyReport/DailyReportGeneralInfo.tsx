@@ -67,10 +67,18 @@ export function DailyReportGeneralInfo({ currentReport, updateField }: DailyRepo
             <Label className="text-xs">Condição de trabalho</Label>
             <Select
               value={currentReport.workCondition || ''}
-              onValueChange={(v) => updateField('workCondition', v as WorkCondition)}
+              onValueChange={(v) => {
+                if (v === '__clear__') {
+                  updateField('workCondition', undefined);
+                  updateField('workConditionOther', '');
+                } else {
+                  updateField('workCondition', v as WorkCondition);
+                }
+              }}
             >
               <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
               <SelectContent>
+                <SelectItem value="__clear__">Sem seleção</SelectItem>
                 {WORK_OPTIONS.map(o => (
                   <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
                 ))}
