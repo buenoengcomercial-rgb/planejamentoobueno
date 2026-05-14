@@ -478,6 +478,9 @@ export function useMeasurementRows({
         totals.balanceNoBDI += r.valueBalanceNoBDI;
         totals.qtyContracted += r.qtyContracted;
         totals.qtyAccum += r.qtyCurrentAccum;
+        totals.forecast += r.valueForecast;
+        totals.forecastNoBDI += r.valueForecastNoBDI;
+        totals.diffForecast += r.diffForecastVsReal;
       });
       childGroups.forEach(c => {
         totals.contracted += c.totals.contracted;
@@ -490,6 +493,9 @@ export function useMeasurementRows({
         totals.balanceNoBDI += c.totals.balanceNoBDI;
         totals.qtyContracted += c.totals.qtyContracted;
         totals.qtyAccum += c.totals.qtyAccum;
+        totals.forecast += c.totals.forecast;
+        totals.forecastNoBDI += c.totals.forecastNoBDI;
+        totals.diffForecast += c.totals.diffForecast;
       });
 
       return {
@@ -520,6 +526,9 @@ export function useMeasurementRows({
         orphanTotals.balanceNoBDI += r.valueBalanceNoBDI;
         orphanTotals.qtyContracted += r.qtyContracted;
         orphanTotals.qtyAccum += r.qtyCurrentAccum;
+        orphanTotals.forecast += r.valueForecast;
+        orphanTotals.forecastNoBDI += r.valueForecastNoBDI;
+        orphanTotals.diffForecast += r.diffForecastVsReal;
       });
       sorted.push({
         phaseId: '__synthetic_orphans__',
