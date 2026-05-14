@@ -23,6 +23,8 @@ export interface MinimalRow {
   qtyBalance: number;
 }
 
+export type ValidationMode = 'generation' | 'fiscal-review';
+
 export interface ValidationContext {
   startDate: string;
   endDate: string;
