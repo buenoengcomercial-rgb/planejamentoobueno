@@ -16,13 +16,14 @@ interface MeasurementTableProps extends RowHandlers {
   isLocked: boolean;
 }
 
-const COLSPAN = 15;
+const COLSPAN = 18;
 
 // Cores por grupo (tokens semânticos)
 const G_BG = {
   id: 'bg-muted/40',                 // Identificação
   contract: 'bg-info/10',            // Contrato
   period: 'bg-success/10',           // Medição atual
+  forecast: 'bg-accent/20',          // Previsão (Gantt)
   accum: 'bg-warning/10',            // Acumulado
   balance: 'bg-destructive/10',      // Saldo
 };
@@ -30,6 +31,7 @@ const G_HEAD = {
   id: 'bg-muted text-foreground',
   contract: 'bg-info/20 text-foreground',
   period: 'bg-success/20 text-foreground',
+  forecast: 'bg-accent/40 text-foreground',
   accum: 'bg-warning/20 text-foreground',
   balance: 'bg-destructive/15 text-foreground',
 };
@@ -90,6 +92,9 @@ export default function MeasurementTable(props: MeasurementTableProps) {
               <col className="col-val" />
               <col className="col-qty" />
               <col className="col-val" />
+              <col className="col-val" />
+              <col className="col-qty" />
+              <col className="col-val" />
               <col className="col-qty" />
               <col className="col-val" />
             </colgroup>
@@ -104,6 +109,9 @@ export default function MeasurementTable(props: MeasurementTableProps) {
                 </th>
                 <th colSpan={2} className={`px-2 py-1 text-[10px] uppercase tracking-wider font-bold ${G_HEAD.period} ${BORDER_L}`}>
                   Medição Atual
+                </th>
+                <th colSpan={3} className={`px-2 py-1 text-[10px] uppercase tracking-wider font-bold ${G_HEAD.forecast} ${BORDER_L}`}>
+                  Previsão (Gantt)
                 </th>
                 <th colSpan={2} className={`px-2 py-1 text-[10px] uppercase tracking-wider font-bold ${G_HEAD.accum} ${BORDER_L}`}>
                   Acumulado
@@ -127,6 +135,10 @@ export default function MeasurementTable(props: MeasurementTableProps) {
                 {/* Medição atual */}
                 <th className={`px-2 py-2 text-right font-semibold ${BORDER_L}`}>Quant. Medição</th>
                 <th className="px-2 py-2 text-right font-semibold">Subtotal Medição</th>
+                {/* Previsão */}
+                <th className={`px-2 py-2 text-right font-semibold ${BORDER_L}`}>Quant. Prevista</th>
+                <th className="px-2 py-2 text-right font-semibold">Subtotal Previsto</th>
+                <th className="px-2 py-2 text-right font-semibold">Dif. Real x Prev.</th>
                 {/* Acumulado */}
                 <th className={`px-2 py-2 text-right font-semibold ${BORDER_L}`}>Quant. Acum.</th>
                 <th className="px-2 py-2 text-right font-semibold">Subtotal Acumulado</th>
@@ -167,6 +179,9 @@ export default function MeasurementTable(props: MeasurementTableProps) {
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(totals.contracted)}</td>
                   <td className={`px-2 py-2 text-right ${BORDER_L}`}>—</td>
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(totals.period)}</td>
+                  <td className={`px-2 py-2 text-right ${BORDER_L}`}>—</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(totals.forecast)}</td>
+                  <td className={`px-2 py-2 text-right tabular-nums ${totals.diffForecast > 0 ? 'text-success' : totals.diffForecast < 0 ? 'text-destructive' : ''}`}>{fmtBRL(totals.diffForecast)}</td>
                   <td className={`px-2 py-2 text-right ${BORDER_L}`}>—</td>
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(totals.accum)}</td>
                   <td className={`px-2 py-2 text-right ${BORDER_L}`}>—</td>

@@ -102,6 +102,13 @@ export default function MeasurementGroupRow(props: MeasurementGroupRowProps) {
         </td>
         <td className={`px-2 py-1.5 text-right tabular-nums text-foreground border-t-2 border-border ${BORDER_L}`}>—</td>
         <td className="px-2 py-1.5 text-right tabular-nums text-foreground border-t-2 border-border">
+          {fmtBRL(g.totals.forecast)}
+        </td>
+        <td className={`px-2 py-1.5 text-right tabular-nums border-t-2 border-border ${g.totals.diffForecast > 0 ? 'text-success' : g.totals.diffForecast < 0 ? 'text-destructive' : 'text-foreground'}`}>
+          {fmtBRL(g.totals.diffForecast)}
+        </td>
+        <td className={`px-2 py-1.5 text-right tabular-nums text-foreground border-t-2 border-border ${BORDER_L}`}>—</td>
+        <td className="px-2 py-1.5 text-right tabular-nums text-foreground border-t-2 border-border">
           {fmtBRL(g.totals.accum)}
         </td>
         <td className={`px-2 py-1.5 text-right tabular-nums text-foreground border-t-2 border-border ${BORDER_L}`}>—</td>
