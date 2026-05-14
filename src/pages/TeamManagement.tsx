@@ -128,6 +128,40 @@ export default function TeamManagement() {
     } catch { toast.error('Erro ao remover'); }
   };
 
+  const handleChangeMyPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (pwdNew.length < 8) { toast.error('A senha deve ter pelo menos 8 caracteres'); return; }
+    if (pwdNew !== pwdConfirm) { toast.error('As senhas não coincidem'); return; }
+    setPwdSubmitting(true);
+    const { error } = await supabase.auth.updateUser({ password: pwdNew });
+    setPwdSubmitting(false);
+    if (error) {
+      const msg = (error.message || '').toLowerCase();
+      if (msg.includes('pwned') || msg.includes('compromis') || msg.includes('weak')) {
+        toast.error('Essa senha apareceu em vazamentos. Escolha uma senha diferente.');
+      } else {
+        toast.error(error.message);
+      }
+      return;
+    }
+    toast.success('Senha alterada com sucesso.');
+    setPwdOpen(false);
+    setPwdNew(''); setPwdConfirm('');
+  };
+
+  const handleSendReset = async (member: OrgMember) => {
+    if (!member.email) { toast.error('Usuário sem e-mail cadastrado'); return; }
+    if (!confirm(`Enviar e-mail de redefinição de senha para ${member.email}?`)) return;
+    setResetSubmittingId(member.id);
+    const { error } = await supabase.auth.resetPasswordForEmail(member.email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+    setResetSubmittingId(null);
+    if (error) { toast.error(error.message); return; }
+    toast.success('E-mail de redefinição enviado.');
+  };
+
+
   if (authLoading || orgLoading) {
     return <div className="min-h-screen flex items-center justify-center bg-background"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>;
   }
