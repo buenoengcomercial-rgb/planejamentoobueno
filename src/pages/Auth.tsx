@@ -103,6 +103,13 @@ export default function Auth() {
                 <Button type="submit" className="w-full" disabled={submitting}>
                   {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Entrar'}
                 </Button>
+                <button
+                  type="button"
+                  onClick={() => { setForgotEmail(loginEmail); setForgotOpen(true); }}
+                  className="block w-full text-sm text-muted-foreground hover:text-foreground underline-offset-4 hover:underline"
+                >
+                  Esqueci minha senha
+                </button>
               </form>
             </TabsContent>
 
