@@ -127,6 +127,7 @@ export function useMeasurementRows({
               unitPriceWithBDI: calc.unitPriceWithBDI,
               unitPriceNoBDI: calc.unitPriceNoBDI,
               trabalhaSabado,
+              unit: it.unit,
             })
           : { qtyForecast: 0, valueForecast: 0, valueForecastNoBDI: 0, plannedDaily: 0, plannedDaysInPeriod: 0 };
         return {
@@ -341,6 +342,7 @@ export function useMeasurementRows({
         unitPriceWithBDI: calc.unitPriceWithBDI,
         unitPriceNoBDI: calc.unitPriceNoBDI,
         trabalhaSabado,
+        unit,
       });
 
       return {
