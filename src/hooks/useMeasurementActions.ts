@@ -319,18 +319,22 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
   };
 
   // ───────── Liberar para ajuste / aprovar / reprovar / enviar ─────────
+  /**
+   * Libera edição controlada de uma medição reprovada.
+   * Mantém status='rejected' e marca editUnlocked=true para destravar o snapshot.
+   */
   const unlockForEdit = () => {
     if (!activeMeasurement) return;
     updateMeasurement(activeMeasurement.id, m => ({
       ...m,
-      status: 'rejected',
+      editUnlocked: true,
       history: [
         ...(m.history || []),
         {
           at: new Date().toISOString(),
-          field: 'status',
-          previous: m.status,
-          next: 'rejected',
+          field: 'editUnlocked',
+          previous: String(!!m.editUnlocked),
+          next: 'true',
           reason: editReason || 'Liberada para ajustes',
         },
       ],
@@ -339,8 +343,50 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
     setEditReason('');
     toast({
       title: 'Medição aberta para ajustes',
-      description: 'Edite os campos liberados e refaça a aprovação.',
+      description: 'Ajuste os campos liberados e clique em "Reenviar p/ Fiscal".',
     });
+  };
+
+  /**
+   * Reenvia para fiscalização uma medição que estava reprovada e foi ajustada.
+   * Re-congela o snapshot a partir das linhas atuais e volta status para in_review.
+   */
+  const resendForReview = () => {
+    if (!activeMeasurement) return;
+    const frozenItems: MeasurementSnapshotItem[] = rows.map(r => ({
+      item: r.item,
+      phaseId: r.phaseId,
+      phaseChain: r.phaseChain,
+      taskId: r.taskId,
+      description: r.description,
+      unit: r.unit,
+      itemCode: r.itemCode,
+      priceBank: r.priceBank,
+      qtyContracted: r.qtyContracted,
+      unitPriceNoBDI: r.unitPriceNoBDI,
+      unitPriceWithBDI: r.unitPriceWithBDI,
+      qtyProposed: r.qtyPeriod,
+      qtyPriorAccum: r.qtyPriorAccum,
+      notes: r.notes,
+    }));
+    updateMeasurement(activeMeasurement.id, m => ({
+      ...m,
+      items: frozenItems,
+      dailyReportSnapshot: buildDailyReportSnapshot(dailyReportsSummary),
+      status: 'in_review',
+      editUnlocked: false,
+      history: [
+        ...(m.history || []),
+        {
+          at: new Date().toISOString(),
+          field: 'status',
+          previous: m.status,
+          next: 'in_review',
+          reason: 'Reenviada para fiscalização após ajustes',
+        },
+      ],
+    }));
+    toast({ title: 'Medição reenviada para fiscalização' });
   };
 
   const setStatus = (next: MeasurementStatus) => {
@@ -349,6 +395,9 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
     updateMeasurement(activeMeasurement.id, m => ({
       ...m,
       status: next,
+      // Ao reprovar a partir do fiscal, mantém snapshot congelado (editUnlocked=false)
+      // até que o usuário clique em "Editar Medição".
+      editUnlocked: next === 'rejected' ? false : m.editUnlocked,
       history: [
         ...(m.history || []),
         { at: new Date().toISOString(), field: 'status', previous: m.status, next },
