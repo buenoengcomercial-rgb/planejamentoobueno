@@ -99,8 +99,8 @@ export function useDailyReportPhotos({
         .from(PHOTO_BUCKET)
         .upload(path, file, { contentType: file.type || 'image/jpeg', upsert: false });
       if (error) throw error;
-      const { data: pub } = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path);
-      return { ...base, storagePath: path, publicUrl: pub.publicUrl };
+      // Bucket é privado: a URL é gerada sob demanda via signed URL (resolvePhotoUrl).
+      return { ...base, storagePath: path };
     } catch {
       const dataUrl = await readFileAsDataURL(file);
       return { ...base, dataUrl };
