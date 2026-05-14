@@ -73,7 +73,7 @@ export interface GroupNode {
 
 export const STATUS_LABEL: Record<MeasurementStatus, string> = {
   draft: 'Rascunho',
-  generated: 'Gerada',
+  generated: 'Previsão',
   in_review: 'Em análise fiscal',
   approved: 'Aprovada',
   rejected: 'Reprovada / Ajustar',
@@ -88,4 +88,4 @@ export const STATUS_CLASS: Record<MeasurementStatus, string> = {
 };
 
 export const isLockedStatus = (s: MeasurementStatus) =>
-  s === 'generated' || s === 'in_review' || s === 'approved';
+  s === 'in_review' || s === 'approved';

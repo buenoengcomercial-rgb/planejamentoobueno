@@ -313,8 +313,8 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
     setActiveId('live');
     setConfirmGenerate(false);
     toast({
-      title: `Medição nº ${number} gerada`,
-      description: `Snapshot bloqueado. Preparando ${nextNumber}ª Medição.`,
+      title: `Medição nº ${number} criada`,
+      description: `Previsão viva — atualiza com apontamentos. Preparando ${nextNumber}ª Medição.`,
     });
   };
 

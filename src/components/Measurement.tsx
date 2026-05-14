@@ -33,7 +33,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { validateMeasurement, summarizeIssues, type ValidationIssue } from '@/lib/measurementValidation';
 import MeasurementValidationPanel from '@/components/MeasurementValidationPanel';
-import { summarizeDailyReportsForPeriod } from '@/lib/dailyReportSummary';
+import { summarizeDailyReportsForPeriod, buildDailyReportSnapshot } from '@/lib/dailyReportSummary';
 import { toast } from '@/hooks/use-toast';
 
 interface MeasurementProps {
@@ -680,6 +680,37 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
             {!fiscalReviewSummary.hasBlocking && (
               <AlertDialogAction
                 onClick={() => {
+                  // Congela o snapshot a partir das linhas vivas atuais antes de enviar.
+                  if (activeMeasurement) {
+                    const frozenItems = rows.map(r => ({
+                      item: r.item,
+                      phaseId: r.phaseId,
+                      phaseChain: r.phaseChain,
+                      taskId: r.taskId,
+                      description: r.description,
+                      unit: r.unit,
+                      itemCode: r.itemCode,
+                      priceBank: r.priceBank,
+                      qtyContracted: r.qtyContracted,
+                      unitPriceNoBDI: r.unitPriceNoBDI,
+                      unitPriceWithBDI: r.unitPriceWithBDI,
+                      qtyProposed: r.qtyPeriod,
+                      qtyPriorAccum: r.qtyPriorAccum,
+                      notes: r.notes,
+                    }));
+                    onProjectChange({
+                      ...projectRef.current,
+                      measurements: (projectRef.current.measurements || []).map(m =>
+                        m.id === activeMeasurement.id
+                          ? {
+                              ...m,
+                              items: frozenItems,
+                              dailyReportSnapshot: buildDailyReportSnapshot(dailyReportsSummary),
+                            }
+                          : m,
+                      ),
+                    });
+                  }
                   setStatus('in_review');
                   setConfirmSendToReview(false);
                 }}

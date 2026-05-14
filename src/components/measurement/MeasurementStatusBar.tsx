@@ -147,11 +147,15 @@ export default function MeasurementStatusBar({
                 emitida em {fmtDateBR(activeMeasurement.issueDate)}
               </span>
             </div>
-            {isLocked && (
+            {isLocked ? (
               <span className="flex items-center gap-1 text-muted-foreground">
                 <Lock className="w-3.5 h-3.5" /> Snapshot bloqueado
               </span>
-            )}
+            ) : activeMeasurement.status === 'generated' ? (
+              <span className="text-muted-foreground">
+                Previsão — atualiza com apontamentos
+              </span>
+            ) : null}
           </div>
         )}
       </CardContent>

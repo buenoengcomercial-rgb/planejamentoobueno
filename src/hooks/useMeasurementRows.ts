@@ -66,7 +66,11 @@ export function useMeasurementRows({
   }, [activeId, measurements]);
 
   const isLocked = activeMeasurement ? isLockedStatus(activeMeasurement.status) : false;
-  const isSnapshotMode = !!activeMeasurement;
+  // Snapshot só para medições enviadas/aprovadas. "generated" continua como previsão viva.
+  const isSnapshotMode = !!activeMeasurement && (
+    activeMeasurement.status === 'in_review' ||
+    activeMeasurement.status === 'approved'
+  );
 
   // Período/BDI vigentes para cálculo (snapshot vs live)
   const effStart = activeMeasurement?.startDate ?? startDate;
@@ -76,19 +80,21 @@ export function useMeasurementRows({
   const effIssue = activeMeasurement?.issueDate ?? issueDate;
   const effNumber = activeMeasurement?.number?.toString() ?? measurementNumber;
 
-  // Acumulado anterior considerando medições anteriores APROVADAS/GERADAS quando em live
+  // Acumulado anterior considerando medições anteriores APROVADAS/GERADAS quando em live ou previsão
   const priorAccumByTask = useMemo<Map<string, number>>(() => {
     const map = new Map<string, number>();
     if (isSnapshotMode) return map;
     measurements.forEach(m => {
       if (m.status === 'draft' || m.status === 'rejected') return;
+      // Não dupla-conta a própria medição ativa (que está sendo recalculada ao vivo).
+      if (activeMeasurement && m.id === activeMeasurement.id) return;
       m.items.forEach(it => {
         const qty = it.qtyApproved ?? it.qtyProposed ?? 0;
         map.set(it.taskId, (map.get(it.taskId) || 0) + qty);
       });
     });
     return map;
-  }, [measurements, isSnapshotMode]);
+  }, [measurements, isSnapshotMode, activeMeasurement]);
 
   // Mapa rápido taskId → Task (para previsão usar dados atuais do Gantt mesmo em snapshot)
   const taskById = useMemo<Map<string, Task>>(() => {
