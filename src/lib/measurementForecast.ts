@@ -22,6 +22,32 @@ import {
   parseISODateLocal,
 } from '@/components/gantt/utils';
 
+/**
+ * Detecta unidades mensais (MES, MÊS, UN/MES, UNXMES, etc.).
+ * Normaliza removendo acentos, caixa e espaços extras.
+ */
+export function isMonthlyUnit(unit: string | undefined | null): boolean {
+  if (!unit) return false;
+  const norm = String(unit)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/\s+/g, '');
+  if (!norm) return false;
+  // Evita falso positivo com unidades tipo "MESA" — exige token MES isolado
+  return /(^|[^A-Z])MES([^A-Z]|$)/.test(norm)
+    || norm.includes('UN/MES')
+    || norm.includes('UNXMES');
+}
+
+/** Conta dias corridos inclusivos entre duas datas ISO. */
+function countCalendarDaysISO(startISO: string, endISO: string): number {
+  if (!startISO || !endISO || startISO > endISO) return 0;
+  const a = parseISODateLocal(startISO).getTime();
+  const b = parseISODateLocal(endISO).getTime();
+  return Math.round((b - a) / (1000 * 60 * 60 * 24)) + 1;
+}
+
 /** Conta dias úteis sobrepostos (inclusivos) entre dois intervalos ISO. */
 export function countOverlapDays(
   startA: string, endA: string,
