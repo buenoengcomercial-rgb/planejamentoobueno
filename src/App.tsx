@@ -23,6 +23,7 @@ const App = () => (
           <OrganizationProvider>
             <Routes>
               <Route path="/auth" element={<Auth />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="/team" element={<TeamManagement />} />
               <Route path="/" element={<Index />} />
               <Route path="*" element={<NotFound />} />
