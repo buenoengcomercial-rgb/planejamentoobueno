@@ -1,5 +1,6 @@
-import type { Project, Task, Phase } from '@/types/project';
+import type { Project, Task, Phase, SavedMeasurement } from '@/types/project';
 import { getChapterTree, getChapterNumbering, type ChapterNode } from '@/lib/chapters';
+import { buildDailyReportSnapshot, summarizeDailyReportsForPeriod } from '@/lib/dailyReportSummary';
 import type { GroupTotals } from './types';
 
 // ───────────────────────── Helpers de formatação ─────────────────────────
