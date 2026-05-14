@@ -13,8 +13,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, ArrowLeft, UserPlus, Trash2, ShieldOff, ShieldCheck } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Loader2, ArrowLeft, UserPlus, Trash2, ShieldOff, ShieldCheck, KeyRound, Mail } from 'lucide-react';
 import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
 
 const ROLE_OPTIONS: OrgRole[] = ['owner', 'admin', 'engineer', 'field_user', 'viewer'];
 
