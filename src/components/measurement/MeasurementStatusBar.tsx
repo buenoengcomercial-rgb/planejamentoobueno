@@ -35,6 +35,7 @@ export default function MeasurementStatusBar({
   onConfirmDelete,
   setStatus,
   validationHasBlocking,
+  onSendToReview,
 }: MeasurementStatusBarProps) {
   const nextNumber = (measurements[measurements.length - 1]?.number || 0) + 1;
 
