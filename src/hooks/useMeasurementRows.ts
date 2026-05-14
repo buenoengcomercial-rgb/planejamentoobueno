@@ -65,11 +65,15 @@ export function useMeasurementRows({
     return measurements.find(m => m.id === activeId) || null;
   }, [activeId, measurements]);
 
-  const isLocked = activeMeasurement ? isLockedStatus(activeMeasurement.status) : false;
-  // Snapshot só para medições enviadas/aprovadas. "generated" continua como previsão viva.
+  const isLocked = activeMeasurement
+    ? isLockedStatus(activeMeasurement.status, activeMeasurement.editUnlocked)
+    : false;
+  // Snapshot congelado: in_review/approved sempre; rejected enquanto edição não foi liberada.
+  // "generated" continua como previsão viva.
   const isSnapshotMode = !!activeMeasurement && (
     activeMeasurement.status === 'in_review' ||
-    activeMeasurement.status === 'approved'
+    activeMeasurement.status === 'approved' ||
+    (activeMeasurement.status === 'rejected' && !activeMeasurement.editUnlocked)
   );
 
   // Período/BDI vigentes para cálculo (snapshot vs live)
