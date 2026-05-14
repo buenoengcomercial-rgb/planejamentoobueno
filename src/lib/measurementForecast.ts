@@ -101,6 +101,8 @@ export interface TaskForecastInput {
   unitPriceNoBDI: number;
   /** Calendário trabalha sábado (0,5 dia). Default false. */
   trabalhaSabado?: boolean;
+  /** Unidade contratada — usada para detectar serviços mensais (MÊS/MES). */
+  unit?: string;
 }
 
 export interface TaskForecast {
@@ -113,7 +115,7 @@ export interface TaskForecast {
 
 /** Calcula a previsão da tarefa dentro do período da medição. */
 export function computeTaskForecast(input: TaskForecastInput): TaskForecast {
-  const { task, periodStart, periodEnd, qtyContracted } = input;
+  const { task, periodStart, periodEnd, qtyContracted, unit } = input;
   const trabalhaSabado = input.trabalhaSabado ?? false;
   const unitPriceWithBDI = trunc2(input.unitPriceWithBDI);
   const unitPriceNoBDI = trunc2(input.unitPriceNoBDI);
@@ -123,26 +125,39 @@ export function computeTaskForecast(input: TaskForecastInput): TaskForecast {
   }
 
   const taskEnd = getWorkEndDate(task.startDate, task.duration, trabalhaSabado);
-  const totalPlannedDays = countWorkDays(
-    parseISODateLocal(task.startDate),
-    parseISODateLocal(taskEnd),
-    trabalhaSabado,
-  );
-
-  const overlapDays = countOverlapDays(task.startDate, taskEnd, periodStart, periodEnd, trabalhaSabado);
 
   let plannedDaily = 0;
   let qtyForecast = 0;
+  let plannedDaysInPeriod = 0;
 
-  if (task.duration <= 1) {
-    // Tarefa de 1 dia: tudo ou nada conforme intersecção
-    if (overlapDays > 0 && qtyContracted > 0) {
-      qtyForecast = trunc2(qtyContracted);
-      plannedDaily = qtyContracted;
+  if (isMonthlyUnit(unit)) {
+    // Serviços mensais: previsão por competência (dias corridos / 30).
+    const overlapStart = task.startDate > periodStart ? task.startDate : periodStart;
+    const overlapEnd = taskEnd < periodEnd ? taskEnd : periodEnd;
+    const overlapCalendarDays = countCalendarDaysISO(overlapStart, overlapEnd);
+    plannedDaysInPeriod = overlapCalendarDays;
+    if (overlapCalendarDays > 0 && qtyContracted > 0) {
+      qtyForecast = trunc2(overlapCalendarDays / 30);
+      plannedDaily = qtyContracted > 0 && task.duration > 0 ? qtyContracted / task.duration : 0;
     }
-  } else if (totalPlannedDays > 0 && qtyContracted > 0 && overlapDays > 0) {
-    plannedDaily = qtyContracted / totalPlannedDays;
-    qtyForecast = trunc2(plannedDaily * overlapDays);
+  } else {
+    const totalPlannedDays = countWorkDays(
+      parseISODateLocal(task.startDate),
+      parseISODateLocal(taskEnd),
+      trabalhaSabado,
+    );
+    const overlapDays = countOverlapDays(task.startDate, taskEnd, periodStart, periodEnd, trabalhaSabado);
+    plannedDaysInPeriod = overlapDays;
+
+    if (task.duration <= 1) {
+      if (overlapDays > 0 && qtyContracted > 0) {
+        qtyForecast = trunc2(qtyContracted);
+        plannedDaily = qtyContracted;
+      }
+    } else if (totalPlannedDays > 0 && qtyContracted > 0 && overlapDays > 0) {
+      plannedDaily = qtyContracted / totalPlannedDays;
+      qtyForecast = trunc2(plannedDaily * overlapDays);
+    }
   }
 
   if (qtyForecast < 0) qtyForecast = 0;
