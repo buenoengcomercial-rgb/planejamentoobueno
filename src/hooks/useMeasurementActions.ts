@@ -11,7 +11,7 @@ import type {
 import { trunc2, calculateUnitPriceWithBDI } from '@/lib/measurementCalculations';
 import { logToProject, type AuditUserInfo } from '@/lib/audit';
 import { toast } from '@/hooks/use-toast';
-import { isoAddDays, suggestPeriodForNext } from '@/components/measurement/measurementFormat';
+import { isoAddDays, suggestPeriodForNext, getProjectStartDate } from '@/components/measurement/measurementFormat';
 import { buildDailyReportSnapshot, type DailyReportPeriodSummary } from '@/lib/dailyReportSummary';
 import type { Row } from '@/components/measurement/types';
 
@@ -271,7 +271,7 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
     };
 
     const nextStartIso = isoAddDays(endDate, 1);
-    const nextEndIso = isoAddDays(nextStartIso, 30);
+    const nextEndIso = isoAddDays(nextStartIso, 29);
     const nextNumber = number + 1;
     const latestProject = projectRef.current;
     const nextProject: Project = {
@@ -396,7 +396,7 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
 
   const newMeasurementDraft = () => {
     const last = measurements[measurements.length - 1];
-    const suggested = suggestPeriodForNext(measurements, today, monthAgo);
+    const suggested = suggestPeriodForNext(measurements, today, monthAgo, getProjectStartDate(projectRef.current));
     setStartDate(suggested.startDate);
     setEndDate(suggested.endDate);
     setMeasurementNumber(String((last?.number || 0) + 1));
