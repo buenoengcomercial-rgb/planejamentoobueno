@@ -462,6 +462,7 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
     setManualPeriodQuantity,
     generateMeasurement,
     unlockForEdit,
+    resendForReview,
     setStatus,
     deleteMeasurement,
     newMeasurementDraft,
