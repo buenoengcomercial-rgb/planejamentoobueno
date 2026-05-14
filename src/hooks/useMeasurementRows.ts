@@ -126,6 +126,7 @@ export function useMeasurementRows({
               qtyContracted: it.qtyContracted,
               unitPriceWithBDI: calc.unitPriceWithBDI,
               unitPriceNoBDI: calc.unitPriceNoBDI,
+              trabalhaSabado,
             })
           : { qtyForecast: 0, valueForecast: 0, valueForecastNoBDI: 0, plannedDaily: 0, plannedDaysInPeriod: 0 };
         return {
