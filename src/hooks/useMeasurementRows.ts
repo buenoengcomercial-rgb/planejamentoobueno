@@ -328,6 +328,15 @@ export function useMeasurementRows({
         ? Math.max(0, money2(valueContractedNoBDI - calc.totalAccumulatedNoBDI))
         : calc.totalBalanceNoBDI;
 
+      const fc = computeTaskForecast({
+        task,
+        periodStart: effStart,
+        periodEnd: effEnd,
+        qtyContracted,
+        unitPriceWithBDI: calc.unitPriceWithBDI,
+        unitPriceNoBDI: calc.unitPriceNoBDI,
+      });
+
       return {
         item: itemNumber, phaseId: phase.id, phaseChain: chain, taskId: task.id,
         description: task.name, unit,
@@ -350,6 +359,10 @@ export function useMeasurementRows({
         valuePeriod: calc.totalPeriod,
         valueAccum: calc.totalAccumulated,
         valueBalance,
+        qtyForecast: fc.qtyForecast,
+        valueForecast: fc.valueForecast,
+        valueForecastNoBDI: fc.valueForecastNoBDI,
+        diffForecastVsReal: trunc2(calc.totalPeriod - fc.valueForecast),
         hasNoLogsInPeriod: logsInfo.hasNoLogsInPeriod,
         hasNoLogsAtAll: logsInfo.hasNoLogsAtAll,
       };
@@ -401,6 +414,10 @@ export function useMeasurementRows({
           valuePeriod: 0,
           valueAccum: 0,
           valueBalance: valueContracted,
+          qtyForecast: 0,
+          valueForecast: 0,
+          valueForecastNoBDI: 0,
+          diffForecastVsReal: 0,
           hasNoLogsInPeriod: true,
           hasNoLogsAtAll: true,
         });
