@@ -152,6 +152,43 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
   }, [activeMeasurement, startDate, endDate, measurementNumber, rows, measurements, contractor, contracted, contractNumber, contractObject, location, budgetSource, bdiPercent, dailyReportsSummary]);
   const validationSummary = useMemo(() => summarizeIssues(validationIssues), [validationIssues]);
 
+  // ───────── Validação para envio à fiscalização (modo mais rigoroso) ─────────
+  const [confirmSendToReview, setConfirmSendToReview] = useState(false);
+  const fiscalReviewIssues: ValidationIssue[] = useMemo(() => {
+    if (!activeMeasurement) return [];
+    return validateMeasurement(
+      {
+        startDate: activeMeasurement.startDate,
+        endDate: activeMeasurement.endDate,
+        measurementNumber: activeMeasurement.number,
+        rows: rows.map(r => ({
+          taskId: r.taskId,
+          description: r.description,
+          itemCode: r.itemCode,
+          priceBank: r.priceBank,
+          unitPriceNoBDI: r.unitPriceNoBDI,
+          qtyContracted: r.qtyContracted,
+          qtyPeriod: r.qtyPeriod,
+          qtyPriorAccum: r.qtyPriorAccum,
+          qtyCurrentAccum: r.qtyCurrentAccum,
+          qtyBalance: r.qtyBalance,
+        })),
+        measurements: measurements.filter(m => m.id !== activeMeasurement.id),
+        contract: {
+          contractor, contracted, contractNumber, contractObject, location,
+          budgetSource, bdiPercent,
+        },
+        dailyReports: {
+          missingReports: dailyReportsSummary.missingReports,
+          productionWithoutReportDays: dailyReportsSummary.productionWithoutReportDates.length,
+          impedimentDays: dailyReportsSummary.impedimentDays,
+        },
+      },
+      { mode: 'fiscal-review' },
+    );
+  }, [activeMeasurement, rows, measurements, contractor, contracted, contractNumber, contractObject, location, budgetSource, bdiPercent, dailyReportsSummary]);
+  const fiscalReviewSummary = useMemo(() => summarizeIssues(fiscalReviewIssues), [fiscalReviewIssues]);
+
   /** Tem avisos não-bloqueantes específicos de diário/impedimento que requerem confirmação extra. */
   const hasDailyWarnings =
     !activeMeasurement && (
