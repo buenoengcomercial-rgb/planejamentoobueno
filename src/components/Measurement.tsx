@@ -443,6 +443,7 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
         setStatus={setStatus}
         validationHasBlocking={validationSummary.hasBlocking}
         onSendToReview={() => setConfirmSendToReview(true)}
+        onResendForReview={resendForReview}
       />
 
       {/* Painel de validação (somente em modo "live") */}
