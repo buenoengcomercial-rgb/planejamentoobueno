@@ -28,6 +28,30 @@ export interface DailyReportPeriodSummary {
   productionWithoutReportDates: string[];
 }
 
+export function isDailyReportEmpty(report?: Partial<DailyReport> | null): boolean {
+  if (!report) return true;
+  return !String(report.responsible ?? '').trim()
+    && !report.weather
+    && !String(report.weatherOther ?? '').trim()
+    && !report.workCondition
+    && !String(report.workConditionOther ?? '').trim()
+    && !String(report.occurrences ?? '').trim()
+    && !String(report.impediments ?? '').trim()
+    && !String(report.observations ?? '').trim()
+    && (report.teamsPresent?.length || 0) === 0
+    && (report.equipment?.length || 0) === 0
+    && (report.attachments?.length || 0) === 0;
+}
+
+function dailyReportTime(report: DailyReport): number {
+  return Date.parse(report.updatedAt || report.createdAt || '') || 0;
+}
+
+export function pickLatestDailyReport(current: DailyReport | undefined, next: DailyReport): DailyReport {
+  if (!current) return next;
+  return dailyReportTime(next) >= dailyReportTime(current) ? next : current;
+}
+
 /** Itera datas ISO inclusivas entre start e end. */
 function eachDateISO(startISO: string, endISO: string): string[] {
   if (!startISO || !endISO || startISO > endISO) return [];
@@ -67,7 +91,10 @@ export function summarizeDailyReportsForPeriod(
 ): DailyReportPeriodSummary {
   const dates = eachDateISO(startDate, endDate);
   const reportsMap = new Map<string, DailyReport>();
-  (project.dailyReports || []).forEach(r => reportsMap.set(r.date, r));
+  (project.dailyReports || []).forEach(r => {
+    if (!r.date) return;
+    reportsMap.set(r.date, pickLatestDailyReport(reportsMap.get(r.date), r));
+  });
   const productionByDate = buildProductionByDate(project);
 
   let filledReports = 0;
@@ -79,18 +106,10 @@ export function summarizeDailyReportsForPeriod(
     const report = reportsMap.get(date);
     const totalProduction = productionByDate.get(date) || 0;
     const hasProduction = totalProduction > 0;
-    const hasImpediment = !!report?.impediments?.trim();
+    const impedimentText = String(report?.impediments ?? '').trim();
+    const hasImpediment = impedimentText.length > 0;
     // "preenchido" = existe um diário com pelo menos um campo significativo.
-    const hasReport = !!report && (
-      !!report.responsible?.trim() ||
-      !!report.weather ||
-      !!report.workCondition ||
-      !!report.occurrences?.trim() ||
-      !!report.impediments?.trim() ||
-      !!report.observations?.trim() ||
-      (report.teamsPresent?.length || 0) > 0 ||
-      (report.equipment?.length || 0) > 0
-    );
+    const hasReport = !!report && !isDailyReportEmpty(report);
 
     if (hasReport) filledReports++;
     if (hasProduction) productionDays++;

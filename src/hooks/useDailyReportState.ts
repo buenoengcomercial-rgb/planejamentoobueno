@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Project, DailyReport as DailyReportEntry } from '@/types/project';
 import { todayISO, uid } from '@/components/dailyReport/dailyReportFormat';
+import { isDailyReportEmpty, pickLatestDailyReport } from '@/lib/dailyReportSummary';
 
 interface UseDailyReportStateArgs {
   project: Project;
@@ -18,6 +19,20 @@ export interface UseDailyReportStateResult {
   currentReport: DailyReportEntry;
   persist: (mutator: (r: DailyReportEntry) => DailyReportEntry) => void;
   updateField: <K extends keyof DailyReportEntry>(key: K, value: DailyReportEntry[K]) => void;
+  clearDailyReport: () => void;
+}
+
+function createBlankDailyReport(date: string): DailyReportEntry {
+  const now = new Date().toISOString();
+  return {
+    id: uid('dr'),
+    date,
+    teamsPresent: [],
+    equipment: [],
+    attachments: [],
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 export function useDailyReportState({
@@ -45,36 +60,38 @@ export function useDailyReportState({
   const reports = project.dailyReports || [];
 
   const currentReport: DailyReportEntry = useMemo(() => {
-    const found = reports.find(r => r.date === selectedDate);
+    const found = reports
+      .filter(r => r.date === selectedDate)
+      .reduce<DailyReportEntry | undefined>((latest, report) => pickLatestDailyReport(latest, report), undefined);
     if (found) return found;
-    const now = new Date().toISOString();
-    return {
-      id: uid('dr'),
-      date: selectedDate,
-      teamsPresent: [],
-      equipment: [],
-      attachments: [],
-      createdAt: now,
-      updatedAt: now,
-    };
+    return createBlankDailyReport(selectedDate);
   }, [reports, selectedDate]);
 
   const persist = useCallback((mutator: (r: DailyReportEntry) => DailyReportEntry) => {
     onProjectChange(prev => {
       const list = prev.dailyReports || [];
-      const idx = list.findIndex(r => r.date === selectedDate);
-      const base = idx >= 0 ? list[idx] : currentReport;
+      const reportsForDate = list.filter(r => r.date === selectedDate);
+      const base = reportsForDate.reduce<DailyReportEntry | undefined>(
+        (latest, report) => pickLatestDailyReport(latest, report),
+        undefined,
+      ) || createBlankDailyReport(selectedDate);
       const updated: DailyReportEntry = { ...mutator(base), date: selectedDate, updatedAt: new Date().toISOString() };
-      const nextList = idx >= 0
-        ? list.map((r, i) => i === idx ? updated : r)
-        : [...list, updated];
+      const listWithoutDate = list.filter(r => r.date !== selectedDate);
+      const nextList = isDailyReportEmpty(updated) ? listWithoutDate : [...listWithoutDate, updated];
       return { ...prev, dailyReports: nextList };
     });
-  }, [onProjectChange, selectedDate, currentReport]);
+  }, [onProjectChange, selectedDate]);
 
   const updateField = useCallback(<K extends keyof DailyReportEntry>(key: K, value: DailyReportEntry[K]) => {
     persist(r => ({ ...r, [key]: value }));
   }, [persist]);
+
+  const clearDailyReport = useCallback(() => {
+    onProjectChange(prev => ({
+      ...prev,
+      dailyReports: (prev.dailyReports || []).filter(r => r.date !== selectedDate),
+    }));
+  }, [onProjectChange, selectedDate]);
 
   return {
     selectedDate,
@@ -84,5 +101,6 @@ export function useDailyReportState({
     currentReport,
     persist,
     updateField,
+    clearDailyReport,
   };
 }

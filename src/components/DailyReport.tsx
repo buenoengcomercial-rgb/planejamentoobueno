@@ -30,6 +30,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, init
     currentReport,
     persist,
     updateField,
+    clearDailyReport,
   } = useDailyReportState({ project, onProjectChange, initialDate, initialMeasurementFilter, navKey });
 
   const { measurementPeriods, activePeriod, periodDates, dateMembership, periodSummary } =
@@ -126,7 +127,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, init
       <DailyReportSummaryCards summary={summary} />
 
       {/* Informações gerais */}
-      <DailyReportGeneralInfo currentReport={currentReport} updateField={updateField} />
+      <DailyReportGeneralInfo currentReport={currentReport} updateField={updateField} onClearDay={clearDailyReport} />
 
       {/* Equipes / Equipamentos lado a lado */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

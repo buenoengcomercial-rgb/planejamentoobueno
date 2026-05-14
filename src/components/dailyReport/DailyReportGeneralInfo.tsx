@@ -1,4 +1,6 @@
 import type { DailyReport as DailyReportEntry, WeatherCondition, WorkCondition } from '@/types/project';
+import { Trash2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -8,13 +10,23 @@ import { WEATHER_OPTIONS, WORK_OPTIONS } from '@/components/dailyReport/dailyRep
 interface DailyReportGeneralInfoProps {
   currentReport: DailyReportEntry;
   updateField: <K extends keyof DailyReportEntry>(key: K, value: DailyReportEntry[K]) => void;
+  onClearDay: () => void;
 }
 
-export function DailyReportGeneralInfo({ currentReport, updateField }: DailyReportGeneralInfoProps) {
+export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay }: DailyReportGeneralInfoProps) {
+  const handleClearDay = () => {
+    if (window.confirm('Limpar completamente o diário deste dia, incluindo equipes, equipamentos e fotos?')) {
+      onClearDay();
+    }
+  };
+
   return (
     <Card>
-      <CardHeader className="pb-3">
+      <CardHeader className="pb-3 flex flex-row items-center justify-between gap-2">
         <CardTitle className="text-sm">Informações do dia</CardTitle>
+        <Button size="sm" variant="ghost" onClick={handleClearDay} className="h-8 text-xs">
+          <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Limpar diário do dia
+        </Button>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
