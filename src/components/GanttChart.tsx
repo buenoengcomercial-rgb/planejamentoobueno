@@ -7,6 +7,7 @@ import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { ChevronDown, ChevronRight, AlertTriangle, Flag } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
+import { GanttDatePickerCalendar } from './gantt/GanttDatePickerCalendar';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
@@ -1205,12 +1206,10 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                             {(() => {
                               const sel = phaseRange.start ? parseISODateLocal(phaseRange.start) : undefined;
                               return (
-                                <Calendar
-                                  mode="single"
-                                  selected={sel}
-                                  defaultMonth={sel}
+                                <GanttDatePickerCalendar
+                                  title="Alterar início do capítulo"
+                                  valueDate={sel}
                                   onSelect={(d) => handleChapterDateChange(phase.id, 'start', d)}
-                                  className={cn("p-3 pointer-events-auto")}
                                 />
                               );
                             })()}
@@ -1226,12 +1225,10 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                             {(() => {
                               const sel = phaseRange.end ? parseISODateLocal(phaseRange.end) : undefined;
                               return (
-                                <Calendar
-                                  mode="single"
-                                  selected={sel}
-                                  defaultMonth={sel}
+                                <GanttDatePickerCalendar
+                                  title="Alterar fim do capítulo"
+                                  valueDate={sel}
                                   onSelect={(d) => handleChapterDateChange(phase.id, 'end', d)}
-                                  className={cn("p-3 pointer-events-auto")}
                                 />
                               );
                             })()}
@@ -1371,12 +1368,10 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                         {(() => {
                                           const sel = parseISODateLocal(task.startDate);
                                           return (
-                                            <Calendar
-                                              mode="single"
-                                              selected={sel}
-                                              defaultMonth={sel}
+                                            <GanttDatePickerCalendar
+                                              title="Alterar início"
+                                              valueDate={sel}
                                               onSelect={(d) => handleDateChange(task.id, 'start', d)}
-                                              className={cn("p-3 pointer-events-auto")}
                                             />
                                           );
                                         })()}
@@ -1435,12 +1430,10 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                         {(() => {
                                           const sel = parseISODateLocal(endDate);
                                           return (
-                                            <Calendar
-                                              mode="single"
-                                              selected={sel}
-                                              defaultMonth={sel}
+                                            <GanttDatePickerCalendar
+                                              title="Alterar fim"
+                                              valueDate={sel}
                                               onSelect={(d) => handleDateChange(task.id, 'end', d)}
-                                              className={cn("p-3 pointer-events-auto")}
                                             />
                                           );
                                         })()}
