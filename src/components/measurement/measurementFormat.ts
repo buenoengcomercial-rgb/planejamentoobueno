@@ -88,18 +88,45 @@ export const isoAddDays = (iso: string, days: number): string => {
 };
 
 /**
+ * Retorna a data de início da obra com base no Cronograma/Gantt.
+ * Prioridade:
+ *  1. Menor `task.startDate` entre tarefas com quantidade contratada ou valor unitário > 0.
+ *  2. Menor `task.startDate` entre todas as tarefas da EAP.
+ *  3. `undefined` se não houver nenhuma tarefa.
+ */
+export function getProjectStartDate(project: Project): string | undefined {
+  const all: string[] = [];
+  const contracted: string[] = [];
+  (project.phases || []).forEach(ph => {
+    (ph.tasks || []).forEach(t => {
+      if (!t.startDate) return;
+      all.push(t.startDate);
+      const qty = Number(t.quantity) || 0;
+      const price = (Number(t.unitPrice) || 0) + (Number(t.unitPriceNoBDI) || 0);
+      if (qty > 0 || price > 0) contracted.push(t.startDate);
+    });
+  });
+  const pool = contracted.length ? contracted : all;
+  if (!pool.length) return undefined;
+  return pool.reduce((min, d) => (d < min ? d : min), pool[0]);
+}
+
+/**
  * Calcula o período sugerido para a próxima medição em preparação.
- * - startDate = (data final da última medição) + 1 dia
- * - endDate   = startDate + 30 dias
- * Sem medições anteriores: startDate = hoje - 30 dias, endDate = hoje.
+ * Ciclo padrão de 30 dias corridos (data inicial + 29 dias).
+ * - Sem medições anteriores: usa o início da obra (Gantt) se informado;
+ *   caso contrário, faz fallback para `monthAgo` (hoje - 30 dias).
+ * - Com medições anteriores: startDate = (data final da última) + 1 dia.
  */
 export function suggestPeriodForNext(
   measurements: Array<{ number: number; endDate: string }>,
   today: string,
   monthAgo: string,
+  projectStart?: string,
 ): { startDate: string; endDate: string } {
   if (!measurements.length) {
-    return { startDate: monthAgo, endDate: today };
+    const start = projectStart || monthAgo;
+    return { startDate: start, endDate: isoAddDays(start, 29) };
   }
   // Última pelo maior nº; em empate, pela data final mais recente
   const last = [...measurements].sort((a, b) => {
@@ -107,6 +134,6 @@ export function suggestPeriodForNext(
     return a.endDate.localeCompare(b.endDate);
   })[measurements.length - 1];
   const start = isoAddDays(last.endDate, 1);
-  const end = isoAddDays(start, 30);
+  const end = isoAddDays(start, 29);
   return { startDate: start, endDate: end };
 }
