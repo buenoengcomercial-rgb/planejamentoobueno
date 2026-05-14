@@ -97,6 +97,9 @@ export function useMeasurementRows({
     return m;
   }, [project.phases]);
 
+  // Calendário de trabalho (sábado conta meio dia ou não) — mesma fonte do Gantt
+  const trabalhaSabado = useMemo(() => loadObraConfig().trabalhaSabado, []);
+
   // ───────── Cálculo das linhas ─────────
   const rows: Row[] = useMemo(() => {
     if (isSnapshotMode && activeMeasurement) {
