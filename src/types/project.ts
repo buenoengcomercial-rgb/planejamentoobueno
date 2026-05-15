@@ -475,6 +475,10 @@ export interface AdditiveComposition {
   calculationMemory?: AdditiveCalculationMemoryRow[];
   /** Nomes personalizados das colunas dimensionais da memória de cálculo (por composição). */
   calculationMemoryColumns?: AdditiveCalculationMemoryColumns;
+  /** Tarefa criada/atualizada quando o aditivo foi integrado ao projeto. */
+  linkedTaskId?: string;
+  /** Carimbo de quando esta composição foi integrada ao projeto. */
+  integratedAt?: string;
 }
 
 /** Linha da memória de cálculo (Arquimedes-like) de uma composição do aditivo. */
