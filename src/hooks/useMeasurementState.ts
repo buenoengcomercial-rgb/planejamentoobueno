@@ -29,44 +29,49 @@ export function useMeasurementState({ project, onProjectChange }: UseMeasurement
 
   const contract: ContractInfo = project.contractInfo || {};
 
-  const activeIdStorageKey = `obraplanner-measurement-active-${project.id}`;
-  const isValidActiveId = (id: string | null): id is string => {
-    if (!id) return false;
-    if (id === 'live') return true;
-    return (project.measurements || []).some(m => m.id === id);
-  };
+  const getMeasurementActiveStorageKey = (projectId: string) =>
+    `obraplanner-measurement-active-${projectId}`;
+  const activeIdStorageKey = getMeasurementActiveStorageKey(project.id);
+
+  // Inicializa otimisticamente com o valor salvo (sem validar contra measurements ainda),
+  // pois no primeiro render a lista pode estar vazia/desatualizada.
   const [activeId, setActiveIdState] = useState<string>(() => {
     try {
-      const saved = localStorage.getItem(activeIdStorageKey);
-      if (isValidActiveId(saved)) return saved;
-    } catch {}
-    return 'live';
+      return localStorage.getItem(activeIdStorageKey) || 'live';
+    } catch {
+      return 'live';
+    }
   });
   const setActiveId = (id: string) => {
     setActiveIdState(id);
     try { localStorage.setItem(activeIdStorageKey, id); } catch {}
   };
-  // Ao trocar de projeto, restaura seleção salva (ou 'live')
+
+  // Reconciliação: roda quando troca de projeto OU quando a lista de medições muda.
+  // Só volta para 'live' se a lista já carregou e o id salvo realmente não existe.
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(`obraplanner-measurement-active-${project.id}`);
-      const valid = saved && (saved === 'live' || (project.measurements || []).some(m => m.id === saved));
-      setActiveIdState(valid ? saved! : 'live');
-    } catch {
+    let saved: string | null = null;
+    try { saved = localStorage.getItem(getMeasurementActiveStorageKey(project.id)); } catch {}
+    const list = project.measurements || [];
+
+    if (!saved || saved === 'live') {
       setActiveIdState('live');
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id]);
-  // Se a medição salva foi excluída, volta para 'live'
-  useEffect(() => {
-    if (activeId === 'live') return;
-    const exists = (project.measurements || []).some(m => m.id === activeId);
-    if (!exists) {
-      setActiveIdState('live');
-      try { localStorage.setItem(activeIdStorageKey, 'live'); } catch {}
+    if (list.some(m => m.id === saved)) {
+      setActiveIdState(saved);
+      return;
     }
+    // Lista ainda não carregou — preserva escolha salva, não força 'live'.
+    if (list.length === 0) {
+      setActiveIdState(saved);
+      return;
+    }
+    // Lista carregada e id salvo não existe mais → volta para 'live'.
+    setActiveIdState('live');
+    try { localStorage.setItem(getMeasurementActiveStorageKey(project.id), 'live'); } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.measurements, activeId]);
+  }, [project.id, project.measurements]);
   const [historyOpen, setHistoryOpen] = useState(false);
 
   // Número da próxima medição em preparação (default)
