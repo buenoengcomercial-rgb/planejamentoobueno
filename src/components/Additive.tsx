@@ -55,6 +55,7 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
   } = state;
 
   const totals = useMemo(() => (active ? additiveTotals(active, project) : null), [active, project]);
+  const [contractConfirmOpen, setContractConfirmOpen] = useState(false);
 
   const openReview = (preset: 'approve' | 'reject') => {
     if (preset === 'approve') {
