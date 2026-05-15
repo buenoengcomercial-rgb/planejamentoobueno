@@ -149,11 +149,11 @@ export default function AdditiveHeader({
             onClick={onContract}
             disabled={!!active.isContracted}
             title={active.isContracted
-              ? 'Aditivo já contratado — novos serviços integrados ao projeto.'
-              : 'Marca o aditivo como contratado e integra os novos serviços à EAP/Medição.'}
+              ? 'Aditivo já integrado — composições vinculadas a Tarefas, Cronograma, Medição e Diário.'
+              : 'Integra o aditivo ao projeto: cria/atualiza tarefas e quantidades contratuais.'}
           >
             <CheckCircle2 className="w-4 h-4 mr-1" />
-            {active.isContracted ? 'Aditivo Contratado' : 'Marcar como Contratado'}
+            {active.isContracted ? 'Integrado ao projeto' : 'Integrar ao Projeto'}
           </Button>
         )}
         <DropdownMenu>
