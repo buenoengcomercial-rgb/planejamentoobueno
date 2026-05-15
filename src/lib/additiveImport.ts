@@ -1850,7 +1850,7 @@ export function createNewServiceComposition(
  *  - operação idempotente: id determinístico para tarefas novas e chave
  *    `(additiveId, version)` para impedir reaplicação do delta.
  */
-export function contractAdditive(project: Project, additiveId: string): Project {
+export function contractAdditive(project: Project, additiveId: string, user?: string): Project {
   const add = (project.additives ?? []).find(a => a.id === additiveId);
   if (!add) return project;
   const bdi = add.bdiPercent ?? 0;
@@ -1888,15 +1888,24 @@ export function contractAdditive(project: Project, additiveId: string): Project 
       const previousQuantity = task.quantity ?? 0;
       const delta = added - suppressed;
       const newQuantity = Math.max(0, _trunc2(previousQuantity + delta));
+      const previousUnit = task.unitPrice ?? 0;
+      const previousTotal = truncar2(previousUnit * previousQuantity);
+      const newTotal = truncar2(previousUnit * newQuantity);
       const entry = {
         additiveId: add.id,
         additiveName: add.name,
         version,
         at: now,
+        kind: (added >= suppressed ? 'acrescimo' : 'supressao') as 'acrescimo' | 'supressao',
         addedQuantity: added,
         suppressedQuantity: suppressed,
         previousQuantity,
         newQuantity,
+        previousUnitPriceWithBDI: previousUnit,
+        newUnitPriceWithBDI: previousUnit,
+        previousTotalWithBDI: previousTotal,
+        newTotalWithBDI: newTotal,
+        user,
       };
       mutated = true;
       linkedTaskByCompId.set(ajuste.id, task.id);
@@ -1920,6 +1929,7 @@ export function contractAdditive(project: Project, additiveId: string): Project 
       const baseUnitNoBDI = money2(referenceUnit * (1 - discount / 100));
       const upWithBDI = truncar2(baseUnitNoBDI * fator);
       const qty = n.addedQuantity ?? 0;
+      const totalWithBDI = truncar2(upWithBDI * qty);
       newTasks.push({
         id: taskId,
         name: n.description || 'Novo serviço (Aditivo)',
@@ -1943,6 +1953,22 @@ export function contractAdditive(project: Project, additiveId: string): Project 
         originAdditiveId: add.id,
         originAdditiveName: add.name,
         originAdditiveVersion: version,
+        additiveHistory: [{
+          additiveId: add.id,
+          additiveName: add.name,
+          version,
+          at: now,
+          kind: 'novo',
+          addedQuantity: qty,
+          suppressedQuantity: 0,
+          previousQuantity: 0,
+          newQuantity: qty,
+          previousUnitPriceWithBDI: 0,
+          newUnitPriceWithBDI: upWithBDI,
+          previousTotalWithBDI: 0,
+          newTotalWithBDI: totalWithBDI,
+          user,
+        }],
       } as Task);
       mutated = true;
     }
