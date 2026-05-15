@@ -32,7 +32,27 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
   const projectTeams: TeamDefinition[] = project.teams ?? DEFAULT_TEAMS;
   // Helper local que sempre busca a definição na lista do projeto.
   const teamDef = useCallback((code?: TeamCode) => getTeamDefinition(code, projectTeams), [projectTeams]);
-  const [viewMode, setViewMode] = useState<ViewMode>('weeks');
+  const viewModeStorageKey = `obraplanner-gantt-viewmode-${project.id}`;
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    try {
+      const saved = localStorage.getItem(viewModeStorageKey);
+      if (saved === 'days' || saved === 'weeks' || saved === 'months') return saved;
+    } catch {}
+    return 'weeks';
+  });
+  // Recarrega ao trocar de projeto
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`obraplanner-gantt-viewmode-${project.id}`);
+      if (saved === 'days' || saved === 'weeks' || saved === 'months') setViewMode(saved);
+      else setViewMode('weeks');
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+  // Persiste a cada mudança
+  useEffect(() => {
+    try { localStorage.setItem(viewModeStorageKey, viewMode); } catch {}
+  }, [viewMode, viewModeStorageKey]);
   // Estado de capítulos minimizados — inicializa com a persistência do projeto.
   const [collapsedPhases, setCollapsedPhases] = useState<Set<string>>(
     () => new Set(project.uiState?.ganttCollapsedPhaseIds ?? [])
