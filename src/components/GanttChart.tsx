@@ -32,7 +32,27 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
   const projectTeams: TeamDefinition[] = project.teams ?? DEFAULT_TEAMS;
   // Helper local que sempre busca a definição na lista do projeto.
   const teamDef = useCallback((code?: TeamCode) => getTeamDefinition(code, projectTeams), [projectTeams]);
-  const [viewMode, setViewMode] = useState<ViewMode>('weeks');
+  const viewModeStorageKey = `obraplanner-gantt-viewmode-${project.id}`;
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    try {
+      const saved = localStorage.getItem(viewModeStorageKey);
+      if (saved === 'days' || saved === 'weeks' || saved === 'months') return saved;
+    } catch {}
+    return 'weeks';
+  });
+  // Recarrega ao trocar de projeto
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`obraplanner-gantt-viewmode-${project.id}`);
+      if (saved === 'days' || saved === 'weeks' || saved === 'months') setViewMode(saved);
+      else setViewMode('weeks');
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+  // Persiste a cada mudança
+  useEffect(() => {
+    try { localStorage.setItem(viewModeStorageKey, viewMode); } catch {}
+  }, [viewMode, viewModeStorageKey]);
   // Estado de capítulos minimizados — inicializa com a persistência do projeto.
   const [collapsedPhases, setCollapsedPhases] = useState<Set<string>>(
     () => new Set(project.uiState?.ganttCollapsedPhaseIds ?? [])
@@ -1175,7 +1195,10 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                       const depth = Math.min(phaseDepth.get(phase.id) ?? 0, 3);
                       const headerBgClass = isMainChapter ? 'bg-muted/50' : 'bg-muted/30';
                       return (
-                    <div className={`border-b border-border ${headerBgClass} transition-colors duration-200 ease-out hover:bg-muted/70`}>
+                    <div
+                      className={`border-b border-border ${headerBgClass} transition-colors duration-200 ease-out hover:bg-muted/70 overflow-hidden`}
+                      style={{ height: ROW_HEIGHT + 20 }}
+                    >
                       <button
                         onClick={() => togglePhase(phase.id)}
                         className="w-full flex items-center gap-1.5 px-2 transition-colors duration-200 ease-out focus:outline-none focus-visible:ring-1 focus-visible:ring-foreground/30 rounded-sm"
@@ -1203,7 +1226,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                         <span className="text-[9px] ml-auto text-muted-foreground">{phase.tasks.length}</span>
                       </button>
                       {/* Chapter dates row */}
-                      <div className="flex items-center gap-2 px-2 pb-1 text-[9px]">
+                      <div className="flex items-center gap-2 px-2 text-[9px] overflow-hidden" style={{ height: 20 }}>
                         <Popover>
                           <PopoverTrigger asChild>
                             <button className="text-muted-foreground hover:text-primary transition-colors">

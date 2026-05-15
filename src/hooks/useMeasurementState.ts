@@ -29,7 +29,44 @@ export function useMeasurementState({ project, onProjectChange }: UseMeasurement
 
   const contract: ContractInfo = project.contractInfo || {};
 
-  const [activeId, setActiveId] = useState<string>('live');
+  const activeIdStorageKey = `obraplanner-measurement-active-${project.id}`;
+  const isValidActiveId = (id: string | null): id is string => {
+    if (!id) return false;
+    if (id === 'live') return true;
+    return (project.measurements || []).some(m => m.id === id);
+  };
+  const [activeId, setActiveIdState] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(activeIdStorageKey);
+      if (isValidActiveId(saved)) return saved;
+    } catch {}
+    return 'live';
+  });
+  const setActiveId = (id: string) => {
+    setActiveIdState(id);
+    try { localStorage.setItem(activeIdStorageKey, id); } catch {}
+  };
+  // Ao trocar de projeto, restaura seleção salva (ou 'live')
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`obraplanner-measurement-active-${project.id}`);
+      const valid = saved && (saved === 'live' || (project.measurements || []).some(m => m.id === saved));
+      setActiveIdState(valid ? saved! : 'live');
+    } catch {
+      setActiveIdState('live');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+  // Se a medição salva foi excluída, volta para 'live'
+  useEffect(() => {
+    if (activeId === 'live') return;
+    const exists = (project.measurements || []).some(m => m.id === activeId);
+    if (!exists) {
+      setActiveIdState('live');
+      try { localStorage.setItem(activeIdStorageKey, 'live'); } catch {}
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.measurements, activeId]);
   const [historyOpen, setHistoryOpen] = useState(false);
 
   // Número da próxima medição em preparação (default)
