@@ -1842,8 +1842,13 @@ export function createNewServiceComposition(
 }
 
 /**
- * Marca o aditivo como contratado e cria as tarefas dos novos serviços na EAP,
- * dentro dos respectivos capítulos/subcapítulos. Retorna o projeto atualizado.
+ * Integra o aditivo ao projeto:
+ *  - novos serviços viram tarefas reais na EAP no capítulo correto;
+ *  - composições existentes têm a quantidade contratual da Tarefa e do BudgetItem
+ *    sintético atualizadas (acréscimo/supressão), preservando histórico em
+ *    `task.additiveHistory`;
+ *  - operação idempotente: id determinístico para tarefas novas e chave
+ *    `(additiveId, version)` para impedir reaplicação do delta.
  */
 export function contractAdditive(project: Project, additiveId: string): Project {
   const add = (project.additives ?? []).find(a => a.id === additiveId);
@@ -1851,21 +1856,71 @@ export function contractAdditive(project: Project, additiveId: string): Project 
   const bdi = add.bdiPercent ?? 0;
   const discount = add.globalDiscountPercent ?? 0;
   const fator = 1 + bdi / 100;
+  const version = add.version ?? 0;
+  const now = new Date().toISOString();
 
-  // Indexa novos serviços por phaseId
   const novos = add.compositions.filter(c => c.isNewService);
+  const ajustes = add.compositions.filter(c => !c.isNewService && (
+    (c.addedQuantity ?? 0) > 0 ||
+    (c.suppressedQuantity ?? 0) > 0 ||
+    c.changeKind === 'acrescido' || c.changeKind === 'suprimido'
+  ));
 
-  // Cria tarefas na EAP para cada novo serviço, dentro do phaseId correspondente.
+  // Composition.id → linkedTaskId (preenchido durante o processamento)
+  const linkedTaskByCompId = new Map<string, string>();
+
+  // Aplica ajustes em tarefas existentes + cria novas tarefas em uma única passagem.
   const phases = project.phases.map(phase => {
+    let mutated = false;
+    const updatedTasks: Task[] = phase.tasks.map(task => {
+      const ajuste = ajustes.find(a => a.taskId === task.id);
+      if (!ajuste) return task;
+      // Idempotência: se já há entrada deste aditivo+versão, não reaplica
+      const already = (task.additiveHistory ?? []).some(
+        h => h.additiveId === add.id && h.version === version,
+      );
+      if (already) {
+        linkedTaskByCompId.set(ajuste.id, task.id);
+        return task;
+      }
+      const added = ajuste.addedQuantity ?? 0;
+      const suppressed = ajuste.suppressedQuantity ?? 0;
+      const previousQuantity = task.quantity ?? 0;
+      const delta = added - suppressed;
+      const newQuantity = Math.max(0, _trunc2(previousQuantity + delta));
+      const entry = {
+        additiveId: add.id,
+        additiveName: add.name,
+        version,
+        at: now,
+        addedQuantity: added,
+        suppressedQuantity: suppressed,
+        previousQuantity,
+        newQuantity,
+      };
+      mutated = true;
+      linkedTaskByCompId.set(ajuste.id, task.id);
+      return {
+        ...task,
+        quantity: newQuantity,
+        suppressedByAdditive: newQuantity === 0 ? true : task.suppressedByAdditive,
+        additiveHistory: [...(task.additiveHistory ?? []), entry],
+      };
+    });
+
+    // Anexa novos serviços desta phase (idempotente por id determinístico)
     const novosDaFase = novos.filter(n => n.phaseId === phase.id);
-    if (novosDaFase.length === 0) return phase;
-    const newTasks: Task[] = novosDaFase.map(n => {
+    const existingIds = new Set(updatedTasks.map(t => t.id));
+    const newTasks: Task[] = [];
+    for (const n of novosDaFase) {
+      const taskId = `add-${add.id}-${n.id}`;
+      linkedTaskByCompId.set(n.id, taskId);
+      if (existingIds.has(taskId)) continue; // já criada antes
       const referenceUnit = referenceUnitNoBDIForNewService(n);
       const baseUnitNoBDI = money2(referenceUnit * (1 - discount / 100));
       const upWithBDI = truncar2(baseUnitNoBDI * fator);
       const qty = n.addedQuantity ?? 0;
-      const taskId = `add-${add.id}-${n.id}`;
-      return {
+      newTasks.push({
         id: taskId,
         name: n.description || 'Novo serviço (Aditivo)',
         phase: phase.id,
@@ -1885,22 +1940,58 @@ export function contractAdditive(project: Project, additiveId: string): Project 
         durationMode: 'manual',
         isManual: true,
         manualDuration: 1,
-      } as Task;
+        originAdditiveId: add.id,
+        originAdditiveName: add.name,
+        originAdditiveVersion: version,
+      } as Task);
+      mutated = true;
+    }
+    if (!mutated) return phase;
+    return { ...phase, tasks: [...updatedTasks, ...newTasks] };
+  });
+
+  // Atualiza BudgetItems sintéticos para refletir nova quantidade contratual
+  // de composições existentes (acréscimo/supressão). Não cria itens duplicados.
+  const synthByTask = new Map<string, BudgetItem>();
+  (project.budgetItems ?? []).forEach(b => {
+    if (b.source === 'sintetica' && b.taskId) synthByTask.set(b.taskId, b);
+  });
+  const adjustedSynth = new Map<string, BudgetItem>(); // por id
+  for (const ajuste of ajustes) {
+    if (!ajuste.taskId) continue;
+    // Se essa versão já foi aplicada à task, não tocar no budget também
+    const targetTask = phases.flatMap(p => p.tasks).find(t => t.id === ajuste.taskId);
+    if (!targetTask) continue;
+    const bi = synthByTask.get(ajuste.taskId);
+    if (!bi) continue;
+    const newQty = targetTask.quantity ?? 0;
+    if (bi.quantity === newQty) continue;
+    adjustedSynth.set(bi.id, {
+      ...bi,
+      quantity: newQty,
+      totalNoBDI: truncar2(bi.unitPriceNoBDI * newQty),
+      totalWithBDI: truncar2(bi.unitPriceWithBDI * newQty),
     });
-    return { ...phase, tasks: [...phase.tasks, ...newTasks] };
+  }
+
+  const updatedCompositions = add.compositions.map(c => {
+    const linked = linkedTaskByCompId.get(c.id);
+    if (!linked) return c;
+    return { ...c, linkedTaskId: linked, integratedAt: c.integratedAt ?? now };
   });
 
   const updatedAdditive: Additive = {
     ...add,
+    compositions: updatedCompositions,
     status: 'aditivo_contratado',
     isContracted: true,
-    contractedAt: new Date().toISOString(),
+    contractedAt: add.contractedAt ?? now,
   };
   const nextAdditives = (project.additives ?? []).map(a => a.id === add.id ? updatedAdditive : a);
 
-  // Recalcula budgetItems source 'aditivo' considerando o aditivo contratado
   const projWithChange: Project = { ...project, phases, additives: nextAdditives };
   const approvedBudget = getApprovedAdditiveBudgetItems(projWithChange);
-  const keep = (project.budgetItems ?? []).filter(b => b.source !== 'aditivo');
-  return { ...projWithChange, budgetItems: [...keep, ...approvedBudget] };
+  const keepBase = (project.budgetItems ?? []).filter(b => b.source !== 'aditivo');
+  const mergedBase = keepBase.map(b => adjustedSynth.get(b.id) ?? b);
+  return { ...projWithChange, budgetItems: [...mergedBase, ...approvedBudget] };
 }
