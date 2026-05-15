@@ -772,7 +772,7 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
     }
     const novosServicos = active.compositions.filter(c => c.isNewService);
     onProjectChange(prev => {
-      const next = contractAdditive(prev, active.id, auditUser?.name || auditUser?.email);
+      const next = contractAdditive(prev, active.id, auditUser?.userName || auditUser?.userEmail);
       return logToProject(next, {
         ...auditUser,
         entityType: 'additive',
