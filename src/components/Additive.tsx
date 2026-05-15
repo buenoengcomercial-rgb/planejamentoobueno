@@ -80,7 +80,7 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
         onChangeGlobalDiscount={actions.handleChangeGlobalDiscount}
         onFileSelected={actions.handleFileSelected}
         onUseSynthetic={actions.handleUseSyntheticFromMeasurement}
-        onContract={actions.handleContractAdditive}
+        onContract={() => setContractConfirmOpen(true)}
         onExportExcel={actions.handleExportExcel}
         onExportSyntheticComplete={actions.handleExportSyntheticCompleteExcel}
         onExportNewServices={actions.handleExportNewServicesExcel}
