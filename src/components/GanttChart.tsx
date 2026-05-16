@@ -1353,6 +1353,14 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                 {hasViolation && <AlertTriangle className="w-3 h-3 flex-shrink-0" style={{ color: 'hsl(0, 75%, 38%)', filter: 'drop-shadow(0 0 1px white)' }} />}
                                 {noWorkDays && <AlertTriangle className="w-3 h-3 flex-shrink-0" style={{ color: '#b45309', filter: 'drop-shadow(0 0 1px white)' }} />}
                                 <p className={`text-[11px] font-medium line-clamp-2 break-words leading-tight ${rowTeamDef ? '' : 'text-foreground'}`}>{task.name}</p>
+                                <AdditiveBadge
+                                  originAdditiveId={task.originAdditiveId}
+                                  originAdditiveName={task.originAdditiveName}
+                                  originAdditiveVersion={task.originAdditiveVersion}
+                                  additiveHistory={task.additiveHistory}
+                                  suppressedByAdditive={task.suppressedByAdditive}
+                                  className="ml-1 flex-shrink-0"
+                                />
                               </div>
                               
                               <div className="flex flex-col gap-0.5">
