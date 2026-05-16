@@ -429,8 +429,8 @@ export interface ComparisonItem {
   chosenSupplierId?: string;
   prices: ComparisonItemPrice[];
   status?: ComparisonItemStatus;
-  /** Origem (composição, tarefa, aditivo, manual). */
-  sourceType?: 'manual' | 'task' | 'composition' | 'additive';
+  /** Origem (insumo analítico, material de tarefa, insumo de aditivo, manual). */
+  sourceType?: 'manual' | 'task_material' | 'analytic_input' | 'additive_input';
   sourceId?: string;
 }
 

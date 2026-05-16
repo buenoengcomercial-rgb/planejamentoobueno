@@ -4,7 +4,8 @@ import * as MC from '@/lib/materialComparisons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Plus, Sparkles, Trash2 } from 'lucide-react';
+import { Plus, Sparkles, Trash2, AlertTriangle } from 'lucide-react';
+import { parseBR, NumberInput } from './numberInput';
 
 interface Props {
   project: Project;
@@ -15,26 +16,28 @@ interface Props {
 export default function MaterialsListTab({ project, comparison, onApply }: Props) {
   const [showSuggest, setShowSuggest] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Record<string, boolean>>({});
-  const [manual, setManual] = useState({ description: '', unit: 'un', quantity: 1, referencePrice: '', code: '' });
+  const [manual, setManual] = useState({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '' });
 
   const suggestions = useMemo(() => MC.suggestMaterialsFromProject(project), [project]);
+  const realSuggestions = suggestions.filter(s => !s.warning);
+  const warnings = suggestions.filter(s => s.warning);
 
   const addManual = () => {
     if (!manual.description.trim()) return;
     const next = MC.addItem(comparison, {
       description: manual.description.trim(),
       unit: manual.unit || 'un',
-      quantity: Number(manual.quantity) || 0,
-      referencePrice: manual.referencePrice ? Number(manual.referencePrice) : undefined,
+      quantity: parseBR(manual.quantity) ?? 0,
+      referencePrice: parseBR(manual.referencePrice),
       code: manual.code || undefined,
       sourceType: 'manual',
     });
     onApply(next);
-    setManual({ description: '', unit: 'un', quantity: 1, referencePrice: '', code: '' });
+    setManual({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '' });
   };
 
   const importSelected = () => {
-    const picked = suggestions.filter(s => selectedKeys[s.key]);
+    const picked = realSuggestions.filter(s => selectedKeys[s.key]);
     if (picked.length === 0) return;
     const next = MC.addItemsBulk(
       comparison,
@@ -54,6 +57,11 @@ export default function MaterialsListTab({ project, comparison, onApply }: Props
     setShowSuggest(false);
   };
 
+  const sourceLabel = (s: MC.MaterialSuggestionSource) =>
+    s === 'task_material' ? 'Material de tarefa'
+    : s === 'additive_input' ? 'Insumo de aditivo'
+    : 'Insumo analítico';
+
   return (
     <div className="space-y-4">
       {/* Add manual */}
@@ -69,13 +77,21 @@ export default function MaterialsListTab({ project, comparison, onApply }: Props
           <Input className="col-span-2" placeholder="Código" value={manual.code} onChange={e => setManual({ ...manual, code: e.target.value })} />
           <Input className="col-span-5" placeholder="Descrição" value={manual.description} onChange={e => setManual({ ...manual, description: e.target.value })} />
           <Input className="col-span-1" placeholder="Un." value={manual.unit} onChange={e => setManual({ ...manual, unit: e.target.value })} />
-          <Input className="col-span-1" type="number" placeholder="Qtd." value={manual.quantity} onChange={e => setManual({ ...manual, quantity: Number(e.target.value) })} />
-          <Input className="col-span-2" type="number" placeholder="Preço ref." value={manual.referencePrice} onChange={e => setManual({ ...manual, referencePrice: e.target.value })} />
+          <NumberInput className="col-span-1" placeholder="Qtd." value={manual.quantity} onChange={v => setManual({ ...manual, quantity: v })} />
+          <NumberInput className="col-span-2" placeholder="Preço ref." value={manual.referencePrice} onChange={v => setManual({ ...manual, referencePrice: v })} />
           <Button className="col-span-1" onClick={addManual}><Plus className="w-4 h-4" /></Button>
         </div>
 
         {showSuggest && (
           <div className="border border-border rounded-lg max-h-80 overflow-auto mt-2">
+            {warnings.length > 0 && (
+              <div className="px-3 py-2 bg-warning/10 border-b border-border text-[11px] text-warning-foreground flex items-start gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                <div>
+                  <strong>{warnings.length}</strong> composição(ões) sem analítico vinculado foram ignoradas (composições sintéticas não viram material de compra).
+                </div>
+              </div>
+            )}
             <table className="w-full text-xs">
               <thead className="bg-muted sticky top-0">
                 <tr>
@@ -88,19 +104,19 @@ export default function MaterialsListTab({ project, comparison, onApply }: Props
                 </tr>
               </thead>
               <tbody>
-                {suggestions.length === 0 && (
-                  <tr><td colSpan={6} className="p-4 text-center text-muted-foreground">Sem materiais identificados nas tarefas/composições.</td></tr>
+                {realSuggestions.length === 0 && (
+                  <tr><td colSpan={6} className="p-4 text-center text-muted-foreground">Sem insumos analíticos identificados nas tarefas ou em aditivos contratados.</td></tr>
                 )}
-                {suggestions.map(s => (
+                {realSuggestions.map(s => (
                   <tr key={s.key} className="border-t border-border hover:bg-muted/30">
                     <td className="p-2">
                       <Checkbox checked={!!selectedKeys[s.key]} onCheckedChange={v => setSelectedKeys(prev => ({ ...prev, [s.key]: !!v }))} />
                     </td>
                     <td className="p-2">{s.description}</td>
-                    <td className="p-2 text-center text-[10px] text-muted-foreground">{s.sourceType}</td>
+                    <td className="p-2 text-center text-[10px] text-muted-foreground">{sourceLabel(s.sourceType)}</td>
                     <td className="p-2 text-center">{s.unit}</td>
-                    <td className="p-2 text-right">{s.quantity.toLocaleString('pt-BR')}</td>
-                    <td className="p-2 text-right">{s.referencePrice ? `R$ ${s.referencePrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '—'}</td>
+                    <td className="p-2 text-right">{s.quantity.toLocaleString('pt-BR', { maximumFractionDigits: 4 })}</td>
+                    <td className="p-2 text-right">{s.referencePrice ? `R$ ${s.referencePrice.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -146,11 +162,19 @@ export default function MaterialsListTab({ project, comparison, onApply }: Props
                   <td className="p-2 w-16">
                     <Input value={it.unit} onChange={e => onApply(MC.updateItem(comparison, it.id, { unit: e.target.value }))} className="h-7 text-xs" />
                   </td>
-                  <td className="p-2 w-20">
-                    <Input type="number" value={it.quantity} onChange={e => onApply(MC.updateItem(comparison, it.id, { quantity: Number(e.target.value) }))} className="h-7 text-xs text-right" />
+                  <td className="p-2 w-24">
+                    <NumberInput
+                      value={String(it.quantity ?? '')}
+                      onChange={v => onApply(MC.updateItem(comparison, it.id, { quantity: parseBR(v) ?? 0 }))}
+                      className="h-7 text-xs text-right"
+                    />
                   </td>
                   <td className="p-2 w-28">
-                    <Input type="number" value={it.referencePrice ?? ''} onChange={e => onApply(MC.updateItem(comparison, it.id, { referencePrice: e.target.value === '' ? undefined : Number(e.target.value) }))} className="h-7 text-xs text-right" />
+                    <NumberInput
+                      value={it.referencePrice != null ? String(it.referencePrice) : ''}
+                      onChange={v => onApply(MC.updateItem(comparison, it.id, { referencePrice: parseBR(v) }))}
+                      className="h-7 text-xs text-right"
+                    />
                   </td>
                   <td className="p-2 text-center">
                     <select
@@ -164,7 +188,16 @@ export default function MaterialsListTab({ project, comparison, onApply }: Props
                     </select>
                   </td>
                   <td className="p-2 text-right">
-                    <Button size="sm" variant="ghost" className="text-destructive h-7" onClick={() => onApply(MC.removeItem(comparison, it.id))}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-destructive h-7"
+                      onClick={() => {
+                        if (confirm(`Remover o item "${it.description}" do comparativo?`)) {
+                          onApply(MC.removeItem(comparison, it.id));
+                        }
+                      }}
+                    >
                       <Trash2 className="w-3.5 h-3.5" />
                     </Button>
                   </td>

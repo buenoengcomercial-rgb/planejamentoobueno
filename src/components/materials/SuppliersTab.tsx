@@ -4,6 +4,7 @@ import * as MC from '@/lib/materialComparisons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Plus, Trash2, Star } from 'lucide-react';
+import { NumberInput, parseBR } from './numberInput';
 
 interface Props {
   comparison: MaterialComparison;
@@ -18,8 +19,8 @@ export default function SuppliersTab({ comparison, onApply }: Props) {
     onApply(MC.addSupplier(comparison, {
       name: form.name.trim(),
       contact: form.contact || undefined,
-      deliveryDays: form.deliveryDays ? Number(form.deliveryDays) : undefined,
-      rating: form.rating ? Number(form.rating) : undefined,
+      deliveryDays: parseBR(form.deliveryDays),
+      rating: parseBR(form.rating),
     }));
     setForm({ name: '', contact: '', deliveryDays: '', rating: '' });
   };
@@ -31,8 +32,8 @@ export default function SuppliersTab({ comparison, onApply }: Props) {
         <div className="grid grid-cols-12 gap-2">
           <Input className="col-span-4" placeholder="Nome" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
           <Input className="col-span-4" placeholder="Contato (telefone/e-mail)" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} />
-          <Input className="col-span-2" type="number" placeholder="Prazo (dias)" value={form.deliveryDays} onChange={e => setForm({ ...form, deliveryDays: e.target.value })} />
-          <Input className="col-span-1" type="number" min={0} max={5} placeholder="0-5" value={form.rating} onChange={e => setForm({ ...form, rating: e.target.value })} />
+          <NumberInput className="col-span-2" placeholder="Prazo (dias)" decimal={false} value={form.deliveryDays} onChange={v => setForm({ ...form, deliveryDays: v })} />
+          <NumberInput className="col-span-1" placeholder="0-5" value={form.rating} onChange={v => setForm({ ...form, rating: v })} />
           <Button className="col-span-1" onClick={add}><Plus className="w-4 h-4" /></Button>
         </div>
       </div>
@@ -59,15 +60,35 @@ export default function SuppliersTab({ comparison, onApply }: Props) {
                 <tr key={s.id} className="border-t border-border hover:bg-muted/20">
                   <td className="p-2"><Input value={s.name} onChange={e => onApply(MC.updateSupplier(comparison, s.id, { name: e.target.value }))} className="h-7 text-xs" /></td>
                   <td className="p-2"><Input value={s.contact ?? ''} onChange={e => onApply(MC.updateSupplier(comparison, s.id, { contact: e.target.value }))} className="h-7 text-xs" /></td>
-                  <td className="p-2 w-24"><Input type="number" value={s.deliveryDays ?? ''} onChange={e => onApply(MC.updateSupplier(comparison, s.id, { deliveryDays: e.target.value === '' ? undefined : Number(e.target.value) }))} className="h-7 text-xs text-center" /></td>
+                  <td className="p-2 w-24">
+                    <NumberInput
+                      decimal={false}
+                      value={s.deliveryDays != null ? String(s.deliveryDays) : ''}
+                      onChange={v => onApply(MC.updateSupplier(comparison, s.id, { deliveryDays: parseBR(v) }))}
+                      className="h-7 text-xs text-center"
+                    />
+                  </td>
                   <td className="p-2 w-24 text-center">
                     <div className="inline-flex items-center gap-1">
                       <Star className="w-3 h-3 text-warning" />
-                      <Input type="number" min={0} max={5} value={s.rating ?? ''} onChange={e => onApply(MC.updateSupplier(comparison, s.id, { rating: e.target.value === '' ? undefined : Number(e.target.value) }))} className="h-7 text-xs text-center w-16" />
+                      <NumberInput
+                        value={s.rating != null ? String(s.rating) : ''}
+                        onChange={v => onApply(MC.updateSupplier(comparison, s.id, { rating: parseBR(v) }))}
+                        className="h-7 text-xs text-center w-16"
+                      />
                     </div>
                   </td>
                   <td className="p-2 text-right">
-                    <Button size="sm" variant="ghost" className="text-destructive h-7" onClick={() => onApply(MC.removeSupplier(comparison, s.id))}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-destructive h-7"
+                      onClick={() => {
+                        if (confirm(`Remover o fornecedor "${s.name}"? Os preços lançados por ele também serão removidos.`)) {
+                          onApply(MC.removeSupplier(comparison, s.id));
+                        }
+                      }}
+                    >
                       <Trash2 className="w-3.5 h-3.5" />
                     </Button>
                   </td>
