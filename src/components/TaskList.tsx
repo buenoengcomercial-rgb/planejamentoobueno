@@ -15,6 +15,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { getChapterTree, getChapterNumbering, moveChapter, getChapterTasks, safeMoveChapter, reorderChapter, reorderChapterByNumber } from '@/lib/chapters';
 import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
+import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
 
 /** Encurta o nome da tarefa para no máximo `maxWords` palavras, adicionando "…" no final. */
 function truncateWords(text: string, maxWords = 4): string {
@@ -998,23 +999,15 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                     </TooltipContent>
                                   </Tooltip>
                                 )}
-                                {(task.originAdditiveId || (task.additiveHistory?.length ?? 0) > 0) && (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-primary/15 text-primary border border-primary/30 font-medium whitespace-nowrap">
-                                        {task.originAdditiveId ? `Aditivo · ${task.originAdditiveName ?? ''}` : `Aditivo (Δ)`}
-                                      </span>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="top" className="max-w-sm whitespace-pre-line text-xs">
-                                      {task.originAdditiveId
-                                        ? `Tarefa criada pelo ${task.originAdditiveName ?? 'Aditivo'} (v${task.originAdditiveVersion ?? 0}).`
-                                        : (task.additiveHistory ?? [])
-                                            .map(h => `${h.additiveName} v${h.version} · ${h.previousQuantity} → ${h.newQuantity} (+${h.addedQuantity}/-${h.suppressedQuantity})`)
-                                            .join('\n')}
-                                      {task.suppressedByAdditive ? '\nItem suprimido (saldo zerado).' : ''}
-                                    </TooltipContent>
-                                  </Tooltip>
-                                )}
+                                <AdditiveBadge
+                                  originAdditiveId={task.originAdditiveId}
+                                  originAdditiveName={task.originAdditiveName}
+                                  originAdditiveVersion={task.originAdditiveVersion}
+                                  additiveHistory={task.additiveHistory}
+                                  suppressedByAdditive={task.suppressedByAdditive}
+                                  className="ml-1"
+                                />
+
                               </div>
 
                               {/* Quantidade + Unidade */}

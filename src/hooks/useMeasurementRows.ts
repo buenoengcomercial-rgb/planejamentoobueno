@@ -383,6 +383,11 @@ export function useMeasurementRows({
         diffForecastVsReal: trunc2(calc.totalPeriod - fc.valueForecast),
         hasNoLogsInPeriod: logsInfo.hasNoLogsInPeriod,
         hasNoLogsAtAll: logsInfo.hasNoLogsAtAll,
+        originAdditiveId: task.originAdditiveId,
+        originAdditiveName: task.originAdditiveName,
+        originAdditiveVersion: task.originAdditiveVersion,
+        additiveHistory: task.additiveHistory,
+        suppressedByAdditive: task.suppressedByAdditive,
       };
     });
 

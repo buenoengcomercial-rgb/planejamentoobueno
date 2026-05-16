@@ -1,6 +1,7 @@
 import { AlertCircle, Lock } from 'lucide-react';
 import type { Row } from '@/components/measurement/types';
 import { fmtBRL, fmtNum } from '@/components/measurement/measurementFormat';
+import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
 
 export interface MeasurementItemRowProps {
   row: Row;
@@ -62,6 +63,15 @@ export default function MeasurementItemRow({
             />
           )}
           <span className="leading-snug break-words">{r.description}</span>
+          <AdditiveBadge
+            originAdditiveId={r.originAdditiveId}
+            originAdditiveName={r.originAdditiveName}
+            originAdditiveVersion={r.originAdditiveVersion}
+            additiveHistory={r.additiveHistory}
+            suppressedByAdditive={r.suppressedByAdditive}
+            baseQuantity={r.qtyContracted}
+            className="shrink-0 mt-0.5"
+          />
         </div>
       </td>
       <td className={`px-2 py-1.5 text-muted-foreground align-top cell-und ${G_BG.id}`}>
