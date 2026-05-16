@@ -271,7 +271,8 @@ export function optimizedPurchasePlan(comp: MaterialComparison): OptimizedPlan {
 // ============== HISTÓRICO DE PREÇOS ==============
 
 export function appendPriceHistoryFromComparison(project: Project, comp: MaterialComparison): Project {
-  const existing = project.materialPriceHistory ?? [];
+  // Remove registros antigos deste mesmo comparativo (evita duplicação ao fechar 2x).
+  const existing = (project.materialPriceHistory ?? []).filter(h => h.comparisonId !== comp.id);
   const supplierMap = new Map(comp.suppliers.map(s => [s.id, s.name] as const));
   const entries: PriceHistoryEntry[] = [];
   const date = nowISO();
@@ -296,6 +297,10 @@ export function appendPriceHistoryFromComparison(project: Project, comp: Materia
 }
 
 // ============== SUGESTÕES DE MATERIAIS DO PROJETO ==============
+// Regra: somente INSUMOS ANALÍTICOS são sugeridos. Composições sintéticas
+// (BudgetItem source='sintetica') NÃO devem aparecer como item de compra.
+
+export type MaterialSuggestionSource = 'analytic_input' | 'additive_input' | 'task_material';
 
 export interface MaterialSuggestion {
   key: string;
@@ -304,47 +309,86 @@ export interface MaterialSuggestion {
   quantity: number;
   code?: string;
   referencePrice?: number;
-  sourceType: 'task' | 'composition' | 'additive';
+  sourceType: MaterialSuggestionSource;
   sourceId: string;
+  /** Aviso opcional (ex.: composição sem analítico). */
+  warning?: string;
+}
+
+function makeKey(code: string | undefined, description: string, unit: string, bank?: string): string {
+  return [code ?? '', bank ?? '', description, unit].join('|').toLowerCase();
 }
 
 export function suggestMaterialsFromProject(project: Project): MaterialSuggestion[] {
   const suggestions = new Map<string, MaterialSuggestion>();
+
+  const upsert = (s: MaterialSuggestion) => {
+    const cur = suggestions.get(s.key);
+    if (cur) {
+      cur.quantity = +(cur.quantity + s.quantity).toFixed(4);
+      if (!cur.referencePrice && s.referencePrice) cur.referencePrice = s.referencePrice;
+    } else {
+      suggestions.set(s.key, { ...s });
+    }
+  };
+
+  // 1) Materiais analíticos declarados nas tarefas (task.materials).
   const tasks = getAllTasks(project);
   for (const t of tasks) {
     for (const m of t.materials ?? []) {
-      const key = `${m.name}__${m.unit}`.toLowerCase();
-      const cur = suggestions.get(key);
       const refPrice = m.estimatedCost && m.quantity ? +(m.estimatedCost / m.quantity).toFixed(2) : undefined;
-      if (cur) {
-        cur.quantity += m.quantity || 0;
-      } else {
+      upsert({
+        key: makeKey(undefined, m.name, m.unit),
+        description: m.name,
+        unit: m.unit,
+        quantity: m.quantity || 0,
+        referencePrice: refPrice,
+        sourceType: 'task_material',
+        sourceId: t.id,
+      });
+    }
+  }
+
+  // 2) Insumos analíticos das composições de aditivos APROVADOS/CONTRATADOS.
+  //    Rascunho ou em análise NÃO entram. Composição sintética principal NÃO entra.
+  for (const ad of project.additives ?? []) {
+    const approved = ad.isContracted === true || ad.status === 'aditivo_contratado';
+    if (!approved) continue;
+    for (const comp of ad.compositions ?? []) {
+      const compQty = comp.quantity || 0;
+      const inputs = comp.inputs ?? [];
+      if (inputs.length === 0) {
+        // Sinaliza composição sem analítico (não cria item, apenas avisa).
+        const key = `__warn__${comp.id}`;
         suggestions.set(key, {
           key,
-          description: m.name,
-          unit: m.unit,
-          quantity: m.quantity || 0,
-          referencePrice: refPrice,
-          sourceType: 'task',
-          sourceId: t.id,
+          description: `${comp.description} — composição sem analítico vinculado`,
+          unit: comp.unit,
+          quantity: 0,
+          code: comp.code,
+          sourceType: 'additive_input',
+          sourceId: comp.id,
+          warning: 'Composição sem analítico vinculado',
+        });
+        continue;
+      }
+      for (const inp of inputs) {
+        const qty = +((inp.coefficient || 0) * compQty).toFixed(4);
+        if (!qty) continue;
+        upsert({
+          key: makeKey(inp.code, inp.description, inp.unit, inp.bank),
+          description: inp.description,
+          unit: inp.unit,
+          quantity: qty,
+          code: inp.code || undefined,
+          referencePrice: inp.unitPrice || undefined,
+          sourceType: 'additive_input',
+          sourceId: inp.id,
         });
       }
     }
   }
-  for (const bi of project.budgetItems ?? []) {
-    const key = `bi__${bi.code || bi.description}__${bi.unit}`.toLowerCase();
-    if (suggestions.has(key)) continue;
-    suggestions.set(key, {
-      key,
-      description: bi.description,
-      unit: bi.unit,
-      quantity: bi.quantity,
-      code: bi.code,
-      referencePrice: bi.unitPriceWithBDI,
-      sourceType: bi.source === 'aditivo' ? 'additive' : 'composition',
-      sourceId: bi.id,
-    });
-  }
+
   return Array.from(suggestions.values()).sort((a, b) => a.description.localeCompare(b.description, 'pt-BR'));
 }
 
