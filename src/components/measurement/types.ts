@@ -38,6 +38,12 @@ export interface Row {
   diffForecastVsReal: number;
   hasNoLogsInPeriod: boolean;
   hasNoLogsAtAll: boolean;
+  // ─────── Indicadores de aditivo (apenas visualização) ───────
+  originAdditiveId?: string;
+  originAdditiveName?: string;
+  originAdditiveVersion?: number;
+  additiveHistory?: TaskAdditiveHistoryEntry[];
+  suppressedByAdditive?: boolean;
   notes?: string;
 }
 
