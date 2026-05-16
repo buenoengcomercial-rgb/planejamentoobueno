@@ -15,6 +15,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { getChapterTree, getChapterNumbering, moveChapter, getChapterTasks, safeMoveChapter, reorderChapter, reorderChapterByNumber } from '@/lib/chapters';
 import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
+import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
 
 /** Encurta o nome da tarefa para no máximo `maxWords` palavras, adicionando "…" no final. */
 function truncateWords(text: string, maxWords = 4): string {
