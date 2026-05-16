@@ -1,6 +1,7 @@
 import { AlertCircle, Lock } from 'lucide-react';
 import type { Row } from '@/components/measurement/types';
 import { fmtBRL, fmtNum } from '@/components/measurement/measurementFormat';
+import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
 
 export interface MeasurementItemRowProps {
   row: Row;
