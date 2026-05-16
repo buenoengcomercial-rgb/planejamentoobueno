@@ -1,3 +1,7 @@
+/**
+ * @deprecated LEGADO — substituído pelo módulo "Lista de Material" (src/components/Materials.tsx).
+ * Mantido apenas para referência histórica. Não é importado em nenhum lugar do app.
+ */
 import { Project, Material } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
 import { getChapterTree, getChapterNumbering } from '@/lib/chapters';
