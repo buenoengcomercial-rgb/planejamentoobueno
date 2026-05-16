@@ -20,6 +20,7 @@ import { calculateRupDuration, propagateAllDependencies, checkDependencyViolatio
 import { flattenPhasesByChapter, getChapterNumbering, getChapterTasks } from '@/lib/chapters';
 import { beginBarMutation, endBarMutation, endAllBarMutations, setTransform, setTransition, setOpacity, setLeftPx, setWidthPx, type BarMutationSession } from './gantt/barTransform';
 import { toast } from 'sonner';
+import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
 
 interface GanttChartProps {
   project: Project;
