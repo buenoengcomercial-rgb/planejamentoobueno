@@ -30,6 +30,15 @@ export function useMaterialComparisons(project: Project, onProjectChange: (next:
     } catch { /* ignore */ }
   }, [activeId, project.id]);
 
+  // Migração: garante fornecedores globais (a partir de comparativos antigos).
+  useEffect(() => {
+    if (project.materialSuppliers === undefined) {
+      const migrated = MC.ensureGlobalSuppliers(project);
+      if (migrated !== project) onProjectChange(migrated);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+
   const active = useMemo(
     () => comparisons.find(c => c.id === activeId) ?? null,
     [comparisons, activeId],
