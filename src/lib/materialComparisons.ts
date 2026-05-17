@@ -405,8 +405,16 @@ export function suggestMaterialsWithDiagnostics(
       const inputs = comp.inputs ?? [];
       if (compQty <= 0 || inputs.length === 0) continue;
       diag.additiveCompositionsWithAnalytic += 1;
+      const isNew = comp.isNewService === true;
+      const added = comp.addedQuantity ?? 0;
+      const suppressed = comp.suppressedQuantity ?? 0;
+      const detail: MaterialSuggestionDetail = isNew
+        ? 'additive_new_service'
+        : added > 0 || suppressed > 0
+          ? 'additive_existing_changed'
+          : 'contracted_item';
       for (const inp of inputs) {
-        const qty = +((inp.coefficient || 0) * compQty).toFixed(4);
+        const qty = trunc2((inp.coefficient || 0) * compQty);
         if (!qty) continue;
         diag.additiveAnalyticInputs += 1;
         upsert({
@@ -418,6 +426,7 @@ export function suggestMaterialsWithDiagnostics(
           bank: inp.bank || undefined,
           referencePrice: inp.unitPrice || undefined,
           sourceType: 'additive_input',
+          sourceDetail: detail,
           sourceId: inp.id,
         });
       }
