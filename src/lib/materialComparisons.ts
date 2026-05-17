@@ -7,6 +7,8 @@ import type {
   ComparisonItemStatus,
   PriceHistoryEntry,
   MaterialComparisonStatus,
+  StockMovement,
+  StockMovementType,
 } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
 import { trunc2 } from '@/lib/financialEngine';
