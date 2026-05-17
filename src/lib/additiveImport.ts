@@ -674,6 +674,114 @@ export async function extractBaseAnalyticCompositions(
   };
 }
 
+/**
+ * Extrai composições analíticas do CONTRATO/BASE a partir de um arquivo
+ * SOMENTE ANALÍTICA, vinculando-as à Sintética já importada (budgetItems).
+ *
+ * Estratégia de vínculo: monta um "pseudo-aditivo" a partir de budgetItems
+ * sintéticos e reusa `mergeAnalyticIntoAdditive` (que casa por item+code,
+ * code normalizado e desempata por fila).
+ */
+export async function extractBaseAnalyticCompositionsFromAnalyticFile(
+  buf: ArrayBuffer,
+  currentBudgetItems: BudgetItem[],
+): Promise<{
+  compositions: AdditiveComposition[];
+  linkedCount: number;
+  leftoverBlocks: number;
+  totalInputs: number;
+  hasAnalyticSheet: boolean;
+  message: string;
+}> {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(buf, { type: 'array' });
+
+  // Procura aba Analítica por nome; senão, por conteúdo em qualquer aba.
+  let analyName =
+    findSheetName(wb.SheetNames, 'Analitica') || findSheetName(wb.SheetNames, 'analítica');
+  if (!analyName) {
+    for (const name of wb.SheetNames) {
+      const rows = sheetToRows(wb.Sheets[name], XLSX);
+      if (looksLikeAnalyticSheet(rows)) {
+        analyName = name;
+        break;
+      }
+    }
+  }
+  if (!analyName) {
+    return {
+      compositions: [],
+      linkedCount: 0,
+      leftoverBlocks: 0,
+      totalInputs: 0,
+      hasAnalyticSheet: false,
+      message: 'Aba Analítica não encontrada no arquivo.',
+    };
+  }
+
+  const syntheticItems = (currentBudgetItems ?? []).filter(b => b.source === 'sintetica');
+  if (syntheticItems.length === 0) {
+    return {
+      compositions: [],
+      linkedCount: 0,
+      leftoverBlocks: 0,
+      totalInputs: 0,
+      hasAnalyticSheet: true,
+      message: 'Importe primeiro a Sintética antes da Analítica.',
+    };
+  }
+
+  // Constrói um "pseudo-aditivo" com as composições derivadas da Sintética.
+  const pseudoCompositions: AdditiveComposition[] = syntheticItems.map(s => ({
+    id: uid(),
+    item: s.item,
+    code: s.code,
+    bank: s.bank,
+    description: s.description,
+    quantity: s.quantity,
+    unit: s.unit,
+    unitPriceNoBDI: s.unitPriceNoBDI,
+    unitPriceWithBDI: s.unitPriceWithBDI,
+    total: s.totalWithBDI,
+    totalNoBDI: s.totalNoBDI,
+    totalWithBDI: s.totalWithBDI,
+    inputs: [],
+    source: 'sintetica_medicao',
+    changeKind: 'sem_alteracao',
+    originalQuantity: s.quantity,
+    addedQuantity: 0,
+    suppressedQuantity: 0,
+  }));
+
+  const pseudoAdditive: Additive = {
+    id: uid(),
+    name: '__base__',
+    importedAt: new Date().toISOString(),
+    compositions: pseudoCompositions,
+    issues: [],
+    status: 'rascunho',
+  };
+
+  const analyRows = sheetToRows(wb.Sheets[analyName], XLSX);
+  const { blocks } = parseAdditiveAnalyticWorkbook(analyRows);
+  const merged = mergeAnalyticIntoAdditive(pseudoAdditive, blocks);
+
+  const compositions = merged.additive.compositions.filter(c => c.inputs.length > 0);
+  const totalInputs = compositions.reduce((a, c) => a + c.inputs.length, 0);
+
+  return {
+    compositions,
+    linkedCount: merged.linked,
+    leftoverBlocks: merged.leftover,
+    totalInputs,
+    hasAnalyticSheet: true,
+    message:
+      merged.leftover > 0
+        ? `Analítica vinculada: ${compositions.length} composições, ${totalInputs} insumos. ${merged.leftover} bloco(s) sem vínculo.`
+        : `Analítica vinculada: ${compositions.length} composições, ${totalInputs} insumos.`,
+  };
+}
+
 /** Soma dos totais H dos insumos da Analítica (sem BDI), por unidade da composição. */
 export function sumAnalyticTotalNoBDI(comp: AdditiveComposition): number {
   return comp.inputs.reduce((a, i) => a + (i.total || 0), 0);
