@@ -1,22 +1,75 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState, useCallback } from 'react';
 import type { Project, MaterialComparison } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Plus, Sparkles, Trash2, AlertTriangle } from 'lucide-react';
+import { Plus, Sparkles, Trash2, AlertTriangle, Link2, Loader2, Check } from 'lucide-react';
 import { parseBR, NumberInput } from './numberInput';
+import {
+  extractBaseAnalyticCompositions,
+  extractBaseAnalyticCompositionsFromAnalyticFile,
+} from '@/lib/additiveImport';
 
 interface Props {
   project: Project;
   comparison: MaterialComparison;
   onApply: (next: MaterialComparison) => void;
+  onProjectChange: (next: Project) => void;
 }
 
-export default function MaterialsListTab({ project, comparison, onApply }: Props) {
+export default function MaterialsListTab({ project, comparison, onApply, onProjectChange }: Props) {
   const [showSuggest, setShowSuggest] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Record<string, boolean>>({});
   const [manual, setManual] = useState({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '' });
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [linkingAnalytic, setLinkingAnalytic] = useState(false);
+  const [linkMsg, setLinkMsg] = useState<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null);
+
+  const diagnostics = useMemo(
+    () => MC.suggestMaterialsWithDiagnostics(project).diagnostics,
+    [project],
+  );
+  const needsAnalyticLink =
+    diagnostics.baseCompositionsWithAnalytic === 0 &&
+    diagnostics.baseAnalyticInputs === 0 &&
+    diagnostics.syntheticCompositionsIgnored > 0;
+
+  const handleAnalyticFile = useCallback(async (file: File) => {
+    setLinkingAnalytic(true);
+    setLinkMsg(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const baseItems = (project.budgetItems ?? []).filter(b => b.source === 'sintetica');
+      // Tenta primeiro como arquivo combinado (Sintética + Analítica).
+      let compositions: any[] = [];
+      let info = '';
+      const combined = await extractBaseAnalyticCompositions(buf);
+      if (combined.hasAnalyticSheet && combined.compositions.length > 0) {
+        compositions = combined.compositions;
+        info = combined.message;
+      } else {
+        const only = await extractBaseAnalyticCompositionsFromAnalyticFile(buf, baseItems);
+        if (!only.hasAnalyticSheet) {
+          setLinkMsg({ kind: 'err', text: 'Aba Analítica não encontrada no arquivo.' });
+          setLinkingAnalytic(false);
+          return;
+        }
+        if (only.compositions.length === 0) {
+          setLinkMsg({ kind: 'err', text: only.message || 'Analítica lida, mas nenhum bloco vinculou à Sintética.' });
+          setLinkingAnalytic(false);
+          return;
+        }
+        compositions = only.compositions;
+        info = only.message;
+      }
+      onProjectChange({ ...project, analyticCompositions: compositions });
+      setLinkMsg({ kind: 'ok', text: info });
+    } catch (err: any) {
+      setLinkMsg({ kind: 'err', text: `Falha ao ler Analítica: ${err?.message ?? 'erro desconhecido'}.` });
+    }
+    setLinkingAnalytic(false);
+  }, [project, onProjectChange]);
 
   const suggestions = useMemo(() => MC.suggestMaterialsFromProject(project), [project]);
   const realSuggestions = suggestions.filter(s => !s.warning);
@@ -64,6 +117,44 @@ export default function MaterialsListTab({ project, comparison, onApply }: Props
 
   return (
     <div className="space-y-4">
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".xlsx,.xls"
+        className="hidden"
+        onChange={e => {
+          const f = e.target.files?.[0];
+          if (f) handleAnalyticFile(f);
+          e.target.value = '';
+        }}
+      />
+
+      {needsAnalyticLink && (
+        <div className="bg-warning/10 border border-warning/40 rounded-xl p-4 flex flex-wrap items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-warning" />
+          <div className="flex-1 min-w-[200px]">
+            <div className="text-sm font-semibold text-foreground">Analítica do contrato não vinculada</div>
+            <div className="text-xs text-muted-foreground">
+              Existem {diagnostics.syntheticCompositionsIgnored} composições sintéticas sem analítico. Vincule a planilha Analítica para listar os insumos reais (mão de obra, materiais, equipamentos).
+            </div>
+          </div>
+          <Button size="sm" onClick={() => fileRef.current?.click()} disabled={linkingAnalytic}>
+            {linkingAnalytic ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Link2 className="w-3.5 h-3.5 mr-1" />}
+            Vincular Analítica do contrato
+          </Button>
+        </div>
+      )}
+      {linkMsg && (
+        <div className={`text-xs rounded-lg px-3 py-2 border flex items-start gap-2 ${
+          linkMsg.kind === 'ok' ? 'bg-success/10 border-success/40 text-success-foreground'
+          : linkMsg.kind === 'err' ? 'bg-destructive/10 border-destructive/40 text-destructive'
+          : 'bg-muted border-border text-muted-foreground'
+        }`}>
+          {linkMsg.kind === 'ok' ? <Check className="w-3.5 h-3.5 mt-0.5" /> : <AlertTriangle className="w-3.5 h-3.5 mt-0.5" />}
+          <span>{linkMsg.text}</span>
+        </div>
+      )}
+
       {/* Add manual */}
       <div className="bg-card border border-border rounded-xl p-4 space-y-3">
         <div className="flex items-center justify-between">
@@ -105,7 +196,7 @@ export default function MaterialsListTab({ project, comparison, onApply }: Props
               </thead>
               <tbody>
                 {realSuggestions.length === 0 && (
-                  <tr><td colSpan={6} className="p-4 text-center text-muted-foreground">Nenhum insumo analítico encontrado. Importe/vincule a planilha Analítica do contrato ou integre um aditivo com analítica.</td></tr>
+                  <tr><td colSpan={6} className="p-4 text-center text-muted-foreground">{needsAnalyticLink ? 'Vincule primeiro a Analítica do contrato (botão acima) para listar os insumos.' : 'Nenhum insumo analítico encontrado. Importe/vincule a planilha Analítica do contrato ou integre um aditivo com analítica.'}</td></tr>
                 )}
                 {realSuggestions.map(s => (
                   <tr key={s.key} className="border-t border-border hover:bg-muted/30">
