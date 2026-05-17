@@ -388,6 +388,13 @@ export interface Project {
   materialComparisons?: MaterialComparison[];
   /** Histórico consolidado de preços de materiais (todas as cotações fechadas). */
   materialPriceHistory?: PriceHistoryEntry[];
+  /**
+   * Composições analíticas do contrato/base (planilha Analítica).
+   * Cada composição traz seus insumos (inputs) que alimentam a Lista de Material.
+   * NÃO é usado em cálculos de Medição/Cronograma/Diário/Aditivo — somente para sugestão de compras.
+   * Reusa AdditiveComposition para manter a mesma estrutura de insumos analíticos.
+   */
+  analyticCompositions?: AdditiveComposition[];
 }
 
 // =================== LISTA DE MATERIAL / COMPARATIVOS ===================

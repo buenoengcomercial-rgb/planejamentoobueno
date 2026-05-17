@@ -33,6 +33,11 @@ export default function Materials({ project, onProjectChange }: Props) {
     };
   }, [ctl.comparisons]);
 
+  const diagnostics = useMemo(
+    () => MC.suggestMaterialsWithDiagnostics(project).diagnostics,
+    [project],
+  );
+
   return (
     <div className="p-6 space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -74,6 +79,18 @@ export default function Materials({ project, onProjectChange }: Props) {
         <Card label="Em aberto" value={summary.open.toString()} />
         <Card label="Fechados" value={summary.closed.toString()} />
         <Card label="Economia estimada" value={`R$ ${summary.totalEconomy.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`} accent="text-success" />
+      </div>
+
+      {/* Diagnostics */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground bg-muted/30 border border-border rounded-lg px-3 py-2">
+        <span><strong className="text-foreground">{diagnostics.baseCompositionsWithAnalytic}</strong> composições base c/ analítico</span>
+        <span><strong className="text-foreground">{diagnostics.baseAnalyticInputs}</strong> insumos base</span>
+        <span><strong className="text-foreground">{diagnostics.contractedAdditivesRead}</strong> aditivos contratados lidos</span>
+        <span><strong className="text-foreground">{diagnostics.taskMaterials}</strong> materiais de tarefa</span>
+        <span><strong className="text-foreground">{diagnostics.syntheticCompositionsIgnored}</strong> composições sintéticas ignoradas</span>
+        {diagnostics.baseCompositionsWithoutAnalytic > 0 && (
+          <span className="text-warning"><strong>{diagnostics.baseCompositionsWithoutAnalytic}</strong> composições base sem analítico</span>
+        )}
       </div>
 
       {/* Comparison selector */}

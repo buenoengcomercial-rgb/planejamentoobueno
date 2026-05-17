@@ -308,6 +308,7 @@ export interface MaterialSuggestion {
   unit: string;
   quantity: number;
   code?: string;
+  bank?: string;
   referencePrice?: number;
   sourceType: MaterialSuggestionSource;
   sourceId: string;
@@ -315,12 +316,35 @@ export interface MaterialSuggestion {
   warning?: string;
 }
 
+export interface MaterialSuggestionDiagnostics {
+  baseCompositionsWithAnalytic: number;
+  baseCompositionsWithoutAnalytic: number;
+  baseAnalyticInputs: number;
+  contractedAdditivesRead: number;
+  syntheticCompositionsIgnored: number;
+  taskMaterials: number;
+}
+
 function makeKey(code: string | undefined, description: string, unit: string, bank?: string): string {
   return [code ?? '', bank ?? '', description, unit].join('|').toLowerCase();
 }
 
 export function suggestMaterialsFromProject(project: Project): MaterialSuggestion[] {
+  return suggestMaterialsWithDiagnostics(project).suggestions;
+}
+
+export function suggestMaterialsWithDiagnostics(
+  project: Project,
+): { suggestions: MaterialSuggestion[]; diagnostics: MaterialSuggestionDiagnostics } {
   const suggestions = new Map<string, MaterialSuggestion>();
+  const diag: MaterialSuggestionDiagnostics = {
+    baseCompositionsWithAnalytic: 0,
+    baseCompositionsWithoutAnalytic: 0,
+    baseAnalyticInputs: 0,
+    contractedAdditivesRead: 0,
+    syntheticCompositionsIgnored: 0,
+    taskMaterials: 0,
+  };
 
   const upsert = (s: MaterialSuggestion) => {
     const cur = suggestions.get(s.key);
@@ -332,10 +356,58 @@ export function suggestMaterialsFromProject(project: Project): MaterialSuggestio
     }
   };
 
-  // 1) Materiais analíticos declarados nas tarefas (task.materials).
+  // A) Insumos analíticos do CONTRATO/BASE (planilha Analítica).
+  for (const comp of project.analyticCompositions ?? []) {
+    const compQty = comp.quantity || 0;
+    const inputs = comp.inputs ?? [];
+    if (inputs.length === 0) {
+      diag.baseCompositionsWithoutAnalytic += 1;
+      const key = `__warn_base__${comp.id}`;
+      suggestions.set(key, {
+        key,
+        description: `${comp.description} — composição base sem analítico vinculado`,
+        unit: comp.unit,
+        quantity: 0,
+        code: comp.code,
+        sourceType: 'analytic_input',
+        sourceId: comp.id,
+        warning: 'Composição base sem analítico vinculado',
+      });
+      continue;
+    }
+    diag.baseCompositionsWithAnalytic += 1;
+    for (const inp of inputs) {
+      const qty = +((inp.coefficient || 0) * compQty).toFixed(4);
+      if (!qty) continue;
+      diag.baseAnalyticInputs += 1;
+      upsert({
+        key: makeKey(inp.code, inp.description, inp.unit, inp.bank),
+        description: inp.description,
+        unit: inp.unit,
+        quantity: qty,
+        code: inp.code || undefined,
+        bank: inp.bank || undefined,
+        referencePrice: inp.unitPrice || undefined,
+        sourceType: 'analytic_input',
+        sourceId: inp.id,
+      });
+    }
+  }
+
+  // Sintéticas sem analítica vinculada são apenas contabilizadas (ignoradas como material).
+  for (const bi of project.budgetItems ?? []) {
+    if (bi.source !== 'sintetica') continue;
+    const hasAnalytic = (project.analyticCompositions ?? []).some(
+      c => c.code === bi.code && c.bank === bi.bank,
+    );
+    if (!hasAnalytic) diag.syntheticCompositionsIgnored += 1;
+  }
+
+  // B) Materiais manuais declarados nas tarefas (task.materials).
   const tasks = getAllTasks(project);
   for (const t of tasks) {
     for (const m of t.materials ?? []) {
+      diag.taskMaterials += 1;
       const refPrice = m.estimatedCost && m.quantity ? +(m.estimatedCost / m.quantity).toFixed(2) : undefined;
       upsert({
         key: makeKey(undefined, m.name, m.unit),
@@ -349,26 +421,26 @@ export function suggestMaterialsFromProject(project: Project): MaterialSuggestio
     }
   }
 
-  // 2) Insumos analíticos das composições de aditivos APROVADOS/CONTRATADOS.
+  // C) Insumos analíticos das composições de aditivos APROVADOS/CONTRATADOS.
   //    Rascunho ou em análise NÃO entram. Composição sintética principal NÃO entra.
   for (const ad of project.additives ?? []) {
     const approved = ad.isContracted === true || ad.status === 'aditivo_contratado';
     if (!approved) continue;
+    diag.contractedAdditivesRead += 1;
     for (const comp of ad.compositions ?? []) {
       const compQty = comp.quantity || 0;
       const inputs = comp.inputs ?? [];
       if (inputs.length === 0) {
-        // Sinaliza composição sem analítico (não cria item, apenas avisa).
-        const key = `__warn__${comp.id}`;
+        const key = `__warn_add__${comp.id}`;
         suggestions.set(key, {
           key,
-          description: `${comp.description} — composição sem analítico vinculado`,
+          description: `${comp.description} — composição de aditivo sem analítico vinculado`,
           unit: comp.unit,
           quantity: 0,
           code: comp.code,
           sourceType: 'additive_input',
           sourceId: comp.id,
-          warning: 'Composição sem analítico vinculado',
+          warning: 'Composição de aditivo sem analítico vinculado',
         });
         continue;
       }
@@ -381,6 +453,7 @@ export function suggestMaterialsFromProject(project: Project): MaterialSuggestio
           unit: inp.unit,
           quantity: qty,
           code: inp.code || undefined,
+          bank: inp.bank || undefined,
           referencePrice: inp.unitPrice || undefined,
           sourceType: 'additive_input',
           sourceId: inp.id,
@@ -389,7 +462,10 @@ export function suggestMaterialsFromProject(project: Project): MaterialSuggestio
     }
   }
 
-  return Array.from(suggestions.values()).sort((a, b) => a.description.localeCompare(b.description, 'pt-BR'));
+  const sorted = Array.from(suggestions.values()).sort((a, b) =>
+    a.description.localeCompare(b.description, 'pt-BR'),
+  );
+  return { suggestions: sorted, diagnostics: diag };
 }
 
 export const STATUS_LABEL: Record<MaterialComparisonStatus, string> = {
