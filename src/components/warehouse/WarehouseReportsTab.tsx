@@ -76,12 +76,14 @@ export default function WarehouseReportsTab({ project }: Props) {
   };
 
   const ReportCard = ({ title, desc, onExport }: { title: string; desc: string; onExport: () => void }) => (
-    <div className="bg-card border border-border rounded-lg p-3 flex flex-col gap-2">
-      <div>
-        <div className="text-sm font-semibold">{title}</div>
-        <div className="text-[11px] text-muted-foreground">{desc}</div>
+    <div className="bg-card border border-border rounded-md p-3 flex flex-col gap-3 h-full min-h-[110px]">
+      <div className="flex-1">
+        <div className="text-sm font-semibold leading-tight">{title}</div>
+        <div className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{desc}</div>
       </div>
-      <Button size="sm" variant="outline" className="h-8 text-xs" onClick={onExport}><Download className="w-3 h-3 mr-1" /> Exportar CSV</Button>
+      <Button size="sm" variant="ghost" className="h-7 text-[11px] self-start text-muted-foreground hover:text-foreground" onClick={onExport}>
+        <Download className="w-3 h-3 mr-1" /> Exportar CSV
+      </Button>
     </div>
   );
 
