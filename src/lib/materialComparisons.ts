@@ -342,12 +342,16 @@ export function suggestMaterialsWithDiagnostics(
 ): { suggestions: MaterialSuggestion[]; diagnostics: MaterialSuggestionDiagnostics } {
   const suggestions = new Map<string, MaterialSuggestion>();
   const diag: MaterialSuggestionDiagnostics = {
+    additiveCompositionsWithAnalytic: 0,
+    additiveAnalyticInputs: 0,
+    additivesRead: 0,
     baseCompositionsWithAnalytic: 0,
     baseCompositionsWithoutAnalytic: 0,
     baseAnalyticInputs: 0,
     contractedAdditivesRead: 0,
     syntheticCompositionsIgnored: 0,
     taskMaterials: 0,
+    groupedInputs: 0,
   };
 
   const upsert = (s: MaterialSuggestion) => {
@@ -360,23 +364,55 @@ export function suggestMaterialsWithDiagnostics(
     }
   };
 
-  // A) Insumos analíticos do CONTRATO/BASE (planilha Analítica).
+  // Qtd Final exibida na tabela do Aditivo:
+  //   se houver original/added/suppressed → original + added − suppressed
+  //   senão → quantity da composição.
+  const qtyFinal = (c: { quantity?: number; originalQuantity?: number; addedQuantity?: number; suppressedQuantity?: number }) => {
+    const hasDelta = c.originalQuantity != null || c.addedQuantity != null || c.suppressedQuantity != null;
+    if (hasDelta) {
+      return (c.originalQuantity ?? 0) + (c.addedQuantity ?? 0) - (c.suppressedQuantity ?? 0);
+    }
+    return c.quantity ?? 0;
+  };
+
+  // A) FONTE PRINCIPAL — Insumos analíticos das composições da aba ADITIVO.
+  //    Lê todos os aditivos (inclusive rascunho/em análise) apenas para fins
+  //    de planejamento de compra. Não integra Medição/Cronograma/EAP/Diário.
+  for (const ad of project.additives ?? []) {
+    diag.additivesRead += 1;
+    const isContracted = ad.isContracted === true || ad.status === 'aditivo_contratado';
+    if (isContracted) diag.contractedAdditivesRead += 1;
+    for (const comp of ad.compositions ?? []) {
+      const compQty = qtyFinal(comp);
+      const inputs = comp.inputs ?? [];
+      if (compQty <= 0 || inputs.length === 0) continue;
+      diag.additiveCompositionsWithAnalytic += 1;
+      for (const inp of inputs) {
+        const qty = +((inp.coefficient || 0) * compQty).toFixed(4);
+        if (!qty) continue;
+        diag.additiveAnalyticInputs += 1;
+        upsert({
+          key: makeKey(inp.code, inp.description, inp.unit, inp.bank),
+          description: inp.description,
+          unit: inp.unit,
+          quantity: qty,
+          code: inp.code || undefined,
+          bank: inp.bank || undefined,
+          referencePrice: inp.unitPrice || undefined,
+          sourceType: 'additive_input',
+          sourceId: inp.id,
+        });
+      }
+    }
+  }
+
+  // B) FALLBACK — Insumos analíticos do CONTRATO/BASE (planilha Analítica
+  //    vinculada diretamente em project.analyticCompositions).
   for (const comp of project.analyticCompositions ?? []) {
     const compQty = comp.quantity || 0;
     const inputs = comp.inputs ?? [];
     if (inputs.length === 0) {
       diag.baseCompositionsWithoutAnalytic += 1;
-      const key = `__warn_base__${comp.id}`;
-      suggestions.set(key, {
-        key,
-        description: `${comp.description} — composição base sem analítico vinculado`,
-        unit: comp.unit,
-        quantity: 0,
-        code: comp.code,
-        sourceType: 'analytic_input',
-        sourceId: comp.id,
-        warning: 'Composição base sem analítico vinculado',
-      });
       continue;
     }
     diag.baseCompositionsWithAnalytic += 1;
@@ -398,7 +434,7 @@ export function suggestMaterialsWithDiagnostics(
     }
   }
 
-  // Sintéticas sem analítica vinculada são apenas contabilizadas (ignoradas como material).
+  // Sintéticas sem analítica vinculada são apenas contabilizadas.
   for (const bi of project.budgetItems ?? []) {
     if (bi.source !== 'sintetica') continue;
     const hasAnalytic = (project.analyticCompositions ?? []).some(
@@ -407,7 +443,7 @@ export function suggestMaterialsWithDiagnostics(
     if (!hasAnalytic) diag.syntheticCompositionsIgnored += 1;
   }
 
-  // B) Materiais manuais declarados nas tarefas (task.materials).
+  // C) SECUNDÁRIA — Materiais manuais declarados nas tarefas (task.materials).
   const tasks = getAllTasks(project);
   for (const t of tasks) {
     for (const m of t.materials ?? []) {
@@ -425,50 +461,10 @@ export function suggestMaterialsWithDiagnostics(
     }
   }
 
-  // C) Insumos analíticos das composições de aditivos APROVADOS/CONTRATADOS.
-  //    Rascunho ou em análise NÃO entram. Composição sintética principal NÃO entra.
-  for (const ad of project.additives ?? []) {
-    const approved = ad.isContracted === true || ad.status === 'aditivo_contratado';
-    if (!approved) continue;
-    diag.contractedAdditivesRead += 1;
-    for (const comp of ad.compositions ?? []) {
-      const compQty = comp.quantity || 0;
-      const inputs = comp.inputs ?? [];
-      if (inputs.length === 0) {
-        const key = `__warn_add__${comp.id}`;
-        suggestions.set(key, {
-          key,
-          description: `${comp.description} — composição de aditivo sem analítico vinculado`,
-          unit: comp.unit,
-          quantity: 0,
-          code: comp.code,
-          sourceType: 'additive_input',
-          sourceId: comp.id,
-          warning: 'Composição de aditivo sem analítico vinculado',
-        });
-        continue;
-      }
-      for (const inp of inputs) {
-        const qty = +((inp.coefficient || 0) * compQty).toFixed(4);
-        if (!qty) continue;
-        upsert({
-          key: makeKey(inp.code, inp.description, inp.unit, inp.bank),
-          description: inp.description,
-          unit: inp.unit,
-          quantity: qty,
-          code: inp.code || undefined,
-          bank: inp.bank || undefined,
-          referencePrice: inp.unitPrice || undefined,
-          sourceType: 'additive_input',
-          sourceId: inp.id,
-        });
-      }
-    }
-  }
-
   const sorted = Array.from(suggestions.values()).sort((a, b) =>
     a.description.localeCompare(b.description, 'pt-BR'),
   );
+  diag.groupedInputs = sorted.filter(s => !s.warning).length;
   return { suggestions: sorted, diagnostics: diag };
 }
 
