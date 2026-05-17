@@ -64,9 +64,12 @@ export default function WarehouseRequisitionsTab({ project, onProjectChange }: P
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Button size="sm" onClick={() => setOpen(o => !o)}><Plus className="w-3.5 h-3.5 mr-1" /> Nova requisição</Button>
-        <span className="text-[11px] text-muted-foreground">Total: {wh.requisitions.length}</span>
+      <div className="flex items-center gap-2 bg-card border border-border rounded-md p-2">
+        <Button size="sm" onClick={() => setOpen(o => !o)}>
+          <Plus className="w-3.5 h-3.5 mr-1" /> Nova requisição
+        </Button>
+        <div className="h-5 w-px bg-border mx-1" />
+        <span className="text-[11px] text-muted-foreground">{wh.requisitions.length} requisição(ões)</span>
       </div>
 
       {open && (
