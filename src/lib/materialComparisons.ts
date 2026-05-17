@@ -317,12 +317,16 @@ export interface MaterialSuggestion {
 }
 
 export interface MaterialSuggestionDiagnostics {
+  additiveCompositionsWithAnalytic: number;
+  additiveAnalyticInputs: number;
+  additivesRead: number;
   baseCompositionsWithAnalytic: number;
   baseCompositionsWithoutAnalytic: number;
   baseAnalyticInputs: number;
   contractedAdditivesRead: number;
   syntheticCompositionsIgnored: number;
   taskMaterials: number;
+  groupedInputs: number;
 }
 
 function makeKey(code: string | undefined, description: string, unit: string, bank?: string): string {
