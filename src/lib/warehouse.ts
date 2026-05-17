@@ -26,27 +26,53 @@ export function emptyWarehouse(): WarehouseState {
   return { locations: [], items: [], movements: [], requisitions: [], equipments: [], custodyTerms: [] };
 }
 
+function normalizeWarehouse(state?: Partial<WarehouseState>): WarehouseState {
+  return {
+    locations: state?.locations ?? [],
+    items: state?.items ?? [],
+    movements: state?.movements ?? [],
+    requisitions: state?.requisitions ?? [],
+    equipments: state?.equipments ?? [],
+    custodyTerms: state?.custodyTerms ?? [],
+  };
+}
+
 /**
  * Garante project.warehouse e migra movimentos antigos de project.stockMovements
- * para WarehouseMovement (entrada/saida/ajuste → entrada/retirada/ajuste_positivo).
+ * para WarehouseMovement. Idempotente: retorna o mesmo project se nada mudar.
  */
 export function ensureWarehouse(project: Project): Project {
   const cur = project.warehouse;
   const hasLegacy = (project.stockMovements ?? []).length > 0;
-  if (cur && !hasLegacy) return project;
-  const wh: WarehouseState = cur
-    ? { ...cur, movements: [...cur.movements] }
-    : emptyWarehouse();
+  const wh = normalizeWarehouse(cur);
+  const isPartial = cur
+    ? wh.locations !== cur.locations ||
+      wh.items !== cur.items ||
+      wh.movements !== cur.movements ||
+      wh.requisitions !== cur.requisitions ||
+      wh.equipments !== cur.equipments ||
+      wh.custodyTerms !== cur.custodyTerms
+    : false;
+  let changed = !cur || isPartial;
+
   if (hasLegacy) {
-    const existingLegacyIds = new Set(wh.movements.filter(m => m.id.startsWith('legacy-')).map(m => m.id));
+    const existingLegacyIds = new Set(
+      wh.movements.filter(m => m.id.startsWith('legacy-')).map(m => m.id),
+    );
+    let movements = wh.movements;
+    let cloned = false;
     for (const s of project.stockMovements ?? []) {
       const id = `legacy-${s.id}`;
       if (existingLegacyIds.has(id)) continue;
+      if (!cloned) {
+        movements = [...movements];
+        cloned = true;
+      }
       const type: WarehouseMovementType =
         s.type === 'entrada' ? 'entrada' :
         s.type === 'saida' ? 'retirada' :
         s.quantity >= 0 ? 'ajuste_positivo' : 'ajuste_negativo';
-      wh.movements.push({
+      movements.push({
         id,
         type,
         date: s.date.slice(0, 10),
@@ -62,7 +88,13 @@ export function ensureWarehouse(project: Project): Project {
         user: s.user,
       });
     }
+    if (cloned) {
+      wh.movements = movements;
+      changed = true;
+    }
   }
+
+  if (!changed) return project;
   return { ...project, warehouse: wh };
 }
 
