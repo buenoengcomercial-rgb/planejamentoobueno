@@ -611,6 +611,69 @@ export async function importAdditiveFromExcel(
   };
 }
 
+/**
+ * Extrai as composições analíticas do CONTRATO/BASE a partir do workbook
+ * Sintética + Analítica. Reusa o parser/merge de aditivos para alimentar
+ * `project.analyticCompositions` sem efeitos colaterais nos aditivos.
+ *
+ * Cada AdditiveComposition retornada representa um item da sintética com
+ * seus insumos analíticos já vinculados (quando houver bloco correspondente).
+ */
+export async function extractBaseAnalyticCompositions(
+  buf: ArrayBuffer,
+): Promise<{
+  compositions: AdditiveComposition[];
+  linkedCount: number;
+  totalInputs: number;
+  hasAnalyticSheet: boolean;
+  message: string;
+}> {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(buf, { type: 'array' });
+
+  const synthName =
+    findSheetName(wb.SheetNames, 'Sintetica') || findSheetName(wb.SheetNames, 'sintética') || wb.SheetNames[0];
+  let analyName =
+    findSheetName(wb.SheetNames, 'Analitica') || findSheetName(wb.SheetNames, 'analítica');
+  if (!analyName) {
+    for (const name of wb.SheetNames) {
+      if (name === synthName) continue;
+      const rows = sheetToRows(wb.Sheets[name], XLSX);
+      if (looksLikeAnalyticSheet(rows)) {
+        analyName = name;
+        break;
+      }
+    }
+  }
+  if (!analyName) {
+    return {
+      compositions: [],
+      linkedCount: 0,
+      totalInputs: 0,
+      hasAnalyticSheet: false,
+      message: 'Aba Analítica não encontrada no arquivo.',
+    };
+  }
+
+  const synthRows = sheetToRows(wb.Sheets[synthName], XLSX);
+  const analyRows = sheetToRows(wb.Sheets[analyName], XLSX);
+  const { additive } = parseAdditiveSyntheticWorkbook(synthRows, '__base__');
+  const { blocks } = parseAdditiveAnalyticWorkbook(analyRows);
+  const merged = mergeAnalyticIntoAdditive(additive, blocks);
+
+  // Mantém apenas composições que têm insumos analíticos vinculados.
+  const compositions = merged.additive.compositions.filter(c => c.inputs.length > 0);
+  const totalInputs = compositions.reduce((a, c) => a + c.inputs.length, 0);
+
+  return {
+    compositions,
+    linkedCount: merged.linked,
+    totalInputs,
+    hasAnalyticSheet: true,
+    message: `${compositions.length} composições base com analítico (${totalInputs} insumos).`,
+  };
+}
+
 /** Soma dos totais H dos insumos da Analítica (sem BDI), por unidade da composição. */
 export function sumAnalyticTotalNoBDI(comp: AdditiveComposition): number {
   return comp.inputs.reduce((a, i) => a + (i.total || 0), 0);
