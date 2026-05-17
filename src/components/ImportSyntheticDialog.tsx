@@ -3,8 +3,9 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Project, BudgetItem } from '@/types/project';
+import { Project, BudgetItem, AdditiveComposition } from '@/types/project';
 import { parseSyntheticBudget, ParsedSynthetic } from '@/lib/importParser';
+import { extractBaseAnalyticCompositions } from '@/lib/additiveImport';
 import {
   Upload, FileSpreadsheet, AlertTriangle, Loader2, Check, Info, DollarSign,
 } from 'lucide-react';
