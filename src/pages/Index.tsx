@@ -65,7 +65,7 @@ export default function Index() {
     setSidebarOpen(false);
   }, []);
 
-  const undoStacksRef = useRef<UndoStacks>({ dashboard: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], materials: [] });
+  const undoStacksRef = useRef<UndoStacks>({ dashboard: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], materials: [], warehouse: [] });
   const [undoVersion, setUndoVersion] = useState(0);
   const saveTimerRef = useRef<number | null>(null);
   const initialLoadRef = useRef(false);
@@ -215,7 +215,7 @@ export default function Index() {
       const proj = await loadCloudProject(id);
       if (proj) {
         setRawProject(proj);
-        undoStacksRef.current = { dashboard: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], materials: [] };
+        undoStacksRef.current = { dashboard: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], materials: [], warehouse: [] };
         setUndoVersion(v => v + 1);
       }
     } catch {
@@ -231,7 +231,7 @@ export default function Index() {
       const newProj = await createCloudProject(finalName, orgId);
       await refreshCloudList();
       setRawProject(newProj);
-      undoStacksRef.current = { dashboard: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], materials: [] };
+      undoStacksRef.current = { dashboard: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], materials: [], warehouse: [] };
       setUndoVersion(v => v + 1);
       return newProj.id;
     } catch {
@@ -280,7 +280,7 @@ export default function Index() {
           const proj = await loadCloudProject(next.id);
           if (proj) {
             setRawProject(proj);
-            undoStacksRef.current = { dashboard: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], materials: [] };
+            undoStacksRef.current = { dashboard: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], materials: [], warehouse: [] };
           }
         }
       }
