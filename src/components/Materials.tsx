@@ -131,7 +131,7 @@ export default function Materials({ project, onProjectChange }: Props) {
             <MaterialsListTab project={project} comparison={ctl.active} onApply={ctl.apply} onProjectChange={onProjectChange} />
           </TabsContent>
           <TabsContent value="comparativo" className="mt-3">
-            <ComparisonsTab project={project} comparison={ctl.active} onApply={ctl.apply} />
+            <ComparisonsTab project={project} comparison={ctl.active} onApply={ctl.apply} onProjectChange={onProjectChange} />
           </TabsContent>
           <TabsContent value="fornecedores" className="mt-3">
             <SuppliersTab project={project} onProjectChange={onProjectChange} />

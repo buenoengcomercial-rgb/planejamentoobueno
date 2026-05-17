@@ -8,7 +8,7 @@ import { toast } from 'sonner';
 interface Props { project: Project; comparison: MaterialComparison }
 
 export default function PurchaseOrderTab({ project, comparison }: Props) {
-  const suppliers = useMemo(() => MC.getProjectSuppliers(project), [project]);
+  const suppliers = useMemo(() => MC.getComparisonSuppliers(project, comparison), [project, comparison]);
   const plan = useMemo(() => MC.optimizedPurchasePlan({ ...comparison, suppliers }), [comparison, suppliers]);
   const grouped = useMemo(() => {
     const map = new Map<string, { supplierName: string; rows: typeof plan.rows }>();

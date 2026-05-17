@@ -469,6 +469,8 @@ export interface MaterialComparison {
   status: MaterialComparisonStatus;
   description?: string;
   suppliers: ComparisonSupplier[];
+  /** IDs de fornecedores globais participantes deste comparativo. */
+  supplierIds?: string[];
   items: ComparisonItem[];
   /** ISO. */
   createdAt: string;
