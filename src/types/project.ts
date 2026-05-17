@@ -399,6 +399,162 @@ export interface Project {
    * Reusa AdditiveComposition para manter a mesma estrutura de insumos analíticos.
    */
   analyticCompositions?: AdditiveComposition[];
+  /** Estado do módulo Almoxarifado (estoque, movimentações, equipamentos, termos). */
+  warehouse?: WarehouseState;
+}
+
+// =================== ALMOXARIFADO ===================
+
+export type WarehouseMovementType =
+  | 'entrada'
+  | 'devolucao'
+  | 'retirada'
+  | 'perda'
+  | 'transferencia_saida'
+  | 'transferencia_entrada'
+  | 'ajuste_positivo'
+  | 'ajuste_negativo'
+  | 'estorno';
+
+export interface WarehouseLocation {
+  id: string;
+  name: string;
+  notes?: string;
+}
+
+export interface WarehouseItemConfig {
+  /** linkKey (igual ao usado em materialComparisons). */
+  key: string;
+  code?: string;
+  description: string;
+  unit: string;
+  minStock?: number;
+  defaultLocationId?: string;
+}
+
+export interface WarehouseAttachment {
+  id: string;
+  name: string;
+  dataUrl: string;
+  kind?: 'nf' | 'foto' | 'recibo' | 'termo' | 'outro';
+  uploadedAt: string;
+}
+
+export interface WarehouseMovement {
+  id: string;
+  type: WarehouseMovementType;
+  /** ISO yyyy-mm-dd. */
+  date: string;
+  createdAt: string;
+  itemKey: string;
+  itemCode?: string;
+  itemDescription: string;
+  itemUnit: string;
+  /** Quantidade absoluta (positiva). Sinal definido pelo type. */
+  quantity: number;
+  unitPrice?: number;
+  locationId?: string;
+  // origens
+  purchaseOrderId?: string;
+  supplierId?: string;
+  invoiceNumber?: string;
+  // destinos
+  requisitionId?: string;
+  taskId?: string;
+  teamId?: string;
+  workerName?: string;
+  workFront?: string;
+  // governança / rastreabilidade
+  responsible?: string;
+  user?: string;
+  notes?: string;
+  attachments?: WarehouseAttachment[];
+  /** Movimento que este estorno reverte. */
+  reversesId?: string;
+  /** Movimento de estorno que reverteu este. */
+  reversedById?: string;
+  /** ID do diário em que foi publicado (quando aplicável). */
+  publishedToDailyReportId?: string;
+}
+
+export interface WarehouseRequisitionItem {
+  itemKey: string;
+  code?: string;
+  description: string;
+  unit: string;
+  quantity: number;
+  /** Movimento de retirada gerado quando a requisição foi entregue. */
+  movementId?: string;
+}
+
+export type WarehouseRequisitionStatus = 'rascunho' | 'entregue' | 'cancelada';
+
+export interface WarehouseRequisition {
+  id: string;
+  number: string;
+  date: string;
+  status: WarehouseRequisitionStatus;
+  taskId?: string;
+  taskName?: string;
+  teamId?: string;
+  requesterName?: string;
+  workFront?: string;
+  notes?: string;
+  items: WarehouseRequisitionItem[];
+  signatureWarehouse?: string; // dataURL PNG
+  signatureReceiver?: string;
+  warehouseOperator?: string;
+  /** Se true, foi espelhada no diário do dia. */
+  publishedToDailyReportId?: string;
+  createdAt: string;
+}
+
+export interface Equipment {
+  id: string;
+  name: string;
+  patrimony?: string;
+  serial?: string;
+  category?: string;
+  notes?: string;
+  createdAt: string;
+}
+
+export type CustodyTermStatus =
+  | 'em_uso'
+  | 'devolvido'
+  | 'divergencia'
+  | 'perdido'
+  | 'danificado';
+
+export interface CustodyTerm {
+  id: string;
+  number: string;
+  equipmentId: string;
+  equipmentName: string;
+  equipmentPatrimony?: string;
+  issuedAt: string;
+  dueDate?: string;
+  workerName: string;
+  teamId?: string;
+  accessories?: string;
+  stateOnDelivery?: string;
+  signatureWarehouse?: string;
+  signatureReceiver?: string;
+  status: CustodyTermStatus;
+  returnedAt?: string;
+  stateOnReturn?: string;
+  divergenceNotes?: string;
+  attachments?: WarehouseAttachment[];
+  createdAt: string;
+}
+
+export interface WarehouseState {
+  locations: WarehouseLocation[];
+  items: WarehouseItemConfig[];
+  movements: WarehouseMovement[];
+  requisitions: WarehouseRequisition[];
+  equipments: Equipment[];
+  custodyTerms: CustodyTerm[];
 }
 
 // =================== LISTA DE MATERIAL / COMPARATIVOS ===================
