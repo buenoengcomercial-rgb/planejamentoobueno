@@ -49,18 +49,17 @@ export default function ComparisonsTab({ comparison, onApply }: Props) {
                     {it.code && <div className="text-[10px] text-muted-foreground">{it.code}</div>}
                   </td>
                   <td className="p-2 text-center">{it.unit}</td>
-                  <td className="p-2 text-right">{it.quantity.toLocaleString('pt-BR')}</td>
+                  <td className="p-2 text-right">{formatQty(it.quantity)}</td>
                   <td className="p-2 text-right">{it.referencePrice ? fmt(it.referencePrice) : '—'}</td>
                   {comparison.suppliers.map(s => {
                     const price = it.prices.find(p => p.supplierId === s.id);
                     const isBest = an.bestSupplierId === s.id;
                     return (
                       <td key={s.id} className={`p-1 text-right ${isBest ? 'bg-success/10' : ''}`}>
-                        <NumberInput
-                          value={price?.price != null ? String(price.price) : ''}
+                        <CurrencyInput
+                          value={price?.price ?? undefined}
                           onChange={v => {
-                            const val = parseBR(v) ?? 0;
-                            onApply(MC.setItemPrice(comparison, it.id, s.id, val));
+                            onApply(MC.setItemPrice(comparison, it.id, s.id, v ?? 0));
                           }}
                           className={`h-7 text-xs text-right ${isBest ? 'border-success font-semibold text-success' : ''}`}
                         />
