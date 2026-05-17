@@ -34,7 +34,7 @@ export default function ComparisonsTab({ project, comparison, onApply }: Props) 
               <th className="p-2">Un.</th>
               <th className="p-2 text-right">Qtd.</th>
               <th className="p-2 text-right">Ref.</th>
-              {comparison.suppliers.map(s => (
+              {suppliers.map(s => (
                 <th key={s.id} className="p-2 text-center min-w-[110px]">{s.name}</th>
               ))}
               <th className="p-2 text-center">Vencedor</th>
@@ -53,7 +53,7 @@ export default function ComparisonsTab({ project, comparison, onApply }: Props) 
                   <td className="p-2 text-center">{it.unit}</td>
                   <td className="p-2 text-right">{formatQty(it.quantity)}</td>
                   <td className="p-2 text-right">{it.referencePrice ? fmt(it.referencePrice) : '—'}</td>
-                  {comparison.suppliers.map(s => {
+                  {suppliers.map(s => {
                     const price = it.prices.find(p => p.supplierId === s.id);
                     const isBest = an.bestSupplierId === s.id;
                     return (
@@ -86,7 +86,7 @@ export default function ComparisonsTab({ project, comparison, onApply }: Props) 
           <tfoot className="bg-muted/50 font-semibold">
             <tr>
               <td className="p-2" colSpan={4}>Total por fornecedor</td>
-              {comparison.suppliers.map(s => {
+              {suppliers.map(s => {
                 const t = totals.find(x => x.supplierId === s.id);
                 return <td key={s.id} className="p-2 text-right">{t ? fmt(t.total) : '—'}</td>;
               })}
