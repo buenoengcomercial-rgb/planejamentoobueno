@@ -55,3 +55,68 @@ export const NumberInput = React.forwardRef<HTMLInputElement, NumberInputProps>(
   },
 );
 NumberInput.displayName = 'NumberInput';
+
+/** Trunca em 2 casas decimais (sem arredondar para cima). */
+export function trunc2(value: number | null | undefined): number {
+  if (value == null || !Number.isFinite(Number(value))) return 0;
+  return Math.trunc((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
+/** Formata número como moeda BR (R$ 1.234,56). */
+export function formatBRL(value: number | null | undefined): string {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  return `R$ ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** Formata número com truncamento de 2 casas e separadores BR (sem R$). */
+export function formatQty(value: number | null | undefined): string {
+  return trunc2(value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+interface CurrencyInputProps extends Omit<React.ComponentProps<typeof Input>, 'onChange' | 'value' | 'type'> {
+  /** Valor numérico (em reais). */
+  value: number | undefined | null;
+  onChange: (next: number | undefined) => void;
+}
+
+/**
+ * Input de moeda BRL: mostra "R$ 1.234,56" quando desfocado e número editável quando focado.
+ */
+export const CurrencyInput = React.forwardRef<HTMLInputElement, CurrencyInputProps>(
+  ({ value, onChange, className, onFocus, onBlur, ...rest }, ref) => {
+    const [focused, setFocused] = React.useState(false);
+    const [draft, setDraft] = React.useState<string>('');
+    const display = focused
+      ? draft
+      : value != null && Number.isFinite(Number(value))
+        ? formatBRL(value)
+        : '';
+    return (
+      <Input
+        ref={ref}
+        type="text"
+        inputMode="decimal"
+        value={display}
+        onFocus={e => {
+          setFocused(true);
+          setDraft(value != null ? String(value).replace('.', ',') : '');
+          onFocus?.(e);
+        }}
+        onChange={e => {
+          const v = e.target.value;
+          if (v === '' || /^-?[\d.,\sR$]*$/.test(v)) setDraft(v);
+        }}
+        onBlur={e => {
+          setFocused(false);
+          const parsed = parseBR(draft);
+          onChange(parsed);
+          onBlur?.(e);
+        }}
+        className={cn('[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none', className)}
+        {...rest}
+      />
+    );
+  },
+);
+CurrencyInput.displayName = 'CurrencyInput';
