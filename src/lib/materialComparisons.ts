@@ -9,6 +9,7 @@ import type {
   MaterialComparisonStatus,
 } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
+import { trunc2 } from '@/lib/financialEngine';
 
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const nowISO = () => new Date().toISOString();
