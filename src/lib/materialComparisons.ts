@@ -202,6 +202,7 @@ export function totalsBySupplier(comp: MaterialComparison): SupplierTotal[] {
 
 export interface OptimizedPlanRow {
   itemId: string;
+  code?: string;
   description: string;
   unit: string;
   quantity: number;
