@@ -25,6 +25,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   const [error, setError] = useState('');
   const [fileName, setFileName] = useState('');
   const [parsed, setParsed] = useState<ParsedSynthetic | null>(null);
+  const [analyticCompositions, setAnalyticCompositions] = useState<AdditiveComposition[]>([]);
+  const [analyticInfo, setAnalyticInfo] = useState<string>('');
 
   const reset = () => {
     setLoading(false);
