@@ -18,6 +18,7 @@ const Measurement = lazy(() => import('@/components/Measurement'));
 const DailyReport = lazy(() => import('@/components/DailyReport'));
 const Additive = lazy(() => import('@/components/Additive'));
 const Materials = lazy(() => import('@/components/Materials'));
+const WarehouseView = lazy(() => import('@/components/warehouse/Warehouse'));
 import { useAuth } from '@/hooks/useAuth';
 import { useOrganization } from '@/hooks/useOrganization';
 import { canCreateProject, canDeleteProject, canEditProject, ROLE_LABELS } from '@/lib/organizations';
