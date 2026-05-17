@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import type { MaterialComparison } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import { Trophy, TrendingDown } from 'lucide-react';
-import { NumberInput, parseBR } from './numberInput';
+import { CurrencyInput, formatQty } from './numberInput';
 
 interface Props {
   comparison: MaterialComparison;
