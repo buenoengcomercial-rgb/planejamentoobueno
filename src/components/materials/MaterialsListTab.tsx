@@ -31,6 +31,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     [project],
   );
   const needsAnalyticLink =
+    diagnostics.additiveAnalyticInputs === 0 &&
     diagnostics.baseCompositionsWithAnalytic === 0 &&
     diagnostics.baseAnalyticInputs === 0 &&
     diagnostics.syntheticCompositionsIgnored > 0;
