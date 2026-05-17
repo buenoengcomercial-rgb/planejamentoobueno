@@ -240,6 +240,7 @@ export function optimizedPurchasePlan(comp: MaterialComparison): OptimizedPlan {
     totalCost += total;
     rows.push({
       itemId: it.id,
+      code: it.code,
       description: it.description,
       unit: it.unit,
       quantity: it.quantity,
