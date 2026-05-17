@@ -19,10 +19,9 @@ interface Props {
 export default function Warehouse({ project, onProjectChange }: Props) {
   const [tab, setTab] = useState('painel');
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
-  // Garante migração na primeira renderização
-  if (ensured !== project) {
-    queueMicrotask(() => onProjectChange(ensured));
-  }
+  useEffect(() => {
+    if (ensured !== project) onProjectChange(ensured);
+  }, [ensured, project, onProjectChange]);
   const summary = useMemo(() => panelSummary(ensured), [ensured]);
 
   return (
