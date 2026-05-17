@@ -5,9 +5,12 @@ import {
 import { Button } from '@/components/ui/button';
 import { Project, BudgetItem, AdditiveComposition } from '@/types/project';
 import { parseSyntheticBudget, ParsedSynthetic } from '@/lib/importParser';
-import { extractBaseAnalyticCompositions } from '@/lib/additiveImport';
 import {
-  Upload, FileSpreadsheet, AlertTriangle, Loader2, Check, Info, DollarSign,
+  extractBaseAnalyticCompositions,
+  extractBaseAnalyticCompositionsFromAnalyticFile,
+} from '@/lib/additiveImport';
+import {
+  Upload, FileSpreadsheet, AlertTriangle, Loader2, Check, Info, DollarSign, Layers,
 } from 'lucide-react';
 
 interface Props {
@@ -25,16 +28,24 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   const [error, setError] = useState('');
   const [fileName, setFileName] = useState('');
   const [parsed, setParsed] = useState<ParsedSynthetic | null>(null);
-  const [analyticCompositions, setAnalyticCompositions] = useState<AdditiveComposition[]>([]);
+
+  // Analítica (pode vir no mesmo arquivo da Sintética OU em arquivo separado).
+  const [analyticCompositions, setAnalyticCompositions] = useState<AdditiveComposition[] | null>(null);
+  const [analyticFileName, setAnalyticFileName] = useState('');
   const [analyticInfo, setAnalyticInfo] = useState<string>('');
+  const [analyticLoading, setAnalyticLoading] = useState(false);
+  const [analyticOk, setAnalyticOk] = useState(false);
 
   const reset = () => {
     setLoading(false);
     setError('');
     setFileName('');
     setParsed(null);
-    setAnalyticCompositions([]);
+    setAnalyticCompositions(null);
+    setAnalyticFileName('');
     setAnalyticInfo('');
+    setAnalyticLoading(false);
+    setAnalyticOk(false);
   };
   const handleClose = () => { reset(); onClose(); };
 
@@ -56,15 +67,19 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
       // Falha silenciosa: se não houver, segue só com a Sintética.
       try {
         const an = await extractBaseAnalyticCompositions(buf);
-        setAnalyticCompositions(an.compositions);
-        setAnalyticInfo(
-          an.hasAnalyticSheet
-            ? `Analítica detectada: ${an.compositions.length} composições c/ insumos (${an.totalInputs} insumos).`
-            : 'Aba Analítica não encontrada — a Lista de Material ficará sem insumos do contrato.',
-        );
+        if (an.hasAnalyticSheet && an.compositions.length > 0) {
+          setAnalyticCompositions(an.compositions);
+          setAnalyticOk(true);
+          setAnalyticInfo(`Analítica detectada no mesmo arquivo: ${an.compositions.length} composições c/ insumos (${an.totalInputs} insumos).`);
+        } else {
+          setAnalyticCompositions(null);
+          setAnalyticOk(false);
+          setAnalyticInfo('Aba Analítica não encontrada neste arquivo — você pode anexá-la abaixo.');
+        }
       } catch (err: any) {
-        setAnalyticCompositions([]);
-        setAnalyticInfo(`Falha ao ler Analítica: ${err?.message ?? 'erro desconhecido'}.`);
+        setAnalyticCompositions(null);
+        setAnalyticOk(false);
+        setAnalyticInfo(`Falha ao ler Analítica deste arquivo: ${err?.message ?? 'erro desconhecido'}.`);
       }
     } catch (e: any) {
       setError(`Erro ao ler a Sintética: ${e?.message ?? 'formato não reconhecido'}`);
@@ -72,31 +87,86 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     setLoading(false);
   }, []);
 
+  /** Importação da Analítica em arquivo separado, vinculando à Sintética. */
+  const handleAnalyticFile = useCallback(async (file: File) => {
+    setAnalyticLoading(true);
+    setAnalyticInfo('');
+    setAnalyticFileName(file.name);
+    try {
+      const buf = await file.arrayBuffer();
+      // Base de vínculo: itens recém-parseados (se houver) ou os já salvos no projeto.
+      const baseItems: BudgetItem[] = parsed
+        ? parsed.items
+        : (project.budgetItems ?? []).filter(b => b.source === 'sintetica');
+      const an = await extractBaseAnalyticCompositionsFromAnalyticFile(buf, baseItems);
+      if (!an.hasAnalyticSheet) {
+        setAnalyticOk(false);
+        setAnalyticCompositions(null);
+        setAnalyticInfo('Aba Analítica não encontrada no arquivo selecionado.');
+      } else if (an.compositions.length === 0) {
+        setAnalyticOk(false);
+        setAnalyticCompositions([]);
+        setAnalyticInfo(an.message || 'Analítica lida, mas nenhum bloco vinculou à Sintética.');
+      } else {
+        setAnalyticOk(true);
+        setAnalyticCompositions(an.compositions);
+        setAnalyticInfo(an.message);
+      }
+    } catch (err: any) {
+      setAnalyticOk(false);
+      setAnalyticCompositions(null);
+      setAnalyticInfo(`Falha ao ler Analítica: ${err?.message ?? 'erro desconhecido'}.`);
+    }
+    setAnalyticLoading(false);
+  }, [parsed, project.budgetItems]);
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     const f = e.dataTransfer.files[0];
     if (f) handleFile(f);
   }, [handleFile]);
 
+  const handleAnalyticDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    const f = e.dataTransfer.files[0];
+    if (f) handleAnalyticFile(f);
+  }, [handleAnalyticFile]);
+
   const confirmImport = () => {
-    if (!parsed) return;
-    // Mantém apenas itens de aditivo (source==='aditivo'), substitui os de Sintética
-    const keep = (project.budgetItems ?? []).filter(b => b.source !== 'sintetica');
-    const next: BudgetItem[] = [...keep, ...parsed.items];
-    onProjectChange({
-      ...project,
-      budgetItems: next,
-      // Substitui as composições analíticas do contrato/base quando o usuário
-      // reimporta a planilha. Mantém vazio se a aba Analítica não veio no arquivo.
-      analyticCompositions: analyticCompositions,
-      syntheticBdiPercent: parsed.bdiPercent,
-      syntheticImportedAt: new Date().toISOString(),
-    });
-    handleClose();
+    // Caso 1: importação completa de Sintética (+ opcional Analítica).
+    if (parsed) {
+      const keep = (project.budgetItems ?? []).filter(b => b.source !== 'sintetica');
+      const next: BudgetItem[] = [...keep, ...parsed.items];
+      const nextProject: Project = {
+        ...project,
+        budgetItems: next,
+        syntheticBdiPercent: parsed.bdiPercent,
+        syntheticImportedAt: new Date().toISOString(),
+      };
+      // Só substitui analyticCompositions se uma Analítica nova foi lida com sucesso.
+      // Caso contrário, PRESERVA a Analítica existente (não apaga).
+      if (analyticCompositions && analyticCompositions.length > 0) {
+        nextProject.analyticCompositions = analyticCompositions;
+      }
+      onProjectChange(nextProject);
+      handleClose();
+      return;
+    }
+    // Caso 2: somente Analítica (sem nova Sintética) — atualiza apenas analyticCompositions.
+    if (analyticCompositions && analyticCompositions.length > 0) {
+      onProjectChange({
+        ...project,
+        analyticCompositions,
+      });
+      handleClose();
+      return;
+    }
   };
 
   const totalNoBDI = parsed?.items.reduce((s, i) => s + i.totalNoBDI, 0) ?? 0;
   const totalWithBDI = parsed?.items.reduce((s, i) => s + i.totalWithBDI, 0) ?? 0;
+  const canConfirm = !!parsed || (analyticCompositions && analyticCompositions.length > 0);
+  const hasExistingSynthetic = (project.budgetItems ?? []).some(b => b.source === 'sintetica');
 
   return (
     <Dialog open={open} onOpenChange={v => !v && handleClose()}>
@@ -109,16 +179,16 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
           <DialogDescription>
             Planilha financeira do orçamento. Layout fixo:
             A=Item · B=Código · C=Banco · D=Descrição · E=Quant · F=Und · G=V.unit s/BDI · H=Total s/BDI · I=V.unit c/BDI · J=Total c/BDI.
-            <br />BDI lido de <strong>J8</strong> quando presente. Esta importação alimenta apenas a aba <strong>Medição</strong>.
+            <br />BDI lido de <strong>J8</strong> quando presente. Esta importação alimenta a aba <strong>Medição</strong> e — se houver Analítica — também a <strong>Lista de Material</strong>.
           </DialogDescription>
         </DialogHeader>
 
         {!parsed && (
-          <div className="flex-1 flex flex-col items-center justify-center py-8">
+          <div className="flex-1 flex flex-col items-center justify-center py-4 space-y-4">
             <div
               onDrop={handleDrop}
               onDragOver={e => e.preventDefault()}
-              className="w-full border-2 border-dashed border-border rounded-xl p-12 flex flex-col items-center gap-4 hover:border-primary/50 hover:bg-primary/5 transition-colors cursor-pointer"
+              className="w-full border-2 border-dashed border-border rounded-xl p-10 flex flex-col items-center gap-3 hover:border-primary/50 hover:bg-primary/5 transition-colors cursor-pointer"
               onClick={() => document.getElementById('synthetic-file-input')?.click()}
             >
               {loading ? (
@@ -126,7 +196,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
               ) : (
                 <>
                   <FileSpreadsheet className="w-10 h-10 text-success/70" />
-                  <p className="text-sm font-medium text-foreground">Arraste e solte ou clique para selecionar</p>
+                  <p className="text-sm font-medium text-foreground">Sintética — arraste e solte ou clique</p>
                   <p className="text-xs text-muted-foreground">.xlsx · .xls</p>
                 </>
               )}
@@ -139,9 +209,51 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
               onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])}
             />
             {error && (
-              <div className="mt-4 p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-2 w-full">
+              <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-2 w-full">
                 <AlertTriangle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
                 <p className="text-xs text-destructive">{error}</p>
+              </div>
+            )}
+
+            {/* Bloco para importar SOMENTE a Analítica, vinculando à Sintética já salva no projeto. */}
+            {hasExistingSynthetic && (
+              <div className="w-full border-t border-border pt-4 space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Já existe uma Sintética importada neste projeto. Você pode anexar somente a <strong>Analítica do contrato</strong> para alimentar a Lista de Material — sem reimportar a Sintética.
+                </p>
+                <div
+                  onDrop={handleAnalyticDrop}
+                  onDragOver={e => e.preventDefault()}
+                  className="w-full border-2 border-dashed border-border rounded-xl p-6 flex flex-col items-center gap-2 hover:border-warning/50 hover:bg-warning/5 transition-colors cursor-pointer"
+                  onClick={() => document.getElementById('analytic-only-file-input')?.click()}
+                >
+                  {analyticLoading ? (
+                    <Loader2 className="w-7 h-7 text-warning animate-spin" />
+                  ) : (
+                    <>
+                      <Layers className="w-7 h-7 text-warning/70" />
+                      <p className="text-xs font-medium text-foreground">Analítica do contrato — arraste e solte ou clique</p>
+                      <p className="text-[10px] text-muted-foreground">.xlsx · .xls</p>
+                    </>
+                  )}
+                </div>
+                <input
+                  id="analytic-only-file-input"
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={e => e.target.files?.[0] && handleAnalyticFile(e.target.files[0])}
+                />
+                {analyticInfo && (
+                  <div className={`rounded-lg border px-3 py-2 text-xs ${
+                    analyticOk
+                      ? 'border-success/30 bg-success/5 text-success'
+                      : 'border-warning/30 bg-warning/5 text-warning'
+                  }`}>
+                    {analyticFileName && <span className="opacity-70">📄 {analyticFileName} — </span>}
+                    {analyticInfo}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -161,15 +273,44 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
               </div>
             </div>
 
-            {analyticInfo && (
-              <div className={`rounded-lg border px-3 py-2 text-xs ${
-                analyticCompositions.length > 0
-                  ? 'border-success/30 bg-success/5 text-success'
-                  : 'border-warning/30 bg-warning/5 text-warning'
-              }`}>
-                {analyticInfo}
+            {/* Bloco da Analítica: anexar arquivo separado caso não esteja no mesmo arquivo. */}
+            <div className="rounded-lg border border-dashed border-border bg-muted/20 p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
+                  <Layers className="w-4 h-4 text-warning" />
+                  Analítica do contrato (opcional)
+                </div>
+                <button
+                  type="button"
+                  onClick={() => document.getElementById('analytic-extra-file-input')?.click()}
+                  className="text-xs px-2 py-1 rounded border border-border bg-card hover:bg-muted transition-colors"
+                >
+                  {analyticLoading ? 'Lendo...' : 'Anexar Analítica'}
+                </button>
+                <input
+                  id="analytic-extra-file-input"
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={e => e.target.files?.[0] && handleAnalyticFile(e.target.files[0])}
+                />
               </div>
-            )}
+              {analyticInfo && (
+                <div className={`rounded-md border px-2 py-1.5 text-[11px] ${
+                  analyticOk
+                    ? 'border-success/30 bg-success/5 text-success'
+                    : 'border-warning/30 bg-warning/5 text-warning'
+                }`}>
+                  {analyticFileName && <span className="opacity-70">📄 {analyticFileName} — </span>}
+                  {analyticInfo}
+                </div>
+              )}
+              {!analyticInfo && (
+                <p className="text-[11px] text-muted-foreground">
+                  Se a Analítica não estiver no mesmo arquivo da Sintética, anexe aqui para alimentar a Lista de Material.
+                </p>
+              )}
+            </div>
 
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-lg border border-border bg-card p-3">
@@ -235,9 +376,10 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
 
         <DialogFooter>
           <Button variant="outline" onClick={handleClose}>Cancelar</Button>
-          {parsed && (
+          {canConfirm && (
             <Button onClick={confirmImport}>
-              <Check className="w-4 h-4 mr-1" /> Importar para Medição
+              <Check className="w-4 h-4 mr-1" />
+              {parsed ? 'Importar Sintética' : 'Vincular Analítica'}
             </Button>
           )}
         </DialogFooter>
