@@ -42,8 +42,13 @@ function originBadge(sourceType: MC.MaterialSuggestionSource, detail?: MC.Materi
   return { label: 'Aditivo', cls: 'bg-muted text-muted-foreground border-border' };
 }
 
+const linkKey = (x: { sourceId?: string; code?: string; description: string; unit: string }) =>
+  x.sourceId
+    ? `id:${x.sourceId}`
+    : `k:${(x.code ?? '').trim().toLowerCase()}|${(x.description ?? '').trim().toLowerCase()}|${(x.unit ?? '').trim().toLowerCase()}`;
+
 export default function MaterialsListTab({ project, comparison, onApply, onProjectChange }: Props) {
-  const [showSuggest, setShowSuggest] = useState(false);
+  const [showSuggest, setShowSuggest] = useState(true);
   const [selectedKeys, setSelectedKeys] = useState<Record<string, boolean>>({});
   const [search, setSearch] = useState('');
   const [manual, setManual] = useState({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '' });
