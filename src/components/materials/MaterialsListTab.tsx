@@ -38,22 +38,17 @@ function originBadge(sourceType: MC.MaterialSuggestionSource, detail?: MC.Materi
   return { label: 'Aditivo', cls: 'bg-muted text-muted-foreground border-border' };
 }
 
-const linkKey = (x: { sourceId?: string; code?: string; description: string; unit: string }) =>
-  x.sourceId
-    ? `id:${x.sourceId}`
-    : `k:${(x.code ?? '').trim().toLowerCase()}|${(x.description ?? '').trim().toLowerCase()}|${(x.unit ?? '').trim().toLowerCase()}`;
-
 export default function MaterialsListTab({ project, comparison, onApply, onProjectChange }: Props) {
   const [selectedKeys, setSelectedKeys] = useState<Record<string, boolean>>({});
-  const [groupByKey, setGroupByKey] = useState<Record<string, string>>({});
   const [search, setSearch] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const [linkingAnalytic, setLinkingAnalytic] = useState(false);
   const [linkMsg, setLinkMsg] = useState<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null);
 
-  // Manual add (collapsible)
   const [showManual, setShowManual] = useState(false);
-  const [manual, setManual] = useState({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '', purchaseGroup: '' });
+  const [manual, setManual] = useState({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '' });
+
+  const allComparisons = project.materialComparisons ?? [];
 
   const diagnostics = useMemo(
     () => MC.suggestMaterialsWithDiagnostics(project).diagnostics,
@@ -67,15 +62,20 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     diagnostics.baseAnalyticInputs === 0 &&
     diagnostics.syntheticCompositionsIgnored > 0;
 
-  const linkedKeys = useMemo(() => {
-    const set = new Set<string>();
-    (comparison.items ?? []).forEach(it => set.add(linkKey(it)));
-    return set;
-  }, [comparison.items]);
+  // Map linkKey → comparisonId where this insumo is linked.
+  const linkedByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of allComparisons) {
+      for (const it of c.items) {
+        map.set(MC.linkKeyOf(it), c.id);
+      }
+    }
+    return map;
+  }, [allComparisons]);
 
   const realSuggestions = useMemo(
-    () => suggestions.filter(s => !s.warning && !linkedKeys.has(linkKey(s))),
-    [suggestions, linkedKeys],
+    () => suggestions.filter(s => !s.warning),
+    [suggestions],
   );
 
   const filtered = useMemo(() => {
@@ -128,25 +128,33 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     setLinkingAnalytic(false);
   }, [project, onProjectChange]);
 
-  const linkSelected = () => {
-    const picked = realSuggestions.filter(s => selectedKeys[s.key] && !linkedKeys.has(linkKey(s)));
+  const suggestionToPayload = (s: MC.MaterialSuggestion) => ({
+    description: s.description,
+    unit: s.unit,
+    quantity: trunc2(s.quantity),
+    referencePrice: s.referencePrice,
+    code: s.code,
+    sourceType: s.sourceType,
+    sourceDetail: s.sourceDetail,
+    sourceId: s.sourceId,
+  });
+
+  const changeGroup = (s: MC.MaterialSuggestion, targetCompId: string | null) => {
+    onProjectChange(MC.setSuggestionLink(project, suggestionToPayload(s), targetCompId));
+  };
+
+  const linkSelectedToActive = () => {
+    if (!comparison) {
+      alert('Selecione ou crie um comparativo antes de vincular insumos.');
+      return;
+    }
+    const picked = realSuggestions.filter(s => selectedKeys[s.key]);
     if (picked.length === 0) return;
-    const next = MC.addItemsBulk(
-      comparison,
-      picked.map(p => ({
-        description: p.description,
-        unit: p.unit,
-        quantity: trunc2(p.quantity),
-        referencePrice: p.referencePrice,
-        code: p.code,
-        sourceType: p.sourceType,
-        sourceDetail: p.sourceDetail,
-        sourceId: p.sourceId,
-        purchaseGroup: (groupByKey[p.key] ?? '').trim() || undefined,
-        status: 'pendente' as const,
-      })),
-    );
-    onApply(next);
+    let next = project;
+    for (const s of picked) {
+      next = MC.setSuggestionLink(next, suggestionToPayload(s), comparison.id);
+    }
+    onProjectChange(next);
     setSelectedKeys({});
   };
 
@@ -158,11 +166,10 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
       quantity: trunc2(parseBR(manual.quantity) ?? 0),
       referencePrice: parseBR(manual.referencePrice),
       code: manual.code || undefined,
-      purchaseGroup: manual.purchaseGroup.trim() || undefined,
       sourceType: 'manual',
     });
     onApply(next);
-    setManual({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '', purchaseGroup: '' });
+    setManual({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '' });
   };
 
   const selectedCount = Object.values(selectedKeys).filter(Boolean).length;
@@ -174,6 +181,12 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
       return next;
     });
   };
+
+  const linkedCount = useMemo(
+    () => realSuggestions.filter(s => linkedByKey.has(MC.linkKeyOf(s))).length,
+    [realSuggestions, linkedByKey],
+  );
+  const activeLinkedCount = comparison?.items.length ?? 0;
 
   return (
     <div className="space-y-2">
@@ -225,8 +238,16 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
         </div>
         <span className="text-[11px] text-muted-foreground whitespace-nowrap">
           <strong className="text-foreground">{filtered.length}</strong> de {realSuggestions.length} insumos disponíveis
+          <span className="mx-1.5">·</span>
+          <strong className="text-foreground">{linkedCount}</strong> vinculados no projeto
+          {comparison && (
+            <>
+              <span className="mx-1.5">·</span>
+              <strong className="text-foreground">{activeLinkedCount}</strong> em "{comparison.name}"
+            </>
+          )}
         </span>
-        <Button size="sm" className="h-8 text-xs" onClick={linkSelected} disabled={selectedCount === 0}>
+        <Button size="sm" className="h-8 text-xs" onClick={linkSelectedToActive} disabled={selectedCount === 0}>
           <Link2 className="w-3.5 h-3.5 mr-1" /> Vincular selecionados {selectedCount > 0 && `(${selectedCount})`}
         </Button>
         <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setShowManual(s => !s)}>
@@ -234,15 +255,13 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
         </Button>
       </div>
 
-      {/* Manual add (collapsible compact) */}
       {showManual && (
         <div className="bg-card border border-border rounded-lg px-2 py-2 grid grid-cols-12 gap-1.5">
           <Input className="col-span-2 h-8 text-xs" placeholder="Código" value={manual.code} onChange={e => setManual({ ...manual, code: e.target.value })} />
-          <Input className="col-span-4 h-8 text-xs" placeholder="Descrição" value={manual.description} onChange={e => setManual({ ...manual, description: e.target.value })} />
+          <Input className="col-span-5 h-8 text-xs" placeholder="Descrição" value={manual.description} onChange={e => setManual({ ...manual, description: e.target.value })} />
           <Input className="col-span-1 h-8 text-xs" placeholder="Un." value={manual.unit} onChange={e => setManual({ ...manual, unit: e.target.value })} />
           <Input className="col-span-1 h-8 text-xs text-right" placeholder="Qtd." value={manual.quantity} onChange={e => setManual({ ...manual, quantity: e.target.value })} />
-          <Input className="col-span-1 h-8 text-xs text-right" placeholder="Preço" value={manual.referencePrice} onChange={e => setManual({ ...manual, referencePrice: e.target.value })} />
-          <Input className="col-span-2 h-8 text-xs" placeholder="Grupo de compra" value={manual.purchaseGroup} onChange={e => setManual({ ...manual, purchaseGroup: e.target.value })} />
+          <Input className="col-span-2 h-8 text-xs text-right" placeholder="Preço" value={manual.referencePrice} onChange={e => setManual({ ...manual, referencePrice: e.target.value })} />
           <Button className="col-span-1 h-8" size="sm" onClick={addManual}><Plus className="w-3.5 h-3.5" /></Button>
         </div>
       )}
@@ -263,8 +282,8 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                 <th className="p-2 text-left w-40">Origem</th>
                 <th className="p-2 text-right w-20">Qtd</th>
                 <th className="p-2 text-right w-24">Preço ref.</th>
-                <th className="p-2 text-left w-40">Grupo de compra</th>
-                <th className="p-2 text-center w-14">Vinc.</th>
+                <th className="p-2 text-left w-44">Grupo de compra</th>
+                <th className="p-2 text-left w-32">Vinculado</th>
               </tr>
             </thead>
             <tbody>
@@ -272,13 +291,11 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                 <tr>
                   <td colSpan={10} className="p-6 text-center text-muted-foreground text-xs">
                     {realSuggestions.length === 0
-                      ? (suggestions.filter(s => !s.warning).length > 0
-                          ? 'Todos os insumos disponíveis já foram vinculados a este comparativo.'
-                          : diagnostics.additivesRead > 0
-                            ? 'Nenhum insumo analítico encontrado no Aditivo atual.'
-                            : needsAnalyticLink
-                              ? 'Vincule primeiro a Analítica do contrato.'
-                              : 'Nenhum insumo analítico encontrado.')
+                      ? (diagnostics.additivesRead > 0
+                          ? 'Nenhum insumo analítico encontrado no Aditivo atual.'
+                          : needsAnalyticLink
+                            ? 'Vincule primeiro a Analítica do contrato.'
+                            : 'Nenhum insumo analítico encontrado.')
                       : 'Nenhum insumo bate com a busca.'}
                   </td>
                 </tr>
@@ -286,8 +303,10 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
               {filtered.map(s => {
                 const badge = originBadge(s.sourceType, s.sourceDetail);
                 const checked = !!selectedKeys[s.key];
+                const linkedTo = linkedByKey.get(MC.linkKeyOf(s)) ?? '';
+                const linkedComp = linkedTo ? allComparisons.find(c => c.id === linkedTo) : null;
                 return (
-                  <tr key={s.key} className="border-t border-border hover:bg-muted/30">
+                  <tr key={s.key} className={`border-t border-border hover:bg-muted/30 ${linkedTo ? 'bg-primary/5' : ''}`}>
                     <td className="p-1.5 align-middle">
                       <Checkbox checked={checked} onCheckedChange={v => setSelectedKeys(prev => ({ ...prev, [s.key]: !!v }))} />
                     </td>
@@ -303,14 +322,26 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                     <td className="p-1.5 align-middle text-right font-mono">{formatQty(s.quantity)}</td>
                     <td className="p-1.5 align-middle text-right font-mono">{s.referencePrice ? formatBRL(s.referencePrice) : '—'}</td>
                     <td className="p-1.5 align-middle">
-                      <Input
-                        value={groupByKey[s.key] ?? ''}
-                        onChange={e => setGroupByKey(prev => ({ ...prev, [s.key]: e.target.value }))}
-                        placeholder="ex.: PVC CONEXÕES"
-                        className="h-6 text-[11px]"
-                      />
+                      <select
+                        value={linkedTo}
+                        onChange={e => changeGroup(s, e.target.value || null)}
+                        className="h-7 w-full text-[11px] border border-border rounded px-1.5 bg-background"
+                      >
+                        <option value="">— sem grupo —</option>
+                        {allComparisons.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
                     </td>
-                    <td className="p-1.5 align-middle text-center text-muted-foreground">—</td>
+                    <td className="p-1.5 align-middle">
+                      {linkedComp ? (
+                        <span className="inline-block px-1.5 py-0.5 rounded border bg-primary/10 text-primary border-primary/40 text-[10px] font-medium truncate max-w-[120px]">
+                          {linkedComp.name}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground">—</span>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
@@ -318,8 +349,8 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
           </table>
         </div>
         <div className="px-2 py-1.5 border-t border-border bg-muted/30 flex items-center justify-between text-[11px] text-muted-foreground">
-          <span>{selectedCount} selecionado{selectedCount === 1 ? '' : 's'}</span>
-          <Button size="sm" className="h-7 text-[11px]" onClick={linkSelected} disabled={selectedCount === 0}>
+          <span>{selectedCount} selecionado{selectedCount === 1 ? '' : 's'}{comparison ? ` · vincular ao comparativo "${comparison.name}"` : ''}</span>
+          <Button size="sm" className="h-7 text-[11px]" onClick={linkSelectedToActive} disabled={selectedCount === 0}>
             <Link2 className="w-3 h-3 mr-1" /> Vincular selecionados
           </Button>
         </div>
