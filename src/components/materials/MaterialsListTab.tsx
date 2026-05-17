@@ -1,22 +1,75 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState, useCallback } from 'react';
 import type { Project, MaterialComparison } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Plus, Sparkles, Trash2, AlertTriangle } from 'lucide-react';
+import { Plus, Sparkles, Trash2, AlertTriangle, Link2, Loader2, Check } from 'lucide-react';
 import { parseBR, NumberInput } from './numberInput';
+import {
+  extractBaseAnalyticCompositions,
+  extractBaseAnalyticCompositionsFromAnalyticFile,
+} from '@/lib/additiveImport';
 
 interface Props {
   project: Project;
   comparison: MaterialComparison;
   onApply: (next: MaterialComparison) => void;
+  onProjectChange: (next: Project) => void;
 }
 
-export default function MaterialsListTab({ project, comparison, onApply }: Props) {
+export default function MaterialsListTab({ project, comparison, onApply, onProjectChange }: Props) {
   const [showSuggest, setShowSuggest] = useState(false);
   const [selectedKeys, setSelectedKeys] = useState<Record<string, boolean>>({});
   const [manual, setManual] = useState({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '' });
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [linkingAnalytic, setLinkingAnalytic] = useState(false);
+  const [linkMsg, setLinkMsg] = useState<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null);
+
+  const diagnostics = useMemo(
+    () => MC.suggestMaterialsWithDiagnostics(project).diagnostics,
+    [project],
+  );
+  const needsAnalyticLink =
+    diagnostics.baseCompositionsWithAnalytic === 0 &&
+    diagnostics.baseAnalyticInputs === 0 &&
+    diagnostics.syntheticCompositionsIgnored > 0;
+
+  const handleAnalyticFile = useCallback(async (file: File) => {
+    setLinkingAnalytic(true);
+    setLinkMsg(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const baseItems = (project.budgetItems ?? []).filter(b => b.source === 'sintetica');
+      // Tenta primeiro como arquivo combinado (Sintética + Analítica).
+      let compositions: any[] = [];
+      let info = '';
+      const combined = await extractBaseAnalyticCompositions(buf);
+      if (combined.hasAnalyticSheet && combined.compositions.length > 0) {
+        compositions = combined.compositions;
+        info = combined.message;
+      } else {
+        const only = await extractBaseAnalyticCompositionsFromAnalyticFile(buf, baseItems);
+        if (!only.hasAnalyticSheet) {
+          setLinkMsg({ kind: 'err', text: 'Aba Analítica não encontrada no arquivo.' });
+          setLinkingAnalytic(false);
+          return;
+        }
+        if (only.compositions.length === 0) {
+          setLinkMsg({ kind: 'err', text: only.message || 'Analítica lida, mas nenhum bloco vinculou à Sintética.' });
+          setLinkingAnalytic(false);
+          return;
+        }
+        compositions = only.compositions;
+        info = only.message;
+      }
+      onProjectChange({ ...project, analyticCompositions: compositions });
+      setLinkMsg({ kind: 'ok', text: info });
+    } catch (err: any) {
+      setLinkMsg({ kind: 'err', text: `Falha ao ler Analítica: ${err?.message ?? 'erro desconhecido'}.` });
+    }
+    setLinkingAnalytic(false);
+  }, [project, onProjectChange]);
 
   const suggestions = useMemo(() => MC.suggestMaterialsFromProject(project), [project]);
   const realSuggestions = suggestions.filter(s => !s.warning);
