@@ -1,24 +1,26 @@
 import { useMemo } from 'react';
-import type { MaterialComparison } from '@/types/project';
+import type { MaterialComparison, Project } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import { Trophy, TrendingDown } from 'lucide-react';
 import { CurrencyInput, formatQty } from './numberInput';
 
 interface Props {
+  project: Project;
   comparison: MaterialComparison;
   onApply: (next: MaterialComparison) => void;
 }
 
-export default function ComparisonsTab({ comparison, onApply }: Props) {
-  const totals = useMemo(() => MC.totalsBySupplier(comparison), [comparison]);
-  const plan = useMemo(() => MC.optimizedPurchasePlan(comparison), [comparison]);
-  const supplierMap = useMemo(() => new Map(comparison.suppliers.map(s => [s.id, s.name] as const)), [comparison.suppliers]);
+export default function ComparisonsTab({ project, comparison, onApply }: Props) {
+  const suppliers = useMemo(() => MC.getProjectSuppliers(project), [project]);
+  const totals = useMemo(() => MC.totalsBySupplier({ ...comparison, suppliers }), [comparison, suppliers]);
+  const plan = useMemo(() => MC.optimizedPurchasePlan({ ...comparison, suppliers }), [comparison, suppliers]);
+  const supplierMap = useMemo(() => new Map(suppliers.map(s => [s.id, s.name] as const)), [suppliers]);
 
-  if (comparison.suppliers.length === 0) {
+  if (suppliers.length === 0) {
     return <Empty msg="Cadastre fornecedores na aba 'Fornecedores' para começar a comparar preços." />;
   }
   if (comparison.items.length === 0) {
-    return <Empty msg="Adicione itens na aba 'Materiais' para começar a comparar." />;
+    return <Empty msg="Vincule insumos em 'Insumos do Projeto' para começar a comparar." />;
   }
 
   return (
@@ -32,7 +34,7 @@ export default function ComparisonsTab({ comparison, onApply }: Props) {
               <th className="p-2">Un.</th>
               <th className="p-2 text-right">Qtd.</th>
               <th className="p-2 text-right">Ref.</th>
-              {comparison.suppliers.map(s => (
+              {suppliers.map(s => (
                 <th key={s.id} className="p-2 text-center min-w-[110px]">{s.name}</th>
               ))}
               <th className="p-2 text-center">Vencedor</th>
@@ -51,7 +53,7 @@ export default function ComparisonsTab({ comparison, onApply }: Props) {
                   <td className="p-2 text-center">{it.unit}</td>
                   <td className="p-2 text-right">{formatQty(it.quantity)}</td>
                   <td className="p-2 text-right">{it.referencePrice ? fmt(it.referencePrice) : '—'}</td>
-                  {comparison.suppliers.map(s => {
+                  {suppliers.map(s => {
                     const price = it.prices.find(p => p.supplierId === s.id);
                     const isBest = an.bestSupplierId === s.id;
                     return (
@@ -84,7 +86,7 @@ export default function ComparisonsTab({ comparison, onApply }: Props) {
           <tfoot className="bg-muted/50 font-semibold">
             <tr>
               <td className="p-2" colSpan={4}>Total por fornecedor</td>
-              {comparison.suppliers.map(s => {
+              {suppliers.map(s => {
                 const t = totals.find(x => x.supplierId === s.id);
                 return <td key={s.id} className="p-2 text-right">{t ? fmt(t.total) : '—'}</td>;
               })}

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { MaterialComparison } from '@/types/project';
+import type { Project } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,16 +7,17 @@ import { Plus, Trash2, Star } from 'lucide-react';
 import { NumberInput, parseBR } from './numberInput';
 
 interface Props {
-  comparison: MaterialComparison;
-  onApply: (next: MaterialComparison) => void;
+  project: Project;
+  onProjectChange: (next: Project) => void;
 }
 
-export default function SuppliersTab({ comparison, onApply }: Props) {
+export default function SuppliersTab({ project, onProjectChange }: Props) {
+  const suppliers = MC.getProjectSuppliers(project);
   const [form, setForm] = useState({ name: '', contact: '', deliveryDays: '', rating: '' });
 
   const add = () => {
     if (!form.name.trim()) return;
-    onApply(MC.addSupplier(comparison, {
+    onProjectChange(MC.addProjectSupplier(project, {
       name: form.name.trim(),
       contact: form.contact || undefined,
       deliveryDays: parseBR(form.deliveryDays),
@@ -28,7 +29,8 @@ export default function SuppliersTab({ comparison, onApply }: Props) {
   return (
     <div className="space-y-4">
       <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-        <h3 className="text-sm font-semibold">Adicionar fornecedor</h3>
+        <h3 className="text-sm font-semibold">Adicionar fornecedor (global do projeto)</h3>
+        <p className="text-[11px] text-muted-foreground">Fornecedores cadastrados aqui aparecem em todos os comparativos.</p>
         <div className="grid grid-cols-12 gap-2">
           <Input className="col-span-4" placeholder="Nome" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
           <Input className="col-span-4" placeholder="Contato (telefone/e-mail)" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} />
@@ -40,10 +42,10 @@ export default function SuppliersTab({ comparison, onApply }: Props) {
 
       <div className="bg-card border border-border rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b border-border bg-muted/30 text-xs uppercase font-semibold tracking-wide">
-          Fornecedores ({comparison.suppliers.length})
+          Fornecedores ({suppliers.length})
         </div>
-        {comparison.suppliers.length === 0 ? (
-          <div className="p-8 text-center text-sm text-muted-foreground">Nenhum fornecedor ainda.</div>
+        {suppliers.length === 0 ? (
+          <div className="p-8 text-center text-sm text-muted-foreground">Nenhum fornecedor cadastrado ainda.</div>
         ) : (
           <table className="w-full text-xs">
             <thead className="bg-muted">
@@ -56,15 +58,15 @@ export default function SuppliersTab({ comparison, onApply }: Props) {
               </tr>
             </thead>
             <tbody>
-              {comparison.suppliers.map(s => (
+              {suppliers.map(s => (
                 <tr key={s.id} className="border-t border-border hover:bg-muted/20">
-                  <td className="p-2"><Input value={s.name} onChange={e => onApply(MC.updateSupplier(comparison, s.id, { name: e.target.value }))} className="h-7 text-xs" /></td>
-                  <td className="p-2"><Input value={s.contact ?? ''} onChange={e => onApply(MC.updateSupplier(comparison, s.id, { contact: e.target.value }))} className="h-7 text-xs" /></td>
+                  <td className="p-2"><Input value={s.name} onChange={e => onProjectChange(MC.updateProjectSupplier(project, s.id, { name: e.target.value }))} className="h-7 text-xs" /></td>
+                  <td className="p-2"><Input value={s.contact ?? ''} onChange={e => onProjectChange(MC.updateProjectSupplier(project, s.id, { contact: e.target.value }))} className="h-7 text-xs" /></td>
                   <td className="p-2 w-24">
                     <NumberInput
                       decimal={false}
                       value={s.deliveryDays != null ? String(s.deliveryDays) : ''}
-                      onChange={v => onApply(MC.updateSupplier(comparison, s.id, { deliveryDays: parseBR(v) }))}
+                      onChange={v => onProjectChange(MC.updateProjectSupplier(project, s.id, { deliveryDays: parseBR(v) }))}
                       className="h-7 text-xs text-center"
                     />
                   </td>
@@ -73,7 +75,7 @@ export default function SuppliersTab({ comparison, onApply }: Props) {
                       <Star className="w-3 h-3 text-warning" />
                       <NumberInput
                         value={s.rating != null ? String(s.rating) : ''}
-                        onChange={v => onApply(MC.updateSupplier(comparison, s.id, { rating: parseBR(v) }))}
+                        onChange={v => onProjectChange(MC.updateProjectSupplier(project, s.id, { rating: parseBR(v) }))}
                         className="h-7 text-xs text-center w-16"
                       />
                     </div>
@@ -84,8 +86,8 @@ export default function SuppliersTab({ comparison, onApply }: Props) {
                       variant="ghost"
                       className="text-destructive h-7"
                       onClick={() => {
-                        if (confirm(`Remover o fornecedor "${s.name}"? Os preços lançados por ele também serão removidos.`)) {
-                          onApply(MC.removeSupplier(comparison, s.id));
+                        if (confirm(`Remover o fornecedor "${s.name}"? Os preços lançados por ele em todos os comparativos serão removidos.`)) {
+                          onProjectChange(MC.removeProjectSupplier(project, s.id));
                         }
                       }}
                     >

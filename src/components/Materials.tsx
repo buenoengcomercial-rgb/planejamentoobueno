@@ -5,13 +5,13 @@ import * as MC from '@/lib/materialComparisons';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Plus, ListChecks, Boxes, Truck, History, ShoppingCart, Trash2, Lock, Link2 } from 'lucide-react';
+import { Plus, ListChecks, Boxes, Truck, History, ShoppingCart, Trash2, Lock, Warehouse } from 'lucide-react';
 import MaterialsListTab from './materials/MaterialsListTab';
-import LinkedItemsTab from './materials/LinkedItemsTab';
 import ComparisonsTab from './materials/ComparisonsTab';
 import SuppliersTab from './materials/SuppliersTab';
 import PriceHistoryTab from './materials/PriceHistoryTab';
 import PurchaseOrderTab from './materials/PurchaseOrderTab';
+import StockTab from './materials/StockTab';
 
 interface Props {
   project: Project;
@@ -120,30 +120,30 @@ export default function Materials({ project, onProjectChange }: Props) {
         <Tabs value={tab} onValueChange={setTab} className="w-full">
           <TabsList className="bg-muted h-9">
             <TabsTrigger value="insumos" className="text-xs"><Boxes className="w-3.5 h-3.5 mr-1" /> Insumos do Projeto</TabsTrigger>
-            <TabsTrigger value="vinculados" className="text-xs"><Link2 className="w-3.5 h-3.5 mr-1" /> Vinculados ({ctl.active.items.length})</TabsTrigger>
-            <TabsTrigger value="comparativo" className="text-xs"><ListChecks className="w-3.5 h-3.5 mr-1" /> Comparativo</TabsTrigger>
+            <TabsTrigger value="comparativo" className="text-xs"><ListChecks className="w-3.5 h-3.5 mr-1" /> Comparativo ({ctl.active.items.length})</TabsTrigger>
             <TabsTrigger value="fornecedores" className="text-xs"><Truck className="w-3.5 h-3.5 mr-1" /> Fornecedores</TabsTrigger>
-            <TabsTrigger value="historico" className="text-xs"><History className="w-3.5 h-3.5 mr-1" /> Histórico</TabsTrigger>
             <TabsTrigger value="pedido" className="text-xs"><ShoppingCart className="w-3.5 h-3.5 mr-1" /> Pedido</TabsTrigger>
+            <TabsTrigger value="estoque" className="text-xs"><Warehouse className="w-3.5 h-3.5 mr-1" /> Estoque</TabsTrigger>
+            <TabsTrigger value="historico" className="text-xs"><History className="w-3.5 h-3.5 mr-1" /> Histórico</TabsTrigger>
           </TabsList>
 
           <TabsContent value="insumos" className="mt-3">
             <MaterialsListTab project={project} comparison={ctl.active} onApply={ctl.apply} onProjectChange={onProjectChange} />
           </TabsContent>
-          <TabsContent value="vinculados" className="mt-3">
-            <LinkedItemsTab project={project} comparison={ctl.active} onApply={ctl.apply} onProjectChange={onProjectChange} />
-          </TabsContent>
           <TabsContent value="comparativo" className="mt-3">
-            <ComparisonsTab comparison={ctl.active} onApply={ctl.apply} />
+            <ComparisonsTab project={project} comparison={ctl.active} onApply={ctl.apply} />
           </TabsContent>
           <TabsContent value="fornecedores" className="mt-3">
-            <SuppliersTab comparison={ctl.active} onApply={ctl.apply} />
+            <SuppliersTab project={project} onProjectChange={onProjectChange} />
+          </TabsContent>
+          <TabsContent value="pedido" className="mt-3">
+            <PurchaseOrderTab project={project} comparison={ctl.active} />
+          </TabsContent>
+          <TabsContent value="estoque" className="mt-3">
+            <StockTab project={project} onProjectChange={onProjectChange} />
           </TabsContent>
           <TabsContent value="historico" className="mt-3">
             <PriceHistoryTab project={project} />
-          </TabsContent>
-          <TabsContent value="pedido" className="mt-3">
-            <PurchaseOrderTab comparison={ctl.active} />
           </TabsContent>
         </Tabs>
       ) : (

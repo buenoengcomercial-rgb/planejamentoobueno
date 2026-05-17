@@ -7,6 +7,8 @@ import type {
   ComparisonItemStatus,
   PriceHistoryEntry,
   MaterialComparisonStatus,
+  StockMovement,
+  StockMovementType,
 } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
 import { trunc2 } from '@/lib/financialEngine';
@@ -200,6 +202,7 @@ export function totalsBySupplier(comp: MaterialComparison): SupplierTotal[] {
 
 export interface OptimizedPlanRow {
   itemId: string;
+  code?: string;
   description: string;
   unit: string;
   quantity: number;
@@ -237,6 +240,7 @@ export function optimizedPurchasePlan(comp: MaterialComparison): OptimizedPlan {
     totalCost += total;
     rows.push({
       itemId: it.id,
+      code: it.code,
       description: it.description,
       unit: it.unit,
       quantity: it.quantity,
@@ -557,3 +561,198 @@ export const STATUS_LABEL: Record<MaterialComparisonStatus, string> = {
   fechado: 'Fechado',
   comprado: 'Comprado',
 };
+
+// ============== FORNECEDORES GLOBAIS (project-level) ==============
+
+const supplierKey = (s: { name?: string; contact?: string }) =>
+  `${(s.name ?? '').trim().toLowerCase()}|${(s.contact ?? '').trim().toLowerCase()}`;
+
+/**
+ * Retorna a lista de fornecedores globais do projeto, garantindo migração
+ * de fornecedores antigos que estavam dentro de cada comparativo.
+ */
+export function getProjectSuppliers(project: Project): ComparisonSupplier[] {
+  const global = project.materialSuppliers ?? [];
+  if (global.length > 0) return global;
+  // Fallback: derivar dos comparativos antigos (sem mutar projeto).
+  const seen = new Map<string, ComparisonSupplier>();
+  for (const c of project.materialComparisons ?? []) {
+    for (const s of c.suppliers ?? []) {
+      const k = supplierKey(s);
+      if (!seen.has(k)) seen.set(k, s);
+    }
+  }
+  return Array.from(seen.values());
+}
+
+/**
+ * Garante que project.materialSuppliers exista, migrando fornecedores antigos
+ * de comparison.suppliers (preservando os IDs originais para não quebrar preços).
+ */
+export function ensureGlobalSuppliers(project: Project): Project {
+  if (project.materialSuppliers && project.materialSuppliers.length >= 0 && project.materialSuppliers !== undefined) {
+    // Mesmo se já existir, fundir com qualquer fornecedor ainda solto em comparativos.
+    const byKey = new Map<string, ComparisonSupplier>();
+    for (const s of project.materialSuppliers) byKey.set(supplierKey(s), s);
+    let changed = false;
+    for (const c of project.materialComparisons ?? []) {
+      for (const s of c.suppliers ?? []) {
+        const k = supplierKey(s);
+        if (!byKey.has(k)) { byKey.set(k, s); changed = true; }
+      }
+    }
+    if (!changed) return project;
+    return { ...project, materialSuppliers: Array.from(byKey.values()) };
+  }
+  const byKey = new Map<string, ComparisonSupplier>();
+  for (const c of project.materialComparisons ?? []) {
+    for (const s of c.suppliers ?? []) {
+      const k = supplierKey(s);
+      if (!byKey.has(k)) byKey.set(k, s);
+    }
+  }
+  return { ...project, materialSuppliers: Array.from(byKey.values()) };
+}
+
+export function addProjectSupplier(project: Project, supplier: Omit<ComparisonSupplier, 'id'>): Project {
+  const list = getProjectSuppliers(project);
+  const k = supplierKey(supplier);
+  if (list.some(s => supplierKey(s) === k)) return project;
+  const s: ComparisonSupplier = { id: uid(), ...supplier };
+  return { ...project, materialSuppliers: [...list, s] };
+}
+
+export function updateProjectSupplier(project: Project, id: string, patch: Partial<ComparisonSupplier>): Project {
+  const list = getProjectSuppliers(project);
+  return { ...project, materialSuppliers: list.map(s => (s.id === id ? { ...s, ...patch } : s)) };
+}
+
+export function removeProjectSupplier(project: Project, id: string): Project {
+  const list = getProjectSuppliers(project).filter(s => s.id !== id);
+  // Limpa preços e escolhas em todos os comparativos.
+  const comps = (project.materialComparisons ?? []).map(c => ({
+    ...c,
+    suppliers: (c.suppliers ?? []).filter(s => s.id !== id),
+    items: c.items.map(it => ({
+      ...it,
+      prices: it.prices.filter(p => p.supplierId !== id),
+      chosenSupplierId: it.chosenSupplierId === id ? undefined : it.chosenSupplierId,
+    })),
+  }));
+  return { ...project, materialSuppliers: list, materialComparisons: comps };
+}
+
+// ============== ESTOQUE / ALMOXARIFADO ==============
+
+export interface StockRow {
+  key: string;
+  code?: string;
+  bank?: string;
+  description: string;
+  unit: string;
+  comparisonId?: string;
+  comparisonName?: string;
+  planned: number;
+  purchased: number;  // quantidade comprada/pedida (status comprado em itens)
+  received: number;   // soma de entradas
+  used: number;       // soma de saídas
+  balance: number;    // received - used + ajustes
+  diffPlannedUsed: number; // planned - used
+  status: StockStatus;
+}
+
+export type StockStatus =
+  | 'nao_comprado'
+  | 'pedido_aberto'
+  | 'recebido_parcial'
+  | 'em_estoque'
+  | 'consumo_previsto'
+  | 'consumo_acima'
+  | 'falta_material';
+
+export const STOCK_STATUS_LABEL: Record<StockStatus, string> = {
+  nao_comprado: 'Não comprado',
+  pedido_aberto: 'Pedido em aberto',
+  recebido_parcial: 'Recebido parcial',
+  em_estoque: 'Em estoque',
+  consumo_previsto: 'Consumo conforme previsto',
+  consumo_acima: 'Consumo acima do previsto',
+  falta_material: 'Falta material',
+};
+
+export function computeStockRows(project: Project): StockRow[] {
+  const rows = new Map<string, StockRow>();
+  const comps = project.materialComparisons ?? [];
+  for (const c of comps) {
+    for (const it of c.items) {
+      const key = linkKeyOf(it);
+      const cur = rows.get(key) ?? {
+        key,
+        code: it.code,
+        description: it.description,
+        unit: it.unit,
+        comparisonId: c.id,
+        comparisonName: c.name,
+        planned: 0,
+        purchased: 0,
+        received: 0,
+        used: 0,
+        balance: 0,
+        diffPlannedUsed: 0,
+        status: 'nao_comprado' as StockStatus,
+      };
+      cur.planned = trunc2(cur.planned + (it.quantity || 0));
+      if (it.status === 'comprado') cur.purchased = trunc2(cur.purchased + (it.quantity || 0));
+      rows.set(key, cur);
+    }
+  }
+  // Movimentações
+  for (const m of project.stockMovements ?? []) {
+    let row = rows.get(m.itemKey);
+    if (!row) {
+      row = {
+        key: m.itemKey,
+        code: m.itemCode,
+        description: m.itemDescription,
+        unit: m.itemUnit,
+        planned: 0, purchased: 0, received: 0, used: 0, balance: 0, diffPlannedUsed: 0,
+        status: 'nao_comprado',
+      };
+      rows.set(m.itemKey, row);
+    }
+    if (m.type === 'entrada') row.received = trunc2(row.received + m.quantity);
+    else if (m.type === 'saida') row.used = trunc2(row.used + m.quantity);
+    else if (m.type === 'ajuste') row.balance = trunc2(row.balance + m.quantity);
+  }
+  // Cálculo final
+  const out: StockRow[] = [];
+  for (const r of rows.values()) {
+    r.balance = trunc2(r.balance + r.received - r.used);
+    r.diffPlannedUsed = trunc2(r.planned - r.used);
+    r.status = deriveStockStatus(r);
+    out.push(r);
+  }
+  return out.sort((a, b) => a.description.localeCompare(b.description, 'pt-BR'));
+}
+
+function deriveStockStatus(r: StockRow): StockStatus {
+  if (r.received === 0 && r.purchased === 0) return 'nao_comprado';
+  if (r.purchased > 0 && r.received === 0) return 'pedido_aberto';
+  if (r.used > r.planned && r.planned > 0) return 'consumo_acima';
+  if (r.balance < 0) return 'falta_material';
+  if (r.received > 0 && r.received < r.purchased) return 'recebido_parcial';
+  if (r.balance > 0) return 'em_estoque';
+  if (r.used > 0 && Math.abs(r.planned - r.used) < 0.01) return 'consumo_previsto';
+  return 'em_estoque';
+}
+
+export function addStockMovement(project: Project, m: Omit<StockMovement, 'id' | 'createdAt'>): Project {
+  const mv: StockMovement = { id: uid(), createdAt: nowISO(), ...m };
+  return { ...project, stockMovements: [...(project.stockMovements ?? []), mv] };
+}
+
+export function removeStockMovement(project: Project, id: string): Project {
+  return { ...project, stockMovements: (project.stockMovements ?? []).filter(m => m.id !== id) };
+}
+
+export type { StockMovement, StockMovementType };
