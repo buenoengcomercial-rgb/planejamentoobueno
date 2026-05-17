@@ -42,8 +42,13 @@ function originBadge(sourceType: MC.MaterialSuggestionSource, detail?: MC.Materi
   return { label: 'Aditivo', cls: 'bg-muted text-muted-foreground border-border' };
 }
 
+const linkKey = (x: { sourceId?: string; code?: string; description: string; unit: string }) =>
+  x.sourceId
+    ? `id:${x.sourceId}`
+    : `k:${(x.code ?? '').trim().toLowerCase()}|${(x.description ?? '').trim().toLowerCase()}|${(x.unit ?? '').trim().toLowerCase()}`;
+
 export default function MaterialsListTab({ project, comparison, onApply, onProjectChange }: Props) {
-  const [showSuggest, setShowSuggest] = useState(false);
+  const [showSuggest, setShowSuggest] = useState(true);
   const [selectedKeys, setSelectedKeys] = useState<Record<string, boolean>>({});
   const [search, setSearch] = useState('');
   const [manual, setManual] = useState({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '' });
@@ -97,8 +102,16 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   }, [project, onProjectChange]);
 
   const suggestions = useMemo(() => MC.suggestMaterialsFromProject(project), [project]);
-  const realSuggestions = suggestions.filter(s => !s.warning);
   const warnings = suggestions.filter(s => s.warning);
+  const linkedKeys = useMemo(() => {
+    const set = new Set<string>();
+    (comparison.items ?? []).forEach(it => set.add(linkKey(it)));
+    return set;
+  }, [comparison.items]);
+  const realSuggestions = useMemo(
+    () => suggestions.filter(s => !s.warning && !linkedKeys.has(linkKey(s))),
+    [suggestions, linkedKeys],
+  );
 
   const filteredSuggestions = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -130,8 +143,13 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   };
 
   const importSelected = () => {
-    const picked = realSuggestions.filter(s => selectedKeys[s.key]);
-    if (picked.length === 0) return;
+    const picked = realSuggestions.filter(
+      s => selectedKeys[s.key] && !linkedKeys.has(linkKey(s)),
+    );
+    if (picked.length === 0) {
+      setSelectedKeys({});
+      return;
+    }
     const next = MC.addItemsBulk(
       comparison,
       picked.map(p => ({
@@ -148,7 +166,6 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     );
     onApply(next);
     setSelectedKeys({});
-    setShowSuggest(false);
   };
 
   const selectedCount = Object.values(selectedKeys).filter(Boolean).length;
@@ -199,7 +216,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
           <h3 className="text-sm font-semibold">Adicionar item</h3>
           <Button size="sm" variant="outline" onClick={() => setShowSuggest(s => !s)}>
             <Sparkles className="w-3.5 h-3.5 mr-1" />
-            {showSuggest ? 'Ocultar sugestões' : 'Importar do projeto'}
+            {showSuggest ? 'Ocultar disponíveis' : 'Mostrar disponíveis'}
           </Button>
         </div>
         <div className="grid grid-cols-12 gap-2">
@@ -260,11 +277,13 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                   {filteredSuggestions.length === 0 && (
                     <tr><td colSpan={7} className="p-4 text-center text-muted-foreground">
                       {realSuggestions.length === 0
-                        ? (diagnostics.additivesRead > 0
-                            ? 'Nenhum insumo analítico encontrado no Aditivo atual.'
-                            : needsAnalyticLink
-                              ? 'Vincule primeiro a Analítica do contrato (botão acima).'
-                              : 'Nenhum insumo analítico encontrado.')
+                        ? (suggestions.filter(s => !s.warning).length > 0
+                            ? 'Todos os insumos disponíveis já foram vinculados a este comparativo.'
+                            : diagnostics.additivesRead > 0
+                              ? 'Nenhum insumo analítico encontrado no Aditivo atual.'
+                              : needsAnalyticLink
+                                ? 'Vincule primeiro a Analítica do contrato (botão acima).'
+                                : 'Nenhum insumo analítico encontrado.')
                         : 'Nenhum insumo bate com a busca.'}
                     </td></tr>
                   )}
