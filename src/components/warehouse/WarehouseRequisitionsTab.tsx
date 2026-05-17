@@ -209,8 +209,12 @@ export default function WarehouseRequisitionsTab({ project, onProjectChange }: P
               )}
             </div>
           ) : (
-            <div className="text-xs text-muted-foreground italic p-6 text-center">Selecione uma requisição para ver detalhes.</div>
+            <div className="text-xs text-muted-foreground py-8 text-center">
+              <div>Selecione uma requisição na lista</div>
+              <div className="text-[11px] mt-1">ou clique em <strong>Nova requisição</strong> para criar uma.</div>
+            </div>
           )}
+          </div>
         </div>
       </div>
     </div>
