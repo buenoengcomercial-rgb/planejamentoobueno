@@ -4,8 +4,8 @@ import * as MC from '@/lib/materialComparisons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Plus, Sparkles, Trash2, AlertTriangle, Link2, Loader2, Check, Search, Lock } from 'lucide-react';
-import { parseBR, NumberInput, CurrencyInput, trunc2, formatBRL, formatQty } from './numberInput';
+import { AlertTriangle, Link2, Loader2, Check, Search, Plus } from 'lucide-react';
+import { parseBR, trunc2, formatBRL, formatQty } from './numberInput';
 import {
   extractBaseAnalyticCompositions,
   extractBaseAnalyticCompositionsFromAnalyticFile,
@@ -33,12 +33,8 @@ function originBadge(sourceType: MC.MaterialSuggestionSource, detail?: MC.Materi
   if (sourceType === 'additive_input' && detail) {
     return { label: DETAIL_LABEL[detail], cls: DETAIL_BADGE[detail] };
   }
-  if (sourceType === 'task_material') {
-    return { label: 'Material manual', cls: 'bg-muted text-muted-foreground border-border' };
-  }
-  if (sourceType === 'analytic_input') {
-    return { label: 'Analítico do contrato', cls: 'bg-secondary text-secondary-foreground border-border' };
-  }
+  if (sourceType === 'task_material') return { label: 'Material manual', cls: 'bg-muted text-muted-foreground border-border' };
+  if (sourceType === 'analytic_input') return { label: 'Analítico do contrato', cls: 'bg-secondary text-secondary-foreground border-border' };
   return { label: 'Aditivo', cls: 'bg-muted text-muted-foreground border-border' };
 }
 
@@ -48,23 +44,54 @@ const linkKey = (x: { sourceId?: string; code?: string; description: string; uni
     : `k:${(x.code ?? '').trim().toLowerCase()}|${(x.description ?? '').trim().toLowerCase()}|${(x.unit ?? '').trim().toLowerCase()}`;
 
 export default function MaterialsListTab({ project, comparison, onApply, onProjectChange }: Props) {
-  const [showSuggest, setShowSuggest] = useState(true);
   const [selectedKeys, setSelectedKeys] = useState<Record<string, boolean>>({});
+  const [groupByKey, setGroupByKey] = useState<Record<string, string>>({});
   const [search, setSearch] = useState('');
-  const [manual, setManual] = useState({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '' });
   const fileRef = useRef<HTMLInputElement>(null);
   const [linkingAnalytic, setLinkingAnalytic] = useState(false);
   const [linkMsg, setLinkMsg] = useState<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null);
+
+  // Manual add (collapsible)
+  const [showManual, setShowManual] = useState(false);
+  const [manual, setManual] = useState({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '', purchaseGroup: '' });
 
   const diagnostics = useMemo(
     () => MC.suggestMaterialsWithDiagnostics(project).diagnostics,
     [project],
   );
+  const suggestions = useMemo(() => MC.suggestMaterialsFromProject(project), [project]);
+
   const needsAnalyticLink =
     diagnostics.additiveAnalyticInputs === 0 &&
     diagnostics.baseCompositionsWithAnalytic === 0 &&
     diagnostics.baseAnalyticInputs === 0 &&
     diagnostics.syntheticCompositionsIgnored > 0;
+
+  const linkedKeys = useMemo(() => {
+    const set = new Set<string>();
+    (comparison.items ?? []).forEach(it => set.add(linkKey(it)));
+    return set;
+  }, [comparison.items]);
+
+  const realSuggestions = useMemo(
+    () => suggestions.filter(s => !s.warning && !linkedKeys.has(linkKey(s))),
+    [suggestions, linkedKeys],
+  );
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return realSuggestions;
+    return realSuggestions.filter(s => {
+      const origin = originBadge(s.sourceType, s.sourceDetail).label.toLowerCase();
+      return (
+        (s.code ?? '').toLowerCase().includes(q) ||
+        (s.bank ?? '').toLowerCase().includes(q) ||
+        s.description.toLowerCase().includes(q) ||
+        s.unit.toLowerCase().includes(q) ||
+        origin.includes(q)
+      );
+    });
+  }, [realSuggestions, search]);
 
   const handleAnalyticFile = useCallback(async (file: File) => {
     setLinkingAnalytic(true);
@@ -101,55 +128,9 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     setLinkingAnalytic(false);
   }, [project, onProjectChange]);
 
-  const suggestions = useMemo(() => MC.suggestMaterialsFromProject(project), [project]);
-  const warnings = suggestions.filter(s => s.warning);
-  const linkedKeys = useMemo(() => {
-    const set = new Set<string>();
-    (comparison.items ?? []).forEach(it => set.add(linkKey(it)));
-    return set;
-  }, [comparison.items]);
-  const realSuggestions = useMemo(
-    () => suggestions.filter(s => !s.warning && !linkedKeys.has(linkKey(s))),
-    [suggestions, linkedKeys],
-  );
-
-  const filteredSuggestions = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return realSuggestions;
-    return realSuggestions.filter(s => {
-      const origin = originBadge(s.sourceType, s.sourceDetail).label.toLowerCase();
-      return (
-        (s.code ?? '').toLowerCase().includes(q) ||
-        (s.bank ?? '').toLowerCase().includes(q) ||
-        s.description.toLowerCase().includes(q) ||
-        s.unit.toLowerCase().includes(q) ||
-        origin.includes(q)
-      );
-    });
-  }, [realSuggestions, search]);
-
-  const addManual = () => {
-    if (!manual.description.trim()) return;
-    const next = MC.addItem(comparison, {
-      description: manual.description.trim(),
-      unit: manual.unit || 'un',
-      quantity: trunc2(parseBR(manual.quantity) ?? 0),
-      referencePrice: parseBR(manual.referencePrice),
-      code: manual.code || undefined,
-      sourceType: 'manual',
-    });
-    onApply(next);
-    setManual({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '' });
-  };
-
-  const importSelected = () => {
-    const picked = realSuggestions.filter(
-      s => selectedKeys[s.key] && !linkedKeys.has(linkKey(s)),
-    );
-    if (picked.length === 0) {
-      setSelectedKeys({});
-      return;
-    }
+  const linkSelected = () => {
+    const picked = realSuggestions.filter(s => selectedKeys[s.key] && !linkedKeys.has(linkKey(s)));
+    if (picked.length === 0) return;
     const next = MC.addItemsBulk(
       comparison,
       picked.map(p => ({
@@ -161,6 +142,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
         sourceType: p.sourceType,
         sourceDetail: p.sourceDetail,
         sourceId: p.sourceId,
+        purchaseGroup: (groupByKey[p.key] ?? '').trim() || undefined,
         status: 'pendente' as const,
       })),
     );
@@ -168,10 +150,33 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     setSelectedKeys({});
   };
 
+  const addManual = () => {
+    if (!manual.description.trim()) return;
+    const next = MC.addItem(comparison, {
+      description: manual.description.trim(),
+      unit: manual.unit || 'un',
+      quantity: trunc2(parseBR(manual.quantity) ?? 0),
+      referencePrice: parseBR(manual.referencePrice),
+      code: manual.code || undefined,
+      purchaseGroup: manual.purchaseGroup.trim() || undefined,
+      sourceType: 'manual',
+    });
+    onApply(next);
+    setManual({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '', purchaseGroup: '' });
+  };
+
   const selectedCount = Object.values(selectedKeys).filter(Boolean).length;
+  const allVisibleSelected = filtered.length > 0 && filtered.every(s => selectedKeys[s.key]);
+  const toggleAllVisible = (v: boolean) => {
+    setSelectedKeys(prev => {
+      const next = { ...prev };
+      filtered.forEach(s => { next[s.key] = v; });
+      return next;
+    });
+  };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2">
       <input
         ref={fileRef}
         type="file"
@@ -185,253 +190,139 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
       />
 
       {needsAnalyticLink && (
-        <div className="bg-warning/10 border border-warning/40 rounded-xl p-4 flex flex-wrap items-center gap-3">
-          <AlertTriangle className="w-5 h-5 text-warning" />
-          <div className="flex-1 min-w-[200px]">
-            <div className="text-sm font-semibold text-foreground">Analítica do contrato não vinculada</div>
-            <div className="text-xs text-muted-foreground">
-              Existem {diagnostics.syntheticCompositionsIgnored} composições sintéticas sem analítico. Vincule a planilha Analítica para listar os insumos reais (mão de obra, materiais, equipamentos).
-            </div>
-          </div>
-          <Button size="sm" onClick={() => fileRef.current?.click()} disabled={linkingAnalytic}>
-            {linkingAnalytic ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Link2 className="w-3.5 h-3.5 mr-1" />}
-            Vincular Analítica do contrato
+        <div className="bg-warning/10 border border-warning/40 rounded-lg px-3 py-2 flex flex-wrap items-center gap-2 text-xs">
+          <AlertTriangle className="w-4 h-4 text-warning" />
+          <span className="flex-1 min-w-[200px] text-muted-foreground">
+            {diagnostics.syntheticCompositionsIgnored} composições sintéticas sem analítico. Vincule a Analítica para listar os insumos.
+          </span>
+          <Button size="sm" className="h-7 text-[11px]" onClick={() => fileRef.current?.click()} disabled={linkingAnalytic}>
+            {linkingAnalytic ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Link2 className="w-3 h-3 mr-1" />}
+            Vincular Analítica
           </Button>
         </div>
       )}
       {linkMsg && (
-        <div className={`text-xs rounded-lg px-3 py-2 border flex items-start gap-2 ${
+        <div className={`text-[11px] rounded px-2 py-1.5 border flex items-start gap-2 ${
           linkMsg.kind === 'ok' ? 'bg-success/10 border-success/40 text-success-foreground'
           : linkMsg.kind === 'err' ? 'bg-destructive/10 border-destructive/40 text-destructive'
           : 'bg-muted border-border text-muted-foreground'
         }`}>
-          {linkMsg.kind === 'ok' ? <Check className="w-3.5 h-3.5 mt-0.5" /> : <AlertTriangle className="w-3.5 h-3.5 mt-0.5" />}
+          {linkMsg.kind === 'ok' ? <Check className="w-3 h-3 mt-0.5" /> : <AlertTriangle className="w-3 h-3 mt-0.5" />}
           <span>{linkMsg.text}</span>
         </div>
       )}
 
-      {/* Add manual */}
-      <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold">Adicionar item</h3>
-          <Button size="sm" variant="outline" onClick={() => setShowSuggest(s => !s)}>
-            <Sparkles className="w-3.5 h-3.5 mr-1" />
-            {showSuggest ? 'Ocultar disponíveis' : 'Mostrar disponíveis'}
-          </Button>
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center gap-2 bg-card border border-border rounded-lg px-2 py-1.5">
+        <div className="relative flex-1 min-w-[260px]">
+          <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Buscar por código, descrição, banco ou origem..."
+            className="h-8 pl-7 text-xs"
+          />
         </div>
-        <div className="grid grid-cols-12 gap-2">
-          <Input className="col-span-2" placeholder="Código" value={manual.code} onChange={e => setManual({ ...manual, code: e.target.value })} />
-          <Input className="col-span-5" placeholder="Descrição" value={manual.description} onChange={e => setManual({ ...manual, description: e.target.value })} />
-          <Input className="col-span-1" placeholder="Un." value={manual.unit} onChange={e => setManual({ ...manual, unit: e.target.value })} />
-          <NumberInput className="col-span-1" placeholder="Qtd." value={manual.quantity} onChange={v => setManual({ ...manual, quantity: v })} />
-          <NumberInput className="col-span-2" placeholder="Preço ref." value={manual.referencePrice} onChange={v => setManual({ ...manual, referencePrice: v })} />
-          <Button className="col-span-1" onClick={addManual}><Plus className="w-4 h-4" /></Button>
-        </div>
-
-        {showSuggest && (
-          <div className="border border-border rounded-lg overflow-hidden mt-2">
-            <div className="px-3 py-2 bg-muted/40 border-b border-border flex flex-wrap items-center gap-2">
-              <div className="relative flex-1 min-w-[220px]">
-                <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  placeholder="Buscar por código, banco, descrição ou origem..."
-                  className="h-8 pl-7 text-xs"
-                />
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                {filteredSuggestions.length}/{realSuggestions.length} insumos
-              </div>
-              <Button size="sm" onClick={importSelected} disabled={selectedCount === 0}>
-                Importar selecionados {selectedCount > 0 && `(${selectedCount})`}
-              </Button>
-            </div>
-            <div className="px-3 py-1.5 bg-muted/30 border-b border-border text-[10px] text-muted-foreground flex flex-wrap gap-x-4 gap-y-0.5">
-              <span><strong>{diagnostics.additiveCompositionsWithAnalytic}</strong> composições do Aditivo c/ analítico</span>
-              <span><strong>{diagnostics.additiveAnalyticInputs}</strong> insumos lidos</span>
-              <span><strong>{diagnostics.groupedInputs}</strong> agrupados</span>
-            </div>
-            {warnings.length > 0 && (
-              <div className="px-3 py-2 bg-warning/10 border-b border-border text-[11px] text-warning-foreground flex items-start gap-2">
-                <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                <div>
-                  <strong>{warnings.length}</strong> composição(ões) sem analítico vinculado foram ignoradas.
-                </div>
-              </div>
-            )}
-            <div className="max-h-80 overflow-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-muted sticky top-0 z-10">
-                  <tr>
-                    <th className="p-2 w-8"></th>
-                    <th className="p-2 text-left">Código / Banco</th>
-                    <th className="p-2 text-left">Descrição</th>
-                    <th className="p-2 text-left">Origem</th>
-                    <th className="p-2">Un</th>
-                    <th className="p-2 text-right">Qtd</th>
-                    <th className="p-2 text-right">Preço ref.</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredSuggestions.length === 0 && (
-                    <tr><td colSpan={7} className="p-4 text-center text-muted-foreground">
-                      {realSuggestions.length === 0
-                        ? (suggestions.filter(s => !s.warning).length > 0
-                            ? 'Todos os insumos disponíveis já foram vinculados a este comparativo.'
-                            : diagnostics.additivesRead > 0
-                              ? 'Nenhum insumo analítico encontrado no Aditivo atual.'
-                              : needsAnalyticLink
-                                ? 'Vincule primeiro a Analítica do contrato (botão acima).'
-                                : 'Nenhum insumo analítico encontrado.')
-                        : 'Nenhum insumo bate com a busca.'}
-                    </td></tr>
-                  )}
-                  {filteredSuggestions.map(s => {
-                    const badge = originBadge(s.sourceType, s.sourceDetail);
-                    return (
-                      <tr key={s.key} className="border-t border-border hover:bg-muted/30">
-                        <td className="p-2 align-top">
-                          <Checkbox checked={!!selectedKeys[s.key]} onCheckedChange={v => setSelectedKeys(prev => ({ ...prev, [s.key]: !!v }))} />
-                        </td>
-                        <td className="p-2 align-top">
-                          <div className="font-mono text-[10px] text-foreground">{s.code || '—'}</div>
-                          <div className="text-[10px] text-muted-foreground">{s.bank || ''}</div>
-                        </td>
-                        <td className="p-2 align-top">{s.description}</td>
-                        <td className="p-2 align-top">
-                          <span className={`inline-block px-1.5 py-0.5 rounded border text-[10px] font-medium ${badge.cls}`}>
-                            {badge.label}
-                          </span>
-                        </td>
-                        <td className="p-2 text-center align-top">{s.unit}</td>
-                        <td className="p-2 text-right align-top">{formatQty(s.quantity)}</td>
-                        <td className="p-2 text-right align-top">{s.referencePrice ? formatBRL(s.referencePrice) : '—'}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <div className="p-2 border-t border-border bg-muted/30 flex justify-end">
-              <Button size="sm" onClick={importSelected} disabled={selectedCount === 0}>
-                Importar selecionados {selectedCount > 0 && `(${selectedCount})`}
-              </Button>
-            </div>
-          </div>
-        )}
+        <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+          <strong className="text-foreground">{filtered.length}</strong> de {realSuggestions.length} insumos disponíveis
+        </span>
+        <Button size="sm" className="h-8 text-xs" onClick={linkSelected} disabled={selectedCount === 0}>
+          <Link2 className="w-3.5 h-3.5 mr-1" /> Vincular selecionados {selectedCount > 0 && `(${selectedCount})`}
+        </Button>
+        <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setShowManual(s => !s)}>
+          <Plus className="w-3.5 h-3.5 mr-1" /> Item manual
+        </Button>
       </div>
 
-      {/* Current items */}
-      <div className="bg-card border border-border rounded-xl overflow-hidden">
-        <div className="px-4 py-3 border-b border-border bg-muted/30 text-xs uppercase font-semibold tracking-wide">
-          Itens do comparativo ({comparison.items.length})
+      {/* Manual add (collapsible compact) */}
+      {showManual && (
+        <div className="bg-card border border-border rounded-lg px-2 py-2 grid grid-cols-12 gap-1.5">
+          <Input className="col-span-2 h-8 text-xs" placeholder="Código" value={manual.code} onChange={e => setManual({ ...manual, code: e.target.value })} />
+          <Input className="col-span-4 h-8 text-xs" placeholder="Descrição" value={manual.description} onChange={e => setManual({ ...manual, description: e.target.value })} />
+          <Input className="col-span-1 h-8 text-xs" placeholder="Un." value={manual.unit} onChange={e => setManual({ ...manual, unit: e.target.value })} />
+          <Input className="col-span-1 h-8 text-xs text-right" placeholder="Qtd." value={manual.quantity} onChange={e => setManual({ ...manual, quantity: e.target.value })} />
+          <Input className="col-span-1 h-8 text-xs text-right" placeholder="Preço" value={manual.referencePrice} onChange={e => setManual({ ...manual, referencePrice: e.target.value })} />
+          <Input className="col-span-2 h-8 text-xs" placeholder="Grupo de compra" value={manual.purchaseGroup} onChange={e => setManual({ ...manual, purchaseGroup: e.target.value })} />
+          <Button className="col-span-1 h-8" size="sm" onClick={addManual}><Plus className="w-3.5 h-3.5" /></Button>
         </div>
-        {comparison.items.length === 0 ? (
-          <div className="p-8 text-center text-sm text-muted-foreground">Nenhum item ainda. Adicione manualmente ou importe do projeto.</div>
-        ) : (
+      )}
+
+      {/* Dominant table */}
+      <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="max-h-[calc(100vh-260px)] overflow-auto">
           <table className="w-full text-xs">
-            <thead className="bg-muted">
-              <tr>
-                <th className="p-2 text-left">Código</th>
+            <thead className="bg-muted sticky top-0 z-10">
+              <tr className="border-b border-border">
+                <th className="p-2 w-8">
+                  <Checkbox checked={allVisibleSelected} onCheckedChange={v => toggleAllVisible(!!v)} />
+                </th>
+                <th className="p-2 text-left w-28">Código</th>
+                <th className="p-2 text-left w-20">Banco</th>
+                <th className="p-2 text-center w-12">Un</th>
                 <th className="p-2 text-left">Descrição</th>
-                <th className="p-2">Un.</th>
-                <th className="p-2 text-right">Qtd.</th>
-                <th className="p-2 text-right">Preço ref.</th>
-                <th className="p-2 text-left">Origem</th>
-                <th className="p-2 text-center">Status</th>
-                <th className="p-2"></th>
+                <th className="p-2 text-left w-40">Origem</th>
+                <th className="p-2 text-right w-20">Qtd</th>
+                <th className="p-2 text-right w-24">Preço ref.</th>
+                <th className="p-2 text-left w-40">Grupo de compra</th>
+                <th className="p-2 text-center w-14">Vinc.</th>
               </tr>
             </thead>
             <tbody>
-              {comparison.items.map(it => {
-                const isManual = (it.sourceType ?? 'manual') === 'manual';
-                const badge = originBadge(
-                  (it.sourceType ?? 'manual') as MC.MaterialSuggestionSource,
-                  it.sourceDetail as MC.MaterialSuggestionDetail | undefined,
-                );
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={10} className="p-6 text-center text-muted-foreground text-xs">
+                    {realSuggestions.length === 0
+                      ? (suggestions.filter(s => !s.warning).length > 0
+                          ? 'Todos os insumos disponíveis já foram vinculados a este comparativo.'
+                          : diagnostics.additivesRead > 0
+                            ? 'Nenhum insumo analítico encontrado no Aditivo atual.'
+                            : needsAnalyticLink
+                              ? 'Vincule primeiro a Analítica do contrato.'
+                              : 'Nenhum insumo analítico encontrado.')
+                      : 'Nenhum insumo bate com a busca.'}
+                  </td>
+                </tr>
+              )}
+              {filtered.map(s => {
+                const badge = originBadge(s.sourceType, s.sourceDetail);
+                const checked = !!selectedKeys[s.key];
                 return (
-                  <tr key={it.id} className="border-t border-border hover:bg-muted/30">
-                    <td className="p-2">
-                      {isManual ? (
-                        <Input value={it.code ?? ''} onChange={e => onApply(MC.updateItem(comparison, it.id, { code: e.target.value }))} className="h-7 text-xs" />
-                      ) : (
-                        <span className="font-mono text-[11px] text-foreground">{it.code || '—'}</span>
-                      )}
+                  <tr key={s.key} className="border-t border-border hover:bg-muted/30">
+                    <td className="p-1.5 align-middle">
+                      <Checkbox checked={checked} onCheckedChange={v => setSelectedKeys(prev => ({ ...prev, [s.key]: !!v }))} />
                     </td>
-                    <td className="p-2 min-w-[200px]">
-                      {isManual ? (
-                        <Input value={it.description} onChange={e => onApply(MC.updateItem(comparison, it.id, { description: e.target.value }))} className="h-7 text-xs" />
-                      ) : (
-                        <span className="text-foreground">{it.description}</span>
-                      )}
-                    </td>
-                    <td className="p-2 w-16 text-center">
-                      {isManual ? (
-                        <Input value={it.unit} onChange={e => onApply(MC.updateItem(comparison, it.id, { unit: e.target.value }))} className="h-7 text-xs" />
-                      ) : (
-                        <span className="text-muted-foreground">{it.unit}</span>
-                      )}
-                    </td>
-                    <td className="p-2 w-24 text-right">
-                      {isManual ? (
-                        <NumberInput
-                          value={String(it.quantity ?? '')}
-                          onChange={v => onApply(MC.updateItem(comparison, it.id, { quantity: trunc2(parseBR(v) ?? 0) }))}
-                          className="h-7 text-xs text-right"
-                        />
-                      ) : (
-                        <span className="font-mono">{formatQty(it.quantity)}</span>
-                      )}
-                    </td>
-                    <td className="p-2 w-32 text-right">
-                      {isManual ? (
-                        <CurrencyInput
-                          value={it.referencePrice ?? undefined}
-                          onChange={v => onApply(MC.updateItem(comparison, it.id, { referencePrice: v }))}
-                          className="h-7 text-xs text-right"
-                        />
-                      ) : (
-                        <span className="font-mono">{it.referencePrice != null ? formatBRL(it.referencePrice) : '—'}</span>
-                      )}
-                    </td>
-                    <td className="p-2">
-                      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium ${badge.cls}`}>
-                        {!isManual && <Lock className="w-2.5 h-2.5" />}
+                    <td className="p-1.5 align-middle font-mono text-[10px]">{s.code || '—'}</td>
+                    <td className="p-1.5 align-middle text-[10px] text-muted-foreground">{s.bank || '—'}</td>
+                    <td className="p-1.5 align-middle text-center text-muted-foreground">{s.unit}</td>
+                    <td className="p-1.5 align-middle">{s.description}</td>
+                    <td className="p-1.5 align-middle">
+                      <span className={`inline-block px-1.5 py-0.5 rounded border text-[10px] font-medium ${badge.cls}`}>
                         {badge.label}
                       </span>
                     </td>
-                    <td className="p-2 text-center">
-                      <select
-                        value={it.status ?? 'pendente'}
-                        onChange={e => onApply(MC.setItemStatus(comparison, it.id, e.target.value as never))}
-                        className="text-[11px] border border-border rounded px-1.5 py-1 bg-background"
-                      >
-                        <option value="pendente">Pendente</option>
-                        <option value="orcado">Orçado</option>
-                        <option value="comprado">Comprado</option>
-                      </select>
+                    <td className="p-1.5 align-middle text-right font-mono">{formatQty(s.quantity)}</td>
+                    <td className="p-1.5 align-middle text-right font-mono">{s.referencePrice ? formatBRL(s.referencePrice) : '—'}</td>
+                    <td className="p-1.5 align-middle">
+                      <Input
+                        value={groupByKey[s.key] ?? ''}
+                        onChange={e => setGroupByKey(prev => ({ ...prev, [s.key]: e.target.value }))}
+                        placeholder="ex.: PVC CONEXÕES"
+                        className="h-6 text-[11px]"
+                      />
                     </td>
-                    <td className="p-2 text-right">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="text-destructive h-7"
-                        onClick={() => {
-                          if (confirm(`Remover o item "${it.description}" do comparativo?`)) {
-                            onApply(MC.removeItem(comparison, it.id));
-                          }
-                        }}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </Button>
-                    </td>
+                    <td className="p-1.5 align-middle text-center text-muted-foreground">—</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-        )}
+        </div>
+        <div className="px-2 py-1.5 border-t border-border bg-muted/30 flex items-center justify-between text-[11px] text-muted-foreground">
+          <span>{selectedCount} selecionado{selectedCount === 1 ? '' : 's'}</span>
+          <Button size="sm" className="h-7 text-[11px]" onClick={linkSelected} disabled={selectedCount === 0}>
+            <Link2 className="w-3 h-3 mr-1" /> Vincular selecionados
+          </Button>
+        </div>
       </div>
     </div>
   );

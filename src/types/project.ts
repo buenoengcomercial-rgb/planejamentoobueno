@@ -441,6 +441,8 @@ export interface ComparisonItem {
   /** Subtipo da origem quando vem do Aditivo. */
   sourceDetail?: 'contracted_item' | 'additive_new_service' | 'additive_existing_changed';
   sourceId?: string;
+  /** Grupo de compra livre (ex.: "PVC CONEXÕES", "CABEAMENTO"). */
+  purchaseGroup?: string;
 }
 
 export interface PriceHistoryEntry {
