@@ -1,14 +1,15 @@
 import { useMemo } from 'react';
-import type { MaterialComparison } from '@/types/project';
+import type { MaterialComparison, Project } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import { Button } from '@/components/ui/button';
-import { ShoppingCart, Printer } from 'lucide-react';
+import { ShoppingCart, Printer, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 
-interface Props { comparison: MaterialComparison }
+interface Props { project: Project; comparison: MaterialComparison }
 
-export default function PurchaseOrderTab({ comparison }: Props) {
-  const plan = useMemo(() => MC.optimizedPurchasePlan(comparison), [comparison]);
+export default function PurchaseOrderTab({ project, comparison }: Props) {
+  const suppliers = useMemo(() => MC.getProjectSuppliers(project), [project]);
+  const plan = useMemo(() => MC.optimizedPurchasePlan({ ...comparison, suppliers }), [comparison, suppliers]);
   const grouped = useMemo(() => {
     const map = new Map<string, { supplierName: string; rows: typeof plan.rows }>();
     for (const r of plan.rows) {
@@ -19,9 +20,16 @@ export default function PurchaseOrderTab({ comparison }: Props) {
     return Array.from(map.entries());
   }, [plan]);
 
-  if (plan.rows.length === 0) {
+  const unresolvedDetails = useMemo(
+    () => plan.unresolvedItems
+      .map(u => comparison.items.find(i => i.id === u.itemId))
+      .filter((x): x is NonNullable<typeof x> => !!x),
+    [plan, comparison.items],
+  );
+
+  if (plan.rows.length === 0 && unresolvedDetails.length === 0) {
     return <div className="bg-card border border-dashed border-border rounded-xl p-10 text-center text-sm text-muted-foreground">
-      Cadastre fornecedores, itens e preços para gerar pedidos.
+      Vincule insumos e cadastre preços para gerar pedidos.
     </div>;
   }
 
