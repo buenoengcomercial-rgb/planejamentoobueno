@@ -1,24 +1,26 @@
 import { useMemo } from 'react';
-import type { MaterialComparison } from '@/types/project';
+import type { MaterialComparison, Project } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import { Trophy, TrendingDown } from 'lucide-react';
 import { CurrencyInput, formatQty } from './numberInput';
 
 interface Props {
+  project: Project;
   comparison: MaterialComparison;
   onApply: (next: MaterialComparison) => void;
 }
 
-export default function ComparisonsTab({ comparison, onApply }: Props) {
-  const totals = useMemo(() => MC.totalsBySupplier(comparison), [comparison]);
-  const plan = useMemo(() => MC.optimizedPurchasePlan(comparison), [comparison]);
-  const supplierMap = useMemo(() => new Map(comparison.suppliers.map(s => [s.id, s.name] as const)), [comparison.suppliers]);
+export default function ComparisonsTab({ project, comparison, onApply }: Props) {
+  const suppliers = useMemo(() => MC.getProjectSuppliers(project), [project]);
+  const totals = useMemo(() => MC.totalsBySupplier({ ...comparison, suppliers }), [comparison, suppliers]);
+  const plan = useMemo(() => MC.optimizedPurchasePlan({ ...comparison, suppliers }), [comparison, suppliers]);
+  const supplierMap = useMemo(() => new Map(suppliers.map(s => [s.id, s.name] as const)), [suppliers]);
 
-  if (comparison.suppliers.length === 0) {
+  if (suppliers.length === 0) {
     return <Empty msg="Cadastre fornecedores na aba 'Fornecedores' para começar a comparar preços." />;
   }
   if (comparison.items.length === 0) {
-    return <Empty msg="Adicione itens na aba 'Materiais' para começar a comparar." />;
+    return <Empty msg="Vincule insumos em 'Insumos do Projeto' para começar a comparar." />;
   }
 
   return (
