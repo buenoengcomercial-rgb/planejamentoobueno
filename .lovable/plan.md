@@ -1,114 +1,180 @@
-# Integração do Aditivo Aprovado ao Projeto
 
-## Princípio
+# Estoque / Almoxarifado — Plano de Implementação
 
-Enquanto o aditivo estiver em **rascunho**, **em análise** ou apenas **aprovado**, ele permanece **isolado** na aba Aditivo. Somente ao clicar em **"Integrar ao Projeto"** (status `aditivo_contratado` / `isContracted=true`) os efeitos são propagados para Tarefas, Cronograma, Medição e Diário de Obra.
+Vamos criar uma aba dedicada **Estoque / Almoxarifado** integrada aos módulos já existentes (Lista de Material, Pedidos, Tarefas/EAP, Diário, Medição, Aditivo). A aba atual "Estoque" dentro de Lista de Material será mantida apenas como visão rápida; o controle completo passa para a nova aba principal.
 
-## Estado atual (relevante)
+## Estrutura da nova aba
 
-- `Additive.status`: `rascunho | em_analise | aprovado | reprovado | aditivo_contratado` + flag `isContracted`.
-- `contractAdditive()` em `src/lib/additiveImport.ts` já existe e:
-  - cria tarefas dos **novos serviços** dentro do `phaseId` correto (id `add-{addId}-{compId}`);
-  - marca o aditivo como `aditivo_contratado`.
-- `getApprovedAdditiveBudgetItems()` hoje inclui itens com status **`aprovado`** — **fere a regra**: aprovado não pode mexer na Medição antes de integrar.
-- Acréscimo/supressão hoje gera apenas um `BudgetItem` separado (source `aditivo`); **não atualiza** a quantidade contratual da composição/tarefa original e não gera histórico estruturado.
+Nova entrada na sidebar **Almoxarifado**, com 7 subabas:
 
-## Mudanças
+1. **Painel** — cards de Planejado / Comprado / Recebido / Retirado / Aplicado / Saldo / A comprar / Abaixo do mínimo / Divergência.
+2. **Materiais em estoque** — lista consolidada por item com saldo calculado, estoque mínimo, local, último movimento.
+3. **Movimentações** — extrato completo (entradas, retiradas, devoluções, perdas, transferências, ajustes, estornos). Não há exclusão — apenas estorno.
+4. **Requisições / Retiradas** — formulário de requisição vinculada a tarefa/EAP, equipe, funcionário, frente de serviço; gera recibo PDF com assinatura digital (canvas) do almoxarife e do recebedor; opção "publicar no Diário do dia".
+5. **Equipamentos & Termo de Cautela** — cadastro de equipamentos (patrimônio/série), entrega com termo PDF assinado, devolução com conferência de estado, registro de divergência/dano/perda.
+6. **Inventário** — contagem física por item, gera ajustes automáticos como movimentações.
+7. **Relatórios** — extrato por item, retiradas por equipe, retiradas por tarefa, abaixo do mínimo, termos em aberto, equipamentos não devolvidos, divergência planejado×comprado×retirado×medido. Exportação CSV.
 
-### 1. Tipos (`src/types/project.ts`)
+## Regras de negócio
 
-- `Task`: adicionar campos opcionais
-  - `originAdditiveId?: string`, `originAdditiveName?: string`, `originAdditiveVersion?: number` (quando criada por aditivo)
-  - `additiveHistory?: Array<{ additiveId; additiveName; version; at; addedQuantity; suppressedQuantity; previousQuantity; newQuantity }>` (acréscimos/supressões aplicados a tarefas existentes)
-- `BudgetItem`: garantir `additiveId`, `originAdditiveName`, `additiveHistory` (similar) para itens contratuais sintéticos.
-- `AdditiveComposition`: novo `linkedTaskId?: string` (tarefa criada/atualizada pela integração) e `integratedAt?: string`.
+- **Saldo é sempre derivado**: `Saldo = Σ(entradas + devoluções) − Σ(retiradas + perdas + transferências_saída) ± ajustes`. Nunca editável.
+- **Imutabilidade**: movimentações não são apagadas. Para corrigir, o usuário cria um **estorno** que referencia o movimento original (`reversesId`).
+- **Auditoria**: cada movimento guarda `date`, `createdAt`, `user`, `responsible`, `originId` (pedido/requisição/termo), `destination` (tarefa/equipe/funcionário), `notes`, `attachments[]`.
+- **Anexos** (NF, foto do material, recibo, termo) ficam em base64/URL no projeto (mesmo padrão do Diário).
+- **Assinatura digital**: componente de canvas que salva PNG base64 dentro do registro.
+- **Integrações**:
+  - Itens vindos de `MaterialsList` (com `linkedComparisonId`) alimentam "Planejado".
+  - Pedidos com status `comprado` alimentam "Esperado para entrada".
+  - Entradas registradas viram saldo real.
+  - Retiradas opcionalmente espelham no `dailyReports` do dia (entrada de produção/observação).
+  - Aditivo atualiza quantidades planejadas via recálculo da Lista de Material (já existe).
+  - Tarefa/EAP vinculada na retirada permite o cruzamento na Medição.
 
-### 2. Regra de visibilidade (não-integrado fica isolado)
+## Detalhes técnicos
 
-Em `src/lib/additiveImport.ts` → `getApprovedAdditiveBudgetItems`:
-- Trocar o filtro para **somente** aditivos com `isContracted === true` (ou `status === 'aditivo_contratado'`).
-- Remover o ramo `status === 'aprovado'` que vaza para Medição/budget antes de integrar.
+### Tipos novos em `src/types/project.ts`
+```ts
+export type WarehouseMovementType =
+  | 'entrada' | 'devolucao' | 'retirada' | 'perda'
+  | 'transferencia_saida' | 'transferencia_entrada'
+  | 'ajuste_positivo' | 'ajuste_negativo' | 'estorno';
 
-Auditoria de outros consumidores (`src/lib/financialEngine.ts`, `useMeasurementRows`, `Dashboard`, `Measurement`, `DailyReport`, Gantt) para confirmar que tudo passa por `budgetItems` derivados, então essa única mudança neutraliza vazamentos. Caso encontre acesso direto a `project.additives` que considere `aprovado`, ajustar para exigir `isContracted`.
+export interface WarehouseLocation { id: string; name: string; }
 
-### 3. `contractAdditive()` — integração completa e idempotente
+export interface WarehouseItem {
+  key: string;          // mesmo linkKey usado em materialComparisons
+  code?: string;
+  description: string;
+  unit: string;
+  minStock?: number;
+  defaultLocationId?: string;
+}
 
-Reescrita do fluxo em `src/lib/additiveImport.ts`:
+export interface WarehouseMovement {
+  id: string;
+  type: WarehouseMovementType;
+  date: string;             // ISO
+  createdAt: string;
+  itemKey: string;
+  itemCode?: string;
+  itemDescription: string;
+  itemUnit: string;
+  quantity: number;
+  unitPrice?: number;
+  locationId?: string;
+  // origens
+  purchaseOrderId?: string;
+  supplierId?: string;
+  invoiceNumber?: string;
+  // destinos
+  requisitionId?: string;
+  taskId?: string;
+  teamId?: string;
+  workerName?: string;
+  workFront?: string;
+  // governança
+  responsible?: string;
+  user?: string;
+  notes?: string;
+  attachments?: { name: string; dataUrl: string; kind: 'nf'|'foto'|'recibo'|'outro' }[];
+  reversesId?: string;
+  reversedById?: string;
+  publishedToDailyReportId?: string;
+}
 
-```text
-para cada composition c do aditivo:
-  se c.isNewService:
-    se já existe task com id `add-{addId}-{c.id}` → pular (idempotência)
-    senão criar Task no phase c.phaseId com:
-      quantity = c.addedQuantity, unitPrice/unitPriceNoBDI calculados (atual),
-      originAdditiveId, originAdditiveName, originAdditiveVersion,
-      durationMode='manual', startDate sugerida = project.startDate, sem dependências
-    setar c.linkedTaskId = task.id
-  senão (composição existente):
-    localizar Task alvo via c.taskId (preferencial) ou itemNumber/code
-    se não achar → registrar issue 'info' e pular (não cria duplicado)
-    se já existe entry em task.additiveHistory com (additiveId, version) → pular (idempotência)
-    delta = (c.addedQuantity ?? 0) - (c.suppressedQuantity ?? 0)
-    previousQuantity = task.quantity
-    newQuantity = max(0, previousQuantity + delta)
-    push em task.additiveHistory: { additiveId, additiveName, version, at, addedQuantity, suppressedQuantity, previousQuantity, newQuantity }
-    task.quantity = newQuantity
-    se newQuantity === 0 → marcar task como suprimida (flag suppressed=true) mas NÃO remover
+export interface WarehouseRequisition {
+  id: string;
+  number: string;
+  date: string;
+  taskId?: string;
+  teamId?: string;
+  requesterName?: string;
+  workFront?: string;
+  notes?: string;
+  items: { itemKey: string; quantity: number; unit: string; description: string; code?: string; movementId?: string }[];
+  signatureWarehouse?: string;  // dataURL
+  signatureReceiver?: string;
+  status: 'rascunho' | 'entregue' | 'cancelada';
+}
 
-aditivo.status = 'aditivo_contratado'
-aditivo.isContracted = true
-aditivo.contractedAt = now
-recalcular budgetItems source='aditivo' via getApprovedAdditiveBudgetItems (já filtrando isContracted)
+export interface Equipment {
+  id: string; name: string; patrimony?: string; serial?: string;
+  category?: string; notes?: string; createdAt: string;
+}
+
+export interface CustodyTerm {
+  id: string; number: string; equipmentId: string;
+  issuedAt: string; dueDate?: string;
+  workerName: string; teamId?: string;
+  accessories?: string;
+  stateOnDelivery?: string;
+  signatureWarehouse?: string; signatureReceiver?: string;
+  status: 'em_uso' | 'devolvido' | 'divergencia' | 'perdido' | 'danificado';
+  returnedAt?: string; stateOnReturn?: string;
+  divergenceNotes?: string;
+  attachments?: { name: string; dataUrl: string }[];
+}
+
+export interface WarehouseState {
+  locations: WarehouseLocation[];
+  items: WarehouseItem[];                // overrides (minStock, location) por key
+  movements: WarehouseMovement[];
+  requisitions: WarehouseRequisition[];
+  equipments: Equipment[];
+  custodyTerms: CustodyTerm[];
+}
 ```
+Campo `warehouse?: WarehouseState` adicionado em `Project`.
 
-A idempotência é garantida por (a) id determinístico de tarefa nova e (b) chave `(additiveId, version)` no histórico.
+### Lógica em `src/lib/warehouse.ts` (novo)
+- `computeBalance(movements, itemKey)` aplicando sinais por tipo.
+- `computeWarehouseRows(project)` cruzando Lista de Material + Pedidos + Movimentos → Planejado/Comprado/Recebido/Retirado/Aplicado/Saldo/A comprar.
+- `addMovement`, `reverseMovement`, `addRequisition`, `deliverRequisition` (cria movimentos `retirada`), `issueCustody`, `returnCustody`.
+- `publishMovementToDailyReport(project, movement)` — adiciona linha em observações/produção do diário do dia.
 
-### 4. Medição respeita novo saldo
+### Componentes (novos em `src/components/warehouse/`)
+- `Warehouse.tsx` (container + Tabs).
+- `WarehousePanel.tsx`
+- `WarehouseStockTab.tsx`
+- `WarehouseMovementsTab.tsx` (+ `MovementFormDialog.tsx` com tipos entrada/retirada/perda/transf/ajuste, anexos).
+- `WarehouseRequisitionsTab.tsx` (+ `RequisitionDialog.tsx`, `RequisitionReceiptPdf.tsx`).
+- `WarehouseEquipmentsTab.tsx` (+ `CustodyTermDialog.tsx`, `CustodyTermPdf.tsx`).
+- `WarehouseInventoryTab.tsx`
+- `WarehouseReportsTab.tsx`
+- `SignaturePad.tsx` (canvas → base64).
 
-- A Medição já lê `budgetItems` (source `original` + `aditivo`). Após integrar, a `quantity` da composição original muda via `additiveHistory` aplicado ao `BudgetItem` correspondente.
-  - Em `getApprovedAdditiveBudgetItems`, para `changeKind` acrescido/suprimido, gerar **um BudgetItem único de ajuste** (já existe), e adicionalmente expor utilitário `getEffectiveContractQuantity(itemNumber|taskId)` que soma original + somatório de aditivos integrados.
-- Em `src/lib/measurementValidation.ts` (ou local equivalente) acrescentar regra: medição acumulada não pode exceder `effectiveContractQuantity`. Se exceder por causa de supressão posterior, gerar `MeasurementValidationIssue` `level: 'error'` com texto "Medição acumulada (X) excede saldo contratual após Aditivo Y (Z)".
+### Sidebar / Roteamento
+- `src/components/AppSidebar.tsx`: adicionar item **Almoxarifado** (ícone `Warehouse`).
+- `src/pages/Index.tsx` (ou router atual): novo case `warehouse` renderizando `<Warehouse project … />`.
 
-### 5. Cronograma / Tarefas / Diário
+### Persistência
+- Tudo via `project.warehouse` no fluxo existente de `onProjectChange` (localStorage + Supabase já cuidam).
+- Migração leve: ao carregar, se `project.warehouse` ausente, inicializar `{ locations:[], items:[], movements:[], requisitions:[], equipments:[], custodyTerms:[] }`. Movimentos antigos em `project.stockMovements` são convertidos em `WarehouseMovement` (tipo entrada/saida/ajuste → entrada/retirada/ajuste_positivo).
 
-- Como tarefas são criadas/atualizadas dentro de `project.phases`, automaticamente aparecem em `TaskList`, `GanttChart` e `DailyReport` (que iteram phases).
-- `TaskList` e `GanttChart`: exibir badge "Aditivo Nº X" quando `task.originAdditiveId` ou `task.additiveHistory?.length`. Tooltip com histórico (qtd original → qtd final).
-- `DailyReport` produção: nada muda (lista phases.tasks). Apenas adicionar badge de origem na linha.
+### Integrações concretas
+- **Pedido**: botão "Registrar entrada" em `PurchaseOrderTab.tsx` abre `MovementFormDialog` pré-preenchido (fornecedor, item, qty pendente).
+- **Diário**: ao confirmar retirada, opção "Publicar no Diário do dia" chama `publishMovementToDailyReport`.
+- **Medição**: `WarehouseReportsTab` cruza `taskId` das retiradas com itens medidos para calcular divergência.
+- **Aditivo**: já reflete em Lista de Material; cards de Planejado leem dali.
 
-### 6. UI do Aditivo
+### Aba antiga
+- `StockTab.tsx` dentro de Lista de Material: manter, com aviso "Para controle completo, use Almoxarifado", ou substituir por link. Decisão: **manter** somente leitura.
 
-`src/components/additive/AdditiveApprovalBanner.tsx` e `AdditiveHeader.tsx`:
-- Renomear ação de **"Marcar como Contratado"** para **"Integrar ao Projeto"**.
-- Antes de executar, abrir `AlertDialog` de confirmação com o texto:
-  > "Após integrar, este aditivo passará a compor o contrato da obra e será vinculado às abas Tarefas, Cronograma, Medição e Diário de Obra. Esta ação não pode ser desfeita."
-- Status badge ganha rótulo final **"Integrado ao projeto"** (mantém enum `aditivo_contratado` por compatibilidade).
-- Após integrado, a tela de edição do aditivo já fica `isLocked` (regra existente). Confirmar que todas as ações de edição respeitam.
+## Ordem de execução
 
-### 7. Auditoria (`audit.ts`)
+1. Tipos + util `warehouse.ts` + migração.
+2. Sidebar + rota + container `Warehouse.tsx` com Tabs vazias.
+3. Painel + Materiais em estoque + Movimentações (com SignaturePad e anexos).
+4. Requisições + recibo PDF.
+5. Equipamentos + Termo de Cautela + PDF.
+6. Inventário + Relatórios + integrações (Pedido → entrada, Diário, Medição cross-check).
+7. Typecheck e ajustes.
 
-Em `handleContractAdditive` registrar log com:
-- contagem de novos serviços criados
-- composições existentes acrescidas/suprimidas
-- lista resumida de tarefas afetadas (id + delta)
+## Critérios de aceite mapeados
 
-## Arquivos afetados
-
-- `src/types/project.ts` — novos campos opcionais em `Task`, `AdditiveComposition`.
-- `src/lib/additiveImport.ts` — reescrever `contractAdditive`, ajustar `getApprovedAdditiveBudgetItems`, adicionar `getEffectiveContractQuantity`.
-- `src/lib/measurementValidation.ts` — regra de saldo após supressão.
-- `src/hooks/useAdditiveActions.ts` — abrir confirmação, mensagens, métricas para o log.
-- `src/components/additive/AdditiveHeader.tsx` e `AdditiveApprovalBanner.tsx` — renomear botão, adicionar `AlertDialog`.
-- `src/components/additive/types.ts` — novo `STATUS_LABEL.aditivo_contratado = 'Integrado ao projeto'`.
-- `src/components/TaskList.tsx` e `src/components/GanttChart.tsx` — badge "Aditivo Nº X" e tooltip de histórico.
-- `src/components/DailyReport.tsx` (ou `dailyReport/ProductionTable.tsx`) — badge de origem.
-
-## Critérios de aceite cobertos
-
-- Rascunho/Em análise/Aprovado: zero impacto fora da aba Aditivo (validado pelo filtro `isContracted` em `getApprovedAdditiveBudgetItems`).
-- Novo serviço integrado: aparece em Tarefas, Gantt, Medição e Diário com badge de origem.
-- Acréscimo: tarefa existente recebe nova `quantity`, sem duplicação, com `additiveHistory` preservado.
-- Supressão: tarefa existente reduzida (mantida visível mesmo com qty 0), Medição alerta se acumulado excede.
-- Idempotência: clicar duas vezes em "Integrar" não duplica (id determinístico + chave `additiveId+version`).
-- Aditivo integrado: edição bloqueada (regra `isAdditiveReplacementBlocked` já cobre).
-- Exportações continuam funcionando (não tocadas).
-- Typecheck/build executados pelo harness ao final.
+- Entrada → saldo ↑: ✔ via `addMovement('entrada')`.
+- Retirada vinculada a tarefa → saldo ↓ + histórico do item: ✔.
+- Termo de cautela: ✔ gerar PDF + assinatura.
+- Devolução de equipamento: ✔ `returnCustody`.
+- Relatórios + exportação: ✔.
+- Build sem erros: ✔ via verificação final.
