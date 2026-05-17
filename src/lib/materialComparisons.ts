@@ -302,6 +302,10 @@ export function appendPriceHistoryFromComparison(project: Project, comp: Materia
 // (BudgetItem source='sintetica') NÃO devem aparecer como item de compra.
 
 export type MaterialSuggestionSource = 'analytic_input' | 'additive_input' | 'task_material';
+export type MaterialSuggestionDetail =
+  | 'contracted_item'
+  | 'additive_new_service'
+  | 'additive_existing_changed';
 
 export interface MaterialSuggestion {
   key: string;
@@ -312,6 +316,7 @@ export interface MaterialSuggestion {
   bank?: string;
   referencePrice?: number;
   sourceType: MaterialSuggestionSource;
+  sourceDetail?: MaterialSuggestionDetail;
   sourceId: string;
   /** Aviso opcional (ex.: composição sem analítico). */
   warning?: string;
