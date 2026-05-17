@@ -363,10 +363,22 @@ export function suggestMaterialsWithDiagnostics(
   const upsert = (s: MaterialSuggestion) => {
     const cur = suggestions.get(s.key);
     if (cur) {
-      cur.quantity = +(cur.quantity + s.quantity).toFixed(4);
+      cur.quantity = trunc2(cur.quantity + s.quantity);
       if (!cur.referencePrice && s.referencePrice) cur.referencePrice = s.referencePrice;
+      // Se origens diferem dentro do mesmo insumo, manter o detalhe "alterado"
+      // como mais informativo do que "contratado".
+      if (s.sourceDetail && cur.sourceDetail && s.sourceDetail !== cur.sourceDetail) {
+        const ranking: Record<MaterialSuggestionDetail, number> = {
+          contracted_item: 0,
+          additive_existing_changed: 1,
+          additive_new_service: 2,
+        };
+        if (ranking[s.sourceDetail] > ranking[cur.sourceDetail]) cur.sourceDetail = s.sourceDetail;
+      } else if (s.sourceDetail && !cur.sourceDetail) {
+        cur.sourceDetail = s.sourceDetail;
+      }
     } else {
-      suggestions.set(s.key, { ...s });
+      suggestions.set(s.key, { ...s, quantity: trunc2(s.quantity) });
     }
   };
 
