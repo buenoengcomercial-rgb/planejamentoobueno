@@ -444,7 +444,7 @@ export function suggestMaterialsWithDiagnostics(
     }
     diag.baseCompositionsWithAnalytic += 1;
     for (const inp of inputs) {
-      const qty = +((inp.coefficient || 0) * compQty).toFixed(4);
+      const qty = trunc2((inp.coefficient || 0) * compQty);
       if (!qty) continue;
       diag.baseAnalyticInputs += 1;
       upsert({
