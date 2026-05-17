@@ -495,6 +495,62 @@ export function suggestMaterialsWithDiagnostics(
   return { suggestions: sorted, diagnostics: diag };
 }
 
+// ============== VÍNCULO INSUMO ↔ COMPARATIVO ==============
+
+export interface SuggestionLikeKey {
+  sourceId?: string;
+  code?: string;
+  description: string;
+  unit: string;
+}
+
+export function linkKeyOf(x: SuggestionLikeKey): string {
+  if (x.sourceId) return `id:${x.sourceId}`;
+  return `k:${(x.code ?? '').trim().toLowerCase()}|${(x.description ?? '').trim().toLowerCase()}|${(x.unit ?? '').trim().toLowerCase()}`;
+}
+
+/** Procura em quais comparativos um insumo (por chave) já foi vinculado. */
+export function findLinkedLocations(
+  project: Project,
+  key: string,
+): Array<{ comparisonId: string; itemId: string }> {
+  const out: Array<{ comparisonId: string; itemId: string }> = [];
+  for (const c of project.materialComparisons ?? []) {
+    for (const it of c.items) {
+      if (linkKeyOf(it) === key) out.push({ comparisonId: c.id, itemId: it.id });
+    }
+  }
+  return out;
+}
+
+/**
+ * Move/seta o vínculo de um insumo para `targetComparisonId`.
+ * - null/undefined → remove de todos os comparativos.
+ * - Caso o item já esteja em outro comparativo, ele é removido de lá.
+ */
+export function setSuggestionLink(
+  project: Project,
+  suggestion: Omit<ComparisonItem, 'id' | 'prices' | 'status'> & { sourceType?: ComparisonItem['sourceType']; sourceDetail?: ComparisonItem['sourceDetail']; sourceId?: string },
+  targetComparisonId: string | null,
+): Project {
+  const key = linkKeyOf(suggestion);
+  const list = project.materialComparisons ?? [];
+  const ts = nowISO();
+  const updated = list.map(c => {
+    const has = c.items.find(it => linkKeyOf(it) === key);
+    if (c.id === targetComparisonId) {
+      if (has) return c; // já está no destino
+      const it: ComparisonItem = { id: uid(), prices: [], status: 'pendente', ...suggestion };
+      return { ...c, items: [...c.items, it], updatedAt: ts };
+    }
+    if (has) {
+      return { ...c, items: c.items.filter(it => linkKeyOf(it) !== key), updatedAt: ts };
+    }
+    return c;
+  });
+  return { ...project, materialComparisons: updated };
+}
+
 export const STATUS_LABEL: Record<MaterialComparisonStatus, string> = {
   rascunho: 'Rascunho',
   em_cotacao: 'Em cotação',
