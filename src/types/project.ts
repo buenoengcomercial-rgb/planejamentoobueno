@@ -388,6 +388,10 @@ export interface Project {
   materialComparisons?: MaterialComparison[];
   /** Histórico consolidado de preços de materiais (todas as cotações fechadas). */
   materialPriceHistory?: PriceHistoryEntry[];
+  /** Fornecedores globais do projeto (compartilhados entre comparativos). */
+  materialSuppliers?: ComparisonSupplier[];
+  /** Movimentações de estoque/almoxarifado por insumo. */
+  stockMovements?: StockMovement[];
   /**
    * Composições analíticas do contrato/base (planilha Analítica).
    * Cada composição traz seus insumos (inputs) que alimentam a Lista de Material.
