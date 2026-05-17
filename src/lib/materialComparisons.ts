@@ -642,7 +642,69 @@ export function removeProjectSupplier(project: Project, id: string): Project {
   return { ...project, materialSuppliers: list, materialComparisons: comps };
 }
 
-// ============== ESTOQUE / ALMOXARIFADO ==============
+// ============== FORNECEDORES POR COMPARATIVO ==============
+
+/**
+ * Retorna os IDs de fornecedores participantes do comparativo.
+ * Migração: se `supplierIds` não existir, deriva de `comp.suppliers` (legado)
+ * e dos preços já lançados nos itens.
+ */
+export function getComparisonSupplierIds(comp: MaterialComparison): string[] {
+  if (Array.isArray(comp.supplierIds)) return comp.supplierIds;
+  const set = new Set<string>();
+  for (const s of comp.suppliers ?? []) set.add(s.id);
+  for (const it of comp.items) for (const p of it.prices) set.add(p.supplierId);
+  return Array.from(set);
+}
+
+/** Retorna os fornecedores globais filtrados pelos participantes do comparativo. */
+export function getComparisonSuppliers(
+  project: Project,
+  comp: MaterialComparison,
+): ComparisonSupplier[] {
+  const ids = new Set(getComparisonSupplierIds(comp));
+  const global = getProjectSuppliers(project);
+  // Preserva a ordem de inclusão se possível.
+  const byId = new Map(global.map(s => [s.id, s] as const));
+  const ordered = getComparisonSupplierIds(comp)
+    .map(id => byId.get(id))
+    .filter((s): s is ComparisonSupplier => !!s);
+  // Adiciona quaisquer remanescentes globais que estavam no set mas perderam ordem.
+  for (const s of global) if (ids.has(s.id) && !ordered.includes(s)) ordered.push(s);
+  return ordered;
+}
+
+export function addSupplierToComparison(comp: MaterialComparison, supplierId: string): MaterialComparison {
+  const cur = getComparisonSupplierIds(comp);
+  if (cur.includes(supplierId)) return comp;
+  return { ...comp, supplierIds: [...cur, supplierId], updatedAt: nowISO() };
+}
+
+export function removeSupplierFromComparison(comp: MaterialComparison, supplierId: string): MaterialComparison {
+  const cur = getComparisonSupplierIds(comp).filter(id => id !== supplierId);
+  // Preserva preços lançados (apenas oculta o fornecedor deste comparativo).
+  return { ...comp, supplierIds: cur, updatedAt: nowISO() };
+}
+
+/** Cadastra um novo fornecedor global E já o vincula ao comparativo informado. */
+export function addProjectSupplierAndLink(
+  project: Project,
+  supplier: Omit<ComparisonSupplier, 'id'>,
+  comparisonId: string,
+): Project {
+  const before = getProjectSuppliers(project);
+  const next = addProjectSupplier(project, supplier);
+  const after = getProjectSuppliers(next);
+  // Acha o ID do fornecedor (recém-criado ou já existente).
+  const k = supplierKey(supplier);
+  const found = after.find(s => supplierKey(s) === k) ?? after[after.length - 1];
+  if (!found) return next;
+  const comps = (next.materialComparisons ?? []).map(c =>
+    c.id === comparisonId ? addSupplierToComparison(c, found.id) : c,
+  );
+  void before;
+  return { ...next, materialComparisons: comps };
+}
 
 export interface StockRow {
   key: string;
