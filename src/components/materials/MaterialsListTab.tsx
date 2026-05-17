@@ -58,9 +58,9 @@ export default function MaterialsListTab({ project, comparison, onApply }: Props
   };
 
   const sourceLabel = (s: MC.MaterialSuggestionSource) =>
-    s === 'task_material' ? 'Material de tarefa'
-    : s === 'additive_input' ? 'Insumo de aditivo'
-    : 'Insumo analítico';
+    s === 'task_material' ? 'Material manual'
+    : s === 'additive_input' ? 'Aditivo contratado'
+    : 'Analítico do contrato';
 
   return (
     <div className="space-y-4">
