@@ -1,13 +1,14 @@
-import type { MaterialComparison } from '@/types/project';
+import type { Project, MaterialComparison } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Trash2, Lock } from 'lucide-react';
 import { formatBRL, formatQty } from './numberInput';
 
 interface Props {
+  project: Project;
   comparison: MaterialComparison;
   onApply: (next: MaterialComparison) => void;
+  onProjectChange: (next: Project) => void;
 }
 
 const DETAIL_LABEL: Record<string, string> = {
