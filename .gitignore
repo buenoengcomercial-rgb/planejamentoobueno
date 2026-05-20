@@ -11,6 +11,11 @@ node_modules
 dist
 dist-ssr
 *.local
+.pnpm-store/
+pnpm-bin/
+pnpm-win32-x64.zip
+pnpm-workspace.yaml
+pnpm-lock.yaml
 
 # Editor directories and files
 .vscode/*
