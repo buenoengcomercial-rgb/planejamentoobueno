@@ -48,7 +48,7 @@ export default function Auth() {
     const { error } = await signUp(signupEmail.trim(), signupPassword, signupName.trim() || undefined);
     setSubmitting(false);
     if (error) toast.error(error);
-    else toast.success('Sua conta foi criada. Aguarde liberação de acesso pela empresa.', { duration: 6000 });
+    else toast.success('Sua conta foi criada. Aguarde libera\u00e7\u00e3o de acesso pela empresa.', { duration: 6000 });
   };
 
   const handleForgot = async (e: React.FormEvent) => {
@@ -142,7 +142,7 @@ export default function Auth() {
           <DialogHeader>
             <DialogTitle>Recuperar senha</DialogTitle>
             <DialogDescription>
-              Informe seu e-mail. Enviaremos um link para você criar uma nova senha.
+              {'Informe seu e-mail. Enviaremos um link para voc\u00ea criar uma nova senha.'}
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleForgot} className="space-y-4">
