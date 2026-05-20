@@ -75,7 +75,6 @@ export default function Index() {
   const inFlightSaveRef = useRef<Promise<void> | null>(null);
   const skipNextAutoSaveRef = useRef(false);
   const conflictDetectedRef = useRef(false);
-  const currentProjectUpdatedAtRef = useRef<string | null>(null);
 
   const orgId = membership?.organization.id;
   const role = membership?.role;
@@ -96,20 +95,14 @@ export default function Index() {
   const replaceProjectWithoutAutoSave = useCallback((projectToLoad: Project | null, updatedAt: string | null = null) => {
     skipNextAutoSaveRef.current = true;
     conflictDetectedRef.current = false;
-    currentProjectUpdatedAtRef.current = updatedAt;
     setCurrentProjectUpdatedAt(updatedAt);
     setRawProject(projectToLoad);
   }, []);
 
   const persistProject = useCallback(async (projectToSave: Project, projectOrgId: string) => {
-    if (inFlightSaveRef.current) {
-      await inFlightSaveRef.current;
-    }
-
     const request = (async () => {
-      const updatedAt = await upsertCloudProject(projectToSave, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined);
+      const updatedAt = await upsertCloudProject(projectToSave, projectOrgId, currentProjectUpdatedAt ?? undefined);
       conflictDetectedRef.current = false;
-      currentProjectUpdatedAtRef.current = updatedAt;
       setCurrentProjectUpdatedAt(updatedAt);
       setSaveStatus('saved');
       setCloudList(prev => {
@@ -131,7 +124,7 @@ export default function Index() {
     } finally {
       if (inFlightSaveRef.current === request) inFlightSaveRef.current = null;
     }
-  }, []);
+  }, [currentProjectUpdatedAt]);
 
   const flushPendingSave = useCallback(async () => {
     if (!user || !orgId || !rawProject || !initialLoadRef.current || !editor) return true;
