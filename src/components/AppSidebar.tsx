@@ -123,7 +123,7 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
     const newId = await onCreateProject();
     if (typeof newId === 'string') {
       setTimeout(() => {
-        const list = projectsList ?? listProjects();
+        const list = projectsList ? listProjects();
         const created = list.find(p => p.id === newId);
         if (created) {
           setEditingId(newId);
@@ -511,7 +511,7 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
           <button
             onClick={onLogout}
             className={`w-full flex items-center ${collapsed ? 'justify-center' : ''} gap-3 px-3 py-2 rounded-lg text-xs font-medium hover:bg-[hsl(var(--sidebar-hover))] transition-colors opacity-80`}
-            title={collapsed ? `Sair (${userEmail ?? ''})` : 'Sair'}
+            title={collapsed ? `Sair (${userEmail ? ''})` : 'Sair'}
           >
             <X className="w-4 h-4" />
             {!collapsed && (
