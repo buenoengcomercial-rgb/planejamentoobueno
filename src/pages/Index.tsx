@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import { applyRupToProject, applyDailyLogsToProject, calculateCPM, captureBaseline, syncBaselineWithRup, settleAllDependencies } from '@/lib/calculations';
 import { loadObraConfig } from '@/components/ConfiguracaoObra';
 
-// Lazy load: cada aba s√≥ baixa seu bundle quando aberta pela primeira vez.
+// Lazy load: cada aba sÛ baixa seu bundle quando aberta pela primeira vez.
 const Dashboard = lazy(() => import('@/components/Dashboard'));
 const GanttChart = lazy(() => import('@/components/GanttChart'));
 const TaskList = lazy(() => import('@/components/TaskList'));
@@ -61,7 +61,7 @@ export default function Index() {
   const handleOpenDailyReport = useCallback((dateISO: string, measurementFilter?: string) => {
     setDailyReportInitialDate(dateISO);
     setDailyReportInitialFilter(measurementFilter);
-    setDailyReportNavKey(k => k + 1); // for√ßa re-aplica√ß√£o mesmo se valores se repetirem
+    setDailyReportNavKey(k => k + 1); // forÁa re-aplicaÁ„o mesmo se valores se repetirem
     setCurrentView('dailyReport');
     setSidebarOpen(false);
   }, []);
@@ -118,7 +118,7 @@ export default function Index() {
     return () => { cancelled = true; };
   }, [user, orgId, creator, refreshCloudList]);
 
-  // Salvamento debounced (somente se o usu√°rio pode editar)
+  // Salvamento debounced (somente se o usu·rio pode editar)
   useEffect(() => {
     if (!user || !orgId || !rawProject || !initialLoadRef.current) return;
     if (!editor) return;
@@ -142,7 +142,7 @@ export default function Index() {
       } catch (e) {
         console.error(e);
         setSaveStatus('error');
-        toast.error('Erro ao salvar na nuvem. Sua altera√ß√£o ficou apenas neste navegador.');
+        toast.error('Erro ao salvar na nuvem. Sua alteraÁ„o ficou apenas neste navegador.');
       }
     }, SAVE_DEBOUNCE_MS);
     return () => {
@@ -152,10 +152,10 @@ export default function Index() {
 
   const deferredRawProject = useDeferredValue(rawProject);
 
-  // Rec√°lculo condicional: o `settleAllDependencies` (mais caro, varre depend√™ncias)
-  // s√≥ roda quando o usu√°rio est√° nas abas que dependem dele (Cronograma/Dashboard).
-  // Nas demais abas (Tarefas/Medi√ß√£o/Di√°rio) usa-se o pipeline leve, evitando trabalho
-  // pesado a cada digita√ß√£o. CPM continua rodando porque √© barato e fornece `isCritical`.
+  // Rec·lculo condicional: o `settleAllDependencies` (mais caro, varre dependÍncias)
+  // sÛ roda quando o usu·rio est· nas abas que dependem dele (Cronograma/Dashboard).
+  // Nas demais abas (Tarefas/MediÁ„o/Di·rio) usa-se o pipeline leve, evitando trabalho
+  // pesado a cada digitaÁ„o. CPM continua rodando porque È barato e fornece `isCritical`.
   const needsDependencySettle = currentView === 'gantt' || currentView === 'dashboard';
 
   const project = useMemo(() => {
@@ -176,7 +176,7 @@ export default function Index() {
   const makeViewSetter = useCallback((view: AppView) => {
     return (next: Project | ((prev: Project) => Project)) => {
       if (!editor) {
-        toast.error('Voc√™ n√£o tem permiss√£o para editar.');
+        toast.error('VocÍ n„o tem permiss„o para editar.');
         return;
       }
       setRawProject(prev => {
@@ -206,7 +206,7 @@ export default function Index() {
     const prev = stack.pop()!;
     setRawProject(prev);
     setUndoVersion(v => v + 1);
-    toast.success('Altera√ß√£o desfeita');
+    toast.success('AlteraÁ„o desfeita');
   }, []);
 
   const canUndo = (view: AppView) => undoStacksRef.current[view].length > 0;
@@ -227,7 +227,7 @@ export default function Index() {
 
   const handleCreateProject = async (name?: string): Promise<string | void> => {
     if (!orgId) return;
-    if (!creator) { toast.error('Sem permiss√£o para criar obras.'); return; }
+    if (!creator) { toast.error('Sem permiss„o para criar obras.'); return; }
     try {
       const finalName = (name && name.trim()) || (await generateUniqueCloudName('Nova obra'));
       const newProj = await createCloudProject(finalName, orgId);
@@ -242,7 +242,7 @@ export default function Index() {
   };
 
   const handleRenameProject = async (id: string, newName: string) => {
-    if (!orgId || !editor) { toast.error('Sem permiss√£o para renomear.'); return; }
+    if (!orgId || !editor) { toast.error('Sem permiss„o para renomear.'); return; }
     try {
       const updated = await renameCloudProject(id, newName, orgId);
       if (updated && rawProject && id === rawProject.id) setRawProject(updated);
@@ -254,7 +254,7 @@ export default function Index() {
   };
 
   const handleDuplicateProject = async (id: string) => {
-    if (!orgId || !creator) { toast.error('Sem permiss√£o para duplicar.'); return; }
+    if (!orgId || !creator) { toast.error('Sem permiss„o para duplicar.'); return; }
     try {
       const copy = await duplicateCloudProject(id, orgId);
       if (copy) {
@@ -268,9 +268,9 @@ export default function Index() {
   };
 
   const handleDeleteProject = async (id: string) => {
-    if (!remover) { toast.error('Sem permiss√£o para excluir.'); return; }
+    if (!remover) { toast.error('Sem permiss„o para excluir.'); return; }
     if (cloudList.length <= 1) {
-      toast.error('N√£o √© poss√≠vel excluir a √∫nica obra. Crie outra antes.');
+      toast.error('N„o È possÌvel excluir a ˙nica obra. Crie outra antes.');
       return;
     }
     try {
@@ -286,7 +286,7 @@ export default function Index() {
           }
         }
       }
-      toast.success('Obra exclu√≠da');
+      toast.success('Obra excluÌda');
       setUndoVersion(v => v + 1);
     } catch {
       toast.error('Erro ao excluir');
@@ -312,7 +312,7 @@ export default function Index() {
     );
   }
 
-  // Usu√°rio logado mas SEM organiza√ß√£o ativa: bloqueia acesso
+  // Usu·rio logado mas SEM organizaÁ„o ativa: bloqueia acesso
   if (user && !membership) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-6">
