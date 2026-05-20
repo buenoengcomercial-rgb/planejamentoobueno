@@ -34,7 +34,7 @@ export default function ResetPassword() {
       return;
     }
     if (password !== confirm) {
-      toast.error('As senhas nÃ£o coincidem');
+      toast.error('As senhas não coincidem');
       return;
     }
     setSubmitting(true);
@@ -57,7 +57,7 @@ export default function ResetPassword() {
           <CardDescription>
             {ready
               ? 'Crie uma nova senha forte para sua conta'
-              : 'Validando link de recuperaÃ§Ã£o...'}
+              : 'Validando link de recuperação...'}
           </CardDescription>
         </CardHeader>
         <CardContent>

@@ -39,7 +39,7 @@ export default function MigrationDialog({ organizationId, onMigrated }: { organi
       for (const meta of local) {
         const proj = loadLocalProject(meta.id);
         if (!proj) continue;
-        // Garante UUID vÃ¡lido para a nuvem
+        // Garante UUID válido para a nuvem
         const cloudProject = { ...proj, id: crypto.randomUUID() };
         await upsertCloudProject(cloudProject, organizationId);
         ok++;
@@ -62,11 +62,11 @@ export default function MigrationDialog({ organizationId, onMigrated }: { organi
         <AlertDialogHeader>
           <AlertDialogTitle>Enviar obras para a nuvem?</AlertDialogTitle>
           <AlertDialogDescription>
-            Encontramos <strong>{count}</strong> obra(s) salva(s) neste navegador. Deseja enviÃ¡-las para sua conta na nuvem? Os dados locais serÃ£o mantidos como backup.
+            Encontramos <strong>{count}</strong> obra(s) salva(s) neste navegador. Deseja enviá-las para sua conta na nuvem? Os dados locais serão mantidos como backup.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={dismiss} disabled={busy}>Agora nÃ£o</AlertDialogCancel>
+          <AlertDialogCancel onClick={dismiss} disabled={busy}>Agora não</AlertDialogCancel>
           <AlertDialogAction onClick={migrate} disabled={busy}>
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Migrar para nuvem'}
           </AlertDialogAction>

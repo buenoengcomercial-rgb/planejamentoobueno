@@ -56,7 +56,7 @@ export default function TeamManagement() {
       setMembers(list);
     } catch (e) {
       console.error(e);
-      toast.error('Erro ao carregar usuÃ¡rios');
+      toast.error('Erro ao carregar usuários');
     } finally {
       setLoading(false);
     }
@@ -80,21 +80,21 @@ export default function TeamManagement() {
           void reload();
           return;
         }
-        if (res.reason === 'already_member') toast.error('Esta pessoa jÃ¡ Ã© membro da empresa.');
+        if (res.reason === 'already_member') toast.error('Esta pessoa já é membro da empresa.');
         else toast.error(res.message || 'Erro ao criar acesso.');
         return;
       }
       const res = await inviteMemberByEmail(orgId, inviteEmail, inviteRole);
       if (res.ok === true) {
-        toast.success('UsuÃ¡rio liberado.');
+        toast.success('Usuário liberado.');
         setInviteEmail('');
         void reload();
         return;
       }
       if (res.reason === 'not_registered') {
-        toast.error('Este e-mail ainda nÃ£o tem cadastro. Use "Criar acesso" para cadastrar diretamente.');
+        toast.error('Este e-mail ainda não tem cadastro. Use "Criar acesso" para cadastrar diretamente.');
       } else if (res.reason === 'already_member') {
-        toast.error('Esta pessoa jÃ¡ Ã© membro da empresa.');
+        toast.error('Esta pessoa já é membro da empresa.');
       } else {
         toast.error(res.message || 'Erro ao liberar acesso.');
       }
@@ -106,9 +106,9 @@ export default function TeamManagement() {
   const handleRoleChange = async (memberId: string, role: OrgRole) => {
     try {
       await updateMemberRole(memberId, role);
-      toast.success('FunÃ§Ã£o atualizada');
+      toast.success('Função atualizada');
       void reload();
-    } catch { toast.error('Erro ao atualizar funÃ§Ã£o'); }
+    } catch { toast.error('Erro ao atualizar função'); }
   };
 
   const handleStatusChange = async (memberId: string, status: MemberStatus) => {
@@ -120,10 +120,10 @@ export default function TeamManagement() {
   };
 
   const handleRemove = async (memberId: string) => {
-    if (!confirm('Remover este usuÃ¡rio da empresa?')) return;
+    if (!confirm('Remover este usuário da empresa?')) return;
     try {
       await removeMember(memberId);
-      toast.success('UsuÃ¡rio removido');
+      toast.success('Usuário removido');
       void reload();
     } catch { toast.error('Erro ao remover'); }
   };
@@ -131,7 +131,7 @@ export default function TeamManagement() {
   const handleChangeMyPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (pwdNew.length < 8) { toast.error('A senha deve ter pelo menos 8 caracteres'); return; }
-    if (pwdNew !== pwdConfirm) { toast.error('As senhas nÃ£o coincidem'); return; }
+    if (pwdNew !== pwdConfirm) { toast.error('As senhas não coincidem'); return; }
     setPwdSubmitting(true);
     const { error } = await supabase.auth.updateUser({ password: pwdNew });
     setPwdSubmitting(false);
@@ -150,15 +150,15 @@ export default function TeamManagement() {
   };
 
   const handleSendReset = async (member: OrgMember) => {
-    if (!member.email) { toast.error('UsuÃ¡rio sem e-mail cadastrado'); return; }
-    if (!confirm(`Enviar e-mail de redefiniÃ§Ã£o de senha para ${member.email}?`)) return;
+    if (!member.email) { toast.error('Usuário sem e-mail cadastrado'); return; }
+    if (!confirm(`Enviar e-mail de redefinição de senha para ${member.email}?`)) return;
     setResetSubmittingId(member.id);
     const { error } = await supabase.auth.resetPasswordForEmail(member.email, {
       redirectTo: `${window.location.origin}/reset-password`,
     });
     setResetSubmittingId(null);
     if (error) { toast.error(error.message); return; }
-    toast.success('E-mail de redefiniÃ§Ã£o enviado.');
+    toast.success('E-mail de redefinição enviado.');
   };
 
 
@@ -169,7 +169,7 @@ export default function TeamManagement() {
   if (!membership) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-6">
-        <p className="text-sm text-muted-foreground">VocÃª nÃ£o estÃ¡ vinculado a nenhuma empresa.</p>
+        <p className="text-sm text-muted-foreground">Você não está vinculado a nenhuma empresa.</p>
       </div>
     );
   }
@@ -179,7 +179,7 @@ export default function TeamManagement() {
       <div className="min-h-screen flex items-center justify-center bg-background p-6 text-center">
         <div className="space-y-4 max-w-md">
           <h1 className="text-xl font-semibold">Acesso restrito</h1>
-          <p className="text-sm text-muted-foreground">Apenas administradores ou proprietÃ¡rios podem gerenciar usuÃ¡rios.</p>
+          <p className="text-sm text-muted-foreground">Apenas administradores ou proprietários podem gerenciar usuários.</p>
           <Button variant="outline" onClick={() => navigate('/')}>Voltar</Button>
         </div>
       </div>
@@ -194,7 +194,7 @@ export default function TeamManagement() {
             <Button variant="ghost" size="sm" onClick={() => navigate('/')} className="mb-2 -ml-2">
               <ArrowLeft className="w-4 h-4 mr-1" /> Voltar
             </Button>
-            <h1 className="text-2xl font-bold">UsuÃ¡rios da empresa</h1>
+            <h1 className="text-2xl font-bold">Usuários da empresa</h1>
             <p className="text-sm text-muted-foreground">{membership.organization.name}</p>
           </div>
         </div>
@@ -206,8 +206,8 @@ export default function TeamManagement() {
                 <CardTitle className="text-base">{createMode ? 'Criar novo acesso' : 'Liberar acesso'}</CardTitle>
                 <CardDescription>
                   {createMode
-                    ? 'Cadastre uma nova pessoa diretamente: ela jÃ¡ entra ativa na empresa com a senha que vocÃª definir.'
-                    : 'Adicione uma pessoa que jÃ¡ tem conta no sistema usando o e-mail dela.'}
+                    ? 'Cadastre uma nova pessoa diretamente: ela já entra ativa na empresa com a senha que você definir.'
+                    : 'Adicione uma pessoa que já tem conta no sistema usando o e-mail dela.'}
                 </CardDescription>
               </div>
               <Button type="button" variant="outline" size="sm" onClick={() => setCreateMode(v => !v)}>
