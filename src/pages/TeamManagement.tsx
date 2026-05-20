@@ -244,12 +244,13 @@ export default function TeamManagement() {
                   <Label htmlFor="create-password">Senha</Label>
                   <Input
                     id="create-password"
-                    type="text"
+                    type="password"
                     required
                     minLength={6}
                     value={createPassword}
                     onChange={e => setCreatePassword(e.target.value)}
                     placeholder="Mín. 6 caracteres"
+                    autoComplete="new-password"
                   />
                 </div>
               )}
