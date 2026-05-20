@@ -58,9 +58,10 @@ export async function createCloudProject(name: string, organizationId: string, b
     totalBudget: 0,
     ...base,
   };
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from('projects')
     .insert([{
+      id: seed.id,
       organization_id: organizationId,
       name: seed.name,
       data_json: seed as unknown as import('@/integrations/supabase/types').Json,
@@ -68,9 +69,7 @@ export async function createCloudProject(name: string, organizationId: string, b
     .select('id')
     .single();
   if (error) throw error;
-  const finalProject: Project = { ...seed, id: data.id };
-  await upsertCloudProject(finalProject, organizationId);
-  return finalProject;
+  return seed;
 }
 
 export async function renameCloudProject(id: string, newName: string, organizationId: string): Promise<Project | null> {
@@ -86,12 +85,13 @@ export async function duplicateCloudProject(id: string, organizationId: string):
   if (!proj) return null;
   const newId = crypto.randomUUID();
   const copy: Project = { ...JSON.parse(JSON.stringify(proj)), id: newId, name: `${proj.name} (cópia)` };
-  await supabase.from('projects').insert([{
+  const { error } = await supabase.from('projects').insert([{
     id: newId,
     organization_id: organizationId,
     name: copy.name,
     data_json: copy as unknown as import('@/integrations/supabase/types').Json,
   }]);
+  if (error) throw error;
   return copy;
 }
 

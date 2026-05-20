@@ -70,6 +70,8 @@ export default function Index() {
   const [undoVersion, setUndoVersion] = useState(0);
   const saveTimerRef = useRef<number | null>(null);
   const initialLoadRef = useRef(false);
+  const inFlightSaveRef = useRef<Promise<void> | null>(null);
+  const skipNextAutoSaveRef = useRef(false);
 
   const orgId = membership?.organization.id;
   const role = membership?.role;
@@ -87,6 +89,62 @@ export default function Index() {
     return list;
   }, []);
 
+  const replaceProjectWithoutAutoSave = useCallback((projectToLoad: Project | null) => {
+    skipNextAutoSaveRef.current = true;
+    setRawProject(projectToLoad);
+  }, []);
+
+  const persistProject = useCallback(async (projectToSave: Project, projectOrgId: string) => {
+    const request = (async () => {
+      await upsertCloudProject(projectToSave, projectOrgId);
+      setSaveStatus('saved');
+      setCloudList(prev => {
+        const idx = prev.findIndex(p => p.id === projectToSave.id);
+        const meta: CloudProjectMeta = {
+          id: projectToSave.id,
+          name: projectToSave.name,
+          createdAt: idx >= 0 ? prev[idx].createdAt : new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        if (idx >= 0) { const copy = [...prev]; copy[idx] = meta; return copy; }
+        return [meta, ...prev];
+      });
+    })();
+
+    inFlightSaveRef.current = request;
+    try {
+      await request;
+    } finally {
+      if (inFlightSaveRef.current === request) inFlightSaveRef.current = null;
+    }
+  }, []);
+
+  const flushPendingSave = useCallback(async () => {
+    if (!user || !orgId || !rawProject || !initialLoadRef.current || !editor) return;
+
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+      setSaveStatus('saving');
+      try {
+        await persistProject(rawProject, orgId);
+      } catch (e) {
+        console.warn(e);
+        setSaveStatus('error');
+        toast.error('Erro ao salvar na nuvem. Sua alteração ficou apenas neste navegador.');
+      }
+      return;
+    }
+
+    if (inFlightSaveRef.current) {
+      try {
+        await inFlightSaveRef.current;
+      } catch {
+        // O aviso visual já é tratado no fluxo principal de salvamento.
+      }
+    }
+  }, [user, orgId, rawProject, editor, persistProject]);
+
   useEffect(() => {
     if (!user || !orgId) return;
     let cancelled = false;
@@ -99,13 +157,13 @@ export default function Index() {
           const created = await createCloudProject(name, orgId, getSampleSeed());
           if (cancelled) return;
           list = await refreshCloudList();
-          setRawProject(created);
+          replaceProjectWithoutAutoSave(created);
         } else if (list.length > 0) {
           const proj = await loadCloudProject(list[0].id);
           if (cancelled) return;
-          if (proj) setRawProject(proj);
+          if (proj) replaceProjectWithoutAutoSave(proj);
         } else {
-          setRawProject(null);
+          replaceProjectWithoutAutoSave(null);
         }
         initialLoadRef.current = true;
       } catch (e) {
@@ -116,29 +174,23 @@ export default function Index() {
       }
     })();
     return () => { cancelled = true; };
-  }, [user, orgId, creator, refreshCloudList]);
+  }, [user, orgId, creator, refreshCloudList, replaceProjectWithoutAutoSave]);
 
   // Salvamento debounced (somente se o usuário pode editar)
   useEffect(() => {
     if (!user || !orgId || !rawProject || !initialLoadRef.current) return;
     if (!editor) return;
+    if (skipNextAutoSaveRef.current) {
+      skipNextAutoSaveRef.current = false;
+      setSaveStatus('saved');
+      return;
+    }
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     setSaveStatus('saving');
     saveTimerRef.current = window.setTimeout(async () => {
       try {
-        await upsertCloudProject(rawProject, orgId);
-        setSaveStatus('saved');
-        setCloudList(prev => {
-          const idx = prev.findIndex(p => p.id === rawProject.id);
-          const meta: CloudProjectMeta = {
-            id: rawProject.id,
-            name: rawProject.name,
-            createdAt: idx >= 0 ? prev[idx].createdAt : new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-          if (idx >= 0) { const copy = [...prev]; copy[idx] = meta; return copy; }
-          return [meta, ...prev];
-        });
+        saveTimerRef.current = null;
+        await persistProject(rawProject, orgId);
       } catch (e) {
         console.warn(e);
         setSaveStatus('error');
@@ -148,7 +200,18 @@ export default function Index() {
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
-  }, [rawProject, user, orgId, editor]);
+  }, [rawProject, user, orgId, editor, persistProject]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!saveTimerRef.current && !inFlightSaveRef.current) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
 
   const deferredRawProject = useDeferredValue(rawProject);
 
@@ -214,9 +277,10 @@ export default function Index() {
 
   const handleSwitchProject = async (id: string) => {
     try {
+      await flushPendingSave();
       const proj = await loadCloudProject(id);
       if (proj) {
-        setRawProject(proj);
+        replaceProjectWithoutAutoSave(proj);
         undoStacksRef.current = { dashboard: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], materials: [], warehouse: [] };
         setUndoVersion(v => v + 1);
       }
@@ -229,10 +293,11 @@ export default function Index() {
     if (!orgId) return;
     if (!creator) { toast.error('Sem permissão para criar obras.'); return; }
     try {
+      await flushPendingSave();
       const finalName = (name && name.trim()) || (await generateUniqueCloudName('Nova obra'));
       const newProj = await createCloudProject(finalName, orgId);
       await refreshCloudList();
-      setRawProject(newProj);
+      replaceProjectWithoutAutoSave(newProj);
       undoStacksRef.current = { dashboard: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], materials: [], warehouse: [] };
       setUndoVersion(v => v + 1);
       return newProj.id;
@@ -244,8 +309,9 @@ export default function Index() {
   const handleRenameProject = async (id: string, newName: string) => {
     if (!orgId || !editor) { toast.error('Sem permissão para renomear.'); return; }
     try {
+      if (rawProject?.id === id) await flushPendingSave();
       const updated = await renameCloudProject(id, newName, orgId);
-      if (updated && rawProject && id === rawProject.id) setRawProject(updated);
+      if (updated && rawProject && id === rawProject.id) replaceProjectWithoutAutoSave(updated);
       await refreshCloudList();
       setUndoVersion(v => v + 1);
     } catch {
@@ -256,6 +322,7 @@ export default function Index() {
   const handleDuplicateProject = async (id: string) => {
     if (!orgId || !creator) { toast.error('Sem permissão para duplicar.'); return; }
     try {
+      if (rawProject?.id === id) await flushPendingSave();
       const copy = await duplicateCloudProject(id, orgId);
       if (copy) {
         await refreshCloudList();
@@ -274,6 +341,7 @@ export default function Index() {
       return;
     }
     try {
+      if (rawProject?.id === id) await flushPendingSave();
       await deleteCloudProject(id);
       const list = await refreshCloudList();
       if (rawProject && id === rawProject.id) {
@@ -281,7 +349,7 @@ export default function Index() {
         if (next) {
           const proj = await loadCloudProject(next.id);
           if (proj) {
-            setRawProject(proj);
+            replaceProjectWithoutAutoSave(proj);
             undoStacksRef.current = { dashboard: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], materials: [], warehouse: [] };
           }
         }
@@ -294,6 +362,7 @@ export default function Index() {
   };
 
   const handleLogout = async () => {
+    await flushPendingSave();
     await signOut();
     navigate('/auth', { replace: true });
   };
