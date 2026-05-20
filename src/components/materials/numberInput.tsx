@@ -84,7 +84,7 @@ interface CurrencyInputProps extends Omit<React.ComponentProps<typeof Input>, 'o
  * Input de moeda BRL: mostra "R$ 1.234,56" quando desfocado e número editável quando focado.
  */
 export const CurrencyInput = React.forwardRef<HTMLInputElement, CurrencyInputProps>(
-  ({ value, onChange, className, onFocus, onBlur, ...rest }, ref) => {
+  ({ value, onChange, className, onFocus, onBlur, onKeyDown, ...rest }, ref) => {
     const [focused, setFocused] = React.useState(false);
     const [draft, setDraft] = React.useState<string>('');
     const display = focused
@@ -100,7 +100,8 @@ export const CurrencyInput = React.forwardRef<HTMLInputElement, CurrencyInputPro
         value={display}
         onFocus={e => {
           setFocused(true);
-          setDraft(value != null ? String(value).replace('.', ',') : '');
+          const numericValue = Number(value);
+          setDraft(value != null && Number.isFinite(numericValue) && numericValue !== 0 ? String(value).replace('.', ',') : '');
           onFocus?.(e);
         }}
         onChange={e => {
@@ -112,6 +113,37 @@ export const CurrencyInput = React.forwardRef<HTMLInputElement, CurrencyInputPro
           const parsed = parseBR(draft);
           onChange(parsed);
           onBlur?.(e);
+        }}
+        onKeyDown={e => {
+          onKeyDown?.(e);
+          if (e.defaultPrevented) return;
+
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            e.currentTarget.blur();
+            return;
+          }
+
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            const current = e.currentTarget;
+            const supplierId = current.dataset.supplierId;
+            const focusNext = () => {
+              const allPriceInputs = Array.from(
+                document.querySelectorAll<HTMLInputElement>('input[data-material-price-input="true"]'),
+              );
+              const sameSupplierInputs = supplierId
+                ? allPriceInputs.filter(input => input.dataset.supplierId === supplierId)
+                : allPriceInputs;
+              const currentIndex = sameSupplierInputs.indexOf(current);
+              const next = currentIndex >= 0 ? sameSupplierInputs[currentIndex + 1] : undefined;
+              next?.focus();
+              next?.select();
+            };
+
+            current.blur();
+            window.setTimeout(focusNext, 0);
+          }
         }}
         className={cn('[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none', className)}
         {...rest}

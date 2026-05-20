@@ -185,6 +185,8 @@ export default function ComparisonsTab({ project, comparison, onApply, onProject
                             <CurrencyInput
                               value={price?.price ?? undefined}
                               onChange={v => onApply(MC.setItemPrice(comparison, it.id, s.id, v ?? 0))}
+                              data-material-price-input="true"
+                              data-supplier-id={s.id}
                               className={`h-7 text-xs text-right ${isBest ? 'border-success font-semibold text-success' : ''}`}
                             />
                           </td>
