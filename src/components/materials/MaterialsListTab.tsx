@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { AlertTriangle, Link2, Loader2, Check, Search, Plus } from 'lucide-react';
+import { toast } from 'sonner';
 import { parseBR, trunc2, formatBRL, formatQty } from './numberInput';
 import {
   extractBaseAnalyticCompositions,
@@ -145,7 +146,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
 
   const linkSelectedToActive = () => {
     if (!comparison) {
-      alert('Selecione ou crie um comparativo antes de vincular insumos.');
+      toast.error('Selecione ou crie um comparativo antes de vincular insumos.');
       return;
     }
     const picked = realSuggestions.filter(s => selectedKeys[s.key]);

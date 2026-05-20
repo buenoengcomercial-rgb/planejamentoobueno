@@ -4,6 +4,7 @@ import { computeWarehouseRows, addMovement } from '@/lib/warehouse';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Save } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface Props { project: Project; onProjectChange: (next: Project) => void; }
 
@@ -39,9 +40,9 @@ export default function WarehouseInventoryTab({ project, onProjectChange }: Prop
     if (applied > 0) {
       onProjectChange(next);
       setCounts({});
-      alert(`${applied} ajuste(s) de inventário aplicado(s).`);
+      toast.success(`${applied} ajuste(s) de inventário aplicado(s).`);
     } else {
-      alert('Nenhuma diferença a aplicar.');
+      toast.error('Nenhuma diferença a aplicar.');
     }
   };
 

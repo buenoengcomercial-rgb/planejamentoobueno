@@ -109,7 +109,7 @@ export default function Index() {
         }
         initialLoadRef.current = true;
       } catch (e) {
-        console.error(e);
+        console.warn(e);
         toast.error('Erro ao carregar obras da empresa');
       } finally {
         if (!cancelled) setBootLoading(false);
@@ -140,7 +140,7 @@ export default function Index() {
           return [meta, ...prev];
         });
       } catch (e) {
-        console.error(e);
+        console.warn(e);
         setSaveStatus('error');
         toast.error('Erro ao salvar na nuvem. Sua alteração ficou apenas neste navegador.');
       }

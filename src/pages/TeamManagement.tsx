@@ -57,7 +57,7 @@ export default function TeamManagement() {
       const list = await listOrgMembers(orgId);
       setMembers(list);
     } catch (e) {
-      console.error(e);
+      console.warn(e);
       toast.error('Erro ao carregar usuários');
     } finally {
       setLoading(false);

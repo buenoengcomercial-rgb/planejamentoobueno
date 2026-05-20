@@ -49,7 +49,7 @@ export default function MigrationDialog({ organizationId, onMigrated }: { organi
       setOpen(false);
       onMigrated();
     } catch (e) {
-      console.error(e);
+      console.warn(e);
       toast.error('Erro ao migrar. Tente novamente.');
     } finally {
       setBusy(false);
