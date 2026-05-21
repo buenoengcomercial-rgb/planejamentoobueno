@@ -13,9 +13,8 @@ import { loadObraConfig } from '@/components/ConfiguracaoObra';
 // Lazy load: cada aba só baixa seu bundle quando aberta pela primeira vez.
 const Dashboard = lazy(() => import('@/components/Dashboard'));
 const GanttChart = lazy(() => import('@/components/GanttChart'));
-const TaskList = lazy(() => import('@/components/TaskList'));
 const Measurement = lazy(() => import('@/components/Measurement'));
-const DailyReport = lazy(() => import('@/components/DailyReport'));
+const DailyProductionWorkspace = lazy(() => import('@/components/DailyProductionWorkspace'));
 const Additive = lazy(() => import('@/components/Additive'));
 const Materials = lazy(() => import('@/components/Materials'));
 const WarehouseView = lazy(() => import('@/components/warehouse/Warehouse'));
@@ -104,12 +103,14 @@ export default function Index() {
   const [dailyReportInitialDate, setDailyReportInitialDate] = useState<string | undefined>(undefined);
   const [dailyReportInitialFilter, setDailyReportInitialFilter] = useState<string | undefined>(undefined);
   const [dailyReportNavKey, setDailyReportNavKey] = useState(0);
+  const [productionWorkspaceInitialTab, setProductionWorkspaceInitialTab] = useState<'production' | 'dailyReport'>('production');
 
   const handleOpenDailyReport = useCallback((dateISO: string, measurementFilter?: string) => {
     setDailyReportInitialDate(dateISO);
     setDailyReportInitialFilter(measurementFilter);
     setDailyReportNavKey(k => k + 1); // força re-aplicação mesmo se valores se repetirem
-    setCurrentView('dailyReport');
+    setProductionWorkspaceInitialTab('dailyReport');
+    setCurrentView('tasks');
     setSidebarOpen(false);
   }, []);
 
@@ -502,11 +503,35 @@ export default function Index() {
       case 'gantt':
         return <GanttChart project={project} onProjectChange={ganttSetter} undoButton={<UndoButton canUndo={canUndo('gantt')} onUndo={() => handleUndo('gantt')} size="xs" />} />;
       case 'tasks':
-        return <TaskList project={project} onProjectChange={tasksSetter} undoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />} />;
+        return (
+          <DailyProductionWorkspace
+            project={project}
+            initialTab={productionWorkspaceInitialTab}
+            onProductionChange={tasksSetter}
+            onDailyReportChange={dailyReportSetter}
+            productionUndoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />}
+            dailyReportUndoButton={<UndoButton canUndo={canUndo('dailyReport')} onUndo={() => handleUndo('dailyReport')} />}
+            dailyReportInitialDate={dailyReportInitialDate}
+            dailyReportInitialFilter={dailyReportInitialFilter}
+            dailyReportNavKey={dailyReportNavKey}
+          />
+        );
       case 'measurement':
         return <Measurement project={project} onProjectChange={measurementSetter} undoButton={<UndoButton canUndo={canUndo('measurement')} onUndo={() => handleUndo('measurement')} />} onOpenDailyReport={handleOpenDailyReport} />;
       case 'dailyReport':
-        return <DailyReport project={project} onProjectChange={dailyReportSetter} undoButton={<UndoButton canUndo={canUndo('dailyReport')} onUndo={() => handleUndo('dailyReport')} />} initialDate={dailyReportInitialDate} initialMeasurementFilter={dailyReportInitialFilter} navKey={dailyReportNavKey} />;
+        return (
+          <DailyProductionWorkspace
+            project={project}
+            initialTab="dailyReport"
+            onProductionChange={tasksSetter}
+            onDailyReportChange={dailyReportSetter}
+            productionUndoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />}
+            dailyReportUndoButton={<UndoButton canUndo={canUndo('dailyReport')} onUndo={() => handleUndo('dailyReport')} />}
+            dailyReportInitialDate={dailyReportInitialDate}
+            dailyReportInitialFilter={dailyReportInitialFilter}
+            dailyReportNavKey={dailyReportNavKey}
+          />
+        );
       case 'additive':
         return <Additive project={project} onProjectChange={additiveSetter} undoButton={<UndoButton canUndo={canUndo('additive')} onUndo={() => handleUndo('additive')} />} />;
       case 'materials':
@@ -532,7 +557,11 @@ export default function Index() {
       <div className={`fixed lg:static z-40 transition-transform lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <AppSidebar
           currentView={currentView}
-          onViewChange={(v) => { setCurrentView(v); setSidebarOpen(false); }}
+          onViewChange={(v) => {
+            if (v === 'tasks') setProductionWorkspaceInitialTab('production');
+            setCurrentView(v);
+            setSidebarOpen(false);
+          }}
           projectName={project.name}
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(c => !c)}

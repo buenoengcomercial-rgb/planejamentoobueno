@@ -72,6 +72,10 @@ const navItems: { view: AppView; label: string; icon: React.ElementType }[] = [
   { view: 'warehouse', label: 'Almoxarifado', icon: Warehouse },
 ];
 
+const visibleNavItems = navItems
+  .filter(item => item.view !== 'dailyReport')
+  .map(item => item.view === 'tasks' ? { ...item, label: 'Produção diária' } : item);
+
 export default function AppSidebar({ currentView, onViewChange, projectName, collapsed, onToggleCollapse, onSwitchProject, onCreateProject, onRenameProject, onDuplicateProject, onDeleteProject, onImportedProject, activeProjectId, projectsList, userEmail, onLogout, orgName, roleLabel, canManageTeam, onOpenTeam }: AppSidebarProps) {
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
   const [showProjects, setShowProjects] = useState(true);
@@ -482,7 +486,7 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
       </AlertDialog>
 
       <nav className="flex-1 p-2 space-y-1">
-        {navItems.map(({ view, label, icon: Icon }) => {
+        {visibleNavItems.map(({ view, label, icon: Icon }) => {
           const isActive = currentView === view;
           return (
             <button
