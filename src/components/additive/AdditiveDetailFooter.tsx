@@ -1,4 +1,5 @@
-import { Calculator, Layers, PieChart } from 'lucide-react';
+import { useState } from 'react';
+import { Calculator, ChevronDown, Layers, PieChart } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import type { AdditiveCalculationMemoryRow, AdditiveComposition, Project } from '@/types/project';
 import { computeAdditiveRow, computeCompositionWithBDI } from '@/lib/additiveImport';
@@ -84,6 +85,7 @@ export default function AdditiveDetailFooter({
   onChangeMemory,
   onUpdateComposition,
 }: Props) {
+  const [collapsed, setCollapsed] = useState(false);
   const title =
     selection?.mode === 'memory' ? 'Memória de cálculo'
     : selection?.mode === 'analytic' ? 'Composição analítica'
@@ -95,7 +97,7 @@ export default function AdditiveDetailFooter({
     : PieChart;
 
   return (
-    <Card className="print:hidden border-primary/20 overflow-hidden">
+    <Card data-detail-footer="true" className="print:hidden sticky bottom-3 z-30 border-primary/20 overflow-hidden shadow-xl bg-background">
       <div className="px-4 py-3 border-b border-border bg-muted/30 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-semibold">
@@ -108,8 +110,16 @@ export default function AdditiveDetailFooter({
             </p>
           )}
         </div>
+        <button
+          type="button"
+          className="shrink-0 rounded border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+          onClick={() => setCollapsed(v => !v)}
+        >
+          <ChevronDown className={`inline h-3.5 w-3.5 transition-transform ${collapsed ? 'rotate-180' : ''}`} />
+          <span className="ml-1">{collapsed ? 'Expandir' : 'Recolher'}</span>
+        </button>
       </div>
-      <div className="p-3 max-h-[320px] overflow-auto">
+      {!collapsed && <div className="p-3 max-h-[320px] overflow-auto">
         {!selection || !composition ? (
           <EmptyState />
         ) : selection.mode === 'memory' ? (
@@ -131,7 +141,7 @@ export default function AdditiveDetailFooter({
         ) : (
           <ClassificationView project={project} composition={composition} bdi={bdi} globalDiscount={globalDiscount} />
         )}
-      </div>
+      </div>}
     </Card>
   );
 }

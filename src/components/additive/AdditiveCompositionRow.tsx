@@ -370,6 +370,7 @@ function AdditiveCompositionRowImpl({
             )}
             <button
               onClick={() => selectDetail('memory')}
+              data-detail-cell="true"
               className={`text-[10px] inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border ${isMemoryOpen ? 'bg-violet-100 border-violet-300 text-violet-800' : 'border-border text-muted-foreground hover:bg-muted'}`}
               title="Memória de cálculo"
               type="button"
@@ -449,6 +450,7 @@ function AdditiveCompositionRowImpl({
           </span>
         </td>
         <td
+          data-detail-cell="true"
           className={`px-1 py-1 text-right ${G_BG.suppressed} text-rose-700`}
           onClick={isLocked ? undefined : () => openMemoryFor('suprimida')}
         >
@@ -463,6 +465,7 @@ function AdditiveCompositionRowImpl({
           />
         </td>
         <td
+          data-detail-cell="true"
           className={`px-1 py-1 text-right ${G_BG.added} text-emerald-700`}
           onClick={isLocked ? undefined : () => openMemoryFor('acrescida')}
         >
@@ -494,17 +497,17 @@ function AdditiveCompositionRowImpl({
           )}
         </td>
         <td className={`px-1 py-1 text-right ${G_BG.val}`}>
-          <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('analytic')}>
+          <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('analytic')}>
             {fmtBRL(r.unitPriceWithBDI)}
           </button>
         </td>
         <td className={`px-1 py-1 text-right text-muted-foreground ${G_BG.val}`}>
-          <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
+          <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
             {fmtBRL(r.totalFonte)}
           </button>
         </td>
         <td className={`px-1 py-1 text-right ${G_BG.val}`}>
-          <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
+          <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
             {fmtBRL(isNew ? 0 : r.valorContratadoOriginalPreservado)}
           </button>
         </td>
@@ -514,7 +517,7 @@ function AdditiveCompositionRowImpl({
         </td>
         <td className={`px-1 py-1 text-right text-emerald-700 font-medium ${G_BG.added}`}>{fmtBRL(r.valorAcrescido)}</td>
         <td className={`px-1 py-1 text-right font-medium ${G_BG.impact}`}>
-          <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
+          <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
             {fmtBRL(r.valorFinal)}
           </button>
         </td>

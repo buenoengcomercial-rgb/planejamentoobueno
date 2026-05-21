@@ -89,12 +89,13 @@ export default function MeasurementItemRow({
 
       {/* Contrato */}
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${BORDER_L} ${G_BG.contract}`}>
-        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyContracted)}</button>
+        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyContracted)}</button>
       </td>
       <td className={`px-2 py-1.5 text-right align-top ${G_BG.contract}`}>
         <div className="flex items-center justify-end gap-1">
           <button
             type="button"
+            data-detail-cell="true"
             className={`rounded px-1 hover:bg-primary/10 tabular-nums text-[11px] ${r.unitPriceIsEstimated ? 'italic text-muted-foreground' : ''}`}
             onClick={selectAnalytic}
           >
@@ -106,10 +107,10 @@ export default function MeasurementItemRow({
         </div>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${G_BG.contract}`}>
-        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={selectAnalytic}>{fmtBRL(r.unitPriceWithBDI || 0)}</button>
+        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectAnalytic}>{fmtBRL(r.unitPriceWithBDI || 0)}</button>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${G_BG.contract}`}>
-        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('contracted')}>{fmtBRL(r.valueContracted)}</button>
+        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('contracted')}>{fmtBRL(r.valueContracted)}</button>
       </td>
 
       {/* Medição atual — somente leitura, vem dos apontamentos da EAP/Diário */}
@@ -119,18 +120,18 @@ export default function MeasurementItemRow({
         }`}
         title={r.hasNoLogsInPeriod ? 'Sem apontamento no período — lance produção em Tarefas/EAP/Diário de Obra' : undefined}
       >
-        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyPeriod || 0)}</button>
+        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyPeriod || 0)}</button>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums font-semibold text-foreground align-top ${G_BG.period}`}>
-        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('period')}>{fmtBRL(r.valuePeriod)}</button>
+        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('period')}>{fmtBRL(r.valuePeriod)}</button>
       </td>
 
       {/* Previsão (Gantt) — somente leitura, recalcula com mudanças no cronograma */}
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${BORDER_L} ${G_BG.forecast || 'bg-accent/20'}`}>
-        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyForecast || 0)}</button>
+        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyForecast || 0)}</button>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${G_BG.forecast || 'bg-accent/20'}`}>
-        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('forecast')}>{fmtBRL(r.valueForecast || 0)}</button>
+        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('forecast')}>{fmtBRL(r.valueForecast || 0)}</button>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums align-top ${G_BG.forecast || 'bg-accent/20'} ${
         (r.diffForecastVsReal || 0) > 0 ? 'text-success font-semibold'
@@ -142,18 +143,18 @@ export default function MeasurementItemRow({
 
       {/* Acumulado */}
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${BORDER_L} ${G_BG.accum}`}>
-        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyCurrentAccum)}</button>
+        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyCurrentAccum)}</button>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${G_BG.accum}`}>
-        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('accum')}>{fmtBRL(r.valueAccum)}</button>
+        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('accum')}>{fmtBRL(r.valueAccum)}</button>
       </td>
 
       {/* Saldo */}
       <td className={`px-2 py-1.5 text-right tabular-nums text-muted-foreground align-top ${BORDER_L} ${G_BG.balance}`}>
-        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyBalance)}</button>
+        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyBalance)}</button>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums text-muted-foreground align-top ${G_BG.balance}`}>
-        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('balance')}>{fmtBRL(r.valueBalance)}</button>
+        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('balance')}>{fmtBRL(r.valueBalance)}</button>
       </td>
     </tr>
   );

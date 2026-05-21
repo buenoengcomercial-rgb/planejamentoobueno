@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type MouseEvent } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Upload } from 'lucide-react';
@@ -71,8 +71,16 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
     setReviewDialogOpen(true);
   };
 
+  const handleDetailClickCapture = (event: MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+    if (target.closest('[data-detail-cell="true"]')) return;
+    if (target.closest('[data-detail-footer="true"]')) return;
+    setDetailSelection(null);
+  };
+
   return (
-    <div className="p-4 lg:p-6 space-y-4 max-w-[1700px] mx-auto">
+    <div className="p-4 lg:p-6 space-y-4 max-w-[1700px] mx-auto" onClickCapture={handleDetailClickCapture}>
       <AdditiveHeader
         project={project}
         active={active}
