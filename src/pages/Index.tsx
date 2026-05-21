@@ -73,6 +73,9 @@ export default function Index() {
   const saveTimerRef = useRef<number | null>(null);
   const initialLoadRef = useRef(false);
   const inFlightSaveRef = useRef<Promise<void> | null>(null);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const currentProjectUpdatedAtRef = useRef<string | null>(null);
+  const saveRequestSeqRef = useRef(0);
   const skipNextAutoSaveRef = useRef(false);
   const conflictDetectedRef = useRef(false);
 
@@ -95,16 +98,21 @@ export default function Index() {
   const replaceProjectWithoutAutoSave = useCallback((projectToLoad: Project | null, updatedAt: string | null = null) => {
     skipNextAutoSaveRef.current = true;
     conflictDetectedRef.current = false;
+    currentProjectUpdatedAtRef.current = updatedAt;
     setCurrentProjectUpdatedAt(updatedAt);
     setRawProject(projectToLoad);
   }, []);
 
   const persistProject = useCallback(async (projectToSave: Project, projectOrgId: string) => {
-    const request = (async () => {
-      const updatedAt = await upsertCloudProject(projectToSave, projectOrgId, currentProjectUpdatedAt ?? undefined);
+    const seq = ++saveRequestSeqRef.current;
+    const request = saveQueueRef.current.catch(() => undefined).then(async () => {
+      const updatedAt = await upsertCloudProject(projectToSave, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined);
       conflictDetectedRef.current = false;
+      currentProjectUpdatedAtRef.current = updatedAt;
       setCurrentProjectUpdatedAt(updatedAt);
-      setSaveStatus('saved');
+      if (seq === saveRequestSeqRef.current && !saveTimerRef.current) {
+        setSaveStatus('saved');
+      }
       setCloudList(prev => {
         const idx = prev.findIndex(p => p.id === projectToSave.id);
         const meta: CloudProjectMeta = {
@@ -116,15 +124,16 @@ export default function Index() {
         if (idx >= 0) { const copy = [...prev]; copy[idx] = meta; return copy; }
         return [meta, ...prev];
       });
-    })();
+    });
 
+    saveQueueRef.current = request;
     inFlightSaveRef.current = request;
     try {
       await request;
     } finally {
       if (inFlightSaveRef.current === request) inFlightSaveRef.current = null;
     }
-  }, [currentProjectUpdatedAt]);
+  }, []);
 
   const flushPendingSave = useCallback(async () => {
     if (!user || !orgId || !rawProject || !initialLoadRef.current || !editor) return true;

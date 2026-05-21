@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useCallback } from 'react';
+import { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import type { ElementType, ReactNode } from 'react';
 import type { Project, MaterialComparison } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
@@ -67,7 +67,12 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   const [selectedKeys, setSelectedKeys] = useState<Record<string, boolean>>({});
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortState | null>(null);
+  const [sortOrderKeys, setSortOrderKeys] = useState<string[] | null>(null);
+  const [classDrafts, setClassDrafts] = useState<Record<string, MaterialCostClass>>({});
   const fileRef = useRef<HTMLInputElement>(null);
+  const latestProjectRef = useRef(project);
+  const pendingCostClassesRef = useRef<Record<string, MaterialCostClass>>({});
+  const classFlushTimerRef = useRef<number | null>(null);
   const [linkingAnalytic, setLinkingAnalytic] = useState(false);
   const [linkMsg, setLinkMsg] = useState<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null);
 
@@ -75,6 +80,45 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   const [manual, setManual] = useState({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '' });
 
   const allComparisons = project.materialComparisons ?? [];
+  const visibleProject = useMemo(
+    () => ({
+      ...project,
+      materialCostClasses: {
+        ...(project.materialCostClasses ?? {}),
+        ...classDrafts,
+      },
+    }),
+    [classDrafts, project],
+  );
+
+  useEffect(() => {
+    latestProjectRef.current = project;
+  }, [project]);
+
+  useEffect(() => {
+    setClassDrafts({});
+    pendingCostClassesRef.current = {};
+  }, [project.id]);
+
+  const flushCostClassChanges = useCallback(() => {
+    if (classFlushTimerRef.current) {
+      window.clearTimeout(classFlushTimerRef.current);
+      classFlushTimerRef.current = null;
+    }
+    const pending = pendingCostClassesRef.current;
+    if (Object.keys(pending).length === 0) return;
+    pendingCostClassesRef.current = {};
+    const base = latestProjectRef.current;
+    onProjectChange({
+      ...base,
+      materialCostClasses: {
+        ...(base.materialCostClasses ?? {}),
+        ...pending,
+      },
+    });
+  }, [onProjectChange]);
+
+  useEffect(() => () => flushCostClassChanges(), [flushCostClassChanges]);
 
   const diagnostics = useMemo(
     () => MC.suggestMaterialsWithDiagnostics(project).diagnostics,
@@ -104,8 +148,8 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     [suggestions],
   );
   const costClassTotals = useMemo(
-    () => MC.computeMaterialCostClassTotals(project, realSuggestions),
-    [project, realSuggestions],
+    () => MC.computeMaterialCostClassTotals(visibleProject, realSuggestions),
+    [realSuggestions, visibleProject],
   );
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -121,34 +165,43 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
       );
     });
   }, [realSuggestions, search]);
-  const sortedFiltered = useMemo(() => {
-    if (!sort) return filtered;
-
+  const getSortValue = useCallback((s: MC.MaterialSuggestion, column: SortColumn) => {
     const text = (value: unknown) => String(value ?? '').toLowerCase();
     const number = (value: unknown) => Number(value ?? 0) || 0;
     const comparisonName = (s: MC.MaterialSuggestion) => {
       const linkedTo = linkedByKey.get(MC.linkKeyOf(s)) ?? '';
       return allComparisons.find(c => c.id === linkedTo)?.name ?? '';
     };
-    const sortValue = (s: MC.MaterialSuggestion) => {
-      if (sort.column === 'unit') return text(s.unit);
-      if (sort.column === 'description') return text(s.description);
-      if (sort.column === 'origin') return text(originBadge(s.sourceType, s.sourceDetail).label);
-      if (sort.column === 'class') return text(MC.MATERIAL_COST_CLASS_LABEL[MC.resolveMaterialCostClass(project, s)]);
-      if (sort.column === 'quantity') return number(s.quantity);
-      if (sort.column === 'price') return number(s.referencePrice);
-      return text(comparisonName(s));
-    };
+    if (column === 'unit') return text(s.unit);
+    if (column === 'description') return text(s.description);
+    if (column === 'origin') return text(originBadge(s.sourceType, s.sourceDetail).label);
+    if (column === 'class') return text(MC.MATERIAL_COST_CLASS_LABEL[MC.resolveMaterialCostClass(visibleProject, s)]);
+    if (column === 'quantity') return number(s.quantity);
+    if (column === 'price') return number(s.referencePrice);
+    return text(comparisonName(s));
+  }, [allComparisons, linkedByKey, visibleProject]);
 
+  const buildSortOrder = useCallback((column: SortColumn, direction: 'asc' | 'desc') => {
     return [...filtered].sort((a, b) => {
-      const av = sortValue(a);
-      const bv = sortValue(b);
+      const av = getSortValue(a, column);
+      const bv = getSortValue(b, column);
       const base = typeof av === 'number' && typeof bv === 'number'
         ? av - bv
         : String(av).localeCompare(String(bv), 'pt-BR', { numeric: true, sensitivity: 'base' });
-      return sort.direction === 'asc' ? base : -base;
+      return direction === 'asc' ? base : -base;
+    }).map(s => s.key);
+  }, [filtered, getSortValue]);
+
+  const sortedFiltered = useMemo(() => {
+    if (!sort || !sortOrderKeys) return filtered;
+    const order = new Map(sortOrderKeys.map((key, index) => [key, index]));
+    return [...filtered].sort((a, b) => {
+      const av = order.get(a.key) ?? Number.MAX_SAFE_INTEGER;
+      const bv = order.get(b.key) ?? Number.MAX_SAFE_INTEGER;
+      if (av !== bv) return av - bv;
+      return a.key.localeCompare(b.key, 'pt-BR', { numeric: true, sensitivity: 'base' });
     });
-  }, [allComparisons, filtered, linkedByKey, project, sort]);
+  }, [filtered, sort, sortOrderKeys]);
 
   const handleAnalyticFile = useCallback(async (file: File) => {
     setLinkingAnalytic(true);
@@ -197,14 +250,23 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   });
 
   const changeGroup = (s: MC.MaterialSuggestion, targetCompId: string | null) => {
+    flushCostClassChanges();
     onProjectChange(MC.setSuggestionLink(project, suggestionToPayload(s), targetCompId));
   };
 
   const changeCostClass = (s: MC.MaterialSuggestion, costClass: MaterialCostClass) => {
-    onProjectChange(MC.setMaterialCostClass(project, s, costClass));
+    const key = MC.linkKeyOf(s);
+    setClassDrafts(prev => ({ ...prev, [key]: costClass }));
+    pendingCostClassesRef.current = {
+      ...pendingCostClassesRef.current,
+      [key]: costClass,
+    };
+    if (classFlushTimerRef.current) window.clearTimeout(classFlushTimerRef.current);
+    classFlushTimerRef.current = window.setTimeout(flushCostClassChanges, 900);
   };
 
   const linkSelectedToActive = () => {
+    flushCostClassChanges();
     if (!comparison) {
       toast.error('Selecione ou crie um comparativo antes de vincular insumos.');
       return;
@@ -220,6 +282,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   };
 
   const addManual = () => {
+    flushCostClassChanges();
     if (!manual.description.trim()) return;
     const next = MC.addItem(comparison, {
       description: manual.description.trim(),
@@ -243,10 +306,9 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     });
   };
   const toggleSort = (column: SortColumn) => {
-    setSort(prev => {
-      if (prev?.column !== column) return { column, direction: 'asc' };
-      return { column, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
-    });
+    const direction = sort?.column === column && sort.direction === 'asc' ? 'desc' : 'asc';
+    setSort({ column, direction });
+    setSortOrderKeys(buildSortOrder(column, direction));
   };
   const SortButton = ({
     column,
@@ -392,13 +454,12 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                 <th className="p-2 text-right w-20"><SortButton column="quantity" className="justify-end">Qtd</SortButton></th>
                 <th className="p-2 text-right w-24"><SortButton column="price" className="justify-end">Preco ref.</SortButton></th>
                 <th className="p-2 text-left w-44"><SortButton column="group">Grupo de compra</SortButton></th>
-                <th className="p-2 text-left w-32">Vinculado</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="p-6 text-center text-muted-foreground text-xs">
+                  <td colSpan={10} className="p-6 text-center text-muted-foreground text-xs">
                     {realSuggestions.length === 0
                       ? (diagnostics.additivesRead > 0
                           ? 'Nenhum insumo analítico encontrado no Aditivo atual.'
@@ -413,8 +474,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                 const badge = originBadge(s.sourceType, s.sourceDetail);
                 const checked = !!selectedKeys[s.key];
                 const linkedTo = linkedByKey.get(MC.linkKeyOf(s)) ?? '';
-                const linkedComp = linkedTo ? allComparisons.find(c => c.id === linkedTo) : null;
-                const costClass = MC.resolveMaterialCostClass(project, s);
+                const costClass = MC.resolveMaterialCostClass(visibleProject, s);
                 return (
                   <tr key={s.key} className={`border-t border-border hover:bg-muted/30 ${linkedTo ? 'bg-primary/5' : ''}`}>
                     <td className="p-1.5 align-middle">
@@ -456,15 +516,6 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                           <option key={c.id} value={c.id}>{c.name}</option>
                         ))}
                       </select>
-                    </td>
-                    <td className="p-1.5 align-middle">
-                      {linkedComp ? (
-                        <span className="inline-block px-1.5 py-0.5 rounded border bg-primary/10 text-primary border-primary/40 text-[10px] font-medium truncate max-w-[120px]">
-                          {linkedComp.name}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-muted-foreground">—</span>
-                      )}
                     </td>
                   </tr>
                 );
