@@ -36,7 +36,6 @@ interface Props {
 export default function Materials({ project, onProjectChange }: Props) {
   const ctl = useMaterialComparisons(project, onProjectChange);
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
-  const [newName, setNewName] = useState('');
   const [section, setSection] = useState('grupos');
   const [tab, setTab] = useState('comparativo');
   const [supplierSearch, setSupplierSearch] = useState('');
@@ -74,9 +73,8 @@ export default function Materials({ project, onProjectChange }: Props) {
   }, [activeSupplierIds, globalSuppliers, supplierSearch]);
 
   const createComparison = () => {
-    const name = newName.trim() || `Grupo ${ctl.comparisons.length + 1}`;
+    const name = `Grupo ${ctl.comparisons.length + 1}`;
     ctl.createNew(name);
-    setNewName('');
     setSection('grupos');
     setTab('comparativo');
   };
@@ -182,17 +180,6 @@ export default function Materials({ project, onProjectChange }: Props) {
                 <Button size="sm" className="h-8" onClick={createComparison}>
                   <Plus className="w-3.5 h-3.5 mr-1" /> Grupo
                 </Button>
-              </div>
-              <div className="p-3 border-b border-border">
-                <Input
-                  value={newName}
-                  onChange={e => setNewName(e.target.value)}
-                  placeholder="Nome do novo grupo"
-                  className="h-8 text-xs"
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') createComparison();
-                  }}
-                />
               </div>
               <div className="max-h-[265px] overflow-y-auto">
                 {ctl.comparisons.length === 0 ? (
