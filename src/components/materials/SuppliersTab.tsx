@@ -9,7 +9,7 @@ import { NumberInput, parseBR } from './numberInput';
 
 interface Props {
   project: Project;
-  onProjectChange: (next: Project) => void;
+  onProjectChange: (next: Project | ((prev: Project) => Project)) => void;
 }
 
 export default function SuppliersTab({ project, onProjectChange }: Props) {
@@ -19,7 +19,7 @@ export default function SuppliersTab({ project, onProjectChange }: Props) {
 
   const add = () => {
     if (!form.name.trim()) return;
-    onProjectChange(MC.addProjectSupplier(project, {
+    onProjectChange(prev => MC.addProjectSupplier(prev, {
       name: form.name.trim(),
       contact: form.contact || undefined,
       deliveryDays: parseBR(form.deliveryDays),
@@ -62,13 +62,13 @@ export default function SuppliersTab({ project, onProjectChange }: Props) {
             <tbody>
               {suppliers.map(s => (
                 <tr key={s.id} className="border-t border-border hover:bg-muted/20">
-                  <td className="p-2"><Input value={s.name} onChange={e => onProjectChange(MC.updateProjectSupplier(project, s.id, { name: e.target.value }))} className="h-7 text-xs" /></td>
-                  <td className="p-2"><Input value={s.contact ?? ''} onChange={e => onProjectChange(MC.updateProjectSupplier(project, s.id, { contact: e.target.value }))} className="h-7 text-xs" /></td>
+                  <td className="p-2"><Input value={s.name} onChange={e => onProjectChange(prev => MC.updateProjectSupplier(prev, s.id, { name: e.target.value }))} className="h-7 text-xs" /></td>
+                  <td className="p-2"><Input value={s.contact ?? ''} onChange={e => onProjectChange(prev => MC.updateProjectSupplier(prev, s.id, { contact: e.target.value }))} className="h-7 text-xs" /></td>
                   <td className="p-2 w-24">
                     <NumberInput
                       decimal={false}
                       value={s.deliveryDays != null ? String(s.deliveryDays) : ''}
-                      onChange={v => onProjectChange(MC.updateProjectSupplier(project, s.id, { deliveryDays: parseBR(v) }))}
+                      onChange={v => onProjectChange(prev => MC.updateProjectSupplier(prev, s.id, { deliveryDays: parseBR(v) }))}
                       className="h-7 text-xs text-center"
                     />
                   </td>
@@ -77,7 +77,7 @@ export default function SuppliersTab({ project, onProjectChange }: Props) {
                       <Star className="w-3 h-3 text-warning" />
                       <NumberInput
                         value={s.rating != null ? String(s.rating) : ''}
-                        onChange={v => onProjectChange(MC.updateProjectSupplier(project, s.id, { rating: parseBR(v) }))}
+                        onChange={v => onProjectChange(prev => MC.updateProjectSupplier(prev, s.id, { rating: parseBR(v) }))}
                         className="h-7 text-xs text-center w-16"
                       />
                     </div>
@@ -98,7 +98,7 @@ export default function SuppliersTab({ project, onProjectChange }: Props) {
                             ),
                             confirmLabel: 'Remover fornecedor',
                           },
-                          () => onProjectChange(MC.removeProjectSupplier(project, s.id)),
+                          () => onProjectChange(prev => MC.removeProjectSupplier(prev, s.id)),
                         );
                       }}
                     >

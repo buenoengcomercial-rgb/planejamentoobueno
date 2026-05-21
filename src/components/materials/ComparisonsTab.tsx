@@ -11,10 +11,11 @@ interface Props {
   project: Project;
   comparison: MaterialComparison;
   onApply: (next: MaterialComparison) => void;
-  onProjectChange?: (next: Project) => void;
+  onProjectChange?: (next: Project | ((prev: Project) => Project)) => void;
+  hideSupplierManager?: boolean;
 }
 
-export default function ComparisonsTab({ project, comparison, onApply, onProjectChange }: Props) {
+export default function ComparisonsTab({ project, comparison, onApply, onProjectChange, hideSupplierManager = false }: Props) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const globalSuppliers = useMemo(() => MC.getProjectSuppliers(project), [project]);
   const suppliers = useMemo(() => MC.getComparisonSuppliers(project, comparison), [project, comparison]);
@@ -56,7 +57,7 @@ export default function ComparisonsTab({ project, comparison, onApply, onProject
 
   const createAndLink = () => {
     if (!form.name.trim() || !onProjectChange) return;
-    onProjectChange(MC.addProjectSupplierAndLink(project, {
+    onProjectChange(prev => MC.addProjectSupplierAndLink(prev, {
       name: form.name.trim(),
       contact: form.contact || undefined,
       deliveryDays: parseBR(form.deliveryDays),
@@ -77,6 +78,7 @@ export default function ComparisonsTab({ project, comparison, onApply, onProject
   return (
     <div className="space-y-4">
       {/* Participantes */}
+      {!hideSupplierManager && (
       <div className="bg-card border border-border rounded-xl p-3 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -142,6 +144,7 @@ export default function ComparisonsTab({ project, comparison, onApply, onProject
           </div>
         )}
       </div>
+      )}
 
       {suppliers.length === 0 ? (
         <Empty msg="Adicione fornecedores participantes acima para começar a comparar preços." />
