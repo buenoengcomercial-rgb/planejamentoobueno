@@ -38,7 +38,7 @@ import {
 import type { ProjectMeta } from '@/lib/projectStorage';
 
 const UNDO_LIMIT = 20;
-const SAVE_DEBOUNCE_MS = 1200;
+const SAVE_DEBOUNCE_MS = 4000;
 const UNSAVED_DRAFT_VERSION = 1;
 
 type UndoStacks = Record<AppView, Project[]>;
@@ -87,6 +87,10 @@ function clearUnsavedDraft(projectId: string) {
   }
 }
 
+function serializeProjectForSave(project: Project): string {
+  return JSON.stringify(project);
+}
+
 export default function Index() {
   const { user, loading: authLoading, signOut } = useAuth();
   const { membership, loading: orgLoading } = useOrganization();
@@ -122,6 +126,7 @@ export default function Index() {
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const currentProjectUpdatedAtRef = useRef<string | null>(null);
   const saveRequestSeqRef = useRef(0);
+  const lastSavedProjectJsonRef = useRef<string | null>(null);
   const skipNextAutoSaveRef = useRef(false);
   const conflictDetectedRef = useRef(false);
 
@@ -152,17 +157,26 @@ export default function Index() {
     skipNextAutoSaveRef.current = !draft;
     conflictDetectedRef.current = false;
     currentProjectUpdatedAtRef.current = updatedAt;
+    lastSavedProjectJsonRef.current = projectForState ? serializeProjectForSave(projectForState) : null;
     setCurrentProjectUpdatedAt(updatedAt);
     setRawProject(projectForState);
     if (draft) setSaveStatus('saving');
   }, []);
 
   const persistProject = useCallback(async (projectToSave: Project, projectOrgId: string) => {
+    const nextJson = serializeProjectForSave(projectToSave);
+    if (nextJson === lastSavedProjectJsonRef.current) {
+      clearUnsavedDraft(projectToSave.id);
+      setSaveStatus('saved');
+      return;
+    }
+
     const seq = ++saveRequestSeqRef.current;
     const request = saveQueueRef.current.catch(() => undefined).then(async () => {
       const updatedAt = await upsertCloudProject(projectToSave, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined);
       conflictDetectedRef.current = false;
       currentProjectUpdatedAtRef.current = updatedAt;
+      lastSavedProjectJsonRef.current = nextJson;
       setCurrentProjectUpdatedAt(updatedAt);
       if (seq === saveRequestSeqRef.current && !saveTimerRef.current) {
         clearUnsavedDraft(projectToSave.id);
