@@ -4,6 +4,7 @@ import type { Row, GroupNode, GroupTotals } from '@/components/measurement/types
 import { fmtBRL } from '@/components/measurement/measurementFormat';
 import MeasurementGroupRow from './MeasurementGroupRow';
 import type { MeasurementItemRowProps } from './MeasurementItemRow';
+import type { MeasurementDetailSelection } from './MeasurementDetailFooter';
 
 type RowHandlers = Omit<MeasurementItemRowProps, 'row' | 'indentPx' | 'G_BG' | 'BORDER_L'>;
 
@@ -14,6 +15,8 @@ interface MeasurementTableProps extends RowHandlers {
   collapsed: Set<string>;
   setCollapsed: React.Dispatch<React.SetStateAction<Set<string>>>;
   isLocked: boolean;
+  selectedDetail?: MeasurementDetailSelection | null;
+  onSelectDetail?: (selection: MeasurementDetailSelection) => void;
 }
 
 const COLSPAN = 18;

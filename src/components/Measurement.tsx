@@ -14,6 +14,7 @@ import MeasurementFilters from '@/components/measurement/MeasurementFilters';
 import MeasurementSummaryCards from '@/components/measurement/MeasurementSummaryCards';
 import MeasurementTotals from '@/components/measurement/MeasurementTotals';
 import MeasurementTable from '@/components/measurement/MeasurementTable';
+import MeasurementDetailFooter, { type MeasurementDetailSelection } from '@/components/measurement/MeasurementDetailFooter';
 import { useAuth } from '@/hooks/useAuth';
 import { userInfoFromSupabaseUser } from '@/lib/audit';
 import AuditHistoryPanel from '@/components/AuditHistoryPanel';
@@ -48,6 +49,7 @@ interface MeasurementProps {
 export default function Measurement({ project, onProjectChange, undoButton, onOpenDailyReport }: MeasurementProps) {
   const { user } = useAuth();
   const auditUser = useMemo(() => userInfoFromSupabaseUser(user), [user]);
+  const [detailSelection, setDetailSelection] = useState<MeasurementDetailSelection | null>(null);
 
   const measurementState = useMeasurementState({ project, onProjectChange });
   const {
@@ -120,6 +122,10 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
   const dailyReportsSummary = useMemo(
     () => summarizeDailyReportsForPeriod(project, effStart, effEnd),
     [project, effStart, effEnd],
+  );
+  const selectedMeasurementRow = useMemo(
+    () => rows.find(r => r.taskId === detailSelection?.taskId),
+    [rows, detailSelection],
   );
 
   // ───────── Validação da medição (somente no modo "live") ─────────
@@ -517,6 +523,15 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
         updateTaskField={updateTaskField}
         patchSnapshotItem={patchSnapshotItem}
         setManualPeriodQuantity={setManualPeriodQuantity}
+        selectedDetail={detailSelection}
+        onSelectDetail={setDetailSelection}
+      />
+
+      <MeasurementDetailFooter
+        project={project}
+        selection={detailSelection}
+        row={selectedMeasurementRow}
+        bdi={effBdi}
       />
 
       {/* Rodapé técnico */}

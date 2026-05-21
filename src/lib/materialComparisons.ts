@@ -648,7 +648,7 @@ function compositionQtyFinal(c: { quantity?: number; originalQuantity?: number; 
   return c.quantity ?? 0;
 }
 
-function breakdownForComposition(project: Project, comp: AdditiveComposition, source: string): MaterialCompositionClassBreakdown | null {
+export function getMaterialCompositionBreakdown(project: Project, comp: AdditiveComposition, source = 'Composição'): MaterialCompositionClassBreakdown | null {
   const qty = compositionQtyFinal(comp);
   if (qty <= 0 || !comp.inputs?.length) return null;
   const rows = computeMaterialCostClassTotals(
@@ -684,12 +684,12 @@ function breakdownForComposition(project: Project, comp: AdditiveComposition, so
 export function getMaterialCompositionBreakdowns(project: Project): MaterialCompositionClassBreakdown[] {
   const out: MaterialCompositionClassBreakdown[] = [];
   for (const comp of project.analyticCompositions ?? []) {
-    const row = breakdownForComposition(project, comp, 'Contrato');
+    const row = getMaterialCompositionBreakdown(project, comp, 'Contrato');
     if (row) out.push(row);
   }
   for (const ad of project.additives ?? []) {
     for (const comp of ad.compositions ?? []) {
-      const row = breakdownForComposition(project, comp, ad.name || 'Aditivo');
+      const row = getMaterialCompositionBreakdown(project, comp, ad.name || 'Aditivo');
       if (row) out.push(row);
     }
   }

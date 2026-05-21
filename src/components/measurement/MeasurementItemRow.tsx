@@ -2,6 +2,7 @@ import { AlertCircle, Lock } from 'lucide-react';
 import type { Row } from '@/components/measurement/types';
 import { fmtBRL, fmtNum } from '@/components/measurement/measurementFormat';
 import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
+import type { MeasurementDetailSelection, MeasurementValueScope } from './MeasurementDetailFooter';
 
 export interface MeasurementItemRowProps {
   row: Row;
@@ -21,6 +22,8 @@ export interface MeasurementItemRowProps {
   updateTaskField?: (taskId: string, patch: Record<string, unknown>) => void;
   patchSnapshotItem?: (taskId: string, patch: Record<string, unknown>, fieldLabel: string) => void;
   setManualPeriodQuantity?: (taskId: string, v: number) => void;
+  selectedDetail?: MeasurementDetailSelection | null;
+  onSelectDetail?: (selection: MeasurementDetailSelection) => void;
   G_BG: { id: string; contract: string; period: string; forecast?: string; accum: string; balance: string };
   BORDER_L: string;
 }
@@ -29,14 +32,20 @@ export default function MeasurementItemRow({
   row: r,
   indentPx,
   isLocked,
+  selectedDetail,
+  onSelectDetail,
   G_BG,
   BORDER_L,
 }: MeasurementItemRowProps) {
   const baseBg = r.hasNoLogsInPeriod ? 'bg-warning/5' : 'bg-background';
   const stickyBg = r.hasNoLogsInPeriod ? 'bg-warning/5' : 'bg-background';
+  const isSelected = selectedDetail?.taskId === r.taskId;
+  const selectQuantity = () => onSelectDetail?.({ taskId: r.taskId, mode: 'quantity' });
+  const selectAnalytic = () => onSelectDetail?.({ taskId: r.taskId, mode: 'analytic' });
+  const selectClassification = (valueScope: MeasurementValueScope) => onSelectDetail?.({ taskId: r.taskId, mode: 'classification', valueScope });
 
   return (
-    <tr className={`border-b border-border/60 hover:bg-muted/30 ${baseBg}`}>
+    <tr className={`border-b border-border/60 hover:bg-muted/30 ${baseBg} ${isSelected ? 'ring-2 ring-primary/40 ring-inset' : ''}`}>
       {/* Identificação */}
       <td
         className={`px-2 py-1.5 font-mono tabular-nums text-foreground align-top ${stickyBg}`}
@@ -80,23 +89,27 @@ export default function MeasurementItemRow({
 
       {/* Contrato */}
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${BORDER_L} ${G_BG.contract}`}>
-        {fmtNum(r.qtyContracted)}
+        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyContracted)}</button>
       </td>
       <td className={`px-2 py-1.5 text-right align-top ${G_BG.contract}`}>
         <div className="flex items-center justify-end gap-1">
-          <span className={`tabular-nums text-[11px] ${r.unitPriceIsEstimated ? 'italic text-muted-foreground' : ''}`}>
+          <button
+            type="button"
+            className={`rounded px-1 hover:bg-primary/10 tabular-nums text-[11px] ${r.unitPriceIsEstimated ? 'italic text-muted-foreground' : ''}`}
+            onClick={selectAnalytic}
+          >
             {fmtBRL(r.unitPriceNoBDI || 0)}
-          </span>
+          </button>
           {isLocked && (
             <Lock className="h-3 w-3 text-muted-foreground print:hidden" aria-label="Medição bloqueada" />
           )}
         </div>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${G_BG.contract}`}>
-        {fmtBRL(r.unitPriceWithBDI || 0)}
+        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={selectAnalytic}>{fmtBRL(r.unitPriceWithBDI || 0)}</button>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${G_BG.contract}`}>
-        {fmtBRL(r.valueContracted)}
+        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('contracted')}>{fmtBRL(r.valueContracted)}</button>
       </td>
 
       {/* Medição atual — somente leitura, vem dos apontamentos da EAP/Diário */}
@@ -106,18 +119,18 @@ export default function MeasurementItemRow({
         }`}
         title={r.hasNoLogsInPeriod ? 'Sem apontamento no período — lance produção em Tarefas/EAP/Diário de Obra' : undefined}
       >
-        {fmtNum(r.qtyPeriod || 0)}
+        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyPeriod || 0)}</button>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums font-semibold text-foreground align-top ${G_BG.period}`}>
-        {fmtBRL(r.valuePeriod)}
+        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('period')}>{fmtBRL(r.valuePeriod)}</button>
       </td>
 
       {/* Previsão (Gantt) — somente leitura, recalcula com mudanças no cronograma */}
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${BORDER_L} ${G_BG.forecast || 'bg-accent/20'}`}>
-        {fmtNum(r.qtyForecast || 0)}
+        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyForecast || 0)}</button>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${G_BG.forecast || 'bg-accent/20'}`}>
-        {fmtBRL(r.valueForecast || 0)}
+        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('forecast')}>{fmtBRL(r.valueForecast || 0)}</button>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums align-top ${G_BG.forecast || 'bg-accent/20'} ${
         (r.diffForecastVsReal || 0) > 0 ? 'text-success font-semibold'
@@ -129,18 +142,18 @@ export default function MeasurementItemRow({
 
       {/* Acumulado */}
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${BORDER_L} ${G_BG.accum}`}>
-        {fmtNum(r.qtyCurrentAccum)}
+        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyCurrentAccum)}</button>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${G_BG.accum}`}>
-        {fmtBRL(r.valueAccum)}
+        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('accum')}>{fmtBRL(r.valueAccum)}</button>
       </td>
 
       {/* Saldo */}
       <td className={`px-2 py-1.5 text-right tabular-nums text-muted-foreground align-top ${BORDER_L} ${G_BG.balance}`}>
-        {fmtNum(r.qtyBalance)}
+        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyBalance)}</button>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums text-muted-foreground align-top ${G_BG.balance}`}>
-        {fmtBRL(r.valueBalance)}
+        <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('balance')}>{fmtBRL(r.valueBalance)}</button>
       </td>
     </tr>
   );

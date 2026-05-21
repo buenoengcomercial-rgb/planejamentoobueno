@@ -4,6 +4,7 @@ import type { CompGroup } from './types';
 import { COL_COUNT, G_HEAD, BORDER_L } from './types';
 import AdditiveGroupRow from './AdditiveGroupRow';
 import AdditiveCompositionRow from './AdditiveCompositionRow';
+import type { AdditiveDetailSelection } from './AdditiveDetailFooter';
 
 interface Props {
   bdi: number;
@@ -25,6 +26,8 @@ interface Props {
   onRemoveComposition: (id: string) => void;
   onAddNewService: (phaseId: string, phaseChain: string, parentNumber: string) => void;
   onChangeMemory: (id: string, rows: AdditiveCalculationMemoryRow[]) => void;
+  selectedDetail?: AdditiveDetailSelection | null;
+  onSelectDetail?: (selection: AdditiveDetailSelection) => void;
 }
 
 export default function AdditiveTable(props: Props) {
@@ -38,7 +41,7 @@ export default function AdditiveTable(props: Props) {
       globalDiscount={props.globalDiscount}
       isLocked={props.isLocked}
       isOpen={props.expanded.has(c.id)}
-      isMemoryOpen={props.expandedMemory.has(c.id)}
+      isMemoryOpen={props.selectedDetail?.compositionId === c.id && props.selectedDetail.mode === 'memory'}
       showAnalytic={props.showAnalytic}
       rowIndex={idx}
       onToggleExpand={props.onToggleExpand}
@@ -47,6 +50,8 @@ export default function AdditiveTable(props: Props) {
       onUpdateQuantity={props.onUpdateQuantity}
       onRemoveComposition={props.onRemoveComposition}
       onChangeMemory={props.onChangeMemory}
+      selectedDetail={props.selectedDetail}
+      onSelectDetail={props.onSelectDetail}
     />
   );
 
@@ -143,6 +148,8 @@ export default function AdditiveTable(props: Props) {
                     onRemoveComposition={props.onRemoveComposition}
                     onAddNewService={props.onAddNewService}
                     onChangeMemory={props.onChangeMemory}
+                    selectedDetail={props.selectedDetail}
+                    onSelectDetail={props.onSelectDetail}
                   />
                 ))}
                 {orphanRows.length > 0 && (
