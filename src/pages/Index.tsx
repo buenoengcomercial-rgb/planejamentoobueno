@@ -298,22 +298,6 @@ export default function Index() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, []);
 
-  useEffect(() => {
-    const flushWhenLeaving = () => {
-      void flushPendingSave();
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') flushWhenLeaving();
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('pagehide', flushWhenLeaving);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('pagehide', flushWhenLeaving);
-    };
-  }, [flushPendingSave]);
-
   const deferredRawProject = useDeferredValue(rawProject);
 
   // Recálculo condicional: o `settleAllDependencies` (mais caro, varre dependências)
