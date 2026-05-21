@@ -1,11 +1,11 @@
 import { useMemo, useRef, useState, useCallback } from 'react';
-import type { ElementType } from 'react';
+import type { ElementType, ReactNode } from 'react';
 import type { Project, MaterialComparison } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { AlertTriangle, Link2, Loader2, Check, Search, Plus, BrickWall, HardHat, Truck, CircleSlash } from 'lucide-react';
+import { AlertTriangle, Link2, Loader2, Check, Search, Plus, BrickWall, HardHat, Truck, CircleSlash, ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { parseBR, trunc2, formatBRL, formatQty } from './numberInput';
 import {
@@ -55,6 +55,9 @@ const COST_CLASS_BADGE: Record<MaterialCostClass, string> = {
   unclassified: 'border-slate-300 bg-slate-50 text-slate-600',
 };
 
+type SortColumn = 'unit' | 'description' | 'origin' | 'class' | 'quantity' | 'price' | 'group';
+type SortState = { column: SortColumn; direction: 'asc' | 'desc' };
+
 function CostClassIcon({ costClass, className = 'w-3.5 h-3.5' }: { costClass: MaterialCostClass; className?: string }) {
   const Icon = COST_CLASS_ICON[costClass];
   return <Icon className={className} />;
@@ -63,6 +66,7 @@ function CostClassIcon({ costClass, className = 'w-3.5 h-3.5' }: { costClass: Ma
 export default function MaterialsListTab({ project, comparison, onApply, onProjectChange }: Props) {
   const [selectedKeys, setSelectedKeys] = useState<Record<string, boolean>>({});
   const [search, setSearch] = useState('');
+  const [sort, setSort] = useState<SortState | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [linkingAnalytic, setLinkingAnalytic] = useState(false);
   const [linkMsg, setLinkMsg] = useState<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null);
@@ -117,6 +121,34 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
       );
     });
   }, [realSuggestions, search]);
+  const sortedFiltered = useMemo(() => {
+    if (!sort) return filtered;
+
+    const text = (value: unknown) => String(value ?? '').toLowerCase();
+    const number = (value: unknown) => Number(value ?? 0) || 0;
+    const comparisonName = (s: MC.MaterialSuggestion) => {
+      const linkedTo = linkedByKey.get(MC.linkKeyOf(s)) ?? '';
+      return allComparisons.find(c => c.id === linkedTo)?.name ?? '';
+    };
+    const sortValue = (s: MC.MaterialSuggestion) => {
+      if (sort.column === 'unit') return text(s.unit);
+      if (sort.column === 'description') return text(s.description);
+      if (sort.column === 'origin') return text(originBadge(s.sourceType, s.sourceDetail).label);
+      if (sort.column === 'class') return text(MC.MATERIAL_COST_CLASS_LABEL[MC.resolveMaterialCostClass(project, s)]);
+      if (sort.column === 'quantity') return number(s.quantity);
+      if (sort.column === 'price') return number(s.referencePrice);
+      return text(comparisonName(s));
+    };
+
+    return [...filtered].sort((a, b) => {
+      const av = sortValue(a);
+      const bv = sortValue(b);
+      const base = typeof av === 'number' && typeof bv === 'number'
+        ? av - bv
+        : String(av).localeCompare(String(bv), 'pt-BR', { numeric: true, sensitivity: 'base' });
+      return sort.direction === 'asc' ? base : -base;
+    });
+  }, [allComparisons, filtered, linkedByKey, project, sort]);
 
   const handleAnalyticFile = useCallback(async (file: File) => {
     setLinkingAnalytic(true);
@@ -209,6 +241,35 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
       filtered.forEach(s => { next[s.key] = v; });
       return next;
     });
+  };
+  const toggleSort = (column: SortColumn) => {
+    setSort(prev => {
+      if (prev?.column !== column) return { column, direction: 'asc' };
+      return { column, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+    });
+  };
+  const SortButton = ({
+    column,
+    children,
+    className = '',
+  }: {
+    column: SortColumn;
+    children: ReactNode;
+    className?: string;
+  }) => {
+    const active = sort?.column === column;
+    const Icon = !active ? ArrowUpDown : sort.direction === 'asc' ? ArrowUp : ArrowDown;
+    return (
+      <button
+        type="button"
+        className={`inline-flex w-full items-center gap-1 rounded px-1 py-0.5 text-[11px] font-semibold hover:bg-background ${className}`}
+        onClick={() => toggleSort(column)}
+        title="Clique para ordenar esta coluna"
+      >
+        <span>{children}</span>
+        <Icon className={`h-3 w-3 ${active ? 'text-primary' : 'text-muted-foreground'}`} />
+      </button>
+    );
   };
 
   const linkedCount = useMemo(
@@ -324,13 +385,13 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                 </th>
                 <th className="p-2 text-left w-28">Código</th>
                 <th className="p-2 text-left w-20">Banco</th>
-                <th className="p-2 text-center w-12">Un</th>
-                <th className="p-2 text-left">Descrição</th>
-                <th className="p-2 text-left w-40">Origem</th>
-                <th className="p-2 text-left w-36">Classe</th>
-                <th className="p-2 text-right w-20">Qtd</th>
-                <th className="p-2 text-right w-24">Preço ref.</th>
-                <th className="p-2 text-left w-44">Grupo de compra</th>
+                <th className="p-2 text-center w-12"><SortButton column="unit" className="justify-center">Un</SortButton></th>
+                <th className="p-2 text-left"><SortButton column="description">Descricao</SortButton></th>
+                <th className="p-2 text-left w-40"><SortButton column="origin">Origem</SortButton></th>
+                <th className="p-2 text-left w-36"><SortButton column="class">Classe</SortButton></th>
+                <th className="p-2 text-right w-20"><SortButton column="quantity" className="justify-end">Qtd</SortButton></th>
+                <th className="p-2 text-right w-24"><SortButton column="price" className="justify-end">Preco ref.</SortButton></th>
+                <th className="p-2 text-left w-44"><SortButton column="group">Grupo de compra</SortButton></th>
                 <th className="p-2 text-left w-32">Vinculado</th>
               </tr>
             </thead>
@@ -348,7 +409,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                   </td>
                 </tr>
               )}
-              {filtered.map(s => {
+              {sortedFiltered.map(s => {
                 const badge = originBadge(s.sourceType, s.sourceDetail);
                 const checked = !!selectedKeys[s.key];
                 const linkedTo = linkedByKey.get(MC.linkKeyOf(s)) ?? '';
