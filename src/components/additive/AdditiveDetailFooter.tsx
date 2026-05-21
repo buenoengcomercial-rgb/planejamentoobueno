@@ -86,6 +86,10 @@ export default function AdditiveDetailFooter({
   onUpdateComposition,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
+  const fixedFooterStyle = {
+    left: 'calc(var(--sidebar-width, 0px) + 1rem)',
+    right: '1rem',
+  } as const;
   const title =
     selection?.mode === 'memory' ? 'Memória de cálculo'
     : selection?.mode === 'analytic' ? 'Composição analítica'
@@ -97,7 +101,11 @@ export default function AdditiveDetailFooter({
     : PieChart;
 
   return (
-    <Card data-detail-footer="true" className="print:hidden sticky bottom-3 z-30 border-primary/20 overflow-hidden shadow-xl bg-background">
+    <Card
+      data-detail-footer="true"
+      style={fixedFooterStyle}
+      className="print:hidden fixed bottom-0 z-50 border-primary/20 overflow-hidden rounded-b-none rounded-t-xl shadow-2xl bg-background"
+    >
       <div className="px-4 py-3 border-b border-border bg-muted/30 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-semibold">
@@ -119,7 +127,7 @@ export default function AdditiveDetailFooter({
           <span className="ml-1">{collapsed ? 'Expandir' : 'Recolher'}</span>
         </button>
       </div>
-      {!collapsed && <div className="p-3 max-h-[320px] overflow-auto">
+      {!collapsed && <div className="p-3 max-h-[38vh] overflow-auto">
         {!selection || !composition ? (
           <EmptyState />
         ) : selection.mode === 'memory' ? (

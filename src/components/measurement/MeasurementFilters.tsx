@@ -1,4 +1,4 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { CalendarDays, Search } from 'lucide-react';
@@ -32,47 +32,75 @@ export default function MeasurementFilters({
   numbering,
 }: MeasurementFiltersProps) {
   return (
-    <Card className="print:hidden">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-semibold">Filtros</CardTitle>
-      </CardHeader>
-      <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3">
-        <div>
-          <label className="text-xs font-medium text-muted-foreground flex items-center gap-1 mb-1">
-            <CalendarDays className="w-3 h-3" /> Data inicial
-          </label>
-          <Input type="date" value={effStart} disabled={isSnapshotMode}
-            onChange={e => setStartDate(e.target.value)} />
-        </div>
-        <div>
-          <label className="text-xs font-medium text-muted-foreground flex items-center gap-1 mb-1">
-            <CalendarDays className="w-3 h-3" /> Data final
-          </label>
-          <Input type="date" value={effEnd} disabled={isSnapshotMode}
-            onChange={e => setEndDate(e.target.value)} />
-        </div>
-        <div>
-          <label className="text-xs font-medium text-muted-foreground mb-1 block">Capítulo</label>
+    <Card className="print:hidden px-3 py-2">
+      <div className="flex flex-wrap items-end gap-2">
+        <p className="mr-2 pb-2 text-xs font-semibold text-foreground">Filtros</p>
+
+        <FilterField label="Data inicial" icon={<CalendarDays className="w-3 h-3" />}>
+          <Input
+            className="h-8 w-[150px] text-xs"
+            type="date"
+            value={effStart}
+            disabled={isSnapshotMode}
+            onChange={e => setStartDate(e.target.value)}
+          />
+        </FilterField>
+
+        <FilterField label="Data final" icon={<CalendarDays className="w-3 h-3" />}>
+          <Input
+            className="h-8 w-[150px] text-xs"
+            type="date"
+            value={effEnd}
+            disabled={isSnapshotMode}
+            onChange={e => setEndDate(e.target.value)}
+          />
+        </FilterField>
+
+        <FilterField label="Capitulo">
           <Select value={chapterFilter} onValueChange={setChapterFilter} disabled={isSnapshotMode}>
-            <SelectTrigger><SelectValue placeholder="Todos os capítulos" /></SelectTrigger>
+            <SelectTrigger className="h-8 w-[230px] text-xs">
+              <SelectValue placeholder="Todos os capitulos" />
+            </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">Todos os capítulos</SelectItem>
+              <SelectItem value="all">Todos os capitulos</SelectItem>
               {project.phases.map(p => (
                 <SelectItem key={p.id} value={p.id}>
-                  {numbering.get(p.id)} — {p.name}
+                  {numbering.get(p.id)} - {p.name}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-        </div>
-        <div>
-          <label className="text-xs font-medium text-muted-foreground flex items-center gap-1 mb-1">
-            <Search className="w-3 h-3" /> Busca
-          </label>
-          <Input placeholder="Item, código, capítulo ou descrição"
-            value={search} onChange={e => setSearch(e.target.value)} />
-        </div>
-      </CardContent>
+        </FilterField>
+
+        <FilterField label="Busca" icon={<Search className="w-3 h-3" />}>
+          <Input
+            className="h-8 min-w-[260px] flex-1 text-xs"
+            placeholder="Item, codigo, capitulo ou descricao"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </FilterField>
+      </div>
     </Card>
+  );
+}
+
+function FilterField({
+  label,
+  icon,
+  children,
+}: {
+  label: string;
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
+        {icon}
+        {label}
+      </span>
+      {children}
+    </label>
   );
 }

@@ -1,6 +1,7 @@
+import { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Building2 } from 'lucide-react';
+import { Building2, ChevronDown } from 'lucide-react';
 import type { Project, ContractInfo } from '@/types/project';
 import { fmtDateBR } from '@/components/measurement/measurementFormat';
 
@@ -41,25 +42,59 @@ export default function MeasurementContractInfo({
   measurementNumber, setMeasurementNumber,
   persistContractInfo,
 }: MeasurementContractInfoProps) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const compactBdi = Number.isFinite(effBdi) ? effBdi.toLocaleString('pt-BR') : '0';
+
   return (
-    <Card className="border-2 border-foreground/20 print:border-foreground print:shadow-none">
+    <Card className="border border-foreground/15 print:border-foreground print:shadow-none">
       <CardContent className="p-0">
-        <div className="bg-muted/40 px-5 py-3 border-b-2 border-foreground/20 flex items-center justify-between">
+        <button
+          type="button"
+          className="w-full bg-muted/35 px-4 py-2 border-b border-foreground/15 flex items-center justify-between gap-3 text-left print:hidden"
+          onClick={() => setDetailsOpen(v => !v)}
+        >
+          <div className="flex min-w-0 items-center gap-3">
+            <Building2 className="w-5 h-5 shrink-0 text-foreground" />
+            <div className="min-w-0">
+              <h2 className="text-sm font-bold tracking-widest uppercase text-foreground">
+                Boletim de Medicao para Pagamento
+              </h2>
+              <div className="mt-1 hidden lg:flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                <span>Medicao nÂº <strong className="text-foreground">{effNumber || '-'}</strong></span>
+                <span>Periodo <strong className="text-foreground">{fmtDateBR(effStart)} a {fmtDateBR(effEnd)}</strong></span>
+                <span className="truncate">Contratada <strong className="text-foreground">{contracted || '-'}</strong></span>
+                <span>Contrato <strong className="text-foreground">{contractNumber || '-'}</strong></span>
+                <span>BDI <strong className="text-foreground">{compactBdi}%</strong></span>
+              </div>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-3 text-right">
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Medicao nÂº</p>
+              <p className="text-base font-bold tabular-nums text-foreground leading-none">
+                {effNumber || '-'}
+              </p>
+            </div>
+            <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${detailsOpen ? 'rotate-180' : ''}`} />
+          </div>
+        </button>
+
+        <div className="hidden print:flex bg-muted/40 px-5 py-3 border-b-2 border-foreground/20 items-center justify-between">
           <div className="flex items-center gap-3">
             <Building2 className="w-5 h-5 text-foreground" />
             <h2 className="text-sm font-bold tracking-widest uppercase text-foreground">
-              Boletim de Medição para Pagamento
+              Boletim de Medicao para Pagamento
             </h2>
           </div>
           <div className="text-right">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Medição Nº</p>
+            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Medicao nÂº</p>
             <p className="text-lg font-bold tabular-nums text-foreground leading-none">
-              {effNumber || '—'}
+              {effNumber || '-'}
             </p>
           </div>
         </div>
 
-        <div className="grid grid-cols-12 text-[11px]">
+        <div className={`${detailsOpen ? 'grid' : 'hidden'} print:grid grid-cols-12 text-[11px]`}>
           <FormField label="Contratante" colSpan={6}>
             <Input
               className="h-7 text-xs border-0 px-0 focus-visible:ring-0 bg-transparent"
@@ -83,7 +118,7 @@ export default function MeasurementContractInfo({
           <FormField label="Obra" colSpan={8}>
             <p className="text-xs font-semibold text-foreground py-1">{project.name}</p>
           </FormField>
-          <FormField label="Local / Município" colSpan={4}>
+          <FormField label="Local / Municipio" colSpan={4}>
             <Input
               className="h-7 text-xs border-0 px-0 focus-visible:ring-0 bg-transparent"
               value={location}
@@ -100,10 +135,10 @@ export default function MeasurementContractInfo({
               disabled={isSnapshotMode}
               onChange={e => setContractObject(e.target.value)}
               onBlur={() => persistContractInfo({ contractObject })}
-              placeholder="Descrição resumida do escopo"
+              placeholder="Descricao resumida do escopo"
             />
           </FormField>
-          <FormField label="Nº do Contrato" colSpan={3}>
+          <FormField label="NÂº do Contrato" colSpan={3}>
             <Input
               className="h-7 text-xs border-0 px-0 focus-visible:ring-0 bg-transparent"
               value={contractNumber}
@@ -113,7 +148,7 @@ export default function MeasurementContractInfo({
               placeholder="Ex.: 001/2025"
             />
           </FormField>
-          <FormField label="Nº ART" colSpan={3}>
+          <FormField label="NÂº ART" colSpan={3}>
             <Input
               className="h-7 text-xs border-0 px-0 focus-visible:ring-0 bg-transparent"
               value={artNumber}
@@ -123,17 +158,17 @@ export default function MeasurementContractInfo({
               placeholder="Ex.: BR20240000000"
             />
           </FormField>
-          <FormField label="Período da Medição" colSpan={4}>
+          <FormField label="Periodo da Medicao" colSpan={4}>
             <p className="text-xs font-semibold text-foreground py-1 tabular-nums">
               {fmtDateBR(effStart)} a {fmtDateBR(effEnd)}
             </p>
           </FormField>
-          <FormField label="Data de Emissão" colSpan={2}>
+          <FormField label="Data de Emissao" colSpan={2}>
             <p className="text-xs font-semibold text-foreground py-1 tabular-nums">
               {fmtDateBR(effIssue)}
             </p>
           </FormField>
-          <FormField label="Fonte de Orçamento" colSpan={4}>
+          <FormField label="Fonte de Orcamento" colSpan={4}>
             <Input
               className="h-7 text-xs border-0 px-0 focus-visible:ring-0 bg-transparent"
               value={budgetSource}
@@ -155,7 +190,7 @@ export default function MeasurementContractInfo({
               onBlur={() => persistContractInfo({ bdiPercent: bdiPercent })}
             />
           </FormField>
-          <FormField label="Medição Nº" colSpan={3} bottom>
+          <FormField label="Medicao nÂº" colSpan={3} bottom>
             <Input
               className="h-7 text-xs border-0 px-0 focus-visible:ring-0 bg-transparent tabular-nums font-semibold"
               value={effNumber}

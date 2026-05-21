@@ -80,7 +80,7 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
   };
 
   return (
-    <div className="p-4 lg:p-6 space-y-4 max-w-[1700px] mx-auto" onClickCapture={handleDetailClickCapture}>
+    <div className="p-4 lg:p-6 pb-56 space-y-4 max-w-[1700px] mx-auto" onClickCapture={handleDetailClickCapture}>
       <AdditiveHeader
         project={project}
         active={active}

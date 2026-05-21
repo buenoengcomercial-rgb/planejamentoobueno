@@ -159,6 +159,10 @@ function ClassificationView({
 
 export default function MeasurementDetailFooter({ project, selection, row, bdi }: Props) {
   const [collapsed, setCollapsed] = useState(false);
+  const fixedFooterStyle = {
+    left: 'calc(var(--sidebar-width, 0px) + 1rem)',
+    right: '1rem',
+  } as const;
   const composition = findComposition(project, row);
   const title =
     selection?.mode === 'quantity' ? 'Memoria / quantidades da medicao'
@@ -171,7 +175,11 @@ export default function MeasurementDetailFooter({ project, selection, row, bdi }
     : PieChart;
 
   return (
-    <Card data-detail-footer="true" className="print:hidden sticky bottom-3 z-30 border-primary/20 overflow-hidden shadow-xl bg-background">
+    <Card
+      data-detail-footer="true"
+      style={fixedFooterStyle}
+      className="print:hidden fixed bottom-0 z-50 border-primary/20 overflow-hidden rounded-b-none rounded-t-xl shadow-2xl bg-background"
+    >
       <div className="px-4 py-3 border-b border-border bg-muted/30 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-semibold">
@@ -194,7 +202,7 @@ export default function MeasurementDetailFooter({ project, selection, row, bdi }
         </button>
       </div>
       {!collapsed && (
-        <div className="p-3 max-h-[320px] overflow-auto">
+        <div className="p-3 max-h-[38vh] overflow-auto">
           {!selection || !row ? (
             <div className="text-sm text-muted-foreground">
               Selecione uma quantidade, preco ou valor total para ver os detalhes.

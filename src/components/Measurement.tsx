@@ -341,7 +341,7 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
   };
 
   return (
-    <div className="measurement-print-root p-6 space-y-5 print:p-0 print:space-y-3" onClickCapture={handleDetailClickCapture}>
+    <div className="measurement-print-root p-4 lg:p-5 pb-56 space-y-4 print:p-0 print:space-y-3" onClickCapture={handleDetailClickCapture}>
       <style>{`
         .measurement-table { table-layout: fixed; min-width: 1400px; }
         .measurement-table col.col-item { width: 70px; }
@@ -512,8 +512,6 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
       />
 
       {/* Resumo técnico */}
-      <MeasurementSummaryCards totals={totals} />
-
       {/* Tabela */}
       <MeasurementTable
         filteredRows={filteredRows}
@@ -543,7 +541,10 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
       />
 
       {/* Rodapé técnico */}
-      <MeasurementTotals totals={totals} effBdi={effBdi} />
+      <div className="space-y-3">
+        <MeasurementTotals totals={totals} effBdi={effBdi} />
+        <MeasurementSummaryCards totals={totals} />
+      </div>
 
       {/* Histórico de alterações */}
       {activeMeasurement?.history && activeMeasurement.history.length > 0 && (
