@@ -4,6 +4,7 @@ import type { AdditiveComposition, AdditiveCalculationMemoryRow } from '@/types/
 import type { CompGroup } from './types';
 import { fmtBRL, fmtPct, COL_COUNT } from './types';
 import AdditiveCompositionRow from './AdditiveCompositionRow';
+import type { AdditiveDetailSelection } from './AdditiveDetailFooter';
 
 interface Props {
   group: CompGroup;
@@ -22,6 +23,8 @@ interface Props {
   onRemoveComposition: (id: string) => void;
   onAddNewService: (phaseId: string, phaseChain: string, parentNumber: string) => void;
   onChangeMemory: (id: string, rows: AdditiveCalculationMemoryRow[]) => void;
+  selectedDetail?: AdditiveDetailSelection | null;
+  onSelectDetail?: (selection: AdditiveDetailSelection) => void;
 }
 
 function AdditiveGroupRowImpl(props: Props) {
@@ -89,7 +92,7 @@ function AdditiveGroupRowImpl(props: Props) {
           globalDiscount={props.globalDiscount}
           isLocked={isLocked}
           isOpen={props.expanded.has(c.id)}
-          isMemoryOpen={props.expandedMemory.has(c.id)}
+          isMemoryOpen={props.selectedDetail?.compositionId === c.id && props.selectedDetail.mode === 'memory'}
           showAnalytic={props.showAnalytic}
           rowIndex={idx}
           onToggleExpand={props.onToggleExpand}
@@ -98,6 +101,8 @@ function AdditiveGroupRowImpl(props: Props) {
           onUpdateQuantity={props.onUpdateQuantity}
           onRemoveComposition={props.onRemoveComposition}
           onChangeMemory={props.onChangeMemory}
+          selectedDetail={props.selectedDetail}
+          onSelectDetail={props.onSelectDetail}
         />
       ))}
       {!isCollapsed && !isLocked && (

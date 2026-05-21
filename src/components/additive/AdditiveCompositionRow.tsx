@@ -15,9 +15,9 @@ import { computeAdditiveRow, computeCompositionWithBDI } from '@/lib/additiveImp
 import { memoryTotals } from '@/lib/calculationMemory';
 import { fmtBRL, fmtNum, fmtQty2, fmtPct, COL_COUNT, G_BG, BORDER_L } from './types';
 import AdditiveAnalyticRows from './AdditiveAnalyticRows';
-import AdditiveCalculationMemory from './AdditiveCalculationMemory';
 import { handleGridKeyDown } from '@/lib/gridKeyboardNavigation';
 import { requestMemoryFocus, type AdditiveMemoryQtyType } from '@/lib/additiveMemoryFocus';
+import type { AdditiveDetailMode, AdditiveDetailSelection } from './AdditiveDetailFooter';
 
 const MAIN_GRID = 'additive-main-table';
 
@@ -240,12 +240,14 @@ interface Props {
   onUpdateQuantity: (id: string, field: 'addedQuantity' | 'suppressedQuantity', v: number) => void;
   onRemoveComposition: (id: string) => void;
   onChangeMemory: (id: string, rows: AdditiveCalculationMemoryRow[]) => void;
+  selectedDetail?: AdditiveDetailSelection | null;
+  onSelectDetail?: (selection: AdditiveDetailSelection) => void;
 }
 
 function AdditiveCompositionRowImpl({
   c, bdi, globalDiscount, isLocked, isOpen, isMemoryOpen, showAnalytic, rowIndex = 0,
   onToggleExpand, onToggleMemory, onUpdateComposition, onUpdateQuantity,
-  onRemoveComposition, onChangeMemory,
+  onRemoveComposition, onChangeMemory, selectedDetail, onSelectDetail,
 }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const r = computeAdditiveRow(c, bdi, globalDiscount);
@@ -267,15 +269,20 @@ function AdditiveCompositionRowImpl({
     Math.abs(r.diferenca) > 0.005
   );
 
+  const isSelected = selectedDetail?.compositionId === c.id;
+  const selectDetail = (mode: AdditiveDetailMode, qtyType?: AdditiveMemoryQtyType) => {
+    onSelectDetail?.({ compositionId: c.id, mode, qtyType });
+  };
+
   const openMemoryFor = (type: AdditiveMemoryQtyType) => {
     if (isLocked) return;
     requestMemoryFocus(c.id, type);
-    if (!isMemoryOpen) onToggleMemory(c.id);
+    selectDetail('memory', type);
   };
 
   return (
     <Fragment>
-      <tr className={`border-b align-top ${
+      <tr className={`border-b align-top ${isSelected ? 'ring-2 ring-primary/40 ring-inset' : ''} ${
         isNew
           ? 'bg-sky-50 hover:bg-sky-100/70 border-l-4 border-l-sky-500'
           : isAlteredContracted
@@ -362,7 +369,7 @@ function AdditiveCompositionRowImpl({
               </button>
             )}
             <button
-              onClick={() => onToggleMemory(c.id)}
+              onClick={() => selectDetail('memory')}
               className={`text-[10px] inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border ${isMemoryOpen ? 'bg-violet-100 border-violet-300 text-violet-800' : 'border-border text-muted-foreground hover:bg-muted'}`}
               title="Memória de cálculo"
               type="button"
@@ -486,15 +493,31 @@ function AdditiveCompositionRowImpl({
             </span>
           )}
         </td>
-        <td className={`px-1 py-1 text-right ${G_BG.val}`}>{fmtBRL(r.unitPriceWithBDI)}</td>
-        <td className={`px-1 py-1 text-right text-muted-foreground ${G_BG.val}`}>{fmtBRL(r.totalFonte)}</td>
-        <td className={`px-1 py-1 text-right ${G_BG.val}`}>{fmtBRL(isNew ? 0 : r.valorContratadoOriginalPreservado)}</td>
+        <td className={`px-1 py-1 text-right ${G_BG.val}`}>
+          <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('analytic')}>
+            {fmtBRL(r.unitPriceWithBDI)}
+          </button>
+        </td>
+        <td className={`px-1 py-1 text-right text-muted-foreground ${G_BG.val}`}>
+          <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
+            {fmtBRL(r.totalFonte)}
+          </button>
+        </td>
+        <td className={`px-1 py-1 text-right ${G_BG.val}`}>
+          <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
+            {fmtBRL(isNew ? 0 : r.valorContratadoOriginalPreservado)}
+          </button>
+        </td>
         {/* Impacto */}
         <td className={`px-1 py-1 text-right text-rose-700 font-medium ${G_BG.suppressed} ${BORDER_L}`}>
           {r.valorSuprimido > 0 ? fmtBRL(-r.valorSuprimido) : fmtBRL(0)}
         </td>
         <td className={`px-1 py-1 text-right text-emerald-700 font-medium ${G_BG.added}`}>{fmtBRL(r.valorAcrescido)}</td>
-        <td className={`px-1 py-1 text-right font-medium ${G_BG.impact}`}>{fmtBRL(r.valorFinal)}</td>
+        <td className={`px-1 py-1 text-right font-medium ${G_BG.impact}`}>
+          <button type="button" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
+            {fmtBRL(r.valorFinal)}
+          </button>
+        </td>
         <td className={`px-1 py-1 text-right font-medium ${r.diferenca < 0 ? 'text-rose-700' : r.diferenca > 0 ? 'text-emerald-700' : 'text-foreground'}`}>
           {fmtBRL(r.diferenca)}
         </td>
@@ -513,19 +536,6 @@ function AdditiveCompositionRowImpl({
               isLocked={isLocked}
               cb={cb}
               onUpdateComposition={onUpdateComposition}
-            />
-          </td>
-        </tr>
-      )}
-      {isMemoryOpen && (
-        <tr className="bg-violet-50/30 border-b">
-          <td />
-          <td colSpan={COL_COUNT - 1} className="px-3 py-2">
-            <AdditiveCalculationMemory
-              c={c}
-              isLocked={isLocked}
-              onChange={rows => onChangeMemory(c.id, rows)}
-              onChangeColumns={cols => onUpdateComposition(c.id, { calculationMemoryColumns: cols })}
             />
           </td>
         </tr>
