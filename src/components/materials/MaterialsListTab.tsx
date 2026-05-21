@@ -1,16 +1,19 @@
 import { useMemo, useRef, useState, useCallback } from 'react';
+import type { ElementType } from 'react';
 import type { Project, MaterialComparison } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { AlertTriangle, Link2, Loader2, Check, Search, Plus } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { AlertTriangle, Link2, Loader2, Check, Search, Plus, BrickWall, HardHat, Truck, CircleSlash, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 import { parseBR, trunc2, formatBRL, formatQty } from './numberInput';
 import {
   extractBaseAnalyticCompositions,
   extractBaseAnalyticCompositionsFromAnalyticFile,
 } from '@/lib/additiveImport';
+import type { MaterialCostClass } from '@/types/project';
 
 interface Props {
   project: Project;
@@ -39,6 +42,25 @@ function originBadge(sourceType: MC.MaterialSuggestionSource, detail?: MC.Materi
   return { label: 'Aditivo', cls: 'bg-muted text-muted-foreground border-border' };
 }
 
+const COST_CLASS_ICON: Record<MaterialCostClass, ElementType> = {
+  material: BrickWall,
+  labor: HardHat,
+  equipment: Truck,
+  unclassified: CircleSlash,
+};
+
+const COST_CLASS_BADGE: Record<MaterialCostClass, string> = {
+  material: 'border-orange-300 bg-orange-50 text-orange-700',
+  labor: 'border-red-300 bg-red-50 text-red-700',
+  equipment: 'border-blue-300 bg-blue-50 text-blue-700',
+  unclassified: 'border-slate-300 bg-slate-50 text-slate-600',
+};
+
+function CostClassIcon({ costClass, className = 'w-3.5 h-3.5' }: { costClass: MaterialCostClass; className?: string }) {
+  const Icon = COST_CLASS_ICON[costClass];
+  return <Icon className={className} />;
+}
+
 export default function MaterialsListTab({ project, comparison, onApply, onProjectChange }: Props) {
   const [selectedKeys, setSelectedKeys] = useState<Record<string, boolean>>({});
   const [search, setSearch] = useState('');
@@ -48,6 +70,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
 
   const [showManual, setShowManual] = useState(false);
   const [manual, setManual] = useState({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '' });
+  const [selectedBreakdown, setSelectedBreakdown] = useState<MC.MaterialCompositionClassBreakdown | null>(null);
 
   const allComparisons = project.materialComparisons ?? [];
 
@@ -77,6 +100,14 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   const realSuggestions = useMemo(
     () => suggestions.filter(s => !s.warning),
     [suggestions],
+  );
+  const costClassTotals = useMemo(
+    () => MC.computeMaterialCostClassTotals(project, realSuggestions),
+    [project, realSuggestions],
+  );
+  const compositionBreakdowns = useMemo(
+    () => MC.getMaterialCompositionBreakdowns(project),
+    [project],
   );
 
   const filtered = useMemo(() => {
@@ -142,6 +173,10 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
 
   const changeGroup = (s: MC.MaterialSuggestion, targetCompId: string | null) => {
     onProjectChange(MC.setSuggestionLink(project, suggestionToPayload(s), targetCompId));
+  };
+
+  const changeCostClass = (s: MC.MaterialSuggestion, costClass: MaterialCostClass) => {
+    onProjectChange(MC.setMaterialCostClass(project, s, costClass));
   };
 
   const linkSelectedToActive = () => {
@@ -256,6 +291,62 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
         </Button>
       </div>
 
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
+        {costClassTotals.map(row => (
+          <div key={row.costClass} className={`rounded-lg border px-3 py-2 ${COST_CLASS_BADGE[row.costClass]}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-xs font-semibold">
+                <CostClassIcon costClass={row.costClass} />
+                {row.label}
+              </span>
+              <span className="text-[10px] opacity-75">{row.itemsCount} item{row.itemsCount === 1 ? '' : 's'}</span>
+            </div>
+            <div className="mt-1 text-sm font-bold tabular-nums">{formatBRL(row.total)}</div>
+            {row.missingPriceCount > 0 && (
+              <div className="mt-0.5 text-[10px] opacity-75">{row.missingPriceCount} sem preço ref.</div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {compositionBreakdowns.length > 0 && (
+        <div className="bg-card border border-border rounded-lg overflow-hidden">
+          <div className="px-3 py-2 border-b border-border flex items-center justify-between gap-2">
+            <div>
+              <p className="text-xs font-semibold text-foreground">Detalhe por composição</p>
+              <p className="text-[11px] text-muted-foreground">Clique no valor para ver Material, Mão de obra e Equipamento.</p>
+            </div>
+            <span className="text-[11px] text-muted-foreground">{compositionBreakdowns.length} composições com analítica</span>
+          </div>
+          <div className="max-h-44 overflow-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-muted/60 sticky top-0 z-10">
+                <tr className="border-b border-border">
+                  <th className="px-2 py-1.5 text-left w-24">Item</th>
+                  <th className="px-2 py-1.5 text-left">Composição</th>
+                  <th className="px-2 py-1.5 text-left w-24">Origem</th>
+                  <th className="px-2 py-1.5 text-right w-32">Valor ref.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {compositionBreakdowns.map(row => (
+                  <tr key={row.id} className="border-t border-border hover:bg-muted/30">
+                    <td className="px-2 py-1.5 font-mono text-[10px]">{row.item || row.code || '—'}</td>
+                    <td className="px-2 py-1.5">{row.description}</td>
+                    <td className="px-2 py-1.5 text-muted-foreground">{row.source}</td>
+                    <td className="px-2 py-1.5 text-right">
+                      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs font-mono" onClick={() => setSelectedBreakdown(row)}>
+                        <Eye className="w-3 h-3 mr-1" /> {formatBRL(row.total)}
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {showManual && (
         <div className="bg-card border border-border rounded-lg px-2 py-2 grid grid-cols-12 gap-1.5">
           <Input className="col-span-2 h-8 text-xs" placeholder="Código" value={manual.code} onChange={e => setManual({ ...manual, code: e.target.value })} />
@@ -281,6 +372,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                 <th className="p-2 text-center w-12">Un</th>
                 <th className="p-2 text-left">Descrição</th>
                 <th className="p-2 text-left w-40">Origem</th>
+                <th className="p-2 text-left w-36">Classe</th>
                 <th className="p-2 text-right w-20">Qtd</th>
                 <th className="p-2 text-right w-24">Preço ref.</th>
                 <th className="p-2 text-left w-44">Grupo de compra</th>
@@ -290,7 +382,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="p-6 text-center text-muted-foreground text-xs">
+                  <td colSpan={11} className="p-6 text-center text-muted-foreground text-xs">
                     {realSuggestions.length === 0
                       ? (diagnostics.additivesRead > 0
                           ? 'Nenhum insumo analítico encontrado no Aditivo atual.'
@@ -306,6 +398,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                 const checked = !!selectedKeys[s.key];
                 const linkedTo = linkedByKey.get(MC.linkKeyOf(s)) ?? '';
                 const linkedComp = linkedTo ? allComparisons.find(c => c.id === linkedTo) : null;
+                const costClass = MC.resolveMaterialCostClass(project, s);
                 return (
                   <tr key={s.key} className={`border-t border-border hover:bg-muted/30 ${linkedTo ? 'bg-primary/5' : ''}`}>
                     <td className="p-1.5 align-middle">
@@ -319,6 +412,20 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                       <span className={`inline-block px-1.5 py-0.5 rounded border text-[10px] font-medium ${badge.cls}`}>
                         {badge.label}
                       </span>
+                    </td>
+                    <td className="p-1.5 align-middle">
+                      <div className={`h-7 rounded border px-1.5 flex items-center gap-1 ${COST_CLASS_BADGE[costClass]}`}>
+                        <CostClassIcon costClass={costClass} />
+                        <select
+                          value={costClass}
+                          onChange={e => changeCostClass(s, e.target.value as MaterialCostClass)}
+                          className="min-w-0 flex-1 bg-transparent text-[11px] font-medium outline-none"
+                        >
+                          {MC.MATERIAL_COST_CLASS_ORDER.map(c => (
+                            <option key={c} value={c}>{MC.MATERIAL_COST_CLASS_LABEL[c]}</option>
+                          ))}
+                        </select>
+                      </div>
                     </td>
                     <td className="p-1.5 align-middle text-right font-mono">{formatQty(s.quantity)}</td>
                     <td className="p-1.5 align-middle text-right font-mono">{s.referencePrice ? formatBRL(s.referencePrice) : '—'}</td>
@@ -356,6 +463,61 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
           </Button>
         </div>
       </div>
+      <Dialog open={!!selectedBreakdown} onOpenChange={open => !open && setSelectedBreakdown(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base">Detalhe de custo por classificação</DialogTitle>
+          </DialogHeader>
+          {selectedBreakdown && (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-border bg-muted/30 p-3">
+                <p className="text-sm font-semibold text-foreground">{selectedBreakdown.description}</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {selectedBreakdown.item || selectedBreakdown.code || 'Sem item'} · {selectedBreakdown.source}
+                </p>
+              </div>
+              <div className="overflow-hidden rounded-lg border border-border">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted">
+                    <tr className="border-b border-border">
+                      <th className="p-2 text-left">Classificação</th>
+                      <th className="p-2 text-right">Itens</th>
+                      <th className="p-2 text-right">Pendências</th>
+                      <th className="p-2 text-right">Valor ref.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedBreakdown.rows.map(row => (
+                      <tr key={row.costClass} className="border-t border-border">
+                        <td className="p-2">
+                          <span className={`inline-flex items-center gap-1.5 rounded border px-2 py-1 text-xs font-semibold ${COST_CLASS_BADGE[row.costClass]}`}>
+                            <CostClassIcon costClass={row.costClass} />
+                            {row.label}
+                          </span>
+                        </td>
+                        <td className="p-2 text-right font-mono">{row.itemsCount}</td>
+                        <td className="p-2 text-right font-mono">{row.missingPriceCount}</td>
+                        <td className="p-2 text-right font-mono font-semibold">{formatBRL(row.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-muted/40 border-t border-border">
+                    <tr>
+                      <td className="p-2 font-semibold" colSpan={3}>Total de referência</td>
+                      <td className="p-2 text-right font-mono font-bold">{formatBRL(selectedBreakdown.total)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              {selectedBreakdown.missingPriceCount > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {selectedBreakdown.missingPriceCount} insumo(s) sem preço de referência não entram no total.
+                </p>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

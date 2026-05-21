@@ -390,6 +390,8 @@ export interface Project {
   materialPriceHistory?: PriceHistoryEntry[];
   /** Fornecedores globais do projeto (compartilhados entre comparativos). */
   materialSuppliers?: ComparisonSupplier[];
+  /** Classificacao manual dos insumos da Lista de Material, indexada pelo linkKey do insumo. */
+  materialCostClasses?: Record<string, MaterialCostClass>;
   /** Movimentações de estoque/almoxarifado por insumo. */
   stockMovements?: StockMovement[];
   /**
@@ -561,6 +563,7 @@ export interface WarehouseState {
 
 export type MaterialComparisonStatus = 'rascunho' | 'em_cotacao' | 'fechado' | 'comprado';
 export type ComparisonItemStatus = 'pendente' | 'orcado' | 'comprado';
+export type MaterialCostClass = 'material' | 'labor' | 'equipment' | 'unclassified';
 
 export interface ComparisonSupplier {
   id: string;

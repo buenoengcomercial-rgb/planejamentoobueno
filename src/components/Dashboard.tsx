@@ -1,16 +1,24 @@
 import { Project } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
 import { generateCurvaS, suggestOptimizations } from '@/lib/calculations';
+import * as MC from '@/lib/materialComparisons';
 import { getChapterTree, getChapterTasks, getChapterNumbering } from '@/lib/chapters';
 import { motion } from 'framer-motion';
 import { useMemo } from 'react';
-import { TrendingUp, AlertTriangle, DollarSign, CheckCircle2, Zap, Target } from 'lucide-react';
+import { TrendingUp, AlertTriangle, DollarSign, CheckCircle2, Zap, Target, BrickWall, HardHat, Truck, CircleSlash } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
 
 interface DashboardProps {
   project: Project;
   undoButton?: React.ReactNode;
 }
+
+const COST_CLASS_ICON = {
+  material: BrickWall,
+  labor: HardHat,
+  equipment: Truck,
+  unclassified: CircleSlash,
+} as const;
 
 export default function Dashboard({ project, undoButton }: DashboardProps) {
   const tasks = useMemo(() => getAllTasks(project), [project]);
@@ -27,6 +35,18 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
 
   const allMaterials = tasks.flatMap(t => t.materials);
   const totalCost = allMaterials.reduce((s, m) => s + (m.estimatedCost || 0), 0);
+  const materialCostTotals = useMemo(() => MC.computeMaterialCostClassTotals(project), [project]);
+  const materialCostChart = useMemo(
+    () => materialCostTotals
+      .filter(row => row.total > 0 || row.itemsCount > 0)
+      .map(row => ({
+        name: row.label,
+        total: row.total,
+        color: MC.MATERIAL_COST_CLASS_COLOR[row.costClass],
+        costClass: row.costClass,
+      })),
+    [materialCostTotals],
+  );
 
   // Agrupa progresso por capítulo principal (incluindo seus subcapítulos)
   const chapterTree = useMemo(() => getChapterTree(project), [project.phases]);
@@ -90,6 +110,57 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
           </motion.div>
         ))}
       </div>
+
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }} className="bg-card rounded-xl p-5 border border-border shadow-sm">
+        <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">Custo por classificação</h3>
+            <p className="text-xs text-muted-foreground mt-1">Referência calculada a partir da Lista de Material.</p>
+          </div>
+          <span className="text-[11px] text-muted-foreground">
+            Total ref.: <strong className="text-foreground">{materialCostTotals.reduce((sum, row) => sum + row.total, 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong>
+          </span>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+            {materialCostTotals.map(row => {
+              const Icon = COST_CLASS_ICON[row.costClass];
+              return (
+                <div key={row.costClass} className="rounded-lg border border-border bg-muted/20 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                      <Icon className="w-3.5 h-3.5" style={{ color: MC.MATERIAL_COST_CLASS_COLOR[row.costClass] }} />
+                      {row.label}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">{row.itemsCount} item{row.itemsCount === 1 ? '' : 's'}</span>
+                  </div>
+                  <p className="mt-2 text-base font-bold text-foreground tabular-nums">
+                    {row.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </p>
+                  {row.missingPriceCount > 0 && (
+                    <p className="mt-1 text-[10px] text-muted-foreground">{row.missingPriceCount} sem preço ref.</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="min-h-[180px]">
+            <ResponsiveContainer width="100%" height={180}>
+              <PieChart>
+                <Pie data={materialCostChart} cx="50%" cy="50%" innerRadius={42} outerRadius={70} dataKey="total" nameKey="name" paddingAngle={3}>
+                  {materialCostChart.map(entry => (
+                    <Cell key={entry.costClass} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  formatter={(value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  contentStyle={{ borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--card))' }}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </motion.div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="lg:col-span-2 bg-card rounded-xl p-5 border border-border shadow-sm">

@@ -9,6 +9,9 @@ import type {
   MaterialComparisonStatus,
   StockMovement,
   StockMovementType,
+  MaterialCostClass,
+  AdditiveInputType,
+  AdditiveComposition,
 } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
 import { trunc2 } from '@/lib/financialEngine';
@@ -322,6 +325,7 @@ export interface MaterialSuggestion {
   sourceType: MaterialSuggestionSource;
   sourceDetail?: MaterialSuggestionDetail;
   sourceId: string;
+  legacyInputType?: AdditiveInputType;
   /** Aviso opcional (ex.: composição sem analítico). */
   warning?: string;
 }
@@ -369,6 +373,7 @@ export function suggestMaterialsWithDiagnostics(
     if (cur) {
       cur.quantity = trunc2(cur.quantity + s.quantity);
       if (!cur.referencePrice && s.referencePrice) cur.referencePrice = s.referencePrice;
+      if (!cur.legacyInputType && s.legacyInputType) cur.legacyInputType = s.legacyInputType;
       // Se origens diferem dentro do mesmo insumo, manter o detalhe "alterado"
       // como mais informativo do que "contratado".
       if (s.sourceDetail && cur.sourceDetail && s.sourceDetail !== cur.sourceDetail) {
@@ -432,6 +437,7 @@ export function suggestMaterialsWithDiagnostics(
           sourceType: 'additive_input',
           sourceDetail: detail,
           sourceId: inp.id,
+          legacyInputType: inp.type,
         });
       }
     }
@@ -461,6 +467,7 @@ export function suggestMaterialsWithDiagnostics(
         referencePrice: inp.unitPrice || undefined,
         sourceType: 'analytic_input',
         sourceId: inp.id,
+        legacyInputType: inp.type,
       });
     }
   }
@@ -511,6 +518,182 @@ export interface SuggestionLikeKey {
 export function linkKeyOf(x: SuggestionLikeKey): string {
   if (x.sourceId) return `id:${x.sourceId}`;
   return `k:${(x.code ?? '').trim().toLowerCase()}|${(x.description ?? '').trim().toLowerCase()}|${(x.unit ?? '').trim().toLowerCase()}`;
+}
+
+export const MATERIAL_COST_CLASS_ORDER: MaterialCostClass[] = ['material', 'labor', 'equipment', 'unclassified'];
+
+export const MATERIAL_COST_CLASS_LABEL: Record<MaterialCostClass, string> = {
+  material: 'Material',
+  labor: 'Mão de obra',
+  equipment: 'Equipamento',
+  unclassified: 'Sem classificação',
+};
+
+export const MATERIAL_COST_CLASS_COLOR: Record<MaterialCostClass, string> = {
+  material: 'hsl(24, 82%, 54%)',
+  labor: 'hsl(0, 72%, 51%)',
+  equipment: 'hsl(230, 65%, 52%)',
+  unclassified: 'hsl(215, 16%, 47%)',
+};
+
+function normCostText(value: string | undefined): string {
+  return (value ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+}
+
+function classFromLegacyType(type?: AdditiveInputType): MaterialCostClass | undefined {
+  if (type === 'material') return 'material';
+  if (type === 'mao_obra') return 'labor';
+  if (type === 'equipamento') return 'equipment';
+  if (type === 'outro') return 'unclassified';
+  return undefined;
+}
+
+function textHasAny(text: string, words: string[]): boolean {
+  return words.some(w => text.includes(w));
+}
+
+export function guessMaterialCostClass(input: {
+  description: string;
+  unit?: string;
+  sourceType?: MaterialSuggestionSource | ComparisonItem['sourceType'];
+  legacyInputType?: AdditiveInputType;
+}): MaterialCostClass {
+  const legacy = classFromLegacyType(input.legacyInputType);
+  if (legacy) return legacy;
+
+  const desc = normCostText(input.description);
+  const unit = normCostText(input.unit);
+  const laborWords = ['ajudante', 'auxiliar', 'armador', 'azulejista', 'bombeiro hidraulico', 'carpinteiro', 'eletricista', 'encanador', 'engenheiro', 'mestre', 'montador', 'oficial', 'operador', 'pedreiro', 'pintor', 'serralheiro', 'servente', 'soldador', 'tecnico', 'vigia'];
+  const equipmentWords = ['betoneira', 'caminhao', 'carregadeira', 'compactador', 'compressor', 'escavadeira', 'equipamento', 'furadeira', 'guindaste', 'maquina', 'martelete', 'retroescavadeira', 'rolo compactador', 'serra circular'];
+  const materialWords = ['abracadeira', 'aco', 'adesivo', 'argamassa', 'areia', 'barra', 'bloco', 'bomba', 'bucha', 'cabo', 'cimento', 'concreto', 'conexao', 'disjuntor', 'eletroduto', 'fio', 'fita', 'joelho', 'luminaria', 'parafuso', 'placa', 'porta', 'registro', 'tinta', 'tijolo', 'tubo', 'valvula'];
+
+  if (textHasAny(desc, laborWords)) return 'labor';
+  if (textHasAny(desc, equipmentWords)) return 'equipment';
+  if (textHasAny(desc, materialWords)) return 'material';
+  if (input.sourceType === 'task_material') return 'material';
+  if (['h', 'hora', 'horas'].includes(unit) && textHasAny(desc, laborWords)) return 'labor';
+  return 'unclassified';
+}
+
+export function resolveMaterialCostClass(project: Project, item: MaterialSuggestion | ComparisonItem): MaterialCostClass {
+  const manual = project.materialCostClasses?.[linkKeyOf(item)];
+  if (manual) return manual;
+  return guessMaterialCostClass({
+    description: item.description,
+    unit: item.unit,
+    sourceType: item.sourceType,
+    legacyInputType: 'legacyInputType' in item ? item.legacyInputType : undefined,
+  });
+}
+
+export function setMaterialCostClass(project: Project, item: SuggestionLikeKey, costClass: MaterialCostClass): Project {
+  return {
+    ...project,
+    materialCostClasses: {
+      ...(project.materialCostClasses ?? {}),
+      [linkKeyOf(item)]: costClass,
+    },
+  };
+}
+
+export interface MaterialCostClassTotal {
+  costClass: MaterialCostClass;
+  label: string;
+  total: number;
+  itemsCount: number;
+  missingPriceCount: number;
+}
+
+export function computeMaterialCostClassTotals(
+  project: Project,
+  items: MaterialSuggestion[] = suggestMaterialsFromProject(project).filter(s => !s.warning),
+): MaterialCostClassTotal[] {
+  const totals = new Map<MaterialCostClass, MaterialCostClassTotal>();
+  for (const costClass of MATERIAL_COST_CLASS_ORDER) {
+    totals.set(costClass, {
+      costClass,
+      label: MATERIAL_COST_CLASS_LABEL[costClass],
+      total: 0,
+      itemsCount: 0,
+      missingPriceCount: 0,
+    });
+  }
+  for (const item of items) {
+    const row = totals.get(resolveMaterialCostClass(project, item))!;
+    row.itemsCount += 1;
+    if (item.referencePrice != null && item.referencePrice > 0) {
+      row.total = trunc2(row.total + item.referencePrice * item.quantity);
+    } else {
+      row.missingPriceCount += 1;
+    }
+  }
+  return MATERIAL_COST_CLASS_ORDER.map(c => totals.get(c)!);
+}
+
+export interface MaterialCompositionClassBreakdown {
+  id: string;
+  item?: string;
+  code?: string;
+  bank?: string;
+  description: string;
+  source: string;
+  total: number;
+  missingPriceCount: number;
+  rows: MaterialCostClassTotal[];
+}
+
+function compositionQtyFinal(c: { quantity?: number; originalQuantity?: number; addedQuantity?: number; suppressedQuantity?: number }) {
+  const hasDelta = c.originalQuantity != null || c.addedQuantity != null || c.suppressedQuantity != null;
+  if (hasDelta) return (c.originalQuantity ?? 0) + (c.addedQuantity ?? 0) - (c.suppressedQuantity ?? 0);
+  return c.quantity ?? 0;
+}
+
+function breakdownForComposition(project: Project, comp: AdditiveComposition, source: string): MaterialCompositionClassBreakdown | null {
+  const qty = compositionQtyFinal(comp);
+  if (qty <= 0 || !comp.inputs?.length) return null;
+  const rows = computeMaterialCostClassTotals(
+    project,
+    comp.inputs
+      .map(inp => ({
+        key: makeKey(inp.code, inp.description, inp.unit, inp.bank),
+        description: inp.description,
+        unit: inp.unit,
+        quantity: trunc2((inp.coefficient || 0) * qty),
+        code: inp.code || undefined,
+        bank: inp.bank || undefined,
+        referencePrice: inp.unitPrice || undefined,
+        sourceType: 'analytic_input' as const,
+        sourceId: inp.id,
+        legacyInputType: inp.type,
+      }))
+      .filter(inp => inp.quantity > 0),
+  );
+  return {
+    id: `${source}:${comp.id}`,
+    item: comp.item,
+    code: comp.code,
+    bank: comp.bank,
+    description: comp.description,
+    source,
+    total: trunc2(rows.reduce((sum, row) => sum + row.total, 0)),
+    missingPriceCount: rows.reduce((sum, row) => sum + row.missingPriceCount, 0),
+    rows,
+  };
+}
+
+export function getMaterialCompositionBreakdowns(project: Project): MaterialCompositionClassBreakdown[] {
+  const out: MaterialCompositionClassBreakdown[] = [];
+  for (const comp of project.analyticCompositions ?? []) {
+    const row = breakdownForComposition(project, comp, 'Contrato');
+    if (row) out.push(row);
+  }
+  for (const ad of project.additives ?? []) {
+    for (const comp of ad.compositions ?? []) {
+      const row = breakdownForComposition(project, comp, ad.name || 'Aditivo');
+      if (row) out.push(row);
+    }
+  }
+  return out.sort((a, b) => a.description.localeCompare(b.description, 'pt-BR'));
 }
 
 /** Procura em quais comparativos um insumo (por chave) já foi vinculado. */
