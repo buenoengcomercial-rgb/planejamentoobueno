@@ -21,6 +21,7 @@ import { flattenPhasesByChapter, getChapterNumbering, getChapterTasks } from '@/
 import { beginBarMutation, endBarMutation, endAllBarMutations, setTransform, setTransition, setOpacity, setLeftPx, setWidthPx, type BarMutationSession } from './gantt/barTransform';
 import { toast } from 'sonner';
 import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
+import GanttFinancialForecast from './gantt/GanttFinancialForecast';
 
 interface GanttChartProps {
   project: Project;
@@ -1116,6 +1117,8 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
             </div>
           </div>
         </div>
+
+        <GanttFinancialForecast project={project} trabalhaSabado={obraConfig.trabalhaSabado} />
 
         {/* Legend */}
         <div className="flex items-center gap-3 text-[9px] text-muted-foreground flex-wrap">
