@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import type { Project } from '@/types/project';
 import {
   AlertTriangle,
   BarChart3,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   CircleDollarSign,
   Layers3,
   Search,
@@ -76,7 +78,7 @@ function StatCard({
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
-          <p className={`mt-1 text-lg font-bold ${toneClass}`}>{value}</p>
+          <p className={`mt-1 text-lg font-bold tabular-nums ${toneClass}`}>{value}</p>
           {hint && <p className="mt-1 text-[11px] text-muted-foreground">{hint}</p>}
         </div>
         <Icon className={`mt-0.5 h-4 w-4 ${toneClass}`} />
@@ -85,21 +87,44 @@ function StatCard({
   );
 }
 
-function PendingPill({ label, value }: { label: string; value: number }) {
+function PendingMini({ label, value }: { label: string; value: number }) {
   const hasIssue = value > 0;
   return (
-    <div className={`rounded-lg border px-3 py-2 ${hasIssue ? 'border-warning/35 bg-warning/10' : 'border-success/30 bg-success/10'}`}>
-      <p className={`text-base font-bold ${hasIssue ? 'text-warning' : 'text-success'}`}>{value}</p>
-      <p className="text-[10px] font-medium text-muted-foreground">{label}</p>
+    <div className={`rounded-md border px-2.5 py-1.5 ${hasIssue ? 'border-warning/35 bg-warning/10' : 'border-success/30 bg-success/10'}`}>
+      <p className={`text-sm font-bold tabular-nums ${hasIssue ? 'text-warning' : 'text-success'}`}>{value}</p>
+      <p className="text-[10px] leading-tight text-muted-foreground">{label}</p>
     </div>
   );
 }
 
 function marginTone(value: number) {
-  if (value < 0) return 'text-destructive';
   if (value < 5) return 'text-destructive';
   if (value < 15) return 'text-warning';
   return 'text-success';
+}
+
+function signalFromRows(rows: RealCostCompositionRow[], marginPct: number): RealCostSignal {
+  if (rows.length === 0 || rows.some(row => row.signal === 'incomplete')) return 'incomplete';
+  if (marginPct < 5) return 'danger';
+  if (marginPct < 15) return 'attention';
+  return 'healthy';
+}
+
+function pendingCount(row: RealCostCompositionRow) {
+  return (
+    row.missingQuoteCount +
+    (row.hasAnalytic ? 0 : 1) +
+    (row.hasScheduleLink ? 0 : 1) +
+    (row.hasContractValue ? 0 : 1)
+  );
+}
+
+function formatDate(value?: string) {
+  if (!value) return '-';
+  const date = value.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  const [year, month, day] = date.split('-');
+  return `${day}/${month}/${year}`;
 }
 
 export default function RealCost({ project }: Props) {
@@ -108,7 +133,7 @@ export default function RealCost({ project }: Props) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | RealCostSignal>('all');
   const [chapterFilter, setChapterFilter] = useState('all');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const filteredCompositions = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -116,35 +141,55 @@ export default function RealCost({ project }: Props) {
       if (statusFilter !== 'all' && row.signal !== statusFilter) return false;
       if (chapterFilter !== 'all' && row.chapterId !== chapterFilter) return false;
       if (!q) return true;
-      const blob = `${row.item} ${row.code ?? ''} ${row.description} ${row.chapter} ${row.sourceName}`.toLowerCase();
+      const blob = `${row.item} ${row.code ?? ''} ${row.bank ?? ''} ${row.description} ${row.chapter} ${row.sourceName}`.toLowerCase();
       return blob.includes(q);
     });
   }, [analysis.compositions, chapterFilter, search, statusFilter]);
 
-  const selected = useMemo<RealCostCompositionRow | null>(
-    () => analysis.compositions.find(row => row.id === selectedId) ?? null,
-    [analysis.compositions, selectedId],
-  );
+  const groupedChapters = useMemo(() => {
+    return analysis.chapters
+      .map(chapter => {
+        const rows = filteredCompositions.filter(row => row.chapterId === chapter.id);
+        const contractedValue = rows.reduce((sum, row) => sum + row.contractedValue, 0);
+        const realCost = rows.reduce((sum, row) => sum + row.realCost, 0);
+        const grossProfit = contractedValue - realCost;
+        const marginPct = contractedValue > 0 ? (grossProfit / contractedValue) * 100 : 0;
+        return {
+          id: chapter.id,
+          chapter: chapter.chapter,
+          rows,
+          contractedValue,
+          realCost,
+          grossProfit,
+          marginPct,
+          pendingCompositionCount: rows.filter(row => row.signal === 'incomplete').length,
+          signal: signalFromRows(rows, marginPct),
+        };
+      })
+      .filter(group => group.rows.length > 0);
+  }, [analysis.chapters, filteredCompositions]);
 
   const maxMonthValue = Math.max(1, ...analysis.months.map(month => Math.max(month.contractedValue, month.realCost)));
 
   return (
-    <div className="p-4 lg:p-6 space-y-4 max-w-[1700px] mx-auto">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <CircleDollarSign className="h-5 w-5 text-primary" />
-            <h1 className="text-xl font-bold text-foreground">Custo real de obra</h1>
+    <div className="p-3 lg:p-4 space-y-3 max-w-[1900px] mx-auto">
+      <header className="rounded-xl border border-border bg-card p-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <CircleDollarSign className="h-5 w-5 text-primary" />
+              <h1 className="text-xl font-bold text-foreground">Custo real de obra</h1>
+            </div>
+            <p className="mt-1 max-w-4xl text-xs text-muted-foreground">
+              Planilha interna de margem: compara o valor contratado com BDI contra o custo real cotado na Lista de Material.
+              Nao altera Medicao, Aditivo, Cronograma, Lista de Material ou Almoxarifado.
+            </p>
           </div>
-          <p className="mt-1 max-w-3xl text-xs text-muted-foreground">
-            Controle interno de margem: compara o valor contratado com BDI contra o custo real cotado na Lista de Material.
-            Esta tela nao altera Medicao, Aditivo, Cronograma, Lista de Material ou Almoxarifado.
-          </p>
+          <SignalBadge signal={analysis.totals.signal} />
         </div>
-        <SignalBadge signal={analysis.totals.signal} />
       </header>
 
-      <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+      <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2">
         <StatCard
           label="Valor contratado"
           value={fmtBRL(analysis.totals.contractedValue)}
@@ -175,291 +220,286 @@ export default function RealCost({ project }: Props) {
         <Card className="p-3">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Pendencias</p>
           <div className="mt-2 grid grid-cols-2 gap-1.5">
-            <PendingPill label="sem cotacao" value={analysis.pending.inputsWithoutQuote} />
-            <PendingPill label="sem analitica" value={analysis.pending.compositionsWithoutAnalytic} />
+            <PendingMini label="sem cotacao" value={analysis.pending.inputsWithoutQuote} />
+            <PendingMini label="margem incompleta" value={analysis.pending.incompleteCompositions} />
           </div>
         </Card>
       </section>
 
-      <section className="grid grid-cols-1 lg:grid-cols-5 gap-3">
-        <Card className="lg:col-span-2 p-3">
-          <div className="flex items-center justify-between gap-2">
+      <Card className="overflow-hidden">
+        <div className="border-b border-border bg-muted/30 px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="text-sm font-semibold">Confiabilidade da leitura</h2>
-              <p className="text-[11px] text-muted-foreground">Pendencias que podem deixar a margem incompleta.</p>
+              <h2 className="text-sm font-semibold">Planilha de custo real</h2>
+              <p className="text-[11px] text-muted-foreground">
+                Capitulos e composicoes no mesmo quadro. Clique em uma composicao para abrir a analitica do custo real.
+              </p>
             </div>
-            <AlertTriangle className="h-4 w-4 text-warning" />
+            <div className="flex flex-wrap gap-1.5">
+              <PendingMini label="insumos sem cotacao" value={analysis.pending.inputsWithoutQuote} />
+              <PendingMini label="sem analitica" value={analysis.pending.compositionsWithoutAnalytic} />
+              <PendingMini label="sem Gantt" value={analysis.pending.itemsWithoutScheduleLink} />
+              <PendingMini label="sem contrato" value={analysis.pending.itemsWithoutContractValue} />
+            </div>
           </div>
-          <div className="mt-3 grid grid-cols-2 md:grid-cols-5 lg:grid-cols-2 xl:grid-cols-5 gap-2">
-            <PendingPill label="insumos sem cotacao" value={analysis.pending.inputsWithoutQuote} />
-            <PendingPill label="composicoes sem analitica" value={analysis.pending.compositionsWithoutAnalytic} />
-            <PendingPill label="sem vinculo no Gantt" value={analysis.pending.itemsWithoutScheduleLink} />
-            <PendingPill label="sem valor contratado" value={analysis.pending.itemsWithoutContractValue} />
-            <PendingPill label="margem incompleta" value={analysis.pending.incompleteCompositions} />
+          <div className="mt-2 flex flex-wrap gap-2">
+            <div className="relative min-w-[260px] flex-1">
+              <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={event => setSearch(event.target.value)}
+                placeholder="Buscar item, codigo, capitulo ou descricao..."
+                className="h-8 pl-7 text-xs"
+              />
+            </div>
+            <select
+              value={chapterFilter}
+              onChange={event => setChapterFilter(event.target.value)}
+              className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+            >
+              <option value="all">Todos os capitulos</option>
+              {analysis.chapters.map(chapter => (
+                <option key={chapter.id} value={chapter.id}>{chapter.chapter}</option>
+              ))}
+            </select>
+            <select
+              value={statusFilter}
+              onChange={event => setStatusFilter(event.target.value as typeof statusFilter)}
+              className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+            >
+              <option value="all">Todos os status</option>
+              <option value="healthy">Margem saudavel</option>
+              <option value="attention">Atencao</option>
+              <option value="danger">Critico</option>
+              <option value="incomplete">Incompleto</option>
+            </select>
           </div>
-        </Card>
+        </div>
 
-        <Card className="lg:col-span-3 p-3">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <h2 className="text-sm font-semibold">Visao mensal pelo Cronograma</h2>
-              <p className="text-[11px] text-muted-foreground">Distribuicao estimada pelo periodo das tarefas no Gantt.</p>
-            </div>
-            <Layers3 className="h-4 w-4 text-primary" />
-          </div>
-          {analysis.months.length === 0 ? (
-            <div className="mt-4 rounded-lg border border-dashed border-border p-5 text-center text-xs text-muted-foreground">
-              Vincule composicoes ao cronograma para ver a distribuicao mensal.
-            </div>
-          ) : (
-            <div className="mt-3 max-h-56 overflow-auto pr-1">
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-card">
-                  <tr className="border-b border-border text-muted-foreground">
-                    <th className="py-1.5 text-left">Mes</th>
-                    <th className="py-1.5 text-right">Receita</th>
-                    <th className="py-1.5 text-right">Custo</th>
-                    <th className="py-1.5 text-right">Lucro</th>
-                    <th className="py-1.5 text-right">Margem</th>
-                    <th className="py-1.5 text-left">Leitura</th>
+        <div className="max-h-[680px] overflow-auto">
+          <table className="w-full min-w-[1320px] text-xs">
+            <thead className="sticky top-0 z-20">
+              <tr className="bg-slate-950 text-white">
+                <th className="p-2 text-left w-24">Item</th>
+                <th className="p-2 text-left w-24">Codigo</th>
+                <th className="p-2 text-left w-20">Banco</th>
+                <th className="p-2 text-left min-w-[360px]">Descricao</th>
+                <th className="p-2 text-center w-16">Un.</th>
+                <th className="p-2 text-right w-24">Qtd.</th>
+                <th className="p-2 text-right w-36">Valor contratado</th>
+                <th className="p-2 text-right w-36">Custo real cotado</th>
+                <th className="p-2 text-right w-32">Lucro bruto</th>
+                <th className="p-2 text-right w-24">Margem</th>
+                <th className="p-2 text-center w-24">Pend.</th>
+                <th className="p-2 text-center w-28">Semaforo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {groupedChapters.map(group => (
+                <Fragment key={`group-${group.id}`}>
+                  <tr key={`chapter-${group.id}`} className="border-y border-primary/20 bg-blue-50 text-blue-950">
+                    <td colSpan={4} className="p-2 font-bold">
+                      {group.chapter}
+                      <span className="ml-2 text-[10px] font-medium text-blue-700">{group.rows.length} composicao(oes)</span>
+                    </td>
+                    <td className="p-2 text-center font-semibold">-</td>
+                    <td className="p-2 text-right font-semibold">-</td>
+                    <td className="p-2 text-right font-bold tabular-nums">{fmtBRL(group.contractedValue)}</td>
+                    <td className="p-2 text-right font-bold tabular-nums">{fmtBRL(group.realCost)}</td>
+                    <td className={`p-2 text-right font-bold tabular-nums ${group.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
+                      {fmtBRL(group.grossProfit)}
+                    </td>
+                    <td className={`p-2 text-right font-bold tabular-nums ${marginTone(group.marginPct)}`}>{fmtPct(group.marginPct)}</td>
+                    <td className="p-2 text-center font-semibold">{group.pendingCompositionCount}</td>
+                    <td className="p-2 text-center"><SignalBadge signal={group.signal} /></td>
                   </tr>
-                </thead>
-                <tbody>
-                  {analysis.months.map(month => (
-                    <tr key={month.key} className="border-b border-border/60">
-                      <td className="py-2 font-medium">{month.label}</td>
-                      <td className="py-2 text-right tabular-nums">{fmtBRL(month.contractedValue)}</td>
-                      <td className="py-2 text-right tabular-nums">{fmtBRL(month.realCost)}</td>
-                      <td className={`py-2 text-right tabular-nums font-semibold ${month.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
-                        {fmtBRL(month.grossProfit)}
-                      </td>
-                      <td className={`py-2 text-right tabular-nums font-semibold ${marginTone(month.marginPct)}`}>{fmtPct(month.marginPct)}</td>
-                      <td className="py-2">
-                        <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                  {group.rows.map(row => {
+                    const expanded = expandedId === row.id;
+                    return (
+                      <Fragment key={`row-${row.id}`}>
+                        <tr
+                          key={row.id}
+                          className={`cursor-pointer border-b border-border hover:bg-muted/40 ${expanded ? 'bg-primary/10' : ''}`}
+                          onClick={() => setExpandedId(expanded ? null : row.id)}
+                        >
+                          <td className="p-2 align-top font-mono text-[11px]">
+                            <span className="inline-flex items-center gap-1">
+                              {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                              {row.item || '-'}
+                            </span>
+                          </td>
+                          <td className="p-2 align-top font-mono text-[11px]">{row.code || '-'}</td>
+                          <td className="p-2 align-top text-muted-foreground">{row.bank || '-'}</td>
+                          <td className="p-2 align-top">
+                            <div className="font-medium leading-snug">{row.description}</div>
+                            <div className="mt-0.5 text-[10px] text-muted-foreground">{row.sourceName}</div>
+                          </td>
+                          <td className="p-2 align-top text-center">{row.unit}</td>
+                          <td className="p-2 align-top text-right tabular-nums">{row.quantity.toLocaleString('pt-BR', { maximumFractionDigits: 3 })}</td>
+                          <td className="p-2 align-top text-right tabular-nums">{fmtBRL(row.contractedValue)}</td>
+                          <td className="p-2 align-top text-right tabular-nums">{fmtBRL(row.realCost)}</td>
+                          <td className={`p-2 align-top text-right tabular-nums font-semibold ${row.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
+                            {fmtBRL(row.grossProfit)}
+                          </td>
+                          <td className={`p-2 align-top text-right tabular-nums font-semibold ${marginTone(row.marginPct)}`}>{fmtPct(row.marginPct)}</td>
+                          <td className="p-2 align-top text-center">{pendingCount(row)}</td>
+                          <td className="p-2 align-top text-center"><SignalBadge signal={row.signal} /></td>
+                        </tr>
+                        {expanded && (
+                          <tr key={`${row.id}-detail`} className="border-b border-primary/20 bg-primary/5">
+                            <td colSpan={12} className="p-3">
+                              <div className="rounded-lg border border-border bg-card overflow-hidden">
+                                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/40 px-3 py-2">
+                                  <div>
+                                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Composicao analitica do custo real</p>
+                                    <p className="text-xs font-medium">{row.item} - {row.description}</p>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2 text-[11px]">
+                                    <span className="rounded border border-border px-2 py-1">Contrato: <strong>{fmtBRL(row.contractedValue)}</strong></span>
+                                    <span className="rounded border border-border px-2 py-1">Custo real: <strong>{fmtBRL(row.realCost)}</strong></span>
+                                    <span className="rounded border border-border px-2 py-1">Lucro: <strong className={row.grossProfit >= 0 ? 'text-success' : 'text-destructive'}>{fmtBRL(row.grossProfit)}</strong></span>
+                                  </div>
+                                </div>
+                                {row.inputs.length === 0 ? (
+                                  <div className="p-5 text-center text-xs text-muted-foreground">
+                                    Composicao sem analitica vinculada. Ela continua na planilha, mas a margem fica incompleta.
+                                  </div>
+                                ) : (
+                                  <div className="overflow-auto">
+                                    <table className="w-full min-w-[1120px] text-xs">
+                                      <thead className="bg-muted text-muted-foreground">
+                                        <tr>
+                                          <th className="p-2 text-left w-24">Codigo</th>
+                                          <th className="p-2 text-left w-20">Banco</th>
+                                          <th className="p-2 text-left">Insumo</th>
+                                          <th className="p-2 text-center w-16">Un.</th>
+                                          <th className="p-2 text-right w-24">Coef.</th>
+                                          <th className="p-2 text-right w-24">Qtd. total</th>
+                                          <th className="p-2 text-right w-28">Preco real</th>
+                                          <th className="p-2 text-right w-28">Custo</th>
+                                          <th className="p-2 text-left w-36">Fornecedor</th>
+                                          <th className="p-2 text-left w-36">Grupo</th>
+                                          <th className="p-2 text-center w-24">Data</th>
+                                          <th className="p-2 text-center w-24">Status</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {row.inputs.map(input => (
+                                          <tr key={input.id} className="border-t border-border">
+                                            <td className="p-2 align-top font-mono text-[11px]">{input.code || '-'}</td>
+                                            <td className="p-2 align-top text-muted-foreground">{input.bank || '-'}</td>
+                                            <td className="p-2 align-top">
+                                              <div className="font-medium leading-snug">{input.description}</div>
+                                              {!input.priceSource && (
+                                                <div className="mt-1 text-[10px] text-warning">Sem cotacao na Lista de Material.</div>
+                                              )}
+                                            </td>
+                                            <td className="p-2 align-top text-center">{input.unit}</td>
+                                            <td className="p-2 align-top text-right tabular-nums">{input.coefficient.toLocaleString('pt-BR', { maximumFractionDigits: 5 })}</td>
+                                            <td className="p-2 align-top text-right tabular-nums">{input.totalQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 3 })}</td>
+                                            <td className="p-2 align-top text-right tabular-nums">{input.priceSource ? fmtBRL(input.priceSource.unitPrice) : '-'}</td>
+                                            <td className="p-2 align-top text-right tabular-nums font-semibold">{input.priceSource ? fmtBRL(input.realTotal) : '-'}</td>
+                                            <td className="p-2 align-top">{input.priceSource?.supplierName || '-'}</td>
+                                            <td className="p-2 align-top">{input.priceSource?.comparisonName || '-'}</td>
+                                            <td className="p-2 align-top text-center">{formatDate(input.priceSource?.date)}</td>
+                                            <td className="p-2 align-top text-center">
+                                              {input.priceSource ? (
+                                                <span className="rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-[10px] font-semibold text-success">Cotado</span>
+                                              ) : (
+                                                <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold text-warning">Pendente</span>
+                                              )}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </Fragment>
+              ))}
+              {groupedChapters.length === 0 && (
+                <tr>
+                  <td colSpan={12} className="p-8 text-center text-sm text-muted-foreground">
+                    Nenhuma composicao encontrada com os filtros atuais.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Card className="overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/30 px-3 py-2">
+          <div>
+            <div className="flex items-center gap-2">
+              <Layers3 className="h-4 w-4 text-primary" />
+              <h2 className="text-sm font-semibold">Distribuicao mensal pelo Cronograma</h2>
+            </div>
+            <p className="text-[11px] text-muted-foreground">Receita, custo real cotado, lucro e margem previstos conforme as datas do Gantt.</p>
+          </div>
+        </div>
+        {analysis.months.length === 0 ? (
+          <div className="p-8 text-center text-sm text-muted-foreground">
+            Vincule composicoes ao cronograma para ver a distribuicao mensal.
+          </div>
+        ) : (
+          <div className="overflow-auto">
+            <table className="w-full min-w-[980px] text-xs">
+              <thead className="bg-slate-950 text-white">
+                <tr>
+                  <th className="p-2 text-left">Mes</th>
+                  <th className="p-2 text-right">Receita prevista</th>
+                  <th className="p-2 text-right">Custo real previsto</th>
+                  <th className="p-2 text-right">Lucro previsto</th>
+                  <th className="p-2 text-right">Margem</th>
+                  <th className="p-2 text-center">Tarefas</th>
+                  <th className="p-2 text-left">Comparativo visual</th>
+                  <th className="p-2 text-center">Semaforo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {analysis.months.map(month => (
+                  <tr key={month.key} className="border-b border-border">
+                    <td className="p-2 font-medium">{month.label}</td>
+                    <td className="p-2 text-right tabular-nums">{fmtBRL(month.contractedValue)}</td>
+                    <td className="p-2 text-right tabular-nums">{fmtBRL(month.realCost)}</td>
+                    <td className={`p-2 text-right tabular-nums font-semibold ${month.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
+                      {fmtBRL(month.grossProfit)}
+                    </td>
+                    <td className={`p-2 text-right tabular-nums font-semibold ${marginTone(month.marginPct)}`}>{fmtPct(month.marginPct)}</td>
+                    <td className="p-2 text-center tabular-nums">{month.taskCount}</td>
+                    <td className="p-2">
+                      <div className="space-y-1">
+                        <div className="h-2 w-full rounded-full bg-muted overflow-hidden" title="Receita prevista">
                           <div
-                            className="h-2 rounded-full bg-primary/70"
+                            className="h-2 rounded-full bg-primary/80"
                             style={{ width: `${Math.max(2, (month.contractedValue / maxMonthValue) * 100)}%` }}
                           />
                         </div>
-                        <div className="mt-1 h-2 w-full rounded-full bg-muted overflow-hidden">
+                        <div className="h-2 w-full rounded-full bg-muted overflow-hidden" title="Custo real previsto">
                           <div
                             className="h-2 rounded-full bg-warning/80"
                             style={{ width: `${Math.max(2, (month.realCost / maxMonthValue) * 100)}%` }}
                           />
                         </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
-      </section>
-
-      <section className="grid grid-cols-1 xl:grid-cols-[1fr_420px] gap-3">
-        <div className="space-y-3">
-          <Card className="p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h2 className="text-sm font-semibold">Resumo por capitulo</h2>
-                <p className="text-[11px] text-muted-foreground">Margem consolidada por frente/capitulo da obra.</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <div className="relative">
-                  <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={search}
-                    onChange={event => setSearch(event.target.value)}
-                    placeholder="Buscar composicao..."
-                    className="h-8 w-64 pl-7 text-xs"
-                  />
-                </div>
-                <select
-                  value={chapterFilter}
-                  onChange={event => setChapterFilter(event.target.value)}
-                  className="h-8 rounded-md border border-border bg-background px-2 text-xs"
-                >
-                  <option value="all">Todos os capitulos</option>
-                  {analysis.chapters.map(chapter => (
-                    <option key={chapter.id} value={chapter.id}>{chapter.chapter}</option>
-                  ))}
-                </select>
-                <select
-                  value={statusFilter}
-                  onChange={event => setStatusFilter(event.target.value as typeof statusFilter)}
-                  className="h-8 rounded-md border border-border bg-background px-2 text-xs"
-                >
-                  <option value="all">Todos os status</option>
-                  <option value="healthy">Margem saudavel</option>
-                  <option value="attention">Atencao</option>
-                  <option value="danger">Critico</option>
-                  <option value="incomplete">Incompleto</option>
-                </select>
-              </div>
-            </div>
-
-            <div className="mt-3 overflow-auto rounded-lg border border-border">
-              <table className="w-full min-w-[900px] text-xs">
-                <thead className="bg-muted text-muted-foreground">
-                  <tr>
-                    <th className="p-2 text-left">Capitulo</th>
-                    <th className="p-2 text-right">Valor contratado</th>
-                    <th className="p-2 text-right">Custo real cotado</th>
-                    <th className="p-2 text-right">Lucro bruto</th>
-                    <th className="p-2 text-right">Margem</th>
-                    <th className="p-2 text-center">Pendencias</th>
-                    <th className="p-2 text-left">Semaforo</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {analysis.chapters.map(chapter => (
-                    <tr key={chapter.id} className="border-t border-border">
-                      <td className="p-2 font-medium">{chapter.chapter}</td>
-                      <td className="p-2 text-right tabular-nums">{fmtBRL(chapter.contractedValue)}</td>
-                      <td className="p-2 text-right tabular-nums">{fmtBRL(chapter.realCost)}</td>
-                      <td className={`p-2 text-right tabular-nums font-semibold ${chapter.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
-                        {fmtBRL(chapter.grossProfit)}
-                      </td>
-                      <td className={`p-2 text-right tabular-nums font-semibold ${marginTone(chapter.marginPct)}`}>{fmtPct(chapter.marginPct)}</td>
-                      <td className="p-2 text-center">{chapter.pendingCompositionCount}</td>
-                      <td className="p-2"><SignalBadge signal={chapter.signal} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-
-          <Card className="overflow-hidden">
-            <div className="border-b border-border bg-muted/30 px-3 py-2">
-              <h2 className="text-sm font-semibold">Composicoes</h2>
-              <p className="text-[11px] text-muted-foreground">
-                Clique em uma composicao para ver os insumos, fornecedores e pendencias.
-              </p>
-            </div>
-            <div className="max-h-[560px] overflow-auto">
-              <table className="w-full min-w-[1050px] text-xs">
-                <thead className="sticky top-0 z-10 bg-muted text-muted-foreground">
-                  <tr>
-                    <th className="p-2 text-left w-24">Item</th>
-                    <th className="p-2 text-left">Descricao</th>
-                    <th className="p-2 text-right w-24">Qtd.</th>
-                    <th className="p-2 text-right w-32">Contrato</th>
-                    <th className="p-2 text-right w-32">Custo real</th>
-                    <th className="p-2 text-right w-32">Lucro</th>
-                    <th className="p-2 text-right w-24">Margem</th>
-                    <th className="p-2 text-left w-28">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredCompositions.map(row => (
-                    <tr
-                      key={row.id}
-                      className={`cursor-pointer border-t border-border hover:bg-muted/40 ${selected?.id === row.id ? 'bg-primary/10' : ''}`}
-                      onClick={() => setSelectedId(row.id)}
-                    >
-                      <td className="p-2 align-top font-mono text-[11px]">{row.item || row.code || '-'}</td>
-                      <td className="p-2 align-top">
-                        <div className="font-medium">{row.description}</div>
-                        <div className="mt-0.5 text-[10px] text-muted-foreground">{row.chapter} - {row.sourceName}</div>
-                      </td>
-                      <td className="p-2 align-top text-right tabular-nums">{row.quantity.toLocaleString('pt-BR', { maximumFractionDigits: 3 })} {row.unit}</td>
-                      <td className="p-2 align-top text-right tabular-nums">{fmtBRL(row.contractedValue)}</td>
-                      <td className="p-2 align-top text-right tabular-nums">{fmtBRL(row.realCost)}</td>
-                      <td className={`p-2 align-top text-right tabular-nums font-semibold ${row.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
-                        {fmtBRL(row.grossProfit)}
-                      </td>
-                      <td className={`p-2 align-top text-right tabular-nums font-semibold ${marginTone(row.marginPct)}`}>{fmtPct(row.marginPct)}</td>
-                      <td className="p-2 align-top"><SignalBadge signal={row.signal} /></td>
-                    </tr>
-                  ))}
-                  {filteredCompositions.length === 0 && (
-                    <tr>
-                      <td colSpan={8} className="p-8 text-center text-sm text-muted-foreground">
-                        Nenhuma composicao encontrada com os filtros atuais.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        </div>
-
-        <Card className="h-fit overflow-hidden xl:sticky xl:top-4">
-          <div className="border-b border-border bg-muted/30 px-3 py-2">
-            <h2 className="text-sm font-semibold">Detalhe da composicao</h2>
-            <p className="text-[11px] text-muted-foreground">Fonte do custo real e pendencias por insumo.</p>
-          </div>
-          {!selected ? (
-            <div className="p-8 text-center text-sm text-muted-foreground">
-              Selecione uma composicao para ver os insumos.
-            </div>
-          ) : (
-            <div className="p-3 space-y-3">
-              <div>
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <p className="text-[11px] text-muted-foreground">{selected.item || selected.code}</p>
-                    <h3 className="text-sm font-semibold leading-snug">{selected.description}</h3>
-                  </div>
-                  <SignalBadge signal={selected.signal} />
-                </div>
-                <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-                  <div className="rounded border border-border p-2">
-                    <p className="text-[10px] text-muted-foreground">Contrato</p>
-                    <p className="font-semibold">{fmtBRL(selected.contractedValue)}</p>
-                  </div>
-                  <div className="rounded border border-border p-2">
-                    <p className="text-[10px] text-muted-foreground">Custo real</p>
-                    <p className="font-semibold">{fmtBRL(selected.realCost)}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-border overflow-hidden">
-                <div className="grid grid-cols-[1fr_70px_90px] gap-2 bg-muted px-2 py-1.5 text-[10px] font-semibold text-muted-foreground">
-                  <span>Insumo</span>
-                  <span className="text-right">Qtd.</span>
-                  <span className="text-right">Custo</span>
-                </div>
-                <div className="max-h-[520px] overflow-auto">
-                  {selected.inputs.length === 0 && (
-                    <div className="p-5 text-center text-xs text-muted-foreground">
-                      Composicao sem analitica vinculada.
-                    </div>
-                  )}
-                  {selected.inputs.map(input => (
-                    <div key={input.id} className="border-t border-border px-2 py-2 text-xs">
-                      <div className="grid grid-cols-[1fr_70px_90px] gap-2">
-                        <div className="min-w-0">
-                          <p className="font-medium leading-snug">{input.description}</p>
-                          <p className="mt-0.5 text-[10px] text-muted-foreground">
-                            {input.code || '-'} - coef. {input.coefficient.toLocaleString('pt-BR', { maximumFractionDigits: 5 })} {input.unit}
-                          </p>
-                        </div>
-                        <div className="text-right tabular-nums">{input.totalQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 3 })}</div>
-                        <div className="text-right tabular-nums font-semibold">{input.priceSource ? fmtBRL(input.realTotal) : '-'}</div>
                       </div>
-                      {input.priceSource ? (
-                        <div className="mt-1 rounded bg-success/10 px-2 py-1 text-[10px] text-success">
-                          Menor cotacao: {fmtBRL(input.priceSource.unitPrice)} - {input.priceSource.supplierName} - {input.priceSource.comparisonName}
-                          {input.priceSource.date ? ` - ${input.priceSource.date.slice(0, 10)}` : ''}
-                        </div>
-                      ) : (
-                        <div className="mt-1 rounded bg-warning/10 px-2 py-1 text-[10px] text-warning">
-                          Sem cotacao na Lista de Material. Este insumo deixa a margem incompleta.
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-        </Card>
-      </section>
+                    </td>
+                    <td className="p-2 text-center"><SignalBadge signal={month.signal} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
