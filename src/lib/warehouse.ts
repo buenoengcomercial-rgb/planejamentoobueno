@@ -1,5 +1,6 @@
 import type {
   Project,
+  Task,
   WarehouseState,
   WarehouseMovement,
   WarehouseMovementType,
@@ -15,6 +16,7 @@ import type {
 } from '@/types/project';
 import { linkKeyOf, computeStockRows } from '@/lib/materialComparisons';
 import { trunc2 } from '@/lib/financialEngine';
+import { getChapterNumbering } from '@/lib/chapters';
 
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const nowISO = () => new Date().toISOString();
@@ -516,6 +518,113 @@ export function panelSummary(project: Project): WarehousePanelSummary {
     overdueCustodyCount: overdue,
     divergenceCount: divergence,
   };
+}
+
+// ============== CONSUMO POR CAPITULO ==============
+
+export interface WarehouseUsageItem {
+  key: string;
+  description: string;
+  unit: string;
+  quantity: number;
+}
+
+export interface WarehouseUsageByChapterRow {
+  phaseId: string;
+  chapter: string;
+  taskCount: number;
+  movementCount: number;
+  itemCount: number;
+  lastMovementDate?: string;
+  items: WarehouseUsageItem[];
+}
+
+export interface WarehouseUsageByChapterResult {
+  rows: WarehouseUsageByChapterRow[];
+  unlinkedMovementCount: number;
+}
+
+function buildTaskIndex(project: Project): Map<string, { task: Task; phaseId: string; phaseName: string }> {
+  const map = new Map<string, { task: Task; phaseId: string; phaseName: string }>();
+  for (const phase of project.phases ?? []) {
+    for (const task of phase.tasks ?? []) {
+      map.set(task.id, { task, phaseId: phase.id, phaseName: phase.name });
+    }
+  }
+  return map;
+}
+
+const CONSUMPTION_TYPES = new Set<WarehouseMovementType>(['retirada', 'perda', 'transferencia_saida']);
+
+export function computeWarehouseUsageByChapter(project: Project): WarehouseUsageByChapterResult {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const taskIndex = buildTaskIndex(p);
+  const numbering = getChapterNumbering(p);
+  const byChapter = new Map<string, WarehouseUsageByChapterRow & { taskIds: Set<string>; itemKeys: Set<string> }>();
+  let unlinkedMovementCount = 0;
+
+  for (const movement of wh.movements) {
+    if (movement.reversedById || !CONSUMPTION_TYPES.has(movement.type)) continue;
+    if (!movement.taskId) {
+      unlinkedMovementCount += 1;
+      continue;
+    }
+    const meta = taskIndex.get(movement.taskId);
+    if (!meta) {
+      unlinkedMovementCount += 1;
+      continue;
+    }
+
+    const chapterNumber = numbering.get(meta.phaseId) || '';
+    const chapter = `${chapterNumber ? `${chapterNumber} - ` : ''}${meta.phaseName}`;
+    let row = byChapter.get(meta.phaseId);
+    if (!row) {
+      row = {
+        phaseId: meta.phaseId,
+        chapter,
+        taskCount: 0,
+        movementCount: 0,
+        itemCount: 0,
+        items: [],
+        taskIds: new Set<string>(),
+        itemKeys: new Set<string>(),
+      };
+      byChapter.set(meta.phaseId, row);
+    }
+
+    row.movementCount += 1;
+    row.taskIds.add(movement.taskId);
+    row.itemKeys.add(movement.itemKey);
+    if (!row.lastMovementDate || movement.date > row.lastMovementDate) {
+      row.lastMovementDate = movement.date;
+    }
+
+    const item = row.items.find(current => current.key === movement.itemKey);
+    if (item) {
+      item.quantity = trunc2(item.quantity + movement.quantity);
+    } else {
+      row.items.push({
+        key: movement.itemKey,
+        description: movement.itemDescription,
+        unit: movement.itemUnit,
+        quantity: trunc2(movement.quantity),
+      });
+    }
+  }
+
+  const rows = Array.from(byChapter.values()).map(row => ({
+    phaseId: row.phaseId,
+    chapter: row.chapter,
+    taskCount: row.taskIds.size,
+    movementCount: row.movementCount,
+    itemCount: row.itemKeys.size,
+    lastMovementDate: row.lastMovementDate,
+    items: row.items.sort((a, b) => b.quantity - a.quantity).slice(0, 4),
+  }));
+
+  rows.sort((a, b) => a.chapter.localeCompare(b.chapter, 'pt-BR', { numeric: true }));
+  return { rows, unlinkedMovementCount };
 }
 
 // ============== HELPERS ==============

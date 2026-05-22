@@ -1,7 +1,7 @@
 import type { Project } from '@/types/project';
-import { panelSummary, computeWarehouseRows, ensureWarehouse } from '@/lib/warehouse';
+import { panelSummary, computeWarehouseRows, ensureWarehouse, computeWarehouseUsageByChapter } from '@/lib/warehouse';
 import { useMemo } from 'react';
-import { AlertTriangle, PackagePlus, ClipboardList, FileWarning } from 'lucide-react';
+import { AlertTriangle, PackagePlus, ClipboardList, FileWarning, MapPinned } from 'lucide-react';
 
 interface Props { project: Project; }
 
@@ -23,6 +23,7 @@ const StatCard = ({ label, value, tone, hint }: { label: string; value: string |
 export default function WarehousePanel({ project }: Props) {
   const s = useMemo(() => panelSummary(project), [project]);
   const rows = useMemo(() => computeWarehouseRows(project), [project]);
+  const usageByChapter = useMemo(() => computeWarehouseUsageByChapter(project), [project]);
   const wh = ensureWarehouse(project).warehouse!;
   const underMin = rows.filter(r => r.underMin).slice(0, 8);
   const hasMovements = wh.movements.length > 0;
@@ -92,6 +93,55 @@ export default function WarehousePanel({ project }: Props) {
                   <td className="p-1 text-center">{r.unit}</td>
                   <td className="p-1 text-right font-mono text-destructive">{r.balance.toLocaleString('pt-BR')}</td>
                   <td className="p-1 text-right font-mono">{r.minStock?.toLocaleString('pt-BR')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="bg-card border border-border rounded-md p-3">
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div>
+            <div className="text-xs font-semibold flex items-center gap-1.5">
+              <MapPinned className="w-3.5 h-3.5 text-primary" /> Consumo por capitulo da obra
+            </div>
+            <div className="text-[11px] text-muted-foreground">
+              Retiradas, perdas e transferencias de saida vinculadas a tarefas da EAP.
+            </div>
+          </div>
+          {usageByChapter.unlinkedMovementCount > 0 && (
+            <span className="rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
+              {usageByChapter.unlinkedMovementCount} sem vinculo
+            </span>
+          )}
+        </div>
+
+        {usageByChapter.rows.length === 0 ? (
+          <div className="text-xs text-muted-foreground py-4 text-center border border-dashed border-border rounded-md">
+            Ainda nao ha retirada vinculada a capitulo/tarefa. Ao registrar uma retirada, selecione a tarefa da EAP.
+          </div>
+        ) : (
+          <table className="w-full text-xs">
+            <thead className="text-muted-foreground">
+              <tr>
+                <th className="text-left p-1">Capitulo</th>
+                <th className="text-center p-1 w-20">Tarefas</th>
+                <th className="text-center p-1 w-20">Itens</th>
+                <th className="text-left p-1">Principais materiais retirados</th>
+                <th className="text-right p-1 w-24">Ultima saida</th>
+              </tr>
+            </thead>
+            <tbody>
+              {usageByChapter.rows.slice(0, 8).map(row => (
+                <tr key={row.phaseId} className="border-t border-border">
+                  <td className="p-1 font-medium">{row.chapter}</td>
+                  <td className="p-1 text-center tabular-nums">{row.taskCount}</td>
+                  <td className="p-1 text-center tabular-nums">{row.itemCount}</td>
+                  <td className="p-1 text-[11px] text-muted-foreground">
+                    {row.items.map(item => `${item.description}: ${item.quantity.toLocaleString('pt-BR')} ${item.unit}`).join(' | ')}
+                  </td>
+                  <td className="p-1 text-right tabular-nums text-muted-foreground">{row.lastMovementDate ?? '-'}</td>
                 </tr>
               ))}
             </tbody>

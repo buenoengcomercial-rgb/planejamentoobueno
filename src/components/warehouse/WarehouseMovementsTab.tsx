@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Plus, Undo2, Paperclip, X } from 'lucide-react';
 import { addMovement, reverseMovement, MOVEMENT_LABEL, ensureWarehouse, makeAttachment, movementSign, computeWarehouseRows } from '@/lib/warehouse';
 import { getProjectSuppliers } from '@/lib/materialComparisons';
+import { getAllTasks } from '@/data/sampleProject';
 
 interface Props { project: Project; onProjectChange: (next: Project) => void; }
 
@@ -16,6 +17,8 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const rows = useMemo(() => computeWarehouseRows(project), [project]);
   const suppliers = useMemo(() => getProjectSuppliers(project), [project]);
+  const tasks = useMemo(() => getAllTasks(project), [project]);
+  const taskById = useMemo(() => new Map(tasks.map(task => [task.id, task.name])), [tasks]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({
     type: 'entrada' as WarehouseMovementType,
@@ -28,10 +31,12 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
     notes: '',
     responsible: '',
     user: '',
+    taskId: '',
   });
   const [attachments, setAttachments] = useState<WarehouseAttachment[]>([]);
 
   const item = rows.find(r => r.key === form.itemKey);
+  const shouldLinkTask = ['retirada', 'perda', 'transferencia_saida', 'ajuste_negativo'].includes(form.type);
 
   const submit = () => {
     if (!item) return;
@@ -51,6 +56,7 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
       notes: form.notes || undefined,
       responsible: form.responsible || undefined,
       user: form.user || undefined,
+      taskId: form.taskId || undefined,
       attachments,
     }));
     setOpen(false);
@@ -80,7 +86,7 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
         {open && (
           <div className="bg-card border border-border rounded-lg p-3 space-y-2">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              <select className="h-8 text-xs border border-border rounded px-2 bg-background" value={form.type} onChange={e => setForm({ ...form, type: e.target.value as WarehouseMovementType })}>
+              <select className="h-8 text-xs border border-border rounded px-2 bg-background" value={form.type} onChange={e => setForm({ ...form, type: e.target.value as WarehouseMovementType, taskId: '' })}>
                 {TYPES.map(t => <option key={t} value={t}>{MOVEMENT_LABEL[t]}</option>)}
               </select>
               <Input type="date" className="h-8 text-xs" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
@@ -90,6 +96,12 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
               </select>
               <Input placeholder={`Quantidade ${item ? `(${item.unit})` : ''}`} value={form.quantity} onChange={e => setForm({ ...form, quantity: e.target.value })} className="h-8 text-xs" />
               <Input placeholder="Valor unit. (R$)" value={form.unitPrice} onChange={e => setForm({ ...form, unitPrice: e.target.value })} className="h-8 text-xs" />
+              {shouldLinkTask && (
+                <select className="h-8 text-xs border border-border rounded px-2 bg-background col-span-2" value={form.taskId} onChange={e => setForm({ ...form, taskId: e.target.value })}>
+                  <option value="">-- vincular a tarefa/capitulo --</option>
+                  {tasks.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              )}
               {form.type === 'entrada' && (
                 <>
                   <select className="h-8 text-xs border border-border rounded px-2 bg-background" value={form.supplierId} onChange={e => setForm({ ...form, supplierId: e.target.value })}>
@@ -143,6 +155,7 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
               {wh.movements.slice().sort((a, b) => b.date.localeCompare(a.date)).map(m => {
                 const sign = movementSign(m);
                 const reversed = !!m.reversedById;
+                const taskName = m.taskId ? taskById.get(m.taskId) : undefined;
                 return (
                   <tr key={m.id} className={`border-t border-border ${reversed ? 'opacity-50 line-through' : ''}`}>
                     <td className="p-1.5 font-mono text-[10px]">{m.date}</td>
@@ -154,7 +167,7 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
                     <td className="p-1.5 text-[10px] text-muted-foreground">
                       {m.invoiceNumber && `NF ${m.invoiceNumber} `}
                       {m.workerName && `· ${m.workerName} `}
-                      {m.taskId && `· tarefa ${m.taskId.slice(0, 6)} `}
+                      {m.taskId && `· ${taskName ?? `tarefa ${m.taskId.slice(0, 6)}`} `}
                       {m.notes && `· ${m.notes}`}
                     </td>
                     <td className="p-1.5 text-[10px]">{m.responsible ?? m.user ?? '—'}</td>
