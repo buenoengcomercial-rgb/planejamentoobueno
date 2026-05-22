@@ -1,6 +1,8 @@
 import type {
+  Additive,
   AdditiveComposition,
   AdditiveInput,
+  AdditiveStatus,
   BudgetItem,
   ComparisonItem,
   ComparisonItemPrice,
@@ -10,6 +12,8 @@ import type {
 } from '@/types/project';
 import { buildOrderedTasks } from '@/components/measurement/measurementFormat';
 import { getWorkEndDate } from '@/components/gantt/utils';
+import { computeAdditiveRow } from '@/lib/additiveImport';
+import { getChapterNumbering, getChapterTree, type ChapterNode } from '@/lib/chapters';
 import { money2, trunc2 } from '@/lib/financialEngine';
 
 export type RealCostSignal = 'healthy' | 'attention' | 'danger' | 'incomplete';
@@ -45,12 +49,22 @@ export interface RealCostCompositionRow {
   description: string;
   unit: string;
   quantity: number;
+  quantityContracted: number;
+  quantitySuppressed: number;
+  quantityAdded: number;
+  quantityFinal: number;
+  unitPriceReference: number;
+  unitPriceContracted: number;
+  valueSuppressed: number;
+  valueAdded: number;
   chapterId: string;
   chapter: string;
   taskId?: string;
   taskName?: string;
   source: 'contract' | 'additive' | 'analytic';
   sourceName: string;
+  sourceStatus?: string;
+  sourceDetail?: string;
   contractedValue: number;
   realCost: number;
   grossProfit: number;
@@ -73,6 +87,26 @@ export interface RealCostChapterRow {
   signal: RealCostSignal;
   compositionCount: number;
   pendingCompositionCount: number;
+}
+
+export interface RealCostGroupTotals {
+  contractedValue: number;
+  realCost: number;
+  grossProfit: number;
+  marginPct: number;
+  signal: RealCostSignal;
+  compositionCount: number;
+  pendingCompositionCount: number;
+}
+
+export interface RealCostGroupNode {
+  phaseId: string;
+  number: string;
+  name: string;
+  depth: number;
+  rows: RealCostCompositionRow[];
+  children: RealCostGroupNode[];
+  totals: RealCostGroupTotals;
 }
 
 export interface RealCostMonthRow {
@@ -99,6 +133,7 @@ export interface RealCostPendingSummary {
 export interface RealCostAnalysis {
   compositions: RealCostCompositionRow[];
   chapters: RealCostChapterRow[];
+  groupTree: RealCostGroupNode[];
   months: RealCostMonthRow[];
   pending: RealCostPendingSummary;
   totals: {
@@ -118,9 +153,19 @@ type CompositionSource = {
   description: string;
   unit: string;
   quantity: number;
+  quantityContracted: number;
+  quantitySuppressed: number;
+  quantityAdded: number;
+  quantityFinal: number;
+  unitPriceReference: number;
+  unitPriceContracted: number;
+  valueSuppressed: number;
+  valueAdded: number;
   contractedValue: number;
   source: RealCostCompositionRow['source'];
   sourceName: string;
+  sourceStatus?: string;
+  sourceDetail?: string;
   taskId?: string;
   phaseId?: string;
   phaseChain?: string;
@@ -169,6 +214,57 @@ const contractValueFromComposition = (composition: AdditiveComposition, quantity
   if ((composition.unitPriceWithBDI ?? 0) > 0) return trunc2((composition.unitPriceWithBDI ?? 0) * quantity);
   if ((composition.total ?? 0) > 0) return money2(composition.total);
   return 0;
+};
+
+const ADDITIVE_STATUS_LABEL: Record<AdditiveStatus, string> = {
+  rascunho: 'Rascunho',
+  em_analise: 'Em analise',
+  reprovado: 'Reprovado',
+  aprovado: 'Aprovado',
+  aditivo_contratado: 'Integrado ao projeto',
+};
+
+const additiveStatusLabel = (additive: Additive) =>
+  ADDITIVE_STATUS_LABEL[additive.status ?? 'rascunho'];
+
+const additiveDetailLabel = (composition: AdditiveComposition) => {
+  if (composition.isNewService) return 'Novo servico';
+  const added = composition.addedQuantity ?? 0;
+  const suppressed = composition.suppressedQuantity ?? 0;
+  if (added > 0 && suppressed > 0) return 'Acrescimo e supressao';
+  if (added > 0) return 'Acrescimo';
+  if (suppressed > 0) return 'Supressao';
+  return 'Sem alteracao';
+};
+
+const hasAdditiveReference = (composition: AdditiveComposition) =>
+  !composition.isNewService && (
+    !!composition.taskId ||
+    !!composition.linkedTaskId ||
+    !!normalize(composition.item) ||
+    !!normalize(composition.code) ||
+    !!normalizeDesc(composition.description)
+  );
+
+const replacementKeysForComposition = (composition: AdditiveComposition) => {
+  const keys: string[] = [];
+  const taskId = composition.linkedTaskId || composition.taskId;
+  if (taskId) keys.push(`task:${taskId}`);
+  if (normalize(composition.item)) keys.push(`item:${normalize(composition.item)}`);
+  if (normalize(composition.code)) {
+    keys.push(`code:${normalize(composition.code)}|${normalize(composition.bank)}`);
+  }
+  if (normalizeDesc(composition.description)) keys.push(`desc:${normalizeDesc(composition.description)}`);
+  return keys;
+};
+
+const replacementKeysForBudgetItem = (budget: BudgetItem) => {
+  const keys: string[] = [];
+  if (budget.taskId) keys.push(`task:${budget.taskId}`);
+  if (normalize(budget.item)) keys.push(`item:${normalize(budget.item)}`);
+  if (normalize(budget.code)) keys.push(`code:${normalize(budget.code)}|${normalize(budget.bank)}`);
+  if (normalizeDesc(budget.description)) keys.push(`desc:${normalizeDesc(budget.description)}`);
+  return keys;
 };
 
 const signalFromMargin = (marginPct: number, complete: boolean): RealCostSignal => {
@@ -325,13 +421,23 @@ function buildCompositionSources(project: Project): CompositionSource[] {
     (additive.compositions ?? []).map(composition => ({ additive, composition })),
   );
   const additiveCompositions = additivePairs.map(pair => pair.composition);
+  const additiveReplacementKeys = new Set<string>();
   const usedCompositionIds = new Set<string>();
   const sources: CompositionSource[] = [];
 
+  for (const pair of additivePairs) {
+    if (!hasAdditiveReference(pair.composition)) continue;
+    replacementKeysForComposition(pair.composition).forEach(key => additiveReplacementKeys.add(key));
+  }
+
   for (const budget of project.budgetItems ?? []) {
     if (budget.source !== 'sintetica' && budget.source !== 'aditivo') continue;
+    const representedByAdditive = replacementKeysForBudgetItem(budget).some(key => additiveReplacementKeys.has(key));
+    if (representedByAdditive) continue;
+
     const composition = matchCompositionForBudgetItem(budget, baseCompositions, additiveCompositions);
     if (composition) usedCompositionIds.add(composition.id);
+    const quantity = trunc2(budget.quantity);
     sources.push({
       id: `budget:${budget.id}`,
       item: budget.item,
@@ -339,30 +445,51 @@ function buildCompositionSources(project: Project): CompositionSource[] {
       bank: budget.bank || undefined,
       description: budget.description,
       unit: budget.unit,
-      quantity: trunc2(budget.quantity),
+      quantity,
+      quantityContracted: quantity,
+      quantitySuppressed: 0,
+      quantityAdded: 0,
+      quantityFinal: quantity,
+      unitPriceReference: trunc2(budget.unitPriceNoBDI),
+      unitPriceContracted: trunc2(budget.unitPriceWithBDI),
+      valueSuppressed: 0,
+      valueAdded: 0,
       contractedValue: money2(budget.totalWithBDI),
       source: budget.source === 'aditivo' ? 'additive' : 'contract',
-      sourceName: budget.source === 'aditivo' ? 'Aditivo aprovado' : 'Contrato',
+      sourceName: budget.source === 'aditivo' ? 'Aditivo integrado na medicao' : 'Contrato',
+      sourceStatus: budget.source === 'aditivo' ? 'Integrado ao projeto' : undefined,
+      sourceDetail: budget.source === 'aditivo' ? 'Servico integrado' : 'Contrato original',
       taskId: budget.taskId,
       composition,
     });
   }
 
   for (const pair of additivePairs) {
-    if (usedCompositionIds.has(pair.composition.id)) continue;
-    const quantity = compositionFinalQuantity(pair.composition);
-    const contractedValue = contractValueFromComposition(pair.composition, quantity);
+    const bdi = pair.additive.bdiPercent ?? project.syntheticBdiPercent ?? project.contractInfo?.bdiPercent ?? 0;
+    const discount = pair.additive.globalDiscountPercent ?? 0;
+    const r = computeAdditiveRow(pair.composition, bdi, discount);
+    const quantity = trunc2(r.qtdFinal);
     sources.push({
       id: `additive:${pair.additive.id}:${pair.composition.id}`,
-      item: pair.composition.item,
+      item: pair.composition.itemNumber || pair.composition.item,
       code: pair.composition.code || undefined,
       bank: pair.composition.bank || undefined,
       description: pair.composition.description,
       unit: pair.composition.unit,
       quantity,
-      contractedValue,
+      quantityContracted: r.qtdContratada,
+      quantitySuppressed: r.qtdSuprimida,
+      quantityAdded: r.qtdAcrescida,
+      quantityFinal: quantity,
+      unitPriceReference: r.referenceUnitNoBDI,
+      unitPriceContracted: r.unitPriceWithBDI,
+      valueSuppressed: r.valorSuprimido,
+      valueAdded: r.valorAcrescido,
+      contractedValue: r.valorFinal,
       source: 'additive',
       sourceName: pair.additive.name || 'Aditivo',
+      sourceStatus: additiveStatusLabel(pair.additive),
+      sourceDetail: additiveDetailLabel(pair.composition),
       taskId: pair.composition.linkedTaskId || pair.composition.taskId,
       phaseId: pair.composition.phaseId,
       phaseChain: pair.composition.phaseChain,
@@ -372,6 +499,9 @@ function buildCompositionSources(project: Project): CompositionSource[] {
 
   for (const composition of baseCompositions) {
     if (usedCompositionIds.has(composition.id)) continue;
+    const representedByAdditive = replacementKeysForComposition(composition).some(key => additiveReplacementKeys.has(key));
+    if (representedByAdditive) continue;
+
     const quantity = compositionFinalQuantity(composition);
     const contractedValue = contractValueFromComposition(composition, quantity);
     sources.push({
@@ -382,9 +512,18 @@ function buildCompositionSources(project: Project): CompositionSource[] {
       description: composition.description,
       unit: composition.unit,
       quantity,
+      quantityContracted: quantity,
+      quantitySuppressed: 0,
+      quantityAdded: 0,
+      quantityFinal: quantity,
+      unitPriceReference: trunc2(composition.unitPriceNoBDI),
+      unitPriceContracted: trunc2(composition.unitPriceWithBDI),
+      valueSuppressed: 0,
+      valueAdded: 0,
       contractedValue,
       source: 'analytic',
       sourceName: 'Analitica do contrato',
+      sourceDetail: 'Contrato original',
       taskId: composition.linkedTaskId || composition.taskId,
       phaseId: composition.phaseId,
       phaseChain: composition.phaseChain,
@@ -433,7 +572,7 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
     const realCost = money2(inputs.reduce((sum, input) => sum + input.realTotal, 0));
     const missingQuoteCount = inputs.filter(input => input.status === 'missing').length;
     const hasAnalytic = inputs.length > 0;
-    const hasScheduleLink = !!matchedTask;
+    const hasScheduleLink = !!(matchedTask || source.phaseId);
     const hasContractValue = source.contractedValue > 0;
     const complete = hasAnalytic && hasScheduleLink && hasContractValue && missingQuoteCount === 0;
     const grossProfit = money2(source.contractedValue - realCost);
@@ -447,12 +586,22 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
       description: source.description,
       unit: source.unit,
       quantity: source.quantity,
+      quantityContracted: source.quantityContracted,
+      quantitySuppressed: source.quantitySuppressed,
+      quantityAdded: source.quantityAdded,
+      quantityFinal: source.quantityFinal,
+      unitPriceReference: source.unitPriceReference,
+      unitPriceContracted: source.unitPriceContracted,
+      valueSuppressed: source.valueSuppressed,
+      valueAdded: source.valueAdded,
       chapterId: phaseId,
       chapter,
       taskId: matchedTask?.task.id || source.taskId,
       taskName: matchedTask?.task.name,
       source: source.source,
       sourceName: source.sourceName,
+      sourceStatus: source.sourceStatus,
+      sourceDetail: source.sourceDetail,
       contractedValue: money2(source.contractedValue),
       realCost,
       grossProfit,
@@ -467,39 +616,109 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
   }).sort((a, b) => a.item.localeCompare(b.item, 'pt-BR', { numeric: true }));
 }
 
-function buildChapterRows(compositions: RealCostCompositionRow[]): RealCostChapterRow[] {
-  const map = new Map<string, RealCostChapterRow>();
+function totalsFromRowsAndChildren(
+  rows: RealCostCompositionRow[],
+  children: RealCostGroupNode[],
+): RealCostGroupTotals {
+  const contractedValue = money2(
+    rows.reduce((sum, row) => sum + row.contractedValue, 0) +
+    children.reduce((sum, child) => sum + child.totals.contractedValue, 0),
+  );
+  const realCost = money2(
+    rows.reduce((sum, row) => sum + row.realCost, 0) +
+    children.reduce((sum, child) => sum + child.totals.realCost, 0),
+  );
+  const grossProfit = money2(contractedValue - realCost);
+  const marginPct = contractedValue > 0 ? trunc2((grossProfit / contractedValue) * 100) : 0;
+  const compositionCount =
+    rows.length + children.reduce((sum, child) => sum + child.totals.compositionCount, 0);
+  const pendingCompositionCount =
+    rows.filter(row => row.signal === 'incomplete').length +
+    children.reduce((sum, child) => sum + child.totals.pendingCompositionCount, 0);
 
-  for (const composition of compositions) {
-    const current = map.get(composition.chapterId) ?? {
-      id: composition.chapterId,
-      chapter: composition.chapter,
-      contractedValue: 0,
-      realCost: 0,
-      grossProfit: 0,
-      marginPct: 0,
-      signal: 'incomplete' as RealCostSignal,
-      compositionCount: 0,
-      pendingCompositionCount: 0,
-    };
+  return {
+    contractedValue,
+    realCost,
+    grossProfit,
+    marginPct,
+    compositionCount,
+    pendingCompositionCount,
+    signal: signalFromMargin(marginPct, pendingCompositionCount === 0 && contractedValue > 0),
+  };
+}
 
-    current.contractedValue = money2(current.contractedValue + composition.contractedValue);
-    current.realCost = money2(current.realCost + composition.realCost);
-    current.compositionCount += 1;
-    if (composition.signal === 'incomplete') current.pendingCompositionCount += 1;
-    map.set(composition.chapterId, current);
+function buildRealCostGroupTree(project: Project, compositions: RealCostCompositionRow[]): RealCostGroupNode[] {
+  const rowsByPhase = new Map<string, RealCostCompositionRow[]>();
+  for (const row of compositions) {
+    const arr = rowsByPhase.get(row.chapterId) ?? [];
+    arr.push(row);
+    rowsByPhase.set(row.chapterId, arr);
   }
 
-  return Array.from(map.values()).map(chapter => {
-    const grossProfit = money2(chapter.contractedValue - chapter.realCost);
-    const marginPct = chapter.contractedValue > 0 ? trunc2((grossProfit / chapter.contractedValue) * 100) : 0;
+  const numbering = getChapterNumbering(project);
+  const tree = getChapterTree(project);
+
+  const buildNode = (chapterNode: ChapterNode, depth: number): RealCostGroupNode | null => {
+    const rows = (rowsByPhase.get(chapterNode.phase.id) ?? [])
+      .slice()
+      .sort((a, b) => a.item.localeCompare(b.item, 'pt-BR', { numeric: true }));
+    const children = chapterNode.children
+      .map(child => buildNode(child, depth + 1))
+      .filter((child): child is RealCostGroupNode => child !== null);
+    if (rows.length === 0 && children.length === 0) return null;
+
     return {
-      ...chapter,
-      grossProfit,
-      marginPct,
-      signal: signalFromMargin(marginPct, chapter.pendingCompositionCount === 0 && chapter.contractedValue > 0),
+      phaseId: chapterNode.phase.id,
+      number: numbering.get(chapterNode.phase.id) || '',
+      name: chapterNode.phase.name,
+      depth,
+      rows,
+      children,
+      totals: totalsFromRowsAndChildren(rows, children),
     };
-  }).sort((a, b) => a.chapter.localeCompare(b.chapter, 'pt-BR', { numeric: true }));
+  };
+
+  const groups = tree
+    .map(node => buildNode(node, 0))
+    .filter((node): node is RealCostGroupNode => node !== null)
+    .sort((a, b) => a.number.localeCompare(b.number, 'pt-BR', { numeric: true }));
+
+  const orphanRows = (rowsByPhase.get('__unlinked__') ?? [])
+    .slice()
+    .sort((a, b) => a.item.localeCompare(b.item, 'pt-BR', { numeric: true }));
+  if (orphanRows.length > 0) {
+    groups.push({
+      phaseId: '__unlinked__',
+      number: 'SV',
+      name: 'Sem vinculo com cronograma',
+      depth: 0,
+      rows: orphanRows,
+      children: [],
+      totals: totalsFromRowsAndChildren(orphanRows, []),
+    });
+  }
+
+  return groups;
+}
+
+function flattenGroupChapters(groups: RealCostGroupNode[]): RealCostChapterRow[] {
+  const rows: RealCostChapterRow[] = [];
+  const walk = (group: RealCostGroupNode) => {
+    rows.push({
+      id: group.phaseId,
+      chapter: `${group.number} ${group.name}`.trim(),
+      contractedValue: group.totals.contractedValue,
+      realCost: group.totals.realCost,
+      grossProfit: group.totals.grossProfit,
+      marginPct: group.totals.marginPct,
+      signal: group.totals.signal,
+      compositionCount: group.totals.compositionCount,
+      pendingCompositionCount: group.totals.pendingCompositionCount,
+    });
+    group.children.forEach(walk);
+  };
+  groups.forEach(walk);
+  return rows;
 }
 
 const isISODate = (value: string | undefined | null): value is string =>
@@ -629,7 +848,8 @@ function buildMonthlyRows(
 
 export function buildRealCostAnalysis(project: Project, trabalhaSabado = false): RealCostAnalysis {
   const compositions = buildCompositionRows(project);
-  const chapters = buildChapterRows(compositions);
+  const groupTree = buildRealCostGroupTree(project, compositions);
+  const chapters = flattenGroupChapters(groupTree);
   const months = buildMonthlyRows(project, compositions, trabalhaSabado);
   const pending: RealCostPendingSummary = {
     inputsWithoutQuote: compositions.reduce((sum, row) => sum + row.missingQuoteCount, 0),
@@ -647,6 +867,7 @@ export function buildRealCostAnalysis(project: Project, trabalhaSabado = false):
   return {
     compositions,
     chapters,
+    groupTree,
     months,
     pending,
     totals: {

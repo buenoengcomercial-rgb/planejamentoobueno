@@ -14,7 +14,13 @@ import {
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { buildRealCostAnalysis, type RealCostCompositionRow, type RealCostSignal } from '@/lib/realCost';
+import {
+  buildRealCostAnalysis,
+  type RealCostCompositionRow,
+  type RealCostGroupNode,
+  type RealCostGroupTotals,
+  type RealCostSignal,
+} from '@/lib/realCost';
 import { fmtBRL, fmtPct } from '@/components/measurement/measurementFormat';
 import { loadObraConfig } from '@/components/ConfiguracaoObra';
 
@@ -103,10 +109,10 @@ function marginTone(value: number) {
   return 'text-success';
 }
 
-function signalFromRows(rows: RealCostCompositionRow[], marginPct: number): RealCostSignal {
-  if (rows.length === 0 || rows.some(row => row.signal === 'incomplete')) return 'incomplete';
-  if (marginPct < 5) return 'danger';
-  if (marginPct < 15) return 'attention';
+function signalFromTotals(totals: Pick<RealCostGroupTotals, 'contractedValue' | 'pendingCompositionCount' | 'marginPct'>): RealCostSignal {
+  if (totals.pendingCompositionCount > 0 || totals.contractedValue <= 0) return 'incomplete';
+  if (totals.marginPct < 5) return 'danger';
+  if (totals.marginPct < 15) return 'attention';
   return 'healthy';
 }
 
@@ -127,6 +133,261 @@ function formatDate(value?: string) {
   return `${day}/${month}/${year}`;
 }
 
+function fmtQty(value: number) {
+  return (Number(value) || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+}
+
+function roundMoney(value: number) {
+  return Math.round(((Number(value) || 0) + Number.EPSILON) * 100) / 100;
+}
+
+function computeVisibleTotals(rows: RealCostCompositionRow[], children: RealCostGroupNode[]): RealCostGroupTotals {
+  const contractedValue = roundMoney(
+    rows.reduce((sum, row) => sum + row.contractedValue, 0) +
+    children.reduce((sum, child) => sum + child.totals.contractedValue, 0),
+  );
+  const realCost = roundMoney(
+    rows.reduce((sum, row) => sum + row.realCost, 0) +
+    children.reduce((sum, child) => sum + child.totals.realCost, 0),
+  );
+  const grossProfit = roundMoney(contractedValue - realCost);
+  const marginPct = contractedValue > 0 ? Math.round((grossProfit / contractedValue) * 10000) / 100 : 0;
+  const compositionCount = rows.length + children.reduce((sum, child) => sum + child.totals.compositionCount, 0);
+  const pendingCompositionCount =
+    rows.filter(row => row.signal === 'incomplete').length +
+    children.reduce((sum, child) => sum + child.totals.pendingCompositionCount, 0);
+  const totals = {
+    contractedValue,
+    realCost,
+    grossProfit,
+    marginPct,
+    compositionCount,
+    pendingCompositionCount,
+    signal: 'incomplete' as RealCostSignal,
+  };
+  totals.signal = signalFromTotals(totals);
+  return totals;
+}
+
+function groupHeaderStyle(depth: number) {
+  if (depth === 0) return 'bg-primary/10 text-foreground font-bold border-y border-primary/30';
+  if (depth === 1) return 'bg-slate-100/90 text-foreground font-semibold border-y border-border';
+  return 'bg-slate-50 text-foreground font-semibold border-y border-border';
+}
+
+function groupSubtotalStyle(depth: number) {
+  if (depth === 0) return 'bg-primary/5 border-y border-primary/20 font-bold';
+  if (depth === 1) return 'bg-slate-50 border-y border-border font-semibold';
+  return 'bg-muted/20 border-y border-border font-semibold';
+}
+
+function collectGroupIds(groups: RealCostGroupNode[]) {
+  const ids: string[] = [];
+  const walk = (group: RealCostGroupNode) => {
+    ids.push(group.phaseId);
+    group.children.forEach(walk);
+  };
+  groups.forEach(walk);
+  return ids;
+}
+
+const TABLE_COLSPAN = 17;
+const BORDER_L = 'border-l-2 border-border';
+
+function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
+  return (
+    <tr className="border-b border-primary/20 bg-primary/5">
+      <td colSpan={TABLE_COLSPAN} className="p-3">
+        <div className="rounded-lg border border-border bg-card overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/40 px-3 py-2">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Composicao analitica do custo real
+              </p>
+              <p className="text-xs font-medium">{row.item} - {row.description}</p>
+              <p className="text-[10px] text-muted-foreground">
+                {row.sourceName}{row.sourceStatus ? ` - ${row.sourceStatus}` : ''}{row.sourceDetail ? ` - ${row.sourceDetail}` : ''}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2 text-[11px]">
+              <span className="rounded border border-border px-2 py-1">Contrato: <strong>{fmtBRL(row.contractedValue)}</strong></span>
+              <span className="rounded border border-border px-2 py-1">Custo real: <strong>{fmtBRL(row.realCost)}</strong></span>
+              <span className="rounded border border-border px-2 py-1">
+                Lucro: <strong className={row.grossProfit >= 0 ? 'text-success' : 'text-destructive'}>{fmtBRL(row.grossProfit)}</strong>
+              </span>
+            </div>
+          </div>
+          {row.inputs.length === 0 ? (
+            <div className="p-5 text-center text-xs text-muted-foreground">
+              Composicao sem analitica vinculada. Ela continua na planilha, mas a margem fica incompleta.
+            </div>
+          ) : (
+            <div className="overflow-auto">
+              <table className="w-full min-w-[1120px] text-xs">
+                <thead className="bg-muted text-muted-foreground">
+                  <tr>
+                    <th className="p-2 text-left w-24">Codigo</th>
+                    <th className="p-2 text-left w-20">Banco</th>
+                    <th className="p-2 text-left">Insumo</th>
+                    <th className="p-2 text-center w-16">Un.</th>
+                    <th className="p-2 text-right w-24">Coef.</th>
+                    <th className="p-2 text-right w-24">Qtd. total</th>
+                    <th className="p-2 text-right w-28">Preco real</th>
+                    <th className="p-2 text-right w-28">Custo</th>
+                    <th className="p-2 text-left w-36">Fornecedor</th>
+                    <th className="p-2 text-left w-36">Grupo</th>
+                    <th className="p-2 text-center w-24">Data</th>
+                    <th className="p-2 text-center w-24">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {row.inputs.map(input => (
+                    <tr key={input.id} className="border-t border-border">
+                      <td className="p-2 align-top font-mono text-[11px]">{input.code || '-'}</td>
+                      <td className="p-2 align-top text-muted-foreground">{input.bank || '-'}</td>
+                      <td className="p-2 align-top">
+                        <div className="font-medium leading-snug">{input.description}</div>
+                        {!input.priceSource && (
+                          <div className="mt-1 text-[10px] text-warning">Sem cotacao na Lista de Material.</div>
+                        )}
+                      </td>
+                      <td className="p-2 align-top text-center">{input.unit}</td>
+                      <td className="p-2 align-top text-right tabular-nums">{input.coefficient.toLocaleString('pt-BR', { maximumFractionDigits: 5 })}</td>
+                      <td className="p-2 align-top text-right tabular-nums">{fmtQty(input.totalQuantity)}</td>
+                      <td className="p-2 align-top text-right tabular-nums">{input.priceSource ? fmtBRL(input.priceSource.unitPrice) : '-'}</td>
+                      <td className="p-2 align-top text-right tabular-nums font-semibold">{input.priceSource ? fmtBRL(input.realTotal) : '-'}</td>
+                      <td className="p-2 align-top">{input.priceSource?.supplierName || '-'}</td>
+                      <td className="p-2 align-top">{input.priceSource?.comparisonName || '-'}</td>
+                      <td className="p-2 align-top text-center">{formatDate(input.priceSource?.date)}</td>
+                      <td className="p-2 align-top text-center">
+                        {input.priceSource ? (
+                          <span className="rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-[10px] font-semibold text-success">Cotado</span>
+                        ) : (
+                          <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold text-warning">Pendente</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function RealCostGroupRows({
+  group,
+  collapsed,
+  toggleCollapsed,
+  expandedId,
+  setExpandedId,
+}: {
+  group: RealCostGroupNode;
+  collapsed: Set<string>;
+  toggleCollapsed: (id: string) => void;
+  expandedId: string | null;
+  setExpandedId: (id: string | null) => void;
+}) {
+  const isCollapsed = collapsed.has(group.phaseId);
+  const indentPx = group.depth * 14;
+
+  return (
+    <Fragment>
+      <tr className={groupHeaderStyle(group.depth)}>
+        <td colSpan={TABLE_COLSPAN} className="px-2 py-1.5">
+          <button
+            type="button"
+            onClick={() => toggleCollapsed(group.phaseId)}
+            className="inline-flex items-center gap-1 hover:opacity-80"
+            style={{ paddingLeft: indentPx }}
+          >
+            {isCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            <span className="font-mono tabular-nums">{group.number}</span>
+            <span className="ml-1 uppercase tracking-wide">{group.name}</span>
+            <span className="ml-2 text-[10px] font-medium text-muted-foreground">
+              {group.totals.compositionCount} composicao(oes)
+            </span>
+          </button>
+        </td>
+      </tr>
+
+      {!isCollapsed && (
+        <Fragment>
+          {group.rows.map(row => {
+            const expanded = expandedId === row.id;
+            return (
+              <Fragment key={row.id}>
+                <tr
+                  className={`cursor-pointer border-b border-border hover:bg-muted/40 ${expanded ? 'bg-primary/10' : ''}`}
+                  onClick={() => setExpandedId(expanded ? null : row.id)}
+                >
+                  <td className="p-2 align-top font-mono text-[11px]">
+                    <span className="inline-flex items-center gap-1">
+                      {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                      {row.item || '-'}
+                    </span>
+                  </td>
+                  <td className="p-2 align-top font-mono text-[11px]">{row.code || '-'}</td>
+                  <td className="p-2 align-top text-muted-foreground">{row.bank || '-'}</td>
+                  <td className="p-2 align-top">
+                    <div className="font-medium leading-snug">{row.description}</div>
+                    <div className="mt-0.5 text-[10px] text-muted-foreground">
+                      {row.sourceName}{row.sourceStatus ? ` - ${row.sourceStatus}` : ''}{row.sourceDetail ? ` - ${row.sourceDetail}` : ''}
+                    </div>
+                  </td>
+                  <td className="p-2 align-top text-center">{row.unit}</td>
+                  <td className={`p-2 align-top text-right tabular-nums ${BORDER_L}`}>{fmtQty(row.quantityContracted)}</td>
+                  <td className="p-2 align-top text-right tabular-nums text-destructive">{row.quantitySuppressed ? fmtQty(row.quantitySuppressed) : '-'}</td>
+                  <td className="p-2 align-top text-right tabular-nums text-success">{row.quantityAdded ? fmtQty(row.quantityAdded) : '-'}</td>
+                  <td className="p-2 align-top text-right tabular-nums font-semibold">{fmtQty(row.quantityFinal)}</td>
+                  <td className={`p-2 align-top text-right tabular-nums ${BORDER_L}`}>{fmtBRL(row.unitPriceReference)}</td>
+                  <td className="p-2 align-top text-right tabular-nums">{fmtBRL(row.unitPriceContracted)}</td>
+                  <td className="p-2 align-top text-right tabular-nums font-semibold">{fmtBRL(row.contractedValue)}</td>
+                  <td className={`p-2 align-top text-right tabular-nums font-semibold ${BORDER_L}`}>{fmtBRL(row.realCost)}</td>
+                  <td className={`p-2 align-top text-right tabular-nums font-semibold ${row.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
+                    {fmtBRL(row.grossProfit)}
+                  </td>
+                  <td className={`p-2 align-top text-right tabular-nums font-semibold ${marginTone(row.marginPct)}`}>{fmtPct(row.marginPct)}</td>
+                  <td className="p-2 align-top text-center">{pendingCount(row)}</td>
+                  <td className="p-2 align-top text-center"><SignalBadge signal={row.signal} /></td>
+                </tr>
+                {expanded && <RealCostCompositionDetail row={row} />}
+              </Fragment>
+            );
+          })}
+          {group.children.map(child => (
+            <RealCostGroupRows
+              key={child.phaseId}
+              group={child}
+              collapsed={collapsed}
+              toggleCollapsed={toggleCollapsed}
+              expandedId={expandedId}
+              setExpandedId={setExpandedId}
+            />
+          ))}
+        </Fragment>
+      )}
+
+      <tr className={groupSubtotalStyle(group.depth)}>
+        <td colSpan={11} className="px-2 py-1.5 text-right border-t-2 border-border">
+          <span style={{ paddingLeft: indentPx }}>Subtotal {group.number} - {group.name}</span>
+        </td>
+        <td className="px-2 py-1.5 text-right tabular-nums border-t-2 border-border">{fmtBRL(group.totals.contractedValue)}</td>
+        <td className={`px-2 py-1.5 text-right tabular-nums border-t-2 border-border ${BORDER_L}`}>{fmtBRL(group.totals.realCost)}</td>
+        <td className={`px-2 py-1.5 text-right tabular-nums border-t-2 border-border ${group.totals.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
+          {fmtBRL(group.totals.grossProfit)}
+        </td>
+        <td className={`px-2 py-1.5 text-right tabular-nums border-t-2 border-border ${marginTone(group.totals.marginPct)}`}>{fmtPct(group.totals.marginPct)}</td>
+        <td className="px-2 py-1.5 text-center tabular-nums border-t-2 border-border">{group.totals.pendingCompositionCount}</td>
+        <td className="px-2 py-1.5 text-center border-t-2 border-border"><SignalBadge signal={group.totals.signal} /></td>
+      </tr>
+    </Fragment>
+  );
+}
+
 export default function RealCost({ project }: Props) {
   const trabalhaSabado = useMemo(() => loadObraConfig().trabalhaSabado, []);
   const analysis = useMemo(() => buildRealCostAnalysis(project, trabalhaSabado), [project, trabalhaSabado]);
@@ -134,40 +395,55 @@ export default function RealCost({ project }: Props) {
   const [statusFilter, setStatusFilter] = useState<'all' | RealCostSignal>('all');
   const [chapterFilter, setChapterFilter] = useState('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
-  const filteredCompositions = useMemo(() => {
+  const filteredGroupTree = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return analysis.compositions.filter(row => {
+    const rowMatches = (row: RealCostCompositionRow) => {
       if (statusFilter !== 'all' && row.signal !== statusFilter) return false;
-      if (chapterFilter !== 'all' && row.chapterId !== chapterFilter) return false;
       if (!q) return true;
-      const blob = `${row.item} ${row.code ?? ''} ${row.bank ?? ''} ${row.description} ${row.chapter} ${row.sourceName}`.toLowerCase();
+      const blob = `${row.item} ${row.code ?? ''} ${row.bank ?? ''} ${row.description} ${row.chapter} ${row.sourceName} ${row.sourceStatus ?? ''} ${row.sourceDetail ?? ''}`.toLowerCase();
       return blob.includes(q);
-    });
-  }, [analysis.compositions, chapterFilter, search, statusFilter]);
+    };
 
-  const groupedChapters = useMemo(() => {
-    return analysis.chapters
-      .map(chapter => {
-        const rows = filteredCompositions.filter(row => row.chapterId === chapter.id);
-        const contractedValue = rows.reduce((sum, row) => sum + row.contractedValue, 0);
-        const realCost = rows.reduce((sum, row) => sum + row.realCost, 0);
-        const grossProfit = contractedValue - realCost;
-        const marginPct = contractedValue > 0 ? (grossProfit / contractedValue) * 100 : 0;
-        return {
-          id: chapter.id,
-          chapter: chapter.chapter,
-          rows,
-          contractedValue,
-          realCost,
-          grossProfit,
-          marginPct,
-          pendingCompositionCount: rows.filter(row => row.signal === 'incomplete').length,
-          signal: signalFromRows(rows, marginPct),
-        };
-      })
-      .filter(group => group.rows.length > 0);
-  }, [analysis.chapters, filteredCompositions]);
+    const filterNode = (node: RealCostGroupNode, ancestorSelected: boolean): RealCostGroupNode | null => {
+      const currentSelected = chapterFilter === 'all' || ancestorSelected || node.phaseId === chapterFilter;
+      const childAncestorSelected = ancestorSelected || node.phaseId === chapterFilter;
+      const rows = currentSelected ? node.rows.filter(rowMatches) : [];
+      const children = node.children
+        .map(child => filterNode(child, childAncestorSelected))
+        .filter((child): child is RealCostGroupNode => child !== null);
+      if (rows.length === 0 && children.length === 0) return null;
+
+      return {
+        ...node,
+        rows,
+        children,
+        totals: computeVisibleTotals(rows, children),
+      };
+    };
+
+    return analysis.groupTree
+      .map(group => filterNode(group, false))
+      .filter((group): group is RealCostGroupNode => group !== null);
+  }, [analysis.groupTree, chapterFilter, search, statusFilter]);
+
+  const visibleGroupIds = useMemo(() => collectGroupIds(filteredGroupTree), [filteredGroupTree]);
+  const visibleTotals = useMemo(() => computeVisibleTotals([], filteredGroupTree), [filteredGroupTree]);
+
+  const toggleCollapsed = (id: string) => {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const collapseAll = () => setCollapsed(new Set(visibleGroupIds));
+  const expandAll = () => setCollapsed(new Set());
+
+  const visibleCompositionCount = visibleTotals.compositionCount;
 
   const maxMonthValue = Math.max(1, ...analysis.months.map(month => Math.max(month.contractedValue, month.realCost)));
 
@@ -273,165 +549,98 @@ export default function RealCost({ project }: Props) {
               <option value="danger">Critico</option>
               <option value="incomplete">Incompleto</option>
             </select>
+            <button
+              type="button"
+              onClick={expandAll}
+              className="h-8 rounded-md border border-border bg-background px-3 text-xs font-medium hover:bg-muted"
+            >
+              Expandir tudo
+            </button>
+            <button
+              type="button"
+              onClick={collapseAll}
+              className="h-8 rounded-md border border-border bg-background px-3 text-xs font-medium hover:bg-muted"
+            >
+              Recolher tudo
+            </button>
           </div>
         </div>
 
-        <div className="max-h-[680px] overflow-auto">
-          <table className="w-full min-w-[1320px] text-xs">
-            <thead className="sticky top-0 z-20">
+        <div className="max-h-[calc(100vh-330px)] overflow-auto">
+          <table className="w-full min-w-[1780px] border-separate border-spacing-0 text-xs">
+            <thead className="sticky top-0 z-20 shadow-sm">
+              <tr>
+                <th colSpan={5} className="border-b border-border bg-slate-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-slate-800">
+                  Identificacao
+                </th>
+                <th colSpan={4} className={`border-b border-border bg-sky-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-sky-950 ${BORDER_L}`}>
+                  Quantidades
+                </th>
+                <th colSpan={3} className={`border-b border-border bg-blue-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-blue-950 ${BORDER_L}`}>
+                  Contrato / referencia
+                </th>
+                <th colSpan={5} className={`border-b border-border bg-emerald-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-emerald-950 ${BORDER_L}`}>
+                  Custo real e margem
+                </th>
+              </tr>
               <tr className="bg-slate-950 text-white">
                 <th className="p-2 text-left w-24">Item</th>
                 <th className="p-2 text-left w-24">Codigo</th>
                 <th className="p-2 text-left w-20">Banco</th>
                 <th className="p-2 text-left min-w-[360px]">Descricao</th>
                 <th className="p-2 text-center w-16">Un.</th>
-                <th className="p-2 text-right w-24">Qtd.</th>
-                <th className="p-2 text-right w-36">Valor contratado</th>
-                <th className="p-2 text-right w-36">Custo real cotado</th>
-                <th className="p-2 text-right w-32">Lucro bruto</th>
+                <th className={`p-2 text-right w-28 ${BORDER_L}`}>Qtd. Contratada</th>
+                <th className="p-2 text-right w-28 text-rose-100">Qtd. Suprimida</th>
+                <th className="p-2 text-right w-28 text-emerald-100">Qtd. Acrescida</th>
+                <th className="p-2 text-right w-24">Qtd. Final</th>
+                <th className={`p-2 text-right w-32 ${BORDER_L}`}>V. Unit. Referencia</th>
+                <th className="p-2 text-right w-32">V. Unit. Contratado</th>
+                <th className="p-2 text-right w-36">Valor Contratado Final</th>
+                <th className={`p-2 text-right w-36 ${BORDER_L}`}>Custo Real Cotado</th>
+                <th className="p-2 text-right w-32">Lucro Bruto</th>
                 <th className="p-2 text-right w-24">Margem</th>
-                <th className="p-2 text-center w-24">Pend.</th>
+                <th className="p-2 text-center w-20">Pend.</th>
                 <th className="p-2 text-center w-28">Semaforo</th>
               </tr>
             </thead>
             <tbody>
-              {groupedChapters.map(group => (
-                <Fragment key={`group-${group.id}`}>
-                  <tr key={`chapter-${group.id}`} className="border-y border-primary/20 bg-blue-50 text-blue-950">
-                    <td colSpan={4} className="p-2 font-bold">
-                      {group.chapter}
-                      <span className="ml-2 text-[10px] font-medium text-blue-700">{group.rows.length} composicao(oes)</span>
-                    </td>
-                    <td className="p-2 text-center font-semibold">-</td>
-                    <td className="p-2 text-right font-semibold">-</td>
-                    <td className="p-2 text-right font-bold tabular-nums">{fmtBRL(group.contractedValue)}</td>
-                    <td className="p-2 text-right font-bold tabular-nums">{fmtBRL(group.realCost)}</td>
-                    <td className={`p-2 text-right font-bold tabular-nums ${group.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
-                      {fmtBRL(group.grossProfit)}
-                    </td>
-                    <td className={`p-2 text-right font-bold tabular-nums ${marginTone(group.marginPct)}`}>{fmtPct(group.marginPct)}</td>
-                    <td className="p-2 text-center font-semibold">{group.pendingCompositionCount}</td>
-                    <td className="p-2 text-center"><SignalBadge signal={group.signal} /></td>
-                  </tr>
-                  {group.rows.map(row => {
-                    const expanded = expandedId === row.id;
-                    return (
-                      <Fragment key={`row-${row.id}`}>
-                        <tr
-                          key={row.id}
-                          className={`cursor-pointer border-b border-border hover:bg-muted/40 ${expanded ? 'bg-primary/10' : ''}`}
-                          onClick={() => setExpandedId(expanded ? null : row.id)}
-                        >
-                          <td className="p-2 align-top font-mono text-[11px]">
-                            <span className="inline-flex items-center gap-1">
-                              {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                              {row.item || '-'}
-                            </span>
-                          </td>
-                          <td className="p-2 align-top font-mono text-[11px]">{row.code || '-'}</td>
-                          <td className="p-2 align-top text-muted-foreground">{row.bank || '-'}</td>
-                          <td className="p-2 align-top">
-                            <div className="font-medium leading-snug">{row.description}</div>
-                            <div className="mt-0.5 text-[10px] text-muted-foreground">{row.sourceName}</div>
-                          </td>
-                          <td className="p-2 align-top text-center">{row.unit}</td>
-                          <td className="p-2 align-top text-right tabular-nums">{row.quantity.toLocaleString('pt-BR', { maximumFractionDigits: 3 })}</td>
-                          <td className="p-2 align-top text-right tabular-nums">{fmtBRL(row.contractedValue)}</td>
-                          <td className="p-2 align-top text-right tabular-nums">{fmtBRL(row.realCost)}</td>
-                          <td className={`p-2 align-top text-right tabular-nums font-semibold ${row.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
-                            {fmtBRL(row.grossProfit)}
-                          </td>
-                          <td className={`p-2 align-top text-right tabular-nums font-semibold ${marginTone(row.marginPct)}`}>{fmtPct(row.marginPct)}</td>
-                          <td className="p-2 align-top text-center">{pendingCount(row)}</td>
-                          <td className="p-2 align-top text-center"><SignalBadge signal={row.signal} /></td>
-                        </tr>
-                        {expanded && (
-                          <tr key={`${row.id}-detail`} className="border-b border-primary/20 bg-primary/5">
-                            <td colSpan={12} className="p-3">
-                              <div className="rounded-lg border border-border bg-card overflow-hidden">
-                                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/40 px-3 py-2">
-                                  <div>
-                                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Composicao analitica do custo real</p>
-                                    <p className="text-xs font-medium">{row.item} - {row.description}</p>
-                                  </div>
-                                  <div className="flex flex-wrap gap-2 text-[11px]">
-                                    <span className="rounded border border-border px-2 py-1">Contrato: <strong>{fmtBRL(row.contractedValue)}</strong></span>
-                                    <span className="rounded border border-border px-2 py-1">Custo real: <strong>{fmtBRL(row.realCost)}</strong></span>
-                                    <span className="rounded border border-border px-2 py-1">Lucro: <strong className={row.grossProfit >= 0 ? 'text-success' : 'text-destructive'}>{fmtBRL(row.grossProfit)}</strong></span>
-                                  </div>
-                                </div>
-                                {row.inputs.length === 0 ? (
-                                  <div className="p-5 text-center text-xs text-muted-foreground">
-                                    Composicao sem analitica vinculada. Ela continua na planilha, mas a margem fica incompleta.
-                                  </div>
-                                ) : (
-                                  <div className="overflow-auto">
-                                    <table className="w-full min-w-[1120px] text-xs">
-                                      <thead className="bg-muted text-muted-foreground">
-                                        <tr>
-                                          <th className="p-2 text-left w-24">Codigo</th>
-                                          <th className="p-2 text-left w-20">Banco</th>
-                                          <th className="p-2 text-left">Insumo</th>
-                                          <th className="p-2 text-center w-16">Un.</th>
-                                          <th className="p-2 text-right w-24">Coef.</th>
-                                          <th className="p-2 text-right w-24">Qtd. total</th>
-                                          <th className="p-2 text-right w-28">Preco real</th>
-                                          <th className="p-2 text-right w-28">Custo</th>
-                                          <th className="p-2 text-left w-36">Fornecedor</th>
-                                          <th className="p-2 text-left w-36">Grupo</th>
-                                          <th className="p-2 text-center w-24">Data</th>
-                                          <th className="p-2 text-center w-24">Status</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {row.inputs.map(input => (
-                                          <tr key={input.id} className="border-t border-border">
-                                            <td className="p-2 align-top font-mono text-[11px]">{input.code || '-'}</td>
-                                            <td className="p-2 align-top text-muted-foreground">{input.bank || '-'}</td>
-                                            <td className="p-2 align-top">
-                                              <div className="font-medium leading-snug">{input.description}</div>
-                                              {!input.priceSource && (
-                                                <div className="mt-1 text-[10px] text-warning">Sem cotacao na Lista de Material.</div>
-                                              )}
-                                            </td>
-                                            <td className="p-2 align-top text-center">{input.unit}</td>
-                                            <td className="p-2 align-top text-right tabular-nums">{input.coefficient.toLocaleString('pt-BR', { maximumFractionDigits: 5 })}</td>
-                                            <td className="p-2 align-top text-right tabular-nums">{input.totalQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 3 })}</td>
-                                            <td className="p-2 align-top text-right tabular-nums">{input.priceSource ? fmtBRL(input.priceSource.unitPrice) : '-'}</td>
-                                            <td className="p-2 align-top text-right tabular-nums font-semibold">{input.priceSource ? fmtBRL(input.realTotal) : '-'}</td>
-                                            <td className="p-2 align-top">{input.priceSource?.supplierName || '-'}</td>
-                                            <td className="p-2 align-top">{input.priceSource?.comparisonName || '-'}</td>
-                                            <td className="p-2 align-top text-center">{formatDate(input.priceSource?.date)}</td>
-                                            <td className="p-2 align-top text-center">
-                                              {input.priceSource ? (
-                                                <span className="rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-[10px] font-semibold text-success">Cotado</span>
-                                              ) : (
-                                                <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold text-warning">Pendente</span>
-                                              )}
-                                            </td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  </div>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                </Fragment>
+              {filteredGroupTree.map(group => (
+                <RealCostGroupRows
+                  key={group.phaseId}
+                  group={group}
+                  collapsed={collapsed}
+                  toggleCollapsed={toggleCollapsed}
+                  expandedId={expandedId}
+                  setExpandedId={setExpandedId}
+                />
               ))}
-              {groupedChapters.length === 0 && (
+              {filteredGroupTree.length === 0 && (
                 <tr>
-                  <td colSpan={12} className="p-8 text-center text-sm text-muted-foreground">
+                  <td colSpan={TABLE_COLSPAN} className="p-8 text-center text-sm text-muted-foreground">
                     Nenhuma composicao encontrada com os filtros atuais.
                   </td>
                 </tr>
               )}
             </tbody>
+            {filteredGroupTree.length > 0 && (
+              <tfoot className="sticky bottom-0 z-10">
+                <tr className="border-t-2 border-slate-900 bg-slate-900 font-bold text-white">
+                  <td colSpan={11} className="px-2 py-2 text-right uppercase tracking-wide">
+                    Total geral ({visibleCompositionCount} composicao(oes))
+                  </td>
+                  <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(visibleTotals.contractedValue)}</td>
+                  <td className={`px-2 py-2 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(visibleTotals.realCost)}</td>
+                  <td className={`px-2 py-2 text-right tabular-nums ${visibleTotals.grossProfit >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                    {fmtBRL(visibleTotals.grossProfit)}
+                  </td>
+                  <td className={`px-2 py-2 text-right tabular-nums ${visibleTotals.marginPct >= 15 ? 'text-emerald-300' : visibleTotals.marginPct >= 5 ? 'text-amber-300' : 'text-rose-300'}`}>
+                    {fmtPct(visibleTotals.marginPct)}
+                  </td>
+                  <td className="px-2 py-2 text-center tabular-nums">{visibleTotals.pendingCompositionCount}</td>
+                  <td className="px-2 py-2 text-center"><SignalBadge signal={visibleTotals.signal} /></td>
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       </Card>
