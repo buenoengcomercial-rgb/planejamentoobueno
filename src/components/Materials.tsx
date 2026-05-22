@@ -346,7 +346,7 @@ export default function Materials({ project, onProjectChange }: Props) {
                 <SuppliersTab project={project} onProjectChange={onProjectChange} />
               </TabsContent>
               <TabsContent value="pedido" className="mt-3">
-                <PurchaseOrderTab project={project} comparison={ctl.active} />
+                <PurchaseOrderTab project={project} comparison={ctl.active} onProjectChange={onProjectChange} />
               </TabsContent>
               <TabsContent value="estoque" className="mt-3">
                 <StockTab project={project} onProjectChange={onProjectChange} />
