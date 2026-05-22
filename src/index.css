@@ -6,88 +6,97 @@
 
 @layer base {
   :root {
-    --background: 220 20% 97%;
-    --foreground: 220 30% 10%;
+    /* Premium SaaS palette — Linear / Stripe inspired */
+    --background: 210 40% 98%;         /* #F8FAFC */
+    --foreground: 222 47% 11%;         /* #0F172A */
 
     --card: 0 0% 100%;
-    --card-foreground: 220 30% 10%;
+    --card-foreground: 222 47% 11%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 220 30% 10%;
+    --popover-foreground: 222 47% 11%;
 
-    --primary: 230 65% 52%;
+    --primary: 217 91% 60%;            /* #2563EB */
     --primary-foreground: 0 0% 100%;
+    --primary-soft: 217 91% 95%;       /* tinted bg */
 
-    --secondary: 220 15% 93%;
-    --secondary-foreground: 220 30% 15%;
+    --secondary: 215 25% 95%;
+    --secondary-foreground: 222 47% 18%;
 
-    --muted: 220 15% 95%;
-    --muted-foreground: 220 10% 45%;
+    --muted: 215 25% 96%;
+    --muted-foreground: 215 16% 47%;
 
     --accent: 25 95% 55%;
     --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 72% 51%;
+    --destructive: 0 84% 60%;          /* #EF4444 */
     --destructive-foreground: 0 0% 100%;
 
-    --border: 220 15% 90%;
-    --input: 220 15% 90%;
-    --ring: 230 65% 52%;
+    --border: 214 24% 91%;
+    --input: 214 24% 91%;
+    --ring: 217 91% 60%;
 
-    --radius: 0.625rem;
+    --radius: 0.75rem;                 /* 12px premium */
 
-    /* Custom tokens */
-    --sidebar-bg: 225 35% 12%;
-    --sidebar-fg: 220 15% 85%;
-    --sidebar-active: 230 65% 52%;
-    --sidebar-hover: 225 30% 18%;
+    /* Premium shadows / gradients */
+    --shadow-xs: 0 1px 2px 0 hsl(222 47% 11% / 0.04);
+    --shadow-sm: 0 1px 3px 0 hsl(222 47% 11% / 0.06), 0 1px 2px -1px hsl(222 47% 11% / 0.04);
+    --shadow-md: 0 4px 8px -2px hsl(222 47% 11% / 0.06), 0 2px 4px -2px hsl(222 47% 11% / 0.04);
+    --shadow-lg: 0 12px 24px -8px hsl(222 47% 11% / 0.10), 0 4px 8px -4px hsl(222 47% 11% / 0.06);
+    --gradient-primary: linear-gradient(135deg, hsl(217 91% 60%), hsl(230 85% 62%));
 
-    --success: 152 60% 42%;
+    /* Sidebar — permanently dark (#0F172A) */
+    --sidebar-bg: 222 47% 11%;
+    --sidebar-fg: 215 20% 80%;
+    --sidebar-active: 217 91% 60%;
+    --sidebar-hover: 222 40% 16%;
+
+    --success: 142 71% 45%;            /* #22C55E */
     --success-foreground: 0 0% 100%;
-    --warning: 38 92% 50%;
+    --warning: 38 92% 50%;             /* #F59E0B */
     --warning-foreground: 0 0% 100%;
-    --info: 205 80% 55%;
+    --info: 199 89% 48%;
     --info-foreground: 0 0% 100%;
 
-    --gantt-bar: 230 65% 52%;
-    --gantt-bar-complete: 152 60% 42%;
-    --gantt-bar-delayed: 0 72% 51%;
+    --gantt-bar: 217 91% 60%;
+    --gantt-bar-complete: 142 71% 45%;
+    --gantt-bar-delayed: 0 84% 60%;
     --gantt-critical: 340 75% 55%;
-    --gantt-grid: 220 15% 92%;
+    --gantt-grid: 214 24% 93%;
     --gantt-today: 25 95% 55%;
     --gantt-sunday: 0 70% 95%;
     --gantt-saturday: 45 80% 93%;
     --gantt-holiday-national: 25 80% 93%;
     --gantt-holiday-local: 280 50% 94%;
 
-    --status-done: 152 60% 42%;
-    --status-progress: 230 65% 52%;
-    --status-pending: 220 10% 65%;
-    --status-delayed: 0 72% 51%;
-    --status-purchased: 152 60% 42%;
+    --status-done: 142 71% 45%;
+    --status-progress: 217 91% 60%;
+    --status-pending: 215 16% 65%;
+    --status-delayed: 0 84% 60%;
+    --status-purchased: 142 71% 45%;
 
-    /* Chapter hierarchy tones (light) — neutral grayscale, dark→light by depth */
-    --chapter-l0-bg: 220 12% 28%;
-    --chapter-l0-border: 220 15% 18%;
+    /* Chapter hierarchy tones (light) */
+    --chapter-l0-bg: 222 47% 16%;
+    --chapter-l0-border: 222 47% 11%;
     --chapter-l0-fg: 0 0% 100%;
-    --chapter-l1-bg: 220 10% 55%;
-    --chapter-l1-border: 220 12% 38%;
+    --chapter-l1-bg: 215 20% 50%;
+    --chapter-l1-border: 215 20% 38%;
     --chapter-l1-fg: 0 0% 100%;
-    --chapter-l2-bg: 220 10% 78%;
-    --chapter-l2-border: 220 10% 55%;
-    --chapter-l2-fg: 220 25% 15%;
-    --chapter-l3-bg: 220 12% 92%;
-    --chapter-l3-border: 220 10% 70%;
-    --chapter-l3-fg: 220 25% 20%;
+    --chapter-l2-bg: 214 24% 82%;
+    --chapter-l2-border: 214 24% 65%;
+    --chapter-l2-fg: 222 47% 15%;
+    --chapter-l3-bg: 214 24% 93%;
+    --chapter-l3-border: 214 24% 80%;
+    --chapter-l3-fg: 222 47% 20%;
 
-    --sidebar-background: 225 35% 12%;
-    --sidebar-foreground: 220 15% 85%;
-    --sidebar-primary: 230 65% 52%;
+    --sidebar-background: 222 47% 11%;
+    --sidebar-foreground: 215 20% 80%;
+    --sidebar-primary: 217 91% 60%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 225 30% 18%;
-    --sidebar-accent-foreground: 220 15% 85%;
-    --sidebar-border: 225 25% 20%;
-    --sidebar-ring: 230 65% 52%;
+    --sidebar-accent: 222 40% 16%;
+    --sidebar-accent-foreground: 215 20% 90%;
+    --sidebar-border: 222 47% 18%;
+    --sidebar-ring: 217 91% 60%;
   }
 
   .dark {

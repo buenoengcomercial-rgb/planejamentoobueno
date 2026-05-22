@@ -485,29 +485,29 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
         </AlertDialogContent>
       </AlertDialog>
 
-      <nav className="flex-1 p-2 space-y-1">
+      <nav className="flex-1 p-2 space-y-0.5">
         {visibleNavItems.map(({ view, label, icon: Icon }) => {
           const isActive = currentView === view;
           return (
             <button
               key={view}
               onClick={() => onViewChange(view)}
-              className={`w-full flex items-center ${collapsed ? 'justify-center' : ''} gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all relative`}
+              className={`group w-full flex items-center ${collapsed ? 'justify-center' : ''} gap-3 px-3 py-2 rounded-md text-[13px] font-medium transition-all relative ${
+                isActive
+                  ? 'bg-primary/15 text-white'
+                  : 'text-[hsl(var(--sidebar-fg))] hover:bg-[hsl(var(--sidebar-hover))] hover:text-white'
+              }`}
               title={collapsed ? label : undefined}
             >
               {isActive && (
-                <motion.div
-                  layoutId="sidebar-active"
-                  className="absolute inset-0 bg-primary rounded-lg"
-                  transition={{ type: 'spring', stiffness: 350, damping: 30 }}
+                <motion.span
+                  layoutId="sidebar-active-accent"
+                  className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-primary"
+                  transition={{ type: 'spring', stiffness: 380, damping: 32 }}
                 />
               )}
-              <Icon className={`w-4 h-4 relative z-10 ${isActive ? 'text-primary-foreground' : ''}`} />
-              {!collapsed && (
-                <span className={`relative z-10 ${isActive ? 'text-primary-foreground' : 'text-[hsl(var(--sidebar-fg))]'}`}>
-                  {label}
-                </span>
-              )}
+              <Icon className={`w-[18px] h-[18px] relative z-10 ${isActive ? 'text-primary' : 'opacity-80 group-hover:opacity-100'}`} strokeWidth={isActive ? 2.25 : 1.75} />
+              {!collapsed && <span className="relative z-10 truncate">{label}</span>}
             </button>
           );
         })}
