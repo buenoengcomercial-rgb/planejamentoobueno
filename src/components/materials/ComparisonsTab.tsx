@@ -164,10 +164,10 @@ export default function ComparisonsTab({ project, comparison, onApply, onProject
             <table className="w-full text-xs border-separate border-spacing-0">
               <thead className="sticky top-0 z-30">
                 <tr>
-                  <th className="p-2.5 text-left min-w-[360px] bg-muted border-b border-border">Item</th>
+                  <th className="sticky left-0 z-40 p-2.5 text-left min-w-[360px] bg-muted border-b border-r border-border shadow-[6px_0_10px_-10px_rgba(15,23,42,0.65)]">Item</th>
                   <th className="p-2.5 text-center bg-muted border-b border-border">Un.</th>
                   <th className="p-2.5 text-center bg-muted border-b border-border">Qtd.</th>
-                  <th className="p-2.5 text-center bg-muted border-b border-border">Ref.</th>
+                  <th className="p-2.5 text-center min-w-[96px] w-24 bg-muted border-b border-border whitespace-nowrap">Ref.</th>
                   {suppliers.map((s, supplierIndex) => {
                     const tone = supplierTone(supplierIndex);
                     return (
@@ -186,13 +186,13 @@ export default function ComparisonsTab({ project, comparison, onApply, onProject
                   const rowTone = rowIndex % 2 === 0 ? 'bg-background' : 'bg-slate-50/80';
                   return (
                     <tr key={it.id} className={`${rowTone} hover:bg-primary/5 transition-colors`}>
-                      <td className="p-2.5 align-middle border-b border-border">
+                      <td className={`sticky left-0 z-20 p-2.5 align-middle border-b border-r border-border shadow-[6px_0_10px_-10px_rgba(15,23,42,0.65)] ${rowTone}`}>
                         <div className="font-semibold text-foreground leading-snug">{it.description}</div>
                         {it.code && <div className="mt-0.5 text-[10px] text-muted-foreground">{it.code}</div>}
                       </td>
                       <td className="p-2.5 align-middle text-center border-b border-border font-medium">{it.unit}</td>
                       <td className="p-2.5 align-middle text-center border-b border-border tabular-nums">{formatQty(it.quantity)}</td>
-                      <td className="p-2.5 align-middle text-center border-b border-border tabular-nums">{it.referencePrice ? fmt(it.referencePrice) : '—'}</td>
+                      <td className="p-2.5 align-middle text-right border-b border-border tabular-nums whitespace-nowrap min-w-[96px] w-24">{it.referencePrice ? fmt(it.referencePrice) : '—'}</td>
                       {suppliers.map((s, supplierIndex) => {
                         const price = it.prices.find(p => p.supplierId === s.id);
                         const isBest = an.bestSupplierId === s.id;
@@ -226,7 +226,7 @@ export default function ComparisonsTab({ project, comparison, onApply, onProject
               </tbody>
               <tfoot className="sticky bottom-0 z-20 bg-muted/95 font-semibold shadow-[0_-1px_0_rgba(15,23,42,0.08)]">
                 <tr>
-                  <td className="p-2.5 border-t border-border" colSpan={4}>Total por fornecedor</td>
+                  <td className="sticky left-0 z-30 p-2.5 border-t border-r border-border bg-muted/95 shadow-[6px_0_10px_-10px_rgba(15,23,42,0.65)]" colSpan={4}>Total por fornecedor</td>
                   {suppliers.map((s, supplierIndex) => {
                     const t = totals.find(x => x.supplierId === s.id);
                     const tone = supplierTone(supplierIndex);

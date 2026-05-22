@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import { Project } from '@/types/project';
 import { useMaterialComparisons } from '@/hooks/useMaterialComparisons';
 import * as MC from '@/lib/materialComparisons';
@@ -6,6 +6,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Boxes,
   History,
@@ -42,6 +50,8 @@ export default function Materials({ project, onProjectChange }: Props) {
   const [showRegisteredSuppliers, setShowRegisteredSuppliers] = useState(false);
   const [showSupplierCreate, setShowSupplierCreate] = useState(false);
   const [supplierForm, setSupplierForm] = useState({ name: '', contact: '', deliveryDays: '', rating: '' });
+  const [newGroupOpen, setNewGroupOpen] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
 
   const summary = useMemo(() => {
     const all = ctl.comparisons;
@@ -72,11 +82,15 @@ export default function Materials({ project, onProjectChange }: Props) {
     });
   }, [activeSupplierIds, globalSuppliers, supplierSearch]);
 
-  const createComparison = () => {
-    const name = `Grupo ${ctl.comparisons.length + 1}`;
+  const createComparison = (event?: FormEvent<HTMLFormElement>) => {
+    event?.preventDefault();
+    const name = newGroupName.trim();
+    if (!name) return;
     ctl.createNew(name);
     setSection('grupos');
     setTab('comparativo');
+    setNewGroupName('');
+    setNewGroupOpen(false);
   };
 
   const addExistingSupplier = (id: string) => {
@@ -177,7 +191,14 @@ export default function Materials({ project, onProjectChange }: Props) {
                   <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Grupos de compra</div>
                   <div className="text-[11px] text-muted-foreground">Comparativos da obra</div>
                 </div>
-                <Button size="sm" className="h-8" onClick={createComparison}>
+                <Button
+                  size="sm"
+                  className="h-8"
+                  onClick={() => {
+                    setNewGroupName('');
+                    setNewGroupOpen(true);
+                  }}
+                >
                   <Plus className="w-3.5 h-3.5 mr-1" /> Grupo
                 </Button>
               </div>
@@ -362,6 +383,39 @@ export default function Materials({ project, onProjectChange }: Props) {
           )}
         </TabsContent>
       </Tabs>
+      <Dialog open={newGroupOpen} onOpenChange={setNewGroupOpen}>
+        <DialogContent className="sm:max-w-md">
+          <form onSubmit={createComparison} className="space-y-4">
+            <DialogHeader>
+              <DialogTitle>Novo grupo de compra</DialogTitle>
+              <DialogDescription>
+                Informe o nome do grupo para organizar as cotacoes e fornecedores.
+              </DialogDescription>
+            </DialogHeader>
+            <Input
+              value={newGroupName}
+              onChange={e => setNewGroupName(e.target.value)}
+              placeholder="Ex.: Hidraulica, Ferragens, Porta corta fogo"
+              autoFocus
+            />
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setNewGroupName('');
+                  setNewGroupOpen(false);
+                }}
+              >
+                Cancelar
+              </Button>
+              <Button type="submit" disabled={!newGroupName.trim()}>
+                Criar grupo
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
       {confirmDialog}
     </div>
   );
