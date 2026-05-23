@@ -10,6 +10,7 @@ import ImportSyntheticDialog from '@/components/ImportSyntheticDialog';
 import DailyLogsPanel from '@/components/DailyLogsPanel';
 
 import { calculateRupDuration } from '@/lib/calculations';
+import { syncAdditiveProductivity } from '@/lib/additiveProductivity';
 import { formatISODateBR } from '@/components/gantt/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { getChapterTree, getChapterNumbering, moveChapter, getChapterTasks, safeMoveChapter, reorderChapter, reorderChapterByNumber } from '@/lib/chapters';
@@ -559,6 +560,25 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
     return calculateRupDuration(doubled);
   };
 
+  const syncAdditiveRup = () => {
+    const result = syncAdditiveProductivity(project);
+    if (result.updated > 0) {
+      onProjectChange(result.project);
+      toast.success(
+        `${result.updated} composiÃ§Ã£o(Ãµes) do aditivo receberam RUP pela mÃ£o de obra classificada.`,
+      );
+      if (result.withoutLabor > 0 || result.preserved > 0) {
+        toast.info(
+          `${result.withoutLabor} sem mÃ£o de obra classificada; ${result.preserved} preservada(s) por jÃ¡ terem produtividade.`,
+        );
+      }
+      return;
+    }
+    toast.info(
+      `Nenhuma tarefa foi atualizada. ${result.withoutLabor} sem mÃ£o de obra classificada; ${result.preserved} jÃ¡ tinham produtividade.`,
+    );
+  };
+
   // Get all task IDs for dependency dropdown
   const allTasks = project.phases.flatMap(p => p.tasks);
 
@@ -612,6 +632,13 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
             title="Importa Sintética + Analítica do orçamento de aditivo (alimenta a aba Aditivo)."
           >
             <ArrowUpFromLine className="w-4 h-4" /> Importar Analítica / Aditivo
+          </button>
+          <button
+            onClick={syncAdditiveRup}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-warning/40 bg-warning/10 text-warning font-medium text-sm hover:bg-warning/20 transition-colors shadow-sm"
+            title="Preenche RUP das composicoes do aditivo usando apenas insumos classificados como Mao de obra na Lista de Material."
+          >
+            <Zap className="w-4 h-4" /> Atualizar RUP do Aditivo
           </button>
           <input
             ref={additiveFileRef}

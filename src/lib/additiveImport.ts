@@ -11,6 +11,7 @@ import type {
 } from '@/types/project';
 import { getChapterTree, getChapterNumbering, type ChapterNode } from '@/lib/chapters';
 import { resolveMemoryColumnLabels, validMemoryRows } from '@/lib/calculationMemory';
+import { applyAdditiveProductivityToTask } from '@/lib/additiveProductivity';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
@@ -2101,7 +2102,7 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
       const upWithBDI = truncar2(baseUnitNoBDI * fator);
       const qty = n.addedQuantity ?? 0;
       const totalWithBDI = truncar2(upWithBDI * qty);
-      newTasks.push({
+      const baseTask: Task = {
         id: taskId,
         name: n.description || 'Novo serviço (Aditivo)',
         phase: phase.id,
@@ -2140,7 +2141,8 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
           newTotalWithBDI: totalWithBDI,
           user,
         }],
-      } as Task);
+      };
+      newTasks.push(applyAdditiveProductivityToTask(project, baseTask, n, { overwriteExisting: true }).task);
       mutated = true;
     }
     if (!mutated) return phase;
