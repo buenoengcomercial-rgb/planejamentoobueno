@@ -1,5 +1,6 @@
 import type { Project, Task, Phase, SavedMeasurement } from '@/types/project';
 import { getChapterTree, getChapterNumbering, type ChapterNode } from '@/lib/chapters';
+import { sortTasksForContract } from '@/lib/taskOrdering';
 import { buildDailyReportSnapshot, summarizeDailyReportsForPeriod } from '@/lib/dailyReportSummary';
 import type { GroupTotals } from './types';
 
@@ -52,7 +53,7 @@ export function buildOrderedTasks(
     nodes.forEach(node => {
       const phaseNumber = numbering.get(node.phase.id) || '';
       const newChain = [...chain, node.phase.name];
-      node.phase.tasks.forEach((task, idx) => {
+      sortTasksForContract(node.phase.tasks).forEach((task, idx) => {
         out.push({
           task, phase: node.phase,
           itemNumber: `${phaseNumber}.${idx + 1}`,
@@ -68,7 +69,7 @@ export function buildOrderedTasks(
   project.phases.forEach(phase => {
     if (visited.has(phase.id)) return;
     const phaseNumber = numbering.get(phase.id) || '?';
-    phase.tasks.forEach((task, idx) => {
+    sortTasksForContract(phase.tasks).forEach((task, idx) => {
       out.push({
         task, phase,
         itemNumber: `${phaseNumber}.${idx + 1}`,

@@ -22,6 +22,7 @@ import { beginBarMutation, endBarMutation, endAllBarMutations, setTransform, set
 import { toast } from 'sonner';
 import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
 import GanttFinancialForecast from './gantt/GanttFinancialForecast';
+import { sortTasksForSchedule, withScheduleOrderForMove } from '@/lib/taskOrdering';
 
 interface GanttChartProps {
   project: Project;
@@ -152,24 +153,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
       return;
     }
 
-    const newPhases = project.phases.map(p => ({ ...p, tasks: [...p.tasks] }));
-    const srcPhase = newPhases.find(p => p.id === reorderDragPhaseId);
-    const dstPhase = newPhases.find(p => p.id === targetPhaseId);
-    if (!srcPhase || !dstPhase) return;
-
-    const srcIdx = srcPhase.tasks.findIndex(t => t.id === reorderDragTaskId);
-    if (srcIdx === -1) return;
-    const [moved] = srcPhase.tasks.splice(srcIdx, 1);
-
-    let dstIdx = dstPhase.tasks.findIndex(t => t.id === targetTaskId);
-    if (dstIdx === -1) {
-      dstPhase.tasks.push(moved);
-    } else {
-      if (pos === 'after') dstIdx += 1;
-      dstPhase.tasks.splice(dstIdx, 0, moved);
-    }
-
-    onProjectChange({ ...project, phases: newPhases });
+    onProjectChange(withScheduleOrderForMove(project, reorderDragPhaseId, reorderDragTaskId, targetPhaseId, targetTaskId, pos));
     setReorderDragPhaseId(null);
     setReorderDragTaskId(null);
     setReorderDropTargetId(null);
@@ -259,7 +243,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
     const map = new Map<string, number>();
     let num = 0;
     project.phases.forEach(phase => {
-      phase.tasks.forEach(task => {
+      sortTasksForSchedule(phase.tasks).forEach(task => {
         num++;
         map.set(task.id, num);
       });
@@ -311,7 +295,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
     displayPhases.forEach(phase => {
       rowIdx++;
       if (!collapsedPhases.has(phase.id)) {
-        phase.tasks
+        sortTasksForSchedule(phase.tasks)
           .filter(t => !showCriticalOnly || t.isCritical)
           .forEach(task => {
             result.push({ task, phaseId: phase.id, phaseName: phase.name, rowIndex: rowIdx });
@@ -333,7 +317,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
       y += PHASE_HEADER_HEIGHT;
       if (!collapsedPhases.has(phase.id)) {
         if (phase.tasks.length > 0) y += SUBHEADER_HEIGHT;
-        phase.tasks
+        sortTasksForSchedule(phase.tasks)
           .filter(t => !showCriticalOnly || t.isCritical)
           .forEach(task => {
             map.set(task.id, y + ROW_HEIGHT / 2);
@@ -1271,7 +1255,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                         </Popover>
                         <span className="ml-auto flex items-center gap-2 text-muted-foreground">
                           {(() => {
-                            const items = phase.tasks;
+                            const items = sortTasksForSchedule(phase.tasks);
                             if (items.length === 0) return null;
                             const totalDur = items.reduce((s, t) => s + Math.max(1, t.duration), 0) || 1;
                             const weighted = items.reduce((s, t) => s + (t.physicalProgress ?? t.percentComplete ?? 0) * Math.max(1, t.duration), 0);
@@ -1307,7 +1291,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                       </div>
                     )}
                     {!collapsedPhases.has(phase.id) &&
-                      phase.tasks
+                      sortTasksForSchedule(phase.tasks)
                         .filter(t => !showCriticalOnly || t.isCritical)
                         .map((task, idx) => {
                           const endDate = getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado);
@@ -1874,7 +1858,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                         <div className="border-b border-border bg-secondary/30" style={{ height: 18 }} />
                       )}
                       {!collapsedPhases.has(phase.id) &&
-                        phase.tasks
+                        sortTasksForSchedule(phase.tasks)
                           .filter(t => !showCriticalOnly || t.isCritical)
                           .map((task, idx) => {
                             const bar = getBarStyle(task);

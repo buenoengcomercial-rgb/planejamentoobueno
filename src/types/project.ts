@@ -42,6 +42,17 @@ export interface Task {
   frenteServico?: string;
   disciplina?: string;
   ordemExecucao?: number;
+  /**
+   * Contract order belongs to the public sheet structure and is used by
+   * Medicao, Aditivo and Custo Real. Schedule order belongs only to the
+   * executive planning views, so dragging a task in Cronograma must not
+   * reorder the contract arrays shared with the official tables.
+   */
+  contractOrder?: number;
+  originalOrder?: number;
+  publicSheetOrder?: number;
+  scheduleOrder?: number;
+  ganttOrder?: number;
   observations?: string;
   // Duration mode
   durationMode?: 'manual' | 'rup';

@@ -17,6 +17,7 @@ import { getChapterTree, getChapterNumbering, moveChapter, getChapterTasks, safe
 import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
+import { sortTasksForSchedule, withScheduleOrderForMove } from '@/lib/taskOrdering';
 
 /** Encurta o nome da tarefa para no máximo `maxWords` palavras, adicionando "…" no final. */
 function truncateWords(text: string, maxWords = 4): string {
@@ -163,19 +164,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
       return;
     }
 
-    const newPhases = [...project.phases];
-    const srcPhase = newPhases.find(p => p.id === dragPhaseId);
-    const dstPhase = newPhases.find(p => p.id === targetPhaseId);
-    if (!srcPhase || !dstPhase) return;
-
-    const srcIdx = srcPhase.tasks.findIndex(t => t.id === dragTaskId);
-    if (srcIdx === -1) return;
-    const [movedTask] = srcPhase.tasks.splice(srcIdx, 1);
-
-    const dstIdx = dstPhase.tasks.findIndex(t => t.id === targetTaskId);
-    dstPhase.tasks.splice(dstIdx, 0, movedTask);
-
-    onProjectChange({ ...project, phases: newPhases });
+    onProjectChange(withScheduleOrderForMove(project, dragPhaseId, dragTaskId, targetPhaseId, targetTaskId));
     setDragPhaseId(null);
     setDragTaskId(null);
     setDropTargetId(null);
@@ -435,6 +424,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
     const phase = project.phases.find(p => p.id === phaseId);
     if (!phase) return;
     const nextId = `t${Date.now()}`;
+    const nextOrder = phase.tasks.length;
     const lastTask = phase.tasks[phase.tasks.length - 1];
     const lastEnd = lastTask ? new Date(lastTask.startDate) : new Date(project.startDate);
     if (lastTask) lastEnd.setDate(lastEnd.getDate() + lastTask.duration);
@@ -443,6 +433,8 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
       id: nextId,
       name: 'Nova atividade',
       phase: phase.name,
+      contractOrder: nextOrder,
+      scheduleOrder: nextOrder,
       startDate: lastEnd.toISOString().split('T')[0],
       duration: 5,
       dependencies: lastTask ? [lastTask.id] : [],
@@ -470,10 +462,14 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
 
   const duplicateTask = (phaseId: string, task: Task) => {
     const newId = `t${Date.now()}`;
+    const targetPhase = project.phases.find(p => p.id === phaseId);
+    const nextOrder = targetPhase?.tasks.length ?? 0;
     const dup: Task = {
       ...task,
       id: newId,
       name: `${task.name} (cópia)`,
+      contractOrder: nextOrder,
+      scheduleOrder: nextOrder,
       percentComplete: 0,
       laborCompositions: task.laborCompositions?.map(c => ({ ...c, id: `lc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` })),
       materials: task.materials.map(m => ({ ...m, id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, status: 'pendente' as const })),
@@ -946,7 +942,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                          </div>
                        )}
 
-                      {phase.tasks.map(task => {
+                      {sortTasksForSchedule(phase.tasks).map(task => {
                         const endDate = new Date(task.startDate);
                         // Fim = último dia trabalhado = start + (duration − 1)
                         endDate.setDate(endDate.getDate() + Math.max(0, task.duration - 1));
