@@ -35,8 +35,12 @@ export interface RealCostInputRow {
   unit: string;
   coefficient: number;
   totalQuantity: number;
+  referenceUnitPrice: number;
+  referenceTotal: number;
   realUnitPrice?: number;
   realTotal: number;
+  grossProfit: number;
+  marginPct: number;
   priceSource?: RealCostPriceSource;
   status: 'quoted' | 'missing';
 }
@@ -565,7 +569,11 @@ function buildInputRows(
   return inputs.map(input => {
     const price = resolveInputPrice(input, priceIndex);
     const totalQuantity = trunc2((input.coefficient || 0) * source.quantity);
+    const referenceUnitPrice = trunc2(input.unitPrice || 0);
+    const referenceTotal = trunc2(totalQuantity * referenceUnitPrice);
     const realTotal = price ? trunc2(totalQuantity * price.unitPrice) : 0;
+    const grossProfit = money2(referenceTotal - realTotal);
+    const marginPct = referenceTotal > 0 ? trunc2((grossProfit / referenceTotal) * 100) : 0;
     return {
       id: input.id,
       code: input.code || undefined,
@@ -574,8 +582,12 @@ function buildInputRows(
       unit: input.unit,
       coefficient: trunc2(input.coefficient || 0),
       totalQuantity,
+      referenceUnitPrice,
+      referenceTotal,
       realUnitPrice: price?.unitPrice,
       realTotal,
+      grossProfit,
+      marginPct,
       priceSource: price,
       status: price ? 'quoted' : 'missing',
     };

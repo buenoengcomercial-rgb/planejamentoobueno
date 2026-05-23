@@ -175,12 +175,6 @@ function groupHeaderStyle(depth: number) {
   return 'bg-slate-50 text-foreground font-semibold border-y border-border';
 }
 
-function groupSubtotalStyle(depth: number) {
-  if (depth === 0) return 'bg-primary/5 border-y border-primary/20 font-bold';
-  if (depth === 1) return 'bg-slate-50 border-y border-border font-semibold';
-  return 'bg-muted/20 border-y border-border font-semibold';
-}
-
 function collectGroupIds(groups: RealCostGroupNode[]) {
   const ids: string[] = [];
   const walk = (group: RealCostGroupNode) => {
@@ -199,23 +193,10 @@ function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
     <tr className="border-b border-primary/20 bg-primary/5">
       <td colSpan={TABLE_COLSPAN} className="p-3">
         <div className="rounded-lg border border-border bg-card overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/40 px-3 py-2">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Composicao analitica do custo real
-              </p>
-              <p className="text-xs font-medium">{row.item} - {row.description}</p>
-              <p className="text-[10px] text-muted-foreground">
-                {row.sourceName}{row.sourceStatus ? ` - ${row.sourceStatus}` : ''}{row.sourceDetail ? ` - ${row.sourceDetail}` : ''}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2 text-[11px]">
-              <span className="rounded border border-border px-2 py-1">Contrato: <strong>{fmtBRL(row.contractedValue)}</strong></span>
-              <span className="rounded border border-border px-2 py-1">Custo real: <strong>{fmtBRL(row.realCost)}</strong></span>
-              <span className="rounded border border-border px-2 py-1">
-                Lucro: <strong className={row.grossProfit >= 0 ? 'text-success' : 'text-destructive'}>{fmtBRL(row.grossProfit)}</strong>
-              </span>
-            </div>
+          <div className="border-b border-border bg-muted/40 px-3 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Analitica do custo real
+            </p>
           </div>
           {row.inputs.length === 0 ? (
             <div className="p-5 text-center text-xs text-muted-foreground">
@@ -223,7 +204,7 @@ function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
             </div>
           ) : (
             <div className="overflow-auto">
-              <table className="w-full min-w-[1120px] text-xs">
+              <table className="w-full min-w-[1280px] text-xs">
                 <thead className="bg-muted text-muted-foreground">
                   <tr>
                     <th className="p-2 text-left w-24">Codigo</th>
@@ -232,8 +213,10 @@ function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
                     <th className="p-2 text-center w-16">Un.</th>
                     <th className="p-2 text-right w-24">Coef.</th>
                     <th className="p-2 text-right w-24">Qtd. total</th>
+                    <th className="p-2 text-right w-28">V. unit ref.</th>
                     <th className="p-2 text-right w-28">Preco real</th>
                     <th className="p-2 text-right w-28">Custo</th>
+                    <th className="p-2 text-right w-24">Margem</th>
                     <th className="p-2 text-left w-36">Fornecedor</th>
                     <th className="p-2 text-left w-36">Grupo</th>
                     <th className="p-2 text-center w-24">Data</th>
@@ -254,8 +237,12 @@ function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
                       <td className="p-2 align-top text-center">{input.unit}</td>
                       <td className="p-2 align-top text-right tabular-nums">{input.coefficient.toLocaleString('pt-BR', { maximumFractionDigits: 5 })}</td>
                       <td className="p-2 align-top text-right tabular-nums">{fmtQty(input.totalQuantity)}</td>
+                      <td className="p-2 align-top text-right tabular-nums">{fmtBRL(input.referenceUnitPrice)}</td>
                       <td className="p-2 align-top text-right tabular-nums">{input.priceSource ? fmtBRL(input.priceSource.unitPrice) : '-'}</td>
                       <td className="p-2 align-top text-right tabular-nums font-semibold">{input.priceSource ? fmtBRL(input.realTotal) : '-'}</td>
+                      <td className={`p-2 align-top text-right tabular-nums font-semibold ${input.priceSource ? marginTone(input.marginPct) : 'text-muted-foreground'}`}>
+                        {input.priceSource ? fmtPct(input.marginPct) : '-'}
+                      </td>
                       <td className="p-2 align-top">{input.priceSource?.supplierName || '-'}</td>
                       <td className="p-2 align-top">{input.priceSource?.comparisonName || '-'}</td>
                       <td className="p-2 align-top text-center">{formatDate(input.priceSource?.date)}</td>
@@ -297,7 +284,7 @@ function RealCostGroupRows({
   return (
     <Fragment>
       <tr className={groupHeaderStyle(group.depth)}>
-        <td colSpan={TABLE_COLSPAN} className="px-2 py-1.5">
+        <td colSpan={8} className="px-2 py-1.5">
           <button
             type="button"
             onClick={() => toggleCollapsed(group.phaseId)}
@@ -312,6 +299,16 @@ function RealCostGroupRows({
             </span>
           </button>
         </td>
+        <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(group.totals.contractedValue)}</td>
+        <td className={`px-2 py-1.5 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(group.totals.realCost)}</td>
+        <td className={`px-2 py-1.5 text-right tabular-nums ${group.totals.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
+          {fmtBRL(group.totals.grossProfit)}
+        </td>
+        <td className={`px-2 py-1.5 text-right tabular-nums ${marginTone(group.totals.marginPct)}`}>
+          {fmtPct(group.totals.marginPct)}
+        </td>
+        <td className="px-2 py-1.5 text-center tabular-nums">{group.totals.pendingCompositionCount}</td>
+        <td className="px-2 py-1.5 text-center"><SignalBadge signal={group.totals.signal} /></td>
       </tr>
 
       {!isCollapsed && (
@@ -368,19 +365,6 @@ function RealCostGroupRows({
         </Fragment>
       )}
 
-      <tr className={groupSubtotalStyle(group.depth)}>
-        <td colSpan={8} className="px-2 py-1.5 text-right border-t-2 border-border">
-          <span style={{ paddingLeft: indentPx }}>Subtotal {group.number} - {group.name}</span>
-        </td>
-        <td className="px-2 py-1.5 text-right tabular-nums border-t-2 border-border">{fmtBRL(group.totals.contractedValue)}</td>
-        <td className={`px-2 py-1.5 text-right tabular-nums border-t-2 border-border ${BORDER_L}`}>{fmtBRL(group.totals.realCost)}</td>
-        <td className={`px-2 py-1.5 text-right tabular-nums border-t-2 border-border ${group.totals.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
-          {fmtBRL(group.totals.grossProfit)}
-        </td>
-        <td className={`px-2 py-1.5 text-right tabular-nums border-t-2 border-border ${marginTone(group.totals.marginPct)}`}>{fmtPct(group.totals.marginPct)}</td>
-        <td className="px-2 py-1.5 text-center tabular-nums border-t-2 border-border">{group.totals.pendingCompositionCount}</td>
-        <td className="px-2 py-1.5 text-center border-t-2 border-border"><SignalBadge signal={group.totals.signal} /></td>
-      </tr>
     </Fragment>
   );
 }
