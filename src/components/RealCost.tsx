@@ -191,7 +191,7 @@ function collectGroupIds(groups: RealCostGroupNode[]) {
   return ids;
 }
 
-const TABLE_COLSPAN = 17;
+const TABLE_COLSPAN = 14;
 const BORDER_L = 'border-l-2 border-border';
 
 function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
@@ -339,10 +339,7 @@ function RealCostGroupRows({
                     </div>
                   </td>
                   <td className="p-2 align-top text-center">{row.unit}</td>
-                  <td className={`p-2 align-top text-right tabular-nums ${BORDER_L}`}>{fmtQty(row.quantityContracted)}</td>
-                  <td className="p-2 align-top text-right tabular-nums text-destructive">{row.quantitySuppressed ? fmtQty(row.quantitySuppressed) : '-'}</td>
-                  <td className="p-2 align-top text-right tabular-nums text-success">{row.quantityAdded ? fmtQty(row.quantityAdded) : '-'}</td>
-                  <td className="p-2 align-top text-right tabular-nums font-semibold">{fmtQty(row.quantityFinal)}</td>
+                  <td className={`p-2 align-top text-right tabular-nums font-semibold ${BORDER_L}`}>{fmtQty(row.quantityFinal)}</td>
                   <td className={`p-2 align-top text-right tabular-nums ${BORDER_L}`}>{fmtBRL(row.unitPriceReference)}</td>
                   <td className="p-2 align-top text-right tabular-nums">{fmtBRL(row.unitPriceContracted)}</td>
                   <td className="p-2 align-top text-right tabular-nums font-semibold">{fmtBRL(row.contractedValue)}</td>
@@ -372,7 +369,7 @@ function RealCostGroupRows({
       )}
 
       <tr className={groupSubtotalStyle(group.depth)}>
-        <td colSpan={11} className="px-2 py-1.5 text-right border-t-2 border-border">
+        <td colSpan={8} className="px-2 py-1.5 text-right border-t-2 border-border">
           <span style={{ paddingLeft: indentPx }}>Subtotal {group.number} - {group.name}</span>
         </td>
         <td className="px-2 py-1.5 text-right tabular-nums border-t-2 border-border">{fmtBRL(group.totals.contractedValue)}</td>
@@ -567,14 +564,14 @@ export default function RealCost({ project }: Props) {
         </div>
 
         <div className="max-h-[calc(100vh-330px)] overflow-auto">
-          <table className="w-full min-w-[1780px] border-separate border-spacing-0 text-xs">
+          <table className="w-full min-w-[1480px] border-separate border-spacing-0 text-xs">
             <thead className="sticky top-0 z-20 shadow-sm">
               <tr>
                 <th colSpan={5} className="border-b border-border bg-slate-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-slate-800">
                   Identificacao
                 </th>
-                <th colSpan={4} className={`border-b border-border bg-sky-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-sky-950 ${BORDER_L}`}>
-                  Quantidades
+                <th colSpan={1} className={`border-b border-border bg-sky-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-sky-950 ${BORDER_L}`}>
+                  Quantidade
                 </th>
                 <th colSpan={3} className={`border-b border-border bg-blue-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-blue-950 ${BORDER_L}`}>
                   Contrato / referencia
@@ -589,10 +586,7 @@ export default function RealCost({ project }: Props) {
                 <th className="p-2 text-left w-20">Banco</th>
                 <th className="p-2 text-left min-w-[360px]">Descricao</th>
                 <th className="p-2 text-center w-16">Un.</th>
-                <th className={`p-2 text-right w-28 ${BORDER_L}`}>Qtd. Contratada</th>
-                <th className="p-2 text-right w-28 text-rose-100">Qtd. Suprimida</th>
-                <th className="p-2 text-right w-28 text-emerald-100">Qtd. Acrescida</th>
-                <th className="p-2 text-right w-24">Qtd. Final</th>
+                <th className={`p-2 text-right w-24 ${BORDER_L}`}>Qtd.</th>
                 <th className={`p-2 text-right w-32 ${BORDER_L}`}>V. Unit. Referencia</th>
                 <th className="p-2 text-right w-32">V. Unit. Contratado</th>
                 <th className="p-2 text-right w-36">Valor Contratado Final</th>
@@ -625,7 +619,7 @@ export default function RealCost({ project }: Props) {
             {filteredGroupTree.length > 0 && (
               <tfoot className="sticky bottom-0 z-10">
                 <tr className="border-t-2 border-slate-900 bg-slate-900 font-bold text-white">
-                  <td colSpan={11} className="px-2 py-2 text-right uppercase tracking-wide">
+                  <td colSpan={8} className="px-2 py-2 text-right uppercase tracking-wide">
                     Total geral ({visibleCompositionCount} composicao(oes))
                   </td>
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(visibleTotals.contractedValue)}</td>

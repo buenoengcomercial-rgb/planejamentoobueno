@@ -422,6 +422,7 @@ function buildCompositionSources(project: Project): CompositionSource[] {
   );
   const additiveCompositions = additivePairs.map(pair => pair.composition);
   const additiveReplacementKeys = new Set<string>();
+  const budgetRepresentationKeys = new Set<string>();
   const usedCompositionIds = new Set<string>();
   const sources: CompositionSource[] = [];
 
@@ -432,8 +433,7 @@ function buildCompositionSources(project: Project): CompositionSource[] {
 
   for (const budget of project.budgetItems ?? []) {
     if (budget.source !== 'sintetica' && budget.source !== 'aditivo') continue;
-    const representedByAdditive = replacementKeysForBudgetItem(budget).some(key => additiveReplacementKeys.has(key));
-    if (representedByAdditive) continue;
+    replacementKeysForBudgetItem(budget).forEach(key => budgetRepresentationKeys.add(key));
 
     const composition = matchCompositionForBudgetItem(budget, baseCompositions, additiveCompositions);
     if (composition) usedCompositionIds.add(composition.id);
@@ -465,6 +465,10 @@ function buildCompositionSources(project: Project): CompositionSource[] {
   }
 
   for (const pair of additivePairs) {
+    if (usedCompositionIds.has(pair.composition.id)) continue;
+    const alreadyRepresentedByBudget = replacementKeysForComposition(pair.composition).some(key => budgetRepresentationKeys.has(key));
+    if (alreadyRepresentedByBudget) continue;
+
     const bdi = pair.additive.bdiPercent ?? project.syntheticBdiPercent ?? project.contractInfo?.bdiPercent ?? 0;
     const discount = pair.additive.globalDiscountPercent ?? 0;
     const r = computeAdditiveRow(pair.composition, bdi, discount);
