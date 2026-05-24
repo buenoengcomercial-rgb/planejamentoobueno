@@ -61,6 +61,12 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
     () => new Set(project.uiState?.ganttCollapsedPhaseIds ?? [])
   );
   const [showCriticalOnly, setShowCriticalOnly] = useState(false);
+  const [showZeroSuppressed, setShowZeroSuppressed] = useState(false);
+  const [teamFilter, setTeamFilter] = useState<string>('all');
+  const [phaseFilter, setPhaseFilter] = useState<string>('all');
+  const [showDelayedOnly, setShowDelayedOnly] = useState(false);
+  const [showWithDependenciesOnly, setShowWithDependenciesOnly] = useState(false);
+  const [density, setDensity] = useState<'comfortable' | 'compact'>('comfortable');
   const [obraConfig, setObraConfig] = useState<ObraConfig>(loadObraConfig);
 
   // Persiste no projeto sempre que o conjunto de minimizados mudar (com guard de igualdade).
@@ -167,8 +173,71 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
     setReorderDropPos(null);
   }, []);
 
+  const today = new Date();
+
+  const isZeroOrSuppressedTask = useCallback((task: Task) => {
+    const latest = task.additiveHistory?.[task.additiveHistory.length - 1];
+    const finalQuantity = latest?.newQuantity ?? task.quantity ?? task.remainingQuantity ?? 0;
+    const totalAdded = (task.additiveHistory ?? []).reduce((sum, item) => sum + (item.addedQuantity || 0), 0);
+    const totalSuppressed = (task.additiveHistory ?? []).reduce((sum, item) => sum + (item.suppressedQuantity || 0), 0);
+    const baseQuantity = task.additiveHistory?.[0]?.previousQuantity ?? task.quantity ?? 0;
+    const fullySuppressed = baseQuantity > 0 && totalSuppressed >= baseQuantity + totalAdded;
+
+    // Only schedule visibility changes here. Contract tabs still render these tasks.
+    return task.suppressedByAdditive === true || finalQuantity <= 0 || fullySuppressed;
+  }, []);
+
+  const isDelayedTask = useCallback((task: Task) => {
+    const endDate = addDays(parseISODateLocal(task.startDate), Math.max(0, task.duration - 1));
+    return endDate < today && task.percentComplete < 100;
+  }, [today]);
+
   const tasks = useMemo(() => getAllTasks(project), [project]);
-  const criticalCount = useMemo(() => tasks.filter(t => t.isCritical).length, [tasks]);
+  const selectedPhaseIds = useMemo(() => {
+    if (phaseFilter === 'all') return null;
+    const allowedPhaseIds = new Set<string>([phaseFilter]);
+    if (phaseFilter !== 'all') {
+      project.phases.forEach(phase => {
+        let current = phase.parentId;
+        while (current) {
+          if (current === phaseFilter) {
+            allowedPhaseIds.add(phase.id);
+            break;
+          }
+          current = project.phases.find(p => p.id === current)?.parentId;
+        }
+      });
+    }
+    return allowedPhaseIds;
+  }, [phaseFilter, project.phases]);
+
+  const visibleTaskIds = useMemo(() => {
+    return new Set(tasks
+      .filter(task => showZeroSuppressed || !isZeroOrSuppressedTask(task))
+      .filter(task => teamFilter === 'all' || (task.team ?? '_none') === teamFilter)
+      .filter(task => !selectedPhaseIds || project.phases.some(phase => (
+        selectedPhaseIds.has(phase.id) && phase.tasks.some(t => t.id === task.id)
+      )))
+      .filter(task => !showDelayedOnly || isDelayedTask(task))
+      .filter(task => !showWithDependenciesOnly || (task.dependencies?.length ?? 0) > 0 || (task.dependencyDetails?.length ?? 0) > 0)
+      .filter(task => !showCriticalOnly || task.isCritical)
+      .map(task => task.id));
+  }, [
+    isDelayedTask,
+    isZeroOrSuppressedTask,
+    project.phases,
+    selectedPhaseIds,
+    showCriticalOnly,
+    showDelayedOnly,
+    showWithDependenciesOnly,
+    showZeroSuppressed,
+    tasks,
+    teamFilter,
+  ]);
+  const getVisiblePhaseTasks = useCallback((phase: typeof project.phases[0]) => (
+    sortTasksForSchedule(phase.tasks).filter(task => visibleTaskIds.has(task.id))
+  ), [visibleTaskIds]);
+  const criticalCount = useMemo(() => tasks.filter(t => t.isCritical && visibleTaskIds.has(t.id)).length, [tasks, visibleTaskIds]);
   const projectStart = useMemo(
     () => new Date(Math.min(...tasks.map(t => parseISODateLocal(t.startDate).getTime()))),
     [tasks],
@@ -179,9 +248,11 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
   );
   const totalDays = useMemo(() => diffDays(projectStart, projectEnd) + 10, [projectStart, projectEnd]);
   const dayWidth = DAY_WIDTH[viewMode];
+  const taskRowHeight = density === 'compact' ? 24 : ROW_HEIGHT;
+  const phaseHeaderHeight = taskRowHeight + (density === 'compact' ? 16 : 20);
+  const taskSubHeaderHeight = density === 'compact' ? 16 : 18;
   const chartWidth = useMemo(() => totalDays * dayWidth, [totalDays, dayWidth]);
 
-  const today = new Date();
   const todayOffset = diffDays(projectStart, today);
 
   // Holiday map for the project range
@@ -202,8 +273,8 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
 
   // Coleta tarefas do capítulo: se for capítulo principal, inclui as dos subcapítulos.
   const getEffectiveChapterTasks = useCallback((phase: typeof project.phases[0]) => {
-    return getChapterTasks(project, phase.id);
-  }, [project]);
+    return getChapterTasks(project, phase.id).filter(task => visibleTaskIds.has(task.id));
+  }, [project, visibleTaskIds]);
 
   // Chapter business days
   const getChapterDiasUteis = useCallback((phase: typeof project.phases[0]) => {
@@ -244,12 +315,13 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
     let num = 0;
     project.phases.forEach(phase => {
       sortTasksForSchedule(phase.tasks).forEach(task => {
+        if (!visibleTaskIds.has(task.id)) return;
         num++;
         map.set(task.id, num);
       });
     });
     return map;
-  }, [project]);
+  }, [project, visibleTaskIds]);
 
   const numberToTaskId = useMemo(() => {
     const map = new Map<number, string>();
@@ -283,9 +355,9 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
         }
         return false;
       };
-      return allPhases.filter(p => !collapsedAncestor(p));
+      return allPhases.filter(p => !collapsedAncestor(p) && (!selectedPhaseIds || selectedPhaseIds.has(p.id)));
     },
-    [allPhases, collapsedPhases]
+    [allPhases, collapsedPhases, selectedPhaseIds]
   );
   const chapterNumbering = useMemo(() => getChapterNumbering(project), [project]);
 
@@ -295,38 +367,35 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
     displayPhases.forEach(phase => {
       rowIdx++;
       if (!collapsedPhases.has(phase.id)) {
-        sortTasksForSchedule(phase.tasks)
-          .filter(t => !showCriticalOnly || t.isCritical)
-          .forEach(task => {
+        getVisiblePhaseTasks(phase).forEach(task => {
             result.push({ task, phaseId: phase.id, phaseName: phase.name, rowIndex: rowIdx });
             rowIdx++;
           });
       }
     });
     return result;
-  }, [displayPhases, collapsedPhases, showCriticalOnly]);
+  }, [displayPhases, collapsedPhases, getVisiblePhaseTasks]);
 
   // Compute Y positions for dependency arrows (relative to bars area)
   const taskYPositions = useMemo(() => {
     const map = new Map<string, number>();
-    const PHASE_HEADER_HEIGHT = ROW_HEIGHT + 20;
-    const SUBHEADER_HEIGHT = 18;
+    const PHASE_HEADER_HEIGHT = phaseHeaderHeight;
+    const SUBHEADER_HEIGHT = taskSubHeaderHeight;
     let y = 0;
     displayPhases.forEach(phase => {
       // Header do capítulo é sempre renderizado (botão + linha de datas)
       y += PHASE_HEADER_HEIGHT;
       if (!collapsedPhases.has(phase.id)) {
-        if (phase.tasks.length > 0) y += SUBHEADER_HEIGHT;
-        sortTasksForSchedule(phase.tasks)
-          .filter(t => !showCriticalOnly || t.isCritical)
-          .forEach(task => {
-            map.set(task.id, y + ROW_HEIGHT / 2);
-            y += ROW_HEIGHT;
+        const visibleTasks = getVisiblePhaseTasks(phase);
+        if (visibleTasks.length > 0) y += SUBHEADER_HEIGHT;
+        visibleTasks.forEach(task => {
+            map.set(task.id, y + taskRowHeight / 2);
+            y += taskRowHeight;
           });
       }
     });
     return map;
-  }, [displayPhases, collapsedPhases, showCriticalOnly]);
+  }, [displayPhases, collapsedPhases, getVisiblePhaseTasks, phaseHeaderHeight, taskRowHeight, taskSubHeaderHeight]);
   const violationMap = useMemo(() => {
     const map = new Map<string, Set<string>>();
     tasks.forEach(task => {
@@ -588,7 +657,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
   const handleChapterDateChange = (phaseId: string, field: 'start' | 'end', date: Date | undefined) => {
     if (!date || !onProjectChange) return;
     const phase = project.phases.find(p => p.id === phaseId);
-    if (!phase || phase.tasks.length === 0) return;
+    if (!phase || getVisiblePhaseTasks(phase).length === 0) return;
 
     const range = getPhaseRange(phase);
     const oldStart = new Date(range.start);
@@ -1039,9 +1108,10 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
 
   // Get chapter bar info for milestones
   const getChapterBarInfo = (phase: typeof project.phases[0]) => {
-    if (phase.tasks.length === 0) return null;
-    const starts = phase.tasks.map(t => parseISODateLocal(t.startDate).getTime());
-    const ends = phase.tasks.map(t => addDays(parseISODateLocal(t.startDate), t.duration).getTime());
+    const items = getVisiblePhaseTasks(phase);
+    if (items.length === 0) return null;
+    const starts = items.map(t => parseISODateLocal(t.startDate).getTime());
+    const ends = items.map(t => addDays(parseISODateLocal(t.startDate), t.duration).getTime());
     const minStart = new Date(Math.min(...starts));
     const maxEnd = new Date(Math.max(...ends));
     const left = diffDays(projectStart, minStart) * dayWidth;
@@ -1098,6 +1168,99 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                   {m === 'days' ? 'Dias' : m === 'weeks' ? 'Semanas' : 'Meses'}
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-border bg-card p-2 shadow-sm">
+          <div className="flex flex-wrap items-end gap-2 text-[10px]">
+            <label className="flex min-w-[160px] flex-col gap-1">
+              <span className="font-medium text-muted-foreground">Equipe</span>
+              <Select value={teamFilter} onValueChange={setTeamFilter}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="Todas as equipes" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas as equipes</SelectItem>
+                  <SelectItem value="_none">Sem equipe</SelectItem>
+                  {projectTeams.map(team => (
+                    <SelectItem key={team.code} value={team.code}>{team.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+
+            <label className="flex min-w-[220px] flex-col gap-1">
+              <span className="font-medium text-muted-foreground">Capítulo/Subcapítulo</span>
+              <Select value={phaseFilter} onValueChange={setPhaseFilter}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="Todos os capítulos" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos os capítulos</SelectItem>
+                  {allPhases.map(phase => (
+                    <SelectItem key={phase.id} value={phase.id}>
+                      {chapterNumbering.get(phase.id) ? `${chapterNumbering.get(phase.id)} - ` : ''}{phase.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </label>
+
+            <label className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5">
+              <input
+                type="checkbox"
+                checked={showZeroSuppressed}
+                onChange={e => setShowZeroSuppressed(e.target.checked)}
+              />
+              <span>Mostrar itens zerados/suprimidos</span>
+            </label>
+            <label className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5">
+              <input
+                type="checkbox"
+                checked={showDelayedOnly}
+                onChange={e => setShowDelayedOnly(e.target.checked)}
+              />
+              <span>Apenas atrasados</span>
+            </label>
+            <label className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5">
+              <input
+                type="checkbox"
+                checked={showWithDependenciesOnly}
+                onChange={e => setShowWithDependenciesOnly(e.target.checked)}
+              />
+              <span>Com dependência</span>
+            </label>
+
+            <div className="ml-auto flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setCollapsedPhases(new Set())}
+                className="h-8 rounded-md border border-border bg-background px-2.5 font-medium text-muted-foreground hover:text-foreground"
+              >
+                Expandir tudo
+              </button>
+              <button
+                type="button"
+                onClick={() => setCollapsedPhases(new Set(allPhases.map(phase => phase.id)))}
+                className="h-8 rounded-md border border-border bg-background px-2.5 font-medium text-muted-foreground hover:text-foreground"
+              >
+                Recolher tudo
+              </button>
+              <div className="flex h-8 rounded-md bg-secondary p-0.5">
+                {(['comfortable', 'compact'] as const).map(mode => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setDensity(mode)}
+                    className={`rounded px-2 text-[10px] font-medium transition-colors ${
+                      density === mode ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {mode === 'comfortable' ? 'Confortável' : 'Compacta'}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -1174,6 +1337,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
               {displayPhases.map(phase => {
                 const phaseRange = getPhaseRange(phase);
                 const diasUteis = getChapterDiasUteis(phase);
+                const visiblePhaseTasks = getVisiblePhaseTasks(phase);
 
                 return (
                   <div key={phase.id}>
@@ -1185,12 +1349,12 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                       return (
                     <div
                       className={`border-b border-border ${headerBgClass} transition-colors duration-200 ease-out hover:bg-muted/70 overflow-hidden`}
-                      style={{ height: ROW_HEIGHT + 20 }}
+                      style={{ height: phaseHeaderHeight }}
                     >
                       <button
                         onClick={() => togglePhase(phase.id)}
                         className="w-full flex items-center gap-1.5 px-2 transition-colors duration-200 ease-out focus:outline-none focus-visible:ring-1 focus-visible:ring-foreground/30 rounded-sm"
-                        style={{ height: ROW_HEIGHT, paddingLeft: 8 + depth * 18 }}
+                        style={{ height: taskRowHeight, paddingLeft: 8 + depth * 18 }}
                       >
                         {collapsedPhases.has(phase.id)
                           ? <ChevronRight className="w-3 h-3 opacity-60 transition-transform duration-200 ease-out" />
@@ -1211,10 +1375,10 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                         >
                           {phase.name}
                         </span>
-                        <span className="text-[9px] ml-auto text-muted-foreground">{phase.tasks.length}</span>
+                        <span className="text-[9px] ml-auto text-muted-foreground">{visiblePhaseTasks.length}</span>
                       </button>
                       {/* Chapter dates row */}
-                      <div className="flex items-center gap-2 px-2 text-[9px] overflow-hidden" style={{ height: 20 }}>
+                      <div className="flex items-center gap-2 px-2 text-[9px] overflow-hidden" style={{ height: phaseHeaderHeight - taskRowHeight }}>
                         <Popover>
                           <PopoverTrigger asChild>
                             <button className="text-muted-foreground hover:text-primary transition-colors">
@@ -1255,7 +1419,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                         </Popover>
                         <span className="ml-auto flex items-center gap-2 text-muted-foreground">
                           {(() => {
-                            const items = sortTasksForSchedule(phase.tasks);
+                            const items = visiblePhaseTasks;
                             if (items.length === 0) return null;
                             const totalDur = items.reduce((s, t) => s + Math.max(1, t.duration), 0) || 1;
                             const weighted = items.reduce((s, t) => s + (t.physicalProgress ?? t.percentComplete ?? 0) * Math.max(1, t.duration), 0);
@@ -1272,10 +1436,10 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                     </div>
                       );
                     })()}
-                    {!collapsedPhases.has(phase.id) && phase.tasks.length > 0 && (
+                    {!collapsedPhases.has(phase.id) && visiblePhaseTasks.length > 0 && (
                       <div
                         className="border-b border-border bg-secondary/30 grid items-center px-1"
-                        style={{ height: 18, gridTemplateColumns: sidebarCols }}
+                        style={{ height: taskSubHeaderHeight, gridTemplateColumns: sidebarCols }}
                       >
                         <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center">#</span>
                         <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider pl-1">Descrição</span>
@@ -1291,8 +1455,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                       </div>
                     )}
                     {!collapsedPhases.has(phase.id) &&
-                      sortTasksForSchedule(phase.tasks)
-                        .filter(t => !showCriticalOnly || t.isCritical)
+                      visiblePhaseTasks
                         .map((task, idx) => {
                           const endDate = getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado);
                           const taskNum = taskNumbering.get(task.id) || 0;
@@ -1324,7 +1487,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                 isReorderTarget && reorderDropPos === 'after' ? 'border-b-2 border-b-primary' : ''
                               }`}
                               style={{
-                                height: ROW_HEIGHT,
+                                height: taskRowHeight,
                                 gridTemplateColumns: sidebarCols,
                                 ...(rowTeamDef ? {
                                   backgroundColor: rowTeamDef.bgColor,
@@ -1339,13 +1502,21 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                 {task.isCritical && <div className="w-1.5 h-1.5 rounded-full bg-destructive flex-shrink-0" />}
                                 {hasViolation && <AlertTriangle className="w-3 h-3 flex-shrink-0" style={{ color: 'hsl(0, 75%, 38%)', filter: 'drop-shadow(0 0 1px white)' }} />}
                                 {noWorkDays && <AlertTriangle className="w-3 h-3 flex-shrink-0" style={{ color: '#b45309', filter: 'drop-shadow(0 0 1px white)' }} />}
-                                <p className={`text-[11px] font-medium line-clamp-2 break-words leading-tight ${rowTeamDef ? '' : 'text-foreground'}`}>{task.name}</p>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <p className={`text-[11px] font-medium line-clamp-2 break-words leading-tight ${rowTeamDef ? '' : 'text-foreground'}`}>{task.name}</p>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top" className="max-w-md whitespace-normal break-words text-xs">
+                                    {task.name}
+                                  </TooltipContent>
+                                </Tooltip>
                                 <AdditiveBadge
                                   originAdditiveId={task.originAdditiveId}
                                   originAdditiveName={task.originAdditiveName}
                                   originAdditiveVersion={task.originAdditiveVersion}
                                   additiveHistory={task.additiveHistory}
                                   suppressedByAdditive={task.suppressedByAdditive}
+                                  compact
                                   className="ml-1 flex-shrink-0"
                                 />
                               </div>
@@ -1667,7 +1838,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
               <div style={{ width: chartWidth, minWidth: '100%' }}>
                 {/* Header */}
                 {viewMode === 'weeks' ? (
-                  <div className="border-b border-border bg-secondary/50 relative" style={{ height: headerHeightPx }}>
+              <div className="border-b border-border bg-secondary/50 relative" style={{ height: headerHeightPx }}>
                     {monthGroups.map((g, i) => (
                       <div
                         key={i}
@@ -1760,10 +1931,10 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                   {/* Dependency arrows */}
                   {(() => {
                     // During drag, provide tasks with temporary positions for arrows
-                    let arrowTasks = tasks;
+                    let arrowTasks = tasks.filter(task => visibleTaskIds.has(task.id));
                     if (draggingTaskId && (dragOffset !== 0 || dragTempTasks.size > 0)) {
                       const daysMoved = Math.round(dragOffset / dayWidth);
-                      arrowTasks = tasks.map(t => {
+                      arrowTasks = arrowTasks.map(t => {
                         if (t.id === draggingTaskId) {
                           const newStart = addDays(parseISODateLocal(t.startDate), daysMoved);
                           return { ...t, startDate: dateToISO(newStart) };
@@ -1787,18 +1958,19 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                   {displayPhases.map(phase => {
                     const isMainChapter = !phase.parentId;
                     const ganttRowBgClass = isMainChapter ? 'bg-muted/40' : 'bg-muted/20';
+                    const visiblePhaseTasks = getVisiblePhaseTasks(phase);
                     return (
                     <div key={phase.id}>
                       {/* Phase header row with milestone markers */}
                       <div
                         className={`border-b border-border ${ganttRowBgClass} relative`}
-                        style={{ height: ROW_HEIGHT + 20 }}
+                        style={{ height: phaseHeaderHeight }}
                       >
                         {(() => {
                           const chapterBar = getChapterBarInfo(phase);
                           if (!chapterBar) return null;
                           const diamondSize = 10;
-                          const midY = (ROW_HEIGHT + 20) / 2;
+                          const midY = phaseHeaderHeight / 2;
                           return (
                             <>
                               {/* Chapter span line */}
@@ -1854,12 +2026,11 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                           );
                         })()}
                       </div>
-                      {!collapsedPhases.has(phase.id) && phase.tasks.length > 0 && (
-                        <div className="border-b border-border bg-secondary/30" style={{ height: 18 }} />
+                      {!collapsedPhases.has(phase.id) && visiblePhaseTasks.length > 0 && (
+                        <div className="border-b border-border bg-secondary/30" style={{ height: taskSubHeaderHeight }} />
                       )}
                       {!collapsedPhases.has(phase.id) &&
-                        sortTasksForSchedule(phase.tasks)
-                          .filter(t => !showCriticalOnly || t.isCritical)
+                        visiblePhaseTasks
                           .map((task, idx) => {
                             const bar = getBarStyle(task);
                             const isDragging = draggingTaskId === task.id;
@@ -1909,7 +2080,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                               <div
                                 key={task.id}
                                 className={`border-b border-border relative ${idx % 2 === 0 ? 'bg-card' : 'bg-muted/10'}`}
-                                style={{ height: ROW_HEIGHT }}
+                                style={{ height: taskRowHeight }}
                               >
                                 {/* Barra planejada = task.startDate + task.duration (Manual ou RUP) */}
                                 {(() => {
@@ -1923,8 +2094,8 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                   style={{
                                     left: barLeft,
                                     width: barWidth,
-                                    top: 9,
-                                    height: 20,
+                                    top: density === 'compact' ? 6 : 9,
+                                    height: density === 'compact' ? 12 : 20,
                                     borderRadius: 6,
                                     background: (() => {
                                       const td = teamDef(task.team);

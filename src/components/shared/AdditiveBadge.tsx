@@ -1,5 +1,6 @@
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import type { TaskAdditiveHistoryEntry } from '@/types/project';
+import { Flag } from 'lucide-react';
 
 export interface AdditiveBadgeProps {
   originAdditiveId?: string;
@@ -9,6 +10,7 @@ export interface AdditiveBadgeProps {
   suppressedByAdditive?: boolean;
   /** Quantidade original conhecida (anterior a qualquer aditivo). Opcional. */
   baseQuantity?: number;
+  compact?: boolean;
   className?: string;
 }
 
@@ -31,6 +33,7 @@ export function AdditiveBadge({
   additiveHistory = [],
   suppressedByAdditive,
   baseQuantity,
+  compact = false,
   className = '',
 }: AdditiveBadgeProps) {
   const isNew = !!originAdditiveId;
@@ -68,9 +71,10 @@ export function AdditiveBadge({
     <Tooltip>
       <TooltipTrigger asChild>
         <span
-          className={`text-[9px] px-1 py-0.5 rounded border font-medium whitespace-nowrap ${cls} ${className}`}
+          className={`${compact ? 'inline-flex h-4 w-4 items-center justify-center rounded-full' : 'text-[9px] px-1 py-0.5 rounded'} border font-medium whitespace-nowrap ${cls} ${className}`}
+          aria-label={label}
         >
-          {label}
+          {compact ? <Flag className="h-2.5 w-2.5" /> : label}
         </span>
       </TooltipTrigger>
       <TooltipContent side="top" className="max-w-xs text-xs">
