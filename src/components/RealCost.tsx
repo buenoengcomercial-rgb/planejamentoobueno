@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { Project } from '@/types/project';
 import {
   AlertTriangle,
@@ -150,6 +150,14 @@ function computeVisibleTotals(rows: RealCostCompositionRow[], children: RealCost
     rows.reduce((sum, row) => sum + row.realCost, 0) +
     children.reduce((sum, child) => sum + child.totals.realCost, 0),
   );
+  const materialCost = roundMoney(
+    rows.reduce((sum, row) => sum + row.materialCost, 0) +
+    children.reduce((sum, child) => sum + child.totals.materialCost, 0),
+  );
+  const laborCost = roundMoney(
+    rows.reduce((sum, row) => sum + row.laborCost, 0) +
+    children.reduce((sum, child) => sum + child.totals.laborCost, 0),
+  );
   const grossProfit = roundMoney(contractedValue - realCost);
   const marginPct = contractedValue > 0 ? Math.round((grossProfit / contractedValue) * 10000) / 100 : 0;
   const compositionCount = rows.length + children.reduce((sum, child) => sum + child.totals.compositionCount, 0);
@@ -158,6 +166,8 @@ function computeVisibleTotals(rows: RealCostCompositionRow[], children: RealCost
     children.reduce((sum, child) => sum + child.totals.pendingCompositionCount, 0);
   const totals = {
     contractedValue,
+    materialCost,
+    laborCost,
     realCost,
     grossProfit,
     marginPct,
@@ -185,7 +195,7 @@ function collectGroupIds(groups: RealCostGroupNode[]) {
   return ids;
 }
 
-const TABLE_COLSPAN = 14;
+const TABLE_COLSPAN = 16;
 const BORDER_L = 'border-l-2 border-border';
 
 function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
@@ -300,6 +310,8 @@ function RealCostGroupRows({
           </button>
         </td>
         <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(group.totals.contractedValue)}</td>
+        <td className={`px-2 py-1.5 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(group.totals.materialCost)}</td>
+        <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(group.totals.laborCost)}</td>
         <td className={`px-2 py-1.5 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(group.totals.realCost)}</td>
         <td className={`px-2 py-1.5 text-right tabular-nums ${group.totals.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
           {fmtBRL(group.totals.grossProfit)}
@@ -340,6 +352,8 @@ function RealCostGroupRows({
                   <td className={`p-2 align-top text-right tabular-nums ${BORDER_L}`}>{fmtBRL(row.unitPriceReference)}</td>
                   <td className="p-2 align-top text-right tabular-nums">{fmtBRL(row.unitPriceContracted)}</td>
                   <td className="p-2 align-top text-right tabular-nums font-semibold">{fmtBRL(row.contractedValue)}</td>
+                  <td className={`p-2 align-top text-right tabular-nums ${BORDER_L}`}>{fmtBRL(row.materialCost)}</td>
+                  <td className="p-2 align-top text-right tabular-nums">{fmtBRL(row.laborCost)}</td>
                   <td className={`p-2 align-top text-right tabular-nums font-semibold ${BORDER_L}`}>{fmtBRL(row.realCost)}</td>
                   <td className={`p-2 align-top text-right tabular-nums font-semibold ${row.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
                     {fmtBRL(row.grossProfit)}
@@ -372,11 +386,51 @@ function RealCostGroupRows({
 export default function RealCost({ project }: Props) {
   const trabalhaSabado = useMemo(() => loadObraConfig().trabalhaSabado, []);
   const analysis = useMemo(() => buildRealCostAnalysis(project, trabalhaSabado), [project, trabalhaSabado]);
+  const uiStorageKey = `obraPlanner:realCost:ui:${project.id || project.name || 'default'}`;
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | RealCostSignal>('all');
   const [chapterFilter, setChapterFilter] = useState('all');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [expandedId, setExpandedId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(uiStorageKey) || '{}') as { expandedId?: string };
+      return saved.expandedId || null;
+    } catch {
+      return null;
+    }
+  });
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set();
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(uiStorageKey) || '{}') as { collapsed?: string[] };
+      return new Set(Array.isArray(saved.collapsed) ? saved.collapsed : []);
+    } catch {
+      return new Set();
+    }
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(uiStorageKey) || '{}') as {
+        collapsed?: string[];
+        expandedId?: string;
+      };
+      setCollapsed(new Set(Array.isArray(saved.collapsed) ? saved.collapsed : []));
+      setExpandedId(saved.expandedId || null);
+    } catch {
+      setCollapsed(new Set());
+      setExpandedId(null);
+    }
+  }, [uiStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(uiStorageKey, JSON.stringify({
+      collapsed: Array.from(collapsed),
+      expandedId,
+    }));
+  }, [collapsed, expandedId, uiStorageKey]);
 
   const filteredGroupTree = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -420,6 +474,8 @@ export default function RealCost({ project }: Props) {
     return {
       ...visibleTotals,
       contractedValue,
+      materialCost: visibleTotals.materialCost,
+      laborCost: visibleTotals.laborCost,
       grossProfit,
       marginPct,
       signal: analysis.totals.signal,
@@ -562,7 +618,7 @@ export default function RealCost({ project }: Props) {
         </div>
 
         <div className="min-h-[620px] max-h-[calc(100vh-235px)] overflow-auto">
-          <table className="w-full min-w-[1480px] border-separate border-spacing-0 text-xs">
+          <table className="w-full min-w-[1720px] border-separate border-spacing-0 text-xs">
             <thead className="sticky top-0 z-20 shadow-sm">
               <tr>
                 <th colSpan={5} className="border-b border-border bg-slate-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-slate-800">
@@ -574,7 +630,7 @@ export default function RealCost({ project }: Props) {
                 <th colSpan={3} className={`border-b border-border bg-blue-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-blue-950 ${BORDER_L}`}>
                   Contrato / referencia
                 </th>
-                <th colSpan={5} className={`border-b border-border bg-emerald-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-emerald-950 ${BORDER_L}`}>
+                <th colSpan={7} className={`border-b border-border bg-emerald-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-emerald-950 ${BORDER_L}`}>
                   Custo real e margem
                 </th>
               </tr>
@@ -588,6 +644,8 @@ export default function RealCost({ project }: Props) {
                 <th className={`p-2 text-right w-32 ${BORDER_L}`}>V. Unit. Referencia</th>
                 <th className="p-2 text-right w-32">V. Unit. Contratado</th>
                 <th className="p-2 text-right w-36">Valor Contratado Final</th>
+                <th className={`p-2 text-right w-32 ${BORDER_L}`}>Material</th>
+                <th className="p-2 text-right w-32">Mão de obra</th>
                 <th className={`p-2 text-right w-36 ${BORDER_L}`}>Custo Real Cotado</th>
                 <th className="p-2 text-right w-32">Lucro Bruto</th>
                 <th className="p-2 text-right w-24">Margem</th>
@@ -621,6 +679,8 @@ export default function RealCost({ project }: Props) {
                     Total geral ({visibleCompositionCount} composicao(oes))
                   </td>
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(displayTotals.contractedValue)}</td>
+                  <td className={`px-2 py-2 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(displayTotals.materialCost)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(displayTotals.laborCost)}</td>
                   <td className={`px-2 py-2 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(displayTotals.realCost)}</td>
                   <td className={`px-2 py-2 text-right tabular-nums ${displayTotals.grossProfit >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
                     {fmtBRL(displayTotals.grossProfit)}

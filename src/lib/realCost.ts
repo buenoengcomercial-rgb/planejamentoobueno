@@ -7,6 +7,7 @@ import type {
   ComparisonItem,
   ComparisonItemPrice,
   MaterialComparison,
+  MaterialCostClass,
   Project,
   Task,
 } from '@/types/project';
@@ -15,6 +16,7 @@ import { getWorkEndDate } from '@/components/gantt/utils';
 import { additiveTotals, computeAdditiveRow } from '@/lib/additiveImport';
 import { getChapterNumbering, getChapterTree, type ChapterNode } from '@/lib/chapters';
 import { money2, trunc2 } from '@/lib/financialEngine';
+import { resolveMaterialCostClass } from '@/lib/materialComparisons';
 
 export type RealCostSignal = 'healthy' | 'attention' | 'danger' | 'incomplete';
 
@@ -39,6 +41,7 @@ export interface RealCostInputRow {
   referenceTotal: number;
   realUnitPrice?: number;
   realTotal: number;
+  costClass: MaterialCostClass;
   grossProfit: number;
   marginPct: number;
   priceSource?: RealCostPriceSource;
@@ -70,6 +73,8 @@ export interface RealCostCompositionRow {
   sourceStatus?: string;
   sourceDetail?: string;
   contractedValue: number;
+  materialCost: number;
+  laborCost: number;
   realCost: number;
   grossProfit: number;
   marginPct: number;
@@ -95,6 +100,8 @@ export interface RealCostChapterRow {
 
 export interface RealCostGroupTotals {
   contractedValue: number;
+  materialCost: number;
+  laborCost: number;
   realCost: number;
   grossProfit: number;
   marginPct: number;
@@ -405,7 +412,7 @@ function buildContractPhaseIndex(project: Project) {
     for (const node of nodes) {
       const number = numbering.get(node.phase.id) || '';
       const nextChain = [...chain, node.phase.name];
-      const info = { phaseId: node.phase.id, chapter: nextChain.join(' › ') };
+      const info = { phaseId: node.phase.id, chapter: nextChain.join(' > ') };
       byId.set(node.phase.id, info);
       if (number) byNumber.set(number, info);
       walk(node.children, nextChain);
@@ -606,6 +613,7 @@ function buildCompositionSources(project: Project): CompositionSource[] {
 }
 
 function buildInputRows(
+  project: Project,
   source: CompositionSource,
   priceIndex: ReturnType<typeof buildPriceIndex>,
 ): RealCostInputRow[] {
@@ -618,6 +626,19 @@ function buildInputRows(
     const realTotal = price ? trunc2(totalQuantity * price.unitPrice) : 0;
     const grossProfit = money2(referenceTotal - realTotal);
     const marginPct = referenceTotal > 0 ? trunc2((grossProfit / referenceTotal) * 100) : 0;
+    const sourceType = source.source === 'additive' ? 'additive_input' : 'analytic_input';
+    const costClass = resolveMaterialCostClass(project, {
+      key: `${source.id}:${input.id}`,
+      code: input.code || undefined,
+      bank: input.bank || undefined,
+      description: input.description,
+      unit: input.unit,
+      quantity: totalQuantity,
+      referencePrice: input.unitPrice || undefined,
+      sourceType,
+      sourceId: input.id,
+      legacyInputType: input.type,
+    });
     return {
       id: input.id,
       code: input.code || undefined,
@@ -630,6 +651,7 @@ function buildInputRows(
       referenceTotal,
       realUnitPrice: price?.unitPrice,
       realTotal,
+      costClass,
       grossProfit,
       marginPct,
       priceSource: price,
@@ -651,8 +673,10 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
     const contractPhase = sourcePhase || itemPhase;
     const phaseId = contractPhase?.phaseId || matchedTask?.phaseId || '__unlinked__';
     const chapter = source.phaseChain || contractPhase?.chapter || matchedTask?.chapter || 'Sem vinculo com cronograma';
-    const inputs = buildInputRows(source, priceIndex);
+    const inputs = buildInputRows(project, source, priceIndex);
     const realCost = money2(inputs.reduce((sum, input) => sum + input.realTotal, 0));
+    const materialCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'material' ? input.realTotal : 0), 0));
+    const laborCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'labor' ? input.realTotal : 0), 0));
     const missingQuoteCount = inputs.filter(input => input.status === 'missing').length;
     const hasAnalytic = inputs.length > 0;
     const hasScheduleLink = !!(matchedTask || source.phaseId);
@@ -686,6 +710,8 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
       sourceStatus: source.sourceStatus,
       sourceDetail: source.sourceDetail,
       contractedValue: money2(source.contractedValue),
+      materialCost,
+      laborCost,
       realCost,
       grossProfit,
       marginPct,
@@ -707,6 +733,14 @@ function totalsFromRowsAndChildren(
     rows.reduce((sum, row) => sum + row.contractedValue, 0) +
     children.reduce((sum, child) => sum + child.totals.contractedValue, 0),
   );
+  const materialCost = money2(
+    rows.reduce((sum, row) => sum + row.materialCost, 0) +
+    children.reduce((sum, child) => sum + child.totals.materialCost, 0),
+  );
+  const laborCost = money2(
+    rows.reduce((sum, row) => sum + row.laborCost, 0) +
+    children.reduce((sum, child) => sum + child.totals.laborCost, 0),
+  );
   const realCost = money2(
     rows.reduce((sum, row) => sum + row.realCost, 0) +
     children.reduce((sum, child) => sum + child.totals.realCost, 0),
@@ -721,6 +755,8 @@ function totalsFromRowsAndChildren(
 
   return {
     contractedValue,
+    materialCost,
+    laborCost,
     realCost,
     grossProfit,
     marginPct,
