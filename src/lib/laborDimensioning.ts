@@ -136,6 +136,79 @@ export interface LaborProjection {
   compatibility: TeamCompatibility[];
 }
 
+export type LaborPlanningGranularity = 'day' | 'week' | 'month';
+
+export interface LaborPeriodActivity {
+  taskId: string;
+  taskName: string;
+  phaseId: string;
+  phaseName: string;
+  startDate: string;
+  endDate: string;
+  teamCode?: string;
+  teamName?: string;
+  hours: number;
+  neededPeople: number;
+}
+
+export interface LaborPeriodRolePlan {
+  periodKey: string;
+  periodLabel: string;
+  periodStart: string;
+  periodEnd: string;
+  roleId: string;
+  roleName: string;
+  hours: number;
+  neededPeople: number;
+  recommendedPeople: number;
+  availablePeople: number;
+  balancePeople: number;
+  status: 'ok' | 'deficit' | 'surplus';
+  activities: LaborPeriodActivity[];
+}
+
+export interface LaborTeamConflict {
+  periodKey: string;
+  periodLabel: string;
+  teamCode: string;
+  teamName: string;
+  tasks: Array<{
+    taskId: string;
+    taskName: string;
+    phaseId: string;
+    phaseName: string;
+    startDate: string;
+    endDate: string;
+  }>;
+}
+
+export interface LaborTaskConflictInfo {
+  roleDeficits: string[];
+  teamConflicts: string[];
+}
+
+export interface LaborReprogrammingSuggestion {
+  taskId: string;
+  taskName: string;
+  reason: string;
+  suggestedStartDate: string;
+  impactNote: string;
+}
+
+export interface LaborPlanningAnalysis {
+  granularity: LaborPlanningGranularity;
+  rows: LaborPeriodRolePlan[];
+  deficitRows: LaborPeriodRolePlan[];
+  surplusRows: LaborPeriodRolePlan[];
+  teamConflicts: LaborTeamConflict[];
+  taskConflictMap: Record<string, LaborTaskConflictInfo>;
+  peakPeople: number;
+  peakPeriod: string;
+  totalDeficitPeriods: number;
+  totalSurplusPeriods: number;
+  suggestions: LaborReprogrammingSuggestion[];
+}
+
 function norm(value: string | undefined) {
   return (value ?? '')
     .normalize('NFD')
@@ -287,6 +360,83 @@ function addDaysISO(dateISO: string, days: number) {
   return date.toISOString().slice(0, 10);
 }
 
+function parseLocalDate(dateISO: string) {
+  const [year, month, day] = dateISO.split('-').map(Number);
+  if (!year || !month || !day) return new Date(`${dateISO}T00:00:00`);
+  return new Date(year, month - 1, day);
+}
+
+function formatISODate(date: Date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function addCalendarDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function isWorkingDate(date: Date, settings: LaborDimensioningSettings) {
+  const dow = date.getDay();
+  if (dow >= 1 && dow <= 5) return true;
+  if (dow === 6) return settings.workSaturday;
+  if (dow === 0) return settings.workSunday;
+  return false;
+}
+
+function workingDatesBetween(startISO: string, endISO: string, settings: LaborDimensioningSettings) {
+  const start = parseLocalDate(startISO);
+  const end = parseLocalDate(endISO);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return [];
+  const first = start <= end ? start : end;
+  const last = start <= end ? end : start;
+  const dates: string[] = [];
+  for (let cursor = new Date(first); cursor <= last; cursor = addCalendarDays(cursor, 1)) {
+    if (isWorkingDate(cursor, settings)) dates.push(formatISODate(cursor));
+  }
+  if (dates.length === 0) dates.push(formatISODate(first));
+  return dates;
+}
+
+function periodFor(dateISO: string, granularity: LaborPlanningGranularity) {
+  const date = parseLocalDate(dateISO);
+  if (Number.isNaN(date.getTime())) {
+    return { key: dateISO, label: dateISO, start: dateISO, end: dateISO };
+  }
+
+  if (granularity === 'day') {
+    return {
+      key: dateISO,
+      label: date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' }),
+      start: dateISO,
+      end: dateISO,
+    };
+  }
+
+  if (granularity === 'month') {
+    const start = new Date(date.getFullYear(), date.getMonth(), 1);
+    const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+    return {
+      key: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
+      label: date.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }).replace('.', ''),
+      start: formatISODate(start),
+      end: formatISODate(end),
+    };
+  }
+
+  const monday = addCalendarDays(date, -((date.getDay() + 6) % 7));
+  const sunday = addCalendarDays(monday, 6);
+  return {
+    key: formatISODate(monday),
+    label: `${monday.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} a ${sunday.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`,
+    start: formatISODate(monday),
+    end: formatISODate(sunday),
+  };
+}
+
 function taskEndDate(task: Task) {
   if (task.current?.forecastEndDate) return task.current.forecastEndDate;
   if (task.forecastEndDate) return task.forecastEndDate;
@@ -383,6 +533,236 @@ function inferTeamMembers(team: TeamDefinition, project: Project): Array<{ opera
     return [{ operationalRoleId: 'ajudante-servente', quantity: 1, dailyHours: team.dailyHours }];
   }
   return names.map(({ role }) => ({ operationalRoleId: role.id, quantity: 1, dailyHours: team.dailyHours }));
+}
+
+function taskMap(project: Project) {
+  const map = new Map<string, { phaseId: string; phaseName: string; task: Task }>();
+  project.phases.forEach(phase => {
+    phase.tasks.forEach(task => map.set(task.id, { phaseId: phase.id, phaseName: phase.name, task }));
+  });
+  return map;
+}
+
+function bumpTaskConflict(
+  target: Record<string, LaborTaskConflictInfo>,
+  taskId: string,
+  patch: Partial<LaborTaskConflictInfo>,
+) {
+  const current = target[taskId] ?? { roleDeficits: [], teamConflicts: [] };
+  target[taskId] = {
+    roleDeficits: Array.from(new Set([...(current.roleDeficits ?? []), ...(patch.roleDeficits ?? [])])),
+    teamConflicts: Array.from(new Set([...(current.teamConflicts ?? []), ...(patch.teamConflicts ?? [])])),
+  };
+}
+
+export function buildLaborPlanningAnalysis(
+  project: Project,
+  granularity: LaborPlanningGranularity = 'week',
+): LaborPlanningAnalysis {
+  const roles = getOperationalRoles(project);
+  const settings = getDimensioningSettings(project);
+  const availability = getLaborAvailability(project);
+  const teams = project.teams ?? DEFAULT_TEAMS;
+  const taskLookup = taskMap(project);
+  const demandLines = buildLaborDemand(project)
+    .filter(line => line.normalizationType === 'cargo_operacional' && line.normalizedRoleId);
+
+  const periodRows = new Map<string, LaborPeriodRolePlan & { dayKeys: Set<string> }>();
+  const taskDays = new Map<string, Set<string>>();
+  const teamByDay = new Map<string, Map<string, Array<{ phaseId: string; phaseName: string; task: Task }>>>();
+
+  for (const line of demandLines) {
+    const taskInfo = taskLookup.get(line.taskId);
+    const task = taskInfo?.task;
+    const team = task?.team ? teams.find(t => t.code === task.team) : undefined;
+    const roleId = line.normalizedRoleId!;
+    const role = roleById(roles, roleId);
+    const workDays = workingDatesBetween(line.startDate, line.endDate, settings);
+    const dailyHours = line.hours / Math.max(1, workDays.length);
+
+    for (const dayISO of workDays) {
+      const period = periodFor(dayISO, granularity);
+      const rowKey = `${period.key}|${roleId}`;
+      const row = periodRows.get(rowKey) ?? {
+        periodKey: period.key,
+        periodLabel: period.label,
+        periodStart: period.start,
+        periodEnd: period.end,
+        roleId,
+        roleName: role?.name ?? line.normalizedRoleName ?? roleId,
+        hours: 0,
+        neededPeople: 0,
+        recommendedPeople: 0,
+        availablePeople: 0,
+        balancePeople: 0,
+        status: 'ok' as const,
+        activities: [],
+        dayKeys: new Set<string>(),
+      };
+      row.hours += dailyHours;
+      row.dayKeys.add(dayISO);
+      const existing = row.activities.find(activity => activity.taskId === line.taskId);
+      const activityHours = dailyHours;
+      const availabilityRow = availability.find(item => item.operationalRoleId === roleId);
+      const roleDailyHours = availabilityRow?.dailyHours || role?.defaultDailyHours || settings.defaultDailyHours || DEFAULT_DAILY_HOURS;
+      if (existing) {
+        existing.hours += activityHours;
+        existing.neededPeople += activityHours / roleDailyHours;
+      } else {
+        row.activities.push({
+          taskId: line.taskId,
+          taskName: line.taskName,
+          phaseId: line.phaseId,
+          phaseName: line.phaseName,
+          startDate: line.startDate,
+          endDate: line.endDate,
+          teamCode: task?.team,
+          teamName: team?.label,
+          hours: activityHours,
+          neededPeople: activityHours / roleDailyHours,
+        });
+      }
+      periodRows.set(rowKey, row);
+    }
+
+    if (task) {
+      const days = taskDays.get(task.id) ?? new Set<string>();
+      workDays.forEach(day => days.add(day));
+      taskDays.set(task.id, days);
+    }
+  }
+
+  project.phases.forEach(phase => {
+    phase.tasks.forEach(task => {
+      if (!task.team) return;
+      const days = taskDays.get(task.id) ?? new Set(workingDatesBetween(task.startDate, taskEndDate(task), settings));
+      for (const dayISO of days) {
+        const dayMap = teamByDay.get(dayISO) ?? new Map<string, Array<{ phaseId: string; phaseName: string; task: Task }>>();
+        const list = dayMap.get(task.team) ?? [];
+        list.push({ phaseId: phase.id, phaseName: phase.name, task });
+        dayMap.set(task.team, list);
+        teamByDay.set(dayISO, dayMap);
+      }
+    });
+  });
+
+  const rows: LaborPeriodRolePlan[] = Array.from(periodRows.values()).map(row => {
+    const role = roleById(roles, row.roleId);
+    const avail = availability.find(item => item.operationalRoleId === row.roleId);
+    const dailyHours = avail?.dailyHours || role?.defaultDailyHours || settings.defaultDailyHours || DEFAULT_DAILY_HOURS;
+    const availablePeople = avail?.quantity ?? 0;
+    const neededPeople = row.hours / (Math.max(1, row.dayKeys.size) * dailyHours);
+    const recommendedPeople = row.hours > 0 ? Math.ceil(neededPeople) : 0;
+    const balancePeople = availablePeople - recommendedPeople;
+    return {
+      periodKey: row.periodKey,
+      periodLabel: row.periodLabel,
+      periodStart: row.periodStart,
+      periodEnd: row.periodEnd,
+      roleId: row.roleId,
+      roleName: row.roleName,
+      hours: row.hours,
+      neededPeople,
+      recommendedPeople,
+      availablePeople,
+      balancePeople,
+      status: balancePeople < 0 ? 'deficit' : balancePeople > 0 && recommendedPeople > 0 ? 'surplus' : 'ok',
+      activities: row.activities
+        .sort((a, b) => b.hours - a.hours)
+        .map(activity => ({ ...activity, neededPeople: Number(activity.neededPeople.toFixed(2)) })),
+    };
+  }).sort((a, b) => a.periodStart.localeCompare(b.periodStart) || b.hours - a.hours);
+
+  const teamConflictsByPeriod = new Map<string, LaborTeamConflict>();
+  for (const [dayISO, dayMap] of teamByDay) {
+    for (const [teamCode, allocations] of dayMap) {
+      const uniqueTasks = Array.from(new Map(allocations.map(item => [item.task.id, item])).values());
+      if (uniqueTasks.length <= 1) continue;
+      const period = periodFor(dayISO, granularity);
+      const team = teams.find(t => t.code === teamCode);
+      const key = `${period.key}|${teamCode}`;
+      const current = teamConflictsByPeriod.get(key) ?? {
+        periodKey: period.key,
+        periodLabel: period.label,
+        teamCode,
+        teamName: team?.label ?? teamCode,
+        tasks: [],
+      };
+      const taskById = new Map(current.tasks.map(task => [task.taskId, task]));
+      uniqueTasks.forEach(({ phaseId, phaseName, task }) => {
+        taskById.set(task.id, {
+          taskId: task.id,
+          taskName: task.name,
+          phaseId,
+          phaseName,
+          startDate: task.startDate,
+          endDate: taskEndDate(task),
+        });
+      });
+      current.tasks = Array.from(taskById.values());
+      teamConflictsByPeriod.set(key, current);
+    }
+  }
+
+  const deficitRows = rows.filter(row => row.status === 'deficit');
+  const surplusRows = rows.filter(row => row.status === 'surplus');
+  const taskConflictMap: Record<string, LaborTaskConflictInfo> = {};
+  deficitRows.forEach(row => {
+    const label = `${row.roleName}: faltam ${Math.abs(row.balancePeople)} em ${row.periodLabel}`;
+    row.activities.forEach(activity => bumpTaskConflict(taskConflictMap, activity.taskId, { roleDeficits: [label] }));
+  });
+
+  const teamConflicts = Array.from(teamConflictsByPeriod.values())
+    .sort((a, b) => a.periodKey.localeCompare(b.periodKey) || a.teamName.localeCompare(b.teamName));
+  teamConflicts.forEach(conflict => {
+    const label = `${conflict.teamName} em ${conflict.periodLabel}`;
+    conflict.tasks.forEach(task => bumpTaskConflict(taskConflictMap, task.taskId, { teamConflicts: [label] }));
+  });
+
+  const peopleByPeriod = new Map<string, { label: string; people: number }>();
+  rows.forEach(row => {
+    const current = peopleByPeriod.get(row.periodKey) ?? { label: row.periodLabel, people: 0 };
+    current.people += row.recommendedPeople;
+    peopleByPeriod.set(row.periodKey, current);
+  });
+  let peakPeople = 0;
+  let peakPeriod = 'Sem demanda';
+  peopleByPeriod.forEach(row => {
+    if (row.people > peakPeople) {
+      peakPeople = row.people;
+      peakPeriod = row.label;
+    }
+  });
+
+  const suggestions: LaborReprogrammingSuggestion[] = deficitRows.slice(0, 6).flatMap(row => {
+    const movable = row.activities
+      .map(activity => ({ activity, task: taskLookup.get(activity.taskId)?.task }))
+      .filter(item => item.task && !item.task.isCritical)
+      .sort((a, b) => b.activity.hours - a.activity.hours)[0];
+    if (!movable?.task) return [];
+    const newStart = addDaysISO(row.periodEnd, 1);
+    return [{
+      taskId: movable.task.id,
+      taskName: movable.task.name,
+      reason: `Reduzir sobreposicao de ${row.roleName} em ${row.periodLabel}`,
+      suggestedStartDate: newStart,
+      impactNote: 'Sugestao inicial: validar dependencias e caminho critico antes de aplicar.',
+    }];
+  });
+
+  return {
+    granularity,
+    rows,
+    deficitRows,
+    surplusRows,
+    teamConflicts,
+    taskConflictMap,
+    peakPeople,
+    peakPeriod,
+    totalDeficitPeriods: deficitRows.length,
+    totalSurplusPeriods: surplusRows.length,
+    suggestions,
+  };
 }
 
 export function buildLaborProjection(project: Project): LaborProjection {

@@ -23,6 +23,7 @@ import { toast } from 'sonner';
 import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
 import GanttFinancialForecast from './gantt/GanttFinancialForecast';
 import { sortTasksForSchedule, withScheduleOrderForMove } from '@/lib/taskOrdering';
+import { buildLaborPlanningAnalysis, type LaborPlanningGranularity } from '@/lib/laborDimensioning';
 
 interface GanttChartProps {
   project: Project;
@@ -67,6 +68,8 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
   const [showDelayedOnly, setShowDelayedOnly] = useState(false);
   const [showWithDependenciesOnly, setShowWithDependenciesOnly] = useState(false);
   const [density, setDensity] = useState<'comfortable' | 'compact'>('comfortable');
+  const [laborPeriodMode, setLaborPeriodMode] = useState<LaborPlanningGranularity>('week');
+  const [showLaborOnlyDeficits, setShowLaborOnlyDeficits] = useState(true);
   const [obraConfig, setObraConfig] = useState<ObraConfig>(loadObraConfig);
 
   // Persiste no projeto sempre que o conjunto de minimizados mudar (com guard de igualdade).
@@ -193,6 +196,15 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
   }, [today]);
 
   const tasks = useMemo(() => getAllTasks(project), [project]);
+  const laborPlanning = useMemo(
+    () => buildLaborPlanningAnalysis(project, laborPeriodMode),
+    [project, laborPeriodMode],
+  );
+  const laborRowsToShow = useMemo(() => {
+    const rows = showLaborOnlyDeficits ? laborPlanning.deficitRows : laborPlanning.rows.filter(row => row.hours > 0);
+    return rows.slice(0, 8);
+  }, [laborPlanning, showLaborOnlyDeficits]);
+  const laborTopDeficit = laborPlanning.deficitRows[0];
   const selectedPhaseIds = useMemo(() => {
     if (phaseFilter === 'all') return null;
     const allowedPhaseIds = new Set<string>([phaseFilter]);
@@ -1265,6 +1277,127 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
           </div>
         </div>
 
+        <div className="rounded-lg border border-border bg-card p-3 shadow-sm">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <div className="mr-auto">
+              <h3 className="text-sm font-semibold text-foreground">Planejamento de mÃ£o de obra</h3>
+              <p className="text-[10px] text-muted-foreground">
+                Compara RUP + datas do Cronograma contra a disponibilidade cadastrada da obra.
+              </p>
+            </div>
+            <Select value={laborPeriodMode} onValueChange={(value) => setLaborPeriodMode(value as LaborPlanningGranularity)}>
+              <SelectTrigger className="h-8 w-[120px] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="day">DiÃ¡rio</SelectItem>
+                <SelectItem value="week">Semanal</SelectItem>
+                <SelectItem value="month">Mensal</SelectItem>
+              </SelectContent>
+            </Select>
+            <label className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-[10px]">
+              <input
+                type="checkbox"
+                checked={showLaborOnlyDeficits}
+                onChange={e => setShowLaborOnlyDeficits(e.target.checked)}
+              />
+              <span>SÃ³ dÃ©ficits</span>
+            </label>
+          </div>
+
+          <div className="grid gap-2 md:grid-cols-4">
+            <div className={`rounded-md border p-2 ${laborPlanning.totalDeficitPeriods > 0 ? 'border-orange-300 bg-orange-50' : 'border-emerald-200 bg-emerald-50'}`}>
+              <div className="text-[9px] font-semibold uppercase text-muted-foreground">PerÃ­odos com dÃ©ficit</div>
+              <div className={`text-lg font-bold ${laborPlanning.totalDeficitPeriods > 0 ? 'text-orange-700' : 'text-emerald-700'}`}>
+                {laborPlanning.totalDeficitPeriods}
+              </div>
+              <div className="text-[10px] text-muted-foreground">
+                {laborTopDeficit
+                  ? `${laborTopDeficit.roleName}: faltam ${Math.abs(laborTopDeficit.balancePeople)} em ${laborTopDeficit.periodLabel}`
+                  : 'Capacidade suficiente nos perÃ­odos calculados'}
+              </div>
+            </div>
+            <div className="rounded-md border border-blue-200 bg-blue-50 p-2">
+              <div className="text-[9px] font-semibold uppercase text-muted-foreground">Pico planejado</div>
+              <div className="text-lg font-bold text-blue-700">{laborPlanning.peakPeople}</div>
+              <div className="text-[10px] text-muted-foreground">{laborPlanning.peakPeriod}</div>
+            </div>
+            <div className={`rounded-md border p-2 ${laborPlanning.teamConflicts.length > 0 ? 'border-amber-300 bg-amber-50' : 'border-emerald-200 bg-emerald-50'}`}>
+              <div className="text-[9px] font-semibold uppercase text-muted-foreground">Conflitos de equipe</div>
+              <div className={`text-lg font-bold ${laborPlanning.teamConflicts.length > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                {laborPlanning.teamConflicts.length}
+              </div>
+              <div className="text-[10px] text-muted-foreground">
+                {laborPlanning.teamConflicts[0]
+                  ? `${laborPlanning.teamConflicts[0].teamName} em ${laborPlanning.teamConflicts[0].periodLabel}`
+                  : 'Nenhuma equipe sobreposta'}
+              </div>
+            </div>
+            <div className="rounded-md border border-border bg-background p-2">
+              <div className="text-[9px] font-semibold uppercase text-muted-foreground">SugestÃµes iniciais</div>
+              <div className="text-lg font-bold text-foreground">{laborPlanning.suggestions.length}</div>
+              <div className="text-[10px] text-muted-foreground">ReprogramaÃ§Ãµes para revisar manualmente</div>
+            </div>
+          </div>
+
+          <div className="mt-2 overflow-hidden rounded-md border border-border">
+            <div className="grid grid-cols-[120px_1fr_70px_70px_70px_1.7fr] bg-secondary/60 px-2 py-1 text-[9px] font-semibold uppercase text-muted-foreground">
+              <span>PerÃ­odo</span>
+              <span>Cargo</span>
+              <span className="text-center">Disp.</span>
+              <span className="text-center">Nec.</span>
+              <span className="text-center">Saldo</span>
+              <span>Atividades responsÃ¡veis</span>
+            </div>
+            {laborRowsToShow.length > 0 ? laborRowsToShow.map(row => (
+              <div
+                key={`${row.periodKey}-${row.roleId}`}
+                className={`grid grid-cols-[120px_1fr_70px_70px_70px_1.7fr] items-center border-t border-border px-2 py-1.5 text-[10px] ${
+                  row.status === 'deficit' ? 'bg-orange-50/70' : row.status === 'surplus' ? 'bg-blue-50/60' : 'bg-card'
+                }`}
+              >
+                <span className="font-medium text-foreground">{row.periodLabel}</span>
+                <span>{row.roleName}</span>
+                <span className="text-center tabular-nums">{row.availablePeople}</span>
+                <span className="text-center font-semibold tabular-nums">{row.recommendedPeople}</span>
+                <span className={`text-center font-bold tabular-nums ${row.balancePeople < 0 ? 'text-orange-700' : 'text-emerald-700'}`}>
+                  {row.balancePeople > 0 ? `+${row.balancePeople}` : row.balancePeople}
+                </span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="truncate text-muted-foreground">
+                      {row.activities.slice(0, 3).map(activity => activity.taskName).join(' â€¢ ')}
+                      {row.activities.length > 3 ? ` +${row.activities.length - 3}` : ''}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-lg whitespace-normal text-xs">
+                    <div className="space-y-1">
+                      {row.activities.slice(0, 8).map(activity => (
+                        <div key={activity.taskId}>
+                          <strong>{activity.taskName}</strong>
+                          <span className="text-muted-foreground"> â€” {activity.teamName ?? 'sem equipe'} â€¢ {Math.round(activity.hours)}h</span>
+                        </div>
+                      ))}
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
+            )) : (
+              <div className="px-2 py-3 text-center text-[11px] text-muted-foreground">
+                Sem demanda de mÃ£o de obra para o filtro atual.
+              </div>
+            )}
+          </div>
+
+          {laborPlanning.suggestions.length > 0 && (
+            <div className="mt-2 rounded-md border border-dashed border-orange-300 bg-orange-50/60 px-3 py-2 text-[10px] text-orange-900">
+              <strong>SugestÃ£o de reprogramaÃ§Ã£o:</strong>{' '}
+              {laborPlanning.suggestions[0].taskName} para {formatDateFull(laborPlanning.suggestions[0].suggestedStartDate)}.
+              <span className="ml-1 text-orange-800">{laborPlanning.suggestions[0].impactNote}</span>
+            </div>
+          )}
+        </div>
+
         <GanttFinancialForecast project={project} trabalhaSabado={obraConfig.trabalhaSabado} />
 
         {/* Legend */}
@@ -1464,6 +1597,11 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                           const depDisplay = getDepDisplay(task);
                           const depTypes = getDepTypes(task);
                           const noWorkDays = hasNoWorkingDays(task);
+                          const laborConflict = laborPlanning.taskConflictMap[task.id];
+                          const hasLaborConflict = !!laborConflict && (
+                            laborConflict.roleDeficits.length > 0 ||
+                            laborConflict.teamConflicts.length > 0
+                          );
 
                           const rowTeamDef = teamDef(task.team);
                           const isReorderDragging = reorderDragTaskId === task.id;
@@ -1502,6 +1640,19 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                 {task.isCritical && <div className="w-1.5 h-1.5 rounded-full bg-destructive flex-shrink-0" />}
                                 {hasViolation && <AlertTriangle className="w-3 h-3 flex-shrink-0" style={{ color: 'hsl(0, 75%, 38%)', filter: 'drop-shadow(0 0 1px white)' }} />}
                                 {noWorkDays && <AlertTriangle className="w-3 h-3 flex-shrink-0" style={{ color: '#b45309', filter: 'drop-shadow(0 0 1px white)' }} />}
+                                {hasLaborConflict && (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <AlertTriangle className="w-3 h-3 flex-shrink-0" style={{ color: '#c2410c', filter: 'drop-shadow(0 0 1px white)' }} />
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="max-w-md whitespace-normal text-xs">
+                                      <div className="space-y-1">
+                                        {laborConflict.roleDeficits.map(item => <div key={item}>{item}</div>)}
+                                        {laborConflict.teamConflicts.map(item => <div key={item}>Equipe sobreposta: {item}</div>)}
+                                      </div>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                )}
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <p className={`text-[11px] font-medium line-clamp-2 break-words leading-tight ${rowTeamDef ? '' : 'text-foreground'}`}>{task.name}</p>
@@ -2038,6 +2189,11 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                             const violations = getViolations(task);
                             const hasViolation = violations.length > 0;
                             const noWorkDays = hasNoWorkingDays(task);
+                            const laborConflict = laborPlanning.taskConflictMap[task.id];
+                            const hasLaborConflict = !!laborConflict && (
+                              laborConflict.roleDeficits.length > 0 ||
+                              laborConflict.teamConflicts.length > 0
+                            );
 
                             // Compute current bar position with drag/resize/propagation
                             let currentLeft = bar.left;
@@ -2089,7 +2245,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                   return (
                                 <div
                                   ref={setBarRef(task.id)}
-                                  className={`absolute rounded-md ${hasViolation ? 'animate-pulse ring-2 ring-destructive' : ''} ${noWorkDays ? 'ring-2 ring-warning' : ''}`}
+                                  className={`absolute rounded-md ${hasViolation ? 'animate-pulse ring-2 ring-destructive' : ''} ${noWorkDays ? 'ring-2 ring-warning' : ''} ${hasLaborConflict ? 'ring-2 ring-orange-400' : ''}`}
                                   title={`${formatDateFull(task.startDate)} → ${formatDateFull(getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado))} | ${task.duration}d — Arraste para mover`}
                                   style={{
                                     left: barLeft,
