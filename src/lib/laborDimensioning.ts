@@ -498,7 +498,7 @@ export function buildLaborProjection(project: Project): LaborProjection {
   }
 
   const teams = project.teams ?? DEFAULT_TEAMS;
-  const compatibility: TeamCompatibility[] = project.phases.flatMap(phase => phase.tasks).map(task => {
+  const compatibility: TeamCompatibility[] = project.phases.flatMap(phase => phase.tasks.map(task => ({ phase, task }))).map(({ phase, task }) => {
     const taskLines = linesByTask.get(task.id) ?? [];
     const requiredRoles = Array.from(new Set(taskLines.map(line => line.normalizedRoleId!)));
     const team = teams.find(t => t.code === task.team);
