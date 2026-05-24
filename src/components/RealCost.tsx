@@ -561,7 +561,7 @@ export default function RealCost({ project }: Props) {
           </div>
         </div>
 
-        <div className="max-h-[calc(100vh-330px)] overflow-auto">
+        <div className="min-h-[620px] max-h-[calc(100vh-235px)] overflow-auto">
           <table className="w-full min-w-[1480px] border-separate border-spacing-0 text-xs">
             <thead className="sticky top-0 z-20 shadow-sm">
               <tr>

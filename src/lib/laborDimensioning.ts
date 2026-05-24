@@ -86,16 +86,47 @@ export interface PeriodRoleDemand {
 export interface TeamCompatibility {
   taskId: string;
   taskName: string;
+  phaseId: string;
+  phaseName: string;
+  startDate: string;
+  endDate: string;
+  totalHours: number;
   teamName?: string;
   missingRoles: string[];
   requiredRoles: string[];
   compatible: boolean;
+  reason: 'ok' | 'sem_equipe' | 'faltando_cargo';
+}
+
+export interface PhaseDemandSummary {
+  phaseId: string;
+  phaseName: string;
+  hours: number;
+  taskCount: number;
+  recommendedPeople: number;
+  mainRoles: string[];
+}
+
+export interface TaskDimensioningSummary {
+  taskId: string;
+  taskName: string;
+  phaseId: string;
+  phaseName: string;
+  startDate: string;
+  endDate: string;
+  totalHours: number;
+  requiredRoles: string[];
+  teamName?: string;
+  missingRoles: string[];
+  status: 'ok' | 'sem_equipe' | 'incompativel';
 }
 
 export interface LaborProjection {
   lines: LaborDemandLine[];
   summaries: RoleDemandSummary[];
   periodRows: PeriodRoleDemand[];
+  phaseSummaries: PhaseDemandSummary[];
+  taskSummaries: TaskDimensioningSummary[];
   totalHours: number;
   peakPeriod: string;
   peakPeople: number;
@@ -433,30 +464,94 @@ export function buildLaborProjection(project: Project): LaborProjection {
     }
   });
 
+  const demandByPhase = new Map<string, { phaseName: string; taskIds: Set<string>; roleHours: Map<string, number>; hours: number }>();
+  for (const line of demandLines) {
+    const current = demandByPhase.get(line.phaseId) ?? {
+      phaseName: line.phaseName,
+      taskIds: new Set<string>(),
+      roleHours: new Map<string, number>(),
+      hours: 0,
+    };
+    current.taskIds.add(line.taskId);
+    current.hours += line.hours;
+    current.roleHours.set(line.normalizedRoleId!, (current.roleHours.get(line.normalizedRoleId!) ?? 0) + line.hours);
+    demandByPhase.set(line.phaseId, current);
+  }
+
+  const phaseSummaries: PhaseDemandSummary[] = Array.from(demandByPhase.entries())
+    .map(([phaseId, row]) => ({
+      phaseId,
+      phaseName: row.phaseName,
+      hours: row.hours,
+      taskCount: row.taskIds.size,
+      recommendedPeople: Math.ceil(row.hours / (settings.defaultDailyHours * 22)),
+      mainRoles: Array.from(row.roleHours.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([roleId]) => roleById(roles, roleId)?.name ?? roleId),
+    }))
+    .sort((a, b) => b.hours - a.hours);
+
+  const linesByTask = new Map<string, LaborDemandLine[]>();
+  for (const line of demandLines) {
+    linesByTask.set(line.taskId, [...(linesByTask.get(line.taskId) ?? []), line]);
+  }
+
   const teams = project.teams ?? DEFAULT_TEAMS;
   const compatibility: TeamCompatibility[] = project.phases.flatMap(phase => phase.tasks).map(task => {
-    const requiredRoles = Array.from(new Set(
-      lines
-        .filter(line => line.taskId === task.id && line.normalizationType === 'cargo_operacional' && line.normalizedRoleId)
-        .map(line => line.normalizedRoleId!)
-    ));
+    const taskLines = linesByTask.get(task.id) ?? [];
+    const requiredRoles = Array.from(new Set(taskLines.map(line => line.normalizedRoleId!)));
     const team = teams.find(t => t.code === task.team);
     const teamRoleIds = team ? new Set(inferTeamMembers(team, project).map(member => member.operationalRoleId)) : new Set<string>();
     const missingIds = requiredRoles.filter(roleId => !teamRoleIds.has(roleId));
+    const reason = requiredRoles.length === 0
+      ? 'ok'
+      : !team
+        ? 'sem_equipe'
+        : missingIds.length > 0
+          ? 'faltando_cargo'
+          : 'ok';
     return {
       taskId: task.id,
       taskName: task.name,
+      phaseId: phase.id,
+      phaseName: phase.name,
+      startDate: task.startDate,
+      endDate: taskEndDate(task),
+      totalHours: taskLines.reduce((sum, line) => sum + line.hours, 0),
       teamName: team?.label,
       missingRoles: missingIds.map(roleId => roleById(roles, roleId)?.name ?? roleId),
       requiredRoles: requiredRoles.map(roleId => roleById(roles, roleId)?.name ?? roleId),
-      compatible: requiredRoles.length === 0 || (!!team && missingIds.length === 0),
+      compatible: reason === 'ok',
+      reason,
     };
   }).filter(row => row.requiredRoles.length > 0);
+
+  const taskSummaries: TaskDimensioningSummary[] = compatibility
+    .map(row => ({
+      taskId: row.taskId,
+      taskName: row.taskName,
+      phaseId: row.phaseId,
+      phaseName: row.phaseName,
+      startDate: row.startDate,
+      endDate: row.endDate,
+      totalHours: row.totalHours,
+      requiredRoles: row.requiredRoles,
+      teamName: row.teamName,
+      missingRoles: row.missingRoles,
+      status: row.reason === 'sem_equipe' ? 'sem_equipe' : row.reason === 'faltando_cargo' ? 'incompativel' : 'ok',
+    }))
+    .sort((a, b) => {
+      const order = { incompativel: 0, sem_equipe: 1, ok: 2 };
+      return order[a.status] - order[b.status] || b.totalHours - a.totalHours;
+    });
 
   return {
     lines,
     summaries,
     periodRows,
+    phaseSummaries,
+    taskSummaries,
     totalHours: demandLines.reduce((sum, line) => sum + line.hours, 0),
     peakPeriod,
     peakPeople,
