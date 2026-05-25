@@ -860,9 +860,13 @@ export function buildLaborProjection(project: Project): LaborProjection {
   for (const line of demandLines) {
     const roleId = line.normalizedRoleId!;
     byRole.set(roleId, (byRole.get(roleId) ?? 0) + line.hours);
-    const periods = monthsBetween(line.startDate, line.endDate);
-    const distributed = line.hours / periods.length;
-    for (const period of periods) {
+    // A necessidade executiva precisa respeitar o Cronograma: uma atividade
+    // longa de vigia/encarregado/almoxarife distribui horas pelos dias em que
+    // ela realmente acontece, em vez de virar "pessoas totais" concentradas.
+    const workDays = workingDatesBetween(line.startDate, line.endDate, settings);
+    const dailyHours = line.hours / Math.max(1, workDays.length);
+    for (const dayISO of workDays) {
+      const period = periodFor(dayISO, 'month').label;
       const role = roleById(roles, roleId);
       const key = `${period}|${roleId}`;
       const current = periodRole.get(key) ?? {
@@ -875,17 +879,30 @@ export function buildLaborProjection(project: Project): LaborProjection {
         availablePeople: 0,
         balancePeople: 0,
       };
-      current.hours += distributed;
+      current.hours += dailyHours;
       periodRole.set(key, current);
     }
   }
 
+  const rolePeakPeople = new Map<string, { neededPeople: number; recommendedPeople: number }>();
+  Array.from(periodRole.values()).forEach(row => {
+    const role = roleById(roles, row.roleId);
+    const avail = availability.find(item => item.operationalRoleId === row.roleId);
+    const dailyHours = avail?.dailyHours || role?.defaultDailyHours || settings.defaultDailyHours;
+    const neededPeople = row.hours / (dailyHours * workingDaysInMonth(row.period, settings));
+    const recommendedPeople = row.hours > 0 ? Math.ceil(neededPeople) : 0;
+    const current = rolePeakPeople.get(row.roleId);
+    if (!current || neededPeople > current.neededPeople) {
+      rolePeakPeople.set(row.roleId, { neededPeople, recommendedPeople });
+    }
+  });
+
   const summaries: RoleDemandSummary[] = roles.map(role => {
     const hours = byRole.get(role.id) ?? 0;
     const avail = availability.find(row => row.operationalRoleId === role.id);
-    const dailyHours = avail?.dailyHours || role.defaultDailyHours || settings.defaultDailyHours;
-    const calculatedPeople = hours > 0 ? hours / (dailyHours * 22) : 0;
-    const recommendedPeople = hours > 0 ? Math.ceil(calculatedPeople) : 0;
+    const peak = rolePeakPeople.get(role.id);
+    const calculatedPeople = peak?.neededPeople ?? 0;
+    const recommendedPeople = peak?.recommendedPeople ?? 0;
     const availablePeople = avail?.quantity ?? 0;
     const balancePeople = availablePeople - recommendedPeople;
     return {
