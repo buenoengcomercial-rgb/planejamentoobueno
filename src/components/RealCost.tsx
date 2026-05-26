@@ -200,63 +200,74 @@ const BORDER_L = 'border-l-2 border-border';
 
 function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
   return (
-    <tr className="border-b border-primary/20 bg-primary/5">
-      <td colSpan={TABLE_COLSPAN} className="p-3">
-        <div className="rounded-lg border border-border bg-card overflow-hidden">
-          <div className="border-b border-border bg-muted/40 px-3 py-2">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Analitica do custo real
-            </p>
-          </div>
+    <tr className="border-b border-border bg-primary/5">
+      <td colSpan={TABLE_COLSPAN} className="px-3 py-2">
+        <div className="overflow-hidden rounded-md border border-border/70 bg-background">
           {row.inputs.length === 0 ? (
-            <div className="p-5 text-center text-xs text-muted-foreground">
+            <div className="p-4 text-center text-[11px] text-muted-foreground">
               Composicao sem analitica vinculada. Ela continua na planilha, mas a margem fica incompleta.
             </div>
           ) : (
             <div className="overflow-auto">
-              <table className="w-full min-w-[1280px] text-xs">
-                <thead className="bg-muted text-muted-foreground">
+              <table className="w-full min-w-[1180px] table-fixed border-collapse text-[11px]">
+                <colgroup>
+                  <col className="w-[82px]" />
+                  <col className="w-[70px]" />
+                  <col />
+                  <col className="w-[54px]" />
+                  <col className="w-[76px]" />
+                  <col className="w-[88px]" />
+                  <col className="w-[98px]" />
+                  <col className="w-[98px]" />
+                  <col className="w-[104px]" />
+                  <col className="w-[76px]" />
+                  <col className="w-[118px]" />
+                  <col className="w-[118px]" />
+                  <col className="w-[82px]" />
+                  <col className="w-[82px]" />
+                </colgroup>
+                <thead className="bg-muted/60 text-muted-foreground">
                   <tr>
-                    <th className="p-2 text-left w-24">Codigo</th>
-                    <th className="p-2 text-left w-20">Banco</th>
-                    <th className="p-2 text-left">Insumo</th>
-                    <th className="p-2 text-center w-16">Un.</th>
-                    <th className="p-2 text-right w-24">Coef.</th>
-                    <th className="p-2 text-right w-24">Qtd. total</th>
-                    <th className="p-2 text-right w-28">V. unit ref.</th>
-                    <th className="p-2 text-right w-28">Preco real</th>
-                    <th className="p-2 text-right w-28">Custo</th>
-                    <th className="p-2 text-right w-24">Margem</th>
-                    <th className="p-2 text-left w-36">Fornecedor</th>
-                    <th className="p-2 text-left w-36">Grupo</th>
-                    <th className="p-2 text-center w-24">Data</th>
-                    <th className="p-2 text-center w-24">Status</th>
+                    <th className="px-2 py-1.5 text-left">Codigo</th>
+                    <th className="px-2 py-1.5 text-left">Banco</th>
+                    <th className="px-2 py-1.5 text-left">Insumo</th>
+                    <th className="px-2 py-1.5 text-center">Un.</th>
+                    <th className="px-2 py-1.5 text-right">Coef.</th>
+                    <th className="px-2 py-1.5 text-right">Qtd. total</th>
+                    <th className="px-2 py-1.5 text-right">V. unit ref.</th>
+                    <th className="px-2 py-1.5 text-right">Preco real</th>
+                    <th className="px-2 py-1.5 text-right">Custo</th>
+                    <th className="px-2 py-1.5 text-right">Margem</th>
+                    <th className="px-2 py-1.5 text-left">Fornecedor</th>
+                    <th className="px-2 py-1.5 text-left">Grupo</th>
+                    <th className="px-2 py-1.5 text-center">Data</th>
+                    <th className="px-2 py-1.5 text-center">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {row.inputs.map(input => (
-                    <tr key={input.id} className="border-t border-border">
-                      <td className="p-2 align-top font-mono text-[11px]">{input.code || '-'}</td>
-                      <td className="p-2 align-top text-muted-foreground">{input.bank || '-'}</td>
-                      <td className="p-2 align-top">
+                    <tr key={input.id} className="border-t border-border/60">
+                      <td className="px-2 py-1.5 align-top font-mono text-[10px]">{input.code || '-'}</td>
+                      <td className="px-2 py-1.5 align-top text-muted-foreground">{input.bank || '-'}</td>
+                      <td className="px-2 py-1.5 align-top">
                         <div className="font-medium leading-snug">{input.description}</div>
                         {!input.priceSource && (
                           <div className="mt-1 text-[10px] text-warning">Sem cotacao na Lista de Material.</div>
                         )}
                       </td>
-                      <td className="p-2 align-top text-center">{input.unit}</td>
-                      <td className="p-2 align-top text-right tabular-nums">{input.coefficient.toLocaleString('pt-BR', { maximumFractionDigits: 5 })}</td>
-                      <td className="p-2 align-top text-right tabular-nums">{fmtQty(input.totalQuantity)}</td>
-                      <td className="p-2 align-top text-right tabular-nums">{fmtBRL(input.referenceUnitPrice)}</td>
-                      <td className="p-2 align-top text-right tabular-nums">{input.priceSource ? fmtBRL(input.priceSource.unitPrice) : '-'}</td>
-                      <td className="p-2 align-top text-right tabular-nums font-semibold">{input.priceSource ? fmtBRL(input.realTotal) : '-'}</td>
-                      <td className={`p-2 align-top text-right tabular-nums font-semibold ${input.priceSource ? marginTone(input.marginPct) : 'text-muted-foreground'}`}>
+                      <td className="px-2 py-1.5 align-top text-center">{input.unit}</td>
+                      <td className="px-2 py-1.5 align-top text-right tabular-nums">{input.coefficient.toLocaleString('pt-BR', { maximumFractionDigits: 5 })}</td>
+                      <td className="px-2 py-1.5 align-top text-right tabular-nums">{fmtQty(input.totalQuantity)}</td>
+                      <td className="px-2 py-1.5 align-top text-right tabular-nums">{fmtBRL(input.referenceUnitPrice)}</td>
+                      <td className="px-2 py-1.5 align-top text-right tabular-nums">{input.priceSource ? fmtBRL(input.priceSource.unitPrice) : '-'}</td>
+                      <td className="px-2 py-1.5 align-top text-right tabular-nums font-semibold">{input.priceSource ? fmtBRL(input.realTotal) : '-'}</td>
+                      <td className={`px-2 py-1.5 align-top text-right tabular-nums font-semibold ${input.priceSource ? marginTone(input.marginPct) : 'text-muted-foreground'}`}>
                         {input.priceSource ? fmtPct(input.marginPct) : '-'}
                       </td>
-                      <td className="p-2 align-top">{input.priceSource?.supplierName || '-'}</td>
-                      <td className="p-2 align-top">{input.priceSource?.comparisonName || '-'}</td>
-                      <td className="p-2 align-top text-center">{formatDate(input.priceSource?.date)}</td>
-                      <td className="p-2 align-top text-center">
+                      <td className="px-2 py-1.5 align-top">{input.priceSource?.supplierName || '-'}</td>
+                      <td className="px-2 py-1.5 align-top">{input.priceSource?.comparisonName || '-'}</td>
+                      <td className="px-2 py-1.5 align-top text-center">{formatDate(input.priceSource?.date)}</td>
+                      <td className="px-2 py-1.5 align-top text-center">
                         {input.priceSource ? (
                           <span className="rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-[10px] font-semibold text-success">Cotado</span>
                         ) : (

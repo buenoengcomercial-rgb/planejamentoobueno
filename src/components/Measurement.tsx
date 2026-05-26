@@ -14,7 +14,7 @@ import MeasurementFilters from '@/components/measurement/MeasurementFilters';
 import MeasurementSummaryCards from '@/components/measurement/MeasurementSummaryCards';
 import MeasurementTotals from '@/components/measurement/MeasurementTotals';
 import MeasurementTable from '@/components/measurement/MeasurementTable';
-import MeasurementDetailFooter, { type MeasurementDetailSelection } from '@/components/measurement/MeasurementDetailFooter';
+import type { MeasurementDetailSelection } from '@/components/measurement/MeasurementDetailFooter';
 import { useAuth } from '@/hooks/useAuth';
 import { userInfoFromSupabaseUser } from '@/lib/audit';
 import AuditHistoryPanel from '@/components/AuditHistoryPanel';
@@ -123,11 +123,6 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
     () => summarizeDailyReportsForPeriod(project, effStart, effEnd),
     [project, effStart, effEnd],
   );
-  const selectedMeasurementRow = useMemo(
-    () => rows.find(r => r.taskId === detailSelection?.taskId),
-    [rows, detailSelection],
-  );
-
   // ───────── Validação da medição (somente no modo "live") ─────────
   const validationIssues: ValidationIssue[] = useMemo(() => {
     if (activeMeasurement) return [];
@@ -531,12 +526,7 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
         setManualPeriodQuantity={setManualPeriodQuantity}
         selectedDetail={detailSelection}
         onSelectDetail={setDetailSelection}
-      />
-
-      <MeasurementDetailFooter
         project={project}
-        selection={detailSelection}
-        row={selectedMeasurementRow}
         bdi={effBdi}
       />
 

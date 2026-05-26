@@ -26,7 +26,7 @@ import AdditiveIssuesDialog from '@/components/additive/AdditiveIssuesDialog';
 import AdditiveReviewDialog from '@/components/additive/AdditiveReviewDialog';
 import AdditiveSyntheticConflictDialog from '@/components/additive/AdditiveSyntheticConflictDialog';
 import AdditiveHeaderInfo from '@/components/additive/AdditiveHeaderInfo';
-import AdditiveDetailFooter, { type AdditiveDetailSelection } from '@/components/additive/AdditiveDetailFooter';
+import type { AdditiveDetailSelection } from '@/components/additive/AdditiveDetailFooter';
 
 interface Props {
   project: Project;
@@ -58,10 +58,6 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
   const totals = useMemo(() => (active ? additiveTotals(active, project) : null), [active, project]);
   const [contractConfirmOpen, setContractConfirmOpen] = useState(false);
   const [detailSelection, setDetailSelection] = useState<AdditiveDetailSelection | null>(null);
-  const selectedComposition = useMemo(
-    () => active?.compositions.find(c => c.id === detailSelection?.compositionId),
-    [active, detailSelection],
-  );
 
   const openReview = (preset: 'approve' | 'reject') => {
     if (preset === 'approve') {
@@ -187,17 +183,6 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
             onChangeMemory={actions.setCalculationMemory}
             selectedDetail={detailSelection}
             onSelectDetail={setDetailSelection}
-          />
-
-          <AdditiveDetailFooter
-            project={project}
-            selection={detailSelection}
-            composition={selectedComposition}
-            bdi={bdi}
-            globalDiscount={globalDiscount}
-            isLocked={isLocked}
-            onChangeMemory={actions.setCalculationMemory}
-            onUpdateComposition={actions.updateComposition}
           />
 
           <AdditiveTotalsBlock

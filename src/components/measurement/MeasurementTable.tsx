@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Lock } from 'lucide-react';
+import type { Project } from '@/types/project';
 import type { Row, GroupNode, GroupTotals } from '@/components/measurement/types';
 import { fmtBRL } from '@/components/measurement/measurementFormat';
 import MeasurementGroupRow from './MeasurementGroupRow';
@@ -17,6 +18,8 @@ interface MeasurementTableProps extends RowHandlers {
   isLocked: boolean;
   selectedDetail?: MeasurementDetailSelection | null;
   onSelectDetail?: (selection: MeasurementDetailSelection) => void;
+  project: Project;
+  bdi: number;
 }
 
 const COLSPAN = 18;
@@ -45,12 +48,6 @@ const headerStyleByDepth = (depth: number) => {
   if (depth === 0) return 'chapter-row bg-primary/10 text-foreground font-bold border-y border-primary/30';
   if (depth === 1) return 'chapter-row bg-slate-100/90 text-foreground font-semibold border-y border-border';
   return 'chapter-row bg-slate-50 text-foreground font-semibold border-y border-border';
-};
-
-const subtotalStyleByDepth = (depth: number) => {
-  if (depth === 0) return 'subtotal-row bg-primary/5 border-y border-primary/20 font-bold';
-  if (depth === 1) return 'subtotal-row bg-slate-50 border-y border-border font-semibold';
-  return 'subtotal-row bg-muted/20 border-y border-border font-semibold';
 };
 
 export default function MeasurementTable(props: MeasurementTableProps) {
@@ -159,11 +156,9 @@ export default function MeasurementTable(props: MeasurementTableProps) {
                     group={g}
                     collapsed={collapsed}
                     toggleCollapsed={toggleCollapsed}
-                    COLSPAN={COLSPAN}
                     G_BG={G_BG}
                     BORDER_L={BORDER_L}
                     headerStyleByDepth={headerStyleByDepth}
-                    subtotalStyleByDepth={subtotalStyleByDepth}
                     isLocked={isLocked}
                     {...rowHandlers}
                   />

@@ -58,27 +58,27 @@ export default function AdditiveTable(props: Props) {
   return (
     <Card className="overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full text-xs border-collapse" style={{ minWidth: 1340, tableLayout: 'fixed' }}>
+        <table className="w-full text-[11px] border-collapse [&_thead_th]:whitespace-nowrap" style={{ minWidth: 1640, tableLayout: 'fixed' }}>
           <colgroup>
             <col style={{ width: 22 }} />
             <col style={{ width: 44 }} />
             <col style={{ width: 100 }} />
             <col style={{ width: 90 }} />
-            <col style={{ width: 240 }} />
-            <col style={{ width: 36 }} />
-            <col style={{ width: 62 }} />
-            <col style={{ width: 62 }} />
-            <col style={{ width: 62 }} />
-            <col style={{ width: 54 }} />
-            <col style={{ width: 68 }} />
-            <col style={{ width: 74 }} />
-            <col style={{ width: 74 }} />
-            <col style={{ width: 78 }} />
-            <col style={{ width: 78 }} />
-            <col style={{ width: 78 }} />
-            <col style={{ width: 78 }} />
-            <col style={{ width: 74 }} />
-            <col style={{ width: 48 }} />
+            <col style={{ width: 290 }} />
+            <col style={{ width: 42 }} />
+            <col style={{ width: 86 }} />
+            <col style={{ width: 86 }} />
+            <col style={{ width: 86 }} />
+            <col style={{ width: 72 }} />
+            <col style={{ width: 92 }} />
+            <col style={{ width: 104 }} />
+            <col style={{ width: 100 }} />
+            <col style={{ width: 112 }} />
+            <col style={{ width: 104 }} />
+            <col style={{ width: 112 }} />
+            <col style={{ width: 104 }} />
+            <col style={{ width: 96 }} />
+            <col style={{ width: 70 }} />
           </colgroup>
           <thead className="sticky top-0 z-10">
             <tr>

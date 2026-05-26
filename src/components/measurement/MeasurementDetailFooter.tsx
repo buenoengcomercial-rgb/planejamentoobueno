@@ -51,8 +51,17 @@ function AnalyticView({ composition }: { composition?: AdditiveComposition }) {
   }
 
   return (
-    <div className="overflow-auto rounded-md border border-border">
-      <table className="w-full text-xs">
+    <div className="overflow-auto rounded-md border border-border/70">
+      <table className="w-full min-w-[840px] table-fixed text-[11px]">
+        <colgroup>
+          <col className="w-[84px]" />
+          <col className="w-[72px]" />
+          <col />
+          <col className="w-[56px]" />
+          <col className="w-[82px]" />
+          <col className="w-[96px]" />
+          <col className="w-[104px]" />
+        </colgroup>
         <thead className="bg-muted/60">
           <tr className="border-b border-border">
             <th className="px-2 py-1.5 text-left">Codigo</th>
@@ -67,9 +76,9 @@ function AnalyticView({ composition }: { composition?: AdditiveComposition }) {
         <tbody>
           {composition.inputs.map(input => (
             <tr key={input.id} className="border-t border-border">
-              <td className="px-2 py-1.5 font-mono">{input.code || '-'}</td>
-              <td className="px-2 py-1.5">{input.bank || '-'}</td>
-              <td className="px-2 py-1.5">{input.description}</td>
+              <td className="px-2 py-1.5 align-top font-mono text-[10px]">{input.code || '-'}</td>
+              <td className="px-2 py-1.5 align-top text-muted-foreground">{input.bank || '-'}</td>
+              <td className="px-2 py-1.5 align-top font-medium leading-snug">{input.description}</td>
               <td className="px-2 py-1.5 text-center">{input.unit}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{fmtNum(input.coefficient)}</td>
               <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(input.unitPrice)}</td>
@@ -217,5 +226,44 @@ export default function MeasurementDetailFooter({ project, selection, row, bdi }
         </div>
       )}
     </Card>
+  );
+}
+
+export function MeasurementDetailInline({ project, selection, row, bdi, colSpan }: Props & { colSpan: number }) {
+  if (!selection || !row) return null;
+
+  const composition = findComposition(project, row);
+  const title =
+    selection.mode === 'quantity' ? 'Memoria / quantidades da medicao'
+    : selection.mode === 'analytic' ? 'Composicao analitica'
+    : 'Classificacao do valor total';
+  const Icon =
+    selection.mode === 'quantity' ? Calculator
+    : selection.mode === 'analytic' ? Layers
+    : PieChart;
+
+  return (
+    <tr className="border-b border-border bg-primary/5">
+      <td colSpan={colSpan} className="px-3 py-2">
+        <div className="rounded-md border border-border/70 bg-background">
+          <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-1.5 text-[11px] font-semibold">
+            <Icon className="h-3.5 w-3.5 text-primary" />
+            <span>{title}</span>
+            <span className="truncate text-[10px] font-normal text-muted-foreground">
+              {row.item} - {row.description}
+            </span>
+          </div>
+          <div className="p-2 text-[11px]">
+            {selection.mode === 'quantity' ? (
+              <QuantityView row={row} />
+            ) : selection.mode === 'analytic' ? (
+              <AnalyticView composition={composition} />
+            ) : (
+              <ClassificationView project={project} row={row} composition={composition} scope={selection.valueScope} bdi={bdi} />
+            )}
+          </div>
+        </div>
+      </td>
+    </tr>
   );
 }

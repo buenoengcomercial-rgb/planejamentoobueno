@@ -1,8 +1,10 @@
+import { Fragment } from 'react';
 import { AlertCircle, Lock } from 'lucide-react';
+import type { Project } from '@/types/project';
 import type { Row } from '@/components/measurement/types';
 import { fmtBRL, fmtNum } from '@/components/measurement/measurementFormat';
 import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
-import type { MeasurementDetailSelection, MeasurementValueScope } from './MeasurementDetailFooter';
+import { MeasurementDetailInline, type MeasurementDetailSelection, type MeasurementValueScope } from './MeasurementDetailFooter';
 
 export interface MeasurementItemRowProps {
   row: Row;
@@ -24,6 +26,9 @@ export interface MeasurementItemRowProps {
   setManualPeriodQuantity?: (taskId: string, v: number) => void;
   selectedDetail?: MeasurementDetailSelection | null;
   onSelectDetail?: (selection: MeasurementDetailSelection) => void;
+  project?: Project;
+  bdi?: number;
+  detailColSpan?: number;
   G_BG: { id: string; contract: string; period: string; forecast?: string; accum: string; balance: string };
   BORDER_L: string;
 }
@@ -34,6 +39,9 @@ export default function MeasurementItemRow({
   isLocked,
   selectedDetail,
   onSelectDetail,
+  project,
+  bdi = 0,
+  detailColSpan = 18,
   G_BG,
   BORDER_L,
 }: MeasurementItemRowProps) {
@@ -45,6 +53,7 @@ export default function MeasurementItemRow({
   const selectClassification = (valueScope: MeasurementValueScope) => onSelectDetail?.({ taskId: r.taskId, mode: 'classification', valueScope });
 
   return (
+    <Fragment>
     <tr className={`border-b border-border/60 hover:bg-muted/30 ${baseBg} ${isSelected ? 'ring-2 ring-primary/40 ring-inset' : ''}`}>
       {/* Identificação */}
       <td
@@ -157,5 +166,15 @@ export default function MeasurementItemRow({
         <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('balance')}>{fmtBRL(r.valueBalance)}</button>
       </td>
     </tr>
+    {isSelected && project && (
+      <MeasurementDetailInline
+        project={project}
+        selection={selectedDetail}
+        row={r}
+        bdi={bdi}
+        colSpan={detailColSpan}
+      />
+    )}
+    </Fragment>
   );
 }

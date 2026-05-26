@@ -18,6 +18,7 @@ import AdditiveAnalyticRows from './AdditiveAnalyticRows';
 import { handleGridKeyDown } from '@/lib/gridKeyboardNavigation';
 import { requestMemoryFocus, type AdditiveMemoryQtyType } from '@/lib/additiveMemoryFocus';
 import type { AdditiveDetailMode, AdditiveDetailSelection } from './AdditiveDetailFooter';
+import AdditiveCalculationMemory from './AdditiveCalculationMemory';
 
 const MAIN_GRID = 'additive-main-table';
 
@@ -261,6 +262,7 @@ function AdditiveCompositionRowImpl({
   const hasMemory = memTotals.hasMemory;
   const canOpenAnalytic = hasInputs || isNew;
   const shouldShowAnalyticRows = isOpen && (showAnalytic || isNew) && canOpenAnalytic;
+  const shouldShowMemoryRows = isMemoryOpen;
   const isAlteredContracted = !isNew && (
     (c.addedQuantity ?? 0) > 0 ||
     (c.suppressedQuantity ?? 0) > 0 ||
@@ -272,6 +274,7 @@ function AdditiveCompositionRowImpl({
   const isSelected = selectedDetail?.compositionId === c.id;
   const selectDetail = (mode: AdditiveDetailMode, qtyType?: AdditiveMemoryQtyType) => {
     onSelectDetail?.({ compositionId: c.id, mode, qtyType });
+    if (mode === 'analytic' && !isOpen && canOpenAnalytic) onToggleExpand(c.id);
   };
 
   const openMemoryFor = (type: AdditiveMemoryQtyType) => {
@@ -300,8 +303,8 @@ function AdditiveCompositionRowImpl({
           </button>
         </td>
         {/* Identificação */}
-        <td className={`px-1 py-1 ${G_BG.id}`}>{c.itemNumber || c.item}</td>
-        <td className={`px-1 py-1 font-mono text-[11px] break-words whitespace-normal ${G_BG.id}`}>
+        <td className={`px-1 py-1 align-top ${G_BG.id}`}>{c.itemNumber || c.item}</td>
+        <td className={`px-1 py-1 align-top font-mono text-[11px] break-words whitespace-normal ${G_BG.id}`}>
           {isNew && !isLocked ? (
             <TextCommitCell
               value={c.code}
@@ -312,7 +315,7 @@ function AdditiveCompositionRowImpl({
             />
           ) : c.code}
         </td>
-        <td className={`px-1 py-1 break-words whitespace-normal ${G_BG.id}`}>
+        <td className={`px-1 py-1 align-top break-words whitespace-normal ${G_BG.id}`}>
           {isNew && !isLocked ? (
             <TextCommitCell
               value={c.bank}
@@ -323,7 +326,7 @@ function AdditiveCompositionRowImpl({
             />
           ) : c.bank}
         </td>
-        <td className={`px-1 py-1 ${G_BG.id}`}>
+        <td className={`px-1 py-1 align-top ${G_BG.id}`}>
           {isNew && !isLocked ? (
             <TextareaCommitCell
               value={c.description}
@@ -334,7 +337,7 @@ function AdditiveCompositionRowImpl({
               placeholder="Descrição do novo serviço"
             />
           ) : (
-            <div className="whitespace-normal break-words leading-snug">{c.description}</div>
+            <div className="whitespace-normal break-words leading-snug text-[11px]">{c.description}</div>
           )}
           <div className="flex flex-wrap gap-1 mt-1 items-center">
             {isNew && (
@@ -429,7 +432,7 @@ function AdditiveCompositionRowImpl({
             </AlertDialog>
           )}
         </td>
-        <td className={`px-1 py-1 ${G_BG.id}`}>
+        <td className={`px-1 py-1 align-top text-center ${G_BG.id}`}>
           {isNew && !isLocked ? (
             <TextCommitCell
               value={c.unit}
@@ -441,7 +444,7 @@ function AdditiveCompositionRowImpl({
           ) : c.unit}
         </td>
         {/* Quantidades */}
-        <td className={`px-1 py-1 text-right ${G_BG.qty} ${BORDER_L}`}>
+        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums ${G_BG.qty} ${BORDER_L}`}>
           <span
             className="block w-full text-right px-1 text-xs text-muted-foreground select-text"
             title="Quantidade contratada (somente leitura — vem do contrato original)"
@@ -451,7 +454,7 @@ function AdditiveCompositionRowImpl({
         </td>
         <td
           data-detail-cell="true"
-          className={`px-1 py-1 text-right ${G_BG.suppressed} text-rose-700`}
+          className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums ${G_BG.suppressed} text-rose-700`}
           onClick={isLocked ? undefined : () => openMemoryFor('suprimida')}
         >
           <QtyCell
@@ -466,7 +469,7 @@ function AdditiveCompositionRowImpl({
         </td>
         <td
           data-detail-cell="true"
-          className={`px-1 py-1 text-right ${G_BG.added} text-emerald-700`}
+          className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums ${G_BG.added} text-emerald-700`}
           onClick={isLocked ? undefined : () => openMemoryFor('acrescida')}
         >
           <QtyCell
@@ -479,9 +482,9 @@ function AdditiveCompositionRowImpl({
             onFocusCell={isLocked ? undefined : () => openMemoryFor('acrescida')}
           />
         </td>
-        <td className={`px-1 py-1 text-right font-medium ${G_BG.qty}`}>{fmtQty2(r.qtdFinal)}</td>
+        <td className={`px-1 py-1 align-top text-right font-medium whitespace-nowrap tabular-nums ${G_BG.qty}`}>{fmtQty2(r.qtdFinal)}</td>
         {/* Valores */}
-        <td className={`px-1 py-1 text-right ${G_BG.val} ${BORDER_L}`}>
+        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums ${G_BG.val} ${BORDER_L}`}>
           {isNew && !isLocked && c.inputs.length === 0 ? (
             <MoneyCell
               value={c.unitPriceNoBDIInformed ?? 0}
@@ -496,35 +499,35 @@ function AdditiveCompositionRowImpl({
             </span>
           )}
         </td>
-        <td className={`px-1 py-1 text-right ${G_BG.val}`}>
+        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums ${G_BG.val}`}>
           <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('analytic')}>
             {fmtBRL(r.unitPriceWithBDI)}
           </button>
         </td>
-        <td className={`px-1 py-1 text-right text-muted-foreground ${G_BG.val}`}>
+        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums text-muted-foreground ${G_BG.val}`}>
           <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
             {fmtBRL(r.totalFonte)}
           </button>
         </td>
-        <td className={`px-1 py-1 text-right ${G_BG.val}`}>
+        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums ${G_BG.val}`}>
           <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
             {fmtBRL(isNew ? 0 : r.valorContratadoOriginalPreservado)}
           </button>
         </td>
         {/* Impacto */}
-        <td className={`px-1 py-1 text-right text-rose-700 font-medium ${G_BG.suppressed} ${BORDER_L}`}>
+        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums text-rose-700 font-medium ${G_BG.suppressed} ${BORDER_L}`}>
           {r.valorSuprimido > 0 ? fmtBRL(-r.valorSuprimido) : fmtBRL(0)}
         </td>
-        <td className={`px-1 py-1 text-right text-emerald-700 font-medium ${G_BG.added}`}>{fmtBRL(r.valorAcrescido)}</td>
-        <td className={`px-1 py-1 text-right font-medium ${G_BG.impact}`}>
+        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums text-emerald-700 font-medium ${G_BG.added}`}>{fmtBRL(r.valorAcrescido)}</td>
+        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums font-medium ${G_BG.impact}`}>
           <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
             {fmtBRL(r.valorFinal)}
           </button>
         </td>
-        <td className={`px-1 py-1 text-right font-medium ${r.diferenca < 0 ? 'text-rose-700' : r.diferenca > 0 ? 'text-emerald-700' : 'text-foreground'}`}>
+        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums font-medium ${r.diferenca < 0 ? 'text-rose-700' : r.diferenca > 0 ? 'text-emerald-700' : 'text-foreground'}`}>
           {fmtBRL(r.diferenca)}
         </td>
-        <td className={`px-1 py-1 text-right ${r.percentVar < 0 ? 'text-rose-700' : r.percentVar > 0 ? 'text-emerald-700' : 'text-foreground'}`}>
+        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums ${r.percentVar < 0 ? 'text-rose-700' : r.percentVar > 0 ? 'text-emerald-700' : 'text-foreground'}`}>
           {fmtPct(r.percentVar)}
         </td>
       </tr>
@@ -539,6 +542,19 @@ function AdditiveCompositionRowImpl({
               isLocked={isLocked}
               cb={cb}
               onUpdateComposition={onUpdateComposition}
+            />
+          </td>
+        </tr>
+      )}
+      {shouldShowMemoryRows && (
+        <tr className="bg-violet-50/30 border-b">
+          <td />
+          <td colSpan={COL_COUNT - 1} className="px-3 py-2">
+            <AdditiveCalculationMemory
+              c={c}
+              isLocked={isLocked}
+              onChange={rows => onChangeMemory(c.id, rows)}
+              onChangeColumns={cols => onUpdateComposition(c.id, { calculationMemoryColumns: cols })}
             />
           </td>
         </tr>

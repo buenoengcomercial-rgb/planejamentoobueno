@@ -10,11 +10,9 @@ interface MeasurementGroupRowProps extends RowHandlers {
   group: GroupNode;
   collapsed: Set<string>;
   toggleCollapsed: (id: string) => void;
-  COLSPAN: number;
   G_BG: MeasurementItemRowProps['G_BG'];
   BORDER_L: string;
   headerStyleByDepth: (depth: number) => string;
-  subtotalStyleByDepth: (depth: number) => string;
 }
 
 export default function MeasurementGroupRow(props: MeasurementGroupRowProps) {
@@ -22,11 +20,9 @@ export default function MeasurementGroupRow(props: MeasurementGroupRowProps) {
     group: g,
     collapsed,
     toggleCollapsed,
-    COLSPAN,
     G_BG,
     BORDER_L,
     headerStyleByDepth,
-    subtotalStyleByDepth,
     ...rowHandlers
   } = props;
 
@@ -35,9 +31,9 @@ export default function MeasurementGroupRow(props: MeasurementGroupRowProps) {
 
   return (
     <Fragment>
-      {/* Cabeçalho do grupo */}
+      {/* Ordem contratual/original: a Medicao deve exibir totais no proprio nivel hierarquico. */}
       <tr className={headerStyleByDepth(g.depth)}>
-        <td colSpan={COLSPAN} className="px-2 py-1.5">
+        <td colSpan={8} className="px-2 py-1.5">
           <button
             type="button"
             onClick={() => toggleCollapsed(g.phaseId)}
@@ -54,9 +50,20 @@ export default function MeasurementGroupRow(props: MeasurementGroupRowProps) {
             {g.number} {g.name}
           </span>
         </td>
+        <td className="px-2 py-1.5 text-right tabular-nums text-foreground">{fmtBRL(g.totals.contracted)}</td>
+        <td className={`px-2 py-1.5 text-right tabular-nums text-foreground ${BORDER_L}`}>-</td>
+        <td className="px-2 py-1.5 text-right tabular-nums text-foreground">{fmtBRL(g.totals.period)}</td>
+        <td className={`px-2 py-1.5 text-right tabular-nums text-foreground ${BORDER_L}`}>-</td>
+        <td className="px-2 py-1.5 text-right tabular-nums text-foreground">{fmtBRL(g.totals.forecast)}</td>
+        <td className={`px-2 py-1.5 text-right tabular-nums ${g.totals.diffForecast > 0 ? 'text-success' : g.totals.diffForecast < 0 ? 'text-destructive' : 'text-foreground'}`}>
+          {fmtBRL(g.totals.diffForecast)}
+        </td>
+        <td className={`px-2 py-1.5 text-right tabular-nums text-foreground ${BORDER_L}`}>-</td>
+        <td className="px-2 py-1.5 text-right tabular-nums text-foreground">{fmtBRL(g.totals.accum)}</td>
+        <td className={`px-2 py-1.5 text-right tabular-nums text-foreground ${BORDER_L}`}>-</td>
+        <td className="px-2 py-1.5 text-right tabular-nums text-foreground">{fmtBRL(g.totals.balance)}</td>
       </tr>
 
-      {/* Filhos: itens + subgrupos (recursivo) */}
       {!isCollapsed && (
         <Fragment>
           {g.rows.map(r => (
@@ -75,47 +82,14 @@ export default function MeasurementGroupRow(props: MeasurementGroupRowProps) {
               group={child}
               collapsed={collapsed}
               toggleCollapsed={toggleCollapsed}
-              COLSPAN={COLSPAN}
               G_BG={G_BG}
               BORDER_L={BORDER_L}
               headerStyleByDepth={headerStyleByDepth}
-              subtotalStyleByDepth={subtotalStyleByDepth}
               {...rowHandlers}
             />
           ))}
         </Fragment>
       )}
-
-      {/* Subtotal do grupo */}
-      <tr className={subtotalStyleByDepth(g.depth)}>
-        <td colSpan={8} className="px-2 py-1.5 text-right text-foreground border-t-2 border-border">
-          <span style={{ paddingLeft: indentPx }}>
-            Subtotal {g.number} — {g.name}
-          </span>
-        </td>
-        <td className="px-2 py-1.5 text-right tabular-nums text-foreground border-t-2 border-border">
-          {fmtBRL(g.totals.contracted)}
-        </td>
-        <td className={`px-2 py-1.5 text-right tabular-nums text-foreground border-t-2 border-border ${BORDER_L}`}>—</td>
-        <td className="px-2 py-1.5 text-right tabular-nums text-foreground border-t-2 border-border">
-          {fmtBRL(g.totals.period)}
-        </td>
-        <td className={`px-2 py-1.5 text-right tabular-nums text-foreground border-t-2 border-border ${BORDER_L}`}>—</td>
-        <td className="px-2 py-1.5 text-right tabular-nums text-foreground border-t-2 border-border">
-          {fmtBRL(g.totals.forecast)}
-        </td>
-        <td className={`px-2 py-1.5 text-right tabular-nums border-t-2 border-border ${g.totals.diffForecast > 0 ? 'text-success' : g.totals.diffForecast < 0 ? 'text-destructive' : 'text-foreground'}`}>
-          {fmtBRL(g.totals.diffForecast)}
-        </td>
-        <td className={`px-2 py-1.5 text-right tabular-nums text-foreground border-t-2 border-border ${BORDER_L}`}>—</td>
-        <td className="px-2 py-1.5 text-right tabular-nums text-foreground border-t-2 border-border">
-          {fmtBRL(g.totals.accum)}
-        </td>
-        <td className={`px-2 py-1.5 text-right tabular-nums text-foreground border-t-2 border-border ${BORDER_L}`}>—</td>
-        <td className="px-2 py-1.5 text-right tabular-nums text-foreground border-t-2 border-border">
-          {fmtBRL(g.totals.balance)}
-        </td>
-      </tr>
     </Fragment>
   );
 }
