@@ -78,7 +78,7 @@ export default function MeasurementTable(props: MeasurementTableProps) {
         </CardTitle>
       </CardHeader>
       <CardContent className="p-0 overflow-hidden">
-        <div className="max-h-[calc(100vh-330px)] max-w-full overflow-auto print:max-h-none print:overflow-visible">
+        <div className="max-w-full overflow-x-auto overflow-y-visible print:overflow-visible">
           <table className="measurement-table w-full text-[11px] border-separate border-spacing-0 print:min-w-0">
             <colgroup>
               <col className="col-item" />
