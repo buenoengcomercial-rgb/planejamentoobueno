@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useDeferredValue, useCallback, useRef, lazy, Suspense } from 'react';
+import { flushSync } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { AppView, Project } from '@/types/project';
 import AppSidebar from '@/components/AppSidebar';
@@ -9,6 +10,7 @@ import { Menu, X, Loader2, Building2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { applyRupToProject, applyDailyLogsToProject, calculateCPM, captureBaseline, syncBaselineWithRup, settleAllDependencies } from '@/lib/calculations';
 import { loadObraConfig } from '@/components/ConfiguracaoObra';
+import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 
 // Lazy load: cada aba só baixa seu bundle quando aberta pela primeira vez.
 const Dashboard = lazy(() => import('@/components/Dashboard'));
@@ -47,11 +49,17 @@ type UndoStacks = Record<AppView, Project[]>;
 interface UnsavedProjectDraft {
   version: typeof UNSAVED_DRAFT_VERSION;
   baseUpdatedAt: string | null;
-  savedAt: string;
+  savedAt?: string; // legado: mantido para recuperar rascunhos gravados antes desta blindagem.
+  localDraftUpdatedAt: string;
   project: Project;
 }
 
 const unsavedDraftKey = (projectId: string) => `obraplanner:unsaved-cloud-draft:${projectId}`;
+
+function toTime(value: string | null | undefined): number {
+  const parsed = Date.parse(value ?? '');
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 function readUnsavedDraft(projectId: string, cloudUpdatedAt: string | null): UnsavedProjectDraft | null {
   try {
@@ -59,9 +67,16 @@ function readUnsavedDraft(projectId: string, cloudUpdatedAt: string | null): Uns
     if (!raw) return null;
     const draft = JSON.parse(raw) as UnsavedProjectDraft;
     if (draft.version !== UNSAVED_DRAFT_VERSION) return null;
-    if (draft.baseUpdatedAt !== cloudUpdatedAt) return null;
     if (!draft.project || draft.project.id !== projectId) return null;
-    return draft;
+
+    const localDraftUpdatedAt = draft.localDraftUpdatedAt ?? draft.savedAt;
+    if (!localDraftUpdatedAt) return null;
+
+    const baseMatches = draft.baseUpdatedAt === cloudUpdatedAt;
+    const localIsNewerThanCloud = toTime(localDraftUpdatedAt) >= toTime(cloudUpdatedAt);
+    if (!baseMatches && !localIsNewerThanCloud) return null;
+
+    return { ...draft, localDraftUpdatedAt };
   } catch {
     return null;
   }
@@ -69,10 +84,12 @@ function readUnsavedDraft(projectId: string, cloudUpdatedAt: string | null): Uns
 
 function writeUnsavedDraft(project: Project, baseUpdatedAt: string | null) {
   try {
+    const now = new Date().toISOString();
     localStorage.setItem(unsavedDraftKey(project.id), JSON.stringify({
       version: UNSAVED_DRAFT_VERSION,
       baseUpdatedAt,
-      savedAt: new Date().toISOString(),
+      savedAt: now,
+      localDraftUpdatedAt: now,
       project,
     } satisfies UnsavedProjectDraft));
   } catch (err) {
@@ -121,6 +138,7 @@ export default function Index() {
 
   const undoStacksRef = useRef<UndoStacks>({ dashboard: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], realCost: [], materials: [], warehouse: [] });
   const [undoVersion, setUndoVersion] = useState(0);
+  const rawProjectRef = useRef<Project | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const initialLoadRef = useRef(false);
   const inFlightSaveRef = useRef<Promise<void> | null>(null);
@@ -149,6 +167,7 @@ export default function Index() {
 
   const replaceProjectWithoutAutoSave = useCallback((projectToLoad: Project | null, updatedAt: string | null = null) => {
     let projectForState = projectToLoad;
+    const cloudProjectJson = projectToLoad ? serializeProjectForSave(projectToLoad) : null;
     const draft = projectToLoad ? readUnsavedDraft(projectToLoad.id, updatedAt) : null;
     if (draft) {
       projectForState = draft.project;
@@ -158,7 +177,10 @@ export default function Index() {
     skipNextAutoSaveRef.current = !draft;
     conflictDetectedRef.current = false;
     currentProjectUpdatedAtRef.current = updatedAt;
-    lastSavedProjectJsonRef.current = projectForState ? serializeProjectForSave(projectForState) : null;
+    rawProjectRef.current = projectForState;
+    // Se recuperamos rascunho local, a referencia de "salvo" precisa continuar
+    // sendo a versao da nuvem; assim o autosave percebe a diferenca e reenvia.
+    lastSavedProjectJsonRef.current = draft ? cloudProjectJson : (projectForState ? serializeProjectForSave(projectForState) : null);
     setCurrentProjectUpdatedAt(updatedAt);
     setRawProject(projectForState);
     if (draft) setSaveStatus('saving');
@@ -174,7 +196,18 @@ export default function Index() {
 
     const seq = ++saveRequestSeqRef.current;
     const request = saveQueueRef.current.catch(() => undefined).then(async () => {
-      const updatedAt = await upsertCloudProject(projectToSave, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined);
+      let updatedAt: string;
+      try {
+        updatedAt = await upsertCloudProject(projectToSave, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined);
+      } catch (e) {
+        if (!(e instanceof CloudProjectConflictError)) throw e;
+
+        // Em uso individual/Lovable Preview, conflitos de updated_at costumam
+        // vir de salvamentos concorrentes do mesmo navegador. A versao local
+        // e a mais segura para nao perder trabalho em andamento.
+        updatedAt = await upsertCloudProject(projectToSave, projectOrgId);
+        toast.warning('Mantive suas alteracoes locais e sincronizei novamente com a nuvem.');
+      }
       conflictDetectedRef.current = false;
       currentProjectUpdatedAtRef.current = updatedAt;
       lastSavedProjectJsonRef.current = nextJson;
@@ -204,6 +237,10 @@ export default function Index() {
       if (inFlightSaveRef.current === request) inFlightSaveRef.current = null;
     }
   }, []);
+
+  useEffect(() => {
+    rawProjectRef.current = rawProject;
+  }, [rawProject]);
 
   const flushPendingSave = useCallback(async () => {
     if (!user || !orgId || !rawProject || !initialLoadRef.current || !editor) return true;
@@ -303,16 +340,45 @@ export default function Index() {
     };
   }, [rawProject, user, orgId, editor, persistProject]);
 
+  const protectLocalDraftBeforePageSleeps = useCallback(() => {
+    if (!editor || !rawProjectRef.current) return;
+    try {
+      flushSync(() => {
+        flushPendingEditCommits();
+      });
+    } catch {
+      flushPendingEditCommits();
+    }
+    if (rawProjectRef.current) writeUnsavedDraft(rawProjectRef.current, currentProjectUpdatedAtRef.current);
+  }, [editor]);
+
   useEffect(() => {
+    const handlePageMaySleep = () => {
+      protectLocalDraftBeforePageSleeps();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') protectLocalDraftBeforePageSleeps();
+    };
+
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      protectLocalDraftBeforePageSleeps();
       if (!saveTimerRef.current && !inFlightSaveRef.current) return;
       event.preventDefault();
       event.returnValue = '';
     };
 
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageMaySleep);
+    window.addEventListener('blur', handlePageMaySleep);
     window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, []);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageMaySleep);
+      window.removeEventListener('blur', handlePageMaySleep);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [protectLocalDraftBeforePageSleeps]);
 
   const deferredRawProject = useDeferredValue(rawProject);
 
@@ -350,6 +416,7 @@ export default function Index() {
         const stack = undoStacksRef.current[view];
         stack.push(prev);
         if (stack.length > UNDO_LIMIT) stack.shift();
+        rawProjectRef.current = resolved;
         writeUnsavedDraft(resolved, currentProjectUpdatedAtRef.current);
         setUndoVersion(v => v + 1);
         return resolved;
@@ -370,6 +437,7 @@ export default function Index() {
     if (stack.length === 0) { toast.message('Nada para desfazer'); return; }
     const prev = stack.pop()!;
     writeUnsavedDraft(prev, currentProjectUpdatedAtRef.current);
+    rawProjectRef.current = prev;
     setRawProject(prev);
     setUndoVersion(v => v + 1);
     toast.success('Alteração desfeita');
