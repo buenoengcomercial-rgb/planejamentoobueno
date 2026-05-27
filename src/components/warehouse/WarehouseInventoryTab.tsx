@@ -9,7 +9,10 @@ import { toast } from 'sonner';
 interface Props { project: Project; onProjectChange: (next: Project) => void; }
 
 export default function WarehouseInventoryTab({ project, onProjectChange }: Props) {
-  const rows = useMemo(() => computeWarehouseRows(project), [project]);
+  const rows = useMemo(
+    () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true }),
+    [project],
+  );
   const [counts, setCounts] = useState<Record<string, string>>({});
   const [user, setUser] = useState('');
   const today = new Date().toISOString().slice(0, 10);

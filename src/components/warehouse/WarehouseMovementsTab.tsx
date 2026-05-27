@@ -7,18 +7,33 @@ import { Plus, Undo2, Paperclip, X } from 'lucide-react';
 import { addMovement, reverseMovement, MOVEMENT_LABEL, ensureWarehouse, makeAttachment, movementSign, computeWarehouseRows } from '@/lib/warehouse';
 import { getProjectSuppliers } from '@/lib/materialComparisons';
 import { getAllTasks } from '@/data/sampleProject';
+import { getChapterNumbering } from '@/lib/chapters';
 
 interface Props { project: Project; onProjectChange: (next: Project) => void; }
 
-const TYPES: WarehouseMovementType[] = ['entrada', 'devolucao', 'retirada', 'perda', 'transferencia_saida', 'transferencia_entrada', 'ajuste_positivo', 'ajuste_negativo'];
+const TYPES: WarehouseMovementType[] = ['entrada', 'devolucao', 'retirada'];
+
+const inputQty = (value: number | undefined) =>
+  value != null && Number.isFinite(value)
+    ? value.toLocaleString('pt-BR', { maximumFractionDigits: 2 })
+    : '';
 
 export default function WarehouseMovementsTab({ project, onProjectChange }: Props) {
   const wh = ensureWarehouse(project).warehouse!;
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
-  const rows = useMemo(() => computeWarehouseRows(project), [project]);
+  const rows = useMemo(
+    () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true }),
+    [project],
+  );
   const suppliers = useMemo(() => getProjectSuppliers(project), [project]);
   const tasks = useMemo(() => getAllTasks(project), [project]);
   const taskById = useMemo(() => new Map(tasks.map(task => [task.id, task.name])), [tasks]);
+  const chapterNumbering = useMemo(() => getChapterNumbering(project), [project]);
+  const mainChapters = useMemo(
+    () => (project.phases ?? []).filter(phase => !phase.parentId),
+    [project.phases],
+  );
+  const chapterById = useMemo(() => new Map(mainChapters.map(phase => [phase.id, `${chapterNumbering.get(phase.id) ?? ''} ${phase.name}`.trim()])), [mainChapters, chapterNumbering]);
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({
     type: 'entrada' as WarehouseMovementType,
@@ -32,11 +47,12 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
     responsible: '',
     user: '',
     taskId: '',
+    chapterId: '',
   });
   const [attachments, setAttachments] = useState<WarehouseAttachment[]>([]);
 
   const item = rows.find(r => r.key === form.itemKey);
-  const shouldLinkTask = ['retirada', 'perda', 'transferencia_saida', 'ajuste_negativo'].includes(form.type);
+  const shouldLinkChapter = form.type === 'retirada';
 
   const submit = () => {
     if (!item) return;
@@ -56,11 +72,12 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
       notes: form.notes || undefined,
       responsible: form.responsible || undefined,
       user: form.user || undefined,
+      chapterId: form.chapterId || undefined,
       taskId: form.taskId || undefined,
       attachments,
     }));
     setOpen(false);
-    setForm({ ...form, quantity: '', notes: '', invoiceNumber: '' });
+    setForm({ ...form, quantity: '', notes: '', invoiceNumber: '', chapterId: '' });
     setAttachments([]);
   };
 
@@ -69,6 +86,18 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
     const made = await Promise.all(files.map(f => makeAttachment(f, form.type === 'entrada' ? 'nf' : 'outro')));
     setAttachments(prev => [...prev, ...made]);
     e.target.value = '';
+  };
+
+  const applyItemDefaults = (itemKey: string, type: WarehouseMovementType = form.type) => {
+    const selected = rows.find(row => row.key === itemKey);
+    const pendingReceipt = selected ? Math.max(0, selected.purchased - selected.received) : 0;
+    setForm(prev => ({
+      ...prev,
+      itemKey,
+      quantity: type === 'entrada' && selected ? inputQty(pendingReceipt || selected.purchased) : prev.quantity,
+      unitPrice: type === 'entrada' && selected ? inputQty(selected.unitPrice) : prev.unitPrice,
+      supplierId: type === 'entrada' && selected ? selected.supplierId ?? '' : prev.supplierId,
+    }));
   };
 
   return (
@@ -86,20 +115,34 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
         {open && (
           <div className="bg-card border border-border rounded-lg p-3 space-y-2">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              <select className="h-8 text-xs border border-border rounded px-2 bg-background" value={form.type} onChange={e => setForm({ ...form, type: e.target.value as WarehouseMovementType, taskId: '' })}>
+              <select
+                className="h-8 text-xs border border-border rounded px-2 bg-background"
+                value={form.type}
+                onChange={e => {
+                  const nextType = e.target.value as WarehouseMovementType;
+                  setForm(prev => ({
+                    ...prev,
+                    type: nextType,
+                    taskId: '',
+                    chapterId: '',
+                    supplierId: nextType === 'entrada' ? prev.supplierId : '',
+                  }));
+                  if (form.itemKey) applyItemDefaults(form.itemKey, nextType);
+                }}
+              >
                 {TYPES.map(t => <option key={t} value={t}>{MOVEMENT_LABEL[t]}</option>)}
               </select>
               <Input type="date" className="h-8 text-xs" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
-              <select className="h-8 text-xs border border-border rounded px-2 bg-background col-span-2" value={form.itemKey} onChange={e => setForm({ ...form, itemKey: e.target.value })}>
+              <select className="h-8 text-xs border border-border rounded px-2 bg-background col-span-2" value={form.itemKey} onChange={e => applyItemDefaults(e.target.value)}>
                 <option value="">— selecione o insumo —</option>
                 {rows.map(r => <option key={r.key} value={r.key}>{r.description} ({r.unit})</option>)}
               </select>
               <Input placeholder={`Quantidade ${item ? `(${item.unit})` : ''}`} value={form.quantity} onChange={e => setForm({ ...form, quantity: e.target.value })} className="h-8 text-xs" />
               <Input placeholder="Valor unit. (R$)" value={form.unitPrice} onChange={e => setForm({ ...form, unitPrice: e.target.value })} className="h-8 text-xs" />
-              {shouldLinkTask && (
-                <select className="h-8 text-xs border border-border rounded px-2 bg-background col-span-2" value={form.taskId} onChange={e => setForm({ ...form, taskId: e.target.value })}>
-                  <option value="">-- vincular a tarefa/capitulo --</option>
-                  {tasks.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              {shouldLinkChapter && (
+                <select className="h-8 text-xs border border-border rounded px-2 bg-background col-span-2" value={form.chapterId} onChange={e => setForm({ ...form, chapterId: e.target.value })}>
+                  <option value="">-- vincular ao capítulo principal --</option>
+                  {mainChapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapterById.get(chapter.id)}</option>)}
                 </select>
               )}
               {form.type === 'entrada' && (
@@ -156,6 +199,7 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
                 const sign = movementSign(m);
                 const reversed = !!m.reversedById;
                 const taskName = m.taskId ? taskById.get(m.taskId) : undefined;
+                const chapterName = m.chapterId ? chapterById.get(m.chapterId) : undefined;
                 return (
                   <tr key={m.id} className={`border-t border-border ${reversed ? 'opacity-50 line-through' : ''}`}>
                     <td className="p-1.5 font-mono text-[10px]">{m.date}</td>
@@ -167,6 +211,7 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
                     <td className="p-1.5 text-[10px] text-muted-foreground">
                       {m.invoiceNumber && `NF ${m.invoiceNumber} `}
                       {m.workerName && `· ${m.workerName} `}
+                      {chapterName && `· ${chapterName} `}
                       {m.taskId && `· ${taskName ?? `tarefa ${m.taskId.slice(0, 6)}`} `}
                       {m.notes && `· ${m.notes}`}
                     </td>

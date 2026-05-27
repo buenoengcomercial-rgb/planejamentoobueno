@@ -390,6 +390,10 @@ export interface WarehouseRow {
   code?: string;
   description: string;
   unit: string;
+  manualItem?: boolean;
+  supplierId?: string;
+  supplierName?: string;
+  unitPrice?: number;
   planned: number;
   purchased: number;
   received: number;
@@ -403,11 +407,34 @@ export interface WarehouseRow {
   underMin: boolean;
 }
 
-export function computeWarehouseRows(project: Project): WarehouseRow[] {
+export interface WarehouseRowsOptions {
+  materialOnly?: boolean;
+  confirmedOnly?: boolean;
+  includeManual?: boolean;
+}
+
+export function createManualWarehouseItem(
+  project: Project,
+  input: { code?: string; description: string; unit: string; minStock?: number },
+): Project {
+  const description = input.description.trim();
+  const unit = input.unit.trim();
+  if (!description || !unit) return project;
+  return upsertItemConfig(project, {
+    key: `warehouse-manual|${uid()}`,
+    code: input.code?.trim() || undefined,
+    description,
+    unit,
+    manualItem: true,
+    minStock: input.minStock,
+  });
+}
+
+export function computeWarehouseRows(project: Project, opts: WarehouseRowsOptions = {}): WarehouseRow[] {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
   // partir da consolidação da Lista de Material (planejado/comprado)
-  const stockRows = computeStockRows(p);
+  const stockRows = computeStockRows(p, { materialOnly: opts.materialOnly, confirmedOnly: opts.confirmedOnly });
   const map = new Map<string, WarehouseRow>();
   for (const sr of stockRows) {
     map.set(sr.key, {
@@ -415,6 +442,9 @@ export function computeWarehouseRows(project: Project): WarehouseRow[] {
       code: sr.code,
       description: sr.description,
       unit: sr.unit,
+      supplierId: sr.supplierId,
+      supplierName: sr.supplierName,
+      unitPrice: sr.unitPrice,
       planned: sr.planned,
       purchased: sr.purchased,
       received: 0,
@@ -426,9 +456,33 @@ export function computeWarehouseRows(project: Project): WarehouseRow[] {
     });
   }
   // aplicar config por item
+  const configByKey = new Map(wh.items.map(cfg => [cfg.key, cfg] as const));
   for (const cfg of wh.items) {
-    const r = map.get(cfg.key);
+    let r = map.get(cfg.key);
+    if (!r && cfg.manualItem && opts.includeManual !== false) {
+      r = {
+        key: cfg.key,
+        code: cfg.code,
+        description: cfg.description,
+        unit: cfg.unit,
+        manualItem: true,
+        supplierId: cfg.supplierId,
+        unitPrice: cfg.unitPrice,
+        planned: cfg.plannedQuantity ?? 0,
+        purchased: cfg.purchasedQuantity ?? 0,
+        received: 0,
+        withdrawn: 0,
+        losses: 0,
+        adjustments: 0,
+        balance: 0,
+        underMin: false,
+      };
+      map.set(cfg.key, r);
+    }
     if (r) {
+      r.manualItem = cfg.manualItem;
+      r.supplierId = cfg.supplierId ?? r.supplierId;
+      r.unitPrice = cfg.unitPrice ?? r.unitPrice;
       r.minStock = cfg.minStock;
       r.locationId = cfg.defaultLocationId;
     }
@@ -437,11 +491,16 @@ export function computeWarehouseRows(project: Project): WarehouseRow[] {
   for (const m of wh.movements) {
     let r = map.get(m.itemKey);
     if (!r) {
+      const cfg = configByKey.get(m.itemKey);
+      if (opts.confirmedOnly && !cfg?.manualItem) continue;
       r = {
         key: m.itemKey,
         code: m.itemCode,
         description: m.itemDescription,
         unit: m.itemUnit,
+        manualItem: cfg?.manualItem,
+        supplierId: m.supplierId ?? cfg?.supplierId,
+        unitPrice: m.unitPrice ?? cfg?.unitPrice,
         planned: 0,
         purchased: 0,
         received: 0,
@@ -453,6 +512,8 @@ export function computeWarehouseRows(project: Project): WarehouseRow[] {
       };
       map.set(m.itemKey, r);
     }
+    if (m.supplierId) r.supplierId = m.supplierId;
+    if (m.unitPrice != null) r.unitPrice = m.unitPrice;
     if (m.reversedById) continue;
     const sign = movementSign(m);
     const q = m.quantity * sign;
@@ -486,7 +547,7 @@ export interface WarehousePanelSummary {
 }
 
 export function panelSummary(project: Project): WarehousePanelSummary {
-  const rows = computeWarehouseRows(project);
+  const rows = computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true });
   const wh = (ensureWarehouse(project).warehouse)!;
   let totalPlanned = 0, totalPurchased = 0, totalReceived = 0, totalWithdrawn = 0, totalLosses = 0, totalBalance = 0, totalToPurchase = 0;
   let underMin = 0, divergence = 0;
@@ -554,6 +615,15 @@ function buildTaskIndex(project: Project): Map<string, { task: Task; phaseId: st
   return map;
 }
 
+function resolveRootPhaseId(project: Project, phaseId: string): string {
+  const byId = new Map((project.phases ?? []).map(phase => [phase.id, phase]));
+  let current = byId.get(phaseId);
+  while (current?.parentId && byId.has(current.parentId)) {
+    current = byId.get(current.parentId);
+  }
+  return current?.id ?? phaseId;
+}
+
 const CONSUMPTION_TYPES = new Set<WarehouseMovementType>(['retirada', 'perda', 'transferencia_saida']);
 
 export function computeWarehouseUsageByChapter(project: Project): WarehouseUsageByChapterResult {
@@ -561,27 +631,38 @@ export function computeWarehouseUsageByChapter(project: Project): WarehouseUsage
   const wh = p.warehouse!;
   const taskIndex = buildTaskIndex(p);
   const numbering = getChapterNumbering(p);
+  const phaseById = new Map((p.phases ?? []).map(phase => [phase.id, phase]));
   const byChapter = new Map<string, WarehouseUsageByChapterRow & { taskIds: Set<string>; itemKeys: Set<string> }>();
   let unlinkedMovementCount = 0;
 
   for (const movement of wh.movements) {
     if (movement.reversedById || !CONSUMPTION_TYPES.has(movement.type)) continue;
-    if (!movement.taskId) {
-      unlinkedMovementCount += 1;
-      continue;
+    let phaseId = movement.chapterId;
+    let phaseName: string | undefined;
+    let taskId = movement.taskId;
+
+    if (phaseId) {
+      const phase = phaseById.get(phaseId);
+      phaseName = phase?.name;
+    } else if (movement.taskId) {
+      const meta = taskIndex.get(movement.taskId);
+      if (meta) {
+        phaseId = resolveRootPhaseId(p, meta.phaseId);
+        phaseName = phaseById.get(phaseId)?.name ?? meta.phaseName;
+      }
     }
-    const meta = taskIndex.get(movement.taskId);
-    if (!meta) {
+
+    if (!phaseId || !phaseName) {
       unlinkedMovementCount += 1;
       continue;
     }
 
-    const chapterNumber = numbering.get(meta.phaseId) || '';
-    const chapter = `${chapterNumber ? `${chapterNumber} - ` : ''}${meta.phaseName}`;
-    let row = byChapter.get(meta.phaseId);
+    const chapterNumber = numbering.get(phaseId) || '';
+    const chapter = `${chapterNumber ? `${chapterNumber} - ` : ''}${phaseName}`;
+    let row = byChapter.get(phaseId);
     if (!row) {
       row = {
-        phaseId: meta.phaseId,
+        phaseId,
         chapter,
         taskCount: 0,
         movementCount: 0,
@@ -590,11 +671,11 @@ export function computeWarehouseUsageByChapter(project: Project): WarehouseUsage
         taskIds: new Set<string>(),
         itemKeys: new Set<string>(),
       };
-      byChapter.set(meta.phaseId, row);
+      byChapter.set(phaseId, row);
     }
 
     row.movementCount += 1;
-    row.taskIds.add(movement.taskId);
+    if (taskId) row.taskIds.add(taskId);
     row.itemKeys.add(movement.itemKey);
     if (!row.lastMovementDate || movement.date > row.lastMovementDate) {
       row.lastMovementDate = movement.date;

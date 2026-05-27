@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { MaterialComparison, Project } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import { Button } from '@/components/ui/button';
 import { ShoppingCart, Printer, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { NumberInput, formatQty, parseBR } from './numberInput';
 
 interface Props {
   project: Project;
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export default function PurchaseOrderTab({ project, comparison, onProjectChange }: Props) {
+  const [orderQty, setOrderQty] = useState<Record<string, string>>({});
   const suppliers = useMemo(() => MC.getComparisonSuppliers(project, comparison), [project, comparison]);
   const plan = useMemo(() => MC.optimizedPurchasePlan({ ...comparison, suppliers }), [comparison, suppliers]);
   const grouped = useMemo(() => {
@@ -31,25 +33,46 @@ export default function PurchaseOrderTab({ project, comparison, onProjectChange 
     [plan, comparison.items],
   );
 
+  const quantityToConfirm = (itemId: string) => {
+    const item = comparison.items.find(current => current.id === itemId);
+    if (!item) return 0;
+    const pending = MC.getPendingPurchaseQuantity(item);
+    const typed = parseBR(orderQty[itemId] ?? '');
+    return Math.min(pending, typed && typed > 0 ? typed : pending);
+  };
+
   const confirmSupplierOrder = (supplierId: string, rows: typeof plan.rows) => {
     if (rows.length === 0) return;
 
     let nextComparison = comparison;
+    let confirmedRows = 0;
+    let confirmedQuantity = 0;
     for (const row of rows) {
-      nextComparison = MC.updateItem(nextComparison, row.itemId, {
-        chosenSupplierId: supplierId,
-        status: 'comprado',
-      });
+      const qty = quantityToConfirm(row.itemId);
+      if (qty <= 0) continue;
+      nextComparison = MC.confirmItemPurchase(nextComparison, row.itemId, supplierId, qty, row.unitPrice);
+      confirmedRows += 1;
+      confirmedQuantity += qty;
     }
 
     const hasItems = nextComparison.items.length > 0;
-    const allPurchased = hasItems && nextComparison.items.every(item => item.status === 'comprado');
+    const allPurchased = hasItems && nextComparison.items.every(item => MC.getPendingPurchaseQuantity(item) <= 0);
     if (allPurchased) {
       nextComparison = MC.setComparisonStatus(nextComparison, 'comprado');
     }
 
+    if (confirmedRows === 0) {
+      toast.warning('Nenhuma quantidade pendente para confirmar neste fornecedor.');
+      return;
+    }
+
     onProjectChange(MC.upsertComparison(project, nextComparison));
-    toast.success(`${rows.length} item(ns) marcados como comprados. O Almoxarifado ja pode controlar recebimento e saldo.`);
+    setOrderQty(prev => {
+      const next = { ...prev };
+      for (const row of rows) delete next[row.itemId];
+      return next;
+    });
+    toast.success(`${confirmedRows} item(ns) confirmados (${formatQty(confirmedQuantity)} un.). O Almoxarifado agora pode receber estes materiais.`);
   };
 
   if (plan.rows.length === 0 && unresolvedDetails.length === 0) {
@@ -70,7 +93,7 @@ export default function PurchaseOrderTab({ project, comparison, onProjectChange 
           <div>
             <h3 className="text-sm font-semibold">Pedidos sugeridos por fornecedor</h3>
             <p className="text-[11px] text-muted-foreground">
-              Confirmar um pedido marca os itens como comprados e alimenta o controle de estoque do Almoxarifado.
+              Confirmar um pedido libera estes materiais para recebimento no Almoxarifado; estoque físico nasce na Entrada.
             </p>
           </div>
         </div>
@@ -80,10 +103,18 @@ export default function PurchaseOrderTab({ project, comparison, onProjectChange 
       </div>
 
       {grouped.map(([supplierId, group]) => {
-        const total = group.rows.reduce((sum, row) => sum + row.total, 0);
+        const total = group.rows.reduce((sum, row) => {
+          const item = comparison.items.find(current => current.id === row.itemId);
+          const pending = item ? MC.getPendingPurchaseQuantity(item) : 0;
+          return sum + row.unitPrice * pending;
+        }, 0);
         const allGroupRowsPurchased = group.rows.every(row => {
           const item = comparison.items.find(current => current.id === row.itemId);
-          return item?.status === 'comprado' && item.chosenSupplierId === supplierId;
+          return !!item && MC.getPendingPurchaseQuantity(item) <= 0;
+        });
+        const hasPendingRows = group.rows.some(row => {
+          const item = comparison.items.find(current => current.id === row.itemId);
+          return !!item && MC.getPendingPurchaseQuantity(item) > 0;
         });
 
         return (
@@ -99,6 +130,7 @@ export default function PurchaseOrderTab({ project, comparison, onProjectChange 
                 size="sm"
                 variant={allGroupRowsPurchased ? 'secondary' : 'default'}
                 onClick={() => confirmSupplierOrder(supplierId, group.rows)}
+                disabled={!hasPendingRows}
               >
                 <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
                 {allGroupRowsPurchased ? 'Pedido confirmado' : 'Confirmar pedido'}
@@ -109,7 +141,8 @@ export default function PurchaseOrderTab({ project, comparison, onProjectChange 
                 <tr>
                   <th className="p-2 text-left">Descricao</th>
                   <th className="p-2">Un.</th>
-                  <th className="p-2 text-right">Qtd.</th>
+                  <th className="p-2 text-right">Qtd. planej.</th>
+                  <th className="p-2 text-right">Qtd. a comprar</th>
                   <th className="p-2 text-right">Preco un.</th>
                   <th className="p-2 text-right">Total</th>
                   <th className="p-2 text-center">Status</th>
@@ -118,21 +151,41 @@ export default function PurchaseOrderTab({ project, comparison, onProjectChange 
               <tbody>
                 {group.rows.map(row => {
                   const item = comparison.items.find(current => current.id === row.itemId);
-                  const purchased = item?.status === 'comprado' && item.chosenSupplierId === supplierId;
+                  const purchasedQty = item ? MC.getPurchasedQuantity(item) : 0;
+                  const pendingQty = item ? MC.getPendingPurchaseQuantity(item) : 0;
+                  const inputValue = orderQty[row.itemId] ?? (pendingQty > 0 ? formatQty(pendingQty) : '');
+                  const requestedQty = Math.min(pendingQty, parseBR(inputValue) ?? pendingQty);
+                  const purchased = pendingQty <= 0;
+                  const partial = !purchased && purchasedQty > 0;
                   return (
                     <tr key={row.itemId} className="border-t border-border">
                       <td className="p-2">{row.description}</td>
                       <td className="p-2 text-center">{row.unit}</td>
-                      <td className="p-2 text-right">{row.quantity.toLocaleString('pt-BR')}</td>
+                      <td className="p-2 text-right">{formatQty(row.quantity)}</td>
+                      <td className="p-2 text-right">
+                        <NumberInput
+                          value={inputValue}
+                          onChange={value => setOrderQty(prev => ({ ...prev, [row.itemId]: value }))}
+                          disabled={pendingQty <= 0}
+                          className="ml-auto h-7 w-24 text-xs text-right"
+                        />
+                        {purchasedQty > 0 && (
+                          <div className="mt-0.5 text-[10px] text-muted-foreground">
+                            confirmado: {formatQty(purchasedQty)}
+                          </div>
+                        )}
+                      </td>
                       <td className="p-2 text-right">R$ {row.unitPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                      <td className="p-2 text-right font-medium">R$ {row.total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                      <td className="p-2 text-right font-medium">R$ {(row.unitPrice * requestedQty).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
                       <td className="p-2 text-center">
                         <span className={`inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-medium ${
                           purchased
                             ? 'border-success/40 bg-success/10 text-success'
+                            : partial
+                              ? 'border-warning/40 bg-warning/10 text-warning'
                             : 'border-border bg-muted/40 text-muted-foreground'
                         }`}>
-                          {purchased ? 'Comprado' : 'A confirmar'}
+                          {purchased ? 'Pedido confirmado' : partial ? 'Pedido parcial' : 'A confirmar'}
                         </span>
                       </td>
                     </tr>

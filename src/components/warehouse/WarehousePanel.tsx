@@ -22,7 +22,10 @@ const StatCard = ({ label, value, tone, hint }: { label: string; value: string |
 
 export default function WarehousePanel({ project }: Props) {
   const s = useMemo(() => panelSummary(project), [project]);
-  const rows = useMemo(() => computeWarehouseRows(project), [project]);
+  const rows = useMemo(
+    () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true }),
+    [project],
+  );
   const usageByChapter = useMemo(() => computeWarehouseUsageByChapter(project), [project]);
   const wh = ensureWarehouse(project).warehouse!;
   const underMin = rows.filter(r => r.underMin).slice(0, 8);
@@ -107,7 +110,7 @@ export default function WarehousePanel({ project }: Props) {
               <MapPinned className="w-3.5 h-3.5 text-primary" /> Consumo por capitulo da obra
             </div>
             <div className="text-[11px] text-muted-foreground">
-              Retiradas, perdas e transferencias de saida vinculadas a tarefas da EAP.
+              Retiradas vinculadas aos capitulos principais da obra.
             </div>
           </div>
           {usageByChapter.unlinkedMovementCount > 0 && (
@@ -119,7 +122,7 @@ export default function WarehousePanel({ project }: Props) {
 
         {usageByChapter.rows.length === 0 ? (
           <div className="text-xs text-muted-foreground py-4 text-center border border-dashed border-border rounded-md">
-            Ainda nao ha retirada vinculada a capitulo/tarefa. Ao registrar uma retirada, selecione a tarefa da EAP.
+            Ainda nao ha retirada vinculada a capitulo. Ao registrar uma retirada, selecione o capitulo principal da obra.
           </div>
         ) : (
           <table className="w-full text-xs">

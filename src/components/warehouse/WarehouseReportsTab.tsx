@@ -21,7 +21,10 @@ function downloadCSV(filename: string, rows: (string | number)[][]) {
 
 export default function WarehouseReportsTab({ project }: Props) {
   const wh = ensureWarehouse(project).warehouse!;
-  const rows = useMemo(() => computeWarehouseRows(project), [project]);
+  const rows = useMemo(
+    () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true }),
+    [project],
+  );
   const tasks = useMemo(() => getAllTasks(project), [project]);
 
   const exportMovements = () => {

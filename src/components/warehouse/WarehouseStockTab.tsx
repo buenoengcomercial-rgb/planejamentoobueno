@@ -1,14 +1,20 @@
 import { useMemo, useState } from 'react';
 import type { Project } from '@/types/project';
-import { computeWarehouseRows, upsertItemConfig } from '@/lib/warehouse';
+import { computeWarehouseRows, createManualWarehouseItem, upsertItemConfig } from '@/lib/warehouse';
 import { Input } from '@/components/ui/input';
-import { Search } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Plus, Search, X } from 'lucide-react';
 
 interface Props { project: Project; onProjectChange: (next: Project) => void; }
 
 export default function WarehouseStockTab({ project, onProjectChange }: Props) {
   const [search, setSearch] = useState('');
-  const rows = useMemo(() => computeWarehouseRows(project), [project]);
+  const [showManualForm, setShowManualForm] = useState(false);
+  const [manualForm, setManualForm] = useState({ code: '', description: '', unit: '' });
+  const rows = useMemo(
+    () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true }),
+    [project],
+  );
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return rows;
@@ -19,6 +25,13 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
     onProjectChange(upsertItemConfig(project, { key, code, description, unit, minStock: Number.isFinite(min) ? min : undefined }));
   };
 
+  const createManual = () => {
+    if (!manualForm.description.trim() || !manualForm.unit.trim()) return;
+    onProjectChange(createManualWarehouseItem(project, manualForm));
+    setManualForm({ code: '', description: '', unit: '' });
+    setShowManualForm(false);
+  };
+
   return (
     <div className="bg-card border border-border rounded-md overflow-hidden">
       <div className="p-2 border-b border-border bg-muted/30 relative flex items-center gap-2">
@@ -26,8 +39,40 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
           <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar insumo por descrição ou código..." className="h-8 pl-7 text-xs" />
         </div>
+        <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setShowManualForm(value => !value)}>
+          {showManualForm ? <X className="w-3.5 h-3.5 mr-1" /> : <Plus className="w-3.5 h-3.5 mr-1" />}
+          Novo item avulso
+        </Button>
         <span className="text-[11px] text-muted-foreground ml-auto">{filtered.length} item(ns)</span>
       </div>
+      {showManualForm && (
+        <div className="grid grid-cols-12 gap-2 border-b border-border bg-muted/10 p-2">
+          <Input
+            value={manualForm.code}
+            onChange={e => setManualForm({ ...manualForm, code: e.target.value })}
+            placeholder="Código opcional"
+            className="col-span-2 h-8 text-xs"
+          />
+          <Input
+            value={manualForm.description}
+            onChange={e => setManualForm({ ...manualForm, description: e.target.value })}
+            placeholder="Descrição do material avulso"
+            className="col-span-7 h-8 text-xs"
+          />
+          <Input
+            value={manualForm.unit}
+            onChange={e => setManualForm({ ...manualForm, unit: e.target.value })}
+            placeholder="Un."
+            className="col-span-1 h-8 text-xs"
+            onKeyDown={e => {
+              if (e.key === 'Enter') createManual();
+            }}
+          />
+          <Button className="col-span-2 h-8 text-xs" onClick={createManual} disabled={!manualForm.description.trim() || !manualForm.unit.trim()}>
+            Criar material
+          </Button>
+        </div>
+      )}
       <div className="max-h-[calc(100vh-300px)] overflow-auto">
         <table className="w-full text-xs table-fixed">
           <colgroup>

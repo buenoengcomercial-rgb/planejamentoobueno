@@ -517,7 +517,13 @@ export interface WarehouseItemConfig {
   code?: string;
   description: string;
   unit: string;
+  /** Item criado diretamente no almoxarifado, sem alterar orçamento/lista de material. */
+  manualItem?: boolean;
   minStock?: number;
+  plannedQuantity?: number;
+  purchasedQuantity?: number;
+  unitPrice?: number;
+  supplierId?: string;
   defaultLocationId?: string;
 }
 
@@ -549,6 +555,8 @@ export interface WarehouseMovement {
   invoiceNumber?: string;
   // destinos
   requisitionId?: string;
+  /** Capítulo principal da obra usado para consumo gerencial por frente/prédio. */
+  chapterId?: string;
   taskId?: string;
   teamId?: string;
   workerName?: string;
@@ -649,7 +657,7 @@ export interface WarehouseState {
 // =================== LISTA DE MATERIAL / COMPARATIVOS ===================
 
 export type MaterialComparisonStatus = 'rascunho' | 'em_cotacao' | 'fechado' | 'comprado';
-export type ComparisonItemStatus = 'pendente' | 'orcado' | 'comprado';
+export type ComparisonItemStatus = 'pendente' | 'orcado' | 'pedido_parcial' | 'comprado';
 export type MaterialCostClass = 'material' | 'labor' | 'equipment' | 'unclassified';
 
 export interface ComparisonSupplier {
@@ -674,6 +682,17 @@ export interface ComparisonItemPrice {
   notes?: string;
 }
 
+export interface ComparisonItemPurchase {
+  id: string;
+  supplierId: string;
+  /** Quantidade confirmada neste pedido. */
+  quantity: number;
+  /** Preço unitário confirmado no momento do pedido. */
+  unitPrice: number;
+  /** ISO date. */
+  confirmedAt: string;
+}
+
 export interface ComparisonItem {
   id: string;
   code?: string;
@@ -685,6 +704,8 @@ export interface ComparisonItem {
   /** Fornecedor escolhido manualmente; quando ausente, usa-se o menor preço. */
   chosenSupplierId?: string;
   prices: ComparisonItemPrice[];
+  /** Confirmações de pedido, permitindo compra parcial e histórico por fornecedor. */
+  purchaseOrders?: ComparisonItemPurchase[];
   status?: ComparisonItemStatus;
   /** Origem (insumo analítico, material de tarefa, insumo de aditivo, manual). */
   sourceType?: 'manual' | 'task_material' | 'analytic_input' | 'additive_input';

@@ -13,7 +13,10 @@ interface Props { project: Project; onProjectChange: (next: Project) => void; }
 export default function WarehouseRequisitionsTab({ project, onProjectChange }: Props) {
   const wh = ensureWarehouse(project).warehouse!;
   const tasks = useMemo(() => getAllTasks(project), [project]);
-  const rows = useMemo(() => computeWarehouseRows(project), [project]);
+  const rows = useMemo(
+    () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true }),
+    [project],
+  );
   const [open, setOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
 

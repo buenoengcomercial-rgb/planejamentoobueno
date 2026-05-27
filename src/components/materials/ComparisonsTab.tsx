@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { MaterialComparison, Project } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
-import { Trophy, TrendingDown, Plus, X, UserPlus } from 'lucide-react';
+import { CheckCircle2, Trophy, TrendingDown, Plus, X, UserPlus } from 'lucide-react';
 import { CurrencyInput, formatQty, parseBR, NumberInput } from './numberInput';
 import { Button } from '@/components/ui/button';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
@@ -160,6 +160,19 @@ export default function ComparisonsTab({ project, comparison, onApply, onProject
         <Empty msg="Vincule insumos em 'Insumos do Projeto' para começar a comparar." />
       ) : (
         <>
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-card px-3 py-2">
+            <div>
+              <div className="text-xs font-semibold">Critério de compra</div>
+              <p className="text-[11px] text-muted-foreground">
+                Use o menor preço automaticamente ou marque manualmente o fornecedor que compensa comprar por logística.
+              </p>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => onApply(MC.chooseLowestPrices(comparison))}>
+              <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+              Itemizar itens pelo menor preço
+            </Button>
+          </div>
+
           <div className="bg-card border border-border rounded-xl overflow-auto max-h-[calc(100vh-285px)] shadow-sm">
             <table className="w-full text-xs border-separate border-spacing-0">
               <thead className="sticky top-0 z-30">
@@ -196,16 +209,27 @@ export default function ComparisonsTab({ project, comparison, onApply, onProject
                       {suppliers.map((s, supplierIndex) => {
                         const price = it.prices.find(p => p.supplierId === s.id);
                         const isBest = an.bestSupplierId === s.id;
+                        const isChosen = an.chosenSupplierId === s.id && (price?.price ?? 0) > 0;
                         const tone = supplierTone(supplierIndex);
                         return (
-                          <td key={s.id} className={`p-1.5 align-middle border-b border-l border-border ${tone.cell} ${isBest ? 'bg-success/15' : ''}`}>
+                          <td key={s.id} className={`p-1.5 align-middle border-b border-l border-border ${tone.cell} ${isChosen ? 'bg-success/20' : isBest ? 'bg-success/10' : ''}`}>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="checkbox"
+                                checked={isChosen}
+                                disabled={!price || !(price.price > 0)}
+                                onChange={() => onApply(MC.setChosenSupplier(comparison, it.id, s.id))}
+                                title="Definir este fornecedor como vencedor do item"
+                                className="h-3.5 w-3.5 shrink-0 accent-emerald-600 disabled:opacity-30"
+                              />
                             <CurrencyInput
                               value={price?.price ?? undefined}
                               onChange={v => onApply(MC.setItemPrice(comparison, it.id, s.id, v ?? 0))}
                               data-material-price-input="true"
                               data-supplier-id={s.id}
-                              className={`h-8 text-xs text-center tabular-nums ${tone.input} ${isBest ? 'border-success font-semibold text-success shadow-[0_0_0_1px_rgba(34,197,94,0.25)]' : 'bg-background/80'}`}
+                              className={`h-8 text-xs text-center tabular-nums ${tone.input} ${isChosen ? 'border-success font-semibold text-success shadow-[0_0_0_1px_rgba(34,197,94,0.25)]' : 'bg-background/80'}`}
                             />
+                            </div>
                           </td>
                         );
                       })}

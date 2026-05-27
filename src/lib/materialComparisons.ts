@@ -4,6 +4,7 @@ import type {
   ComparisonSupplier,
   ComparisonItem,
   ComparisonItemPrice,
+  ComparisonItemPurchase,
   ComparisonItemStatus,
   PriceHistoryEntry,
   MaterialComparisonStatus,
@@ -131,6 +132,76 @@ export function setItemPrice(comp: MaterialComparison, itemId: string, supplierI
 
 export function setChosenSupplier(comp: MaterialComparison, itemId: string, supplierId: string | undefined): MaterialComparison {
   return updateItem(comp, itemId, { chosenSupplierId: supplierId });
+}
+
+export function getPurchasedQuantity(item: ComparisonItem): number {
+  const orders = item.purchaseOrders ?? [];
+  if (orders.length > 0) {
+    return trunc2(orders.reduce((sum, order) => sum + (order.quantity || 0), 0));
+  }
+  return item.status === 'comprado' ? trunc2(item.quantity || 0) : 0;
+}
+
+export function getPendingPurchaseQuantity(item: ComparisonItem): number {
+  return trunc2(Math.max(0, (item.quantity || 0) - getPurchasedQuantity(item)));
+}
+
+export function getLastPurchase(item: ComparisonItem): ComparisonItemPurchase | undefined {
+  return item.purchaseOrders?.[item.purchaseOrders.length - 1];
+}
+
+export function confirmItemPurchase(
+  comp: MaterialComparison,
+  itemId: string,
+  supplierId: string,
+  quantity: number,
+  unitPrice: number,
+): MaterialComparison {
+  const safeQuantity = trunc2(Math.max(0, quantity || 0));
+  if (safeQuantity <= 0) return comp;
+
+  return {
+    ...comp,
+    items: comp.items.map(it => {
+      if (it.id !== itemId) return it;
+      const pending = getPendingPurchaseQuantity(it);
+      const confirmedQuantity = trunc2(Math.min(safeQuantity, pending));
+      if (confirmedQuantity <= 0) return it;
+      const purchase: ComparisonItemPurchase = {
+        id: uid(),
+        supplierId,
+        quantity: confirmedQuantity,
+        unitPrice,
+        confirmedAt: nowISO(),
+      };
+      const purchaseOrders = [...(it.purchaseOrders ?? []), purchase];
+      const purchased = trunc2(purchaseOrders.reduce((sum, order) => sum + (order.quantity || 0), 0));
+      const complete = purchased >= (it.quantity || 0) - 0.0001;
+      return {
+        ...it,
+        chosenSupplierId: supplierId,
+        purchaseOrders,
+        status: complete ? 'comprado' : 'pedido_parcial',
+      };
+    }),
+    updatedAt: nowISO(),
+  };
+}
+
+export function chooseLowestPrices(comp: MaterialComparison): MaterialComparison {
+  return {
+    ...comp,
+    items: comp.items.map(it => {
+      const bestSupplierId = analyzeItem(it).bestSupplierId;
+      if (!bestSupplierId) return it;
+      return {
+        ...it,
+        chosenSupplierId: bestSupplierId,
+        status: it.status === 'pendente' ? 'orcado' : it.status,
+      };
+    }),
+    updatedAt: nowISO(),
+  };
 }
 
 // ============== CÁLCULOS ==============
@@ -901,6 +972,10 @@ export interface StockRow {
   unit: string;
   comparisonId?: string;
   comparisonName?: string;
+  supplierId?: string;
+  supplierName?: string;
+  unitPrice?: number;
+  lastPurchaseAt?: string;
   planned: number;
   purchased: number;  // quantidade comprada/pedida (status comprado em itens)
   received: number;   // soma de entradas
@@ -929,12 +1004,25 @@ export const STOCK_STATUS_LABEL: Record<StockStatus, string> = {
   falta_material: 'Falta material',
 };
 
-export function computeStockRows(project: Project): StockRow[] {
+export interface StockRowOptions {
+  materialOnly?: boolean;
+  confirmedOnly?: boolean;
+}
+
+export function computeStockRows(project: Project, opts: StockRowOptions = {}): StockRow[] {
   const rows = new Map<string, StockRow>();
   const comps = project.materialComparisons ?? [];
+  const supplierMap = new Map(getProjectSuppliers(project).map(s => [s.id, s.name] as const));
   for (const c of comps) {
     for (const it of c.items) {
+      if (opts.materialOnly && resolveMaterialCostClass(project, it) !== 'material') continue;
+      const purchasedQuantity = getPurchasedQuantity(it);
+      if (opts.confirmedOnly && purchasedQuantity <= 0) continue;
       const key = linkKeyOf(it);
+      const lastPurchase = getLastPurchase(it);
+      const chosen = analyzeItem(it);
+      const supplierId = lastPurchase?.supplierId ?? (purchasedQuantity > 0 ? it.chosenSupplierId ?? chosen.chosenSupplierId : undefined);
+      const unitPrice = lastPurchase?.unitPrice ?? (purchasedQuantity > 0 ? chosen.chosenPrice : undefined);
       const cur = rows.get(key) ?? {
         key,
         code: it.code,
@@ -942,6 +1030,10 @@ export function computeStockRows(project: Project): StockRow[] {
         unit: it.unit,
         comparisonId: c.id,
         comparisonName: c.name,
+        supplierId,
+        supplierName: supplierId ? supplierMap.get(supplierId) : undefined,
+        unitPrice,
+        lastPurchaseAt: lastPurchase?.confirmedAt,
         planned: 0,
         purchased: 0,
         received: 0,
@@ -951,7 +1043,15 @@ export function computeStockRows(project: Project): StockRow[] {
         status: 'nao_comprado' as StockStatus,
       };
       cur.planned = trunc2(cur.planned + (it.quantity || 0));
-      if (it.status === 'comprado') cur.purchased = trunc2(cur.purchased + (it.quantity || 0));
+      cur.purchased = trunc2(cur.purchased + purchasedQuantity);
+      if (supplierId) {
+        cur.supplierId = supplierId;
+        cur.supplierName = supplierMap.get(supplierId);
+      }
+      if (unitPrice != null) cur.unitPrice = unitPrice;
+      if (lastPurchase?.confirmedAt && (!cur.lastPurchaseAt || lastPurchase.confirmedAt > cur.lastPurchaseAt)) {
+        cur.lastPurchaseAt = lastPurchase.confirmedAt;
+      }
       rows.set(key, cur);
     }
   }
