@@ -43,6 +43,9 @@ import type { ProjectMeta } from '@/lib/projectStorage';
 const UNDO_LIMIT = 20;
 const SAVE_DEBOUNCE_MS = 4000;
 const UNSAVED_DRAFT_VERSION = 1;
+const UI_SESSION_VERSION = 1;
+const APP_UI_SESSION_KEY = 'obraplanner:ui-session';
+const APP_VIEWS: AppView[] = ['dashboard', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'realCost', 'materials', 'warehouse'];
 
 type UndoStacks = Record<AppView, Project[]>;
 
@@ -54,7 +57,55 @@ interface UnsavedProjectDraft {
   project: Project;
 }
 
+interface AppUiSession {
+  version: typeof UI_SESSION_VERSION;
+  projectId?: string;
+  view?: AppView;
+  mainScrollTop?: number;
+  mainScrollLeft?: number;
+  windowScrollX?: number;
+  windowScrollY?: number;
+  updatedAt: string;
+}
+
 const unsavedDraftKey = (projectId: string) => `obraplanner:unsaved-cloud-draft:${projectId}`;
+
+function isAppView(value: unknown): value is AppView {
+  return typeof value === 'string' && APP_VIEWS.includes(value as AppView);
+}
+
+function readAppUiSession(): AppUiSession | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(APP_UI_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AppUiSession;
+    if (parsed.version !== UI_SESSION_VERSION) return null;
+    if (parsed.view && !isAppView(parsed.view)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeAppUiSession(patch: Partial<AppUiSession>) {
+  if (typeof window === 'undefined') return;
+  try {
+    const previous = readAppUiSession();
+    localStorage.setItem(APP_UI_SESSION_KEY, JSON.stringify({
+      version: UI_SESSION_VERSION,
+      ...previous,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    } satisfies AppUiSession));
+  } catch {
+    // Sessao visual e apenas conforto operacional; falha aqui nao deve travar a obra.
+  }
+}
+
+function readInitialView(): AppView {
+  return readAppUiSession()?.view ?? 'dashboard';
+}
 
 function toTime(value: string | null | undefined): number {
   const parsed = Date.parse(value ?? '');
@@ -114,7 +165,7 @@ export default function Index() {
   const { membership, loading: orgLoading } = useOrganization();
   const navigate = useNavigate();
 
-  const [currentView, setCurrentView] = useState<AppView>('dashboard');
+  const [currentView, setCurrentView] = useState<AppView>(() => readInitialView());
   const [rawProject, setRawProject] = useState<Project | null>(null);
   const [cloudList, setCloudList] = useState<CloudProjectMeta[]>([]);
   const [bootLoading, setBootLoading] = useState(true);
@@ -148,6 +199,9 @@ export default function Index() {
   const lastSavedProjectJsonRef = useRef<string | null>(null);
   const skipNextAutoSaveRef = useRef(false);
   const conflictDetectedRef = useRef(false);
+  const mainScrollRef = useRef<HTMLElement | null>(null);
+  const restoredUiSessionRef = useRef<string | null>(null);
+  const uiSessionSaverReadyRef = useRef<string | null>(null);
 
   const orgId = membership?.organization.id;
   const role = membership?.role;
@@ -158,6 +212,81 @@ export default function Index() {
   useEffect(() => {
     if (!authLoading && !user) navigate('/auth', { replace: true });
   }, [authLoading, user, navigate]);
+
+  useEffect(() => {
+    if (!rawProject?.id) return;
+    if (uiSessionSaverReadyRef.current !== rawProject.id) {
+      uiSessionSaverReadyRef.current = rawProject.id;
+      return;
+    }
+
+    writeAppUiSession({
+      projectId: rawProject.id,
+      view: currentView,
+      mainScrollTop: mainScrollRef.current?.scrollTop ?? 0,
+      mainScrollLeft: mainScrollRef.current?.scrollLeft ?? 0,
+      windowScrollX: window.scrollX,
+      windowScrollY: window.scrollY,
+    });
+  }, [currentView, rawProject?.id]);
+
+  useEffect(() => {
+    const projectId = rawProject?.id;
+    if (!projectId) return;
+
+    let rafId = 0;
+    const persistScroll = () => {
+      if (rafId) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = 0;
+        writeAppUiSession({
+          projectId,
+          view: currentView,
+          mainScrollTop: mainScrollRef.current?.scrollTop ?? 0,
+          mainScrollLeft: mainScrollRef.current?.scrollLeft ?? 0,
+          windowScrollX: window.scrollX,
+          windowScrollY: window.scrollY,
+        });
+      });
+    };
+
+    const main = mainScrollRef.current;
+    window.addEventListener('scroll', persistScroll, { passive: true });
+    main?.addEventListener('scroll', persistScroll, { passive: true });
+    return () => {
+      if (rafId) window.cancelAnimationFrame(rafId);
+      window.removeEventListener('scroll', persistScroll);
+      main?.removeEventListener('scroll', persistScroll);
+    };
+  }, [currentView, rawProject?.id]);
+
+  useEffect(() => {
+    if (bootLoading || !rawProject) return;
+    const session = readAppUiSession();
+    if (!session || (session.projectId && session.projectId !== rawProject.id)) return;
+    const restoreKey = `${rawProject.id}:${session.view ?? 'none'}:${session.updatedAt}`;
+    if (restoredUiSessionRef.current === restoreKey) return;
+
+    if (session.view && session.view !== currentView) {
+      setCurrentView(session.view);
+      return;
+    }
+
+    restoredUiSessionRef.current = restoreKey;
+    // Lovable Preview pode remontar o iframe ao voltar de outro app. Esta restauracao
+    // devolve a tela para o mesmo ponto visual sem buscar a obra de novo na nuvem.
+    window.requestAnimationFrame(() => {
+      if (typeof session.windowScrollX === 'number' || typeof session.windowScrollY === 'number') {
+        window.scrollTo(session.windowScrollX ?? 0, session.windowScrollY ?? 0);
+      }
+      if (mainScrollRef.current) {
+        mainScrollRef.current.scrollTo({
+          left: session.mainScrollLeft ?? 0,
+          top: session.mainScrollTop ?? 0,
+        });
+      }
+    });
+  }, [bootLoading, currentView, rawProject]);
 
   const refreshCloudList = useCallback(async (): Promise<CloudProjectMeta[]> => {
     const list = await listCloudProjects();
@@ -661,7 +790,7 @@ export default function Index() {
         />
       </div>
 
-      <main className="flex-1 min-h-screen overflow-y-auto relative">
+      <main ref={mainScrollRef} className="flex-1 min-h-screen overflow-y-auto relative">
         <div className="absolute top-3 right-4 z-20">
           <SaveStatusIndicator status={saveStatus} />
         </div>

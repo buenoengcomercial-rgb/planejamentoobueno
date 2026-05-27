@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Project } from '@/types/project';
 import { useMaterialComparisons } from '@/hooks/useMaterialComparisons';
 import * as MC from '@/lib/materialComparisons';
@@ -41,11 +41,50 @@ interface Props {
   onProjectChange: (next: Project | ((prev: Project) => Project)) => void;
 }
 
+type MaterialsSection = 'insumos' | 'grupos';
+type MaterialsTab = 'comparativo' | 'fornecedores' | 'pedido' | 'estoque' | 'historico';
+
+interface MaterialsUiSession {
+  section?: MaterialsSection;
+  tab?: MaterialsTab;
+  updatedAt: string;
+}
+
+const MATERIALS_UI_KEY = (projectId: string) => `obraplanner:materials-ui:${projectId}`;
+const MATERIALS_SECTIONS: MaterialsSection[] = ['insumos', 'grupos'];
+const MATERIALS_TABS: MaterialsTab[] = ['comparativo', 'fornecedores', 'pedido', 'estoque', 'historico'];
+
+function readMaterialsUiSession(projectId: string): MaterialsUiSession | null {
+  try {
+    const raw = localStorage.getItem(MATERIALS_UI_KEY(projectId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as MaterialsUiSession;
+    if (parsed.section && !MATERIALS_SECTIONS.includes(parsed.section)) return null;
+    if (parsed.tab && !MATERIALS_TABS.includes(parsed.tab)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeMaterialsUiSession(projectId: string, patch: Partial<MaterialsUiSession>) {
+  try {
+    const previous = readMaterialsUiSession(projectId);
+    localStorage.setItem(MATERIALS_UI_KEY(projectId), JSON.stringify({
+      ...previous,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    } satisfies MaterialsUiSession));
+  } catch {
+    // Estado visual local: se falhar, a obra continua funcionando normalmente.
+  }
+}
+
 export default function Materials({ project, onProjectChange }: Props) {
   const ctl = useMaterialComparisons(project, onProjectChange);
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
-  const [section, setSection] = useState('grupos');
-  const [tab, setTab] = useState('comparativo');
+  const [section, setSection] = useState<MaterialsSection>(() => readMaterialsUiSession(project.id)?.section ?? 'grupos');
+  const [tab, setTab] = useState<MaterialsTab>(() => readMaterialsUiSession(project.id)?.tab ?? 'comparativo');
   const [supplierSearch, setSupplierSearch] = useState('');
   const [showRegisteredSuppliers, setShowRegisteredSuppliers] = useState(false);
   const [showSupplierCreate, setShowSupplierCreate] = useState(false);
@@ -63,6 +102,16 @@ export default function Materials({ project, onProjectChange }: Props) {
       totalEconomy,
     };
   }, [ctl.comparisons]);
+
+  useEffect(() => {
+    const stored = readMaterialsUiSession(project.id);
+    setSection(stored?.section ?? 'grupos');
+    setTab(stored?.tab ?? 'comparativo');
+  }, [project.id]);
+
+  useEffect(() => {
+    writeMaterialsUiSession(project.id, { section, tab });
+  }, [project.id, section, tab]);
 
   const globalSuppliers = useMemo(() => MC.getProjectSuppliers(project), [project]);
   const activeSuppliers = useMemo(
@@ -163,7 +212,13 @@ export default function Materials({ project, onProjectChange }: Props) {
         </div>
       </div>
 
-      <Tabs value={section} onValueChange={setSection} className="w-full">
+      <Tabs
+        value={section}
+        onValueChange={(value) => {
+          if (MATERIALS_SECTIONS.includes(value as MaterialsSection)) setSection(value as MaterialsSection);
+        }}
+        className="w-full"
+      >
         <TabsList className="bg-muted h-9">
           <TabsTrigger value="insumos" className="text-xs">
             <Boxes className="w-3.5 h-3.5 mr-1" /> Insumos do Projeto
@@ -351,7 +406,13 @@ export default function Materials({ project, onProjectChange }: Props) {
           </div>
 
           {ctl.active ? (
-            <Tabs value={tab} onValueChange={setTab} className="w-full">
+            <Tabs
+              value={tab}
+              onValueChange={(value) => {
+                if (MATERIALS_TABS.includes(value as MaterialsTab)) setTab(value as MaterialsTab);
+              }}
+              className="w-full"
+            >
               <TabsList className="bg-muted h-9">
                 <TabsTrigger value="comparativo" className="text-xs"><ListChecks className="w-3.5 h-3.5 mr-1" /> Cotação ({ctl.active.items.length})</TabsTrigger>
                 <TabsTrigger value="fornecedores" className="text-xs"><Truck className="w-3.5 h-3.5 mr-1" /> Cadastro global</TabsTrigger>
