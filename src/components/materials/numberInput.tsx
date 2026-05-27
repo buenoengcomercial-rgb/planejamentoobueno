@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { registerPendingEditCommit } from '@/lib/pendingEditCommits';
 
 /**
  * Converte string com vírgula decimal BR para número.
@@ -87,6 +88,33 @@ export const CurrencyInput = React.forwardRef<HTMLInputElement, CurrencyInputPro
   ({ value, onChange, className, onFocus, onBlur, onKeyDown, ...rest }, ref) => {
     const [focused, setFocused] = React.useState(false);
     const [draft, setDraft] = React.useState<string>('');
+    const idRef = React.useRef(`currency-input-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`);
+    const draftRef = React.useRef(draft);
+    const onChangeRef = React.useRef(onChange);
+    const unregisterCommitRef = React.useRef<(() => void) | null>(null);
+
+    React.useEffect(() => {
+      onChangeRef.current = onChange;
+    }, [onChange]);
+
+    React.useEffect(() => {
+      draftRef.current = draft;
+    }, [draft]);
+
+    React.useEffect(() => () => {
+      unregisterCommitRef.current?.();
+    }, []);
+
+    const setDraftValue = (next: string) => {
+      draftRef.current = next;
+      setDraft(next);
+    };
+
+    const commitDraft = React.useCallback(() => {
+      const parsed = parseBR(draftRef.current);
+      onChangeRef.current(parsed);
+    }, []);
+
     const display = focused
       ? draft
       : value != null && Number.isFinite(Number(value))
@@ -101,17 +129,21 @@ export const CurrencyInput = React.forwardRef<HTMLInputElement, CurrencyInputPro
         onFocus={e => {
           setFocused(true);
           const numericValue = Number(value);
-          setDraft(value != null && Number.isFinite(numericValue) && numericValue !== 0 ? String(value).replace('.', ',') : '');
+          const nextDraft = value != null && Number.isFinite(numericValue) && numericValue !== 0 ? String(value).replace('.', ',') : '';
+          setDraftValue(nextDraft);
+          unregisterCommitRef.current?.();
+          unregisterCommitRef.current = registerPendingEditCommit(idRef.current, commitDraft);
           onFocus?.(e);
         }}
         onChange={e => {
           const v = e.target.value;
-          if (v === '' || /^-?[\d.,\sR$]*$/.test(v)) setDraft(v);
+          if (v === '' || /^-?[\d.,\sR$]*$/.test(v)) setDraftValue(v);
         }}
         onBlur={e => {
+          unregisterCommitRef.current?.();
+          unregisterCommitRef.current = null;
           setFocused(false);
-          const parsed = parseBR(draft);
-          onChange(parsed);
+          commitDraft();
           onBlur?.(e);
         }}
         onKeyDown={e => {
