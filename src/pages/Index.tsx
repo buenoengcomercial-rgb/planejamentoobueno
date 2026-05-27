@@ -357,10 +357,6 @@ export default function Index() {
       protectLocalDraftBeforePageSleeps();
     };
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') protectLocalDraftBeforePageSleeps();
-    };
-
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       protectLocalDraftBeforePageSleeps();
       if (!saveTimerRef.current && !inFlightSaveRef.current) return;
@@ -368,14 +364,12 @@ export default function Index() {
       event.returnValue = '';
     };
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    // Trocar de guia nao deve acordar o app, salvar pesado ou reprocessar a obra.
+    // A protecao abaixo roda apenas quando a pagina realmente vai sair/recarregar.
     window.addEventListener('pagehide', handlePageMaySleep);
-    window.addEventListener('blur', handlePageMaySleep);
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('pagehide', handlePageMaySleep);
-      window.removeEventListener('blur', handlePageMaySleep);
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [protectLocalDraftBeforePageSleeps]);
