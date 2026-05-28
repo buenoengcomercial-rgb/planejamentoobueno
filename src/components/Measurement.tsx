@@ -331,6 +331,7 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
     const target = event.target as HTMLElement | null;
     if (!target) return;
     if (target.closest('[data-detail-cell="true"]')) return;
+    if (target.closest('[data-detail-panel="true"]')) return;
     if (target.closest('[data-detail-footer="true"]')) return;
     setDetailSelection(null);
   };

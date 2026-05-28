@@ -32,11 +32,17 @@ export default function MeasurementGroupRow(props: MeasurementGroupRowProps) {
   return (
     <Fragment>
       {/* Ordem contratual/original: a Medicao deve exibir totais no proprio nivel hierarquico. */}
-      <tr className={headerStyleByDepth(g.depth)}>
+      <tr
+        className={`${headerStyleByDepth(g.depth)} cursor-pointer hover:bg-primary/15`}
+        onClick={() => toggleCollapsed(g.phaseId)}
+      >
         <td colSpan={8} className="px-2 py-1.5">
           <button
             type="button"
-            onClick={() => toggleCollapsed(g.phaseId)}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleCollapsed(g.phaseId);
+            }}
             className="inline-flex items-center gap-1 hover:opacity-80 print-hide"
             style={{ paddingLeft: indentPx }}
           >

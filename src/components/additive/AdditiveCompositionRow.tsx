@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, memo, type MouseEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ChevronRight, ChevronDown, Trash2, Calculator, MoreVertical } from 'lucide-react';
@@ -261,7 +261,11 @@ function AdditiveCompositionRowImpl({
   const memTotals = memoryTotals(c);
   const hasMemory = memTotals.hasMemory;
   const canOpenAnalytic = hasInputs || isNew;
-  const shouldShowAnalyticRows = isOpen && (showAnalytic || isNew) && canOpenAnalytic;
+  const shouldShowAnalyticRows = isOpen && canOpenAnalytic && (
+    showAnalytic ||
+    isNew ||
+    (selectedDetail?.compositionId === c.id && selectedDetail.mode === 'analytic')
+  );
   const shouldShowMemoryRows = isMemoryOpen;
   const isAlteredContracted = !isNew && (
     (c.addedQuantity ?? 0) > 0 ||
@@ -283,6 +287,13 @@ function AdditiveCompositionRowImpl({
     selectDetail('memory', type);
   };
 
+  const handleRowClick = (event: MouseEvent<HTMLTableRowElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+    if (target.closest('button, input, textarea, select, [role="button"], [data-detail-cell="true"], [data-detail-panel="true"]')) return;
+    if (canOpenAnalytic) selectDetail('analytic');
+  };
+
   return (
     <Fragment>
       <tr className={`border-b align-top ${isSelected ? 'ring-2 ring-primary/40 ring-inset' : ''} ${
@@ -291,7 +302,7 @@ function AdditiveCompositionRowImpl({
           : isAlteredContracted
             ? 'bg-amber-50 hover:bg-amber-100/60 border-l-4 border-l-amber-500'
             : `hover:bg-slate-100/60 ${rowIndex % 2 === 1 ? 'bg-slate-50/50' : 'bg-white'}`
-      }`}>
+      } ${canOpenAnalytic ? 'cursor-pointer' : ''}`} onClick={handleRowClick}>
         <td className="px-1 py-2 text-center">
           <button
             onClick={() => onToggleExpand(c.id)}
@@ -532,7 +543,7 @@ function AdditiveCompositionRowImpl({
         </td>
       </tr>
       {shouldShowAnalyticRows && (
-        <tr className="bg-muted/20 border-b">
+        <tr className="bg-muted/20 border-b" data-detail-panel="true">
           <td />
           <td colSpan={COL_COUNT - 1} className="px-3 py-2">
             <AdditiveAnalyticRows
@@ -547,7 +558,7 @@ function AdditiveCompositionRowImpl({
         </tr>
       )}
       {shouldShowMemoryRows && (
-        <tr className="bg-violet-50/30 border-b">
+        <tr className="bg-violet-50/30 border-b" data-detail-panel="true">
           <td />
           <td colSpan={COL_COUNT - 1} className="px-3 py-2">
             <AdditiveCalculationMemory

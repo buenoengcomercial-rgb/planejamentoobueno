@@ -1,4 +1,4 @@
-import { Fragment } from 'react';
+import { Fragment, type MouseEvent } from 'react';
 import { AlertCircle, Lock } from 'lucide-react';
 import type { Project } from '@/types/project';
 import type { Row } from '@/components/measurement/types';
@@ -51,10 +51,19 @@ export default function MeasurementItemRow({
   const selectQuantity = () => onSelectDetail?.({ taskId: r.taskId, mode: 'quantity' });
   const selectAnalytic = () => onSelectDetail?.({ taskId: r.taskId, mode: 'analytic' });
   const selectClassification = (valueScope: MeasurementValueScope) => onSelectDetail?.({ taskId: r.taskId, mode: 'classification', valueScope });
+  const handleRowClick = (event: MouseEvent<HTMLTableRowElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (!target) return;
+    if (target.closest('button, input, textarea, select, [role="button"], [data-detail-cell="true"], [data-detail-panel="true"]')) return;
+    selectAnalytic();
+  };
 
   return (
     <Fragment>
-    <tr className={`border-b border-border/60 hover:bg-muted/30 ${baseBg} ${isSelected ? 'ring-2 ring-primary/40 ring-inset' : ''}`}>
+    <tr
+      className={`cursor-pointer border-b border-border/60 hover:bg-muted/30 ${baseBg} ${isSelected ? 'ring-2 ring-primary/40 ring-inset' : ''}`}
+      onClick={handleRowClick}
+    >
       {/* Identificação */}
       <td
         className={`px-2 py-1.5 font-mono tabular-nums text-foreground align-top ${stickyBg}`}
