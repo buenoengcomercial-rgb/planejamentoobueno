@@ -25,7 +25,7 @@ export interface MeasurementItemRowProps {
   patchSnapshotItem?: (taskId: string, patch: Record<string, unknown>, fieldLabel: string) => void;
   setManualPeriodQuantity?: (taskId: string, v: number) => void;
   selectedDetail?: MeasurementDetailSelection | null;
-  onSelectDetail?: (selection: MeasurementDetailSelection) => void;
+  onSelectDetail?: (selection: MeasurementDetailSelection | null) => void;
   project?: Project;
   bdi?: number;
   detailColSpan?: number;
@@ -49,7 +49,8 @@ export default function MeasurementItemRow({
   const stickyBg = r.hasNoLogsInPeriod ? 'bg-warning/5' : 'bg-background';
   const isSelected = selectedDetail?.taskId === r.taskId;
   const selectQuantity = () => onSelectDetail?.({ taskId: r.taskId, mode: 'quantity' });
-  const selectAnalytic = () => onSelectDetail?.({ taskId: r.taskId, mode: 'analytic' });
+  const isAnalyticSelected = selectedDetail?.taskId === r.taskId && selectedDetail.mode === 'analytic';
+  const selectAnalytic = () => onSelectDetail?.(isAnalyticSelected ? null : { taskId: r.taskId, mode: 'analytic' });
   const selectClassification = (valueScope: MeasurementValueScope) => onSelectDetail?.({ taskId: r.taskId, mode: 'classification', valueScope });
   const handleRowClick = (event: MouseEvent<HTMLTableRowElement>) => {
     const target = event.target as HTMLElement | null;

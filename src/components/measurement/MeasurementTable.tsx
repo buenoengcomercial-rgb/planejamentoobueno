@@ -17,7 +17,7 @@ interface MeasurementTableProps extends RowHandlers {
   setCollapsed: React.Dispatch<React.SetStateAction<Set<string>>>;
   isLocked: boolean;
   selectedDetail?: MeasurementDetailSelection | null;
-  onSelectDetail?: (selection: MeasurementDetailSelection) => void;
+  onSelectDetail?: (selection: MeasurementDetailSelection | null) => void;
   project: Project;
   bdi: number;
 }

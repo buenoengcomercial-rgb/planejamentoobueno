@@ -242,7 +242,7 @@ interface Props {
   onRemoveComposition: (id: string) => void;
   onChangeMemory: (id: string, rows: AdditiveCalculationMemoryRow[]) => void;
   selectedDetail?: AdditiveDetailSelection | null;
-  onSelectDetail?: (selection: AdditiveDetailSelection) => void;
+  onSelectDetail?: (selection: AdditiveDetailSelection | null) => void;
   inputReferenceByCode?: ReadonlyMap<string, AdditiveInput>;
 }
 
@@ -293,7 +293,16 @@ function AdditiveCompositionRowImpl({
     const target = event.target as HTMLElement | null;
     if (!target) return;
     if (target.closest('button, input, textarea, select, [role="button"], [data-detail-cell="true"], [data-detail-panel="true"]')) return;
-    if (canOpenAnalytic) selectDetail('analytic');
+    if (!canOpenAnalytic) return;
+    // Row clicks should behave like a spreadsheet outline: open on first click, close on second.
+    if (shouldShowAnalyticRows) {
+      onToggleExpand(c.id);
+      if (selectedDetail?.compositionId === c.id && selectedDetail.mode === 'analytic') {
+        onSelectDetail?.(null);
+      }
+      return;
+    }
+    selectDetail('analytic');
   };
 
   return (

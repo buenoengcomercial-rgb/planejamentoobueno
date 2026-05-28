@@ -29,7 +29,7 @@ interface Props {
   onAddNewService: (phaseId: string, phaseChain: string, parentNumber: string) => void;
   onChangeMemory: (id: string, rows: AdditiveCalculationMemoryRow[]) => void;
   selectedDetail?: AdditiveDetailSelection | null;
-  onSelectDetail?: (selection: AdditiveDetailSelection) => void;
+  onSelectDetail?: (selection: AdditiveDetailSelection | null) => void;
 }
 
 const normalizeInputCode = (value: string) => value.trim().toUpperCase();
