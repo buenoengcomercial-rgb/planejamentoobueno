@@ -764,12 +764,47 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
     }
   };
 
+  const handleUnlockIntegratedAdditive = () => {
+    if (!active?.isContracted) return;
+    if (active.editUnlocked) {
+      toast.info('Este aditivo ja esta liberado para revisao.');
+      return;
+    }
+    const now = new Date().toISOString();
+    onProjectChange(prev => {
+      const nextAdditives = (prev.additives ?? []).map(a =>
+        a.id === active.id
+          ? {
+              ...a,
+              editUnlocked: true,
+              editUnlockedAt: now,
+              editUnlockedBy: auditUser.userName || auditUser.userEmail,
+            }
+          : a,
+      );
+      return logToProject({ ...prev, additives: nextAdditives }, {
+        ...auditUser,
+        entityType: 'additive',
+        entityId: active.id,
+        action: 'unlocked',
+        title: 'Aditivo integrado liberado para revisao',
+        description: 'Edicoes ficam nesta aba ate o usuario reintegrar ao projeto.',
+        metadata: {
+          version: active.version ?? 0,
+          compositions: active.compositions.length,
+        },
+      });
+    });
+    toast.success('Edicao liberada. Ajuste o aditivo e clique em Reintegrar ao projeto para atualizar as abas vinculadas.');
+  };
+
   const handleContractAdditive = () => {
     if (!active) return;
     if (active.status !== 'aprovado' && !active.isContracted) {
       toast.error('O aditivo precisa estar Aprovado para ser contratado.');
       return;
     }
+    const isReintegration = !!active.isContracted;
     const novosServicos = active.compositions.filter(c => c.isNewService);
     onProjectChange(prev => {
       const next = contractAdditive(prev, active.id, auditUser?.userName || auditUser?.userEmail);
@@ -778,8 +813,11 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
         entityType: 'additive',
         entityId: active.id,
         action: 'contracted',
-        title: 'Aditivo contratado e integrado ao projeto',
+        title: isReintegration
+          ? 'Aditivo reintegrado ao projeto'
+          : 'Aditivo contratado e integrado ao projeto',
         metadata: {
+          reintegration: isReintegration,
           novosServicosIntegrados: novosServicos.length,
           budgetItemsCriados: (next.budgetItems ?? []).filter(b => b.additiveId === active.id).length,
         },
@@ -863,6 +901,7 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
     handleChangeGlobalDiscount,
     handleAddNewService,
     handleRemoveComposition,
+    handleUnlockIntegratedAdditive,
     handleContractAdditive,
     syntheticConflict,
   };

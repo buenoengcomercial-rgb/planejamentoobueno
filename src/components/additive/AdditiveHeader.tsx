@@ -5,7 +5,7 @@ import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from '@/components/ui/dropdown-menu';
 import {
-  Upload, Download, Printer, CheckCircle2, Lock, XCircle, History, ChevronDown,
+  Upload, Download, Printer, CheckCircle2, Lock, XCircle, History, ChevronDown, RotateCcw,
 } from 'lucide-react';
 import type { Project, Additive as AdditiveModel, AdditiveStatus } from '@/types/project';
 import { STATUS_BADGE, STATUS_LABEL } from './types';
@@ -24,6 +24,7 @@ interface Props {
   onChangeGlobalDiscount: (value: string) => void;
   onFileSelected: (f: File | null) => void;
   onUseSynthetic: () => void;
+  onUnlockIntegrated: () => void;
   onContract: () => void;
   onExportExcel: () => void;
   onExportSyntheticComplete: () => void;
@@ -41,7 +42,7 @@ interface Props {
 export default function AdditiveHeader({
   project, active, status, bdi, globalDiscount, isLocked, fileRef, undoButton,
   onChangeBdi, onChangeGlobalDiscount, onFileSelected, onUseSynthetic,
-  onContract, onExportExcel, onExportSyntheticComplete, onExportNewServices,
+  onUnlockIntegrated, onContract, onExportExcel, onExportSyntheticComplete, onExportNewServices,
   onExportCalculationMemory, onExportPdf,
   onExportSyntheticCompletePdf, onExportNewServicesPdf, onExportCalculationMemoryPdf,
   onExportPackageExcel, onExportPackagePdf,
@@ -142,18 +143,31 @@ export default function AdditiveHeader({
             <Upload className="w-4 h-4 mr-1" /> Usar Sintética da Medição
           </Button>
         )}
+        {active?.isContracted && !active.editUnlocked && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onUnlockIntegrated}
+            title="Libera este aditivo integrado para revisar quantidades, novas composicoes e exclusoes antes de reintegrar."
+          >
+            <RotateCcw className="w-4 h-4 mr-1" />
+            Reabrir edicao
+          </Button>
+        )}
         {active && (active.status === 'aprovado' || active.isContracted) && (
           <Button
             size="sm"
             className="bg-primary hover:bg-primary/90"
             onClick={onContract}
-            disabled={!!active.isContracted}
+            disabled={!!active.isContracted && !active.editUnlocked}
             title={active.isContracted
               ? 'Aditivo já integrado — composições vinculadas a Tarefas, Cronograma, Medição e Diário.'
               : 'Integra o aditivo ao projeto: cria/atualiza tarefas e quantidades contratuais.'}
           >
             <CheckCircle2 className="w-4 h-4 mr-1" />
-            {active.isContracted ? 'Integrado ao projeto' : 'Integrar ao Projeto'}
+            {active.isContracted
+              ? active.editUnlocked ? 'Reintegrar ao projeto' : 'Integrado ao projeto'
+              : 'Integrar ao Projeto'}
           </Button>
         )}
         <DropdownMenu>

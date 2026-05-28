@@ -111,11 +111,11 @@ export function useAdditiveState(project: Project, opts: Options = {}) {
   const [historyOpen, setHistoryOpen] = useState(false);
 
   const status: AdditiveStatus = active?.status ?? 'rascunho';
+  const isIntegratedRevisionOpen = !!active?.isContracted && !!active?.editUnlocked;
   const isLocked =
     status === 'em_analise' ||
     status === 'aprovado' ||
-    status === 'aditivo_contratado' ||
-    !!active?.isContracted;
+    ((status === 'aditivo_contratado' || !!active?.isContracted) && !isIntegratedRevisionOpen);
   const globalDiscount = active?.globalDiscountPercent ?? 0;
   const bdi = active?.bdiPercent ?? 0;
 

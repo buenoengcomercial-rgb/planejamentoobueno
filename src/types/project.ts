@@ -957,6 +957,16 @@ export interface Additive {
   isContracted?: boolean;
   /** Carimbo de quando o aditivo foi marcado como contratado. */
   contractedAt?: string;
+  /**
+   * Libera revisao de um aditivo ja integrado. Enquanto true, a tela volta a aceitar
+   * acrescimos, supressoes, novos servicos e exclusoes; a nova versao so afeta as
+   * abas vinculadas quando o usuario clicar em reintegrar.
+   */
+  editUnlocked?: boolean;
+  /** Carimbo da liberacao de revisao apos integracao. */
+  editUnlockedAt?: string;
+  /** Usuario/responsavel que liberou revisao apos integracao. */
+  editUnlockedBy?: string;
   /** Versão atual do aditivo (incrementa a cada aprovação). */
   version?: number;
   /** Histórico de snapshots aprovados (congelados). */

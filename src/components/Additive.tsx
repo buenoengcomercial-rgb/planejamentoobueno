@@ -58,6 +58,7 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
   const totals = useMemo(() => (active ? additiveTotals(active, project) : null), [active, project]);
   const [contractConfirmOpen, setContractConfirmOpen] = useState(false);
   const [detailSelection, setDetailSelection] = useState<AdditiveDetailSelection | null>(null);
+  const isReintegration = !!active?.isContracted && !!active?.editUnlocked;
 
   const openReview = (preset: 'approve' | 'reject') => {
     if (preset === 'approve') {
@@ -90,6 +91,7 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
         onChangeGlobalDiscount={actions.handleChangeGlobalDiscount}
         onFileSelected={actions.handleFileSelected}
         onUseSynthetic={actions.handleUseSyntheticFromMeasurement}
+        onUnlockIntegrated={actions.handleUnlockIntegratedAdditive}
         onContract={() => setContractConfirmOpen(true)}
         onExportExcel={actions.handleExportExcel}
         onExportSyntheticComplete={actions.handleExportSyntheticCompleteExcel}
@@ -133,6 +135,8 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
             onSend={actions.handleSendForReview}
             onOpenReview={openReview}
             onBackToDraft={actions.handleBackToDraft}
+            editUnlocked={!!active.editUnlocked}
+            onUnlockIntegrated={actions.handleUnlockIntegratedAdditive}
           />
 
           <AdditiveHeaderInfo
@@ -252,11 +256,20 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
       <AlertDialog open={contractConfirmOpen} onOpenChange={setContractConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Integrar Aditivo ao Projeto?</AlertDialogTitle>
+            <AlertDialogTitle>{isReintegration ? 'Reintegrar aditivo ao projeto?' : 'Integrar Aditivo ao Projeto?'}</AlertDialogTitle>
             <AlertDialogDescription>
+              {isReintegration && (
+                <span>
+                  A revisao atual vai atualizar as abas vinculadas usando apenas as diferencas: supressoes, acrescimos, novos servicos alterados e novas composicoes excluidas desta revisao.
+                </span>
+              )}
+              {!isReintegration && (
+                <>
               Após integrar, este aditivo passará a compor o contrato da obra e será vinculado às abas
               Tarefas, Cronograma, Medição e Diário de Obra. Novos serviços virarão tarefas reais e
               quantidades acrescidas/suprimidas atualizarão as composições existentes. Esta ação não pode ser desfeita.
+                </>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -265,7 +278,7 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
               className="bg-primary text-primary-foreground hover:bg-primary/90"
               onClick={() => { setContractConfirmOpen(false); actions.handleContractAdditive(); }}
             >
-              Integrar ao Projeto
+              {isReintegration ? 'Reintegrar ao projeto' : 'Integrar ao Projeto'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

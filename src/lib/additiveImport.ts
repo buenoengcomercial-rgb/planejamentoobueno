@@ -2028,10 +2028,11 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
   const bdi = add.bdiPercent ?? 0;
   const discount = add.globalDiscountPercent ?? 0;
   const fator = 1 + bdi / 100;
-  const version = add.version ?? 0;
+  const version = add.isContracted ? (add.version ?? 0) + 1 : (add.version ?? 0);
   const now = new Date().toISOString();
 
   const novos = add.compositions.filter(c => c.isNewService);
+  const activeNewTaskIds = new Set(novos.map(n => `add-${add.id}-${n.id}`));
   const ajustes = add.compositions.filter(c => !c.isNewService && (
     (c.addedQuantity ?? 0) > 0 ||
     (c.suppressedQuantity ?? 0) > 0 ||
@@ -2043,34 +2044,40 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
 
   // Aplica ajustes em tarefas existentes + cria novas tarefas em uma única passagem.
   const phases = project.phases.map(phase => {
-    let mutated = false;
-    const updatedTasks: Task[] = phase.tasks.map(task => {
+    const keptTasks = phase.tasks.filter(task =>
+      task.originAdditiveId !== add.id || activeNewTaskIds.has(task.id),
+    );
+    let mutated = keptTasks.length !== phase.tasks.length;
+    let updatedTasks: Task[] = keptTasks.map(task => {
       const ajuste = ajustes.find(a => a.taskId === task.id);
-      if (!ajuste) return task;
-      // Idempotência: se já há entrada deste aditivo+versão, não reaplica
-      const already = (task.additiveHistory ?? []).some(
-        h => h.additiveId === add.id && h.version === version,
-      );
-      if (already) {
-        linkedTaskByCompId.set(ajuste.id, task.id);
-        return task;
-      }
-      const added = ajuste.addedQuantity ?? 0;
-      const suppressed = ajuste.suppressedQuantity ?? 0;
+      const previousEntriesFromThisAdditive = (task.additiveHistory ?? [])
+        .filter(h => h.additiveId === add.id && h.kind !== 'novo');
+      if (!ajuste && previousEntriesFromThisAdditive.length === 0) return task;
+      // A revisao atual e a fonte da verdade. Se um ajuste integrado foi removido
+      // da aba do aditivo, o desejado vira zero e a reintegracao reverte o delta antigo.
+      const added = ajuste?.addedQuantity ?? 0;
+      const suppressed = ajuste?.suppressedQuantity ?? 0;
+      const desiredNet = _trunc2(added - suppressed);
+      const alreadyAppliedNet = previousEntriesFromThisAdditive
+        .reduce((sum, h) => _trunc2(sum + (h.addedQuantity || 0) - (h.suppressedQuantity || 0)), 0);
+      const delta = _trunc2(desiredNet - alreadyAppliedNet);
+      if (ajuste) linkedTaskByCompId.set(ajuste.id, task.id);
+      if (Math.abs(delta) < 0.000001) return task;
       const previousQuantity = task.quantity ?? 0;
-      const delta = added - suppressed;
       const newQuantity = Math.max(0, _trunc2(previousQuantity + delta));
       const previousUnit = task.unitPrice ?? 0;
       const previousTotal = truncar2(previousUnit * previousQuantity);
       const newTotal = truncar2(previousUnit * newQuantity);
+      const deltaAdded = delta > 0 ? delta : 0;
+      const deltaSuppressed = delta < 0 ? Math.abs(delta) : 0;
       const entry = {
         additiveId: add.id,
         additiveName: add.name,
         version,
         at: now,
-        kind: (added >= suppressed ? 'acrescimo' : 'supressao') as 'acrescimo' | 'supressao',
-        addedQuantity: added,
-        suppressedQuantity: suppressed,
+        kind: (delta >= 0 ? 'acrescimo' : 'supressao') as 'acrescimo' | 'supressao',
+        addedQuantity: deltaAdded,
+        suppressedQuantity: deltaSuppressed,
         previousQuantity,
         newQuantity,
         previousUnitPriceWithBDI: previousUnit,
@@ -2080,11 +2087,10 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
         user,
       };
       mutated = true;
-      linkedTaskByCompId.set(ajuste.id, task.id);
       return {
         ...task,
         quantity: newQuantity,
-        suppressedByAdditive: newQuantity === 0 ? true : task.suppressedByAdditive,
+        suppressedByAdditive: newQuantity === 0,
         additiveHistory: [...(task.additiveHistory ?? []), entry],
       };
     });
@@ -2096,12 +2102,111 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
     for (const n of novosDaFase) {
       const taskId = `add-${add.id}-${n.id}`;
       linkedTaskByCompId.set(n.id, taskId);
+      const currentTask = existingIds.has(taskId)
+        ? updatedTasks.find(t => t.id === taskId)
+        : undefined;
+      if (currentTask) {
+        const referenceUnit = referenceUnitNoBDIForNewService(n);
+        const baseUnitNoBDI = money2(referenceUnit * (1 - discount / 100));
+        const upWithBDI = truncar2(baseUnitNoBDI * fator);
+        const qty = n.addedQuantity ?? 0;
+        const totalWithBDI = truncar2(upWithBDI * qty);
+        const previousQuantity = currentTask.quantity ?? 0;
+        const previousUnit = currentTask.unitPrice ?? 0;
+        const previousTotal = truncar2(previousUnit * previousQuantity);
+        const changed =
+          previousQuantity !== qty ||
+          previousUnit !== upWithBDI ||
+          currentTask.unitPriceNoBDI !== baseUnitNoBDI ||
+          currentTask.name !== (n.description || 'Novo servico (Aditivo)');
+        const revisedTask: Task = {
+          ...currentTask,
+          name: n.description || 'Novo servico (Aditivo)',
+          quantity: qty,
+          unit: n.unit,
+          unitPrice: upWithBDI,
+          unitPriceNoBDI: baseUnitNoBDI,
+          itemCode: n.code,
+          priceBank: n.bank,
+          originAdditiveName: add.name,
+          originAdditiveVersion: version,
+          additiveHistory: changed
+            ? [...(currentTask.additiveHistory ?? []), {
+                additiveId: add.id,
+                additiveName: add.name,
+                version,
+                at: now,
+                kind: 'novo',
+                addedQuantity: qty,
+                suppressedQuantity: 0,
+                previousQuantity,
+                newQuantity: qty,
+                previousUnitPriceWithBDI: previousUnit,
+                newUnitPriceWithBDI: upWithBDI,
+                previousTotalWithBDI: previousTotal,
+                newTotalWithBDI: totalWithBDI,
+                user,
+              }]
+            : currentTask.additiveHistory,
+        };
+        const nextTask = applyAdditiveProductivityToTask(project, revisedTask, n, { overwriteExisting: false }).task;
+        updatedTasks = updatedTasks.map(t => t.id === taskId ? nextTask : t);
+        if (changed) mutated = true;
+        continue;
+      }
       if (existingIds.has(taskId)) continue; // já criada antes
       const referenceUnit = referenceUnitNoBDIForNewService(n);
       const baseUnitNoBDI = money2(referenceUnit * (1 - discount / 100));
       const upWithBDI = truncar2(baseUnitNoBDI * fator);
       const qty = n.addedQuantity ?? 0;
       const totalWithBDI = truncar2(upWithBDI * qty);
+      const existingTask = existingIds.has(taskId)
+        ? updatedTasks.find(t => t.id === taskId)
+        : undefined;
+      if (existingTask) {
+        const previousQuantity = existingTask.quantity ?? 0;
+        const previousUnit = existingTask.unitPrice ?? 0;
+        const previousTotal = truncar2(previousUnit * previousQuantity);
+        const changed =
+          previousQuantity !== qty ||
+          previousUnit !== upWithBDI ||
+          existingTask.unitPriceNoBDI !== baseUnitNoBDI ||
+          existingTask.name !== (n.description || 'Novo serviÃ§o (Aditivo)');
+        const revisedTask: Task = {
+          ...existingTask,
+          name: n.description || 'Novo serviÃ§o (Aditivo)',
+          quantity: qty,
+          unit: n.unit,
+          unitPrice: upWithBDI,
+          unitPriceNoBDI: baseUnitNoBDI,
+          itemCode: n.code,
+          priceBank: n.bank,
+          originAdditiveName: add.name,
+          originAdditiveVersion: version,
+          additiveHistory: changed
+            ? [...(existingTask.additiveHistory ?? []), {
+                additiveId: add.id,
+                additiveName: add.name,
+                version,
+                at: now,
+                kind: 'novo',
+                addedQuantity: qty,
+                suppressedQuantity: 0,
+                previousQuantity,
+                newQuantity: qty,
+                previousUnitPriceWithBDI: previousUnit,
+                newUnitPriceWithBDI: upWithBDI,
+                previousTotalWithBDI: previousTotal,
+                newTotalWithBDI: totalWithBDI,
+                user,
+              }]
+            : existingTask.additiveHistory,
+        };
+        const nextTask = applyAdditiveProductivityToTask(project, revisedTask, n, { overwriteExisting: false }).task;
+        updatedTasks = updatedTasks.map(t => t.id === taskId ? nextTask : t);
+        if (changed) mutated = true;
+        continue;
+      }
       const baseTask: Task = {
         id: taskId,
         name: n.description || 'Novo serviço (Aditivo)',
@@ -2176,7 +2281,7 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
   const updatedCompositions = add.compositions.map(c => {
     const linked = linkedTaskByCompId.get(c.id);
     if (!linked) return c;
-    return { ...c, linkedTaskId: linked, integratedAt: c.integratedAt ?? now };
+    return { ...c, linkedTaskId: linked, integratedAt: now };
   });
 
   const updatedAdditive: Additive = {
@@ -2185,6 +2290,10 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
     status: 'aditivo_contratado',
     isContracted: true,
     contractedAt: add.contractedAt ?? now,
+    editUnlocked: false,
+    editUnlockedAt: undefined,
+    editUnlockedBy: undefined,
+    version,
   };
   const nextAdditives = (project.additives ?? []).map(a => a.id === add.id ? updatedAdditive : a);
 

@@ -31,6 +31,7 @@ export function hasAdditiveUserWork(add: Additive | null | undefined): boolean {
 /** Aditivo está bloqueado para substituição direta (apenas criar novo). */
 export function isAdditiveReplacementBlocked(add: Additive | null | undefined): boolean {
   if (!add) return false;
+  if (add.editUnlocked) return false;
   const status = add.status ?? 'rascunho';
   if (add.isContracted) return true;
   return status === 'em_analise' || status === 'aprovado' || status === 'aditivo_contratado';

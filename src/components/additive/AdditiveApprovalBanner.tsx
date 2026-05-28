@@ -8,9 +8,18 @@ interface Props {
   onSend: () => void;
   onOpenReview: (preset: 'approve' | 'reject') => void;
   onBackToDraft: () => void;
+  editUnlocked?: boolean;
+  onUnlockIntegrated?: () => void;
 }
 
-export default function AdditiveApprovalBanner({ status, onSend, onOpenReview, onBackToDraft }: Props) {
+export default function AdditiveApprovalBanner({
+  status,
+  onSend,
+  onOpenReview,
+  onBackToDraft,
+  editUnlocked = false,
+  onUnlockIntegrated,
+}: Props) {
   return (
     <Card
       className="p-3 flex flex-wrap items-center justify-between gap-3 border-l-4"
@@ -35,8 +44,13 @@ export default function AdditiveApprovalBanner({ status, onSend, onOpenReview, o
         {status === 'aprovado' && (
           <div className="text-emerald-700">Aprovado — pronto para integração. Clique em "Integrar ao Projeto" para vincular as composições às abas Tarefas, Cronograma, Medição e Diário de Obra.</div>
         )}
-        {status === 'aditivo_contratado' && (
+        {status === 'aditivo_contratado' && !editUnlocked && (
           <div className="text-primary">Integrado ao projeto — composições vinculadas às abas Tarefas, Cronograma, Medição e Diário de Obra.</div>
+        )}
+        {status === 'aditivo_contratado' && editUnlocked && (
+          <div className="text-amber-700">
+            Revisao liberada: edite supressoes, acrescimos, novas composicoes ou exclusoes nesta aba. Depois clique em "Reintegrar ao projeto".
+          </div>
         )}
       </div>
       <div className="flex items-center gap-1.5 flex-wrap">
@@ -65,6 +79,11 @@ export default function AdditiveApprovalBanner({ status, onSend, onOpenReview, o
         {status === 'aprovado' && (
           <Button size="sm" variant="outline" onClick={onBackToDraft}>
             <RotateCcw className="w-3.5 h-3.5 mr-1" /> Voltar para rascunho
+          </Button>
+        )}
+        {status === 'aditivo_contratado' && !editUnlocked && onUnlockIntegrated && (
+          <Button size="sm" variant="outline" onClick={onUnlockIntegrated}>
+            <RotateCcw className="w-3.5 h-3.5 mr-1" /> Reabrir edicao
           </Button>
         )}
       </div>
