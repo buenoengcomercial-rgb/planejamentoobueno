@@ -14,6 +14,7 @@ interface Props {
   isLocked?: boolean;
   cb: { totalAnalyticWithBDI: number; diff: number };
   onUpdateComposition?: (id: string, patch: Partial<AdditiveComposition>) => void;
+  inputReferenceByCode?: ReadonlyMap<string, AdditiveInput>;
 }
 
 const newInput = (): AdditiveInput => ({
@@ -35,6 +36,8 @@ const parseDecimalInput = (v: string): number => {
   const n = Number(s);
   return Number.isFinite(n) ? n : 0;
 };
+
+const normalizeInputCode = (value: string) => value.trim().toUpperCase();
 
 /** Input numérico — local até blur/Enter. */
 function NumCell({
@@ -115,7 +118,7 @@ function TextCell({
   );
 }
 
-function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpdateComposition }: Props) {
+function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpdateComposition, inputReferenceByCode }: Props) {
   const isNew = !!c.isNewService;
   const editable = isNew && !isLocked && !!onUpdateComposition;
   const showDiscount = isNew && globalDiscount > 0;
@@ -139,6 +142,17 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
       merged.total = money2((merged.coefficient || 0) * (merged.unitPrice || 0));
       return merged;
     }));
+  };
+  const patchFromCodeReference = (input: AdditiveInput, code: string): Partial<AdditiveInput> => {
+    const patch: Partial<AdditiveInput> = { code };
+    if (!isNew) return patch;
+    const reference = inputReferenceByCode?.get(normalizeInputCode(code));
+    if (!reference || reference.id === input.id) return patch;
+    if (reference.bank) patch.bank = reference.bank;
+    if (reference.description) patch.description = reference.description;
+    if (reference.unit) patch.unit = reference.unit;
+    if ((reference.unitPrice ?? 0) > 0) patch.unitPrice = reference.unitPrice;
+    return patch;
   };
   const addInput = () => updateInputs([...c.inputs, newInput()]);
   const removeInput = (id: string) => updateInputs(c.inputs.filter(i => i.id !== id));
@@ -203,7 +217,7 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
               <tr key={i.id} className="border-t border-border/50">
                 <td className="px-1.5 py-1 font-mono align-middle">
                   {editable ? (
-                    <TextCell value={i.code} onCommit={v => patchInput(i.id, { code: v })} className="h-6 w-full text-[11px] font-mono px-1" gridId={gridId} rowIndex={rowIdx} colIndex={0} />
+                    <TextCell value={i.code} onCommit={v => patchInput(i.id, patchFromCodeReference(i, v))} className="h-6 w-full text-[11px] font-mono px-1" gridId={gridId} rowIndex={rowIdx} colIndex={0} />
                   ) : i.code}
                 </td>
                 <td className="px-1.5 py-1 align-middle">

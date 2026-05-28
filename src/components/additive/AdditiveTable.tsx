@@ -1,5 +1,6 @@
+import { useMemo } from 'react';
 import { Card } from '@/components/ui/card';
-import type { AdditiveComposition, AdditiveCalculationMemoryRow } from '@/types/project';
+import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput } from '@/types/project';
 import type { CompGroup } from './types';
 import { COL_COUNT, G_HEAD, BORDER_L } from './types';
 import AdditiveGroupRow from './AdditiveGroupRow';
@@ -15,6 +16,7 @@ interface Props {
   expandedMemory: Set<string>;
   collapsed: Set<string>;
   filteredComps: AdditiveComposition[];
+  allCompositions?: AdditiveComposition[];
   groupTree: CompGroup[];
   orphanRows: AdditiveComposition[];
   hasEapLink: boolean;
@@ -30,8 +32,30 @@ interface Props {
   onSelectDetail?: (selection: AdditiveDetailSelection) => void;
 }
 
+const normalizeInputCode = (value: string) => value.trim().toUpperCase();
+
+const inputReferenceScore = (input: AdditiveInput) =>
+  (input.bank ? 1 : 0) +
+  (input.description ? 3 : 0) +
+  (input.unit ? 1 : 0) +
+  ((input.unitPrice ?? 0) > 0 ? 3 : 0);
+
 export default function AdditiveTable(props: Props) {
-  const { filteredComps, groupTree, orphanRows, hasEapLink } = props;
+  const { filteredComps, allCompositions, groupTree, orphanRows, hasEapLink } = props;
+  const inputReferenceByCode = useMemo(() => {
+    const references = new Map<string, AdditiveInput>();
+    for (const composition of allCompositions ?? filteredComps) {
+      for (const input of composition.inputs ?? []) {
+        const code = normalizeInputCode(input.code ?? '');
+        if (!code) continue;
+        const current = references.get(code);
+        if (!current || inputReferenceScore(input) > inputReferenceScore(current)) {
+          references.set(code, input);
+        }
+      }
+    }
+    return references;
+  }, [allCompositions, filteredComps]);
 
   const renderRow = (c: AdditiveComposition, idx: number) => (
     <AdditiveCompositionRow
@@ -52,11 +76,12 @@ export default function AdditiveTable(props: Props) {
       onChangeMemory={props.onChangeMemory}
       selectedDetail={props.selectedDetail}
       onSelectDetail={props.onSelectDetail}
+      inputReferenceByCode={inputReferenceByCode}
     />
   );
 
   return (
-    <Card className="overflow-hidden">
+    <Card className="overflow-hidden w-full">
       <div className="overflow-x-auto">
         <table className="w-full text-[11px] border-collapse [&_thead_th]:whitespace-nowrap" style={{ minWidth: 1640, tableLayout: 'fixed' }}>
           <colgroup>
@@ -150,6 +175,7 @@ export default function AdditiveTable(props: Props) {
                     onChangeMemory={props.onChangeMemory}
                     selectedDetail={props.selectedDetail}
                     onSelectDetail={props.onSelectDetail}
+                    inputReferenceByCode={inputReferenceByCode}
                   />
                 ))}
                 {orphanRows.length > 0 && (

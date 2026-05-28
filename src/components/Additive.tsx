@@ -78,7 +78,7 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
   };
 
   return (
-    <div className="p-4 lg:p-6 pb-56 space-y-4 max-w-[1700px] mx-auto" onClickCapture={handleDetailClickCapture}>
+    <div className="w-full max-w-none p-3 lg:p-4 pb-56 space-y-4" onClickCapture={handleDetailClickCapture}>
       <AdditiveHeader
         project={project}
         active={active}
@@ -175,6 +175,7 @@ export default function Additive({ project, onProjectChange, undoButton }: Props
             expandedMemory={expandedMemory}
             collapsed={collapsed}
             filteredComps={filteredComps}
+            allCompositions={active?.compositions ?? []}
             groupTree={groupTree}
             orphanRows={orphanRows}
             hasEapLink={hasEapLink}

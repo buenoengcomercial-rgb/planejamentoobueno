@@ -10,7 +10,7 @@ import { buttonVariants } from '@/components/ui/button';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import type { AdditiveComposition, AdditiveCalculationMemoryRow } from '@/types/project';
+import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput } from '@/types/project';
 import { computeAdditiveRow, computeCompositionWithBDI } from '@/lib/additiveImport';
 import { memoryTotals } from '@/lib/calculationMemory';
 import { fmtBRL, fmtNum, fmtQty2, fmtPct, COL_COUNT, G_BG, BORDER_L } from './types';
@@ -243,12 +243,14 @@ interface Props {
   onChangeMemory: (id: string, rows: AdditiveCalculationMemoryRow[]) => void;
   selectedDetail?: AdditiveDetailSelection | null;
   onSelectDetail?: (selection: AdditiveDetailSelection) => void;
+  inputReferenceByCode?: ReadonlyMap<string, AdditiveInput>;
 }
 
 function AdditiveCompositionRowImpl({
   c, bdi, globalDiscount, isLocked, isOpen, isMemoryOpen, showAnalytic, rowIndex = 0,
   onToggleExpand, onToggleMemory, onUpdateComposition, onUpdateQuantity,
   onRemoveComposition, onChangeMemory, selectedDetail, onSelectDetail,
+  inputReferenceByCode,
 }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const r = computeAdditiveRow(c, bdi, globalDiscount);
@@ -553,6 +555,7 @@ function AdditiveCompositionRowImpl({
               isLocked={isLocked}
               cb={cb}
               onUpdateComposition={onUpdateComposition}
+              inputReferenceByCode={inputReferenceByCode}
             />
           </td>
         </tr>

@@ -1,6 +1,6 @@
 import { Fragment, memo } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import type { AdditiveComposition, AdditiveCalculationMemoryRow } from '@/types/project';
+import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput } from '@/types/project';
 import type { CompGroup } from './types';
 import { fmtBRL, fmtPct, COL_COUNT } from './types';
 import AdditiveCompositionRow from './AdditiveCompositionRow';
@@ -25,6 +25,7 @@ interface Props {
   onChangeMemory: (id: string, rows: AdditiveCalculationMemoryRow[]) => void;
   selectedDetail?: AdditiveDetailSelection | null;
   onSelectDetail?: (selection: AdditiveDetailSelection) => void;
+  inputReferenceByCode?: ReadonlyMap<string, AdditiveInput>;
 }
 
 function AdditiveGroupRowImpl(props: Props) {
@@ -103,6 +104,7 @@ function AdditiveGroupRowImpl(props: Props) {
           onChangeMemory={props.onChangeMemory}
           selectedDetail={props.selectedDetail}
           onSelectDetail={props.onSelectDetail}
+          inputReferenceByCode={props.inputReferenceByCode}
         />
       ))}
       {!isCollapsed && !isLocked && (
