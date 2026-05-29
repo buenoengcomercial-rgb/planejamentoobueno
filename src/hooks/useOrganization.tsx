@@ -14,6 +14,7 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
   const { user, loading: authLoading } = useAuth();
   const [membership, setMembership] = useState<OrgMembership | null>(null);
   const [loading, setLoading] = useState(true);
+  const hasLoadedRef = (typeof window !== 'undefined') ? (window as any) : null;
 
   const reload = useCallback(async () => {
     if (!user) {
@@ -21,22 +22,27 @@ export function OrganizationProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    // Only show loading on the FIRST fetch — silent refresh afterwards
+    // so returning to the tab doesn't blank the screen.
+    setLoading(prev => (membership ? false : prev));
     try {
       const m = await getCurrentMembership();
       setMembership(m);
     } catch (e) {
       console.error('[org] erro ao carregar empresa', e);
-      setMembership(null);
+      // Keep previous membership on error to avoid losing UI state.
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user, membership]);
 
   useEffect(() => {
     if (authLoading) return;
     void reload();
-  }, [authLoading, reload]);
+    // Intentionally depend only on user identity, not on the reload callback
+    // (which would re-fire on every membership change).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading, user?.id]);
 
   return (
     <OrgContext.Provider value={{ membership, loading, reload }}>
