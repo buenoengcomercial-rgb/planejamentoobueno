@@ -1019,7 +1019,7 @@ export function buildLaborProjection(project: Project): LaborProjection {
       requiredRoles: row.requiredRoles,
       teamName: row.teamName,
       missingRoles: row.missingRoles,
-      status: row.reason === 'sem_equipe' ? 'sem_equipe' : row.reason === 'faltando_cargo' ? 'incompativel' : 'ok',
+      status: (row.reason === 'sem_equipe' ? 'sem_equipe' : row.reason === 'faltando_cargo' ? 'incompativel' : 'ok') as TaskDimensioningSummary['status'],
     }))
     .sort((a, b) => {
       const order = { incompativel: 0, sem_equipe: 1, ok: 2 };
