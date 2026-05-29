@@ -530,7 +530,12 @@ export interface WarehouseItemConfig {
 export interface WarehouseAttachment {
   id: string;
   name: string;
-  dataUrl: string;
+  /** dataURL embutido — APENAS legado/fallback offline; novos anexos vão para o Storage. */
+  dataUrl?: string;
+  /** Caminho no Storage do bucket `daily-report-photos` (`${projectId}/warehouse/...`). */
+  storagePath?: string;
+  /** MIME do arquivo, usado para abrir/baixar. */
+  mimeType?: string;
   kind?: 'nf' | 'foto' | 'recibo' | 'termo' | 'outro';
   uploadedAt: string;
 }

@@ -735,7 +735,42 @@ export function readFileAsDataURL(file: File): Promise<string> {
   });
 }
 
-export async function makeAttachment(file: File, kind?: WarehouseAttachment['kind']): Promise<WarehouseAttachment> {
-  const dataUrl = await readFileAsDataURL(file);
-  return { id: uid(), name: file.name, dataUrl, kind, uploadedAt: nowISO() };
+/**
+ * Cria um anexo do almoxarifado enviando o arquivo para o Storage (bucket
+ * `daily-report-photos`, sob `${projectId}/warehouse/...`). Em caso de falha
+ * de rede, faz fallback para dataURL embutido (legado/offline) para não
+ * perder o arquivo, mas registra um aviso.
+ *
+ * CRÍTICO: novos anexos NÃO devem ser gravados como dataURL no JSON do
+ * projeto — payloads grandes estouram o limite do PostgREST.
+ */
+export async function makeAttachment(
+  file: File,
+  projectId: string,
+  kind?: WarehouseAttachment['kind'],
+): Promise<WarehouseAttachment> {
+  const id = uid();
+  const safeExt = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const path = `${projectId || 'local'}/warehouse/${id}.${safeExt}`;
+  const mimeType = file.type || 'application/octet-stream';
+  const base: WarehouseAttachment = {
+    id,
+    name: file.name,
+    mimeType,
+    kind,
+    uploadedAt: nowISO(),
+  };
+  try {
+    // Import dinâmico para evitar ciclo lib→integrations em tempo de build.
+    const { supabase } = await import('@/integrations/supabase/client');
+    const { error } = await supabase.storage
+      .from('daily-report-photos')
+      .upload(path, file, { contentType: mimeType, upsert: false });
+    if (error) throw error;
+    return { ...base, storagePath: path };
+  } catch (err) {
+    console.warn('Anexo: falha no upload para Storage, gravando dataURL como fallback.', err);
+    const dataUrl = await readFileAsDataURL(file);
+    return { ...base, dataUrl };
+  }
 }
