@@ -22,13 +22,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Set up listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s);
-      setUser(s?.user ?? null);
+      // Avoid swapping the user object reference on TOKEN_REFRESHED / USER_UPDATED
+      // when the identity didn't actually change. Otherwise downstream effects
+      // (org reload, queries) re-run every time the tab regains focus.
+      setUser(prev => {
+        const next = s?.user ?? null;
+        if (prev?.id === next?.id) return prev;
+        return next;
+      });
     });
 
     // THEN check existing session
     supabase.auth.getSession().then(({ data: { session: s } }) => {
       setSession(s);
-      setUser(s?.user ?? null);
+      setUser(prev => {
+        const next = s?.user ?? null;
+        if (prev?.id === next?.id) return prev;
+        return next;
+      });
       setLoading(false);
     });
 
