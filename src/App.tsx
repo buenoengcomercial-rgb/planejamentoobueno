@@ -11,7 +11,17 @@ import ResetPassword from "./pages/ResetPassword.tsx";
 import TeamManagement from "./pages/TeamManagement.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Avoid auto-refetching when the user returns to the tab — keeps the
+      // screen stable instead of reloading content on focus.
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      staleTime: 5 * 60 * 1000,
+    },
+  },
+});
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
