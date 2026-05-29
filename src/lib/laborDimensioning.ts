@@ -913,7 +913,7 @@ export function buildLaborProjection(project: Project): LaborProjection {
       recommendedPeople,
       availablePeople,
       balancePeople,
-      status: hours <= 0 ? 'empty' : balancePeople < 0 ? 'deficit' : balancePeople > 0 ? 'surplus' : 'ok',
+      status: (hours <= 0 ? 'empty' : balancePeople < 0 ? 'deficit' : balancePeople > 0 ? 'surplus' : 'ok') as RoleDemandSummary['status'],
     };
   }).filter(row => row.hours > 0 || row.availablePeople > 0);
 
@@ -984,7 +984,7 @@ export function buildLaborProjection(project: Project): LaborProjection {
     const team = teams.find(t => t.code === task.team);
     const teamRoleIds = team ? new Set(inferTeamMembers(team, project).map(member => member.operationalRoleId)) : new Set<string>();
     const missingIds = requiredRoles.filter(roleId => !teamRoleIds.has(roleId));
-    const reason = requiredRoles.length === 0
+    const reason: TeamCompatibility['reason'] = requiredRoles.length === 0
       ? 'ok'
       : !team
         ? 'sem_equipe'
@@ -1019,7 +1019,7 @@ export function buildLaborProjection(project: Project): LaborProjection {
       requiredRoles: row.requiredRoles,
       teamName: row.teamName,
       missingRoles: row.missingRoles,
-      status: row.reason === 'sem_equipe' ? 'sem_equipe' : row.reason === 'faltando_cargo' ? 'incompativel' : 'ok',
+      status: (row.reason === 'sem_equipe' ? 'sem_equipe' : row.reason === 'faltando_cargo' ? 'incompativel' : 'ok') as TaskDimensioningSummary['status'],
     }))
     .sort((a, b) => {
       const order = { incompativel: 0, sem_equipe: 1, ok: 2 };

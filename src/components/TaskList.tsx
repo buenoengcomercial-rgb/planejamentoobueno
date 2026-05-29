@@ -1274,16 +1274,16 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                               parentComposition: task.name,
                                               unit: task.unit,
                                             });
-                                            const label = normalized.normalizationType === 'cargo_operacional'
+                                            const label = normalized.type === 'cargo_operacional'
                                               ? normalized.roleName
-                                              : normalized.normalizationType === 'custo_acessorio'
+                                              : normalized.type === 'custo_acessorio'
                                                 ? 'Custo acessório'
-                                                : normalized.normalizationType === 'ignorar_no_dimensionamento'
+                                                : normalized.type === 'ignorar_no_dimensionamento'
                                                   ? 'Ignorado'
                                                   : 'Revisar';
                                             return (
                                               <div className={`text-center rounded px-1 py-0.5 ${
-                                                normalized.normalizationType === 'revisar_manualmente'
+                                                normalized.type === 'revisar_manualmente'
                                                   ? 'bg-warning/10 text-warning'
                                                   : 'bg-primary/10 text-primary'
                                               }`}>
