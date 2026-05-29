@@ -83,7 +83,7 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
 
   const handleFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
-    const made = await Promise.all(files.map(f => makeAttachment(f, form.type === 'entrada' ? 'nf' : 'outro')));
+    const made = await Promise.all(files.map(f => makeAttachment(f, project.id, form.type === 'entrada' ? 'nf' : 'outro')));
     setAttachments(prev => [...prev, ...made]);
     e.target.value = '';
   };
