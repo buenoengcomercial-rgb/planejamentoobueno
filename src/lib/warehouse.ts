@@ -29,11 +29,15 @@ export function emptyWarehouse(): WarehouseState {
 }
 
 export function clearWarehouse(project: Project): Project {
+  const currentWarehouse = normalizeWarehouse(project.warehouse);
   return {
     ...project,
     // Limpa apenas o controle físico/operacional do almoxarifado.
-    // Pedidos confirmados continuam na Lista de Material para nova entrada.
-    warehouse: emptyWarehouse(),
+    // Pedidos confirmados e equipamentos cadastrados continuam preservados.
+    warehouse: {
+      ...emptyWarehouse(),
+      equipments: currentWarehouse.equipments,
+    },
     stockMovements: [],
   };
 }

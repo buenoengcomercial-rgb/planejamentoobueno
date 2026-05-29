@@ -46,11 +46,11 @@ export default function Warehouse({ project, onProjectChange }: Props) {
         description: (
           <div className="space-y-2">
             <p>
-              Esta ação remove entradas, retiradas, devoluções, itens avulsos, requisições, equipamentos,
+              Esta ação remove entradas, retiradas, devoluções, itens avulsos, requisições,
               termos de cautela, locais e configurações do almoxarifado.
             </p>
             <p className="font-medium">
-              Não remove Lista de Material, pedidos confirmados, Medição, Aditivo ou Custo Real.
+              Não remove equipamentos cadastrados, Lista de Material, pedidos confirmados, Medição, Aditivo ou Custo Real.
             </p>
           </div>
         ),
