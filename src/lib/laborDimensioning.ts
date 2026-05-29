@@ -984,7 +984,7 @@ export function buildLaborProjection(project: Project): LaborProjection {
     const team = teams.find(t => t.code === task.team);
     const teamRoleIds = team ? new Set(inferTeamMembers(team, project).map(member => member.operationalRoleId)) : new Set<string>();
     const missingIds = requiredRoles.filter(roleId => !teamRoleIds.has(roleId));
-    const reason = requiredRoles.length === 0
+    const reason: TeamCompatibility['reason'] = requiredRoles.length === 0
       ? 'ok'
       : !team
         ? 'sem_equipe'
