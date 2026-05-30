@@ -520,6 +520,7 @@ function shallowEqualJSON(a: unknown, b: unknown): boolean {
     return JSON.stringify(a) === JSON.stringify(b);
   } catch {
     return false;
+  }
 }
 
 function diffAndSyncEAP(
@@ -534,7 +535,7 @@ function diffAndSyncEAP(
   for (const [id, row] of next) {
     const before = prev.get(id);
     if (!before || !shallowEqualJSON(before, row)) {
-      const r = row as Record<string, unknown>;
+      const r = row as unknown as Record<string, unknown>;
       upserts.push({
         id,
         project_id: projectId,
@@ -560,4 +561,3 @@ function diffAndSyncEAP(
   return ops;
 }
 
-}
