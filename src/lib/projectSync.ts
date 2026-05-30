@@ -24,6 +24,9 @@ import type {
   Phase,
   SavedMeasurement,
   Additive,
+  AuditLog,
+  StockMovement,
+  PriceHistoryEntry,
 } from '@/types/project';
 
 type Json = import('@/integrations/supabase/types').Json;
@@ -38,6 +41,9 @@ interface Snapshot {
   taskLogs: Map<string, { taskId: string; log: DailyProductionLog }>;
   measurements: Map<string, SavedMeasurement>;
   additives: Map<string, Additive>;
+  auditLogs: Map<string, AuditLog>;
+  stockMovements: Map<string, StockMovement>;
+  priceHistory: Map<string, PriceHistoryEntry>;
 }
 
 const snapshots = new Map<string, Snapshot>();
@@ -51,6 +57,9 @@ function emptySnapshot(): Snapshot {
     taskLogs: new Map(),
     measurements: new Map(),
     additives: new Map(),
+    auditLogs: new Map(),
+    stockMovements: new Map(),
+    priceHistory: new Map(),
   };
 }
 
@@ -62,6 +71,9 @@ function buildSnapshot(project: Project): Snapshot {
   for (const d of project.dailyReports ?? []) snap.dailyReports.set(d.id, d);
   for (const m of project.measurements ?? []) snap.measurements.set(m.id, m);
   for (const a of project.additives ?? []) snap.additives.set(a.id, a);
+  for (const l of project.auditLogs ?? []) snap.auditLogs.set(l.id, l);
+  for (const s of project.stockMovements ?? []) snap.stockMovements.set(s.id, s);
+  for (const h of project.materialPriceHistory ?? []) snap.priceHistory.set(h.id, h);
   walkTasks(project.phases ?? [], task => {
     for (const log of task.dailyLogs ?? []) {
       snap.taskLogs.set(log.id, { taskId: task.id, log });
@@ -92,7 +104,7 @@ export function clearCloudSnapshot(projectId: string) {
 
 export async function hydrateProjectFromCloud(project: Project): Promise<Project> {
   const projectId = project.id;
-  const [movRes, reqRes, custRes, drRes, logsRes, measRes, addRes] = await Promise.all([
+  const [movRes, reqRes, custRes, drRes, logsRes, measRes, addRes, audRes, stkRes, phRes] = await Promise.all([
     supabase.from('warehouse_movements').select('id, data').eq('project_id', projectId),
     supabase.from('warehouse_requisitions').select('id, data').eq('project_id', projectId),
     supabase.from('warehouse_custody').select('id, data').eq('project_id', projectId),
@@ -100,6 +112,9 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
     supabase.from('task_daily_logs').select('id, task_id, data').eq('project_id', projectId),
     supabase.from('measurements').select('id, data').eq('project_id', projectId),
     supabase.from('additives').select('id, data').eq('project_id', projectId),
+    supabase.from('audit_logs').select('id, data').eq('project_id', projectId),
+    supabase.from('stock_movements').select('id, data').eq('project_id', projectId),
+    supabase.from('material_price_history').select('id, data').eq('project_id', projectId),
   ]);
 
   // Falha silenciosa: mantém o que veio no data_json (legado / sem permissão).
@@ -113,6 +128,9 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
   }));
   const measurements = measRes.error ? null : (measRes.data ?? []).map(r => r.data as unknown as SavedMeasurement);
   const additives = addRes.error ? null : (addRes.data ?? []).map(r => r.data as unknown as Additive);
+  const auditLogs = audRes.error ? null : (audRes.data ?? []).map(r => r.data as unknown as AuditLog);
+  const stockMovements = stkRes.error ? null : (stkRes.data ?? []).map(r => r.data as unknown as StockMovement);
+  const priceHistory = phRes.error ? null : (phRes.data ?? []).map(r => r.data as unknown as PriceHistoryEntry);
 
   const next: Project = { ...project };
 
@@ -130,6 +148,9 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
   if (dailyReports !== null) next.dailyReports = dailyReports;
   if (measurements !== null && measurements.length > 0) next.measurements = measurements;
   if (additives !== null && additives.length > 0) next.additives = additives;
+  if (auditLogs !== null && auditLogs.length > 0) next.auditLogs = auditLogs;
+  if (stockMovements !== null && stockMovements.length > 0) next.stockMovements = stockMovements;
+  if (priceHistory !== null && priceHistory.length > 0) next.materialPriceHistory = priceHistory;
 
   if (taskLogs !== null && taskLogs.length > 0) {
     const byTask = new Map<string, DailyProductionLog[]>();
@@ -174,6 +195,9 @@ export function stripNormalizedCollections(project: Project): Project {
   next.dailyReports = [];
   next.measurements = [];
   next.additives = [];
+  next.auditLogs = [];
+  next.stockMovements = [];
+  next.materialPriceHistory = [];
   if (project.phases?.length) {
     next.phases = project.phases.map(stripPhaseLogs);
   }
@@ -228,6 +252,27 @@ export async function syncCollectionsToCloud(project: Project, userId?: string):
       imported_at: add.importedAt ?? null,
     };
   }));
+  ops.push(...diffAndSync('audit_logs', prev.auditLogs, next.auditLogs, projectId, userId, l => {
+    const log = l as AuditLog;
+    return {
+      entity_type: log.entityType ?? null,
+      entity_id: log.entityId ?? null,
+      action: log.action ?? null,
+      occurred_at: log.at ?? null,
+      user_id: log.userId ?? null,
+    };
+  }));
+  ops.push(...diffAndSync('stock_movements', prev.stockMovements, next.stockMovements, projectId, userId, s => {
+    const stk = s as StockMovement;
+    return {
+      item_key: stk.itemKey ?? null,
+      occurred_at: stk.date ? stk.date.slice(0, 10) : null,
+      movement_type: stk.type ?? null,
+    };
+  }));
+  ops.push(...diffAndSync('material_price_history', prev.priceHistory, next.priceHistory, projectId, userId, h => ({
+    item_key: (h as PriceHistoryEntry).itemCode ?? null,
+  })));
   ops.push(...diffAndSyncTaskLogs(prev.taskLogs, next.taskLogs, projectId, userId));
 
   const results = await Promise.allSettled(ops);
@@ -240,7 +285,7 @@ export async function syncCollectionsToCloud(project: Project, userId?: string):
 }
 
 function diffAndSync<T extends { id: string }>(
-  table: 'warehouse_movements' | 'warehouse_requisitions' | 'warehouse_custody' | 'daily_reports' | 'measurements' | 'additives',
+  table: 'warehouse_movements' | 'warehouse_requisitions' | 'warehouse_custody' | 'daily_reports' | 'measurements' | 'additives' | 'audit_logs' | 'stock_movements' | 'material_price_history',
   prev: Map<string, T>,
   next: Map<string, T>,
   projectId: string,
