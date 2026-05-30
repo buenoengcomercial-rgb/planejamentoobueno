@@ -53,6 +53,45 @@ export type Database = {
         }
         Relationships: []
       }
+      audit_logs: {
+        Row: {
+          action: string | null
+          created_at: string
+          data: Json
+          entity_id: string | null
+          entity_type: string | null
+          id: string
+          occurred_at: string | null
+          project_id: string
+          updated_at: string
+          user_id: string | null
+        }
+        Insert: {
+          action?: string | null
+          created_at?: string
+          data?: Json
+          entity_id?: string | null
+          entity_type?: string | null
+          id: string
+          occurred_at?: string | null
+          project_id: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Update: {
+          action?: string | null
+          created_at?: string
+          data?: Json
+          entity_id?: string | null
+          entity_type?: string | null
+          id?: string
+          occurred_at?: string | null
+          project_id?: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       daily_reports: {
         Row: {
           created_at: string
@@ -90,6 +129,36 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      material_price_history: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          data: Json
+          id: string
+          item_key: string | null
+          project_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id: string
+          item_key?: string | null
+          project_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id?: string
+          item_key?: string | null
+          project_id?: string
+          updated_at?: string
+        }
+        Relationships: []
       }
       measurements: {
         Row: {
@@ -306,6 +375,42 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      stock_movements: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          data: Json
+          id: string
+          item_key: string | null
+          movement_type: string | null
+          occurred_at: string | null
+          project_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id: string
+          item_key?: string | null
+          movement_type?: string | null
+          occurred_at?: string | null
+          project_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id?: string
+          item_key?: string | null
+          movement_type?: string | null
+          occurred_at?: string | null
+          project_id?: string
+          updated_at?: string
+        }
+        Relationships: []
       }
       task_daily_logs: {
         Row: {
