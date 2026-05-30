@@ -27,6 +27,9 @@ import type {
   AuditLog,
   StockMovement,
   PriceHistoryEntry,
+  BudgetItem,
+  MaterialComparison,
+  AdditiveComposition,
 } from '@/types/project';
 
 type Json = import('@/integrations/supabase/types').Json;
