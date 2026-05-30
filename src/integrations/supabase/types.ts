@@ -53,6 +53,36 @@ export type Database = {
         }
         Relationships: []
       }
+      analytic_compositions: {
+        Row: {
+          code: string | null
+          created_at: string
+          created_by: string | null
+          data: Json
+          id: string
+          project_id: string
+          updated_at: string
+        }
+        Insert: {
+          code?: string | null
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id: string
+          project_id: string
+          updated_at?: string
+        }
+        Update: {
+          code?: string | null
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id?: string
+          project_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       audit_logs: {
         Row: {
           action: string | null
@@ -89,6 +119,48 @@ export type Database = {
           project_id?: string
           updated_at?: string
           user_id?: string | null
+        }
+        Relationships: []
+      }
+      budget_items: {
+        Row: {
+          additive_id: string | null
+          code: string | null
+          created_at: string
+          created_by: string | null
+          data: Json
+          id: string
+          item: string | null
+          project_id: string
+          source: string | null
+          task_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          additive_id?: string | null
+          code?: string | null
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id: string
+          item?: string | null
+          project_id: string
+          source?: string | null
+          task_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          additive_id?: string | null
+          code?: string | null
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id?: string
+          item?: string | null
+          project_id?: string
+          source?: string | null
+          task_id?: string | null
+          updated_at?: string
         }
         Relationships: []
       }
@@ -129,6 +201,39 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      material_comparisons: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          data: Json
+          id: string
+          name: string | null
+          project_id: string
+          status: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id: string
+          name?: string | null
+          project_id: string
+          status?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id?: string
+          name?: string | null
+          project_id?: string
+          status?: string | null
+          updated_at?: string
+        }
+        Relationships: []
       }
       material_price_history: {
         Row: {
