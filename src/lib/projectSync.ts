@@ -47,6 +47,9 @@ interface Snapshot {
   auditLogs: Map<string, AuditLog>;
   stockMovements: Map<string, StockMovement>;
   priceHistory: Map<string, PriceHistoryEntry>;
+  budgetItems: Map<string, BudgetItem>;
+  materialComparisons: Map<string, MaterialComparison>;
+  analyticCompositions: Map<string, AdditiveComposition>;
 }
 
 const snapshots = new Map<string, Snapshot>();
@@ -63,6 +66,9 @@ function emptySnapshot(): Snapshot {
     auditLogs: new Map(),
     stockMovements: new Map(),
     priceHistory: new Map(),
+    budgetItems: new Map(),
+    materialComparisons: new Map(),
+    analyticCompositions: new Map(),
   };
 }
 
@@ -77,6 +83,9 @@ function buildSnapshot(project: Project): Snapshot {
   for (const l of project.auditLogs ?? []) snap.auditLogs.set(l.id, l);
   for (const s of project.stockMovements ?? []) snap.stockMovements.set(s.id, s);
   for (const h of project.materialPriceHistory ?? []) snap.priceHistory.set(h.id, h);
+  for (const b of project.budgetItems ?? []) snap.budgetItems.set(b.id, b);
+  for (const c of project.materialComparisons ?? []) snap.materialComparisons.set(c.id, c);
+  for (const a of project.analyticCompositions ?? []) snap.analyticCompositions.set(a.id, a);
   walkTasks(project.phases ?? [], task => {
     for (const log of task.dailyLogs ?? []) {
       snap.taskLogs.set(log.id, { taskId: task.id, log });
