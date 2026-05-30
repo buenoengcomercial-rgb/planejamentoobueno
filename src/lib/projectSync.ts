@@ -271,7 +271,7 @@ export async function syncCollectionsToCloud(project: Project, userId?: string):
     };
   }));
   ops.push(...diffAndSync('material_price_history', prev.priceHistory, next.priceHistory, projectId, userId, h => ({
-    item_key: (h as PriceHistoryEntry).itemKey ?? null,
+    item_key: (h as PriceHistoryEntry).itemCode ?? null,
   })));
   ops.push(...diffAndSyncTaskLogs(prev.taskLogs, next.taskLogs, projectId, userId));
 
