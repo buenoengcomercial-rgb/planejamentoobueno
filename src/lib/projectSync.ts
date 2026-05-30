@@ -219,6 +219,9 @@ export function stripNormalizedCollections(project: Project): Project {
   next.auditLogs = [];
   next.stockMovements = [];
   next.materialPriceHistory = [];
+  next.budgetItems = [];
+  next.materialComparisons = [];
+  next.analyticCompositions = [];
   if (project.phases?.length) {
     next.phases = project.phases.map(stripPhaseLogs);
   }
