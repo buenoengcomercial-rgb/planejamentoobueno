@@ -684,6 +684,7 @@ export type Database = {
         Args: { _org_id: string; _user_id: string }
         Returns: boolean
       }
+      strip_task_logs: { Args: { node: Json }; Returns: Json }
     }
     Enums: {
       member_status: "active" | "invited" | "blocked"
