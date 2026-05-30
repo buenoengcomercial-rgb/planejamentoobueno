@@ -152,12 +152,19 @@ function buildSnapshot(project: Project): Snapshot {
   return snap;
 }
 
+export function setCloudSnapshot(projectId: string, project: Project) {
+  snapshots.set(projectId, buildSnapshot(project));
+}
+
+export function clearCloudSnapshot(projectId: string) {
+  snapshots.delete(projectId);
+}
 
 // ============== LOAD: HYDRATE ==============
 
 export async function hydrateProjectFromCloud(project: Project): Promise<Project> {
   const projectId = project.id;
-  const [movRes, reqRes, custRes, drRes, logsRes, measRes, addRes, audRes, stkRes, phRes, biRes, mcRes, acRes] = await Promise.all([
+  const [movRes, reqRes, custRes, drRes, logsRes, measRes, addRes, audRes, stkRes, phRes, biRes, mcRes, acRes, chRes, tkRes] = await Promise.all([
     supabase.from('warehouse_movements').select('id, data').eq('project_id', projectId),
     supabase.from('warehouse_requisitions').select('id, data').eq('project_id', projectId),
     supabase.from('warehouse_custody').select('id, data').eq('project_id', projectId),
@@ -171,6 +178,8 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
     supabase.from('budget_items').select('id, data').eq('project_id', projectId),
     supabase.from('material_comparisons').select('id, data').eq('project_id', projectId),
     supabase.from('analytic_compositions').select('id, data').eq('project_id', projectId),
+    supabase.from('eap_chapters').select('id, parent_id, order_index, data').eq('project_id', projectId).order('order_index'),
+    supabase.from('tasks').select('id, chapter_id, parent_task_id, order_index, data').eq('project_id', projectId).order('order_index'),
   ]);
 
   // Falha silenciosa: mantém o que veio no data_json (legado / sem permissão).
@@ -214,14 +223,67 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
   if (materialComparisons !== null && materialComparisons.length > 0) next.materialComparisons = materialComparisons;
   if (analyticCompositions !== null && analyticCompositions.length > 0) next.analyticCompositions = analyticCompositions;
 
-  if (taskLogs !== null && taskLogs.length > 0) {
-    const byTask = new Map<string, DailyProductionLog[]>();
+  // ===== Reconstrói phases[] a partir de eap_chapters + tasks =====
+  const chapterRows = chRes.error ? null : (chRes.data ?? []);
+  const taskRows = tkRes.error ? null : (tkRes.data ?? []);
+
+  const logsByTask = new Map<string, DailyProductionLog[]>();
+  if (taskLogs !== null) {
     for (const { taskId, log } of taskLogs) {
-      const arr = byTask.get(taskId) ?? [];
+      const arr = logsByTask.get(taskId) ?? [];
       arr.push(log);
-      byTask.set(taskId, arr);
+      logsByTask.set(taskId, arr);
     }
-    next.phases = (project.phases ?? []).map(p => mapPhaseTasks(p, byTask));
+  }
+
+  if (chapterRows !== null && chapterRows.length > 0) {
+    type TR = NonNullable<typeof taskRows>[number];
+    const childrenByParent = new Map<string, TR[]>();
+    const rootTasksByChapter = new Map<string, TR[]>();
+    for (const tr of (taskRows ?? []) as TR[]) {
+      if (tr.parent_task_id) {
+        const carr = childrenByParent.get(tr.parent_task_id) ?? [];
+        carr.push(tr);
+        childrenByParent.set(tr.parent_task_id, carr);
+      } else {
+        const rarr = rootTasksByChapter.get(tr.chapter_id) ?? [];
+        rarr.push(tr);
+        rootTasksByChapter.set(tr.chapter_id, rarr);
+      }
+    }
+
+    const buildTask = (row: TR): Task => {
+      const t = { ...(row.data as object) } as Task;
+      t.id = row.id;
+      const kids = (childrenByParent.get(row.id) ?? [])
+        .slice()
+        .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
+        .map(c => buildTask(c));
+      if (kids.length > 0) t.children = kids;
+      else delete t.children;
+      const logs = logsByTask.get(row.id);
+      if (logs && logs.length > 0) t.dailyLogs = logs;
+      return t;
+    };
+
+    const phases: Phase[] = chapterRows
+      .slice()
+      .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
+      .map(ch => {
+        const base = { ...(ch.data as object) } as Phase;
+        base.id = ch.id;
+        if (ch.parent_id) base.parentId = ch.parent_id; else delete (base as Partial<Phase>).parentId;
+        base.order = ch.order_index;
+        const roots = (rootTasksByChapter.get(ch.id) ?? [])
+          .slice()
+          .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
+          .map(r => buildTask(r));
+        base.tasks = roots;
+        return base;
+      });
+    next.phases = phases;
+  } else if (taskLogs !== null && taskLogs.length > 0) {
+    next.phases = (project.phases ?? []).map(p => mapPhaseTasks(p, logsByTask));
   }
 
   setCloudSnapshot(projectId, next);
@@ -237,6 +299,7 @@ function mapTask(task: Task, byTask: Map<string, DailyProductionLog[]>): Task {
   if (task.children?.length) next.children = task.children.map(c => mapTask(c, byTask));
   return next;
 }
+
 
 // ============== SAVE: STRIP + SYNC ==============
 
