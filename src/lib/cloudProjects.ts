@@ -1,6 +1,13 @@
 import { supabase } from '@/integrations/supabase/client';
 import { Project } from '@/types/project';
 import { sampleProject } from '@/data/sampleProject';
+import {
+  hydrateProjectFromCloud,
+  stripNormalizedCollections,
+  syncCollectionsToCloud,
+  setCloudSnapshot,
+  clearCloudSnapshot,
+} from '@/lib/projectSync';
 
 export interface CloudProjectMeta {
   id: string;
