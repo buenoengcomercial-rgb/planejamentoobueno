@@ -104,7 +104,7 @@ export function clearCloudSnapshot(projectId: string) {
 
 export async function hydrateProjectFromCloud(project: Project): Promise<Project> {
   const projectId = project.id;
-  const [movRes, reqRes, custRes, drRes, logsRes, measRes, addRes] = await Promise.all([
+  const [movRes, reqRes, custRes, drRes, logsRes, measRes, addRes, audRes, stkRes, phRes] = await Promise.all([
     supabase.from('warehouse_movements').select('id, data').eq('project_id', projectId),
     supabase.from('warehouse_requisitions').select('id, data').eq('project_id', projectId),
     supabase.from('warehouse_custody').select('id, data').eq('project_id', projectId),
@@ -112,6 +112,9 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
     supabase.from('task_daily_logs').select('id, task_id, data').eq('project_id', projectId),
     supabase.from('measurements').select('id, data').eq('project_id', projectId),
     supabase.from('additives').select('id, data').eq('project_id', projectId),
+    supabase.from('audit_logs').select('id, data').eq('project_id', projectId),
+    supabase.from('stock_movements').select('id, data').eq('project_id', projectId),
+    supabase.from('material_price_history').select('id, data').eq('project_id', projectId),
   ]);
 
   // Falha silenciosa: mantém o que veio no data_json (legado / sem permissão).
@@ -125,6 +128,9 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
   }));
   const measurements = measRes.error ? null : (measRes.data ?? []).map(r => r.data as unknown as SavedMeasurement);
   const additives = addRes.error ? null : (addRes.data ?? []).map(r => r.data as unknown as Additive);
+  const auditLogs = audRes.error ? null : (audRes.data ?? []).map(r => r.data as unknown as AuditLog);
+  const stockMovements = stkRes.error ? null : (stkRes.data ?? []).map(r => r.data as unknown as StockMovement);
+  const priceHistory = phRes.error ? null : (phRes.data ?? []).map(r => r.data as unknown as PriceHistoryEntry);
 
   const next: Project = { ...project };
 
@@ -142,6 +148,9 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
   if (dailyReports !== null) next.dailyReports = dailyReports;
   if (measurements !== null && measurements.length > 0) next.measurements = measurements;
   if (additives !== null && additives.length > 0) next.additives = additives;
+  if (auditLogs !== null && auditLogs.length > 0) next.auditLogs = auditLogs;
+  if (stockMovements !== null && stockMovements.length > 0) next.stockMovements = stockMovements;
+  if (priceHistory !== null && priceHistory.length > 0) next.materialPriceHistory = priceHistory;
 
   if (taskLogs !== null && taskLogs.length > 0) {
     const byTask = new Map<string, DailyProductionLog[]>();
