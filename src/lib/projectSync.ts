@@ -240,7 +240,7 @@ export async function syncCollectionsToCloud(project: Project, userId?: string):
 }
 
 function diffAndSync<T extends { id: string }>(
-  table: 'warehouse_movements' | 'warehouse_requisitions' | 'warehouse_custody' | 'daily_reports',
+  table: 'warehouse_movements' | 'warehouse_requisitions' | 'warehouse_custody' | 'daily_reports' | 'measurements' | 'additives',
   prev: Map<string, T>,
   next: Map<string, T>,
   projectId: string,
