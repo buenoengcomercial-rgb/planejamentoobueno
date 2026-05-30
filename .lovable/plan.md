@@ -1,105 +1,70 @@
-# Etapa 1 — Tirar Almoxarifado e Diário do `data_json`
+# Etapa 6 — Mover `phases[]` e `tasks[]` do `data_json` para tabelas dedicadas
 
-## Objetivo
+## Por quê
 
-Parar de reenviar o projeto inteiro (hoje ~15 MB) toda vez que o usuário registra uma movimentação ou salva o diário. Isso elimina o erro "Erro ao salvar na nuvem" de uma vez e prepara o caminho para os próximos módulos.
+Depois das Etapas 1-5, o `data_json` ficou em ~215 KB num projeto real. Praticamente tudo o que sobra é a árvore da EAP (`phases` → `children`/`tasks`). É a última grande coleção de alto crescimento — e a mais sensível, porque alimenta CPM, Gantt, medição e dashboard.
 
-A EAP, orçamento, equipes, configurações etc. **continuam em `data_json`** por enquanto — só os dois módulos de alto volume saem.
-
-## Escopo desta etapa
+## Escopo
 
 **Entra:**
-- Movimentações de almoxarifado (entradas, retiradas, devoluções, ajustes).
-- Requisições e termos de cautela.
-- Diário de obra (registros diários + equipes presentes + equipamentos + fotos/anexos já estão no Storage).
-- Apontamentos diários da EAP (`task.dailyLogs`) — fonte da medição.
+- Capítulos (`phases[]` e `phases[].children[]` recursivos) → tabela `eap_chapters`
+- Tarefas folha (`phases[]...tasks[]`) → tabela `tasks`
+- Hidratação reconstrói a árvore exatamente como hoje, preservando ordem e hierarquia
+- Sync incremental por linha (mesmo padrão `diffAndSync` das etapas anteriores)
 
-**Não entra (fica para etapas futuras):**
-- Medição, Aditivo, Custo Real, Materiais (lista), Equipes, EAP/Tarefas.
-- Refatoração do `project_history`.
+**Não entra:**
+- Refatoração do CPM (continua rodando em memória sobre o `Project` hidratado)
+- Mudanças de UI/Gantt
+- `project_history` (fica para etapa futura)
 
-## Modelo de dados proposto
+## Modelo de dados
 
 ```text
-warehouse_movements
-  id, project_id (FK), kind (entrada|retirada|devolucao|ajuste),
-  occurred_at, item_ref (id do item dentro do data_json), quantity,
-  unit, location_id, requisition_id, custody_id, notes,
-  attachments (jsonb com {storagePath, mimeType}[]),
-  created_by, created_at, updated_at
+eap_chapters
+  id (text)           -- mesmo id usado hoje no JSON
+  project_id (uuid)
+  parent_id (text)    -- null = raiz (phase de topo)
+  order_index (int)   -- posição entre irmãos
+  name, code, ...     -- demais campos em `data jsonb`
+  created_at, updated_at
 
-warehouse_requisitions
-  id, project_id, number, status, requested_by, requested_at,
-  approved_by, approved_at, items (jsonb), notes
+tasks
+  id (text)
+  project_id (uuid)
+  chapter_id (text)   -- FK lógica para eap_chapters.id
+  order_index (int)
+  -- campos "quentes" para query/índice:
+  start_date, end_date, duration_days, progress, status,
+  -- restante (RUP, recursos, predecessoras, etc.) em `data jsonb`
+  created_at, updated_at
 
-warehouse_custody
-  id, project_id, employee, equipment_ref, signed_at,
-  returned_at, signature_storage_path, items (jsonb)
-
-daily_reports
-  id, project_id, date (date), general_info (jsonb),
-  text_areas (jsonb), photos (jsonb), teams_present (jsonb),
-  equipment (jsonb), created_by, created_at, updated_at
-  UNIQUE(project_id, date)
-
-task_daily_logs
-  id, project_id, task_id (text — referencia o id da tarefa no data_json),
-  date, executed_quantity, notes, team_code,
-  created_by, created_at
-  INDEX(project_id, date)
-  INDEX(project_id, task_id)
+INDEX(project_id, parent_id, order_index)   -- chapters
+INDEX(project_id, chapter_id, order_index)  -- tasks
 ```
 
-Todos com RLS por `is_org_member(auth.uid(), (SELECT organization_id FROM projects WHERE id = project_id))`.
+RLS idêntica às demais tabelas normalizadas (`is_org_member` para SELECT, `has_org_role` para escrita).
 
-## Plano de migração (sem perda de dados)
+## Plano de execução
 
-1. **Criar as 4 tabelas** + GRANTs + RLS + índices.
-2. **Migração one-shot**: ler `data_json` de cada projeto existente e copiar:
-   - `warehouse.movements[]` → `warehouse_movements`
-   - `warehouse.requisitions[]` → `warehouse_requisitions`
-   - `warehouse.custodyTerms[]` → `warehouse_custody`
-   - `dailyReports[]` → `daily_reports`
-   - `phases[].tasks[].dailyLogs[]` → `task_daily_logs`
-3. **NÃO apagar** os campos do `data_json` ainda — manter como fallback de leitura por 1 release.
-4. Refatorar **escrita**: hooks de almoxarifado/diário gravam direto nas novas tabelas (CRUD por linha, ~KB).
-5. Refatorar **leitura**: hidratar o objeto `Project` em memória lendo das novas tabelas + JSON, para o resto da UI continuar funcionando sem mudanças.
-6. Numa etapa futura (não agora), remover os campos do `data_json`.
+1. **Migração de schema** — criar `eap_chapters` + `tasks` + GRANTs + RLS + índices.
+2. **Backfill one-shot** — função recursiva PL/pgSQL que percorre `data_json->'phases'` e insere capítulos/tarefas mantendo `parent_id` e `order_index`.
+3. **Hidratação** (`projectSync.ts`) — após carregar o projeto, montar `phases[]` a partir das duas tabelas (reconstrução da árvore via `parent_id`).
+4. **Strip** — remover `phases` do `data_json` antes de salvar (igual fizemos com as outras coleções).
+5. **Sync incremental** — `diffAndSync` para `eap_chapters` e `tasks`, com upsert por id.
+6. **Cleanup** — segunda migração apaga `phases` do `data_json` dos projetos existentes (só depois da hidratação validada).
 
-## Arquivos a criar/alterar (estimado)
+## Riscos & mitigação
 
-**Novos:**
-- `supabase/migrations/<ts>_normalize_warehouse_and_daily.sql`
-- `src/lib/cloudWarehouse.ts` — CRUD das 3 tabelas de almoxarifado
-- `src/lib/cloudDailyReports.ts` — CRUD de daily_reports + task_daily_logs
-- `src/lib/projectHydration.ts` — monta o Project a partir do JSON + tabelas
+- **CPM depende da árvore montada corretamente** → hidratação reconstrói a estrutura idêntica ao formato atual antes de qualquer cálculo rodar.
+- **Ordem dos irmãos importa para o Gantt** → `order_index` explícito, preenchido no backfill e mantido no sync.
+- **Sync incremental pode mandar muitas linhas na primeira gravação** → mitigado porque o `diffAndSync` compara `prev` vs `next` em memória.
+- **Rollback**: manter `data_json.phases` populado por 1 release (steps 1-5 sem step 6) antes do cleanup.
 
-**Alterados:**
-- `src/lib/warehouse.ts` — operações passam a chamar `cloudWarehouse`
-- `src/components/warehouse/*` — handlers async, sem reescrever o projeto inteiro
-- `src/hooks/useDailyReportState.ts` — `persist` grava em `daily_reports`
-- `src/components/DailyProductionWorkspace.tsx` (e similares) — `dailyLogs` via `cloudDailyReports`
-- `src/lib/cloudProjects.ts` — `loadCloudProject` chama `projectHydration`
+## Validação
 
-## Compatibilidade
+- Abrir projeto: Gantt, EAP, CPM e dashboard mostram exatamente o mesmo conteúdo.
+- Editar uma tarefa: salva em <1 s sem reenviar o projeto inteiro.
+- Adicionar/remover capítulo: hierarquia persiste após reload.
+- `pg_column_size(data_json)` cai de ~215 KB para <30 KB.
 
-- Projetos antigos continuam abrindo (fallback lê do JSON).
-- Salvamento novo escreve só na tabela específica.
-- Conflito de edição passa a ser **por linha**, não pelo projeto inteiro.
-- `localStorage` continua como cache offline.
-
-## Riscos
-
-- Migração de projetos grandes (15 MB) pode ser lenta — rodar uma vez, idempotente, com `ON CONFLICT DO NOTHING`.
-- Hidratação adiciona N queries ao abrir projeto — mitigar com SELECTs paralelos.
-
-## Como vou validar
-
-- Abrir projeto existente: dados aparecem iguais.
-- Adicionar movimentação no Almoxarifado: salva em <1 s, sem o toast de erro.
-- Recarregar página: movimentação persiste.
-- Diário do dia: salvar não dispara PATCH em `projects`.
-
----
-
-Aprovo este escopo? Posso começar pela migração SQL.
+Posso seguir com a migração de schema + backfill?
