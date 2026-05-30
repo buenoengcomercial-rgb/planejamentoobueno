@@ -202,6 +202,42 @@ export type Database = {
           },
         ]
       }
+      eap_chapters: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          data: Json
+          id: string
+          name: string | null
+          order_index: number
+          parent_id: string | null
+          project_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id: string
+          name?: string | null
+          order_index?: number
+          parent_id?: string | null
+          project_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id?: string
+          name?: string | null
+          order_index?: number
+          parent_id?: string | null
+          project_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       material_comparisons: {
         Row: {
           created_at: string
@@ -558,6 +594,54 @@ export type Database = {
           },
         ]
       }
+      tasks: {
+        Row: {
+          chapter_id: string
+          created_at: string
+          created_by: string | null
+          data: Json
+          duration_days: number | null
+          id: string
+          name: string | null
+          order_index: number
+          parent_task_id: string | null
+          percent_complete: number | null
+          project_id: string
+          start_date: string | null
+          updated_at: string
+        }
+        Insert: {
+          chapter_id: string
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          duration_days?: number | null
+          id: string
+          name?: string | null
+          order_index?: number
+          parent_task_id?: string | null
+          percent_complete?: number | null
+          project_id: string
+          start_date?: string | null
+          updated_at?: string
+        }
+        Update: {
+          chapter_id?: string
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          duration_days?: number | null
+          id?: string
+          name?: string | null
+          order_index?: number
+          parent_task_id?: string | null
+          percent_complete?: number | null
+          project_id?: string
+          start_date?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       warehouse_custody: {
         Row: {
           created_at: string
@@ -671,6 +755,15 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      backfill_tasks_recursive: {
+        Args: {
+          _chapter_id: string
+          _parent_task_id: string
+          _project_id: string
+          _tasks: Json
+        }
+        Returns: undefined
+      }
       get_user_org_id: { Args: { _user_id: string }; Returns: string }
       has_org_role: {
         Args: {
