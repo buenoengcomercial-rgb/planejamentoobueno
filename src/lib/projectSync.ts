@@ -22,6 +22,8 @@ import type {
   DailyProductionLog,
   Task,
   Phase,
+  SavedMeasurement,
+  Additive,
 } from '@/types/project';
 
 type Json = import('@/integrations/supabase/types').Json;
@@ -34,6 +36,8 @@ interface Snapshot {
   custody: Map<string, CustodyTerm>;
   dailyReports: Map<string, DailyReport>;
   taskLogs: Map<string, { taskId: string; log: DailyProductionLog }>;
+  measurements: Map<string, SavedMeasurement>;
+  additives: Map<string, Additive>;
 }
 
 const snapshots = new Map<string, Snapshot>();
@@ -45,6 +49,8 @@ function emptySnapshot(): Snapshot {
     custody: new Map(),
     dailyReports: new Map(),
     taskLogs: new Map(),
+    measurements: new Map(),
+    additives: new Map(),
   };
 }
 
@@ -54,6 +60,8 @@ function buildSnapshot(project: Project): Snapshot {
   for (const r of project.warehouse?.requisitions ?? []) snap.requisitions.set(r.id, r);
   for (const c of project.warehouse?.custodyTerms ?? []) snap.custody.set(c.id, c);
   for (const d of project.dailyReports ?? []) snap.dailyReports.set(d.id, d);
+  for (const m of project.measurements ?? []) snap.measurements.set(m.id, m);
+  for (const a of project.additives ?? []) snap.additives.set(a.id, a);
   walkTasks(project.phases ?? [], task => {
     for (const log of task.dailyLogs ?? []) {
       snap.taskLogs.set(log.id, { taskId: task.id, log });
