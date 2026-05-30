@@ -252,6 +252,27 @@ export async function syncCollectionsToCloud(project: Project, userId?: string):
       imported_at: add.importedAt ?? null,
     };
   }));
+  ops.push(...diffAndSync('audit_logs', prev.auditLogs, next.auditLogs, projectId, userId, l => {
+    const log = l as AuditLog;
+    return {
+      entity_type: log.entityType ?? null,
+      entity_id: log.entityId ?? null,
+      action: log.action ?? null,
+      occurred_at: log.at ?? null,
+      user_id: log.userId ?? null,
+    };
+  }));
+  ops.push(...diffAndSync('stock_movements', prev.stockMovements, next.stockMovements, projectId, userId, s => {
+    const stk = s as StockMovement;
+    return {
+      item_key: stk.itemKey ?? null,
+      occurred_at: stk.date ? stk.date.slice(0, 10) : null,
+      movement_type: stk.type ?? null,
+    };
+  }));
+  ops.push(...diffAndSync('material_price_history', prev.priceHistory, next.priceHistory, projectId, userId, h => ({
+    item_key: (h as PriceHistoryEntry).itemKey ?? null,
+  })));
   ops.push(...diffAndSyncTaskLogs(prev.taskLogs, next.taskLogs, projectId, userId));
 
   const results = await Promise.allSettled(ops);
