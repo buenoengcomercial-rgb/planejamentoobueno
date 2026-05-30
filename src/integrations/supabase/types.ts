@@ -14,6 +14,45 @@ export type Database = {
   }
   public: {
     Tables: {
+      additives: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          data: Json
+          id: string
+          imported_at: string | null
+          name: string | null
+          project_id: string
+          status: string | null
+          updated_at: string
+          version: number | null
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id: string
+          imported_at?: string | null
+          name?: string | null
+          project_id: string
+          status?: string | null
+          updated_at?: string
+          version?: number | null
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id?: string
+          imported_at?: string | null
+          name?: string | null
+          project_id?: string
+          status?: string | null
+          updated_at?: string
+          version?: number | null
+        }
+        Relationships: []
+      }
       daily_reports: {
         Row: {
           created_at: string
@@ -51,6 +90,48 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      measurements: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          data: Json
+          end_date: string | null
+          id: string
+          issue_date: string | null
+          number: number | null
+          project_id: string
+          start_date: string | null
+          status: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          end_date?: string | null
+          id: string
+          issue_date?: string | null
+          number?: number | null
+          project_id: string
+          start_date?: string | null
+          status?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          end_date?: string | null
+          id?: string
+          issue_date?: string | null
+          number?: number | null
+          project_id?: string
+          start_date?: string | null
+          status?: string | null
+          updated_at?: string
+        }
+        Relationships: []
       }
       organization_members: {
         Row: {
@@ -151,7 +232,9 @@ export type Database = {
           before_json: Json | null
           created_at: string
           description: string | null
+          entry_type: string
           id: string
+          patch_json: Json | null
           project_id: string
           user_id: string
         }
@@ -161,7 +244,9 @@ export type Database = {
           before_json?: Json | null
           created_at?: string
           description?: string | null
+          entry_type?: string
           id?: string
+          patch_json?: Json | null
           project_id: string
           user_id: string
         }
@@ -171,7 +256,9 @@ export type Database = {
           before_json?: Json | null
           created_at?: string
           description?: string | null
+          entry_type?: string
           id?: string
+          patch_json?: Json | null
           project_id?: string
           user_id?: string
         }
