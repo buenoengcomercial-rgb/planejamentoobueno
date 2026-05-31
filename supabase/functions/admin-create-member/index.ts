@@ -48,13 +48,16 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Verificar se quem chama é owner/admin da organização
-    const { data: hasRole, error: roleErr } = await admin.rpc("has_org_role", {
-      _user_id: callerId,
-      _org_id: organizationId,
-      _roles: ["owner", "admin"],
-    });
-    if (roleErr || !hasRole) {
+    // Verificar se quem chama e owner/admin da organizacao
+    const { data: membership, error: roleErr } = await admin
+      .from("organization_members")
+      .select("id")
+      .eq("user_id", callerId)
+      .eq("organization_id", organizationId)
+      .eq("status", "active")
+      .in("role", ["owner", "admin"])
+      .maybeSingle();
+    if (roleErr || !membership) {
       return new Response(JSON.stringify({ error: "Sem permissão para criar acessos nesta empresa" }), {
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
