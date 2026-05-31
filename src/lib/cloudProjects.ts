@@ -144,18 +144,18 @@ export async function renameCloudProject(id: string, newName: string, organizati
 }
 
 export async function duplicateCloudProject(id: string, organizationId: string): Promise<Project | null> {
-  const proj = await loadCloudProject(id);
-  if (!proj) return null;
-  const newId = crypto.randomUUID();
-  const copy: Project = { ...JSON.parse(JSON.stringify(proj)), id: newId, name: `${proj.name} (cópia)` };
-  const { error } = await supabase.from('projects').insert([{
-    id: newId,
-    organization_id: organizationId,
-    name: copy.name,
-    data_json: copy as unknown as import('@/integrations/supabase/types').Json,
-  }]);
+  const source = await supabase.from('projects').select('name').eq('id', id).maybeSingle();
+  if (source.error) throw source.error;
+  if (!source.data) return null;
+  const newName = `${source.data.name} (cópia)`;
+  const { data: newId, error } = await supabase.rpc('duplicate_project', {
+    p_source_id: id,
+    p_organization_id: organizationId,
+    p_new_name: newName,
+  });
   if (error) throw error;
-  return copy;
+  if (!newId) return null;
+  return await loadCloudProject(newId as string);
 }
 
 export async function deleteCloudProject(id: string): Promise<void> {
