@@ -326,17 +326,8 @@ export function stripNormalizedCollections(project: Project): Project {
   next.budgetItems = [];
   next.materialComparisons = [];
   next.analyticCompositions = [];
-  if (project.phases?.length) {
-    next.phases = project.phases.map(stripPhaseLogs);
-  }
-  return next;
-}
-function stripPhaseLogs(phase: Phase): Phase {
-  return { ...phase, tasks: phase.tasks?.map(stripTaskLogs) ?? [] };
-}
-function stripTaskLogs(task: Task): Task {
-  const next: Task = { ...task, dailyLogs: [] };
-  if (task.children?.length) next.children = task.children.map(stripTaskLogs);
+  // EAP normalizada em eap_chapters/tasks — não persistir mais em data_json.
+  next.phases = [];
   return next;
 }
 
