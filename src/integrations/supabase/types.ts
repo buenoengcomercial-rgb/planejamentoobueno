@@ -764,6 +764,14 @@ export type Database = {
         }
         Returns: undefined
       }
+      duplicate_project: {
+        Args: {
+          p_new_name: string
+          p_organization_id: string
+          p_source_id: string
+        }
+        Returns: string
+      }
       get_user_org_id: { Args: { _user_id: string }; Returns: string }
       has_org_role: {
         Args: {
