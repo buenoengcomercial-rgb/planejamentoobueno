@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import type { Project, WarehouseFiscalNote, WarehouseFiscalNoteItem, WarehouseFiscalNoteStatus } from '@/types/project';
-import { makeAttachment, nowWarehouseISO, uidWarehouse, upsertFiscalNote, deleteFiscalNote } from '@/lib/warehouse';
+import { makeAttachment, nowWarehouseISO, readFileAsDataURL, uidWarehouse, upsertFiscalNote, deleteFiscalNote } from '@/lib/warehouse';
+import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -108,6 +109,61 @@ function parseFiscalNoteText(text: string): Pick<WarehouseFiscalNote, 'supplierN
   };
 }
 
+type ParsedFiscalNote = Pick<WarehouseFiscalNote, 'supplierName' | 'supplierCnpj' | 'invoiceNumber' | 'issueDate' | 'totalAmount' | 'items' | 'notes'>;
+
+type AiFiscalNoteResponse = {
+  ok?: boolean;
+  error?: string;
+  note?: {
+    supplierName?: string | null;
+    supplierCnpj?: string | null;
+    invoiceNumber?: string | null;
+    issueDate?: string | null;
+    totalAmount?: number | null;
+    notes?: string | null;
+    items?: Array<{
+      description?: string;
+      quantity?: number;
+      unit?: string | null;
+      unitPrice?: number;
+      totalPrice?: number;
+      category?: string | null;
+    }>;
+  };
+};
+
+async function readImageWithAi(file: File): Promise<ParsedFiscalNote> {
+  const fileDataUrl = await readFileAsDataURL(file);
+  const { data, error } = await supabase.functions.invoke<AiFiscalNoteResponse>('read-fiscal-note', {
+    body: {
+      fileName: file.name,
+      fileType: file.type,
+      fileDataUrl,
+    },
+  });
+
+  if (error) throw new Error(error.message);
+  if (!data?.ok || !data.note) throw new Error(data?.error ?? 'A IA não conseguiu ler a nota fiscal.');
+
+  return {
+    supplierName: data.note.supplierName ?? '',
+    supplierCnpj: normalizeCnpj(data.note.supplierCnpj ?? ''),
+    invoiceNumber: data.note.invoiceNumber ?? '',
+    issueDate: data.note.issueDate ?? '',
+    totalAmount: Number(data.note.totalAmount ?? 0),
+    notes: data.note.notes ?? undefined,
+    items: (data.note.items ?? []).map(item => ({
+      id: uidWarehouse(),
+      description: item.description ?? '',
+      quantity: Number(item.quantity ?? 1) || 1,
+      unit: item.unit ?? 'UN',
+      unitPrice: Number(item.unitPrice ?? 0),
+      totalPrice: Number(item.totalPrice ?? 0),
+      category: item.category ?? undefined,
+    })).filter(item => item.description.trim()),
+  };
+}
+
 async function extractPdfText(file: File) {
   const pdfjs = await import('pdfjs-dist');
   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -176,14 +232,22 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
       const attachment = await makeAttachment(file, project.id, 'nf');
       const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
       let extractedText = '';
-      let parsed: ReturnType<typeof parseFiscalNoteText> = { totalAmount: 0, items: [] };
+      let parsed: ParsedFiscalNote = { totalAmount: 0, items: [] };
       let processingError: string | undefined;
 
       if (isPdf) {
         extractedText = await extractPdfText(file);
-        parsed = parseFiscalNoteText(extractedText);
+        if (extractedText.trim()) {
+          parsed = parseFiscalNoteText(extractedText);
+        } else {
+          processingError = 'PDF sem texto selecionável. Envie a página como imagem para leitura por IA/OCR.';
+        }
       } else {
-        processingError = 'Imagem anexada. Conecte o OCR/IA real para extrair automaticamente os dados de imagens.';
+        try {
+          parsed = await readImageWithAi(file);
+        } catch (err) {
+          processingError = `Não foi possível ler a imagem automaticamente: ${(err as Error).message}`;
+        }
       }
 
       const note: WarehouseFiscalNote = {

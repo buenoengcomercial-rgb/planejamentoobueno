@@ -2,3 +2,6 @@ project_id = "dvcroexmytusipacbibz"
 
 [functions.admin-create-member]
 verify_jwt = true
+
+[functions.read-fiscal-note]
+verify_jwt = true
