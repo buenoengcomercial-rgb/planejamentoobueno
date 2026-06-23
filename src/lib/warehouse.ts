@@ -12,6 +12,7 @@ import type {
   WarehouseLocation,
   WarehouseItemConfig,
   WarehouseAttachment,
+  WarehouseFiscalNote,
   DailyReport,
 } from '@/types/project';
 import { linkKeyOf, computeStockRows } from '@/lib/materialComparisons';
@@ -25,7 +26,15 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 // ============== STATE / MIGRATION ==============
 
 export function emptyWarehouse(): WarehouseState {
-  return { locations: [], items: [], movements: [], requisitions: [], equipments: [], custodyTerms: [] };
+  return {
+    locations: [],
+    items: [],
+    movements: [],
+    requisitions: [],
+    equipments: [],
+    custodyTerms: [],
+    fiscalNotes: [],
+  };
 }
 
 export function clearWarehouse(project: Project): Project {
@@ -50,6 +59,7 @@ function normalizeWarehouse(state?: Partial<WarehouseState>): WarehouseState {
     requisitions: state?.requisitions ?? [],
     equipments: state?.equipments ?? [],
     custodyTerms: state?.custodyTerms ?? [],
+    fiscalNotes: state?.fiscalNotes ?? [],
   };
 }
 
@@ -67,7 +77,8 @@ export function ensureWarehouse(project: Project): Project {
       wh.movements !== cur.movements ||
       wh.requisitions !== cur.requisitions ||
       wh.equipments !== cur.equipments ||
-      wh.custodyTerms !== cur.custodyTerms
+      wh.custodyTerms !== cur.custodyTerms ||
+      wh.fiscalNotes !== cur.fiscalNotes
     : false;
   let changed = !cur || isPartial;
 
@@ -733,6 +744,31 @@ export function readFileAsDataURL(file: File): Promise<string> {
     r.onerror = reject;
     r.readAsDataURL(file);
   });
+}
+
+export function upsertFiscalNote(project: Project, note: WarehouseFiscalNote): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const fiscalNotes = wh.fiscalNotes ?? [];
+  const exists = fiscalNotes.some(n => n.id === note.id);
+  const nextNotes = exists
+    ? fiscalNotes.map(n => (n.id === note.id ? { ...note, updatedAt: nowISO() } : n))
+    : [{ ...note, updatedAt: note.updatedAt || nowISO() }, ...fiscalNotes];
+  return setWh(p, { fiscalNotes: nextNotes });
+}
+
+export function deleteFiscalNote(project: Project, noteId: string): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  return setWh(p, { fiscalNotes: (wh.fiscalNotes ?? []).filter(n => n.id !== noteId) });
+}
+
+export function uidWarehouse() {
+  return uid();
+}
+
+export function nowWarehouseISO() {
+  return nowISO();
 }
 
 /**

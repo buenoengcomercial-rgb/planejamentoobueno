@@ -579,6 +579,44 @@ export interface WarehouseMovement {
   publishedToDailyReportId?: string;
 }
 
+export type WarehouseFiscalNoteStatus =
+  | 'em_processamento'
+  | 'a_conferir'
+  | 'aprovada'
+  | 'rejeitada';
+
+export interface WarehouseFiscalNoteItem {
+  id: string;
+  description: string;
+  quantity: number;
+  unit?: string;
+  unitPrice: number;
+  totalPrice: number;
+  category?: string;
+  itemKey?: string;
+}
+
+export interface WarehouseFiscalNote {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  supplierName?: string;
+  supplierCnpj?: string;
+  invoiceNumber?: string;
+  issueDate?: string;
+  totalAmount: number;
+  status: WarehouseFiscalNoteStatus;
+  origin: 'upload';
+  sourceFileName: string;
+  sourceMimeType?: string;
+  attachment?: WarehouseAttachment;
+  items: WarehouseFiscalNoteItem[];
+  notes?: string;
+  rejectionReason?: string;
+  processingError?: string;
+  extractedText?: string;
+}
+
 export interface WarehouseRequisitionItem {
   itemKey: string;
   code?: string;
@@ -657,6 +695,7 @@ export interface WarehouseState {
   requisitions: WarehouseRequisition[];
   equipments: Equipment[];
   custodyTerms: CustodyTerm[];
+  fiscalNotes?: WarehouseFiscalNote[];
 }
 
 // =================== LISTA DE MATERIAL / COMPARATIVOS ===================
