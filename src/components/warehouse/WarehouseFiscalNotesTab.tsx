@@ -144,7 +144,13 @@ async function readWithAi(input: { fileName: string; fileType?: string; fileData
     },
   });
 
-  if (error) throw new Error(error.message);
+  if (error) {
+    const message = error.message || 'Falha ao chamar a leitura da nota.';
+    if (/failed to send a request/i.test(message)) {
+      throw new Error('Nao foi possivel conectar a funcao de leitura da nota. Confira se a Edge Function read-fiscal-note foi implantada no Supabase.');
+    }
+    throw new Error(message);
+  }
   if (!data?.ok || !data.note) throw new Error(data?.error ?? 'A IA não conseguiu ler a nota fiscal.');
 
   return {
@@ -291,6 +297,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
         try {
           parsed = await readImageWithAi(file);
         } catch (err) {
+          if (/funcao de leitura da nota|Edge Function read-fiscal-note/i.test((err as Error).message)) {
+            throw err;
+          }
           processingError = `Não foi possível ler a imagem automaticamente: ${(err as Error).message}`;
         }
       }
