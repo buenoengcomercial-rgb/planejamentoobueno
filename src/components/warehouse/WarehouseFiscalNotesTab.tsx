@@ -276,26 +276,68 @@ function emptyItem(): WarehouseFiscalNoteItem {
   return { id: uidWarehouse(), productCode: '', description: '', quantity: 1, unit: 'UN', unitPrice: 0, totalPrice: 0, linkStatus: 'pendente' };
 }
 
+async function openUrlAsBlob(url: string, mimeHint?: string) {
+  // Baixa via fetch e abre como blob: URL para contornar bloqueadores
+  // de anúncio/privacidade que barram domínios *.supabase.co.
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    let blob = await res.blob();
+    if (mimeHint && blob.type !== mimeHint) {
+      blob = new Blob([blob], { type: mimeHint });
+    }
+    const blobUrl = URL.createObjectURL(blob);
+    const win = window.open(blobUrl, '_blank', 'noopener');
+    if (!win) {
+      // Popup bloqueado: força download
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.click();
+    }
+    // Libera após algum tempo para o navegador conseguir abrir
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    return true;
+  } catch (err) {
+    toast.error('Falha ao abrir o arquivo: ' + (err as Error).message);
+    return false;
+  }
+}
+
+function guessMime(name?: string | null): string | undefined {
+  if (!name) return undefined;
+  const ext = name.split('.').pop()?.toLowerCase();
+  if (ext === 'pdf') return 'application/pdf';
+  if (ext === 'png') return 'image/png';
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'webp') return 'image/webp';
+  return undefined;
+}
+
 function openAttachment(note: WarehouseFiscalNote) {
-  const url = note.attachment?.dataUrl;
-  if (!url && !note.attachment?.storagePath) {
+  const att = note.attachment;
+  if (!att?.dataUrl && !att?.storagePath) {
     toast.error('Nenhum arquivo anexo encontrado.');
     return;
   }
-  if (url) {
-    window.open(url, '_blank', 'noopener');
-    return;
-  }
-  // Storage path: gerar signed URL on demand
+  const mime = att.mimeType || guessMime(att.name);
   void (async () => {
-    const { data, error } = await supabase.storage
-      .from('daily-report-photos')
-      .createSignedUrl(note.attachment!.storagePath!, 60);
-    if (error || !data?.signedUrl) {
-      toast.error('Falha ao abrir o arquivo: ' + (error?.message ?? 'sem URL'));
+    if (att.storagePath) {
+      const { data, error } = await supabase.storage
+        .from('daily-report-photos')
+        .createSignedUrl(att.storagePath, 60);
+      if (error || !data?.signedUrl) {
+        toast.error('Falha ao abrir o arquivo: ' + (error?.message ?? 'sem URL'));
+        return;
+      }
+      await openUrlAsBlob(data.signedUrl, mime);
       return;
     }
-    window.open(data.signedUrl, '_blank', 'noopener');
+    if (att.dataUrl) {
+      // dataUrl pode ser data: ou http(s):; fetch funciona com ambos
+      await openUrlAsBlob(att.dataUrl, mime);
+    }
   })();
 }
 
