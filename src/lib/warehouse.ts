@@ -13,6 +13,7 @@ import type {
   WarehouseItemConfig,
   WarehouseAttachment,
   WarehouseFiscalNote,
+  WarehouseFiscalNoteItem,
   DailyReport,
 } from '@/types/project';
 import { linkKeyOf, computeStockRows } from '@/lib/materialComparisons';
@@ -22,6 +23,19 @@ import { getChapterNumbering } from '@/lib/chapters';
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const nowISO = () => new Date().toISOString();
 const todayISO = () => new Date().toISOString().slice(0, 10);
+
+function normalizeLookup(value?: string) {
+  return (value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function fiscalItemLookup(item: Pick<WarehouseFiscalNoteItem, 'description' | 'unit'>) {
+  return `${normalizeLookup(item.description)}|${normalizeLookup(item.unit || 'UN')}`;
+}
 
 // ============== STATE / MIGRATION ==============
 
@@ -761,6 +775,81 @@ export function deleteFiscalNote(project: Project, noteId: string): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
   return setWh(p, { fiscalNotes: (wh.fiscalNotes ?? []).filter(n => n.id !== noteId) });
+}
+
+export function approveFiscalNote(project: Project, noteId: string): Project {
+  let p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const note = wh.fiscalNotes?.find(n => n.id === noteId);
+  if (!note || note.status === 'aprovada') return p;
+
+  const rowsByKey = new Map(
+    computeWarehouseRows(p, { materialOnly: true, confirmedOnly: true, includeManual: true })
+      .map(row => [row.key, row] as const),
+  );
+  const itemKeyByLookup = new Map<string, string>();
+  for (const row of rowsByKey.values()) {
+    itemKeyByLookup.set(fiscalItemLookup({ description: row.description, unit: row.unit }), row.key);
+  }
+
+  let itemsConfig = [...wh.items];
+  const movements = [...wh.movements];
+  const approvedItems = note.items.map(item => {
+    const unit = (item.unit || 'UN').trim() || 'UN';
+    const lookup = fiscalItemLookup({ description: item.description, unit });
+    let itemKey = item.itemKey && rowsByKey.has(item.itemKey) ? item.itemKey : itemKeyByLookup.get(lookup);
+
+    if (!itemKey) {
+      itemKey = `warehouse-nf|${uid()}`;
+      itemKeyByLookup.set(lookup, itemKey);
+      itemsConfig.push({
+        key: itemKey,
+        description: item.description.trim(),
+        unit,
+        manualItem: true,
+        plannedQuantity: 0,
+        purchasedQuantity: Number(item.quantity || 0),
+        unitPrice: Number(item.unitPrice || 0) || undefined,
+      });
+    } else {
+      itemsConfig = itemsConfig.map(cfg =>
+        cfg.key === itemKey
+          ? {
+              ...cfg,
+              purchasedQuantity: cfg.manualItem
+                ? trunc2((cfg.purchasedQuantity ?? 0) + Number(item.quantity || 0))
+                : cfg.purchasedQuantity,
+              unitPrice: Number(item.unitPrice || 0) || cfg.unitPrice,
+            }
+          : cfg,
+      );
+    }
+
+    movements.push({
+      id: uid(),
+      createdAt: nowISO(),
+      type: 'entrada',
+      date: note.issueDate || todayISO(),
+      itemKey,
+      itemDescription: item.description.trim(),
+      itemUnit: unit,
+      quantity: Number(item.quantity || 0),
+      unitPrice: Number(item.unitPrice || 0) || undefined,
+      invoiceNumber: note.invoiceNumber || undefined,
+      notes: `Entrada gerada pela NF ${note.invoiceNumber || note.sourceFileName}`,
+      attachments: note.attachment ? [note.attachment] : undefined,
+    });
+
+    return { ...item, itemKey, unit };
+  });
+
+  const fiscalNotes = (wh.fiscalNotes ?? []).map(n =>
+    n.id === noteId
+      ? { ...n, status: 'aprovada' as const, updatedAt: nowISO(), items: approvedItems }
+      : n,
+  );
+
+  return setWh(p, { items: itemsConfig, movements, fiscalNotes });
 }
 
 export function uidWarehouse() {

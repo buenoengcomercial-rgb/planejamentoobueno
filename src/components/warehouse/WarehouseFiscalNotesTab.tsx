@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import type { Project, WarehouseFiscalNote, WarehouseFiscalNoteItem, WarehouseFiscalNoteStatus } from '@/types/project';
-import { makeAttachment, nowWarehouseISO, readFileAsDataURL, uidWarehouse, upsertFiscalNote, deleteFiscalNote } from '@/lib/warehouse';
+import { approveFiscalNote, makeAttachment, nowWarehouseISO, readFileAsDataURL, uidWarehouse, upsertFiscalNote, deleteFiscalNote } from '@/lib/warehouse';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,6 +19,7 @@ interface Props {
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const ACCEPTED_EXTENSIONS = ['pdf', 'png', 'jpg', 'jpeg', 'heic', 'heif'];
+const MAX_PDF_AI_PAGES = 4;
 
 const STATUS_LABEL: Record<WarehouseFiscalNoteStatus, string> = {
   em_processamento: 'Em processamento',
@@ -132,13 +133,14 @@ type AiFiscalNoteResponse = {
   };
 };
 
-async function readImageWithAi(file: File): Promise<ParsedFiscalNote> {
-  const fileDataUrl = await readFileAsDataURL(file);
+async function readWithAi(input: { fileName: string; fileType?: string; fileDataUrls?: string[]; extractedText?: string }): Promise<ParsedFiscalNote> {
   const { data, error } = await supabase.functions.invoke<AiFiscalNoteResponse>('read-fiscal-note', {
     body: {
-      fileName: file.name,
-      fileType: file.type,
-      fileDataUrl,
+      fileName: input.fileName,
+      fileType: input.fileType,
+      fileDataUrl: input.fileDataUrls?.[0],
+      fileDataUrls: input.fileDataUrls,
+      extractedText: input.extractedText,
     },
   });
 
@@ -164,6 +166,14 @@ async function readImageWithAi(file: File): Promise<ParsedFiscalNote> {
   };
 }
 
+async function readImageWithAi(file: File): Promise<ParsedFiscalNote> {
+  return readWithAi({
+    fileName: file.name,
+    fileType: file.type,
+    fileDataUrls: [await readFileAsDataURL(file)],
+  });
+}
+
 async function extractPdfText(file: File) {
   const pdfjs = await import('pdfjs-dist');
   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -176,6 +186,29 @@ async function extractPdfText(file: File) {
   }
   return pages.join('\n');
 }
+
+async function renderPdfPagesAsImages(file: File) {
+  const pdfjs = await import('pdfjs-dist');
+  pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+  const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+  const images: string[] = [];
+  const totalPages = Math.min(pdf.numPages, MAX_PDF_AI_PAGES);
+
+  for (let pageNumber = 1; pageNumber <= totalPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 1.7 });
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) continue;
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    await page.render({ canvasContext: context, viewport }).promise;
+    images.push(canvas.toDataURL('image/jpeg', 0.82));
+  }
+
+  return images;
+}
+
 
 function validateFile(file: File) {
   const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
@@ -237,10 +270,22 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
 
       if (isPdf) {
         extractedText = await extractPdfText(file);
-        if (extractedText.trim()) {
-          parsed = parseFiscalNoteText(extractedText);
-        } else {
-          processingError = 'PDF sem texto selecionável. Envie a página como imagem para leitura por IA/OCR.';
+        const textParsed = extractedText.trim() ? parseFiscalNoteText(extractedText) : undefined;
+        try {
+          const pageImages = await renderPdfPagesAsImages(file);
+          parsed = await readWithAi({
+            fileName: file.name,
+            fileType: file.type,
+            fileDataUrls: pageImages,
+            extractedText,
+          });
+        } catch (err) {
+          if (textParsed) {
+            parsed = textParsed;
+            processingError = `A IA nao conseguiu revisar o PDF; usei a leitura textual: ${(err as Error).message}`;
+          } else {
+            processingError = `Nao foi possivel ler o PDF automaticamente: ${(err as Error).message}`;
+          }
         }
       } else {
         try {
@@ -302,10 +347,20 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
       toast.error('Inclua pelo menos um item antes de aprovar.');
       return;
     }
+    if (status === 'aprovada') {
+      const saved = upsertFiscalNote(project, { ...selected, updatedAt: nowWarehouseISO() });
+      const approved = approveFiscalNote(saved, selected.id);
+      onProjectChange(approved);
+      const approvedNote = approved.warehouse?.fiscalNotes?.find(note => note.id === selected.id) ?? null;
+      setSelected(approvedNote);
+      setActiveStatus('aprovada');
+      toast.success('Nota aprovada e entrada lancada nos materiais.');
+      return;
+    }
     const next = { ...selected, status, updatedAt: nowWarehouseISO() };
     saveNote(next);
     setActiveStatus(status);
-    toast.success(status === 'aprovada' ? 'Nota aprovada.' : 'Nota rejeitada.');
+    toast.success('Nota rejeitada.');
   };
 
   return (

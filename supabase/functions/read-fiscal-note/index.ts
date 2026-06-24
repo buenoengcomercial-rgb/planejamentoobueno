@@ -23,7 +23,7 @@ type FiscalNotePayload = {
   notes?: string | null;
 };
 
-const systemPrompt = `Voce e um assistente especialista em ler notas fiscais brasileiras de materiais de obra a partir de imagens.
+const systemPrompt = `Voce e um assistente especialista em ler notas fiscais brasileiras de materiais de obra a partir de imagens, paginas de PDF renderizadas e texto extraido de PDF.
 Retorne apenas JSON valido no formato:
 {
   "supplierName": string|null,
@@ -49,7 +49,8 @@ Regras:
 - Datas devem estar em YYYY-MM-DD.
 - Nao invente dados ilegiveis; use null ou 0.
 - Para itens, priorize materiais, descricao, quantidade, unidade, valor unitario e total.
-- Se a imagem estiver ruim, retorne os campos que conseguir e explique em "notes".`;
+- Quando houver texto extraido e imagem, use os dois para conferir os dados.
+- Se a imagem/PDF estiver ruim, retorne os campos que conseguir e explique em "notes".`;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -93,13 +94,42 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const fileDataUrl = String(body.fileDataUrl ?? "");
+    const fileDataUrls = Array.isArray(body.fileDataUrls)
+      ? body.fileDataUrls.map((url: unknown) => String(url)).filter((url: string) => url.startsWith("data:image/")).slice(0, 4)
+      : [];
+    if (fileDataUrl.startsWith("data:image/") && fileDataUrls.length === 0) {
+      fileDataUrls.push(fileDataUrl);
+    }
+    const extractedText = String(body.extractedText ?? "").trim().slice(0, 20000);
     const fileName = String(body.fileName ?? "nota-fiscal");
 
-    if (!fileDataUrl.startsWith("data:image/")) {
-      return jsonResponse({ error: "Envie uma imagem em data URL para leitura por IA." }, 400);
+    if (fileDataUrls.length === 0 && !extractedText) {
+      return jsonResponse({ error: "Envie imagem em data URL ou texto extraido do PDF para leitura por IA." }, 400);
     }
 
     const model = Deno.env.get("OPENAI_VISION_MODEL") ?? "gpt-4o-mini";
+    const userContent: Array<
+      | { type: "text"; text: string }
+      | { type: "image_url"; image_url: { url: string } }
+    > = [
+      {
+        type: "text",
+        text: `Extraia os dados desta nota fiscal de materiais. Arquivo: ${fileName}`,
+      },
+    ];
+    if (extractedText) {
+      userContent.push({
+        type: "text",
+        text: `Texto extraido do PDF para apoio:\n${extractedText}`,
+      });
+    }
+    for (const url of fileDataUrls) {
+      userContent.push({
+        type: "image_url",
+        image_url: { url },
+      });
+    }
+
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -114,16 +144,7 @@ Deno.serve(async (req) => {
           { role: "system", content: systemPrompt },
           {
             role: "user",
-            content: [
-              {
-                type: "text",
-                text: `Extraia os dados desta nota fiscal de materiais. Arquivo: ${fileName}`,
-              },
-              {
-                type: "image_url",
-                image_url: { url: fileDataUrl },
-              },
-            ],
+            content: userContent,
           },
         ],
       }),
