@@ -141,7 +141,7 @@ function parseFiscalNoteText(text: string): Pick<WarehouseFiscalNote, 'supplierN
   };
 }
 
-type ParsedFiscalNote = Pick<WarehouseFiscalNote, 'supplierName' | 'supplierCnpj' | 'invoiceNumber' | 'issueDate' | 'totalAmount' | 'items' | 'notes' | 'aiConfidence'>;
+type ParsedFiscalNote = Pick<WarehouseFiscalNote, 'supplierName' | 'supplierCnpj' | 'invoiceNumber' | 'issueDate' | 'totalAmount' | 'items' | 'invoices' | 'notes' | 'aiConfidence'>;
 
 type AiFiscalNoteResponse = {
   ok?: boolean;
@@ -163,6 +163,13 @@ type AiFiscalNoteResponse = {
       totalPrice?: number;
       category?: string | null;
       confidence?: number | null;
+    }>;
+    invoices?: Array<{
+      number?: string | null;
+      dueDate?: string | null;
+      amount?: number | null;
+      paymentMethod?: string | null;
+      notes?: string | null;
     }>;
   };
 };
@@ -206,6 +213,13 @@ async function readWithAi(input: { fileName: string; fileType?: string; fileData
       category: item.category ?? undefined,
       confidence: item.confidence != null ? Number(item.confidence) : undefined,
     })).filter(item => item.description.trim()),
+    invoices: (data.note.invoices ?? []).map(inv => newInvoiceEntry({
+      number: inv.number ?? undefined,
+      dueDate: inv.dueDate ?? undefined,
+      amount: Number(inv.amount ?? 0) || 0,
+      paymentMethod: inv.paymentMethod ?? undefined,
+      notes: inv.notes ?? undefined,
+    })),
   };
 }
 
