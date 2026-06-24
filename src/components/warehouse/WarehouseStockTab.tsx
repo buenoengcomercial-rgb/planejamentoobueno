@@ -91,6 +91,7 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
             <col className="w-24" />
             <col className="w-24" />
             <col className="w-24" />
+            <col className="w-12" />
           </colgroup>
           <thead className="bg-muted sticky top-0 z-10">
             <tr className="text-muted-foreground">
@@ -105,6 +106,7 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
               <th className="p-2 text-right font-semibold bg-primary/5">Saldo</th>
               <th className="p-2 text-right font-semibold bg-warning/5">Mínimo</th>
               <th className="p-2 text-left font-semibold">Último mov.</th>
+              <th className="p-2 text-center font-semibold">Hist.</th>
             </tr>
           </thead>
           <tbody>
@@ -130,14 +132,100 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
                   />
                 </td>
                 <td className="p-1.5 text-[10px] text-muted-foreground">{r.lastMovementDate ?? '—'}</td>
+                <td className="p-1.5 text-center">
+                  <Button size="icon" variant="ghost" className="h-7 w-7" title="Histórico de compras"
+                    onClick={() => setHistoryFor({ key: r.key, description: r.description })}>
+                    <History className="w-3.5 h-3.5" />
+                  </Button>
+                </td>
               </tr>
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={11} className="p-8 text-center text-muted-foreground italic">Nenhum item encontrado.</td></tr>
+              <tr><td colSpan={12} className="p-8 text-center text-muted-foreground italic">Nenhum item encontrado.</td></tr>
             )}
           </tbody>
         </table>
       </div>
+
+      <PurchaseHistoryDialog project={project} target={historyFor} onClose={() => setHistoryFor(null)} />
     </div>
+  );
+}
+
+function moneyBR(value?: number) {
+  if (value == null) return '—';
+  return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function PurchaseHistoryDialog({ project, target, onClose }: { project: Project; target: { key: string; description: string } | null; onClose: () => void }) {
+  const history = useMemo(() => (target ? getMaterialPurchaseHistory(project, target.key) : []), [project, target]);
+
+  const openAttachment = async (att: NonNullable<ReturnType<typeof getMaterialPurchaseHistory>[number]['attachment']>) => {
+    if (att.dataUrl) {
+      window.open(att.dataUrl, '_blank', 'noopener');
+      return;
+    }
+    if (!att.storagePath) {
+      toast.error('Arquivo indisponível.');
+      return;
+    }
+    const { data, error } = await supabase.storage
+      .from('daily-report-photos')
+      .createSignedUrl(att.storagePath, 60);
+    if (error || !data?.signedUrl) {
+      toast.error('Falha ao abrir o arquivo.');
+      return;
+    }
+    window.open(data.signedUrl, '_blank', 'noopener');
+  };
+
+  return (
+    <Dialog open={!!target} onOpenChange={open => !open && onClose()}>
+      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Histórico de compras</DialogTitle>
+          <DialogDescription>{target?.description}</DialogDescription>
+        </DialogHeader>
+        <div className="bg-card border border-border rounded-md overflow-hidden">
+          <table className="w-full text-xs">
+            <thead className="bg-muted text-muted-foreground">
+              <tr>
+                <th className="p-2 text-left">Data</th>
+                <th className="p-2 text-left">Nota</th>
+                <th className="p-2 text-left">Fornecedor</th>
+                <th className="p-2 text-right">Qtd</th>
+                <th className="p-2 text-right">V. Unit</th>
+                <th className="p-2 text-right">Total</th>
+                <th className="p-2 text-center">Arquivo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map(h => (
+                <tr key={h.movementId} className="border-t border-border">
+                  <td className="p-2">{h.date ? h.date.split('-').reverse().join('/') : '—'}</td>
+                  <td className="p-2 font-mono">{h.invoiceNumber || '—'}</td>
+                  <td className="p-2">{h.supplierName || '—'}</td>
+                  <td className="p-2 text-right tabular-nums">{h.quantity.toLocaleString('pt-BR')} {h.unit ?? ''}</td>
+                  <td className="p-2 text-right tabular-nums">{moneyBR(h.unitPrice)}</td>
+                  <td className="p-2 text-right tabular-nums font-semibold">{moneyBR(h.totalPrice)}</td>
+                  <td className="p-2 text-center">
+                    {h.attachment ? (
+                      <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openAttachment(h.attachment!)} title="Abrir NF">
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </Button>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {history.length === 0 && (
+                <tr><td colSpan={7} className="p-6 text-center text-muted-foreground italic">Sem compras registradas para este material.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
