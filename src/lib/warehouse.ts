@@ -14,6 +14,8 @@ import type {
   WarehouseAttachment,
   WarehouseFiscalNote,
   WarehouseFiscalNoteItem,
+  FiscalItemLinkStatus,
+  FiscalInvoiceEntry,
   DailyReport,
 } from '@/types/project';
 import { linkKeyOf } from '@/lib/materialComparisons';
@@ -549,7 +551,7 @@ export function linkFiscalNoteItemsToMaterials(
       productCode,
       itemKey,
       unit,
-      linkStatus: item.linkStatus === 'vinculado' ? 'vinculado' : 'auto',
+      linkStatus: (item.linkStatus === 'vinculado' ? 'vinculado' : 'auto') as FiscalItemLinkStatus,
     };
   });
 
@@ -1122,4 +1124,86 @@ export function getMaterialPurchaseHistory(project: Project, itemKey: string): M
       };
     })
     .sort((a, b) => (a.date < b.date ? 1 : -1));
+}
+
+/**
+ * Sugere vínculo de material para itens da NF SEM mutar a lista de materiais
+ * do almoxarifado. Usado em upload/conferência — só persiste no aprovar.
+ * Prioridades: (1) código do produto exato no almoxarifado;
+ * (2) código de produto usado em NF anterior do MESMO fornecedor;
+ * (3) descrição + unidade já vista em NF anterior do mesmo fornecedor;
+ * (4) similaridade da descrição em materiais existentes.
+ */
+export function suggestFiscalNoteItemLinks(
+  project: Project,
+  items: WarehouseFiscalNoteItem[],
+  supplierCnpj?: string,
+): WarehouseFiscalNoteItem[] {
+  const wh = project.warehouse;
+  const rows = computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true });
+  const rowsByKey = new Map(rows.map(r => [r.key, r] as const));
+  const byCode = new Map<string, string>();
+  const byLookup = new Map<string, string>();
+  for (const r of rows) {
+    const c = normalizeProductCode(r.code);
+    if (c && !byCode.has(c)) byCode.set(c, r.key);
+    byLookup.set(fiscalItemLookup({ description: r.description, unit: r.unit }), r.key);
+  }
+
+  // Histórico do mesmo fornecedor (apenas notas aprovadas)
+  const cnpjDigits = (supplierCnpj ?? '').replace(/\D/g, '');
+  const supplierHistory = new Map<string, string>(); // productCode/lookup -> itemKey
+  if (cnpjDigits && wh) {
+    for (const n of wh.fiscalNotes ?? []) {
+      if (n.status !== 'aprovada') continue;
+      if ((n.supplierCnpj ?? '').replace(/\D/g, '') !== cnpjDigits) continue;
+      for (const it of n.items) {
+        if (!it.itemKey || !rowsByKey.has(it.itemKey)) continue;
+        const c = normalizeProductCode(it.productCode);
+        if (c) supplierHistory.set('c:' + c, it.itemKey);
+        supplierHistory.set('l:' + fiscalItemLookup({ description: it.description, unit: it.unit }), it.itemKey);
+      }
+    }
+  }
+
+  return items.map(item => {
+    if (item.itemKey && rowsByKey.has(item.itemKey) && item.linkStatus === 'vinculado') {
+      return item;
+    }
+    const productCode = item.productCode?.trim() || undefined;
+    const codeKey = normalizeProductCode(productCode);
+    const lookup = fiscalItemLookup({ description: item.description, unit: item.unit });
+    let suggested: string | undefined;
+    if (codeKey) suggested = byCode.get(codeKey);
+    if (!suggested && codeKey) suggested = supplierHistory.get('c:' + codeKey);
+    if (!suggested) suggested = supplierHistory.get('l:' + lookup);
+    if (!suggested) suggested = byLookup.get(lookup);
+    if (!suggested) {
+      const match = findMaterialMatch(project, item.description, item.unit, productCode);
+      if (match && match.score >= 0.6) suggested = match.key;
+    }
+    if (suggested) {
+      return { ...item, productCode, itemKey: suggested, linkStatus: 'auto' as FiscalItemLinkStatus };
+    }
+    return { ...item, productCode, itemKey: undefined, linkStatus: 'pendente' as FiscalItemLinkStatus };
+  });
+}
+
+/** Soma dos valores das parcelas/faturas. */
+export function sumFiscalInvoices(invoices?: FiscalInvoiceEntry[]): number {
+  if (!invoices?.length) return 0;
+  return trunc2(invoices.reduce((s, i) => s + (Number(i.amount) || 0), 0));
+}
+
+/** Gera id para nova fatura/parcela. */
+export function newInvoiceEntry(partial?: Partial<FiscalInvoiceEntry>): FiscalInvoiceEntry {
+  return {
+    id: uid(),
+    number: partial?.number,
+    dueDate: partial?.dueDate,
+    amount: Number(partial?.amount ?? 0) || 0,
+    paymentMethod: partial?.paymentMethod,
+    status: partial?.status ?? 'aberta',
+    notes: partial?.notes,
+  };
 }
