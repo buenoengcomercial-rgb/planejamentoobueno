@@ -816,9 +816,7 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
         cfg.key === itemKey
           ? {
               ...cfg,
-              purchasedQuantity: cfg.manualItem
-                ? trunc2((cfg.purchasedQuantity ?? 0) + Number(item.quantity || 0))
-                : cfg.purchasedQuantity,
+              purchasedQuantity: trunc2((cfg.purchasedQuantity ?? 0) + Number(item.quantity || 0)),
               unitPrice: Number(item.unitPrice || 0) || cfg.unitPrice,
             }
           : cfg,
