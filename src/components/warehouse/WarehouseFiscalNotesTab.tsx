@@ -274,26 +274,84 @@ function emptyItem(): WarehouseFiscalNoteItem {
   return { id: uidWarehouse(), productCode: '', description: '', quantity: 1, unit: 'UN', unitPrice: 0, totalPrice: 0, linkStatus: 'pendente' };
 }
 
+async function fetchAsBlob(url: string, mimeHint?: string): Promise<Blob> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const blob = await res.blob();
+  if (mimeHint && blob.type !== mimeHint) {
+    return new Blob([blob], { type: mimeHint });
+  }
+  return blob;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = filename;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+}
+
+function guessMime(name?: string | null): string | undefined {
+  if (!name) return undefined;
+  const ext = name.split('.').pop()?.toLowerCase();
+  if (ext === 'pdf') return 'application/pdf';
+  if (ext === 'png') return 'image/png';
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'webp') return 'image/webp';
+  return undefined;
+}
+
+async function resolveAttachmentSource(note: WarehouseFiscalNote): Promise<string | null> {
+  const att = note.attachment;
+  if (!att) return null;
+  if (att.storagePath) {
+    const { data, error } = await supabase.storage
+      .from('daily-report-photos')
+      .createSignedUrl(att.storagePath, 60);
+    if (error || !data?.signedUrl) {
+      toast.error('Falha ao gerar URL: ' + (error?.message ?? 'sem URL'));
+      return null;
+    }
+    return data.signedUrl;
+  }
+  return att.dataUrl ?? null;
+}
+
 function openAttachment(note: WarehouseFiscalNote) {
-  const url = note.attachment?.dataUrl;
-  if (!url && !note.attachment?.storagePath) {
+  const att = note.attachment;
+  if (!att?.dataUrl && !att?.storagePath) {
     toast.error('Nenhum arquivo anexo encontrado.');
     return;
   }
-  if (url) {
-    window.open(url, '_blank', 'noopener');
-    return;
-  }
-  // Storage path: gerar signed URL on demand
+  const mime = att.mimeType || guessMime(att.name);
+  const isPdf = mime === 'application/pdf' || (att.name ?? '').toLowerCase().endsWith('.pdf');
   void (async () => {
-    const { data, error } = await supabase.storage
-      .from('daily-report-photos')
-      .createSignedUrl(note.attachment!.storagePath!, 60);
-    if (error || !data?.signedUrl) {
-      toast.error('Falha ao abrir o arquivo: ' + (error?.message ?? 'sem URL'));
-      return;
+    try {
+      const src = await resolveAttachmentSource(note);
+      if (!src) return;
+      const blob = await fetchAsBlob(src, mime);
+      if (isPdf) {
+        // PDF: força download — bloqueadores não barram <a download>
+        const filename = att.name || `nota-fiscal-${note.id}.pdf`;
+        downloadBlob(blob, filename);
+        toast.success('PDF baixado. Abra o arquivo no seu computador.');
+        return;
+      }
+      // Imagens: tenta abrir em nova aba; se bloqueado, baixa
+      const blobUrl = URL.createObjectURL(blob);
+      const win = window.open(blobUrl, '_blank', 'noopener');
+      if (!win) {
+        downloadBlob(blob, att.name || `anexo-${note.id}`);
+      }
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (err) {
+      toast.error('Falha ao abrir o arquivo: ' + (err as Error).message);
     }
-    window.open(data.signedUrl, '_blank', 'noopener');
   })();
 }
 
