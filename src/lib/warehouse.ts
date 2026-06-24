@@ -549,7 +549,7 @@ export function linkFiscalNoteItemsToMaterials(
       productCode,
       itemKey,
       unit,
-      linkStatus: item.linkStatus === 'vinculado' ? 'vinculado' : 'auto',
+      linkStatus: (item.linkStatus === 'vinculado' ? 'vinculado' : 'auto') as FiscalItemLinkStatus,
     };
   });
 
