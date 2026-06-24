@@ -1,4 +1,4 @@
-﻿export type Json =
+export type Json =
   | string
   | number
   | boolean
@@ -51,15 +51,7 @@ export type Database = {
           updated_at?: string
           version?: number | null
         }
-        Relationships: [
-          {
-            foreignKeyName: "additives_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: false
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       analytic_compositions: {
         Row: {
@@ -89,15 +81,7 @@ export type Database = {
           project_id?: string
           updated_at?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "analytic_compositions_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: false
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       audit_logs: {
         Row: {
@@ -136,15 +120,7 @@ export type Database = {
           updated_at?: string
           user_id?: string | null
         }
-        Relationships: [
-          {
-            foreignKeyName: "audit_logs_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: false
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       budget_items: {
         Row: {
@@ -186,15 +162,7 @@ export type Database = {
           task_id?: string | null
           updated_at?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "budget_items_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: false
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       daily_reports: {
         Row: {
@@ -268,15 +236,7 @@ export type Database = {
           project_id?: string
           updated_at?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "eap_chapters_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: false
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       material_comparisons: {
         Row: {
@@ -309,15 +269,7 @@ export type Database = {
           status?: string | null
           updated_at?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "material_comparisons_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: false
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       material_price_history: {
         Row: {
@@ -347,15 +299,7 @@ export type Database = {
           project_id?: string
           updated_at?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "material_price_history_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: false
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       measurements: {
         Row: {
@@ -397,15 +341,7 @@ export type Database = {
           status?: string | null
           updated_at?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "measurements_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: false
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       organization_members: {
         Row: {
@@ -615,15 +551,7 @@ export type Database = {
           project_id?: string
           updated_at?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "stock_movements_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: false
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       task_daily_logs: {
         Row: {
@@ -712,15 +640,7 @@ export type Database = {
           start_date?: string | null
           updated_at?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "tasks_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: false
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       warehouse_custody: {
         Row: {
@@ -835,6 +755,15 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      backfill_tasks_recursive: {
+        Args: {
+          _chapter_id: string
+          _parent_task_id: string
+          _project_id: string
+          _tasks: Json
+        }
+        Returns: undefined
+      }
       duplicate_project: {
         Args: {
           p_new_name: string
@@ -842,6 +771,19 @@ export type Database = {
           p_source_id: string
         }
         Returns: string
+      }
+      get_user_org_id: { Args: { _user_id: string }; Returns: string }
+      has_org_role: {
+        Args: {
+          _org_id: string
+          _roles: Database["public"]["Enums"]["org_role"][]
+          _user_id: string
+        }
+        Returns: boolean
+      }
+      is_org_member: {
+        Args: { _org_id: string; _user_id: string }
+        Returns: boolean
       }
       strip_task_logs: { Args: { node: Json }; Returns: Json }
     }
