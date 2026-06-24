@@ -897,3 +897,132 @@ export async function makeAttachment(
     return { ...base, dataUrl };
   }
 }
+
+// ============== HELPERS: NOTAS FISCAIS / VÍNCULO DE MATERIAIS ==============
+
+/** Valida um CNPJ brasileiro (com ou sem máscara). */
+export function isValidCnpj(value?: string): boolean {
+  const cnpj = (value ?? '').replace(/\D/g, '');
+  if (cnpj.length !== 14) return false;
+  if (/^(\d)\1+$/.test(cnpj)) return false;
+  const calc = (slice: string, weights: number[]) => {
+    const sum = slice.split('').reduce((s, d, i) => s + Number(d) * weights[i], 0);
+    const rest = sum % 11;
+    return rest < 2 ? 0 : 11 - rest;
+  };
+  const w1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  const w2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  const d1 = calc(cnpj.slice(0, 12), w1);
+  const d2 = calc(cnpj.slice(0, 12) + d1, w2);
+  return d1 === Number(cnpj[12]) && d2 === Number(cnpj[13]);
+}
+
+/** Procura uma nota fiscal duplicada (mesmo CNPJ + número + valor total, ignorando ela mesma). */
+export function findFiscalNoteDuplicate(
+  project: Project,
+  candidate: Pick<WarehouseFiscalNote, 'supplierCnpj' | 'invoiceNumber' | 'totalAmount' | 'id'>,
+): WarehouseFiscalNote | undefined {
+  const cnpj = (candidate.supplierCnpj ?? '').replace(/\D/g, '');
+  const num = (candidate.invoiceNumber ?? '').trim();
+  if (!cnpj || !num) return undefined;
+  const total = Number(candidate.totalAmount || 0);
+  return (project.warehouse?.fiscalNotes ?? []).find(n =>
+    n.id !== candidate.id &&
+    (n.supplierCnpj ?? '').replace(/\D/g, '') === cnpj &&
+    (n.invoiceNumber ?? '').trim() === num &&
+    Math.abs(Number(n.totalAmount || 0) - total) < 0.01,
+  );
+}
+
+const STOPWORDS = new Set([
+  'de','da','do','das','dos','para','com','em','e','a','o','tipo','ref',
+]);
+const ABBREV: Record<string, string> = {
+  sold: 'soldavel',
+  solda: 'soldavel',
+  pvc: 'pvc',
+  un: '',
+  und: '',
+  pc: '',
+  pcs: '',
+};
+
+function tokenize(value: string): string[] {
+  return normalizeLookup(value)
+    .split(/\s+/)
+    .map(t => ABBREV[t] ?? t)
+    .filter(t => t && !STOPWORDS.has(t));
+}
+
+/**
+ * Encontra o material do almoxarifado mais provável para a descrição/unidade do item da NF.
+ * Retorna a chave do material e o score (0..1). Considera empate em unidade como bônus.
+ */
+export function findMaterialMatch(
+  project: Project,
+  description: string,
+  unit?: string,
+): { key: string; score: number; description: string; unit: string } | null {
+  const rows = computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true });
+  if (rows.length === 0) return null;
+  const a = new Set(tokenize(description));
+  if (a.size === 0) return null;
+  const unitNorm = normalizeLookup(unit ?? '');
+  let best: { key: string; score: number; description: string; unit: string } | null = null;
+  for (const row of rows) {
+    const b = new Set(tokenize(row.description));
+    if (b.size === 0) continue;
+    let inter = 0;
+    for (const t of a) if (b.has(t)) inter += 1;
+    const union = a.size + b.size - inter;
+    if (!union) continue;
+    let score = inter / union;
+    if (unitNorm && normalizeLookup(row.unit) === unitNorm) score += 0.05;
+    if (!best || score > best.score) {
+      best = { key: row.key, score, description: row.description, unit: row.unit };
+    }
+  }
+  return best;
+}
+
+/** Histórico de compras de um material a partir dos movimentos de entrada da obra. */
+export interface MaterialPurchaseHistoryEntry {
+  movementId: string;
+  date: string;
+  invoiceNumber?: string;
+  supplierName?: string;
+  quantity: number;
+  unit?: string;
+  unitPrice?: number;
+  totalPrice?: number;
+  attachment?: WarehouseAttachment;
+  noteId?: string;
+}
+
+export function getMaterialPurchaseHistory(project: Project, itemKey: string): MaterialPurchaseHistoryEntry[] {
+  const wh = project.warehouse;
+  if (!wh) return [];
+  const notesByNumber = new Map<string, WarehouseFiscalNote>();
+  for (const n of wh.fiscalNotes ?? []) {
+    if (n.invoiceNumber) notesByNumber.set(n.invoiceNumber.trim(), n);
+  }
+  return (wh.movements ?? [])
+    .filter(m => m.itemKey === itemKey && (m.type === 'entrada' || m.type === 'devolucao' || m.type === 'ajuste_positivo'))
+    .map(m => {
+      const linkedNote = m.invoiceNumber ? notesByNumber.get(m.invoiceNumber.trim()) : undefined;
+      const unitPrice = m.unitPrice ?? linkedNote?.items.find(i => i.itemKey === itemKey)?.unitPrice;
+      return {
+        movementId: m.id,
+        date: m.date,
+        invoiceNumber: m.invoiceNumber,
+        supplierName: linkedNote?.supplierName,
+        quantity: m.quantity,
+        unit: m.itemUnit,
+        unitPrice,
+        totalPrice: unitPrice != null ? unitPrice * m.quantity : undefined,
+        attachment: m.attachments?.[0] ?? linkedNote?.attachment,
+        noteId: linkedNote?.id,
+      };
+    })
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+}
