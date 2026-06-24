@@ -400,8 +400,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
         }
       }
 
-      const linked = linkFiscalNoteItemsToMaterials(project, parsed.items ?? []);
-      const items = linked.items;
+      // IMPORTANTE: apenas SUGERE vínculos. Não cria material no almoxarifado
+      // até que o usuário aprove a nota (evita "fantasmas" quando rejeita).
+      const items = suggestFiscalNoteItemLinks(project, parsed.items ?? [], parsed.supplierCnpj);
 
       const baseNote: WarehouseFiscalNote = {
         id: uidWarehouse(),
@@ -418,13 +419,14 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
         issueDate: parsed.issueDate ?? '',
         totalAmount: parsed.totalAmount ?? 0,
         items,
+        invoices: parsed.invoices ?? [],
         notes: parsed.notes,
         aiConfidence: parsed.aiConfidence,
         processingError,
         extractedText,
       };
 
-      const duplicate = findFiscalNoteDuplicate(linked.project, baseNote);
+      const duplicate = findFiscalNoteDuplicate(project, baseNote);
       if (duplicate) {
         const proceed = window.confirm(
           `Esta nota fiscal aparentemente já foi cadastrada (NF ${duplicate.invoiceNumber} · ${duplicate.supplierName}). Deseja continuar mesmo assim?`,
@@ -437,7 +439,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
         }
       }
 
-      onProjectChange(upsertFiscalNote(linked.project, baseNote));
+      onProjectChange(upsertFiscalNote(project, baseNote));
       setActiveStatus('a_conferir');
       setSelected(baseNote);
       toast.success('Nota enviada para conferência.');
