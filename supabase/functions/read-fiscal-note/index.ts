@@ -11,6 +11,7 @@ type FiscalNoteItem = {
   unitPrice?: number;
   totalPrice?: number;
   category?: string | null;
+  confidence?: number | null;
 };
 
 type FiscalNotePayload = {
@@ -21,6 +22,7 @@ type FiscalNotePayload = {
   totalAmount?: number | null;
   items?: FiscalNoteItem[];
   notes?: string | null;
+  confidence?: number | null;
 };
 
 const systemPrompt = `Voce e um assistente especialista em ler notas fiscais brasileiras de materiais de obra a partir de imagens, paginas de PDF renderizadas e texto extraido de PDF.
@@ -31,6 +33,7 @@ Retorne apenas JSON valido no formato:
   "invoiceNumber": string|null,
   "issueDate": "YYYY-MM-DD"|null,
   "totalAmount": number,
+  "confidence": number,
   "items": [
     {
       "description": string,
@@ -38,7 +41,8 @@ Retorne apenas JSON valido no formato:
       "unit": string|null,
       "unitPrice": number,
       "totalPrice": number,
-      "category": string|null
+      "category": string|null,
+      "confidence": number
     }
   ],
   "notes": string|null
@@ -50,6 +54,7 @@ Regras:
 - Nao invente dados ilegiveis; use null ou 0.
 - Para itens, priorize materiais, descricao, quantidade, unidade, valor unitario e total.
 - Quando houver texto extraido e imagem, use os dois para conferir os dados.
+- "confidence" deve ser um numero entre 0 e 1 indicando o quao confiavel ficou a leitura (da nota e de cada item).
 - Se a imagem/PDF estiver ruim, retorne os campos que conseguir e explique em "notes".`;
 
 function jsonResponse(body: unknown, status = 200) {
@@ -67,6 +72,7 @@ function normalizePayload(raw: FiscalNotePayload): FiscalNotePayload {
     issueDate: raw.issueDate ?? null,
     totalAmount: Number(raw.totalAmount ?? 0) || 0,
     notes: raw.notes ?? null,
+    confidence: raw.confidence != null ? Math.max(0, Math.min(1, Number(raw.confidence))) : null,
     items: Array.isArray(raw.items)
       ? raw.items.map((item) => ({
           description: String(item.description ?? "").trim(),
@@ -75,6 +81,7 @@ function normalizePayload(raw: FiscalNotePayload): FiscalNotePayload {
           unitPrice: Number(item.unitPrice ?? 0) || 0,
           totalPrice: Number(item.totalPrice ?? 0) || 0,
           category: item.category ? String(item.category) : null,
+          confidence: item.confidence != null ? Math.max(0, Math.min(1, Number(item.confidence))) : null,
         })).filter((item) => item.description)
       : [],
   };
