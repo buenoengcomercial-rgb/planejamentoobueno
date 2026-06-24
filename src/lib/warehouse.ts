@@ -14,6 +14,8 @@ import type {
   WarehouseAttachment,
   WarehouseFiscalNote,
   WarehouseFiscalNoteItem,
+  FiscalItemLinkStatus,
+  FiscalInvoiceEntry,
   DailyReport,
 } from '@/types/project';
 import { linkKeyOf, computeStockRows } from '@/lib/materialComparisons';
