@@ -343,6 +343,26 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
   const totalsDiff = selected ? Math.abs(Number(selected.totalAmount || 0) - itemsSum) : 0;
   const totalsMismatch = !!selected && totalsDiff > 0.01;
   const pendingLinks = selected ? selected.items.filter(it => !it.itemKey).length : 0;
+  const invoicesSum = useMemo(() => selected ? sumFiscalInvoices(selected.invoices) : 0, [selected]);
+  const invoicesMismatch = !!selected && (selected.invoices?.length ?? 0) > 0 && Math.abs(invoicesSum - Number(selected.totalAmount || 0)) > 0.01;
+
+  const updateInvoices = (next: FiscalInvoiceEntry[]) => {
+    if (selected) setSelected({ ...selected, invoices: next });
+  };
+  const updateInvoice = (idx: number, patch: Partial<FiscalInvoiceEntry>) => {
+    if (!selected) return;
+    const list = [...(selected.invoices ?? [])];
+    list[idx] = { ...list[idx], ...patch };
+    updateInvoices(list);
+  };
+  const addInvoice = () => {
+    if (!selected) return;
+    updateInvoices([...(selected.invoices ?? []), newInvoiceEntry({ amount: Math.max(0, Number(selected.totalAmount || 0) - invoicesSum) })]);
+  };
+  const removeInvoice = (idx: number) => {
+    if (!selected) return;
+    updateInvoices((selected.invoices ?? []).filter((_, i) => i !== idx));
+  };
 
   const saveNote = (note: WarehouseFiscalNote) => {
     const normalized: WarehouseFiscalNote = {
