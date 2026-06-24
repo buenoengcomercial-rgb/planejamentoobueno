@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import type { Project, WarehouseFiscalNote, WarehouseFiscalNoteItem, WarehouseFiscalNoteStatus } from '@/types/project';
+import type { Project, WarehouseFiscalNote, WarehouseFiscalNoteItem, WarehouseFiscalNoteStatus, FiscalInvoiceEntry } from '@/types/project';
 import {
   approveFiscalNote,
   computeWarehouseRows,
@@ -7,10 +7,12 @@ import {
   deleteFiscalNote,
   findFiscalNoteDuplicate,
   isValidCnpj,
-  linkFiscalNoteItemsToMaterials,
   makeAttachment,
+  newInvoiceEntry,
   nowWarehouseISO,
   readFileAsDataURL,
+  suggestFiscalNoteItemLinks,
+  sumFiscalInvoices,
   uidWarehouse,
   upsertFiscalNote,
 } from '@/lib/warehouse';
