@@ -1,9 +1,12 @@
 import { useMemo, useState } from 'react';
 import type { Project } from '@/types/project';
-import { computeWarehouseRows, createManualWarehouseItem, upsertItemConfig } from '@/lib/warehouse';
+import { computeWarehouseRows, createManualWarehouseItem, getMaterialPurchaseHistory, upsertItemConfig } from '@/lib/warehouse';
+import { supabase } from '@/integrations/supabase/client';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Plus, Search, X } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { ExternalLink, History, Plus, Search, X } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface Props { project: Project; onProjectChange: (next: Project) => void; }
 
@@ -11,6 +14,7 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
   const [search, setSearch] = useState('');
   const [showManualForm, setShowManualForm] = useState(false);
   const [manualForm, setManualForm] = useState({ code: '', description: '', unit: '' });
+  const [historyFor, setHistoryFor] = useState<{ key: string; description: string } | null>(null);
   const rows = useMemo(
     () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true }),
     [project],
