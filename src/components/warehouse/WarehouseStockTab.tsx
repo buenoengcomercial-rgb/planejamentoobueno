@@ -1,16 +1,18 @@
 import { useMemo, useState } from 'react';
 import type { Project } from '@/types/project';
-import { computeWarehouseRows, createManualWarehouseItem, getMaterialPurchaseHistory, upsertItemConfig } from '@/lib/warehouse';
+import { computeWarehouseRows, createManualWarehouseItem, getMaterialPurchaseHistory, removeWarehouseItem, upsertItemConfig } from '@/lib/warehouse';
 import { supabase } from '@/integrations/supabase/client';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { ExternalLink, History, Plus, Search, X } from 'lucide-react';
+import { ExternalLink, History, Plus, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
+import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 
 interface Props { project: Project; onProjectChange: (next: Project) => void; }
 
 export default function WarehouseStockTab({ project, onProjectChange }: Props) {
+  const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [search, setSearch] = useState('');
   const [showManualForm, setShowManualForm] = useState(false);
   const [manualForm, setManualForm] = useState({ code: '', description: '', unit: '' });
@@ -34,6 +36,22 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
     onProjectChange(createManualWarehouseItem(project, manualForm));
     setManualForm({ code: '', description: '', unit: '' });
     setShowManualForm(false);
+  };
+
+  const handleDeleteItem = (key: string, description: string) => {
+    confirm(
+      {
+        title: 'Excluir material?',
+        description: (
+          <div className="space-y-2">
+            <p>O material <strong>{description}</strong> será removido da aba Materiais.</p>
+            <p className="font-medium">Também serão removidas movimentações e vínculos do almoxarifado ligados a este material.</p>
+          </div>
+        ),
+        confirmLabel: 'Excluir material',
+      },
+      () => onProjectChange(removeWarehouseItem(project, key)),
+    );
   };
 
   return (
@@ -92,6 +110,7 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
             <col className="w-24" />
             <col className="w-24" />
             <col className="w-12" />
+            <col className="w-12" />
           </colgroup>
           <thead className="bg-muted sticky top-0 z-10">
             <tr className="text-muted-foreground">
@@ -107,6 +126,7 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
               <th className="p-2 text-right font-semibold bg-warning/5">Mínimo</th>
               <th className="p-2 text-left font-semibold">Último mov.</th>
               <th className="p-2 text-center font-semibold">Hist.</th>
+              <th className="p-2 text-center font-semibold">Excluir</th>
             </tr>
           </thead>
           <tbody>
@@ -138,16 +158,28 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
                     <History className="w-3.5 h-3.5" />
                   </Button>
                 </td>
+                <td className="p-1.5 text-center">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 text-destructive hover:text-destructive"
+                    title="Excluir material"
+                    onClick={() => handleDeleteItem(r.key, r.description)}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </td>
               </tr>
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={12} className="p-8 text-center text-muted-foreground italic">Nenhum item encontrado.</td></tr>
+              <tr><td colSpan={13} className="p-8 text-center text-muted-foreground italic">Nenhum item encontrado.</td></tr>
             )}
           </tbody>
         </table>
       </div>
 
       <PurchaseHistoryDialog project={project} target={historyFor} onClose={() => setHistoryFor(null)} />
+      {confirmDialog}
     </div>
   );
 }

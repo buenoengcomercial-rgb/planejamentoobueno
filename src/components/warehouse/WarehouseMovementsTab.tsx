@@ -3,8 +3,8 @@ import type { Project, WarehouseMovementType, WarehouseAttachment } from '@/type
 import { Button } from '@/components/ui/button';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { Input } from '@/components/ui/input';
-import { Plus, Undo2, Paperclip, X } from 'lucide-react';
-import { addMovement, reverseMovement, MOVEMENT_LABEL, ensureWarehouse, makeAttachment, movementSign, computeWarehouseRows } from '@/lib/warehouse';
+import { Plus, Undo2, Paperclip, Trash2, X } from 'lucide-react';
+import { addMovement, reverseMovement, removeMovement, MOVEMENT_LABEL, ensureWarehouse, makeAttachment, movementSign, computeWarehouseRows } from '@/lib/warehouse';
 import { getProjectSuppliers } from '@/lib/materialComparisons';
 import { getAllTasks } from '@/data/sampleProject';
 import { getChapterNumbering } from '@/lib/chapters';
@@ -219,22 +219,40 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
                     <td className="p-1.5 text-center text-[10px]">{m.attachments?.length ?? 0}</td>
                     <td className="p-1.5 text-right">
                       {!reversed && m.type !== 'estorno' && (
-                        <button title="Estornar" className="text-warning" onClick={() => {
-                          confirm(
-                            {
-                              title: 'Estornar este movimento?',
-                              description: (
-                                <p>
-                                  Será criado um estorno para reverter este lançamento no almoxarifado.
-                                </p>
-                              ),
-                              confirmLabel: 'Estornar movimento',
-                            },
-                            () => onProjectChange(reverseMovement(project, m.id)),
-                          );
-                        }}>
-                          <Undo2 className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="inline-flex items-center justify-end gap-2">
+                          <button title="Estornar" className="text-warning" onClick={() => {
+                            confirm(
+                              {
+                                title: 'Estornar este movimento?',
+                                description: (
+                                  <p>
+                                    Sera criado um estorno para reverter este lancamento no almoxarifado.
+                                  </p>
+                                ),
+                                confirmLabel: 'Estornar movimento',
+                              },
+                              () => onProjectChange(reverseMovement(project, m.id)),
+                            );
+                          }}>
+                            <Undo2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button title="Excluir movimento" className="text-destructive" onClick={() => {
+                            confirm(
+                              {
+                                title: 'Excluir movimento?',
+                                description: (
+                                  <p>
+                                    Este lancamento sera removido do almoxarifado. Use esta opcao para registros incluidos indevidamente.
+                                  </p>
+                                ),
+                                confirmLabel: 'Excluir movimento',
+                              },
+                              () => onProjectChange(removeMovement(project, m.id)),
+                            );
+                          }}>
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>

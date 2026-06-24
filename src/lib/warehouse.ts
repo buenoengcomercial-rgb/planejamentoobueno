@@ -428,6 +428,48 @@ export function upsertItemConfig(project: Project, cfg: WarehouseItemConfig): Pr
   return setWh(p, { items });
 }
 
+export function removeWarehouseItem(project: Project, itemKey: string): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  return setWh(p, {
+    items: wh.items.filter(item => item.key !== itemKey),
+    movements: wh.movements.filter(movement => movement.itemKey !== itemKey),
+    requisitions: wh.requisitions.map(requisition => ({
+      ...requisition,
+      items: requisition.items.filter(item => item.itemKey !== itemKey),
+    })),
+    fiscalNotes: (wh.fiscalNotes ?? []).map(note => ({
+      ...note,
+      items: note.items.map(item =>
+        item.itemKey === itemKey
+          ? { ...item, itemKey: undefined, linkStatus: 'pendente' as const }
+          : item,
+      ),
+    })),
+  });
+}
+
+export function removeMovement(project: Project, movementId: string): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const movement = wh.movements.find(current => current.id === movementId);
+  if (!movement) return p;
+
+  const movements = wh.movements
+    .filter(current => current.id !== movementId && current.reversesId !== movementId)
+    .map(current => current.reversedById === movementId ? { ...current, reversedById: undefined } : current);
+
+  const items = wh.items.map(item => {
+    if (item.key !== movement.itemKey || movement.type !== 'entrada') return item;
+    return {
+      ...item,
+      purchasedQuantity: trunc2(Math.max(0, (item.purchasedQuantity ?? 0) - movement.quantity)),
+    };
+  });
+
+  return setWh(p, { movements, items });
+}
+
 // ============== CONSOLIDADO POR ITEM ==============
 
 export interface WarehouseRow {
