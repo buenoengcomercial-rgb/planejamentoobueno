@@ -558,11 +558,16 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
 
   const handleReject = () => {
     if (!selected) return;
-    const next = { ...selected, status: 'rejeitada' as WarehouseFiscalNoteStatus, updatedAt: nowWarehouseISO() };
+    // Invalida vínculos temporários sugeridos pela IA — só viram definitivos na aprovação.
+    const cleanedItems = selected.items.map(it =>
+      it.linkStatus === 'vinculado' ? it : { ...it, itemKey: undefined, linkStatus: 'pendente' as const },
+    );
+    const next: WarehouseFiscalNote = { ...selected, items: cleanedItems, status: 'rejeitada', updatedAt: nowWarehouseISO() };
     saveNote(next);
     setActiveStatus('rejeitada');
-    toast.success('Nota rejeitada.');
+    toast.success('Nota rejeitada. Nenhum material foi atualizado.');
   };
+
 
   const handleDelete = (note: WarehouseFiscalNote) => {
     if (!window.confirm(`Excluir a nota ${note.invoiceNumber || note.sourceFileName}?`)) return;
