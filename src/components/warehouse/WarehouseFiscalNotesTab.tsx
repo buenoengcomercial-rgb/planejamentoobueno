@@ -276,33 +276,26 @@ function emptyItem(): WarehouseFiscalNoteItem {
   return { id: uidWarehouse(), productCode: '', description: '', quantity: 1, unit: 'UN', unitPrice: 0, totalPrice: 0, linkStatus: 'pendente' };
 }
 
-async function openUrlAsBlob(url: string, mimeHint?: string) {
-  // Baixa via fetch e abre como blob: URL para contornar bloqueadores
-  // de anúncio/privacidade que barram domínios *.supabase.co.
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    let blob = await res.blob();
-    if (mimeHint && blob.type !== mimeHint) {
-      blob = new Blob([blob], { type: mimeHint });
-    }
-    const blobUrl = URL.createObjectURL(blob);
-    const win = window.open(blobUrl, '_blank', 'noopener');
-    if (!win) {
-      // Popup bloqueado: força download
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.target = '_blank';
-      a.rel = 'noopener';
-      a.click();
-    }
-    // Libera após algum tempo para o navegador conseguir abrir
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
-    return true;
-  } catch (err) {
-    toast.error('Falha ao abrir o arquivo: ' + (err as Error).message);
-    return false;
+async function fetchAsBlob(url: string, mimeHint?: string): Promise<Blob> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const blob = await res.blob();
+  if (mimeHint && blob.type !== mimeHint) {
+    return new Blob([blob], { type: mimeHint });
   }
+  return blob;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = filename;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
 }
 
 function guessMime(name?: string | null): string | undefined {
@@ -315,6 +308,22 @@ function guessMime(name?: string | null): string | undefined {
   return undefined;
 }
 
+async function resolveAttachmentSource(note: WarehouseFiscalNote): Promise<string | null> {
+  const att = note.attachment;
+  if (!att) return null;
+  if (att.storagePath) {
+    const { data, error } = await supabase.storage
+      .from('daily-report-photos')
+      .createSignedUrl(att.storagePath, 60);
+    if (error || !data?.signedUrl) {
+      toast.error('Falha ao gerar URL: ' + (error?.message ?? 'sem URL'));
+      return null;
+    }
+    return data.signedUrl;
+  }
+  return att.dataUrl ?? null;
+}
+
 function openAttachment(note: WarehouseFiscalNote) {
   const att = note.attachment;
   if (!att?.dataUrl && !att?.storagePath) {
@@ -322,21 +331,28 @@ function openAttachment(note: WarehouseFiscalNote) {
     return;
   }
   const mime = att.mimeType || guessMime(att.name);
+  const isPdf = mime === 'application/pdf' || (att.name ?? '').toLowerCase().endsWith('.pdf');
   void (async () => {
-    if (att.storagePath) {
-      const { data, error } = await supabase.storage
-        .from('daily-report-photos')
-        .createSignedUrl(att.storagePath, 60);
-      if (error || !data?.signedUrl) {
-        toast.error('Falha ao abrir o arquivo: ' + (error?.message ?? 'sem URL'));
+    try {
+      const src = await resolveAttachmentSource(note);
+      if (!src) return;
+      const blob = await fetchAsBlob(src, mime);
+      if (isPdf) {
+        // PDF: força download — bloqueadores não barram <a download>
+        const filename = att.name || `nota-fiscal-${note.id}.pdf`;
+        downloadBlob(blob, filename);
+        toast.success('PDF baixado. Abra o arquivo no seu computador.');
         return;
       }
-      await openUrlAsBlob(data.signedUrl, mime);
-      return;
-    }
-    if (att.dataUrl) {
-      // dataUrl pode ser data: ou http(s):; fetch funciona com ambos
-      await openUrlAsBlob(att.dataUrl, mime);
+      // Imagens: tenta abrir em nova aba; se bloqueado, baixa
+      const blobUrl = URL.createObjectURL(blob);
+      const win = window.open(blobUrl, '_blank', 'noopener');
+      if (!win) {
+        downloadBlob(blob, att.name || `anexo-${note.id}`);
+      }
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (err) {
+      toast.error('Falha ao abrir o arquivo: ' + (err as Error).message);
     }
   })();
 }
