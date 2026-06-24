@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import type { Project, WarehouseFiscalNote, WarehouseFiscalNoteItem, WarehouseFiscalNoteStatus } from '@/types/project';
+import type { Project, WarehouseFiscalNote, WarehouseFiscalNoteItem, WarehouseFiscalNoteStatus, FiscalInvoiceEntry } from '@/types/project';
 import {
   approveFiscalNote,
   computeWarehouseRows,
@@ -7,10 +7,12 @@ import {
   deleteFiscalNote,
   findFiscalNoteDuplicate,
   isValidCnpj,
-  linkFiscalNoteItemsToMaterials,
   makeAttachment,
+  newInvoiceEntry,
   nowWarehouseISO,
   readFileAsDataURL,
+  suggestFiscalNoteItemLinks,
+  sumFiscalInvoices,
   uidWarehouse,
   upsertFiscalNote,
 } from '@/lib/warehouse';
@@ -139,7 +141,7 @@ function parseFiscalNoteText(text: string): Pick<WarehouseFiscalNote, 'supplierN
   };
 }
 
-type ParsedFiscalNote = Pick<WarehouseFiscalNote, 'supplierName' | 'supplierCnpj' | 'invoiceNumber' | 'issueDate' | 'totalAmount' | 'items' | 'notes' | 'aiConfidence'>;
+type ParsedFiscalNote = Pick<WarehouseFiscalNote, 'supplierName' | 'supplierCnpj' | 'invoiceNumber' | 'issueDate' | 'totalAmount' | 'items' | 'invoices' | 'notes' | 'aiConfidence'>;
 
 type AiFiscalNoteResponse = {
   ok?: boolean;
@@ -161,6 +163,13 @@ type AiFiscalNoteResponse = {
       totalPrice?: number;
       category?: string | null;
       confidence?: number | null;
+    }>;
+    invoices?: Array<{
+      number?: string | null;
+      dueDate?: string | null;
+      amount?: number | null;
+      paymentMethod?: string | null;
+      notes?: string | null;
     }>;
   };
 };
@@ -204,6 +213,13 @@ async function readWithAi(input: { fileName: string; fileType?: string; fileData
       category: item.category ?? undefined,
       confidence: item.confidence != null ? Number(item.confidence) : undefined,
     })).filter(item => item.description.trim()),
+    invoices: (data.note.invoices ?? []).map(inv => newInvoiceEntry({
+      number: inv.number ?? undefined,
+      dueDate: inv.dueDate ?? undefined,
+      amount: Number(inv.amount ?? 0) || 0,
+      paymentMethod: inv.paymentMethod ?? undefined,
+      notes: inv.notes ?? undefined,
+    })),
   };
 }
 
@@ -327,6 +343,26 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
   const totalsDiff = selected ? Math.abs(Number(selected.totalAmount || 0) - itemsSum) : 0;
   const totalsMismatch = !!selected && totalsDiff > 0.01;
   const pendingLinks = selected ? selected.items.filter(it => !it.itemKey).length : 0;
+  const invoicesSum = useMemo(() => selected ? sumFiscalInvoices(selected.invoices) : 0, [selected]);
+  const invoicesMismatch = !!selected && (selected.invoices?.length ?? 0) > 0 && Math.abs(invoicesSum - Number(selected.totalAmount || 0)) > 0.01;
+
+  const updateInvoices = (next: FiscalInvoiceEntry[]) => {
+    if (selected) setSelected({ ...selected, invoices: next });
+  };
+  const updateInvoice = (idx: number, patch: Partial<FiscalInvoiceEntry>) => {
+    if (!selected) return;
+    const list = [...(selected.invoices ?? [])];
+    list[idx] = { ...list[idx], ...patch };
+    updateInvoices(list);
+  };
+  const addInvoice = () => {
+    if (!selected) return;
+    updateInvoices([...(selected.invoices ?? []), newInvoiceEntry({ amount: Math.max(0, Number(selected.totalAmount || 0) - invoicesSum) })]);
+  };
+  const removeInvoice = (idx: number) => {
+    if (!selected) return;
+    updateInvoices((selected.invoices ?? []).filter((_, i) => i !== idx));
+  };
 
   const saveNote = (note: WarehouseFiscalNote) => {
     const normalized: WarehouseFiscalNote = {
@@ -384,8 +420,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
         }
       }
 
-      const linked = linkFiscalNoteItemsToMaterials(project, parsed.items ?? []);
-      const items = linked.items;
+      // IMPORTANTE: apenas SUGERE vínculos. Não cria material no almoxarifado
+      // até que o usuário aprove a nota (evita "fantasmas" quando rejeita).
+      const items = suggestFiscalNoteItemLinks(project, parsed.items ?? [], parsed.supplierCnpj);
 
       const baseNote: WarehouseFiscalNote = {
         id: uidWarehouse(),
@@ -402,13 +439,14 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
         issueDate: parsed.issueDate ?? '',
         totalAmount: parsed.totalAmount ?? 0,
         items,
+        invoices: parsed.invoices ?? [],
         notes: parsed.notes,
         aiConfidence: parsed.aiConfidence,
         processingError,
         extractedText,
       };
 
-      const duplicate = findFiscalNoteDuplicate(linked.project, baseNote);
+      const duplicate = findFiscalNoteDuplicate(project, baseNote);
       if (duplicate) {
         const proceed = window.confirm(
           `Esta nota fiscal aparentemente já foi cadastrada (NF ${duplicate.invoiceNumber} · ${duplicate.supplierName}). Deseja continuar mesmo assim?`,
@@ -421,7 +459,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
         }
       }
 
-      onProjectChange(upsertFiscalNote(linked.project, baseNote));
+      onProjectChange(upsertFiscalNote(project, baseNote));
       setActiveStatus('a_conferir');
       setSelected(baseNote);
       toast.success('Nota enviada para conferência.');
@@ -520,11 +558,16 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
 
   const handleReject = () => {
     if (!selected) return;
-    const next = { ...selected, status: 'rejeitada' as WarehouseFiscalNoteStatus, updatedAt: nowWarehouseISO() };
+    // Invalida vínculos temporários sugeridos pela IA — só viram definitivos na aprovação.
+    const cleanedItems = selected.items.map(it =>
+      it.linkStatus === 'vinculado' ? it : { ...it, itemKey: undefined, linkStatus: 'pendente' as const },
+    );
+    const next: WarehouseFiscalNote = { ...selected, items: cleanedItems, status: 'rejeitada', updatedAt: nowWarehouseISO() };
     saveNote(next);
     setActiveStatus('rejeitada');
-    toast.success('Nota rejeitada.');
+    toast.success('Nota rejeitada. Nenhum material foi atualizado.');
   };
+
 
   const handleDelete = (note: WarehouseFiscalNote) => {
     if (!window.confirm(`Excluir a nota ${note.invoiceNumber || note.sourceFileName}?`)) return;
@@ -839,6 +882,78 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                   </table>
                 </div>
               </div>
+
+              {/* ============== DADOS DA FATURA / PAGAMENTO ============== */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold">Dados da fatura / pagamento</h3>
+                  <Button size="sm" variant="outline" className="h-8 text-xs" onClick={addInvoice}>
+                    <Plus className="w-3.5 h-3.5 mr-1" /> Adicionar fatura
+                  </Button>
+                </div>
+                {invoicesMismatch && (
+                  <div className="rounded-md border border-warning/40 bg-warning/10 p-2 text-xs text-warning flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                    <div>A soma das faturas (<b>{moneyBR(invoicesSum)}</b>) não confere com o valor total da nota (<b>{moneyBR(selected.totalAmount)}</b>). Você pode salvar mesmo assim.</div>
+                  </div>
+                )}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-muted text-muted-foreground">
+                      <tr>
+                        <th className="p-1.5 text-left w-28">Nº fatura</th>
+                        <th className="p-1.5 text-left w-36">Vencimento</th>
+                        <th className="p-1.5 text-right w-28">Valor</th>
+                        <th className="p-1.5 text-left w-36">Forma pgto.</th>
+                        <th className="p-1.5 text-left w-32">Status</th>
+                        <th className="p-1.5 text-left">Observação</th>
+                        <th className="p-1.5 w-8"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(selected.invoices ?? []).map((inv, idx) => (
+                        <tr key={inv.id} className="border-t border-border">
+                          <td className="p-1"><Input className="h-8 text-xs" value={inv.number ?? ''} onChange={e => updateInvoice(idx, { number: e.target.value })} /></td>
+                          <td className="p-1"><Input className="h-8 text-xs" type="date" value={inv.dueDate ?? ''} onChange={e => updateInvoice(idx, { dueDate: e.target.value })} /></td>
+                          <td className="p-1"><Input className="h-8 text-xs text-right" inputMode="decimal" value={moneyBR(inv.amount)} onChange={e => updateInvoice(idx, { amount: parseMoney(e.target.value) })} /></td>
+                          <td className="p-1"><Input className="h-8 text-xs" value={inv.paymentMethod ?? ''} placeholder="Boleto, PIX..." onChange={e => updateInvoice(idx, { paymentMethod: e.target.value })} /></td>
+                          <td className="p-1">
+                            <Select value={inv.status ?? 'aberta'} onValueChange={v => updateInvoice(idx, { status: v as FiscalInvoiceEntry['status'] })}>
+                              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                              <SelectContent className="z-50 bg-popover">
+                                <SelectItem value="aberta">Aberta</SelectItem>
+                                <SelectItem value="paga">Paga</SelectItem>
+                                <SelectItem value="vencida">Vencida</SelectItem>
+                                <SelectItem value="cancelada">Cancelada</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </td>
+                          <td className="p-1"><Input className="h-8 text-xs" value={inv.notes ?? ''} onChange={e => updateInvoice(idx, { notes: e.target.value })} /></td>
+                          <td className="p-1">
+                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => removeInvoice(idx)}>
+                              <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                      {(selected.invoices?.length ?? 0) === 0 && (
+                        <tr><td colSpan={7} className="p-3 text-center text-xs text-muted-foreground">Nenhuma fatura/parcela informada. Adicione manualmente se a nota tiver duplicatas.</td></tr>
+                      )}
+                    </tbody>
+                    {(selected.invoices?.length ?? 0) > 0 && (
+                      <tfoot>
+                        <tr className="border-t-2 border-border bg-muted/40 font-semibold">
+                          <td className="p-1.5 text-right" colSpan={2}>Soma das faturas:</td>
+                          <td className={`p-1.5 text-right tabular-nums ${invoicesMismatch ? 'text-warning' : ''}`}>{moneyBR(invoicesSum)}</td>
+                          <td colSpan={4}></td>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              </div>
+
+
 
               <DialogFooter className="flex flex-wrap justify-between gap-2 border-t border-border pt-3">
                 <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={() => handleDelete(selected)}>

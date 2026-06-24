@@ -604,6 +604,22 @@ export interface WarehouseFiscalNoteItem {
   confidence?: number;
 }
 
+export type FiscalInvoicePaymentStatus = 'aberta' | 'paga' | 'vencida' | 'cancelada';
+
+export interface FiscalInvoiceEntry {
+  id: string;
+  /** Número da fatura/duplicata/parcela. */
+  number?: string;
+  /** Data de vencimento (YYYY-MM-DD). */
+  dueDate?: string;
+  /** Valor da parcela. */
+  amount: number;
+  /** Forma de pagamento (boleto, pix, cartão, etc). */
+  paymentMethod?: string;
+  status?: FiscalInvoicePaymentStatus;
+  notes?: string;
+}
+
 export interface WarehouseFiscalNote {
   id: string;
   createdAt: string;
@@ -619,6 +635,8 @@ export interface WarehouseFiscalNote {
   sourceMimeType?: string;
   attachment?: WarehouseAttachment;
   items: WarehouseFiscalNoteItem[];
+  /** Faturas / duplicatas / parcelas da nota. */
+  invoices?: FiscalInvoiceEntry[];
   notes?: string;
   rejectionReason?: string;
   processingError?: string;
