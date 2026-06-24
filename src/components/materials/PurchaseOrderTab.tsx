@@ -72,7 +72,7 @@ export default function PurchaseOrderTab({ project, comparison, onProjectChange 
       for (const row of rows) delete next[row.itemId];
       return next;
     });
-    toast.success(`${confirmedRows} item(ns) confirmados (${formatQty(confirmedQuantity)} un.). O Almoxarifado agora pode receber estes materiais.`);
+    toast.success(`${confirmedRows} item(ns) confirmados (${formatQty(confirmedQuantity)} un.). Compra marcada como verificada na Lista de Material.`);
   };
 
   if (plan.rows.length === 0 && unresolvedDetails.length === 0) {
@@ -93,7 +93,7 @@ export default function PurchaseOrderTab({ project, comparison, onProjectChange 
           <div>
             <h3 className="text-sm font-semibold">Pedidos sugeridos por fornecedor</h3>
             <p className="text-[11px] text-muted-foreground">
-              Confirmar um pedido libera estes materiais para recebimento no Almoxarifado; estoque físico nasce na Entrada.
+              Confirmar um pedido marca a compra como verificada nesta lista; o Almoxarifado deve ser cadastrado pela nota fiscal de entrada.
             </p>
           </div>
         </div>

@@ -16,7 +16,7 @@ import type {
   WarehouseFiscalNoteItem,
   DailyReport,
 } from '@/types/project';
-import { linkKeyOf, computeStockRows } from '@/lib/materialComparisons';
+import { linkKeyOf } from '@/lib/materialComparisons';
 import { trunc2 } from '@/lib/financialEngine';
 import { getChapterNumbering } from '@/lib/chapters';
 
@@ -60,7 +60,7 @@ export function clearWarehouse(project: Project): Project {
   return {
     ...project,
     // Limpa apenas o controle físico/operacional do almoxarifado.
-    // Pedidos confirmados e equipamentos cadastrados continuam preservados.
+    // A verificação de compra na Lista de Material continua preservada.
     warehouse: {
       ...emptyWarehouse(),
       equipments: currentWarehouse.equipments,
@@ -560,28 +560,9 @@ export function linkFiscalNoteItemsToMaterials(
 export function computeWarehouseRows(project: Project, opts: WarehouseRowsOptions = {}): WarehouseRow[] {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
-  // partir da consolidação da Lista de Material (planejado/comprado)
-  const stockRows = computeStockRows(p, { materialOnly: opts.materialOnly, confirmedOnly: opts.confirmedOnly });
   const map = new Map<string, WarehouseRow>();
-  for (const sr of stockRows) {
-    map.set(sr.key, {
-      key: sr.key,
-      code: sr.code,
-      description: sr.description,
-      unit: sr.unit,
-      supplierId: sr.supplierId,
-      supplierName: sr.supplierName,
-      unitPrice: sr.unitPrice,
-      planned: sr.planned,
-      purchased: sr.purchased,
-      received: 0,
-      withdrawn: 0,
-      losses: 0,
-      adjustments: 0,
-      balance: 0,
-      underMin: false,
-    });
-  }
+  // O Almoxarifado não nasce mais de pedidos confirmados na Lista de Material.
+  // Itens entram aqui por cadastro avulso, nota fiscal aprovada ou movimentação física.
   // aplicar config por item
   const configByKey = new Map(wh.items.map(cfg => [cfg.key, cfg] as const));
   for (const cfg of wh.items) {
