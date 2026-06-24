@@ -674,6 +674,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                 <thead className="bg-muted text-muted-foreground">
                   <tr>
                     <th className="p-2 text-left">Fornecedor</th>
+                    <th className="p-2 text-center w-14">Nº</th>
                     <th className="p-2 text-left">CNPJ</th>
                     <th className="p-2 text-left">Nota</th>
                     <th className="p-2 text-left">Data</th>
@@ -685,9 +686,10 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(note => (
+                  {filtered.map((note, index) => (
                       <tr key={note.id} className="border-t border-border hover:bg-muted/30">
                         <td className="p-2 font-medium">{note.supplierName || '-'}</td>
+                        <td className="p-2 text-center font-mono tabular-nums text-primary font-semibold">{filtered.length - index}</td>
                         <td className="p-2 font-mono text-[11px] text-muted-foreground">{note.supplierCnpj || '-'}</td>
                         <td className="p-2">{note.invoiceNumber || '-'}</td>
                         <td className="p-2">{note.issueDate ? note.issueDate.split('-').reverse().join('/') : '-'}</td>
