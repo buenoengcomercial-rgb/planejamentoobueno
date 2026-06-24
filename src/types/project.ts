@@ -558,6 +558,7 @@ export interface WarehouseMovement {
   // origens
   purchaseOrderId?: string;
   supplierId?: string;
+  fiscalNoteId?: string;
   invoiceNumber?: string;
   // destinos
   requisitionId?: string;

@@ -906,7 +906,67 @@ export function upsertFiscalNote(project: Project, note: WarehouseFiscalNote): P
 export function deleteFiscalNote(project: Project, noteId: string): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
-  return setWh(p, { fiscalNotes: (wh.fiscalNotes ?? []).filter(n => n.id !== noteId) });
+  const note = (wh.fiscalNotes ?? []).find(n => n.id === noteId);
+  if (!note) return p;
+
+  const removedQuantities = new Map<string, number>();
+  const removedMovementIds = new Set<string>();
+  const invoiceNumber = note.invoiceNumber?.trim();
+
+  for (const movement of wh.movements) {
+    const linkedById = movement.fiscalNoteId === noteId;
+    const linkedLegacy =
+      !movement.fiscalNoteId &&
+      note.status === 'aprovada' &&
+      movement.type === 'entrada' &&
+      !!invoiceNumber &&
+      movement.invoiceNumber?.trim() === invoiceNumber;
+
+    if (!linkedById && !linkedLegacy) continue;
+    removedMovementIds.add(movement.id);
+    removedQuantities.set(
+      movement.itemKey,
+      trunc2((removedQuantities.get(movement.itemKey) ?? 0) + movement.quantity),
+    );
+  }
+
+  if (note.status === 'aprovada') {
+    for (const item of note.items ?? []) {
+      if (!item.itemKey || removedQuantities.has(item.itemKey)) continue;
+      removedQuantities.set(item.itemKey, trunc2(Number(item.quantity || 0)));
+    }
+  }
+
+  const remainingNotes = (wh.fiscalNotes ?? []).filter(n => n.id !== noteId);
+  const remainingMovements = wh.movements.filter(m => !removedMovementIds.has(m.id));
+  const referencedItemKeys = new Set<string>();
+  for (const movement of remainingMovements) referencedItemKeys.add(movement.itemKey);
+  for (const requisition of wh.requisitions) {
+    for (const item of requisition.items) referencedItemKeys.add(item.itemKey);
+  }
+  for (const remainingNote of remainingNotes) {
+    if (remainingNote.status !== 'aprovada') continue;
+    for (const item of remainingNote.items ?? []) {
+      if (item.itemKey) referencedItemKeys.add(item.itemKey);
+    }
+  }
+
+  const items = wh.items
+    .map(cfg => {
+      const removed = removedQuantities.get(cfg.key) ?? 0;
+      if (removed <= 0) return cfg;
+      return {
+        ...cfg,
+        purchasedQuantity: trunc2(Math.max(0, (cfg.purchasedQuantity ?? 0) - removed)),
+      };
+    })
+    .filter(cfg => {
+      const purchased = cfg.purchasedQuantity ?? 0;
+      const planned = cfg.plannedQuantity ?? 0;
+      return !(cfg.key.startsWith('warehouse-nf|') && purchased <= 0 && planned <= 0 && !referencedItemKeys.has(cfg.key));
+    });
+
+  return setWh(p, { fiscalNotes: remainingNotes, movements: remainingMovements, items });
 }
 
 export function approveFiscalNote(project: Project, noteId: string): Project {
@@ -1003,6 +1063,7 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
       itemUnit: unit,
       quantity: Number(item.quantity || 0),
       unitPrice: Number(item.unitPrice || 0) || undefined,
+      fiscalNoteId: note.id,
       invoiceNumber: note.invoiceNumber || undefined,
       notes: `Entrada gerada pela NF ${note.invoiceNumber || note.sourceFileName}`,
       attachments: note.attachment ? [note.attachment] : undefined,
