@@ -5,6 +5,7 @@ const corsHeaders = {
 };
 
 type FiscalNoteItem = {
+  productCode?: string | null;
   description?: string;
   quantity?: number;
   unit?: string | null;
@@ -36,6 +37,7 @@ Retorne apenas JSON valido no formato:
   "confidence": number,
   "items": [
     {
+      "productCode": string|null,
       "description": string,
       "quantity": number,
       "unit": string|null,
@@ -49,10 +51,11 @@ Retorne apenas JSON valido no formato:
 }
 Regras:
 - Leia fornecedor/razao social, CNPJ, numero da nota, data de emissao, valor total e itens.
+- Em cada item, extraia tambem o codigo da coluna "COD. PROD.", "Cod. Prod.", "Codigo", "Cod.", ou similar como "productCode".
 - Valores monetarios devem ser numeros em reais, com ponto decimal.
 - Datas devem estar em YYYY-MM-DD.
 - Nao invente dados ilegiveis; use null ou 0.
-- Para itens, priorize materiais, descricao, quantidade, unidade, valor unitario e total.
+- Para itens, priorize codigo do produto, descricao, quantidade, unidade, valor unitario e total.
 - Quando houver texto extraido e imagem, use os dois para conferir os dados.
 - "confidence" deve ser um numero entre 0 e 1 indicando o quao confiavel ficou a leitura (da nota e de cada item).
 - Se a imagem/PDF estiver ruim, retorne os campos que conseguir e explique em "notes".`;
@@ -75,6 +78,7 @@ function normalizePayload(raw: FiscalNotePayload): FiscalNotePayload {
     confidence: raw.confidence != null ? Math.max(0, Math.min(1, Number(raw.confidence))) : null,
     items: Array.isArray(raw.items)
       ? raw.items.map((item) => ({
+          productCode: item.productCode ? String(item.productCode).trim() : null,
           description: String(item.description ?? "").trim(),
           quantity: Number(item.quantity ?? 1) || 1,
           unit: item.unit ? String(item.unit) : null,

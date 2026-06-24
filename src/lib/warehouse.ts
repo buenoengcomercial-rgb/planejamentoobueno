@@ -37,6 +37,10 @@ function fiscalItemLookup(item: Pick<WarehouseFiscalNoteItem, 'description' | 'u
   return `${normalizeLookup(item.description)}|${normalizeLookup(item.unit || 'UN')}`;
 }
 
+function normalizeProductCode(value?: string) {
+  return (value ?? '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+}
+
 // ============== STATE / MIGRATION ==============
 
 export function emptyWarehouse(): WarehouseState {
@@ -469,6 +473,90 @@ export function createManualWarehouseItem(
   });
 }
 
+function mapWarehouseRows(project: Project) {
+  const rows = computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true });
+  const rowsByKey = new Map(rows.map(row => [row.key, row] as const));
+  const itemKeyByLookup = new Map<string, string>();
+  const itemKeyByCode = new Map<string, string>();
+  for (const row of rows) {
+    itemKeyByLookup.set(fiscalItemLookup({ description: row.description, unit: row.unit }), row.key);
+    const code = normalizeProductCode(row.code);
+    if (code && !itemKeyByCode.has(code)) itemKeyByCode.set(code, row.key);
+  }
+  return { rows, rowsByKey, itemKeyByLookup, itemKeyByCode };
+}
+
+export function linkFiscalNoteItemsToMaterials(
+  project: Project,
+  items: WarehouseFiscalNoteItem[],
+): { project: Project; items: WarehouseFiscalNoteItem[] } {
+  let p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const { rowsByKey, itemKeyByLookup, itemKeyByCode } = mapWarehouseRows(p);
+  let itemsConfig = [...wh.items];
+  let changed = false;
+
+  const linkedItems = items.map(item => {
+    const description = item.description.trim();
+    const unit = (item.unit || 'UN').trim() || 'UN';
+    const productCode = item.productCode?.trim() || undefined;
+    const productCodeKey = normalizeProductCode(productCode);
+    const lookup = fiscalItemLookup({ description, unit });
+    let itemKey =
+      item.itemKey && rowsByKey.has(item.itemKey)
+        ? item.itemKey
+        : (productCodeKey ? itemKeyByCode.get(productCodeKey) : undefined) ?? itemKeyByLookup.get(lookup);
+
+    if (!itemKey && description) {
+      itemKey = `warehouse-nf|${uid()}`;
+      itemsConfig.push({
+        key: itemKey,
+        code: productCode,
+        description,
+        unit,
+        manualItem: true,
+        plannedQuantity: 0,
+        purchasedQuantity: 0,
+        unitPrice: Number(item.unitPrice || 0) || undefined,
+      });
+      rowsByKey.set(itemKey, {
+        key: itemKey,
+        code: productCode,
+        description,
+        unit,
+        manualItem: true,
+        unitPrice: Number(item.unitPrice || 0) || undefined,
+        planned: 0,
+        purchased: 0,
+        received: 0,
+        withdrawn: 0,
+        losses: 0,
+        adjustments: 0,
+        balance: 0,
+        underMin: false,
+      });
+      itemKeyByLookup.set(lookup, itemKey);
+      if (productCodeKey) itemKeyByCode.set(productCodeKey, itemKey);
+      changed = true;
+    }
+
+    if (!itemKey) {
+      return { ...item, productCode, unit, linkStatus: item.linkStatus ?? 'pendente' };
+    }
+
+    return {
+      ...item,
+      productCode,
+      itemKey,
+      unit,
+      linkStatus: item.linkStatus === 'vinculado' ? 'vinculado' : 'auto',
+    };
+  });
+
+  if (changed) p = setWh(p, { items: itemsConfig });
+  return { project: p, items: linkedItems };
+}
+
 export function computeWarehouseRows(project: Project, opts: WarehouseRowsOptions = {}): WarehouseRow[] {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
@@ -498,6 +586,7 @@ export function computeWarehouseRows(project: Project, opts: WarehouseRowsOption
   const configByKey = new Map(wh.items.map(cfg => [cfg.key, cfg] as const));
   for (const cfg of wh.items) {
     let r = map.get(cfg.key);
+    let createdManualRow = false;
     if (!r && cfg.manualItem && opts.includeManual !== false) {
       r = {
         key: cfg.key,
@@ -517,6 +606,7 @@ export function computeWarehouseRows(project: Project, opts: WarehouseRowsOption
         underMin: false,
       };
       map.set(cfg.key, r);
+      createdManualRow = true;
     }
     if (r) {
       r.manualItem = cfg.manualItem;
@@ -524,6 +614,9 @@ export function computeWarehouseRows(project: Project, opts: WarehouseRowsOption
       r.unitPrice = cfg.unitPrice ?? r.unitPrice;
       r.minStock = cfg.minStock;
       r.locationId = cfg.defaultLocationId;
+      if (!createdManualRow && cfg.purchasedQuantity) {
+        r.purchased = trunc2(r.purchased + cfg.purchasedQuantity);
+      }
     }
   }
   // aplicar movimentos
@@ -779,31 +872,33 @@ export function deleteFiscalNote(project: Project, noteId: string): Project {
 
 export function approveFiscalNote(project: Project, noteId: string): Project {
   let p = ensureWarehouse(project);
-  const wh = p.warehouse!;
-  const note = wh.fiscalNotes?.find(n => n.id === noteId);
+  const note = p.warehouse?.fiscalNotes?.find(n => n.id === noteId);
   if (!note || note.status === 'aprovada') return p;
 
-  const rowsByKey = new Map(
-    computeWarehouseRows(p, { materialOnly: true, confirmedOnly: true, includeManual: true })
-      .map(row => [row.key, row] as const),
-  );
-  const itemKeyByLookup = new Map<string, string>();
-  for (const row of rowsByKey.values()) {
-    itemKeyByLookup.set(fiscalItemLookup({ description: row.description, unit: row.unit }), row.key);
-  }
+  const linked = linkFiscalNoteItemsToMaterials(p, note.items);
+  p = linked.project;
+  const wh = p.warehouse!;
+  const { rowsByKey, itemKeyByLookup, itemKeyByCode } = mapWarehouseRows(p);
 
   let itemsConfig = [...wh.items];
   const movements = [...wh.movements];
-  const approvedItems = note.items.map(item => {
+  const approvedItems = linked.items.map(item => {
     const unit = (item.unit || 'UN').trim() || 'UN';
+    const productCode = item.productCode?.trim() || undefined;
+    const productCodeKey = normalizeProductCode(productCode);
     const lookup = fiscalItemLookup({ description: item.description, unit });
-    let itemKey = item.itemKey && rowsByKey.has(item.itemKey) ? item.itemKey : itemKeyByLookup.get(lookup);
+    let itemKey =
+      item.itemKey && rowsByKey.has(item.itemKey)
+        ? item.itemKey
+        : (productCodeKey ? itemKeyByCode.get(productCodeKey) : undefined) ?? itemKeyByLookup.get(lookup);
 
     if (!itemKey) {
       itemKey = `warehouse-nf|${uid()}`;
       itemKeyByLookup.set(lookup, itemKey);
+      if (productCodeKey) itemKeyByCode.set(productCodeKey, itemKey);
       itemsConfig.push({
         key: itemKey,
+        code: productCode,
         description: item.description.trim(),
         unit,
         manualItem: true,
@@ -812,15 +907,29 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
         unitPrice: Number(item.unitPrice || 0) || undefined,
       });
     } else {
-      itemsConfig = itemsConfig.map(cfg =>
-        cfg.key === itemKey
-          ? {
-              ...cfg,
-              purchasedQuantity: trunc2((cfg.purchasedQuantity ?? 0) + Number(item.quantity || 0)),
-              unitPrice: Number(item.unitPrice || 0) || cfg.unitPrice,
-            }
-          : cfg,
-      );
+      let updatedConfig = false;
+      itemsConfig = itemsConfig.map(cfg => {
+        if (cfg.key !== itemKey) return cfg;
+        updatedConfig = true;
+        return {
+          ...cfg,
+          purchasedQuantity: trunc2((cfg.purchasedQuantity ?? 0) + Number(item.quantity || 0)),
+          code: cfg.code || productCode,
+          unitPrice: Number(item.unitPrice || 0) || cfg.unitPrice,
+        };
+      });
+      if (!updatedConfig) {
+        const row = rowsByKey.get(itemKey);
+        itemsConfig.push({
+          key: itemKey,
+          code: row?.code || productCode,
+          description: row?.description || item.description.trim(),
+          unit: row?.unit || unit,
+          manualItem: row?.manualItem,
+          purchasedQuantity: Number(item.quantity || 0),
+          unitPrice: Number(item.unitPrice || 0) || row?.unitPrice,
+        });
+      }
     }
 
     movements.push({
@@ -829,6 +938,7 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
       type: 'entrada',
       date: note.issueDate || todayISO(),
       itemKey,
+      itemCode: productCode || rowsByKey.get(itemKey)?.code,
       itemDescription: item.description.trim(),
       itemUnit: unit,
       quantity: Number(item.quantity || 0),
@@ -838,7 +948,7 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
       attachments: note.attachment ? [note.attachment] : undefined,
     });
 
-    return { ...item, itemKey, unit };
+    return { ...item, productCode, itemKey, unit, linkStatus: 'vinculado' as const };
   });
 
   const fiscalNotes = (wh.fiscalNotes ?? []).map(n =>
@@ -962,9 +1072,15 @@ export function findMaterialMatch(
   project: Project,
   description: string,
   unit?: string,
+  productCode?: string,
 ): { key: string; score: number; description: string; unit: string } | null {
   const rows = computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true });
   if (rows.length === 0) return null;
+  const productCodeKey = normalizeProductCode(productCode);
+  if (productCodeKey) {
+    const exact = rows.find(row => normalizeProductCode(row.code) === productCodeKey);
+    if (exact) return { key: exact.key, score: 1, description: exact.description, unit: exact.unit };
+  }
   const a = new Set(tokenize(description));
   if (a.size === 0) return null;
   const unitNorm = normalizeLookup(unit ?? '');

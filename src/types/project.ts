@@ -589,6 +589,8 @@ export type FiscalItemLinkStatus = 'vinculado' | 'pendente' | 'auto';
 
 export interface WarehouseFiscalNoteItem {
   id: string;
+  /** Codigo do produto na nota fiscal (coluna COD. PROD.). */
+  productCode?: string;
   description: string;
   quantity: number;
   unit?: string;

@@ -6,8 +6,8 @@ import {
   createManualWarehouseItem,
   deleteFiscalNote,
   findFiscalNoteDuplicate,
-  findMaterialMatch,
   isValidCnpj,
+  linkFiscalNoteItemsToMaterials,
   makeAttachment,
   nowWarehouseISO,
   readFileAsDataURL,
@@ -49,7 +49,6 @@ interface Props {
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const ACCEPTED_EXTENSIONS = ['pdf', 'png', 'jpg', 'jpeg', 'webp'];
 const MAX_PDF_AI_PAGES = 4;
-const MATCH_SCORE_THRESHOLD = 0.45;
 
 const STATUS_LABEL: Record<WarehouseFiscalNoteStatus, string> = {
   em_processamento: 'Em processamento',
@@ -154,6 +153,7 @@ type AiFiscalNoteResponse = {
     notes?: string | null;
     confidence?: number | null;
     items?: Array<{
+      productCode?: string | null;
       description?: string;
       quantity?: number;
       unit?: string | null;
@@ -195,6 +195,7 @@ async function readWithAi(input: { fileName: string; fileType?: string; fileData
     aiConfidence: data.note.confidence != null ? Number(data.note.confidence) : undefined,
     items: (data.note.items ?? []).map(item => ({
       id: uidWarehouse(),
+      productCode: item.productCode?.trim() || undefined,
       description: item.description ?? '',
       quantity: Number(item.quantity ?? 1) || 1,
       unit: item.unit ?? 'UN',
@@ -256,18 +257,7 @@ function validateFile(file: File) {
 }
 
 function emptyItem(): WarehouseFiscalNoteItem {
-  return { id: uidWarehouse(), description: '', quantity: 1, unit: 'UN', unitPrice: 0, totalPrice: 0, linkStatus: 'pendente' };
-}
-
-function autoLinkItems(project: Project, items: WarehouseFiscalNoteItem[]): WarehouseFiscalNoteItem[] {
-  return items.map(item => {
-    if (item.itemKey) return item;
-    const match = findMaterialMatch(project, item.description, item.unit);
-    if (match && match.score >= MATCH_SCORE_THRESHOLD) {
-      return { ...item, itemKey: match.key, linkStatus: 'auto' };
-    }
-    return { ...item, linkStatus: 'pendente' };
-  });
+  return { id: uidWarehouse(), productCode: '', description: '', quantity: 1, unit: 'UN', unitPrice: 0, totalPrice: 0, linkStatus: 'pendente' };
 }
 
 function openAttachment(note: WarehouseFiscalNote) {
@@ -394,7 +384,8 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
         }
       }
 
-      const items = autoLinkItems(project, parsed.items ?? []);
+      const linked = linkFiscalNoteItemsToMaterials(project, parsed.items ?? []);
+      const items = linked.items;
 
       const baseNote: WarehouseFiscalNote = {
         id: uidWarehouse(),
@@ -417,7 +408,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
         extractedText,
       };
 
-      const duplicate = findFiscalNoteDuplicate(project, baseNote);
+      const duplicate = findFiscalNoteDuplicate(linked.project, baseNote);
       if (duplicate) {
         const proceed = window.confirm(
           `Esta nota fiscal aparentemente já foi cadastrada (NF ${duplicate.invoiceNumber} · ${duplicate.supplierName}). Deseja continuar mesmo assim?`,
@@ -430,7 +421,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
         }
       }
 
-      onProjectChange(upsertFiscalNote(project, baseNote));
+      onProjectChange(upsertFiscalNote(linked.project, baseNote));
       setActiveStatus('a_conferir');
       setSelected(baseNote);
       toast.success('Nota enviada para conferência.');
@@ -466,7 +457,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
     if (key === '__new__') {
       setCreatingMaterialFor(idx);
       const it = selected.items[idx];
-      setNewMaterial({ code: '', description: it.description, unit: it.unit || 'UN' });
+      setNewMaterial({ code: it.productCode ?? '', description: it.description, unit: it.unit || 'UN' });
       return;
     }
     updateItem(idx, { itemKey: key, linkStatus: 'vinculado' });
@@ -765,6 +756,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                   <table className="w-full text-xs">
                     <thead className="bg-muted text-muted-foreground">
                       <tr>
+                        <th className="p-1.5 text-left w-24">Cod. prod.</th>
                         <th className="p-1.5 text-left">Descrição</th>
                         <th className="p-1.5 text-right w-16">Qtd</th>
                         <th className="p-1.5 text-center w-16">Un</th>
@@ -777,6 +769,10 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                     <tbody>
                       {selected.items.map((item, idx) => (
                         <tr key={item.id} className="border-t border-border">
+                          <td className="p-1">
+                            <Input className="h-8 text-xs" value={item.productCode ?? ''} placeholder="Cod. prod."
+                              onChange={e => updateItem(idx, { productCode: e.target.value })} />
+                          </td>
                           <td className="p-1">
                             <Input className="h-8 text-xs" value={item.description} placeholder="Descrição"
                               onChange={e => updateItem(idx, { description: e.target.value })} />
@@ -795,12 +791,12 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                               onChange={e => updateItem(idx, { unit: e.target.value })} />
                           </td>
                           <td className="p-1">
-                            <Input className="h-8 text-xs text-right" type="number" step="0.01" value={item.unitPrice}
-                              onChange={e => updateItem(idx, { unitPrice: Number(e.target.value) })} />
+                            <Input className="h-8 text-xs text-right" inputMode="decimal" value={moneyBR(item.unitPrice)}
+                              onChange={e => updateItem(idx, { unitPrice: parseMoney(e.target.value) })} />
                           </td>
                           <td className="p-1">
-                            <Input className="h-8 text-xs text-right" type="number" step="0.01" value={item.totalPrice}
-                              onChange={e => updateItem(idx, { totalPrice: Number(e.target.value) })} />
+                            <Input className="h-8 text-xs text-right" inputMode="decimal" value={moneyBR(item.totalPrice)}
+                              onChange={e => updateItem(idx, { totalPrice: parseMoney(e.target.value) })} />
                           </td>
                           <td className="p-1">
                             <div className="flex items-center gap-1">
@@ -828,13 +824,13 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                         </tr>
                       ))}
                       {selected.items.length === 0 && (
-                        <tr><td colSpan={7} className="p-4 text-center text-xs text-muted-foreground">Nenhum item. Adicione manualmente para aprovar.</td></tr>
+                        <tr><td colSpan={8} className="p-4 text-center text-xs text-muted-foreground">Nenhum item. Adicione manualmente para aprovar.</td></tr>
                       )}
                     </tbody>
                     {selected.items.length > 0 && (
                       <tfoot>
                         <tr className="border-t-2 border-border bg-muted/40 font-semibold">
-                          <td className="p-1.5 text-right" colSpan={4}>Soma dos itens:</td>
+                          <td className="p-1.5 text-right" colSpan={5}>Soma dos itens:</td>
                           <td className={`p-1.5 text-right tabular-nums ${totalsMismatch ? 'text-warning' : ''}`}>{moneyBR(itemsSum)}</td>
                           <td colSpan={2}></td>
                         </tr>
