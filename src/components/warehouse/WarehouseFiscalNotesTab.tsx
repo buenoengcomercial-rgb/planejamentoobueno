@@ -321,7 +321,7 @@ function openAttachment(note: WarehouseFiscalNote) {
     toast.error('Nenhum arquivo anexo encontrado.');
     return;
   }
-  const mime = att.mimeType || guessMime(att.fileName);
+  const mime = att.mimeType || guessMime(att.name);
   void (async () => {
     if (att.storagePath) {
       const { data, error } = await supabase.storage
