@@ -585,6 +585,8 @@ export type WarehouseFiscalNoteStatus =
   | 'aprovada'
   | 'rejeitada';
 
+export type FiscalItemLinkStatus = 'vinculado' | 'pendente' | 'auto';
+
 export interface WarehouseFiscalNoteItem {
   id: string;
   description: string;
@@ -594,6 +596,10 @@ export interface WarehouseFiscalNoteItem {
   totalPrice: number;
   category?: string;
   itemKey?: string;
+  /** Status do vínculo com material do almoxarifado. */
+  linkStatus?: FiscalItemLinkStatus;
+  /** Confiança da IA na leitura deste item (0-1). */
+  confidence?: number;
 }
 
 export interface WarehouseFiscalNote {
@@ -615,6 +621,10 @@ export interface WarehouseFiscalNote {
   rejectionReason?: string;
   processingError?: string;
   extractedText?: string;
+  /** Confiança média da IA na nota (0-1). */
+  aiConfidence?: number;
+  /** Justificativa preenchida quando soma dos itens difere do total. */
+  totalsJustification?: string;
 }
 
 export interface WarehouseRequisitionItem {
