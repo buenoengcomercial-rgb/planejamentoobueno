@@ -523,6 +523,7 @@ export interface WarehouseItemConfig {
   plannedQuantity?: number;
   purchasedQuantity?: number;
   unitPrice?: number;
+  purchaseGroupId?: string;
   supplierId?: string;
   defaultLocationId?: string;
 }
@@ -597,6 +598,7 @@ export interface WarehouseFiscalNoteItem {
   unitPrice: number;
   totalPrice: number;
   category?: string;
+  purchaseGroupId?: string;
   itemKey?: string;
   /** Status do vínculo com material do almoxarifado. */
   linkStatus?: FiscalItemLinkStatus;

@@ -478,14 +478,25 @@ export function createManualWarehouseItem(
 function mapWarehouseRows(project: Project) {
   const rows = computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true });
   const rowsByKey = new Map(rows.map(row => [row.key, row] as const));
-  const itemKeyByLookup = new Map<string, string>();
-  const itemKeyByCode = new Map<string, string>();
+  const itemKeyByLookup = new Map<string, string[]>();
+  const itemKeyByCode = new Map<string, string[]>();
+  const pushCandidate = (map: Map<string, string[]>, key: string, itemKey: string) => {
+    const list = map.get(key) ?? [];
+    if (!list.includes(itemKey)) map.set(key, [...list, itemKey]);
+  };
   for (const row of rows) {
-    itemKeyByLookup.set(fiscalItemLookup({ description: row.description, unit: row.unit }), row.key);
+    pushCandidate(itemKeyByLookup, fiscalItemLookup({ description: row.description, unit: row.unit }), row.key);
     const code = normalizeProductCode(row.code);
-    if (code && !itemKeyByCode.has(code)) itemKeyByCode.set(code, row.key);
+    if (code) pushCandidate(itemKeyByCode, code, row.key);
   }
   return { rows, rowsByKey, itemKeyByLookup, itemKeyByCode };
+}
+
+function pricesMatch(existing?: number, incoming?: number) {
+  const current = Number(existing || 0);
+  const next = Number(incoming || 0);
+  if (!current || !next) return true;
+  return Math.abs(current - next) < 0.01;
 }
 
 export function linkFiscalNoteItemsToMaterials(
@@ -504,15 +515,17 @@ export function linkFiscalNoteItemsToMaterials(
     const productCode = item.productCode?.trim() || undefined;
     const productCodeKey = normalizeProductCode(productCode);
     const lookup = fiscalItemLookup({ description, unit });
-    let itemKey =
-      item.itemKey && rowsByKey.has(item.itemKey)
-        ? item.itemKey
-        : (productCodeKey ? itemKeyByCode.get(productCodeKey) : undefined) ?? itemKeyByLookup.get(lookup);
+    const candidates = [
+      item.itemKey && rowsByKey.has(item.itemKey) ? item.itemKey : undefined,
+      ...(productCodeKey ? itemKeyByCode.get(productCodeKey) ?? [] : []),
+      ...(itemKeyByLookup.get(lookup) ?? []),
+    ].filter((key): key is string => !!key);
+    const itemKey = candidates.find(key => pricesMatch(rowsByKey.get(key)?.unitPrice, item.unitPrice));
 
     if (!itemKey && description) {
-      itemKey = `warehouse-nf|${uid()}`;
+      const newItemKey = `warehouse-nf|${uid()}`;
       itemsConfig.push({
-        key: itemKey,
+        key: newItemKey,
         code: productCode,
         description,
         unit,
@@ -520,9 +533,10 @@ export function linkFiscalNoteItemsToMaterials(
         plannedQuantity: 0,
         purchasedQuantity: 0,
         unitPrice: Number(item.unitPrice || 0) || undefined,
+        purchaseGroupId: item.purchaseGroupId,
       });
-      rowsByKey.set(itemKey, {
-        key: itemKey,
+      rowsByKey.set(newItemKey, {
+        key: newItemKey,
         code: productCode,
         description,
         unit,
@@ -537,9 +551,16 @@ export function linkFiscalNoteItemsToMaterials(
         balance: 0,
         underMin: false,
       });
-      itemKeyByLookup.set(lookup, itemKey);
-      if (productCodeKey) itemKeyByCode.set(productCodeKey, itemKey);
+      itemKeyByLookup.set(lookup, [...(itemKeyByLookup.get(lookup) ?? []), newItemKey]);
+      if (productCodeKey) itemKeyByCode.set(productCodeKey, [...(itemKeyByCode.get(productCodeKey) ?? []), newItemKey]);
       changed = true;
+      return {
+        ...item,
+        productCode,
+        itemKey: newItemKey,
+        unit,
+        linkStatus: 'vinculado' as FiscalItemLinkStatus,
+      };
     }
 
     if (!itemKey) {
@@ -659,6 +680,12 @@ export interface WarehousePanelSummary {
   openCustodyCount: number;
   overdueCustodyCount: number;
   divergenceCount: number;
+  invoiceTotal: number;
+  invoiceOpen: number;
+  invoiceOverdue: number;
+  invoicePaid: number;
+  invoiceOpenCount: number;
+  invoiceOverdueCount: number;
 }
 
 export function panelSummary(project: Project): WarehousePanelSummary {
@@ -681,6 +708,29 @@ export function panelSummary(project: Project): WarehousePanelSummary {
   const today = todayISO();
   const open = wh.custodyTerms.filter(t => t.status === 'em_uso').length;
   const overdue = wh.custodyTerms.filter(t => t.status === 'em_uso' && t.dueDate && t.dueDate < today).length;
+  let invoiceTotal = 0, invoiceOpen = 0, invoiceOverdue = 0, invoicePaid = 0, invoiceOpenCount = 0, invoiceOverdueCount = 0;
+  for (const note of wh.fiscalNotes ?? []) {
+    if (note.status !== 'aprovada') continue;
+    const invoices = note.invoices?.length
+      ? note.invoices
+      : [{ id: note.id, amount: Number(note.totalAmount || 0), dueDate: note.issueDate, status: 'aberta' as const }];
+    for (const invoice of invoices) {
+      if (invoice.status === 'cancelada') continue;
+      const amount = Number(invoice.amount || 0);
+      invoiceTotal += amount;
+      if (invoice.status === 'paga') {
+        invoicePaid += amount;
+        continue;
+      }
+      const isOverdue = invoice.status === 'vencida' || (!!invoice.dueDate && invoice.dueDate < today);
+      invoiceOpen += amount;
+      invoiceOpenCount += 1;
+      if (isOverdue) {
+        invoiceOverdue += amount;
+        invoiceOverdueCount += 1;
+      }
+    }
+  }
   return {
     totalPlanned: trunc2(totalPlanned),
     totalPurchased: trunc2(totalPurchased),
@@ -693,6 +743,12 @@ export function panelSummary(project: Project): WarehousePanelSummary {
     openCustodyCount: open,
     overdueCustodyCount: overdue,
     divergenceCount: divergence,
+    invoiceTotal: trunc2(invoiceTotal),
+    invoiceOpen: trunc2(invoiceOpen),
+    invoiceOverdue: trunc2(invoiceOverdue),
+    invoicePaid: trunc2(invoicePaid),
+    invoiceOpenCount,
+    invoiceOverdueCount,
   };
 }
 
@@ -870,15 +926,17 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
     const productCode = item.productCode?.trim() || undefined;
     const productCodeKey = normalizeProductCode(productCode);
     const lookup = fiscalItemLookup({ description: item.description, unit });
-    let itemKey =
-      item.itemKey && rowsByKey.has(item.itemKey)
-        ? item.itemKey
-        : (productCodeKey ? itemKeyByCode.get(productCodeKey) : undefined) ?? itemKeyByLookup.get(lookup);
+    const candidates = [
+      item.itemKey && rowsByKey.has(item.itemKey) ? item.itemKey : undefined,
+      ...(productCodeKey ? itemKeyByCode.get(productCodeKey) ?? [] : []),
+      ...(itemKeyByLookup.get(lookup) ?? []),
+    ].filter((key): key is string => !!key);
+    let itemKey = candidates.find(key => pricesMatch(rowsByKey.get(key)?.unitPrice, item.unitPrice));
 
     if (!itemKey) {
       itemKey = `warehouse-nf|${uid()}`;
-      itemKeyByLookup.set(lookup, itemKey);
-      if (productCodeKey) itemKeyByCode.set(productCodeKey, itemKey);
+      itemKeyByLookup.set(lookup, [...(itemKeyByLookup.get(lookup) ?? []), itemKey]);
+      if (productCodeKey) itemKeyByCode.set(productCodeKey, [...(itemKeyByCode.get(productCodeKey) ?? []), itemKey]);
       itemsConfig.push({
         key: itemKey,
         code: productCode,
@@ -888,6 +946,23 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
         plannedQuantity: 0,
         purchasedQuantity: Number(item.quantity || 0),
         unitPrice: Number(item.unitPrice || 0) || undefined,
+        purchaseGroupId: item.purchaseGroupId,
+      });
+      rowsByKey.set(itemKey, {
+        key: itemKey,
+        code: productCode,
+        description: item.description.trim(),
+        unit,
+        manualItem: true,
+        unitPrice: Number(item.unitPrice || 0) || undefined,
+        planned: 0,
+        purchased: Number(item.quantity || 0),
+        received: 0,
+        withdrawn: 0,
+        losses: 0,
+        adjustments: 0,
+        balance: 0,
+        underMin: false,
       });
     } else {
       let updatedConfig = false;
@@ -899,6 +974,7 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
           purchasedQuantity: trunc2((cfg.purchasedQuantity ?? 0) + Number(item.quantity || 0)),
           code: cfg.code || productCode,
           unitPrice: Number(item.unitPrice || 0) || cfg.unitPrice,
+          purchaseGroupId: item.purchaseGroupId ?? cfg.purchaseGroupId,
         };
       });
       if (!updatedConfig) {
@@ -911,6 +987,7 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
           manualItem: row?.manualItem,
           purchasedQuantity: Number(item.quantity || 0),
           unitPrice: Number(item.unitPrice || 0) || row?.unitPrice,
+          purchaseGroupId: item.purchaseGroupId,
         });
       }
     }

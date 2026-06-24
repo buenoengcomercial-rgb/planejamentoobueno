@@ -2,8 +2,6 @@ import { useMemo, useRef, useState } from 'react';
 import type { Project, WarehouseFiscalNote, WarehouseFiscalNoteItem, WarehouseFiscalNoteStatus, FiscalInvoiceEntry } from '@/types/project';
 import {
   approveFiscalNote,
-  computeWarehouseRows,
-  createManualWarehouseItem,
   deleteFiscalNote,
   findFiscalNoteDuplicate,
   isValidCnpj,
@@ -299,27 +297,20 @@ function openAttachment(note: WarehouseFiscalNote) {
   })();
 }
 
-interface MaterialOption {
-  key: string;
-  label: string;
-  unit: string;
-}
-
 export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [search, setSearch] = useState('');
   const [activeStatus, setActiveStatus] = useState<WarehouseFiscalNoteStatus>('a_conferir');
   const [processing, setProcessing] = useState(false);
   const [selected, setSelected] = useState<WarehouseFiscalNote | null>(null);
-  const [creatingMaterialFor, setCreatingMaterialFor] = useState<number | null>(null);
-  const [newMaterial, setNewMaterial] = useState<{ code: string; description: string; unit: string }>({ code: '', description: '', unit: 'UN' });
   const notes = project.warehouse?.fiscalNotes ?? [];
 
-  const materialOptions: MaterialOption[] = useMemo(() => {
-    return computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true })
-      .map(r => ({ key: r.key, label: `${r.code ? r.code + ' · ' : ''}${r.description}`, unit: r.unit }))
-      .sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'));
-  }, [project]);
+  const purchaseGroups = useMemo(
+    () => (project.materialComparisons ?? [])
+      .map(group => ({ id: group.id, name: group.name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+    [project.materialComparisons],
+  );
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -342,7 +333,6 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
 
   const totalsDiff = selected ? Math.abs(Number(selected.totalAmount || 0) - itemsSum) : 0;
   const totalsMismatch = !!selected && totalsDiff > 0.01;
-  const pendingLinks = selected ? selected.items.filter(it => !it.itemKey).length : 0;
   const invoicesSum = useMemo(() => selected ? sumFiscalInvoices(selected.invoices) : 0, [selected]);
   const invoicesMismatch = !!selected && (selected.invoices?.length ?? 0) > 0 && Math.abs(invoicesSum - Number(selected.totalAmount || 0)) > 0.01;
 
@@ -486,39 +476,6 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
     setSelected({ ...selected, items });
   };
 
-  const linkItem = (idx: number, key: string) => {
-    if (!selected) return;
-    if (key === '__pending__') {
-      updateItem(idx, { itemKey: undefined, linkStatus: 'pendente' });
-      return;
-    }
-    if (key === '__new__') {
-      setCreatingMaterialFor(idx);
-      const it = selected.items[idx];
-      setNewMaterial({ code: it.productCode ?? '', description: it.description, unit: it.unit || 'UN' });
-      return;
-    }
-    updateItem(idx, { itemKey: key, linkStatus: 'vinculado' });
-  };
-
-  const confirmCreateMaterial = () => {
-    if (creatingMaterialFor == null || !selected) return;
-    if (!newMaterial.description.trim() || !newMaterial.unit.trim()) {
-      toast.error('Descrição e unidade são obrigatórios.');
-      return;
-    }
-    const nextProject = createManualWarehouseItem(project, newMaterial);
-    // descobre a chave criada (último item adicionado em warehouse.items)
-    const created = nextProject.warehouse?.items.find(i =>
-      i.description === newMaterial.description.trim() && i.unit === newMaterial.unit.trim(),
-    );
-    onProjectChange(nextProject);
-    if (created) updateItem(creatingMaterialFor, { itemKey: created.key, linkStatus: 'vinculado' });
-    setCreatingMaterialFor(null);
-    setNewMaterial({ code: '', description: '', unit: 'UN' });
-    toast.success('Material criado e vinculado.');
-  };
-
   const validateBeforeApprove = (): string | null => {
     if (!selected) return 'Nota não encontrada.';
     if (!selected.supplierName?.trim()) return 'Informe o fornecedor.';
@@ -576,13 +533,6 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
     toast.success('Nota removida.');
   };
 
-  const linkBadge = (item: WarehouseFiscalNoteItem) => {
-    if (item.itemKey) {
-      return <Badge variant="outline" className="bg-success/10 text-success border-success/25 text-[10px]">{item.linkStatus === 'auto' ? 'Auto' : 'Vinculado'}</Badge>;
-    }
-    return <Badge variant="outline" className="bg-warning/15 text-warning border-warning/25 text-[10px]">Pendente</Badge>;
-  };
-
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-card p-2">
@@ -633,9 +583,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(note => {
-                    const pending = note.items.filter(i => !i.itemKey).length;
-                    return (
+                  {filtered.map(note => (
                       <tr key={note.id} className="border-t border-border hover:bg-muted/30">
                         <td className="p-2 font-medium">{note.supplierName || '-'}</td>
                         <td className="p-2 font-mono text-[11px] text-muted-foreground">{note.supplierCnpj || '-'}</td>
@@ -644,17 +592,11 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                         <td className="p-2 max-w-48 truncate" title={note.sourceFileName}>{note.sourceFileName}</td>
                         <td className="p-2 text-center tabular-nums">
                           {note.items.length}
-                          {pending > 0 && note.status === 'aprovada' && (
-                            <span className="ml-1 text-warning" title={`${pending} item(ns) sem vínculo`}>•</span>
-                          )}
                         </td>
                         <td className="p-2 text-right font-semibold">{moneyBR(note.totalAmount)}</td>
                         <td className="p-2">
                           <div className="flex flex-col gap-1">
                             <Badge variant="outline" className={STATUS_CLASS[note.status]}>{STATUS_LABEL[note.status]}</Badge>
-                            {pending > 0 && note.status === 'aprovada' && (
-                              <span className="text-[10px] text-warning">Pendente vínculo</span>
-                            )}
                           </div>
                         </td>
                         <td className="p-2">
@@ -693,8 +635,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                           </div>
                         </td>
                       </tr>
-                    );
-                  })}
+                    ))}
                   {filtered.length === 0 && (
                     <tr>
                       <td colSpan={9} className="p-8 text-center">
@@ -727,7 +668,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                     </Badge>
                   )}
                 </DialogTitle>
-                <DialogDescription>Confira e corrija os dados extraídos antes de aprovar. Materiais são vinculados ao almoxarifado da obra.</DialogDescription>
+                <DialogDescription>Confira os dados extraídos antes de aprovar. Materiais iguais somam quantidade; preço diferente cria novo material.</DialogDescription>
               </DialogHeader>
 
               {selected.processingError && <div className="rounded-md border border-warning/30 bg-warning/10 p-2 text-xs text-warning">{selected.processingError}</div>}
@@ -739,12 +680,6 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                     Soma dos itens (<b>{moneyBR(itemsSum)}</b>) difere do valor total da nota (<b>{moneyBR(selected.totalAmount)}</b>).
                     Para aprovar, preencha uma justificativa abaixo no campo Observações.
                   </div>
-                </div>
-              )}
-
-              {pendingLinks > 0 && (
-                <div className="rounded-md border border-primary/30 bg-primary/5 p-2 text-xs">
-                  {pendingLinks} item(ns) sem material vinculado. Vincule abaixo ou aprove para tratar depois.
                 </div>
               )}
 
@@ -805,7 +740,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                         <th className="p-1.5 text-center w-16">Un</th>
                         <th className="p-1.5 text-right w-24">V. Unit</th>
                         <th className="p-1.5 text-right w-24">V. Total</th>
-                        <th className="p-1.5 text-left w-72">Material vinculado</th>
+                        <th className="p-1.5 text-left w-56">Grupo de compra</th>
                         <th className="p-1.5 w-8"></th>
                       </tr>
                     </thead>
@@ -842,21 +777,17 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                               onChange={e => updateItem(idx, { totalPrice: parseMoney(e.target.value) })} />
                           </td>
                           <td className="p-1">
-                            <div className="flex items-center gap-1">
-                              <Select value={item.itemKey ?? '__pending__'} onValueChange={v => linkItem(idx, v)}>
-                                <SelectTrigger className="h-8 text-xs flex-1">
-                                  <SelectValue placeholder="Vincular material" />
-                                </SelectTrigger>
-                                <SelectContent className="max-h-72 z-50 bg-popover">
-                                  <SelectItem value="__pending__">Deixar pendente</SelectItem>
-                                  <SelectItem value="__new__">+ Criar novo material</SelectItem>
-                                  {materialOptions.map(opt => (
-                                    <SelectItem key={opt.key} value={opt.key}>{opt.label} ({opt.unit})</SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              {linkBadge(item)}
-                            </div>
+                            <Select value={item.purchaseGroupId ?? '__none__'} onValueChange={value => updateItem(idx, { purchaseGroupId: value === '__none__' ? undefined : value })}>
+                              <SelectTrigger className="h-8 text-xs">
+                                <SelectValue placeholder="Classificar" />
+                              </SelectTrigger>
+                              <SelectContent className="max-h-72 z-50 bg-popover">
+                                <SelectItem value="__none__">Sem grupo</SelectItem>
+                                {purchaseGroups.map(group => (
+                                  <SelectItem key={group.id} value={group.id}>{group.name}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                           </td>
                           <td className="p-1">
                             <Button variant="ghost" size="icon" className="h-8 w-8"
@@ -970,32 +901,6 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
         </DialogContent>
       </Dialog>
 
-      <Dialog open={creatingMaterialFor != null} onOpenChange={open => !open && setCreatingMaterialFor(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Criar material no almoxarifado</DialogTitle>
-            <DialogDescription>Este material será adicionado e vinculado ao item da nota.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <label className="space-y-1 block">
-              <span className="text-xs font-medium">Código (opcional)</span>
-              <Input value={newMaterial.code} onChange={e => setNewMaterial({ ...newMaterial, code: e.target.value })} className="h-8 text-xs" />
-            </label>
-            <label className="space-y-1 block">
-              <span className="text-xs font-medium">Descrição</span>
-              <Input value={newMaterial.description} onChange={e => setNewMaterial({ ...newMaterial, description: e.target.value })} className="h-8 text-xs" />
-            </label>
-            <label className="space-y-1 block">
-              <span className="text-xs font-medium">Unidade</span>
-              <Input value={newMaterial.unit} onChange={e => setNewMaterial({ ...newMaterial, unit: e.target.value })} className="h-8 text-xs" />
-            </label>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setCreatingMaterialFor(null)}>Cancelar</Button>
-            <Button onClick={confirmCreateMaterial}>Criar e vincular</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

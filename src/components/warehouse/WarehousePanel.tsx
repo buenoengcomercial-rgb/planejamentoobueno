@@ -1,7 +1,7 @@
 import type { Project } from '@/types/project';
 import { panelSummary, computeWarehouseRows, ensureWarehouse, computeWarehouseUsageByChapter } from '@/lib/warehouse';
 import { useMemo } from 'react';
-import { AlertTriangle, PackagePlus, ClipboardList, FileWarning, MapPinned } from 'lucide-react';
+import { AlertTriangle, PackagePlus, ClipboardList, FileWarning, MapPinned, ReceiptText } from 'lucide-react';
 
 interface Props { project: Project; }
 
@@ -19,6 +19,10 @@ const StatCard = ({ label, value, tone, hint }: { label: string; value: string |
     </div>
   );
 };
+
+function moneyBR(value: number) {
+  return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
 
 export default function WarehousePanel({ project }: Props) {
   const s = useMemo(() => panelSummary(project), [project]);
@@ -39,6 +43,18 @@ export default function WarehousePanel({ project }: Props) {
         <StatCard label="Termos em aberto" value={s.openCustodyCount} />
         <StatCard label="Termos vencidos" value={s.overdueCustodyCount} tone={s.overdueCustodyCount > 0 ? 'danger' : undefined} />
         <StatCard label="Divergência > 10%" value={s.divergenceCount} tone={s.divergenceCount > 0 ? 'warn' : undefined} />
+      </div>
+
+      <div className="bg-card border border-border rounded-md p-3">
+        <div className="text-xs font-semibold mb-2 flex items-center gap-1.5">
+          <ReceiptText className="w-3.5 h-3.5 text-primary" /> Faturas das notas fiscais
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+          <StatCard label="A pagar" value={moneyBR(s.invoiceOpen)} tone={s.invoiceOpen > 0 ? 'warn' : undefined} hint={`${s.invoiceOpenCount} fatura(s) aberta(s)`} />
+          <StatCard label="Vencidas" value={moneyBR(s.invoiceOverdue)} tone={s.invoiceOverdue > 0 ? 'danger' : undefined} hint={`${s.invoiceOverdueCount} fatura(s) vencida(s)`} />
+          <StatCard label="Pagas" value={moneyBR(s.invoicePaid)} tone="ok" />
+          <StatCard label="Total faturado" value={moneyBR(s.invoiceTotal)} tone="primary" />
+        </div>
       </div>
 
       {!hasMovements && (
