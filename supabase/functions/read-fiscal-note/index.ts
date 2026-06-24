@@ -15,6 +15,14 @@ type FiscalNoteItem = {
   confidence?: number | null;
 };
 
+type FiscalInvoice = {
+  number?: string | null;
+  dueDate?: string | null;
+  amount?: number | null;
+  paymentMethod?: string | null;
+  notes?: string | null;
+};
+
 type FiscalNotePayload = {
   supplierName?: string | null;
   supplierCnpj?: string | null;
@@ -22,12 +30,13 @@ type FiscalNotePayload = {
   issueDate?: string | null;
   totalAmount?: number | null;
   items?: FiscalNoteItem[];
+  invoices?: FiscalInvoice[];
   notes?: string | null;
   confidence?: number | null;
 };
 
-const systemPrompt = `Voce e um assistente especialista em ler notas fiscais brasileiras de materiais de obra a partir de imagens, paginas de PDF renderizadas e texto extraido de PDF.
-Retorne apenas JSON valido no formato:
+const systemPrompt = `Voce e um assistente especialista em ler notas fiscais brasileiras (DANFE/NFe) de materiais de obra a partir de imagens, PDFs renderizados e texto extraido.
+Retorne APENAS JSON valido neste formato:
 {
   "supplierName": string|null,
   "supplierCnpj": string|null,
@@ -47,18 +56,27 @@ Retorne apenas JSON valido no formato:
       "confidence": number
     }
   ],
+  "invoices": [
+    {
+      "number": string|null,
+      "dueDate": "YYYY-MM-DD"|null,
+      "amount": number,
+      "paymentMethod": string|null,
+      "notes": string|null
+    }
+  ],
   "notes": string|null
 }
 Regras:
-- Leia fornecedor/razao social, CNPJ, numero da nota, data de emissao, valor total e itens.
-- Em cada item, extraia tambem o codigo da coluna "COD. PROD.", "Cod. Prod.", "Codigo", "Cod.", ou similar como "productCode".
-- Valores monetarios devem ser numeros em reais, com ponto decimal.
-- Datas devem estar em YYYY-MM-DD.
+- Leia fornecedor, CNPJ, numero da nota, data de emissao, valor total e itens.
+- Para CADA item extraia o codigo da coluna "COD. PROD.", "Cod. Prod.", "Codigo", "Cod.", "Ref." ou similar como "productCode" — esse codigo e essencial.
+- Leia tambem a secao FATURA/DUPLICATAS/COBRANCA/PARCELAS quando existir e devolva no array "invoices" cada parcela com numero (ex.: 001, 002), data de vencimento e valor. Se houver apenas uma cobranca/boleto, devolva uma unica linha em "invoices". "paymentMethod" pode ser "Boleto", "PIX", "Cartao", "A vista", etc., quando explicitado.
+- Se a nota nao trouxer faturas, devolva "invoices": [].
+- Valores monetarios devem ser numeros em reais (ponto decimal).
+- Datas em YYYY-MM-DD.
 - Nao invente dados ilegiveis; use null ou 0.
-- Para itens, priorize codigo do produto, descricao, quantidade, unidade, valor unitario e total.
-- Quando houver texto extraido e imagem, use os dois para conferir os dados.
-- "confidence" deve ser um numero entre 0 e 1 indicando o quao confiavel ficou a leitura (da nota e de cada item).
-- Se a imagem/PDF estiver ruim, retorne os campos que conseguir e explique em "notes".`;
+- "confidence" deve ser numero entre 0 e 1.
+- Se a imagem estiver ruim, retorne o que conseguir e explique em "notes".`;
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -87,6 +105,15 @@ function normalizePayload(raw: FiscalNotePayload): FiscalNotePayload {
           category: item.category ? String(item.category) : null,
           confidence: item.confidence != null ? Math.max(0, Math.min(1, Number(item.confidence))) : null,
         })).filter((item) => item.description)
+      : [],
+    invoices: Array.isArray(raw.invoices)
+      ? raw.invoices.map((inv) => ({
+          number: inv.number ? String(inv.number).trim() : null,
+          dueDate: inv.dueDate ? String(inv.dueDate).trim() : null,
+          amount: Number(inv.amount ?? 0) || 0,
+          paymentMethod: inv.paymentMethod ? String(inv.paymentMethod).trim() : null,
+          notes: inv.notes ? String(inv.notes).trim() : null,
+        })).filter((inv) => inv.amount > 0 || inv.dueDate || inv.number)
       : [],
   };
 }
