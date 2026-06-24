@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Project, WarehouseFiscalNote, WarehouseFiscalNoteItem, WarehouseFiscalNoteStatus, FiscalInvoiceEntry } from '@/types/project';
 import {
   approveFiscalNote,
@@ -68,11 +68,55 @@ function moneyBR(value: number) {
   return (Number(value) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
+function decimalBR(value: number) {
+  return (Number(value) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 function parseMoney(raw?: string) {
   if (!raw) return 0;
   const cleaned = raw.replace(/[^\d,.-]/g, '').replace(/\.(?=\d{3}(?:\D|$))/g, '').replace(',', '.');
   const value = Number(cleaned);
   return Number.isFinite(value) ? value : 0;
+}
+
+function CurrencyInput({
+  value,
+  onChange,
+  className = '',
+}: {
+  value: number;
+  onChange: (value: number) => void;
+  className?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(decimalBR(value));
+
+  useEffect(() => {
+    if (!editing) setText(decimalBR(value));
+  }, [editing, value]);
+
+  return (
+    <Input
+      className={`h-8 min-w-28 text-xs text-right font-mono tabular-nums ${className}`}
+      inputMode="decimal"
+      value={text}
+      onFocus={event => {
+        setEditing(true);
+        setText(decimalBR(value));
+        event.currentTarget.select();
+      }}
+      onChange={event => setText(event.target.value)}
+      onBlur={() => {
+        const parsed = parseMoney(text);
+        setEditing(false);
+        setText(decimalBR(parsed));
+        onChange(parsed);
+      }}
+      onKeyDown={event => {
+        if (event.key === 'Enter') event.currentTarget.blur();
+      }}
+    />
+  );
 }
 
 function parseNumber(raw?: string) {
@@ -796,8 +840,8 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                         <th className="p-1.5 text-left">Descrição</th>
                         <th className="p-1.5 text-right w-16">Qtd</th>
                         <th className="p-1.5 text-center w-16">Un</th>
-                        <th className="p-1.5 text-right w-24">V. Unit</th>
-                        <th className="p-1.5 text-right w-24">V. Total</th>
+                        <th className="p-1.5 text-right w-32">V. Unit</th>
+                        <th className="p-1.5 text-right w-36">V. Total</th>
                         <th className="p-1.5 text-left w-56">Grupo de compra</th>
                         <th className="p-1.5 w-8"></th>
                       </tr>
@@ -827,12 +871,10 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                               onChange={e => updateItem(idx, { unit: e.target.value })} />
                           </td>
                           <td className="p-1">
-                            <Input className="h-8 text-xs text-right" inputMode="decimal" value={moneyBR(item.unitPrice)}
-                              onChange={e => updateItem(idx, { unitPrice: parseMoney(e.target.value) })} />
+                            <CurrencyInput value={item.unitPrice} onChange={value => updateItem(idx, { unitPrice: value })} />
                           </td>
                           <td className="p-1">
-                            <Input className="h-8 text-xs text-right" inputMode="decimal" value={moneyBR(item.totalPrice)}
-                              onChange={e => updateItem(idx, { totalPrice: parseMoney(e.target.value) })} />
+                            <CurrencyInput value={item.totalPrice} onChange={value => updateItem(idx, { totalPrice: value })} className="min-w-32" />
                           </td>
                           <td className="p-1">
                             <Select value={item.purchaseGroupId ?? '__none__'} onValueChange={value => updateItem(idx, { purchaseGroupId: value === '__none__' ? undefined : value })}>
@@ -892,8 +934,8 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                       <tr>
                         <th className="p-1.5 text-left w-28">Nº fatura</th>
                         <th className="p-1.5 text-left w-36">Vencimento</th>
-                        <th className="p-1.5 text-right w-28">Valor</th>
-                        <th className="p-1.5 text-left w-36">Forma pgto.</th>
+                        <th className="p-1.5 text-right w-36">Valor</th>
+                        <th className="p-1.5 text-left w-40">Forma pgto.</th>
                         <th className="p-1.5 text-left w-32">Status</th>
                         <th className="p-1.5 text-left">Observação</th>
                         <th className="p-1.5 w-8"></th>
@@ -904,7 +946,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                         <tr key={inv.id} className="border-t border-border">
                           <td className="p-1"><Input className="h-8 text-xs" value={inv.number ?? ''} onChange={e => updateInvoice(idx, { number: e.target.value })} /></td>
                           <td className="p-1"><Input className="h-8 text-xs" type="date" value={inv.dueDate ?? ''} onChange={e => updateInvoice(idx, { dueDate: e.target.value })} /></td>
-                          <td className="p-1"><Input className="h-8 text-xs text-right" inputMode="decimal" value={moneyBR(inv.amount)} onChange={e => updateInvoice(idx, { amount: parseMoney(e.target.value) })} /></td>
+                          <td className="p-1"><CurrencyInput value={inv.amount} onChange={value => updateInvoice(idx, { amount: value })} className="min-w-32" /></td>
                           <td className="p-1"><Input className="h-8 text-xs" value={inv.paymentMethod ?? ''} placeholder="Boleto, PIX..." onChange={e => updateInvoice(idx, { paymentMethod: e.target.value })} /></td>
                           <td className="p-1">
                             <Select value={inv.status ?? 'aberta'} onValueChange={v => updateInvoice(idx, { status: v as FiscalInvoiceEntry['status'] })}>
