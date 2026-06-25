@@ -101,7 +101,7 @@ export default function Warehouse({ project, onProjectChange }: Props) {
         </TabsList>
 
         <TabsContent value="painel" className="mt-3">
-          <WarehousePanel project={ensured} />
+          <WarehousePanel project={ensured} onProjectChange={onProjectChange} />
         </TabsContent>
         <TabsContent value="estoque" className="mt-3">
           <WarehouseStockTab project={ensured} onProjectChange={onProjectChange} />

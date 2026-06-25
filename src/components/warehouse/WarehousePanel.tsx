@@ -5,11 +5,17 @@ import {
   ensureWarehouse,
   computeWarehouseUsageByChapter,
   computeWarehouseMonthlyCosts,
+  upsertFiscalNote,
 } from '@/lib/warehouse';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { AlertTriangle, PackagePlus, ClipboardList, FileWarning, MapPinned, ReceiptText, CalendarDays } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
-interface Props { project: Project; }
+interface Props {
+  project: Project;
+  onProjectChange: (next: Project) => void;
+}
 
 const StatCard = ({ label, value, tone, hint }: { label: string; value: string | number; tone?: 'ok' | 'warn' | 'danger' | 'primary'; hint?: string }) => {
   const toneClass =
@@ -30,7 +36,15 @@ function moneyBR(value: number) {
   return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
-export default function WarehousePanel({ project }: Props) {
+function dateBR(value?: string) {
+  if (!value) return '-';
+  const [year, month, day] = value.slice(0, 10).split('-');
+  if (!year || !month || !day) return value;
+  return `${day}/${month}/${year}`;
+}
+
+export default function WarehousePanel({ project, onProjectChange }: Props) {
+  const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
   const s = useMemo(() => panelSummary(project), [project]);
   const rows = useMemo(
     () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true }),
@@ -41,6 +55,27 @@ export default function WarehousePanel({ project }: Props) {
   const wh = ensureWarehouse(project).warehouse!;
   const underMin = rows.filter(r => r.underMin).slice(0, 8);
   const hasMovements = wh.movements.length > 0;
+  const selectedMonth = monthlyCosts.find(row => row.monthKey === selectedMonthKey) ?? monthlyCosts[0];
+
+  const updatePaymentStatus = (noteId: string, invoiceId: string, status: 'aberta' | 'paga') => {
+    const note = wh.fiscalNotes.find(n => n.id === noteId);
+    if (!note) return;
+    const currentInvoices = note.invoices ?? [];
+    const existing = currentInvoices.find(inv => inv.id === invoiceId);
+    const invoices = existing
+      ? currentInvoices.map(inv => inv.id === invoiceId ? { ...inv, status } : inv)
+      : [
+          ...currentInvoices,
+          {
+            id: invoiceId,
+            number: note.invoiceNumber,
+            dueDate: note.issueDate,
+            amount: Number(note.totalAmount || 0),
+            status,
+          },
+        ];
+    onProjectChange(upsertFiscalNote(project, { ...note, invoices, updatedAt: new Date().toISOString() }));
+  };
 
   return (
     <div className="space-y-3">
@@ -97,8 +132,18 @@ export default function WarehousePanel({ project }: Props) {
               </thead>
               <tbody>
                 {monthlyCosts.slice(0, 12).map(row => (
-                  <tr key={row.monthKey} className="border-t border-border">
-                    <td className="p-1 font-medium capitalize">{row.monthLabel}</td>
+                  <tr key={row.monthKey} className={`border-t border-border ${selectedMonth?.monthKey === row.monthKey ? 'bg-primary/5' : ''}`}>
+                    <td className="p-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs font-medium capitalize"
+                        onClick={() => setSelectedMonthKey(row.monthKey)}
+                      >
+                        {row.monthLabel}
+                      </Button>
+                    </td>
                     <td className="p-1 text-right font-semibold tabular-nums">{moneyBR(row.total)}</td>
                     <td className="p-1 text-right tabular-nums text-success">{moneyBR(row.paid)}</td>
                     <td className="p-1 text-right tabular-nums text-warning">{moneyBR(row.open)}</td>
@@ -116,6 +161,59 @@ export default function WarehousePanel({ project }: Props) {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+        {selectedMonth && (
+          <div className="mt-3 rounded-md border border-border">
+            <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-3 py-2">
+              <div>
+                <div className="text-xs font-semibold capitalize">Detalhe de {selectedMonth.monthLabel}</div>
+                <div className="text-[11px] text-muted-foreground">Fornecedor, CNPJ e valor referente a cada fatura/nota.</div>
+              </div>
+              <div className="text-xs font-semibold tabular-nums">{moneyBR(selectedMonth.total)}</div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-xs">
+                <thead className="text-muted-foreground">
+                  <tr>
+                    <th className="text-left p-1.5">Empresa</th>
+                    <th className="text-left p-1.5 w-36">CNPJ</th>
+                    <th className="text-left p-1.5 w-28">Fatura</th>
+                    <th className="text-left p-1.5 w-28">Referencia</th>
+                    <th className="text-right p-1.5 w-32">Valor</th>
+                    <th className="text-left p-1.5 w-32">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedMonth.entries.map(entry => (
+                    <tr key={`${entry.noteId}-${entry.invoiceId}`} className="border-t border-border">
+                      <td className="p-1.5 font-medium">{entry.supplierName || '-'}</td>
+                      <td className="p-1.5 tabular-nums text-muted-foreground">{entry.supplierCnpj || '-'}</td>
+                      <td className="p-1.5 tabular-nums">{entry.invoiceNumber || '-'}</td>
+                      <td className="p-1.5 text-muted-foreground">
+                        {dateBR(entry.referenceDate)}
+                        {entry.fallbackFromIssueDate && <span className="ml-1 text-[10px]">(emissao)</span>}
+                      </td>
+                      <td className="p-1.5 text-right font-semibold tabular-nums">{moneyBR(entry.amount)}</td>
+                      <td className="p-1.5">
+                        <Select
+                          value={entry.status}
+                          onValueChange={value => updatePaymentStatus(entry.noteId, entry.invoiceId, value as 'aberta' | 'paga')}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="z-50 bg-popover">
+                            <SelectItem value="aberta">Aberto</SelectItem>
+                            <SelectItem value="paga">Pago</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>

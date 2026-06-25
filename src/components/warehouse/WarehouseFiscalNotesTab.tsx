@@ -89,10 +89,11 @@ function CurrencyInput({
   className?: string;
 }) {
   const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(decimalBR(value));
+  const formatText = (next: number) => `R$ ${decimalBR(next)}`;
+  const [text, setText] = useState(formatText(value));
 
   useEffect(() => {
-    if (!editing) setText(decimalBR(value));
+    if (!editing) setText(formatText(value));
   }, [editing, value]);
 
   return (
@@ -102,14 +103,14 @@ function CurrencyInput({
       value={text}
       onFocus={event => {
         setEditing(true);
-        setText(decimalBR(value));
+        setText(formatText(value));
         event.currentTarget.select();
       }}
       onChange={event => setText(event.target.value)}
       onBlur={() => {
         const parsed = parseMoney(text);
         setEditing(false);
-        setText(decimalBR(parsed));
+        setText(formatText(parsed));
         onChange(parsed);
       }}
       onKeyDown={event => {
@@ -938,7 +939,6 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                         <th className="p-1.5 text-left w-36">Vencimento</th>
                         <th className="p-1.5 text-right w-36">Valor</th>
                         <th className="p-1.5 text-left w-40">Forma pgto.</th>
-                        <th className="p-1.5 text-left w-32">Status</th>
                         <th className="p-1.5 text-left">Observação</th>
                         <th className="p-1.5 w-8"></th>
                       </tr>
@@ -949,15 +949,14 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                           <td className="p-1"><Input className="h-8 text-xs" value={inv.number ?? ''} onChange={e => updateInvoice(idx, { number: e.target.value })} /></td>
                           <td className="p-1"><Input className="h-8 text-xs" type="date" value={inv.dueDate ?? ''} onChange={e => updateInvoice(idx, { dueDate: e.target.value })} /></td>
                           <td className="p-1"><CurrencyInput value={inv.amount} onChange={value => updateInvoice(idx, { amount: value })} className="min-w-32" /></td>
-                          <td className="p-1"><Input className="h-8 text-xs" value={inv.paymentMethod ?? ''} placeholder="Boleto, PIX..." onChange={e => updateInvoice(idx, { paymentMethod: e.target.value })} /></td>
                           <td className="p-1">
-                            <Select value={inv.status ?? 'aberta'} onValueChange={v => updateInvoice(idx, { status: v as FiscalInvoiceEntry['status'] })}>
-                              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                            <Select value={inv.paymentMethod ?? ''} onValueChange={v => updateInvoice(idx, { paymentMethod: v })}>
+                              <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Selecione" /></SelectTrigger>
                               <SelectContent className="z-50 bg-popover">
-                                <SelectItem value="aberta">Aberta</SelectItem>
-                                <SelectItem value="paga">Paga</SelectItem>
-                                <SelectItem value="vencida">Vencida</SelectItem>
-                                <SelectItem value="cancelada">Cancelada</SelectItem>
+                                <SelectItem value="Boleto">Boleto</SelectItem>
+                                <SelectItem value="C.Crédito">C.Crédito</SelectItem>
+                                <SelectItem value="C.Débito">C.Débito</SelectItem>
+                                <SelectItem value="Pix">Pix</SelectItem>
                               </SelectContent>
                             </Select>
                           </td>
@@ -970,7 +969,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                         </tr>
                       ))}
                       {(selected.invoices?.length ?? 0) === 0 && (
-                        <tr><td colSpan={7} className="p-3 text-center text-xs text-muted-foreground">Nenhuma fatura/parcela informada. Adicione manualmente se a nota tiver duplicatas.</td></tr>
+                        <tr><td colSpan={6} className="p-3 text-center text-xs text-muted-foreground">Nenhuma fatura/parcela informada. Adicione manualmente se a nota tiver duplicatas.</td></tr>
                       )}
                     </tbody>
                     {(selected.invoices?.length ?? 0) > 0 && (
@@ -978,7 +977,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                         <tr className="border-t-2 border-border bg-muted/40 font-semibold">
                           <td className="p-1.5 text-right" colSpan={2}>Soma das faturas:</td>
                           <td className={`p-1.5 text-right tabular-nums ${invoicesMismatch ? 'text-warning' : ''}`}>{moneyBR(invoicesSum)}</td>
-                          <td colSpan={4}></td>
+                          <td colSpan={3}></td>
                         </tr>
                       </tfoot>
                     )}

@@ -740,6 +740,21 @@ export interface WarehouseMonthlyCostRow {
   invoiceCount: number;
   noteCount: number;
   fallbackCount: number;
+  entries: WarehouseMonthlyCostEntry[];
+}
+
+export interface WarehouseMonthlyCostEntry {
+  noteId: string;
+  invoiceId: string;
+  monthKey: string;
+  referenceDate?: string;
+  supplierName?: string;
+  supplierCnpj?: string;
+  invoiceNumber?: string;
+  fiscalNoteNumber?: string;
+  amount: number;
+  status: 'aberta' | 'paga';
+  fallbackFromIssueDate: boolean;
 }
 
 export function panelSummary(project: Project): WarehousePanelSummary {
@@ -835,6 +850,7 @@ export function computeWarehouseMonthlyCosts(project: Project): WarehouseMonthly
         invoiceCount: 0,
         noteCount: 0,
         fallbackCount: 0,
+        entries: [],
       };
       rows.set(monthKey, row);
     }
@@ -853,6 +869,19 @@ export function computeWarehouseMonthlyCosts(project: Project): WarehouseMonthly
       row.open += amount;
       row.noteCount += 1;
       row.fallbackCount += 1;
+      row.entries.push({
+        noteId: note.id,
+        invoiceId: note.id,
+        monthKey: row.monthKey,
+        referenceDate: date,
+        supplierName: note.supplierName,
+        supplierCnpj: note.supplierCnpj,
+        invoiceNumber: note.invoiceNumber,
+        fiscalNoteNumber: note.invoiceNumber,
+        amount: trunc2(amount),
+        status: 'aberta',
+        fallbackFromIssueDate: true,
+      });
       if (date < today) row.overdue += amount;
       continue;
     }
@@ -871,6 +900,19 @@ export function computeWarehouseMonthlyCosts(project: Project): WarehouseMonthly
       if (isPaid) row.paid += amount;
       else row.open += amount;
       if (isOverdue) row.overdue += amount;
+      row.entries.push({
+        noteId: note.id,
+        invoiceId: invoice.id,
+        monthKey: row.monthKey,
+        referenceDate: date,
+        supplierName: note.supplierName,
+        supplierCnpj: note.supplierCnpj,
+        invoiceNumber: invoice.number || note.invoiceNumber,
+        fiscalNoteNumber: note.invoiceNumber,
+        amount: trunc2(amount),
+        status: isPaid ? 'paga' : 'aberta',
+        fallbackFromIssueDate: !invoice.dueDate,
+      });
     }
     for (const monthKey of countedNoteMonths) {
       rows.get(monthKey)!.noteCount += 1;
@@ -884,6 +926,10 @@ export function computeWarehouseMonthlyCosts(project: Project): WarehouseMonthly
       paid: trunc2(row.paid),
       open: trunc2(row.open),
       overdue: trunc2(row.overdue),
+      entries: row.entries.sort((a, b) =>
+        (a.referenceDate ?? '').localeCompare(b.referenceDate ?? '') ||
+        (a.supplierName ?? '').localeCompare(b.supplierName ?? '', 'pt-BR')
+      ),
     }))
     .sort((a, b) => (a.monthKey < b.monthKey ? 1 : -1));
 }
