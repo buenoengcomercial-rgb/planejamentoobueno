@@ -1,7 +1,13 @@
 import type { Project } from '@/types/project';
-import { panelSummary, computeWarehouseRows, ensureWarehouse, computeWarehouseUsageByChapter } from '@/lib/warehouse';
+import {
+  panelSummary,
+  computeWarehouseRows,
+  ensureWarehouse,
+  computeWarehouseUsageByChapter,
+  computeWarehouseMonthlyCosts,
+} from '@/lib/warehouse';
 import { useMemo } from 'react';
-import { AlertTriangle, PackagePlus, ClipboardList, FileWarning, MapPinned, ReceiptText } from 'lucide-react';
+import { AlertTriangle, PackagePlus, ClipboardList, FileWarning, MapPinned, ReceiptText, CalendarDays } from 'lucide-react';
 
 interface Props { project: Project; }
 
@@ -31,6 +37,7 @@ export default function WarehousePanel({ project }: Props) {
     [project],
   );
   const usageByChapter = useMemo(() => computeWarehouseUsageByChapter(project), [project]);
+  const monthlyCosts = useMemo(() => computeWarehouseMonthlyCosts(project), [project]);
   const wh = ensureWarehouse(project).warehouse!;
   const underMin = rows.filter(r => r.underMin).slice(0, 8);
   const hasMovements = wh.movements.length > 0;
@@ -55,6 +62,62 @@ export default function WarehousePanel({ project }: Props) {
           <StatCard label="Pagas" value={moneyBR(s.invoicePaid)} tone="ok" />
           <StatCard label="Total faturado" value={moneyBR(s.invoiceTotal)} tone="primary" />
         </div>
+      </div>
+
+      <div className="bg-card border border-border rounded-md p-3">
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div>
+            <div className="text-xs font-semibold flex items-center gap-1.5">
+              <CalendarDays className="w-3.5 h-3.5 text-primary" /> Pagamentos e custos por mes
+            </div>
+            <div className="text-[11px] text-muted-foreground">
+              Usa a data da fatura/parcela; sem fatura preenchida, usa a data de emissao da nota fiscal.
+            </div>
+          </div>
+        </div>
+
+        {monthlyCosts.length === 0 ? (
+          <div className="text-xs text-muted-foreground py-4 text-center border border-dashed border-border rounded-md">
+            Ainda nao ha notas fiscais aprovadas para montar o custo mensal.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] text-xs">
+              <thead className="text-muted-foreground">
+                <tr>
+                  <th className="text-left p-1">Mes</th>
+                  <th className="text-right p-1">Custo total</th>
+                  <th className="text-right p-1">Pago</th>
+                  <th className="text-right p-1">Em aberto</th>
+                  <th className="text-right p-1">Vencido</th>
+                  <th className="text-center p-1">Faturas</th>
+                  <th className="text-center p-1">Notas</th>
+                  <th className="text-left p-1">Referencia</th>
+                </tr>
+              </thead>
+              <tbody>
+                {monthlyCosts.slice(0, 12).map(row => (
+                  <tr key={row.monthKey} className="border-t border-border">
+                    <td className="p-1 font-medium capitalize">{row.monthLabel}</td>
+                    <td className="p-1 text-right font-semibold tabular-nums">{moneyBR(row.total)}</td>
+                    <td className="p-1 text-right tabular-nums text-success">{moneyBR(row.paid)}</td>
+                    <td className="p-1 text-right tabular-nums text-warning">{moneyBR(row.open)}</td>
+                    <td className={`p-1 text-right tabular-nums ${row.overdue > 0 ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}>
+                      {moneyBR(row.overdue)}
+                    </td>
+                    <td className="p-1 text-center tabular-nums">{row.invoiceCount}</td>
+                    <td className="p-1 text-center tabular-nums">{row.noteCount}</td>
+                    <td className="p-1 text-[11px] text-muted-foreground">
+                      {row.fallbackCount > 0
+                        ? `${row.fallbackCount} nota(s) pela emissao`
+                        : 'Fatura / pagamento'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {!hasMovements && (

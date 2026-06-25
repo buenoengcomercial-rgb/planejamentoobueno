@@ -730,6 +730,18 @@ export interface WarehousePanelSummary {
   invoiceOverdueCount: number;
 }
 
+export interface WarehouseMonthlyCostRow {
+  monthKey: string;
+  monthLabel: string;
+  total: number;
+  paid: number;
+  open: number;
+  overdue: number;
+  invoiceCount: number;
+  noteCount: number;
+  fallbackCount: number;
+}
+
 export function panelSummary(project: Project): WarehousePanelSummary {
   const rows = computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true });
   const wh = (ensureWarehouse(project).warehouse)!;
@@ -792,6 +804,88 @@ export function panelSummary(project: Project): WarehousePanelSummary {
     invoiceOpenCount,
     invoiceOverdueCount,
   };
+}
+
+function monthLabelBR(monthKey: string): string {
+  const [year, month] = monthKey.split('-');
+  const date = new Date(Number(year), Number(month) - 1, 1);
+  return date.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }).replace('.', '');
+}
+
+function invoiceReferenceDate(note: WarehouseFiscalNote, invoice?: FiscalInvoiceEntry): string | undefined {
+  return invoice?.dueDate || note.issueDate || note.createdAt?.slice(0, 10);
+}
+
+export function computeWarehouseMonthlyCosts(project: Project): WarehouseMonthlyCostRow[] {
+  const wh = ensureWarehouse(project).warehouse!;
+  const today = todayISO();
+  const rows = new Map<string, WarehouseMonthlyCostRow>();
+
+  const getRow = (date: string) => {
+    const monthKey = date.slice(0, 7);
+    let row = rows.get(monthKey);
+    if (!row) {
+      row = {
+        monthKey,
+        monthLabel: monthLabelBR(monthKey),
+        total: 0,
+        paid: 0,
+        open: 0,
+        overdue: 0,
+        invoiceCount: 0,
+        noteCount: 0,
+        fallbackCount: 0,
+      };
+      rows.set(monthKey, row);
+    }
+    return row;
+  };
+
+  for (const note of wh.fiscalNotes ?? []) {
+    if (note.status !== 'aprovada') continue;
+    const invoices = note.invoices?.filter(invoice => invoice.status !== 'cancelada') ?? [];
+    if (invoices.length === 0) {
+      const date = invoiceReferenceDate(note);
+      if (!date) continue;
+      const row = getRow(date);
+      const amount = Number(note.totalAmount || 0);
+      row.total += amount;
+      row.open += amount;
+      row.noteCount += 1;
+      row.fallbackCount += 1;
+      if (date < today) row.overdue += amount;
+      continue;
+    }
+
+    const countedNoteMonths = new Set<string>();
+    for (const invoice of invoices) {
+      const date = invoiceReferenceDate(note, invoice);
+      if (!date) continue;
+      const row = getRow(date);
+      const amount = Number(invoice.amount || 0);
+      const isPaid = invoice.status === 'paga';
+      const isOverdue = invoice.status === 'vencida' || (!isPaid && date < today);
+      row.total += amount;
+      row.invoiceCount += 1;
+      countedNoteMonths.add(row.monthKey);
+      if (isPaid) row.paid += amount;
+      else row.open += amount;
+      if (isOverdue) row.overdue += amount;
+    }
+    for (const monthKey of countedNoteMonths) {
+      rows.get(monthKey)!.noteCount += 1;
+    }
+  }
+
+  return Array.from(rows.values())
+    .map(row => ({
+      ...row,
+      total: trunc2(row.total),
+      paid: trunc2(row.paid),
+      open: trunc2(row.open),
+      overdue: trunc2(row.overdue),
+    }))
+    .sort((a, b) => (a.monthKey < b.monthKey ? 1 : -1));
 }
 
 // ============== CONSUMO POR CAPITULO ==============
