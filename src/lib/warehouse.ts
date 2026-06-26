@@ -43,13 +43,27 @@ function normalizeProductCode(value?: string) {
   return (value ?? '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 }
 
-export function fiscalItemGlobalTotal(item: Pick<WarehouseFiscalNoteItem, 'totalPrice' | 'freightAmount' | 'icmsAmount'>): number {
-  return trunc2(Number(item.totalPrice || 0) + Number(item.freightAmount || 0) + Number(item.icmsAmount || 0));
+type FiscalGlobalCostNote = Pick<WarehouseFiscalNote, 'items' | 'freightAmount' | 'icmsAmount'>;
+
+function fiscalItemsTotal(items: Pick<WarehouseFiscalNoteItem, 'totalPrice'>[]): number {
+  return items.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0);
 }
 
-export function fiscalItemGlobalUnitPrice(item: Pick<WarehouseFiscalNoteItem, 'quantity' | 'totalPrice' | 'freightAmount' | 'icmsAmount' | 'unitPrice'>): number {
+export function fiscalItemAllocatedExtra(item: Pick<WarehouseFiscalNoteItem, 'totalPrice' | 'freightAmount' | 'icmsAmount'>, note?: FiscalGlobalCostNote): number {
+  if (!note) return trunc2(Number(item.freightAmount || 0) + Number(item.icmsAmount || 0));
+  const baseTotal = fiscalItemsTotal(note.items);
+  const extraTotal = Number(note.freightAmount || 0) + Number(note.icmsAmount || 0);
+  if (baseTotal <= 0 || extraTotal <= 0) return 0;
+  return trunc2(extraTotal * (Number(item.totalPrice || 0) / baseTotal));
+}
+
+export function fiscalItemGlobalTotal(item: Pick<WarehouseFiscalNoteItem, 'totalPrice' | 'freightAmount' | 'icmsAmount'>, note?: FiscalGlobalCostNote): number {
+  return trunc2(Number(item.totalPrice || 0) + fiscalItemAllocatedExtra(item, note));
+}
+
+export function fiscalItemGlobalUnitPrice(item: Pick<WarehouseFiscalNoteItem, 'quantity' | 'totalPrice' | 'freightAmount' | 'icmsAmount' | 'unitPrice'>, note?: FiscalGlobalCostNote): number {
   const quantity = Number(item.quantity || 0);
-  if (quantity > 0) return trunc2(fiscalItemGlobalTotal(item) / quantity);
+  if (quantity > 0) return trunc2(fiscalItemGlobalTotal(item, note) / quantity);
   return trunc2(Number(item.unitPrice || 0));
 }
 
@@ -1175,8 +1189,9 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
   const movements = [...wh.movements];
   const approvedItems = linked.items.map(item => {
     const unit = (item.unit || 'UN').trim() || 'UN';
-    const globalUnitPrice = fiscalItemGlobalUnitPrice(item);
-    const globalTotalPrice = fiscalItemGlobalTotal(item);
+    const allocationNote = { ...note, items: linked.items };
+    const globalUnitPrice = fiscalItemGlobalUnitPrice(item, allocationNote);
+    const globalTotalPrice = fiscalItemGlobalTotal(item, allocationNote);
     const productCode = item.productCode?.trim() || undefined;
     const productCodeKey = normalizeProductCode(productCode);
     const lookup = fiscalItemLookup({ description: item.description, unit });

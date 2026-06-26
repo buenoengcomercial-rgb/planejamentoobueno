@@ -598,9 +598,9 @@ export interface WarehouseFiscalNoteItem {
   unit?: string;
   /** Valor unitario informado na nota fiscal, sem frete/ICMS extra. */
   unitPrice: number;
-  /** Frete extra alocado manualmente para este item. */
+  /** Legado: frete extra alocado manualmente para este item. Novas notas usam WarehouseFiscalNote.freightAmount. */
   freightAmount?: number;
-  /** ICMS/diferencial extra alocado manualmente para este item. */
+  /** Legado: ICMS/diferencial extra alocado manualmente para este item. Novas notas usam WarehouseFiscalNote.icmsAmount. */
   icmsAmount?: number;
   /** Valor total global do item, ja incluindo frete/ICMS extra quando houver. */
   globalTotalPrice?: number;
@@ -639,6 +639,10 @@ export interface WarehouseFiscalNote {
   invoiceNumber?: string;
   issueDate?: string;
   totalAmount: number;
+  /** Frete total da compra, rateado proporcionalmente entre os itens. */
+  freightAmount?: number;
+  /** ICMS/diferencial total da compra, rateado proporcionalmente entre os itens. */
+  icmsAmount?: number;
   status: WarehouseFiscalNoteStatus;
   origin: 'upload';
   sourceFileName: string;
