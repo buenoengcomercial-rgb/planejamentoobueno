@@ -4,6 +4,8 @@ import {
   approveFiscalNote,
   deleteFiscalNote,
   findFiscalNoteDuplicate,
+  fiscalItemGlobalTotal,
+  fiscalItemGlobalUnitPrice,
   isValidCnpj,
   makeAttachment,
   newInvoiceEntry,
@@ -433,6 +435,10 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
     if (!selected) return 0;
     return selected.items.reduce((s, it) => s + Number(it.totalPrice || 0), 0);
   }, [selected]);
+  const itemsGlobalSum = useMemo(() => {
+    if (!selected) return 0;
+    return selected.items.reduce((s, it) => s + fiscalItemGlobalTotal(it), 0);
+  }, [selected]);
 
   const totalsDiff = selected ? Math.abs(Number(selected.totalAmount || 0) - itemsSum) : 0;
   const totalsMismatch = !!selected && totalsDiff > 0.01;
@@ -465,7 +471,10 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
         ...item,
         quantity: Number(item.quantity || 0),
         unitPrice: Number(item.unitPrice || 0),
+        freightAmount: Number(item.freightAmount || 0) || undefined,
+        icmsAmount: Number(item.icmsAmount || 0) || undefined,
         totalPrice: Number(item.totalPrice || 0),
+        globalTotalPrice: fiscalItemGlobalTotal(item),
       })),
     };
     onProjectChange(upsertFiscalNote(project, normalized));
@@ -574,6 +583,15 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
     const next = { ...items[idx], ...patch };
     if (patch.quantity !== undefined || patch.unitPrice !== undefined) {
       next.totalPrice = Number(next.quantity || 0) * Number(next.unitPrice || 0);
+    }
+    if (
+      patch.quantity !== undefined ||
+      patch.unitPrice !== undefined ||
+      patch.totalPrice !== undefined ||
+      patch.freightAmount !== undefined ||
+      patch.icmsAmount !== undefined
+    ) {
+      next.globalTotalPrice = fiscalItemGlobalTotal(next);
     }
     items[idx] = next;
     setSelected({ ...selected, items });
@@ -807,7 +825,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                 </label>
                 <label className="space-y-1">
                   <span className="text-xs font-medium">Valor total</span>
-                  <Input type="number" step="0.01" value={selected.totalAmount} onChange={e => updateSelected({ totalAmount: Number(e.target.value) })} className="h-8 text-xs" />
+                  <CurrencyInput value={selected.totalAmount} onChange={value => updateSelected({ totalAmount: value })} className="w-full" />
                 </label>
                 <label className="space-y-1 col-span-2">
                   <span className="text-xs font-medium flex items-center gap-2">
@@ -843,14 +861,20 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                         <th className="p-1.5 text-left">Descrição</th>
                         <th className="p-1.5 text-right w-16">Qtd</th>
                         <th className="p-1.5 text-center w-16">Un</th>
-                        <th className="p-1.5 text-right w-32">V. Unit</th>
+                        <th className="p-1.5 text-right w-32">V. Unit NF</th>
+                        <th className="p-1.5 text-right w-28">Frete</th>
+                        <th className="p-1.5 text-right w-28">ICMS</th>
+                        <th className="p-1.5 text-right w-32">V. Unit Global</th>
                         <th className="p-1.5 text-right w-36">V. Total</th>
                         <th className="p-1.5 text-left w-56">Grupo de compra</th>
                         <th className="p-1.5 w-8"></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {selected.items.map((item, idx) => (
+                      {selected.items.map((item, idx) => {
+                        const globalUnitPrice = fiscalItemGlobalUnitPrice(item);
+                        const globalTotalPrice = fiscalItemGlobalTotal(item);
+                        return (
                         <tr key={item.id} className="border-t border-border">
                           <td className="p-1">
                             <Input className="h-8 text-xs" value={item.productCode ?? ''} placeholder="Cod. prod."
@@ -877,7 +901,16 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                             <CurrencyInput value={item.unitPrice} onChange={value => updateItem(idx, { unitPrice: value })} />
                           </td>
                           <td className="p-1">
-                            <CurrencyInput value={item.totalPrice} onChange={value => updateItem(idx, { totalPrice: value })} className="min-w-32" />
+                            <CurrencyInput value={item.freightAmount ?? 0} onChange={value => updateItem(idx, { freightAmount: value })} />
+                          </td>
+                          <td className="p-1">
+                            <CurrencyInput value={item.icmsAmount ?? 0} onChange={value => updateItem(idx, { icmsAmount: value })} />
+                          </td>
+                          <td className="p-1">
+                            <Input className="h-8 min-w-28 text-xs text-right font-mono tabular-nums bg-muted/50" value={moneyBR(globalUnitPrice)} readOnly />
+                          </td>
+                          <td className="p-1">
+                            <Input className="h-8 min-w-32 text-xs text-right font-mono tabular-nums bg-muted/50" value={moneyBR(globalTotalPrice)} readOnly />
                           </td>
                           <td className="p-1">
                             <Select value={item.purchaseGroupId ?? '__none__'} onValueChange={value => updateItem(idx, { purchaseGroupId: value === '__none__' ? undefined : value })}>
@@ -899,16 +932,18 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange }: Pr
                             </Button>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                       {selected.items.length === 0 && (
-                        <tr><td colSpan={8} className="p-4 text-center text-xs text-muted-foreground">Nenhum item. Adicione manualmente para aprovar.</td></tr>
+                        <tr><td colSpan={11} className="p-4 text-center text-xs text-muted-foreground">Nenhum item. Adicione manualmente para aprovar.</td></tr>
                       )}
                     </tbody>
                     {selected.items.length > 0 && (
                       <tfoot>
                         <tr className="border-t-2 border-border bg-muted/40 font-semibold">
-                          <td className="p-1.5 text-right" colSpan={5}>Soma dos itens:</td>
+                          <td className="p-1.5 text-right" colSpan={7}>Soma NF:</td>
                           <td className={`p-1.5 text-right tabular-nums ${totalsMismatch ? 'text-warning' : ''}`}>{moneyBR(itemsSum)}</td>
+                          <td className="p-1.5 text-right tabular-nums text-primary">{moneyBR(itemsGlobalSum)}</td>
                           <td colSpan={2}></td>
                         </tr>
                       </tfoot>

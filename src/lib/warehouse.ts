@@ -43,6 +43,16 @@ function normalizeProductCode(value?: string) {
   return (value ?? '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 }
 
+export function fiscalItemGlobalTotal(item: Pick<WarehouseFiscalNoteItem, 'totalPrice' | 'freightAmount' | 'icmsAmount'>): number {
+  return trunc2(Number(item.totalPrice || 0) + Number(item.freightAmount || 0) + Number(item.icmsAmount || 0));
+}
+
+export function fiscalItemGlobalUnitPrice(item: Pick<WarehouseFiscalNoteItem, 'quantity' | 'totalPrice' | 'freightAmount' | 'icmsAmount' | 'unitPrice'>): number {
+  const quantity = Number(item.quantity || 0);
+  if (quantity > 0) return trunc2(fiscalItemGlobalTotal(item) / quantity);
+  return trunc2(Number(item.unitPrice || 0));
+}
+
 // ============== STATE / MIGRATION ==============
 
 export function emptyWarehouse(): WarehouseState {
@@ -1165,6 +1175,8 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
   const movements = [...wh.movements];
   const approvedItems = linked.items.map(item => {
     const unit = (item.unit || 'UN').trim() || 'UN';
+    const globalUnitPrice = fiscalItemGlobalUnitPrice(item);
+    const globalTotalPrice = fiscalItemGlobalTotal(item);
     const productCode = item.productCode?.trim() || undefined;
     const productCodeKey = normalizeProductCode(productCode);
     const lookup = fiscalItemLookup({ description: item.description, unit });
@@ -1173,7 +1185,7 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
       ...(productCodeKey ? itemKeyByCode.get(productCodeKey) ?? [] : []),
       ...(itemKeyByLookup.get(lookup) ?? []),
     ].filter((key): key is string => !!key);
-    let itemKey = candidates.find(key => pricesMatch(rowsByKey.get(key)?.unitPrice, item.unitPrice));
+    let itemKey = candidates.find(key => pricesMatch(rowsByKey.get(key)?.unitPrice, globalUnitPrice));
 
     if (!itemKey) {
       itemKey = `warehouse-nf|${uid()}`;
@@ -1187,7 +1199,7 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
         manualItem: true,
         plannedQuantity: 0,
         purchasedQuantity: Number(item.quantity || 0),
-        unitPrice: Number(item.unitPrice || 0) || undefined,
+        unitPrice: globalUnitPrice || undefined,
         purchaseGroupId: item.purchaseGroupId,
       });
       rowsByKey.set(itemKey, {
@@ -1196,7 +1208,7 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
         description: item.description.trim(),
         unit,
         manualItem: true,
-        unitPrice: Number(item.unitPrice || 0) || undefined,
+        unitPrice: globalUnitPrice || undefined,
         planned: 0,
         purchased: Number(item.quantity || 0),
         received: 0,
@@ -1215,7 +1227,7 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
           ...cfg,
           purchasedQuantity: trunc2((cfg.purchasedQuantity ?? 0) + Number(item.quantity || 0)),
           code: cfg.code || productCode,
-          unitPrice: Number(item.unitPrice || 0) || cfg.unitPrice,
+          unitPrice: globalUnitPrice || cfg.unitPrice,
           purchaseGroupId: item.purchaseGroupId ?? cfg.purchaseGroupId,
         };
       });
@@ -1228,7 +1240,7 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
           unit: row?.unit || unit,
           manualItem: row?.manualItem,
           purchasedQuantity: Number(item.quantity || 0),
-          unitPrice: Number(item.unitPrice || 0) || row?.unitPrice,
+          unitPrice: globalUnitPrice || row?.unitPrice,
           purchaseGroupId: item.purchaseGroupId,
         });
       }
@@ -1244,14 +1256,14 @@ export function approveFiscalNote(project: Project, noteId: string): Project {
       itemDescription: item.description.trim(),
       itemUnit: unit,
       quantity: Number(item.quantity || 0),
-      unitPrice: Number(item.unitPrice || 0) || undefined,
+      unitPrice: globalUnitPrice || undefined,
       fiscalNoteId: note.id,
       invoiceNumber: note.invoiceNumber || undefined,
       notes: `Entrada gerada pela NF ${note.invoiceNumber || note.sourceFileName}`,
       attachments: note.attachment ? [note.attachment] : undefined,
     });
 
-    return { ...item, productCode, itemKey, unit, linkStatus: 'vinculado' as const };
+    return { ...item, productCode, itemKey, unit, globalTotalPrice, linkStatus: 'vinculado' as const };
   });
 
   const fiscalNotes = (wh.fiscalNotes ?? []).map(n =>
