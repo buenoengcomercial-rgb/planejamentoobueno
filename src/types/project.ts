@@ -432,6 +432,68 @@ export interface DailyReport {
   updatedAt: string;
 }
 
+export type ManagementChecklistStatus = 'pendente' | 'feito' | 'nao_aplicavel';
+export type ManagementActionStatus = 'aberta' | 'em_andamento' | 'concluida' | 'cancelada';
+
+export interface ManagementRoleAssignment {
+  id: string;
+  role:
+    | 'gestor_obra'
+    | 'mestre_encarregado'
+    | 'compras'
+    | 'medicao'
+    | 'diario_obra'
+    | 'almoxarifado'
+    | 'financeiro'
+    | 'qualidade';
+  personName: string;
+  approvalPersonName?: string;
+  notes?: string;
+}
+
+export interface ManagementChecklistItem {
+  id: string;
+  title: string;
+  ownerRole?: ManagementRoleAssignment['role'];
+  status: ManagementChecklistStatus;
+  notes?: string;
+  updatedAt?: string;
+}
+
+export interface ManagementMeetingAction {
+  id: string;
+  title: string;
+  responsible?: string;
+  dueDate?: string;
+  status: ManagementActionStatus;
+}
+
+export interface ManagementWeeklyMeeting {
+  id: string;
+  date: string;
+  participants?: string;
+  problems?: string;
+  decisions?: string;
+  nextPending?: string;
+  actions: ManagementMeetingAction[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ManagementRoutine {
+  responsibleName?: string;
+  foremanName?: string;
+  buyerName?: string;
+  measurementResponsibleName?: string;
+  dailyReportResponsibleName?: string;
+  weeklyMeetingDay?: string;
+  measurementPeriod?: string;
+  internalApprovalRule?: string;
+  roles: ManagementRoleAssignment[];
+  weeklyChecklist: ManagementChecklistItem[];
+  meetings: ManagementWeeklyMeeting[];
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -461,6 +523,8 @@ export interface Project {
   measurementUiState?: MeasurementUiState;
   /** Diários de obra registrados, indexados por data. */
   dailyReports?: DailyReport[];
+  /** Rotina gerencial da obra: papeis, checklist semanal, reunioes e pendencias. */
+  managementRoutine?: ManagementRoutine;
   /** Aditivos contratuais importados (Sintética + Analítica). Isolado das demais áreas. */
   additives?: Additive[];
   /** Itens financeiros importados da planilha SINTÉTICA (fonte da Medição). */
@@ -1117,4 +1181,4 @@ export interface AuditLog {
 }
 
 export type ViewMode = 'days' | 'weeks' | 'months';
-export type AppView = 'dashboard' | 'gantt' | 'tasks' | 'measurement' | 'dailyReport' | 'additive' | 'realCost' | 'materials' | 'warehouse';
+export type AppView = 'dashboard' | 'management' | 'gantt' | 'tasks' | 'measurement' | 'dailyReport' | 'additive' | 'realCost' | 'materials' | 'warehouse';
