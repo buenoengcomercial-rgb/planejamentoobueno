@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useDeferredValue, useCallback, useRef, lazy, Suspense } from 'react';
+import { useState, useMemo, useEffect, useDeferredValue, useCallback, useRef, Suspense } from 'react';
 import { flushSync } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { AppView, Project } from '@/types/project';
@@ -11,17 +11,19 @@ import { toast } from 'sonner';
 import { applyRupToProject, applyDailyLogsToProject, calculateCPM, captureBaseline, syncBaselineWithRup, settleAllDependencies } from '@/lib/calculations';
 import { loadObraConfig } from '@/components/ConfiguracaoObra';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
+import { lazyWithReload } from '@/lib/lazyWithReload';
 
 // Lazy load: cada aba só baixa seu bundle quando aberta pela primeira vez.
-const Dashboard = lazy(() => import('@/components/Dashboard'));
-const ManagementRoutine = lazy(() => import('@/components/ManagementRoutine'));
-const GanttChart = lazy(() => import('@/components/GanttChart'));
-const Measurement = lazy(() => import('@/components/Measurement'));
-const DailyProductionWorkspace = lazy(() => import('@/components/DailyProductionWorkspace'));
-const Additive = lazy(() => import('@/components/Additive'));
-const RealCost = lazy(() => import('@/components/RealCost'));
-const Materials = lazy(() => import('@/components/Materials'));
-const WarehouseView = lazy(() => import('@/components/warehouse/Warehouse'));
+// Usa lazyWithReload para recuperar automaticamente de chunks obsoletos após deploy.
+const Dashboard = lazyWithReload(() => import('@/components/Dashboard'));
+const ManagementRoutine = lazyWithReload(() => import('@/components/ManagementRoutine'));
+const GanttChart = lazyWithReload(() => import('@/components/GanttChart'));
+const Measurement = lazyWithReload(() => import('@/components/Measurement'));
+const DailyProductionWorkspace = lazyWithReload(() => import('@/components/DailyProductionWorkspace'));
+const Additive = lazyWithReload(() => import('@/components/Additive'));
+const RealCost = lazyWithReload(() => import('@/components/RealCost'));
+const Materials = lazyWithReload(() => import('@/components/Materials'));
+const WarehouseView = lazyWithReload(() => import('@/components/warehouse/Warehouse'));
 import { useAuth } from '@/hooks/useAuth';
 import { useOrganization } from '@/hooks/useOrganization';
 import { canCreateProject, canDeleteProject, canEditProject, ROLE_LABELS } from '@/lib/organizations';
