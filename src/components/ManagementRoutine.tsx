@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import type {
   ManagementActionStatus,
   ManagementChecklistItem,
@@ -229,6 +229,40 @@ function updateTaskTeam(project: Project, taskId: string, team: TeamCode | undef
   };
 }
 
+function buildMainChapterIndex(project: Project) {
+  const phaseById = new Map(project.phases.map(phase => [phase.id, phase]));
+  const orderByRoot = new Map<string, number>();
+  project.phases
+    .filter(phase => !phase.parentId)
+    .sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER))
+    .forEach((phase, index) => orderByRoot.set(phase.id, index));
+
+  const rootForPhase = (phaseId: string) => {
+    let current = phaseById.get(phaseId);
+    while (current?.parentId && phaseById.has(current.parentId)) {
+      current = phaseById.get(current.parentId);
+    }
+    return current ?? phaseById.get(phaseId);
+  };
+
+  const taskChapter = new Map<string, { id: string; name: string; order: number }>();
+  const visitTask = (task: Task, chapter: { id: string; name: string; order: number }) => {
+    taskChapter.set(task.id, chapter);
+    task.children?.forEach(child => visitTask(child, chapter));
+  };
+
+  for (const phase of project.phases) {
+    const root = rootForPhase(phase.id);
+    const chapter = {
+      id: root?.id ?? phase.id,
+      name: root?.name ?? phase.name,
+      order: orderByRoot.get(root?.id ?? phase.id) ?? Number.MAX_SAFE_INTEGER,
+    };
+    phase.tasks.forEach(task => visitTask(task, chapter));
+  }
+  return taskChapter;
+}
+
 function StatCard({ label, value, tone = 'default' }: { label: string; value: string | number; tone?: 'default' | 'success' | 'warning' | 'danger' }) {
   const color =
     tone === 'success' ? 'text-success' :
@@ -255,6 +289,7 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
   const routine = useMemo(() => ensureRoutine(project), [project]);
   const tasks = useMemo(() => getAllTasks(project), [project]);
   const additiveTaskIds = useMemo(() => approvedAdditiveTaskIds(project), [project.additives]);
+  const mainChapterByTask = useMemo(() => buildMainChapterIndex(project), [project.phases]);
   const teams = project.teams?.length ? project.teams : DEFAULT_TEAMS;
   const [selectedWeekStart, setSelectedWeekStart] = useState(() => weekStartISO(todayISO()));
   const selectedWeekEnd = addDaysISO(selectedWeekStart, 6);
@@ -350,10 +385,16 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
         const plannedQuantity = saved?.plannedQuantity ?? plannedQuantityForWeek(task, selectedWeekStart, selectedWeekEnd);
         const actualQuantity = saved?.actualQuantity ?? actualQuantityFromLogs(task, selectedWeekStart, selectedWeekEnd);
         const status = saved?.status ?? deriveWeeklyStatus(plannedQuantity, actualQuantity);
-        return { task, start, end, days, saved, plannedQuantity, actualQuantity, status };
+        const chapter = mainChapterByTask.get(task.id) ?? { id: '__sem_capitulo__', name: 'Sem capitulo', order: Number.MAX_SAFE_INTEGER };
+        return { task, start, end, days, saved, plannedQuantity, actualQuantity, status, chapter };
       })
       .filter(Boolean)
-      .sort((a, b) => a!.start.localeCompare(b!.start) || a!.task.name.localeCompare(b!.task.name)) as Array<{
+      .sort((a, b) => (
+        a!.chapter.order - b!.chapter.order ||
+        a!.chapter.name.localeCompare(b!.chapter.name) ||
+        a!.start.localeCompare(b!.start) ||
+        a!.task.name.localeCompare(b!.task.name)
+      )) as Array<{
         task: Task;
         start: string;
         end: string;
@@ -362,8 +403,25 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
         plannedQuantity: number;
         actualQuantity: number;
         status: ManagementWeeklyTaskStatus;
+        chapter: { id: string; name: string; order: number };
       }>;
-  }, [additiveTaskIds, routine.weeklyPlans, selectedWeekEnd, selectedWeekStart, tasks]);
+  }, [additiveTaskIds, mainChapterByTask, routine.weeklyPlans, selectedWeekEnd, selectedWeekStart, tasks]);
+
+  const groupedWeeklyRows = useMemo(() => {
+    const groups: Array<{ chapter: { id: string; name: string; order: number }; rows: typeof weeklyRows }> = [];
+    const byChapter = new Map<string, { chapter: { id: string; name: string; order: number }; rows: typeof weeklyRows }>();
+    for (const row of weeklyRows) {
+      const existing = byChapter.get(row.chapter.id);
+      if (existing) {
+        existing.rows.push(row);
+      } else {
+        const group = { chapter: row.chapter, rows: [row] };
+        byChapter.set(row.chapter.id, group);
+        groups.push(group);
+      }
+    }
+    return groups;
+  }, [weeklyRows]);
 
   const plannedTotal = weeklyRows.reduce((sum, row) => sum + row.plannedQuantity, 0);
   const actualTotal = weeklyRows.reduce((sum, row) => sum + row.actualQuantity, 0);
@@ -467,62 +525,74 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
                   </td>
                 </tr>
               )}
-              {weeklyRows.map(row => {
-                const unit = row.task.unit || 'un';
-                const team = getTeamDefinition(row.saved?.teamCode ?? row.task.team, teams);
-                const balance = row.plannedQuantity - row.actualQuantity;
-                const weekTaskStart = row.start > selectedWeekStart ? row.start : selectedWeekStart;
-                const weekTaskEnd = row.end < selectedWeekEnd ? row.end : selectedWeekEnd;
-                return (
-                  <tr key={row.task.id} className="border-b border-border/70 align-top">
-                    <td className="p-2">
-                      <p className="font-semibold text-foreground">{row.task.name}</p>
-                      <p className="text-[10px] text-muted-foreground">{row.task.phase}{row.task.frenteServico ? ` - ${row.task.frenteServico}` : ''}</p>
-                    </td>
-                    <td className="p-2 text-muted-foreground">
-                      {formatDateBR(weekTaskStart)} a {formatDateBR(weekTaskEnd)}
-                      <p className="text-[10px]">recorte semanal: {row.days} dia(s)</p>
-                    </td>
-                    <td className="p-2">
-                      <select className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs" value={row.saved?.teamCode ?? row.task.team ?? ''} onChange={e => updateTeam(row.task, e.target.value)}>
-                        <option value="">Sem equipe</option>
-                        {teams.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}
-                      </select>
-                      {team?.composition && <p className="mt-1 text-[10px] text-muted-foreground">{team.composition}</p>}
-                    </td>
-                    <td className="p-2">
-                      <Input className="h-8 text-xs" value={row.saved?.responsible ?? row.task.responsible ?? ''} onChange={e => updateWeeklyPlanItem(row.task, { responsible: e.target.value })} />
-                    </td>
-                    <td className="p-2 text-right font-semibold tabular-nums">
-                      {row.plannedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {unit}
-                    </td>
-                    <td className="p-2">
-                      <Input
-                        className="h-8 text-right text-xs tabular-nums"
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        value={row.actualQuantity}
-                        onChange={e => updateWeeklyPlanItem(row.task, {
-                          actualQuantity: Number(e.target.value),
-                          status: deriveWeeklyStatus(row.plannedQuantity, Number(e.target.value)),
-                        })}
-                      />
-                    </td>
-                    <td className={`p-2 text-right font-semibold tabular-nums ${balance <= 0 ? 'text-success' : 'text-destructive'}`}>
-                      {balance.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {unit}
-                    </td>
-                    <td className="p-2">
-                      <select className={`h-8 w-full rounded-md border px-2 text-xs ${statusClass(row.status)}`} value={row.status} onChange={e => updateWeeklyPlanItem(row.task, { status: e.target.value as ManagementWeeklyTaskStatus })}>
-                        {Object.entries(WEEKLY_TASK_STATUS_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                      </select>
-                    </td>
-                    <td className="p-2">
-                      <Input className="h-8 text-xs" placeholder="Causa, decisao ou restricao" value={row.saved?.notes ?? ''} onChange={e => updateWeeklyPlanItem(row.task, { notes: e.target.value })} />
+              {groupedWeeklyRows.map(group => (
+                <Fragment key={group.chapter.id}>
+                  <tr className="border-y border-border bg-muted/40">
+                    <td colSpan={9} className="px-2 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-xs font-bold uppercase tracking-wide text-foreground">{group.chapter.name}</p>
+                        <span className="text-[10px] font-semibold text-muted-foreground">{group.rows.length} composicao(oes)</span>
+                      </div>
                     </td>
                   </tr>
-                );
-              })}
+                  {group.rows.map(row => {
+                    const unit = row.task.unit || 'un';
+                    const team = getTeamDefinition(row.saved?.teamCode ?? row.task.team, teams);
+                    const balance = row.plannedQuantity - row.actualQuantity;
+                    const weekTaskStart = row.start > selectedWeekStart ? row.start : selectedWeekStart;
+                    const weekTaskEnd = row.end < selectedWeekEnd ? row.end : selectedWeekEnd;
+                    return (
+                      <tr key={row.task.id} className="border-b border-border/70 align-top">
+                        <td className="p-2">
+                          <p className="font-semibold text-foreground">{row.task.name}</p>
+                          {row.task.frenteServico && <p className="text-[10px] text-muted-foreground">{row.task.frenteServico}</p>}
+                        </td>
+                        <td className="p-2 text-muted-foreground">
+                          {formatDateBR(weekTaskStart)} a {formatDateBR(weekTaskEnd)}
+                          <p className="text-[10px]">recorte semanal: {row.days} dia(s)</p>
+                        </td>
+                        <td className="p-2">
+                          <select className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs" value={row.saved?.teamCode ?? row.task.team ?? ''} onChange={e => updateTeam(row.task, e.target.value)}>
+                            <option value="">Sem equipe</option>
+                            {teams.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}
+                          </select>
+                          {team?.composition && <p className="mt-1 text-[10px] text-muted-foreground">{team.composition}</p>}
+                        </td>
+                        <td className="p-2">
+                          <Input className="h-8 text-xs" value={row.saved?.responsible ?? row.task.responsible ?? ''} onChange={e => updateWeeklyPlanItem(row.task, { responsible: e.target.value })} />
+                        </td>
+                        <td className="p-2 text-right font-semibold tabular-nums">
+                          {row.plannedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {unit}
+                        </td>
+                        <td className="p-2">
+                          <Input
+                            className="h-8 text-right text-xs tabular-nums"
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={row.actualQuantity}
+                            onChange={e => updateWeeklyPlanItem(row.task, {
+                              actualQuantity: Number(e.target.value),
+                              status: deriveWeeklyStatus(row.plannedQuantity, Number(e.target.value)),
+                            })}
+                          />
+                        </td>
+                        <td className={`p-2 text-right font-semibold tabular-nums ${balance <= 0 ? 'text-success' : 'text-destructive'}`}>
+                          {balance.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {unit}
+                        </td>
+                        <td className="p-2">
+                          <select className={`h-8 w-full rounded-md border px-2 text-xs ${statusClass(row.status)}`} value={row.status} onChange={e => updateWeeklyPlanItem(row.task, { status: e.target.value as ManagementWeeklyTaskStatus })}>
+                            {Object.entries(WEEKLY_TASK_STATUS_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                          </select>
+                        </td>
+                        <td className="p-2">
+                          <Input className="h-8 text-xs" placeholder="Causa, decisao ou restricao" value={row.saved?.notes ?? ''} onChange={e => updateWeeklyPlanItem(row.task, { notes: e.target.value })} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </Fragment>
+              ))}
             </tbody>
           </table>
         </div>
