@@ -7,9 +7,13 @@ import type {
   ManagementRoleAssignment,
   ManagementRoutine as ManagementRoutineData,
   ManagementWeeklyMeeting,
+  ManagementWeeklyPlanItem,
+  ManagementWeeklyTaskStatus,
   Project,
+  Task,
 } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
+import { DEFAULT_TEAMS, getTeamDefinition, type TeamCode } from '@/lib/teams';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -19,6 +23,8 @@ import {
   AlertTriangle,
   CalendarCheck2,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   ClipboardList,
   Plus,
@@ -56,6 +62,14 @@ const ACTION_STATUS_LABEL: Record<ManagementActionStatus, string> = {
   cancelada: 'Cancelada',
 };
 
+const WEEKLY_TASK_STATUS_LABEL: Record<ManagementWeeklyTaskStatus, string> = {
+  planejada: 'Planejada',
+  cumprida: 'Cumprida',
+  parcial: 'Parcial',
+  nao_cumprida: 'Nao cumprida',
+  reprogramar: 'Reprogramar',
+};
+
 const DEFAULT_CHECKLIST: Array<Pick<ManagementChecklistItem, 'id' | 'title' | 'ownerRole' | 'status'>> = [
   { id: 'cronograma-atualizado', title: 'Cronograma atualizado', ownerRole: 'gestor_obra', status: 'pendente' },
   { id: 'diario-preenchido', title: 'Diario de obra preenchido', ownerRole: 'diario_obra', status: 'pendente' },
@@ -83,12 +97,42 @@ function uid(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function parseISODate(value: string) {
+  const [year, month, day] = value.slice(0, 10).split('-').map(Number);
+  return new Date(year, (month || 1) - 1, day || 1);
+}
+
+function toISODate(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return toISODate(new Date());
 }
 
 function nowISO() {
   return new Date().toISOString();
+}
+
+function weekStartISO(value: string) {
+  const date = parseISODate(value);
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + diff);
+  return toISODate(date);
+}
+
+function addDaysISO(value: string, days: number) {
+  const date = parseISODate(value);
+  date.setDate(date.getDate() + days);
+  return toISODate(date);
+}
+
+function formatDateBR(value?: string) {
+  if (!value) return '-';
+  const [year, month, day] = value.slice(0, 10).split('-');
+  if (!year || !month || !day) return value;
+  return `${day}/${month}/${year}`;
 }
 
 function ensureRoutine(project: Project): ManagementRoutineData {
@@ -102,34 +146,66 @@ function ensureRoutine(project: Project): ManagementRoutineData {
     weeklyMeetingDay: existing?.weeklyMeetingDay ?? 'segunda-feira',
     measurementPeriod: existing?.measurementPeriod ?? 'mensal',
     internalApprovalRule: existing?.internalApprovalRule ?? '',
-    roles: DEFAULT_ROLES.map(role => ({
-      ...role,
-      ...(existing?.roles ?? []).find(saved => saved.role === role.role),
-    })),
-    weeklyChecklist: DEFAULT_CHECKLIST.map(item => ({
-      ...item,
-      ...(existing?.weeklyChecklist ?? []).find(saved => saved.id === item.id),
-    })),
+    roles: DEFAULT_ROLES.map(role => ({ ...role, ...(existing?.roles ?? []).find(saved => saved.role === role.role) })),
+    weeklyChecklist: DEFAULT_CHECKLIST.map(item => ({ ...item, ...(existing?.weeklyChecklist ?? []).find(saved => saved.id === item.id) })),
     meetings: existing?.meetings ?? [],
+    weeklyPlans: existing?.weeklyPlans ?? [],
   };
 }
 
-function formatDateBR(value?: string) {
-  if (!value) return '-';
-  const [year, month, day] = value.slice(0, 10).split('-');
-  if (!year || !month || !day) return value;
-  return `${day}/${month}/${year}`;
+function taskEndISO(task: Task) {
+  const date = parseISODate(task.current?.endDate ?? task.baseline?.endDate ?? task.startDate);
+  if (!task.current?.endDate && !task.baseline?.endDate) date.setDate(date.getDate() + Math.max(0, (task.duration || 1) - 1));
+  return toISODate(date);
 }
 
-function StatusPill({ status }: { status: ManagementChecklistStatus }) {
-  const cls =
-    status === 'feito' ? 'bg-success/10 text-success border-success/30' :
-    status === 'nao_aplicavel' ? 'bg-muted text-muted-foreground border-border' :
-    'bg-warning/10 text-warning border-warning/30';
-  return <Badge variant="outline" className={cls}>{CHECK_STATUS_LABEL[status]}</Badge>;
+function overlapDays(startA: string, endA: string, startB: string, endB: string) {
+  const start = Math.max(parseISODate(startA).getTime(), parseISODate(startB).getTime());
+  const end = Math.min(parseISODate(endA).getTime(), parseISODate(endB).getTime());
+  if (end < start) return 0;
+  return Math.floor((end - start) / 86400000) + 1;
 }
 
-function MiniStat({ label, value, tone = 'default' }: { label: string; value: string | number; tone?: 'default' | 'success' | 'warning' | 'danger' }) {
+function plannedQuantityForWeek(task: Task, weekStart: string, weekEnd: string) {
+  const logsInWeek = (task.dailyLogs ?? []).filter(log => log.date >= weekStart && log.date <= weekEnd);
+  const loggedPlanned = logsInWeek.reduce((sum, log) => sum + (Number(log.plannedQuantity) || 0), 0);
+  if (loggedPlanned > 0) return Math.round(loggedPlanned * 100) / 100;
+  const total = Number(task.quantity) || 0;
+  const duration = task.originalDuration ?? task.baseline?.duration ?? task.duration ?? 0;
+  if (!total || !duration) return 0;
+  const days = overlapDays(task.current?.startDate ?? task.baseline?.startDate ?? task.startDate, taskEndISO(task), weekStart, weekEnd);
+  return Math.round((total / Math.max(1, duration)) * days * 100) / 100;
+}
+
+function actualQuantityFromLogs(task: Task, weekStart: string, weekEnd: string) {
+  return Math.round((task.dailyLogs ?? [])
+    .filter(log => log.date >= weekStart && log.date <= weekEnd)
+    .reduce((sum, log) => sum + (Number(log.actualQuantity) || 0), 0) * 100) / 100;
+}
+
+function deriveWeeklyStatus(planned: number, actual: number): ManagementWeeklyTaskStatus {
+  if (planned <= 0 && actual <= 0) return 'planejada';
+  if (actual >= planned) return 'cumprida';
+  if (actual > 0) return 'parcial';
+  return 'nao_cumprida';
+}
+
+function updateTaskTeam(project: Project, taskId: string, team: TeamCode | undefined): Project {
+  const mapTask = (task: Task): Task => ({
+    ...task,
+    team: task.id === taskId ? team : task.team,
+    children: task.children?.map(mapTask),
+  });
+  return {
+    ...project,
+    phases: project.phases.map(phase => ({
+      ...phase,
+      tasks: phase.tasks.map(mapTask),
+    })),
+  };
+}
+
+function StatCard({ label, value, tone = 'default' }: { label: string; value: string | number; tone?: 'default' | 'success' | 'warning' | 'danger' }) {
   const color =
     tone === 'success' ? 'text-success' :
     tone === 'warning' ? 'text-warning' :
@@ -143,9 +219,20 @@ function MiniStat({ label, value, tone = 'default' }: { label: string; value: st
   );
 }
 
+function statusClass(status: ManagementWeeklyTaskStatus) {
+  if (status === 'cumprida') return 'border-success/30 bg-success/10 text-success';
+  if (status === 'parcial') return 'border-warning/35 bg-warning/10 text-warning';
+  if (status === 'nao_cumprida') return 'border-destructive/30 bg-destructive/10 text-destructive';
+  if (status === 'reprogramar') return 'border-primary/30 bg-primary/10 text-primary';
+  return 'border-border bg-muted text-muted-foreground';
+}
+
 export default function ManagementRoutine({ project, onProjectChange, undoButton }: Props) {
   const routine = useMemo(() => ensureRoutine(project), [project]);
   const tasks = useMemo(() => getAllTasks(project), [project]);
+  const teams = project.teams?.length ? project.teams : DEFAULT_TEAMS;
+  const [selectedWeekStart, setSelectedWeekStart] = useState(() => weekStartISO(todayISO()));
+  const selectedWeekEnd = addDaysISO(selectedWeekStart, 6);
   const [meetingDraft, setMeetingDraft] = useState<ManagementWeeklyMeeting>(() => ({
     id: uid('meeting'),
     date: todayISO(),
@@ -165,9 +252,94 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
     status: 'aberta',
   });
 
-  const checklistDone = routine.weeklyChecklist.filter(item => item.status === 'feito' || item.status === 'nao_aplicavel').length;
-  const checklistTotal = routine.weeklyChecklist.length || 1;
-  const checklistPct = Math.round((checklistDone / checklistTotal) * 100);
+  const updateRoutine = (patch: Partial<ManagementRoutineData>) => {
+    onProjectChange(prev => ({ ...prev, managementRoutine: { ...ensureRoutine(prev), ...patch } }));
+  };
+
+  const updateRole = (role: ManagementRoleAssignment['role'], patch: Partial<ManagementRoleAssignment>) => {
+    updateRoutine({ roles: routine.roles.map(item => item.role === role ? { ...item, ...patch } : item) });
+  };
+
+  const updateChecklist = (id: string, patch: Partial<ManagementChecklistItem>) => {
+    updateRoutine({
+      weeklyChecklist: routine.weeklyChecklist.map(item => item.id === id ? { ...item, ...patch, updatedAt: nowISO() } : item),
+    });
+  };
+
+  const updateWeeklyPlanItem = (task: Task, patch: Partial<ManagementWeeklyPlanItem>) => {
+    const plannedQuantity = plannedQuantityForWeek(task, selectedWeekStart, selectedWeekEnd);
+    const existing = routine.weeklyPlans?.find(item => item.taskId === task.id && item.weekStart === selectedWeekStart);
+    const actualQuantity = patch.actualQuantity ?? existing?.actualQuantity ?? actualQuantityFromLogs(task, selectedWeekStart, selectedWeekEnd);
+    const nextItem: ManagementWeeklyPlanItem = {
+      id: existing?.id ?? uid('weekly-plan'),
+      taskId: task.id,
+      weekStart: selectedWeekStart,
+      weekEnd: selectedWeekEnd,
+      plannedQuantity,
+      actualQuantity,
+      teamCode: patch.teamCode ?? existing?.teamCode ?? task.team,
+      responsible: patch.responsible ?? existing?.responsible ?? task.responsible,
+      status: patch.status ?? existing?.status ?? deriveWeeklyStatus(plannedQuantity, actualQuantity),
+      notes: patch.notes ?? existing?.notes,
+      updatedAt: nowISO(),
+    };
+    const others = (routine.weeklyPlans ?? []).filter(item => !(item.taskId === task.id && item.weekStart === selectedWeekStart));
+    updateRoutine({ weeklyPlans: [...others, nextItem] });
+  };
+
+  const updateTeam = (task: Task, value: string) => {
+    const team = value ? value as TeamCode : undefined;
+    onProjectChange(prev => {
+      const nextProject = updateTaskTeam(prev, task.id, team);
+      const nextRoutine = ensureRoutine(nextProject);
+      const existing = nextRoutine.weeklyPlans?.find(item => item.taskId === task.id && item.weekStart === selectedWeekStart);
+      const item: ManagementWeeklyPlanItem = {
+        id: existing?.id ?? uid('weekly-plan'),
+        taskId: task.id,
+        weekStart: selectedWeekStart,
+        weekEnd: selectedWeekEnd,
+        plannedQuantity: plannedQuantityForWeek(task, selectedWeekStart, selectedWeekEnd),
+        actualQuantity: existing?.actualQuantity ?? actualQuantityFromLogs(task, selectedWeekStart, selectedWeekEnd),
+        teamCode: team,
+        responsible: existing?.responsible ?? task.responsible,
+        status: existing?.status ?? deriveWeeklyStatus(plannedQuantityForWeek(task, selectedWeekStart, selectedWeekEnd), existing?.actualQuantity ?? actualQuantityFromLogs(task, selectedWeekStart, selectedWeekEnd)),
+        notes: existing?.notes,
+        updatedAt: nowISO(),
+      };
+      const others = (nextRoutine.weeklyPlans ?? []).filter(plan => !(plan.taskId === task.id && plan.weekStart === selectedWeekStart));
+      return { ...nextProject, managementRoutine: { ...nextRoutine, weeklyPlans: [...others, item] } };
+    });
+  };
+
+  const weeklyRows = useMemo(() => {
+    return tasks
+      .map(task => {
+        const start = task.current?.startDate ?? task.baseline?.startDate ?? task.startDate;
+        const end = taskEndISO(task);
+        const days = overlapDays(start, end, selectedWeekStart, selectedWeekEnd);
+        if (days <= 0) return null;
+        const saved = routine.weeklyPlans?.find(item => item.taskId === task.id && item.weekStart === selectedWeekStart);
+        const plannedQuantity = saved?.plannedQuantity ?? plannedQuantityForWeek(task, selectedWeekStart, selectedWeekEnd);
+        const actualQuantity = saved?.actualQuantity ?? actualQuantityFromLogs(task, selectedWeekStart, selectedWeekEnd);
+        const status = saved?.status ?? deriveWeeklyStatus(plannedQuantity, actualQuantity);
+        return { task, start, end, days, saved, plannedQuantity, actualQuantity, status };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a!.start.localeCompare(b!.start) || a!.task.name.localeCompare(b!.task.name)) as Array<{
+        task: Task;
+        start: string;
+        end: string;
+        days: number;
+        saved?: ManagementWeeklyPlanItem;
+        plannedQuantity: number;
+        actualQuantity: number;
+        status: ManagementWeeklyTaskStatus;
+      }>;
+  }, [routine.weeklyPlans, selectedWeekEnd, selectedWeekStart, tasks]);
+
+  const plannedTotal = weeklyRows.reduce((sum, row) => sum + row.plannedQuantity, 0);
+  const actualTotal = weeklyRows.reduce((sum, row) => sum + row.actualQuantity, 0);
+  const ppc = weeklyRows.length ? Math.round((weeklyRows.filter(row => row.status === 'cumprida').length / weeklyRows.length) * 100) : 0;
   const openActions = routine.meetings.flatMap(m => m.actions).filter(a => a.status === 'aberta' || a.status === 'em_andamento').length;
   const rolesFilled = routine.roles.filter(r => r.personName.trim()).length;
 
@@ -175,83 +347,33 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
     const checks = [
       { label: 'Cronograma / EAP', ok: tasks.length > 0 },
       { label: 'Contrato preenchido', ok: !!(project.contractInfo?.contractor || project.contractInfo?.contractNumber || project.contractInfo?.contractObject) },
-      { label: 'Equipes cadastradas', ok: (project.teams?.length ?? 0) > 0 },
+      { label: 'Equipes cadastradas', ok: teams.length > 0 },
       { label: 'Orcamento importado', ok: (project.budgetItems?.length ?? 0) > 0 },
-      { label: 'Materiais / compras', ok: (project.materialComparisons?.length ?? 0) > 0 || (project.analyticCompositions?.length ?? 0) > 0 },
       { label: 'Diario iniciado', ok: (project.dailyReports?.length ?? 0) > 0 },
-      { label: 'Medicao configurada', ok: (project.measurements?.length ?? 0) > 0 || !!project.measurementDraft },
-      { label: 'Almoxarifado ativo', ok: !!project.warehouse },
+      { label: 'Plano semanal ativo', ok: weeklyRows.length > 0 },
     ];
-    const score = Math.round((checks.filter(c => c.ok).length / checks.length) * 100);
-    const level = score >= 75 ? 'bom' : score >= 45 ? 'medio' : 'baixo';
-    return { checks, score, level };
-  }, [project, tasks.length]);
-
-  const updateRoutine = (patch: Partial<ManagementRoutineData>) => {
-    onProjectChange(prev => ({
-      ...prev,
-      managementRoutine: {
-        ...ensureRoutine(prev),
-        ...patch,
-      },
-    }));
-  };
-
-  const updateRole = (role: ManagementRoleAssignment['role'], patch: Partial<ManagementRoleAssignment>) => {
-    updateRoutine({
-      roles: routine.roles.map(item => item.role === role ? { ...item, ...patch } : item),
-    });
-  };
-
-  const updateChecklist = (id: string, patch: Partial<ManagementChecklistItem>) => {
-    updateRoutine({
-      weeklyChecklist: routine.weeklyChecklist.map(item => (
-        item.id === id ? { ...item, ...patch, updatedAt: nowISO() } : item
-      )),
-    });
-  };
+    return Math.round((checks.filter(c => c.ok).length / checks.length) * 100);
+  }, [project, tasks.length, teams.length, weeklyRows.length]);
 
   const addActionToDraft = () => {
     const title = actionDraft.title.trim();
     if (!title) return;
-    setMeetingDraft(prev => ({
-      ...prev,
-      actions: [...prev.actions, { ...actionDraft, id: uid('action'), title }],
-    }));
+    setMeetingDraft(prev => ({ ...prev, actions: [...prev.actions, { ...actionDraft, id: uid('action'), title }] }));
     setActionDraft({ id: uid('action'), title: '', responsible: '', dueDate: '', status: 'aberta' });
   };
 
   const saveMeeting = () => {
     if (!meetingDraft.date) return;
-    const saved: ManagementWeeklyMeeting = {
-      ...meetingDraft,
-      id: uid('meeting'),
-      createdAt: nowISO(),
-      updatedAt: nowISO(),
-    };
+    const saved: ManagementWeeklyMeeting = { ...meetingDraft, id: uid('meeting'), createdAt: nowISO(), updatedAt: nowISO() };
     updateRoutine({ meetings: [saved, ...routine.meetings].slice(0, 40) });
-    setMeetingDraft({
-      id: uid('meeting'),
-      date: todayISO(),
-      participants: '',
-      problems: '',
-      decisions: '',
-      nextPending: '',
-      actions: [],
-      createdAt: nowISO(),
-      updatedAt: nowISO(),
-    });
+    setMeetingDraft({ id: uid('meeting'), date: todayISO(), participants: '', problems: '', decisions: '', nextPending: '', actions: [], createdAt: nowISO(), updatedAt: nowISO() });
   };
 
   const updateSavedAction = (meetingId: string, actionId: string, status: ManagementActionStatus) => {
     updateRoutine({
       meetings: routine.meetings.map(meeting => (
         meeting.id === meetingId
-          ? {
-              ...meeting,
-              updatedAt: nowISO(),
-              actions: meeting.actions.map(action => action.id === actionId ? { ...action, status } : action),
-            }
+          ? { ...meeting, updatedAt: nowISO(), actions: meeting.actions.map(action => action.id === actionId ? { ...action, status } : action) }
           : meeting
       )),
     });
@@ -267,13 +389,114 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
         {undoButton}
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <MiniStat label="Checklist semanal" value={`${checklistPct}%`} tone={checklistPct >= 80 ? 'success' : checklistPct >= 50 ? 'warning' : 'danger'} />
-        <MiniStat label="Papeis preenchidos" value={`${rolesFilled}/${routine.roles.length}`} tone={rolesFilled === routine.roles.length ? 'success' : 'warning'} />
-        <MiniStat label="Acoes abertas" value={openActions} tone={openActions > 0 ? 'warning' : 'success'} />
-        <MiniStat label="Diagnostico" value={`${diagnostic.score}%`} tone={diagnostic.level === 'bom' ? 'success' : diagnostic.level === 'medio' ? 'warning' : 'danger'} />
-        <MiniStat label="Reunioes" value={routine.meetings.length} />
-      </div>
+      <Card className="p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">Plano semanal puxado do cronograma</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Semana de {formatDateBR(selectedWeekStart)} a {formatDateBR(selectedWeekEnd)}. As linhas abaixo sao atividades com datas sobrepostas a esta semana.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => setSelectedWeekStart(addDaysISO(selectedWeekStart, -7))}>
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <Input className="h-9 w-[150px]" type="date" value={selectedWeekStart} onChange={e => setSelectedWeekStart(weekStartISO(e.target.value))} />
+            <Button type="button" variant="outline" size="sm" onClick={() => setSelectedWeekStart(addDaysISO(selectedWeekStart, 7))}>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 lg:grid-cols-5 gap-3">
+          <StatCard label="Atividades da semana" value={weeklyRows.length} />
+          <StatCard label="Previsto" value={plannedTotal.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} />
+          <StatCard label="Executado" value={actualTotal.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} tone={actualTotal >= plannedTotal && plannedTotal > 0 ? 'success' : 'warning'} />
+          <StatCard label="PPC" value={`${ppc}%`} tone={ppc >= 80 ? 'success' : ppc >= 50 ? 'warning' : 'danger'} />
+          <StatCard label="Acoes abertas" value={openActions} tone={openActions > 0 ? 'warning' : 'success'} />
+        </div>
+
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full min-w-[1120px] text-xs">
+            <thead>
+              <tr className="border-b border-border text-left text-[10px] uppercase tracking-wide text-muted-foreground">
+                <th className="p-2">Atividade</th>
+                <th className="p-2">Periodo</th>
+                <th className="p-2">Equipe</th>
+                <th className="p-2">Responsavel</th>
+                <th className="p-2 text-right">Previsto</th>
+                <th className="p-2 text-right">Executado</th>
+                <th className="p-2 text-right">Saldo</th>
+                <th className="p-2">Status</th>
+                <th className="p-2">Observacao da reuniao</th>
+              </tr>
+            </thead>
+            <tbody>
+              {weeklyRows.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="p-6 text-center text-sm text-muted-foreground">
+                    Nao ha atividades do cronograma previstas para esta semana.
+                  </td>
+                </tr>
+              )}
+              {weeklyRows.map(row => {
+                const unit = row.task.unit || 'un';
+                const team = getTeamDefinition(row.saved?.teamCode ?? row.task.team, teams);
+                const balance = row.plannedQuantity - row.actualQuantity;
+                return (
+                  <tr key={row.task.id} className="border-b border-border/70 align-top">
+                    <td className="p-2">
+                      <p className="font-semibold text-foreground">{row.task.name}</p>
+                      <p className="text-[10px] text-muted-foreground">{row.task.phase}{row.task.frenteServico ? ` - ${row.task.frenteServico}` : ''}</p>
+                    </td>
+                    <td className="p-2 text-muted-foreground">
+                      {formatDateBR(row.start)} a {formatDateBR(row.end)}
+                      <p className="text-[10px]">{row.days} dia(s) na semana</p>
+                    </td>
+                    <td className="p-2">
+                      <select className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs" value={row.saved?.teamCode ?? row.task.team ?? ''} onChange={e => updateTeam(row.task, e.target.value)}>
+                        <option value="">Sem equipe</option>
+                        {teams.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}
+                      </select>
+                      {team?.composition && <p className="mt-1 text-[10px] text-muted-foreground">{team.composition}</p>}
+                    </td>
+                    <td className="p-2">
+                      <Input className="h-8 text-xs" value={row.saved?.responsible ?? row.task.responsible ?? ''} onChange={e => updateWeeklyPlanItem(row.task, { responsible: e.target.value })} />
+                    </td>
+                    <td className="p-2 text-right font-semibold tabular-nums">
+                      {row.plannedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {unit}
+                    </td>
+                    <td className="p-2">
+                      <Input
+                        className="h-8 text-right text-xs tabular-nums"
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={row.actualQuantity}
+                        onChange={e => updateWeeklyPlanItem(row.task, {
+                          actualQuantity: Number(e.target.value),
+                          status: deriveWeeklyStatus(row.plannedQuantity, Number(e.target.value)),
+                        })}
+                      />
+                    </td>
+                    <td className={`p-2 text-right font-semibold tabular-nums ${balance <= 0 ? 'text-success' : 'text-destructive'}`}>
+                      {balance.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {unit}
+                    </td>
+                    <td className="p-2">
+                      <select className={`h-8 w-full rounded-md border px-2 text-xs ${statusClass(row.status)}`} value={row.status} onChange={e => updateWeeklyPlanItem(row.task, { status: e.target.value as ManagementWeeklyTaskStatus })}>
+                        {Object.entries(WEEKLY_TASK_STATUS_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                      </select>
+                    </td>
+                    <td className="p-2">
+                      <Input className="h-8 text-xs" placeholder="Causa, decisao ou restricao" value={row.saved?.notes ?? ''} onChange={e => updateWeeklyPlanItem(row.task, { notes: e.target.value })} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
 
       <section className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <Card className="p-4 xl:col-span-2">
@@ -296,15 +519,18 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
         <Card className="p-4">
           <div className="flex items-center gap-2 mb-3">
             <ClipboardCheck className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold">Diagnostico inicial</h3>
+            <h3 className="text-sm font-semibold">Diagnostico</h3>
           </div>
-          <div className="space-y-2">
-            {diagnostic.checks.map(check => (
-              <div key={check.label} className="flex items-center justify-between gap-2 rounded-md border border-border px-2.5 py-2">
-                <span className="text-xs text-foreground">{check.label}</span>
-                {check.ok ? <CheckCircle2 className="h-4 w-4 text-success" /> : <AlertTriangle className="h-4 w-4 text-warning" />}
-              </div>
-            ))}
+          <StatCard label="Maturidade operacional" value={`${diagnostic}%`} tone={diagnostic >= 75 ? 'success' : diagnostic >= 45 ? 'warning' : 'danger'} />
+          <div className="mt-3 space-y-2">
+            <div className="flex items-center justify-between rounded-md border border-border px-2.5 py-2 text-xs">
+              <span>Plano semanal vinculado ao cronograma</span>
+              {weeklyRows.length > 0 ? <CheckCircle2 className="h-4 w-4 text-success" /> : <AlertTriangle className="h-4 w-4 text-warning" />}
+            </div>
+            <div className="flex items-center justify-between rounded-md border border-border px-2.5 py-2 text-xs">
+              <span>Papeis preenchidos</span>
+              <strong>{rolesFilled}/{routine.roles.length}</strong>
+            </div>
           </div>
         </Card>
       </section>
@@ -313,7 +539,7 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
         <Card className="p-4">
           <div className="flex items-center gap-2 mb-3">
             <ClipboardList className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold">Checklist semanal</h3>
+            <h3 className="text-sm font-semibold">Checklist de apoio</h3>
           </div>
           <div className="space-y-2">
             {routine.weeklyChecklist.map(item => (
@@ -329,7 +555,6 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
                 <select className="h-9 rounded-md border border-input bg-background px-2 text-xs" value={item.status} onChange={e => updateChecklist(item.id, { status: e.target.value as ManagementChecklistStatus })}>
                   {Object.entries(CHECK_STATUS_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
-                <div className="md:col-start-3"><StatusPill status={item.status} /></div>
               </div>
             ))}
           </div>
@@ -356,12 +581,12 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
         <Card className="p-4">
           <div className="flex items-center gap-2 mb-3">
             <Plus className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold">Registrar reuniao semanal</h3>
+            <h3 className="text-sm font-semibold">Ata da reuniao semanal</h3>
           </div>
           <div className="space-y-3">
             <Input type="date" value={meetingDraft.date} onChange={e => setMeetingDraft(prev => ({ ...prev, date: e.target.value }))} />
             <Textarea placeholder="Participantes" value={meetingDraft.participants ?? ''} onChange={e => setMeetingDraft(prev => ({ ...prev, participants: e.target.value }))} />
-            <Textarea placeholder="Principais problemas" value={meetingDraft.problems ?? ''} onChange={e => setMeetingDraft(prev => ({ ...prev, problems: e.target.value }))} />
+            <Textarea placeholder="Principais problemas encontrados no plano semanal" value={meetingDraft.problems ?? ''} onChange={e => setMeetingDraft(prev => ({ ...prev, problems: e.target.value }))} />
             <Textarea placeholder="Decisoes tomadas" value={meetingDraft.decisions ?? ''} onChange={e => setMeetingDraft(prev => ({ ...prev, decisions: e.target.value }))} />
             <Textarea placeholder="Pendencias para a proxima reuniao" value={meetingDraft.nextPending ?? ''} onChange={e => setMeetingDraft(prev => ({ ...prev, nextPending: e.target.value }))} />
 

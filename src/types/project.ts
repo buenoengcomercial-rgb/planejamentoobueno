@@ -480,6 +480,22 @@ export interface ManagementWeeklyMeeting {
   updatedAt: string;
 }
 
+export type ManagementWeeklyTaskStatus = 'planejada' | 'cumprida' | 'parcial' | 'nao_cumprida' | 'reprogramar';
+
+export interface ManagementWeeklyPlanItem {
+  id: string;
+  taskId: string;
+  weekStart: string;
+  weekEnd: string;
+  plannedQuantity: number;
+  actualQuantity?: number;
+  teamCode?: TeamCode;
+  responsible?: string;
+  status?: ManagementWeeklyTaskStatus;
+  notes?: string;
+  updatedAt: string;
+}
+
 export interface ManagementRoutine {
   responsibleName?: string;
   foremanName?: string;
@@ -492,6 +508,7 @@ export interface ManagementRoutine {
   roles: ManagementRoleAssignment[];
   weeklyChecklist: ManagementChecklistItem[];
   meetings: ManagementWeeklyMeeting[];
+  weeklyPlans?: ManagementWeeklyPlanItem[];
 }
 
 export interface Project {
