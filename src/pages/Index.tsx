@@ -12,7 +12,6 @@ import { applyRupToProject, applyDailyLogsToProject, calculateCPM, captureBaseli
 import { loadObraConfig } from '@/components/ConfiguracaoObra';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 import { lazyWithReload } from '@/lib/lazyWithReload';
-import { createManagementTestProjectSeed } from '@/lib/testProjectSlice';
 
 // Lazy load: cada aba só baixa seu bundle quando aberta pela primeira vez.
 // Usa lazyWithReload para recuperar automaticamente de chunks obsoletos após deploy.
@@ -605,27 +604,6 @@ export default function Index() {
     }
   };
 
-  const handleCreateTestProject = async (): Promise<string | void> => {
-    if (!orgId || !rawProject) return;
-    if (!creator) { toast.error('Sem permissao para criar obras.'); return; }
-    try {
-      if (!(await flushPendingSave())) return;
-      const seed = createManagementTestProjectSeed(rawProject, 15);
-      const finalName = await generateUniqueCloudName(`Teste gestao - ${rawProject.name}`);
-      const newProj = await createCloudProject(finalName, orgId, { ...seed, name: finalName });
-      const list = await refreshCloudList();
-      replaceProjectWithoutAutoSave(newProj, list.find(p => p.id === newProj.id)?.updatedAt ?? null);
-      undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], realCost: [], materials: [], warehouse: [] };
-      setCurrentView('management');
-      setUndoVersion(v => v + 1);
-      toast.success('Obra teste criada com 15 composicoes.');
-      return newProj.id;
-    } catch (error) {
-      console.warn(error);
-      toast.error('Erro ao criar obra teste');
-    }
-  };
-
   const handleRenameProject = async (id: string, newName: string) => {
     if (!orgId || !editor) { toast.error('Sem permissão para renomear.'); return; }
     try {
@@ -803,7 +781,6 @@ export default function Index() {
           onToggleCollapse={() => setSidebarCollapsed(c => !c)}
           onSwitchProject={handleSwitchProject}
           onCreateProject={handleCreateProject}
-          onCreateTestProject={handleCreateTestProject}
           onRenameProject={handleRenameProject}
           onDuplicateProject={handleDuplicateProject}
           onDeleteProject={handleDeleteProject}

@@ -1,5 +1,5 @@
 import { AppView } from '@/types/project';
-import { LayoutDashboard, GanttChart, ListTodo, ClipboardList, ClipboardCheck, HardHat, Sparkles, ChevronsLeft, ChevronsRight, FolderOpen, Plus, ChevronDown, ChevronRight, Pencil, Copy, Trash2, Check, X, MoreHorizontal, Download, Upload, FileDown, Building2, Users, NotebookPen, FilePlus2, CircleDollarSign, Package, Warehouse, FlaskConical } from 'lucide-react';
+import { LayoutDashboard, GanttChart, ListTodo, ClipboardList, ClipboardCheck, HardHat, Sparkles, ChevronsLeft, ChevronsRight, FolderOpen, Plus, ChevronDown, ChevronRight, Pencil, Copy, Trash2, Check, X, MoreHorizontal, Download, Upload, FileDown, Building2, Users, NotebookPen, FilePlus2, CircleDollarSign, Package, Warehouse } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
@@ -43,7 +43,6 @@ interface AppSidebarProps {
   onToggleCollapse: () => void;
   onSwitchProject: (id: string) => void;
   onCreateProject: (name?: string) => string | void | Promise<string | void>;
-  onCreateTestProject?: () => string | void | Promise<string | void>;
   onRenameProject: (id: string, newName: string) => void;
   onDuplicateProject: (id: string) => void;
   onDeleteProject: (id: string) => void;
@@ -79,7 +78,7 @@ const visibleNavItems = navItems
   .filter(item => item.view !== 'dailyReport')
   .map(item => item.view === 'tasks' ? { ...item, label: 'Produção diária' } : item);
 
-export default function AppSidebar({ currentView, onViewChange, projectName, collapsed, onToggleCollapse, onSwitchProject, onCreateProject, onCreateTestProject, onRenameProject, onDuplicateProject, onDeleteProject, onImportedProject, activeProjectId, projectsList, userEmail, onLogout, orgName, roleLabel, canManageTeam, onOpenTeam }: AppSidebarProps) {
+export default function AppSidebar({ currentView, onViewChange, projectName, collapsed, onToggleCollapse, onSwitchProject, onCreateProject, onRenameProject, onDuplicateProject, onDeleteProject, onImportedProject, activeProjectId, projectsList, userEmail, onLogout, orgName, roleLabel, canManageTeam, onOpenTeam }: AppSidebarProps) {
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
   const [showProjects, setShowProjects] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -139,12 +138,6 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
         }
       }, 50);
     }
-  };
-
-  const handleNewTestProject = async () => {
-    if (!onCreateTestProject) return;
-    setShowProjects(true);
-    await onCreateTestProject();
   };
 
   const confirmedDelete = () => {
@@ -321,11 +314,6 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
                 <DropdownMenuItem onClick={handleNewProject}>
                   <Plus className="w-4 h-4 mr-2" /> Nova obra
                 </DropdownMenuItem>
-                {onCreateTestProject && (
-                  <DropdownMenuItem onClick={handleNewTestProject}>
-                    <FlaskConical className="w-4 h-4 mr-2" /> Obra teste (15 comps.)
-                  </DropdownMenuItem>
-                )}
                 <DropdownMenuItem onClick={triggerImport}>
                   <Upload className="w-4 h-4 mr-2" /> {cloudMode ? 'Importar backup local' : 'Importar backup'}
                 </DropdownMenuItem>
@@ -430,14 +418,6 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
             >
               <Plus className="w-3 h-3" /> Nova obra
             </button>
-            {onCreateTestProject && (
-              <button
-                onClick={handleNewTestProject}
-                className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded text-[11px] text-primary hover:bg-primary/10 transition-colors font-medium"
-              >
-                <FlaskConical className="w-3 h-3" /> Obra teste (15 comps.)
-              </button>
-            )}
           </div>
         )}
       </div>
