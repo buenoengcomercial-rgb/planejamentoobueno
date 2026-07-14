@@ -4,10 +4,19 @@
 
 export type TeamCode = string;
 
+export interface TeamWorker {
+  id: string;
+  name: string;
+  role?: string;
+  active?: boolean;
+}
+
 export interface TeamDefinition {
   code: TeamCode;
   label: string;
   composition: string;
+  /** Operarios vinculados a esta equipe para rastrear producao por colaborador. */
+  workers?: TeamWorker[];
   /** Composicao executiva usada pelo dimensionamento. Mantem `composition` como texto legado. */
   members?: Array<{ operationalRoleId: string; quantity: number; dailyHours?: number }>;
   dailyHours?: number;
@@ -79,11 +88,11 @@ export function indexTeams(teams: TeamDefinition[]): Record<TeamCode, TeamDefini
 }
 
 /** Cria nova equipe com cor automática conforme posição na lista. */
-export function createTeam(label: string, composition: string, existing: TeamDefinition[]): TeamDefinition {
+export function createTeam(label: string, composition: string, existing: TeamDefinition[], workers: TeamWorker[] = []): TeamDefinition {
   const palette = AUTO_PALETTE[existing.length % AUTO_PALETTE.length];
   const slug = label.toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') || 'team';
   const code = `${slug}-${Date.now().toString(36)}`;
-  return { code, label: label.trim(), composition: composition.trim(), ...deriveTeamColors(palette.hue, palette.sat) };
+  return { code, label: label.trim(), composition: composition.trim(), workers, ...deriveTeamColors(palette.hue, palette.sat) };
 }
 
 /* ============================================================

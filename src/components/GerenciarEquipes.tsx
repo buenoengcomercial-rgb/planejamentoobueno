@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { Plus, Pencil, Trash2, Check, X } from 'lucide-react';
-import { TeamDefinition, createTeam, deriveTeamColors, DEFAULT_TEAMS } from '@/lib/teams';
+import { TeamDefinition, TeamWorker, createTeam, deriveTeamColors, DEFAULT_TEAMS } from '@/lib/teams';
 import { Project } from '@/types/project';
 import { toast } from 'sonner';
 
@@ -27,12 +27,36 @@ export default function GerenciarEquipes({ project, onProjectChange }: Props) {
   const [editingCode, setEditingCode] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState('');
   const [editComposition, setEditComposition] = useState('');
+  const [editWorkersText, setEditWorkersText] = useState('');
   const [editHue, setEditHue] = useState(210);
   const [editSat, setEditSat] = useState(60);
 
   const [adding, setAdding] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [newComposition, setNewComposition] = useState('');
+  const [newWorkersText, setNewWorkersText] = useState('');
+
+  const workersToText = (workers?: TeamWorker[]) =>
+    (workers ?? []).filter(w => w.active !== false).map(w => w.role ? `${w.name} - ${w.role}` : w.name).join('\n');
+
+  const parseWorkers = (text: string, previous: TeamWorker[] = []): TeamWorker[] => {
+    const previousByName = new Map(previous.map(w => [w.name.trim().toLowerCase(), w]));
+    return text
+      .split(/\r?\n|,/)
+      .map(raw => raw.trim())
+      .filter(Boolean)
+      .map(raw => {
+        const [nameRaw, roleRaw] = raw.split(/\s+-\s+/, 2);
+        const name = nameRaw.trim();
+        const existing = previousByName.get(name.toLowerCase());
+        return {
+          id: existing?.id ?? `worker-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+          name,
+          role: roleRaw?.trim() || existing?.role,
+          active: true,
+        };
+      });
+  };
 
   const persist = (next: TeamDefinition[]) => {
     onProjectChange({ ...project, teams: next });
@@ -42,6 +66,7 @@ export default function GerenciarEquipes({ project, onProjectChange }: Props) {
     setEditingCode(team.code);
     setEditLabel(team.label);
     setEditComposition(team.composition);
+    setEditWorkersText(workersToText(team.workers));
     const m = team.bgColor.match(/hsl\(\s*(\d+)\s*,\s*(\d+)/i);
     if (m) { setEditHue(Number(m[1])); setEditSat(Number(m[2])); }
     else   { setEditHue(210); setEditSat(60); }
@@ -50,7 +75,7 @@ export default function GerenciarEquipes({ project, onProjectChange }: Props) {
   const saveEdit = (code: string) => {
     if (!editLabel.trim()) { toast.error('Nome é obrigatório'); return; }
     const next = teams.map(t => t.code === code
-      ? { ...t, label: editLabel.trim(), composition: editComposition.trim(), ...deriveTeamColors(editHue, editSat) }
+      ? { ...t, label: editLabel.trim(), composition: editComposition.trim(), workers: parseWorkers(editWorkersText, t.workers), ...deriveTeamColors(editHue, editSat) }
       : t);
     persist(next);
     setEditingCode(null);
@@ -67,8 +92,8 @@ export default function GerenciarEquipes({ project, onProjectChange }: Props) {
 
   const addTeam = () => {
     if (!newLabel.trim()) { toast.error('Informe o nome da equipe'); return; }
-    persist([...teams, createTeam(newLabel, newComposition, teams)]);
-    setNewLabel(''); setNewComposition(''); setAdding(false);
+    persist([...teams, createTeam(newLabel, newComposition, teams, parseWorkers(newWorkersText))]);
+    setNewLabel(''); setNewComposition(''); setNewWorkersText(''); setAdding(false);
   };
 
   return (
@@ -127,6 +152,12 @@ export default function GerenciarEquipes({ project, onProjectChange }: Props) {
                     title="Pré-visualização"
                   />
                 </div>
+                <textarea
+                  value={editWorkersText}
+                  onChange={e => setEditWorkersText(e.target.value)}
+                  placeholder="Operarios: um por linha. Ex: Joao Silva - Pedreiro"
+                  className="min-h-[54px] text-[11px] bg-white/70 border border-white/80 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-foreground/30"
+                />
               </div>
             ) : (
               <div className="flex items-center gap-2">
@@ -175,7 +206,7 @@ export default function GerenciarEquipes({ project, onProjectChange }: Props) {
             autoFocus
             value={newLabel}
             onChange={e => setNewLabel(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') addTeam(); if (e.key === 'Escape') { setAdding(false); setNewLabel(''); setNewComposition(''); } }}
+            onKeyDown={e => { if (e.key === 'Enter') addTeam(); if (e.key === 'Escape') { setAdding(false); setNewLabel(''); setNewComposition(''); setNewWorkersText(''); } }}
             placeholder="Nome da equipe"
             className="text-[11px] bg-background border border-border rounded px-2 py-1 w-28 focus:outline-none focus:ring-1 focus:ring-primary"
           />
@@ -186,6 +217,13 @@ export default function GerenciarEquipes({ project, onProjectChange }: Props) {
             placeholder="Composição (ex: Pedreiro + Servente)"
             className="text-[11px] bg-background border border-border rounded px-2 py-1 flex-1 focus:outline-none focus:ring-1 focus:ring-primary"
           />
+          <input
+            value={newWorkersText}
+            onChange={e => setNewWorkersText(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') addTeam(); }}
+            placeholder="Operarios: Joao - Pedreiro, Maria - Servente"
+            className="text-[11px] bg-background border border-border rounded px-2 py-1 flex-1 focus:outline-none focus:ring-1 focus:ring-primary"
+          />
           <button
             onClick={addTeam}
             className="px-2 py-1 rounded bg-primary text-primary-foreground text-[10px] font-medium hover:brightness-110"
@@ -193,7 +231,7 @@ export default function GerenciarEquipes({ project, onProjectChange }: Props) {
             Adicionar
           </button>
           <button
-            onClick={() => { setAdding(false); setNewLabel(''); setNewComposition(''); }}
+            onClick={() => { setAdding(false); setNewLabel(''); setNewComposition(''); setNewWorkersText(''); }}
             className="p-1 rounded hover:bg-muted text-muted-foreground"
           >
             <X className="w-3.5 h-3.5" />

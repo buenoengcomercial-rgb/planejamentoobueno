@@ -503,7 +503,18 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
         </div>
 
         <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[1120px] text-xs">
+          <table className="w-full min-w-[1560px] table-fixed text-xs">
+            <colgroup>
+              <col className="w-[32%]" />
+              <col className="w-[8%]" />
+              <col className="w-[11%]" />
+              <col className="w-[9%]" />
+              <col className="w-[7%]" />
+              <col className="w-[7%]" />
+              <col className="w-[6%]" />
+              <col className="w-[8%]" />
+              <col className="w-[12%]" />
+            </colgroup>
             <thead>
               <tr className="border-b border-border text-left text-[10px] uppercase tracking-wide text-muted-foreground">
                 <th className="p-2">Atividade</th>
@@ -543,7 +554,7 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
                     const weekTaskEnd = row.end < selectedWeekEnd ? row.end : selectedWeekEnd;
                     return (
                       <tr key={row.task.id} className="border-b border-border/70 align-top">
-                        <td className="p-2">
+                        <td className="p-2 pr-4">
                           <p className="font-semibold text-foreground">{row.task.name}</p>
                           {row.task.frenteServico && <p className="text-[10px] text-muted-foreground">{row.task.frenteServico}</p>}
                         </td>
@@ -557,6 +568,11 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
                             {teams.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}
                           </select>
                           {team?.composition && <p className="mt-1 text-[10px] text-muted-foreground">{team.composition}</p>}
+                          {team?.workers?.length ? (
+                            <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
+                              {team.workers.filter(w => w.active !== false).map(w => w.name).join(', ')}
+                            </p>
+                          ) : null}
                         </td>
                         <td className="p-2">
                           <Input className="h-8 text-xs" value={row.saved?.responsible ?? row.task.responsible ?? ''} onChange={e => updateWeeklyPlanItem(row.task, { responsible: e.target.value })} />
@@ -586,7 +602,12 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
                           </select>
                         </td>
                         <td className="p-2">
-                          <Input className="h-8 text-xs" placeholder="Causa, decisao ou restricao" value={row.saved?.notes ?? ''} onChange={e => updateWeeklyPlanItem(row.task, { notes: e.target.value })} />
+                          <Textarea
+                            className="min-h-[64px] resize-y text-xs leading-snug"
+                            placeholder="Causa, decisao, restricao ou encaminhamento da reuniao"
+                            value={row.saved?.notes ?? ''}
+                            onChange={e => updateWeeklyPlanItem(row.task, { notes: e.target.value })}
+                          />
                         </td>
                       </tr>
                     );
