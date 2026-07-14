@@ -61,11 +61,51 @@ interface AppSidebarProps {
   onOpenTeam?: () => void;
 }
 
-const navItems: { view: AppView; label: string; icon: React.ElementType }[] = [
-  { view: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { view: 'management', label: 'Rotina de Gestao', icon: ClipboardCheck },
-  { view: 'gantt', label: 'Cronograma', icon: GanttChart },
-  { view: 'tasks', label: 'Tarefas (EAP)', icon: ListTodo },
+type NavTone = 'blue' | 'emerald' | 'cyan' | 'violet' | 'amber' | 'rose' | 'slate';
+
+const navToneClasses: Record<NavTone, { base: string; active: string; ring: string }> = {
+  blue: {
+    base: 'bg-blue-500/12 text-blue-200 border-blue-400/20',
+    active: 'bg-blue-500 text-white border-blue-300/70',
+    ring: 'shadow-[0_0_0_1px_rgba(96,165,250,0.35)]',
+  },
+  emerald: {
+    base: 'bg-emerald-500/12 text-emerald-200 border-emerald-400/20',
+    active: 'bg-emerald-500 text-white border-emerald-300/70',
+    ring: 'shadow-[0_0_0_1px_rgba(52,211,153,0.35)]',
+  },
+  cyan: {
+    base: 'bg-cyan-500/12 text-cyan-200 border-cyan-400/20',
+    active: 'bg-cyan-500 text-white border-cyan-300/70',
+    ring: 'shadow-[0_0_0_1px_rgba(34,211,238,0.35)]',
+  },
+  violet: {
+    base: 'bg-violet-500/12 text-violet-200 border-violet-400/20',
+    active: 'bg-violet-500 text-white border-violet-300/70',
+    ring: 'shadow-[0_0_0_1px_rgba(167,139,250,0.35)]',
+  },
+  amber: {
+    base: 'bg-amber-500/12 text-amber-200 border-amber-400/20',
+    active: 'bg-amber-500 text-slate-950 border-amber-300/70',
+    ring: 'shadow-[0_0_0_1px_rgba(251,191,36,0.35)]',
+  },
+  rose: {
+    base: 'bg-rose-500/12 text-rose-200 border-rose-400/20',
+    active: 'bg-rose-500 text-white border-rose-300/70',
+    ring: 'shadow-[0_0_0_1px_rgba(251,113,133,0.35)]',
+  },
+  slate: {
+    base: 'bg-slate-500/12 text-slate-200 border-slate-400/20',
+    active: 'bg-slate-200 text-slate-950 border-white/70',
+    ring: 'shadow-[0_0_0_1px_rgba(226,232,240,0.28)]',
+  },
+};
+
+const navItems: { view: AppView; label: string; icon: React.ElementType; tone?: NavTone }[] = [
+  { view: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, tone: 'blue' },
+  { view: 'management', label: 'Rotina', icon: ClipboardCheck, tone: 'emerald' },
+  { view: 'gantt', label: 'Cronograma', icon: GanttChart, tone: 'cyan' },
+  { view: 'tasks', label: 'Producao', icon: ListTodo, tone: 'violet' },
   { view: 'measurement', label: 'Medição', icon: ClipboardList },
   { view: 'dailyReport', label: 'Diário de Obra', icon: NotebookPen },
   { view: 'additive', label: 'Aditivo', icon: FilePlus2 },
@@ -77,6 +117,26 @@ const navItems: { view: AppView; label: string; icon: React.ElementType }[] = [
 const visibleNavItems = navItems
   .filter(item => item.view !== 'dailyReport')
   .map(item => item.view === 'tasks' ? { ...item, label: 'Produção diária' } : item);
+
+const navToneByView: Partial<Record<AppView, NavTone>> = {
+  dashboard: 'blue',
+  management: 'emerald',
+  gantt: 'cyan',
+  tasks: 'violet',
+  measurement: 'amber',
+  additive: 'rose',
+  realCost: 'emerald',
+  materials: 'cyan',
+  warehouse: 'blue',
+};
+
+const navLabelByView: Partial<Record<AppView, string>> = {
+  management: 'Rotina',
+  tasks: 'Producao',
+  measurement: 'Medicao',
+  realCost: 'Custo real',
+  materials: 'Material',
+};
 
 export default function AppSidebar({ currentView, onViewChange, projectName, collapsed, onToggleCollapse, onSwitchProject, onCreateProject, onRenameProject, onDuplicateProject, onDeleteProject, onImportedProject, activeProjectId, projectsList, userEmail, onLogout, orgName, roleLabel, canManageTeam, onOpenTeam }: AppSidebarProps) {
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
@@ -487,32 +547,49 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
         </AlertDialogContent>
       </AlertDialog>
 
-      <nav className="flex-1 p-2 space-y-0.5">
-        {visibleNavItems.map(({ view, label, icon: Icon }) => {
-          const isActive = currentView === view;
-          return (
-            <button
-              key={view}
-              onClick={() => onViewChange(view)}
-              className={`group w-full flex items-center ${collapsed ? 'justify-center' : ''} gap-3 px-3 py-2 rounded-md text-[13px] font-medium transition-all relative ${
-                isActive
-                  ? 'bg-primary/15 text-white'
-                  : 'text-[hsl(var(--sidebar-fg))] hover:bg-[hsl(var(--sidebar-hover))] hover:text-white'
-              }`}
-              title={collapsed ? label : undefined}
-            >
-              {isActive && (
-                <motion.span
-                  layoutId="sidebar-active-accent"
-                  className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-primary"
-                  transition={{ type: 'spring', stiffness: 380, damping: 32 }}
-                />
-              )}
-              <Icon className={`w-[18px] h-[18px] relative z-10 ${isActive ? 'text-primary' : 'opacity-80 group-hover:opacity-100'}`} strokeWidth={isActive ? 2.25 : 1.75} />
-              {!collapsed && <span className="relative z-10 truncate">{label}</span>}
-            </button>
-          );
-        })}
+      <nav className="flex-1 p-2 overflow-y-auto">
+        {!collapsed && (
+          <div className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--sidebar-fg))]/45">
+            Modulos
+          </div>
+        )}
+        <div className={collapsed ? 'grid grid-cols-1 gap-1.5' : 'grid grid-cols-2 gap-2'}>
+          {visibleNavItems.map(({ view, label, icon: Icon, tone }) => {
+            const isActive = currentView === view;
+            const displayLabel = navLabelByView[view] ?? label;
+            const color = navToneClasses[tone ?? navToneByView[view] ?? 'slate'];
+            return (
+              <button
+                key={view}
+                onClick={() => onViewChange(view)}
+                className={`group relative min-h-[64px] rounded-md border px-2.5 py-2 text-left transition-all ${
+                  isActive
+                    ? `bg-white/10 border-white/20 text-white ${color.ring}`
+                    : 'bg-white/[0.035] border-white/10 text-[hsl(var(--sidebar-fg))]/80 hover:bg-white/[0.07] hover:border-white/20 hover:text-white'
+                } ${collapsed ? 'min-h-[44px] px-1.5 py-1.5 flex items-center justify-center' : ''}`}
+                title={collapsed ? displayLabel : undefined}
+              >
+                {isActive && (
+                  <motion.span
+                    layoutId="sidebar-active-tile"
+                    className="absolute inset-0 rounded-md bg-white/[0.035]"
+                    transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+                  />
+                )}
+                <span className="relative z-10 flex items-center gap-2">
+                  <span className={`flex h-8 w-8 items-center justify-center rounded-md border transition-colors ${isActive ? color.active : color.base}`}>
+                    <Icon className="h-[17px] w-[17px]" strokeWidth={isActive ? 2.35 : 1.85} />
+                  </span>
+                  {!collapsed && (
+                    <span className="min-w-0 flex-1 text-[12px] font-semibold leading-tight">
+                      {displayLabel}
+                    </span>
+                  )}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </nav>
 
       <div className="p-2 border-t border-[hsl(var(--sidebar-border))] space-y-1">
