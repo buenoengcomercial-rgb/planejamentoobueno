@@ -183,6 +183,30 @@ function actualQuantityFromLogs(task: Task, weekStart: string, weekEnd: string) 
     .reduce((sum, log) => sum + (Number(log.actualQuantity) || 0), 0) * 100) / 100;
 }
 
+function taskWasFullySuppressed(task: Task) {
+  if (task.suppressedByAdditive) return true;
+  return (Number(task.quantity) || 0) <= 0 && (task.additiveHistory ?? []).some(h => (h.suppressedQuantity || 0) > 0);
+}
+
+function approvedAdditiveTaskIds(project: Project) {
+  const ids = new Set<string>();
+  for (const additive of project.additives ?? []) {
+    const approved = additive.status === 'aprovado' || additive.status === 'aditivo_contratado' || additive.isContracted;
+    if (!approved) continue;
+    for (const composition of additive.compositions ?? []) {
+      const original = Number(composition.originalQuantity ?? composition.quantity ?? 0) || 0;
+      const suppressed = Number(composition.suppressedQuantity ?? 0) || 0;
+      const added = Number(composition.addedQuantity ?? 0) || 0;
+      const finalQuantity = composition.isNewService ? added : Math.max(0, original + added - suppressed);
+      if (finalQuantity <= 0) continue;
+      if (composition.linkedTaskId) ids.add(composition.linkedTaskId);
+      if (composition.taskId) ids.add(composition.taskId);
+      if (composition.isNewService) ids.add(`add-${additive.id}-${composition.id}`);
+    }
+  }
+  return ids;
+}
+
 function deriveWeeklyStatus(planned: number, actual: number): ManagementWeeklyTaskStatus {
   if (planned <= 0 && actual <= 0) return 'planejada';
   if (actual >= planned) return 'cumprida';
@@ -230,6 +254,7 @@ function statusClass(status: ManagementWeeklyTaskStatus) {
 export default function ManagementRoutine({ project, onProjectChange, undoButton }: Props) {
   const routine = useMemo(() => ensureRoutine(project), [project]);
   const tasks = useMemo(() => getAllTasks(project), [project]);
+  const additiveTaskIds = useMemo(() => approvedAdditiveTaskIds(project), [project.additives]);
   const teams = project.teams?.length ? project.teams : DEFAULT_TEAMS;
   const [selectedWeekStart, setSelectedWeekStart] = useState(() => weekStartISO(todayISO()));
   const selectedWeekEnd = addDaysISO(selectedWeekStart, 6);
@@ -312,7 +337,10 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
   };
 
   const weeklyRows = useMemo(() => {
+    const hasApprovedAdditiveScope = additiveTaskIds.size > 0;
     return tasks
+      .filter(task => !taskWasFullySuppressed(task))
+      .filter(task => !hasApprovedAdditiveScope || additiveTaskIds.has(task.id))
       .map(task => {
         const start = task.current?.startDate ?? task.baseline?.startDate ?? task.startDate;
         const end = taskEndISO(task);
@@ -335,7 +363,7 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
         actualQuantity: number;
         status: ManagementWeeklyTaskStatus;
       }>;
-  }, [routine.weeklyPlans, selectedWeekEnd, selectedWeekStart, tasks]);
+  }, [additiveTaskIds, routine.weeklyPlans, selectedWeekEnd, selectedWeekStart, tasks]);
 
   const plannedTotal = weeklyRows.reduce((sum, row) => sum + row.plannedQuantity, 0);
   const actualTotal = weeklyRows.reduce((sum, row) => sum + row.actualQuantity, 0);
@@ -394,7 +422,7 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
           <div>
             <h3 className="text-sm font-semibold text-foreground">Plano semanal puxado do cronograma</h3>
             <p className="mt-1 text-xs text-muted-foreground">
-              Semana de {formatDateBR(selectedWeekStart)} a {formatDateBR(selectedWeekEnd)}. As linhas abaixo sao atividades com datas sobrepostas a esta semana.
+              Semana de {formatDateBR(selectedWeekStart)} a {formatDateBR(selectedWeekEnd)}. As linhas abaixo mostram somente o recorte previsto para esta semana.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -443,6 +471,8 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
                 const unit = row.task.unit || 'un';
                 const team = getTeamDefinition(row.saved?.teamCode ?? row.task.team, teams);
                 const balance = row.plannedQuantity - row.actualQuantity;
+                const weekTaskStart = row.start > selectedWeekStart ? row.start : selectedWeekStart;
+                const weekTaskEnd = row.end < selectedWeekEnd ? row.end : selectedWeekEnd;
                 return (
                   <tr key={row.task.id} className="border-b border-border/70 align-top">
                     <td className="p-2">
@@ -450,8 +480,8 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
                       <p className="text-[10px] text-muted-foreground">{row.task.phase}{row.task.frenteServico ? ` - ${row.task.frenteServico}` : ''}</p>
                     </td>
                     <td className="p-2 text-muted-foreground">
-                      {formatDateBR(row.start)} a {formatDateBR(row.end)}
-                      <p className="text-[10px]">{row.days} dia(s) na semana</p>
+                      {formatDateBR(weekTaskStart)} a {formatDateBR(weekTaskEnd)}
+                      <p className="text-[10px]">recorte semanal: {row.days} dia(s)</p>
                     </td>
                     <td className="p-2">
                       <select className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs" value={row.saved?.teamCode ?? row.task.team ?? ''} onChange={e => updateTeam(row.task, e.target.value)}>
