@@ -51,46 +51,57 @@ function scopeValues(row: Row, scope: MeasurementValueScope | undefined) {
   return { label: 'Total contratado', withBdi: row.valueContracted, noBdi: row.valueContractedNoBDI };
 }
 
-function AnalyticView({ composition }: { composition?: AdditiveComposition }) {
+function AnalyticView({ composition, bdi }: { composition?: AdditiveComposition; bdi: number }) {
   if (!composition?.inputs?.length) {
     return <p className="text-sm text-muted-foreground">Esta linha ainda nao possui composicao analitica vinculada.</p>;
   }
 
+  const bdiFactor = 1 + (Number(bdi) || 0) / 100;
+
   return (
     <div className="overflow-x-auto rounded-md border border-border/70">
-      <table className="w-full min-w-[680px] table-fixed text-[11px]">
+      <table className="w-full min-w-[780px] table-fixed text-[11px]">
         <colgroup>
           <col className="w-[70px]" />
           <col className="w-[58px]" />
           <col />
-          <col className="w-[44px]" />
-          <col className="w-[72px]" />
-          <col className="w-[84px]" />
-          <col className="w-[90px]" />
+          <col className="w-[54px]" />
+          <col className="w-[88px]" />
+          <col className="w-[104px]" />
+          <col className="w-[104px]" />
+          <col className="w-[104px]" />
         </colgroup>
         <thead className="bg-muted/60">
           <tr className="border-b border-border">
             <th className="px-2 py-1.5 text-left">Codigo</th>
             <th className="px-2 py-1.5 text-left">Banco</th>
             <th className="px-2 py-1.5 text-left">Descricao</th>
-            <th className="px-2 py-1.5 text-center">Un</th>
-            <th className="px-2 py-1.5 text-right">Coef.</th>
-            <th className="px-2 py-1.5 text-right">Preco</th>
-            <th className="px-2 py-1.5 text-right">Total</th>
+            <th className="px-2 py-1.5 text-center">Und.</th>
+            <th className="px-2 py-1.5 text-right">Quant./Coef.</th>
+            <th className="px-2 py-1.5 text-right">V. Unit. s/ BDI</th>
+            <th className="px-2 py-1.5 text-right">V. Unit. c/ BDI</th>
+            <th className="px-2 py-1.5 text-right">Total c/ BDI</th>
           </tr>
         </thead>
         <tbody>
-          {composition.inputs.map(input => (
-            <tr key={input.id} className="border-t border-border">
-              <td className="px-2 py-1.5 align-top font-mono text-[10px]">{input.code || '-'}</td>
-              <td className="px-2 py-1.5 align-top text-muted-foreground">{input.bank || '-'}</td>
-              <td className="px-2 py-1.5 align-top font-medium leading-snug break-words">{input.description}</td>
-              <td className="px-2 py-1.5 text-center align-top">{input.unit || '-'}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtNum(input.coefficient || 0)}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtBRL(input.unitPrice || 0)}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums align-top font-medium">{fmtBRL(input.total || ((input.coefficient || 0) * (input.unitPrice || 0)))}</td>
-            </tr>
-          ))}
+          {composition.inputs.map(input => {
+            const coef = Number(input.coefficient || 0);
+            const unitNoBdi = Number(input.unitPrice || 0);
+            const unitWithBdi = unitNoBdi * bdiFactor;
+            const totalWithBdi = coef * unitWithBdi;
+            return (
+              <tr key={input.id} className="border-t border-border">
+                <td className="px-2 py-1.5 align-top font-mono text-[10px]">{input.code || '-'}</td>
+                <td className="px-2 py-1.5 align-top text-muted-foreground">{input.bank || '-'}</td>
+                <td className="px-2 py-1.5 align-top font-medium leading-snug break-words">{input.description}</td>
+                <td className="px-2 py-1.5 text-center align-top">{input.unit || '-'}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtNum(coef)}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtBRL(unitNoBdi)}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtBRL(unitWithBdi)}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums align-top font-medium">{fmtBRL(totalWithBdi)}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -225,7 +236,7 @@ export default function MeasurementDetailFooter({ project, selection, row, bdi }
           ) : selection.mode === 'quantity' ? (
             <QuantityView row={row} />
           ) : selection.mode === 'analytic' ? (
-            <AnalyticView composition={composition} />
+            <AnalyticView composition={composition} bdi={bdi} />
           ) : (
             <ClassificationView project={project} row={row} composition={composition} scope={selection.valueScope} bdi={bdi} />
           )}
@@ -263,7 +274,7 @@ export function MeasurementDetailInline({ project, selection, row, bdi, colSpan 
             {selection.mode === 'quantity' ? (
               <QuantityView row={row} />
             ) : selection.mode === 'analytic' ? (
-              <AnalyticView composition={composition} />
+              <AnalyticView composition={composition} bdi={bdi} />
             ) : (
               <ClassificationView project={project} row={row} composition={composition} scope={selection.valueScope} bdi={bdi} />
             )}
