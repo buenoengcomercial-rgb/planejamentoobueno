@@ -465,6 +465,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   const [analyticFirstDataRow, setAnalyticFirstDataRow] = useState(2);
   const [showAnalyticClassReview, setShowAnalyticClassReview] = useState(false);
   const [analyticClassFilter, setAnalyticClassFilter] = useState<MaterialCostClass | 'all'>('all');
+  const [analyticUnitSort, setAnalyticUnitSort] = useState<'none' | 'asc' | 'desc'>('none');
+  const [selectedAnalyticInputGroups, setSelectedAnalyticInputGroups] = useState<Set<string>>(() => new Set());
 
   const reset = () => {
     setLoading(false);
@@ -490,6 +492,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     setAnalyticFirstDataRow(2);
     setShowAnalyticClassReview(false);
     setAnalyticClassFilter('all');
+    setAnalyticUnitSort('none');
+    setSelectedAnalyticInputGroups(new Set());
   };
   const handleClose = () => { reset(); onClose(); };
 
@@ -617,6 +621,15 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
       ...composition,
       inputs: (composition.inputs ?? []).map(input =>
         analyticInputGroupKey(input) === groupKey ? { ...input, type: inputTypeFromClass(costClass) } : input,
+      ),
+    })) ?? current);
+  }, []);
+
+  const updateAnalyticInputGroupsClass = useCallback((groupKeys: Set<string>, costClass: MaterialCostClass) => {
+    setAnalyticCompositions(current => current?.map(composition => ({
+      ...composition,
+      inputs: (composition.inputs ?? []).map(input =>
+        groupKeys.has(analyticInputGroupKey(input)) ? { ...input, type: inputTypeFromClass(costClass) } : input,
       ),
     })) ?? current);
   }, []);
@@ -805,8 +818,17 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     unclassified: 0,
   } as Record<MaterialCostClass, number>) : null;
   const filteredAnalyticInputGroups = analyticClassFilter === 'all'
-    ? analyticInputGroups
+    ? [...analyticInputGroups]
     : analyticInputGroups.filter(row => row.costClass === analyticClassFilter);
+  if (analyticUnitSort !== 'none') {
+    filteredAnalyticInputGroups.sort((a, b) => {
+      const unitCompare = a.unit.localeCompare(b.unit, 'pt-BR', { numeric: true, sensitivity: 'base' });
+      const descCompare = a.description.localeCompare(b.description, 'pt-BR');
+      return analyticUnitSort === 'asc'
+        ? unitCompare || descCompare
+        : -unitCompare || descCompare;
+    });
+  }
   const analyticClassSummary = analyticClassCounts ? (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
       {COST_CLASS_OPTIONS.map(costClass => (
@@ -945,7 +967,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
           </div>
           {analyticClassSummary}
           <div className="text-[10px] text-muted-foreground">
-            Regra inicial: unidades H, hora e mes entram como mao de obra quando nao houver indicio melhor. A classificacao pode ser revisada na Lista de Material.
+            Regra inicial: unidades H, hora e mes entram como mao de obra quando nao houver indicio melhor. Use Ctrl + clique para selecionar varios insumos; ao mudar a classificacao de um selecionado, todos os selecionados mudam juntos.
           </div>
           {(
             <div className="mt-2 rounded-lg border border-border bg-background">
@@ -974,7 +996,19 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                     <tr>
                       <th className="px-2 py-1 text-left font-semibold">Codigo</th>
                       <th className="px-2 py-1 text-left font-semibold">Insumo</th>
-                      <th className="px-2 py-1 text-center font-semibold">Und</th>
+                      <th className="px-2 py-1 text-center font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => setAnalyticUnitSort(current => current === 'none' ? 'asc' : current === 'asc' ? 'desc' : 'none')}
+                          className="inline-flex items-center gap-1 rounded px-1 py-0.5 hover:bg-background"
+                          title="Ordenar por unidade"
+                        >
+                          Und
+                          <span className="text-[9px] text-muted-foreground">
+                            {analyticUnitSort === 'asc' ? '↑' : analyticUnitSort === 'desc' ? '↓' : '↕'}
+                          </span>
+                        </button>
+                      </th>
                       <th className="px-2 py-1 text-right font-semibold">Qtd. total</th>
                       <th className="px-2 py-1 text-right font-semibold">V. unit. ref.</th>
                       <th className="px-2 py-1 text-right font-semibold">Total ref.</th>
@@ -983,8 +1017,24 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredAnalyticInputGroups.map(group => (
-                      <tr key={group.key} className="border-t border-border">
+                    {filteredAnalyticInputGroups.map(group => {
+                      const selected = selectedAnalyticInputGroups.has(group.key);
+                      return (
+                      <tr
+                        key={group.key}
+                        onClick={event => {
+                          setSelectedAnalyticInputGroups(current => {
+                            const next = new Set(current);
+                            if (event.ctrlKey || event.metaKey) {
+                              if (next.has(group.key)) next.delete(group.key);
+                              else next.add(group.key);
+                              return next;
+                            }
+                            return new Set([group.key]);
+                          });
+                        }}
+                        className={`border-t border-border cursor-pointer ${selected ? 'bg-primary/10 ring-1 ring-inset ring-primary/30' : 'hover:bg-muted/30'}`}
+                      >
                         <td className="px-2 py-1 font-mono">{group.code}</td>
                         <td className="px-2 py-1 max-w-[300px] truncate font-medium" title={group.description}>{group.description}</td>
                         <td className="px-2 py-1 text-center">{group.unit}</td>
@@ -997,7 +1047,14 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                         <td className="px-2 py-1">
                           <select
                             value={group.costClass}
-                            onChange={e => updateAnalyticInputGroupClass(group.key, e.target.value as MaterialCostClass)}
+                            onClick={event => event.stopPropagation()}
+                            onChange={e => {
+                              const costClass = e.target.value as MaterialCostClass;
+                              const targets = selectedAnalyticInputGroups.has(group.key) && selectedAnalyticInputGroups.size > 0
+                                ? selectedAnalyticInputGroups
+                                : new Set([group.key]);
+                              updateAnalyticInputGroupsClass(targets, costClass);
+                            }}
                             className="h-7 w-full rounded border border-border bg-background px-2 text-[10px] text-foreground"
                           >
                             {COST_CLASS_OPTIONS.map(option => (
@@ -1006,7 +1063,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                           </select>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                     {filteredAnalyticInputGroups.length === 0 && (
                       <tr>
                         <td colSpan={8} className="px-2 py-6 text-center text-muted-foreground">
