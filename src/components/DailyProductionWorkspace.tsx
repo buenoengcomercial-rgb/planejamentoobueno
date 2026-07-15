@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CalendarDays, CheckCircle2, ClipboardList, NotebookPen, TrendingUp, Users } from 'lucide-react';
+import { AlertTriangle, CalendarDays, CheckCircle2, ClipboardList, NotebookPen, TrendingUp } from 'lucide-react';
 import type { Project, Task } from '@/types/project';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import TaskList from '@/components/TaskList';
 import DailyReport from '@/components/DailyReport';
-import LaborDimensioning from '@/components/LaborDimensioning';
 import { isDailyReportEmpty } from '@/lib/dailyReportSummary';
 
-type ProductionWorkspaceTab = 'production' | 'dimensioning' | 'dailyReport';
+type ProductionWorkspaceTab = 'production' | 'dailyReport';
 
 interface DailyProductionWorkspaceProps {
   project: Project;
@@ -218,9 +217,6 @@ export default function DailyProductionWorkspace({
             <TabsTrigger value="production" className="text-xs">
               <ClipboardList className="w-3.5 h-3.5 mr-1" /> Produção
             </TabsTrigger>
-            <TabsTrigger value="dimensioning" className="text-xs">
-              <Users className="w-3.5 h-3.5 mr-1" /> Dimensionamento
-            </TabsTrigger>
             <TabsTrigger value="dailyReport" className="text-xs">
               <NotebookPen className="w-3.5 h-3.5 mr-1" /> Diário de obra
             </TabsTrigger>
@@ -234,10 +230,6 @@ export default function DailyProductionWorkspace({
 
           <TabsContent value="production" className="mt-4">
             <TaskList project={project} onProjectChange={onProductionChange} undoButton={productionUndoButton} />
-          </TabsContent>
-
-          <TabsContent value="dimensioning" className="mt-4">
-            <LaborDimensioning project={project} onProjectChange={onProductionChange} />
           </TabsContent>
 
           <TabsContent value="dailyReport" className="mt-4">
