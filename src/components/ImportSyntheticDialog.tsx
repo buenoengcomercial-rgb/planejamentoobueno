@@ -78,6 +78,8 @@ const ANALYTIC_ROLE_LABELS: Record<AnalyticColumnRole, string> = {
   total: 'Total',
 };
 
+const COST_CLASS_OPTIONS: MaterialCostClass[] = ['labor', 'material', 'equipment', 'unclassified'];
+
 const DEFAULT_ANALYTIC_COLUMN_ROLES: AnalyticColumnRole[] = [
   'kindOrItem',
   'code',
@@ -231,8 +233,8 @@ function mergeAnalyticCostClasses(project: Project, compositions: AdditiveCompos
         description: input.description,
         unit: input.unit,
       });
-      if (!next[byId]) next[byId] = costClass;
-      if (!next[byKey]) next[byKey] = costClass;
+      next[byId] = costClass;
+      next[byKey] = costClass;
     }
   }
   return next;
@@ -276,6 +278,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   const [analyticColumnRoles, setAnalyticColumnRoles] = useState<AnalyticColumnRole[]>(DEFAULT_ANALYTIC_COLUMN_ROLES);
   const [analyticHeaderRow, setAnalyticHeaderRow] = useState(1);
   const [analyticFirstDataRow, setAnalyticFirstDataRow] = useState(2);
+  const [showAnalyticClassReview, setShowAnalyticClassReview] = useState(false);
+  const [analyticClassFilter, setAnalyticClassFilter] = useState<MaterialCostClass | 'all'>('all');
 
   const reset = () => {
     setLoading(false);
@@ -298,6 +302,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     setAnalyticColumnRoles(DEFAULT_ANALYTIC_COLUMN_ROLES);
     setAnalyticHeaderRow(1);
     setAnalyticFirstDataRow(2);
+    setShowAnalyticClassReview(false);
+    setAnalyticClassFilter('all');
   };
   const handleClose = () => { reset(); onClose(); };
 
@@ -364,6 +370,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     try {
       const buf = await file.arrayBuffer();
       const inspected = await inspectAnalyticWorkbook(buf);
+      setShowAnalyticClassReview(false);
+      setAnalyticClassFilter('all');
       const nextHeaderRow = inspected.suggestedHeaderRowIndex + 1;
       const nextFirstDataRow = inspected.suggestedFirstDataRowIndex + 1;
       const detectedAnalyticRoles = detectAnalyticColumnRoles(inspected.rows, inspected.suggestedHeaderRowIndex, inspected.hasHeaderRow);
@@ -415,6 +423,15 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     if (f) handleAnalyticFile(f);
   }, [handleAnalyticFile]);
 
+  const updateAnalyticInputClass = useCallback((inputId: string, costClass: MaterialCostClass) => {
+    setAnalyticCompositions(current => current?.map(composition => ({
+      ...composition,
+      inputs: (composition.inputs ?? []).map(input =>
+        input.id === inputId ? { ...input, type: inputTypeFromClass(costClass) } : input,
+      ),
+    })) ?? current);
+  }, []);
+
   const reprocessSynthetic = useCallback(() => {
     if (!syntheticBuffer || !preview) return;
     setError('');
@@ -438,6 +455,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     setAnalyticLoading(true);
     setAnalyticInfo('');
     try {
+      setShowAnalyticClassReview(false);
+      setAnalyticClassFilter('all');
       const baseItems: BudgetItem[] = parsed
         ? parsed.items
         : (project.budgetItems ?? []).filter(b => b.source === 'sintetica');
@@ -508,9 +527,19 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   const canConfirm = !!parsed || (analyticCompositions && analyticCompositions.length > 0);
   const hasExistingSynthetic = (project.budgetItems ?? []).some(b => b.source === 'sintetica');
   const analyticClassCounts = analyticCompositions?.length ? countAnalyticClasses(analyticCompositions) : null;
+  const analyticInputRows = (analyticCompositions ?? []).flatMap(composition =>
+    (composition.inputs ?? []).map(input => ({
+      composition,
+      input,
+      costClass: guessAnalyticInputClass(input),
+    })),
+  );
+  const filteredAnalyticInputRows = analyticClassFilter === 'all'
+    ? analyticInputRows
+    : analyticInputRows.filter(row => row.costClass === analyticClassFilter);
   const analyticClassSummary = analyticClassCounts ? (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-      {(['labor', 'material', 'equipment', 'unclassified'] as MaterialCostClass[]).map(costClass => (
+      {COST_CLASS_OPTIONS.map(costClass => (
         <div key={costClass} className="rounded-md border border-border bg-background px-2 py-1.5">
           <div className="text-[10px] text-muted-foreground">{MATERIAL_COST_CLASS_LABEL[costClass]}</div>
           <div className="text-xs font-semibold text-foreground">{analyticClassCounts[costClass]} insumo(s)</div>
@@ -564,11 +593,92 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
 
       {analyticClassSummary && (
         <div className="space-y-1">
-          <div className="text-[11px] font-semibold text-foreground">Classificacao inicial dos insumos</div>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-[11px] font-semibold text-foreground">Classificacao inicial dos insumos</div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 text-[11px]"
+              onClick={() => setShowAnalyticClassReview(v => !v)}
+            >
+              {showAnalyticClassReview ? 'Ocultar validacao' : 'Validar insumos'}
+            </Button>
+          </div>
           {analyticClassSummary}
           <div className="text-[10px] text-muted-foreground">
             Regra inicial: unidades H, hora e mes entram como mao de obra quando nao houver indicio melhor. A classificacao pode ser revisada na Lista de Material.
           </div>
+          {showAnalyticClassReview && (
+            <div className="mt-2 rounded-lg border border-border bg-background">
+              <div className="flex flex-wrap items-center gap-1 border-b border-border bg-muted/40 px-2 py-2">
+                <button
+                  type="button"
+                  onClick={() => setAnalyticClassFilter('all')}
+                  className={`rounded border px-2 py-1 text-[10px] ${analyticClassFilter === 'all' ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}
+                >
+                  Todos ({analyticInputRows.length})
+                </button>
+                {COST_CLASS_OPTIONS.map(costClass => (
+                  <button
+                    key={costClass}
+                    type="button"
+                    onClick={() => setAnalyticClassFilter(costClass)}
+                    className={`rounded border px-2 py-1 text-[10px] ${analyticClassFilter === costClass ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}
+                  >
+                    {MATERIAL_COST_CLASS_LABEL[costClass]} ({analyticClassCounts[costClass]})
+                  </button>
+                ))}
+              </div>
+              <div className="max-h-72 overflow-auto">
+                <table className="w-full min-w-[880px] text-[10px]">
+                  <thead className="sticky top-0 bg-muted">
+                    <tr>
+                      <th className="px-2 py-1 text-left font-semibold">Item</th>
+                      <th className="px-2 py-1 text-left font-semibold">Composicao</th>
+                      <th className="px-2 py-1 text-left font-semibold">Codigo</th>
+                      <th className="px-2 py-1 text-left font-semibold">Insumo</th>
+                      <th className="px-2 py-1 text-center font-semibold">Und</th>
+                      <th className="px-2 py-1 text-right font-semibold">Coef.</th>
+                      <th className="px-2 py-1 text-right font-semibold">V. unit.</th>
+                      <th className="px-2 py-1 text-left font-semibold">Classificacao</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredAnalyticInputRows.map(({ composition, input, costClass }) => (
+                      <tr key={input.id} className="border-t border-border">
+                        <td className="px-2 py-1 font-mono text-muted-foreground">{composition.item}</td>
+                        <td className="px-2 py-1 max-w-[180px] truncate" title={composition.description}>{composition.description}</td>
+                        <td className="px-2 py-1 font-mono">{input.code || '-'}</td>
+                        <td className="px-2 py-1 max-w-[260px] truncate font-medium" title={input.description}>{input.description}</td>
+                        <td className="px-2 py-1 text-center">{input.unit || '-'}</td>
+                        <td className="px-2 py-1 text-right tabular-nums">{Number(input.coefficient || 0).toLocaleString('pt-BR')}</td>
+                        <td className="px-2 py-1 text-right tabular-nums">{fmtBRL(Number(input.unitPrice || 0))}</td>
+                        <td className="px-2 py-1">
+                          <select
+                            value={costClass}
+                            onChange={e => updateAnalyticInputClass(input.id, e.target.value as MaterialCostClass)}
+                            className="h-7 w-full rounded border border-border bg-background px-2 text-[10px] text-foreground"
+                          >
+                            {COST_CLASS_OPTIONS.map(option => (
+                              <option key={option} value={option}>{MATERIAL_COST_CLASS_LABEL[option]}</option>
+                            ))}
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredAnalyticInputRows.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="px-2 py-6 text-center text-muted-foreground">
+                          Nenhum insumo nesta classificacao.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
