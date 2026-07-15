@@ -26,14 +26,20 @@ function sameText(a?: string, b?: string) {
   return (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
 }
 
+function normCode(a?: string) {
+  return (a ?? '').trim().toUpperCase().replace(/\s+/g, '').replace(/^([A-Z]+)0+(\d+)/, '$1$2');
+}
+
 function findComposition(project: Project, row?: Row): AdditiveComposition | undefined {
   if (!row) return undefined;
   const all = [
     ...(project.additives ?? []).flatMap(a => a.compositions ?? []),
     ...(project.analyticCompositions ?? []),
   ];
+  const rowCode = normCode(row.itemCode);
   return all.find(c => c.taskId === row.taskId || c.linkedTaskId === row.taskId)
-    ?? all.find(c => sameText(c.code, row.itemCode) && sameText(c.bank, row.priceBank))
+    ?? all.find(c => sameText(c.item, row.item) && normCode(c.code) === rowCode)
+    ?? all.find(c => normCode(c.code) === rowCode && sameText(c.bank, row.priceBank))
     ?? all.find(c => sameText(c.description, row.description));
 }
 
