@@ -694,7 +694,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                   </button>
                 ))}
               </div>
-              <div className="max-h-72 overflow-auto">
+              <div className="max-h-[52vh] overflow-auto">
                 <table className="w-full min-w-[920px] text-[10px]">
                   <thead className="sticky top-0 bg-muted">
                     <tr>
@@ -776,7 +776,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
 
   return (
     <Dialog open={open} onOpenChange={v => !v && handleClose()}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+      <DialogContent className="w-[96vw] max-w-7xl max-h-[96vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-foreground">
             <DollarSign className="w-5 h-5 text-primary" />
