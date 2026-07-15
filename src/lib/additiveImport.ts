@@ -137,7 +137,7 @@ interface AnalyticRow {
   rowIndex: number;
 }
 
-interface AnalyticBlock {
+export interface AnalyticBlock {
   normCode: string;
   code: string;
   item: string;
@@ -146,6 +146,44 @@ interface AnalyticBlock {
   analyticUnitPriceWithBDI?: number;
   startRow: number;
 }
+
+export type AnalyticColumnRole =
+  | 'ignore'
+  | 'kindOrItem'
+  | 'code'
+  | 'bank'
+  | 'description'
+  | 'coefficient'
+  | 'unit'
+  | 'unitPrice'
+  | 'total';
+
+export type AnalyticColumnMap = Partial<Record<Exclude<AnalyticColumnRole, 'ignore'>, number>>;
+
+export interface AnalyticImportOptions {
+  sheetName?: string;
+  headerRowIndex?: number;
+  firstDataRowIndex?: number;
+  columns?: AnalyticColumnMap;
+}
+
+export interface AnalyticWorkbookPreview {
+  sheetNames: string[];
+  sheetName: string;
+  rows: string[][];
+  suggestedHeaderRowIndex: number;
+}
+
+export const DEFAULT_ANALYTIC_COLUMN_MAP: AnalyticColumnMap = {
+  kindOrItem: 0,
+  code: 1,
+  bank: 2,
+  description: 3,
+  coefficient: 4,
+  unit: 5,
+  unitPrice: 6,
+  total: 7,
+};
 
 /**
  * Verifica se a planilha tem cabeçalhos compatíveis com Analítica.
@@ -305,6 +343,124 @@ function parseAnalyticSheet(
   }
 
   return { blocks, issues };
+}
+
+function findAnalyticSheetName(wb: any, XLSX: any, sheetName?: string): string | undefined {
+  if (sheetName && wb.Sheets[sheetName]) return sheetName;
+  let analyName =
+    findSheetName(wb.SheetNames, 'Analitica') || findSheetName(wb.SheetNames, 'analítica');
+  if (analyName) return analyName;
+  for (const name of wb.SheetNames) {
+    const rows = sheetToRows(wb.Sheets[name], XLSX);
+    if (looksLikeAnalyticSheet(rows)) return name;
+  }
+  return wb.SheetNames[0];
+}
+
+export async function inspectAnalyticWorkbook(buf: ArrayBuffer, sheetName?: string): Promise<AnalyticWorkbookPreview> {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(buf, { type: 'array' });
+  const selected = findAnalyticSheetName(wb, XLSX, sheetName) || wb.SheetNames[0];
+  const rows = sheetToRows(wb.Sheets[selected], XLSX);
+  return {
+    sheetNames: wb.SheetNames,
+    sheetName: selected,
+    rows: rows.slice(0, 80).map(r => Array.from({ length: 10 }, (_, i) => asString(r[i]))),
+    suggestedHeaderRowIndex: detectHeaderIndex(rows),
+  };
+}
+
+export function parseAnalyticRowsFlexible(
+  rows: unknown[][],
+  options: AnalyticImportOptions = {},
+): { blocks: AnalyticBlock[]; issues: AdditiveImportIssue[] } {
+  const issues: AdditiveImportIssue[] = [];
+  const headerIdx = options.headerRowIndex ?? detectHeaderIndex(rows);
+  const firstDataRowIndex = options.firstDataRowIndex ?? headerIdx + 1;
+  const columns = { ...DEFAULT_ANALYTIC_COLUMN_MAP, ...(options.columns ?? {}) };
+  const read = (row: unknown[], key: keyof AnalyticColumnMap) => {
+    const index = columns[key];
+    return typeof index === 'number' ? row[index] : '';
+  };
+
+  const blocks: AnalyticBlock[] = [];
+  let current: AnalyticBlock | null = null;
+
+  for (let i = firstDataRowIndex; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const kindOrItem = asString(read(r, 'kindOrItem'));
+    const codeRaw = asString(read(r, 'code'));
+    const bank = asString(read(r, 'bank'));
+    const description = asString(read(r, 'description'));
+    const coefficient = toNumber(read(r, 'coefficient'));
+    const unit = asString(read(r, 'unit'));
+    const unitPrice = toNumber(read(r, 'unitPrice'));
+    const total = toNumber(read(r, 'total'));
+
+    if (!kindOrItem && !codeRaw && !bank && !description && !coefficient && !unit && !unitPrice && !total) continue;
+
+    const aLow = norm(kindOrItem);
+    const dLow = norm(description);
+    if (dLow.includes('valor com bdi') || aLow.includes('valor com bdi')) {
+      if (current && total > 0) current.analyticUnitPriceWithBDI = total;
+      continue;
+    }
+
+    const normalizedItem = kindOrItem.replace(',', '.');
+    const isGroupLine = !codeRaw && !!description && coefficient <= 0 && !unit;
+    if (isGroupLine) continue;
+
+    const isParentLine = !!codeRaw && /^\d+(\.\d+)*$/.test(normalizedItem);
+    if (isParentLine) {
+      current = {
+        normCode: normalizeCode(codeRaw),
+        code: codeRaw,
+        item: normalizedItem,
+        inputs: [],
+        parentTotalNoBDI: total > 0 ? total : undefined,
+        startRow: i + 1,
+      };
+      blocks.push(current);
+      continue;
+    }
+
+    if (!isAnalyticInsumoLine(aLow)) continue;
+    if (!current) {
+      issues.push({ level: 'warning', message: `Insumo sem composição pai (${codeRaw || description})`, line: i + 1 });
+      continue;
+    }
+    if (!codeRaw && !description) continue;
+
+    if (unitPrice <= 0) {
+      issues.push({ level: 'warning', message: `Insumo sem preço (${codeRaw || description})`, line: i + 1 });
+    }
+
+    current.inputs.push({
+      code: codeRaw,
+      bank,
+      description,
+      unit,
+      coefficient,
+      unitPrice,
+      total: total || truncar2(coefficient * unitPrice),
+      rowIndex: i + 1,
+    });
+  }
+
+  return { blocks, issues };
+}
+
+export async function parseAnalyticWorkbookFlexible(
+  buf: ArrayBuffer,
+  options: AnalyticImportOptions = {},
+): Promise<{ blocks: AnalyticBlock[]; issues: AdditiveImportIssue[]; hasAnalyticSheet: boolean; sheetName?: string }> {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(buf, { type: 'array' });
+  const sheetName = findAnalyticSheetName(wb, XLSX, options.sheetName);
+  if (!sheetName) return { blocks: [], issues: [], hasAnalyticSheet: false };
+  const rows = sheetToRows(wb.Sheets[sheetName], XLSX);
+  const parsed = parseAnalyticRowsFlexible(rows, options);
+  return { ...parsed, hasAnalyticSheet: true, sheetName };
 }
 
 /** Resultado da importação de aditivo, com indicação do que foi lido. */
@@ -686,6 +842,7 @@ export async function extractBaseAnalyticCompositions(
 export async function extractBaseAnalyticCompositionsFromAnalyticFile(
   buf: ArrayBuffer,
   currentBudgetItems: BudgetItem[],
+  options: AnalyticImportOptions = {},
 ): Promise<{
   compositions: AdditiveComposition[];
   linkedCount: number;
@@ -764,7 +921,9 @@ export async function extractBaseAnalyticCompositionsFromAnalyticFile(
   };
 
   const analyRows = sheetToRows(wb.Sheets[analyName], XLSX);
-  const { blocks } = parseAdditiveAnalyticWorkbook(analyRows);
+  const { blocks } = options.columns
+    ? parseAnalyticRowsFlexible(analyRows, options)
+    : parseAdditiveAnalyticWorkbook(analyRows);
   const merged = mergeAnalyticIntoAdditive(pseudoAdditive, blocks);
 
   const compositions = merged.additive.compositions.filter(c => c.inputs.length > 0);

@@ -15,6 +15,10 @@ import {
 import {
   extractBaseAnalyticCompositions,
   extractBaseAnalyticCompositionsFromAnalyticFile,
+  DEFAULT_ANALYTIC_COLUMN_MAP,
+  inspectAnalyticWorkbook,
+  AnalyticColumnRole,
+  AnalyticWorkbookPreview,
 } from '@/lib/additiveImport';
 import {
   Upload, FileSpreadsheet, AlertTriangle, Loader2, Check, Info, DollarSign, Layers,
@@ -59,8 +63,42 @@ const DEFAULT_COLUMN_ROLES: SyntheticColumnRole[] = [
   'ignore',
 ];
 
+const ANALYTIC_COLUMN_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+
+const ANALYTIC_ROLE_LABELS: Record<AnalyticColumnRole, string> = {
+  ignore: 'Ignorar',
+  kindOrItem: 'Tipo / Item',
+  code: 'Codigo',
+  bank: 'Banco',
+  description: 'Descricao',
+  coefficient: 'Coeficiente / Quant.',
+  unit: 'Unidade',
+  unitPrice: 'Valor unitario',
+  total: 'Total',
+};
+
+const DEFAULT_ANALYTIC_COLUMN_ROLES: AnalyticColumnRole[] = [
+  'kindOrItem',
+  'code',
+  'bank',
+  'description',
+  'coefficient',
+  'unit',
+  'unitPrice',
+  'total',
+];
+
 function rolesToMap(roles: SyntheticColumnRole[]) {
   const map = { ...DEFAULT_SYNTHETIC_COLUMN_MAP };
+  Object.keys(map).forEach(key => delete map[key as keyof typeof map]);
+  roles.forEach((role, index) => {
+    if (role !== 'ignore') map[role] = index;
+  });
+  return map;
+}
+
+function analyticRolesToMap(roles: AnalyticColumnRole[]) {
+  const map = { ...DEFAULT_ANALYTIC_COLUMN_MAP };
   Object.keys(map).forEach(key => delete map[key as keyof typeof map]);
   roles.forEach((role, index) => {
     if (role !== 'ignore') map[role] = index;
@@ -93,6 +131,11 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   const [analyticInfo, setAnalyticInfo] = useState<string>('');
   const [analyticLoading, setAnalyticLoading] = useState(false);
   const [analyticOk, setAnalyticOk] = useState(false);
+  const [analyticBuffer, setAnalyticBuffer] = useState<ArrayBuffer | null>(null);
+  const [analyticPreview, setAnalyticPreview] = useState<AnalyticWorkbookPreview | null>(null);
+  const [analyticColumnRoles, setAnalyticColumnRoles] = useState<AnalyticColumnRole[]>(DEFAULT_ANALYTIC_COLUMN_ROLES);
+  const [analyticHeaderRow, setAnalyticHeaderRow] = useState(1);
+  const [analyticFirstDataRow, setAnalyticFirstDataRow] = useState(2);
 
   const reset = () => {
     setLoading(false);
@@ -110,6 +153,11 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     setAnalyticInfo('');
     setAnalyticLoading(false);
     setAnalyticOk(false);
+    setAnalyticBuffer(null);
+    setAnalyticPreview(null);
+    setAnalyticColumnRoles(DEFAULT_ANALYTIC_COLUMN_ROLES);
+    setAnalyticHeaderRow(1);
+    setAnalyticFirstDataRow(2);
   };
   const handleClose = () => { reset(); onClose(); };
 
@@ -174,11 +222,24 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     setAnalyticFileName(file.name);
     try {
       const buf = await file.arrayBuffer();
+      const inspected = await inspectAnalyticWorkbook(buf);
+      const nextHeaderRow = inspected.suggestedHeaderRowIndex + 1;
+      const nextFirstDataRow = nextHeaderRow + 1;
+      setAnalyticBuffer(buf);
+      setAnalyticPreview(inspected);
+      setAnalyticColumnRoles(DEFAULT_ANALYTIC_COLUMN_ROLES);
+      setAnalyticHeaderRow(nextHeaderRow);
+      setAnalyticFirstDataRow(nextFirstDataRow);
       // Base de vínculo: itens recém-parseados (se houver) ou os já salvos no projeto.
       const baseItems: BudgetItem[] = parsed
         ? parsed.items
         : (project.budgetItems ?? []).filter(b => b.source === 'sintetica');
-      const an = await extractBaseAnalyticCompositionsFromAnalyticFile(buf, baseItems);
+      const an = await extractBaseAnalyticCompositionsFromAnalyticFile(buf, baseItems, {
+        sheetName: inspected.sheetName,
+        headerRowIndex: inspected.suggestedHeaderRowIndex,
+        firstDataRowIndex: inspected.suggestedHeaderRowIndex + 1,
+        columns: analyticRolesToMap(DEFAULT_ANALYTIC_COLUMN_ROLES),
+      });
       if (!an.hasAnalyticSheet) {
         setAnalyticOk(false);
         setAnalyticCompositions(null);
@@ -230,6 +291,41 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     setParsed(result);
   }, [syntheticBuffer, preview, headerRow, firstDataRow, columnRoles, bdiInput]);
 
+  const reprocessAnalytic = useCallback(async () => {
+    if (!analyticBuffer || !analyticPreview) return;
+    setAnalyticLoading(true);
+    setAnalyticInfo('');
+    try {
+      const baseItems: BudgetItem[] = parsed
+        ? parsed.items
+        : (project.budgetItems ?? []).filter(b => b.source === 'sintetica');
+      const an = await extractBaseAnalyticCompositionsFromAnalyticFile(analyticBuffer, baseItems, {
+        sheetName: analyticPreview.sheetName,
+        headerRowIndex: Math.max(0, analyticHeaderRow - 1),
+        firstDataRowIndex: Math.max(0, analyticFirstDataRow - 1),
+        columns: analyticRolesToMap(analyticColumnRoles),
+      });
+      if (!an.hasAnalyticSheet) {
+        setAnalyticOk(false);
+        setAnalyticCompositions(null);
+        setAnalyticInfo('Aba Analitica nao encontrada no arquivo selecionado.');
+      } else if (an.compositions.length === 0) {
+        setAnalyticOk(false);
+        setAnalyticCompositions([]);
+        setAnalyticInfo(an.message || 'Analitica lida, mas nenhum bloco vinculou a Sintetica.');
+      } else {
+        setAnalyticOk(true);
+        setAnalyticCompositions(an.compositions);
+        setAnalyticInfo(an.message);
+      }
+    } catch (err: any) {
+      setAnalyticOk(false);
+      setAnalyticCompositions(null);
+      setAnalyticInfo(`Falha ao ler Analitica: ${err?.message ?? 'erro desconhecido'}.`);
+    }
+    setAnalyticLoading(false);
+  }, [analyticBuffer, analyticPreview, analyticHeaderRow, analyticFirstDataRow, analyticColumnRoles, parsed, project.budgetItems]);
+
   const confirmImport = () => {
     // Caso 1: importação completa de Sintética (+ opcional Analítica).
     if (parsed) {
@@ -265,6 +361,75 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   const totalWithBDI = parsed?.items.reduce((s, i) => s + i.totalWithBDI, 0) ?? 0;
   const canConfirm = !!parsed || (analyticCompositions && analyticCompositions.length > 0);
   const hasExistingSynthetic = (project.budgetItems ?? []).some(b => b.source === 'sintetica');
+  const analyticConfigPanel = analyticPreview ? (
+    <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <div className="text-xs font-semibold text-foreground">Configuracao da leitura Analitica A-H</div>
+          <div className="text-[11px] text-muted-foreground">Ajuste as colunas e atualize o vinculo com a Sintetica.</div>
+        </div>
+        <Button type="button" size="sm" variant="outline" className="h-7 text-[11px]" onClick={reprocessAnalytic} disabled={analyticLoading}>
+          {analyticLoading ? 'Lendo...' : 'Atualizar vinculo'}
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <label className="text-[11px] text-muted-foreground">
+          Linha do cabecalho
+          <input type="number" min={1} value={analyticHeaderRow} onChange={e => setAnalyticHeaderRow(Number(e.target.value) || 1)} className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
+        </label>
+        <label className="text-[11px] text-muted-foreground">
+          Primeira linha de dados
+          <input type="number" min={1} value={analyticFirstDataRow} onChange={e => setAnalyticFirstDataRow(Number(e.target.value) || 1)} className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
+        </label>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        {ANALYTIC_COLUMN_LETTERS.map((letter, index) => (
+          <label key={letter} className="text-[11px] text-muted-foreground">
+            Coluna {letter}
+            <select
+              value={analyticColumnRoles[index]}
+              onChange={e => {
+                const next = [...analyticColumnRoles];
+                next[index] = e.target.value as AnalyticColumnRole;
+                setAnalyticColumnRoles(next);
+              }}
+              className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground"
+            >
+              {(Object.keys(ANALYTIC_ROLE_LABELS) as AnalyticColumnRole[]).map(role => (
+                <option key={role} value={role}>{ANALYTIC_ROLE_LABELS[role]}</option>
+              ))}
+            </select>
+          </label>
+        ))}
+      </div>
+
+      <div className="overflow-x-auto rounded border border-border bg-background">
+        <table className="w-full min-w-[720px] text-[10px]">
+          <thead className="bg-muted">
+            <tr>
+              <th className="px-2 py-1 text-left font-semibold">Linha</th>
+              {ANALYTIC_COLUMN_LETTERS.map(letter => <th key={letter} className="px-2 py-1 text-left font-semibold">{letter}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {analyticPreview.rows.slice(Math.max(0, analyticHeaderRow - 2), Math.max(0, analyticHeaderRow - 2) + 7).map((row, idx) => {
+              const line = Math.max(0, analyticHeaderRow - 2) + idx + 1;
+              return (
+                <tr key={line} className={line === analyticHeaderRow ? 'border-t border-border bg-warning/10' : 'border-t border-border'}>
+                  <td className="px-2 py-1 font-mono text-muted-foreground">{line}</td>
+                  {ANALYTIC_COLUMN_LETTERS.map((_, col) => (
+                    <td key={col} className="px-2 py-1 max-w-[160px] truncate" title={row[col]}>{row[col]}</td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  ) : null;
 
   return (
     <Dialog open={open} onOpenChange={v => !v && handleClose()}>
@@ -352,6 +517,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                     {analyticInfo}
                   </div>
                 )}
+                {analyticConfigPanel}
               </div>
             )}
           </div>
@@ -483,6 +649,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                 </p>
               )}
             </div>
+
+            {analyticConfigPanel}
 
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-lg border border-border bg-card p-3">
