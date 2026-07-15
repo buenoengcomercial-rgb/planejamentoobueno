@@ -60,27 +60,39 @@ function AnalyticView({ composition, bdi }: { composition?: AdditiveComposition;
 
   return (
     <div className="overflow-x-auto rounded-md border border-border/70">
-      <table className="w-full min-w-[780px] table-fixed text-[11px]">
+      <table className="measurement-table w-full table-fixed text-[11px]">
         <colgroup>
-          <col className="w-[70px]" />
-          <col className="w-[58px]" />
-          <col />
-          <col className="w-[54px]" />
-          <col className="w-[88px]" />
-          <col className="w-[104px]" />
-          <col className="w-[104px]" />
-          <col className="w-[104px]" />
+          <col className="col-item" />
+          <col className="col-code" />
+          <col className="col-bank" />
+          <col className="col-desc" />
+          <col className="col-und" />
+          <col className="col-qty" />
+          <col className="col-val" />
+          <col className="col-val" />
+          <col className="col-val" />
+          <col className="col-qty" />
+          <col className="col-val" />
+          <col className="col-qty" />
+          <col className="col-val" />
+          <col className="col-val" />
+          <col className="col-qty" />
+          <col className="col-val" />
+          <col className="col-qty" />
+          <col className="col-val" />
         </colgroup>
         <thead className="bg-muted/60">
           <tr className="border-b border-border">
-            <th className="px-2 py-1.5 text-left">Codigo</th>
-            <th className="px-2 py-1.5 text-left">Banco</th>
+            <th className="px-2 py-1.5 text-left" />
+            <th className="px-2 py-1.5 text-center">Codigo</th>
+            <th className="px-2 py-1.5 text-center">Banco</th>
             <th className="px-2 py-1.5 text-left">Descricao</th>
             <th className="px-2 py-1.5 text-center">Und.</th>
             <th className="px-2 py-1.5 text-right">Quant./Coef.</th>
             <th className="px-2 py-1.5 text-right">V. Unit. s/ BDI</th>
             <th className="px-2 py-1.5 text-right">V. Unit. c/ BDI</th>
             <th className="px-2 py-1.5 text-right">Total c/ BDI</th>
+            <th colSpan={9} />
           </tr>
         </thead>
         <tbody>
@@ -91,14 +103,16 @@ function AnalyticView({ composition, bdi }: { composition?: AdditiveComposition;
             const totalWithBdi = coef * unitWithBdi;
             return (
               <tr key={input.id} className="border-t border-border">
-                <td className="px-2 py-1.5 align-top font-mono text-[10px]">{input.code || '-'}</td>
-                <td className="px-2 py-1.5 align-top text-muted-foreground">{input.bank || '-'}</td>
+                <td className="px-2 py-1.5 align-top" />
+                <td className="px-2 py-1.5 align-top text-center font-mono text-[10px]">{input.code || '-'}</td>
+                <td className="px-2 py-1.5 align-top text-center text-muted-foreground">{input.bank || '-'}</td>
                 <td className="px-2 py-1.5 align-top font-medium leading-snug break-words">{input.description}</td>
                 <td className="px-2 py-1.5 text-center align-top">{input.unit || '-'}</td>
                 <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtNum(coef)}</td>
                 <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtBRL(unitNoBdi)}</td>
                 <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtBRL(unitWithBdi)}</td>
                 <td className="px-2 py-1.5 text-right tabular-nums align-top font-medium">{fmtBRL(totalWithBdi)}</td>
+                <td colSpan={9} />
               </tr>
             );
           })}
