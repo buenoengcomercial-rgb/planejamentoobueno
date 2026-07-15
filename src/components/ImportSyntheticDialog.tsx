@@ -523,7 +523,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         return;
       }
       setParsed(result);
-      setWizardStep(2);
+      setWizardStep(1);
 
       // Tenta extrair a Analítica do MESMO arquivo (aba Analítica).
       // Falha silenciosa: se não houver, segue só com a Sintética.
@@ -533,7 +533,6 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
           setAnalyticCompositions(classifyAnalyticCompositions(an.compositions));
           setAnalyticOk(true);
           setAnalyticInfo(`Analitica detectada no mesmo arquivo: ${an.compositions.length} composicoes c/ insumos (${an.totalInputs} insumos).`);
-          setWizardStep(3);
         } else {
           setAnalyticCompositions(null);
           setAnalyticOk(false);
@@ -590,6 +589,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         setAnalyticOk(true);
         setAnalyticCompositions(classifyAnalyticCompositions(an.compositions));
         setAnalyticInfo(an.message);
+        setShowAnalyticClassReview(true);
         setWizardStep(3);
       }
     } catch (err: any) {
@@ -723,8 +723,9 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     }
   };
 
-  const totalNoBDI = parsed?.items.reduce((s, i) => s + i.totalNoBDI, 0) ?? 0;
-  const totalWithBDI = parsed?.items.reduce((s, i) => s + i.totalWithBDI, 0) ?? 0;
+  const reviewBudgetItems = parsed?.items ?? (project.budgetItems ?? []).filter(item => item.source === 'sintetica');
+  const totalNoBDI = reviewBudgetItems.reduce((s, i) => s + i.totalNoBDI, 0) ?? 0;
+  const totalWithBDI = reviewBudgetItems.reduce((s, i) => s + i.totalWithBDI, 0) ?? 0;
   const hasAnalytic = !!(analyticCompositions && analyticCompositions.length > 0);
   const hasExistingSynthetic = (project.budgetItems ?? []).some(b => b.source === 'sintetica');
   const canGoNext =
@@ -813,6 +814,79 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
           <div className="text-xs font-semibold text-foreground">{analyticClassCounts[costClass]} insumo(s)</div>
         </div>
       ))}
+    </div>
+  ) : null;
+  const syntheticConfigPanel = preview ? (
+    <div className="w-full rounded-lg border border-border bg-muted/20 p-3 space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <div className="text-xs font-semibold text-foreground">Conferencia da Sintetica A-J</div>
+          <div className="text-[11px] text-muted-foreground">Valide as colunas, a primeira linha de dados e o BDI antes de seguir.</div>
+        </div>
+        <Button type="button" size="sm" variant="outline" className="h-7 text-[11px]" onClick={reprocessSynthetic}>
+          Atualizar leitura
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <label className="text-[11px] text-muted-foreground">
+          Linha do cabecalho
+          <input type="number" min={1} value={headerRow} onChange={e => setHeaderRow(Number(e.target.value) || 1)} className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
+        </label>
+        <label className="text-[11px] text-muted-foreground">
+          Primeira linha de dados
+          <input type="number" min={1} value={firstDataRow} onChange={e => setFirstDataRow(Number(e.target.value) || 1)} className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
+        </label>
+        <label className="text-[11px] text-muted-foreground">
+          BDI manual (%)
+          <input value={bdiInput} onChange={e => setBdiInput(e.target.value)} placeholder="Ex.: 22,50" className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
+        </label>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+        {COLUMN_LETTERS.map((letter, index) => (
+          <label key={letter} className="text-[11px] text-muted-foreground">
+            Coluna {letter}
+            <select
+              value={columnRoles[index]}
+              onChange={e => {
+                const next = [...columnRoles];
+                next[index] = e.target.value as SyntheticColumnRole;
+                setColumnRoles(next);
+              }}
+              className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground"
+            >
+              {(Object.keys(ROLE_LABELS) as SyntheticColumnRole[]).map(role => (
+                <option key={role} value={role}>{ROLE_LABELS[role]}</option>
+              ))}
+            </select>
+          </label>
+        ))}
+      </div>
+
+      <div className="overflow-x-auto rounded border border-border bg-background">
+        <table className="w-full min-w-[760px] text-[10px]">
+          <thead className="bg-muted">
+            <tr>
+              <th className="px-2 py-1 text-left font-semibold">Linha</th>
+              {COLUMN_LETTERS.map(letter => <th key={letter} className="px-2 py-1 text-left font-semibold">{letter}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {preview.rows.slice(Math.max(0, headerRow - 2), Math.max(0, headerRow - 2) + 6).map((row, idx) => {
+              const line = Math.max(0, headerRow - 2) + idx + 1;
+              return (
+                <tr key={line} className={line === headerRow ? 'border-t border-border bg-primary/5' : 'border-t border-border'}>
+                  <td className="px-2 py-1 font-mono text-muted-foreground">{line}</td>
+                  {COLUMN_LETTERS.map((_, col) => (
+                    <td key={col} className="px-2 py-1 max-w-[160px] truncate" title={row[col]}>{row[col]}</td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   ) : null;
   const analyticConfigPanel = analyticPreview ? (
@@ -1047,6 +1121,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
               </div>
             )}
 
+            {syntheticConfigPanel}
+
             {/* Bloco para importar SOMENTE a Analítica, vinculando à Sintética já salva no projeto. */}
             {hasExistingSynthetic && (
               <div className="w-full border-t border-border pt-4 space-y-2">
@@ -1092,22 +1168,22 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
           </div>
         )}
 
-        {parsed && wizardStep > 1 && (
+        {(parsed || hasExistingSynthetic) && wizardStep > 1 && (
           <div className="flex-1 overflow-y-auto space-y-3 pr-1">
             <div className="flex items-center justify-between flex-wrap gap-2 px-1">
               <span className="text-xs text-muted-foreground">📄 {fileName}</span>
               <div className="flex items-center gap-2 text-xs">
                 <span className="px-2 py-0.5 rounded-full bg-primary/15 text-primary font-bold">
-                  {parsed.items.length} itens
+                  {reviewBudgetItems.length} itens
                 </span>
                 <span className="px-2 py-0.5 rounded-full bg-info/15 text-info font-medium flex items-center gap-1">
-                  <Info className="w-3 h-3" /> BDI: {parsed.bdiPercent ? `${parsed.bdiPercent.toFixed(2)}%` : 'não detectado'}
+                  <Info className="w-3 h-3" /> BDI: {parsed?.bdiPercent ? `${parsed.bdiPercent.toFixed(2)}%` : 'não detectado'}
                 </span>
               </div>
             </div>
 
             {/* Bloco da Analítica: anexar arquivo separado caso não esteja no mesmo arquivo. */}
-            {preview && wizardStep === 2 && (
+            {false && preview && wizardStep === 2 && (
               <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div>
@@ -1234,7 +1310,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
               <div className="rounded-lg border border-border bg-card p-3">
                 <p className="text-[10px] uppercase text-muted-foreground font-semibold">Composicoes</p>
-                <p className="text-sm font-bold text-foreground mt-0.5">{parsed.items.length}</p>
+                <p className="text-sm font-bold text-foreground mt-0.5">{reviewBudgetItems.length}</p>
               </div>
               <div className="rounded-lg border border-border bg-card p-3">
                 <p className="text-[10px] uppercase text-muted-foreground font-semibold">Analiticas vinculadas</p>
@@ -1262,15 +1338,15 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
             </div>
             )}
 
-            {wizardStep === 4 && parsed.warnings.length > 0 && (
+            {wizardStep === 4 && (parsed?.warnings?.length ?? 0) > 0 && (
               <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 max-h-32 overflow-y-auto">
                 <div className="flex items-center gap-2 mb-1">
                   <AlertTriangle className="w-4 h-4 text-warning" />
-                  <span className="text-xs font-bold text-warning">{parsed.warnings.length} avisos</span>
+                  <span className="text-xs font-bold text-warning">{parsed?.warnings.length} avisos</span>
                 </div>
                 <ul className="text-[10px] text-muted-foreground space-y-0.5">
-                  {parsed.warnings.slice(0, 8).map((w, i) => <li key={i}>• {w}</li>)}
-                  {parsed.warnings.length > 8 && <li>... e mais {parsed.warnings.length - 8}</li>}
+                  {parsed?.warnings.slice(0, 8).map((w, i) => <li key={i}>• {w}</li>)}
+                  {(parsed?.warnings.length ?? 0) > 8 && <li>... e mais {(parsed?.warnings.length ?? 0) - 8}</li>}
                 </ul>
               </div>
             )}
@@ -1291,7 +1367,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                     </tr>
                   </thead>
                   <tbody>
-                    {parsed.items.slice(0, 50).map(it => (
+                    {reviewBudgetItems.slice(0, 50).map(it => (
                       <tr key={it.id} className="border-t border-border">
                         <td className="px-2 py-1">{it.item}</td>
                         <td className="px-2 py-1 font-mono">{it.code}</td>
@@ -1304,9 +1380,9 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                     ))}
                   </tbody>
                 </table>
-                {parsed.items.length > 50 && (
+                {reviewBudgetItems.length > 50 && (
                   <p className="text-[10px] text-muted-foreground text-center py-2">
-                    Mostrando 50 de {parsed.items.length} itens.
+                    Mostrando 50 de {reviewBudgetItems.length} itens.
                   </p>
                 )}
               </div>
