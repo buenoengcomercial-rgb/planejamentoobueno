@@ -1,5 +1,6 @@
 import { Fragment, type MouseEvent } from 'react';
 import { AlertCircle, Lock } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import type { Project } from '@/types/project';
 import type { Row } from '@/components/measurement/types';
 import { fmtBRL, fmtNum } from '@/components/measurement/measurementFormat';
@@ -94,10 +95,29 @@ export default function MeasurementItemRow({
       <td className={`px-2 py-1.5 text-foreground align-top cell-desc ${stickyBg}`}>
         <div className="flex items-start gap-1.5">
           {r.hasNoLogsInPeriod && (
-            <AlertCircle
-              className="w-3.5 h-3.5 text-warning shrink-0 mt-0.5 print:hidden"
-              aria-label="Sem apontamento no período"
-            />
+            <TooltipProvider delayDuration={150}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    data-detail-cell="true"
+                    className="print:hidden shrink-0 mt-0.5 inline-flex items-center justify-center rounded-full hover:bg-warning/10 focus:outline-none focus:ring-2 focus:ring-warning/40"
+                    aria-label="Sem apontamento no período"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <AlertCircle className="w-3.5 h-3.5 text-warning" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs text-xs">
+                  <p className="font-semibold mb-0.5">Sem apontamento no período</p>
+                  <p className="text-muted-foreground">
+                    Este item consta no contrato, mas não possui apontamento de produção
+                    (Diário de Obra / EAP) dentro do período selecionado desta medição.
+                    Verifique se a produção foi lançada nas datas corretas.
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
           <span className="leading-snug break-words">{r.description}</span>
           <AdditiveBadge
