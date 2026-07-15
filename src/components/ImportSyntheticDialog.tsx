@@ -255,6 +255,16 @@ function countAnalyticClasses(compositions: AdditiveComposition[]) {
   return counts;
 }
 
+function normalizeAnalyticCode(value?: string) {
+  return (value ?? '').trim().toUpperCase().replace(/\s+/g, '');
+}
+
+function analyticInputGroupKey(input: { code?: string; description: string; unit?: string }) {
+  const code = normalizeAnalyticCode(input.code);
+  if (code) return `code:${code}`;
+  return `desc:${input.description.trim().toLowerCase()}|${(input.unit ?? '').trim().toLowerCase()}`;
+}
+
 export default function ImportSyntheticDialog({ open, onClose, project, onProjectChange }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -423,11 +433,11 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     if (f) handleAnalyticFile(f);
   }, [handleAnalyticFile]);
 
-  const updateAnalyticInputClass = useCallback((inputId: string, costClass: MaterialCostClass) => {
+  const updateAnalyticInputGroupClass = useCallback((groupKey: string, costClass: MaterialCostClass) => {
     setAnalyticCompositions(current => current?.map(composition => ({
       ...composition,
       inputs: (composition.inputs ?? []).map(input =>
-        input.id === inputId ? { ...input, type: inputTypeFromClass(costClass) } : input,
+        analyticInputGroupKey(input) === groupKey ? { ...input, type: inputTypeFromClass(costClass) } : input,
       ),
     })) ?? current);
   }, []);
@@ -526,17 +536,71 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   const totalWithBDI = parsed?.items.reduce((s, i) => s + i.totalWithBDI, 0) ?? 0;
   const canConfirm = !!parsed || (analyticCompositions && analyticCompositions.length > 0);
   const hasExistingSynthetic = (project.budgetItems ?? []).some(b => b.source === 'sintetica');
-  const analyticClassCounts = analyticCompositions?.length ? countAnalyticClasses(analyticCompositions) : null;
-  const analyticInputRows = (analyticCompositions ?? []).flatMap(composition =>
-    (composition.inputs ?? []).map(input => ({
-      composition,
-      input,
-      costClass: guessAnalyticInputClass(input),
-    })),
-  );
-  const filteredAnalyticInputRows = analyticClassFilter === 'all'
-    ? analyticInputRows
-    : analyticInputRows.filter(row => row.costClass === analyticClassFilter);
+  const analyticInputGroups = Array.from((analyticCompositions ?? []).reduce((map, composition) => {
+    for (const input of composition.inputs ?? []) {
+      const key = analyticInputGroupKey(input);
+      const coefficient = Number(input.coefficient || 0);
+      const contractedQty = Number(composition.quantity || 0);
+      const totalQty = coefficient * contractedQty;
+      const unitPrice = Number(input.unitPrice || 0);
+      const existing = map.get(key);
+      const costClass = guessAnalyticInputClass(input);
+      if (existing) {
+        existing.totalQuantity += totalQty;
+        existing.totalValue += totalQty * unitPrice;
+        existing.occurrences += 1;
+        existing.compositionItems.add(composition.item);
+        existing.costClassCounts[costClass] += 1;
+      } else {
+        map.set(key, {
+          key,
+          code: input.code || '-',
+          description: input.description,
+          unit: input.unit || '-',
+          unitPrice,
+          totalQuantity: totalQty,
+          totalValue: totalQty * unitPrice,
+          occurrences: 1,
+          compositionItems: new Set<string>([composition.item]),
+          costClassCounts: {
+            material: costClass === 'material' ? 1 : 0,
+            labor: costClass === 'labor' ? 1 : 0,
+            equipment: costClass === 'equipment' ? 1 : 0,
+            unclassified: costClass === 'unclassified' ? 1 : 0,
+          } as Record<MaterialCostClass, number>,
+        });
+      }
+    }
+    return map;
+  }, new Map<string, {
+    key: string;
+    code: string;
+    description: string;
+    unit: string;
+    unitPrice: number;
+    totalQuantity: number;
+    totalValue: number;
+    occurrences: number;
+    compositionItems: Set<string>;
+    costClassCounts: Record<MaterialCostClass, number>;
+  }>()).values()).map(group => {
+    const costClass = COST_CLASS_OPTIONS.reduce((best, current) =>
+      group.costClassCounts[current] > group.costClassCounts[best] ? current : best,
+    'unclassified' as MaterialCostClass);
+    return { ...group, costClass };
+  }).sort((a, b) => a.description.localeCompare(b.description, 'pt-BR'));
+  const analyticClassCounts = analyticCompositions?.length ? analyticInputGroups.reduce((counts, group) => {
+    counts[group.costClass] += 1;
+    return counts;
+  }, {
+    material: 0,
+    labor: 0,
+    equipment: 0,
+    unclassified: 0,
+  } as Record<MaterialCostClass, number>) : null;
+  const filteredAnalyticInputGroups = analyticClassFilter === 'all'
+    ? analyticInputGroups
+    : analyticInputGroups.filter(row => row.costClass === analyticClassFilter);
   const analyticClassSummary = analyticClassCounts ? (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
       {COST_CLASS_OPTIONS.map(costClass => (
@@ -617,7 +681,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                   onClick={() => setAnalyticClassFilter('all')}
                   className={`rounded border px-2 py-1 text-[10px] ${analyticClassFilter === 'all' ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}
                 >
-                  Todos ({analyticInputRows.length})
+                  Todos ({analyticInputGroups.length})
                 </button>
                 {COST_CLASS_OPTIONS.map(costClass => (
                   <button
@@ -631,33 +695,35 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                 ))}
               </div>
               <div className="max-h-72 overflow-auto">
-                <table className="w-full min-w-[880px] text-[10px]">
+                <table className="w-full min-w-[920px] text-[10px]">
                   <thead className="sticky top-0 bg-muted">
                     <tr>
-                      <th className="px-2 py-1 text-left font-semibold">Item</th>
-                      <th className="px-2 py-1 text-left font-semibold">Composicao</th>
                       <th className="px-2 py-1 text-left font-semibold">Codigo</th>
                       <th className="px-2 py-1 text-left font-semibold">Insumo</th>
                       <th className="px-2 py-1 text-center font-semibold">Und</th>
-                      <th className="px-2 py-1 text-right font-semibold">Coef.</th>
-                      <th className="px-2 py-1 text-right font-semibold">V. unit.</th>
+                      <th className="px-2 py-1 text-right font-semibold">Qtd. total</th>
+                      <th className="px-2 py-1 text-right font-semibold">V. unit. ref.</th>
+                      <th className="px-2 py-1 text-right font-semibold">Total ref.</th>
+                      <th className="px-2 py-1 text-center font-semibold">Composicoes</th>
                       <th className="px-2 py-1 text-left font-semibold">Classificacao</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredAnalyticInputRows.map(({ composition, input, costClass }) => (
-                      <tr key={input.id} className="border-t border-border">
-                        <td className="px-2 py-1 font-mono text-muted-foreground">{composition.item}</td>
-                        <td className="px-2 py-1 max-w-[180px] truncate" title={composition.description}>{composition.description}</td>
-                        <td className="px-2 py-1 font-mono">{input.code || '-'}</td>
-                        <td className="px-2 py-1 max-w-[260px] truncate font-medium" title={input.description}>{input.description}</td>
-                        <td className="px-2 py-1 text-center">{input.unit || '-'}</td>
-                        <td className="px-2 py-1 text-right tabular-nums">{Number(input.coefficient || 0).toLocaleString('pt-BR')}</td>
-                        <td className="px-2 py-1 text-right tabular-nums">{fmtBRL(Number(input.unitPrice || 0))}</td>
+                    {filteredAnalyticInputGroups.map(group => (
+                      <tr key={group.key} className="border-t border-border">
+                        <td className="px-2 py-1 font-mono">{group.code}</td>
+                        <td className="px-2 py-1 max-w-[300px] truncate font-medium" title={group.description}>{group.description}</td>
+                        <td className="px-2 py-1 text-center">{group.unit}</td>
+                        <td className="px-2 py-1 text-right tabular-nums">{group.totalQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 4 })}</td>
+                        <td className="px-2 py-1 text-right tabular-nums">{fmtBRL(group.unitPrice)}</td>
+                        <td className="px-2 py-1 text-right tabular-nums font-medium">{fmtBRL(group.totalValue)}</td>
+                        <td className="px-2 py-1 text-center tabular-nums" title={Array.from(group.compositionItems).join(', ')}>
+                          {group.compositionItems.size}
+                        </td>
                         <td className="px-2 py-1">
                           <select
-                            value={costClass}
-                            onChange={e => updateAnalyticInputClass(input.id, e.target.value as MaterialCostClass)}
+                            value={group.costClass}
+                            onChange={e => updateAnalyticInputGroupClass(group.key, e.target.value as MaterialCostClass)}
                             className="h-7 w-full rounded border border-border bg-background px-2 text-[10px] text-foreground"
                           >
                             {COST_CLASS_OPTIONS.map(option => (
@@ -667,7 +733,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                         </td>
                       </tr>
                     ))}
-                    {filteredAnalyticInputRows.length === 0 && (
+                    {filteredAnalyticInputGroups.length === 0 && (
                       <tr>
                         <td colSpan={8} className="px-2 py-6 text-center text-muted-foreground">
                           Nenhum insumo nesta classificacao.
