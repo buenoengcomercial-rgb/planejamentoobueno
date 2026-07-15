@@ -3,7 +3,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Project, BudgetItem, AdditiveComposition, AdditiveInputType, MaterialCostClass } from '@/types/project';
+import { Project, BudgetItem, AdditiveComposition, AdditiveInputType, LaborComposition, MaterialCostClass, Phase, Task } from '@/types/project';
 import {
   DEFAULT_SYNTHETIC_COLUMN_MAP,
   inspectSyntheticWorkbook,
@@ -24,6 +24,7 @@ import {
   FileSpreadsheet, AlertTriangle, Loader2, Check, Info, DollarSign, Layers,
 } from 'lucide-react';
 import { guessMaterialCostClass, linkKeyOf, MATERIAL_COST_CLASS_LABEL } from '@/lib/materialComparisons';
+import { calculateRupDuration } from '@/lib/calculations';
 
 interface Props {
   open: boolean;
@@ -65,6 +66,16 @@ const DEFAULT_COLUMN_ROLES: SyntheticColumnRole[] = [
 ];
 
 const ANALYTIC_COLUMN_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+const PHASE_COLORS = [
+  'hsl(var(--primary))',
+  'hsl(var(--info))',
+  'hsl(var(--warning))',
+  'hsl(var(--success))',
+  'hsl(var(--destructive))',
+  'hsl(210, 60%, 50%)',
+  'hsl(280, 50%, 55%)',
+  'hsl(160, 50%, 45%)',
+];
 
 const ANALYTIC_ROLE_LABELS: Record<AnalyticColumnRole, string> = {
   ignore: 'Ignorar',
@@ -265,6 +276,146 @@ function analyticInputGroupKey(input: { code?: string; description: string; unit
   return `desc:${input.description.trim().toLowerCase()}|${(input.unit ?? '').trim().toLowerCase()}`;
 }
 
+function safeIdPart(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase() || 'item';
+}
+
+function sameBudgetKey(a: { item?: string; code?: string }, b: { item?: string; code?: string }) {
+  return (a.item ?? '').trim() === (b.item ?? '').trim()
+    && normalizeAnalyticCode(a.code) === normalizeAnalyticCode(b.code);
+}
+
+function findAnalyticForBudget(compositions: AdditiveComposition[], item: BudgetItem) {
+  return compositions.find(c => c.linkedTaskId === item.taskId || c.taskId === item.taskId)
+    ?? compositions.find(c => sameBudgetKey(c, item));
+}
+
+function buildLaborFromAnalytic(composition?: AdditiveComposition): LaborComposition[] {
+  if (!composition) return [];
+  return (composition.inputs ?? [])
+    .filter(input => guessAnalyticInputClass(input) === 'labor')
+    .map(input => ({
+      id: `lc-${composition.id}-${input.id}`,
+      role: input.description || input.code || 'Mao de obra',
+      originalRole: input.description,
+      rup: Number(input.coefficient || 0),
+      workerCount: 1,
+      hourlyRate: Number(input.unitPrice || 0) || undefined,
+    }))
+    .filter(labor => labor.rup > 0);
+}
+
+function buildImportedTask(item: BudgetItem, phaseName: string, laborCompositions: LaborComposition[], order: number, projectStartDate: string): Task {
+  const taskId = item.taskId ?? `budget-${item.id}`;
+  const base: Task = {
+    id: taskId,
+    name: item.description,
+    phase: phaseName,
+    startDate: projectStartDate,
+    duration: 1,
+    dependencies: [],
+    dependencyDetails: [],
+    responsible: '',
+    percentComplete: 0,
+    materials: [],
+    level: 0,
+    contractOrder: order,
+    scheduleOrder: order,
+    originalOrder: order,
+    publicSheetOrder: order,
+    durationMode: laborCompositions.length ? 'rup' : 'manual',
+    isManual: !laborCompositions.length,
+    quantity: item.quantity,
+    unit: item.unit,
+    unitPrice: item.unitPriceWithBDI,
+    unitPriceNoBDI: item.unitPriceNoBDI,
+    itemCode: item.code,
+    priceBank: item.bank,
+    laborCompositions,
+  };
+  if (!laborCompositions.length) return base;
+  const calc = calculateRupDuration(base);
+  return {
+    ...base,
+    duration: Math.max(1, calc.duration),
+    calculatedDuration: Math.max(1, calc.duration),
+    totalHours: calc.totalHours,
+    bottleneckRole: calc.bottleneckRole,
+  };
+}
+
+function integrateImportedBudget(project: Project, budgetItems: BudgetItem[], analyticCompositions: AdditiveComposition[]) {
+  const phases = [...project.phases];
+  const chapterIndex = new Map<string, string>();
+  const subchapterIndex = new Map<string, string>();
+
+  const ensurePhase = (name: string, code: string, parentId?: string): Phase => {
+    const key = `${parentId ?? 'root'}|${code || name}`;
+    const indexMap = parentId ? subchapterIndex : chapterIndex;
+    const existingId = indexMap.get(key)
+      ?? phases.find(p => (p.parentId ?? '') === (parentId ?? '') && (p.customNumber === code || p.name === name))?.id;
+    if (existingId) {
+      const found = phases.find(p => p.id === existingId);
+      if (found) {
+        indexMap.set(key, found.id);
+        return found;
+      }
+    }
+    const siblings = phases.filter(p => (p.parentId ?? null) === (parentId ?? null));
+    const phase: Phase = {
+      id: `phase-import-${safeIdPart(code || name)}-${Date.now()}-${phases.length}`,
+      name,
+      color: PHASE_COLORS[phases.length % PHASE_COLORS.length],
+      tasks: [],
+      parentId,
+      customNumber: code || undefined,
+      order: siblings.length,
+    };
+    phases.push(phase);
+    indexMap.set(key, phase.id);
+    return phase;
+  };
+
+  const linkedBudgetItems = budgetItems.map(item => ({ ...item, taskId: item.taskId ?? `budget-${item.id}` }));
+
+  linkedBudgetItems.forEach((item, order) => {
+    const chapterName = item.chapterName || item.subchapterName || 'Orcamento importado';
+    const chapterCode = item.chapterCode || item.item.split('.')[0] || '';
+    const chapter = ensurePhase(chapterName, chapterCode);
+    const targetPhase = item.subchapterName
+      ? ensurePhase(item.subchapterName, item.subchapterCode || item.item.split('.').slice(0, 2).join('.'), chapter.id)
+      : chapter;
+    const analytic = findAnalyticForBudget(analyticCompositions, item);
+    const laborCompositions = buildLaborFromAnalytic(analytic);
+    const nextTask = buildImportedTask(item, targetPhase.name, laborCompositions, order, project.startDate);
+    const phaseIndex = phases.findIndex(p => p.id === targetPhase.id);
+    if (phaseIndex < 0) return;
+    const existingTaskIndex = phases[phaseIndex].tasks.findIndex(t => t.id === nextTask.id || sameBudgetKey({ item: t.contractOrder != null ? item.item : undefined, code: t.itemCode }, item));
+    const tasks = existingTaskIndex >= 0
+      ? phases[phaseIndex].tasks.map((task, idx) => idx === existingTaskIndex ? { ...task, ...nextTask, dailyLogs: task.dailyLogs, percentComplete: task.percentComplete } : task)
+      : [...phases[phaseIndex].tasks, nextTask];
+    phases[phaseIndex] = { ...phases[phaseIndex], tasks };
+  });
+
+  const taskIdByBudgetId = new Map(linkedBudgetItems.map(item => [item.id, item.taskId]));
+  const linkedAnalytic = analyticCompositions.map(composition => {
+    const budget = linkedBudgetItems.find(item => sameBudgetKey(composition, item));
+    const linkedTaskId = budget?.taskId ?? composition.linkedTaskId ?? composition.taskId;
+    return linkedTaskId ? { ...composition, taskId: linkedTaskId, linkedTaskId } : composition;
+  });
+
+  return {
+    phases,
+    budgetItems: linkedBudgetItems.map(item => ({ ...item, taskId: taskIdByBudgetId.get(item.id) ?? item.taskId })),
+    analyticCompositions: linkedAnalytic,
+  };
+}
+
 export default function ImportSyntheticDialog({ open, onClose, project, onProjectChange }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -276,6 +427,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   const [headerRow, setHeaderRow] = useState(9);
   const [firstDataRow, setFirstDataRow] = useState(10);
   const [bdiInput, setBdiInput] = useState('');
+  const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4>(1);
 
   // Analítica (pode vir no mesmo arquivo da Sintética OU em arquivo separado).
   const [analyticCompositions, setAnalyticCompositions] = useState<AdditiveComposition[] | null>(null);
@@ -302,6 +454,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     setHeaderRow(9);
     setFirstDataRow(10);
     setBdiInput('');
+    setWizardStep(1);
     setAnalyticCompositions(null);
     setAnalyticFileName('');
     setAnalyticInfo('');
@@ -347,6 +500,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         return;
       }
       setParsed(result);
+      setWizardStep(2);
 
       // Tenta extrair a Analítica do MESMO arquivo (aba Analítica).
       // Falha silenciosa: se não houver, segue só com a Sintética.
@@ -355,7 +509,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         if (an.hasAnalyticSheet && an.compositions.length > 0) {
           setAnalyticCompositions(classifyAnalyticCompositions(an.compositions));
           setAnalyticOk(true);
-          setAnalyticInfo(`Analítica detectada no mesmo arquivo: ${an.compositions.length} composições c/ insumos (${an.totalInputs} insumos).`);
+          setAnalyticInfo(`Analitica detectada no mesmo arquivo: ${an.compositions.length} composicoes c/ insumos (${an.totalInputs} insumos).`);
+          setWizardStep(3);
         } else {
           setAnalyticCompositions(null);
           setAnalyticOk(false);
@@ -412,6 +567,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         setAnalyticOk(true);
         setAnalyticCompositions(classifyAnalyticCompositions(an.compositions));
         setAnalyticInfo(an.message);
+        setWizardStep(3);
       }
     } catch (err: any) {
       setAnalyticOk(false);
@@ -458,6 +614,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
       return;
     }
     setParsed(result);
+    setWizardStep(2);
   }, [syntheticBuffer, preview, headerRow, firstDataRow, columnRoles, bdiInput]);
 
   const reprocessAnalytic = useCallback(async () => {
@@ -488,6 +645,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         setAnalyticOk(true);
         setAnalyticCompositions(classifyAnalyticCompositions(an.compositions));
         setAnalyticInfo(an.message);
+        setWizardStep(3);
       }
     } catch (err: any) {
       setAnalyticOk(false);
@@ -501,20 +659,19 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     // Caso 1: importação completa de Sintética (+ opcional Analítica).
     if (parsed) {
       const keep = (project.budgetItems ?? []).filter(b => b.source !== 'sintetica');
-      const next: BudgetItem[] = [...keep, ...parsed.items];
+      const importedBudgetItems = parsed.items.map(item => ({ ...item, taskId: item.taskId ?? `budget-${item.id}` }));
+      const classified = classifyAnalyticCompositions(analyticCompositions ?? []);
+      const integration = integrateImportedBudget(project, importedBudgetItems, classified);
+      const next: BudgetItem[] = [...keep, ...integration.budgetItems];
       const nextProject: Project = {
         ...project,
         budgetItems: next,
+        phases: integration.phases,
+        analyticCompositions: integration.analyticCompositions,
+        materialCostClasses: classified.length > 0 ? mergeAnalyticCostClasses(project, classified) : project.materialCostClasses,
         syntheticBdiPercent: parsed.bdiPercent,
         syntheticImportedAt: new Date().toISOString(),
       };
-      // Só substitui analyticCompositions se uma Analítica nova foi lida com sucesso.
-      // Caso contrário, PRESERVA a Analítica existente (não apaga).
-      if (analyticCompositions && analyticCompositions.length > 0) {
-        const classified = classifyAnalyticCompositions(analyticCompositions);
-        nextProject.analyticCompositions = classified;
-        nextProject.materialCostClasses = mergeAnalyticCostClasses(project, classified);
-      }
       onProjectChange(nextProject);
       handleClose();
       return;
@@ -534,8 +691,21 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
 
   const totalNoBDI = parsed?.items.reduce((s, i) => s + i.totalNoBDI, 0) ?? 0;
   const totalWithBDI = parsed?.items.reduce((s, i) => s + i.totalWithBDI, 0) ?? 0;
-  const canConfirm = !!parsed || (analyticCompositions && analyticCompositions.length > 0);
+  const hasAnalytic = !!(analyticCompositions && analyticCompositions.length > 0);
+  const canGoNext =
+    wizardStep === 1 ? !!parsed
+    : wizardStep === 2 ? hasAnalytic
+    : wizardStep === 3 ? hasAnalytic
+    : !!parsed;
   const hasExistingSynthetic = (project.budgetItems ?? []).some(b => b.source === 'sintetica');
+  const goNextStep = () => {
+    if (wizardStep === 1 && parsed) setWizardStep(2);
+    else if (wizardStep === 2 && hasAnalytic) {
+      setShowAnalyticClassReview(true);
+      setWizardStep(3);
+    } else if (wizardStep === 3 && hasAnalytic) setWizardStep(4);
+  };
+  const goPreviousStep = () => setWizardStep(step => Math.max(1, step - 1) as 1 | 2 | 3 | 4);
   const analyticInputGroups = Array.from((analyticCompositions ?? []).reduce((map, composition) => {
     for (const input of composition.inputs ?? []) {
       const key = analyticInputGroupKey(input);
@@ -787,9 +957,31 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
             A plataforma tenta detectar cabecalhos automaticamente, mas voce pode alterar coluna, linha inicial e BDI antes de confirmar.
             <br />A mescla entre Sintetica e Analitica e feita principalmente por <strong>Item + Codigo</strong>, independentemente do nome usado no cabecalho.
           </DialogDescription>
+          <div className="grid grid-cols-4 gap-2 pt-2">
+            {[
+              { step: 1, label: 'Sintetica', done: !!parsed },
+              { step: 2, label: 'Analitica', done: hasAnalytic },
+              { step: 3, label: 'Classificar insumos', done: hasAnalytic },
+              { step: 4, label: 'Integrar projeto', done: false },
+            ].map(item => (
+              <div
+                key={item.step}
+                className={`rounded-lg border px-3 py-2 text-[11px] ${
+                  wizardStep === item.step
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : item.done
+                      ? 'border-success/30 bg-success/5 text-success'
+                      : 'border-border bg-muted/20 text-muted-foreground'
+                }`}
+              >
+                <div className="font-semibold">{item.step}o passo</div>
+                <div className="truncate">{item.label}</div>
+              </div>
+            ))}
+          </div>
         </DialogHeader>
 
-        {!parsed && (
+        {wizardStep === 1 && (
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 flex flex-col items-center justify-start py-4 space-y-4">
             <div
               onDrop={handleDrop}
@@ -866,7 +1058,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
           </div>
         )}
 
-        {parsed && (
+        {parsed && wizardStep > 1 && (
           <div className="flex-1 overflow-y-auto space-y-3 pr-1">
             <div className="flex items-center justify-between flex-wrap gap-2 px-1">
               <span className="text-xs text-muted-foreground">📄 {fileName}</span>
@@ -881,7 +1073,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
             </div>
 
             {/* Bloco da Analítica: anexar arquivo separado caso não esteja no mesmo arquivo. */}
-            {preview && (
+            {preview && wizardStep === 2 && (
               <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div>
@@ -955,6 +1147,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
               </div>
             )}
 
+            {wizardStep === 2 && (
             <div className="rounded-lg border border-dashed border-border bg-muted/20 p-3 space-y-2">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
@@ -992,9 +1185,36 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                 </p>
               )}
             </div>
+            )}
 
-            {analyticConfigPanel}
+            {wizardStep === 3 && analyticConfigPanel}
 
+            {wizardStep === 4 && (
+            <div className="space-y-3">
+            <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
+              <div className="text-sm font-semibold text-foreground">4. Integrar planilhas ao projeto</div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                A integracao cria a EAP com os capitulos e subcapitulos importados da Sintetica. Medicao, Aditivo e Custo Real usam a base financeira. Cronograma e Producao recebem somente a RUP formada pelos insumos classificados como Mao de obra.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+              <div className="rounded-lg border border-border bg-card p-3">
+                <p className="text-[10px] uppercase text-muted-foreground font-semibold">Composicoes</p>
+                <p className="text-sm font-bold text-foreground mt-0.5">{parsed.items.length}</p>
+              </div>
+              <div className="rounded-lg border border-border bg-card p-3">
+                <p className="text-[10px] uppercase text-muted-foreground font-semibold">Analiticas vinculadas</p>
+                <p className="text-sm font-bold text-foreground mt-0.5">{analyticCompositions?.length ?? 0}</p>
+              </div>
+              <div className="rounded-lg border border-border bg-card p-3">
+                <p className="text-[10px] uppercase text-muted-foreground font-semibold">Insumos agrupados</p>
+                <p className="text-sm font-bold text-foreground mt-0.5">{analyticInputGroups.length}</p>
+              </div>
+              <div className="rounded-lg border border-border bg-card p-3">
+                <p className="text-[10px] uppercase text-muted-foreground font-semibold">Mao de obra</p>
+                <p className="text-sm font-bold text-success mt-0.5">{analyticClassCounts?.labor ?? 0}</p>
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-2">
               <div className="rounded-lg border border-border bg-card p-3">
                 <p className="text-[10px] uppercase text-muted-foreground font-semibold">Total s/ BDI</p>
@@ -1005,8 +1225,10 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                 <p className="text-sm font-bold text-success mt-0.5">{fmtBRL(totalWithBDI)}</p>
               </div>
             </div>
+            </div>
+            )}
 
-            {parsed.warnings.length > 0 && (
+            {wizardStep === 4 && parsed.warnings.length > 0 && (
               <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 max-h-32 overflow-y-auto">
                 <div className="flex items-center gap-2 mb-1">
                   <AlertTriangle className="w-4 h-4 text-warning" />
@@ -1019,6 +1241,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
               </div>
             )}
 
+            {wizardStep === 4 && (
             <div className="rounded-lg border border-border overflow-hidden">
               <div className="overflow-x-auto max-h-72">
                 <table className="w-full text-[11px]">
@@ -1054,15 +1277,25 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                 )}
               </div>
             </div>
+            )}
           </div>
         )}
 
         <DialogFooter className="shrink-0 border-t border-border pt-3">
           <Button variant="outline" onClick={handleClose}>Cancelar</Button>
-          {canConfirm && (
-            <Button onClick={confirmImport}>
+          {wizardStep > 1 && (
+            <Button variant="outline" onClick={goPreviousStep}>
+              Voltar
+            </Button>
+          )}
+          {wizardStep < 4 ? (
+            <Button onClick={goNextStep} disabled={!canGoNext}>
+              {wizardStep === 1 ? 'Ir para Analitica' : wizardStep === 2 ? 'Ir para classificacao' : 'Ir para integracao'}
+            </Button>
+          ) : (
+            <Button onClick={confirmImport} disabled={!canGoNext}>
               <Check className="w-4 h-4 mr-1" />
-              {parsed ? 'Concluir importacao' : 'Vincular Analitica'}
+              Integrar projeto
             </Button>
           )}
         </DialogFooter>
