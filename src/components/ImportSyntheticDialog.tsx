@@ -4,7 +4,14 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Project, BudgetItem, AdditiveComposition } from '@/types/project';
-import { parseSyntheticBudget, ParsedSynthetic } from '@/lib/importParser';
+import {
+  DEFAULT_SYNTHETIC_COLUMN_MAP,
+  inspectSyntheticWorkbook,
+  parseSyntheticBudgetFlexible,
+  ParsedSynthetic,
+  SyntheticColumnRole,
+  SyntheticWorkbookPreview,
+} from '@/lib/importParser';
 import {
   extractBaseAnalyticCompositions,
   extractBaseAnalyticCompositionsFromAnalyticFile,
@@ -23,11 +30,62 @@ interface Props {
 const fmtBRL = (v: number) =>
   v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+const COLUMN_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
+
+const ROLE_LABELS: Record<SyntheticColumnRole, string> = {
+  ignore: 'Ignorar',
+  item: 'Item',
+  code: 'Codigo',
+  bank: 'Banco',
+  description: 'Descricao',
+  quantity: 'Quantidade',
+  unit: 'Unidade',
+  unitPriceNoBDI: 'Valor unitario',
+  totalNoBDI: 'Total sem BDI',
+  unitPriceWithBDI: 'Valor unitario com BDI',
+  totalWithBDI: 'Total',
+};
+
+const DEFAULT_COLUMN_ROLES: SyntheticColumnRole[] = [
+  'item',
+  'code',
+  'bank',
+  'description',
+  'quantity',
+  'unit',
+  'unitPriceNoBDI',
+  'unitPriceWithBDI',
+  'totalWithBDI',
+  'ignore',
+];
+
+function rolesToMap(roles: SyntheticColumnRole[]) {
+  const map = { ...DEFAULT_SYNTHETIC_COLUMN_MAP };
+  Object.keys(map).forEach(key => delete map[key as keyof typeof map]);
+  roles.forEach((role, index) => {
+    if (role !== 'ignore') map[role] = index;
+  });
+  return map;
+}
+
+function parseBdiInput(value: string): number | undefined {
+  const normalized = value.replace('%', '').replace(/\./g, '').replace(',', '.').trim();
+  if (!normalized) return undefined;
+  const n = Number(normalized);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 export default function ImportSyntheticDialog({ open, onClose, project, onProjectChange }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [fileName, setFileName] = useState('');
   const [parsed, setParsed] = useState<ParsedSynthetic | null>(null);
+  const [syntheticBuffer, setSyntheticBuffer] = useState<ArrayBuffer | null>(null);
+  const [preview, setPreview] = useState<SyntheticWorkbookPreview | null>(null);
+  const [columnRoles, setColumnRoles] = useState<SyntheticColumnRole[]>(DEFAULT_COLUMN_ROLES);
+  const [headerRow, setHeaderRow] = useState(9);
+  const [firstDataRow, setFirstDataRow] = useState(10);
+  const [bdiInput, setBdiInput] = useState('');
 
   // Analítica (pode vir no mesmo arquivo da Sintética OU em arquivo separado).
   const [analyticCompositions, setAnalyticCompositions] = useState<AdditiveComposition[] | null>(null);
@@ -41,6 +99,12 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     setError('');
     setFileName('');
     setParsed(null);
+    setSyntheticBuffer(null);
+    setPreview(null);
+    setColumnRoles(DEFAULT_COLUMN_ROLES);
+    setHeaderRow(9);
+    setFirstDataRow(10);
+    setBdiInput('');
     setAnalyticCompositions(null);
     setAnalyticFileName('');
     setAnalyticInfo('');
@@ -55,7 +119,23 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     setFileName(file.name);
     try {
       const buf = await file.arrayBuffer();
-      const result = parseSyntheticBudget(buf);
+      const inspected = inspectSyntheticWorkbook(buf);
+      const detectedBdi = inspected.detectedBdiPercent;
+      const nextHeaderRow = inspected.suggestedHeaderRowIndex + 1;
+      const nextFirstDataRow = nextHeaderRow + 1;
+      setSyntheticBuffer(buf);
+      setPreview(inspected);
+      setColumnRoles(DEFAULT_COLUMN_ROLES);
+      setHeaderRow(nextHeaderRow);
+      setFirstDataRow(nextFirstDataRow);
+      setBdiInput(detectedBdi ? String(detectedBdi).replace('.', ',') : '');
+      const result = parseSyntheticBudgetFlexible(buf, {
+        sheetName: inspected.sheetName,
+        headerRowIndex: inspected.suggestedHeaderRowIndex,
+        firstDataRowIndex: inspected.suggestedHeaderRowIndex + 1,
+        columns: rolesToMap(DEFAULT_COLUMN_ROLES),
+        bdiPercent: detectedBdi,
+      });
       if (result.items.length === 0) {
         setError('Nenhum item financeiro encontrado na planilha Sintética.');
         setLoading(false);
@@ -132,6 +212,24 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     if (f) handleAnalyticFile(f);
   }, [handleAnalyticFile]);
 
+  const reprocessSynthetic = useCallback(() => {
+    if (!syntheticBuffer || !preview) return;
+    setError('');
+    const result = parseSyntheticBudgetFlexible(syntheticBuffer, {
+      sheetName: preview.sheetName,
+      headerRowIndex: Math.max(0, headerRow - 1),
+      firstDataRowIndex: Math.max(0, firstDataRow - 1),
+      columns: rolesToMap(columnRoles),
+      bdiPercent: parseBdiInput(bdiInput),
+    });
+    if (result.items.length === 0) {
+      setError('Nenhum item financeiro encontrado com esta configuracao de colunas.');
+      setParsed(null);
+      return;
+    }
+    setParsed(result);
+  }, [syntheticBuffer, preview, headerRow, firstDataRow, columnRoles, bdiInput]);
+
   const confirmImport = () => {
     // Caso 1: importação completa de Sintética (+ opcional Analítica).
     if (parsed) {
@@ -177,9 +275,9 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
             Importar Sintética (Orçamento)
           </DialogTitle>
           <DialogDescription>
-            Planilha financeira do orçamento. Layout fixo:
-            A=Item · B=Código · C=Banco · D=Descrição · E=Quant · F=Und · G=V.unit s/BDI · H=Total s/BDI · I=V.unit c/BDI · J=Total c/BDI.
-            <br />BDI lido de <strong>J8</strong> quando presente. Esta importação alimenta a aba <strong>Medição</strong> e — se houver Analítica — também a <strong>Lista de Material</strong>.
+            Planilha financeira do orçamento com leitura configurável de A a J.
+            A classificação vem preenchida como A=Item, B=Código, C=Banco, D=Descrição, E=Quant., F=Un, G=Valor Unit, H=Valor Unit com BDI, I=Total e J=Ignorar.
+            <br />O BDI pode ser informado manualmente. Esta importação alimenta a aba <strong>Medição</strong> e, se houver Analítica, também a <strong>Lista de Material</strong>.
           </DialogDescription>
         </DialogHeader>
 
@@ -274,6 +372,80 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
             </div>
 
             {/* Bloco da Analítica: anexar arquivo separado caso não esteja no mesmo arquivo. */}
+            {preview && (
+              <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div>
+                    <div className="text-xs font-semibold text-foreground">Configuracao da leitura A-J</div>
+                    <div className="text-[11px] text-muted-foreground">Ajuste as colunas conforme a planilha antes de confirmar.</div>
+                  </div>
+                  <Button type="button" size="sm" variant="outline" className="h-7 text-[11px]" onClick={reprocessSynthetic}>
+                    Atualizar leitura
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <label className="text-[11px] text-muted-foreground">
+                    Linha do cabecalho
+                    <input type="number" min={1} value={headerRow} onChange={e => setHeaderRow(Number(e.target.value) || 1)} className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
+                  </label>
+                  <label className="text-[11px] text-muted-foreground">
+                    Primeira linha de dados
+                    <input type="number" min={1} value={firstDataRow} onChange={e => setFirstDataRow(Number(e.target.value) || 1)} className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
+                  </label>
+                  <label className="text-[11px] text-muted-foreground">
+                    BDI manual (%)
+                    <input value={bdiInput} onChange={e => setBdiInput(e.target.value)} placeholder="Ex.: 22,50" className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                  {COLUMN_LETTERS.map((letter, index) => (
+                    <label key={letter} className="text-[11px] text-muted-foreground">
+                      Coluna {letter}
+                      <select
+                        value={columnRoles[index]}
+                        onChange={e => {
+                          const next = [...columnRoles];
+                          next[index] = e.target.value as SyntheticColumnRole;
+                          setColumnRoles(next);
+                        }}
+                        className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground"
+                      >
+                        {(Object.keys(ROLE_LABELS) as SyntheticColumnRole[]).map(role => (
+                          <option key={role} value={role}>{ROLE_LABELS[role]}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+
+                <div className="overflow-x-auto rounded border border-border bg-background">
+                  <table className="w-full min-w-[760px] text-[10px]">
+                    <thead className="bg-muted">
+                      <tr>
+                        <th className="px-2 py-1 text-left font-semibold">Linha</th>
+                        {COLUMN_LETTERS.map(letter => <th key={letter} className="px-2 py-1 text-left font-semibold">{letter}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.rows.slice(Math.max(0, headerRow - 2), Math.max(0, headerRow - 2) + 6).map((row, idx) => {
+                        const line = Math.max(0, headerRow - 2) + idx + 1;
+                        return (
+                          <tr key={line} className={line === headerRow ? 'border-t border-border bg-primary/5' : 'border-t border-border'}>
+                            <td className="px-2 py-1 font-mono text-muted-foreground">{line}</td>
+                            {COLUMN_LETTERS.map((_, col) => (
+                              <td key={col} className="px-2 py-1 max-w-[160px] truncate" title={row[col]}>{row[col]}</td>
+                            ))}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             <div className="rounded-lg border border-dashed border-border bg-muted/20 p-3 space-y-2">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 text-xs font-semibold text-foreground">

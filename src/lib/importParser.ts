@@ -931,6 +931,49 @@ export interface ParsedSynthetic {
 
 import { trunc2 as _trunc2, money2 as _money2, calculateUnitPriceWithBDI as _calcUnitWithBDI, calculateLineTotal as _calcLineTotal } from './financialEngine';
 
+export type SyntheticColumnRole =
+  | 'ignore'
+  | 'item'
+  | 'code'
+  | 'bank'
+  | 'description'
+  | 'quantity'
+  | 'unit'
+  | 'unitPriceNoBDI'
+  | 'totalNoBDI'
+  | 'unitPriceWithBDI'
+  | 'totalWithBDI';
+
+export type SyntheticColumnMap = Partial<Record<Exclude<SyntheticColumnRole, 'ignore'>, number>>;
+
+export interface SyntheticImportOptions {
+  sheetName?: string;
+  headerRowIndex?: number;
+  firstDataRowIndex?: number;
+  columns?: SyntheticColumnMap;
+  bdiPercent?: number;
+}
+
+export interface SyntheticWorkbookPreview {
+  sheetNames: string[];
+  sheetName: string;
+  rows: string[][];
+  suggestedHeaderRowIndex: number;
+  detectedBdiPercent?: number;
+}
+
+export const DEFAULT_SYNTHETIC_COLUMN_MAP: SyntheticColumnMap = {
+  item: 0,
+  code: 1,
+  bank: 2,
+  description: 3,
+  quantity: 4,
+  unit: 5,
+  unitPriceNoBDI: 6,
+  unitPriceWithBDI: 7,
+  totalWithBDI: 8,
+};
+
 function _toNumSyn(v: unknown): number {
   if (v === null || v === undefined || v === '') return 0;
   if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
@@ -949,15 +992,63 @@ function _normLow(s: string): string {
   return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 }
 
+function _findSyntheticSheetName(wb: XLSX.WorkBook, sheetName?: string): string {
+  if (sheetName && wb.Sheets[sheetName]) return sheetName;
+  return wb.SheetNames.find(n => _normLow(n).includes('sintet')) ?? wb.SheetNames[0];
+}
+
+function _detectSyntheticBdi(rows: any[][]): number | undefined {
+  const j8 = _toNumSyn(rows[7]?.[9]);
+  if (j8 > 0 && j8 < 200) return j8;
+  for (let i = 0; i < Math.min(rows.length, 12); i++) {
+    const r = rows[i] || [];
+    for (let c = 0; c < r.length; c++) {
+      if (_normLow(_str(r[c])).includes('bdi')) {
+        for (let cc = c + 1; cc < r.length; cc++) {
+          const n = _toNumSyn(r[cc]);
+          if (n > 0 && n < 200) return n;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+function _detectSyntheticHeaderIndex(rows: any[][]): number {
+  for (let i = 0; i < Math.min(rows.length, 30); i++) {
+    const joined = (rows[i] || []).map(c => _normLow(_str(c))).join(' | ');
+    let hits = 0;
+    if (joined.includes('item')) hits++;
+    if (joined.includes('codigo') || joined.includes('código')) hits++;
+    if (joined.includes('descricao') || joined.includes('descrição')) hits++;
+    if (joined.includes('unidade') || joined.includes('und') || joined.includes(' un')) hits++;
+    if (hits >= 3) return i;
+  }
+  return 0;
+}
+
+export function inspectSyntheticWorkbook(data: ArrayBuffer, sheetName?: string): SyntheticWorkbookPreview {
+  const wb = XLSX.read(data, { type: 'array' });
+  const selectedSheetName = _findSyntheticSheetName(wb, sheetName);
+  const sheet = wb.Sheets[selectedSheetName];
+  const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
+  return {
+    sheetNames: wb.SheetNames,
+    sheetName: selectedSheetName,
+    rows: rows.slice(0, 25).map(row => Array.from({ length: 10 }, (_, i) => _str(row?.[i]))),
+    suggestedHeaderRowIndex: _detectSyntheticHeaderIndex(rows),
+    detectedBdiPercent: _detectSyntheticBdi(rows),
+  };
+}
+
 /**
  * Importa a planilha SINTÉTICA do orçamento.
  * Aceita ArrayBuffer (xlsx) e procura aba cujo nome contenha "sintet".
  */
-export function parseSyntheticBudget(data: ArrayBuffer): ParsedSynthetic {
+export function parseSyntheticBudget(data: ArrayBuffer, options: SyntheticImportOptions = {}): ParsedSynthetic {
   const wb = XLSX.read(data, { type: 'array' });
   // Procura aba cujo nome contenha "sintet"; senão usa a primeira.
-  const sheetName =
-    wb.SheetNames.find(n => _normLow(n).includes('sintet')) ?? wb.SheetNames[0];
+  const sheetName = _findSyntheticSheetName(wb, options.sheetName);
   const sheet = wb.Sheets[sheetName];
   const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
 
@@ -1032,6 +1123,73 @@ export function parseSyntheticBudget(data: ArrayBuffer): ParsedSynthetic {
     items.push({
       id: `bgt-${Date.now().toString(36)}-${i}-${Math.random().toString(36).slice(2, 6)}`,
       item, code, bank, description, unit, quantity,
+      unitPriceNoBDI: finalUpNoBDI,
+      unitPriceWithBDI: finalUpWithBDI,
+      totalNoBDI: finalTotalNoBDI,
+      totalWithBDI: finalTotalWithBDI,
+      source: 'sintetica',
+    });
+  }
+
+  return { items, bdiPercent, warnings };
+}
+
+export function parseSyntheticBudgetFlexible(data: ArrayBuffer, options: SyntheticImportOptions): ParsedSynthetic {
+  const wb = XLSX.read(data, { type: 'array' });
+  const sheetName = _findSyntheticSheetName(wb, options.sheetName);
+  const sheet = wb.Sheets[sheetName];
+  const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
+  const warnings: string[] = [];
+  const bdiPercent = options.bdiPercent !== undefined && Number.isFinite(options.bdiPercent)
+    ? options.bdiPercent
+    : _detectSyntheticBdi(rows);
+  const headerIdx = options.headerRowIndex ?? _detectSyntheticHeaderIndex(rows);
+  const firstDataRowIndex = options.firstDataRowIndex ?? headerIdx + 1;
+  const columns = { ...DEFAULT_SYNTHETIC_COLUMN_MAP, ...(options.columns ?? {}) };
+  const read = (row: any[], key: keyof SyntheticColumnMap) => {
+    const index = columns[key];
+    return typeof index === 'number' ? row[index] : '';
+  };
+  const items: BudgetItem[] = [];
+
+  for (let i = firstDataRowIndex; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const item = _str(read(r, 'item'));
+    const code = _str(read(r, 'code'));
+    const bank = _str(read(r, 'bank'));
+    const description = _str(read(r, 'description'));
+    const quantity = _toNumSyn(read(r, 'quantity'));
+    const unit = _str(read(r, 'unit'));
+    const upNoBDI = _toNumSyn(read(r, 'unitPriceNoBDI'));
+    const totalNoBDI = _toNumSyn(read(r, 'totalNoBDI'));
+    const upWithBDI = _toNumSyn(read(r, 'unitPriceWithBDI'));
+    const totalWithBDI = _toNumSyn(read(r, 'totalWithBDI'));
+
+    if (!item && !code && !description && !quantity && !upNoBDI && !totalNoBDI && !upWithBDI && !totalWithBDI) continue;
+    const dLow = _normLow(description);
+    if (!code && (dLow.includes('total') || dLow.includes('subtotal'))) continue;
+    if (!code) continue;
+
+    const bdiFactor = 1 + (bdiPercent ?? 0) / 100;
+    const finalUpNoBDI = upNoBDI > 0
+      ? _money2(upNoBDI)
+      : (upWithBDI > 0 && bdiFactor > 0 ? _money2(upWithBDI / bdiFactor) : 0);
+    const finalUpWithBDI = upWithBDI > 0 ? _money2(upWithBDI) : _calcUnitWithBDI(finalUpNoBDI, bdiPercent ?? 0);
+    const finalTotalNoBDI = totalNoBDI > 0 ? _money2(totalNoBDI) : _calcLineTotal(finalUpNoBDI, quantity);
+    const finalTotalWithBDI = totalWithBDI > 0 ? _money2(totalWithBDI) : _calcLineTotal(finalUpWithBDI, quantity);
+
+    if (quantity <= 0) warnings.push(`Linha ${i + 1} (${code}): quantidade zero/invalida.`);
+    if (finalUpNoBDI <= 0 && finalUpWithBDI <= 0) warnings.push(`Linha ${i + 1} (${code}): valor unitario nao encontrado.`);
+    if (!bank) warnings.push(`Linha ${i + 1} (${code}): banco nao informado.`);
+
+    items.push({
+      id: `bgt-${Date.now().toString(36)}-${i}-${Math.random().toString(36).slice(2, 6)}`,
+      item,
+      code,
+      bank,
+      description,
+      unit,
+      quantity,
       unitPriceNoBDI: finalUpNoBDI,
       unitPriceWithBDI: finalUpWithBDI,
       totalNoBDI: finalTotalNoBDI,
