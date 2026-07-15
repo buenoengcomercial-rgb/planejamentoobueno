@@ -433,7 +433,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
 
   return (
     <Dialog open={open} onOpenChange={v => !v && handleClose()}>
-      <DialogContent className="max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-foreground">
             <DollarSign className="w-5 h-5 text-primary" />
@@ -447,7 +447,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         </DialogHeader>
 
         {!parsed && (
-          <div className="flex-1 flex flex-col items-center justify-center py-4 space-y-4">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 flex flex-col items-center justify-start py-4 space-y-4">
             <div
               onDrop={handleDrop}
               onDragOver={e => e.preventDefault()}
@@ -714,7 +714,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
           </div>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0 border-t border-border pt-3">
           <Button variant="outline" onClick={handleClose}>Cancelar</Button>
           {canConfirm && (
             <Button onClick={confirmImport}>

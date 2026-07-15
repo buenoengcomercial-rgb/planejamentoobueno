@@ -51,16 +51,16 @@ function AnalyticView({ composition }: { composition?: AdditiveComposition }) {
   }
 
   return (
-    <div className="overflow-auto rounded-md border border-border/70">
-      <table className="w-full min-w-[840px] table-fixed text-[11px]">
+    <div className="overflow-x-auto rounded-md border border-border/70">
+      <table className="w-full min-w-[680px] table-fixed text-[11px]">
         <colgroup>
-          <col className="w-[84px]" />
-          <col className="w-[72px]" />
+          <col className="w-[70px]" />
+          <col className="w-[58px]" />
           <col />
-          <col className="w-[56px]" />
-          <col className="w-[82px]" />
-          <col className="w-[96px]" />
-          <col className="w-[104px]" />
+          <col className="w-[44px]" />
+          <col className="w-[72px]" />
+          <col className="w-[84px]" />
+          <col className="w-[90px]" />
         </colgroup>
         <thead className="bg-muted/60">
           <tr className="border-b border-border">
@@ -78,11 +78,11 @@ function AnalyticView({ composition }: { composition?: AdditiveComposition }) {
             <tr key={input.id} className="border-t border-border">
               <td className="px-2 py-1.5 align-top font-mono text-[10px]">{input.code || '-'}</td>
               <td className="px-2 py-1.5 align-top text-muted-foreground">{input.bank || '-'}</td>
-              <td className="px-2 py-1.5 align-top font-medium leading-snug">{input.description}</td>
-              <td className="px-2 py-1.5 text-center">{input.unit}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums">{fmtNum(input.coefficient)}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(input.unitPrice)}</td>
-              <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(input.total)}</td>
+              <td className="px-2 py-1.5 align-top font-medium leading-snug break-words">{input.description}</td>
+              <td className="px-2 py-1.5 text-center align-top">{input.unit || '-'}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtNum(input.coefficient || 0)}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtBRL(input.unitPrice || 0)}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums align-top font-medium">{fmtBRL(input.total || ((input.coefficient || 0) * (input.unitPrice || 0)))}</td>
             </tr>
           ))}
         </tbody>
