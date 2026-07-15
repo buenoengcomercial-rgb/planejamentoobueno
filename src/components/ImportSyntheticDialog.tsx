@@ -88,6 +88,68 @@ const DEFAULT_ANALYTIC_COLUMN_ROLES: AnalyticColumnRole[] = [
   'total',
 ];
 
+function normalizeHeaderLabel(value: string) {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s/%.-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function detectSyntheticColumnRoles(rows: string[][], headerRowIndex: number): SyntheticColumnRole[] {
+  const roles = [...DEFAULT_COLUMN_ROLES];
+  const header = rows[headerRowIndex] || [];
+  const detected = new Array(COLUMN_LETTERS.length).fill('ignore') as SyntheticColumnRole[];
+  let hits = 0;
+
+  header.slice(0, COLUMN_LETTERS.length).forEach((raw, index) => {
+    const label = normalizeHeaderLabel(raw);
+    let role: SyntheticColumnRole = 'ignore';
+    if (/^item$|^it$|ordem|indice/.test(label)) role = 'item';
+    else if (/codigo|cod\.?|composicao|referencia/.test(label)) role = 'code';
+    else if (/banco|base|fonte|origem/.test(label)) role = 'bank';
+    else if (/descricao|descri|discriminacao|servico|atividade/.test(label)) role = 'description';
+    else if (/quant|qtd|qtde|quantidade/.test(label)) role = 'quantity';
+    else if (/^un$|und|unid|unidade/.test(label)) role = 'unit';
+    else if (/total/.test(label) && /bdi/.test(label) && !/unit/.test(label)) role = 'totalWithBDI';
+    else if (/total/.test(label) && !/unit/.test(label)) role = 'totalWithBDI';
+    else if (/valor|preco|unit/.test(label)) {
+      role = /bdi/.test(label) ? 'unitPriceWithBDI' : 'unitPriceNoBDI';
+    }
+    if (role !== 'ignore') hits++;
+    detected[index] = role;
+  });
+
+  return hits >= 4 ? detected : roles;
+}
+
+function detectAnalyticColumnRoles(rows: string[][], headerRowIndex: number, hasHeaderRow: boolean): AnalyticColumnRole[] {
+  const roles = [...DEFAULT_ANALYTIC_COLUMN_ROLES];
+  if (!hasHeaderRow) return roles;
+  const header = rows[headerRowIndex] || [];
+  const detected = new Array(ANALYTIC_COLUMN_LETTERS.length).fill('ignore') as AnalyticColumnRole[];
+  let hits = 0;
+
+  header.slice(0, ANALYTIC_COLUMN_LETTERS.length).forEach((raw, index) => {
+    const label = normalizeHeaderLabel(raw);
+    let role: AnalyticColumnRole = 'ignore';
+    if (/^item$|tipo|classe|grupo/.test(label)) role = 'kindOrItem';
+    else if (/codigo|cod\.?|composicao|insumo|referencia/.test(label)) role = 'code';
+    else if (/banco|base|fonte|origem/.test(label)) role = 'bank';
+    else if (/descricao|descri|discriminacao|insumo|servico|atividade/.test(label)) role = 'description';
+    else if (/coef|quant|qtd|qtde|consumo|indice/.test(label)) role = 'coefficient';
+    else if (/^un$|und|unid|unidade/.test(label)) role = 'unit';
+    else if (/total|subtotal/.test(label)) role = 'total';
+    else if (/valor|preco|unit/.test(label)) role = 'unitPrice';
+    if (role !== 'ignore') hits++;
+    detected[index] = role;
+  });
+
+  return hits >= 4 ? detected : roles;
+}
+
 function rolesToMap(roles: SyntheticColumnRole[]) {
   const map = { ...DEFAULT_SYNTHETIC_COLUMN_MAP };
   Object.keys(map).forEach(key => delete map[key as keyof typeof map]);
@@ -171,9 +233,10 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
       const detectedBdi = inspected.detectedBdiPercent;
       const nextHeaderRow = inspected.suggestedHeaderRowIndex + 1;
       const nextFirstDataRow = nextHeaderRow + 1;
+      const detectedRoles = detectSyntheticColumnRoles(inspected.rows, inspected.suggestedHeaderRowIndex);
       setSyntheticBuffer(buf);
       setPreview(inspected);
-      setColumnRoles(DEFAULT_COLUMN_ROLES);
+      setColumnRoles(detectedRoles);
       setHeaderRow(nextHeaderRow);
       setFirstDataRow(nextFirstDataRow);
       setBdiInput(detectedBdi ? String(detectedBdi).replace('.', ',') : '');
@@ -181,7 +244,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         sheetName: inspected.sheetName,
         headerRowIndex: inspected.suggestedHeaderRowIndex,
         firstDataRowIndex: inspected.suggestedHeaderRowIndex + 1,
-        columns: rolesToMap(DEFAULT_COLUMN_ROLES),
+        columns: rolesToMap(detectedRoles),
         bdiPercent: detectedBdi,
       });
       if (result.items.length === 0) {
@@ -224,10 +287,11 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
       const buf = await file.arrayBuffer();
       const inspected = await inspectAnalyticWorkbook(buf);
       const nextHeaderRow = inspected.suggestedHeaderRowIndex + 1;
-      const nextFirstDataRow = nextHeaderRow + 1;
+      const nextFirstDataRow = inspected.suggestedFirstDataRowIndex + 1;
+      const detectedAnalyticRoles = detectAnalyticColumnRoles(inspected.rows, inspected.suggestedHeaderRowIndex, inspected.hasHeaderRow);
       setAnalyticBuffer(buf);
       setAnalyticPreview(inspected);
-      setAnalyticColumnRoles(DEFAULT_ANALYTIC_COLUMN_ROLES);
+      setAnalyticColumnRoles(detectedAnalyticRoles);
       setAnalyticHeaderRow(nextHeaderRow);
       setAnalyticFirstDataRow(nextFirstDataRow);
       // Base de vínculo: itens recém-parseados (se houver) ou os já salvos no projeto.
@@ -237,8 +301,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
       const an = await extractBaseAnalyticCompositionsFromAnalyticFile(buf, baseItems, {
         sheetName: inspected.sheetName,
         headerRowIndex: inspected.suggestedHeaderRowIndex,
-        firstDataRowIndex: inspected.suggestedHeaderRowIndex + 1,
-        columns: analyticRolesToMap(DEFAULT_ANALYTIC_COLUMN_ROLES),
+        firstDataRowIndex: inspected.suggestedFirstDataRowIndex,
+        columns: analyticRolesToMap(detectedAnalyticRoles),
       });
       if (!an.hasAnalyticSheet) {
         setAnalyticOk(false);
@@ -375,11 +439,11 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <label className="text-[11px] text-muted-foreground">
-          Linha do cabecalho
+          Linha do cabecalho {analyticPreview.hasHeaderRow ? '' : '(nao detectado)'}
           <input type="number" min={1} value={analyticHeaderRow} onChange={e => setAnalyticHeaderRow(Number(e.target.value) || 1)} className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
         </label>
         <label className="text-[11px] text-muted-foreground">
-          Primeira linha de dados
+          Primeira linha da leitura
           <input type="number" min={1} value={analyticFirstDataRow} onChange={e => setAnalyticFirstDataRow(Number(e.target.value) || 1)} className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
         </label>
       </div>
@@ -440,9 +504,9 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
             Importar Sintética (Orçamento)
           </DialogTitle>
           <DialogDescription>
-            Planilha financeira do orçamento com leitura configurável de A a J.
-            A classificação vem preenchida como A=Item, B=Código, C=Banco, D=Descrição, E=Quant., F=Un, G=Valor Unit, H=Valor Unit com BDI, I=Total e J=Ignorar.
-            <br />O BDI pode ser informado manualmente. Esta importação alimenta a aba <strong>Medição</strong> e, se houver Analítica, também a <strong>Lista de Material</strong>.
+            Fluxo recomendado: importe a Sintética para formar a planilha de medição; depois anexe a Analítica para preencher insumos e produtividade.
+            A plataforma tenta detectar cabeçalhos automaticamente, mas você pode alterar coluna, linha inicial e BDI antes de confirmar.
+            <br />A mescla entre Sintética e Analítica é feita principalmente por <strong>Item + Código</strong>, independentemente do nome usado no cabeçalho.
           </DialogDescription>
         </DialogHeader>
 

@@ -172,6 +172,8 @@ export interface AnalyticWorkbookPreview {
   sheetName: string;
   rows: string[][];
   suggestedHeaderRowIndex: number;
+  suggestedFirstDataRowIndex: number;
+  hasHeaderRow: boolean;
 }
 
 export const DEFAULT_ANALYTIC_COLUMN_MAP: AnalyticColumnMap = {
@@ -357,16 +359,46 @@ function findAnalyticSheetName(wb: any, XLSX: any, sheetName?: string): string |
   return wb.SheetNames[0];
 }
 
+function looksLikeAnalyticDataRow(row: unknown[]): boolean {
+  const kindOrItem = asString(row[0]).replace(',', '.');
+  const code = asString(row[1]);
+  const bank = asString(row[2]);
+  const description = asString(row[3]);
+  const kindLow = norm(asString(row[0]));
+  const isParent = !!code && !!bank && /^\d+(\.\d+)*$/.test(kindOrItem);
+  const isGroup = !code && !!description && /^\d+(\.\d+)*$/.test(kindOrItem);
+  const isInput = isAnalyticInsumoLine(kindLow);
+  return isParent || isGroup || isInput;
+}
+
+function detectAnalyticHeaderInfo(rows: unknown[][]): { headerRowIndex: number; firstDataRowIndex: number; hasHeaderRow: boolean } {
+  const headerRowIndex = detectHeaderIndex(rows);
+  const header = (rows[headerRowIndex] || []).map(c => norm(asString(c))).join(' | ');
+  const hasHeaderRow = ['item', 'codigo', 'código', 'descricao', 'descrição', 'banco', 'unidade', 'quant', 'coef']
+    .filter(h => header.includes(norm(h))).length >= 3;
+  if (hasHeaderRow) return { headerRowIndex, firstDataRowIndex: headerRowIndex + 1, hasHeaderRow: true };
+
+  const firstDataRowIndex = rows.findIndex(r => looksLikeAnalyticDataRow(r || []));
+  return {
+    headerRowIndex: Math.max(0, firstDataRowIndex >= 0 ? firstDataRowIndex : 0),
+    firstDataRowIndex: Math.max(0, firstDataRowIndex >= 0 ? firstDataRowIndex : 0),
+    hasHeaderRow: false,
+  };
+}
+
 export async function inspectAnalyticWorkbook(buf: ArrayBuffer, sheetName?: string): Promise<AnalyticWorkbookPreview> {
   const XLSX = await import('xlsx');
   const wb = XLSX.read(buf, { type: 'array' });
   const selected = findAnalyticSheetName(wb, XLSX, sheetName) || wb.SheetNames[0];
   const rows = sheetToRows(wb.Sheets[selected], XLSX);
+  const headerInfo = detectAnalyticHeaderInfo(rows);
   return {
     sheetNames: wb.SheetNames,
     sheetName: selected,
     rows: rows.slice(0, 80).map(r => Array.from({ length: 10 }, (_, i) => asString(r[i]))),
-    suggestedHeaderRowIndex: detectHeaderIndex(rows),
+    suggestedHeaderRowIndex: headerInfo.headerRowIndex,
+    suggestedFirstDataRowIndex: headerInfo.firstDataRowIndex,
+    hasHeaderRow: headerInfo.hasHeaderRow,
   };
 }
 
@@ -375,8 +407,9 @@ export function parseAnalyticRowsFlexible(
   options: AnalyticImportOptions = {},
 ): { blocks: AnalyticBlock[]; issues: AdditiveImportIssue[] } {
   const issues: AdditiveImportIssue[] = [];
-  const headerIdx = options.headerRowIndex ?? detectHeaderIndex(rows);
-  const firstDataRowIndex = options.firstDataRowIndex ?? headerIdx + 1;
+  const headerInfo = detectAnalyticHeaderInfo(rows);
+  const headerIdx = options.headerRowIndex ?? headerInfo.headerRowIndex;
+  const firstDataRowIndex = options.firstDataRowIndex ?? headerInfo.firstDataRowIndex;
   const columns = { ...DEFAULT_ANALYTIC_COLUMN_MAP, ...(options.columns ?? {}) };
   const read = (row: unknown[], key: keyof AnalyticColumnMap) => {
     const index = columns[key];

@@ -250,7 +250,7 @@ export function MeasurementDetailInline({ project, selection, row, bdi, colSpan 
 
   return (
     <tr className="border-b border-border bg-primary/5" data-detail-panel="true">
-      <td colSpan={colSpan} className="px-3 py-2">
+      <td colSpan={colSpan} className="px-1 py-2">
         <div className="rounded-md border border-border/70 bg-background">
           <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-1.5 text-[11px] font-semibold">
             <Icon className="h-3.5 w-3.5 text-primary" />
