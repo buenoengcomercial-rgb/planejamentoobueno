@@ -672,7 +672,7 @@ export async function importAdditiveFromExcel(
 
   // Fallback por conteúdo: se não há aba ANALITICA pelo nome, procura por cabeçalhos compatíveis
   // em qualquer aba (exceto a Sintética). Aceita arquivos como "Folha 1" / "Planilha1".
-  if (options.sheetName && wb.Sheets[options.sheetName]) analyName = options.sheetName;
+  
   if (!analyName) {
     for (const name of wb.SheetNames) {
       if (synthName && name === synthName) continue;
