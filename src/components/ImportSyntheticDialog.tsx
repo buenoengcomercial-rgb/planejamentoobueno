@@ -3,7 +3,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Project, BudgetItem, AdditiveComposition } from '@/types/project';
+import { Project, BudgetItem, AdditiveComposition, AdditiveInputType, MaterialCostClass } from '@/types/project';
 import {
   DEFAULT_SYNTHETIC_COLUMN_MAP,
   inspectSyntheticWorkbook,
@@ -21,8 +21,9 @@ import {
   AnalyticWorkbookPreview,
 } from '@/lib/additiveImport';
 import {
-  Upload, FileSpreadsheet, AlertTriangle, Loader2, Check, Info, DollarSign, Layers,
+  FileSpreadsheet, AlertTriangle, Loader2, Check, Info, DollarSign, Layers,
 } from 'lucide-react';
+import { guessMaterialCostClass, linkKeyOf, MATERIAL_COST_CLASS_LABEL } from '@/lib/materialComparisons';
 
 interface Props {
   open: boolean;
@@ -175,6 +176,83 @@ function parseBdiInput(value: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+function normalizeCostUnit(value?: string) {
+  return (value ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
+function inputTypeFromClass(costClass: MaterialCostClass): AdditiveInputType {
+  if (costClass === 'labor') return 'mao_obra';
+  if (costClass === 'equipment') return 'equipamento';
+  if (costClass === 'material') return 'material';
+  return 'outro';
+}
+
+function guessAnalyticInputClass(input: { description: string; unit?: string; type?: AdditiveInputType }): MaterialCostClass {
+  const guessed = guessMaterialCostClass({
+    description: input.description,
+    unit: input.unit,
+    sourceType: 'analytic_input',
+    legacyInputType: input.type,
+  });
+  if (guessed !== 'unclassified') return guessed;
+
+  const unit = normalizeCostUnit(input.unit);
+  if (['h', 'hora', 'horas', 'mes', 'meses'].includes(unit)) return 'labor';
+  return 'unclassified';
+}
+
+function classifyAnalyticCompositions(compositions: AdditiveComposition[]) {
+  return compositions.map(composition => ({
+    ...composition,
+    inputs: (composition.inputs ?? []).map(input => {
+      const costClass = guessAnalyticInputClass(input);
+      return { ...input, type: inputTypeFromClass(costClass) };
+    }),
+  }));
+}
+
+function mergeAnalyticCostClasses(project: Project, compositions: AdditiveComposition[]) {
+  const next: Record<string, MaterialCostClass> = { ...(project.materialCostClasses ?? {}) };
+  for (const composition of compositions) {
+    for (const input of composition.inputs ?? []) {
+      const costClass = guessAnalyticInputClass(input);
+      const byId = linkKeyOf({
+        sourceId: input.id,
+        code: input.code,
+        description: input.description,
+        unit: input.unit,
+      });
+      const byKey = linkKeyOf({
+        code: input.code,
+        description: input.description,
+        unit: input.unit,
+      });
+      if (!next[byId]) next[byId] = costClass;
+      if (!next[byKey]) next[byKey] = costClass;
+    }
+  }
+  return next;
+}
+
+function countAnalyticClasses(compositions: AdditiveComposition[]) {
+  const counts: Record<MaterialCostClass, number> = {
+    material: 0,
+    labor: 0,
+    equipment: 0,
+    unclassified: 0,
+  };
+  for (const composition of compositions) {
+    for (const input of composition.inputs ?? []) {
+      counts[guessAnalyticInputClass(input)] += 1;
+    }
+  }
+  return counts;
+}
+
 export default function ImportSyntheticDialog({ open, onClose, project, onProjectChange }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -259,7 +337,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
       try {
         const an = await extractBaseAnalyticCompositions(buf);
         if (an.hasAnalyticSheet && an.compositions.length > 0) {
-          setAnalyticCompositions(an.compositions);
+          setAnalyticCompositions(classifyAnalyticCompositions(an.compositions));
           setAnalyticOk(true);
           setAnalyticInfo(`Analítica detectada no mesmo arquivo: ${an.compositions.length} composições c/ insumos (${an.totalInputs} insumos).`);
         } else {
@@ -314,7 +392,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         setAnalyticInfo(an.message || 'Analítica lida, mas nenhum bloco vinculou à Sintética.');
       } else {
         setAnalyticOk(true);
-        setAnalyticCompositions(an.compositions);
+        setAnalyticCompositions(classifyAnalyticCompositions(an.compositions));
         setAnalyticInfo(an.message);
       }
     } catch (err: any) {
@@ -379,7 +457,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         setAnalyticInfo(an.message || 'Analitica lida, mas nenhum bloco vinculou a Sintetica.');
       } else {
         setAnalyticOk(true);
-        setAnalyticCompositions(an.compositions);
+        setAnalyticCompositions(classifyAnalyticCompositions(an.compositions));
         setAnalyticInfo(an.message);
       }
     } catch (err: any) {
@@ -404,7 +482,9 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
       // Só substitui analyticCompositions se uma Analítica nova foi lida com sucesso.
       // Caso contrário, PRESERVA a Analítica existente (não apaga).
       if (analyticCompositions && analyticCompositions.length > 0) {
-        nextProject.analyticCompositions = analyticCompositions;
+        const classified = classifyAnalyticCompositions(analyticCompositions);
+        nextProject.analyticCompositions = classified;
+        nextProject.materialCostClasses = mergeAnalyticCostClasses(project, classified);
       }
       onProjectChange(nextProject);
       handleClose();
@@ -412,9 +492,11 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     }
     // Caso 2: somente Analítica (sem nova Sintética) — atualiza apenas analyticCompositions.
     if (analyticCompositions && analyticCompositions.length > 0) {
+      const classified = classifyAnalyticCompositions(analyticCompositions);
       onProjectChange({
         ...project,
-        analyticCompositions,
+        analyticCompositions: classified,
+        materialCostClasses: mergeAnalyticCostClasses(project, classified),
       });
       handleClose();
       return;
@@ -425,6 +507,17 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   const totalWithBDI = parsed?.items.reduce((s, i) => s + i.totalWithBDI, 0) ?? 0;
   const canConfirm = !!parsed || (analyticCompositions && analyticCompositions.length > 0);
   const hasExistingSynthetic = (project.budgetItems ?? []).some(b => b.source === 'sintetica');
+  const analyticClassCounts = analyticCompositions?.length ? countAnalyticClasses(analyticCompositions) : null;
+  const analyticClassSummary = analyticClassCounts ? (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+      {(['labor', 'material', 'equipment', 'unclassified'] as MaterialCostClass[]).map(costClass => (
+        <div key={costClass} className="rounded-md border border-border bg-background px-2 py-1.5">
+          <div className="text-[10px] text-muted-foreground">{MATERIAL_COST_CLASS_LABEL[costClass]}</div>
+          <div className="text-xs font-semibold text-foreground">{analyticClassCounts[costClass]} insumo(s)</div>
+        </div>
+      ))}
+    </div>
+  ) : null;
   const analyticConfigPanel = analyticPreview ? (
     <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
       <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -469,6 +562,16 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         ))}
       </div>
 
+      {analyticClassSummary && (
+        <div className="space-y-1">
+          <div className="text-[11px] font-semibold text-foreground">Classificacao inicial dos insumos</div>
+          {analyticClassSummary}
+          <div className="text-[10px] text-muted-foreground">
+            Regra inicial: unidades H, hora e mes entram como mao de obra quando nao houver indicio melhor. A classificacao pode ser revisada na Lista de Material.
+          </div>
+        </div>
+      )}
+
       <div className="overflow-x-auto rounded border border-border bg-background">
         <table className="w-full min-w-[720px] text-[10px]">
           <thead className="bg-muted">
@@ -501,12 +604,12 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-foreground">
             <DollarSign className="w-5 h-5 text-primary" />
-            Importar Sintética (Orçamento)
+            Iniciar importacao do orcamento
           </DialogTitle>
           <DialogDescription>
-            Fluxo recomendado: importe a Sintética para formar a planilha de medição; depois anexe a Analítica para preencher insumos e produtividade.
-            A plataforma tenta detectar cabeçalhos automaticamente, mas você pode alterar coluna, linha inicial e BDI antes de confirmar.
-            <br />A mescla entre Sintética e Analítica é feita principalmente por <strong>Item + Código</strong>, independentemente do nome usado no cabeçalho.
+            Fluxo unico: importe a Sintetica para formar a base de Medicao, Aditivo, EAP, Cronograma e Custo Real; depois anexe a Analitica para preencher insumos, mao de obra e produtividade.
+            A plataforma tenta detectar cabecalhos automaticamente, mas voce pode alterar coluna, linha inicial e BDI antes de confirmar.
+            <br />A mescla entre Sintetica e Analitica e feita principalmente por <strong>Item + Codigo</strong>, independentemente do nome usado no cabecalho.
           </DialogDescription>
         </DialogHeader>
 
@@ -523,7 +626,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
               ) : (
                 <>
                   <FileSpreadsheet className="w-10 h-10 text-success/70" />
-                  <p className="text-sm font-medium text-foreground">Sintética — arraste e solte ou clique</p>
+                  <p className="text-sm font-medium text-foreground">1. Sintetica do orcamento - arraste e solte ou clique</p>
                   <p className="text-xs text-muted-foreground">.xlsx · .xls</p>
                 </>
               )}
@@ -546,7 +649,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
             {hasExistingSynthetic && (
               <div className="w-full border-t border-border pt-4 space-y-2">
                 <p className="text-xs text-muted-foreground">
-                  Já existe uma Sintética importada neste projeto. Você pode anexar somente a <strong>Analítica do contrato</strong> para alimentar a Lista de Material — sem reimportar a Sintética.
+                  Ja existe uma Sintetica importada neste projeto. Voce pode anexar somente a <strong>Analitica do contrato</strong> para alimentar insumos, produtividade e Lista de Material - sem reimportar a Sintetica.
                 </p>
                 <div
                   onDrop={handleAnalyticDrop}
@@ -559,7 +662,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                   ) : (
                     <>
                       <Layers className="w-7 h-7 text-warning/70" />
-                      <p className="text-xs font-medium text-foreground">Analítica do contrato — arraste e solte ou clique</p>
+                      <p className="text-xs font-medium text-foreground">2. Analitica do contrato - arraste e solte ou clique</p>
                       <p className="text-[10px] text-muted-foreground">.xlsx · .xls</p>
                     </>
                   )}
@@ -680,14 +783,14 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
                   <Layers className="w-4 h-4 text-warning" />
-                  Analítica do contrato (opcional)
+                  2. Analitica do contrato
                 </div>
                 <button
                   type="button"
                   onClick={() => document.getElementById('analytic-extra-file-input')?.click()}
                   className="text-xs px-2 py-1 rounded border border-border bg-card hover:bg-muted transition-colors"
                 >
-                  {analyticLoading ? 'Lendo...' : 'Anexar Analítica'}
+                  {analyticLoading ? 'Lendo...' : 'Anexar Analitica'}
                 </button>
                 <input
                   id="analytic-extra-file-input"
@@ -709,7 +812,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
               )}
               {!analyticInfo && (
                 <p className="text-[11px] text-muted-foreground">
-                  Se a Analítica não estiver no mesmo arquivo da Sintética, anexe aqui para alimentar a Lista de Material.
+                  Se a Analitica nao estiver no mesmo arquivo da Sintetica, anexe aqui para alimentar insumos, produtividade, Lista de Material e Custo Real.
                 </p>
               )}
             </div>
@@ -783,7 +886,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
           {canConfirm && (
             <Button onClick={confirmImport}>
               <Check className="w-4 h-4 mr-1" />
-              {parsed ? 'Importar Sintética' : 'Vincular Analítica'}
+              {parsed ? 'Concluir importacao' : 'Vincular Analitica'}
             </Button>
           )}
         </DialogFooter>

@@ -3,14 +3,12 @@ import { getTeamDefinition, DEFAULT_TEAMS, TeamCode, TeamDefinition } from '@/li
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Settings2 } from 'lucide-react';
 import GerenciarEquipes from '@/components/GerenciarEquipes';
-import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
-import { ChevronDown, ChevronRight, Zap, Users, AlertTriangle, Plus, Trash2, Edit3, Check, X, Upload, FolderPlus, GripVertical, ClipboardList, FolderTree, ArrowUpFromLine, Folder, FileSpreadsheet } from 'lucide-react';
-import ImportTasksDialog from '@/components/ImportTasksDialog';
+import { useState, useCallback, useMemo, useEffect } from 'react';
+import { ChevronDown, ChevronRight, Zap, Users, AlertTriangle, Plus, Trash2, Edit3, Check, X, Upload, FolderPlus, GripVertical, ClipboardList, FolderTree, Folder, ArrowUpFromLine } from 'lucide-react';
 import ImportSyntheticDialog from '@/components/ImportSyntheticDialog';
 import DailyLogsPanel from '@/components/DailyLogsPanel';
 
 import { calculateRupDuration } from '@/lib/calculations';
-import { syncAdditiveProductivity } from '@/lib/additiveProductivity';
 import { formatISODateBR } from '@/components/gantt/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { getChapterTree, getChapterNumbering, moveChapter, getChapterTasks, safeMoveChapter, reorderChapter, reorderChapterByNumber } from '@/lib/chapters';
@@ -132,9 +130,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
   const [expandedDaily, setExpandedDaily] = useState<string | null>(null);
   const [simulating, setSimulating] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<string | null>(null);
-  const [importOpen, setImportOpen] = useState(false);
   const [importSyntheticOpen, setImportSyntheticOpen] = useState(false);
-  const additiveFileRef = useRef<HTMLInputElement>(null);
   const [editingPhase, setEditingPhase] = useState<string | null>(null);
   const [phaseNameDraft, setPhaseNameDraft] = useState('');
   const [editingNumberId, setEditingNumberId] = useState<string | null>(null);
@@ -556,26 +552,6 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
     const doubled = { ...task, laborCompositions: task.laborCompositions.map(c => ({ ...c, workerCount: c.workerCount * 2 })) };
     return calculateRupDuration(doubled);
   };
-
-  const syncAdditiveRup = () => {
-    const result = syncAdditiveProductivity(project);
-    if (result.updated > 0) {
-      onProjectChange(result.project);
-      toast.success(
-        `${result.updated} composiÃ§Ã£o(Ãµes) do aditivo receberam RUP pela mÃ£o de obra classificada.`,
-      );
-      if (result.withoutLabor > 0 || result.preserved > 0) {
-        toast.info(
-          `${result.withoutLabor} sem mÃ£o de obra classificada; ${result.preserved} preservada(s) por jÃ¡ terem produtividade.`,
-        );
-      }
-      return;
-    }
-    toast.info(
-      `Nenhuma tarefa foi atualizada. ${result.withoutLabor} sem mÃ£o de obra classificada; ${result.preserved} jÃ¡ tinham produtividade.`,
-    );
-  };
-
   // Get all task IDs for dependency dropdown
   const allTasks = project.phases.flatMap(p => p.tasks);
 
@@ -610,89 +586,12 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
         <div className="flex items-center gap-2 flex-wrap">
           {undoButton}
           <button
-            onClick={() => setImportOpen(true)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-primary text-primary-foreground font-medium text-sm hover:bg-primary/90 transition-colors shadow-sm"
-            title="Importa EAP, RUP, mão de obra e quantidades. Não importa valores financeiros."
-          >
-            <Upload className="w-4 h-4" /> Importar Produtividade
-          </button>
-          <button
             onClick={() => setImportSyntheticOpen(true)}
             className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-success text-success-foreground font-medium text-sm hover:bg-success/90 transition-colors shadow-sm"
-            title="Importa a planilha Sintética do orçamento (alimenta a aba Medição). BDI lido em J8."
+            title="Fluxo unico: Sintetica como base do projeto e Analitica para insumos, produtividade e custo real."
           >
-            <FileSpreadsheet className="w-4 h-4" /> Importar Sintética
+            <Upload className="w-4 h-4" /> Iniciar importacao
           </button>
-          <button
-            onClick={() => additiveFileRef.current?.click()}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-warning text-warning-foreground font-medium text-sm hover:bg-warning/90 transition-colors shadow-sm"
-            title="Importa Sintética + Analítica do orçamento de aditivo (alimenta a aba Aditivo)."
-          >
-            <ArrowUpFromLine className="w-4 h-4" /> Importar Analítica / Aditivo
-          </button>
-          <button
-            onClick={syncAdditiveRup}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-warning/40 bg-warning/10 text-warning font-medium text-sm hover:bg-warning/20 transition-colors shadow-sm"
-            title="Preenche RUP das composicoes do aditivo usando apenas insumos classificados como Mao de obra na Lista de Material."
-          >
-            <Zap className="w-4 h-4" /> Atualizar RUP do Aditivo
-          </button>
-          <input
-            ref={additiveFileRef}
-            type="file"
-            accept=".xlsx,.xls"
-            className="hidden"
-            onChange={async (e) => {
-              const f = e.target.files?.[0];
-              if (!f) return;
-              try {
-                toast.loading('Importando aditivo...', { id: 'imp-add-tl' });
-                const { importAdditiveFromExcel } = await import('@/lib/additiveImport');
-                const base = f.name.replace(/\.(xlsx|xls)$/i, '');
-                // Localiza um aditivo em rascunho com composições para mesclar a Analítica.
-                const draftAdditive =
-                  (project.additives ?? []).find(
-                    a => (a.status ?? 'rascunho') === 'rascunho' && a.compositions.length > 0,
-                  ) ?? null;
-                const result = await importAdditiveFromExcel(f, base || 'Aditivo', draftAdditive);
-
-                if (result.mode === 'analytic_only' && draftAdditive) {
-                  // Mescla no aditivo existente — preserva id e name
-                  const merged = result.additive;
-                  onProjectChange({
-                    ...project,
-                    additives: (project.additives ?? []).map(a =>
-                      a.id === draftAdditive.id
-                        ? { ...merged, id: draftAdditive.id, name: draftAdditive.name }
-                        : a,
-                    ),
-                  });
-                  toast.success(
-                    `${result.message} Vinculada ao aditivo "${draftAdditive.name}".`,
-                    { id: 'imp-add-tl' },
-                  );
-                } else if (result.mode === 'analytic_only' && !draftAdditive) {
-                  toast.warning(
-                    'Importe a Sintética do Aditivo primeiro para vincular a Analítica.',
-                    { id: 'imp-add-tl' },
-                  );
-                } else {
-                  // synthetic_only ou both — cria novo aditivo
-                  const additive = result.additive;
-                  onProjectChange({ ...project, additives: [...(project.additives ?? []), additive] });
-                  toast.success(
-                    `${result.message} (${additive.compositions.length} composições). Abra a aba Aditivo para revisar.`,
-                    { id: 'imp-add-tl' },
-                  );
-                }
-              } catch (err) {
-                console.error(err);
-                toast.error('Falha ao importar aditivo.', { id: 'imp-add-tl' });
-              } finally {
-                if (additiveFileRef.current) additiveFileRef.current.value = '';
-              }
-            }}
-          />
           <button
             onClick={() => addPhase()}
             className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-border bg-card text-foreground font-medium text-sm hover:bg-muted/50 transition-colors shadow-sm"
@@ -701,13 +600,6 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
           </button>
         </div>
       </div>
-
-      <ImportTasksDialog
-        open={importOpen}
-        onClose={() => setImportOpen(false)}
-        project={project}
-        onProjectChange={onProjectChange}
-      />
 
       <ImportSyntheticDialog
         open={importSyntheticOpen}
