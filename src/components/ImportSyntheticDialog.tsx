@@ -22,6 +22,7 @@ import {
 } from '@/lib/additiveImport';
 import {
   FileSpreadsheet, AlertTriangle, Loader2, Check, Info, DollarSign, Layers,
+  ClipboardCheck, FileText,
 } from 'lucide-react';
 import { guessMaterialCostClass, linkKeyOf, MATERIAL_COST_CLASS_LABEL } from '@/lib/materialComparisons';
 import { calculateRupDuration } from '@/lib/calculations';
@@ -1260,17 +1261,17 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
             A plataforma tenta detectar cabecalhos automaticamente, mas voce pode alterar coluna, linha inicial e BDI antes de confirmar.
             <br />A mescla entre Sintetica e Analitica e feita principalmente por <strong>Item + Codigo</strong>, independentemente do nome usado no cabecalho.
           </DialogDescription>
-          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 pt-2">
+          <div className="pt-2 space-y-2">
             {[
-              { step: 1, label: 'Sintetica', done: !!parsed },
-              { step: 2, label: 'Analitica', done: hasAnalytic },
-              { step: 3, label: 'Classificar insumos', done: hasAnalytic },
-              { step: 4, label: 'Revisar integracao', done: false },
-              { step: 5, label: 'Dados iniciais', done: false },
+              { step: 1, label: 'Sintetica', description: 'Base financeira e capitulos da obra', done: !!parsed, Icon: FileSpreadsheet },
+              { step: 2, label: 'Analitica', description: 'Composicoes e insumos do orcamento', done: hasAnalytic, Icon: Layers },
+              { step: 3, label: 'Classificar insumos', description: 'Material, mao de obra e equipamento', done: hasAnalytic, Icon: ClipboardCheck },
+              { step: 4, label: 'Revisar integracao', description: 'Conferencia antes de alimentar os modulos', done: false, Icon: Check },
+              { step: 5, label: 'Dados iniciais', description: 'Cabecalho para medicao, aditivo e custo real', done: false, Icon: FileText },
             ].map(item => (
               <div
                 key={item.step}
-                className={`rounded-lg border px-3 py-2 text-[11px] ${
+                className={`rounded-lg border px-3 py-3 text-[11px] ${
                   wizardStep === item.step
                     ? 'border-primary bg-primary/10 text-primary'
                     : item.done
@@ -1278,8 +1279,13 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                       : 'border-border bg-muted/20 text-muted-foreground'
                 }`}
               >
-                <div className="font-semibold">{item.step}o passo</div>
-                <div className="truncate">{item.label}</div>
+                <div className="flex flex-col items-start gap-2">
+                  <item.Icon className="h-8 w-8" />
+                  <div>
+                    <div className="font-semibold">{item.step}o passo - {item.label}</div>
+                    <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{item.description}</div>
+                  </div>
+                </div>
               </div>
             ))}
           </div>
