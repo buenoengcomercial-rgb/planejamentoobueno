@@ -91,6 +91,19 @@ const ANALYTIC_ROLE_LABELS: Record<AnalyticColumnRole, string> = {
 
 const COST_CLASS_OPTIONS: MaterialCostClass[] = ['labor', 'material', 'equipment', 'unclassified'];
 
+interface ContractDraft {
+  projectName: string;
+  contractor: string;
+  contracted: string;
+  location: string;
+  contractObject: string;
+  contractNumber: string;
+  artNumber: string;
+  budgetSource: string;
+  bdiPercent: string;
+  biddingDiscountPercent: string;
+}
+
 const DEFAULT_ANALYTIC_COLUMN_ROLES: AnalyticColumnRole[] = [
   'kindOrItem',
   'code',
@@ -268,6 +281,29 @@ function countAnalyticClasses(compositions: AdditiveComposition[]) {
 
 function normalizeAnalyticCode(value?: string) {
   return (value ?? '').trim().toUpperCase().replace(/\s+/g, '');
+}
+
+function parsePercentInput(value: string): number | undefined {
+  return parseBdiInput(value);
+}
+
+function buildContractDraft(project: Project, bdi?: number): ContractDraft {
+  const ci = project.contractInfo ?? {};
+  const bdiValue = bdi ?? project.syntheticBdiPercent ?? ci.bdiPercent;
+  return {
+    projectName: project.name || '',
+    contractor: ci.contractor || '',
+    contracted: ci.contracted || '',
+    location: ci.location || '',
+    contractObject: ci.contractObject || '',
+    contractNumber: ci.contractNumber || '',
+    artNumber: ci.artNumber || '',
+    budgetSource: ci.budgetSource || '',
+    bdiPercent: bdiValue !== undefined && Number.isFinite(bdiValue) ? String(bdiValue).replace('.', ',') : '',
+    biddingDiscountPercent: ci.biddingDiscountPercent !== undefined && Number.isFinite(ci.biddingDiscountPercent)
+      ? String(ci.biddingDiscountPercent).replace('.', ',')
+      : '',
+  };
 }
 
 function normalizeBudgetItemNumber(value?: string) {
@@ -450,7 +486,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   const [headerRow, setHeaderRow] = useState(9);
   const [firstDataRow, setFirstDataRow] = useState(10);
   const [bdiInput, setBdiInput] = useState('');
-  const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4>(1);
+  const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4 | 5>(1);
+  const [contractDraft, setContractDraft] = useState<ContractDraft>(() => buildContractDraft(project));
 
   // Analítica (pode vir no mesmo arquivo da Sintética OU em arquivo separado).
   const [analyticCompositions, setAnalyticCompositions] = useState<AdditiveComposition[] | null>(null);
@@ -480,6 +517,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     setFirstDataRow(10);
     setBdiInput('');
     setWizardStep(1);
+    setContractDraft(buildContractDraft(project));
     setAnalyticCompositions(null);
     setAnalyticFileName('');
     setAnalyticInfo('');
@@ -514,6 +552,10 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
       setHeaderRow(nextHeaderRow);
       setFirstDataRow(nextFirstDataRow);
       setBdiInput(detectedBdi ? String(detectedBdi).replace('.', ',') : '');
+      setContractDraft(current => ({
+        ...current,
+        bdiPercent: detectedBdi ? String(detectedBdi).replace('.', ',') : current.bdiPercent,
+      }));
       const result = parseSyntheticBudgetFlexible(buf, {
         sheetName: inspected.sheetName,
         headerRowIndex: inspected.suggestedHeaderRowIndex,
@@ -650,6 +692,12 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
       return;
     }
     setParsed(result);
+    setContractDraft(current => ({
+      ...current,
+      bdiPercent: result.bdiPercent !== undefined && Number.isFinite(result.bdiPercent)
+        ? String(result.bdiPercent).replace('.', ',')
+        : current.bdiPercent,
+    }));
     setWizardStep(2);
   }, [syntheticBuffer, preview, headerRow, firstDataRow, columnRoles, bdiInput]);
 
@@ -693,6 +741,20 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   }, [analyticBuffer, analyticPreview, analyticHeaderRow, analyticFirstDataRow, analyticColumnRoles, parsed, project.budgetItems]);
 
   const confirmImport = () => {
+    const contractBdi = parsePercentInput(contractDraft.bdiPercent);
+    const contractDiscount = parsePercentInput(contractDraft.biddingDiscountPercent);
+    const nextContractInfo = {
+      ...(project.contractInfo ?? {}),
+      contractor: contractDraft.contractor,
+      contracted: contractDraft.contracted,
+      location: contractDraft.location,
+      contractObject: contractDraft.contractObject,
+      contractNumber: contractDraft.contractNumber,
+      artNumber: contractDraft.artNumber,
+      budgetSource: contractDraft.budgetSource,
+      bdiPercent: contractBdi,
+      biddingDiscountPercent: contractDiscount,
+    };
     // Caso 1: importação completa de Sintética (+ opcional Analítica).
     if (parsed) {
       const keep = (project.budgetItems ?? []).filter(b => b.source !== 'sintetica');
@@ -702,11 +764,13 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
       const next: BudgetItem[] = [...keep, ...integration.budgetItems];
       const nextProject: Project = {
         ...project,
+        name: contractDraft.projectName || project.name,
+        contractInfo: nextContractInfo,
         budgetItems: next,
         phases: integration.phases,
         analyticCompositions: integration.analyticCompositions,
         materialCostClasses: classified.length > 0 ? mergeAnalyticCostClasses(project, classified) : project.materialCostClasses,
-        syntheticBdiPercent: parsed.bdiPercent,
+        syntheticBdiPercent: contractBdi ?? parsed.bdiPercent,
         syntheticImportedAt: new Date().toISOString(),
       };
       onProjectChange(nextProject);
@@ -725,6 +789,9 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
       const budgetById = new Map((integration?.budgetItems ?? []).map(item => [item.id, item]));
       onProjectChange({
         ...project,
+        name: contractDraft.projectName || project.name,
+        contractInfo: nextContractInfo,
+        syntheticBdiPercent: contractBdi ?? project.syntheticBdiPercent,
         budgetItems: integration
           ? (project.budgetItems ?? []).map(item => item.source === 'sintetica' ? (budgetById.get(item.id) ?? item) : item)
           : project.budgetItems,
@@ -746,15 +813,17 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     wizardStep === 1 ? !!parsed
     : wizardStep === 2 ? hasAnalytic
     : wizardStep === 3 ? hasAnalytic
-    : (!!parsed || hasExistingSynthetic);
+    : wizardStep === 4 ? (!!parsed || hasExistingSynthetic)
+    : true;
   const goNextStep = () => {
     if (wizardStep === 1 && parsed) setWizardStep(2);
     else if (wizardStep === 2 && hasAnalytic) {
       setShowAnalyticClassReview(true);
       setWizardStep(3);
     } else if (wizardStep === 3 && hasAnalytic) setWizardStep(4);
+    else if (wizardStep === 4) setWizardStep(5);
   };
-  const goPreviousStep = () => setWizardStep(step => Math.max(1, step - 1) as 1 | 2 | 3 | 4);
+  const goPreviousStep = () => setWizardStep(step => Math.max(1, step - 1) as 1 | 2 | 3 | 4 | 5);
   const analyticInputGroups = Array.from((analyticCompositions ?? []).reduce((map, composition) => {
     for (const input of composition.inputs ?? []) {
       const key = analyticInputGroupKey(input);
@@ -839,6 +908,48 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
       ))}
     </div>
   ) : null;
+  const stepNotes: Record<1 | 2 | 3 | 4 | 5, string> = {
+    1: 'Importe a Sintetica e confira a leitura das colunas. Ela vira a base financeira e estrutural da obra.',
+    2: 'Anexe a Analitica e confira se as colunas A-H representam item, codigo, banco, descricao, coeficiente, unidade, valor unitario e total.',
+    3: 'Valide os insumos agrupados por codigo. A classificacao define o que entra como mao de obra, material ou equipamento.',
+    4: 'Revise o que sera integrado para EAP, Cronograma, Producao, Medicao, Aditivo, Custo Real e Lista de Material.',
+    5: 'Preencha os dados iniciais da obra. Eles alimentam os cabecalhos da Medicao, Aditivo, Custo Real e exportacoes.',
+  };
+  const setContractField = (field: keyof ContractDraft, value: string) => {
+    setContractDraft(current => ({ ...current, [field]: value }));
+  };
+  const contractDataPanel = (
+    <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
+      <div>
+        <div className="text-sm font-semibold text-foreground">5. Dados iniciais da obra</div>
+        <div className="text-xs text-muted-foreground">Preencha uma vez para usar nos relatórios e rotinas financeiras.</div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        {[
+          ['projectName', 'Obra'],
+          ['contractor', 'Contratante'],
+          ['contracted', 'Contratada'],
+          ['location', 'Local / Municipio'],
+          ['contractObject', 'Objeto'],
+          ['contractNumber', 'No do documento / contrato'],
+          ['artNumber', 'No da ART'],
+          ['budgetSource', 'Fonte de orcamento'],
+          ['bdiPercent', 'Valor do BDI (%)'],
+          ['biddingDiscountPercent', 'Desconto da licitacao (%)'],
+        ].map(([field, label]) => (
+          <label key={field} className={field === 'contractObject' ? 'text-[11px] text-muted-foreground md:col-span-2' : 'text-[11px] text-muted-foreground'}>
+            {label}
+            <input
+              value={contractDraft[field as keyof ContractDraft]}
+              onChange={e => setContractField(field as keyof ContractDraft, e.target.value)}
+              className="mt-1 h-9 w-full rounded border border-border bg-background px-2 text-xs text-foreground"
+              placeholder={field === 'bdiPercent' ? 'Ex.: 25' : field === 'biddingDiscountPercent' ? 'Ex.: 6,5' : undefined}
+            />
+          </label>
+        ))}
+      </div>
+    </div>
+  );
   const syntheticConfigPanel = preview ? (
     <div className="w-full rounded-lg border border-border bg-muted/20 p-3 space-y-3">
       <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -1121,12 +1232,13 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
             A plataforma tenta detectar cabecalhos automaticamente, mas voce pode alterar coluna, linha inicial e BDI antes de confirmar.
             <br />A mescla entre Sintetica e Analitica e feita principalmente por <strong>Item + Codigo</strong>, independentemente do nome usado no cabecalho.
           </DialogDescription>
-          <div className="grid grid-cols-4 gap-2 pt-2">
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 pt-2">
             {[
               { step: 1, label: 'Sintetica', done: !!parsed },
               { step: 2, label: 'Analitica', done: hasAnalytic },
               { step: 3, label: 'Classificar insumos', done: hasAnalytic },
-              { step: 4, label: 'Integrar projeto', done: false },
+              { step: 4, label: 'Revisar integracao', done: false },
+              { step: 5, label: 'Dados iniciais', done: false },
             ].map(item => (
               <div
                 key={item.step}
@@ -1142,6 +1254,9 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                 <div className="truncate">{item.label}</div>
               </div>
             ))}
+          </div>
+          <div className="mt-2 rounded-lg border border-info/20 bg-info/5 px-3 py-2 text-xs text-muted-foreground">
+            <strong className="text-foreground">Observacao:</strong> {stepNotes[wizardStep]}
           </div>
         </DialogHeader>
 
@@ -1359,7 +1474,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
             {wizardStep === 4 && (
             <div className="space-y-3">
             <div className="rounded-lg border border-primary/25 bg-primary/5 p-3">
-              <div className="text-sm font-semibold text-foreground">4. Integrar planilhas ao projeto</div>
+              <div className="text-sm font-semibold text-foreground">4. Revisar integracao das planilhas</div>
               <p className="mt-1 text-xs text-muted-foreground">
                 A integracao cria a EAP com os capitulos e subcapitulos importados da Sintetica. Medicao, Aditivo e Custo Real usam a base financeira. Cronograma e Producao recebem somente a RUP formada pelos insumos classificados como Mao de obra.
               </p>
@@ -1445,6 +1560,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
               </div>
             </div>
             )}
+
+            {wizardStep === 5 && contractDataPanel}
           </div>
         )}
 
@@ -1455,14 +1572,14 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
               Voltar
             </Button>
           )}
-          {wizardStep < 4 ? (
+          {wizardStep < 5 ? (
             <Button onClick={goNextStep} disabled={!canGoNext}>
-              {wizardStep === 1 ? 'Ir para Analitica' : wizardStep === 2 ? 'Ir para classificacao' : 'Ir para integracao'}
+              {wizardStep === 1 ? 'Ir para Analitica' : wizardStep === 2 ? 'Ir para classificacao' : wizardStep === 3 ? 'Ir para revisao' : 'Ir para dados iniciais'}
             </Button>
           ) : (
             <Button onClick={confirmImport} disabled={!canGoNext}>
               <Check className="w-4 h-4 mr-1" />
-              Integrar projeto
+              Salvar dados e integrar
             </Button>
           )}
         </DialogFooter>

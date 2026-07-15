@@ -269,6 +269,7 @@ export interface ContractInfo {
   budgetSource?: string;
   /** BDI em % (ex.: 25 representa 25%). */
   bdiPercent?: number;
+  biddingDiscountPercent?: number;
   /** Nº da ART (Anotação de Responsabilidade Técnica). */
   artNumber?: string;
 }
