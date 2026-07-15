@@ -30,6 +30,19 @@ function normCode(a?: string) {
   return (a ?? '').trim().toUpperCase().replace(/\s+/g, '').replace(/^([A-Z]+)0+(\d+)/, '$1$2');
 }
 
+function normItem(a?: string) {
+  return (a ?? '')
+    .trim()
+    .toUpperCase()
+    .split('.')
+    .map(part => /^\d+$/.test(part) ? String(parseInt(part, 10)) : part)
+    .join('.');
+}
+
+function compositionItem(c: AdditiveComposition) {
+  return c.itemNumber || c.item || '';
+}
+
 function findComposition(project: Project, row?: Row): AdditiveComposition | undefined {
   if (!row) return undefined;
   const all = [
@@ -37,8 +50,10 @@ function findComposition(project: Project, row?: Row): AdditiveComposition | und
     ...(project.analyticCompositions ?? []),
   ];
   const rowCode = normCode(row.itemCode);
+  const rowItem = normItem(row.item);
   return all.find(c => c.taskId === row.taskId || c.linkedTaskId === row.taskId)
-    ?? all.find(c => sameText(c.item, row.item) && normCode(c.code) === rowCode)
+    ?? all.find(c => normItem(compositionItem(c)) === rowItem && normCode(c.code) === rowCode)
+    ?? all.find(c => normItem(compositionItem(c)) === rowItem && sameText(c.description, row.description))
     ?? all.find(c => normCode(c.code) === rowCode && sameText(c.bank, row.priceBank))
     ?? all.find(c => sameText(c.description, row.description));
 }

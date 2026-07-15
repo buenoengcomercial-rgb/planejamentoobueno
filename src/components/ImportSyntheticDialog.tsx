@@ -270,6 +270,19 @@ function normalizeAnalyticCode(value?: string) {
   return (value ?? '').trim().toUpperCase().replace(/\s+/g, '');
 }
 
+function normalizeBudgetItemNumber(value?: string) {
+  return (value ?? '')
+    .trim()
+    .toUpperCase()
+    .split('.')
+    .map(part => /^\d+$/.test(part) ? String(parseInt(part, 10)) : part)
+    .join('.');
+}
+
+function budgetItemNumber(value: { item?: string; itemNumber?: string }) {
+  return value.itemNumber || value.item || '';
+}
+
 function analyticInputGroupKey(input: { code?: string; description: string; unit?: string }) {
   const code = normalizeAnalyticCode(input.code);
   if (code) return `code:${code}`;
@@ -285,8 +298,8 @@ function safeIdPart(value: string) {
     .toLowerCase() || 'item';
 }
 
-function sameBudgetKey(a: { item?: string; code?: string }, b: { item?: string; code?: string }) {
-  return (a.item ?? '').trim() === (b.item ?? '').trim()
+function sameBudgetKey(a: { item?: string; itemNumber?: string; code?: string }, b: { item?: string; itemNumber?: string; code?: string }) {
+  return normalizeBudgetItemNumber(budgetItemNumber(a)) === normalizeBudgetItemNumber(budgetItemNumber(b))
     && normalizeAnalyticCode(a.code) === normalizeAnalyticCode(b.code);
 }
 
@@ -404,9 +417,19 @@ function integrateImportedBudget(project: Project, budgetItems: BudgetItem[], an
 
   const taskIdByBudgetId = new Map(linkedBudgetItems.map(item => [item.id, item.taskId]));
   const linkedAnalytic = analyticCompositions.map(composition => {
-    const budget = linkedBudgetItems.find(item => sameBudgetKey(composition, item));
+    const budget = linkedBudgetItems.find(item =>
+      item.taskId === composition.linkedTaskId ||
+      item.taskId === composition.taskId ||
+      sameBudgetKey(composition, item)
+    );
     const linkedTaskId = budget?.taskId ?? composition.linkedTaskId ?? composition.taskId;
-    return linkedTaskId ? { ...composition, taskId: linkedTaskId, linkedTaskId } : composition;
+    return linkedTaskId ? {
+      ...composition,
+      item: composition.item || budget?.item,
+      itemNumber: composition.itemNumber || budget?.item,
+      taskId: linkedTaskId,
+      linkedTaskId,
+    } : composition;
   });
 
   return {
@@ -679,9 +702,20 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     // Caso 2: somente Analítica (sem nova Sintética) — atualiza apenas analyticCompositions.
     if (analyticCompositions && analyticCompositions.length > 0) {
       const classified = classifyAnalyticCompositions(analyticCompositions);
+      const existingSyntheticItems = (project.budgetItems ?? [])
+        .filter(item => item.source === 'sintetica')
+        .map(item => ({ ...item, taskId: item.taskId ?? `budget-${item.id}` }));
+      const integration = existingSyntheticItems.length > 0
+        ? integrateImportedBudget(project, existingSyntheticItems, classified)
+        : null;
+      const budgetById = new Map((integration?.budgetItems ?? []).map(item => [item.id, item]));
       onProjectChange({
         ...project,
-        analyticCompositions: classified,
+        budgetItems: integration
+          ? (project.budgetItems ?? []).map(item => item.source === 'sintetica' ? (budgetById.get(item.id) ?? item) : item)
+          : project.budgetItems,
+        phases: integration?.phases ?? project.phases,
+        analyticCompositions: integration?.analyticCompositions ?? classified,
         materialCostClasses: mergeAnalyticCostClasses(project, classified),
       });
       handleClose();
@@ -692,12 +726,12 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   const totalNoBDI = parsed?.items.reduce((s, i) => s + i.totalNoBDI, 0) ?? 0;
   const totalWithBDI = parsed?.items.reduce((s, i) => s + i.totalWithBDI, 0) ?? 0;
   const hasAnalytic = !!(analyticCompositions && analyticCompositions.length > 0);
+  const hasExistingSynthetic = (project.budgetItems ?? []).some(b => b.source === 'sintetica');
   const canGoNext =
     wizardStep === 1 ? !!parsed
     : wizardStep === 2 ? hasAnalytic
     : wizardStep === 3 ? hasAnalytic
-    : !!parsed;
-  const hasExistingSynthetic = (project.budgetItems ?? []).some(b => b.source === 'sintetica');
+    : (!!parsed || hasExistingSynthetic);
   const goNextStep = () => {
     if (wizardStep === 1 && parsed) setWizardStep(2);
     else if (wizardStep === 2 && hasAnalytic) {
