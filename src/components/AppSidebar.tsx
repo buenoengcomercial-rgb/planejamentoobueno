@@ -134,8 +134,9 @@ const navLabelByView: Partial<Record<AppView, string>> = {
   management: 'Rotina',
   tasks: 'Producao',
   measurement: 'Medicao',
-  realCost: 'Custo real',
+  realCost: 'Custos',
   materials: 'Material',
+  warehouse: 'Almoxarifado',
 };
 
 export default function AppSidebar({ currentView, onViewChange, projectName, collapsed, onToggleCollapse, onSwitchProject, onCreateProject, onRenameProject, onDuplicateProject, onDeleteProject, onImportedProject, activeProjectId, projectsList, userEmail, onLogout, orgName, roleLabel, canManageTeam, onOpenTeam }: AppSidebarProps) {
@@ -553,7 +554,7 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
             Modulos
           </div>
         )}
-        <div className={collapsed ? 'grid grid-cols-1 gap-1.5' : 'grid grid-cols-2 gap-2'}>
+        <div className={collapsed ? 'grid grid-cols-1 gap-1.5' : 'grid grid-cols-1 gap-2'}>
           {visibleNavItems.map(({ view, label, icon: Icon, tone }) => {
             const isActive = currentView === view;
             const displayLabel = navLabelByView[view] ?? label;
@@ -562,11 +563,11 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
               <button
                 key={view}
                 onClick={() => onViewChange(view)}
-                className={`group relative min-h-[64px] rounded-md border px-2.5 py-2 text-left transition-all ${
+                className={`group relative rounded-md border text-center transition-all ${
                   isActive
                     ? `bg-white/10 border-white/20 text-white ${color.ring}`
                     : 'bg-white/[0.035] border-white/10 text-[hsl(var(--sidebar-fg))]/80 hover:bg-white/[0.07] hover:border-white/20 hover:text-white'
-                } ${collapsed ? 'min-h-[44px] px-1.5 py-1.5 flex items-center justify-center' : ''}`}
+                } ${collapsed ? 'min-h-[44px] px-1.5 py-1.5 flex items-center justify-center' : 'min-h-[76px] px-3 py-3'}`}
                 title={collapsed ? displayLabel : undefined}
               >
                 {isActive && (
@@ -576,12 +577,12 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
                     transition={{ type: 'spring', stiffness: 380, damping: 32 }}
                   />
                 )}
-                <span className="relative z-10 flex items-center gap-2">
-                  <span className={`flex h-8 w-8 items-center justify-center rounded-md border transition-colors ${isActive ? color.active : color.base}`}>
-                    <Icon className="h-[17px] w-[17px]" strokeWidth={isActive ? 2.35 : 1.85} />
+                <span className={`relative z-10 flex ${collapsed ? 'items-center justify-center' : 'flex-col items-center justify-center'} gap-2`}>
+                  <span className={`flex h-10 w-10 items-center justify-center rounded-md border transition-colors ${isActive ? color.active : color.base}`}>
+                    <Icon className="h-5 w-5" strokeWidth={isActive ? 2.35 : 1.85} />
                   </span>
                   {!collapsed && (
-                    <span className="min-w-0 flex-1 text-[12px] font-semibold leading-tight">
+                    <span className="block w-full text-center text-[12px] font-semibold leading-tight">
                       {displayLabel}
                     </span>
                   )}
