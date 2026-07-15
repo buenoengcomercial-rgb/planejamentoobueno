@@ -589,8 +589,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         setAnalyticOk(true);
         setAnalyticCompositions(classifyAnalyticCompositions(an.compositions));
         setAnalyticInfo(an.message);
-        setShowAnalyticClassReview(true);
-        setWizardStep(3);
+        setShowAnalyticClassReview(false);
+        setWizardStep(2);
       }
     } catch (err: any) {
       setAnalyticOk(false);
@@ -668,7 +668,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         setAnalyticOk(true);
         setAnalyticCompositions(classifyAnalyticCompositions(an.compositions));
         setAnalyticInfo(an.message);
-        setWizardStep(3);
+        setShowAnalyticClassReview(false);
+        setWizardStep(2);
       }
     } catch (err: any) {
       setAnalyticOk(false);
@@ -891,6 +892,8 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   ) : null;
   const analyticConfigPanel = analyticPreview ? (
     <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
+      {wizardStep === 2 && (
+      <>
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div>
           <div className="text-xs font-semibold text-foreground">Configuracao da leitura Analitica A-H</div>
@@ -932,26 +935,19 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
           </label>
         ))}
       </div>
+      </>
+      )}
 
-      {analyticClassSummary && (
+      {wizardStep === 3 && analyticClassSummary && (
         <div className="space-y-1">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="text-[11px] font-semibold text-foreground">Classificacao inicial dos insumos</div>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-7 text-[11px]"
-              onClick={() => setShowAnalyticClassReview(v => !v)}
-            >
-              {showAnalyticClassReview ? 'Ocultar validacao' : 'Validar insumos'}
-            </Button>
           </div>
           {analyticClassSummary}
           <div className="text-[10px] text-muted-foreground">
             Regra inicial: unidades H, hora e mes entram como mao de obra quando nao houver indicio melhor. A classificacao pode ser revisada na Lista de Material.
           </div>
-          {showAnalyticClassReview && (
+          {(
             <div className="mt-2 rounded-lg border border-border bg-background">
               <div className="flex flex-wrap items-center gap-1 border-b border-border bg-muted/40 px-2 py-2">
                 <button
@@ -1026,6 +1022,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         </div>
       )}
 
+      {wizardStep === 2 && (
       <div className="overflow-x-auto rounded border border-border bg-background">
         <table className="w-full min-w-[720px] text-[10px]">
           <thead className="bg-muted">
@@ -1049,6 +1046,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
           </tbody>
         </table>
       </div>
+      )}
     </div>
   ) : null;
 
@@ -1258,19 +1256,24 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
             )}
 
             {wizardStep === 2 && (
-            <div className="rounded-lg border border-dashed border-border bg-muted/20 p-3 space-y-2">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
-                  <Layers className="w-4 h-4 text-warning" />
-                  2. Analitica do contrato
-                </div>
-                <button
-                  type="button"
-                  onClick={() => document.getElementById('analytic-extra-file-input')?.click()}
-                  className="text-xs px-2 py-1 rounded border border-border bg-card hover:bg-muted transition-colors"
-                >
-                  {analyticLoading ? 'Lendo...' : 'Anexar Analitica'}
-                </button>
+            <div className="space-y-3">
+              <div
+                onDrop={handleAnalyticDrop}
+                onDragOver={e => e.preventDefault()}
+                onClick={() => document.getElementById('analytic-extra-file-input')?.click()}
+                className="mx-auto w-full max-w-3xl rounded-xl border-2 border-dashed border-border bg-muted/20 p-8 flex flex-col items-center justify-center gap-3 text-center cursor-pointer hover:border-warning/50 hover:bg-warning/5 transition-colors"
+              >
+                {analyticLoading ? (
+                  <Loader2 className="w-9 h-9 text-warning animate-spin" />
+                ) : (
+                  <>
+                    <Layers className="w-9 h-9 text-warning/80" />
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">2. Anexar planilha analitica</p>
+                      <p className="text-xs text-muted-foreground">Arraste e solte ou clique para selecionar .xlsx / .xls</p>
+                    </div>
+                  </>
+                )}
                 <input
                   id="analytic-extra-file-input"
                   type="file"
@@ -1289,11 +1292,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                   {analyticInfo}
                 </div>
               )}
-              {!analyticInfo && (
-                <p className="text-[11px] text-muted-foreground">
-                  Se a Analitica nao estiver no mesmo arquivo da Sintetica, anexe aqui para alimentar insumos, produtividade, Lista de Material e Custo Real.
-                </p>
-              )}
+              {analyticConfigPanel}
             </div>
             )}
 
