@@ -30,6 +30,17 @@ function normCode(a?: string) {
   return (a ?? '').trim().toUpperCase().replace(/\s+/g, '').replace(/^([A-Z]+)0+(\d+)/, '$1$2');
 }
 
+function normDesc(a?: string) {
+  return (a ?? '')
+    .trim()
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function normItem(a?: string) {
   return (a ?? '')
     .trim()
@@ -51,10 +62,12 @@ function findComposition(project: Project, row?: Row): AdditiveComposition | und
   ];
   const rowCode = normCode(row.itemCode);
   const rowItem = normItem(row.item);
+  const rowDesc = normDesc(row.description);
   return all.find(c => c.taskId === row.taskId || c.linkedTaskId === row.taskId)
     ?? all.find(c => normItem(compositionItem(c)) === rowItem && normCode(c.code) === rowCode)
-    ?? all.find(c => normItem(compositionItem(c)) === rowItem && sameText(c.description, row.description))
+    ?? all.find(c => normItem(compositionItem(c)) === rowItem && normDesc(c.description) === rowDesc)
     ?? all.find(c => normCode(c.code) === rowCode && sameText(c.bank, row.priceBank))
+    ?? all.find(c => normCode(c.code) === rowCode && normDesc(c.description) === rowDesc)
     ?? all.find(c => sameText(c.description, row.description));
 }
 

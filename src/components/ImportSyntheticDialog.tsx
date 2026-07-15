@@ -283,6 +283,17 @@ function normalizeAnalyticCode(value?: string) {
   return (value ?? '').trim().toUpperCase().replace(/\s+/g, '');
 }
 
+function normalizeAnalyticDescription(value?: string) {
+  return (value ?? '')
+    .trim()
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function parsePercentInput(value: string): number | undefined {
   return parseBdiInput(value);
 }
@@ -339,9 +350,22 @@ function sameBudgetKey(a: { item?: string; itemNumber?: string; code?: string },
     && normalizeAnalyticCode(a.code) === normalizeAnalyticCode(b.code);
 }
 
+function sameBudgetFallback(a: { item?: string; itemNumber?: string; code?: string; description?: string }, b: { item?: string; itemNumber?: string; code?: string; description?: string }) {
+  const aItem = normalizeBudgetItemNumber(budgetItemNumber(a));
+  const bItem = normalizeBudgetItemNumber(budgetItemNumber(b));
+  const aCode = normalizeAnalyticCode(a.code);
+  const bCode = normalizeAnalyticCode(b.code);
+  const aDesc = normalizeAnalyticDescription(a.description);
+  const bDesc = normalizeAnalyticDescription(b.description);
+  if (aItem && bItem && aItem === bItem) return true;
+  if (aCode && bCode && aCode === bCode && (!aDesc || !bDesc || aDesc === bDesc)) return true;
+  return !!aDesc && !!bDesc && aDesc === bDesc;
+}
+
 function findAnalyticForBudget(compositions: AdditiveComposition[], item: BudgetItem) {
   return compositions.find(c => c.linkedTaskId === item.taskId || c.taskId === item.taskId)
-    ?? compositions.find(c => sameBudgetKey(c, item));
+    ?? compositions.find(c => sameBudgetKey(c, item))
+    ?? compositions.find(c => sameBudgetFallback(c, item));
 }
 
 function buildLaborFromAnalytic(composition?: AdditiveComposition): LaborComposition[] {
@@ -456,13 +480,17 @@ function integrateImportedBudget(project: Project, budgetItems: BudgetItem[], an
     const budget = linkedBudgetItems.find(item =>
       item.taskId === composition.linkedTaskId ||
       item.taskId === composition.taskId ||
-      sameBudgetKey(composition, item)
+      sameBudgetKey(composition, item) ||
+      sameBudgetFallback(composition, item)
     );
     const linkedTaskId = budget?.taskId ?? composition.linkedTaskId ?? composition.taskId;
     return linkedTaskId ? {
       ...composition,
-      item: composition.item || budget?.item,
-      itemNumber: composition.itemNumber || budget?.item,
+      item: budget?.item ?? composition.item,
+      itemNumber: budget?.item ?? composition.itemNumber,
+      code: composition.code || budget?.code,
+      bank: composition.bank || budget?.bank,
+      description: composition.description || budget?.description,
       taskId: linkedTaskId,
       linkedTaskId,
     } : composition;
