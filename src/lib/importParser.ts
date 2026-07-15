@@ -992,6 +992,12 @@ function _normLow(s: string): string {
   return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 }
 
+function _syntheticItemDepth(item: string): number {
+  const clean = item.trim();
+  if (!clean) return -1;
+  return clean.split('.').filter(Boolean).length - 1;
+}
+
 function _findSyntheticSheetName(wb: XLSX.WorkBook, sheetName?: string): string {
   if (sheetName && wb.Sheets[sheetName]) return sheetName;
   return wb.SheetNames.find(n => _normLow(n).includes('sintet')) ?? wb.SheetNames[0];
@@ -1151,6 +1157,8 @@ export function parseSyntheticBudgetFlexible(data: ArrayBuffer, options: Synthet
     return typeof index === 'number' ? row[index] : '';
   };
   const items: BudgetItem[] = [];
+  let currentChapter: { code: string; name: string } | null = null;
+  let currentSubchapter: { code: string; name: string } | null = null;
 
   for (let i = firstDataRowIndex; i < rows.length; i++) {
     const r = rows[i] || [];
@@ -1168,6 +1176,21 @@ export function parseSyntheticBudgetFlexible(data: ArrayBuffer, options: Synthet
     if (!item && !code && !description && !quantity && !upNoBDI && !totalNoBDI && !upWithBDI && !totalWithBDI) continue;
     const dLow = _normLow(description);
     if (!code && (dLow.includes('total') || dLow.includes('subtotal'))) continue;
+    const looksLikeGroup = !code && !!item && !!description && quantity <= 0 && !unit;
+    if (looksLikeGroup) {
+      const depth = _syntheticItemDepth(item);
+      if (depth <= 0) {
+        currentChapter = { code: item, name: description };
+        currentSubchapter = null;
+      } else {
+        if (!currentChapter) {
+          const parentCode = item.split('.').slice(0, 1).join('.');
+          currentChapter = { code: parentCode || item, name: parentCode || item };
+        }
+        currentSubchapter = { code: item, name: description };
+      }
+      continue;
+    }
     if (!code) continue;
 
     const bdiFactor = 1 + (bdiPercent ?? 0) / 100;
@@ -1195,6 +1218,10 @@ export function parseSyntheticBudgetFlexible(data: ArrayBuffer, options: Synthet
       totalNoBDI: finalTotalNoBDI,
       totalWithBDI: finalTotalWithBDI,
       source: 'sintetica',
+      chapterCode: currentChapter?.code,
+      chapterName: currentChapter?.name,
+      subchapterCode: currentSubchapter?.code,
+      subchapterName: currentSubchapter?.name,
     });
   }
 

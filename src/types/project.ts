@@ -961,6 +961,10 @@ export interface BudgetItem {
   totalNoBDI: number;
   totalWithBDI: number;
   source: BudgetItemSource;
+  chapterCode?: string;
+  chapterName?: string;
+  subchapterCode?: string;
+  subchapterName?: string;
   /** Vínculo opcional com tarefa (quando casado por código). */
   taskId?: string;
   /** Quando vier de aditivo aprovado, referência ao additive. */

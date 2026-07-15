@@ -5,6 +5,10 @@ export interface Row {
   item: string;
   phaseId: string;
   phaseChain: string;
+  syntheticChapterCode?: string;
+  syntheticChapterName?: string;
+  syntheticSubchapterCode?: string;
+  syntheticSubchapterName?: string;
   taskId: string;
   description: string;
   unit: string;

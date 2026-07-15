@@ -409,11 +409,25 @@ export function useMeasurementRows({
         const valueContracted = money2(b.totalWithBDI || calc.totalContracted);
         const valueContractedNoBDI = money2(b.totalNoBDI || calc.totalContractedNoBDI);
         const isAdditive = b.source === 'aditivo';
+        const hasSyntheticChapter = !isAdditive && !!(b.chapterName || b.chapterCode);
+        const syntheticPhaseId = hasSyntheticChapter
+          ? `__synthetic_${b.subchapterCode || b.chapterCode || 'chapter'}__`
+          : '__synthetic_orphans__';
+        const syntheticPhaseChain = hasSyntheticChapter
+          ? [
+              b.chapterCode || b.chapterName ? `${b.chapterCode || ''} ${b.chapterName || ''}`.trim() : '',
+              b.subchapterCode || b.subchapterName ? `${b.subchapterCode || ''} ${b.subchapterName || ''}`.trim() : '',
+            ].filter(Boolean).join(' > ')
+          : 'Itens da Sintetica sem vinculo na EAP';
         orphanRows.push({
           item: b.item,
-          phaseId: isAdditive ? '__additive_items__' : '__synthetic_orphans__',
-          phaseChain: isAdditive ? 'Itens de Aditivo aprovado' : 'Itens da Sintética sem vínculo na EAP',
+          phaseId: isAdditive ? '__additive_items__' : syntheticPhaseId,
+          phaseChain: isAdditive ? 'Itens de Aditivo aprovado' : syntheticPhaseChain,
           taskId: `budget-${b.id}`,
+          syntheticChapterCode: b.chapterCode,
+          syntheticChapterName: b.chapterName,
+          syntheticSubchapterCode: b.subchapterCode,
+          syntheticSubchapterName: b.subchapterName,
           description: b.description,
           unit: b.unit,
           itemCode: b.code,
@@ -533,6 +547,66 @@ export function useMeasurementRows({
       .map(n => buildNode(n, 0))
       .filter((g): g is GroupNode => g !== null);
     const sorted = groups.sort((a, b) => a.number.localeCompare(b.number, undefined, { numeric: true }));
+
+    const addRowToTotals = (totals: ReturnType<typeof emptyTotals>, r: Row) => {
+      totals.contracted += r.valueContracted;
+      totals.period += r.valuePeriod;
+      totals.accum += r.valueAccum;
+      totals.balance += r.valueBalance;
+      totals.contractedNoBDI += r.valueContractedNoBDI;
+      totals.periodNoBDI += r.valuePeriodNoBDI;
+      totals.accumNoBDI += r.valueAccumNoBDI;
+      totals.balanceNoBDI += r.valueBalanceNoBDI;
+      totals.qtyContracted += r.qtyContracted;
+      totals.qtyAccum += r.qtyCurrentAccum;
+      totals.forecast += r.valueForecast;
+      totals.forecastNoBDI += r.valueForecastNoBDI;
+      totals.diffForecast += r.diffForecastVsReal;
+    };
+
+    const syntheticRows = filteredRows.filter(r => r.phaseId.startsWith('__synthetic_') && r.phaseId !== '__synthetic_orphans__');
+    if (syntheticRows.length > 0) {
+      const chapterMap = new Map<string, GroupNode>();
+      syntheticRows.forEach(r => {
+        const chapterKey = r.syntheticChapterCode || r.syntheticChapterName || 'Sintetica';
+        let chapter = chapterMap.get(chapterKey);
+        if (!chapter) {
+          chapter = {
+            phaseId: `__synthetic_chapter_${chapterKey}`,
+            number: r.syntheticChapterCode || '',
+            name: r.syntheticChapterName || r.syntheticChapterCode || 'Sintetica importada',
+            depth: 0,
+            rows: [],
+            children: [],
+            totals: emptyTotals(),
+          };
+          chapterMap.set(chapterKey, chapter);
+        }
+
+        const subKey = r.syntheticSubchapterCode || r.syntheticSubchapterName || '';
+        if (subKey) {
+          let sub = chapter.children.find(c => c.phaseId === `__synthetic_sub_${subKey}`);
+          if (!sub) {
+            sub = {
+              phaseId: `__synthetic_sub_${subKey}`,
+              number: r.syntheticSubchapterCode || '',
+              name: r.syntheticSubchapterName || r.syntheticSubchapterCode || 'Subcapitulo',
+              depth: 1,
+              rows: [],
+              children: [],
+              totals: emptyTotals(),
+            };
+            chapter.children.push(sub);
+          }
+          sub.rows.push(r);
+          addRowToTotals(sub.totals, r);
+        } else {
+          chapter.rows.push(r);
+        }
+        addRowToTotals(chapter.totals, r);
+      });
+      sorted.push(...Array.from(chapterMap.values()).sort((a, b) => a.number.localeCompare(b.number, undefined, { numeric: true })));
+    }
 
     // Seção extra: itens da Sintética sem vínculo na EAP (apenas para revisão)
     const orphanRows = rowsByPhase.get('__synthetic_orphans__') || [];
