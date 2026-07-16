@@ -1,22 +1,17 @@
 import { Project } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
 import { generateCurvaS, suggestOptimizations } from '@/lib/calculations';
-import * as MC from '@/lib/materialComparisons';
-import { buildDashboardFinancialSummary, type DashboardClassComparisonRow } from '@/lib/dashboardFinancial';
+import { buildDashboardFinancialSummary } from '@/lib/dashboardFinancial';
 import { getChapterTree, getChapterTasks, getChapterNumbering } from '@/lib/chapters';
 import { motion } from 'framer-motion';
 import { useMemo } from 'react';
 import {
   AlertTriangle,
-  BadgeCheck,
   BrickWall,
   CheckCircle2,
   CircleSlash,
   DollarSign,
-  FileText,
   HardHat,
-  Percent,
-  ShoppingCart,
   Target,
   TrendingUp,
   Truck,
@@ -28,10 +23,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
   Legend,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -48,6 +40,20 @@ const COST_CLASS_ICON = {
   labor: HardHat,
   equipment: Truck,
   unclassified: CircleSlash,
+} as const;
+
+const COST_CLASS_TONE = {
+  material: 'text-orange-600 bg-orange-50 border-orange-200',
+  labor: 'text-red-600 bg-red-50 border-red-200',
+  equipment: 'text-blue-600 bg-blue-50 border-blue-200',
+  unclassified: 'text-slate-600 bg-slate-50 border-slate-200',
+} as const;
+
+const COST_CLASS_LABEL = {
+  material: 'Material',
+  labor: 'Mao de obra',
+  equipment: 'Equipamento',
+  unclassified: 'Outros',
 } as const;
 
 const fmtBRL = (value: number) => value.toLocaleString('pt-BR', {
@@ -68,54 +74,12 @@ const compactBRL = (value: number) => {
   return fmtBRL(value);
 };
 
-function FinanceMetric({
-  label,
-  value,
-  hint,
-  icon: Icon,
-  tone = 'default',
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  icon: React.ElementType;
-  tone?: 'default' | 'success' | 'warning' | 'danger';
-}) {
-  const toneClass =
-    tone === 'success' ? 'text-success' :
-    tone === 'warning' ? 'text-warning' :
-    tone === 'danger' ? 'text-destructive' :
-    'text-primary';
-
+function MetricLine({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
   return (
-    <div className="rounded-lg border border-border bg-muted/20 p-3">
-      <div className="flex items-start justify-between gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
-        <Icon className={`h-4 w-4 ${toneClass}`} />
-      </div>
-      <p className={`mt-2 text-base font-bold tabular-nums ${toneClass}`}>{value}</p>
-      {hint && <p className="mt-1 text-[11px] text-muted-foreground">{hint}</p>}
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={`text-right tabular-nums ${strong ? 'font-bold text-foreground' : 'font-semibold text-foreground'}`}>{value}</span>
     </div>
-  );
-}
-
-function ComparisonTableRow({ row, total = false }: { row: DashboardClassComparisonRow; total?: boolean }) {
-  const savingsTone = row.savings < 0 ? 'text-destructive' : total ? 'text-emerald-300' : 'text-success';
-  const cellClass = total ? 'px-3 py-2 text-right tabular-nums' : 'px-3 py-2 text-right tabular-nums border-t border-border';
-  const leftClass = total ? 'px-3 py-2 text-left' : 'px-3 py-2 text-left border-t border-border';
-  const centerClass = total ? 'px-3 py-2 text-center tabular-nums' : 'px-3 py-2 text-center tabular-nums border-t border-border';
-
-  return (
-    <tr>
-      <td className={`${leftClass} font-semibold`}>{row.label}</td>
-      <td className={cellClass}>{fmtBRL(row.budgetTotal)}</td>
-      <td className={cellClass}>{fmtBRL(row.quotedBudgetTotal)}</td>
-      <td className={cellClass}>{fmtBRL(row.quotedLocalTotal)}</td>
-      <td className={`${cellClass} font-semibold ${savingsTone}`}>{fmtBRL(row.savings)}</td>
-      <td className={`${cellClass} font-semibold ${savingsTone}`}>{fmtPct(row.savingsPct)}</td>
-      <td className={centerClass}>{row.quotedItemsCount}</td>
-      <td className={centerClass}>{row.pendingItemsCount}</td>
-    </tr>
   );
 }
 
@@ -132,28 +96,21 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
   const criticalTasks = tasks.filter(t => t.isCritical).length;
   const overallProgress = totalTasks > 0 ? Math.round(tasks.reduce((s, t) => s + t.percentComplete, 0) / totalTasks) : 0;
 
-  const materialCostTotals = useMemo(() => MC.computeMaterialCostClassTotals(project), [project]);
-  const materialCostChart = useMemo(
-    () => materialCostTotals
-      .filter(row => row.total > 0 || row.itemsCount > 0)
-      .map(row => ({
-        name: row.label,
-        total: row.total,
-        color: MC.MATERIAL_COST_CLASS_COLOR[row.costClass],
-        costClass: row.costClass,
-      })),
-    [materialCostTotals],
-  );
+  const costUsageRows = useMemo(() => financial.classRows.map(row => ({
+    ...row,
+    label: COST_CLASS_LABEL[row.costClass],
+    utilized: row.quotedLocalTotal,
+    balance: Math.max(0, row.budgetTotal - row.quotedLocalTotal),
+  })), [financial.classRows]);
 
-  const quotedVsBudgetChart = useMemo(() => financial.classRows.map(row => ({
-    name: row.costClass === 'unclassified' ? 'Outros' : row.label,
-    orcado: row.quotedBudgetTotal,
-    cotado: row.quotedLocalTotal,
-    economia: row.savings,
-    economiaPct: row.savingsPct,
+  const costUsageChart = useMemo(() => costUsageRows.map(row => ({
+    name: row.label,
+    orcado: row.budgetTotal,
+    utilizado: row.utilized,
+    saldo: row.balance,
     itensCotados: row.quotedItemsCount,
     itensPendentes: row.pendingItemsCount,
-  })), [financial.classRows]);
+  })), [costUsageRows]);
 
   const chapterTree = useMemo(() => getChapterTree(project), [project]);
   const chapterNumbering = useMemo(() => getChapterNumbering(project), [project]);
@@ -224,153 +181,82 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }} className="bg-card rounded-xl p-5 border border-border shadow-sm">
         <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
           <div>
-            <h3 className="text-sm font-semibold text-foreground">Resumo financeiro da obra</h3>
+            <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide">Custos da obra</h3>
             <p className="text-xs text-muted-foreground mt-1">
-              Base contratual vinda da Sintetica/Medicao; cotacoes locais vem da aba Custos com uma cotacao valida por item.
+              Orçado vem da composição analítica/Lista de Material. Utilizado vem das cotações válidas registradas na aba Custos.
             </p>
           </div>
           <span className="rounded-full border border-primary/25 bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary">
             Cobertura {fmtPct(financial.quoteCoveragePct)}
           </span>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
-          <FinanceMetric label="Custo orcado s/ BDI" value={fmtBRL(financial.budgetDirectCost)} icon={FileText} />
-          <FinanceMetric label="BDI" value={fmtPct(financial.bdiPercent)} hint={fmtBRL(financial.bdiValue)} icon={Percent} />
-          <FinanceMetric label="Contratado c/ BDI" value={fmtBRL(financial.contractedWithBdi)} icon={BadgeCheck} />
-          <FinanceMetric label="Valor cotado localmente" value={fmtBRL(financial.quotedLocalTotal)} icon={ShoppingCart} />
-          <FinanceMetric
-            label={financial.savings >= 0 ? 'Economia prevista' : 'Aumento previsto'}
-            value={fmtBRL(financial.savings)}
-            hint={fmtPct(financial.savingsPct)}
-            icon={financial.savings >= 0 ? TrendingUp : AlertTriangle}
-            tone={financial.savings >= 0 ? 'success' : 'danger'}
-          />
-          <FinanceMetric label="Orcado dos itens cotados" value={fmtBRL(financial.quotedBudgetTotal)} icon={DollarSign} />
-          <FinanceMetric label="Total elegivel p/ cotar" value={fmtBRL(financial.eligibleBudgetTotal)} icon={Target} />
-          <FinanceMetric label="Itens cotados" value={String(financial.quotedItemsCount)} icon={CheckCircle2} tone="success" />
-          <FinanceMetric label="Itens pendentes" value={String(financial.pendingQuoteItemsCount)} icon={AlertTriangle} tone={financial.pendingQuoteItemsCount > 0 ? 'warning' : 'success'} />
-          <FinanceMetric label="BDI em separado" value={fmtBRL(financial.bdiValue)} hint="Nao entra como classe de custo." icon={CircleSlash} />
-        </div>
-      </motion.div>
 
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }} className="bg-card rounded-xl p-5 border border-border shadow-sm">
-        <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
-          <div>
-            <h3 className="text-sm font-semibold text-foreground">Custo por classificacao</h3>
-            <p className="text-xs text-muted-foreground mt-1">Referencia calculada a partir da Lista de Material.</p>
-          </div>
-          <span className="text-[11px] text-muted-foreground">
-            Total ref.: <strong className="text-foreground">{fmtBRL(materialCostTotals.reduce((sum, row) => sum + row.total, 0))}</strong>
-          </span>
-        </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-            {materialCostTotals.map(row => {
-              const Icon = COST_CLASS_ICON[row.costClass];
-              return (
-                <div key={row.costClass} className="rounded-lg border border-border bg-muted/20 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                      <Icon className="w-3.5 h-3.5" style={{ color: MC.MATERIAL_COST_CLASS_COLOR[row.costClass] }} />
-                      {row.label}
-                    </span>
-                    <span className="text-[10px] text-muted-foreground">{row.itemsCount} item{row.itemsCount === 1 ? '' : 's'}</span>
-                  </div>
-                  <p className="mt-2 text-base font-bold text-foreground tabular-nums">
-                    {fmtBRL(row.total)}
-                  </p>
-                  {row.missingPriceCount > 0 && (
-                    <p className="mt-1 text-[10px] text-muted-foreground">{row.missingPriceCount} sem preco ref.</p>
-                  )}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+          {costUsageRows.map(row => {
+            const Icon = COST_CLASS_ICON[row.costClass];
+            const tone = COST_CLASS_TONE[row.costClass];
+            return (
+              <div key={row.costClass} className="rounded-lg border border-border bg-background p-4 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wide text-foreground">{row.label}</span>
+                  <span className={`flex h-9 w-9 items-center justify-center rounded-md border ${tone}`}>
+                    <Icon className="h-[18px] w-[18px]" />
+                  </span>
                 </div>
-              );
-            })}
+                <div className="mt-4 space-y-2 text-sm">
+                  <MetricLine label="Orcado" value={fmtBRL(row.budgetTotal)} />
+                  <MetricLine label="Utilizado" value={fmtBRL(row.utilized)} />
+                  <MetricLine label="Saldo" value={fmtBRL(row.balance)} strong />
+                </div>
+                <div className="mt-3 flex items-center justify-between text-[10px] text-muted-foreground">
+                  <span>{row.quotedItemsCount} cotado(s)</span>
+                  <span>{row.pendingItemsCount} pendente(s)</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-4 rounded-lg border border-border bg-muted/20 p-3">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+            <span><strong>BDI:</strong> {fmtPct(financial.bdiPercent)}</span>
+            <span><strong>Valor do BDI:</strong> {fmtBRL(financial.bdiValue)}</span>
+            <span><strong>Contratado:</strong> {fmtBRL(financial.contractedWithBdi)}</span>
           </div>
-          <div className="min-h-[180px]">
-            <ResponsiveContainer width="100%" height={180}>
-              <PieChart>
-                <Pie data={materialCostChart} cx="50%" cy="50%" innerRadius={42} outerRadius={70} dataKey="total" nameKey="name" paddingAngle={3}>
-                  {materialCostChart.map(entry => (
-                    <Cell key={entry.costClass} fill={entry.color} />
-                  ))}
-                </Pie>
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+            <span><strong>Custo direto:</strong> {fmtBRL(financial.budgetDirectCost)}</span>
+            <span><strong>Utilizado:</strong> {fmtBRL(financial.quotedLocalTotal)}</span>
+            <span><strong>Saldo:</strong> {fmtBRL(Math.max(0, financial.budgetDirectCost - financial.quotedLocalTotal))}</span>
+          </div>
+        </div>
+
+        <div className="mt-5">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h4 className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Grafico: Orcado x Utilizado</h4>
+            <span className="text-[11px] text-muted-foreground">{financial.quotedItemsCount} item(ns) cotado(s)</span>
+          </div>
+          <div className="h-[260px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={costUsageChart}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} />
+                <YAxis tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} tickFormatter={value => compactBRL(Number(value)).replace('R$', '').trim()} />
                 <Tooltip
-                  formatter={(value: number) => fmtBRL(value)}
+                  formatter={(value: number, name: string) => [fmtBRL(value), name === 'orcado' ? 'Orcado' : 'Utilizado']}
+                  labelFormatter={(label, payload) => {
+                    const row = payload?.[0]?.payload;
+                    if (!row) return label;
+                    return `${label} - saldo ${fmtBRL(row.saldo)} - ${row.itensPendentes} pendente(s)`;
+                  }}
                   contentStyle={{ borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--card))' }}
                 />
-              </PieChart>
+                <Legend />
+                <Bar dataKey="orcado" name="Orcado" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="utilizado" name="Utilizado" fill="hsl(152, 60%, 42%)" radius={[6, 6, 0, 0]} />
+              </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
-      </motion.div>
-
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.28 }} className="bg-card rounded-xl p-5 border border-border shadow-sm">
-        <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
-          <div>
-            <h3 className="text-sm font-semibold text-foreground">Orcado x Cotado local por classificacao</h3>
-            <p className="text-xs text-muted-foreground mt-1">
-              O grafico compara somente itens que possuem cotacao valida. Pendentes nao entram como custo zero.
-            </p>
-          </div>
-          <span className="text-[11px] text-muted-foreground">
-            {fmtPct(financial.quoteCoveragePct)} do valor orcado elegivel ja possui cotacao valida.
-          </span>
-        </div>
-
-        {financial.quotedItemsCount === 0 ? (
-          <div className="rounded-lg border border-dashed border-border bg-muted/20 p-8 text-center text-sm text-muted-foreground">
-            Ainda nao existem cotacoes selecionadas para comparacao.
-          </div>
-        ) : (
-          <>
-            <div className="h-[280px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={quotedVsBudgetChart}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} />
-                  <YAxis tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} tickFormatter={value => compactBRL(Number(value)).replace('R$', '').trim()} />
-                  <Tooltip
-                    formatter={(value: number, name: string) => [fmtBRL(value), name === 'orcado' ? 'Orcado dos itens cotados' : 'Cotado localmente']}
-                    labelFormatter={(label, payload) => {
-                      const row = payload?.[0]?.payload;
-                      if (!row) return label;
-                      return `${label} - economia ${fmtBRL(row.economia)} (${fmtPct(row.economiaPct)}) - ${row.itensCotados} item(ns)`;
-                    }}
-                    contentStyle={{ borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--card))' }}
-                  />
-                  <Legend />
-                  <Bar dataKey="orcado" name="Orcado" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="cotado" name="Cotado localmente" fill="hsl(152, 60%, 42%)" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-
-            <div className="mt-4 overflow-auto rounded-lg border border-border">
-              <table className="w-full min-w-[980px] text-xs">
-                <thead className="bg-muted/60 text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 text-left">Classificacao</th>
-                    <th className="px-3 py-2 text-right">Orcado total</th>
-                    <th className="px-3 py-2 text-right">Orcado ja cotado</th>
-                    <th className="px-3 py-2 text-right">Valor cotado</th>
-                    <th className="px-3 py-2 text-right">Economia</th>
-                    <th className="px-3 py-2 text-right">Economia %</th>
-                    <th className="px-3 py-2 text-center">Itens cotados</th>
-                    <th className="px-3 py-2 text-center">Itens pendentes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {financial.classRows.map(row => (
-                    <ComparisonTableRow key={row.costClass} row={row} />
-                  ))}
-                </tbody>
-                <tfoot className="bg-slate-900 text-white font-semibold">
-                  <ComparisonTableRow row={financial.totalsRow} total />
-                </tfoot>
-              </table>
-            </div>
-          </>
-        )}
       </motion.div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
