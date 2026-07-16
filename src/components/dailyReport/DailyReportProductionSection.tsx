@@ -21,7 +21,7 @@ export function DailyReportProductionSection({
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-sm flex items-center gap-2">
+        <CardTitle className="text-base flex items-center gap-2">
           <ListChecks className="w-4 h-4 text-primary" />
           Produção executada no dia ({formatBR(selectedDate)})
         </CardTitle>
@@ -35,7 +35,7 @@ export function DailyReportProductionSection({
           <div className="space-y-4">
             {grouped.map(ch => (
               <div key={ch.chapterNumber + ch.chapterName} className="space-y-2">
-                <div className="font-semibold text-sm text-foreground">
+                <div className="font-semibold text-base text-foreground">
                   {ch.chapterNumber} — {ch.chapterName}
                 </div>
                 {ch.direct.length > 0 && (
@@ -43,7 +43,7 @@ export function DailyReportProductionSection({
                 )}
                 {Array.from(ch.subs.values()).map(sub => (
                   <div key={sub.number + sub.name} className="ml-4 space-y-1">
-                    <div className="text-xs font-medium text-muted-foreground">
+                    <div className="text-sm font-medium text-muted-foreground">
                       {sub.number} — {sub.name}
                     </div>
                     <ProductionTable entries={sub.entries} photosByTask={photosByTask} onShowPhotos={(taskId) => setPhotoFilter(taskId)} />

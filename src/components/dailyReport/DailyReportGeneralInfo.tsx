@@ -36,15 +36,15 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay 
     <>
       <Card>
         <CardHeader className="pb-3 flex flex-row items-center justify-between gap-2">
-          <CardTitle className="text-sm">Informações do dia</CardTitle>
-          <Button size="sm" variant="ghost" onClick={handleClearDay} className="h-8 text-xs">
+          <CardTitle className="text-base">Informações do dia</CardTitle>
+          <Button size="sm" variant="ghost" onClick={handleClearDay} className="h-9 text-sm">
             <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Limpar diário do dia
           </Button>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="space-y-1">
-              <Label className="text-xs">Responsável pelo lançamento</Label>
+              <Label className="text-sm">Responsável pelo lançamento</Label>
               <Input
                 value={currentReport.responsible || ''}
                 onChange={e => updateField('responsible', e.target.value)}
@@ -52,7 +52,7 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay 
               />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Clima</Label>
+              <Label className="text-sm">Clima</Label>
               <Select
                 value={currentReport.weather || ''}
                 onValueChange={(v) => {
@@ -64,7 +64,7 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay 
                   }
                 }}
               >
-                <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="Selecionar..." /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__clear__">Sem seleção</SelectItem>
                   {WEATHER_OPTIONS.map(o => {
@@ -89,7 +89,7 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay 
               )}
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Condição de trabalho</Label>
+              <Label className="text-sm">Condição de trabalho</Label>
               <Select
                 value={currentReport.workCondition || ''}
                 onValueChange={(v) => {
@@ -101,7 +101,7 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay 
                   }
                 }}
               >
-                <SelectTrigger><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="Selecionar..." /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__clear__">Sem seleção</SelectItem>
                   {WORK_OPTIONS.map(o => (

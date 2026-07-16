@@ -65,14 +65,14 @@ export function DailyReportPhotosCard({
   return (
     <Card>
       <CardHeader className="pb-3 flex flex-row items-center justify-between gap-2 flex-wrap">
-        <CardTitle className="text-sm flex items-center gap-2">
+        <CardTitle className="text-base flex items-center gap-2">
           <Camera className="w-4 h-4 text-primary" /> Fotos da Obra ({photos.length})
         </CardTitle>
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex items-center gap-1">
-            <Label className="text-[11px] text-muted-foreground">Vincular à atividade:</Label>
+            <Label className="text-xs text-muted-foreground">Vincular à atividade:</Label>
             <Select value={pendingTaskId} onValueChange={setPendingTaskId}>
-              <SelectTrigger className="h-8 text-xs w-[280px]">
+              <SelectTrigger className="h-9 text-xs w-[280px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -117,16 +117,16 @@ export function DailyReportPhotosCard({
         {photos.length > 0 && (
           <div className="flex items-center gap-2 flex-wrap">
             <Filter className="w-3.5 h-3.5 text-muted-foreground" />
-            <Button size="sm" variant={photoFilter === 'all' ? 'default' : 'outline'} className="h-7 text-[11px]" onClick={() => setPhotoFilter('all')}>
+            <Button size="sm" variant={photoFilter === 'all' ? 'default' : 'outline'} className="h-8 text-xs" onClick={() => setPhotoFilter('all')}>
               Todas ({photos.length})
             </Button>
             {photosByTask.has(GENERAL_TASK_VALUE) && (
-              <Button size="sm" variant={photoFilter === GENERAL_TASK_VALUE ? 'default' : 'outline'} className="h-7 text-[11px]" onClick={() => setPhotoFilter(GENERAL_TASK_VALUE)}>
+              <Button size="sm" variant={photoFilter === GENERAL_TASK_VALUE ? 'default' : 'outline'} className="h-8 text-xs" onClick={() => setPhotoFilter(GENERAL_TASK_VALUE)}>
                 Geral ({photosByTask.get(GENERAL_TASK_VALUE)})
               </Button>
             )}
             {photoTaskOptions.filter(o => photosByTask.has(o.value)).map(o => (
-              <Button key={o.value} size="sm" variant={photoFilter === o.value ? 'default' : 'outline'} className="h-7 text-[11px]" onClick={() => setPhotoFilter(o.value)}>
+              <Button key={o.value} size="sm" variant={photoFilter === o.value ? 'default' : 'outline'} className="h-8 text-xs" onClick={() => setPhotoFilter(o.value)}>
                 {o.taskName} ({photosByTask.get(o.value)})
               </Button>
             ))}
@@ -159,7 +159,7 @@ export function DailyReportPhotosCard({
                   </div>
                   <div className="p-2 space-y-1.5">
                     <Input
-                      className="h-7 text-[11px]"
+                      className="h-8 text-xs"
                       placeholder="Legenda"
                       value={p.caption || ''}
                       onChange={(e) => updatePhoto(p.id, { caption: e.target.value })}
@@ -175,7 +175,7 @@ export function DailyReportPhotosCard({
                         }
                       }}
                     >
-                      <SelectTrigger className="h-7 text-[11px]"><SelectValue /></SelectTrigger>
+                      <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value={GENERAL_TASK_VALUE}>Geral / Sem atividade</SelectItem>
                         {photoTaskOptions.map(o => (
@@ -184,7 +184,7 @@ export function DailyReportPhotosCard({
                       </SelectContent>
                     </Select>
                     {p.uploadedAt && (
-                      <div className="text-[10px] text-muted-foreground truncate">
+                      <div className="text-xs text-muted-foreground truncate">
                         {new Date(p.uploadedAt).toLocaleString('pt-BR')}
                       </div>
                     )}

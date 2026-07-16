@@ -73,9 +73,9 @@ function abbreviateRole(role: string): string {
 }
 
 function StatusBadge({ percent }: { percent: number }) {
-  if (percent === 100) return <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-success/15 text-success">Concluído</span>;
-  if (percent > 0) return <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-primary/15 text-primary">Em andamento</span>;
-  return <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-muted text-muted-foreground">Pendente</span>;
+  if (percent === 100) return <span className="px-2 py-0.5 text-xs font-bold rounded-full bg-success/15 text-success">Concluído</span>;
+  if (percent > 0) return <span className="px-2 py-0.5 text-xs font-bold rounded-full bg-primary/15 text-primary">Em andamento</span>;
+  return <span className="px-2 py-0.5 text-xs font-bold rounded-full bg-muted text-muted-foreground">Pendente</span>;
 }
 
 function InlineInput({ value, onChange, type = 'text', className = '', min, max, step }: {
@@ -90,7 +90,7 @@ function InlineInput({ value, onChange, type = 'text', className = '', min, max,
       min={min}
       max={max}
       step={step}
-      className={`bg-transparent border border-current/30 rounded px-1.5 py-0.5 text-[11px] focus:border-primary focus:outline-none transition-colors ${className}`}
+      className={`bg-transparent border border-current/30 rounded px-1.5 py-0.5 text-xs focus:border-primary focus:outline-none transition-colors ${className}`}
     />
   );
 }
@@ -576,7 +576,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
 
   return (
     <div
-      className="p-6 space-y-4 overflow-x-hidden w-full max-w-full"
+      className="p-0 space-y-4 overflow-x-auto w-full max-w-full"
       onDragOver={e => { if (dragChapterId) e.preventDefault(); }}
     >
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -588,14 +588,14 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
           {undoButton}
           <button
             onClick={() => setImportSyntheticOpen(true)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-success text-success-foreground font-medium text-sm hover:bg-success/90 transition-colors shadow-sm"
+            className="flex h-10 items-center gap-2 px-4 rounded-lg bg-success text-success-foreground font-medium text-sm hover:bg-success/90 transition-colors shadow-sm"
             title="Atualize ou substitua a Sintetica/Analitica de uma obra ja criada."
           >
             <Upload className="w-4 h-4" /> Atualizar planilha
           </button>
           <button
             onClick={() => addPhase()}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-border bg-card text-foreground font-medium text-sm hover:bg-muted/50 transition-colors shadow-sm"
+            className="flex h-10 items-center gap-2 px-4 rounded-lg border border-border bg-card text-foreground font-medium text-sm hover:bg-muted/50 transition-colors shadow-sm"
           >
             <FolderPlus className="w-4 h-4" /> Novo Capítulo
           </button>
@@ -610,23 +610,23 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
       />
 
       {/* Legenda de equipes */}
-      <div className="flex flex-wrap items-center gap-3 px-2 py-2 bg-card rounded-lg border border-border">
-        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mr-1">Equipes:</span>
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-card rounded-lg border border-border">
+        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mr-1">Equipes:</span>
         {projectTeams.map(def => (
-          <div key={def.code} className="flex items-center gap-1.5">
+          <div key={def.code} className="flex items-center gap-2 rounded-full border border-border/70 bg-muted/30 px-2.5 py-1">
             <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: def.bgColor, border: `1px solid ${def.borderColor}` }} />
-            <span className="text-[10px] font-medium text-foreground">{def.label}</span>
-            <span className="text-[9px] text-muted-foreground">({def.composition})</span>
+            <span className="text-xs font-semibold text-foreground">{def.label}</span>
+            <span className="text-xs text-muted-foreground">({def.composition})</span>
           </div>
         ))}
         <Popover>
           <PopoverTrigger asChild>
-            <button className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded border border-border text-[10px] text-muted-foreground hover:text-primary hover:border-primary transition-colors">
-              <Settings2 className="w-3 h-3" /> Gerenciar
+            <button className="ml-auto inline-flex h-8 items-center gap-1.5 px-3 rounded border border-border text-xs text-muted-foreground hover:text-primary hover:border-primary transition-colors">
+              <Settings2 className="w-3.5 h-3.5" /> Gerenciar
             </button>
           </PopoverTrigger>
           <PopoverContent className="w-[480px] p-3" align="end">
-            <div className="text-[11px] font-semibold text-foreground mb-2">Gerenciar Equipes</div>
+            <div className="text-sm font-semibold text-foreground mb-2">Gerenciar Equipes</div>
             <GerenciarEquipes project={project} onProjectChange={onProjectChange} />
           </PopoverContent>
         </Popover>
@@ -701,7 +701,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
               } ${dragChapterId === phase.id ? 'opacity-40 scale-[0.98]' : ''}`}
             >
               {isDropTarget && dropPosition === 'inside' && (
-                <div className="absolute top-1 right-2 z-10 px-2 py-0.5 rounded-full bg-primary text-primary-foreground text-[10px] font-bold shadow-md pointer-events-none">
+                <div className="absolute top-1 right-2 z-10 px-2 py-0.5 rounded-full bg-primary text-primary-foreground text-xs font-bold shadow-md pointer-events-none">
                   ➜ Virará subcapítulo de [{num}] {truncateWords(phase.name, 3)}
                 </div>
               )}
@@ -718,7 +718,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                   draggable
                   onDragStart={e => handleChapterDragStart(e, phase.id)}
                   onDragEnd={handleChapterDragEnd}
-                  className={`flex-1 min-w-0 flex items-center gap-3 px-5 py-2.5 ${headerBgClass} text-foreground transition-colors duration-200 ease-out hover:bg-muted/70 cursor-move`}
+                  className={`flex-1 min-w-0 flex items-center gap-3 px-5 py-3 ${headerBgClass} text-foreground transition-colors duration-200 ease-out hover:bg-muted/70 cursor-move`}
                   title="Arraste para mover/reordenar este capítulo"
                 >
                   <GripVertical className="w-3.5 h-3.5 text-muted-foreground/60 flex-shrink-0" />
@@ -743,7 +743,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                       onClick={e => e.stopPropagation()}
                       onMouseDown={e => e.stopPropagation()}
                       onDragStart={e => e.preventDefault()}
-                      className="text-[11px] font-bold text-foreground bg-transparent border border-primary rounded px-1 py-0 w-14 tabular-nums focus:outline-none"
+                      className="text-xs font-bold text-foreground bg-transparent border border-primary rounded px-1.5 py-0.5 w-16 tabular-nums focus:outline-none"
                       placeholder={String(pi + 1)}
                     />
                   ) : (
@@ -752,7 +752,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                       onMouseDown={e => e.stopPropagation()}
                       onDragStart={e => e.preventDefault()}
                       draggable={false}
-                      className="text-[11px] font-bold text-muted-foreground tabular-nums hover:text-primary hover:bg-primary/10 rounded px-1 py-0.5 transition-colors"
+                      className="text-xs font-bold text-muted-foreground tabular-nums hover:text-primary hover:bg-primary/10 rounded px-1.5 py-0.5 transition-colors"
                       title="Clique para editar a numeração"
                     >
                       {num}
@@ -772,7 +772,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                       <select
                         value={phase.parentId ?? ''}
                         onChange={e => handleMoveChapter(phase.id, e.target.value || null)}
-                        className="max-w-[10rem] truncate text-[10px] h-7 px-1.5 py-1 rounded border border-border bg-card text-foreground hover:border-primary focus:outline-none focus:border-primary cursor-pointer"
+                        className="max-w-[10rem] truncate text-xs h-8 px-1.5 py-1 rounded border border-border bg-card text-foreground hover:border-primary focus:outline-none focus:border-primary cursor-pointer"
                         title="Mover para outro capítulo"
                         onClick={e => e.stopPropagation()}
                       >
@@ -792,16 +792,16 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                     <span
                       className="truncate text-foreground"
                       style={{
-                        fontSize: isMainChapter ? 15 : 13,
+                        fontSize: isMainChapter ? 17 : 15,
                         fontWeight: isMainChapter ? 800 : 700,
                         letterSpacing: isMainChapter ? '0.01em' : 0,
                       }}
                     >{phase.name}</span>
                   )}
                   {hasCritical && <AlertTriangle className="w-3.5 h-3.5 text-destructive flex-shrink-0" />}
-                  <span className="text-xs text-muted-foreground ml-1 flex-shrink-0">({phase.tasks.length})</span>
+                  <span className="text-sm text-muted-foreground ml-1 flex-shrink-0">({phase.tasks.length})</span>
                   <div className="ml-auto flex items-center gap-3 flex-shrink-0">
-                    <span className="text-xs font-bold text-muted-foreground w-8 text-right">{phaseProgress}%</span>
+                    <span className="text-sm font-bold text-muted-foreground w-10 text-right">{phaseProgress}%</span>
                   </div>
                 </div>
 
@@ -811,19 +811,19 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                 <button
                   onClick={() => addTask(phase.id)}
                   onMouseDown={e => e.stopPropagation()}
-                  className="mr-4 flex items-center gap-1 text-[10px] px-2.5 py-1.5 rounded-md bg-primary/10 text-primary font-medium hover:bg-primary/20 transition-colors"
+                  className="mr-4 flex h-8 items-center gap-1.5 text-xs px-3 rounded-md bg-primary/10 text-primary font-medium hover:bg-primary/20 transition-colors"
                   title="Adicionar tarefa"
                 >
-                  <Plus className="w-3 h-3" /> Tarefa
+                   <Plus className="w-3.5 h-3.5" /> Tarefa
                 </button>
               </div>
 
               {isExpanded && (
                 <div className="overflow-hidden" data-chapter-body>
-                     <div className="border-t border-border overflow-x-hidden">
-                       <div className="w-full">
+                     <div className="border-t border-border overflow-x-auto">
+                       <div className="min-w-[1200px]">
                        {phase.tasks.length > 0 && (
-                         <div className="grid gap-1.5 px-3 py-2 bg-secondary/50 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider" style={{ gridTemplateColumns: '36px 4fr 90px 100px 80px 90px 80px 120px 80px' }}>
+                         <div className="grid gap-2 px-3 py-2.5 bg-secondary/50 text-xs font-semibold text-muted-foreground uppercase tracking-wide" style={{ gridTemplateColumns: '44px minmax(360px,4fr) 110px 120px 90px 110px 90px 160px 96px' }}>
                            <div>Eq.</div>
                            <div>Tarefa</div>
                            <div>Qtd.</div>
@@ -868,19 +868,19 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                 setExpandedDaily(prev => (prev === task.id ? null : task.id));
                                 if (expandedRup === task.id) setExpandedRup(null);
                               }}
-                              className={`group grid gap-1.5 px-3 py-1.5 border-t border-border hover:brightness-110 transition-colors items-center cursor-pointer ${
+                              className={`group grid gap-2 px-3 py-2 border-t border-border hover:brightness-110 transition-colors items-center cursor-pointer min-h-[46px] ${
                                 expandedDaily === task.id ? 'ring-1 ring-info/40 bg-info/[0.04]' : ''
                               } ${
                                 !rowTeam ? (isDelayed ? 'bg-destructive/5' : task.isCritical ? 'bg-destructive/[0.03]' : '') : ''
                               }`}
-                              style={{ gridTemplateColumns: '36px 4fr 90px 100px 80px 90px 80px 120px 80px', ...(rowTeam ? { backgroundColor: rowTeam.bgColor, color: rowTeam.textColor } : {}) }}
+                              style={{ gridTemplateColumns: '44px minmax(360px,4fr) 110px 120px 90px 110px 90px 160px 96px', ...(rowTeam ? { backgroundColor: rowTeam.bgColor, color: rowTeam.textColor } : {}) }}
                             >
                               {/* Equipe inicial */}
                               <div className="flex items-center justify-center">
                                 <select
                                   value={task.team || ''}
                                   onChange={e => updateTask(phase.id, task.id, { team: (e.target.value || undefined) as TeamCode | undefined })}
-                                  className="w-8 h-7 text-[10px] font-bold text-center rounded cursor-pointer border-0 appearance-none"
+                                  className="w-9 h-8 text-xs font-bold text-center rounded cursor-pointer border-0 appearance-none"
                                   style={rowTeam
                                     ? { backgroundColor: rowTeam.bgColor, color: rowTeam.textColor, border: `2px solid ${rowTeam.borderColor}` }
                                     : { backgroundColor: 'hsl(var(--muted))', color: 'hsl(var(--muted-foreground))' }
@@ -906,7 +906,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <span
-                                        className={`text-xs font-medium truncate text-left transition-colors cursor-pointer ${rowTeam ? 'hover:opacity-70' : 'text-foreground hover:text-primary'}`}
+                                        className={`text-sm font-semibold truncate text-left transition-colors cursor-pointer ${rowTeam ? 'hover:opacity-70' : 'text-foreground hover:text-primary'}`}
                                       >
                                         {truncateWords(task.name, 8)}
                                       </span>
@@ -945,17 +945,17 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                     />
                                   </>
                                 ) : (
-                                  <span className={`text-[10px] ${rowTeam ? 'opacity-70' : 'text-muted-foreground'}`}>{task.quantity ? `${task.quantity} ${task.unit}` : '—'}</span>
+                                  <span className={`text-xs ${rowTeam ? 'opacity-70' : 'text-muted-foreground'}`}>{task.quantity ? `${task.quantity} ${task.unit}` : '—'}</span>
                                 )}
                               </div>
 
                               {/* Produção Diária (auto) */}
-                              <div className={`text-[10px] font-medium text-center ${rowTeam ? 'opacity-90' : 'text-foreground'}`}>
+                              <div className={`text-xs font-medium text-center ${rowTeam ? 'opacity-90' : 'text-foreground'}`}>
                                 {getDailyProduction(task)}
                               </div>
 
                               {/* Duração (auto) */}
-                              <div className={`text-[10px] font-bold flex items-center gap-1 ${rowTeam ? '' : 'text-foreground'}`}>
+                              <div className={`text-xs font-bold flex items-center gap-1 ${rowTeam ? '' : 'text-foreground'}`}>
                                 {(() => {
                                   const dev = task.baseline ? task.duration - task.baseline.duration : 0;
                                   const showAlert = !!task.baseline && Math.abs(dev) > 2;
@@ -967,7 +967,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                           {showAlert && <AlertTriangle className={`w-3 h-3 ${dev > 0 ? 'text-destructive' : 'text-success'}`} />}
                                         </span>
                                       </TooltipTrigger>
-                                      <TooltipContent side="top" className="text-[10px] space-y-0.5">
+                                      <TooltipContent side="top" className="text-xs space-y-0.5">
                                         {task.baseline ? (
                                           <>
                                             <div><strong>Base:</strong> {formatISODateBR(task.baseline.startDate)} → {formatISODateBR(task.baseline.endDate)} ({task.baseline.duration}d)</div>
@@ -994,11 +994,11 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                 {task.bottleneckRole ? (
                                   <span
                                     title={task.bottleneckRole}
-                                    className={`text-[9px] px-1 py-0.5 rounded font-medium truncate block text-center ${rowTeam ? 'bg-white/20' : 'bg-warning/15 text-warning'}`}
+                                    className={`text-xs px-1.5 py-0.5 rounded font-medium truncate block text-center ${rowTeam ? 'bg-white/20' : 'bg-warning/15 text-warning'}`}
                                   >
                                     {abbreviateRole(task.bottleneckRole)}
                                   </span>
-                                ) : <span className={`text-[10px] ${rowTeam ? 'opacity-60' : 'text-muted-foreground'}`}>—</span>}
+                                ) : <span className={`text-xs ${rowTeam ? 'opacity-60' : 'text-muted-foreground'}`}>—</span>}
                               </div>
 
                               {/* Dependências */}
@@ -1011,7 +1011,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                       const selected = Array.from(e.target.selectedOptions, o => o.value);
                                       updateTask(phase.id, task.id, { dependencies: selected });
                                     }}
-                                    className="w-full text-[9px] bg-transparent border border-current/30 rounded px-1 py-0.5"
+                                    className="w-full text-xs bg-transparent border border-current/30 rounded px-1 py-0.5"
                                     style={rowTeam ? { color: 'inherit' } : undefined}
                                   >
                                     {allTasks.filter(t => t.id !== task.id).map(t => (
@@ -1021,7 +1021,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                 ) : task.dependencies.length > 0 ? (
                                   <Tooltip>
                                     <TooltipTrigger asChild>
-                                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold cursor-help ${rowTeam ? 'bg-white/20' : 'bg-muted text-muted-foreground'}`}>
+                                      <span className={`text-xs px-1.5 py-0.5 rounded font-semibold cursor-help ${rowTeam ? 'bg-white/20' : 'bg-muted text-muted-foreground'}`}>
                                         {task.dependencies.length} dep
                                       </span>
                                     </TooltipTrigger>
@@ -1030,14 +1030,14 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                     </TooltipContent>
                                   </Tooltip>
                                 ) : (
-                                  <span className={`text-[9px] ${rowTeam ? 'opacity-60' : 'text-muted-foreground'}`}>—</span>
+                                  <span className={`text-xs ${rowTeam ? 'opacity-60' : 'text-muted-foreground'}`}>—</span>
                                 )}
                               </div>
 
                               {/* Progresso */}
                               <div className="">
                                 <div className="flex items-center gap-1">
-                                  <div className={`flex-1 h-1.5 rounded-full overflow-hidden ${rowTeam ? 'bg-white/20' : 'bg-muted'}`}>
+                                  <div className={`flex-1 h-2 rounded-full overflow-hidden ${rowTeam ? 'bg-white/20' : 'bg-muted'}`}>
                                     <div
                                       className={`h-full rounded-full transition-all ${rowTeam ? 'bg-white/70' : (isDelayed ? 'bg-destructive' : 'bg-primary')}`}
                                       style={{ width: `${task.percentComplete}%` }}
@@ -1050,7 +1050,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                     value={task.percentComplete}
                                     onFocus={e => e.currentTarget.select()}
                                     onChange={e => updateTask(phase.id, task.id, { percentComplete: Math.min(100, Math.max(0, Number(e.target.value))) })}
-                                    className={`w-9 text-[10px] font-bold text-center bg-transparent border rounded px-0.5 py-0.5 ${rowTeam ? 'border-current/30' : 'border-border'}`}
+                                    className={`w-11 text-xs font-bold text-center bg-transparent border rounded px-0.5 py-0.5 ${rowTeam ? 'border-current/30' : 'border-border'}`}
                                     style={rowTeam ? { color: 'inherit' } : undefined}
                                   />
                                 </div>
@@ -1063,10 +1063,10 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                     setExpandedRup(expandedRup === task.id ? null : task.id);
                                     if (expandedDaily === task.id) setExpandedDaily(null);
                                   }}
-                                  className={`p-1 rounded transition-colors ${expandedRup === task.id ? 'bg-warning/30 text-warning' : 'hover:bg-warning/20 text-warning'}`}
+                                  className={`p-1.5 rounded transition-colors ${expandedRup === task.id ? 'bg-warning/30 text-warning' : 'hover:bg-warning/20 text-warning'}`}
                                   title="Ver composição RUP"
                                 >
-                                  <Zap className="w-3 h-3" />
+                                  <Zap className="w-3.5 h-3.5" />
                                 </button>
                                 <button
                                   onClick={() => confirmDelete(
@@ -1085,10 +1085,10 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                     },
                                     () => deleteTask(phase.id, task.id),
                                   )}
-                                  className="p-1 rounded hover:bg-destructive/20 text-destructive transition-colors"
+                                  className="p-1.5 rounded hover:bg-destructive/20 text-destructive transition-colors"
                                   title="Excluir tarefa"
                                 >
-                                  <Trash2 className="w-3 h-3" />
+                                  <Trash2 className="w-3.5 h-3.5" />
                                 </button>
                                 <div className="hidden group-hover:flex items-center gap-1">
                                   {isEditing ? (
@@ -1111,22 +1111,22 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                             {showRup && task.laborCompositions?.length !== undefined && (
                               <div className="overflow-hidden border-t border-border bg-muted/20">
                                   <div className="px-8 py-3 space-y-3">
-                                    <div className="grid grid-cols-4 gap-2 mb-1 p-2 bg-muted/30 rounded text-[10px]">
+                                    <div className="grid grid-cols-4 gap-2 mb-1 p-2 bg-muted/30 rounded text-xs">
                                       <div><span className="text-muted-foreground">Responsável:</span> {task.responsible || '—'}</div>
                                       <div><span className="text-muted-foreground">Horas:</span> {Math.round(task.totalHours || task.duration * DAILY_HOURS)}h</div>
                                       <div><span className="text-muted-foreground">Folga:</span> {task.float !== undefined ? `${task.float}d` : '—'}</div>
                                       <div><span className="text-muted-foreground">Desvio:</span> {task.baseline ? `${task.duration - task.baseline.duration > 0 ? '+' : ''}${task.duration - task.baseline.duration}d` : '—'}</div>
                                     </div>
-                                    <h4 className="text-[11px] font-semibold text-foreground flex items-center gap-1.5">
+                                    <h4 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
                                       <Zap className="w-3.5 h-3.5 text-warning" />
                                       Composição RUP — {task.quantity} {task.unit}
                                     </h4>
 
-                                    <div className="grid grid-cols-7 gap-2 text-[10px] font-semibold text-muted-foreground uppercase">
+                                    <div className="grid grid-cols-7 gap-2 text-xs font-semibold text-muted-foreground uppercase">
                                       <div>
                                         <button
                                           onClick={() => addLabor(phase.id, task.id)}
-                                          className="text-[10px] font-semibold uppercase text-primary hover:text-primary/80 flex items-center gap-1 transition-colors"
+                                          className="text-xs font-semibold uppercase text-primary hover:text-primary/80 flex items-center gap-1 transition-colors"
                                           title="Adicionar profissional"
                                         >
                                           <Plus className="w-3 h-3" /> Profissional
@@ -1145,7 +1145,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                       const effectiveH = totalH / comp.workerCount;
                                       const isBottleneck = comp.role === task.bottleneckRole;
                                       return (
-                                        <div key={comp.id} className={`grid grid-cols-7 gap-2 text-[11px] items-center py-1 ${isBottleneck ? 'text-warning font-semibold' : 'text-foreground'}`}>
+                                        <div key={comp.id} className={`grid grid-cols-7 gap-2 text-xs items-center py-1.5 ${isBottleneck ? 'text-warning font-semibold' : 'text-foreground'}`}>
                                           <div className="flex items-center gap-1">
                                             <Users className="w-3 h-3" />
                                             {isEditing ? (
@@ -1157,7 +1157,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                             ) : (
                                               <>
                                                 {comp.role}
-                                                {isBottleneck && <span className="text-[8px] bg-warning/20 text-warning px-1 rounded">GARGALO</span>}
+                                                 {isBottleneck && <span className="text-xs bg-warning/20 text-warning px-1 rounded">GARGALO</span>}
                                               </>
                                             )}
                                           </div>
@@ -1203,7 +1203,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                               value={comp.workerCount}
                                               onFocus={e => e.currentTarget.select()}
                                               onChange={e => updateLaborComp(phase.id, task.id, comp.id, { workerCount: Math.max(1, Number(e.target.value)) })}
-                                              className="w-12 text-center bg-transparent border border-border rounded px-1 py-0.5 text-[11px]"
+                                              className="w-12 text-center bg-transparent border border-border rounded px-1 py-0.5 text-xs"
                                             />
                                           </div>
                                           <div className="text-center">{Math.round(totalH)}h</div>
@@ -1224,7 +1224,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                                   },
                                                   () => removeLabor(phase.id, task.id, comp.id),
                                                 )}
-                                                className="p-1 rounded hover:bg-destructive/20 text-destructive transition-colors"
+                                                className="p-1.5 rounded hover:bg-destructive/20 text-destructive transition-colors"
                                                 title="Remover profissional"
                                               >
                                                 <X className="w-3 h-3" />
@@ -1240,7 +1240,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                     {task.isCritical && (
                                       <div className="p-2.5 rounded-lg bg-destructive/10 border border-destructive/20 flex items-start gap-2">
                                         <AlertTriangle className="w-3.5 h-3.5 text-destructive flex-shrink-0 mt-0.5" />
-                                        <p className="text-[10px] text-destructive">
+                                        <p className="text-xs text-destructive">
                                           Esta tarefa está no <strong>Caminho Crítico</strong> — qualquer atraso impacta o prazo final. Considere aumentar a equipe de <strong>{task.bottleneckRole}</strong>.
                                         </p>
                                       </div>
@@ -1332,7 +1332,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
               <div
                 onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDropChapterTargetId('__root__'); }}
                 onDrop={e => handleChapterDrop(e, null)}
-                className={`px-4 py-3 rounded-xl border-2 border-dashed text-center text-[11px] font-medium transition-colors ${
+                className={`px-4 py-3 rounded-xl border-2 border-dashed text-center text-xs font-medium transition-colors ${
                   dropChapterTargetId === '__root__'
                     ? 'border-primary bg-primary/10 text-primary'
                     : 'border-border text-muted-foreground'
@@ -1394,7 +1394,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                             setDropChapterTargetId(null);
                             setDropPosition('inside');
                           }}
-                          className={`flex items-center gap-1.5 text-[10px] px-3 py-1.5 rounded-md border border-dashed transition-colors ${
+                          className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-dashed transition-colors ${
                             isAddDropActive
                               ? 'border-primary bg-primary/10 text-primary ring-2 ring-primary/40'
                               : 'border-border text-muted-foreground hover:text-primary hover:border-primary'
@@ -1449,7 +1449,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                     setDropChapterTargetId(null);
                     setDropPosition('inside');
                   }}
-                  className={`px-4 py-3 rounded-xl border-2 border-dashed text-center text-[11px] font-medium transition-colors ${
+                  className={`px-4 py-3 rounded-xl border-2 border-dashed text-center text-xs font-medium transition-colors ${
                     isActive ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'
                   }`}
                 >

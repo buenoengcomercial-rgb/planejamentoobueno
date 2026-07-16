@@ -32,7 +32,7 @@ export function DailyReportTeamsCard({
   return (
     <Card>
       <CardHeader className="pb-3 flex flex-row items-center justify-between gap-2">
-        <CardTitle className="text-sm flex items-center gap-2">
+        <CardTitle className="text-base flex items-center gap-2">
           <Users className="w-4 h-4 text-info" /> Equipe presente
         </CardTitle>
         <div className="flex items-center gap-1">
@@ -64,7 +64,7 @@ export function DailyReportTeamsCard({
                 updateTeamRow(t.id, { teamCode: v, name: def?.label || t.name, role: def?.composition || t.role });
               }}
             >
-              <SelectTrigger className="h-9 text-xs">
+              <SelectTrigger className="h-10 text-sm">
                 <SelectValue placeholder={teamDisplay(undefined, t.role || t.name) === '—' ? 'Selecionar equipe...' : teamDisplay(t.teamCode ? teamByCode.get(t.teamCode) : undefined, t.role || t.name)} />
               </SelectTrigger>
               <SelectContent>

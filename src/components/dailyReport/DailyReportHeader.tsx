@@ -33,12 +33,12 @@ export function DailyReportHeader({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+        <div className="w-11 h-11 rounded-lg bg-primary/10 flex items-center justify-center">
           <NotebookPen className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h1 className="text-xl font-bold text-foreground">Diário de Obra</h1>
-          <p className="text-xs text-muted-foreground">
+          <h1 className="text-[22px] font-bold leading-tight text-foreground">Diário de Obra</h1>
+          <p className="text-sm text-muted-foreground">
             Registro diário de equipes, ocorrências e produção da obra.
           </p>
         </div>
@@ -46,7 +46,7 @@ export function DailyReportHeader({
       <div className="flex items-center gap-2 flex-wrap">
         {undoButton}
         <Select value={measurementFilter} onValueChange={setMeasurementFilter}>
-          <SelectTrigger className="h-9 w-[230px] text-xs">
+          <SelectTrigger className="h-10 w-[240px] text-sm">
             <SelectValue placeholder="Filtrar por medição" />
           </SelectTrigger>
           <SelectContent>
@@ -58,7 +58,7 @@ export function DailyReportHeader({
         </Select>
         {activePeriod && periodDates.length > 0 ? (
           <Select value={selectedDate} onValueChange={setSelectedDate}>
-            <SelectTrigger className="h-9 w-[170px] text-xs">
+            <SelectTrigger className="h-10 w-[180px] text-sm">
               <SelectValue placeholder="Data" />
             </SelectTrigger>
             <SelectContent className="max-h-[260px]">
@@ -68,7 +68,7 @@ export function DailyReportHeader({
             </SelectContent>
           </Select>
         ) : (
-          <div className="flex items-center gap-2 bg-card border border-border rounded-lg px-3 py-1.5">
+          <div className="flex h-10 items-center gap-2 bg-card border border-border rounded-lg px-3">
             <CalendarDays className="w-4 h-4 text-muted-foreground" />
             <input
               type="date"
@@ -78,11 +78,11 @@ export function DailyReportHeader({
             />
           </div>
         )}
-        <Button onClick={handlePrintDay} variant="outline" size="sm" title="Exporta apenas a data selecionada">
+        <Button onClick={handlePrintDay} variant="outline" size="sm" className="h-10 text-sm" title="Exporta apenas a data selecionada">
           <Printer className="w-4 h-4 mr-1.5" /> PDF do dia
         </Button>
         {activePeriod && (
-          <Button onClick={handlePrintPeriod} variant="default" size="sm" title="Exporta todos os dias do período da medição">
+          <Button onClick={handlePrintPeriod} variant="default" size="sm" className="h-10 text-sm" title="Exporta todos os dias do período da medição">
             <Printer className="w-4 h-4 mr-1.5" /> PDF da medição
           </Button>
         )}

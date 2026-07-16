@@ -95,7 +95,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, init
   });
 
   return (
-    <div className="p-4 lg:p-6 space-y-4 max-w-[1400px] mx-auto">
+    <div className="p-0 space-y-4 max-w-[1680px] mx-auto">
       {/* Header */}
       <DailyReportHeader
         undoButton={undoButton}

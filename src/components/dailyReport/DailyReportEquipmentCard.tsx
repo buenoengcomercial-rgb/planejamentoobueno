@@ -20,7 +20,7 @@ export function DailyReportEquipmentCard({
   return (
     <Card>
       <CardHeader className="pb-3 flex flex-row items-center justify-between">
-        <CardTitle className="text-sm flex items-center gap-2">
+        <CardTitle className="text-base flex items-center gap-2">
           <Wrench className="w-4 h-4 text-info" /> Equipamentos
         </CardTitle>
         <Button size="sm" variant="ghost" onClick={addEqRow}>
