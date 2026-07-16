@@ -1058,6 +1058,15 @@ export default function ImportSyntheticDialog({
     4: 'Revise o que sera integrado para EAP, Cronograma, Producao, Medicao, Aditivo, Custo Real e Lista de Material.',
     5: 'Preencha os dados iniciais da obra. Eles alimentam os cabecalhos da Medicao, Aditivo, Custo Real e exportacoes.',
   };
+  const stepMeta: Record<1 | 2 | 3 | 4 | 5, { title: string; description: string; Icon: React.ElementType }> = {
+    1: { title: 'Importar planilha Sintetica', description: 'Base financeira, servicos e capitulos da obra.', Icon: FileSpreadsheet },
+    2: { title: 'Importar planilha Analitica', description: 'Composicoes, insumos, mao de obra e produtividade.', Icon: Layers },
+    3: { title: 'Classificar insumos', description: 'Revise a classificacao entre material, mao de obra e equipamento.', Icon: ClipboardCheck },
+    4: { title: 'Revisar integracao', description: 'Confira os dados que alimentarao os modulos da obra.', Icon: Check },
+    5: { title: 'Dados iniciais', description: 'Defina as informacoes iniciais de medicao, aditivo e custo real.', Icon: FileText },
+  };
+  const currentStepMeta = stepMeta[wizardStep];
+  const CurrentStepIcon = currentStepMeta.Icon;
   const setContractField = (field: keyof ContractDraft, value: string) => {
     setContractDraft(current => ({ ...current, [field]: value }));
   };
@@ -1365,83 +1374,47 @@ export default function ImportSyntheticDialog({
   return (
     <Dialog open={open} onOpenChange={v => !v && handleClose()}>
       <DialogContent className="w-[96vw] max-w-7xl max-h-[96vh] overflow-hidden flex flex-col">
-        <DialogHeader>
+        <DialogHeader className="shrink-0 space-y-2 border-b border-border pb-3">
           <DialogTitle className="flex items-center gap-2 text-foreground">
             <DollarSign className="w-5 h-5 text-primary" />
             {isCreateMode ? 'Criar nova obra' : 'Atualizar planilha da obra'}
           </DialogTitle>
-          <DialogDescription>
-            {isCreateMode && creationStep === 'name' ? (
-              <>Informe um nome para a obra antes de importar a planilha orcamentaria.</>
-            ) : (
-              <>
-                Fluxo unico: importe a Sintetica para formar a base de Medicao, Aditivo, EAP, Cronograma e Custo Real; depois anexe a Analitica para preencher insumos, mao de obra e produtividade.
-                A plataforma tenta detectar cabecalhos automaticamente, mas voce pode alterar coluna, linha inicial e BDI antes de confirmar.
-                <br />A mescla entre Sintetica e Analitica e feita principalmente por <strong>Item + Codigo</strong>, independentemente do nome usado no cabecalho.
-              </>
-            )}
-          </DialogDescription>
-          {isCreateMode && (
-            <div className="grid grid-cols-2 gap-2 pt-2">
-              {[
-                { step: 'name', label: 'Etapa 1 de 2', description: 'Identificacao da obra', done: creationStep === 'import' },
-                { step: 'import', label: 'Etapa 2 de 2', description: 'Importacao da planilha', done: false },
-              ].map(item => (
+          {isCreateMode && creationStep === 'name' ? (
+            <DialogDescription>
+              Etapa principal 1 de 2 - Identificacao da obra
+            </DialogDescription>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span>{isCreateMode ? 'Etapa principal 2 de 2 - Importacao da planilha' : 'Atualizacao da planilha'}</span>
+                <span className="font-medium text-primary">Passo {wizardStep} de 5</span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
                 <div
-                  key={item.step}
-                  className={`rounded-lg border px-3 py-2 text-xs ${
-                    creationStep === item.step
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : item.done
-                        ? 'border-success/30 bg-success/5 text-success'
-                        : 'border-border bg-muted/20 text-muted-foreground'
-                  }`}
-                >
-                  <div className="font-semibold">{item.label}</div>
-                  <div className="mt-0.5 text-[11px]">{item.description}</div>
-                </div>
-              ))}
-            </div>
-          )}
-          {(!isCreateMode || creationStep === 'import') && (
-          <>
-            <div className="pt-2 space-y-2">
-              {[
-                { step: 1, label: 'Sintetica', description: 'Base financeira e capitulos da obra', done: !!parsed, Icon: FileSpreadsheet },
-                { step: 2, label: 'Analitica', description: 'Composicoes e insumos do orcamento', done: hasAnalytic, Icon: Layers },
-                { step: 3, label: 'Classificar insumos', description: 'Material, mao de obra e equipamento', done: hasAnalytic, Icon: ClipboardCheck },
-                { step: 4, label: 'Revisar integracao', description: 'Conferencia antes de alimentar os modulos', done: false, Icon: Check },
-                { step: 5, label: 'Dados iniciais', description: 'Cabecalho para medicao, aditivo e custo real', done: false, Icon: FileText },
-              ].map(item => (
-              <div
-                key={item.step}
-                className={`rounded-lg border px-3 py-3 text-[11px] ${
-                  wizardStep === item.step
-                    ? 'border-primary bg-primary/10 text-primary'
-                    : item.done
-                      ? 'border-success/30 bg-success/5 text-success'
-                      : 'border-border bg-muted/20 text-muted-foreground'
-                }`}
-              >
-                <div className="flex flex-col items-start gap-2">
-                  <item.Icon className="h-8 w-8" />
-                  <div>
-                    <div className="font-semibold">{item.step}o passo - {item.label}</div>
-                    <div className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{item.description}</div>
+                  className="h-full rounded-full bg-primary transition-all"
+                  style={{ width: `${(wizardStep / 5) * 100}%` }}
+                />
+              </div>
+              <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/20 px-3 py-2">
+                <CurrentStepIcon className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-foreground">
+                    Passo {wizardStep} de 5 - {currentStepMeta.title}
+                  </div>
+                  <div className="text-xs leading-snug text-muted-foreground">
+                    {currentStepMeta.description}
                   </div>
                 </div>
               </div>
-              ))}
+              <div className="rounded-md border border-info/20 bg-info/5 px-3 py-1.5 text-xs text-muted-foreground">
+                <strong className="text-foreground">Observacao:</strong> {stepNotes[wizardStep]}
+              </div>
             </div>
-            <div className="mt-2 rounded-lg border border-info/20 bg-info/5 px-3 py-2 text-xs text-muted-foreground">
-              <strong className="text-foreground">Observacao:</strong> {stepNotes[wizardStep]}
-            </div>
-          </>
           )}
         </DialogHeader>
 
         {isCreateMode && creationStep === 'name' ? (
-          <div className="flex-1 min-h-0 overflow-y-auto py-6">
+          <div className="flex-1 min-h-0 overflow-y-auto py-4">
             <div className="mx-auto w-full max-w-xl rounded-lg border border-border bg-muted/20 p-4 space-y-3">
               <label className="text-sm font-medium text-foreground">
                 Nome da obra
@@ -1475,18 +1448,18 @@ export default function ImportSyntheticDialog({
             </div>
           </div>
         ) : wizardStep === 1 && (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 flex flex-col items-center justify-start py-4 space-y-4">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 flex flex-col items-center justify-start py-2 space-y-3">
             <div
               onDrop={handleDrop}
               onDragOver={e => e.preventDefault()}
-              className="w-full border-2 border-dashed border-border rounded-xl p-10 flex flex-col items-center gap-3 hover:border-primary/50 hover:bg-primary/5 transition-colors cursor-pointer"
+              className="w-full border-2 border-dashed border-border rounded-xl p-5 flex flex-col items-center gap-2 hover:border-primary/50 hover:bg-primary/5 transition-colors cursor-pointer"
               onClick={() => document.getElementById('synthetic-file-input')?.click()}
             >
               {loading ? (
                 <Loader2 className="w-10 h-10 text-primary animate-spin" />
               ) : (
                 <>
-                  <FileSpreadsheet className="w-10 h-10 text-success/70" />
+                  <FileSpreadsheet className="w-8 h-8 text-success/70" />
                   <p className="text-sm font-medium text-foreground">1. Sintetica do orcamento - arraste e solte ou clique</p>
                   <p className="text-xs text-muted-foreground">.xlsx · .xls</p>
                 </>
@@ -1554,7 +1527,7 @@ export default function ImportSyntheticDialog({
         )}
 
         {(parsed || hasExistingSynthetic) && wizardStep > 1 && (
-          <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1">
             <div className="flex items-center justify-between flex-wrap gap-2 px-1">
               <span className="text-xs text-muted-foreground">📄 {fileName}</span>
               <div className="flex items-center gap-2 text-xs">
