@@ -42,7 +42,7 @@ interface AppSidebarProps {
   collapsed: boolean;
   onToggleCollapse: () => void;
   onSwitchProject: (id: string) => void;
-  onCreateProject: (name?: string) => string | void | Promise<string | void>;
+  onCreateProject: () => void | Promise<void>;
   onRenameProject: (id: string, newName: string) => void;
   onDuplicateProject: (id: string) => void;
   onDeleteProject: (id: string) => void;
@@ -188,17 +188,7 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
 
   const handleNewProject = async () => {
     setShowProjects(true);
-    const newId = await onCreateProject();
-    if (typeof newId === 'string') {
-      setTimeout(() => {
-        const list = projectsList ?? listProjects();
-        const created = list.find(p => p.id === newId);
-        if (created) {
-          setEditingId(newId);
-          setEditingName(created.name);
-        }
-      }, 50);
-    }
+    await onCreateProject();
   };
 
   const confirmedDelete = () => {

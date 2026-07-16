@@ -381,7 +381,8 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
   const togglePhase = (id: string) => {
     setExpandedPhases(prev => {
       const n = new Set(prev);
-      n.has(id) ? n.delete(id) : n.add(id);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
       return n;
     });
   };
@@ -556,8 +557,8 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
   const allTasks = project.phases.flatMap(p => p.tasks);
 
   // Memoiza árvore/numeração para evitar recomputação a cada toggle.
-  const chapterTree = useMemo(() => getChapterTree(project), [project.phases]);
-  const chapterNumbering = useMemo(() => getChapterNumbering(project), [project.phases]);
+  const chapterTree = useMemo(() => getChapterTree(project), [project]);
+  const chapterNumbering = useMemo(() => getChapterNumbering(project), [project]);
   const mainChapters = useMemo(() => project.phases.filter(p => !p.parentId), [project.phases]);
   const orderedMainChapters = useMemo(() => {
     const mains = project.phases
@@ -588,9 +589,9 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
           <button
             onClick={() => setImportSyntheticOpen(true)}
             className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-success text-success-foreground font-medium text-sm hover:bg-success/90 transition-colors shadow-sm"
-            title="Fluxo unico: Sintetica como base do projeto e Analitica para insumos, produtividade e custo real."
+            title="Atualize ou substitua a Sintetica/Analitica de uma obra ja criada."
           >
-            <Upload className="w-4 h-4" /> Iniciar importacao
+            <Upload className="w-4 h-4" /> Atualizar planilha
           </button>
           <button
             onClick={() => addPhase()}

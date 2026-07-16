@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
@@ -32,10 +32,25 @@ interface Props {
   onClose: () => void;
   project: Project;
   onProjectChange: (project: Project) => void;
+  mode?: 'update' | 'create';
+  existingProjectNames?: string[];
+  onCreateProject?: (project: Project) => void | Promise<void>;
 }
 
 const fmtBRL = (v: number) =>
   v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+const normalizeProjectName = (value: string) =>
+  value.trim().replace(/\s+/g, ' ');
+
+const comparableProjectName = (value: string) =>
+  normalizeProjectName(value)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+const errorMessage = (error: unknown, fallback: string) =>
+  error instanceof Error ? error.message : fallback;
 
 const COLUMN_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
 
@@ -504,7 +519,16 @@ function integrateImportedBudget(project: Project, budgetItems: BudgetItem[], an
   };
 }
 
-export default function ImportSyntheticDialog({ open, onClose, project, onProjectChange }: Props) {
+export default function ImportSyntheticDialog({
+  open,
+  onClose,
+  project,
+  onProjectChange,
+  mode = 'update',
+  existingProjectNames = [],
+  onCreateProject,
+}: Props) {
+  const isCreateMode = mode === 'create';
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [fileName, setFileName] = useState('');
@@ -517,6 +541,11 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   const [bdiInput, setBdiInput] = useState('');
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4 | 5>(1);
   const [contractDraft, setContractDraft] = useState<ContractDraft>(() => buildContractDraft(project));
+  const [creationStep, setCreationStep] = useState<'name' | 'import'>(isCreateMode ? 'name' : 'import');
+  const [projectNameInput, setProjectNameInput] = useState('');
+  const [projectNameTouched, setProjectNameTouched] = useState(false);
+  const [savingImport, setSavingImport] = useState(false);
+  const projectNameInputRef = useRef<HTMLInputElement>(null);
 
   // Analítica (pode vir no mesmo arquivo da Sintética OU em arquivo separado).
   const [analyticCompositions, setAnalyticCompositions] = useState<AdditiveComposition[] | null>(null);
@@ -534,6 +563,31 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
   const [analyticUnitSort, setAnalyticUnitSort] = useState<'none' | 'asc' | 'desc'>('none');
   const [selectedAnalyticInputGroups, setSelectedAnalyticInputGroups] = useState<Set<string>>(() => new Set());
 
+  const normalizedProjectName = useMemo(() => normalizeProjectName(projectNameInput), [projectNameInput]);
+  const duplicateProjectName = useMemo(() => {
+    if (!normalizedProjectName) return false;
+    const current = comparableProjectName(normalizedProjectName);
+    return existingProjectNames.some(name => comparableProjectName(name) === current);
+  }, [existingProjectNames, normalizedProjectName]);
+  const projectNameValidation = !projectNameTouched && !projectNameInput
+    ? ''
+    : !normalizedProjectName
+      ? 'Informe o nome da obra para continuar.'
+      : duplicateProjectName
+        ? 'Ja existe uma obra com este nome. Escolha outro nome.'
+        : '';
+  const canContinueProjectName = !!normalizedProjectName && !duplicateProjectName && !savingImport;
+  const hasUnsavedImportProgress = !!(
+    fileName ||
+    parsed ||
+    syntheticBuffer ||
+    preview ||
+    analyticFileName ||
+    analyticCompositions ||
+    analyticBuffer ||
+    analyticPreview
+  );
+
   const reset = () => {
     setLoading(false);
     setError('');
@@ -547,6 +601,10 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     setBdiInput('');
     setWizardStep(1);
     setContractDraft(buildContractDraft(project));
+    setCreationStep(isCreateMode ? 'name' : 'import');
+    setProjectNameInput('');
+    setProjectNameTouched(false);
+    setSavingImport(false);
     setAnalyticCompositions(null);
     setAnalyticFileName('');
     setAnalyticInfo('');
@@ -562,7 +620,29 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
     setAnalyticUnitSort('none');
     setSelectedAnalyticInputGroups(new Set());
   };
-  const handleClose = () => { reset(); onClose(); };
+  const handleClose = () => {
+    if (savingImport) return;
+    if (isCreateMode && creationStep === 'import' && hasUnsavedImportProgress) {
+      const shouldClose = window.confirm('Cancelar a criacao da obra? Os arquivos e leituras desta importacao serao descartados.');
+      if (!shouldClose) return;
+    }
+    reset();
+    onClose();
+  };
+
+  useEffect(() => {
+    if (open && isCreateMode && creationStep === 'name') {
+      window.requestAnimationFrame(() => projectNameInputRef.current?.focus());
+    }
+  }, [creationStep, isCreateMode, open]);
+
+  const continueFromProjectName = () => {
+    setProjectNameTouched(true);
+    if (!canContinueProjectName) return;
+    setContractDraft(current => ({ ...current, projectName: normalizedProjectName }));
+    setCreationStep('import');
+    setWizardStep(1);
+  };
 
   const handleFile = useCallback(async (file: File) => {
     setLoading(true);
@@ -613,13 +693,13 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
           setAnalyticOk(false);
           setAnalyticInfo('Aba Analítica não encontrada neste arquivo — você pode anexá-la abaixo.');
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         setAnalyticCompositions(null);
         setAnalyticOk(false);
-        setAnalyticInfo(`Falha ao ler Analítica deste arquivo: ${err?.message ?? 'erro desconhecido'}.`);
+        setAnalyticInfo(`Falha ao ler Analítica deste arquivo: ${errorMessage(err, 'erro desconhecido')}.`);
       }
-    } catch (e: any) {
-      setError(`Erro ao ler a Sintética: ${e?.message ?? 'formato não reconhecido'}`);
+    } catch (e: unknown) {
+      setError(`Erro ao ler a Sintética: ${errorMessage(e, 'formato não reconhecido')}`);
     }
     setLoading(false);
   }, []);
@@ -667,10 +747,10 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         setShowAnalyticClassReview(false);
         setWizardStep(2);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       setAnalyticOk(false);
       setAnalyticCompositions(null);
-      setAnalyticInfo(`Falha ao ler Analítica: ${err?.message ?? 'erro desconhecido'}.`);
+      setAnalyticInfo(`Falha ao ler Analítica: ${errorMessage(err, 'erro desconhecido')}.`);
     }
     setAnalyticLoading(false);
   }, [parsed, project.budgetItems]);
@@ -761,17 +841,53 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         setShowAnalyticClassReview(false);
         setWizardStep(2);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       setAnalyticOk(false);
       setAnalyticCompositions(null);
-      setAnalyticInfo(`Falha ao ler Analitica: ${err?.message ?? 'erro desconhecido'}.`);
+      setAnalyticInfo(`Falha ao ler Analitica: ${errorMessage(err, 'erro desconhecido')}.`);
     }
     setAnalyticLoading(false);
   }, [analyticBuffer, analyticPreview, analyticHeaderRow, analyticFirstDataRow, analyticColumnRoles, parsed, project.budgetItems]);
 
-  const confirmImport = () => {
+  const finishImport = async (nextProject: Project) => {
+    const finalName = normalizeProjectName(nextProject.name);
+    if (isCreateMode) {
+      if (!finalName) {
+        setError('Informe o nome da obra antes de concluir a importacao.');
+        setCreationStep('name');
+        return;
+      }
+      if (existingProjectNames.some(name => comparableProjectName(name) === comparableProjectName(finalName))) {
+        setError('Ja existe uma obra com este nome. Volte e informe outro nome.');
+        setWizardStep(5);
+        return;
+      }
+      if (!onCreateProject) {
+        setError('Nao foi possivel concluir a criacao da obra.');
+        return;
+      }
+      setSavingImport(true);
+      setError('');
+      try {
+        await onCreateProject({ ...nextProject, name: finalName });
+        reset();
+        onClose();
+      } catch (err) {
+        console.warn(err);
+        setError(err instanceof Error ? err.message : 'Erro ao criar a obra com a importacao.');
+      } finally {
+        setSavingImport(false);
+      }
+      return;
+    }
+    onProjectChange({ ...nextProject, name: finalName || project.name });
+    handleClose();
+  };
+
+  const confirmImport = async () => {
     const contractBdi = parsePercentInput(contractDraft.bdiPercent);
     const contractDiscount = parsePercentInput(contractDraft.biddingDiscountPercent);
+    const selectedProjectName = normalizeProjectName(contractDraft.projectName || projectNameInput || project.name);
     const nextContractInfo = {
       ...(project.contractInfo ?? {}),
       contractor: contractDraft.contractor,
@@ -793,7 +909,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
       const next: BudgetItem[] = [...keep, ...integration.budgetItems];
       const nextProject: Project = {
         ...project,
-        name: contractDraft.projectName || project.name,
+        name: selectedProjectName || project.name,
         contractInfo: nextContractInfo,
         budgetItems: next,
         phases: integration.phases,
@@ -802,8 +918,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         syntheticBdiPercent: contractBdi ?? parsed.bdiPercent,
         syntheticImportedAt: new Date().toISOString(),
       };
-      onProjectChange(nextProject);
-      handleClose();
+      await finishImport(nextProject);
       return;
     }
     // Caso 2: somente Analítica (sem nova Sintética) — atualiza apenas analyticCompositions.
@@ -816,9 +931,9 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         ? integrateImportedBudget(project, existingSyntheticItems, classified)
         : null;
       const budgetById = new Map((integration?.budgetItems ?? []).map(item => [item.id, item]));
-      onProjectChange({
+      await finishImport({
         ...project,
-        name: contractDraft.projectName || project.name,
+        name: selectedProjectName || project.name,
         contractInfo: nextContractInfo,
         syntheticBdiPercent: contractBdi ?? project.syntheticBdiPercent,
         budgetItems: integration
@@ -828,7 +943,6 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         analyticCompositions: integration?.analyticCompositions ?? classified,
         materialCostClasses: mergeAnalyticCostClasses(project, classified),
       });
-      handleClose();
       return;
     }
   };
@@ -1254,21 +1368,51 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-foreground">
             <DollarSign className="w-5 h-5 text-primary" />
-            Iniciar importacao do orcamento
+            {isCreateMode ? 'Criar nova obra' : 'Atualizar planilha da obra'}
           </DialogTitle>
           <DialogDescription>
-            Fluxo unico: importe a Sintetica para formar a base de Medicao, Aditivo, EAP, Cronograma e Custo Real; depois anexe a Analitica para preencher insumos, mao de obra e produtividade.
-            A plataforma tenta detectar cabecalhos automaticamente, mas voce pode alterar coluna, linha inicial e BDI antes de confirmar.
-            <br />A mescla entre Sintetica e Analitica e feita principalmente por <strong>Item + Codigo</strong>, independentemente do nome usado no cabecalho.
+            {isCreateMode && creationStep === 'name' ? (
+              <>Informe um nome para a obra antes de importar a planilha orcamentaria.</>
+            ) : (
+              <>
+                Fluxo unico: importe a Sintetica para formar a base de Medicao, Aditivo, EAP, Cronograma e Custo Real; depois anexe a Analitica para preencher insumos, mao de obra e produtividade.
+                A plataforma tenta detectar cabecalhos automaticamente, mas voce pode alterar coluna, linha inicial e BDI antes de confirmar.
+                <br />A mescla entre Sintetica e Analitica e feita principalmente por <strong>Item + Codigo</strong>, independentemente do nome usado no cabecalho.
+              </>
+            )}
           </DialogDescription>
-          <div className="pt-2 space-y-2">
-            {[
-              { step: 1, label: 'Sintetica', description: 'Base financeira e capitulos da obra', done: !!parsed, Icon: FileSpreadsheet },
-              { step: 2, label: 'Analitica', description: 'Composicoes e insumos do orcamento', done: hasAnalytic, Icon: Layers },
-              { step: 3, label: 'Classificar insumos', description: 'Material, mao de obra e equipamento', done: hasAnalytic, Icon: ClipboardCheck },
-              { step: 4, label: 'Revisar integracao', description: 'Conferencia antes de alimentar os modulos', done: false, Icon: Check },
-              { step: 5, label: 'Dados iniciais', description: 'Cabecalho para medicao, aditivo e custo real', done: false, Icon: FileText },
-            ].map(item => (
+          {isCreateMode && (
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              {[
+                { step: 'name', label: 'Etapa 1 de 2', description: 'Identificacao da obra', done: creationStep === 'import' },
+                { step: 'import', label: 'Etapa 2 de 2', description: 'Importacao da planilha', done: false },
+              ].map(item => (
+                <div
+                  key={item.step}
+                  className={`rounded-lg border px-3 py-2 text-xs ${
+                    creationStep === item.step
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : item.done
+                        ? 'border-success/30 bg-success/5 text-success'
+                        : 'border-border bg-muted/20 text-muted-foreground'
+                  }`}
+                >
+                  <div className="font-semibold">{item.label}</div>
+                  <div className="mt-0.5 text-[11px]">{item.description}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {(!isCreateMode || creationStep === 'import') && (
+          <>
+            <div className="pt-2 space-y-2">
+              {[
+                { step: 1, label: 'Sintetica', description: 'Base financeira e capitulos da obra', done: !!parsed, Icon: FileSpreadsheet },
+                { step: 2, label: 'Analitica', description: 'Composicoes e insumos do orcamento', done: hasAnalytic, Icon: Layers },
+                { step: 3, label: 'Classificar insumos', description: 'Material, mao de obra e equipamento', done: hasAnalytic, Icon: ClipboardCheck },
+                { step: 4, label: 'Revisar integracao', description: 'Conferencia antes de alimentar os modulos', done: false, Icon: Check },
+                { step: 5, label: 'Dados iniciais', description: 'Cabecalho para medicao, aditivo e custo real', done: false, Icon: FileText },
+              ].map(item => (
               <div
                 key={item.step}
                 className={`rounded-lg border px-3 py-3 text-[11px] ${
@@ -1287,14 +1431,50 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
-          <div className="mt-2 rounded-lg border border-info/20 bg-info/5 px-3 py-2 text-xs text-muted-foreground">
-            <strong className="text-foreground">Observacao:</strong> {stepNotes[wizardStep]}
-          </div>
+              ))}
+            </div>
+            <div className="mt-2 rounded-lg border border-info/20 bg-info/5 px-3 py-2 text-xs text-muted-foreground">
+              <strong className="text-foreground">Observacao:</strong> {stepNotes[wizardStep]}
+            </div>
+          </>
+          )}
         </DialogHeader>
 
-        {wizardStep === 1 && (
+        {isCreateMode && creationStep === 'name' ? (
+          <div className="flex-1 min-h-0 overflow-y-auto py-6">
+            <div className="mx-auto w-full max-w-xl rounded-lg border border-border bg-muted/20 p-4 space-y-3">
+              <label className="text-sm font-medium text-foreground">
+                Nome da obra
+                <input
+                  ref={projectNameInputRef}
+                  value={projectNameInput}
+                  onChange={e => {
+                    setProjectNameInput(e.target.value);
+                    setProjectNameTouched(true);
+                    if (error) setError('');
+                  }}
+                  onBlur={() => setProjectNameTouched(true)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && canContinueProjectName) continueFromProjectName();
+                  }}
+                  placeholder="Digite o nome da obra"
+                  className="mt-2 h-10 w-full rounded border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
+              </label>
+              {projectNameValidation && (
+                <p className="text-xs text-destructive">{projectNameValidation}</p>
+              )}
+              {error && (
+                <div className="rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {error}
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                A obra so sera criada depois da confirmacao da importacao. Se cancelar agora, nenhum registro vazio sera salvo.
+              </p>
+            </div>
+          </div>
+        ) : wizardStep === 1 && (
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 flex flex-col items-center justify-start py-4 space-y-4">
             <div
               onDrop={handleDrop}
@@ -1388,7 +1568,7 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
             </div>
 
             {/* Bloco da Analítica: anexar arquivo separado caso não esteja no mesmo arquivo. */}
-            {false && preview && wizardStep === 2 && (
+            {Boolean((globalThis as { __legacySyntheticReview?: boolean }).__legacySyntheticReview) && preview && wizardStep === 2 && (
               <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div>
@@ -1600,7 +1780,18 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
         )}
 
         <DialogFooter className="shrink-0 border-t border-border pt-3">
-          <Button variant="outline" onClick={handleClose}>Cancelar</Button>
+          <Button variant="outline" onClick={handleClose} disabled={savingImport}>Cancelar</Button>
+          {isCreateMode && creationStep === 'name' ? (
+            <Button onClick={continueFromProjectName} disabled={!canContinueProjectName}>
+              Continuar
+            </Button>
+          ) : (
+          <>
+          {isCreateMode && (
+            <Button variant="outline" onClick={() => setCreationStep('name')} disabled={savingImport}>
+              Voltar ao nome
+            </Button>
+          )}
           {wizardStep > 1 && (
             <Button variant="outline" onClick={goPreviousStep}>
               Voltar
@@ -1611,10 +1802,12 @@ export default function ImportSyntheticDialog({ open, onClose, project, onProjec
               {wizardStep === 1 ? 'Ir para Analitica' : wizardStep === 2 ? 'Ir para classificacao' : wizardStep === 3 ? 'Ir para revisao' : 'Ir para dados iniciais'}
             </Button>
           ) : (
-            <Button onClick={confirmImport} disabled={!canGoNext}>
-              <Check className="w-4 h-4 mr-1" />
-              Salvar dados e integrar
+            <Button onClick={confirmImport} disabled={!canGoNext || savingImport}>
+              {savingImport ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Check className="w-4 h-4 mr-1" />}
+              {isCreateMode ? 'Concluir importacao' : 'Salvar dados e integrar'}
             </Button>
+          )}
+          </>
           )}
         </DialogFooter>
       </DialogContent>

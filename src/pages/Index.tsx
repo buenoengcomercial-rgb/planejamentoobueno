@@ -6,6 +6,7 @@ import AppSidebar from '@/components/AppSidebar';
 import UndoButton from '@/components/UndoButton';
 import SaveStatusIndicator, { SaveStatus } from '@/components/SaveStatusIndicator';
 import MigrationDialog from '@/components/MigrationDialog';
+import ImportSyntheticDialog from '@/components/ImportSyntheticDialog';
 import { Menu, X, Loader2, Building2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { applyRupToProject, applyDailyLogsToProject, calculateCPM, captureBaseline, syncBaselineWithRup, settleAllDependencies } from '@/lib/calculations';
@@ -51,6 +52,18 @@ const APP_UI_SESSION_KEY = 'obraplanner:ui-session';
 const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'realCost', 'materials', 'warehouse'];
 
 type UndoStacks = Record<AppView, Project[]>;
+
+function createDraftProject(name = ''): Project {
+  const today = new Date().toISOString().split('T')[0];
+  return {
+    id: crypto.randomUUID(),
+    name,
+    startDate: today,
+    endDate: today,
+    phases: [],
+    totalBudget: 0,
+  };
+}
 
 interface UnsavedProjectDraft {
   version: typeof UNSAVED_DRAFT_VERSION;
@@ -180,6 +193,8 @@ export default function Index() {
   const [dailyReportInitialFilter, setDailyReportInitialFilter] = useState<string | undefined>(undefined);
   const [dailyReportNavKey, setDailyReportNavKey] = useState(0);
   const [productionWorkspaceInitialTab, setProductionWorkspaceInitialTab] = useState<'production' | 'dailyReport'>('production');
+  const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
+  const [draftProjectForImport, setDraftProjectForImport] = useState<Project | null>(null);
 
   const handleOpenDailyReport = useCallback((dateISO: string, measurementFilter?: string) => {
     setDailyReportInitialDate(dateISO);
@@ -587,21 +602,37 @@ export default function Index() {
     }
   };
 
-  const handleCreateProject = async (name?: string): Promise<string | void> => {
+  const handleCreateProject = async (): Promise<void> => {
     if (!orgId) return;
     if (!creator) { toast.error('Sem permissão para criar obras.'); return; }
     try {
       if (!(await flushPendingSave())) return;
-      const finalName = (name && name.trim()) || (await generateUniqueCloudName('Nova obra'));
-      const newProj = await createCloudProject(finalName, orgId);
-      const list = await refreshCloudList();
-      replaceProjectWithoutAutoSave(newProj, list.find(p => p.id === newProj.id)?.updatedAt ?? null);
-      undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], realCost: [], materials: [], warehouse: [] };
-      setUndoVersion(v => v + 1);
-      return newProj.id;
+      setDraftProjectForImport(createDraftProject());
+      setCreateProjectDialogOpen(true);
     } catch {
       toast.error('Erro ao criar obra');
     }
+  };
+
+  const handleCreateProjectFromImport = async (projectToCreate: Project) => {
+    if (!orgId) throw new Error('Empresa nao identificada para salvar a obra.');
+    if (!creator) throw new Error('Sem permissao para criar obras.');
+    const finalName = projectToCreate.name.trim();
+    if (!finalName) throw new Error('Informe o nome da obra.');
+    const exists = cloudList.some(p => p.name.trim().toLowerCase() === finalName.toLowerCase());
+    if (exists) throw new Error('Ja existe uma obra com este nome. Informe outro nome.');
+
+    const projectWithName = { ...projectToCreate, name: finalName };
+    const updatedAt = await upsertCloudProject(projectWithName, orgId);
+    const list = await refreshCloudList();
+    replaceProjectWithoutAutoSave(projectWithName, list.find(p => p.id === projectWithName.id)?.updatedAt ?? updatedAt);
+    undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], realCost: [], materials: [], warehouse: [] };
+    setUndoVersion(v => v + 1);
+    setCurrentView('dashboard');
+    setSidebarOpen(false);
+    setCreateProjectDialogOpen(false);
+    setDraftProjectForImport(null);
+    toast.success('Obra criada e planilha importada com sucesso.');
   };
 
   const handleRenameProject = async (id: string, newName: string) => {
@@ -808,6 +839,21 @@ export default function Index() {
           {renderView()}
         </Suspense>
       </main>
+
+      {draftProjectForImport && (
+        <ImportSyntheticDialog
+          open={createProjectDialogOpen}
+          onClose={() => {
+            setCreateProjectDialogOpen(false);
+            setDraftProjectForImport(null);
+          }}
+          project={draftProjectForImport}
+          onProjectChange={() => undefined}
+          mode="create"
+          existingProjectNames={sidebarProjects.map(p => p.name)}
+          onCreateProject={handleCreateProjectFromImport}
+        />
+      )}
 
       {orgId && <MigrationDialog organizationId={orgId} onMigrated={async () => { await refreshCloudList(); }} />}
     </div>
