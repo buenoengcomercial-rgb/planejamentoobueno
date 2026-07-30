@@ -970,8 +970,9 @@ export const DEFAULT_SYNTHETIC_COLUMN_MAP: SyntheticColumnMap = {
   quantity: 4,
   unit: 5,
   unitPriceNoBDI: 6,
-  unitPriceWithBDI: 7,
-  totalWithBDI: 8,
+  totalNoBDI: 7,
+  unitPriceWithBDI: 8,
+  totalWithBDI: 9,
 };
 
 function _toNumSyn(v: unknown): number {

@@ -135,6 +135,8 @@ export interface Task {
   unitPriceNoBDI?: number;
   /** Código do item (referência SINAPI/orçamento). */
   itemCode?: string;
+  /** Número do item da Sintética que originou a tarefa (ex.: "1.1.1"). */
+  contractItem?: string;
   /** Banco de referência do preço (ex.: SINAPI, SBC, próprio). */
   priceBank?: string;
   laborCompositions?: LaborComposition[];

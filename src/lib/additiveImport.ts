@@ -122,6 +122,9 @@ interface SyntheticRow {
   unit: string;
   unitPriceNoBDI: number;
   unitPriceWithBDI: number;
+  totalNoBDI: number;
+  totalWithBDI: number;
+  /** Compatibilidade: total da composição sempre representa o total com BDI. */
   total: number;
   rowIndex: number;
 }
@@ -209,6 +212,10 @@ function looksLikeAnalyticSheet(rows: unknown[][]): boolean {
 
 /**
  * Parser SINTÉTICA — layout fixo A..J.
+ *
+ * G = valor unitário sem BDI; H = total sem BDI; I = valor unitário com
+ * BDI; J = total com BDI. Os totais da fonte são preservados, pois algumas
+ * planilhas têm arredondamento que não pode ser refeito por quantidade × preço.
  */
 function parseSyntheticSheet(rows: unknown[][]): { items: SyntheticRow[]; issues: AdditiveImportIssue[]; bdi?: number } {
   const issues: AdditiveImportIssue[] = [];
@@ -225,10 +232,11 @@ function parseSyntheticSheet(rows: unknown[][]): { items: SyntheticRow[]; issues
     const quantity = toNumber(r[4]);
     const unit = asString(r[5]);
     const unitPriceNoBDI = toNumber(r[6]);
-    const total = toNumber(r[7]);
+    const totalNoBDI = toNumber(r[7]);
     const unitPriceWithBDI = toNumber(r[8]);
+    const totalWithBDI = toNumber(r[9]);
 
-    if (!item && !code && !bank && !description && !quantity && !total && !unitPriceNoBDI) continue;
+    if (!item && !code && !bank && !description && !quantity && !totalNoBDI && !unitPriceNoBDI && !totalWithBDI) continue;
     const lowDesc = norm(description);
     if (!code && (lowDesc.includes('total') || lowDesc.includes('subtotal'))) continue;
     if (!bank) continue; // capítulos
@@ -245,7 +253,9 @@ function parseSyntheticSheet(rows: unknown[][]): { items: SyntheticRow[]; issues
       item, code, bank, description, quantity, unit,
       unitPriceNoBDI,
       unitPriceWithBDI: unitPriceWithBDI || 0,
-      total: total || +(unitPriceNoBDI * quantity).toFixed(2),
+      totalNoBDI: totalNoBDI || calculateLineTotal(unitPriceNoBDI, quantity),
+      totalWithBDI: totalWithBDI || calculateLineTotal(unitPriceWithBDI, quantity),
+      total: totalWithBDI || calculateLineTotal(unitPriceWithBDI, quantity),
       rowIndex: i + 1,
     });
   }
@@ -314,8 +324,13 @@ function parseAnalyticSheet(
     }
 
     // Detecta linha pai: A é número (item tipo "1", "2.1.4") e B/C preenchidos.
+    // Linhas de capítulo da Analítica costumam trazer "Capítulo" em B e "0"
+    // em C; elas organizam o relatório, mas não são uma composição.
     const isParentLine =
-      !!codeRaw && !!bank && /^\d+(\.\d+)*$/.test(aRaw.replace(',', '.'));
+      !!codeRaw
+      && !!bank
+      && norm(codeRaw) !== 'capitulo'
+      && /^\d+(\.\d+)*$/.test(aRaw.replace(',', '.'));
 
     if (isParentLine) {
       current = {
@@ -443,7 +458,10 @@ export function parseAnalyticRowsFlexible(
     const isGroupLine = !codeRaw && !!description && coefficient <= 0 && !unit;
     if (isGroupLine) continue;
 
-    const isParentLine = !!codeRaw && /^\d+(\.\d+)*$/.test(normalizedItem);
+    const isParentLine =
+      !!codeRaw
+      && norm(codeRaw) !== 'capitulo'
+      && /^\d+(\.\d+)*$/.test(normalizedItem);
     if (isParentLine) {
       current = {
         normCode: normalizeCode(codeRaw),
@@ -527,10 +545,12 @@ export function parseAdditiveSyntheticWorkbook(
     const upWithBDI = s.unitPriceWithBDI > 0
       ? truncar2(s.unitPriceWithBDI)
       : calculateUnitPriceWithBDI(upNoBDI, bdiPercent);
-    const tWithBDI = s.total > 0
-      ? money2(s.total)
+    const tWithBDI = s.totalWithBDI > 0
+      ? money2(s.totalWithBDI)
       : calculateLineTotal(upWithBDI, s.quantity);
-    const tNoBDI = calculateLineTotal(upNoBDI, s.quantity);
+    const tNoBDI = s.totalNoBDI > 0
+      ? money2(s.totalNoBDI)
+      : calculateLineTotal(upNoBDI, s.quantity);
     return {
       id: uid(),
       item: s.item,

@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { guessMaterialCostClass, linkKeyOf, MATERIAL_COST_CLASS_LABEL } from '@/lib/materialComparisons';
 import { calculateRupDuration } from '@/lib/calculations';
+import { findMissingAnalyticItems, validateNewWorkImport } from '@/lib/newWorkImportValidation';
 
 interface Props {
   open: boolean;
@@ -76,9 +77,9 @@ const DEFAULT_COLUMN_ROLES: SyntheticColumnRole[] = [
   'quantity',
   'unit',
   'unitPriceNoBDI',
+  'totalNoBDI',
   'unitPriceWithBDI',
   'totalWithBDI',
-  'ignore',
 ];
 
 const ANALYTIC_COLUMN_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
@@ -165,7 +166,20 @@ function detectSyntheticColumnRoles(rows: string[][], headerRowIndex: number): S
     detected[index] = role;
   });
 
-  return hits >= 4 ? detected : roles;
+  if (hits < 4) return roles;
+
+  // Layout padrão dos orçamentos licitatórios A..J: a coluna H pode vir
+  // sem rótulo próprio, mas é o total sem BDI entre G (unitário sem BDI) e
+  // I/J (valores com BDI). Não a deixe ser ignorada.
+  if (
+    detected[6] === 'unitPriceNoBDI'
+    && detected[7] === 'ignore'
+    && detected[8] === 'unitPriceWithBDI'
+    && detected[9] === 'totalWithBDI'
+  ) {
+    detected[7] = 'totalNoBDI';
+  }
+  return detected;
 }
 
 function detectAnalyticColumnRoles(rows: string[][], headerRowIndex: number, hasHeaderRow: boolean): AnalyticColumnRole[] {
@@ -212,7 +226,10 @@ function analyticRolesToMap(roles: AnalyticColumnRole[]) {
 }
 
 function parseBdiInput(value: string): number | undefined {
-  const normalized = value.replace('%', '').replace(/\./g, '').replace(',', '.').trim();
+  const raw = value.replace('%', '').trim();
+  const normalized = raw.includes(',') && raw.includes('.')
+    ? raw.replace(/\./g, '').replace(',', '.')
+    : raw.replace(',', '.');
   if (!normalized) return undefined;
   const n = Number(normalized);
   return Number.isFinite(n) ? n : undefined;
@@ -424,6 +441,7 @@ function buildImportedTask(item: BudgetItem, phaseName: string, laborComposition
     unitPrice: item.unitPriceWithBDI,
     unitPriceNoBDI: item.unitPriceNoBDI,
     itemCode: item.code,
+    contractItem: item.item,
     priceBank: item.bank,
     laborCompositions,
   };
@@ -438,7 +456,7 @@ function buildImportedTask(item: BudgetItem, phaseName: string, laborComposition
   };
 }
 
-function integrateImportedBudget(project: Project, budgetItems: BudgetItem[], analyticCompositions: AdditiveComposition[]) {
+export function integrateImportedBudget(project: Project, budgetItems: BudgetItem[], analyticCompositions: AdditiveComposition[]) {
   const phases = [...project.phases];
   const chapterIndex = new Map<string, string>();
   const subchapterIndex = new Map<string, string>();
@@ -484,7 +502,9 @@ function integrateImportedBudget(project: Project, budgetItems: BudgetItem[], an
     const nextTask = buildImportedTask(item, targetPhase.name, laborCompositions, order, project.startDate);
     const phaseIndex = phases.findIndex(p => p.id === targetPhase.id);
     if (phaseIndex < 0) return;
-    const existingTaskIndex = phases[phaseIndex].tasks.findIndex(t => t.id === nextTask.id || sameBudgetKey({ item: t.contractOrder != null ? item.item : undefined, code: t.itemCode }, item));
+    const existingTaskIndex = phases[phaseIndex].tasks.findIndex(t =>
+      t.id === nextTask.id || sameBudgetKey({ item: t.contractItem, code: t.itemCode }, item),
+    );
     const tasks = existingTaskIndex >= 0
       ? phases[phaseIndex].tasks.map((task, idx) => idx === existingTaskIndex ? { ...task, ...nextTask, dailyLogs: task.dailyLogs, percentComplete: task.percentComplete } : task)
       : [...phases[phaseIndex].tasks, nextTask];
@@ -661,10 +681,6 @@ export default function ImportSyntheticDialog({
       setHeaderRow(nextHeaderRow);
       setFirstDataRow(nextFirstDataRow);
       setBdiInput(detectedBdi ? String(detectedBdi).replace('.', ',') : '');
-      setContractDraft(current => ({
-        ...current,
-        bdiPercent: detectedBdi ? String(detectedBdi).replace('.', ',') : current.bdiPercent,
-      }));
       const result = parseSyntheticBudgetFlexible(buf, {
         sheetName: inspected.sheetName,
         headerRowIndex: inspected.suggestedHeaderRowIndex,
@@ -681,13 +697,17 @@ export default function ImportSyntheticDialog({
       setWizardStep(1);
 
       // Tenta extrair a Analítica do MESMO arquivo (aba Analítica).
-      // Falha silenciosa: se não houver, segue só com a Sintética.
       try {
         const an = await extractBaseAnalyticCompositions(buf);
         if (an.hasAnalyticSheet && an.compositions.length > 0) {
+          const missing = findMissingAnalyticItems(result.items, an.compositions);
           setAnalyticCompositions(classifyAnalyticCompositions(an.compositions));
-          setAnalyticOk(true);
-          setAnalyticInfo(`Analitica detectada no mesmo arquivo: ${an.compositions.length} composicoes c/ insumos (${an.totalInputs} insumos).`);
+          setAnalyticOk(missing.length === 0);
+          setAnalyticInfo(
+            missing.length === 0
+              ? `Analitica detectada no mesmo arquivo: ${an.compositions.length} composicoes c/ insumos (${an.totalInputs} insumos).`
+              : `Analitica detectada, mas ${missing.length} servico(s) da Sintetica ficaram sem vinculo. Corrija a Analitica antes de concluir.`,
+          );
         } else {
           setAnalyticCompositions(null);
           setAnalyticOk(false);
@@ -741,11 +761,16 @@ export default function ImportSyntheticDialog({
         setAnalyticCompositions([]);
         setAnalyticInfo(an.message || 'Analítica lida, mas nenhum bloco vinculou à Sintética.');
       } else {
-        setAnalyticOk(true);
+        const missing = findMissingAnalyticItems(baseItems, an.compositions);
+        setAnalyticOk(missing.length === 0);
         setAnalyticCompositions(classifyAnalyticCompositions(an.compositions));
-        setAnalyticInfo(an.message);
+        setAnalyticInfo(
+          missing.length === 0
+            ? an.message
+            : `${an.message} Faltam ${missing.length} serviço(s) da Sintética sem Analítica vinculada.`,
+        );
         setShowAnalyticClassReview(false);
-        setWizardStep(2);
+        if (missing.length === 0 || !isCreateMode) setWizardStep(2);
       }
     } catch (err: unknown) {
       setAnalyticOk(false);
@@ -753,7 +778,7 @@ export default function ImportSyntheticDialog({
       setAnalyticInfo(`Falha ao ler Analítica: ${errorMessage(err, 'erro desconhecido')}.`);
     }
     setAnalyticLoading(false);
-  }, [parsed, project.budgetItems]);
+  }, [isCreateMode, parsed, project.budgetItems]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -801,12 +826,6 @@ export default function ImportSyntheticDialog({
       return;
     }
     setParsed(result);
-    setContractDraft(current => ({
-      ...current,
-      bdiPercent: result.bdiPercent !== undefined && Number.isFinite(result.bdiPercent)
-        ? String(result.bdiPercent).replace('.', ',')
-        : current.bdiPercent,
-    }));
     setWizardStep(2);
   }, [syntheticBuffer, preview, headerRow, firstDataRow, columnRoles, bdiInput]);
 
@@ -835,11 +854,16 @@ export default function ImportSyntheticDialog({
         setAnalyticCompositions([]);
         setAnalyticInfo(an.message || 'Analitica lida, mas nenhum bloco vinculou a Sintetica.');
       } else {
-        setAnalyticOk(true);
+        const missing = findMissingAnalyticItems(baseItems, an.compositions);
+        setAnalyticOk(missing.length === 0);
         setAnalyticCompositions(classifyAnalyticCompositions(an.compositions));
-        setAnalyticInfo(an.message);
+        setAnalyticInfo(
+          missing.length === 0
+            ? an.message
+            : `${an.message} Faltam ${missing.length} serviço(s) da Sintética sem Analítica vinculada.`,
+        );
         setShowAnalyticClassReview(false);
-        setWizardStep(2);
+        if (missing.length === 0 || !isCreateMode) setWizardStep(2);
       }
     } catch (err: unknown) {
       setAnalyticOk(false);
@@ -847,7 +871,7 @@ export default function ImportSyntheticDialog({
       setAnalyticInfo(`Falha ao ler Analitica: ${errorMessage(err, 'erro desconhecido')}.`);
     }
     setAnalyticLoading(false);
-  }, [analyticBuffer, analyticPreview, analyticHeaderRow, analyticFirstDataRow, analyticColumnRoles, parsed, project.budgetItems]);
+  }, [analyticBuffer, analyticPreview, analyticHeaderRow, analyticFirstDataRow, analyticColumnRoles, isCreateMode, parsed, project.budgetItems]);
 
   const finishImport = async (nextProject: Project) => {
     const finalName = normalizeProjectName(nextProject.name);
@@ -888,6 +912,19 @@ export default function ImportSyntheticDialog({
     const contractBdi = parsePercentInput(contractDraft.bdiPercent);
     const contractDiscount = parsePercentInput(contractDraft.biddingDiscountPercent);
     const selectedProjectName = normalizeProjectName(contractDraft.projectName || projectNameInput || project.name);
+    if (isCreateMode && parsed) {
+      const validation = validateNewWorkImport({
+        contractBdiPercent: contractBdi,
+        detectedBdiPercent: parsed.bdiPercent,
+        budgetItems: parsed.items,
+        analyticCompositions,
+      });
+      if (!validation.isValid) {
+        setError(validation.errors.join(' '));
+        setWizardStep(validation.missingAnalytics.length > 0 ? 2 : 5);
+        return;
+      }
+    }
     const nextContractInfo = {
       ...(project.contractInfo ?? {}),
       contractor: contractDraft.contractor,
@@ -952,18 +989,30 @@ export default function ImportSyntheticDialog({
   const totalWithBDI = reviewBudgetItems.reduce((s, i) => s + i.totalWithBDI, 0) ?? 0;
   const hasAnalytic = !!(analyticCompositions && analyticCompositions.length > 0);
   const hasExistingSynthetic = (project.budgetItems ?? []).some(b => b.source === 'sintetica');
+  const missingAnalyticItems = parsed
+    ? findMissingAnalyticItems(parsed.items, analyticCompositions)
+    : [];
+  const newWorkImportValidation = isCreateMode && parsed
+    ? validateNewWorkImport({
+        contractBdiPercent: parsePercentInput(contractDraft.bdiPercent),
+        detectedBdiPercent: parsed.bdiPercent,
+        budgetItems: parsed.items,
+        analyticCompositions,
+      })
+    : null;
+  const completeAnalyticForNewWork = !isCreateMode || !parsed || missingAnalyticItems.length === 0;
   const canGoNext =
     wizardStep === 1 ? !!parsed
-    : wizardStep === 2 ? hasAnalytic
-    : wizardStep === 3 ? hasAnalytic
+    : wizardStep === 2 ? hasAnalytic && completeAnalyticForNewWork
+    : wizardStep === 3 ? hasAnalytic && completeAnalyticForNewWork
     : wizardStep === 4 ? (!!parsed || hasExistingSynthetic)
     : true;
   const goNextStep = () => {
     if (wizardStep === 1 && parsed) setWizardStep(2);
-    else if (wizardStep === 2 && hasAnalytic) {
+    else if (wizardStep === 2 && hasAnalytic && completeAnalyticForNewWork) {
       setShowAnalyticClassReview(true);
       setWizardStep(3);
-    } else if (wizardStep === 3 && hasAnalytic) setWizardStep(4);
+    } else if (wizardStep === 3 && hasAnalytic && completeAnalyticForNewWork) setWizardStep(4);
     else if (wizardStep === 4) setWizardStep(5);
   };
   const goPreviousStep = () => setWizardStep(step => Math.max(1, step - 1) as 1 | 2 | 3 | 4 | 5);
@@ -1100,6 +1149,19 @@ export default function ImportSyntheticDialog({
           </label>
         ))}
       </div>
+      {isCreateMode && parsed && (
+        <div className={`rounded-md border px-3 py-2 text-xs ${
+          newWorkImportValidation?.errors.some(message => message.includes('BDI'))
+            ? 'border-destructive/30 bg-destructive/5 text-destructive'
+            : 'border-info/30 bg-info/5 text-muted-foreground'
+        }`}>
+          <strong className="text-foreground">Confirmação obrigatória do BDI:</strong>{' '}
+          a planilha informa {parsed.bdiPercent !== undefined ? `${parsed.bdiPercent.toFixed(2)}%` : 'BDI não detectado'}.
+          {newWorkImportValidation?.errors.some(message => message.includes('BDI')) && (
+            <p className="mt-1">{newWorkImportValidation.errors.filter(message => message.includes('BDI')).join(' ')}</p>
+          )}
+        </div>
+      )}
     </div>
   );
   const syntheticConfigPanel = preview ? (
@@ -1541,6 +1603,27 @@ export default function ImportSyntheticDialog({
             </div>
 
             {/* Bloco da Analítica: anexar arquivo separado caso não esteja no mesmo arquivo. */}
+            {error && (
+              <div className="rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                {error}
+              </div>
+            )}
+
+            {isCreateMode && parsed && wizardStep === 2 && missingAnalyticItems.length > 0 && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">
+                <p className="font-semibold">A criação está bloqueada até vincular a Analítica de todos os serviços.</p>
+                <p className="mt-1">{missingAnalyticItems.length} serviço(s) sem composição ou sem insumos:</p>
+                <ul className="mt-2 max-h-32 list-disc space-y-0.5 overflow-y-auto pl-4">
+                  {missingAnalyticItems.slice(0, 20).map(item => (
+                    <li key={`${item.item}-${item.code}`}>
+                      {item.item} · {item.code} — {item.description} ({item.reason})
+                    </li>
+                  ))}
+                  {missingAnalyticItems.length > 20 && <li>… e mais {missingAnalyticItems.length - 20} serviço(s).</li>}
+                </ul>
+              </div>
+            )}
+
             {Boolean((globalThis as { __legacySyntheticReview?: boolean }).__legacySyntheticReview) && preview && wizardStep === 2 && (
               <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -1775,7 +1858,7 @@ export default function ImportSyntheticDialog({
               {wizardStep === 1 ? 'Ir para Analitica' : wizardStep === 2 ? 'Ir para classificacao' : wizardStep === 3 ? 'Ir para revisao' : 'Ir para dados iniciais'}
             </Button>
           ) : (
-            <Button onClick={confirmImport} disabled={!canGoNext || savingImport}>
+            <Button onClick={confirmImport} disabled={!canGoNext || savingImport || !!(isCreateMode && parsed && !newWorkImportValidation?.isValid)}>
               {savingImport ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Check className="w-4 h-4 mr-1" />}
               {isCreateMode ? 'Concluir importacao' : 'Salvar dados e integrar'}
             </Button>
