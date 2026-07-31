@@ -1,6 +1,7 @@
 import type { AdditiveComposition, AdditiveInput, LaborComposition, MaterialCostClass, Project, Task } from '@/types/project';
 import { calculateRupDuration } from '@/lib/calculations';
 import { guessMaterialCostClass, linkKeyOf } from '@/lib/materialComparisons';
+import { compositionWithResolvedInputs } from '@/lib/analyticLinks';
 
 function normKey(value: string | undefined): string {
   return (value ?? '').trim().toLowerCase();
@@ -106,7 +107,8 @@ export function applyAdditiveProductivityToTask(
     return { task, status: 'preserved' };
   }
 
-  const laborCompositions = buildLaborCompositionsFromAdditive(project, composition);
+  const effectiveComposition = compositionWithResolvedInputs(project, composition).composition;
+  const laborCompositions = buildLaborCompositionsFromAdditive(project, effectiveComposition);
   if (!laborCompositions.length) {
     return { task, status: 'without_labor' };
   }
@@ -121,8 +123,9 @@ export function syncAdditiveProductivity(project: Project): SyncAdditiveProducti
     for (const composition of additive.compositions ?? []) {
       const taskId = composition.linkedTaskId ?? composition.taskId;
       if (!taskId) continue;
-      if (!composition.inputs?.length) continue;
-      compositionsByTaskId.set(taskId, composition);
+      const effectiveComposition = compositionWithResolvedInputs(project, composition).composition;
+      if (!effectiveComposition.inputs?.length) continue;
+      compositionsByTaskId.set(taskId, effectiveComposition);
     }
   }
 

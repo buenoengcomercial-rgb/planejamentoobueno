@@ -9,6 +9,7 @@ import {
   setCloudSnapshot,
   buildContractImportPayload,
 } from '@/lib/projectSync';
+import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
 
 export interface CloudProjectMeta {
   id: string;
@@ -20,6 +21,7 @@ export interface CloudProjectMeta {
 export interface CloudProjectRecord {
   project: Project;
   updatedAt: string;
+  repairApplied?: boolean;
 }
 
 export class CloudProjectConflictError extends Error {
@@ -60,9 +62,11 @@ export async function loadCloudProjectRecord(id: string): Promise<CloudProjectRe
   const base: Project = { ...proj, id: data.id, name: data.name };
   // Hidrata coleções normalizadas (almoxarifado, diários, apontamentos).
   const hydrated = await hydrateProjectFromCloud(base);
+  const repaired = repairProjectAnalyticLinks(hydrated);
   return {
-    project: hydrated,
+    project: repaired.project,
     updatedAt: data.updated_at,
+    repairApplied: repaired.changed,
   };
 }
 

@@ -168,6 +168,7 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
           />
 
           <AdditiveTable
+            project={project}
             bdi={bdi}
             globalDiscount={globalDiscount}
             isLocked={isLocked}

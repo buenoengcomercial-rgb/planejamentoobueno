@@ -16,6 +16,7 @@ import {
   createNewServiceComposition, contractAdditive,
 } from '@/lib/additiveImport';
 import { trunc2 } from '@/lib/financialEngine';
+import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
 import {
   exportAdditiveSyntheticCompletePro,
   exportAdditiveNewServicesPro,
@@ -337,7 +338,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
                 : a,
             ),
           };
-          return logToProject(next, {
+          return logToProject(repairProjectAnalyticLinks(next).project, {
             ...auditUser,
             entityType: 'additive',
             entityId: draftCandidate.id,
@@ -353,7 +354,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
             ...prev,
             additives: [...(prev.additives ?? []), result.additive],
           };
-          return logToProject(next, {
+          return logToProject(repairProjectAnalyticLinks(next).project, {
             ...auditUser,
             entityType: 'additive',
             entityId: result.additive.id,

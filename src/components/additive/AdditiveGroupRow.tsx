@@ -1,12 +1,13 @@
 import { Fragment, memo } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput } from '@/types/project';
+import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput, Project } from '@/types/project';
 import type { CompGroup } from './types';
 import { fmtBRL, fmtPct, COL_COUNT } from './types';
 import AdditiveCompositionRow from './AdditiveCompositionRow';
 import type { AdditiveDetailSelection } from './AdditiveDetailFooter';
 
 interface Props {
+  project: Project;
   group: CompGroup;
   bdi: number;
   globalDiscount: number;
@@ -88,6 +89,7 @@ function AdditiveGroupRowImpl(props: Props) {
       {!isCollapsed && g.rows.map((c, idx) => (
         <AdditiveCompositionRow
           key={c.id}
+          project={props.project}
           c={c}
           bdi={props.bdi}
           globalDiscount={props.globalDiscount}

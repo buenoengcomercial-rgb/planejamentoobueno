@@ -370,7 +370,15 @@ function safeIdPart(value: string) {
 }
 
 function sameBudgetKey(a: { item?: string; itemNumber?: string; code?: string }, b: { item?: string; itemNumber?: string; code?: string }) {
-  return normalizeAnalyticCode(a.code) === normalizeAnalyticCode(b.code);
+  const normalizeItem = (value?: string) => (value ?? '')
+    .trim()
+    .replace(',', '.')
+    .split('.')
+    .filter(Boolean)
+    .map(part => /^\d+$/.test(part) ? String(Number(part)) : part.toUpperCase())
+    .join('.');
+  return normalizeItem(a.itemNumber || a.item) === normalizeItem(b.itemNumber || b.item)
+    && normalizeAnalyticCode(a.code) === normalizeAnalyticCode(b.code);
 }
 
 function findAnalyticForBudget(compositions: AdditiveComposition[], item: BudgetItem) {
@@ -941,6 +949,7 @@ export default function ImportSyntheticDialog({
         ...project,
         name: selectedProjectName || project.name,
         contractSchemaVersion: isCreateMode ? 2 : (project.contractSchemaVersion ?? 1),
+        analyticLinkSchemaVersion: 2,
         contractRevisions: project.contractRevisions ?? [],
         contractRectifications: project.contractRectifications ?? [],
         costLedger: project.costLedger ?? [],

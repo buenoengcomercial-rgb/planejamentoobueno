@@ -3,11 +3,12 @@ import { describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
 import { integrateImportedBudget } from '@/components/ImportSyntheticDialog';
 import type { Project } from '@/types/project';
-import { extractBaseAnalyticCompositions } from './additiveImport';
+import { buildAdditiveFromSyntheticBudgetItems, extractBaseAnalyticCompositions } from './additiveImport';
 import { priceNewContractFromAnalytic } from './additiveImport';
 import { inspectSyntheticWorkbook, parseSyntheticBudgetFlexible } from './importParser';
 import { money2 } from './financialEngine';
 import { buildContractImportPayload } from './projectSync';
+import { resolveAnalyticComposition } from './analyticLinks';
 
 const workbookPath = process.env.SYNTHETIC_CORRECTION_WORKBOOK;
 const acceptance = workbookPath && existsSync(workbookPath) ? it : it.skip;
@@ -61,12 +62,28 @@ describe('aceitação da planilha Sintética Correção 02', () => {
     expect(administrationBudget?.taskId).toBeTruthy();
     expect(administrationAnalytic?.linkedTaskId).toBe(administrationBudget?.taskId);
 
-    const atomicPayload = buildContractImportPayload({
+    const integratedProject: Project = {
       ...project,
-      contractSchemaVersion: 2,
       phases: integration.phases,
       budgetItems: integration.budgetItems,
       analyticCompositions: integration.analyticCompositions,
+    };
+    const additive = buildAdditiveFromSyntheticBudgetItems(integratedProject);
+    expect(additive?.compositions).toHaveLength(402);
+    const unresolvedLinks = (additive?.compositions ?? []).filter(composition =>
+      !composition.baseBudgetItemId
+      || !composition.baseAnalyticCompositionId
+      || !resolveAnalyticComposition(integratedProject, composition).composition?.inputs.length,
+    ).map(composition => ({ item: composition.item, code: composition.code, taskId: composition.taskId }));
+    expect(unresolvedLinks).toEqual([]);
+    expect(resolveAnalyticComposition(
+      integratedProject,
+      additive?.compositions.find(composition => composition.code === 'ADM04'),
+    ).composition?.inputs.length).toBeGreaterThan(0);
+
+    const atomicPayload = buildContractImportPayload({
+      ...integratedProject,
+      contractSchemaVersion: 2,
     });
     expect(atomicPayload.budgetItems).toHaveLength(402);
     expect(atomicPayload.analyticCompositions).toHaveLength(402);

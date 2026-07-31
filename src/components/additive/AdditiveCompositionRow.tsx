@@ -10,7 +10,7 @@ import { buttonVariants } from '@/components/ui/button';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput } from '@/types/project';
+import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput, Project } from '@/types/project';
 import { computeAdditiveRow, computeCompositionWithBDI } from '@/lib/additiveImport';
 import { memoryTotals } from '@/lib/calculationMemory';
 import { fmtBRL, fmtNum, fmtQty2, fmtPct, COL_COUNT, G_BG, BORDER_L } from './types';
@@ -19,6 +19,7 @@ import { handleGridKeyDown } from '@/lib/gridKeyboardNavigation';
 import { requestMemoryFocus, type AdditiveMemoryQtyType } from '@/lib/additiveMemoryFocus';
 import type { AdditiveDetailMode, AdditiveDetailSelection } from './AdditiveDetailFooter';
 import AdditiveCalculationMemory from './AdditiveCalculationMemory';
+import { compositionWithResolvedInputs } from '@/lib/analyticLinks';
 
 const MAIN_GRID = 'additive-main-table';
 
@@ -227,6 +228,7 @@ function MoneyCell({
 }
 
 interface Props {
+  project: Project;
   c: AdditiveComposition;
   bdi: number;
   globalDiscount: number;
@@ -247,15 +249,17 @@ interface Props {
 }
 
 function AdditiveCompositionRowImpl({
-  c, bdi, globalDiscount, isLocked, isOpen, isMemoryOpen, showAnalytic, rowIndex = 0,
+  project, c, bdi, globalDiscount, isLocked, isOpen, isMemoryOpen, showAnalytic, rowIndex = 0,
   onToggleExpand, onToggleMemory, onUpdateComposition, onUpdateQuantity,
   onRemoveComposition, onChangeMemory, selectedDetail, onSelectDetail,
   inputReferenceByCode,
 }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const { composition: analyticComposition, resolution: analyticResolution } = compositionWithResolvedInputs(project, c);
   const r = computeAdditiveRow(c, bdi, globalDiscount);
-  const cb = computeCompositionWithBDI(c, bdi);
-  const hasInputs = c.inputs.length > 0;
+  const cb = computeCompositionWithBDI(analyticComposition, bdi);
+  const hasInputs = analyticComposition.inputs.length > 0;
+  const inheritedAnalytic = analyticResolution.inherited;
   const diff = hasInputs ? cb.diff : 0;
   const hasDiff = hasInputs && Math.abs(diff) > 0.05;
   const noAnalytic = !hasInputs && !c.isNewService;
@@ -373,6 +377,11 @@ function AdditiveCompositionRowImpl({
               </Badge>
             )}
             {noAnalytic && <Badge variant="outline" className="text-[9px] text-amber-700 border-amber-400">Sem analítico</Badge>}
+            {inheritedAnalytic && (
+              <Badge variant="outline" className="text-[9px] text-emerald-700 border-emerald-400 bg-emerald-50">
+                Analítica herdada do contrato
+              </Badge>
+            )}
             {hasDiff && (
               <Badge variant="outline" className="text-[9px] text-rose-700 border-rose-400">
                 Dif. analítica c/ BDI: {fmtBRL(diff)}
@@ -558,10 +567,10 @@ function AdditiveCompositionRowImpl({
           <td />
           <td colSpan={COL_COUNT - 1} className="px-3 py-2">
             <AdditiveAnalyticRows
-              c={c}
+              c={analyticComposition}
               bdi={bdi}
               globalDiscount={globalDiscount}
-              isLocked={isLocked}
+              isLocked={isLocked || inheritedAnalytic}
               cb={cb}
               onUpdateComposition={onUpdateComposition}
               inputReferenceByCode={inputReferenceByCode}

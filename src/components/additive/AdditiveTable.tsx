@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Card } from '@/components/ui/card';
-import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput } from '@/types/project';
+import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput, Project } from '@/types/project';
 import type { CompGroup } from './types';
 import { COL_COUNT, G_HEAD, BORDER_L } from './types';
 import AdditiveGroupRow from './AdditiveGroupRow';
@@ -8,6 +8,7 @@ import AdditiveCompositionRow from './AdditiveCompositionRow';
 import type { AdditiveDetailSelection } from './AdditiveDetailFooter';
 
 interface Props {
+  project: Project;
   bdi: number;
   globalDiscount: number;
   isLocked: boolean;
@@ -60,6 +61,7 @@ export default function AdditiveTable(props: Props) {
   const renderRow = (c: AdditiveComposition, idx: number) => (
     <AdditiveCompositionRow
       key={c.id}
+      project={props.project}
       c={c}
       bdi={props.bdi}
       globalDiscount={props.globalDiscount}
@@ -157,6 +159,7 @@ export default function AdditiveTable(props: Props) {
                 {groupTree.map(g => (
                   <AdditiveGroupRow
                     key={g.phaseId}
+                    project={props.project}
                     group={g}
                     bdi={props.bdi}
                     globalDiscount={props.globalDiscount}

@@ -3,6 +3,7 @@ import { Calculator, ChevronDown, Layers, PieChart } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import type { AdditiveComposition, Project } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
+import { resolveAnalyticComposition } from '@/lib/analyticLinks';
 import { fmtBRL, fmtNum } from './measurementFormat';
 import type { Row } from './types';
 
@@ -22,53 +23,15 @@ interface Props {
   bdi: number;
 }
 
-function sameText(a?: string, b?: string) {
-  return (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
-}
-
-function normCode(a?: string) {
-  return (a ?? '').trim().toUpperCase().replace(/\s+/g, '').replace(/^([A-Z]+)0+(\d+)/, '$1$2');
-}
-
-function normDesc(a?: string) {
-  return (a ?? '')
-    .trim()
-    .toUpperCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^A-Z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function normItem(a?: string) {
-  return (a ?? '')
-    .trim()
-    .toUpperCase()
-    .split('.')
-    .map(part => /^\d+$/.test(part) ? String(parseInt(part, 10)) : part)
-    .join('.');
-}
-
-function compositionItem(c: AdditiveComposition) {
-  return c.itemNumber || c.item || '';
-}
-
 function findComposition(project: Project, row?: Row): AdditiveComposition | undefined {
   if (!row) return undefined;
-  const all = [
-    ...(project.additives ?? []).flatMap(a => a.compositions ?? []),
-    ...(project.analyticCompositions ?? []),
-  ];
-  const rowCode = normCode(row.itemCode);
-  const rowItem = normItem(row.item);
-  const rowDesc = normDesc(row.description);
-  return all.find(c => c.taskId === row.taskId || c.linkedTaskId === row.taskId)
-    ?? all.find(c => normItem(compositionItem(c)) === rowItem && normCode(c.code) === rowCode)
-    ?? all.find(c => normItem(compositionItem(c)) === rowItem && normDesc(c.description) === rowDesc)
-    ?? all.find(c => normCode(c.code) === rowCode && sameText(c.bank, row.priceBank))
-    ?? all.find(c => normCode(c.code) === rowCode && normDesc(c.description) === rowDesc)
-    ?? all.find(c => sameText(c.description, row.description));
+  return resolveAnalyticComposition(project, {
+    taskId: row.taskId,
+    item: row.item,
+    code: row.itemCode,
+    bank: row.priceBank,
+    description: row.description,
+  }).composition;
 }
 
 function scopeValues(row: Row, scope: MeasurementValueScope | undefined) {

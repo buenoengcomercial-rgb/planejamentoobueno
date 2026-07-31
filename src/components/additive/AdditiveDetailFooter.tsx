@@ -7,6 +7,7 @@ import * as MC from '@/lib/materialComparisons';
 import AdditiveAnalyticRows from './AdditiveAnalyticRows';
 import AdditiveCalculationMemory from './AdditiveCalculationMemory';
 import { fmtBRL } from './types';
+import { compositionWithResolvedInputs } from '@/lib/analyticLinks';
 
 export type AdditiveDetailMode = 'memory' | 'analytic' | 'classification';
 
@@ -86,6 +87,9 @@ export default function AdditiveDetailFooter({
   onUpdateComposition,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
+  const resolved = composition ? compositionWithResolvedInputs(project, composition) : undefined;
+  const analyticComposition = resolved?.composition;
+  const inheritedAnalytic = !!resolved?.resolution.inherited;
   const fixedFooterStyle = {
     left: 'calc(var(--sidebar-width, 0px) + 1rem)',
     right: '1rem',
@@ -138,16 +142,21 @@ export default function AdditiveDetailFooter({
             onChangeColumns={cols => onUpdateComposition(composition.id, { calculationMemoryColumns: cols })}
           />
         ) : selection.mode === 'analytic' ? (
-          <AdditiveAnalyticRows
-            c={composition}
-            bdi={bdi}
-            globalDiscount={globalDiscount}
-            isLocked={isLocked}
-            cb={computeCompositionWithBDI(composition, bdi)}
-            onUpdateComposition={onUpdateComposition}
-          />
+          <div className="space-y-2">
+            {inheritedAnalytic && (
+              <p className="text-xs font-medium text-emerald-700">Analítica herdada do contrato-base (somente leitura).</p>
+            )}
+            <AdditiveAnalyticRows
+              c={analyticComposition ?? composition}
+              bdi={bdi}
+              globalDiscount={globalDiscount}
+              isLocked={isLocked || inheritedAnalytic}
+              cb={computeCompositionWithBDI(analyticComposition ?? composition, bdi)}
+              onUpdateComposition={onUpdateComposition}
+            />
+          </div>
         ) : (
-          <ClassificationView project={project} composition={composition} bdi={bdi} globalDiscount={globalDiscount} />
+          <ClassificationView project={project} composition={analyticComposition ?? composition} bdi={bdi} globalDiscount={globalDiscount} />
         )}
       </div>}
     </Card>

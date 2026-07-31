@@ -12,6 +12,7 @@ import type {
 import { getChapterTree, getChapterNumbering, type ChapterNode } from '@/lib/chapters';
 import { resolveMemoryColumnLabels, validMemoryRows } from '@/lib/calculationMemory';
 import { applyAdditiveProductivityToTask } from '@/lib/additiveProductivity';
+import { resolveAnalyticComposition } from '@/lib/analyticLinks';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
@@ -1426,7 +1427,7 @@ export function buildAdditiveFromSyntheticBudgetItems(
   const bdi = project.syntheticBdiPercent ?? project.contractInfo?.bdiPercent ?? 0;
   const issues: AdditiveImportIssue[] = [
     { level: 'info', message: `Sintética reaproveitada da Medição: ${items.length} composições.` },
-    { level: 'warning', message: 'Sem Analítica vinculada — importe a Analítica do aditivo para preencher os insumos.' },
+    { level: 'info', message: 'As composições existentes herdam a Analítica imutável do contrato-base.' },
   ];
 
   // ── Construção da lista ordenada de tarefas (mesma lógica da Medição) ──
@@ -1555,7 +1556,7 @@ export function buildAdditiveFromSyntheticBudgetItems(
       });
     }
     const link = linkByBudgetId.get(b.id);
-    return {
+    const composition: AdditiveComposition = {
       id: uid(),
       item: b.item,
       code: b.code,
@@ -1578,7 +1579,11 @@ export function buildAdditiveFromSyntheticBudgetItems(
       phaseChain: link?.phaseChain,
       taskId: link?.taskId,
       itemNumber: link?.itemNumber,
+      baseBudgetItemId: b.id,
+      baseTaskId: b.taskId || link?.taskId,
     };
+    const analytic = resolveAnalyticComposition(project, composition).composition;
+    return { ...composition, baseAnalyticCompositionId: analytic?.id };
   });
 
   const linkedCount = compositions.filter(c => c.phaseId).length;

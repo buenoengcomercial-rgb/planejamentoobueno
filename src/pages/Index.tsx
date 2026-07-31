@@ -312,7 +312,11 @@ export default function Index() {
     return list;
   }, []);
 
-  const replaceProjectWithoutAutoSave = useCallback((projectToLoad: Project | null, updatedAt: string | null = null) => {
+  const replaceProjectWithoutAutoSave = useCallback((
+    projectToLoad: Project | null,
+    updatedAt: string | null = null,
+    repairApplied = false,
+  ) => {
     let projectForState = projectToLoad;
     const cloudProjectJson = projectToLoad ? serializeProjectForSave(projectToLoad) : null;
     const draft = projectToLoad ? readUnsavedDraft(projectToLoad.id, updatedAt) : null;
@@ -321,16 +325,18 @@ export default function Index() {
       toast.info('Recuperei alterações locais que ainda não tinham sido salvas na nuvem.');
     }
 
-    skipNextAutoSaveRef.current = !draft;
+    skipNextAutoSaveRef.current = !draft && !repairApplied;
     conflictDetectedRef.current = false;
     currentProjectUpdatedAtRef.current = updatedAt;
     rawProjectRef.current = projectForState;
     // Se recuperamos rascunho local, a referencia de "salvo" precisa continuar
     // sendo a versao da nuvem; assim o autosave percebe a diferenca e reenvia.
-    lastSavedProjectJsonRef.current = draft ? cloudProjectJson : (projectForState ? serializeProjectForSave(projectForState) : null);
+    lastSavedProjectJsonRef.current = repairApplied
+      ? null
+      : draft ? cloudProjectJson : (projectForState ? serializeProjectForSave(projectForState) : null);
     setCurrentProjectUpdatedAt(updatedAt);
     setRawProject(projectForState);
-    if (draft) setSaveStatus('saving');
+    if (draft || repairApplied) setSaveStatus('saving');
   }, []);
 
   const persistProject = useCallback(async (projectToSave: Project, projectOrgId: string) => {
@@ -440,7 +446,7 @@ export default function Index() {
         } else if (list.length > 0) {
           const record = await loadCloudProjectRecord(list[0].id);
           if (cancelled) return;
-          if (record) replaceProjectWithoutAutoSave(record.project, record.updatedAt);
+          if (record) replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied);
         } else {
           replaceProjectWithoutAutoSave(null);
         }
@@ -593,7 +599,7 @@ export default function Index() {
       if (!(await flushPendingSave())) return;
       const record = await loadCloudProjectRecord(id);
       if (record) {
-        replaceProjectWithoutAutoSave(record.project, record.updatedAt);
+        replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied);
         undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], realCost: [], materials: [], warehouse: [] };
         setUndoVersion(v => v + 1);
       }
@@ -691,7 +697,7 @@ export default function Index() {
         if (next) {
           const record = await loadCloudProjectRecord(next.id);
           if (record) {
-            replaceProjectWithoutAutoSave(record.project, record.updatedAt);
+            replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied);
             undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], realCost: [], materials: [], warehouse: [] };
           }
         }

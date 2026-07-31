@@ -17,6 +17,7 @@ import { additiveTotals, computeAdditiveRow } from '@/lib/additiveImport';
 import { getChapterNumbering, getChapterTree, type ChapterNode } from '@/lib/chapters';
 import { money2, trunc2 } from '@/lib/financialEngine';
 import { resolveMaterialCostClass } from '@/lib/materialComparisons';
+import { compositionWithResolvedInputs } from '@/lib/analyticLinks';
 
 export type RealCostSignal = 'healthy' | 'attention' | 'danger' | 'incomplete';
 
@@ -533,6 +534,9 @@ function buildCompositionSources(project: Project): CompositionSource[] {
       : undefined;
 
     const composition = additiveAdjustment?.composition ?? matchCompositionForBudgetItem(budget, baseCompositions, additiveCompositions);
+    const effectiveComposition = composition
+      ? compositionWithResolvedInputs(project, composition).composition
+      : undefined;
     if (composition) usedCompositionIds.add(composition.id);
     const additiveRow = additiveAdjustment
       ? computeAdditiveRow(
@@ -569,7 +573,7 @@ function buildCompositionSources(project: Project): CompositionSource[] {
       taskId: budget.taskId || composition?.linkedTaskId || composition?.taskId,
       phaseId: composition?.phaseId,
       phaseChain: composition?.phaseChain,
-      composition,
+      composition: effectiveComposition,
     });
   }
 
@@ -606,7 +610,7 @@ function buildCompositionSources(project: Project): CompositionSource[] {
       taskId: pair.composition.linkedTaskId || pair.composition.taskId,
       phaseId: pair.composition.phaseId,
       phaseChain: pair.composition.phaseChain,
-      composition: pair.composition,
+      composition: compositionWithResolvedInputs(project, pair.composition).composition,
     });
   }
 

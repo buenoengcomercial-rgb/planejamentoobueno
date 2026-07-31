@@ -603,6 +603,8 @@ export interface Project {
   totalBudget: number;
   /** Modelo 2: contrato-base imutavel e modulos alimentados pela mesma estrutura. */
   contractSchemaVersion?: 1 | 2;
+  /** Versao da associacao central entre contrato, EAP e composicoes analiticas. */
+  analyticLinkSchemaVersion?: 2;
   contractRevisions?: ContractRevision[];
   contractRectifications?: ContractRectification[];
   costLedger?: CostLedgerEntry[];
@@ -1118,6 +1120,12 @@ export interface AdditiveComposition {
   totalNoBDI?: number;
   totalWithBDI?: number;
   inputs: AdditiveInput[];
+  /** Item financeiro imutavel do contrato-base que originou esta linha. */
+  baseBudgetItemId?: string;
+  /** Composicao Analitica imutavel do contrato-base herdada por esta linha. */
+  baseAnalyticCompositionId?: string;
+  /** Tarefa original da EAP contratual. */
+  baseTaskId?: string;
   /** Valor unitário c/ BDI lido da linha "Valor com BDI =" da Analítica (por unidade da composição). */
   analyticUnitPriceWithBDI?: number;
   /** Total c/ BDI calculado a partir da Analítica (= analyticUnitPriceWithBDI * quantity). */
