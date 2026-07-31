@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Plus, Copy, Trash2, AlertTriangle, Clipboard, ClipboardPaste } from 'lucide-react';
+import { Plus, Copy, Trash2, AlertTriangle, Clipboard, ClipboardPaste, ChevronUp } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   DropdownMenu,
@@ -61,6 +61,7 @@ interface Props {
   /** Recebe SOMENTE linhas preenchidas (a linha vazia visual é estado local). */
   onChange: (rows: AdditiveCalculationMemoryRow[]) => void;
   onChangeColumns?: (cols: AdditiveCalculationMemoryColumns) => void;
+  onClose?: () => void;
 }
 
 const DECIMAL_INPUT_RE = /^-?\d*([,.]\d*)?$/;
@@ -141,6 +142,13 @@ function MemoryNumberCell({
       onFocus={e => { editingRef.current = true; e.currentTarget.select(); }}
       onBlur={e => { commit(); onBlur?.(e); }}
       onKeyDown={e => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          editingRef.current = false;
+          setLocal(formatPtDecimal(value));
+          return;
+        }
         if (e.key === 'Enter' || e.key === 'Tab') {
           commit();
         }
@@ -221,7 +229,7 @@ function ensureSingleTrailingDraftRow(
 }
 
 function AdditiveCalculationMemoryImpl({
-  c, isLocked, onChange, onChangeColumns,
+  c, isLocked, onChange, onChangeColumns, onClose,
 }: Props) {
   const labels = resolveMemoryColumnLabels(c.calculationMemoryColumns);
   const placeholder = `${labels.a}*${labels.b}*${labels.c}*${labels.d}`;
@@ -333,11 +341,22 @@ function AdditiveCalculationMemoryImpl({
     return finalRows;
   }, [commit]);
 
-  const handleBlur = (e: React.FocusEvent<HTMLElement>) => {
+  const handleBlur = (e: React.FocusEvent<HTMLElement>, confirmedField?: EditField) => {
     if (isLocked) return;
+    // O comentario confirma a linha mesmo quando o foco permanece dentro da grade.
+    // `ensureSingleTrailingDraftRow` torna Enter + blur idempotente.
+    if (confirmedField === 'comment') {
+      reconcile();
+      return;
+    }
     const next = e.relatedTarget as HTMLElement | null;
     if (skipNextBlurCommitRef.current || next?.getAttribute('data-grid-id') === gridId) return;
     reconcile();
+  };
+
+  const cancelTextEdit = (rowId: string, field: 'comment' | 'formula') => {
+    const original = persistedFilled.find(row => row.id === rowId);
+    onCellChange(rowId, field, original?.[field] ?? '');
   };
 
   const handleMemoryContainerKeyDownCapture = (e: React.KeyboardEvent) => {
@@ -431,9 +450,9 @@ function AdditiveCalculationMemoryImpl({
       const cur = c.calculationMemoryColumns ?? {};
       const merged: AdditiveCalculationMemoryColumns = { ...cur };
       (['a', 'b', 'c', 'd'] as const).forEach(k => {
-        const v = (src.columns as any)[k];
-        if (v && !((cur as any)[k] && (cur as any)[k].trim())) {
-          (merged as any)[k] = v;
+        const v = src.columns?.[k];
+        if (v && !cur[k]?.trim()) {
+          merged[k] = v;
         }
       });
       onChangeColumns(merged);
@@ -510,15 +529,38 @@ function AdditiveCalculationMemoryImpl({
 
   return (
     <div
-      className="border rounded-md bg-background p-2 space-y-2"
+      className="relative max-h-[58vh] overflow-auto rounded-md border bg-background"
       onKeyDownCapture={handleMemoryContainerKeyDownCapture}
     >
-      <div className="flex items-center justify-between">
-        <div className="text-[11px] font-semibold text-muted-foreground">
-          Memória de cálculo — {c.itemNumber || c.item} {c.description}
+      <div className="sticky top-0 z-20 space-y-2 border-b bg-background/95 px-3 py-2 shadow-sm backdrop-blur">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-semibold text-foreground">Memória de cálculo</div>
+            <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+              <span className="font-semibold text-foreground">Item {c.itemNumber || c.item || '—'}</span>
+              <span className="rounded bg-muted px-1.5 py-0.5 font-mono">{c.code || 'Sem código'}</span>
+              <span className="min-w-0 truncate" title={c.description}>{c.description || 'Sem descrição'}</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-right">
+              <div className="text-[9px] uppercase tracking-wide text-emerald-700">Acréscimo</div>
+              <div className="text-[11px] font-semibold tabular-nums text-emerald-800">{fmtNum(totalAcrescida)}</div>
+            </div>
+            <div className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-right">
+              <div className="text-[9px] uppercase tracking-wide text-rose-700">Supressão</div>
+              <div className="text-[11px] font-semibold tabular-nums text-rose-800">{fmtNum(totalSuprimida)}</div>
+            </div>
+            {onClose && (
+              <Button size="sm" variant="ghost" className="h-8 text-[11px]" onClick={onClose} title="Minimizar memória">
+                <ChevronUp className="mr-1 h-3.5 w-3.5" /> Minimizar
+              </Button>
+            )}
+          </div>
         </div>
-        {!isLocked && (
-          <div className="flex gap-1">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {!isLocked ? (
+          <div className="flex flex-wrap items-center gap-1">
             <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => addManual('acrescida')}>
               <Plus className="w-3 h-3 mr-1" /> Acrescida
             </Button>
@@ -557,13 +599,15 @@ function AdditiveCalculationMemoryImpl({
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-        )}
+          ) : <span className="text-[10px] font-medium text-muted-foreground">Memória bloqueada para edição</span>}
+          <span className="text-[10px] text-muted-foreground">Enter avança | Tab navega | Esc cancela</span>
+        </div>
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="min-w-[920px]">
         <table className="w-full text-[11px] table-fixed">
           <colgroup>
-            <col style={{ width: 36 }} />
+            <col style={{ width: 66 }} />
             <col style={{ width: 88 }} />
             <col />
             <col style={{ width: 110 }} />
@@ -574,7 +618,7 @@ function AdditiveCalculationMemoryImpl({
             <col style={{ width: 78 }} />
             <col style={{ width: 56 }} />
           </colgroup>
-          <thead className="text-muted-foreground">
+          <thead className="bg-background text-muted-foreground">
             <tr className="border-b">
               <th className="px-1 py-1 text-center font-medium">Loc</th>
               <th className="px-1.5 py-1 text-left font-medium">Tipo</th>
@@ -604,14 +648,18 @@ function AdditiveCalculationMemoryImpl({
               const isInvalid = filled && !ev.ok;
               const isNegative = filled && ev.ok && ev.value < 0;
               const rowBg = isDraftRow
-                ? 'bg-muted/10'
+                ? 'bg-violet-50/60'
                 : isInvalid
                   ? 'bg-rose-50/50'
                   : r.type === 'suprimida' ? 'bg-rose-50/20' : 'bg-emerald-50/20';
               return (
-                <tr key={r.id} className={`border-b align-top ${rowBg}`}>
+                <tr key={r.id} className={`border-b align-top ${isDraftRow ? 'border-t border-dashed border-violet-300' : ''} ${rowBg}`}>
                   <td className="px-1 py-1 text-center font-mono text-muted-foreground">
-                    {rowIndex + 1}
+                    {isDraftRow ? (
+                      <span className="inline-flex rounded-full border border-dashed border-violet-300 bg-white px-1.5 py-0.5 text-[9px] font-sans font-medium text-violet-700">
+                        Nova linha
+                      </span>
+                    ) : rowIndex + 1}
                   </td>
                   <td className="px-1.5 py-1">
                     <select
@@ -636,9 +684,16 @@ function AdditiveCalculationMemoryImpl({
                       data-row-index={rowIndex}
                       data-col-index={1}
                       onChange={e => onCellChange(r.id, 'comment', e.target.value)}
-                      onBlur={handleBlur}
+                      onBlur={e => handleBlur(e, 'comment')}
+                      onKeyDown={e => {
+                        if (e.key === 'Escape') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          cancelTextEdit(r.id, 'comment');
+                        }
+                      }}
                       className="h-7 text-[11px]"
-                      placeholder={isDraftRow ? 'Justificativa (digite para iniciar)' : 'Justificativa'}
+                      placeholder={isDraftRow ? 'Comentário da nova linha' : 'Justificativa'}
                     />
                   </td>
                   <td className="px-1.5 py-1">
@@ -650,6 +705,13 @@ function AdditiveCalculationMemoryImpl({
                       data-col-index={2}
                       onChange={e => onCellChange(r.id, 'formula', e.target.value)}
                       onBlur={handleBlur}
+                      onKeyDown={e => {
+                        if (e.key === 'Escape') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          cancelTextEdit(r.id, 'formula');
+                        }
+                      }}
                       className={`h-7 text-[11px] font-mono ${isInvalid ? 'border-rose-400' : ''}`}
                       placeholder={placeholder}
                       title={isInvalid ? ev.error : `Fórmula opcional. Use A, B, C, D, +, -, *, /, ( ). Padrão: ${placeholder}`}
@@ -693,7 +755,7 @@ function AdditiveCalculationMemoryImpl({
             })}
           </tbody>
           {(totalAcrescida !== 0 || totalSuprimida !== 0) && (
-            <tfoot>
+            <tfoot className="sticky bottom-0 z-10 bg-background/95 shadow-[0_-2px_5px_rgba(15,23,42,0.08)] backdrop-blur">
               <tr className="border-t font-medium">
                 <td colSpan={8} className="px-1.5 py-1 text-right">Total Acrescida:</td>
                 <td className="px-1.5 py-1 text-right text-emerald-700">{fmtNum(totalAcrescida)}</td>

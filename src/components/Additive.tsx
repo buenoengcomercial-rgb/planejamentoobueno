@@ -44,7 +44,7 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
 
   const {
     additives, active, status, isLocked, bdi, globalDiscount,
-    showAnalytic, setShowAnalytic, expanded, expandedMemory, collapsed,
+    showAnalytic, setShowAnalytic, expanded, collapsed,
     importDialogOpen, setImportDialogOpen, importName, setImportName,
     setPendingFile, fileRef,
     issuesOpen, setIssuesOpen,
@@ -53,7 +53,7 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
     reviewNotes, setReviewNotes, approvedBy, setApprovedBy,
     historyOpen, setHistoryOpen,
     setActiveId, search, setSearch, bankFilter, setBankFilter,
-    toggleExpand, toggleExpandMemory, toggleCollapsed, collapseAllGroups, expandAllGroups,
+    toggleExpand, toggleCollapsed, collapseAllGroups, expandAllGroups,
   } = state;
 
   const totals = useMemo(() => (active ? additiveTotals(active, project) : null), [active, project]);
@@ -174,7 +174,6 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
             isLocked={isLocked}
             showAnalytic={showAnalytic}
             expanded={expanded}
-            expandedMemory={expandedMemory}
             collapsed={collapsed}
             filteredComps={filteredComps}
             allCompositions={active?.compositions ?? []}
@@ -182,7 +181,6 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
             orphanRows={orphanRows}
             hasEapLink={hasEapLink}
             onToggleExpand={toggleExpand}
-            onToggleMemory={toggleExpandMemory}
             onToggleCollapsed={toggleCollapsed}
             onUpdateComposition={actions.updateComposition}
             onUpdateQuantity={actions.updateCompositionQuantity}

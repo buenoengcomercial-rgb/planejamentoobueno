@@ -14,7 +14,6 @@ interface Props {
   isLocked: boolean;
   showAnalytic: boolean;
   expanded: Set<string>;
-  expandedMemory: Set<string>;
   collapsed: Set<string>;
   filteredComps: AdditiveComposition[];
   allCompositions?: AdditiveComposition[];
@@ -22,7 +21,6 @@ interface Props {
   orphanRows: AdditiveComposition[];
   hasEapLink: boolean;
   onToggleExpand: (id: string) => void;
-  onToggleMemory: (id: string) => void;
   onToggleCollapsed: (id: string) => void;
   onUpdateComposition: (id: string, patch: Partial<AdditiveComposition>) => void;
   onUpdateQuantity: (id: string, field: 'addedQuantity' | 'suppressedQuantity', v: number) => void;
@@ -71,7 +69,6 @@ export default function AdditiveTable(props: Props) {
       showAnalytic={props.showAnalytic}
       rowIndex={idx}
       onToggleExpand={props.onToggleExpand}
-      onToggleMemory={props.onToggleMemory}
       onUpdateComposition={props.onUpdateComposition}
       onUpdateQuantity={props.onUpdateQuantity}
       onRemoveComposition={props.onRemoveComposition}
@@ -165,11 +162,9 @@ export default function AdditiveTable(props: Props) {
                     globalDiscount={props.globalDiscount}
                     isLocked={props.isLocked}
                     expanded={props.expanded}
-                    expandedMemory={props.expandedMemory}
                     collapsed={props.collapsed}
                     showAnalytic={props.showAnalytic}
                     onToggleExpand={props.onToggleExpand}
-                    onToggleMemory={props.onToggleMemory}
                     onToggleCollapsed={props.onToggleCollapsed}
                     onUpdateComposition={props.onUpdateComposition}
                     onUpdateQuantity={props.onUpdateQuantity}

@@ -238,7 +238,6 @@ interface Props {
   showAnalytic: boolean;
   rowIndex?: number;
   onToggleExpand: (id: string) => void;
-  onToggleMemory: (id: string) => void;
   onUpdateComposition: (id: string, patch: Partial<AdditiveComposition>) => void;
   onUpdateQuantity: (id: string, field: 'addedQuantity' | 'suppressedQuantity', v: number) => void;
   onRemoveComposition: (id: string) => void;
@@ -250,7 +249,7 @@ interface Props {
 
 function AdditiveCompositionRowImpl({
   project, c, bdi, globalDiscount, isLocked, isOpen, isMemoryOpen, showAnalytic, rowIndex = 0,
-  onToggleExpand, onToggleMemory, onUpdateComposition, onUpdateQuantity,
+  onToggleExpand, onUpdateComposition, onUpdateQuantity,
   onRemoveComposition, onChangeMemory, selectedDetail, onSelectDetail,
   inputReferenceByCode,
 }: Props) {
@@ -267,7 +266,8 @@ function AdditiveCompositionRowImpl({
   const memTotals = memoryTotals(c);
   const hasMemory = memTotals.hasMemory;
   const canOpenAnalytic = hasInputs || isNew;
-  const shouldShowAnalyticRows = isOpen && canOpenAnalytic && (
+  const memorySelectedForComposition = selectedDetail?.compositionId === c.id && selectedDetail.mode === 'memory';
+  const shouldShowAnalyticRows = !memorySelectedForComposition && isOpen && canOpenAnalytic && (
     showAnalytic ||
     isNew ||
     (selectedDetail?.compositionId === c.id && selectedDetail.mode === 'analytic')
@@ -283,6 +283,14 @@ function AdditiveCompositionRowImpl({
 
   const isSelected = selectedDetail?.compositionId === c.id;
   const selectDetail = (mode: AdditiveDetailMode, qtyType?: AdditiveMemoryQtyType) => {
+    const sameDetail = selectedDetail?.compositionId === c.id && selectedDetail.mode === mode;
+    if (sameDetail) {
+      if (mode === 'analytic' && isOpen) onToggleExpand(c.id);
+      onSelectDetail?.(null);
+      return;
+    }
+    // Uma composição nunca exibe Memória e Analítica ao mesmo tempo.
+    if (mode === 'memory' && isOpen) onToggleExpand(c.id);
     onSelectDetail?.({ compositionId: c.id, mode, qtyType });
     if (mode === 'analytic' && !isOpen && canOpenAnalytic) onToggleExpand(c.id);
   };
@@ -290,6 +298,10 @@ function AdditiveCompositionRowImpl({
   const openMemoryFor = (type: AdditiveMemoryQtyType) => {
     if (isLocked) return;
     requestMemoryFocus(c.id, type);
+    if (selectedDetail?.compositionId === c.id && selectedDetail.mode === 'memory') {
+      onSelectDetail?.({ compositionId: c.id, mode: 'memory', qtyType: type });
+      return;
+    }
     selectDetail('memory', type);
   };
 
@@ -297,6 +309,11 @@ function AdditiveCompositionRowImpl({
     const target = event.target as HTMLElement | null;
     if (!target) return;
     if (target.closest('button, input, textarea, select, [role="button"], [data-detail-cell="true"], [data-detail-panel="true"]')) return;
+    if (selectedDetail?.compositionId === c.id) {
+      if (selectedDetail.mode === 'analytic' && isOpen) onToggleExpand(c.id);
+      onSelectDetail?.(null);
+      return;
+    }
     if (!canOpenAnalytic) return;
     // Row clicks should behave like a spreadsheet outline: open on first click, close on second.
     if (shouldShowAnalyticRows) {
@@ -320,7 +337,7 @@ function AdditiveCompositionRowImpl({
       } ${canOpenAnalytic ? 'cursor-pointer' : ''}`} onClick={handleRowClick}>
         <td className="px-1 py-2 text-center">
           <button
-            onClick={() => onToggleExpand(c.id)}
+            onClick={() => selectDetail('analytic')}
             className="p-1 rounded hover:bg-muted"
             disabled={!canOpenAnalytic}
             title={!canOpenAnalytic ? 'Sem analítico' : 'Expandir analítica'}
@@ -394,7 +411,7 @@ function AdditiveCompositionRowImpl({
             )}
             {isNew && (
               <button
-                onClick={() => onToggleExpand(c.id)}
+                onClick={() => selectDetail('analytic')}
                 className={`text-[10px] inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border ${isOpen ? 'bg-primary/10 border-primary/30 text-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}
                 title="Abrir insumos analíticos"
                 type="button"
@@ -587,6 +604,7 @@ function AdditiveCompositionRowImpl({
               isLocked={isLocked}
               onChange={rows => onChangeMemory(c.id, rows)}
               onChangeColumns={cols => onUpdateComposition(c.id, { calculationMemoryColumns: cols })}
+              onClose={() => onSelectDetail?.(null)}
             />
           </td>
         </tr>

@@ -13,11 +13,9 @@ interface Props {
   globalDiscount: number;
   isLocked: boolean;
   expanded: Set<string>;
-  expandedMemory: Set<string>;
   collapsed: Set<string>;
   showAnalytic: boolean;
   onToggleExpand: (id: string) => void;
-  onToggleMemory: (id: string) => void;
   onToggleCollapsed: (id: string) => void;
   onUpdateComposition: (id: string, patch: Partial<AdditiveComposition>) => void;
   onUpdateQuantity: (id: string, field: 'addedQuantity' | 'suppressedQuantity', v: number) => void;
@@ -99,7 +97,6 @@ function AdditiveGroupRowImpl(props: Props) {
           showAnalytic={props.showAnalytic}
           rowIndex={idx}
           onToggleExpand={props.onToggleExpand}
-          onToggleMemory={props.onToggleMemory}
           onUpdateComposition={props.onUpdateComposition}
           onUpdateQuantity={props.onUpdateQuantity}
           onRemoveComposition={props.onRemoveComposition}
