@@ -47,6 +47,7 @@ const COLOR = {
 
 const FMT_BRL = 'R$ #,##0.00;[Red]-R$ #,##0.00;R$ 0.00';
 const FMT_QTD = '#,##0.00';
+const FMT_COEF = '0.0000000';
 const FMT_PCT = '0.00%';
 
 // ---------- Normalizadores numéricos para a planilha ----------
@@ -843,7 +844,7 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
             tCell(ip.bank || ''),
             tCell(ip.description || ''),
             tCell(ip.unit || '', undefined, false, undefined, 'center'),
-            nCell(q2(coef), FMT_QTD),
+            nCell(coef, FMT_COEF),
             nCell(moneyExcel(ref), FMT_BRL),
             nCell(pctExcel(dPct), FMT_PCT),
             nCell(moneyExcel(unitDisc), FMT_BRL),
@@ -1199,6 +1200,7 @@ function pdfFooter(doc: any) {
 
 const fmtBRL = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtQ = (v: number) => (Number.isFinite(v) ? v : 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtCoef = (v: number) => (Number.isFinite(v) ? v : 0).toLocaleString('pt-BR', { minimumFractionDigits: 7, maximumFractionDigits: 7 });
 const fmtPctBR = (v: number) => `${(v * 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 
 // ---- PDF Sintética Completa ----
@@ -1400,7 +1402,7 @@ export async function exportAdditiveNewServicesPdf(project: Project, add: Additi
             { content: ip.bank || '', styles: { fillColor: insBg } },
             { content: ip.description || '', styles: { fillColor: insBg } },
             { content: ip.unit || '', styles: { fillColor: insBg, halign: 'center' } },
-            { content: fmtQ(coef), styles: { fillColor: insBg, halign: 'right' } },
+            { content: fmtCoef(coef), styles: { fillColor: insBg, halign: 'right' } },
             { content: fmtBRL(ref), styles: { fillColor: insBg, halign: 'right' } },
             { content: `${(discount || 0).toFixed(2)}%`, styles: { fillColor: insBg, halign: 'right' } },
             { content: fmtBRL(unitDisc), styles: { fillColor: insBg, halign: 'right' } },

@@ -38,6 +38,10 @@ const parseDecimalInput = (v: string): number => {
 };
 
 const normalizeInputCode = (value: string) => value.trim().toUpperCase();
+const formatCoefficient = (value: number) => value.toLocaleString('pt-BR', {
+  minimumFractionDigits: 7,
+  maximumFractionDigits: 7,
+});
 
 /** Input numérico — local até blur/Enter. */
 function NumCell({
@@ -243,7 +247,7 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
                       className="h-6 w-full text-[11px] text-right px-1"
                       gridId={gridId} rowIndex={rowIdx} colIndex={4}
                     />
-                  ) : i.coefficient.toLocaleString('pt-BR')}
+                  ) : formatCoefficient(i.coefficient)}
                 </td>
                 <td className="px-1.5 py-1 text-right align-middle">
                   {editable ? (

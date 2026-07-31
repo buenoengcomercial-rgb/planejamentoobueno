@@ -271,7 +271,7 @@ function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
                         )}
                       </td>
                       <td className="px-2 py-1.5 align-top text-center">{input.unit}</td>
-                      <td className="px-2 py-1.5 align-top text-right tabular-nums">{input.coefficient.toLocaleString('pt-BR', { maximumFractionDigits: 5 })}</td>
+                      <td className="px-2 py-1.5 align-top text-right tabular-nums">{input.coefficient.toLocaleString('pt-BR', { minimumFractionDigits: 7, maximumFractionDigits: 7 })}</td>
                       <td className="px-2 py-1.5 align-top text-right tabular-nums">{fmtQty(input.totalQuantity)}</td>
                       <td className="px-2 py-1.5 align-top text-right tabular-nums">{fmtBRL(input.referenceUnitPrice)}</td>
                       <td className="px-2 py-1.5 align-top text-right tabular-nums">{input.priceSource ? fmtBRL(input.priceSource.unitPrice) : '-'}</td>

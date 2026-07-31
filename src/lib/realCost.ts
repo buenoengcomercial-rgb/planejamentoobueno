@@ -684,7 +684,7 @@ function buildInputRows(
       bank: input.bank || undefined,
       description: input.description,
       unit: input.unit,
-      coefficient: trunc2(input.coefficient || 0),
+      coefficient: Number(input.coefficient) || 0,
       totalQuantity,
       referenceUnitPrice,
       referenceTotal,

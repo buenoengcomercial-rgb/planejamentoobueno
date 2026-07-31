@@ -4,7 +4,7 @@ import { Card } from '@/components/ui/card';
 import type { AdditiveComposition, Project } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import { resolveAnalyticComposition } from '@/lib/analyticLinks';
-import { fmtBRL, fmtNum } from './measurementFormat';
+import { fmtBRL, fmtCoefficient, fmtNum } from './measurementFormat';
 import type { Row } from './types';
 
 export type MeasurementDetailMode = 'quantity' | 'analytic' | 'classification';
@@ -99,7 +99,7 @@ function AnalyticView({ composition, bdi }: { composition?: AdditiveComposition;
                 <td className="px-2 py-1.5 align-top text-center text-muted-foreground">{input.bank || '-'}</td>
                 <td className="px-2 py-1.5 align-top font-medium leading-snug break-words">{input.description}</td>
                 <td className="px-2 py-1.5 text-center align-top">{input.unit || '-'}</td>
-                <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtNum(coef)}</td>
+                <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtCoefficient(coef)}</td>
                 <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtBRL(unitNoBdi)}</td>
                 <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtBRL(unitWithBdi)}</td>
                 <td className="px-2 py-1.5 text-right tabular-nums align-top font-medium">{fmtBRL(totalWithBdi)}</td>

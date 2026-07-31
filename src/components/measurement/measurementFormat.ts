@@ -17,6 +17,10 @@ export const fmtBRL = (n: number) => {
   });
 };
 export const fmtNum = (n: number) => n.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
+export const fmtCoefficient = (n: number) => n.toLocaleString('pt-BR', {
+  minimumFractionDigits: 7,
+  maximumFractionDigits: 7,
+});
 export const fmtPct = (n: number) => `${n.toFixed(2)}%`;
 export const fmtDateBR = (iso: string) => {
   if (!iso) return '';

@@ -2166,7 +2166,7 @@ export async function exportAdditiveToPdf(
         head: [['', 'Cód.', 'Banco', 'Descrição insumo', 'Un', 'Coef.', 'V.Unit s/BDI', 'Total s/BDI']],
         body: (c.inputs ?? []).map(i => [
           '', i.code, i.bank, i.description, i.unit,
-          i.coefficient.toLocaleString('pt-BR'), fmtBRL(i.unitPrice), fmtBRL(i.total),
+          i.coefficient.toLocaleString('pt-BR', { minimumFractionDigits: 7, maximumFractionDigits: 7 }), fmtBRL(i.unitPrice), fmtBRL(i.total),
         ]),
         margin: { left: margin + 6, right: margin },
         styles: { fontSize: 6.8, cellPadding: 1.1, overflow: 'linebreak', textColor: 60 },
