@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx';
 import { integrateImportedBudget } from '@/components/ImportSyntheticDialog';
 import type { Project } from '@/types/project';
 import { extractBaseAnalyticCompositions } from './additiveImport';
+import { priceNewContractFromAnalytic } from './additiveImport';
 import { inspectSyntheticWorkbook, parseSyntheticBudgetFlexible } from './importParser';
 import { money2 } from './financialEngine';
 import { buildContractImportPayload } from './projectSync';
@@ -19,8 +20,8 @@ describe('aceitação da planilha Sintética Correção 02', () => {
     const parsed = parseSyntheticBudgetFlexible(data, {});
     const analytic = await extractBaseAnalyticCompositions(data);
 
-    expect(inspected.detectedBdiPercent).toBe(27.58);
-    expect(parsed.bdiPercent).toBe(27.58);
+    expect(inspected.detectedBdiPercent).toBeUndefined();
+    expect(parsed.bdiPercent).toBeUndefined();
     expect(parsed.items).toHaveLength(402);
     expect(new Set(parsed.items.map(item => item.chapterCode)).size).toBe(7);
     expect(new Set(parsed.items.map(item => item.subchapterCode).filter(Boolean)).size).toBe(44);
@@ -31,13 +32,10 @@ describe('aceitação da planilha Sintética Correção 02', () => {
       requiresDescription: true,
     });
     expect(parsed.errors).toEqual([]);
-    expect(money2(parsed.items.reduce((sum, item) => sum + item.totalWithBDI, 0))).toBe(5_815_613.52);
+    expect(parsed.items.every(item => item.totalWithBDI === 0)).toBe(true);
 
     const administration = parsed.items.find(item => item.item === '1.1.1' && item.code === 'ADM04');
-    expect(administration).toMatchObject({
-      totalNoBDI: 75_573.18,
-      totalWithBDI: 96_416.22,
-    });
+    expect(administration).toMatchObject({ totalNoBDI: 0, totalWithBDI: 0 });
 
     expect(analytic).toMatchObject({ linkedCount: 402, totalInputs: 1711, hasAnalyticSheet: true });
     expect(analytic.compositions).toHaveLength(402);
@@ -50,13 +48,16 @@ describe('aceitação da planilha Sintética Correção 02', () => {
       phases: [],
       totalBudget: 0,
     };
-    const integration = integrateImportedBudget(project, parsed.items, analytic.compositions);
+    const priced = priceNewContractFromAnalytic(parsed.items, analytic.compositions, 27.58);
+    expect(money2(priced.items.reduce((sum, item) => sum + item.totalWithBDI, 0))).toBe(5_815_613.47);
+    const integration = integrateImportedBudget(project, priced.items, priced.compositions);
     expect(integration.phases.filter(phase => !phase.parentId)).toHaveLength(7);
     expect(integration.phases.filter(phase => !!phase.parentId)).toHaveLength(44);
     expect(integration.phases.reduce((sum, phase) => sum + phase.tasks.length, 0)).toBe(402);
 
     const administrationBudget = integration.budgetItems.find(item => item.item === '1.1.1' && item.code === 'ADM04');
     const administrationAnalytic = integration.analyticCompositions.find(composition => composition.item === '1.1.1' && composition.code === 'ADM04');
+    expect(administrationBudget).toMatchObject({ totalNoBDI: 75_573.18, totalWithBDI: 96_416.22 });
     expect(administrationBudget?.taskId).toBeTruthy();
     expect(administrationAnalytic?.linkedTaskId).toBe(administrationBudget?.taskId);
 
@@ -88,6 +89,7 @@ describe('aceitação da planilha Sintética Correção 02', () => {
     const parsed = parseSyntheticBudgetFlexible(data, {});
 
     expect(parsed.items).toHaveLength(33);
-    expect(parsed.items.every(item => item.totalNoBDI === 0.29 && item.totalWithBDI === 0.29)).toBe(true);
+    expect(parsed.items.every(item => item.totalNoBDI === 0 && item.totalWithBDI === 0)).toBe(true);
+    expect(parsed.items.every(item => item.sourceValues?.totalNoBDI === '0.29' && item.sourceValues?.totalWithBDI === '0.29')).toBe(true);
   });
 });

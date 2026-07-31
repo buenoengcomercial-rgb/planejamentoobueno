@@ -16,6 +16,7 @@ import {
 import {
   extractBaseAnalyticCompositions,
   extractBaseAnalyticCompositionsFromAnalyticFile,
+  priceNewContractFromAnalytic,
   DEFAULT_ANALYTIC_COLUMN_MAP,
   inspectAnalyticWorkbook,
   AnalyticColumnRole,
@@ -369,8 +370,7 @@ function safeIdPart(value: string) {
 }
 
 function sameBudgetKey(a: { item?: string; itemNumber?: string; code?: string }, b: { item?: string; itemNumber?: string; code?: string }) {
-  return normalizeBudgetItemNumber(budgetItemNumber(a)) === normalizeBudgetItemNumber(budgetItemNumber(b))
-    && normalizeAnalyticCode(a.code) === normalizeAnalyticCode(b.code);
+  return normalizeAnalyticCode(a.code) === normalizeAnalyticCode(b.code);
 }
 
 function findAnalyticForBudget(compositions: AdditiveComposition[], item: BudgetItem) {
@@ -650,7 +650,6 @@ export default function ImportSyntheticDialog({
     try {
       const buf = await file.arrayBuffer();
       const inspected = inspectSyntheticWorkbook(buf);
-      const detectedBdi = inspected.detectedBdiPercent;
       const nextHeaderRow = inspected.suggestedHeaderRowIndex + 1;
       const nextFirstDataRow = nextHeaderRow + 1;
       const detectedRoles = detectSyntheticColumnRoles(inspected.rows, inspected.suggestedHeaderRowIndex);
@@ -659,13 +658,13 @@ export default function ImportSyntheticDialog({
       setColumnRoles(detectedRoles);
       setHeaderRow(nextHeaderRow);
       setFirstDataRow(nextFirstDataRow);
-      setBdiInput(detectedBdi ? String(detectedBdi).replace('.', ',') : '');
+      // O BDI deve ser informado manualmente no cadastro; nunca copiar o BDI da planilha.
+      setBdiInput('');
       const result = parseSyntheticBudgetFlexible(buf, {
         sheetName: inspected.sheetName,
         headerRowIndex: inspected.suggestedHeaderRowIndex,
         firstDataRowIndex: inspected.suggestedHeaderRowIndex + 1,
         columns: rolesToMap(detectedRoles),
-        bdiPercent: detectedBdi,
       });
       if (result.items.length === 0) {
         setError('Nenhum item financeiro encontrado na planilha Sintética.');
@@ -798,7 +797,6 @@ export default function ImportSyntheticDialog({
       headerRowIndex: Math.max(0, headerRow - 1),
       firstDataRowIndex: Math.max(0, firstDataRow - 1),
       columns: rolesToMap(columnRoles),
-      bdiPercent: parseBdiInput(bdiInput),
     });
     if (result.items.length === 0) {
       setError('Nenhum item financeiro encontrado com esta configuracao de colunas.');
@@ -908,7 +906,6 @@ export default function ImportSyntheticDialog({
     if (isCreateMode && parsed) {
       const validation = validateNewWorkImport({
         contractBdiPercent: contractBdi,
-        detectedBdiPercent: parsed.bdiPercent,
         budgetItems: importedItems,
         analyticCompositions,
         syntheticErrors: parsed.errors,
@@ -936,8 +933,9 @@ export default function ImportSyntheticDialog({
     if (parsed) {
       const keep = (project.budgetItems ?? []).filter(b => b.source !== 'sintetica');
       const importedBudgetItems = importedItems.map(item => ({ ...item, taskId: item.taskId ?? `budget-${item.id}` }));
-      const classified = classifyAnalyticCompositions(analyticCompositions ?? []);
-      const integration = integrateImportedBudget(project, importedBudgetItems, classified);
+      const priced = priceNewContractFromAnalytic(importedBudgetItems, analyticCompositions ?? [], contractBdi ?? 0);
+      const classified = classifyAnalyticCompositions(priced.compositions);
+      const integration = integrateImportedBudget(project, priced.items, classified);
       const next: BudgetItem[] = [...keep, ...integration.budgetItems];
       const nextProject: Project = {
         ...project,
@@ -951,7 +949,7 @@ export default function ImportSyntheticDialog({
         phases: integration.phases,
         analyticCompositions: integration.analyticCompositions,
         materialCostClasses: classified.length > 0 ? mergeAnalyticCostClasses(project, classified) : project.materialCostClasses,
-        syntheticBdiPercent: contractBdi ?? parsed.bdiPercent,
+        syntheticBdiPercent: contractBdi,
         syntheticImportedAt: new Date().toISOString(),
       };
       await finishImport(nextProject);
@@ -983,8 +981,11 @@ export default function ImportSyntheticDialog({
     }
   };
 
+  const reviewPriced = parsed
+    ? priceNewContractFromAnalytic(parsed.items, analyticCompositions ?? [], parsePercentInput(contractDraft.bdiPercent) ?? 0).items
+    : [];
   const reviewBudgetItems = parsed
-    ? parsed.items.map(item => ({
+    ? reviewPriced.map(item => ({
         ...item,
         chapterName: item.chapterCode && structuralNames[item.chapterCode]?.trim()
           ? structuralNames[item.chapterCode].trim()
@@ -1007,7 +1008,6 @@ export default function ImportSyntheticDialog({
   const newWorkImportValidation = isCreateMode && parsed
     ? validateNewWorkImport({
         contractBdiPercent: parsePercentInput(contractDraft.bdiPercent),
-        detectedBdiPercent: parsed.bdiPercent,
         budgetItems: reviewBudgetItems,
         analyticCompositions,
         syntheticErrors: parsed.errors,
@@ -1170,7 +1170,7 @@ export default function ImportSyntheticDialog({
             : 'border-info/30 bg-info/5 text-muted-foreground'
         }`}>
           <strong className="text-foreground">Confirmação obrigatória do BDI:</strong>{' '}
-          a planilha informa {parsed.bdiPercent !== undefined ? `${parsed.bdiPercent.toFixed(2)}%` : 'BDI não detectado'}.
+          informe o percentual manual do contrato; o BDI da planilha é ignorado.
           {newWorkImportValidation?.errors.some(message => message.includes('BDI')) && (
             <p className="mt-1">{newWorkImportValidation.errors.filter(message => message.includes('BDI')).join(' ')}</p>
           )}
@@ -1183,7 +1183,7 @@ export default function ImportSyntheticDialog({
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div>
           <div className="text-xs font-semibold text-foreground">Conferencia da Sintetica A-J</div>
-          <div className="text-[11px] text-muted-foreground">Valide as colunas, a primeira linha de dados e o BDI antes de seguir.</div>
+          <div className="text-[11px] text-muted-foreground">Valide as colunas e as linhas; o BDI serÃ¡ informado manualmente no contrato.</div>
         </div>
         <Button type="button" size="sm" variant="outline" className="h-7 text-[11px]" onClick={reprocessSynthetic}>
           Atualizar leitura
@@ -1201,7 +1201,7 @@ export default function ImportSyntheticDialog({
         </label>
         <label className="text-[11px] text-muted-foreground">
           BDI manual (%)
-          <input value={bdiInput} onChange={e => setBdiInput(e.target.value)} placeholder="Ex.: 22,50" className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
+          <input value={bdiInput} onChange={e => { setBdiInput(e.target.value); setContractField('bdiPercent', e.target.value); }} placeholder="Ex.: 22,50" className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
         </label>
       </div>
 
@@ -1611,7 +1611,7 @@ export default function ImportSyntheticDialog({
                   {reviewBudgetItems.length} itens
                 </span>
                 <span className="px-2 py-0.5 rounded-full bg-info/15 text-info font-medium flex items-center gap-1">
-                  <Info className="w-3 h-3" /> BDI: {parsed?.bdiPercent ? `${parsed.bdiPercent.toFixed(2)}%` : 'não detectado'}
+                  <Info className="w-3 h-3" /> BDI: informado manualmente no contrato
                 </span>
               </div>
             </div>
@@ -1661,7 +1661,7 @@ export default function ImportSyntheticDialog({
                   </label>
                   <label className="text-[11px] text-muted-foreground">
                     BDI manual (%)
-                    <input value={bdiInput} onChange={e => setBdiInput(e.target.value)} placeholder="Ex.: 22,50" className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
+                    <input value={bdiInput} onChange={e => { setBdiInput(e.target.value); setContractField('bdiPercent', e.target.value); }} placeholder="Ex.: 22,50" className="mt-1 h-8 w-full rounded border border-border bg-background px-2 text-xs text-foreground" />
                   </label>
                 </div>
 

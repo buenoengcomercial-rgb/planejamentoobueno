@@ -1078,7 +1078,7 @@ export function inspectSyntheticWorkbook(data: ArrayBuffer, sheetName?: string):
     sheetName: selectedSheetName,
     rows: rows.slice(0, 25).map(row => Array.from({ length: 10 }, (_, i) => _str(row?.[i]))),
     suggestedHeaderRowIndex: _detectSyntheticHeaderIndex(rows),
-    detectedBdiPercent: _detectSyntheticBdi(rows),
+    detectedBdiPercent: undefined,
   };
 }
 
@@ -1182,9 +1182,9 @@ export function parseSyntheticBudgetFlexible(data: ArrayBuffer, options: Synthet
   const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
   const warnings: string[] = [];
   const errors: string[] = [];
-  const bdiPercent = options.bdiPercent !== undefined && Number.isFinite(options.bdiPercent)
-    ? options.bdiPercent
-    : _detectSyntheticBdi(rows);
+  // O BDI da planilha nunca participa da importaÃ§Ã£o de obra nova. O contrato
+  // usa exclusivamente o valor informado manualmente no cadastro.
+  const bdiPercent = undefined;
   const headerIdx = options.headerRowIndex ?? _detectSyntheticHeaderIndex(rows);
   const firstDataRowIndex = options.firstDataRowIndex ?? headerIdx + 1;
   const columns = { ...DEFAULT_SYNTHETIC_COLUMN_MAP, ...(options.columns ?? {}) };
@@ -1195,7 +1195,7 @@ export function parseSyntheticBudgetFlexible(data: ArrayBuffer, options: Synthet
   const items: BudgetItem[] = [];
   const groups: SyntheticStructuralGroup[] = [];
   const groupByCode = new Map<string, SyntheticStructuralGroup>();
-  const seenKeys = new Map<string, number>();
+  const seenCodes = new Map<string, number>();
 
   for (let i = firstDataRowIndex; i < rows.length; i++) {
     const r = rows[i] || [];
@@ -1259,34 +1259,19 @@ export function parseSyntheticBudgetFlexible(data: ArrayBuffer, options: Synthet
       continue;
     }
 
-    const bdiFactor = 1 + (bdiPercent ?? 0) / 100;
-    const finalUpNoBDI = upNoBDI > 0
-      ? _money2(upNoBDI)
-      : (upWithBDI > 0 && bdiFactor > 0 ? _money2(upWithBDI / bdiFactor) : 0);
-    const finalUpWithBDI = upWithBDI > 0 ? _money2(upWithBDI) : _calcUnitWithBDI(finalUpNoBDI, bdiPercent ?? 0);
-    const finalTotalNoBDI = totalNoBDI > 0 ? _money2(totalNoBDI) : _calcLineTotal(finalUpNoBDI, quantity);
-    const finalTotalWithBDI = totalWithBDI > 0 ? _money2(totalWithBDI) : _calcLineTotal(finalUpWithBDI, quantity);
-    const calculatedTotalWithBDI = _calcLineTotal(upWithBDI > 0 ? upWithBDI : finalUpWithBDI, quantity);
-    if (totalWithBDI > 0) {
-      const difference = Math.abs(_money2(totalWithBDI) - calculatedTotalWithBDI);
-      if (difference > 0.011) {
-        errors.push(`Linha ${i + 1} (${code}): total com BDI da coluna J diverge do produto quantidade x unitario com BDI.`);
-      } else if (difference > 0.001) {
-        warnings.push(`Linha ${i + 1} (${code}): diferenca de R$ 0,01 preservada conforme a fonte.`);
-      }
-    }
+    // G/H/I/J sÃ£o somente valores-fonte para auditoria. O preÃ§o contratual Ã©
+    // preenchido depois da associaÃ§Ã£o com a AnalÃ­tica e do BDI manual.
+    const finalUpNoBDI = 0;
+    const finalUpWithBDI = 0;
+    const finalTotalNoBDI = 0;
+    const finalTotalWithBDI = 0;
 
     if (quantity <= 0) warnings.push(`Linha ${i + 1} (${code}): quantidade zero/invalida.`);
-    if (finalUpNoBDI <= 0 && finalUpWithBDI <= 0) warnings.push(`Linha ${i + 1} (${code}): valor unitario nao encontrado.`);
     if (!bank) warnings.push(`Linha ${i + 1} (${code}): banco nao informado.`);
 
-    const canonicalKey = `${item}|${_normalizeSyntheticCode(code)}`;
-    const duplicateRow = seenKeys.get(canonicalKey);
-    if (duplicateRow) {
-      errors.push(`Linhas ${duplicateRow} e ${i + 1}: chave duplicada ${item} / ${code}.`);
-      continue;
-    }
-    seenKeys.set(canonicalKey, i + 1);
+    const normalizedCode = _normalizeSyntheticCode(code);
+    const canonicalKey = normalizedCode;
+    if (!seenCodes.has(normalizedCode)) seenCodes.set(normalizedCode, i + 1);
 
     const itemParts = item.split('.');
     const chapterCode = itemParts[0] || '';

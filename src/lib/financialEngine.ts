@@ -88,13 +88,10 @@ export interface AnalyticInputLike {
 export function calculateAnalyticTotalNoBDI(inputs: AnalyticInputLike[]): number {
   let acc = 0;
   for (const i of inputs ?? []) {
-    const hasTotal = i.total !== null && i.total !== undefined && Number.isFinite(Number(i.total));
-    const t = hasTotal
-      ? money2(i.total as number)
-      : trunc2((Number(i.coefficient) || 0) * (Number(i.unitPrice) || 0));
-    acc = money2(acc + t);
+    const t = trunc2((Number(i.coefficient) || 0) * (Number(i.unitPrice) || 0));
+    acc = trunc2(acc + t);
   }
-  return money2(acc);
+  return trunc2(acc);
 }
 
 /** Soma os totais s/ BDI dos insumos com desconto global aplicado em cada insumo. */
@@ -103,9 +100,9 @@ export function calculateDiscountedAnalyticTotalNoBDI(inputs: AnalyticInputLike[
   for (const i of inputs ?? []) {
     const unitDisc = calculateDiscountedUnitNoBDI(Number(i.unitPrice) || 0, discountPercent);
     const totalDisc = trunc2(unitDisc * (Number(i.coefficient) || 0));
-    acc = money2(acc + totalDisc);
+    acc = trunc2(acc + totalDisc);
   }
-  return money2(acc);
+  return trunc2(acc);
 }
 
 // ---------------------------------------------------------------------------

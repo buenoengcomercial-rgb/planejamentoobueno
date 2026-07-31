@@ -40,6 +40,17 @@ function keyOf(item?: string, code?: string) {
   return `${normalizeItem(item)}|${normalizeCode(code)}`;
 }
 
+function analyticFingerprint(composition: AdditiveComposition) {
+  return JSON.stringify((composition.inputs ?? []).map(input => [
+    normalizeCode(input.code),
+    input.bank.trim().toUpperCase(),
+    input.description.trim().toUpperCase(),
+    input.unit.trim().toUpperCase(),
+    Number(input.coefficient),
+    Number(input.unitPrice),
+  ]));
+}
+
 /**
  * Retorna os serviços que não têm uma composição Analítica com ao menos um
  * insumo. A fila por item+código evita que códigos repetidos consumam a mesma
@@ -49,20 +60,17 @@ export function findMissingAnalyticItems(
   budgetItems: BudgetItem[],
   analyticCompositions: AdditiveComposition[] | null | undefined,
 ): UnlinkedAnalyticItem[] {
-  const availableByKey = new Map<string, number>();
+  const availableByCode = new Set<string>();
   for (const composition of analyticCompositions ?? []) {
     if ((composition.inputs?.length ?? 0) === 0) continue;
-    const key = keyOf(composition.item ?? composition.itemNumber, composition.code);
-    if (!key || key === '|') continue;
-    availableByKey.set(key, (availableByKey.get(key) ?? 0) + 1);
+    const key = normalizeCode(composition.code);
+    if (key) availableByCode.add(key);
   }
 
   const missing: UnlinkedAnalyticItem[] = [];
   for (const budget of budgetItems) {
-    const key = keyOf(budget.item, budget.code);
-    const remaining = availableByKey.get(key) ?? 0;
-    if (remaining > 0) {
-      availableByKey.set(key, remaining - 1);
+    const key = normalizeCode(budget.code);
+    if (key && availableByCode.has(key)) {
       continue;
     }
     missing.push({
@@ -79,16 +87,21 @@ export function findMissingAnalyticItems(
 export function validateNewWorkImport(input: NewWorkImportValidationInput): NewWorkImportValidation {
   const errors: string[] = [...(input.syntheticErrors ?? [])];
   const contractBdi = input.contractBdiPercent;
-  const detectedBdi = input.detectedBdiPercent;
 
   if (contractBdi === undefined || !Number.isFinite(contractBdi) || contractBdi < 0 || contractBdi >= 200) {
     errors.push('Informe um BDI válido para confirmar o orçamento.');
-  } else if (
-    detectedBdi !== undefined
-    && Number.isFinite(detectedBdi)
-    && Math.abs(contractBdi - detectedBdi) > 0.005
-  ) {
-    errors.push(`O BDI informado (${contractBdi.toFixed(2)}%) diverge do BDI da planilha (${detectedBdi.toFixed(2)}%).`);
+  }
+
+  const byCode = new Map<string, AdditiveComposition>();
+  for (const composition of input.analyticCompositions ?? []) {
+    const code = normalizeCode(composition.code);
+    if (!code) continue;
+    const previous = byCode.get(code);
+    if (previous && analyticFingerprint(previous) !== analyticFingerprint(composition)) {
+      errors.push(`O cÃ³digo AnalÃ­tico ${composition.code} aparece com insumos, coeficientes ou preÃ§os diferentes.`);
+    } else if (!previous) {
+      byCode.set(code, composition);
+    }
   }
 
   const missingAnalytics = findMissingAnalyticItems(input.budgetItems, input.analyticCompositions);

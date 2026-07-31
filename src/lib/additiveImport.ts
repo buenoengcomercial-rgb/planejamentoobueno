@@ -39,6 +39,7 @@ function asString(v: unknown): string {
 import {
   trunc2 as _trunc2,
   money2 as _money2,
+  calculateAnalyticTotalNoBDI,
   calculateUnitPriceWithBDI,
   calculateLineTotal,
   calculateDiscountedUnitNoBDI,
@@ -493,7 +494,7 @@ export function parseAnalyticRowsFlexible(
       unit,
       coefficient,
       unitPrice,
-      total: total || truncar2(coefficient * unitPrice),
+      total: truncar2(coefficient * unitPrice),
       rowIndex: i + 1,
     });
   }
@@ -601,7 +602,9 @@ export function mergeAnalyticIntoAdditive(
   blocks: AnalyticBlock[],
 ): { additive: Additive; linked: number; leftover: number; issues: AdditiveImportIssue[] } {
   const issues: AdditiveImportIssue[] = [];
-  // Filas indexadas: (1) por item+code  (2) por code normalizado
+  const contractMode = additive.name === '__base__';
+  // Obras novas usam exclusivamente o cÃ³digo normalizado; aditivos legados
+  // mantÃªm a fila item+cÃ³digo para nÃ£o alterar obras existentes.
   const queueByItemCode = new Map<string, AnalyticBlock[]>();
   const queueByCode = new Map<string, AnalyticBlock[]>();
   const consumed = new Set<AnalyticBlock>();
@@ -613,25 +616,25 @@ export function mergeAnalyticIntoAdditive(
     if (!queueByCode.has(cKey)) queueByCode.set(cKey, []);
     queueByCode.get(cKey)!.push(b);
   }
+  for (const [code, sameCode] of queueByCode) {
+    const fingerprint = (b: AnalyticBlock) => JSON.stringify(b.inputs.map(i => [i.code, i.bank, i.description, i.unit, truncar2(i.coefficient), truncar2(i.unitPrice)]));
+    if (new Set(sameCode.map(fingerprint)).size > 1) {
+      issues.push({ level: 'error', message: `CÃ³digo AnalÃ­tico duplicado com composiÃ§Ãµes diferentes: ${code}.` });
+    }
+  }
   let linked = 0;
 
   const takeBlock = (item: string, code: string): AnalyticBlock | undefined => {
-    const itemKey = `${(item || '').trim()}|${normalizeCode(code)}`;
-    const qIc = queueByItemCode.get(itemKey);
-    if (qIc) {
-      while (qIc.length > 0) {
-        const b = qIc.shift()!;
-        if (!consumed.has(b)) { consumed.add(b); return b; }
+    const take = (queue?: AnalyticBlock[]) => {
+      while (queue && queue.length > 0) {
+        const candidate = queue.shift()!;
+        if (!consumed.has(candidate)) { consumed.add(candidate); return candidate; }
       }
-    }
-    const qC = queueByCode.get(normalizeCode(code));
-    if (qC) {
-      while (qC.length > 0) {
-        const b = qC.shift()!;
-        if (!consumed.has(b)) { consumed.add(b); return b; }
-      }
-    }
-    return undefined;
+      return undefined;
+    };
+    if (contractMode) return queueByCode.get(normalizeCode(code))?.[0];
+    return take(queueByItemCode.get(`${(item || '').trim()}|${normalizeCode(code)}`))
+      ?? take(queueByCode.get(normalizeCode(code)));
   };
 
   // Vincula composições SEM inputs (inclui novos serviços manuais com isNewService).
@@ -648,11 +651,14 @@ export function mergeAnalyticIntoAdditive(
       unit: r.unit,
       coefficient: r.coefficient,
       unitPrice: r.unitPrice,
-      total: r.total || +(r.coefficient * r.unitPrice).toFixed(2),
+      total: truncar2(r.coefficient * r.unitPrice),
     }));
     // Preserva todos os campos da composição (id, item, code, bank, description, unit,
     // quantity, addedQuantity, phaseId, phaseChain, itemNumber, isNewService, etc.).
-    const merged: AdditiveComposition = { ...c, inputs };
+    const unitPriceNoBDI = calculateAnalyticTotalNoBDI(inputs);
+    const merged: AdditiveComposition = contractMode
+      ? { ...c, inputs, unitPriceNoBDI, totalNoBDI: calculateLineTotal(unitPriceNoBDI, c.quantity ?? 0), unitPriceWithBDI: 0, totalWithBDI: 0, total: 0 }
+      : { ...c, inputs };
     if (block.analyticUnitPriceWithBDI != null) {
       merged.analyticUnitPriceWithBDI = money2(block.analyticUnitPriceWithBDI);
       const q = money2(c.quantity ?? 0);
@@ -660,7 +666,7 @@ export function mergeAnalyticIntoAdditive(
     }
     return merged;
   });
-  const leftover = blocks.filter(b => !consumed.has(b)).length;
+  const leftover = contractMode ? 0 : blocks.filter(b => !consumed.has(b)).length;
   if (leftover > 0) {
     issues.push({ level: 'warning', message: `${leftover} bloco(s) analítico(s) sem composição correspondente foram ignorados.` });
   }
@@ -1001,7 +1007,61 @@ export async function extractBaseAnalyticCompositionsFromAnalyticFile(
 
 /** Soma dos totais H dos insumos da Analítica (sem BDI), por unidade da composição. */
 export function sumAnalyticTotalNoBDI(comp: AdditiveComposition): number {
-  return comp.inputs.reduce((a, i) => a + (i.total || 0), 0);
+  return calculateAnalyticTotalNoBDI(comp.inputs ?? []);
+}
+
+/** Aplica os valores contratuais da AnalÃ­tica aos itens da SintÃ©tica. */
+export function priceNewContractFromAnalytic(
+  items: BudgetItem[],
+  compositions: AdditiveComposition[],
+  bdiPercent: number,
+): { items: BudgetItem[]; compositions: AdditiveComposition[] } {
+  const byCode = new Map<string, AdditiveComposition>();
+  for (const composition of compositions ?? []) {
+    if (!byCode.has(normalizeCode(composition.code))) byCode.set(normalizeCode(composition.code), composition);
+  }
+  const nextCompositions = (compositions ?? []).map(composition => {
+    const unitPriceNoBDI = sumAnalyticTotalNoBDI(composition);
+    const unitPriceWithBDI = calculateUnitPriceWithBDI(unitPriceNoBDI, bdiPercent);
+    const quantity = truncar2(composition.quantity ?? 0);
+    const totalWithBDI = calculateLineTotal(unitPriceWithBDI, quantity);
+    return {
+      ...composition,
+      unitPriceNoBDI,
+      unitPriceWithBDI,
+      totalNoBDI: calculateLineTotal(unitPriceNoBDI, quantity),
+      totalWithBDI,
+      total: totalWithBDI,
+      analyticUnitPriceWithBDI: unitPriceWithBDI,
+      analyticTotalWithBDI: totalWithBDI,
+    };
+  });
+  const nextByCode = new Map(nextCompositions.map(c => [normalizeCode(c.code), c]));
+  return {
+    compositions: nextCompositions,
+    items: items.map(item => {
+      const composition = nextByCode.get(normalizeCode(item.code)) ?? byCode.get(normalizeCode(item.code));
+      if (!composition) return item;
+      const unitPriceNoBDI = sumAnalyticTotalNoBDI(composition);
+      const unitPriceWithBDI = calculateUnitPriceWithBDI(unitPriceNoBDI, bdiPercent);
+      const quantity = truncar2(item.quantity);
+      return {
+        ...item,
+        quantity,
+        unitPriceNoBDI,
+        unitPriceWithBDI,
+        totalNoBDI: calculateLineTotal(unitPriceNoBDI, quantity),
+        totalWithBDI: calculateLineTotal(unitPriceWithBDI, quantity),
+        baseContract: {
+          quantity,
+          unitPriceNoBDI,
+          unitPriceWithBDI,
+          totalNoBDI: calculateLineTotal(unitPriceNoBDI, quantity),
+          totalWithBDI: calculateLineTotal(unitPriceWithBDI, quantity),
+        },
+      };
+    }),
+  };
 }
 
 /**
@@ -1040,12 +1100,14 @@ export function computeCompositionWithBDI(comp: AdditiveComposition, bdiPercent:
   const fator = 1 + (bdiPercent || 0) / 100;
   // Preserva valores importados quando existirem (Sintética da Medição/Excel).
   const unitPriceNoBDI = money2(comp.unitPriceNoBDI);
-  const unitPriceWithBDI = money2(comp.unitPriceWithBDI ?? truncar2(unitPriceNoBDI * fator));
+  const unitPriceWithBDI = comp.unitPriceWithBDI != null && comp.unitPriceWithBDI > 0
+    ? money2(comp.unitPriceWithBDI)
+    : calculateUnitPriceWithBDI(unitPriceNoBDI, bdiPercent);
   const qty = money2(comp.quantity ?? 0);
   const totalSyntheticWithBDI =
     comp.totalWithBDI != null
       ? money2(comp.totalWithBDI)
-      : money2(comp.total ?? truncar2(unitPriceWithBDI * qty));
+      : money2(comp.total ?? calculateLineTotal(unitPriceWithBDI, qty));
   const sumAnalyticNoBDI = sumAnalyticTotalNoBDI(comp);
   // Valor unitário analítico c/ BDI: prioriza o lido da linha "Valor com BDI =" da planilha.
   // Caso contrário, trunca em 2 casas o produto (soma analítica s/ BDI × fator BDI), por unidade.

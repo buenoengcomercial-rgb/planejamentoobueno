@@ -72,7 +72,7 @@ describe('validateNewWorkImport', () => {
       detectedBdiPercent: 27.58,
       budgetItems: items,
       analyticCompositions: analytics,
-    }).isValid).toBe(false);
+    }).isValid).toBe(true);
 
     expect(validateNewWorkImport({
       contractBdiPercent: 27.58,
@@ -80,5 +80,13 @@ describe('validateNewWorkImport', () => {
       budgetItems: items,
       analyticCompositions: analytics,
     })).toMatchObject({ isValid: true, missingAnalytics: [] });
+  });
+
+  it('aceita codigo repetido somente quando a composicao e identica', () => {
+    const items = [budget('1.1.1', 'PLASIN2')];
+    const same = composition('1.1.1', 'PLASIN2');
+    const different = { ...composition('2.1.1', 'PLASIN2'), inputs: [{ ...composition('2.1.1', 'PLASIN2').inputs[0], unitPrice: 11 }] };
+    expect(validateNewWorkImport({ contractBdiPercent: 27.58, budgetItems: items, analyticCompositions: [same, { ...same, id: 'copy' }] }).isValid).toBe(true);
+    expect(validateNewWorkImport({ contractBdiPercent: 27.58, budgetItems: items, analyticCompositions: [same, different] }).isValid).toBe(false);
   });
 });
