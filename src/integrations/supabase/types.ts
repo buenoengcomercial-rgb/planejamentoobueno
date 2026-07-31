@@ -772,6 +772,19 @@ export type Database = {
         }
         Returns: string
       }
+      create_contract_project_v2: {
+        Args: {
+          p_analytic_compositions: Json
+          p_budget_items: Json
+          p_chapters: Json
+          p_data: Json
+          p_name: string
+          p_organization_id: string
+          p_project_id: string
+          p_tasks: Json
+        }
+        Returns: string
+      }
       get_user_org_id: { Args: { _user_id: string }; Returns: string }
       has_org_role: {
         Args: {

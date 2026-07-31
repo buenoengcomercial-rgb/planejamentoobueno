@@ -34,9 +34,10 @@ interface Params {
   project: Project;
   onProjectChange: (next: Project | ((prev: Project) => Project)) => void;
   state: AdditiveStateApi;
+  canFormalize?: boolean;
 }
 
-export function useAdditiveActions({ project, onProjectChange, state }: Params) {
+export function useAdditiveActions({ project, onProjectChange, state, canFormalize = false }: Params) {
   const { user } = useAuth();
   const auditUser = useMemo(() => userInfoFromSupabaseUser(user), [user]);
   const {
@@ -800,8 +801,16 @@ export function useAdditiveActions({ project, onProjectChange, state }: Params) 
 
   const handleContractAdditive = () => {
     if (!active) return;
+    if (!canFormalize) {
+      toast.error('Somente Proprietario ou Administrador pode contratar um aditivo.');
+      return;
+    }
     if (active.status !== 'aprovado' && !active.isContracted) {
       toast.error('O aditivo precisa estar Aprovado para ser contratado.');
+      return;
+    }
+    if (!active.effectiveDate) {
+      toast.error('Informe e salve a data de vigencia contratual antes de contratar o aditivo.');
       return;
     }
     const isReintegration = !!active.isContracted;

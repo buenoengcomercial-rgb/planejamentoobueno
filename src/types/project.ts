@@ -10,6 +10,8 @@ export interface LaborComposition {
   operationalRoleId?: string;
   /** Quando true, o insumo permanece no custo, mas não entra no histograma de equipe. */
   dimensioningIgnored?: boolean;
+  /** Etapa sequencial da tarefa. Funcoes da mesma etapa trabalham em paralelo. */
+  executionStage?: number;
 }
 
 export interface OperationalRole {
@@ -150,6 +152,8 @@ export interface Task {
   bottleneckRole?: string;
   calculatedDuration?: number;
   totalHours?: number;
+  /** Horas de calendario determinadas pelos gargalos das etapas. */
+  calendarHours?: number;
   // Daily production tracking
   dailyLogs?: DailyProductionLog[];
   executedQuantityTotal?: number;
@@ -181,7 +185,7 @@ export interface TaskAdditiveHistoryEntry {
   /** ISO timestamp da integração. */
   at: string;
   /** Tipo da movimentação aplicada. */
-  kind?: 'novo' | 'acrescimo' | 'supressao';
+  kind?: 'novo' | 'acrescimo' | 'supressao' | 'alteracao_preco';
   addedQuantity: number;
   suppressedQuantity: number;
   previousQuantity: number;
@@ -222,6 +226,8 @@ export interface DailyProductionLog {
   plannedQuantity: number;
   actualQuantity: number;
   notes?: string;
+  /** Horas efetivamente apontadas por funcao ou trabalhador. */
+  laborEntries?: DailyLaborEntry[];
 }
 
 export interface Material {
@@ -274,6 +280,77 @@ export interface ContractInfo {
   biddingDiscountPercent?: number;
   /** Nº da ART (Anotação de Responsabilidade Técnica). */
   artNumber?: string;
+}
+
+export type ContractRevisionStatus = 'draft' | 'under_review' | 'approved' | 'contracted' | 'rejected' | 'cancelled';
+export type ContractChangeType = 'new_item' | 'quantity_increase' | 'quantity_suppression' | 'price_change' | 'term_change';
+
+export interface ContractChange {
+  id: string;
+  revisionId: string;
+  type: ContractChangeType;
+  budgetItemId?: string;
+  canonicalKey?: string;
+  previousQuantity?: number;
+  quantityDelta?: number;
+  revisedQuantity?: number;
+  previousUnitPriceWithBDI?: number;
+  revisedUnitPriceWithBDI?: number;
+  previousEndDate?: string;
+  revisedEndDate?: string;
+  reason: string;
+}
+
+export interface ContractRevision {
+  id: string;
+  number: number;
+  name: string;
+  status: ContractRevisionStatus;
+  effectiveDate?: string;
+  createdAt: string;
+  createdBy?: string;
+  contractedAt?: string;
+  contractedBy?: string;
+  changes: ContractChange[];
+}
+
+export interface ContractRectification {
+  id: string;
+  reason: string;
+  entityType: 'contract' | 'budget_item' | 'structure';
+  entityId: string;
+  before: unknown;
+  after: unknown;
+  createdAt: string;
+  createdBy: string;
+}
+
+export type CostLedgerLevel = 'committed' | 'actual' | 'paid';
+export type CostLedgerCategory = 'material' | 'labor' | 'equipment' | 'other';
+
+export interface CostLedgerEntry {
+  id: string;
+  taskId?: string;
+  budgetItemId?: string;
+  category: CostLedgerCategory;
+  level: CostLedgerLevel;
+  amount: number;
+  quantity?: number;
+  unitPrice?: number;
+  occurredAt: string;
+  sourceType: 'purchase_order' | 'stock_issue' | 'daily_labor' | 'equipment_usage' | 'invoice' | 'manual';
+  sourceId?: string;
+  notes?: string;
+}
+
+export interface DailyLaborEntry {
+  id: string;
+  workerId?: string;
+  workerName?: string;
+  role: string;
+  teamCode?: string;
+  hours: number;
+  hourlyCost: number;
 }
 
 export type MeasurementStatus =
@@ -346,6 +423,9 @@ export interface SavedMeasurement {
   dailyReportSnapshot?: DailyReportSnapshotData;
   /** Quando true e status='rejected', libera edição controlada do snapshot. */
   editUnlocked?: boolean;
+  /** Revisao contratual vigente congelada no momento da geracao. */
+  contractRevisionId?: string;
+  contractRevisionNumber?: number;
 }
 
 /** Rascunho da medição em preparação (filtros não-persistidos em snapshot). */
@@ -521,6 +601,11 @@ export interface Project {
   endDate: string;
   phases: Phase[];
   totalBudget: number;
+  /** Modelo 2: contrato-base imutavel e modulos alimentados pela mesma estrutura. */
+  contractSchemaVersion?: 1 | 2;
+  contractRevisions?: ContractRevision[];
+  contractRectifications?: ContractRectification[];
+  costLedger?: CostLedgerEntry[];
   /** Equipes do projeto. Quando undefined, usa-se DEFAULT_TEAMS. */
   teams?: TeamDefinition[];
   /** Cargos executivos usados para dimensionamento de equipes. Nao altera insumos originais. */
@@ -972,6 +1057,25 @@ export interface BudgetItem {
   taskId?: string;
   /** Quando vier de aditivo aprovado, referência ao additive. */
   additiveId?: string;
+  /** Chave natural usada somente para importacao e reconciliacao. */
+  canonicalKey?: string;
+  /** Valores crus preservados para auditoria da planilha. */
+  sourceValues?: {
+    quantity: string;
+    unitPriceNoBDI: string;
+    totalNoBDI: string;
+    unitPriceWithBDI: string;
+    totalWithBDI: string;
+  };
+  /** Fotografia imutavel do item no contrato-base. */
+  baseContract?: {
+    quantity: number;
+    unitPriceNoBDI: number;
+    unitPriceWithBDI: number;
+    totalNoBDI: number;
+    totalWithBDI: number;
+  };
+  currentRevisionId?: string;
 }
 
 // =================== ADITIVO ===================
@@ -1096,7 +1200,16 @@ export interface AdditiveImportIssue {
 }
 
 /** Estados do fluxo de aprovação do aditivo. */
-export type AdditiveStatus = 'rascunho' | 'em_analise' | 'reprovado' | 'aprovado' | 'aditivo_contratado';
+export type AdditiveStatus =
+  | 'rascunho'
+  | 'em_analise'
+  | 'aprovado'
+  | 'contratado'
+  | 'rejeitado'
+  | 'cancelado'
+  // valores legados preservados somente para leitura
+  | 'reprovado'
+  | 'aditivo_contratado';
 
 /** Snapshot congelado do aditivo no momento da aprovação (versionado). */
 export interface AdditiveApprovalSnapshot {
@@ -1133,6 +1246,9 @@ export interface Additive {
   isContracted?: boolean;
   /** Carimbo de quando o aditivo foi marcado como contratado. */
   contractedAt?: string;
+  /** Data a partir da qual a revisao passa a compor o contrato vigente. */
+  effectiveDate?: string;
+  contractRevisionId?: string;
   /**
    * Libera revisao de um aditivo ja integrado. Enquanto true, a tela volta a aceitar
    * acrescimos, supressoes, novos servicos e exclusoes; a nova versao so afeta as

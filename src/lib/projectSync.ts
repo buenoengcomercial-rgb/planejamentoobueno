@@ -53,6 +53,13 @@ interface TaskRow {
   data: unknown;
 }
 
+export interface ContractImportPayload {
+  budgetItems: Array<Record<string, unknown>>;
+  analyticCompositions: Array<Record<string, unknown>>;
+  chapters: Array<Record<string, unknown>>;
+  tasks: Array<Record<string, unknown>>;
+}
+
 interface Snapshot {
   movements: Map<string, WarehouseMovement>;
   requisitions: Map<string, WarehouseRequisition>;
@@ -154,6 +161,38 @@ function buildSnapshot(project: Project): Snapshot {
 
 export function setCloudSnapshot(projectId: string, project: Project) {
   snapshots.set(projectId, buildSnapshot(project));
+}
+
+/**
+ * Serializa a estrutura contratual V2 no mesmo formato das tabelas normalizadas.
+ * O payload é consumido pela RPC transacional de criação de obra.
+ */
+export function buildContractImportPayload(project: Project): ContractImportPayload {
+  const snapshot = buildSnapshot(project);
+  return {
+    budgetItems: Array.from(snapshot.budgetItems, ([id, item]) => ({
+      id,
+      item: item.item ?? null,
+      code: item.code ?? null,
+      source: item.source ?? null,
+      task_id: item.taskId ?? null,
+      additive_id: item.additiveId ?? null,
+      data: item,
+    })),
+    analyticCompositions: Array.from(snapshot.analyticCompositions, ([id, composition]) => ({
+      id,
+      code: composition.code ?? null,
+      data: composition,
+    })),
+    chapters: Array.from(snapshot.chapters, ([id, chapter]) => ({
+      id,
+      ...chapter,
+    })),
+    tasks: Array.from(snapshot.tasks, ([id, task]) => ({
+      id,
+      ...task,
+    })),
+  };
 }
 
 export function clearCloudSnapshot(projectId: string) {
@@ -335,7 +374,7 @@ export function stripNormalizedCollections(project: Project): Project {
  * Faz diff entre o snapshot salvo e o projeto atual, e aplica
  * upsert/delete por linha nas tabelas normalizadas.
  *
- * Não bloqueia o save do projeto se a sincronização falhar (apenas loga).
+ * A sincronização é estrita: qualquer falha impede o snapshot de avançar.
  */
 export async function syncCollectionsToCloud(project: Project, userId?: string): Promise<void> {
   const projectId = project.id;
@@ -418,6 +457,14 @@ export async function syncCollectionsToCloud(project: Project, userId?: string):
   const failed = results.filter(r => r.status === 'rejected');
   if (failed.length > 0) {
     console.warn(`[projectSync] ${failed.length}/${results.length} ops falharam`, failed.slice(0, 3));
+    const reasons = failed
+      .slice(0, 3)
+      .map(result => result.status === 'rejected'
+        ? String(result.reason instanceof Error ? result.reason.message : result.reason)
+        : '')
+      .filter(Boolean)
+      .join('; ');
+    throw new Error(`Falha ao persistir a estrutura normalizada da obra${reasons ? `: ${reasons}` : '.'}`);
   }
 
   snapshots.set(projectId, next);

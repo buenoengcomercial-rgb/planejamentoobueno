@@ -624,8 +624,21 @@ export default function Index() {
 
     const projectWithName = { ...projectToCreate, name: finalName };
     const updatedAt = await upsertCloudProject(projectWithName, orgId);
+    const persisted = await loadCloudProjectRecord(projectWithName.id);
+    if (!persisted) throw new Error('A obra foi gravada, mas nao pode ser relida para validacao.');
+    const expectedTasks = (projectWithName.phases ?? []).reduce((sum, phase) => sum + (phase.tasks?.length ?? 0), 0);
+    const persistedTasks = (persisted.project.phases ?? []).reduce((sum, phase) => sum + (phase.tasks?.length ?? 0), 0);
+    const collectionsMatch =
+      (persisted.project.budgetItems?.length ?? 0) === (projectWithName.budgetItems?.length ?? 0)
+      && (persisted.project.analyticCompositions?.length ?? 0) === (projectWithName.analyticCompositions?.length ?? 0)
+      && (persisted.project.phases?.length ?? 0) === (projectWithName.phases?.length ?? 0)
+      && persistedTasks === expectedTasks;
+    if (!collectionsMatch) {
+      await deleteCloudProject(projectWithName.id);
+      throw new Error('A estrutura importada nao foi confirmada no banco. A obra incompleta foi removida; tente novamente.');
+    }
     const list = await refreshCloudList();
-    replaceProjectWithoutAutoSave(projectWithName, list.find(p => p.id === projectWithName.id)?.updatedAt ?? updatedAt);
+    replaceProjectWithoutAutoSave(persisted.project, list.find(p => p.id === projectWithName.id)?.updatedAt ?? persisted.updatedAt ?? updatedAt);
     undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], realCost: [], materials: [], warehouse: [] };
     setUndoVersion(v => v + 1);
     setCurrentView('dashboard');
@@ -776,7 +789,7 @@ export default function Index() {
           />
         );
       case 'additive':
-        return <Additive project={project} onProjectChange={additiveSetter} undoButton={<UndoButton canUndo={canUndo('additive')} onUndo={() => handleUndo('additive')} />} />;
+        return <Additive project={project} onProjectChange={additiveSetter} canFormalize={role === 'owner' || role === 'admin'} undoButton={<UndoButton canUndo={canUndo('additive')} onUndo={() => handleUndo('additive')} />} />;
       case 'realCost':
         return <RealCost project={project} />;
       case 'materials':

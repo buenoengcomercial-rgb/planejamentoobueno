@@ -6,6 +6,8 @@ import {
   stripNormalizedCollections,
   syncCollectionsToCloud,
   clearCloudSnapshot,
+  setCloudSnapshot,
+  buildContractImportPayload,
 } from '@/lib/projectSync';
 
 export interface CloudProjectMeta {
@@ -76,7 +78,6 @@ async function getCurrentUserId(): Promise<string | undefined> {
 export async function upsertCloudProject(project: Project, organizationId: string, expectedUpdatedAt?: string): Promise<string> {
   const userId = await getCurrentUserId();
   // Sincroniza coleções normalizadas em paralelo e remove do payload do JSON.
-  await syncCollectionsToCloud(project, userId);
   const slim = stripNormalizedCollections(project);
 
   if (expectedUpdatedAt) {
@@ -93,21 +94,66 @@ export async function upsertCloudProject(project: Project, organizationId: strin
       .maybeSingle();
     if (error) throw error;
     if (!data) throw new CloudProjectConflictError();
+    await syncCollectionsToCloud(project, userId);
     return data.updated_at;
   }
 
-  const { data, error } = await supabase
+  const { data: existing, error: existingError } = await supabase
     .from('projects')
-    .upsert([{
-      id: slim.id,
-      organization_id: organizationId,
-      name: slim.name,
-      data_json: slim as unknown as import('@/integrations/supabase/types').Json,
-    }], { onConflict: 'id' })
-    .select('updated_at')
-    .single();
+    .select('id')
+    .eq('id', slim.id)
+    .maybeSingle();
+  if (existingError) throw existingError;
+  const isNewProject = !existing;
+  if (isNewProject && project.contractSchemaVersion === 2) {
+    const contractPayload = buildContractImportPayload(project);
+    const { data, error } = await supabase.rpc('create_contract_project_v2', {
+      p_project_id: slim.id,
+      p_organization_id: organizationId,
+      p_name: slim.name,
+      p_data: slim as unknown as import('@/integrations/supabase/types').Json,
+      p_budget_items: contractPayload.budgetItems as unknown as import('@/integrations/supabase/types').Json,
+      p_analytic_compositions: contractPayload.analyticCompositions as unknown as import('@/integrations/supabase/types').Json,
+      p_chapters: contractPayload.chapters as unknown as import('@/integrations/supabase/types').Json,
+      p_tasks: contractPayload.tasks as unknown as import('@/integrations/supabase/types').Json,
+    });
+    if (!error) {
+      setCloudSnapshot(project.id, project);
+      return data;
+    }
+    const missingRpc = error.code === 'PGRST202'
+      || /create_contract_project_v2|schema cache|could not find the function/i.test(error.message);
+    if (!missingRpc) throw error;
+    console.warn('[cloudProjects] RPC V2 ainda nao publicada; usando criacao com rollback compensatorio.');
+  }
+  const parentPayload = {
+    id: slim.id,
+    organization_id: organizationId,
+    name: slim.name,
+    data_json: slim as unknown as import('@/integrations/supabase/types').Json,
+  };
+  const parentQuery = isNewProject
+    ? supabase.from('projects').insert([parentPayload])
+    : supabase.from('projects').upsert([parentPayload], { onConflict: 'id' });
+  const { data, error } = await parentQuery.select('updated_at').single();
   if (error) throw error;
-  return data.updated_at;
+  try {
+    await syncCollectionsToCloud(project, userId);
+    return data.updated_at;
+  } catch (syncError) {
+    clearCloudSnapshot(project.id);
+    if (isNewProject) {
+      const rollback = await supabase
+        .from('projects')
+        .delete()
+        .eq('id', project.id)
+        .eq('organization_id', organizationId);
+      if (rollback.error) {
+        throw new Error(`A importacao falhou e a obra incompleta nao pode ser removida automaticamente: ${rollback.error.message}`);
+      }
+    }
+    throw syncError;
+  }
 }
 
 export async function createCloudProject(name: string, organizationId: string, base?: Partial<Project>): Promise<Project> {

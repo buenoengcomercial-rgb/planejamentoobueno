@@ -32,11 +32,12 @@ interface Props {
   project: Project;
   onProjectChange: (next: Project | ((prev: Project) => Project)) => void;
   undoButton?: React.ReactNode;
+  canFormalize?: boolean;
 }
 
-export default function Additive({ project, onProjectChange, undoButton }: Props) {
+export default function Additive({ project, onProjectChange, undoButton, canFormalize = false }: Props) {
   const state = useAdditiveState(project, { onProjectChange });
-  const actions = useAdditiveActions({ project, onProjectChange, state });
+  const actions = useAdditiveActions({ project, onProjectChange, state, canFormalize });
   const { banks, filteredComps, groupTree, orphanRows, hasEapLink } = useAdditiveGroups(
     project, state.active, state.search, state.bankFilter,
   );

@@ -246,6 +246,9 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
       qtyPriorAccum: r.qtyPriorAccum,
     }));
 
+    const currentRevision = (project.contractRevisions ?? [])
+      .filter(revision => revision.status === 'contracted' && (!revision.effectiveDate || revision.effectiveDate <= endDate))
+      .sort((a, b) => b.number - a.number)[0];
     const snapshot: SavedMeasurement = {
       id: `meas-${Date.now()}`,
       number,
@@ -268,6 +271,8 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
       },
       history: [],
       dailyReportSnapshot: buildDailyReportSnapshot(dailyReportsSummary),
+      contractRevisionId: currentRevision?.id,
+      contractRevisionNumber: currentRevision?.number,
     };
 
     const nextStartIso = isoAddDays(endDate, 1);

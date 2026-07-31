@@ -77,7 +77,7 @@ export interface JornadaConfig {
 export function calculateRupDuration(
   task: Task,
   config?: JornadaConfig
-): { duration: number; totalHours: number; bottleneckRole: string } {
+): { duration: number; totalHours: number; calendarHours: number; bottleneckRole: string } {
   const jornadaDiaria = config?.jornadaDiaria ?? DAILY_HOURS;
   const trabalhaSabado = config?.trabalhaSabado ?? false;
 
@@ -90,24 +90,35 @@ export function calculateRupDuration(
   const horasPorDia = horasPorSemana / diasUteisSemana;
 
   if (!task.laborCompositions?.length || !task.quantity) {
-    return { duration: task.duration, totalHours: task.duration * horasPorDia, bottleneckRole: '' };
+    return {
+      duration: task.duration,
+      totalHours: task.duration * horasPorDia,
+      calendarHours: task.duration * horasPorDia,
+      bottleneckRole: '',
+    };
   }
 
-  let maxHours = 0;
+  let totalHours = 0;
+  let maxRoleHours = 0;
   let bottleneck = '';
+  const stageHours = new Map<number, number>();
 
   for (const comp of task.laborCompositions) {
     const totalHoursForRole = task.quantity * comp.rup;
-    const effectiveHours = totalHoursForRole / comp.workerCount;
-    if (effectiveHours > maxHours) {
-      maxHours = effectiveHours;
+    totalHours += totalHoursForRole;
+    const effectiveHours = totalHoursForRole / Math.max(1, comp.workerCount);
+    const stage = Math.max(1, Math.trunc(comp.executionStage ?? 1));
+    stageHours.set(stage, Math.max(stageHours.get(stage) ?? 0, effectiveHours));
+    if (effectiveHours > maxRoleHours) {
+      maxRoleHours = effectiveHours;
       bottleneck = comp.role;
     }
   }
 
-  const totalHours = maxHours;
-  const duration = Math.ceil(totalHours / horasPorDia);
-  return { duration, totalHours, bottleneckRole: bottleneck };
+  // Etapas sao sequenciais; profissionais dentro da mesma etapa atuam em paralelo.
+  const calendarHours = Array.from(stageHours.values()).reduce((sum, hours) => sum + hours, 0);
+  const duration = Math.ceil(calendarHours / horasPorDia);
+  return { duration, totalHours, calendarHours, bottleneckRole: bottleneck };
 }
 
 /** Apply RUP calculations to all tasks, mutating duration */
@@ -121,8 +132,8 @@ export function applyRupToProject(project: Project): Project {
         if (t.isManual) {
           return t;
         }
-        const { duration, totalHours, bottleneckRole } = calculateRupDuration(t);
-        return { ...t, duration, totalHours, bottleneckRole, calculatedDuration: duration };
+        const { duration, totalHours, calendarHours, bottleneckRole } = calculateRupDuration(t);
+        return { ...t, duration, totalHours, calendarHours, bottleneckRole, calculatedDuration: duration };
       }),
     })),
   };

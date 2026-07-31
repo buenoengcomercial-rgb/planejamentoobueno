@@ -1113,7 +1113,8 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                   <div className="px-8 py-3 space-y-3">
                                     <div className="grid grid-cols-4 gap-2 mb-1 p-2 bg-muted/30 rounded text-xs">
                                       <div><span className="text-muted-foreground">Responsável:</span> {task.responsible || '—'}</div>
-                                      <div><span className="text-muted-foreground">Horas:</span> {Math.round(task.totalHours || task.duration * DAILY_HOURS)}h</div>
+                                      <div><span className="text-muted-foreground">Homem-hora:</span> {Math.round(task.totalHours || task.duration * DAILY_HOURS)}h</div>
+                                      <div><span className="text-muted-foreground">Horas de calendario:</span> {Math.round(task.calendarHours || task.duration * DAILY_HOURS)}h</div>
                                       <div><span className="text-muted-foreground">Folga:</span> {task.float !== undefined ? `${task.float}d` : '—'}</div>
                                       <div><span className="text-muted-foreground">Desvio:</span> {task.baseline ? `${task.duration - task.baseline.duration > 0 ? '+' : ''}${task.duration - task.baseline.duration}d` : '—'}</div>
                                     </div>

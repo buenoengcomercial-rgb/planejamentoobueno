@@ -1,5 +1,6 @@
-import { Task, DailyProductionLog } from '@/types/project';
-import { ClipboardList, Plus, Trash2, TrendingUp, TrendingDown, PlusCircle } from 'lucide-react';
+import { Fragment } from 'react';
+import { Task, DailyProductionLog, DailyLaborEntry } from '@/types/project';
+import { ClipboardList, Plus, Trash2, TrendingUp, TrendingDown, PlusCircle, Users } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 
@@ -80,6 +81,34 @@ export default function DailyLogsPanel({ task, onChange }: DailyLogsPanelProps) 
 
   const removeLog = (id: string) => {
     onChange(logs.filter(l => l.id !== id));
+  };
+
+  const addLaborEntry = (logId: string) => {
+    const entry: DailyLaborEntry = {
+      id: `labor-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      role: '',
+      workerName: '',
+      teamCode: '',
+      hours: 8,
+      hourlyCost: 0,
+    };
+    const target = logs.find(log => log.id === logId);
+    updateLog(logId, { laborEntries: [...(target?.laborEntries ?? []), entry] });
+  };
+
+  const updateLaborEntry = (logId: string, entryId: string, patch: Partial<DailyLaborEntry>) => {
+    const target = logs.find(log => log.id === logId);
+    updateLog(logId, {
+      laborEntries: (target?.laborEntries ?? []).map(entry =>
+        entry.id === entryId ? { ...entry, ...patch } : entry),
+    });
+  };
+
+  const removeLaborEntry = (logId: string, entryId: string) => {
+    const target = logs.find(log => log.id === logId);
+    updateLog(logId, {
+      laborEntries: (target?.laborEntries ?? []).filter(entry => entry.id !== entryId),
+    });
   };
 
   // Linhas: saldo dia, saldo acumulado, executado acumulado, falta executar
@@ -244,10 +273,10 @@ export default function DailyLogsPanel({ task, onChange }: DailyLogsPanelProps) 
         )}
 
         {rows.map(row => (
-          <div
-            key={row.id}
-            className={`grid grid-cols-8 gap-2 text-[11px] items-center py-1 px-2 rounded ${STATUS_BG[row.status]}`}
-          >
+          <Fragment key={row.id}>
+            <div
+              className={`grid grid-cols-8 gap-2 text-[11px] items-center py-1 px-2 rounded ${STATUS_BG[row.status]}`}
+            >
             <div className="flex items-center gap-1">
               <button
                 onClick={(e) => { e.stopPropagation(); addLogAfter(row.id); }}
@@ -295,7 +324,17 @@ export default function DailyLogsPanel({ task, onChange }: DailyLogsPanelProps) 
               onChange={e => updateLog(row.id, { notes: e.target.value })}
               className="bg-transparent border border-current/30 rounded px-1 py-0.5 text-[10px] focus:outline-none focus:border-current"
             />
-            <div className="text-center">
+            <div className="text-center flex items-center justify-center gap-1">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  addLaborEntry(row.id);
+                }}
+                className="p-1 rounded hover:bg-primary/20 text-primary transition-colors"
+                title="Apontar mão de obra deste dia"
+              >
+                <Users className="w-3 h-3" />
+              </button>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -323,7 +362,73 @@ export default function DailyLogsPanel({ task, onChange }: DailyLogsPanelProps) 
                 <Trash2 className="w-3 h-3" />
               </button>
             </div>
-          </div>
+            </div>
+            {(row.laborEntries ?? []).length > 0 && (
+              <div className="ml-8 mr-2 rounded-md border border-border/60 bg-card/70 p-2 space-y-1.5">
+                <div className="grid grid-cols-[1.2fr_1fr_0.7fr_0.65fr_0.8fr_0.8fr_28px] gap-2 text-[9px] uppercase text-muted-foreground font-semibold">
+                  <span>Trabalhador</span>
+                  <span>Função</span>
+                  <span>Equipe</span>
+                  <span className="text-right">Horas</span>
+                  <span className="text-right">Custo/h</span>
+                  <span className="text-right">Custo</span>
+                  <span />
+                </div>
+                {(row.laborEntries ?? []).map(entry => {
+                  const laborTotal = (Number(entry.hours) || 0) * (Number(entry.hourlyCost) || 0);
+                  return (
+                    <div key={entry.id} className="grid grid-cols-[1.2fr_1fr_0.7fr_0.65fr_0.8fr_0.8fr_28px] gap-2 items-center">
+                      <input
+                        value={entry.workerName ?? ''}
+                        placeholder="Nome"
+                        onChange={event => updateLaborEntry(row.id, entry.id, { workerName: event.target.value })}
+                        className="h-7 rounded border border-border bg-background px-2 text-[10px]"
+                      />
+                      <input
+                        value={entry.role}
+                        placeholder="Pedreiro"
+                        onChange={event => updateLaborEntry(row.id, entry.id, { role: event.target.value })}
+                        className="h-7 rounded border border-border bg-background px-2 text-[10px]"
+                      />
+                      <input
+                        value={entry.teamCode ?? ''}
+                        placeholder="Equipe"
+                        onChange={event => updateLaborEntry(row.id, entry.id, { teamCode: event.target.value })}
+                        className="h-7 rounded border border-border bg-background px-2 text-[10px]"
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.25}
+                        value={entry.hours}
+                        onChange={event => updateLaborEntry(row.id, entry.id, { hours: Number(event.target.value) })}
+                        className="h-7 rounded border border-border bg-background px-2 text-right text-[10px]"
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={entry.hourlyCost}
+                        onChange={event => updateLaborEntry(row.id, entry.id, { hourlyCost: Number(event.target.value) })}
+                        className="h-7 rounded border border-border bg-background px-2 text-right text-[10px]"
+                      />
+                      <span className="text-right text-[10px] font-semibold">
+                        {laborTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removeLaborEntry(row.id, entry.id)}
+                        className="p-1 text-destructive hover:bg-destructive/10 rounded"
+                        title="Excluir apontamento de mão de obra"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Fragment>
         ))}
       </div>
       {confirmDialog}

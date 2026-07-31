@@ -15,6 +15,7 @@ import {
   buildOrderedTasks,
 } from '@/components/measurement/measurementFormat';
 import { loadObraConfig } from '@/components/ConfiguracaoObra';
+import { calculateLineTotal } from '@/lib/financialEngine';
 
 export interface UseMeasurementRowsParams {
   project: Project;
@@ -332,10 +333,10 @@ export function useMeasurementRows({
 
       // Quando vinculado à Sintética, preserva totais contratados EXATOS da planilha (money2, sem trunc)
       const valueContracted = matchedBudget
-        ? money2(matchedBudget.totalWithBDI || calc.totalContracted)
+        ? calculateLineTotal(matchedBudget.unitPriceWithBDI, qtyContracted)
         : calc.totalContracted;
       const valueContractedNoBDI = matchedBudget
-        ? money2(matchedBudget.totalNoBDI || calc.totalContractedNoBDI)
+        ? calculateLineTotal(matchedBudget.unitPriceNoBDI, qtyContracted)
         : calc.totalContractedNoBDI;
       const valueBalance = matchedBudget
         ? Math.max(0, money2(valueContracted - calc.totalAccumulated))
@@ -406,8 +407,8 @@ export function useMeasurementRows({
           unitPriceNoBDI: noBDI,
           bdiPercent: implicitBdi,
         });
-        const valueContracted = money2(b.totalWithBDI || calc.totalContracted);
-        const valueContractedNoBDI = money2(b.totalNoBDI || calc.totalContractedNoBDI);
+        const valueContracted = calculateLineTotal(b.unitPriceWithBDI, b.quantity || 0);
+        const valueContractedNoBDI = calculateLineTotal(b.unitPriceNoBDI, b.quantity || 0);
         const isAdditive = b.source === 'aditivo';
         const hasSyntheticChapter = !isAdditive && !!(b.chapterName || b.chapterCode);
         const syntheticPhaseId = hasSyntheticChapter

@@ -12,6 +12,8 @@ export interface NewWorkImportValidationInput {
   detectedBdiPercent?: number;
   budgetItems: BudgetItem[];
   analyticCompositions: AdditiveComposition[] | null | undefined;
+  syntheticErrors?: string[];
+  unresolvedStructuralGroups?: string[];
 }
 
 export interface NewWorkImportValidation {
@@ -75,7 +77,7 @@ export function findMissingAnalyticItems(
 
 /** Regras obrigatórias antes de criar uma obra nova por importação. */
 export function validateNewWorkImport(input: NewWorkImportValidationInput): NewWorkImportValidation {
-  const errors: string[] = [];
+  const errors: string[] = [...(input.syntheticErrors ?? [])];
   const contractBdi = input.contractBdiPercent;
   const detectedBdi = input.detectedBdiPercent;
 
@@ -92,6 +94,9 @@ export function validateNewWorkImport(input: NewWorkImportValidationInput): NewW
   const missingAnalytics = findMissingAnalyticItems(input.budgetItems, input.analyticCompositions);
   if (missingAnalytics.length > 0) {
     errors.push(`${missingAnalytics.length} serviço(s) da Sintética estão sem composição Analítica vinculada.`);
+  }
+  if ((input.unresolvedStructuralGroups?.length ?? 0) > 0) {
+    errors.push(`Corrija a descricao de: ${input.unresolvedStructuralGroups!.join(', ')}.`);
   }
 
   return { errors, missingAnalytics, isValid: errors.length === 0 };

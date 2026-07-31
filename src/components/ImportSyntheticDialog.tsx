@@ -3,6 +3,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Project, BudgetItem, AdditiveComposition, AdditiveInputType, LaborComposition, MaterialCostClass, Phase, Task } from '@/types/project';
 import {
   DEFAULT_SYNTHETIC_COLUMN_MAP,
@@ -316,17 +317,6 @@ function normalizeAnalyticCode(value?: string) {
   return (value ?? '').trim().toUpperCase().replace(/\s+/g, '');
 }
 
-function normalizeAnalyticDescription(value?: string) {
-  return (value ?? '')
-    .trim()
-    .toUpperCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^A-Z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 function parsePercentInput(value: string): number | undefined {
   return parseBdiInput(value);
 }
@@ -383,22 +373,9 @@ function sameBudgetKey(a: { item?: string; itemNumber?: string; code?: string },
     && normalizeAnalyticCode(a.code) === normalizeAnalyticCode(b.code);
 }
 
-function sameBudgetFallback(a: { item?: string; itemNumber?: string; code?: string; description?: string }, b: { item?: string; itemNumber?: string; code?: string; description?: string }) {
-  const aItem = normalizeBudgetItemNumber(budgetItemNumber(a));
-  const bItem = normalizeBudgetItemNumber(budgetItemNumber(b));
-  const aCode = normalizeAnalyticCode(a.code);
-  const bCode = normalizeAnalyticCode(b.code);
-  const aDesc = normalizeAnalyticDescription(a.description);
-  const bDesc = normalizeAnalyticDescription(b.description);
-  if (aItem && bItem && aItem === bItem) return true;
-  if (aCode && bCode && aCode === bCode && (!aDesc || !bDesc || aDesc === bDesc)) return true;
-  return !!aDesc && !!bDesc && aDesc === bDesc;
-}
-
 function findAnalyticForBudget(compositions: AdditiveComposition[], item: BudgetItem) {
   return compositions.find(c => c.linkedTaskId === item.taskId || c.taskId === item.taskId)
-    ?? compositions.find(c => sameBudgetKey(c, item))
-    ?? compositions.find(c => sameBudgetFallback(c, item));
+    ?? compositions.find(c => sameBudgetKey(c, item));
 }
 
 function buildLaborFromAnalytic(composition?: AdditiveComposition): LaborComposition[] {
@@ -452,6 +429,7 @@ function buildImportedTask(item: BudgetItem, phaseName: string, laborComposition
     duration: Math.max(1, calc.duration),
     calculatedDuration: Math.max(1, calc.duration),
     totalHours: calc.totalHours,
+    calendarHours: calc.calendarHours,
     bottleneckRole: calc.bottleneckRole,
   };
 }
@@ -516,8 +494,7 @@ export function integrateImportedBudget(project: Project, budgetItems: BudgetIte
     const budget = linkedBudgetItems.find(item =>
       item.taskId === composition.linkedTaskId ||
       item.taskId === composition.taskId ||
-      sameBudgetKey(composition, item) ||
-      sameBudgetFallback(composition, item)
+      sameBudgetKey(composition, item)
     );
     const linkedTaskId = budget?.taskId ?? composition.linkedTaskId ?? composition.taskId;
     return linkedTaskId ? {
@@ -553,6 +530,7 @@ export default function ImportSyntheticDialog({
   const [error, setError] = useState('');
   const [fileName, setFileName] = useState('');
   const [parsed, setParsed] = useState<ParsedSynthetic | null>(null);
+  const [structuralNames, setStructuralNames] = useState<Record<string, string>>({});
   const [syntheticBuffer, setSyntheticBuffer] = useState<ArrayBuffer | null>(null);
   const [preview, setPreview] = useState<SyntheticWorkbookPreview | null>(null);
   const [columnRoles, setColumnRoles] = useState<SyntheticColumnRole[]>(DEFAULT_COLUMN_ROLES);
@@ -613,6 +591,7 @@ export default function ImportSyntheticDialog({
     setError('');
     setFileName('');
     setParsed(null);
+    setStructuralNames({});
     setSyntheticBuffer(null);
     setPreview(null);
     setColumnRoles(DEFAULT_COLUMN_ROLES);
@@ -694,6 +673,7 @@ export default function ImportSyntheticDialog({
         return;
       }
       setParsed(result);
+      setStructuralNames({});
       setWizardStep(1);
 
       // Tenta extrair a Analítica do MESMO arquivo (aba Analítica).
@@ -826,6 +806,7 @@ export default function ImportSyntheticDialog({
       return;
     }
     setParsed(result);
+    setStructuralNames({});
     setWizardStep(2);
   }, [syntheticBuffer, preview, headerRow, firstDataRow, columnRoles, bdiInput]);
 
@@ -912,12 +893,26 @@ export default function ImportSyntheticDialog({
     const contractBdi = parsePercentInput(contractDraft.bdiPercent);
     const contractDiscount = parsePercentInput(contractDraft.biddingDiscountPercent);
     const selectedProjectName = normalizeProjectName(contractDraft.projectName || projectNameInput || project.name);
+    const importedItems = (parsed?.items ?? []).map(item => ({
+      ...item,
+      chapterName: item.chapterCode && structuralNames[item.chapterCode]?.trim()
+        ? structuralNames[item.chapterCode].trim()
+        : item.chapterName,
+      subchapterName: item.subchapterCode && structuralNames[item.subchapterCode]?.trim()
+        ? structuralNames[item.subchapterCode].trim()
+        : item.subchapterName,
+    }));
+    const unresolvedStructuralGroups = (parsed?.groups ?? [])
+      .filter(group => group.requiresDescription && !structuralNames[group.code]?.trim())
+      .map(group => group.code);
     if (isCreateMode && parsed) {
       const validation = validateNewWorkImport({
         contractBdiPercent: contractBdi,
         detectedBdiPercent: parsed.bdiPercent,
-        budgetItems: parsed.items,
+        budgetItems: importedItems,
         analyticCompositions,
+        syntheticErrors: parsed.errors,
+        unresolvedStructuralGroups,
       });
       if (!validation.isValid) {
         setError(validation.errors.join(' '));
@@ -940,13 +935,17 @@ export default function ImportSyntheticDialog({
     // Caso 1: importação completa de Sintética (+ opcional Analítica).
     if (parsed) {
       const keep = (project.budgetItems ?? []).filter(b => b.source !== 'sintetica');
-      const importedBudgetItems = parsed.items.map(item => ({ ...item, taskId: item.taskId ?? `budget-${item.id}` }));
+      const importedBudgetItems = importedItems.map(item => ({ ...item, taskId: item.taskId ?? `budget-${item.id}` }));
       const classified = classifyAnalyticCompositions(analyticCompositions ?? []);
       const integration = integrateImportedBudget(project, importedBudgetItems, classified);
       const next: BudgetItem[] = [...keep, ...integration.budgetItems];
       const nextProject: Project = {
         ...project,
         name: selectedProjectName || project.name,
+        contractSchemaVersion: isCreateMode ? 2 : (project.contractSchemaVersion ?? 1),
+        contractRevisions: project.contractRevisions ?? [],
+        contractRectifications: project.contractRectifications ?? [],
+        costLedger: project.costLedger ?? [],
         contractInfo: nextContractInfo,
         budgetItems: next,
         phases: integration.phases,
@@ -984,7 +983,20 @@ export default function ImportSyntheticDialog({
     }
   };
 
-  const reviewBudgetItems = parsed?.items ?? (project.budgetItems ?? []).filter(item => item.source === 'sintetica');
+  const reviewBudgetItems = parsed
+    ? parsed.items.map(item => ({
+        ...item,
+        chapterName: item.chapterCode && structuralNames[item.chapterCode]?.trim()
+          ? structuralNames[item.chapterCode].trim()
+          : item.chapterName,
+        subchapterName: item.subchapterCode && structuralNames[item.subchapterCode]?.trim()
+          ? structuralNames[item.subchapterCode].trim()
+          : item.subchapterName,
+      }))
+    : (project.budgetItems ?? []).filter(item => item.source === 'sintetica');
+  const unresolvedStructuralGroups = (parsed?.groups ?? [])
+    .filter(group => group.requiresDescription && !structuralNames[group.code]?.trim())
+    .map(group => group.code);
   const totalNoBDI = reviewBudgetItems.reduce((s, i) => s + i.totalNoBDI, 0) ?? 0;
   const totalWithBDI = reviewBudgetItems.reduce((s, i) => s + i.totalWithBDI, 0) ?? 0;
   const hasAnalytic = !!(analyticCompositions && analyticCompositions.length > 0);
@@ -996,8 +1008,10 @@ export default function ImportSyntheticDialog({
     ? validateNewWorkImport({
         contractBdiPercent: parsePercentInput(contractDraft.bdiPercent),
         detectedBdiPercent: parsed.bdiPercent,
-        budgetItems: parsed.items,
+        budgetItems: reviewBudgetItems,
         analyticCompositions,
+        syntheticErrors: parsed.errors,
+        unresolvedStructuralGroups,
       })
     : null;
   const completeAnalyticForNewWork = !isCreateMode || !parsed || missingAnalyticItems.length === 0;
@@ -1778,6 +1792,40 @@ export default function ImportSyntheticDialog({
               </div>
             </div>
             </div>
+            )}
+
+            {wizardStep === 4 && (parsed?.groups ?? []).some(group => group.requiresDescription) && (
+              <div className="rounded-lg border border-warning/40 bg-warning/5 p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-warning" />
+                  <span className="text-xs font-bold text-warning">Descricoes estruturais obrigatorias</span>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  A hierarquia foi preservada, mas a planilha deixou estes capitulos ou subcapitulos sem nome. Informe a descricao para concluir.
+                </p>
+                {(parsed?.groups ?? []).filter(group => group.requiresDescription).map(group => (
+                  <div key={group.code} className="grid grid-cols-[7rem_1fr] items-center gap-2">
+                    <span className="text-xs font-mono font-semibold">{group.code}</span>
+                    <Input
+                      value={structuralNames[group.code] ?? ''}
+                      onChange={event => setStructuralNames(current => ({ ...current, [group.code]: event.target.value }))}
+                      placeholder={`Descricao do ${group.kind === 'chapter' ? 'capitulo' : 'subcapitulo'} ${group.code}`}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {wizardStep === 4 && (parsed?.errors?.length ?? 0) > 0 && (
+              <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 max-h-40 overflow-y-auto">
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertTriangle className="w-4 h-4 text-destructive" />
+                  <span className="text-xs font-bold text-destructive">{parsed?.errors.length} erros bloqueiam a importacao</span>
+                </div>
+                <ul className="text-[10px] text-muted-foreground space-y-0.5">
+                  {parsed?.errors.slice(0, 12).map((message, index) => <li key={index}>• {message}</li>)}
+                </ul>
+              </div>
             )}
 
             {wizardStep === 4 && (parsed?.warnings?.length ?? 0) > 0 && (

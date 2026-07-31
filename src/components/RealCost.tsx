@@ -158,6 +158,18 @@ function computeVisibleTotals(rows: RealCostCompositionRow[], children: RealCost
     rows.reduce((sum, row) => sum + row.laborCost, 0) +
     children.reduce((sum, child) => sum + child.totals.laborCost, 0),
   );
+  const equipmentCost = roundMoney(
+    rows.reduce((sum, row) => sum + row.equipmentCost, 0) +
+    children.reduce((sum, child) => sum + child.totals.equipmentCost, 0),
+  );
+  const otherCost = roundMoney(
+    rows.reduce((sum, row) => sum + row.otherCost, 0) +
+    children.reduce((sum, child) => sum + child.totals.otherCost, 0),
+  );
+  const committedCost = roundMoney(
+    rows.reduce((sum, row) => sum + row.committedCost, 0) +
+    children.reduce((sum, child) => sum + child.totals.committedCost, 0),
+  );
   const grossProfit = roundMoney(contractedValue - realCost);
   const marginPct = contractedValue > 0 ? Math.round((grossProfit / contractedValue) * 10000) / 100 : 0;
   const compositionCount = rows.length + children.reduce((sum, child) => sum + child.totals.compositionCount, 0);
@@ -168,6 +180,9 @@ function computeVisibleTotals(rows: RealCostCompositionRow[], children: RealCost
     contractedValue,
     materialCost,
     laborCost,
+    equipmentCost,
+    otherCost,
+    committedCost,
     realCost,
     grossProfit,
     marginPct,
@@ -195,7 +210,7 @@ function collectGroupIds(groups: RealCostGroupNode[]) {
   return ids;
 }
 
-const TABLE_COLSPAN = 16;
+const TABLE_COLSPAN = 17;
 const BORDER_L = 'border-l-2 border-border';
 
 function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
@@ -323,7 +338,8 @@ function RealCostGroupRows({
         <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(group.totals.contractedValue)}</td>
         <td className={`px-2 py-1.5 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(group.totals.materialCost)}</td>
         <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(group.totals.laborCost)}</td>
-        <td className={`px-2 py-1.5 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(group.totals.realCost)}</td>
+        <td className={`px-2 py-1.5 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(group.totals.committedCost)}</td>
+        <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(group.totals.realCost)}</td>
         <td className={`px-2 py-1.5 text-right tabular-nums ${group.totals.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
           {fmtBRL(group.totals.grossProfit)}
         </td>
@@ -365,7 +381,8 @@ function RealCostGroupRows({
                   <td className="p-2 align-top text-right tabular-nums font-semibold">{fmtBRL(row.contractedValue)}</td>
                   <td className={`p-2 align-top text-right tabular-nums ${BORDER_L}`}>{fmtBRL(row.materialCost)}</td>
                   <td className="p-2 align-top text-right tabular-nums">{fmtBRL(row.laborCost)}</td>
-                  <td className={`p-2 align-top text-right tabular-nums font-semibold ${BORDER_L}`}>{fmtBRL(row.realCost)}</td>
+                  <td className={`p-2 align-top text-right tabular-nums ${BORDER_L}`}>{fmtBRL(row.committedCost)}</td>
+                  <td className="p-2 align-top text-right tabular-nums font-semibold">{fmtBRL(row.realCost)}</td>
                   <td className={`p-2 align-top text-right tabular-nums font-semibold ${row.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
                     {fmtBRL(row.grossProfit)}
                   </td>
@@ -519,7 +536,7 @@ export default function RealCost({ project }: Props) {
               <h1 className="text-xl font-bold text-foreground">Custo real de obra</h1>
             </div>
             <p className="mt-1 max-w-4xl text-xs text-muted-foreground">
-              Planilha interna de margem: compara o valor contratado com BDI contra o custo real cotado na Lista de Material.
+              Compara o contrato com a referencia da Analitica e com os valores comprometidos em cotacoes e compras.
               Nao altera Medicao, Aditivo, Cronograma, Lista de Material ou Almoxarifado.
             </p>
           </div>
@@ -527,7 +544,7 @@ export default function RealCost({ project }: Props) {
         </div>
       </header>
 
-      <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2">
+      <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-2">
         <StatCard
           label="Valor contratado"
           value={fmtBRL(analysis.totals.contractedValue)}
@@ -535,16 +552,23 @@ export default function RealCost({ project }: Props) {
           icon={CircleDollarSign}
         />
         <StatCard
-          label="Custo real cotado"
+          label="Custo comprometido"
+          value={fmtBRL(analysis.totals.committedCost)}
+          hint="Cotacoes e compras vinculadas"
+          icon={BarChart3}
+          tone="warning"
+        />
+        <StatCard
+          label="Custo realizado"
           value={fmtBRL(analysis.totals.realCost)}
-          hint="Menor cotacao por insumo"
+          hint="Apontamentos e saidas para tarefas"
           icon={BarChart3}
           tone="warning"
         />
         <StatCard
           label="Lucro bruto estimado"
           value={fmtBRL(analysis.totals.grossProfit)}
-          hint="Contrato - custo cotado"
+          hint="Contrato - comprometido"
           icon={analysis.totals.grossProfit >= 0 ? TrendingUp : TrendingDown}
           tone={analysis.totals.grossProfit >= 0 ? 'success' : 'danger'}
         />
@@ -641,7 +665,7 @@ export default function RealCost({ project }: Props) {
                 <th colSpan={3} className={`border-b border-border bg-blue-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-blue-950 ${BORDER_L}`}>
                   Contrato / referencia
                 </th>
-                <th colSpan={7} className={`border-b border-border bg-emerald-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-emerald-950 ${BORDER_L}`}>
+                <th colSpan={8} className={`border-b border-border bg-emerald-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-emerald-950 ${BORDER_L}`}>
                   Custo real e margem
                 </th>
               </tr>
@@ -655,9 +679,10 @@ export default function RealCost({ project }: Props) {
                 <th className={`p-2 text-right w-32 ${BORDER_L}`}>V. Unit. Referencia</th>
                 <th className="p-2 text-right w-32">V. Unit. Contratado</th>
                 <th className="p-2 text-right w-36">Valor Contratado Final</th>
-                <th className={`p-2 text-right w-32 ${BORDER_L}`}>Material</th>
-                <th className="p-2 text-right w-32">Mão de obra</th>
-                <th className={`p-2 text-right w-36 ${BORDER_L}`}>Custo Real Cotado</th>
+                <th className={`p-2 text-right w-32 ${BORDER_L}`}>Material ref.</th>
+                <th className="p-2 text-right w-32">Mão de obra ref.</th>
+                <th className={`p-2 text-right w-36 ${BORDER_L}`}>Comprometido</th>
+                <th className="p-2 text-right w-36">Realizado</th>
                 <th className="p-2 text-right w-32">Lucro Bruto</th>
                 <th className="p-2 text-right w-24">Margem</th>
                 <th className="p-2 text-center w-20">Pend.</th>
@@ -692,7 +717,8 @@ export default function RealCost({ project }: Props) {
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(displayTotals.contractedValue)}</td>
                   <td className={`px-2 py-2 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(displayTotals.materialCost)}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(displayTotals.laborCost)}</td>
-                  <td className={`px-2 py-2 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(displayTotals.realCost)}</td>
+                  <td className={`px-2 py-2 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(displayTotals.committedCost)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(displayTotals.realCost)}</td>
                   <td className={`px-2 py-2 text-right tabular-nums ${displayTotals.grossProfit >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
                     {fmtBRL(displayTotals.grossProfit)}
                   </td>

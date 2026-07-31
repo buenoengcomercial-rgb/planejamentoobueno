@@ -1317,6 +1317,8 @@ export function getApprovedAdditiveBudgetItems(project: Project): BudgetItem[] {
       if (!qty) continue;
       const baseUnitNoBDI = money2(referenceUnitNoBDIForNewService(c) * (1 - discount / 100));
       const upWithBDI = truncar2(baseUnitNoBDI * fator);
+      const totalNoBDI = truncar2(baseUnitNoBDI * qty);
+      const totalWithBDI = truncar2(upWithBDI * qty);
       out.push({
         id: `add-${a.id}-${c.id}`,
         item: c.item,
@@ -1327,10 +1329,18 @@ export function getApprovedAdditiveBudgetItems(project: Project): BudgetItem[] {
         quantity: qty,
         unitPriceNoBDI: baseUnitNoBDI,
         unitPriceWithBDI: upWithBDI,
-        totalNoBDI: truncar2(baseUnitNoBDI * qty),
-        totalWithBDI: truncar2(upWithBDI * qty),
+        totalNoBDI,
+        totalWithBDI,
         source: 'aditivo',
         additiveId: a.id,
+        currentRevisionId: a.contractRevisionId,
+        baseContract: {
+          quantity: qty,
+          unitPriceNoBDI: baseUnitNoBDI,
+          unitPriceWithBDI: upWithBDI,
+          totalNoBDI,
+          totalWithBDI,
+        },
       });
     }
   }
@@ -2246,14 +2256,32 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
   const fator = 1 + bdi / 100;
   const version = add.isContracted ? (add.version ?? 0) + 1 : (add.version ?? 0);
   const now = new Date().toISOString();
+  const revisionNumber = Math.max(0, ...(project.contractRevisions ?? []).map(revision => revision.number)) + 1;
+  const revisionId = `contract-revision-${add.id}-${revisionNumber}`;
+  if (!add.effectiveDate) {
+    throw new Error('O aditivo precisa de uma data de vigencia antes da contratacao.');
+  }
+  const effectiveDate = add.effectiveDate;
 
   const novos = add.compositions.filter(c => c.isNewService);
   const activeNewTaskIds = new Set(novos.map(n => `add-${add.id}-${n.id}`));
-  const ajustes = add.compositions.filter(c => !c.isNewService && (
-    (c.addedQuantity ?? 0) > 0 ||
-    (c.suppressedQuantity ?? 0) > 0 ||
-    c.changeKind === 'acrescido' || c.changeKind === 'suprimido'
-  ));
+  const taskById = new Map(project.phases.flatMap(phase => phase.tasks).map(task => [task.id, task]));
+  const ajustes = add.compositions.filter(c => {
+    if (c.isNewService) return false;
+    const linkedTask = c.taskId ? taskById.get(c.taskId) : undefined;
+    const revisedUnit = computeCompositionWithBDI(c, bdi).unitPriceWithBDI;
+    const priceChanged = !!linkedTask && (
+      Math.abs(revisedUnit - (linkedTask.unitPrice ?? 0)) >= 0.01
+      || Math.abs((c.unitPriceNoBDI ?? 0) - (linkedTask.unitPriceNoBDI ?? 0)) >= 0.01
+    );
+    return (
+      (c.addedQuantity ?? 0) > 0
+      || (c.suppressedQuantity ?? 0) > 0
+      || c.changeKind === 'acrescido'
+      || c.changeKind === 'suprimido'
+      || priceChanged
+    );
+  });
 
   // Composition.id → linkedTaskId (preenchido durante o processamento)
   const linkedTaskByCompId = new Map<string, string>();
@@ -2278,12 +2306,16 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
         .reduce((sum, h) => _trunc2(sum + (h.addedQuantity || 0) - (h.suppressedQuantity || 0)), 0);
       const delta = _trunc2(desiredNet - alreadyAppliedNet);
       if (ajuste) linkedTaskByCompId.set(ajuste.id, task.id);
-      if (Math.abs(delta) < 0.000001) return task;
       const previousQuantity = task.quantity ?? 0;
       const newQuantity = Math.max(0, _trunc2(previousQuantity + delta));
       const previousUnit = task.unitPrice ?? 0;
+      const nextUnit = ajuste ? computeCompositionWithBDI(ajuste, bdi).unitPriceWithBDI : previousUnit;
+      const nextUnitNoBDI = ajuste?.unitPriceNoBDI ?? task.unitPriceNoBDI;
+      const priceChanged = Math.abs(nextUnit - previousUnit) >= 0.01
+        || Math.abs((nextUnitNoBDI ?? 0) - (task.unitPriceNoBDI ?? 0)) >= 0.01;
+      if (Math.abs(delta) < 0.000001 && !priceChanged) return task;
       const previousTotal = truncar2(previousUnit * previousQuantity);
-      const newTotal = truncar2(previousUnit * newQuantity);
+      const newTotal = truncar2(nextUnit * newQuantity);
       const deltaAdded = delta > 0 ? delta : 0;
       const deltaSuppressed = delta < 0 ? Math.abs(delta) : 0;
       const entry = {
@@ -2291,13 +2323,14 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
         additiveName: add.name,
         version,
         at: now,
-        kind: (delta >= 0 ? 'acrescimo' : 'supressao') as 'acrescimo' | 'supressao',
+        kind: (delta > 0 ? 'acrescimo' : delta < 0 ? 'supressao' : 'alteracao_preco') as
+          'acrescimo' | 'supressao' | 'alteracao_preco',
         addedQuantity: deltaAdded,
         suppressedQuantity: deltaSuppressed,
         previousQuantity,
         newQuantity,
         previousUnitPriceWithBDI: previousUnit,
-        newUnitPriceWithBDI: previousUnit,
+        newUnitPriceWithBDI: nextUnit,
         previousTotalWithBDI: previousTotal,
         newTotalWithBDI: newTotal,
         user,
@@ -2306,6 +2339,8 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
       return {
         ...task,
         quantity: newQuantity,
+        unitPrice: nextUnit,
+        unitPriceNoBDI: nextUnitNoBDI,
         suppressedByAdditive: newQuantity === 0,
         additiveHistory: [...(task.additiveHistory ?? []), entry],
       };
@@ -2485,12 +2520,28 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
     const bi = synthByTask.get(ajuste.taskId);
     if (!bi) continue;
     const newQty = targetTask.quantity ?? 0;
-    if (bi.quantity === newQty) continue;
+    const newUnitNoBDI = ajuste.unitPriceNoBDI ?? bi.unitPriceNoBDI;
+    const newUnitWithBDI = computeCompositionWithBDI(ajuste, bdi).unitPriceWithBDI;
+    if (
+      bi.quantity === newQty
+      && Math.abs(bi.unitPriceNoBDI - newUnitNoBDI) < 0.01
+      && Math.abs(bi.unitPriceWithBDI - newUnitWithBDI) < 0.01
+    ) continue;
     adjustedSynth.set(bi.id, {
       ...bi,
+      baseContract: bi.baseContract ?? {
+        quantity: bi.quantity,
+        unitPriceNoBDI: bi.unitPriceNoBDI,
+        unitPriceWithBDI: bi.unitPriceWithBDI,
+        totalNoBDI: bi.totalNoBDI,
+        totalWithBDI: bi.totalWithBDI,
+      },
       quantity: newQty,
-      totalNoBDI: truncar2(bi.unitPriceNoBDI * newQty),
-      totalWithBDI: truncar2(bi.unitPriceWithBDI * newQty),
+      unitPriceNoBDI: newUnitNoBDI,
+      unitPriceWithBDI: newUnitWithBDI,
+      totalNoBDI: truncar2(newUnitNoBDI * newQty),
+      totalWithBDI: truncar2(newUnitWithBDI * newQty),
+      currentRevisionId: revisionId,
     });
   }
 
@@ -2506,14 +2557,65 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
     status: 'aditivo_contratado',
     isContracted: true,
     contractedAt: add.contractedAt ?? now,
+    effectiveDate,
+    contractRevisionId: revisionId,
     editUnlocked: false,
     editUnlockedAt: undefined,
     editUnlockedBy: undefined,
     version,
   };
   const nextAdditives = (project.additives ?? []).map(a => a.id === add.id ? updatedAdditive : a);
+  const revision = {
+    id: revisionId,
+    number: revisionNumber,
+    name: add.name,
+    status: 'contracted' as const,
+    effectiveDate,
+    createdAt: now,
+    createdBy: user,
+    contractedAt: now,
+    contractedBy: user,
+    changes: add.compositions.filter(composition => {
+      if (composition.isNewService) return true;
+      const baseItem = composition.taskId ? synthByTask.get(composition.taskId) : undefined;
+      const quantityDelta = (composition.addedQuantity ?? 0) - (composition.suppressedQuantity ?? 0);
+      const revisedUnit = computeCompositionWithBDI(composition, bdi).unitPriceWithBDI;
+      return quantityDelta !== 0
+        || (!!baseItem && Math.abs(revisedUnit - baseItem.unitPriceWithBDI) >= 0.01);
+    }).map(composition => {
+      const currentItem = composition.taskId ? synthByTask.get(composition.taskId) : undefined;
+      const originalQuantity = currentItem?.quantity ?? composition.originalQuantity ?? 0;
+      const quantityDelta = (composition.addedQuantity ?? 0) - (composition.suppressedQuantity ?? 0);
+      return {
+        id: `${revisionId}-${composition.id}`,
+        revisionId,
+        type: composition.isNewService
+          ? 'new_item' as const
+          : quantityDelta > 0
+            ? 'quantity_increase' as const
+            : quantityDelta < 0
+              ? 'quantity_suppression' as const
+              : 'price_change' as const,
+        budgetItemId: composition.taskId
+          ? synthByTask.get(composition.taskId)?.id
+          : `add-${add.id}-${composition.id}`,
+        canonicalKey: `${composition.itemNumber || composition.item}|${normalizeCode(composition.code)}`,
+        previousQuantity: originalQuantity,
+        quantityDelta,
+        revisedQuantity: originalQuantity + quantityDelta,
+        previousUnitPriceWithBDI: currentItem?.unitPriceWithBDI ?? composition.unitPriceWithBDI,
+        revisedUnitPriceWithBDI: computeCompositionWithBDI(composition, bdi).unitPriceWithBDI,
+        reason: add.reviewNotes || 'Aditivo contratado',
+      };
+    }),
+  };
 
-  const projWithChange: Project = { ...project, phases, additives: nextAdditives };
+  const projWithChange: Project = {
+    ...project,
+    phases,
+    additives: nextAdditives,
+    contractRevisions: [...(project.contractRevisions ?? []).filter(item => item.id !== revisionId), revision],
+  };
   const approvedBudget = getApprovedAdditiveBudgetItems(projWithChange);
   const keepBase = (project.budgetItems ?? []).filter(b => b.source !== 'aditivo');
   const mergedBase = keepBase.map(b => adjustedSynth.get(b.id) ?? b);

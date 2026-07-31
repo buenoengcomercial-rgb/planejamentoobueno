@@ -21,6 +21,9 @@ export const STATUS_LABEL: Record<AdditiveStatus, string> = {
   reprovado: 'Reprovado',
   aprovado: 'Aprovado',
   aditivo_contratado: 'Integrado ao projeto',
+  contratado: 'Contratado',
+  rejeitado: 'Rejeitado',
+  cancelado: 'Cancelado',
 };
 
 export const STATUS_BADGE: Record<AdditiveStatus, string> = {
@@ -29,6 +32,9 @@ export const STATUS_BADGE: Record<AdditiveStatus, string> = {
   reprovado: 'bg-rose-100 text-rose-800 border-rose-300',
   aprovado: 'bg-emerald-100 text-emerald-800 border-emerald-300',
   aditivo_contratado: 'bg-primary/15 text-primary border-primary/40',
+  contratado: 'bg-primary/15 text-primary border-primary/40',
+  rejeitado: 'bg-rose-100 text-rose-800 border-rose-300',
+  cancelado: 'bg-slate-100 text-slate-600 border-slate-300',
 };
 
 export const fmtBRL = (v: number) =>

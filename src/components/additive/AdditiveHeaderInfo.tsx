@@ -31,6 +31,7 @@ interface Draft {
   bdi: string;
   globalDiscount: string;
   issueDate: string;
+  effectiveDate: string;
   responsible: string;
 }
 
@@ -48,6 +49,7 @@ function buildDraft(project: Project, active: Additive, bdi: number, globalDisco
     bdi: String(Number.isFinite(bdi) ? bdi : 0),
     globalDiscount: String(Number.isFinite(globalDiscount) ? globalDiscount : 0),
     issueDate: (active.headerIssueDate || '').slice(0, 10),
+    effectiveDate: (active.effectiveDate || '').slice(0, 10),
     responsible: active.headerResponsible ?? active.approvedBy ?? '',
   };
 }
@@ -98,6 +100,7 @@ export default function AdditiveHeaderInfo({
     onUpdateAdditive(a => ({
       ...a,
       headerIssueDate: draft.issueDate ? new Date(draft.issueDate).toISOString() : undefined,
+      effectiveDate: draft.effectiveDate || undefined,
       headerResponsible: draft.responsible || undefined,
     }));
   };
@@ -171,6 +174,12 @@ export default function AdditiveHeaderInfo({
               <Input
                 type="date" value={draft.issueDate}
                 onChange={e => set('issueDate', e.target.value)}
+              />
+            </Field>
+            <Field label="Data de Vigência Contratual">
+              <Input
+                type="date" value={draft.effectiveDate} disabled={isLocked}
+                onChange={e => set('effectiveDate', e.target.value)}
               />
             </Field>
             <Field label="Responsável">

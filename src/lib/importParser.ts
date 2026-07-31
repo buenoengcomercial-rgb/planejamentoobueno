@@ -927,6 +927,16 @@ export interface ParsedSynthetic {
   items: BudgetItem[];
   bdiPercent?: number;
   warnings: string[];
+  errors: string[];
+  groups: SyntheticStructuralGroup[];
+}
+
+export interface SyntheticStructuralGroup {
+  code: string;
+  name: string;
+  kind: 'chapter' | 'subchapter';
+  row: number;
+  requiresDescription: boolean;
 }
 
 import { trunc2 as _trunc2, money2 as _money2, calculateUnitPriceWithBDI as _calcUnitWithBDI, calculateLineTotal as _calcLineTotal } from './financialEngine';
@@ -978,7 +988,13 @@ export const DEFAULT_SYNTHETIC_COLUMN_MAP: SyntheticColumnMap = {
 function _toNumSyn(v: unknown): number {
   if (v === null || v === undefined || v === '') return 0;
   if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
-  let s = String(v).trim().replace(/[^\d.,\-]/g, '');
+  let s = String(v).trim()
+    .replace(/\s+/g, '')
+    .replace(/^R\$/i, '')
+    .replace(/%$/, '');
+  // Nunca extrair numeros de rotulos como "Total 6.7".
+  if (/[A-Za-z\u00C0-\u024F]/.test(s)) return 0;
+  s = s.replace(/[^\d.,\-]/g, '');
   if (s.includes(',') && s.includes('.')) s = s.replace(/\./g, '').replace(',', '.');
   else if (s.includes(',')) s = s.replace(',', '.');
   const n = Number(s);
@@ -994,9 +1010,27 @@ function _normLow(s: string): string {
 }
 
 function _syntheticItemDepth(item: string): number {
-  const clean = item.trim();
+  const clean = _normalizeSyntheticItem(item);
   if (!clean) return -1;
   return clean.split('.').filter(Boolean).length - 1;
+}
+
+function _normalizeSyntheticItem(item: string): string {
+  const parts = item.trim().replace(',', '.').split('.').filter(Boolean);
+  if (parts.length === 2 && /^0+$/.test(parts[1])) return String(Number(parts[0]));
+  return parts.map(part => /^\d+$/.test(part) ? String(Number(part)) : part).join('.');
+}
+
+function _normalizeSyntheticCode(code: string): string {
+  const source = code.trim().toUpperCase().replace(/\s+/g, '');
+  const match = source.match(/^([A-Z]+)(0+)(\d+)(.*)$/);
+  return match ? `${match[1]}${match[3]}${match[4]}` : source;
+}
+
+function _sourceDecimal(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '';
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '';
+  return String(value).trim();
 }
 
 function _findSyntheticSheetName(wb: XLSX.WorkBook, sheetName?: string): string {
@@ -1138,7 +1172,7 @@ export function parseSyntheticBudget(data: ArrayBuffer, options: SyntheticImport
     });
   }
 
-  return { items, bdiPercent, warnings };
+  return { items, bdiPercent, warnings, errors: [], groups: [] };
 }
 
 export function parseSyntheticBudgetFlexible(data: ArrayBuffer, options: SyntheticImportOptions): ParsedSynthetic {
@@ -1147,6 +1181,7 @@ export function parseSyntheticBudgetFlexible(data: ArrayBuffer, options: Synthet
   const sheet = wb.Sheets[sheetName];
   const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
   const warnings: string[] = [];
+  const errors: string[] = [];
   const bdiPercent = options.bdiPercent !== undefined && Number.isFinite(options.bdiPercent)
     ? options.bdiPercent
     : _detectSyntheticBdi(rows);
@@ -1158,12 +1193,14 @@ export function parseSyntheticBudgetFlexible(data: ArrayBuffer, options: Synthet
     return typeof index === 'number' ? row[index] : '';
   };
   const items: BudgetItem[] = [];
-  let currentChapter: { code: string; name: string } | null = null;
-  let currentSubchapter: { code: string; name: string } | null = null;
+  const groups: SyntheticStructuralGroup[] = [];
+  const groupByCode = new Map<string, SyntheticStructuralGroup>();
+  const seenKeys = new Map<string, number>();
 
   for (let i = firstDataRowIndex; i < rows.length; i++) {
     const r = rows[i] || [];
-    const item = _str(read(r, 'item'));
+    const itemSource = _str(read(r, 'item'));
+    const item = _normalizeSyntheticItem(itemSource);
     const code = _str(read(r, 'code'));
     const bank = _str(read(r, 'bank'));
     const description = _str(read(r, 'description'));
@@ -1174,25 +1211,53 @@ export function parseSyntheticBudgetFlexible(data: ArrayBuffer, options: Synthet
     const upWithBDI = _toNumSyn(read(r, 'unitPriceWithBDI'));
     const totalWithBDI = _toNumSyn(read(r, 'totalWithBDI'));
 
-    if (!item && !code && !description && !quantity && !upNoBDI && !totalNoBDI && !upWithBDI && !totalWithBDI) continue;
+    if (!item && !code && !description && !bank && !quantity && !unit && !upNoBDI && !totalNoBDI && !upWithBDI && !totalWithBDI) continue;
     const dLow = _normLow(description);
     if (!code && (dLow.includes('total') || dLow.includes('subtotal'))) continue;
-    const looksLikeGroup = !code && !!item && !!description && quantity <= 0 && !unit;
+    const looksLikeGroup = !!item
+      && /^\d+(?:\.\d+)*$/.test(item)
+      && !code
+      && !bank
+      && quantity <= 0
+      && !unit
+      && upNoBDI === 0
+      && totalNoBDI === 0
+      && upWithBDI === 0
+      && totalWithBDI === 0;
     if (looksLikeGroup) {
       const depth = _syntheticItemDepth(item);
-      if (depth <= 0) {
-        currentChapter = { code: item, name: description };
-        currentSubchapter = null;
-      } else {
-        if (!currentChapter) {
-          const parentCode = item.split('.').slice(0, 1).join('.');
-          currentChapter = { code: parentCode || item, name: parentCode || item };
+      const kind = depth <= 0 ? 'chapter' : 'subchapter';
+      const name = description || `${kind === 'chapter' ? 'Capitulo' : 'Subcapitulo'} ${item} - sem descricao`;
+      const group: SyntheticStructuralGroup = {
+        code: item,
+        name,
+        kind,
+        row: i + 1,
+        requiresDescription: !description,
+      };
+      const existingGroup = groupByCode.get(item);
+      if (existingGroup) {
+        if (existingGroup.requiresDescription && description) {
+          existingGroup.name = description;
+          existingGroup.requiresDescription = false;
         }
-        currentSubchapter = { code: item, name: description };
+        continue;
+      }
+      groups.push(group);
+      groupByCode.set(item, group);
+      if (!description) warnings.push(`Linha ${i + 1} (${item}): ${kind} sem descricao; corrija antes de concluir.`);
+      continue;
+    }
+    if (item && !/^\d+(?:\.\d+)*$/.test(item) && !code && !bank && !quantity && !unit) {
+      continue;
+    }
+    const hasCompositionIdentity = !!code && !!bank && quantity > 0 && !!unit;
+    if (!hasCompositionIdentity) {
+      if (item || code || bank || quantity || unit) {
+        errors.push(`Linha ${i + 1} (${item || code || 'sem item'}): linha ambigua; composicao exige codigo, banco, quantidade e unidade.`);
       }
       continue;
     }
-    if (!code) continue;
 
     const bdiFactor = 1 + (bdiPercent ?? 0) / 100;
     const finalUpNoBDI = upNoBDI > 0
@@ -1201,10 +1266,39 @@ export function parseSyntheticBudgetFlexible(data: ArrayBuffer, options: Synthet
     const finalUpWithBDI = upWithBDI > 0 ? _money2(upWithBDI) : _calcUnitWithBDI(finalUpNoBDI, bdiPercent ?? 0);
     const finalTotalNoBDI = totalNoBDI > 0 ? _money2(totalNoBDI) : _calcLineTotal(finalUpNoBDI, quantity);
     const finalTotalWithBDI = totalWithBDI > 0 ? _money2(totalWithBDI) : _calcLineTotal(finalUpWithBDI, quantity);
+    const calculatedTotalWithBDI = _calcLineTotal(upWithBDI > 0 ? upWithBDI : finalUpWithBDI, quantity);
+    if (totalWithBDI > 0) {
+      const difference = Math.abs(_money2(totalWithBDI) - calculatedTotalWithBDI);
+      if (difference > 0.011) {
+        errors.push(`Linha ${i + 1} (${code}): total com BDI da coluna J diverge do produto quantidade x unitario com BDI.`);
+      } else if (difference > 0.001) {
+        warnings.push(`Linha ${i + 1} (${code}): diferenca de R$ 0,01 preservada conforme a fonte.`);
+      }
+    }
 
     if (quantity <= 0) warnings.push(`Linha ${i + 1} (${code}): quantidade zero/invalida.`);
     if (finalUpNoBDI <= 0 && finalUpWithBDI <= 0) warnings.push(`Linha ${i + 1} (${code}): valor unitario nao encontrado.`);
     if (!bank) warnings.push(`Linha ${i + 1} (${code}): banco nao informado.`);
+
+    const canonicalKey = `${item}|${_normalizeSyntheticCode(code)}`;
+    const duplicateRow = seenKeys.get(canonicalKey);
+    if (duplicateRow) {
+      errors.push(`Linhas ${duplicateRow} e ${i + 1}: chave duplicada ${item} / ${code}.`);
+      continue;
+    }
+    seenKeys.set(canonicalKey, i + 1);
+
+    const itemParts = item.split('.');
+    const chapterCode = itemParts[0] || '';
+    const chapter = groupByCode.get(chapterCode);
+    let subchapter: SyntheticStructuralGroup | undefined;
+    for (let depth = itemParts.length - 1; depth >= 2; depth--) {
+      const candidate = groupByCode.get(itemParts.slice(0, depth).join('.'));
+      if (candidate?.kind === 'subchapter') {
+        subchapter = candidate;
+        break;
+      }
+    }
 
     items.push({
       id: `bgt-${Date.now().toString(36)}-${i}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1219,12 +1313,27 @@ export function parseSyntheticBudgetFlexible(data: ArrayBuffer, options: Synthet
       totalNoBDI: finalTotalNoBDI,
       totalWithBDI: finalTotalWithBDI,
       source: 'sintetica',
-      chapterCode: currentChapter?.code,
-      chapterName: currentChapter?.name,
-      subchapterCode: currentSubchapter?.code,
-      subchapterName: currentSubchapter?.name,
+      chapterCode: chapter?.code ?? chapterCode,
+      chapterName: chapter?.name ?? `Capitulo ${chapterCode}`,
+      subchapterCode: subchapter?.code,
+      subchapterName: subchapter?.name,
+      canonicalKey,
+      sourceValues: {
+        quantity: _sourceDecimal(read(r, 'quantity')),
+        unitPriceNoBDI: _sourceDecimal(read(r, 'unitPriceNoBDI')),
+        totalNoBDI: _sourceDecimal(read(r, 'totalNoBDI')),
+        unitPriceWithBDI: _sourceDecimal(read(r, 'unitPriceWithBDI')),
+        totalWithBDI: _sourceDecimal(read(r, 'totalWithBDI')),
+      },
+      baseContract: {
+        quantity,
+        unitPriceNoBDI: finalUpNoBDI,
+        unitPriceWithBDI: finalUpWithBDI,
+        totalNoBDI: finalTotalNoBDI,
+        totalWithBDI: finalTotalWithBDI,
+      },
     });
   }
 
-  return { items, bdiPercent, warnings };
+  return { items, bdiPercent, warnings, errors, groups };
 }

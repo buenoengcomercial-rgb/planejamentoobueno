@@ -75,6 +75,9 @@ export interface RealCostCompositionRow {
   contractedValue: number;
   materialCost: number;
   laborCost: number;
+  equipmentCost: number;
+  otherCost: number;
+  committedCost: number;
   realCost: number;
   grossProfit: number;
   marginPct: number;
@@ -102,6 +105,9 @@ export interface RealCostGroupTotals {
   contractedValue: number;
   materialCost: number;
   laborCost: number;
+  equipmentCost: number;
+  otherCost: number;
+  committedCost: number;
   realCost: number;
   grossProfit: number;
   marginPct: number;
@@ -149,6 +155,7 @@ export interface RealCostAnalysis {
   pending: RealCostPendingSummary;
   totals: {
     contractedValue: number;
+    committedCost: number;
     realCost: number;
     grossProfit: number;
     marginPct: number;
@@ -252,6 +259,9 @@ const ADDITIVE_STATUS_LABEL: Record<AdditiveStatus, string> = {
   reprovado: 'Reprovado',
   aprovado: 'Aprovado',
   aditivo_contratado: 'Integrado ao projeto',
+  contratado: 'Contratado',
+  rejeitado: 'Rejeitado',
+  cancelado: 'Cancelado',
 };
 
 const additiveStatusLabel = (additive: Additive) =>
@@ -699,14 +709,48 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
     const phaseId = contractPhase?.phaseId || matchedTask?.phaseId || '__unlinked__';
     const chapter = source.phaseChain || contractPhase?.chapter || matchedTask?.chapter || 'Sem vinculo com cronograma';
     const inputs = buildInputRows(project, source, priceIndex);
-    const realCost = money2(inputs.reduce((sum, input) => sum + input.realTotal, 0));
-    const materialCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'material' ? input.realTotal : 0), 0));
-    const laborCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'labor' ? input.realTotal : 0), 0));
+    const committedCost = money2(inputs.reduce((sum, input) => sum + input.realTotal, 0));
+    const materialCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'material' ? input.referenceTotal : 0), 0));
+    const laborCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'labor' ? input.referenceTotal : 0), 0));
+    const equipmentCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'equipment' ? input.referenceTotal : 0), 0));
+    const otherCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'unclassified' ? input.referenceTotal : 0), 0));
+    const linkedTaskId = matchedTask?.task.id || source.taskId;
+    const linkedBudgetId = source.id.startsWith('budget:') ? source.id.slice('budget:'.length) : undefined;
+    const matchingActualEntries = (project.costLedger ?? [])
+      .filter(entry =>
+        entry.level === 'actual'
+        && (
+          (!!linkedTaskId && entry.taskId === linkedTaskId)
+          || (!!linkedBudgetId && entry.budgetItemId === linkedBudgetId)
+        ));
+    const hasLaborLedger = matchingActualEntries.some(entry => entry.category === 'labor');
+    const hasMaterialLedger = matchingActualEntries.some(entry => entry.category === 'material');
+    const dailyLaborActual = hasLaborLedger
+      ? 0
+      : money2((matchedTask?.task.dailyLogs ?? [])
+          .flatMap(log => log.laborEntries ?? [])
+          .reduce((sum, entry) => sum + trunc2((Number(entry.hours) || 0) * (Number(entry.hourlyCost) || 0)), 0));
+    const warehouseMaterialActual = hasMaterialLedger || !linkedTaskId
+      ? 0
+      : money2((project.warehouse?.movements ?? [])
+          .filter(movement =>
+            movement.taskId === linkedTaskId
+            && !movement.reversedById
+            && (movement.type === 'retirada' || movement.type === 'devolucao'))
+          .reduce((sum, movement) => {
+            const amount = trunc2((Number(movement.quantity) || 0) * (Number(movement.unitPrice) || 0));
+            return sum + (movement.type === 'devolucao' ? -amount : amount);
+          }, 0));
+    const realCost = money2(
+      matchingActualEntries.reduce((sum, entry) => sum + (Number(entry.amount) || 0), 0)
+      + dailyLaborActual
+      + warehouseMaterialActual,
+    );
     const missingQuoteCount = inputs.filter(input => input.status === 'missing').length;
     const hasAnalytic = inputs.length > 0;
     const hasScheduleLink = !!(matchedTask || source.phaseId);
     const hasContractValue = source.contractedValue > 0;
-    const complete = hasAnalytic && hasScheduleLink && hasContractValue && missingQuoteCount === 0;
+    const complete = hasAnalytic && hasScheduleLink && hasContractValue;
     const grossProfit = money2(source.contractedValue - realCost);
     const marginPct = source.contractedValue > 0 ? trunc2((grossProfit / source.contractedValue) * 100) : 0;
 
@@ -737,6 +781,9 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
       contractedValue: money2(source.contractedValue),
       materialCost,
       laborCost,
+      equipmentCost,
+      otherCost,
+      committedCost,
       realCost,
       grossProfit,
       marginPct,
@@ -766,6 +813,18 @@ function totalsFromRowsAndChildren(
     rows.reduce((sum, row) => sum + row.laborCost, 0) +
     children.reduce((sum, child) => sum + child.totals.laborCost, 0),
   );
+  const equipmentCost = money2(
+    rows.reduce((sum, row) => sum + row.equipmentCost, 0) +
+    children.reduce((sum, child) => sum + child.totals.equipmentCost, 0),
+  );
+  const otherCost = money2(
+    rows.reduce((sum, row) => sum + row.otherCost, 0) +
+    children.reduce((sum, child) => sum + child.totals.otherCost, 0),
+  );
+  const committedCost = money2(
+    rows.reduce((sum, row) => sum + row.committedCost, 0) +
+    children.reduce((sum, child) => sum + child.totals.committedCost, 0),
+  );
   const realCost = money2(
     rows.reduce((sum, row) => sum + row.realCost, 0) +
     children.reduce((sum, child) => sum + child.totals.realCost, 0),
@@ -782,6 +841,9 @@ function totalsFromRowsAndChildren(
     contractedValue,
     materialCost,
     laborCost,
+    equipmentCost,
+    otherCost,
+    committedCost,
     realCost,
     grossProfit,
     marginPct,
@@ -1005,6 +1067,7 @@ export function buildRealCostAnalysis(project: Project, trabalhaSabado = false):
 
   const reconstructedContractedValue = money2(compositions.reduce((sum, row) => sum + row.contractedValue, 0));
   const contractedValue = getOfficialRealCostContractedValue(project) ?? reconstructedContractedValue;
+  const committedCost = money2(compositions.reduce((sum, row) => sum + row.committedCost, 0));
   const realCost = money2(compositions.reduce((sum, row) => sum + row.realCost, 0));
   const grossProfit = money2(contractedValue - realCost);
   const marginPct = contractedValue > 0 ? trunc2((grossProfit / contractedValue) * 100) : 0;
@@ -1017,6 +1080,7 @@ export function buildRealCostAnalysis(project: Project, trabalhaSabado = false):
     pending,
     totals: {
       contractedValue,
+      committedCost,
       realCost,
       grossProfit,
       marginPct,

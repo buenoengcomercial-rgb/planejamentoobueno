@@ -5,6 +5,8 @@ import { integrateImportedBudget } from '@/components/ImportSyntheticDialog';
 import type { Project } from '@/types/project';
 import { extractBaseAnalyticCompositions } from './additiveImport';
 import { inspectSyntheticWorkbook, parseSyntheticBudgetFlexible } from './importParser';
+import { money2 } from './financialEngine';
+import { buildContractImportPayload } from './projectSync';
 
 const workbookPath = process.env.SYNTHETIC_CORRECTION_WORKBOOK;
 const acceptance = workbookPath && existsSync(workbookPath) ? it : it.skip;
@@ -21,7 +23,15 @@ describe('aceitação da planilha Sintética Correção 02', () => {
     expect(parsed.bdiPercent).toBe(27.58);
     expect(parsed.items).toHaveLength(402);
     expect(new Set(parsed.items.map(item => item.chapterCode)).size).toBe(7);
-    expect(new Set(parsed.items.map(item => item.subchapterCode).filter(Boolean)).size).toBe(43);
+    expect(new Set(parsed.items.map(item => item.subchapterCode).filter(Boolean)).size).toBe(44);
+    expect(parsed.groups.filter(group => group.kind === 'chapter')).toHaveLength(7);
+    expect(parsed.groups.filter(group => group.kind === 'subchapter')).toHaveLength(44);
+    expect(parsed.groups.find(group => group.code === '6.7')).toMatchObject({
+      kind: 'subchapter',
+      requiresDescription: true,
+    });
+    expect(parsed.errors).toEqual([]);
+    expect(money2(parsed.items.reduce((sum, item) => sum + item.totalWithBDI, 0))).toBe(5_815_613.52);
 
     const administration = parsed.items.find(item => item.item === '1.1.1' && item.code === 'ADM04');
     expect(administration).toMatchObject({
@@ -42,13 +52,27 @@ describe('aceitação da planilha Sintética Correção 02', () => {
     };
     const integration = integrateImportedBudget(project, parsed.items, analytic.compositions);
     expect(integration.phases.filter(phase => !phase.parentId)).toHaveLength(7);
-    expect(integration.phases.filter(phase => !!phase.parentId)).toHaveLength(43);
+    expect(integration.phases.filter(phase => !!phase.parentId)).toHaveLength(44);
     expect(integration.phases.reduce((sum, phase) => sum + phase.tasks.length, 0)).toBe(402);
 
     const administrationBudget = integration.budgetItems.find(item => item.item === '1.1.1' && item.code === 'ADM04');
     const administrationAnalytic = integration.analyticCompositions.find(composition => composition.item === '1.1.1' && composition.code === 'ADM04');
     expect(administrationBudget?.taskId).toBeTruthy();
     expect(administrationAnalytic?.linkedTaskId).toBe(administrationBudget?.taskId);
+
+    const atomicPayload = buildContractImportPayload({
+      ...project,
+      contractSchemaVersion: 2,
+      phases: integration.phases,
+      budgetItems: integration.budgetItems,
+      analyticCompositions: integration.analyticCompositions,
+    });
+    expect(atomicPayload.budgetItems).toHaveLength(402);
+    expect(atomicPayload.analyticCompositions).toHaveLength(402);
+    expect(atomicPayload.chapters).toHaveLength(51);
+    expect(atomicPayload.tasks).toHaveLength(402);
+    expect(atomicPayload.chapters.find(row => row.id === integration.phases.find(phase => phase.customNumber === '6.7')?.id))
+      .toMatchObject({ parent_id: expect.any(String) });
   });
 
   it('preserva 33 totais da fonte que diferem do cálculo por R$ 0,01', () => {
