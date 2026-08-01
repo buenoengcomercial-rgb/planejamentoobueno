@@ -26,6 +26,7 @@ interface Props {
   onUpdateQuantity: (id: string, field: 'addedQuantity' | 'suppressedQuantity', v: number) => void;
   onRemoveComposition: (id: string) => void;
   onAddNewService: (phaseId: string, phaseChain: string, parentNumber: string) => void;
+  onAddNewSubchapter: (parentPhaseId: string) => void;
   onChangeMemory: (id: string, rows: AdditiveCalculationMemoryRow[]) => void;
   selectedDetail?: AdditiveDetailSelection | null;
   onSelectDetail?: (selection: AdditiveDetailSelection | null) => void;
@@ -143,7 +144,7 @@ export default function AdditiveTable(props: Props) {
             </tr>
           </thead>
           <tbody>
-            {filteredComps.length === 0 ? (
+            {filteredComps.length === 0 && groupTree.length === 0 && orphanRows.length === 0 ? (
               <tr>
                 <td colSpan={COL_COUNT} className="text-center text-muted-foreground py-8">
                   Nenhuma composição encontrada com os filtros atuais.
@@ -170,6 +171,7 @@ export default function AdditiveTable(props: Props) {
                     onUpdateQuantity={props.onUpdateQuantity}
                     onRemoveComposition={props.onRemoveComposition}
                     onAddNewService={props.onAddNewService}
+                    onAddNewSubchapter={props.onAddNewSubchapter}
                     onChangeMemory={props.onChangeMemory}
                     selectedDetail={props.selectedDetail}
                     onSelectDetail={props.onSelectDetail}

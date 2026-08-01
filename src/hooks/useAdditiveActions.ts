@@ -7,7 +7,7 @@ import {
 } from '@/lib/additiveUserWork';
 import type {
   Project, Additive as AdditiveModel, AdditiveComposition,
-  AdditiveStatus, AdditiveApprovalSnapshot,
+  AdditiveStatus, AdditiveApprovalSnapshot, Phase,
 } from '@/types/project';
 import {
   importAdditiveFromExcel, exportAdditiveToExcel, exportAdditiveToPdf,
@@ -37,6 +37,13 @@ interface Params {
   state: AdditiveStateApi;
   canFormalize?: boolean;
 }
+
+const createPhaseId = () => {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return `phase-${crypto.randomUUID()}`;
+  }
+  return `phase-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+};
 
 export function useAdditiveActions({ project, onProjectChange, state, canFormalize = false }: Params) {
   const { user } = useAuth();
@@ -334,7 +341,13 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
             ...prev,
             additives: (prev.additives ?? []).map(a =>
               a.id === draftCandidate.id
-                ? { ...merged, id: draftCandidate.id, name: draftCandidate.name, status: draftCandidate.status ?? 'rascunho' }
+                ? {
+                    ...merged,
+                    id: draftCandidate.id,
+                    name: draftCandidate.name,
+                    status: draftCandidate.status ?? 'rascunho',
+                    visiblePhaseIds: draftCandidate.visiblePhaseIds,
+                  }
                 : a,
             ),
           };
@@ -747,6 +760,74 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     toast.success(`Novo serviço ${novo.itemNumber} adicionado`);
   };
 
+  const handleAddSubchapter = (parentPhaseId: string, rawName: string) => {
+    if (!active || isLocked) return;
+    const name = rawName.trim();
+    if (!name) {
+      toast.error('Informe o nome do novo subcapítulo.');
+      return;
+    }
+
+    const parent = project.phases.find(phase => phase.id === parentPhaseId);
+    if (!parent || parent.parentId) {
+      toast.error('O subcapítulo deve ser criado dentro de um capítulo principal.');
+      return;
+    }
+
+    const phaseId = createPhaseId();
+    onProjectChange(prev => {
+      const currentParent = prev.phases.find(phase => phase.id === parentPhaseId);
+      if (!currentParent || currentParent.parentId) return prev;
+
+      const siblings = prev.phases
+        .filter(phase => phase.parentId === parentPhaseId)
+        .sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER));
+      const normalizedOrder = new Map(siblings.map((phase, index) => [phase.id, index]));
+      const newPhase: Phase = {
+        id: phaseId,
+        name,
+        color: currentParent.color,
+        tasks: [],
+        parentId: parentPhaseId,
+        order: siblings.length,
+      };
+
+      const nextProject: Project = {
+        ...prev,
+        phases: [
+          ...prev.phases.map(phase =>
+            phase.parentId === parentPhaseId
+              ? { ...phase, order: normalizedOrder.get(phase.id) ?? phase.order }
+              : phase,
+          ),
+          newPhase,
+        ],
+        additives: (prev.additives ?? []).map(additive =>
+          additive.id === active.id
+            ? {
+                ...additive,
+                visiblePhaseIds: Array.from(new Set([...(additive.visiblePhaseIds ?? []), phaseId])),
+              }
+            : additive,
+        ),
+      };
+
+      return logToProject(nextProject, {
+        ...auditUser,
+        entityType: 'additive',
+        entityId: active.id,
+        action: 'created',
+        title: 'Novo subcapítulo criado no aditivo',
+        metadata: {
+          phaseId,
+          parentPhaseId,
+          name,
+        },
+      });
+    });
+    toast.success(`Subcapítulo “${name}” criado.`);
+  };
+
   const handleRemoveComposition = (compId: string) => {
     if (!active || isLocked) return;
     const comp = active.compositions.find(c => c.id === compId);
@@ -910,6 +991,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     handleUseSyntheticFromMeasurement,
     handleChangeGlobalDiscount,
     handleAddNewService,
+    handleAddSubchapter,
     handleRemoveComposition,
     handleUnlockIntegratedAdditive,
     handleContractAdditive,

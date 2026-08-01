@@ -1,5 +1,5 @@
 import { Fragment, memo } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput, Project } from '@/types/project';
 import type { CompGroup } from './types';
 import { fmtBRL, fmtPct, COL_COUNT } from './types';
@@ -21,6 +21,7 @@ interface Props {
   onUpdateQuantity: (id: string, field: 'addedQuantity' | 'suppressedQuantity', v: number) => void;
   onRemoveComposition: (id: string) => void;
   onAddNewService: (phaseId: string, phaseChain: string, parentNumber: string) => void;
+  onAddNewSubchapter: (parentPhaseId: string) => void;
   onChangeMemory: (id: string, rows: AdditiveCalculationMemoryRow[]) => void;
   selectedDetail?: AdditiveDetailSelection | null;
   onSelectDetail?: (selection: AdditiveDetailSelection | null) => void;
@@ -28,7 +29,7 @@ interface Props {
 }
 
 function AdditiveGroupRowImpl(props: Props) {
-  const { group: g, isLocked, collapsed, onToggleCollapsed, onAddNewService } = props;
+  const { group: g, isLocked, collapsed, onToggleCollapsed, onAddNewService, onAddNewSubchapter } = props;
   const indent = g.depth * 14;
   const isCollapsed = collapsed.has(g.phaseId);
 
@@ -54,7 +55,25 @@ function AdditiveGroupRowImpl(props: Props) {
         {/* Banco */}
         <td />
         {/* Descrição */}
-        <td className="px-1 py-1.5 text-[12px] truncate" title={g.name}>{g.name}</td>
+        <td className="px-1 py-1.5 text-[12px]" title={g.name}>
+          <div className="flex min-w-0 items-center gap-1">
+            <span className="truncate">{g.name}</span>
+            {g.depth === 0 && !isLocked && (
+              <button
+                type="button"
+                aria-label={`Novo subcapítulo em ${g.number} ${g.name}`}
+                title="Novo subcapítulo"
+                onClick={event => {
+                  event.stopPropagation();
+                  onAddNewSubchapter(g.phaseId);
+                }}
+                className="inline-flex shrink-0 items-center rounded p-0.5 text-sky-700 hover:bg-sky-100 hover:text-sky-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            )}
+          </div>
+        </td>
         {/* Und */}
         <td />
         {/* Quantidades (4) */}

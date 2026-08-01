@@ -1,11 +1,16 @@
 import { useMemo, useState, type MouseEvent } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Upload } from 'lucide-react';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
 import type { Project } from '@/types/project';
 import { additiveTotals } from '@/lib/additiveImport';
 import AuditHistoryPanel from '@/components/AuditHistoryPanel';
@@ -59,7 +64,26 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
   const totals = useMemo(() => (active ? additiveTotals(active, project) : null), [active, project]);
   const [contractConfirmOpen, setContractConfirmOpen] = useState(false);
   const [detailSelection, setDetailSelection] = useState<AdditiveDetailSelection | null>(null);
+  const [subchapterParentId, setSubchapterParentId] = useState<string | null>(null);
+  const [subchapterName, setSubchapterName] = useState('Novo Subcapítulo');
   const isReintegration = !!active?.isContracted && !!active?.editUnlocked;
+  const subchapterParent = project.phases.find(phase => phase.id === subchapterParentId);
+
+  const requestNewSubchapter = (parentPhaseId: string) => {
+    setSubchapterParentId(parentPhaseId);
+    setSubchapterName('Novo Subcapítulo');
+  };
+
+  const closeSubchapterDialog = () => {
+    setSubchapterParentId(null);
+    setSubchapterName('Novo Subcapítulo');
+  };
+
+  const confirmNewSubchapter = () => {
+    if (!subchapterParentId || !subchapterName.trim()) return;
+    actions.handleAddSubchapter(subchapterParentId, subchapterName);
+    closeSubchapterDialog();
+  };
 
   const openReview = (preset: 'approve' | 'reject') => {
     if (preset === 'approve') {
@@ -186,6 +210,7 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
             onUpdateQuantity={actions.updateCompositionQuantity}
             onRemoveComposition={actions.handleRemoveComposition}
             onAddNewService={actions.handleAddNewService}
+            onAddNewSubchapter={requestNewSubchapter}
             onChangeMemory={actions.setCalculationMemory}
             selectedDetail={detailSelection}
             onSelectDetail={setDetailSelection}
@@ -208,6 +233,35 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
         onConfirm={actions.handleConfirmImport}
         onCancel={() => { setImportDialogOpen(false); setPendingFile(null); }}
       />
+
+      <Dialog open={!!subchapterParentId} onOpenChange={open => !open && closeSubchapterDialog()}>
+        <DialogContent>
+          <form onSubmit={event => { event.preventDefault(); confirmNewSubchapter(); }}>
+            <DialogHeader>
+              <DialogTitle>Novo Subcapítulo</DialogTitle>
+              <DialogDescription>
+                {subchapterParent
+                  ? `O subcapítulo será incluído em ${subchapterParent.name}.`
+                  : 'Informe o nome do subcapítulo.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-4 space-y-2">
+              <Label htmlFor="additive-subchapter-name">Nome do subcapítulo</Label>
+              <Input
+                id="additive-subchapter-name"
+                value={subchapterName}
+                onChange={event => setSubchapterName(event.target.value)}
+                autoFocus
+                onFocus={event => event.currentTarget.select()}
+              />
+            </div>
+            <DialogFooter className="mt-6">
+              <Button type="button" variant="outline" onClick={closeSubchapterDialog}>Cancelar</Button>
+              <Button type="submit" disabled={!subchapterName.trim()}>Criar subcapítulo</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <AdditiveReviewDialog
         open={reviewDialogOpen}

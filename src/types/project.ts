@@ -1273,6 +1273,8 @@ export interface Additive {
   approvalSnapshots?: AdditiveApprovalSnapshot[];
   /** Estado visual persistido por aditivo (capítulos recolhidos, composições abertas, mostrar analítico). */
   uiState?: AdditiveUiState;
+  /** Subcapítulos criados manualmente neste aditivo, inclusive enquanto ainda não têm serviços. */
+  visiblePhaseIds?: string[];
   /** Data de emissão do relatório (override do cabeçalho exportado). ISO. */
   headerIssueDate?: string;
   /** Responsável exibido no cabeçalho exportado (sobrepõe approvedBy). */

@@ -38,6 +38,7 @@ export function useAdditiveGroups(
     if (!active) return empty;
     void globalDiscount;
     const compsByPhase = new Map<string, AdditiveComposition[]>();
+    const visiblePhaseIds = new Set(active.visiblePhaseIds ?? []);
     const orphans: AdditiveComposition[] = [];
     let anyLinked = false;
     filteredComps.forEach(c => {
@@ -50,7 +51,7 @@ export function useAdditiveGroups(
         orphans.push(c);
       }
     });
-    if (!anyLinked) return { ...empty, orphanRows: filteredComps };
+    if (!anyLinked && visiblePhaseIds.size === 0) return { ...empty, orphanRows: filteredComps };
 
     const numbering = getChapterNumbering(project);
     const tree = getChapterTree(project);
@@ -60,7 +61,8 @@ export function useAdditiveGroups(
       const childGroups = chapterNode.children
         .map(c => buildNode(c, depth + 1))
         .filter((g): g is CompGroup => g !== null);
-      if (directRows.length === 0 && childGroups.length === 0) return null;
+      const isExplicitlyVisible = visiblePhaseIds.has(chapterNode.phase.id);
+      if (directRows.length === 0 && childGroups.length === 0 && !isExplicitlyVisible) return null;
 
       let subtotalTotalFonte = 0;
       let subtotalContratado = 0;
@@ -103,7 +105,7 @@ export function useAdditiveGroups(
       .filter((g): g is CompGroup => g !== null)
       .sort((a, b) => a.number.localeCompare(b.number, undefined, { numeric: true }));
 
-    return { groupTree: groups, orphanRows: orphans, hasEapLink: anyLinked };
+    return { groupTree: groups, orphanRows: orphans, hasEapLink: anyLinked || groups.length > 0 };
   }, [active, filteredComps, project, globalDiscount, bdi]);
 
   return { banks, filteredComps, groupTree, orphanRows, hasEapLink };
