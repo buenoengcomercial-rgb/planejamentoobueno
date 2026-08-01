@@ -107,4 +107,11 @@ describe('AdditiveGroupRow', () => {
     );
     expect(screen.queryByRole('button', { name: /novo subcapítulo/i })).not.toBeInTheDocument();
   });
+
+  it('mantém a ação de novo serviço alinhada quando o grupo é um subcapítulo', () => {
+    renderGroup({ ...rootGroup, phaseId: 'chapter-2-9', number: '2.9', name: 'SERVIÇOS - ITENS NOVOS', depth: 1 });
+
+    const action = screen.getByRole('button', { name: /novo serviço em 2\.9 serviços - itens novos/i });
+    expect(action.parentElement).toHaveStyle({ paddingLeft: '24px' });
+  });
 });

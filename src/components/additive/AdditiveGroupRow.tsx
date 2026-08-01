@@ -128,7 +128,7 @@ function AdditiveGroupRowImpl(props: Props) {
       {!isCollapsed && !isLocked && (
         <tr className="border-b bg-sky-50/30">
           <td colSpan={COL_COUNT} className="px-2 py-1">
-            <div style={{ paddingLeft: indent + 24 }}>
+            <div style={{ paddingLeft: 24 }}>
               <button
                 type="button"
                 onClick={() => onAddNewService(g.phaseId, `${g.number} ${g.name}`, g.number)}
