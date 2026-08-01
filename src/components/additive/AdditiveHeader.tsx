@@ -9,7 +9,6 @@ import {
 } from 'lucide-react';
 import type { Project, Additive as AdditiveModel, AdditiveStatus } from '@/types/project';
 import { STATUS_BADGE, STATUS_LABEL } from './types';
-import type { RefObject } from 'react';
 
 interface Props {
   project: Project;
@@ -18,11 +17,10 @@ interface Props {
   bdi: number;
   globalDiscount: number;
   isLocked: boolean;
-  fileRef: RefObject<HTMLInputElement>;
   undoButton?: React.ReactNode;
   onChangeBdi: (value: string) => void;
   onChangeGlobalDiscount: (value: string) => void;
-  onFileSelected: (f: File | null) => void;
+  onOpenImport: () => void;
   onUseSynthetic: () => void;
   onUnlockIntegrated: () => void;
   onContract: () => void;
@@ -40,8 +38,8 @@ interface Props {
 }
 
 export default function AdditiveHeader({
-  project, active, status, bdi, globalDiscount, isLocked, fileRef, undoButton,
-  onChangeBdi, onChangeGlobalDiscount, onFileSelected, onUseSynthetic,
+  project, active, status, bdi, globalDiscount, isLocked, undoButton,
+  onChangeBdi, onChangeGlobalDiscount, onOpenImport, onUseSynthetic,
   onUnlockIntegrated, onContract, onExportExcel, onExportSyntheticComplete, onExportNewServices,
   onExportCalculationMemory, onExportPdf,
   onExportSyntheticCompletePdf, onExportNewServicesPdf, onExportCalculationMemoryPdf,
@@ -125,12 +123,7 @@ export default function AdditiveHeader({
             />
           </div>
         )}
-        <input
-          ref={fileRef} type="file" accept=".xlsx,.xls"
-          className="hidden"
-          onChange={e => onFileSelected(e.target.files?.[0] ?? null)}
-        />
-        <Button variant="default" size="sm" onClick={() => fileRef.current?.click()}>
+        <Button variant="default" size="sm" onClick={onOpenImport}>
           <Upload className="w-4 h-4 mr-1" /> Importar Excel
         </Button>
         {(project.budgetItems ?? []).some(b => b.source === 'sintetica') && (

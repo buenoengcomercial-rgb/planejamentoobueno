@@ -1128,6 +1128,8 @@ export interface AdditiveComposition {
   baseTaskId?: string;
   /** Valor unitário c/ BDI lido da linha "Valor com BDI =" da Analítica (por unidade da composição). */
   analyticUnitPriceWithBDI?: number;
+  /** Valor unitário de referência s/ BDI lido na linha pai "Composição" da Analítica. */
+  analyticReferenceUnitPriceNoBDI?: number;
   /** Total c/ BDI calculado a partir da Analítica (= analyticUnitPriceWithBDI * quantity). */
   analyticTotalWithBDI?: number;
   /** Origem dos valores financeiros, usada para preservar totais já calculados pela Sintética da Medição. */

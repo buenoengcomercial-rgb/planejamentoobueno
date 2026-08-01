@@ -50,8 +50,7 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
   const {
     additives, active, status, isLocked, bdi, globalDiscount,
     showAnalytic, setShowAnalytic, expanded, collapsed,
-    importDialogOpen, setImportDialogOpen, importName, setImportName,
-    setPendingFile, fileRef,
+    importDialogOpen, setImportDialogOpen,
     issuesOpen, setIssuesOpen,
     confirmDeleteId, setConfirmDeleteId,
     reviewDialogOpen, setReviewDialogOpen,
@@ -62,6 +61,9 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
   } = state;
 
   const totals = useMemo(() => (active ? additiveTotals(active, project) : null), [active, project]);
+  const analyticImportPhaseIds = useMemo(() => project.phases
+    .filter(phase => phase.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().includes('SERVICOS - ITENS NOVOS'))
+    .map(phase => phase.id), [project.phases]);
   const [contractConfirmOpen, setContractConfirmOpen] = useState(false);
   const [detailSelection, setDetailSelection] = useState<AdditiveDetailSelection | null>(null);
   const [subchapterParentId, setSubchapterParentId] = useState<string | null>(null);
@@ -111,11 +113,10 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
         bdi={bdi}
         globalDiscount={globalDiscount}
         isLocked={isLocked}
-        fileRef={fileRef}
         undoButton={undoButton}
         onChangeBdi={actions.handleChangeBdi}
         onChangeGlobalDiscount={actions.handleChangeGlobalDiscount}
-        onFileSelected={actions.handleFileSelected}
+        onOpenImport={() => setImportDialogOpen(true)}
         onUseSynthetic={actions.handleUseSyntheticFromMeasurement}
         onUnlockIntegrated={actions.handleUnlockIntegratedAdditive}
         onContract={() => setContractConfirmOpen(true)}
@@ -148,7 +149,7 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
             <br />
             <span className="text-xs">Você pode importar a Sintética primeiro e a Analítica depois — o sistema vincula os insumos automaticamente.</span>
           </p>
-          <Button onClick={() => fileRef.current?.click()}>
+          <Button onClick={() => setImportDialogOpen(true)}>
             <Upload className="w-4 h-4 mr-2" /> Importar planilha
           </Button>
         </Card>
@@ -228,10 +229,13 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
       <AdditiveImportDialog
         open={importDialogOpen}
         onOpenChange={setImportDialogOpen}
-        importName={importName}
-        setImportName={setImportName}
-        onConfirm={actions.handleConfirmImport}
-        onCancel={() => { setImportDialogOpen(false); setPendingFile(null); }}
+        active={active}
+        isLocked={isLocked}
+        bdi={bdi}
+        globalDiscount={globalDiscount}
+        eligiblePhaseIds={analyticImportPhaseIds}
+        onConfirmSynthetic={actions.handleConfirmSyntheticPrepared}
+        onConfirmAnalytic={actions.handleConfirmAnalyticImport}
       />
 
       <Dialog open={!!subchapterParentId} onOpenChange={open => !open && closeSubchapterDialog()}>

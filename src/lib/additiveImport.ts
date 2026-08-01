@@ -75,6 +75,18 @@ function normalizeCode(raw: string): string {
   return s;
 }
 
+/** Chave conservadora usada exclusivamente na importação analítica do Aditivo. */
+export function normalizeAdditiveAnalyticCode(raw: string): string {
+  return String(raw ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[\u00A0\u200B-\u200D\uFEFF\s._]/g, '');
+}
+
+function normalizeAdditiveBank(raw: string): string {
+  return norm(String(raw ?? '')).replace(/\s+/g, ' ');
+}
+
 function findSheetName(names: string[], target: string): string | undefined {
   const t = norm(target);
   return names.find(n => norm(n) === t) || names.find(n => norm(n).includes(t));
@@ -131,6 +143,21 @@ interface SyntheticRow {
   rowIndex: number;
 }
 
+export type SyntheticColumnRole =
+  | 'item' | 'code' | 'bank' | 'description' | 'quantity' | 'unit'
+  | 'unitPriceNoBDI' | 'totalNoBDI' | 'unitPriceWithBDI' | 'totalWithBDI';
+export type SyntheticColumnMap = Partial<Record<SyntheticColumnRole, number>>;
+export interface SyntheticImportOptions {
+  sheetName?: string;
+  headerRowIndex?: number;
+  firstDataRowIndex?: number;
+  columns?: SyntheticColumnMap;
+}
+export const DEFAULT_SYNTHETIC_COLUMN_MAP: SyntheticColumnMap = {
+  item: 0, code: 1, bank: 2, description: 3, quantity: 4, unit: 5,
+  unitPriceNoBDI: 6, totalNoBDI: 7, unitPriceWithBDI: 8, totalWithBDI: 9,
+};
+
 interface AnalyticRow {
   code: string;
   bank: string;
@@ -146,6 +173,10 @@ export interface AnalyticBlock {
   normCode: string;
   code: string;
   item: string;
+  bank?: string;
+  description?: string;
+  unit?: string;
+  referenceUnitPriceNoBDI?: number;
   inputs: AnalyticRow[];
   parentTotalNoBDI?: number;
   analyticUnitPriceWithBDI?: number;
@@ -170,6 +201,7 @@ export interface AnalyticImportOptions {
   headerRowIndex?: number;
   firstDataRowIndex?: number;
   columns?: AnalyticColumnMap;
+  blockMode?: 'auto' | 'numeric_item' | 'composition_marker';
 }
 
 export interface AnalyticWorkbookPreview {
@@ -186,8 +218,8 @@ export const DEFAULT_ANALYTIC_COLUMN_MAP: AnalyticColumnMap = {
   code: 1,
   bank: 2,
   description: 3,
-  coefficient: 4,
-  unit: 5,
+  unit: 4,
+  coefficient: 5,
   unitPrice: 6,
   total: 7,
 };
@@ -207,7 +239,8 @@ function looksLikeAnalyticSheet(rows: unknown[][]): boolean {
     const hasQuant = cells.some(c => c === 'quant' || c.startsWith('quant') || c === 'coef' || c.startsWith('coef'));
     const hasUn = cells.some(c => c === 'un' || c === 'und' || c === 'unid' || c.startsWith('unid'));
     const hits = [hasItem, hasCodigo, hasBanco, hasDesc, hasQuant, hasUn].filter(Boolean).length;
-    if (hits >= 4) return true;
+    const hasCompositionMarker = cells.some(c => c === 'composicao');
+    if (hits >= 4 || (hasCompositionMarker && hasCodigo && hasDesc)) return true;
   }
   return false;
 }
@@ -219,24 +252,30 @@ function looksLikeAnalyticSheet(rows: unknown[][]): boolean {
  * BDI; J = total com BDI. Os totais da fonte são preservados, pois algumas
  * planilhas têm arredondamento que não pode ser refeito por quantidade × preço.
  */
-function parseSyntheticSheet(rows: unknown[][]): { items: SyntheticRow[]; issues: AdditiveImportIssue[]; bdi?: number } {
+function parseSyntheticSheet(rows: unknown[][], options: SyntheticImportOptions = {}): { items: SyntheticRow[]; issues: AdditiveImportIssue[]; bdi?: number } {
   const issues: AdditiveImportIssue[] = [];
-  const headerIdx = detectHeaderIndex(rows);
+  const headerIdx = options.headerRowIndex ?? detectHeaderIndex(rows);
+  const firstDataRowIndex = options.firstDataRowIndex ?? headerIdx + 1;
+  const columns = { ...DEFAULT_SYNTHETIC_COLUMN_MAP, ...(options.columns ?? {}) };
+  const read = (row: unknown[], key: SyntheticColumnRole) => {
+    const index = columns[key];
+    return typeof index === 'number' ? row[index] : '';
+  };
   const items: SyntheticRow[] = [];
   const bdi = extractBdiFromJ8(rows);
 
-  for (let i = headerIdx + 1; i < rows.length; i++) {
+  for (let i = firstDataRowIndex; i < rows.length; i++) {
     const r = rows[i] || [];
-    const item = asString(r[0]);
-    const code = asString(r[1]);
-    const bank = asString(r[2]);
-    const description = asString(r[3]);
-    const quantity = toNumber(r[4]);
-    const unit = asString(r[5]);
-    const unitPriceNoBDI = toNumber(r[6]);
-    const totalNoBDI = toNumber(r[7]);
-    const unitPriceWithBDI = toNumber(r[8]);
-    const totalWithBDI = toNumber(r[9]);
+    const item = asString(read(r, 'item'));
+    const code = asString(read(r, 'code'));
+    const bank = asString(read(r, 'bank'));
+    const description = asString(read(r, 'description'));
+    const quantity = toNumber(read(r, 'quantity'));
+    const unit = asString(read(r, 'unit'));
+    const unitPriceNoBDI = toNumber(read(r, 'unitPriceNoBDI'));
+    const totalNoBDI = toNumber(read(r, 'totalNoBDI'));
+    const unitPriceWithBDI = toNumber(read(r, 'unitPriceWithBDI'));
+    const totalWithBDI = toNumber(read(r, 'totalWithBDI'));
 
     if (!item && !code && !bank && !description && !quantity && !totalNoBDI && !unitPriceNoBDI && !totalWithBDI) continue;
     const lowDesc = norm(description);
@@ -385,7 +424,8 @@ function looksLikeAnalyticDataRow(row: unknown[]): boolean {
   const isParent = !!code && !!bank && /^\d+(\.\d+)*$/.test(kindOrItem);
   const isGroup = !code && !!description && /^\d+(\.\d+)*$/.test(kindOrItem);
   const isInput = isAnalyticInsumoLine(kindLow);
-  return isParent || isGroup || isInput;
+  const isCompositionMarker = kindLow === 'composicao' && !!code;
+  return isParent || isGroup || isInput || isCompositionMarker;
 }
 
 function detectAnalyticHeaderInfo(rows: unknown[][]): { headerRowIndex: number; firstDataRowIndex: number; hasHeaderRow: boolean } {
@@ -451,24 +491,37 @@ export function parseAnalyticRowsFlexible(
 
     const aLow = norm(kindOrItem);
     const dLow = norm(description);
+    const isRepeatedHeader = ['codigo', 'código'].includes(norm(codeRaw))
+      && norm(bank).startsWith('banco')
+      && (dLow.startsWith('descricao') || dLow.startsWith('descrição'));
+    if (isRepeatedHeader) continue;
     if (dLow.includes('valor com bdi') || aLow.includes('valor com bdi')) {
       if (current && total > 0) current.analyticUnitPriceWithBDI = total;
       continue;
     }
 
     const normalizedItem = kindOrItem.replace(',', '.');
-    const isGroupLine = !codeRaw && !!description && coefficient <= 0 && !unit;
-    if (isGroupLine) continue;
-
-    const isParentLine =
-      !!codeRaw
+    const markerParent = aLow === 'composicao' && !!codeRaw;
+    const numericParent = !!codeRaw
       && norm(codeRaw) !== 'capitulo'
       && /^\d+(\.\d+)*$/.test(normalizedItem);
+    const mode = options.blockMode ?? 'auto';
+    const isParentLine = mode === 'composition_marker'
+      ? markerParent
+      : mode === 'numeric_item'
+        ? numericParent
+        : markerParent || numericParent;
+    const isGroupLine = !codeRaw && !!description && coefficient <= 0 && !unit;
+    if (isGroupLine) continue;
     if (isParentLine) {
       current = {
-        normCode: normalizeCode(codeRaw),
+        normCode: markerParent ? normalizeAdditiveAnalyticCode(codeRaw) : normalizeCode(codeRaw),
         code: codeRaw,
-        item: normalizedItem,
+        item: markerParent ? '' : normalizedItem,
+        bank,
+        description,
+        unit,
+        referenceUnitPriceNoBDI: unitPrice > 0 ? unitPrice : undefined,
         inputs: [],
         parentTotalNoBDI: total > 0 ? total : undefined,
         startRow: i + 1,
@@ -477,7 +530,8 @@ export function parseAnalyticRowsFlexible(
       continue;
     }
 
-    if (!isAnalyticInsumoLine(aLow)) continue;
+    const markerChild = mode !== 'numeric_item' && !!current && !kindOrItem && (!!codeRaw || !!description);
+    if (!isAnalyticInsumoLine(aLow) && !markerChild) continue;
     if (!current) {
       issues.push({ level: 'warning', message: `Insumo sem composição pai (${codeRaw || description})`, line: i + 1 });
       continue;
@@ -517,6 +571,150 @@ export async function parseAnalyticWorkbookFlexible(
 }
 
 /** Resultado da importação de aditivo, com indicação do que foi lido. */
+export type AdditiveAnalyticMatchStatus = 'matched' | 'unmatched' | 'conflict';
+
+export interface AdditiveAnalyticImportMatch {
+  blockIndex: number;
+  code: string;
+  bank: string;
+  description: string;
+  inputCount: number;
+  referenceUnitPriceNoBDI: number;
+  targetCompositionId?: string;
+  targetItem?: string;
+  targetDescription?: string;
+  status: AdditiveAnalyticMatchStatus;
+  reason?: string;
+  priceDivergences: number;
+}
+
+export interface AdditiveAnalyticImportPreview {
+  matches: AdditiveAnalyticImportMatch[];
+  matched: number;
+  unmatched: number;
+  conflicts: number;
+  inputsToReplace: number;
+  priceDivergences: number;
+  contractedCompositionsAffected: 0;
+}
+
+function analyticMatchKey(code: string, bank: string): string {
+  return `${normalizeAdditiveAnalyticCode(code)}|${normalizeAdditiveBank(bank)}`;
+}
+
+export function buildAdditiveAnalyticImportPreview(
+  additive: Additive,
+  blocks: AnalyticBlock[],
+  eligiblePhaseIds?: string[],
+): AdditiveAnalyticImportPreview {
+  const eligibleSet = eligiblePhaseIds === undefined ? null : new Set(eligiblePhaseIds);
+  const targets = additive.compositions.filter(c =>
+    c.isNewService && (!eligibleSet || (!!c.phaseId && eligibleSet.has(c.phaseId))),
+  );
+  const targetsByKey = new Map<string, AdditiveComposition[]>();
+  const blocksByKey = new Map<string, Array<{ block: AnalyticBlock; index: number }>>();
+  const contractedInputPrices = new Map<string, number[]>();
+  additive.compositions.filter(c => !c.isNewService).forEach(composition => {
+    composition.inputs.forEach(input => {
+      const key = analyticMatchKey(input.code, input.bank);
+      const prices = contractedInputPrices.get(key) ?? [];
+      prices.push(money2(input.unitPrice));
+      contractedInputPrices.set(key, prices);
+    });
+  });
+  for (const target of targets) {
+    const key = analyticMatchKey(target.code, target.bank);
+    const queue = targetsByKey.get(key) ?? [];
+    queue.push(target);
+    targetsByKey.set(key, queue);
+  }
+  blocks.forEach((block, index) => {
+    const key = analyticMatchKey(block.code, block.bank ?? '');
+    const queue = blocksByKey.get(key) ?? [];
+    queue.push({ block, index });
+    blocksByKey.set(key, queue);
+  });
+
+  const matches: AdditiveAnalyticImportMatch[] = [];
+  for (const [key, entries] of blocksByKey) {
+    const targetQueue = targetsByKey.get(key) ?? [];
+    const occurrenceConflict = entries.length !== targetQueue.length && (entries.length > 1 || targetQueue.length > 1);
+    entries.forEach(({ block, index }, occurrence) => {
+      const target = targetQueue[occurrence];
+      const priceDivergences = block.inputs.filter(input => {
+        const importedPrice = money2(input.unitPrice);
+        const differsFromTarget = target?.inputs.some(existing =>
+          analyticMatchKey(existing.code, existing.bank) === analyticMatchKey(input.code, input.bank)
+          && money2(existing.unitPrice) !== importedPrice,
+        );
+        const contractPrices = contractedInputPrices.get(analyticMatchKey(input.code, input.bank)) ?? [];
+        return !!differsFromTarget || contractPrices.some(price => price !== importedPrice);
+      }).length;
+      const status: AdditiveAnalyticMatchStatus = occurrenceConflict
+        ? 'conflict'
+        : target ? 'matched' : 'unmatched';
+      matches.push({
+        blockIndex: index,
+        code: block.code,
+        bank: block.bank ?? '',
+        description: block.description ?? '',
+        inputCount: block.inputs.length,
+        referenceUnitPriceNoBDI: money2(block.referenceUnitPriceNoBDI ?? 0),
+        targetCompositionId: status === 'matched' ? target?.id : undefined,
+        targetItem: status === 'matched' ? (target?.itemNumber || target?.item) : undefined,
+        targetDescription: status === 'matched' ? target?.description : undefined,
+        status,
+        reason: occurrenceConflict
+          ? `Ocorrências no Excel (${entries.length}) e na plataforma (${targetQueue.length}) não coincidem.`
+          : target ? undefined : 'Nenhum novo serviço com o mesmo código e banco.',
+        priceDivergences,
+      });
+    });
+  }
+  matches.sort((a, b) => a.blockIndex - b.blockIndex);
+  return {
+    matches,
+    matched: matches.filter(m => m.status === 'matched').length,
+    unmatched: matches.filter(m => m.status === 'unmatched').length,
+    conflicts: matches.filter(m => m.status === 'conflict').length,
+    inputsToReplace: matches.filter(m => m.status === 'matched').reduce((sum, m) => sum + m.inputCount, 0),
+    priceDivergences: matches.reduce((sum, m) => sum + m.priceDivergences, 0),
+    contractedCompositionsAffected: 0,
+  };
+}
+
+export function applyAdditiveAnalyticImport(
+  additive: Additive,
+  blocks: AnalyticBlock[],
+  preview: AdditiveAnalyticImportPreview,
+): Additive {
+  const matchedByTarget = new Map(preview.matches
+    .filter(m => m.status === 'matched' && m.targetCompositionId)
+    .map(m => [m.targetCompositionId!, blocks[m.blockIndex]]));
+  return {
+    ...additive,
+    compositions: additive.compositions.map(composition => {
+      const block = matchedByTarget.get(composition.id);
+      if (!composition.isNewService || !block) return composition;
+      const inputs: AdditiveInput[] = block.inputs.map(input => ({
+        id: uid(),
+        code: input.code,
+        bank: input.bank,
+        description: input.description,
+        unit: input.unit,
+        coefficient: input.coefficient,
+        unitPrice: input.unitPrice,
+        total: truncar2(input.coefficient * input.unitPrice),
+      }));
+      return {
+        ...composition,
+        inputs,
+        analyticReferenceUnitPriceNoBDI: money2(block.referenceUnitPriceNoBDI ?? 0),
+      };
+    }),
+  };
+}
+
 export interface AdditiveImportResult {
   /** Aditivo novo OU atualização a ser aplicada num existente. */
   additive: Additive;
@@ -535,8 +733,9 @@ export interface AdditiveImportResult {
 export function parseAdditiveSyntheticWorkbook(
   rows: unknown[][],
   additiveName: string,
+  options: SyntheticImportOptions = {},
 ): { additive: Additive; bdiPercent: number; issues: AdditiveImportIssue[] } {
-  const { items: synthItems, issues: synthIssues, bdi } = parseSyntheticSheet(rows);
+  const { items: synthItems, issues: synthIssues, bdi } = parseSyntheticSheet(rows, options);
   const issues: AdditiveImportIssue[] = [...synthIssues];
   const bdiPercent = bdi ?? 0;
 
@@ -585,6 +784,40 @@ export function parseAdditiveSyntheticWorkbook(
     status: 'rascunho',
   };
   return { additive, bdiPercent, issues };
+}
+
+export async function inspectSyntheticWorkbook(buf: ArrayBuffer, sheetName?: string): Promise<AnalyticWorkbookPreview> {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(buf, { type: 'array' });
+  const selected = (sheetName && wb.Sheets[sheetName] ? sheetName : undefined)
+    ?? findSheetName(wb.SheetNames, 'Sintetica')
+    ?? findSheetName(wb.SheetNames, 'sintética')
+    ?? wb.SheetNames[0];
+  const rows = sheetToRows(wb.Sheets[selected], XLSX);
+  const headerRowIndex = detectHeaderIndex(rows);
+  return {
+    sheetNames: wb.SheetNames,
+    sheetName: selected,
+    rows: rows.slice(0, 80).map(r => Array.from({ length: 10 }, (_, index) => asString(r[index]))),
+    suggestedHeaderRowIndex: headerRowIndex,
+    suggestedFirstDataRowIndex: headerRowIndex + 1,
+    hasHeaderRow: true,
+  };
+}
+
+export async function parseSyntheticWorkbookFlexible(
+  buf: ArrayBuffer,
+  additiveName: string,
+  options: SyntheticImportOptions = {},
+): Promise<{ additive: Additive; bdiPercent: number; issues: AdditiveImportIssue[]; sheetName: string }> {
+  const XLSX = await import('xlsx');
+  const wb = XLSX.read(buf, { type: 'array' });
+  const sheetName = (options.sheetName && wb.Sheets[options.sheetName] ? options.sheetName : undefined)
+    ?? findSheetName(wb.SheetNames, 'Sintetica')
+    ?? findSheetName(wb.SheetNames, 'sintética')
+    ?? wb.SheetNames[0];
+  const rows = sheetToRows(wb.Sheets[sheetName], XLSX);
+  return { ...parseAdditiveSyntheticWorkbook(rows, additiveName, options), sheetName };
 }
 
 /** Apenas a Analítica → retorna blocos crus para merge. */
@@ -1144,6 +1377,9 @@ export function computeCompositionWithBDI(comp: AdditiveComposition, bdiPercent:
  * Prioridade: soma da analítica (banco de preços, p.ex. SINAPI) → valor informado manualmente.
  */
 export function referenceUnitNoBDIForNewService(comp: AdditiveComposition): number {
+  if (hasReadyValue(comp.analyticReferenceUnitPriceNoBDI) && Number(comp.analyticReferenceUnitPriceNoBDI) > 0) {
+    return money2(comp.analyticReferenceUnitPriceNoBDI);
+  }
   const sumAnalytic = sumAnalyticTotalNoBDI(comp);
   if (sumAnalytic > 0) return money2(sumAnalytic);
   return money2(comp.unitPriceNoBDIInformed ?? comp.unitPriceNoBDI ?? 0);

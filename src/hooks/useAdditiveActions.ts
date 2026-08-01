@@ -14,6 +14,9 @@ import {
   additiveTotals, getApprovedAdditiveBudgetItems,
   buildAdditiveFromSyntheticBudgetItems,
   createNewServiceComposition, contractAdditive,
+  applyAdditiveAnalyticImport,
+  type AnalyticBlock,
+  type AdditiveAnalyticImportPreview,
 } from '@/lib/additiveImport';
 import { trunc2 } from '@/lib/financialEngine';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
@@ -122,6 +125,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
               unitPriceNoBDI: source.unitPriceNoBDI,
               unitPriceWithBDI: source.unitPriceWithBDI,
               analyticUnitPriceWithBDI: source.analyticUnitPriceWithBDI,
+              analyticReferenceUnitPriceNoBDI: source.analyticReferenceUnitPriceNoBDI,
               inputs: clonedInputs,
               calculationMemoryColumns: source.calculationMemoryColumns
                 ? { ...source.calculationMemoryColumns }
@@ -262,15 +266,17 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     setImportDialogOpen(true);
   };
 
-  const handleConfirmImport = async () => {
-    if (!pendingFile) return;
+  const handleConfirmImport = async (fileOverride?: File, nameOverride?: string) => {
+    const selectedFile = fileOverride ?? pendingFile;
+    if (!selectedFile) return;
+    const selectedName = nameOverride ?? importName;
     try {
       const XLSX = await import('xlsx');
-      const buf = await pendingFile.arrayBuffer();
+      const buf = await selectedFile.arrayBuffer();
       const peek = XLSX.read(buf, { type: 'array' });
       const normName = (n: string) => n.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
       const lower = peek.SheetNames.map(normName);
-      let hasSynth = lower.some(n => n.includes('sintetica'));
+      const hasSynth = lower.some(n => n.includes('sintetica'));
       let hasAnaly = lower.some(n => n.includes('analitica'));
 
       if (!hasAnaly) {
@@ -311,8 +317,8 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
 
       toast.loading('Importando aditivo...', { id: 'imp-add' });
       const result = await importAdditiveFromExcel(
-        pendingFile,
-        importName.trim() || 'Aditivo',
+        selectedFile,
+        selectedName.trim() || 'Aditivo',
         draftCandidate,
       );
 
@@ -326,7 +332,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
 
       const inputsCount = result.additive.compositions.reduce((a, c) => a + (c.inputs?.length ?? 0), 0);
       const importMeta = {
-        fileName: pendingFile.name,
+        fileName: selectedFile.name,
         mode: result.mode,
         hasSynthetic: hasSynth,
         hasAnalytic: hasAnaly,
@@ -828,6 +834,67 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     toast.success(`Subcapítulo “${name}” criado.`);
   };
 
+  const handleConfirmAnalyticImport = async (
+    file: File,
+    blocks: AnalyticBlock[],
+    preview: AdditiveAnalyticImportPreview,
+    metadata: Record<string, unknown>,
+  ) => {
+    if (!active || isLocked) {
+      toast.error('A Analítica só pode ser importada em um aditivo editável em rascunho.');
+      return;
+    }
+    const activeIdForImport = active.id;
+    const updated = applyAdditiveAnalyticImport(active, blocks, preview);
+    onProjectChange(prev => logToProject({
+      ...prev,
+      additives: (prev.additives ?? []).map(additive =>
+        additive.id === activeIdForImport ? updated : additive,
+      ),
+    }, {
+      ...auditUser,
+      entityType: 'additive',
+      entityId: activeIdForImport,
+      action: 'imported',
+      title: 'Planilha Analítica importada nos novos serviços',
+      metadata: {
+        fileName: file.name,
+        ...metadata,
+        compositionsMatched: preview.matched,
+        inputsReplaced: preview.inputsToReplace,
+        unmatched: preview.unmatched,
+        conflicts: preview.conflicts,
+        priceDivergences: preview.priceDivergences,
+        contractedCompositionsAffected: 0,
+      },
+    }));
+    toast.success(`Analítica importada: ${preview.matched} composição(ões) e ${preview.inputsToReplace} insumo(s) atualizados.`);
+  };
+
+  const handleConfirmSyntheticPrepared = async (
+    file: File,
+    imported: AdditiveModel,
+    metadata: Record<string, unknown>,
+  ) => {
+    onProjectChange(prev => {
+      const next = { ...prev, additives: [...(prev.additives ?? []), imported] };
+      return logToProject(repairProjectAnalyticLinks(next).project, {
+        ...auditUser,
+        entityType: 'additive',
+        entityId: imported.id,
+        action: 'imported',
+        title: 'Planilha Sintética importada no Aditivo',
+        metadata: {
+          fileName: file.name,
+          ...metadata,
+          compositionsCount: imported.compositions.length,
+        },
+      });
+    });
+    setActiveId(imported.id);
+    toast.success(`Sintética importada: ${imported.compositions.length} composição(ões).`);
+  };
+
   const handleRemoveComposition = (compId: string) => {
     if (!active || isLocked) return;
     const comp = active.compositions.find(c => c.id === compId);
@@ -972,6 +1039,8 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     setCalculationMemory,
     handleFileSelected,
     handleConfirmImport,
+    handleConfirmAnalyticImport,
+    handleConfirmSyntheticPrepared,
     handleExportExcel,
     handleExportSyntheticCompleteExcel,
     handleExportNewServicesExcel,
