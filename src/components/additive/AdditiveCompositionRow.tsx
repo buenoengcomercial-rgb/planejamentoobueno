@@ -1,4 +1,4 @@
-import { Fragment, memo, type MouseEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, memo, type MouseEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ChevronRight, ChevronDown, Trash2, Calculator, MoreVertical } from 'lucide-react';
@@ -143,11 +143,11 @@ function QtyCell({
   colIndex?: number;
   onFocusCell?: () => void;
 }) {
-  const fmtView = (n: number) =>
-    n === 0 && allowEmptyZero ? '' : fmtQty2(n);
+  const fmtView = useCallback((n: number) =>
+    n === 0 && allowEmptyZero ? '' : fmtQty2(n), [allowEmptyZero]);
   const [local, setLocal] = useState<string>(() => fmtView(value));
   const [focused, setFocused] = useState(false);
-  useEffect(() => { if (!focused) setLocal(fmtView(value)); }, [value, focused, allowEmptyZero]);
+  useEffect(() => { if (!focused) setLocal(fmtView(value)); }, [value, focused, fmtView]);
   return (
     <Input
       type="text"
@@ -239,6 +239,7 @@ interface Props {
   rowIndex?: number;
   onToggleExpand: (id: string) => void;
   onUpdateComposition: (id: string, patch: Partial<AdditiveComposition>) => void;
+  onReorderComposition: (id: string, requestedItem: string) => void;
   onUpdateQuantity: (id: string, field: 'addedQuantity' | 'suppressedQuantity', v: number) => void;
   onRemoveComposition: (id: string) => void;
   onChangeMemory: (id: string, rows: AdditiveCalculationMemoryRow[]) => void;
@@ -249,7 +250,7 @@ interface Props {
 
 function AdditiveCompositionRowImpl({
   project, c, bdi, globalDiscount, isLocked, isOpen, isMemoryOpen, showAnalytic, rowIndex = 0,
-  onToggleExpand, onUpdateComposition, onUpdateQuantity,
+  onToggleExpand, onUpdateComposition, onUpdateQuantity, onReorderComposition,
   onRemoveComposition, onChangeMemory, selectedDetail, onSelectDetail,
   inputReferenceByCode,
 }: Props) {
@@ -346,7 +347,16 @@ function AdditiveCompositionRowImpl({
           </button>
         </td>
         {/* Identificação */}
-        <td className={`px-1 py-1 align-top ${G_BG.id}`}>{c.itemNumber || c.item}</td>
+        <td className={`px-1 py-1 align-top ${G_BG.id}`}>
+          {isNew && !isLocked ? (
+            <TextCommitCell
+              value={c.itemNumber || c.item}
+              onCommit={value => onReorderComposition(c.id, value)}
+              className="h-7 w-full px-1 text-[11px] font-mono"
+              placeholder="Item"
+            />
+          ) : c.itemNumber || c.item}
+        </td>
         <td className={`px-1 py-1 align-top font-mono text-[11px] break-words whitespace-normal ${G_BG.id}`}>
           {isNew && !isLocked ? (
             <TextCommitCell
@@ -459,7 +469,7 @@ function AdditiveCompositionRowImpl({
                 <AlertDialogHeader>
                   <AlertDialogTitle>Excluir novo serviço aditivado?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    Esta ação removerá a composição, seus insumos analíticos e sua memória de cálculo. Essa ação não pode ser desfeita.
+                    O serviço será removido deste aditivo e os itens seguintes serão renumerados. A estrutura técnica e os insumos continuarão disponíveis pelo código; quantidades e memória de cálculo não serão restauradas.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <div className="rounded-md border bg-muted/30 p-3 text-xs space-y-1">

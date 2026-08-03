@@ -87,7 +87,7 @@ function projectFixture(additiveComposition?: AdditiveComposition): Project {
       issues: [],
       status: 'rascunho',
     }] : [],
-  } as Project;
+  } as unknown as Project;
 }
 
 function emptyAdditive(): AdditiveComposition {

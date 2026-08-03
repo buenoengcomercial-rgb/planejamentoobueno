@@ -341,7 +341,8 @@ function parseAnalyticSheet(
     const coefficient = toNumber(r[4]);
     const unit = asString(r[5]);
     const unitPrice = toNumber(r[6]);
-    const total = toNumber(r[7]);
+    const totalRaw = r[7];
+    const total = toNumber(totalRaw);
 
     if (!aRaw && !codeRaw && !description && !coefficient && !unitPrice) continue;
 
@@ -395,7 +396,8 @@ function parseAnalyticSheet(
     }
 
     current.inputs.push({
-      code: codeRaw, bank, description, unit, coefficient, unitPrice, total,
+      code: codeRaw, bank, description, unit, coefficient, unitPrice,
+      total: asString(totalRaw) !== '' ? money2(total) : calculateLineTotal(unitPrice, coefficient),
       rowIndex: i + 1,
     });
   }
@@ -485,7 +487,8 @@ export function parseAnalyticRowsFlexible(
     const coefficient = toNumber(read(r, 'coefficient'));
     const unit = asString(read(r, 'unit'));
     const unitPrice = toNumber(read(r, 'unitPrice'));
-    const total = toNumber(read(r, 'total'));
+    const totalRaw = read(r, 'total');
+    const total = toNumber(totalRaw);
 
     if (!kindOrItem && !codeRaw && !bank && !description && !coefficient && !unit && !unitPrice && !total) continue;
 
@@ -549,7 +552,7 @@ export function parseAnalyticRowsFlexible(
       unit,
       coefficient,
       unitPrice,
-      total: truncar2(coefficient * unitPrice),
+      total: asString(totalRaw) !== '' ? money2(total) : calculateLineTotal(unitPrice, coefficient),
       rowIndex: i + 1,
     });
   }
@@ -704,7 +707,7 @@ export function applyAdditiveAnalyticImport(
         unit: input.unit,
         coefficient: input.coefficient,
         unitPrice: input.unitPrice,
-        total: truncar2(input.coefficient * input.unitPrice),
+        total: money2(input.total),
       }));
       return {
         ...composition,
@@ -885,7 +888,7 @@ export function mergeAnalyticIntoAdditive(
       unit: r.unit,
       coefficient: r.coefficient,
       unitPrice: r.unitPrice,
-      total: truncar2(r.coefficient * r.unitPrice),
+      total: money2(r.total),
     }));
     // Preserva todos os campos da composição (id, item, code, bank, description, unit,
     // quantity, addedQuantity, phaseId, phaseChain, itemNumber, isNewService, etc.).

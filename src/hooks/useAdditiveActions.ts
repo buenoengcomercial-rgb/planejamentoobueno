@@ -18,8 +18,15 @@ import {
   type AnalyticBlock,
   type AdditiveAnalyticImportPreview,
 } from '@/lib/additiveImport';
-import { trunc2 } from '@/lib/financialEngine';
+import { calculateLineTotal, trunc2 } from '@/lib/financialEngine';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
+import {
+  cloneTemplateTechnicalPatch,
+  removeNewServiceAndCompact,
+  reorderNewService,
+  resolveAdditiveCompositionTemplate,
+  upsertAdditiveCompositionTemplate,
+} from '@/lib/additiveCompositionCatalog';
 import {
   exportAdditiveSyntheticCompletePro,
   exportAdditiveNewServicesPro,
@@ -61,7 +68,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     setReviewDialogOpen, setConfirmDeleteId, activeId,
   } = state;
 
-  const logAdd = (
+  const logAdd = useCallback((
     additiveId: string,
     params: Omit<Parameters<typeof logToProject>[1], 'entityType' | 'entityId'>,
   ) => {
@@ -71,7 +78,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
       entityType: 'additive',
       entityId: additiveId,
     }));
-  };
+  }, [onProjectChange, auditUser]);
 
   const updateAdditive = useCallback((mutator: (a: AdditiveModel) => AdditiveModel) => {
     if (!active) return;
@@ -83,7 +90,6 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
   }, [active, onProjectChange]);
 
   const updateComposition = useCallback((compId: string, patch: Partial<AdditiveComposition>) => {
-    const normCode = (s: string) => String(s ?? '').trim().toLowerCase();
     const normInputCode = (s: string) => String(s ?? '').trim().toUpperCase().replace(/\s+/g, ' ');
     const money2 = (n: number) => Math.round((Number.isFinite(n) ? n : 0) * 100) / 100;
     const genId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
@@ -91,6 +97,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
       : `inp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 
     let autofillLog: { code: string; sourceId: string; sourceDesc: string; targetId: string; targetChain?: string } | null = null;
+    let ambiguousTemplate = false;
     const priceSyncLogs: Array<{
       code: string; previousPrice: number; newPrice: number;
       occurrences: number; affectedCompositions: Array<{ id: string; item?: string; description: string }>;
@@ -102,34 +109,21 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
 
       let effectivePatch: Partial<AdditiveComposition> = { ...patch };
 
-      // Autofill por código: somente em novos serviços, quando o código for alterado
-      // e existir outra nova composição aditivada com o mesmo código (case/space-insensitive).
+      // Autofill por código/banco: reutiliza outra composição ativa ou o catálogo técnico da obra.
       const codeChanged = Object.prototype.hasOwnProperty.call(patch, 'code');
+      const bankChanged = Object.prototype.hasOwnProperty.call(patch, 'bank');
       const isNew = !!target.isNewService;
-      if (codeChanged && isNew) {
-        const newCode = normCode(patch.code ?? '');
-        if (newCode) {
-          const source = a.compositions.find(c =>
-            c.id !== compId &&
-            !!c.isNewService &&
-            normCode(c.code) === newCode,
-          );
-          if (source) {
-            const clonedInputs = (source.inputs ?? []).map(i => ({ ...i, id: genId() }));
+      if ((codeChanged || bankChanged) && isNew) {
+        const nextCode = codeChanged ? String(patch.code ?? '') : target.code;
+        const nextBank = bankChanged ? String(patch.bank ?? '') : target.bank;
+        const resolution = resolveAdditiveCompositionTemplate(
+          project.additiveCompositionCatalog ?? [], a.compositions, compId, nextCode, nextBank,
+        );
+        if (resolution.template) {
+            const source = resolution.template;
             effectivePatch = {
               ...effectivePatch,
-              bank: source.bank,
-              description: source.description,
-              unit: source.unit,
-              unitPriceNoBDIInformed: source.unitPriceNoBDIInformed,
-              unitPriceNoBDI: source.unitPriceNoBDI,
-              unitPriceWithBDI: source.unitPriceWithBDI,
-              analyticUnitPriceWithBDI: source.analyticUnitPriceWithBDI,
-              analyticReferenceUnitPriceNoBDI: source.analyticReferenceUnitPriceNoBDI,
-              inputs: clonedInputs,
-              calculationMemoryColumns: source.calculationMemoryColumns
-                ? { ...source.calculationMemoryColumns }
-                : target.calculationMemoryColumns,
+              ...cloneTemplateTechnicalPatch(source, genId),
             };
             autofillLog = {
               code: source.code,
@@ -138,8 +132,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
               targetId: target.id,
               targetChain: target.phaseChain,
             };
-          }
-        }
+        } else if (resolution.ambiguous) ambiguousTemplate = true;
       }
 
       // Sincronização de preço de insumos: somente em novos serviços, quando inputs foram alterados.
@@ -182,7 +175,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
             if (money2(i.unitPrice) === money2(ch.next)) return i;
             mutated = true;
             const unitPrice = ch.next;
-            return { ...i, unitPrice, total: money2((i.coefficient || 0) * unitPrice) };
+            return { ...i, unitPrice, total: calculateLineTotal(unitPrice, i.coefficient || 0) };
           });
           return mutated ? { ...c, inputs: newInputs } : c;
         });
@@ -206,12 +199,28 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
       return { ...a, compositions: finalCompositions };
     });
 
+    // Catálogo técnico da obra: não armazena quantidades nem memória de cálculo.
+    onProjectChange(prev => {
+      const additive = (prev.additives ?? []).find(candidate => candidate.id === active?.id);
+      const composition = additive?.compositions.find(candidate => candidate.id === compId);
+      if (!composition?.isNewService) return prev;
+      return {
+        ...prev,
+        additiveCompositionCatalog: upsertAdditiveCompositionTemplate(
+          prev.additiveCompositionCatalog ?? [], composition, additive?.id,
+        ),
+      };
+    });
+
     if (autofillLog && active) {
       logAdd(active.id, {
         action: 'updated',
         title: 'Composição aditivada preenchida automaticamente por código',
         metadata: autofillLog,
       });
+    }
+    if (ambiguousTemplate) {
+      toast.warning('Existe mais de uma composição com este código. Informe o Banco para concluir o preenchimento.');
     }
     if (priceSyncLogs.length > 0 && active) {
       for (const ps of priceSyncLogs) {
@@ -227,7 +236,32 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
         });
       }
     }
-  }, [updateAdditive, active]);
+  }, [updateAdditive, active, onProjectChange, project.additiveCompositionCatalog, logAdd]);
+
+  const handleReorderComposition = useCallback((compId: string, requestedItem: string) => {
+    if (!active || isLocked) return;
+    const result = reorderNewService(active.compositions, compId, requestedItem);
+    if (!result.ok) {
+      toast.error('error' in result ? result.error : 'Não foi possível reordenar o serviço.');
+      return;
+    }
+    onProjectChange(prev => logToProject({
+      ...prev,
+      additives: (prev.additives ?? []).map(additive => additive.id === active.id
+        ? { ...additive, compositions: result.compositions }
+        : additive),
+    }, {
+      ...auditUser,
+      entityType: 'additive',
+      entityId: active.id,
+      action: 'updated',
+      title: 'Novo serviço reordenado no aditivo',
+      metadata: { compositionId: compId, before: result.before, after: result.after },
+      before: result.before,
+      after: result.after,
+    }));
+    toast.success(`Serviço movido para ${result.after}.`);
+  }, [active, isLocked, onProjectChange, auditUser]);
 
   const updateCompositionQuantity = useCallback((
     compId: string,
@@ -846,28 +880,35 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     }
     const activeIdForImport = active.id;
     const updated = applyAdditiveAnalyticImport(active, blocks, preview);
-    onProjectChange(prev => logToProject({
-      ...prev,
-      additives: (prev.additives ?? []).map(additive =>
-        additive.id === activeIdForImport ? updated : additive,
-      ),
-    }, {
-      ...auditUser,
-      entityType: 'additive',
-      entityId: activeIdForImport,
-      action: 'imported',
-      title: 'Planilha Analítica importada nos novos serviços',
-      metadata: {
-        fileName: file.name,
-        ...metadata,
-        compositionsMatched: preview.matched,
-        inputsReplaced: preview.inputsToReplace,
-        unmatched: preview.unmatched,
-        conflicts: preview.conflicts,
-        priceDivergences: preview.priceDivergences,
-        contractedCompositionsAffected: 0,
-      },
-    }));
+    onProjectChange(prev => {
+      let catalog = prev.additiveCompositionCatalog ?? [];
+      for (const composition of updated.compositions.filter(candidate => candidate.isNewService)) {
+        catalog = upsertAdditiveCompositionTemplate(catalog, composition, activeIdForImport);
+      }
+      return logToProject({
+        ...prev,
+        additiveCompositionCatalog: catalog,
+        additives: (prev.additives ?? []).map(additive =>
+          additive.id === activeIdForImport ? updated : additive,
+        ),
+      }, {
+        ...auditUser,
+        entityType: 'additive',
+        entityId: activeIdForImport,
+        action: 'imported',
+        title: 'Planilha Analítica importada nos novos serviços',
+        metadata: {
+          fileName: file.name,
+          ...metadata,
+          compositionsMatched: preview.matched,
+          inputsReplaced: preview.inputsToReplace,
+          unmatched: preview.unmatched,
+          conflicts: preview.conflicts,
+          priceDivergences: preview.priceDivergences,
+          contractedCompositionsAffected: 0,
+        },
+      });
+    });
     toast.success(`Analítica importada: ${preview.matched} composição(ões) e ${preview.inputsToReplace} insumo(s) atualizados.`);
   };
 
@@ -898,20 +939,37 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
   const handleRemoveComposition = (compId: string) => {
     if (!active || isLocked) return;
     const comp = active.compositions.find(c => c.id === compId);
-    updateAdditive(a => ({ ...a, compositions: a.compositions.filter(c => c.id !== compId) }));
-    if (comp?.isNewService) {
-      logAdd(active.id, {
+    if (!comp?.isNewService) return;
+    onProjectChange(prev => {
+      const additive = (prev.additives ?? []).find(candidate => candidate.id === active.id);
+      const current = additive?.compositions.find(candidate => candidate.id === compId) ?? comp;
+      const catalog = upsertAdditiveCompositionTemplate(
+        prev.additiveCompositionCatalog ?? [], current, active.id,
+      );
+      const compositions = removeNewServiceAndCompact(additive?.compositions ?? active.compositions, compId);
+      return logToProject({
+        ...prev,
+        additiveCompositionCatalog: catalog,
+        additives: (prev.additives ?? []).map(candidate => candidate.id === active.id
+          ? { ...candidate, compositions }
+          : candidate),
+      }, {
+        ...auditUser,
+        entityType: 'additive',
+        entityId: active.id,
         action: 'deleted',
-        title: 'Novo serviço excluído do aditivo',
+        title: 'Novo serviço removido do aditivo e preservado no catálogo da obra',
         metadata: {
-          item: comp.item || comp.itemNumber,
-          code: comp.code,
-          description: comp.description,
-          inputsCount: (comp.inputs ?? []).length,
-          memoryRowsCount: (comp.calculationMemory ?? []).length,
+          item: current.itemNumber || current.item,
+          code: current.code,
+          description: current.description,
+          inputsCount: (current.inputs ?? []).length,
+          memoryRowsDiscarded: (current.calculationMemory ?? []).length,
+          catalogPreserved: true,
         },
       });
-    }
+    });
+    toast.success('Serviço removido. A composição técnica continua disponível pelo código.');
   };
 
   const handleUnlockIntegratedAdditive = () => {
@@ -1035,6 +1093,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
   return {
     updateAdditive,
     updateComposition,
+    handleReorderComposition,
     updateCompositionQuantity,
     setCalculationMemory,
     handleFileSelected,

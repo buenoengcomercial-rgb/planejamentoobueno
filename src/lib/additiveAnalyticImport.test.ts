@@ -60,6 +60,20 @@ describe('importação Analítica dos novos serviços', () => {
     expect(normalizeAdditiveAnalyticCode('C0060')).toBe('C0060');
   });
 
+  it('preserva a coluna Total da Analítica em vez de recalcular pelos valores exibidos', () => {
+    const rows = [
+      ['', 'Código', 'Banco', 'Descrição', 'Und', 'Quant.', 'Valor Unit', 'Total'],
+      ['Composição', '9106', 'ORSE', 'Suporte', 'un', 1, 26.11, 26.11],
+      ['', '00006111/SINAPI', 'ORSE', 'Servente', 'h', 0.25, 14.58, 3.64],
+      ['', '00002696/SINAPI', 'ORSE', 'Encanador', 'h', 0.25, 20.44, 5.10],
+      ['', '10549', 'ORSE', 'Encargos', 'h', 0.25, 3.87, 0.96],
+    ];
+    const parsed = parseAnalyticRowsFlexible(rows, {
+      headerRowIndex: 0, firstDataRowIndex: 1, blockMode: 'composition_marker',
+    });
+    expect(parsed.blocks[0].inputs.map(input => input.total)).toEqual([3.64, 5.10, 0.96]);
+  });
+
   it('substitui somente a Analítica da nova composição e preserva o contrato', () => {
     const contracted = composition({ id: 'contract', item: '2.4.1', itemNumber: '2.4.1', phaseId: 'phase-24', isNewService: false, code: '88489', bank: 'SINAPI', unitPriceNoBDI: 10, inputs: [{ id: 'old', code: '88489', bank: 'SINAPI', description: 'Original', unit: 'm²', coefficient: 1, unitPrice: 10, total: 10 }] });
     const fresh = composition({ id: 'new' });

@@ -18,6 +18,7 @@ interface Props {
   onToggleExpand: (id: string) => void;
   onToggleCollapsed: (id: string) => void;
   onUpdateComposition: (id: string, patch: Partial<AdditiveComposition>) => void;
+  onReorderComposition: (id: string, requestedItem: string) => void;
   onUpdateQuantity: (id: string, field: 'addedQuantity' | 'suppressedQuantity', v: number) => void;
   onRemoveComposition: (id: string) => void;
   onAddNewService: (phaseId: string, phaseChain: string, parentNumber: string) => void;
@@ -117,6 +118,7 @@ function AdditiveGroupRowImpl(props: Props) {
           rowIndex={idx}
           onToggleExpand={props.onToggleExpand}
           onUpdateComposition={props.onUpdateComposition}
+          onReorderComposition={props.onReorderComposition}
           onUpdateQuantity={props.onUpdateQuantity}
           onRemoveComposition={props.onRemoveComposition}
           onChangeMemory={props.onChangeMemory}

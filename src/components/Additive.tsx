@@ -208,6 +208,7 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
             onToggleExpand={toggleExpand}
             onToggleCollapsed={toggleCollapsed}
             onUpdateComposition={actions.updateComposition}
+            onReorderComposition={actions.handleReorderComposition}
             onUpdateQuantity={actions.updateCompositionQuantity}
             onRemoveComposition={actions.handleRemoveComposition}
             onAddNewService={actions.handleAddNewService}

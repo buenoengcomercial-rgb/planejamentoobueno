@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { trunc2, calculateUnitPriceWithBDI, calculateLineTotal, calculateNewServiceUnitPrices } from './financialEngine';
+import { trunc2, calculateUnitPriceWithBDI, calculateLineTotal, calculateNewServiceUnitPrices, calculateAnalyticTotalNoBDI } from './financialEngine';
 import { computeAdditiveRow, additiveTotals, getOfficialContractedTotal } from './additiveImport';
 import type { Project, BudgetItem } from '@/types/project';
 import type { Additive, AdditiveComposition } from '@/types/project';
@@ -9,6 +9,14 @@ describe('financialEngine truncation', () => {
   it('trunc2(16069.379) → 16069.37', () => expect(trunc2(16069.379)).toBe(16069.37));
   it('BDI 27.58 sobre 424.83 → 541.99', () => expect(calculateUnitPriceWithBDI(424.83, 27.58)).toBe(541.99));
   it('linha unit×qty trunca', () => expect(calculateLineTotal(5313.52, 6)).toBe(31881.12));
+  it('totais analíticos truncam 3,645 e 0,9675 sem arredondar', () => {
+    expect(calculateLineTotal(14.58, 0.25)).toBe(3.64);
+    expect(calculateLineTotal(3.87, 0.25)).toBe(0.96);
+  });
+  it('preserva o Total explícito da fonte quando usa precisão interna não exibida', () => {
+    expect(calculateLineTotal(20.44, 0.25)).toBe(5.11);
+    expect(calculateAnalyticTotalNoBDI([{ coefficient: 0.25, unitPrice: 20.44, total: 5.10 }])).toBe(5.10);
+  });
   it('BOINC1: BDI truncado e total sem perda de centavo', () => {
     expect(calculateUnitPriceWithBDI(7526.24, 27.58)).toBe(9601.97);
     expect(calculateLineTotal(9601.97, 2)).toBe(19203.94);

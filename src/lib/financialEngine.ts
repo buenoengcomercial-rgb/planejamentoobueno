@@ -88,7 +88,13 @@ export interface AnalyticInputLike {
 export function calculateAnalyticTotalNoBDI(inputs: AnalyticInputLike[]): number {
   let acc = 0;
   for (const i of inputs ?? []) {
-    const t = trunc2((Number(i.coefficient) || 0) * (Number(i.unitPrice) || 0));
+    // Quando a Analítica traz a coluna Total, ela é a autoridade: alguns bancos
+    // calculam com precisão interna maior que a exibida em Coef./Valor Unit.
+    // Em linhas criadas/editadas na plataforma, `total` já é recalculado com trunc2.
+    const hasSourceTotal = i.total !== null && i.total !== undefined && Number.isFinite(Number(i.total));
+    const t = hasSourceTotal
+      ? money2(Number(i.total))
+      : trunc2((Number(i.coefficient) || 0) * (Number(i.unitPrice) || 0));
     acc = trunc2(acc + t);
   }
   return trunc2(acc);

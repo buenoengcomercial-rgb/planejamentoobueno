@@ -3,7 +3,8 @@ import { Plus, Trash2, Copy } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import type { AdditiveComposition, AdditiveInput } from '@/types/project';
-import { sumAnalyticTotalNoBDI, money2, truncar2 } from '@/lib/additiveImport';
+import { sumAnalyticTotalNoBDI, truncar2 } from '@/lib/additiveImport';
+import { calculateDiscountedAnalyticTotalNoBDI, calculateDiscountedUnitNoBDI, calculateLineTotal } from '@/lib/financialEngine';
 import { fmtBRL } from './types';
 import { handleGridContainerKeyDownCapture } from '@/lib/gridKeyboardNavigation';
 
@@ -126,9 +127,10 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
   const isNew = !!c.isNewService;
   const editable = isNew && !isLocked && !!onUpdateComposition;
   const showDiscount = isNew && globalDiscount > 0;
-  const discFactor = showDiscount ? (1 - globalDiscount / 100) : 1;
   const sumNoBDI = sumAnalyticTotalNoBDI(c);
-  const sumNoBDIDisc = money2(sumNoBDI * discFactor);
+  const sumNoBDIDisc = showDiscount
+    ? calculateDiscountedAnalyticTotalNoBDI(c.inputs, globalDiscount)
+    : sumNoBDI;
   const qty = c.addedQuantity ?? c.quantity ?? 0;
   const fator = 1 + bdi / 100;
   const totalAnalyticWithBDI = showDiscount
@@ -143,7 +145,7 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
     updateInputs(c.inputs.map(i => {
       if (i.id !== id) return i;
       const merged = { ...i, ...patch };
-      merged.total = money2((merged.coefficient || 0) * (merged.unitPrice || 0));
+      merged.total = calculateLineTotal(merged.unitPrice || 0, merged.coefficient || 0);
       return merged;
     }));
   };
@@ -214,8 +216,8 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
             </tr>
           )}
           {c.inputs.map((i, rowIdx) => {
-            const unitDisc = money2(i.unitPrice * discFactor);
-            const totalDisc = money2(i.coefficient * unitDisc);
+            const unitDisc = calculateDiscountedUnitNoBDI(i.unitPrice, globalDiscount);
+            const totalDisc = calculateLineTotal(unitDisc, i.coefficient);
             const gridId = `additive-analytic-${c.id}`;
             return (
               <tr key={i.id} className="border-t border-border/50">

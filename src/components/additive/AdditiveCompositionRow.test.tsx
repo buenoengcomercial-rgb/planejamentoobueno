@@ -12,31 +12,34 @@ const composition: AdditiveComposition = {
 
 const project = { analyticCompositions: [], budgetItems: [] } as unknown as Project;
 
-function renderRow(options: { mode: 'memory' | 'analytic'; isOpen: boolean }) {
+function renderRow(options: { mode: 'memory' | 'analytic'; isOpen: boolean; composition?: AdditiveComposition; isLocked?: boolean }) {
   const onToggleExpand = vi.fn();
   const onSelectDetail = vi.fn();
+  const onReorderComposition = vi.fn();
+  const current = options.composition ?? composition;
   render(
     <table><tbody>
       <AdditiveCompositionRow
         project={project}
-        c={composition}
+        c={current}
         bdi={27.58}
         globalDiscount={0}
-        isLocked={false}
+        isLocked={options.isLocked ?? false}
         isOpen={options.isOpen}
         isMemoryOpen={options.mode === 'memory'}
         showAnalytic
         onToggleExpand={onToggleExpand}
         onUpdateComposition={vi.fn()}
+        onReorderComposition={onReorderComposition}
         onUpdateQuantity={vi.fn()}
         onRemoveComposition={vi.fn()}
         onChangeMemory={vi.fn()}
-        selectedDetail={{ compositionId: composition.id, mode: options.mode }}
+        selectedDetail={{ compositionId: current.id, mode: options.mode }}
         onSelectDetail={onSelectDetail}
       />
     </tbody></table>,
   );
-  return { onToggleExpand, onSelectDetail };
+  return { onToggleExpand, onSelectDetail, onReorderComposition };
 }
 
 describe('AdditiveCompositionRow detail selection', () => {
@@ -55,5 +58,21 @@ describe('AdditiveCompositionRow detail selection', () => {
     fireEvent.click(mainRow!);
     expect(onToggleExpand).toHaveBeenCalledWith('comp-1');
     expect(onSelectDetail).toHaveBeenCalledWith(null);
+  });
+
+  it('permite editar o Item somente no novo serviço desbloqueado', () => {
+    const newComposition = { ...composition, isNewService: true };
+    const { onReorderComposition } = renderRow({ mode: 'analytic', isOpen: false, composition: newComposition });
+    const item = screen.getByPlaceholderText('Item');
+    fireEvent.focus(item);
+    fireEvent.change(item, { target: { value: '1' } });
+    fireEvent.blur(item);
+    expect(onReorderComposition).toHaveBeenCalledWith('comp-1', '1');
+  });
+
+  it('mantém o Item somente leitura quando o aditivo está bloqueado', () => {
+    renderRow({ mode: 'analytic', isOpen: false, composition: { ...composition, isNewService: true }, isLocked: true });
+    expect(screen.queryByPlaceholderText('Item')).not.toBeInTheDocument();
+    expect(screen.getByText('1.1.1')).toBeInTheDocument();
   });
 });

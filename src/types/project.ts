@@ -659,6 +659,8 @@ export interface Project {
    * Reusa AdditiveComposition para manter a mesma estrutura de insumos analíticos.
    */
   analyticCompositions?: AdditiveComposition[];
+  /** Catálogo da obra para reutilizar estruturas técnicas de novos serviços aditivados. */
+  additiveCompositionCatalog?: AdditiveCompositionTemplate[];
   /** Estado do módulo Almoxarifado (estoque, movimentações, equipamentos, termos). */
   warehouse?: WarehouseState;
 }
@@ -1165,6 +1167,21 @@ export interface AdditiveComposition {
   linkedTaskId?: string;
   /** Carimbo de quando esta composição foi integrada ao projeto. */
   integratedAt?: string;
+}
+
+/** Estrutura técnica reutilizável de um novo serviço, sem quantidades ou memória de cálculo. */
+export interface AdditiveCompositionTemplate {
+  id: string;
+  code: string;
+  normalizedCode: string;
+  bank: string;
+  description: string;
+  unit: string;
+  unitPriceNoBDIInformed?: number;
+  analyticReferenceUnitPriceNoBDI?: number;
+  inputs: AdditiveInput[];
+  sourceAdditiveId?: string;
+  updatedAt: string;
 }
 
 /** Linha da memória de cálculo (Arquimedes-like) de uma composição do aditivo. */

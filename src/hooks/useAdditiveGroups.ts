@@ -57,7 +57,12 @@ export function useAdditiveGroups(
     const tree = getChapterTree(project);
 
     const buildNode = (chapterNode: ChapterNode, depth: number): CompGroup | null => {
-      const directRows = compsByPhase.get(chapterNode.phase.id) || [];
+      const directRows = [...(compsByPhase.get(chapterNode.phase.id) || [])]
+        .sort((a, b) => (a.itemNumber || a.item || '').localeCompare(
+          b.itemNumber || b.item || '',
+          'pt-BR',
+          { numeric: true },
+        ));
       const childGroups = chapterNode.children
         .map(c => buildNode(c, depth + 1))
         .filter((g): g is CompGroup => g !== null);
