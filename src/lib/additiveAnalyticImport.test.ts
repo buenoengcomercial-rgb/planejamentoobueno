@@ -87,7 +87,12 @@ describe('importação Analítica dos novos serviços', () => {
     expect(result.compositions[1].analyticReferenceUnitPriceNoBDI).toBe(2775.03);
     const financial = computeAdditiveRow(result.compositions[1], 27.58, 6);
     expect(financial.referenceUnitNoBDI).toBe(2775.03);
+    expect(financial.unitPriceNoBDI).toBe(2775.03);
     expect(financial.unitPriceNoBDIWithDiscount).toBe(2608.52);
+    expect(financial.bdiAmount).toBe(765.35);
+    expect(financial.unitPriceWithBDIBeforeDiscount).toBe(3540.38);
+    expect(financial.unitPriceWithBDI).toBe(3327.95);
+    expect(financial.valorAcrescido).toBe(3327.95);
   });
 
   it('bloqueia códigos duplicados quando a quantidade de ocorrências diverge', () => {

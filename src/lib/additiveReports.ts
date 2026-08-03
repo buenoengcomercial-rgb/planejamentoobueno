@@ -12,6 +12,7 @@ import type { Project, Additive, AdditiveComposition } from '@/types/project';
 import {
   computeAdditiveRow,
   referenceUnitNoBDIForNewService,
+  resolveAdditivePricingRule,
   totalAfterAdditive,
   money2,
 } from './additiveImport';
@@ -497,6 +498,7 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
   const XLSX = await loadXLSXStyle();
   const bdi = add.bdiPercent ?? 0;
   const discount = add.globalDiscountPercent ?? 0;
+  const pricingRule = resolveAdditivePricingRule(add);
 
   // 19 colunas conforme spec
   const SUB = [
@@ -569,7 +571,7 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
   }>();
 
   const pushComp = (c: AdditiveComposition) => {
-    const r = computeAdditiveRow(c, bdi, discount);
+    const r = computeAdditiveRow(c, bdi, discount, pricingRule);
     // Normaliza UMA única vez os valores que serão escritos na linha
     const lineTotalFonte = trunc2(r.totalFonte);
     const lineValorContratado = trunc2(r.valorContratadoOriginalPreservado);
@@ -608,7 +610,7 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
       nCell(q2(r.qtdSuprimida), FMT_QTD, supBg, supFg),
       nCell(q2(r.qtdAcrescida), FMT_QTD, acrBg, acrFg),
       nCell(q2(r.qtdFinal), FMT_QTD, rowFill),
-      nCell(moneyExcel(c.isNewService ? r.unitPriceNoBDIWithDiscount : r.unitPriceNoBDI), FMT_BRL, rowFill),
+      nCell(moneyExcel(r.unitPriceNoBDI), FMT_BRL, rowFill),
       nCell(moneyExcel(r.unitPriceWithBDI), FMT_BRL, rowFill),
       nCell(lineTotalFonte, FMT_BRL, rowFill),
       nCell(lineValorContratado, FMT_BRL, rowFill),
@@ -725,11 +727,12 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
   const XLSX = await loadXLSXStyle();
   const bdi = add.bdiPercent ?? 0;
   const discount = add.globalDiscountPercent ?? 0;
+  const pricingRule = resolveAdditivePricingRule(add);
 
   const SUB = [
     'Item', 'Código', 'Banco', 'Descrição', 'Und',
     'Qtd Acrescida',
-    'V. Unit Ref. s/ BDI', 'Desc. Licit. %', 'V. Unit s/ BDI c/ Desc.', 'BDI %', 'V. Unit c/ BDI',
+    'V. Unit s/ BDI', 'BDI %', 'V. Unit c/ BDI antes Desc.', 'Desc. Licit. %', 'V. Unit c/ BDI e Desc.',
     'Valor Acrescido', 'Valor Final',
     'Fonte / Observação',
   ];
@@ -782,7 +785,7 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
       rowHeights.push(26);
     },
     onComposition: c => {
-      const r = computeAdditiveRow(c, bdi, discount);
+      const r = computeAdditiveRow(c, bdi, discount, pricingRule);
       const refUnit = referenceUnitNoBDIForNewService(c);
       const obs = c.bank ? `Fonte: ${c.bank}` : 'Novo serviço aditivado';
       rows.push([
@@ -793,9 +796,9 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
         tCell(c.unit || '', rowFill, false, undefined, 'center'),
         nCell(q2(r.qtdAcrescida), FMT_QTD, COLOR.acrescidoBg, COLOR.acrescidoFg),
         nCell(moneyExcel(refUnit), FMT_BRL, rowFill),
-        nCell(pctExcel((discount || 0) / 100), FMT_PCT, rowFill),
-        nCell(moneyExcel(r.unitPriceNoBDIWithDiscount), FMT_BRL, rowFill),
         nCell(pctExcel((bdi || 0) / 100), FMT_PCT, rowFill),
+        nCell(moneyExcel(r.unitPriceWithBDIBeforeDiscount), FMT_BRL, rowFill),
+        nCell(pctExcel((discount || 0) / 100), FMT_PCT, rowFill),
         nCell(moneyExcel(r.unitPriceWithBDI), FMT_BRL, rowFill),
         nCell(moneyExcel(r.valorAcrescido), FMT_BRL, COLOR.acrescidoBg, COLOR.acrescidoFg),
         nCell(moneyExcel(r.valorFinal), FMT_BRL, rowFill),
@@ -813,7 +816,7 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
         // Espaçador visual antes do bloco analítico
         rows.push(Array(totalCols).fill(''));
         rowHeights.push(6);
-        // Sub-header dos insumos (14 colunas) — altura fixa maior + wrap central
+        // Insumos preservam os preços de referência; desconto é global da composição.
         rows.push([
           tCell('  ↳', insBg, true, insFg, 'center'),
           tCell('Cód. Insumo', insBg, true, insFg, 'center'),
@@ -821,23 +824,20 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
           tCell('Descrição do insumo', insBg, true, insFg, 'center'),
           tCell('Und', insBg, true, insFg, 'center'),
           tCell('Coef.', insBg, true, insFg, 'center'),
-          tCell('V.Unit Ref. s/ BDI', insBg, true, insFg, 'center'),
-          tCell('Desc. %', insBg, true, insFg, 'center'),
-          tCell('V.Unit s/ BDI c/ Desc.', insBg, true, insFg, 'center'),
+          tCell('V.Unit s/ BDI', insBg, true, insFg, 'center'),
           tCell('', insBg),
           tCell('', insBg),
-          tCell('Total s/ BDI Ref.', insBg, true, insFg, 'center'),
-          tCell('Total s/ BDI c/ Desc.', insBg, true, insFg, 'center'),
+          tCell('', insBg),
+          tCell('', insBg),
+          tCell('Total s/ BDI', insBg, true, insFg, 'center'),
+          tCell('', insBg),
           tCell('Insumo', insBg, true, insFg, 'center'),
         ]);
         rowHeights.push(30);
-        const dPct = (discount || 0) / 100;
         inputs.forEach(ip => {
           const ref = Number(ip.unitPrice) || 0;
           const coef = Number(ip.coefficient) || 0;
-          const unitDisc = trunc2(ref * (1 - dPct));
           const totRef = trunc2(coef * ref);
-          const totDisc = trunc2(coef * unitDisc);
           rows.push([
             tCell(''),
             tCell(ip.code || ''),
@@ -846,12 +846,12 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
             tCell(ip.unit || '', undefined, false, undefined, 'center'),
             nCell(coef, FMT_COEF),
             nCell(moneyExcel(ref), FMT_BRL),
-            nCell(pctExcel(dPct), FMT_PCT),
-            nCell(moneyExcel(unitDisc), FMT_BRL),
+            tCell(''),
+            tCell(''),
             tCell(''),
             tCell(''),
             nCell(moneyExcel(totRef), FMT_BRL),
-            nCell(moneyExcel(totDisc), FMT_BRL),
+            tCell(''),
             tCell('Insumo', undefined, false, insFg),
           ]);
           rowHeights.push(estimateRowHeight(ip.description || ''));
@@ -1212,6 +1212,7 @@ export async function exportAdditiveSyntheticCompletePdf(project: Project, add: 
 
   const bdi = add.bdiPercent ?? 0;
   const discount = add.globalDiscountPercent ?? 0;
+  const pricingRule = resolveAdditivePricingRule(add);
 
   const head = [
     [
@@ -1246,7 +1247,7 @@ export async function exportAdditiveSyntheticCompletePdf(project: Project, add: 
       }]);
     },
     onComposition: c => {
-      const r = computeAdditiveRow(c, bdi, discount);
+      const r = computeAdditiveRow(c, bdi, discount, pricingRule);
       const lineValorContratado = trunc2(r.valorContratadoOriginalPreservado);
       const lineValorSuprimido = trunc2(r.valorSuprimido);
       const lineValorAcrescido = trunc2(r.valorAcrescido);
@@ -1284,7 +1285,7 @@ export async function exportAdditiveSyntheticCompletePdf(project: Project, add: 
         { content: fmtQ(r.qtdSuprimida), styles: { ...supStyles, halign: 'right' } },
         { content: fmtQ(r.qtdAcrescida), styles: { ...acrStyles, halign: 'right' } },
         { content: fmtQ(r.qtdFinal), styles: { ...baseStyles, halign: 'right' } },
-        { content: fmtBRL(c.isNewService ? r.unitPriceNoBDIWithDiscount : r.unitPriceNoBDI), styles: { ...baseStyles, halign: 'right' } },
+        { content: fmtBRL(r.unitPriceNoBDI), styles: { ...baseStyles, halign: 'right' } },
         { content: fmtBRL(r.unitPriceWithBDI), styles: { ...baseStyles, halign: 'right' } },
         { content: fmtBRL(lineValorSuprimido), styles: { ...supStyles, halign: 'right' } },
         { content: fmtBRL(lineValorAcrescido), styles: { ...acrStyles, halign: 'right' } },
@@ -1348,11 +1349,12 @@ export async function exportAdditiveNewServicesPdf(project: Project, add: Additi
 
   const bdi = add.bdiPercent ?? 0;
   const discount = add.globalDiscountPercent ?? 0;
+  const pricingRule = resolveAdditivePricingRule(add);
 
   const head = [[
     'Item', 'Cód', 'Banco', 'Descrição', 'Und',
     'Qtd Acresc.',
-    'V.Unit Ref. s/BDI', 'Desc.%', 'V.Unit s/BDI c/Desc.', 'BDI %', 'V.Unit c/BDI',
+    'V.Unit s/BDI', 'BDI %', 'V.Unit c/BDI antes Desc.', 'Desc.%', 'V.Unit c/BDI e Desc.',
     'V. Acrescido', 'V. Final', 'Fonte/Obs',
   ]];
   const body: any[] = [];
@@ -1360,7 +1362,7 @@ export async function exportAdditiveNewServicesPdf(project: Project, add: Additi
   walkByChapters(project, add, c => !!c.isNewService, {
     onChapterStart: ch => body.push([{ content: `${'    '.repeat(ch.depth)}${ch.number} ${ch.name}`, colSpan: 14, styles: { fillColor: [241, 245, 249], fontStyle: 'bold' } }]),
     onComposition: c => {
-      const r = computeAdditiveRow(c, bdi, discount);
+      const r = computeAdditiveRow(c, bdi, discount, pricingRule);
       const refUnit = referenceUnitNoBDIForNewService(c);
       const obs = c.bank ? `Fonte: ${c.bank}` : 'Novo serviço aditivado';
       const fill: [number, number, number] = [239, 246, 255];
@@ -1373,9 +1375,9 @@ export async function exportAdditiveNewServicesPdf(project: Project, add: Additi
         { content: c.unit || '', styles: { fillColor: fill, halign: 'center' } },
         { content: fmtQ(r.qtdAcrescida), styles: acrStyles },
         { content: fmtBRL(refUnit), styles: { fillColor: fill, halign: 'right' } },
-        { content: `${(discount || 0).toFixed(2)}%`, styles: { fillColor: fill, halign: 'right' } },
-        { content: fmtBRL(r.unitPriceNoBDIWithDiscount), styles: { fillColor: fill, halign: 'right' } },
         { content: `${(bdi || 0).toFixed(2)}%`, styles: { fillColor: fill, halign: 'right' } },
+        { content: fmtBRL(r.unitPriceWithBDIBeforeDiscount), styles: { fillColor: fill, halign: 'right' } },
+        { content: `${(discount || 0).toFixed(2)}%`, styles: { fillColor: fill, halign: 'right' } },
         { content: fmtBRL(r.unitPriceWithBDI), styles: { fillColor: fill, halign: 'right' } },
         { content: fmtBRL(r.valorAcrescido), styles: acrStyles },
         { content: fmtBRL(r.valorFinal), styles: { fillColor: fill, halign: 'right' } },
@@ -1389,13 +1391,10 @@ export async function exportAdditiveNewServicesPdf(project: Project, add: Additi
         body.push([
           { content: '↳ Insumos analíticos (formação de preço)', colSpan: 14, styles: { fillColor: insBg, textColor: [71, 85, 105], fontStyle: 'bold', fontSize: 6.4 } },
         ]);
-        const dPct = (discount || 0) / 100;
         inputs.forEach(ip => {
           const ref = Number(ip.unitPrice) || 0;
           const coef = Number(ip.coefficient) || 0;
-          const unitDisc = trunc2(ref * (1 - dPct));
           const totRef = trunc2(coef * ref);
-          const totDisc = trunc2(coef * unitDisc);
           body.push([
             { content: '', styles: { fillColor: insBg } },
             { content: ip.code || '', styles: { fillColor: insBg } },
@@ -1404,12 +1403,12 @@ export async function exportAdditiveNewServicesPdf(project: Project, add: Additi
             { content: ip.unit || '', styles: { fillColor: insBg, halign: 'center' } },
             { content: fmtCoef(coef), styles: { fillColor: insBg, halign: 'right' } },
             { content: fmtBRL(ref), styles: { fillColor: insBg, halign: 'right' } },
-            { content: `${(discount || 0).toFixed(2)}%`, styles: { fillColor: insBg, halign: 'right' } },
-            { content: fmtBRL(unitDisc), styles: { fillColor: insBg, halign: 'right' } },
+            { content: '', styles: { fillColor: insBg } },
+            { content: '', styles: { fillColor: insBg } },
             { content: '', styles: { fillColor: insBg } },
             { content: '', styles: { fillColor: insBg } },
             { content: fmtBRL(totRef), styles: { fillColor: insBg, halign: 'right' } },
-            { content: fmtBRL(totDisc), styles: { fillColor: insBg, halign: 'right' } },
+            { content: '', styles: { fillColor: insBg } },
             { content: 'Insumo', styles: { fillColor: insBg, textColor: [71, 85, 105] } },
           ]);
         });

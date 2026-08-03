@@ -1,6 +1,6 @@
 import { Fragment, memo } from 'react';
 import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
-import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput, Project } from '@/types/project';
+import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput, AdditivePricingRule, Project } from '@/types/project';
 import type { CompGroup } from './types';
 import { fmtBRL, fmtPct, COL_COUNT } from './types';
 import AdditiveCompositionRow from './AdditiveCompositionRow';
@@ -11,6 +11,7 @@ interface Props {
   group: CompGroup;
   bdi: number;
   globalDiscount: number;
+  pricingRule?: AdditivePricingRule;
   isLocked: boolean;
   expanded: Set<string>;
   collapsed: Set<string>;
@@ -111,6 +112,7 @@ function AdditiveGroupRowImpl(props: Props) {
           c={c}
           bdi={props.bdi}
           globalDiscount={props.globalDiscount}
+          pricingRule={props.pricingRule}
           isLocked={isLocked}
           isOpen={props.expanded.has(c.id)}
           isMemoryOpen={props.selectedDetail?.compositionId === c.id && props.selectedDetail.mode === 'memory'}

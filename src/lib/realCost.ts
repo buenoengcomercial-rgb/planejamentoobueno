@@ -13,7 +13,7 @@ import type {
 } from '@/types/project';
 import { buildOrderedTasks } from '@/components/measurement/measurementFormat';
 import { getWorkEndDate } from '@/components/gantt/utils';
-import { additiveTotals, computeAdditiveRow } from '@/lib/additiveImport';
+import { additiveTotals, computeAdditiveRow, resolveAdditivePricingRule } from '@/lib/additiveImport';
 import { getChapterNumbering, getChapterTree, type ChapterNode } from '@/lib/chapters';
 import { money2, trunc2 } from '@/lib/financialEngine';
 import { resolveMaterialCostClass } from '@/lib/materialComparisons';
@@ -543,6 +543,7 @@ function buildCompositionSources(project: Project): CompositionSource[] {
           additiveAdjustment.composition,
           additiveAdjustment.additive.bdiPercent ?? project.syntheticBdiPercent ?? project.contractInfo?.bdiPercent ?? 0,
           additiveAdjustment.additive.globalDiscountPercent ?? 0,
+          resolveAdditivePricingRule(additiveAdjustment.additive),
         )
       : null;
     // Ordem contratual/original e valores oficiais permanecem na Medicao/Aditivo.
@@ -584,7 +585,7 @@ function buildCompositionSources(project: Project): CompositionSource[] {
 
     const bdi = pair.additive.bdiPercent ?? project.syntheticBdiPercent ?? project.contractInfo?.bdiPercent ?? 0;
     const discount = pair.additive.globalDiscountPercent ?? 0;
-    const r = computeAdditiveRow(pair.composition, bdi, discount);
+    const r = computeAdditiveRow(pair.composition, bdi, discount, resolveAdditivePricingRule(pair.additive));
     const quantity = trunc2(r.qtdFinal);
     sources.push({
       id: `additive:${pair.additive.id}:${pair.composition.id}`,

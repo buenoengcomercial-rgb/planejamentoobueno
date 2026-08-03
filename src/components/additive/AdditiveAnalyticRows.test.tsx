@@ -15,7 +15,7 @@ describe('AdditiveAnalyticRows layout', () => {
     const { container } = render(
       <AdditiveAnalyticRows
         c={composition} bdi={20} globalDiscount={0} isLocked={false}
-        cb={{ totalAnalyticWithBDI: 12, diff: 0 }} onUpdateComposition={vi.fn()}
+        cb={{ analyticUnitWithBDI: 12, totalAnalyticWithBDI: 12, diff: 0 }} onUpdateComposition={vi.fn()}
       />,
     );
     expect(screen.getByText('Coef.')).toHaveClass('text-center');
@@ -23,5 +23,29 @@ describe('AdditiveAnalyticRows layout', () => {
     const coefficientInput = container.querySelector<HTMLInputElement>('[data-col-index="4"]')!;
     expect(coefficientInput).toHaveClass('text-center');
     expect(coefficientInput.closest('td')).toHaveClass('text-center');
+  });
+
+  it('não desconta insumos e mostra o resumo agregado da Administração', () => {
+    render(
+      <AdditiveAnalyticRows
+        c={{
+          ...composition,
+          inputs: [{
+            id: 'input-abhi', code: 'ABHI', bank: 'PRÓPRIO', description: 'Composição ABHI_3',
+            unit: 'UN', coefficient: 1, unitPrice: 2775.03, total: 2775.03,
+          }],
+        }}
+        bdi={27.58} globalDiscount={6} isLocked={false}
+        cb={{ analyticUnitWithBDI: 3540.38, totalAnalyticWithBDI: 3540.38, diff: 0 }}
+        onUpdateComposition={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('V. Unit c/ Desc.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Total c/ Desc.')).not.toBeInTheDocument();
+    expect(screen.getByText('Analítica s/ BDI com desconto da licitação (6%) — informativo:')).toBeInTheDocument();
+    expect(screen.getByText('Valor analítico unitário c/ BDI e desconto — critério Administração:')).toBeInTheDocument();
+    expect(screen.getByText('R$ 2.608,52')).toBeInTheDocument();
+    expect(screen.getByText('R$ 3.327,95')).toBeInTheDocument();
   });
 });

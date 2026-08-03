@@ -15,6 +15,7 @@ import {
   buildAdditiveFromSyntheticBudgetItems,
   createNewServiceComposition, contractAdditive,
   applyAdditiveAnalyticImport,
+  resolveAdditivePricingRule,
   type AnalyticBlock,
   type AdditiveAnalyticImportPreview,
 } from '@/lib/additiveImport';
@@ -682,6 +683,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
   const handleApprove = () => {
     if (!active) return;
     const totals = additiveTotals(active, project);
+    const pricingRuleVersion = resolveAdditivePricingRule(active);
     const nextVersion = (active.version ?? 0) + 1;
     const approvedAt = new Date().toISOString();
     const snapshot: AdditiveApprovalSnapshot = {
@@ -691,6 +693,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
       reviewNotes: reviewNotes || undefined,
       bdiPercent: active.bdiPercent ?? 0,
       globalDiscountPercent: active.globalDiscountPercent ?? 0,
+      pricingRuleVersion,
       totals,
       compositions: JSON.parse(JSON.stringify(active.compositions)),
       issues: JSON.parse(JSON.stringify(active.issues ?? [])),
@@ -698,6 +701,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     const approvedAdditive: AdditiveModel = {
       ...active,
       status: 'aprovado',
+      pricingRuleVersion,
       approvedAt,
       approvedBy: approvedBy || undefined,
       reviewNotes: reviewNotes || undefined,

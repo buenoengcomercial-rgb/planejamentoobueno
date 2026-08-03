@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { Project, Additive as AdditiveModel, AdditiveComposition } from '@/types/project';
 import { getChapterTree, getChapterNumbering, type ChapterNode } from '@/lib/chapters';
-import { computeAdditiveRow } from '@/lib/additiveImport';
+import { computeAdditiveRow, resolveAdditivePricingRule } from '@/lib/additiveImport';
 import type { CompGroup } from '@/components/additive/types';
 
 export function useAdditiveGroups(
@@ -37,6 +37,7 @@ export function useAdditiveGroups(
     const empty = { groupTree: [] as CompGroup[], orphanRows: [] as AdditiveComposition[], hasEapLink: false };
     if (!active) return empty;
     void globalDiscount;
+    const pricingRule = resolveAdditivePricingRule(active);
     const compsByPhase = new Map<string, AdditiveComposition[]>();
     const visiblePhaseIds = new Set(active.visiblePhaseIds ?? []);
     const orphans: AdditiveComposition[] = [];
@@ -75,7 +76,7 @@ export function useAdditiveGroups(
       let subtotalAcrescido = 0;
       let subtotalFinal = 0;
       directRows.forEach(c => {
-        const r = computeAdditiveRow(c, bdi, globalDiscount);
+        const r = computeAdditiveRow(c, bdi, globalDiscount, pricingRule);
         subtotalTotalFonte += r.totalFonte;
         subtotalContratado += r.valorContratadoOriginalPreservado;
         subtotalSuprimido += r.valorSuprimido;

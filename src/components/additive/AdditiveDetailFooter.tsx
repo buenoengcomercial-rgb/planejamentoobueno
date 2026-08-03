@@ -8,6 +8,7 @@ import AdditiveAnalyticRows from './AdditiveAnalyticRows';
 import AdditiveCalculationMemory from './AdditiveCalculationMemory';
 import { fmtBRL } from './types';
 import { compositionWithResolvedInputs } from '@/lib/analyticLinks';
+import { trunc2 } from '@/lib/financialEngine';
 
 export type AdditiveDetailMode = 'memory' | 'analytic' | 'classification';
 
@@ -49,7 +50,7 @@ function ClassificationView({
 }) {
   const row = computeAdditiveRow(composition, bdi, globalDiscount);
   const breakdown = MC.getMaterialCompositionBreakdown(project, composition, 'Aditivo');
-  const bdiValue = Math.max(0, (row.unitPriceWithBDI - row.unitPriceNoBDIWithDiscount) * row.qtdFinal);
+  const bdiValue = trunc2(row.bdiAmount * row.qtdFinal);
 
   return (
     <div className="space-y-3">
@@ -64,7 +65,7 @@ function ClassificationView({
         <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
           <div className="text-[11px] text-muted-foreground">BDI em reais</div>
           <div className="mt-1 text-sm font-semibold tabular-nums">{fmtBRL(bdiValue)}</div>
-          <div className="text-[10px] text-muted-foreground">{bdi.toLocaleString('pt-BR')}% sobre a base</div>
+          <div className="text-[10px] text-muted-foreground">{bdi.toLocaleString('pt-BR')}% sobre a base antes do desconto</div>
         </div>
       </div>
       {!breakdown && (

@@ -1,5 +1,6 @@
 import type {
   Additive,
+  AdditivePricingRule,
   AdditiveComposition,
   AdditiveInput,
   AdditiveImportIssue,
@@ -44,6 +45,7 @@ import {
   calculateUnitPriceWithBDI,
   calculateLineTotal,
   calculateDiscountedUnitNoBDI,
+  calculateNewServiceUnitPrices,
 } from './financialEngine';
 
 /** Alias histórico — usar trunc2 do financialEngine. */
@@ -57,6 +59,19 @@ export function money2(value: number | null | undefined): number {
 
 const hasReadyValue = (value: unknown): value is number =>
   value !== null && value !== undefined && Number.isFinite(Number(value));
+
+export const ADMINISTRATION_PRICING_RULE: AdditivePricingRule = 'administration_bdi_then_discount_v1';
+export const LEGACY_PRICING_RULE: AdditivePricingRule = 'legacy_discount_then_bdi_v1';
+
+/**
+ * Rascunhos, revisões abertas e novos contratos usam a regra da Administração.
+ * Aditivos antigos já integrados, sem versão gravada, preservam o cálculo legado.
+ */
+export function resolveAdditivePricingRule(add: Additive): AdditivePricingRule {
+  if (add.pricingRuleVersion) return add.pricingRuleVersion;
+  if (add.isContracted && !add.editUnlocked) return LEGACY_PRICING_RULE;
+  return ADMINISTRATION_PRICING_RULE;
+}
 
 const norm = (s: string) =>
   s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
@@ -1388,10 +1403,14 @@ export function referenceUnitNoBDIForNewService(comp: AdditiveComposition): numb
   return money2(comp.unitPriceNoBDIInformed ?? comp.unitPriceNoBDI ?? 0);
 }
 
-export function computeAdditiveRow(comp: AdditiveComposition, bdiPercent: number, globalDiscountPercent = 0) {
+export function computeAdditiveRow(
+  comp: AdditiveComposition,
+  bdiPercent: number,
+  globalDiscountPercent = 0,
+  pricingRule: AdditivePricingRule = ADMINISTRATION_PRICING_RULE,
+) {
   const isNew = !!comp.isNewService;
   // Para novos serviços: o valor unitário s/ BDI exibido é a REFERÊNCIA (SINAPI), sem desconto.
-  // O desconto global da licitação é aplicado em uma coluna separada e propaga para o BDI.
   const discountFactor = isNew ? (1 - (globalDiscountPercent || 0) / 100) : 1;
   const referenceUnitNoBDI = isNew
     ? referenceUnitNoBDIForNewService(comp)
@@ -1400,16 +1419,32 @@ export function computeAdditiveRow(comp: AdditiveComposition, bdiPercent: number
   //  - novos serviços: REFERÊNCIA SINAPI (sem desconto), para rastreabilidade;
   //  - existentes: valor importado da Sintética/Medição.
   const unitPriceNoBDI = referenceUnitNoBDI;
-  // Valor com desconto licitatório (somente novos serviços; nos demais é igual à referência).
+  // Regra nova oficial: BDI truncado sobre a referência e desconto global somente no final.
+  // O caminho legado existe apenas para preservar aditivos antigos já contratados.
+  const officialPricing = calculateNewServiceUnitPrices({
+    referenceUnitNoBDI,
+    bdiPercent: bdiPercent || 0,
+    discountPercent: globalDiscountPercent || 0,
+  });
+  const legacyDiscountedNoBDI = calculateDiscountedUnitNoBDI(referenceUnitNoBDI, globalDiscountPercent || 0);
+  const legacyUnitWithBDI = calculateUnitPriceWithBDI(legacyDiscountedNoBDI, bdiPercent || 0);
+  const useLegacyNewServiceRule = isNew && pricingRule === LEGACY_PRICING_RULE;
   const unitPriceNoBDIWithDiscount = isNew
-    ? calculateDiscountedUnitNoBDI(referenceUnitNoBDI, globalDiscountPercent || 0)
+    ? officialPricing.unitPriceNoBDIWithDiscount
     : referenceUnitNoBDI;
-  // Valor c/ BDI: aplicado SOBRE o valor já com desconto (novos) ou sobre o contratado (existentes).
-  const unitPriceWithBDI = isNew
-    ? calculateUnitPriceWithBDI(unitPriceNoBDIWithDiscount, bdiPercent || 0)
+  const unitPriceWithBDIBeforeDiscount = isNew
+    ? officialPricing.unitPriceWithBDIBeforeDiscount
     : hasReadyValue(comp.unitPriceWithBDI)
       ? truncar2(comp.unitPriceWithBDI)
       : calculateUnitPriceWithBDI(unitPriceNoBDI, bdiPercent || 0);
+  const unitPriceWithBDI = isNew
+    ? (useLegacyNewServiceRule ? legacyUnitWithBDI : officialPricing.unitPriceWithBDI)
+    : unitPriceWithBDIBeforeDiscount;
+  const bdiAmount = isNew
+    ? (useLegacyNewServiceRule
+        ? truncar2(legacyUnitWithBDI - legacyDiscountedNoBDI)
+        : officialPricing.bdiAmount)
+    : truncar2(Math.max(0, unitPriceWithBDI - unitPriceNoBDI));
   // Quantidades SEMPRE truncadas em 2 casas antes de qualquer multiplicação financeira.
   const qtdContratada = truncar2(comp.originalQuantity ?? comp.quantity ?? 0);
   const qtdSuprimida = truncar2(comp.suppressedQuantity ?? 0);
@@ -1440,6 +1475,7 @@ export function computeAdditiveRow(comp: AdditiveComposition, bdiPercent: number
   const percentVar = valorContratadoOriginalPreservado > 0 ? diferenca / valorContratadoOriginalPreservado : 0;
   return {
     unitPriceNoBDI, unitPriceNoBDIWithDiscount, unitPriceWithBDI,
+    bdiAmount, unitPriceWithBDIBeforeDiscount, pricingRule,
     referenceUnitNoBDI, discountFactor, globalDiscountPercent: globalDiscountPercent || 0,
     qtdContratada, qtdSuprimida, qtdAcrescida, qtdFinal,
     totalFonte, valorContratadoCalc, valorContratadoOriginalPreservado,
@@ -1466,6 +1502,7 @@ export function getOfficialContractedTotal(project: Project | null | undefined):
 export function additiveTotals(add: Additive, project?: Project | null) {
   const bdi = add.bdiPercent ?? 0;
   const discount = add.globalDiscountPercent ?? 0;
+  const pricingRule = resolveAdditivePricingRule(add);
   const compCount = add.compositions.length;
   const totalSemBDI = add.compositions.reduce(
     (a, c) => truncar2(a + money2(c.totalNoBDI ?? c.unitPriceNoBDI * c.quantity)),
@@ -1491,7 +1528,7 @@ export function additiveTotals(add: Additive, project?: Project | null) {
   let totalNovosServicos = 0;
   let valorFinal = 0;
   for (const c of add.compositions) {
-    const r = computeAdditiveRow(c, bdi, discount);
+    const r = computeAdditiveRow(c, bdi, discount, pricingRule);
     totalContratadoOriginal = truncar2(totalContratadoOriginal + r.valorContratadoOriginalPreservado);
     totalSuprimido = truncar2(totalSuprimido + r.valorSuprimido);
     totalAcrescido = truncar2(totalAcrescido + r.valorAcrescido);
@@ -1565,9 +1602,10 @@ export function getApprovedAdditiveItems(project: Project): ApprovedAdditiveItem
   for (const a of adds) {
     if (a.status !== 'aprovado') continue;
     const bdi = a.bdiPercent ?? 0;
-    const fator = 1 + bdi / 100;
+    const discount = a.globalDiscountPercent ?? 0;
+    const pricingRule = resolveAdditivePricingRule(a);
     for (const c of a.compositions) {
-      const upWithBDI = truncar2(c.unitPriceNoBDI * fator);
+      const row = computeAdditiveRow(c, bdi, discount, pricingRule);
       out.push({
         additiveId: a.id,
         additiveName: a.name,
@@ -1582,8 +1620,8 @@ export function getApprovedAdditiveItems(project: Project): ApprovedAdditiveItem
         suppressedQuantity: c.suppressedQuantity ?? 0,
         addedQuantity: c.addedQuantity ?? c.quantity ?? 0,
         totalAfter: totalAfterAdditive(c),
-        unitPriceNoBDI: c.unitPriceNoBDI,
-        unitPriceWithBDI: upWithBDI,
+        unitPriceNoBDI: row.unitPriceNoBDI,
+        unitPriceWithBDI: row.unitPriceWithBDI,
         status: 'aprovado',
         approvedAt: a.approvedAt,
         approvedBy: a.approvedBy,
@@ -1610,15 +1648,16 @@ export function getApprovedAdditiveBudgetItems(project: Project): BudgetItem[] {
     if (!a.isContracted && a.status !== 'aditivo_contratado') continue;
     const bdi = a.bdiPercent ?? 0;
     const discount = a.globalDiscountPercent ?? 0;
-    const fator = 1 + bdi / 100;
+    const pricingRule = resolveAdditivePricingRule(a);
     for (const c of a.compositions) {
       // Apenas novos serviços viram BudgetItems próprios. Acréscimos/supressões
       // em itens existentes são aplicados diretamente em `contractAdditive`.
       if (!c.isNewService) continue;
       const qty = c.addedQuantity ?? c.quantity ?? 0;
       if (!qty) continue;
-      const baseUnitNoBDI = money2(referenceUnitNoBDIForNewService(c) * (1 - discount / 100));
-      const upWithBDI = truncar2(baseUnitNoBDI * fator);
+      const row = computeAdditiveRow(c, bdi, discount, pricingRule);
+      const baseUnitNoBDI = row.unitPriceNoBDI;
+      const upWithBDI = row.unitPriceWithBDI;
       const totalNoBDI = truncar2(baseUnitNoBDI * qty);
       const totalWithBDI = truncar2(upWithBDI * qty);
       out.push({
@@ -2019,12 +2058,13 @@ export async function exportAdditiveNewServicesToExcel(
   (globalThis as any).__xlsxRef = XLSX;
   const bdi = add.bdiPercent ?? 0;
   const discount = add.globalDiscountPercent ?? 0;
+  const pricingRule = resolveAdditivePricingRule(add);
 
   const header = [
     'Item', 'Código', 'Banco', 'Descrição', 'Unidade',
     'Qtd Acrescida',
-    'Valor Unit Referência s/ BDI', 'Desconto Licit. %', 'Valor Unit s/ BDI com Desconto',
-    'BDI %', 'Valor Unit c/ BDI',
+    'Valor Unit s/ BDI', 'BDI %', 'Valor Unit c/ BDI antes do Desconto',
+    'Desconto Licit. %', 'Valor Unit c/ BDI e Desconto',
     'Valor Acrescido', 'Valor Final',
     'Fonte / Observação',
   ];
@@ -2049,16 +2089,16 @@ export async function exportAdditiveNewServicesToExcel(
       aoa.push([`${indent}${ch.number} ${ch.name}`]);
     },
     onComposition: c => {
-      const r = computeAdditiveRow(c, bdi, discount);
+      const r = computeAdditiveRow(c, bdi, discount, pricingRule);
       const refUnit = referenceUnitNoBDIForNewService(c);
       const obs = c.bank ? `Fonte: ${c.bank}` : 'Novo serviço aditivado';
       aoa.push([
         c.item, c.code, c.bank, c.description, c.unit,
         r.qtdAcrescida,
         refUnit,
-        (discount || 0) / 100,
-        r.unitPriceNoBDIWithDiscount,
         (bdi || 0) / 100,
+        r.unitPriceWithBDIBeforeDiscount,
+        (discount || 0) / 100,
         r.unitPriceWithBDI,
         r.valorAcrescido, r.valorFinal,
         obs,
@@ -2559,7 +2599,7 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
   if (!add) return project;
   const bdi = add.bdiPercent ?? 0;
   const discount = add.globalDiscountPercent ?? 0;
-  const fator = 1 + bdi / 100;
+  const pricingRule = resolveAdditivePricingRule(add);
   const version = add.isContracted ? (add.version ?? 0) + 1 : (add.version ?? 0);
   const now = new Date().toISOString();
   const revisionNumber = Math.max(0, ...(project.contractRevisions ?? []).map(revision => revision.number)) + 1;
@@ -2663,9 +2703,9 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
         ? updatedTasks.find(t => t.id === taskId)
         : undefined;
       if (currentTask) {
-        const referenceUnit = referenceUnitNoBDIForNewService(n);
-        const baseUnitNoBDI = money2(referenceUnit * (1 - discount / 100));
-        const upWithBDI = truncar2(baseUnitNoBDI * fator);
+        const row = computeAdditiveRow(n, bdi, discount, pricingRule);
+        const baseUnitNoBDI = row.unitPriceNoBDI;
+        const upWithBDI = row.unitPriceWithBDI;
         const qty = n.addedQuantity ?? 0;
         const totalWithBDI = truncar2(upWithBDI * qty);
         const previousQuantity = currentTask.quantity ?? 0;
@@ -2712,9 +2752,9 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
         continue;
       }
       if (existingIds.has(taskId)) continue; // já criada antes
-      const referenceUnit = referenceUnitNoBDIForNewService(n);
-      const baseUnitNoBDI = money2(referenceUnit * (1 - discount / 100));
-      const upWithBDI = truncar2(baseUnitNoBDI * fator);
+      const row = computeAdditiveRow(n, bdi, discount, pricingRule);
+      const baseUnitNoBDI = row.unitPriceNoBDI;
+      const upWithBDI = row.unitPriceWithBDI;
       const qty = n.addedQuantity ?? 0;
       const totalWithBDI = truncar2(upWithBDI * qty);
       const existingTask = existingIds.has(taskId)
@@ -2865,6 +2905,7 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
     contractedAt: add.contractedAt ?? now,
     effectiveDate,
     contractRevisionId: revisionId,
+    pricingRuleVersion: pricingRule,
     editUnlocked: false,
     editUnlockedAt: undefined,
     editUnlockedBy: undefined,

@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Card } from '@/components/ui/card';
-import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput, Project } from '@/types/project';
+import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput, AdditivePricingRule, Project } from '@/types/project';
 import type { CompGroup } from './types';
 import { COL_COUNT, G_HEAD, BORDER_L } from './types';
 import AdditiveGroupRow from './AdditiveGroupRow';
@@ -11,6 +11,7 @@ interface Props {
   project: Project;
   bdi: number;
   globalDiscount: number;
+  pricingRule?: AdditivePricingRule;
   isLocked: boolean;
   showAnalytic: boolean;
   expanded: Set<string>;
@@ -65,6 +66,7 @@ export default function AdditiveTable(props: Props) {
       c={c}
       bdi={props.bdi}
       globalDiscount={props.globalDiscount}
+      pricingRule={props.pricingRule}
       isLocked={props.isLocked}
       isOpen={props.expanded.has(c.id)}
       isMemoryOpen={props.selectedDetail?.compositionId === c.id && props.selectedDetail.mode === 'memory'}
@@ -163,6 +165,7 @@ export default function AdditiveTable(props: Props) {
                     group={g}
                     bdi={props.bdi}
                     globalDiscount={props.globalDiscount}
+                    pricingRule={props.pricingRule}
                     isLocked={props.isLocked}
                     expanded={props.expanded}
                     collapsed={props.collapsed}

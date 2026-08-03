@@ -10,7 +10,7 @@ import { buttonVariants } from '@/components/ui/button';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput, Project } from '@/types/project';
+import type { AdditiveComposition, AdditiveCalculationMemoryRow, AdditiveInput, AdditivePricingRule, Project } from '@/types/project';
 import { computeAdditiveRow, computeCompositionWithBDI } from '@/lib/additiveImport';
 import { memoryTotals } from '@/lib/calculationMemory';
 import { fmtBRL, fmtNum, fmtQty2, fmtPct, COL_COUNT, G_BG, BORDER_L } from './types';
@@ -232,6 +232,7 @@ interface Props {
   c: AdditiveComposition;
   bdi: number;
   globalDiscount: number;
+  pricingRule?: AdditivePricingRule;
   isLocked: boolean;
   isOpen: boolean;
   isMemoryOpen: boolean;
@@ -249,14 +250,14 @@ interface Props {
 }
 
 function AdditiveCompositionRowImpl({
-  project, c, bdi, globalDiscount, isLocked, isOpen, isMemoryOpen, showAnalytic, rowIndex = 0,
+  project, c, bdi, globalDiscount, pricingRule, isLocked, isOpen, isMemoryOpen, showAnalytic, rowIndex = 0,
   onToggleExpand, onUpdateComposition, onUpdateQuantity, onReorderComposition,
   onRemoveComposition, onChangeMemory, selectedDetail, onSelectDetail,
   inputReferenceByCode,
 }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const { composition: analyticComposition, resolution: analyticResolution } = compositionWithResolvedInputs(project, c);
-  const r = computeAdditiveRow(c, bdi, globalDiscount);
+  const r = computeAdditiveRow(c, bdi, globalDiscount, pricingRule);
   const cb = computeCompositionWithBDI(analyticComposition, bdi);
   const hasInputs = analyticComposition.inputs.length > 0;
   const inheritedAnalytic = analyticResolution.inherited;
@@ -574,12 +575,12 @@ function AdditiveCompositionRowImpl({
               value={c.unitPriceNoBDIInformed ?? 0}
               onCommit={n => onUpdateComposition(c.id, { unitPriceNoBDIInformed: n })}
               className="h-7 w-full text-xs text-center px-1"
-              title={globalDiscount > 0 ? `Informe a referência s/ BDI. Desconto licit. ${globalDiscount}% será aplicado.` : 'Valor s/ BDI'}
+              title={globalDiscount > 0 ? `Informe a referência s/ BDI. O desconto licitatório de ${globalDiscount}% será aplicado após o BDI.` : 'Valor s/ BDI'}
               gridId={MAIN_GRID} rowIndex={rowIndex} colIndex={7}
             />
           ) : (
-            <span title={isNew && globalDiscount > 0 ? `Já com desconto de ${globalDiscount}% (referência: ${fmtBRL(r.referenceUnitNoBDI)})` : undefined}>
-              {fmtBRL(isNew ? r.unitPriceNoBDIWithDiscount : r.unitPriceNoBDI)}
+            <span title={isNew && globalDiscount > 0 ? `Referência s/ BDI; o desconto de ${globalDiscount}% é aplicado somente no valor final c/ BDI.` : undefined}>
+              {fmtBRL(r.unitPriceNoBDI)}
             </span>
           )}
         </td>
@@ -623,6 +624,7 @@ function AdditiveCompositionRowImpl({
               c={analyticComposition}
               bdi={bdi}
               globalDiscount={globalDiscount}
+              pricingRule={pricingRule}
               isLocked={isLocked || inheritedAnalytic}
               cb={cb}
               onUpdateComposition={onUpdateComposition}

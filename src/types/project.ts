@@ -1238,6 +1238,11 @@ export type AdditiveStatus =
   | 'reprovado'
   | 'aditivo_contratado';
 
+/** Regra usada para formar o preço de novos serviços do aditivo. */
+export type AdditivePricingRule =
+  | 'legacy_discount_then_bdi_v1'
+  | 'administration_bdi_then_discount_v1';
+
 /** Snapshot congelado do aditivo no momento da aprovação (versionado). */
 export interface AdditiveApprovalSnapshot {
   version: number;
@@ -1246,6 +1251,7 @@ export interface AdditiveApprovalSnapshot {
   reviewNotes?: string;
   bdiPercent: number;
   globalDiscountPercent: number;
+  pricingRuleVersion?: AdditivePricingRule;
   /** Totais agregados calculados na aprovação (estrutura aberta). */
   totals: unknown;
   compositions: AdditiveComposition[];
@@ -1269,6 +1275,11 @@ export interface Additive {
   aditivoLimitPercent?: number;
   /** Desconto global da licitação (%). Aplicado APENAS aos novos serviços (isNewService). */
   globalDiscountPercent?: number;
+  /**
+   * Versão da regra financeira. A ausência em aditivo já contratado identifica
+   * o cálculo legado; rascunhos e revisões abertas usam a regra da Administração.
+   */
+  pricingRuleVersion?: AdditivePricingRule;
   /** True quando o usuário clicou em "Aditivo Contratado" — integra novos serviços ao projeto. */
   isContracted?: boolean;
   /** Carimbo de quando o aditivo foi marcado como contratado. */

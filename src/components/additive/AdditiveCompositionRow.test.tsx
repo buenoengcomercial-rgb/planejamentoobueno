@@ -15,7 +15,7 @@ const composition: AdditiveComposition = {
 
 const project = { analyticCompositions: [], budgetItems: [] } as unknown as Project;
 
-function renderRow(options: { mode?: 'memory' | 'analytic'; isOpen: boolean; composition?: AdditiveComposition; isLocked?: boolean }) {
+function renderRow(options: { mode?: 'memory' | 'analytic'; isOpen: boolean; composition?: AdditiveComposition; isLocked?: boolean; globalDiscount?: number }) {
   const onToggleExpand = vi.fn();
   const onSelectDetail = vi.fn();
   const onReorderComposition = vi.fn();
@@ -26,7 +26,7 @@ function renderRow(options: { mode?: 'memory' | 'analytic'; isOpen: boolean; com
         project={project}
         c={current}
         bdi={27.58}
-        globalDiscount={0}
+        globalDiscount={options.globalDiscount ?? 0}
         isLocked={options.isLocked ?? false}
         isOpen={options.isOpen}
         isMemoryOpen={options.mode === 'memory'}
@@ -81,6 +81,28 @@ function DetailInteractionHarness() {
 }
 
 describe('AdditiveCompositionRow detail selection', () => {
+  it('mostra referência s/ BDI e valor final oficial no novo serviço', () => {
+    renderRow({
+      isOpen: false,
+      globalDiscount: 6,
+      composition: {
+        ...composition,
+        isNewService: true,
+        quantity: 0,
+        originalQuantity: 0,
+        addedQuantity: 12,
+        total: 0,
+        totalWithBDI: 0,
+        analyticReferenceUnitPriceNoBDI: 2775.03,
+      },
+    });
+
+    expect(screen.getByText('R$ 2.775,03')).toBeInTheDocument();
+    expect(screen.getByText('R$ 3.327,95')).toBeInTheDocument();
+    expect(screen.getAllByText('R$ 39.935,40').length).toBeGreaterThan(0);
+    expect(screen.queryByText('R$ 2.608,52')).not.toBeInTheDocument();
+  });
+
   it('fecha a Memória pelo clique na composição sem o capture global abrir a Analítica', () => {
     const { container } = render(<DetailInteractionHarness />);
     const addedQuantity = container.querySelector<HTMLInputElement>('input.border-emerald-200');

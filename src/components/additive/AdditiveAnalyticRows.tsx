@@ -2,9 +2,9 @@ import { memo, useState, useEffect } from 'react';
 import { Plus, Trash2, Copy } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import type { AdditiveComposition, AdditiveInput } from '@/types/project';
-import { sumAnalyticTotalNoBDI, truncar2 } from '@/lib/additiveImport';
-import { calculateDiscountedAnalyticTotalNoBDI, calculateDiscountedUnitNoBDI, calculateLineTotal } from '@/lib/financialEngine';
+import type { AdditiveComposition, AdditiveInput, AdditivePricingRule } from '@/types/project';
+import { referenceUnitNoBDIForNewService, sumAnalyticTotalNoBDI } from '@/lib/additiveImport';
+import { calculateDiscountedUnitNoBDI, calculateLineTotal, calculateNewServiceUnitPrices, calculateUnitPriceWithBDI } from '@/lib/financialEngine';
 import { fmtBRL } from './types';
 import { handleGridContainerKeyDownCapture } from '@/lib/gridKeyboardNavigation';
 
@@ -12,8 +12,9 @@ interface Props {
   c: AdditiveComposition;
   bdi: number;
   globalDiscount: number;
+  pricingRule?: AdditivePricingRule;
   isLocked?: boolean;
-  cb: { totalAnalyticWithBDI: number; diff: number };
+  cb: { analyticUnitWithBDI: number; totalAnalyticWithBDI: number; diff: number };
   onUpdateComposition?: (id: string, patch: Partial<AdditiveComposition>) => void;
   inputReferenceByCode?: ReadonlyMap<string, AdditiveInput>;
 }
@@ -123,19 +124,25 @@ function TextCell({
   );
 }
 
-function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpdateComposition, inputReferenceByCode }: Props) {
+function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, pricingRule, isLocked, cb, onUpdateComposition, inputReferenceByCode }: Props) {
   const isNew = !!c.isNewService;
   const editable = isNew && !isLocked && !!onUpdateComposition;
   const showDiscount = isNew && globalDiscount > 0;
   const sumNoBDI = sumAnalyticTotalNoBDI(c);
+  const pricingBaseNoBDI = sumNoBDI > 0 ? sumNoBDI : referenceUnitNoBDIForNewService(c);
   const sumNoBDIDisc = showDiscount
-    ? calculateDiscountedAnalyticTotalNoBDI(c.inputs, globalDiscount)
-    : sumNoBDI;
-  const qty = c.addedQuantity ?? c.quantity ?? 0;
-  const fator = 1 + bdi / 100;
-  const totalAnalyticWithBDI = showDiscount
-    ? truncar2(truncar2(sumNoBDIDisc * fator) * qty)
-    : cb.totalAnalyticWithBDI;
+    ? calculateDiscountedUnitNoBDI(pricingBaseNoBDI, globalDiscount)
+    : pricingBaseNoBDI;
+  const officialPricing = calculateNewServiceUnitPrices({
+    referenceUnitNoBDI: pricingBaseNoBDI,
+    bdiPercent: bdi,
+    discountPercent: showDiscount ? globalDiscount : 0,
+  });
+  const analyticUnitWithBDI = isNew
+    ? (pricingRule === 'legacy_discount_then_bdi_v1'
+        ? calculateUnitPriceWithBDI(sumNoBDIDisc, bdi)
+        : officialPricing.unitPriceWithBDI)
+    : cb.analyticUnitWithBDI;
 
   const updateInputs = (next: AdditiveInput[]) => {
     if (!onUpdateComposition) return;
@@ -172,7 +179,7 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
     updateInputs(next);
   };
 
-  const colCount = (showDiscount ? 9 : 7) + (editable ? 1 : 0);
+  const colCount = 7 + (editable ? 1 : 0);
 
   return (
     <div className="space-y-2" onKeyDownCapture={handleGridContainerKeyDownCapture}>
@@ -184,9 +191,7 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
           <col style={{ width: '70px' }} />
           <col style={{ width: '90px' }} />
           <col style={{ width: '120px' }} />
-          {showDiscount && <col style={{ width: '130px' }} />}
           <col style={{ width: '120px' }} />
-          {showDiscount && <col style={{ width: '130px' }} />}
           {editable && <col style={{ width: '60px' }} />}
         </colgroup>
         <thead>
@@ -197,13 +202,7 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
             <th className="text-left px-1.5 py-1 font-medium">Un</th>
             <th className="text-center px-1.5 py-1 font-medium">Coef.</th>
             <th className="text-center px-1.5 py-1 font-medium">V. Unit s/ BDI</th>
-            {showDiscount && (
-              <th className="text-center px-1.5 py-1 font-medium text-sky-700">V. Unit c/ Desc.</th>
-            )}
             <th className="text-center px-1.5 py-1 font-medium">Total s/ BDI</th>
-            {showDiscount && (
-              <th className="text-center px-1.5 py-1 font-medium text-sky-700">Total c/ Desc.</th>
-            )}
             {editable && <th className="px-1.5 py-1 text-right">Ações</th>}
           </tr>
         </thead>
@@ -216,8 +215,6 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
             </tr>
           )}
           {c.inputs.map((i, rowIdx) => {
-            const unitDisc = calculateDiscountedUnitNoBDI(i.unitPrice, globalDiscount);
-            const totalDisc = calculateLineTotal(unitDisc, i.coefficient);
             const gridId = `additive-analytic-${c.id}`;
             return (
               <tr key={i.id} className="border-t border-border/50">
@@ -261,13 +258,7 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
                     />
                   ) : fmtBRL(i.unitPrice)}
                 </td>
-                {showDiscount && (
-                  <td className="px-1.5 py-1 text-center text-sky-700 align-middle">{fmtBRL(unitDisc)}</td>
-                )}
                 <td className="px-1.5 py-1 text-center align-middle">{fmtBRL(i.total)}</td>
-                {showDiscount && (
-                  <td className="px-1.5 py-1 text-center text-sky-700 align-middle">{fmtBRL(totalDisc)}</td>
-                )}
                 {editable && (
                   <td className="px-1.5 py-1 text-right whitespace-nowrap align-middle">
                     <button
@@ -293,23 +284,23 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
           })}
           <tr className="border-t font-medium">
             <td colSpan={6} className="px-1.5 py-1 text-right">Soma analítica s/ BDI:</td>
-            {showDiscount && <td />}
             <td className="px-1.5 py-1 text-center">{fmtBRL(sumNoBDI)}</td>
-            {showDiscount && <td />}
             {editable && <td />}
           </tr>
           {showDiscount && (
             <tr className="font-medium text-sky-700">
-              <td colSpan={6} className="px-1.5 py-1 text-right">Soma c/ desconto ({globalDiscount}%):</td>
-              <td />
+              <td colSpan={6} className="px-1.5 py-1 text-right">Analítica s/ BDI com desconto da licitação ({globalDiscount}%) — informativo:</td>
               <td className="px-1.5 py-1 text-center">{fmtBRL(sumNoBDIDisc)}</td>
-              <td />
               {editable && <td />}
             </tr>
           )}
           <tr className="font-medium text-primary">
-            <td colSpan={showDiscount ? 8 : 6} className="px-1.5 py-1 text-right">Valor analítico c/ BDI calculado (× qtd):</td>
-            <td className="px-1.5 py-1 text-center">{fmtBRL(totalAnalyticWithBDI)}</td>
+            <td colSpan={6} className="px-1.5 py-1 text-right">
+              {showDiscount
+                ? 'Valor analítico unitário c/ BDI e desconto — critério Administração:'
+                : 'Valor analítico unitário c/ BDI:'}
+            </td>
+            <td className="px-1.5 py-1 text-center">{fmtBRL(analyticUnitWithBDI)}</td>
             {editable && <td />}
           </tr>
         </tbody>

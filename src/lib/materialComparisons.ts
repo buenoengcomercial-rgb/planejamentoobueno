@@ -479,7 +479,6 @@ export function suggestMaterialsWithDiagnostics(
   for (const ad of project.additives ?? []) {
     diag.additivesRead += 1;
     const isContracted = ad.isContracted === true || ad.status === 'aditivo_contratado';
-    const discountFactor = 1 - ((ad.globalDiscountPercent ?? 0) / 100);
     if (isContracted) diag.contractedAdditivesRead += 1;
     for (const comp of ad.compositions ?? []) {
       const compQty = qtyFinal(comp);
@@ -498,9 +497,9 @@ export function suggestMaterialsWithDiagnostics(
         const qty = trunc2((inp.coefficient || 0) * compQty);
         if (!qty) continue;
         diag.additiveAnalyticInputs += 1;
-        const referencePrice = isNew
-          ? trunc2((inp.unitPrice || 0) * discountFactor)
-          : inp.unitPrice || undefined;
+        // O desconto licitatório é global da composição; nunca altera o
+        // preço de referência de cada material para planejamento de compra.
+        const referencePrice = inp.unitPrice || undefined;
         upsert({
           key: makeKey(inp.code, inp.description, inp.unit, inp.bank),
           description: inp.description,

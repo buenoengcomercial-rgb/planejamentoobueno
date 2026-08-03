@@ -65,16 +65,40 @@ export interface NewServiceUnitPricesInput {
 
 export interface NewServiceUnitPricesResult {
   referenceUnitNoBDI: number;
+  /** Valor s/ BDI com o desconto global, apenas informativo. */
   unitPriceNoBDIWithDiscount: number;
+  /** Parcela de BDI truncada antes da soma, conforme a planilha da Administração. */
+  bdiAmount: number;
+  /** Referência + BDI, antes de aplicar o desconto licitatório. */
+  unitPriceWithBDIBeforeDiscount: number;
+  /** Valor final: BDI primeiro, desconto global por último. */
   unitPriceWithBDI: number;
 }
 
-/** Preços de um novo serviço acrescido (referência → desconto → BDI). */
+/**
+ * Preços de um novo serviço acrescido segundo a Administração:
+ *   referência → BDI truncado → soma truncada → desconto global truncado.
+ *
+ * O valor s/ BDI com desconto continua disponível apenas para conferência;
+ * ele NÃO é usado como base para calcular o BDI.
+ */
 export function calculateNewServiceUnitPrices(input: NewServiceUnitPricesInput): NewServiceUnitPricesResult {
   const referenceUnitNoBDI = money2(input.referenceUnitNoBDI);
   const unitPriceNoBDIWithDiscount = calculateDiscountedUnitNoBDI(referenceUnitNoBDI, input.discountPercent);
-  const unitPriceWithBDI = calculateUnitPriceWithBDI(unitPriceNoBDIWithDiscount, input.bdiPercent);
-  return { referenceUnitNoBDI, unitPriceNoBDIWithDiscount, unitPriceWithBDI };
+  const bdi = Number.isFinite(input.bdiPercent) ? Math.max(0, input.bdiPercent) : 0;
+  const discount = Number.isFinite(input.discountPercent)
+    ? Math.max(0, Math.min(100, input.discountPercent))
+    : 0;
+  const bdiAmount = trunc2(referenceUnitNoBDI * (bdi / 100));
+  const unitPriceWithBDIBeforeDiscount = trunc2(referenceUnitNoBDI + bdiAmount);
+  const unitPriceWithBDI = trunc2(unitPriceWithBDIBeforeDiscount * (1 - discount / 100));
+  return {
+    referenceUnitNoBDI,
+    unitPriceNoBDIWithDiscount,
+    bdiAmount,
+    unitPriceWithBDIBeforeDiscount,
+    unitPriceWithBDI,
+  };
 }
 
 export interface AnalyticInputLike {
@@ -100,15 +124,12 @@ export function calculateAnalyticTotalNoBDI(inputs: AnalyticInputLike[]): number
   return trunc2(acc);
 }
 
-/** Soma os totais s/ BDI dos insumos com desconto global aplicado em cada insumo. */
+/**
+ * Aplica o desconto uma única vez sobre a soma analítica.
+ * Nunca desconta ou trunca cada insumo separadamente.
+ */
 export function calculateDiscountedAnalyticTotalNoBDI(inputs: AnalyticInputLike[], discountPercent: number): number {
-  let acc = 0;
-  for (const i of inputs ?? []) {
-    const unitDisc = calculateDiscountedUnitNoBDI(Number(i.unitPrice) || 0, discountPercent);
-    const totalDisc = trunc2(unitDisc * (Number(i.coefficient) || 0));
-    acc = trunc2(acc + totalDisc);
-  }
-  return trunc2(acc);
+  return calculateDiscountedUnitNoBDI(calculateAnalyticTotalNoBDI(inputs), discountPercent);
 }
 
 // ---------------------------------------------------------------------------
@@ -125,4 +146,9 @@ if (import.meta.env?.DEV) {
   assertEq('calculateUnitPriceWithBDI(424.83, 27.58)', calculateUnitPriceWithBDI(424.83, 27.58), 541.99);
   assertEq('calculateDiscountedUnitNoBDI(4430.70, 6)', calculateDiscountedUnitNoBDI(4430.70, 6), 4164.85);
   assertEq('calculateLineTotal(5313.52, 6)', calculateLineTotal(5313.52, 6), 31881.12);
+  assertEq(
+    'calculateNewServiceUnitPrices(2775.03, 27.58, 6)',
+    calculateNewServiceUnitPrices({ referenceUnitNoBDI: 2775.03, bdiPercent: 27.58, discountPercent: 6 }).unitPriceWithBDI,
+    3327.95,
+  );
 }

@@ -1,8 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { trunc2, calculateUnitPriceWithBDI, calculateLineTotal, calculateNewServiceUnitPrices, calculateAnalyticTotalNoBDI } from './financialEngine';
-import { computeAdditiveRow, additiveTotals, getOfficialContractedTotal } from './additiveImport';
+import {
+  ADMINISTRATION_PRICING_RULE,
+  LEGACY_PRICING_RULE,
+  computeAdditiveRow,
+  additiveTotals,
+  getOfficialContractedTotal,
+  resolveAdditivePricingRule,
+} from './additiveImport';
 import type { Project, BudgetItem } from '@/types/project';
 import type { Additive, AdditiveComposition } from '@/types/project';
+import { suggestMaterialsFromProject } from './materialComparisons';
 
 describe('financialEngine truncation', () => {
   it('trunc2(10.999) → 10.99', () => expect(trunc2(10.999)).toBe(10.99));
@@ -21,10 +29,21 @@ describe('financialEngine truncation', () => {
     expect(calculateUnitPriceWithBDI(7526.24, 27.58)).toBe(9601.97);
     expect(calculateLineTotal(9601.97, 2)).toBe(19203.94);
   });
-  it('novo serviço aplica desconto e BDI com trunc2', () => {
+  it('novo serviço aplica BDI antes do desconto, como a Administração', () => {
     const r = calculateNewServiceUnitPrices({ referenceUnitNoBDI: 4430.70, discountPercent: 6, bdiPercent: 27.58 });
     expect(r.unitPriceNoBDIWithDiscount).toBe(4164.85);
-    expect(r.unitPriceWithBDI).toBe(calculateUnitPriceWithBDI(4164.85, 27.58));
+    expect(r.bdiAmount).toBe(trunc2(4430.70 * 0.2758));
+    expect(r.unitPriceWithBDIBeforeDiscount).toBe(trunc2(4430.70 + r.bdiAmount));
+    expect(r.unitPriceWithBDI).toBe(trunc2(r.unitPriceWithBDIBeforeDiscount * 0.94));
+  });
+
+  it('ABHI_3: 2.775,03 + BDI 27,58% - desconto 6% = 3.327,95', () => {
+    const r = calculateNewServiceUnitPrices({ referenceUnitNoBDI: 2775.03, discountPercent: 6, bdiPercent: 27.58 });
+    expect(r.unitPriceNoBDIWithDiscount).toBe(2608.52);
+    expect(r.bdiAmount).toBe(765.35);
+    expect(r.unitPriceWithBDIBeforeDiscount).toBe(3540.38);
+    expect(r.unitPriceWithBDI).toBe(3327.95);
+    expect(calculateLineTotal(r.unitPriceWithBDI, 12)).toBe(39935.40);
   });
 });
 
@@ -39,6 +58,60 @@ function comp(overrides: Partial<AdditiveComposition> = {}): AdditiveComposition
 }
 
 describe('Aditivo trunc2 nas operações', () => {
+  it('preserva legado contratado e usa Administração em rascunhos e revisões abertas', () => {
+    const base = { id: 'a', name: 'Aditivo', importedAt: '', compositions: [], issues: [] } as Additive;
+    expect(resolveAdditivePricingRule({ ...base, status: 'rascunho' })).toBe(ADMINISTRATION_PRICING_RULE);
+    expect(resolveAdditivePricingRule({ ...base, isContracted: true })).toBe(LEGACY_PRICING_RULE);
+    expect(resolveAdditivePricingRule({ ...base, isContracted: true, editUnlocked: true })).toBe(ADMINISTRATION_PRICING_RULE);
+    expect(resolveAdditivePricingRule({
+      ...base,
+      isContracted: true,
+      pricingRuleVersion: ADMINISTRATION_PRICING_RULE,
+    })).toBe(ADMINISTRATION_PRICING_RULE);
+  });
+
+  it('distingue R$ 3.327,95 oficial de R$ 3.327,94 legado no ABHI_3', () => {
+    const abhi = comp({
+      isNewService: true,
+      analyticReferenceUnitPriceNoBDI: 2775.03,
+      originalQuantity: 0,
+      addedQuantity: 12,
+      quantity: 0,
+      total: 0,
+      totalWithBDI: 0,
+    });
+    const official = computeAdditiveRow(abhi, 27.58, 6, ADMINISTRATION_PRICING_RULE);
+    const legacy = computeAdditiveRow(abhi, 27.58, 6, LEGACY_PRICING_RULE);
+    expect(official.unitPriceWithBDI).toBe(3327.95);
+    expect(official.valorAcrescido).toBe(39935.40);
+    expect(legacy.unitPriceWithBDI).toBe(3327.94);
+    expect(legacy.valorAcrescido).toBe(39935.28);
+  });
+
+  it('mantém o preço de referência do insumo sem desconto individual', () => {
+    const project = {
+      phases: [],
+      additives: [{
+        id: 'ad', name: 'Aditivo', importedAt: '', status: 'rascunho',
+        bdiPercent: 27.58, globalDiscountPercent: 6, issues: [],
+        compositions: [comp({
+          isNewService: true,
+          quantity: 0,
+          originalQuantity: 0,
+          addedQuantity: 2,
+          inputs: [{
+            id: 'insumo', code: 'MAT1', bank: 'SINAPI', description: 'Material',
+            unit: 'UN', coefficient: 3, unitPrice: 100, total: 300,
+          }],
+        })],
+      }],
+    } as unknown as Project;
+    const suggestion = suggestMaterialsFromProject(project).find(item => item.code === 'MAT1');
+    expect(suggestion?.quantity).toBe(6);
+    expect(suggestion?.referencePrice).toBe(100);
+    expect(suggestion?.referencePrice).not.toBe(94);
+  });
+
   it('valorAcrescido = trunc2(unit × qty)', () => {
     const r = computeAdditiveRow(comp({ addedQuantity: 3 }), 27.58, 0);
     expect(r.valorAcrescido).toBe(trunc2(r.unitPriceWithBDI * 3));
