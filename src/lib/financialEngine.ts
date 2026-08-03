@@ -108,17 +108,39 @@ export interface AnalyticInputLike {
   total?: number | null;
 }
 
+export type AnalyticTotalPolicy =
+  | 'recalculate_lines_trunc2'
+  | 'preserve_source_total';
+
+/**
+ * Total s/ BDI de um insumo analítico.
+ *
+ * - Administração: recalcula coeficiente × valor unitário e trunca a linha.
+ * - Legado: preserva o Total explícito da fonte quando ele existir.
+ */
+export function calculateAnalyticLineTotal(
+  input: AnalyticInputLike,
+  policy: AnalyticTotalPolicy = 'preserve_source_total',
+): number {
+  if (policy === 'recalculate_lines_trunc2') {
+    return calculateLineTotal(Number(input.unitPrice) || 0, Number(input.coefficient) || 0);
+  }
+  const hasSourceTotal = input.total !== null
+    && input.total !== undefined
+    && Number.isFinite(Number(input.total));
+  return hasSourceTotal
+    ? money2(Number(input.total))
+    : calculateLineTotal(Number(input.unitPrice) || 0, Number(input.coefficient) || 0);
+}
+
 /** Soma os totais s/ BDI dos insumos da composição analítica. */
-export function calculateAnalyticTotalNoBDI(inputs: AnalyticInputLike[]): number {
+export function calculateAnalyticTotalNoBDI(
+  inputs: AnalyticInputLike[],
+  policy: AnalyticTotalPolicy = 'preserve_source_total',
+): number {
   let acc = 0;
   for (const i of inputs ?? []) {
-    // Quando a Analítica traz a coluna Total, ela é a autoridade: alguns bancos
-    // calculam com precisão interna maior que a exibida em Coef./Valor Unit.
-    // Em linhas criadas/editadas na plataforma, `total` já é recalculado com trunc2.
-    const hasSourceTotal = i.total !== null && i.total !== undefined && Number.isFinite(Number(i.total));
-    const t = hasSourceTotal
-      ? money2(Number(i.total))
-      : trunc2((Number(i.coefficient) || 0) * (Number(i.unitPrice) || 0));
+    const t = calculateAnalyticLineTotal(i, policy);
     acc = trunc2(acc + t);
   }
   return trunc2(acc);
@@ -128,8 +150,12 @@ export function calculateAnalyticTotalNoBDI(inputs: AnalyticInputLike[]): number
  * Aplica o desconto uma única vez sobre a soma analítica.
  * Nunca desconta ou trunca cada insumo separadamente.
  */
-export function calculateDiscountedAnalyticTotalNoBDI(inputs: AnalyticInputLike[], discountPercent: number): number {
-  return calculateDiscountedUnitNoBDI(calculateAnalyticTotalNoBDI(inputs), discountPercent);
+export function calculateDiscountedAnalyticTotalNoBDI(
+  inputs: AnalyticInputLike[],
+  discountPercent: number,
+  policy: AnalyticTotalPolicy = 'preserve_source_total',
+): number {
+  return calculateDiscountedUnitNoBDI(calculateAnalyticTotalNoBDI(inputs, policy), discountPercent);
 }
 
 // ---------------------------------------------------------------------------

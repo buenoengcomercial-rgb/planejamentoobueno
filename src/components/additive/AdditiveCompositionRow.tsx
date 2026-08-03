@@ -258,7 +258,7 @@ function AdditiveCompositionRowImpl({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const { composition: analyticComposition, resolution: analyticResolution } = compositionWithResolvedInputs(project, c);
   const r = computeAdditiveRow(c, bdi, globalDiscount, pricingRule);
-  const cb = computeCompositionWithBDI(analyticComposition, bdi);
+  const cb = computeCompositionWithBDI(analyticComposition, bdi, pricingRule);
   const hasInputs = analyticComposition.inputs.length > 0;
   const inheritedAnalytic = analyticResolution.inherited;
   const diff = hasInputs ? cb.diff : 0;

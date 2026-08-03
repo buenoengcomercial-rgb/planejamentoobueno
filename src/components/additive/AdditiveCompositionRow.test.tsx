@@ -94,6 +94,10 @@ describe('AdditiveCompositionRow detail selection', () => {
         total: 0,
         totalWithBDI: 0,
         analyticReferenceUnitPriceNoBDI: 2775.03,
+        inputs: [{
+          id: 'abhi', code: 'ABHI', bank: 'PRÓPRIO', description: 'Composição ABHI_3',
+          unit: 'UN', coefficient: 1, unitPrice: 2775.03, total: 2775.03,
+        }],
       },
     });
 
@@ -101,6 +105,38 @@ describe('AdditiveCompositionRow detail selection', () => {
     expect(screen.getByText('R$ 3.327,95')).toBeInTheDocument();
     expect(screen.getAllByText('R$ 39.935,40').length).toBeGreaterThan(0);
     expect(screen.queryByText('R$ 2.608,52')).not.toBeInTheDocument();
+  });
+
+  it('mostra a FIXA_2 truncada em R$ 31,37 e total de R$ 33.032,61', () => {
+    renderRow({
+      isOpen: false,
+      globalDiscount: 6,
+      composition: {
+        ...composition,
+        code: 'FIXA_2',
+        isNewService: true,
+        quantity: 0,
+        originalQuantity: 0,
+        addedQuantity: 1053,
+        total: 0,
+        totalWithBDI: 0,
+        analyticReferenceUnitPriceNoBDI: 26.19,
+        inputs: [
+          { id: '1', code: '1', bank: 'ORSE', description: 'Servente', unit: 'H', coefficient: 0.25, unitPrice: 14.58, total: 3.65 },
+          { id: '2', code: '2', bank: 'ORSE', description: 'Encargos', unit: 'H', coefficient: 0.25, unitPrice: 3.80, total: 0.95 },
+          { id: '3', code: '3', bank: 'ORSE', description: 'Porca', unit: 'UN', coefficient: 3, unitPrice: 0.22, total: 0.66 },
+          { id: '4', code: '4', bank: 'ORSE', description: 'Encanador', unit: 'H', coefficient: 0.25, unitPrice: 20.44, total: 5.11 },
+          { id: '5', code: '5', bank: 'ORSE', description: 'Vergalhão', unit: 'M', coefficient: 1, unitPrice: 9.83, total: 9.83 },
+          { id: '6', code: '6', bank: 'ORSE', description: 'Chumbador', unit: 'UN', coefficient: 1, unitPrice: 3.59, total: 3.59 },
+          { id: '7', code: '7', bank: 'ORSE', description: 'Abraçadeira', unit: 'UN', coefficient: 1, unitPrice: 1.43, total: 1.43 },
+          { id: '8', code: '8', bank: 'ORSE', description: 'Encargos servente', unit: 'H', coefficient: 0.25, unitPrice: 3.87, total: 0.97 },
+        ],
+      },
+    });
+
+    expect(screen.getByText('R$ 26,17')).toBeInTheDocument();
+    expect(screen.getByText('R$ 31,37')).toBeInTheDocument();
+    expect(screen.getAllByText('R$ 33.032,61').length).toBeGreaterThan(0);
   });
 
   it('fecha a Memória pelo clique na composição sem o capture global abrir a Analítica', () => {
