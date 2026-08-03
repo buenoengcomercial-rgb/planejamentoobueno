@@ -25,6 +25,20 @@ describe('financialEngine truncation', () => {
     expect(calculateLineTotal(20.44, 0.25)).toBe(5.11);
     expect(calculateAnalyticTotalNoBDI([{ coefficient: 0.25, unitPrice: 20.44, total: 5.10 }])).toBe(5.10);
   });
+  it('FIXA_2 recalcula as linhas na regra nova e preserva os totais na regra legada', () => {
+    const inputs = [
+      { coefficient: 0.25, unitPrice: 14.58, total: 3.65 },
+      { coefficient: 0.25, unitPrice: 3.80, total: 0.95 },
+      { coefficient: 3, unitPrice: 0.22, total: 0.66 },
+      { coefficient: 0.25, unitPrice: 20.44, total: 5.11 },
+      { coefficient: 1, unitPrice: 9.83, total: 9.83 },
+      { coefficient: 1, unitPrice: 3.59, total: 3.59 },
+      { coefficient: 1, unitPrice: 1.43, total: 1.43 },
+      { coefficient: 0.25, unitPrice: 3.87, total: 0.97 },
+    ];
+    expect(calculateAnalyticTotalNoBDI(inputs, 'recalculate_lines_trunc2')).toBe(26.17);
+    expect(calculateAnalyticTotalNoBDI(inputs, 'preserve_source_total')).toBe(26.19);
+  });
   it('BOINC1: BDI truncado e total sem perda de centavo', () => {
     expect(calculateUnitPriceWithBDI(7526.24, 27.58)).toBe(9601.97);
     expect(calculateLineTotal(9601.97, 2)).toBe(19203.94);
@@ -86,6 +100,36 @@ describe('Aditivo trunc2 nas operações', () => {
     expect(official.valorAcrescido).toBe(39935.40);
     expect(legacy.unitPriceWithBDI).toBe(3327.94);
     expect(legacy.valorAcrescido).toBe(39935.28);
+  });
+
+  it('FIXA_2 usa R$ 26,17 como base e gera R$ 31,37 por unidade', () => {
+    const fixa = comp({
+      code: 'FIXA_2',
+      isNewService: true,
+      analyticReferenceUnitPriceNoBDI: 26.19,
+      originalQuantity: 0,
+      addedQuantity: 1053,
+      quantity: 0,
+      total: 0,
+      totalWithBDI: 0,
+      inputs: [
+        { id: '1', code: '1', bank: 'ORSE', description: 'Servente', unit: 'H', coefficient: 0.25, unitPrice: 14.58, total: 3.65 },
+        { id: '2', code: '2', bank: 'ORSE', description: 'Encargos', unit: 'H', coefficient: 0.25, unitPrice: 3.80, total: 0.95 },
+        { id: '3', code: '3', bank: 'ORSE', description: 'Porca', unit: 'UN', coefficient: 3, unitPrice: 0.22, total: 0.66 },
+        { id: '4', code: '4', bank: 'ORSE', description: 'Encanador', unit: 'H', coefficient: 0.25, unitPrice: 20.44, total: 5.11 },
+        { id: '5', code: '5', bank: 'ORSE', description: 'Vergalhão', unit: 'M', coefficient: 1, unitPrice: 9.83, total: 9.83 },
+        { id: '6', code: '6', bank: 'ORSE', description: 'Chumbador', unit: 'UN', coefficient: 1, unitPrice: 3.59, total: 3.59 },
+        { id: '7', code: '7', bank: 'ORSE', description: 'Abraçadeira', unit: 'UN', coefficient: 1, unitPrice: 1.43, total: 1.43 },
+        { id: '8', code: '8', bank: 'ORSE', description: 'Encargos servente', unit: 'H', coefficient: 0.25, unitPrice: 3.87, total: 0.97 },
+      ],
+    });
+    const official = computeAdditiveRow(fixa, 27.58, 6, ADMINISTRATION_PRICING_RULE);
+    const legacy = computeAdditiveRow(fixa, 27.58, 6, LEGACY_PRICING_RULE);
+    expect(official.referenceUnitNoBDI).toBe(26.17);
+    expect(official.unitPriceNoBDIWithDiscount).toBe(24.59);
+    expect(official.unitPriceWithBDI).toBe(31.37);
+    expect(official.valorAcrescido).toBe(33032.61);
+    expect(legacy.referenceUnitNoBDI).toBe(26.19);
   });
 
   it('mantém o preço de referência do insumo sem desconto individual', () => {

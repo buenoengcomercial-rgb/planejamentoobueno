@@ -3,8 +3,19 @@ import { Plus, Trash2, Copy } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import type { AdditiveComposition, AdditiveInput, AdditivePricingRule } from '@/types/project';
-import { referenceUnitNoBDIForNewService, sumAnalyticTotalNoBDI } from '@/lib/additiveImport';
-import { calculateDiscountedUnitNoBDI, calculateLineTotal, calculateNewServiceUnitPrices, calculateUnitPriceWithBDI } from '@/lib/financialEngine';
+import {
+  ADMINISTRATION_PRICING_RULE,
+  analyticTotalPolicyForPricingRule,
+  referenceUnitNoBDIForNewService,
+  sumAnalyticTotalNoBDI,
+} from '@/lib/additiveImport';
+import {
+  calculateAnalyticLineTotal,
+  calculateDiscountedUnitNoBDI,
+  calculateLineTotal,
+  calculateNewServiceUnitPrices,
+  calculateUnitPriceWithBDI,
+} from '@/lib/financialEngine';
 import { fmtBRL } from './types';
 import { handleGridContainerKeyDownCapture } from '@/lib/gridKeyboardNavigation';
 
@@ -128,8 +139,12 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, pricingRule, isLocke
   const isNew = !!c.isNewService;
   const editable = isNew && !isLocked && !!onUpdateComposition;
   const showDiscount = isNew && globalDiscount > 0;
-  const sumNoBDI = sumAnalyticTotalNoBDI(c);
-  const pricingBaseNoBDI = sumNoBDI > 0 ? sumNoBDI : referenceUnitNoBDIForNewService(c);
+  const effectivePricingRule = pricingRule ?? ADMINISTRATION_PRICING_RULE;
+  const totalPolicy = analyticTotalPolicyForPricingRule(effectivePricingRule);
+  const sumNoBDI = sumAnalyticTotalNoBDI(c, effectivePricingRule);
+  const pricingBaseNoBDI = sumNoBDI > 0
+    ? sumNoBDI
+    : referenceUnitNoBDIForNewService(c, effectivePricingRule);
   const sumNoBDIDisc = showDiscount
     ? calculateDiscountedUnitNoBDI(pricingBaseNoBDI, globalDiscount)
     : pricingBaseNoBDI;
@@ -139,7 +154,7 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, pricingRule, isLocke
     discountPercent: showDiscount ? globalDiscount : 0,
   });
   const analyticUnitWithBDI = isNew
-    ? (pricingRule === 'legacy_discount_then_bdi_v1'
+    ? (effectivePricingRule === 'legacy_discount_then_bdi_v1'
         ? calculateUnitPriceWithBDI(sumNoBDIDisc, bdi)
         : officialPricing.unitPriceWithBDI)
     : cb.analyticUnitWithBDI;
@@ -258,7 +273,9 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, pricingRule, isLocke
                     />
                   ) : fmtBRL(i.unitPrice)}
                 </td>
-                <td className="px-1.5 py-1 text-center align-middle">{fmtBRL(i.total)}</td>
+                <td className="px-1.5 py-1 text-center align-middle">
+                  {fmtBRL(calculateAnalyticLineTotal(i, totalPolicy))}
+                </td>
                 {editable && (
                   <td className="px-1.5 py-1 text-right whitespace-nowrap align-middle">
                     <button

@@ -11,12 +11,13 @@
 import type { Project, Additive, AdditiveComposition } from '@/types/project';
 import {
   computeAdditiveRow,
+  analyticTotalPolicyForPricingRule,
   referenceUnitNoBDIForNewService,
   resolveAdditivePricingRule,
   totalAfterAdditive,
   money2,
 } from './additiveImport';
-import { trunc2 } from './financialEngine';
+import { calculateAnalyticLineTotal, trunc2 } from './financialEngine';
 import { resolveMemoryColumnLabels, validMemoryRows } from './calculationMemory';
 import { getChapterTree, getChapterNumbering, type ChapterNode } from './chapters';
 import { loadCompanyLogoForPdf, company } from './companyBranding';
@@ -786,7 +787,7 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
     },
     onComposition: c => {
       const r = computeAdditiveRow(c, bdi, discount, pricingRule);
-      const refUnit = referenceUnitNoBDIForNewService(c);
+      const refUnit = referenceUnitNoBDIForNewService(c, pricingRule);
       const obs = c.bank ? `Fonte: ${c.bank}` : 'Novo serviço aditivado';
       rows.push([
         tCell(c.item || '', rowFill),
@@ -837,7 +838,10 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
         inputs.forEach(ip => {
           const ref = Number(ip.unitPrice) || 0;
           const coef = Number(ip.coefficient) || 0;
-          const totRef = trunc2(coef * ref);
+          const totRef = calculateAnalyticLineTotal(
+            { ...ip, coefficient: coef, unitPrice: ref },
+            analyticTotalPolicyForPricingRule(pricingRule),
+          );
           rows.push([
             tCell(''),
             tCell(ip.code || ''),
@@ -1363,7 +1367,7 @@ export async function exportAdditiveNewServicesPdf(project: Project, add: Additi
     onChapterStart: ch => body.push([{ content: `${'    '.repeat(ch.depth)}${ch.number} ${ch.name}`, colSpan: 14, styles: { fillColor: [241, 245, 249], fontStyle: 'bold' } }]),
     onComposition: c => {
       const r = computeAdditiveRow(c, bdi, discount, pricingRule);
-      const refUnit = referenceUnitNoBDIForNewService(c);
+      const refUnit = referenceUnitNoBDIForNewService(c, pricingRule);
       const obs = c.bank ? `Fonte: ${c.bank}` : 'Novo serviço aditivado';
       const fill: [number, number, number] = [239, 246, 255];
       const acrStyles = { fillColor: [220, 252, 231] as [number, number, number], textColor: [4, 120, 87] as [number, number, number], halign: 'right' as const };
@@ -1394,7 +1398,10 @@ export async function exportAdditiveNewServicesPdf(project: Project, add: Additi
         inputs.forEach(ip => {
           const ref = Number(ip.unitPrice) || 0;
           const coef = Number(ip.coefficient) || 0;
-          const totRef = trunc2(coef * ref);
+          const totRef = calculateAnalyticLineTotal(
+            { ...ip, coefficient: coef, unitPrice: ref },
+            analyticTotalPolicyForPricingRule(pricingRule),
+          );
           body.push([
             { content: '', styles: { fillColor: insBg } },
             { content: ip.code || '', styles: { fillColor: insBg } },

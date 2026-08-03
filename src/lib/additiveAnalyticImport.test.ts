@@ -74,25 +74,30 @@ describe('importação Analítica dos novos serviços', () => {
     expect(parsed.blocks[0].inputs.map(input => input.total)).toEqual([3.64, 5.10, 0.96]);
   });
 
-  it('substitui somente a Analítica da nova composição e preserva o contrato', () => {
+  it('substitui somente a Analítica nova, recalcula a linha e preserva o contrato', () => {
     const contracted = composition({ id: 'contract', item: '2.4.1', itemNumber: '2.4.1', phaseId: 'phase-24', isNewService: false, code: '88489', bank: 'SINAPI', unitPriceNoBDI: 10, inputs: [{ id: 'old', code: '88489', bank: 'SINAPI', description: 'Original', unit: 'm²', coefficient: 1, unitPrice: 10, total: 10 }] });
     const fresh = composition({ id: 'new' });
     const source = additive([contracted, fresh]);
-    const blocks = [{ normCode: 'ABHI3', code: 'ABHI3', item: '', bank: 'Próprio', description: 'Abrigo Excel', unit: 'UN', referenceUnitPriceNoBDI: 2775.03, startRow: 2, inputs: [{ code: '88489', bank: 'SINAPI', description: 'Pintura', unit: 'm²', coefficient: 5, unitPrice: 13.88, total: 69.4, rowIndex: 3 }] }];
+    const blocks = [{ normCode: 'ABHI3', code: 'ABHI3', item: '', bank: 'Próprio', description: 'Abrigo Excel', unit: 'UN', referenceUnitPriceNoBDI: 26.19, startRow: 2, inputs: [{ code: '88489', bank: 'SINAPI', description: 'Pintura', unit: 'm²', coefficient: 0.25, unitPrice: 14.58, total: 3.65, rowIndex: 3 }] }];
     const preview = buildAdditiveAnalyticImportPreview(source, blocks, ['phase-29']);
     const result = applyAdditiveAnalyticImport(source, blocks, preview);
     expect(preview).toMatchObject({ matched: 1, priceDivergences: 1, contractedCompositionsAffected: 0 });
+    expect(preview.matches[0].referenceUnitPriceNoBDI).toBe(3.64);
     expect(result.compositions[0]).toEqual(contracted);
-    expect(result.compositions[1].inputs[0].unitPrice).toBe(13.88);
-    expect(result.compositions[1].analyticReferenceUnitPriceNoBDI).toBe(2775.03);
+    expect(result.compositions[1].inputs[0].unitPrice).toBe(14.58);
+    expect(result.compositions[1].inputs[0].total).toBe(3.64);
+    expect(result.compositions[1].analyticReferenceUnitPriceNoBDI).toBe(3.64);
     const financial = computeAdditiveRow(result.compositions[1], 27.58, 6);
-    expect(financial.referenceUnitNoBDI).toBe(2775.03);
-    expect(financial.unitPriceNoBDI).toBe(2775.03);
-    expect(financial.unitPriceNoBDIWithDiscount).toBe(2608.52);
-    expect(financial.bdiAmount).toBe(765.35);
-    expect(financial.unitPriceWithBDIBeforeDiscount).toBe(3540.38);
-    expect(financial.unitPriceWithBDI).toBe(3327.95);
-    expect(financial.valorAcrescido).toBe(3327.95);
+    expect(financial.referenceUnitNoBDI).toBe(3.64);
+  });
+
+  it('preserva o Total importado em um aditivo contratado legado', () => {
+    const fresh = composition({ id: 'legacy-new' });
+    const source = { ...additive([fresh]), isContracted: true } as Additive;
+    const blocks = [{ normCode: 'ABHI3', code: 'ABHI3', item: '', bank: 'Próprio', referenceUnitPriceNoBDI: 26.19, startRow: 1, inputs: [{ code: 'I1', bank: 'ORSE', description: 'Servente', unit: 'H', coefficient: 0.25, unitPrice: 14.58, total: 3.65, rowIndex: 2 }] }];
+    const result = applyAdditiveAnalyticImport(source, blocks, buildAdditiveAnalyticImportPreview(source, blocks, ['phase-29']));
+    expect(result.compositions[0].inputs[0].total).toBe(3.65);
+    expect(result.compositions[0].analyticReferenceUnitPriceNoBDI).toBe(26.19);
   });
 
   it('bloqueia códigos duplicados quando a quantidade de ocorrências diverge', () => {
