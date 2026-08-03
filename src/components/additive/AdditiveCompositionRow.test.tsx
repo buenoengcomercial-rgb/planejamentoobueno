@@ -12,7 +12,7 @@ const composition: AdditiveComposition = {
 
 const project = { analyticCompositions: [], budgetItems: [] } as unknown as Project;
 
-function renderRow(options: { mode: 'memory' | 'analytic'; isOpen: boolean; composition?: AdditiveComposition; isLocked?: boolean }) {
+function renderRow(options: { mode?: 'memory' | 'analytic'; isOpen: boolean; composition?: AdditiveComposition; isLocked?: boolean }) {
   const onToggleExpand = vi.fn();
   const onSelectDetail = vi.fn();
   const onReorderComposition = vi.fn();
@@ -34,7 +34,7 @@ function renderRow(options: { mode: 'memory' | 'analytic'; isOpen: boolean; comp
         onUpdateQuantity={vi.fn()}
         onRemoveComposition={vi.fn()}
         onChangeMemory={vi.fn()}
-        selectedDetail={{ compositionId: current.id, mode: options.mode }}
+        selectedDetail={options.mode ? { compositionId: current.id, mode: options.mode } : null}
         onSelectDetail={onSelectDetail}
       />
     </tbody></table>,
@@ -52,12 +52,42 @@ describe('AdditiveCompositionRow detail selection', () => {
     expect(onToggleExpand).not.toHaveBeenCalled();
   });
 
+  it('fecha somente a Memória ao clicar na seta sem abrir a Analítica', () => {
+    const { onToggleExpand, onSelectDetail } = renderRow({ mode: 'memory', isOpen: false });
+    fireEvent.click(screen.getByRole('button', { name: 'Recolher memória' }));
+    expect(onSelectDetail).toHaveBeenCalledWith(null);
+    expect(onSelectDetail).toHaveBeenCalledTimes(1);
+    expect(onToggleExpand).not.toHaveBeenCalled();
+  });
+
   it('fecha somente a Analítica já aberta ao clicar novamente na composição', () => {
     const { onToggleExpand, onSelectDetail } = renderRow({ mode: 'analytic', isOpen: true });
     const mainRow = screen.getAllByText('ADM04')[0].closest('tr');
     fireEvent.click(mainRow!);
     expect(onToggleExpand).toHaveBeenCalledWith('comp-1');
     expect(onSelectDetail).toHaveBeenCalledWith(null);
+  });
+
+  it('fecha a Analítica pela seta', () => {
+    const opened = renderRow({ mode: 'analytic', isOpen: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Recolher analítica' }));
+    expect(opened.onToggleExpand).toHaveBeenCalledWith('comp-1');
+    expect(opened.onSelectDetail).toHaveBeenCalledWith(null);
+  });
+
+  it('abre a Analítica pela seta quando não há detalhe ativo', () => {
+    const { onToggleExpand, onSelectDetail } = renderRow({ isOpen: false });
+    fireEvent.click(screen.getByRole('button', { name: 'Expandir analítica' }));
+    expect(onSelectDetail).toHaveBeenCalledWith({ compositionId: 'comp-1', mode: 'analytic', qtyType: undefined });
+    expect(onToggleExpand).toHaveBeenCalledWith('comp-1');
+  });
+
+  it('abre a Analítica ao clicar na composição quando não há detalhe ativo', () => {
+    const { onToggleExpand, onSelectDetail } = renderRow({ isOpen: false });
+    const mainRow = screen.getAllByText('ADM04')[0].closest('tr');
+    fireEvent.click(mainRow!);
+    expect(onSelectDetail).toHaveBeenCalledWith({ compositionId: 'comp-1', mode: 'analytic', qtyType: undefined });
+    expect(onToggleExpand).toHaveBeenCalledWith('comp-1');
   });
 
   it('permite editar o Item somente no novo serviço desbloqueado', () => {

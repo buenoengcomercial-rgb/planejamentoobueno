@@ -290,6 +290,16 @@ function AdditiveCompositionRowImpl({
       : '';
 
   const isSelected = selectedDetail?.compositionId === c.id;
+  const analyticSelectedForComposition = isSelected && selectedDetail?.mode === 'analytic';
+  const outlineIsExpanded = memorySelectedForComposition || (analyticSelectedForComposition && isOpen) || shouldShowAnalyticRows;
+  const outlineLabel = memorySelectedForComposition
+    ? 'Recolher memória'
+    : outlineIsExpanded
+      ? 'Recolher analítica'
+      : canOpenAnalytic
+        ? 'Expandir analítica'
+        : 'Sem analítico';
+
   const selectDetail = (mode: AdditiveDetailMode, qtyType?: AdditiveMemoryQtyType) => {
     const sameDetail = selectedDetail?.compositionId === c.id && selectedDetail.mode === mode;
     if (sameDetail) {
@@ -301,6 +311,18 @@ function AdditiveCompositionRowImpl({
     if (mode === 'memory' && isOpen) onToggleExpand(c.id);
     onSelectDetail?.({ compositionId: c.id, mode, qtyType });
     if (mode === 'analytic' && !isOpen && canOpenAnalytic) onToggleExpand(c.id);
+  };
+
+  const closeSelectedDetail = () => {
+    if (selectedDetail?.compositionId !== c.id) return false;
+    if (selectedDetail.mode === 'analytic' && isOpen) onToggleExpand(c.id);
+    onSelectDetail?.(null);
+    return true;
+  };
+
+  const handleOutlineClick = () => {
+    if (closeSelectedDetail()) return;
+    if (canOpenAnalytic) selectDetail('analytic');
   };
 
   const openMemoryFor = (type: AdditiveMemoryQtyType) => {
@@ -317,11 +339,7 @@ function AdditiveCompositionRowImpl({
     const target = event.target as HTMLElement | null;
     if (!target) return;
     if (target.closest('button, input, textarea, select, [role="button"], [data-detail-cell="true"], [data-detail-panel="true"]')) return;
-    if (selectedDetail?.compositionId === c.id) {
-      if (selectedDetail.mode === 'analytic' && isOpen) onToggleExpand(c.id);
-      onSelectDetail?.(null);
-      return;
-    }
+    if (closeSelectedDetail()) return;
     if (!canOpenAnalytic) return;
     // Row clicks should behave like a spreadsheet outline: open on first click, close on second.
     if (shouldShowAnalyticRows) {
@@ -345,12 +363,13 @@ function AdditiveCompositionRowImpl({
       } ${canOpenAnalytic ? 'cursor-pointer' : ''}`} onClick={handleRowClick}>
         <td className="px-1 py-2 text-center">
           <button
-            onClick={() => selectDetail('analytic')}
+            onClick={handleOutlineClick}
             className="p-1 rounded hover:bg-muted"
-            disabled={!canOpenAnalytic}
-            title={!canOpenAnalytic ? 'Sem analítico' : 'Expandir analítica'}
+            disabled={!canOpenAnalytic && !isSelected}
+            title={outlineLabel}
+            aria-label={outlineLabel}
           >
-            {isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            {outlineIsExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
           </button>
         </td>
         {/* Identificação */}
