@@ -15,8 +15,84 @@ export function normalizeAdditiveCatalogBank(value?: string | null): string {
 const cloneInputs = (inputs: AdditiveInput[] = []): AdditiveInput[] =>
   inputs.map(input => ({ ...input }));
 
-function templateKey(code: string, bank: string): string {
-  return `${normalizeAdditiveCatalogCode(code)}|${normalizeAdditiveCatalogBank(bank)}`;
+function templateKey(code: string): string {
+  return normalizeAdditiveCatalogCode(code);
+}
+
+function hasPositiveReferencePrice(template: Pick<AdditiveCompositionTemplate,
+  'unitPriceNoBDIInformed' | 'analyticReferenceUnitPriceNoBDI'>): boolean {
+  return [template.unitPriceNoBDIInformed, template.analyticReferenceUnitPriceNoBDI]
+    .some(value => Number.isFinite(value) && Number(value) > 0);
+}
+
+export function isCompleteAdditiveCompositionTemplate(template: AdditiveCompositionTemplate): boolean {
+  const description = normalizedDescription(template.description);
+  return !!normalizeAdditiveCatalogCode(template.code)
+    && !!normalizeAdditiveCatalogBank(template.bank)
+    && !!description
+    && description !== 'NOVO SERVICO'
+    && !!(template.unit ?? '').trim()
+    && (hasPositiveReferencePrice(template) || (template.inputs ?? []).length > 0);
+}
+
+function templateTimestamp(template: AdditiveCompositionTemplate): number {
+  const timestamp = Date.parse(template.updatedAt);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function selectMostRecentCompleteTemplate(
+  candidates: AdditiveCompositionTemplate[],
+): AdditiveCompositionTemplate | undefined {
+  return candidates.reduce<AdditiveCompositionTemplate | undefined>((selected, candidate) => {
+    if (!isCompleteAdditiveCompositionTemplate(candidate)) return selected;
+    if (!selected || templateTimestamp(candidate) >= templateTimestamp(selected)) return candidate;
+    return selected;
+  }, undefined);
+}
+
+export interface ConsolidateAdditiveCompositionCatalogResult {
+  catalog: AdditiveCompositionTemplate[];
+  changed: boolean;
+  consolidatedCodes: string[];
+}
+
+/** Consolida o legado para uma unica estrutura completa e mais recente por codigo. */
+export function consolidateAdditiveCompositionCatalog(
+  catalog: AdditiveCompositionTemplate[] = [],
+): ConsolidateAdditiveCompositionCatalogResult {
+  const grouped = new Map<string, AdditiveCompositionTemplate[]>();
+  const codeOrder: string[] = [];
+  for (const candidate of catalog) {
+    const key = templateKey(candidate.code || candidate.normalizedCode);
+    if (!key) continue;
+    if (!grouped.has(key)) codeOrder.push(key);
+    grouped.set(key, [...(grouped.get(key) ?? []), candidate]);
+  }
+
+  const consolidatedCodes: string[] = [];
+  const canonical = codeOrder.flatMap(code => {
+    const candidates = grouped.get(code) ?? [];
+    const selected = selectMostRecentCompleteTemplate(candidates);
+    if (!selected) {
+      if (candidates.length > 0) consolidatedCodes.push(code);
+      return [];
+    }
+    const normalized: AdditiveCompositionTemplate = {
+      ...selected,
+      id: `additive-template:${code}`,
+      normalizedCode: code,
+      inputs: cloneInputs(selected.inputs),
+    };
+    if (candidates.length !== 1
+      || selected.id !== normalized.id
+      || selected.normalizedCode !== normalized.normalizedCode) {
+      consolidatedCodes.push(code);
+    }
+    return [normalized];
+  });
+
+  const changed = JSON.stringify(canonical) !== JSON.stringify(catalog);
+  return { catalog: changed ? canonical : catalog, changed, consolidatedCodes };
 }
 
 export function compositionTemplateFrom(
@@ -28,7 +104,7 @@ export function compositionTemplateFrom(
   if (!normalizedCode || !normalizeAdditiveCatalogBank(composition.bank)) return null;
   const bank = composition.bank ?? '';
   return {
-    id: `additive-template:${templateKey(composition.code, bank)}`,
+    id: `additive-template:${templateKey(composition.code)}`,
     code: composition.code,
     normalizedCode,
     bank,
@@ -50,35 +126,13 @@ export function upsertAdditiveCompositionTemplate(
 ): AdditiveCompositionTemplate[] {
   if (!composition.isNewService) return catalog;
   const template = compositionTemplateFrom(composition, sourceAdditiveId, now);
-  if (!template) return catalog;
-  const key = templateKey(template.code, template.bank);
-  const existingIndex = catalog.findIndex(candidate => templateKey(candidate.code, candidate.bank) === key);
-  if (existingIndex < 0) return [...catalog, template];
-  return catalog.map((candidate, index) => index === existingIndex ? { ...candidate, ...template } : candidate);
+  const consolidated = consolidateAdditiveCompositionCatalog(catalog).catalog;
+  if (!template || !isCompleteAdditiveCompositionTemplate(template)) return consolidated;
+  return consolidateAdditiveCompositionCatalog([...consolidated, template]).catalog;
 }
 
 export interface CompositionTemplateResolution {
   template?: AdditiveCompositionTemplate;
-  ambiguous: boolean;
-}
-
-function technicalFingerprint(template: AdditiveCompositionTemplate): string {
-  return JSON.stringify({
-    bank: normalizeAdditiveCatalogBank(template.bank),
-    description: template.description,
-    unit: template.unit,
-    unitPriceNoBDIInformed: template.unitPriceNoBDIInformed,
-    analyticReferenceUnitPriceNoBDI: template.analyticReferenceUnitPriceNoBDI,
-    inputs: template.inputs.map(input => ({
-      code: input.code,
-      bank: input.bank,
-      description: input.description,
-      unit: input.unit,
-      coefficient: input.coefficient,
-      unitPrice: input.unitPrice,
-      total: input.total,
-    })),
-  });
 }
 
 export function resolveAdditiveCompositionTemplate(
@@ -86,34 +140,26 @@ export function resolveAdditiveCompositionTemplate(
   activeCompositions: AdditiveComposition[] = [],
   targetId: string,
   code: string,
-  bank?: string,
 ): CompositionTemplateResolution {
   const normalizedCode = normalizeAdditiveCatalogCode(code);
-  if (!normalizedCode) return { ambiguous: false };
+  if (!normalizedCode) return {};
 
-  let candidates = catalog.filter(candidate =>
+  const catalogCandidates = catalog.filter(candidate =>
     (candidate.normalizedCode || normalizeAdditiveCatalogCode(candidate.code)) === normalizedCode,
   );
-  for (const composition of activeCompositions) {
-    if (composition.id === targetId || !composition.isNewService) continue;
-    if (normalizeAdditiveCatalogCode(composition.code) !== normalizedCode) continue;
-    const template = compositionTemplateFrom(composition);
-    if (template) candidates = [...candidates, template];
-  }
+  const catalogTemplate = selectMostRecentCompleteTemplate(catalogCandidates);
+  if (catalogTemplate) return { template: catalogTemplate };
 
-  const normalizedBank = normalizeAdditiveCatalogBank(bank);
-  if (normalizedBank) {
-    candidates = candidates.filter(candidate => normalizeAdditiveCatalogBank(candidate.bank) === normalizedBank);
-  }
-
-  const unique = new Map<string, AdditiveCompositionTemplate>();
-  for (const candidate of candidates) {
-    unique.set(technicalFingerprint(candidate), candidate);
-  }
-  const definitions = Array.from(unique.values());
-  return definitions.length === 1
-    ? { template: definitions[0], ambiguous: false }
-    : { ambiguous: definitions.length > 1 };
+  const survivingCandidates: AdditiveCompositionTemplate[] = [];
+  activeCompositions.forEach((composition, index) => {
+    if (composition.id === targetId || !composition.isNewService) return;
+    if (normalizeAdditiveCatalogCode(composition.code) !== normalizedCode) return;
+    // A ordem recebida e da ocorrencia mais antiga para a mais recente.
+    const fallbackTimestamp = new Date(index + 1).toISOString();
+    const template = compositionTemplateFrom(composition, undefined, fallbackTimestamp);
+    if (template) survivingCandidates.push(template);
+  });
+  return { template: selectMostRecentCompleteTemplate(survivingCandidates) };
 }
 
 export function cloneTemplateTechnicalPatch(
@@ -173,7 +219,7 @@ export function restoreIncompleteNewServices(
   const next = compositions.map(composition => {
     if (!isIncompleteNewService(composition)) return composition;
     const resolution = resolveAdditiveCompositionTemplate(
-      catalog, candidates, composition.id, composition.code, composition.bank,
+      catalog, candidates, composition.id, composition.code,
     );
     if (!resolution.template) return composition;
     restored.push({

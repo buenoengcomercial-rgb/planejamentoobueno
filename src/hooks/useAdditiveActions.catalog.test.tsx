@@ -36,7 +36,7 @@ describe('useAdditiveActions catálogo atual da obra', () => {
     const staleProject = {
       id: 'project-1', phases: [], additives: [additive], additiveCompositionCatalog: [],
     } as unknown as Project;
-    let currentProject = {
+    let currentProject: Project = {
       ...staleProject,
       additiveCompositionCatalog: upsertAdditiveCompositionTemplate([], source, additive.id),
     };
@@ -76,7 +76,7 @@ describe('useAdditiveActions catálogo atual da obra', () => {
     const staleProject = {
       id: 'project-1', phases: [], additives: [additive], additiveCompositionCatalog: [],
     } as unknown as Project;
-    let currentProject = {
+    let currentProject: Project = {
       ...staleProject,
       additiveCompositionCatalog: upsertAdditiveCompositionTemplate([], templateSource, additive.id),
     };
@@ -94,5 +94,42 @@ describe('useAdditiveActions catálogo atual da obra', () => {
     });
     expect(restored?.inputs).toHaveLength(1);
     expect(currentProject.auditLogs?.at(-1)?.title).toBe('Composições incompletas restauradas pelo catálogo da obra');
+  });
+
+  it('consolida versões legadas e repara o FIXA_1 vazio pela completa mais recente', () => {
+    const incomplete = { ...target, code: 'FIXA_1', item: '6.9.25', itemNumber: '6.9.25' };
+    const additive = additiveWith([incomplete]);
+    const older = upsertAdditiveCompositionTemplate(
+      [], { ...source, bank: 'ORSE', description: 'VERSÃO ANTIGA' }, additive.id, '2026-08-01T00:00:00.000Z',
+    )[0];
+    const latest = upsertAdditiveCompositionTemplate(
+      [], source, additive.id, '2026-08-03T00:00:00.000Z',
+    )[0];
+    const staleProject = {
+      id: 'project-1', phases: [], additives: [additive], additiveCompositionCatalog: [],
+    } as unknown as Project;
+    let currentProject: Project = {
+      ...staleProject,
+      additiveCompositionCatalog: [older, latest],
+    };
+    const onProjectChange = vi.fn((next: Project | ((prev: Project) => Project)) => {
+      currentProject = typeof next === 'function' ? next(currentProject) : next;
+    });
+    const state = { active: additive, activeId: additive.id, isLocked: false } as unknown as AdditiveStateApi;
+
+    renderHook(() => useAdditiveActions({ project: staleProject, onProjectChange, state }));
+
+    const restored = currentProject.additives?.[0].compositions[0];
+    expect(restored).toMatchObject({
+      code: 'FIXA_1', bank: 'PRÓPRIO', description: 'FIXAÇÃO DE TUBO VERTICAL',
+      itemNumber: '6.9.25', phaseId: 'phase-6-9', addedQuantity: 7,
+      calculationMemory: [{ id: 'memory', type: 'acrescida', partial: 7 }],
+    });
+    expect(currentProject.additiveCompositionCatalog).toHaveLength(1);
+    expect(currentProject.additiveCompositionCatalog?.[0].id).toBe('additive-template:FIXA1');
+    expect(currentProject.auditLogs?.map(log => log.title)).toEqual(expect.arrayContaining([
+      'Catálogo de composições consolidado por código',
+      'Composições incompletas restauradas pelo catálogo da obra',
+    ]));
   });
 });

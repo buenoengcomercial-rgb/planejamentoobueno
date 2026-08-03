@@ -89,11 +89,11 @@ describe('AdditiveCompositionRow detail selection', () => {
     fireEvent.click(addedQuantity!);
     expect(screen.getByText('Memória de cálculo')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('cell', { name: 'ADM04', exact: true }));
+    fireEvent.click(screen.getByRole('cell', { name: /^ADM04$/ }));
     expect(screen.queryByText('Memória de cálculo')).not.toBeInTheDocument();
     expect(screen.queryByText('Engenheiro')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('cell', { name: 'ADM04', exact: true }));
+    fireEvent.click(screen.getByRole('cell', { name: /^ADM04$/ }));
     expect(screen.getByText('Engenheiro')).toBeInTheDocument();
   });
 

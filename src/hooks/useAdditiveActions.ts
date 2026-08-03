@@ -22,6 +22,7 @@ import { calculateLineTotal, trunc2 } from '@/lib/financialEngine';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
 import {
   cloneTemplateTechnicalPatch,
+  consolidateAdditiveCompositionCatalog,
   removeNewServiceAndCompact,
   reorderNewService,
   resolveAdditiveCompositionTemplate,
@@ -48,6 +49,11 @@ interface Params {
   state: AdditiveStateApi;
   canFormalize?: boolean;
 }
+
+const additiveCompositionsOldestToNewest = (additives: AdditiveModel[] = []) =>
+  [...additives]
+    .sort((left, right) => Date.parse(left.importedAt) - Date.parse(right.importedAt))
+    .flatMap(additive => additive.compositions ?? []);
 
 const createPhaseId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -98,7 +104,6 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
       : `inp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 
     let autofillLog: { code: string; sourceId: string; sourceDesc: string; targetId: string; targetChain?: string } | null = null;
-    let ambiguousTemplate = false;
     const priceSyncLogs: Array<{
       code: string; previousPrice: number; newPrice: number;
       occurrences: number; affectedCompositions: Array<{ id: string; item?: string; description: string }>;
@@ -109,7 +114,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
 
     onProjectChange(prev => {
       const catalog = prev.additiveCompositionCatalog ?? [];
-      const allCandidateCompositions = (prev.additives ?? []).flatMap(additive => additive.compositions ?? []);
+      const allCandidateCompositions = additiveCompositionsOldestToNewest(prev.additives ?? []);
       let updatedTarget: AdditiveComposition | undefined;
       const additives = (prev.additives ?? []).map(a => {
         if (a.id !== activeIdForUpdate) return a;
@@ -124,9 +129,8 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
       const isNew = !!target.isNewService;
       if ((codeChanged || bankChanged) && isNew) {
         const nextCode = codeChanged ? String(patch.code ?? '') : target.code;
-        const nextBank = bankChanged ? String(patch.bank ?? '') : target.bank;
         const resolution = resolveAdditiveCompositionTemplate(
-          catalog, allCandidateCompositions, compId, nextCode, nextBank,
+          catalog, allCandidateCompositions, compId, nextCode,
         );
         if (resolution.template) {
             const source = resolution.template;
@@ -141,7 +145,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
               targetId: target.id,
               targetChain: target.phaseChain,
             };
-        } else if (resolution.ambiguous) ambiguousTemplate = true;
+        }
       }
 
       // Sincronização de preço de insumos: somente em novos serviços, quando inputs foram alterados.
@@ -226,9 +230,6 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
         metadata: autofillLog,
       });
     }
-    if (ambiguousTemplate) {
-      toast.warning('Existe mais de uma composição com este código. Informe o Banco para concluir o preenchimento.');
-    }
     if (priceSyncLogs.length > 0 && active) {
       for (const ps of priceSyncLogs) {
         if (ps.occurrences > 0) {
@@ -255,35 +256,55 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     onProjectChange(prev => {
       const additive = (prev.additives ?? []).find(candidate => candidate.id === additiveId);
       if (!additive) return prev;
-      const catalog = prev.additiveCompositionCatalog ?? [];
-      const candidates = (prev.additives ?? []).flatMap(candidate => candidate.compositions ?? []);
+      const catalogConsolidation = consolidateAdditiveCompositionCatalog(
+        prev.additiveCompositionCatalog ?? [],
+      );
+      const catalog = catalogConsolidation.catalog;
+      const candidates = additiveCompositionsOldestToNewest(prev.additives ?? []);
       const repair = restoreIncompleteNewServices(
         catalog, additive.compositions, candidates, makeInputId,
       );
-      if (repair.restored.length === 0) return prev;
+      if (!catalogConsolidation.changed && repair.restored.length === 0) return prev;
 
       let nextCatalog = catalog;
       for (const restored of repair.restored) {
         const composition = repair.compositions.find(candidate => candidate.id === restored.compositionId);
         if (composition) nextCatalog = upsertAdditiveCompositionTemplate(nextCatalog, composition, additiveId);
       }
-      return logToProject({
+      let nextProject: Project = {
         ...prev,
         additiveCompositionCatalog: nextCatalog,
         additives: (prev.additives ?? []).map(candidate => candidate.id === additiveId
           ? { ...candidate, compositions: repair.compositions }
           : candidate),
-      }, {
-        ...auditUser,
-        entityType: 'additive',
-        entityId: additiveId,
-        action: 'updated',
-        title: 'Composições incompletas restauradas pelo catálogo da obra',
-        metadata: {
-          restoredCount: repair.restored.length,
-          restored: repair.restored,
-        },
-      });
+      };
+      if (catalogConsolidation.changed) {
+        nextProject = logToProject(nextProject, {
+          ...auditUser,
+          entityType: 'additive',
+          entityId: additiveId,
+          action: 'updated',
+          title: 'Catálogo de composições consolidado por código',
+          metadata: {
+            consolidatedCount: catalogConsolidation.consolidatedCodes.length,
+            consolidatedCodes: catalogConsolidation.consolidatedCodes,
+          },
+        });
+      }
+      if (repair.restored.length > 0) {
+        nextProject = logToProject(nextProject, {
+          ...auditUser,
+          entityType: 'additive',
+          entityId: additiveId,
+          action: 'updated',
+          title: 'Composições incompletas restauradas pelo catálogo da obra',
+          metadata: {
+            restoredCount: repair.restored.length,
+            restored: repair.restored,
+          },
+        });
+      }
+      return nextProject;
     });
   }, [active?.id, isLocked, onProjectChange, project.additiveCompositionCatalog, auditUser]);
 
