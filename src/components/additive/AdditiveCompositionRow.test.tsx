@@ -1,7 +1,10 @@
+import { useState, type MouseEvent } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { AdditiveComposition, Project } from '@/types/project';
 import AdditiveCompositionRow from './AdditiveCompositionRow';
+import type { AdditiveDetailSelection } from './AdditiveDetailFooter';
+import { shouldDismissAdditiveDetail } from './additiveDetailInteraction';
 
 const composition: AdditiveComposition = {
   id: 'comp-1', item: '1.1.1', itemNumber: '1.1.1', code: 'ADM04', bank: 'PRÓPRIO',
@@ -42,7 +45,68 @@ function renderRow(options: { mode?: 'memory' | 'analytic'; isOpen: boolean; com
   return { onToggleExpand, onSelectDetail, onReorderComposition };
 }
 
+function DetailInteractionHarness() {
+  const [selectedDetail, setSelectedDetail] = useState<AdditiveDetailSelection | null>(null);
+  const [isOpen, setIsOpen] = useState(false);
+
+  const handleClickCapture = (event: MouseEvent<HTMLDivElement>) => {
+    if (shouldDismissAdditiveDetail(event.target)) setSelectedDetail(null);
+  };
+
+  return (
+    <div onClickCapture={handleClickCapture}>
+      <button type="button">Fora da composição</button>
+      <table><tbody>
+        <AdditiveCompositionRow
+          project={project}
+          c={composition}
+          bdi={27.58}
+          globalDiscount={0}
+          isLocked={false}
+          isOpen={isOpen}
+          isMemoryOpen={selectedDetail?.compositionId === composition.id && selectedDetail.mode === 'memory'}
+          showAnalytic
+          onToggleExpand={() => setIsOpen(value => !value)}
+          onUpdateComposition={vi.fn()}
+          onReorderComposition={vi.fn()}
+          onUpdateQuantity={vi.fn()}
+          onRemoveComposition={vi.fn()}
+          onChangeMemory={vi.fn()}
+          selectedDetail={selectedDetail}
+          onSelectDetail={setSelectedDetail}
+        />
+      </tbody></table>
+    </div>
+  );
+}
+
 describe('AdditiveCompositionRow detail selection', () => {
+  it('fecha a Memória pelo clique na composição sem o capture global abrir a Analítica', () => {
+    const { container } = render(<DetailInteractionHarness />);
+    const addedQuantity = container.querySelector<HTMLInputElement>('input.border-emerald-200');
+    expect(addedQuantity).not.toBeNull();
+
+    fireEvent.click(addedQuantity!);
+    expect(screen.getByText('Memória de cálculo')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('cell', { name: 'ADM04', exact: true }));
+    expect(screen.queryByText('Memória de cálculo')).not.toBeInTheDocument();
+    expect(screen.queryByText('Engenheiro')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('cell', { name: 'ADM04', exact: true }));
+    expect(screen.getByText('Engenheiro')).toBeInTheDocument();
+  });
+
+  it('continua fechando a Memória quando o clique ocorre fora da composição', () => {
+    const { container } = render(<DetailInteractionHarness />);
+    const addedQuantity = container.querySelector<HTMLInputElement>('input.border-emerald-200');
+    fireEvent.click(addedQuantity!);
+    expect(screen.getByText('Memória de cálculo')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Fora da composição' }));
+    expect(screen.queryByText('Memória de cálculo')).not.toBeInTheDocument();
+  });
+
   it('fecha somente a Memória ao clicar novamente na composição', () => {
     const { onToggleExpand, onSelectDetail } = renderRow({ mode: 'memory', isOpen: false });
     const mainRow = screen.getAllByText('ADM04')[0].closest('tr');

@@ -32,6 +32,7 @@ import AdditiveReviewDialog from '@/components/additive/AdditiveReviewDialog';
 import AdditiveSyntheticConflictDialog from '@/components/additive/AdditiveSyntheticConflictDialog';
 import AdditiveHeaderInfo from '@/components/additive/AdditiveHeaderInfo';
 import type { AdditiveDetailSelection } from '@/components/additive/AdditiveDetailFooter';
+import { shouldDismissAdditiveDetail } from '@/components/additive/additiveDetailInteraction';
 
 interface Props {
   project: Project;
@@ -96,11 +97,7 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
   };
 
   const handleDetailClickCapture = (event: MouseEvent<HTMLDivElement>) => {
-    const target = event.target as HTMLElement | null;
-    if (!target) return;
-    if (target.closest('[data-detail-cell="true"]')) return;
-    if (target.closest('[data-detail-panel="true"]')) return;
-    if (target.closest('[data-detail-footer="true"]')) return;
+    if (!shouldDismissAdditiveDetail(event.target)) return;
     setDetailSelection(null);
   };
 

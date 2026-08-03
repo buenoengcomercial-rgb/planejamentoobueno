@@ -354,7 +354,7 @@ function AdditiveCompositionRowImpl({
 
   return (
     <Fragment>
-      <tr className={`border-b align-top ${isSelected ? 'ring-2 ring-primary/40 ring-inset' : ''} ${
+      <tr data-additive-composition-row="true" className={`border-b align-top ${isSelected ? 'ring-2 ring-primary/40 ring-inset' : ''} ${
         isNew
           ? 'bg-sky-50 hover:bg-sky-100/70 border-l-4 border-l-sky-500'
           : isAlteredContracted
