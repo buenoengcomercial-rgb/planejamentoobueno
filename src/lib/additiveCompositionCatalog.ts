@@ -1,4 +1,5 @@
 import type {
+  Additive,
   AdditiveComposition,
   AdditiveCompositionTemplate,
   AdditiveInput,
@@ -14,6 +15,36 @@ export function normalizeAdditiveCatalogBank(value?: string | null): string {
 
 const cloneInputs = (inputs: AdditiveInput[] = []): AdditiveInput[] =>
   inputs.map(input => ({ ...input }));
+
+const technicalInput = (input: AdditiveInput) => ({
+  code: input.code,
+  bank: input.bank,
+  description: input.description,
+  unit: input.unit,
+  coefficient: input.coefficient,
+  unitPrice: input.unitPrice,
+  total: input.total,
+});
+
+const technicalFingerprint = (composition: AdditiveComposition): string => JSON.stringify({
+  code: composition.code,
+  bank: composition.bank,
+  description: composition.description,
+  unit: composition.unit,
+  unitPriceNoBDIInformed: composition.unitPriceNoBDIInformed,
+  analyticReferenceUnitPriceNoBDI: composition.analyticReferenceUnitPriceNoBDI,
+  inputs: (composition.inputs ?? []).map(technicalInput),
+});
+
+const templateFingerprint = (template: AdditiveCompositionTemplate): string => JSON.stringify({
+  code: template.code,
+  bank: template.bank,
+  description: template.description,
+  unit: template.unit,
+  unitPriceNoBDIInformed: template.unitPriceNoBDIInformed,
+  analyticReferenceUnitPriceNoBDI: template.analyticReferenceUnitPriceNoBDI,
+  inputs: (template.inputs ?? []).map(technicalInput),
+});
 
 function templateKey(code: string): string {
   return normalizeAdditiveCatalogCode(code);
@@ -173,6 +204,138 @@ export function cloneTemplateTechnicalPatch(
     unitPriceNoBDIInformed: template.unitPriceNoBDIInformed,
     analyticReferenceUnitPriceNoBDI: template.analyticReferenceUnitPriceNoBDI,
     inputs: template.inputs.map(input => ({ ...input, id: makeInputId() })),
+  };
+}
+
+/** Mesma regra de bloqueio da tela: contratos e aprovacoes so sincronizam em revisao liberada. */
+export function isAdditiveTechnicalSyncEditable(additive: Additive): boolean {
+  const status = additive.status ?? 'rascunho';
+  if (status === 'em_analise' || status === 'aprovado') return false;
+  if (status === 'contratado' || status === 'aditivo_contratado' || additive.isContracted) {
+    return !!additive.editUnlocked;
+  }
+  return true;
+}
+
+function applyTemplateTechnicalStructure(
+  composition: AdditiveComposition,
+  template: AdditiveCompositionTemplate,
+  makeInputId: () => string,
+): AdditiveComposition {
+  if (technicalFingerprint(composition) === templateFingerprint(template)) return composition;
+  return {
+    ...composition,
+    code: template.code,
+    ...cloneTemplateTechnicalPatch(template, makeInputId),
+  };
+}
+
+export interface SyncedCompositionOccurrence {
+  additiveId: string;
+  compositionId: string;
+  item?: string;
+}
+
+export interface SynchronizeCompositionOccurrencesResult {
+  additives: Additive[];
+  catalog: AdditiveCompositionTemplate[];
+  synchronized: SyncedCompositionOccurrence[];
+}
+
+/**
+ * Torna a ocorrencia informada a fonte tecnica do codigo e replica a estrutura
+ * para todas as ocorrencias editaveis. Campos locais nunca entram no template.
+ */
+export function synchronizeAdditiveCompositionOccurrences(
+  additives: Additive[] = [],
+  catalog: AdditiveCompositionTemplate[] = [],
+  sourceAdditiveId: string,
+  sourceCompositionId: string,
+  makeInputId: () => string,
+  now?: string,
+): SynchronizeCompositionOccurrencesResult {
+  const source = additives
+    .find(additive => additive.id === sourceAdditiveId)
+    ?.compositions.find(composition => composition.id === sourceCompositionId);
+  if (!source?.isNewService) return { additives, catalog, synchronized: [] };
+
+  const normalizedCode = normalizeAdditiveCatalogCode(source.code);
+  const template = compositionTemplateFrom(source, sourceAdditiveId, now);
+  if (!normalizedCode || !template) return { additives, catalog, synchronized: [] };
+
+  const synchronized: SyncedCompositionOccurrence[] = [];
+  const nextAdditives = additives.map(additive => {
+    if (!isAdditiveTechnicalSyncEditable(additive)) return additive;
+    let additiveChanged = false;
+    const compositions = additive.compositions.map(composition => {
+      if (additive.id === sourceAdditiveId && composition.id === sourceCompositionId) return composition;
+      if (!composition.isNewService || normalizeAdditiveCatalogCode(composition.code) !== normalizedCode) {
+        return composition;
+      }
+      const next = applyTemplateTechnicalStructure(composition, template, makeInputId);
+      if (next === composition) return composition;
+      additiveChanged = true;
+      synchronized.push({
+        additiveId: additive.id,
+        compositionId: composition.id,
+        item: composition.itemNumber || composition.item,
+      });
+      return next;
+    });
+    return additiveChanged ? { ...additive, compositions } : additive;
+  });
+
+  return {
+    additives: synchronized.length > 0 ? nextAdditives : additives,
+    catalog: upsertAdditiveCompositionTemplate(catalog, source, sourceAdditiveId, now),
+    synchronized,
+  };
+}
+
+export interface ReconcileCompositionCatalogResult {
+  additives: Additive[];
+  catalog: AdditiveCompositionTemplate[];
+  reconciled: SyncedCompositionOccurrence[];
+  consolidatedCodes: string[];
+  catalogChanged: boolean;
+}
+
+/** Repara divergencias existentes somente quando ja existe uma fonte completa no catalogo. */
+export function reconcileAdditiveCompositionsFromCatalog(
+  additives: Additive[] = [],
+  catalog: AdditiveCompositionTemplate[] = [],
+  makeInputId: () => string,
+): ReconcileCompositionCatalogResult {
+  const consolidation = consolidateAdditiveCompositionCatalog(catalog);
+  const templates = new Map(consolidation.catalog
+    .filter(isCompleteAdditiveCompositionTemplate)
+    .map(template => [template.normalizedCode || normalizeAdditiveCatalogCode(template.code), template]));
+  const reconciled: SyncedCompositionOccurrence[] = [];
+  const nextAdditives = additives.map(additive => {
+    if (!isAdditiveTechnicalSyncEditable(additive)) return additive;
+    let additiveChanged = false;
+    const compositions = additive.compositions.map(composition => {
+      if (!composition.isNewService) return composition;
+      const template = templates.get(normalizeAdditiveCatalogCode(composition.code));
+      if (!template) return composition;
+      const next = applyTemplateTechnicalStructure(composition, template, makeInputId);
+      if (next === composition) return composition;
+      additiveChanged = true;
+      reconciled.push({
+        additiveId: additive.id,
+        compositionId: composition.id,
+        item: composition.itemNumber || composition.item,
+      });
+      return next;
+    });
+    return additiveChanged ? { ...additive, compositions } : additive;
+  });
+  return {
+    additives: reconciled.length > 0 ? nextAdditives : additives,
+    catalog: consolidation.catalog,
+    reconciled,
+    consolidatedCodes: consolidation.consolidatedCodes,
+    catalogChanged: consolidation.changed,
   };
 }
 

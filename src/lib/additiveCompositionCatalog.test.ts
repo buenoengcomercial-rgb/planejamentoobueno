@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AdditiveComposition, Project } from '@/types/project';
+import type { Additive, AdditiveComposition, Project } from '@/types/project';
 import {
   cloneTemplateTechnicalPatch,
   consolidateAdditiveCompositionCatalog,
@@ -7,8 +7,10 @@ import {
   normalizeAdditiveCatalogCode,
   removeNewServiceAndCompact,
   reorderNewService,
+  reconcileAdditiveCompositionsFromCatalog,
   resolveAdditiveCompositionTemplate,
   restoreIncompleteNewServices,
+  synchronizeAdditiveCompositionOccurrences,
   upsertAdditiveCompositionTemplate,
 } from './additiveCompositionCatalog';
 import { stripNormalizedCollections } from './projectSync';
@@ -18,6 +20,102 @@ const composition = (id: string, item: string, code = id): AdditiveComposition =
   quantity: 0, unit: 'UN', unitPriceNoBDI: 10, unitPriceNoBDIInformed: 10,
   unitPriceWithBDI: 0, total: 0, inputs: [{ id: `input-${id}`, code: 'I1', bank: 'ORSE', description: 'Insumo', unit: 'UN', coefficient: 1, unitPrice: 10, total: 10 }],
   phaseId: 'phase-3-10', phaseChain: '3.10 NOVOS', isNewService: true,
+});
+
+describe('sincronização técnica por código', () => {
+  const additive = (
+    id: string,
+    compositions: AdditiveComposition[],
+    extra: Partial<Additive> = {},
+  ): Additive => ({
+    id,
+    name: id,
+    importedAt: '2026-08-03T00:00:00.000Z',
+    status: 'rascunho',
+    compositions,
+    ...extra,
+  });
+
+  it('propaga a estrutura completa e preserva campos locais de cada ocorrência', () => {
+    const source = {
+      ...composition('source', '2.9.19', 'ABHI_4'),
+      description: 'Abrigo corrigido',
+      addedQuantity: 1,
+      calculationMemory: [{ id: 'memory-source', type: 'acrescida' as const, partial: 1 }],
+      inputs: [
+        { id: 's1', code: 'A', bank: 'SINAPI', description: 'Primeiro', unit: 'H', coefficient: 2, unitPrice: 3, total: 6 },
+        { id: 's2', code: 'B', bank: 'SBC', description: 'Segundo', unit: 'UN', coefficient: 4, unitPrice: 5, total: 20 },
+      ],
+    };
+    const target = {
+      ...composition('target', '4.9.1', 'ABHI.4'),
+      description: 'Estrutura antiga',
+      addedQuantity: 10,
+      phaseId: 'phase-4-9',
+      calculationMemory: [{ id: 'memory-target', type: 'acrescida' as const, partial: 10 }],
+    };
+    let nextId = 0;
+    const result = synchronizeAdditiveCompositionOccurrences(
+      [additive('a1', [source]), additive('a2', [target])],
+      [], 'a1', source.id, () => `clone-${++nextId}`, '2026-08-03T12:00:00.000Z',
+    );
+    const synced = result.additives[1].compositions[0];
+    expect(synced).toMatchObject({
+      code: 'ABHI_4', description: 'Abrigo corrigido', itemNumber: '4.9.1',
+      phaseId: 'phase-4-9', addedQuantity: 10,
+      calculationMemory: [{ id: 'memory-target', type: 'acrescida', partial: 10 }],
+    });
+    expect(synced.inputs.map(input => [input.code, input.coefficient, input.total]))
+      .toEqual([['A', 2, 6], ['B', 4, 20]]);
+    expect(synced.inputs.map(input => input.id)).toEqual(['clone-1', 'clone-2']);
+    expect(result.catalog).toHaveLength(1);
+    expect(result.synchronized).toHaveLength(1);
+  });
+
+  it('preserva aprovados, contratados, snapshots e revisões bloqueadas', () => {
+    const source = { ...composition('source', '2.9.1', 'ABHI4'), description: 'Vigente' };
+    const divergent = (id: string) => ({ ...composition(id, '4.9.1', 'ABHI_4'), description: 'Congelada' });
+    const locked = [
+      additive('approved', [divergent('approved-c')], { status: 'aprovado' }),
+      additive('contracted', [divergent('contracted-c')], { status: 'aditivo_contratado', isContracted: true }),
+      additive('revision-locked', [divergent('revision-c')], { isContracted: true, editUnlocked: false }),
+    ];
+    const snapshotComposition = divergent('snapshot-c');
+    locked[0].approvalSnapshots = [{
+      version: 1, approvedAt: '2026-08-03', bdiPercent: 27.58,
+      globalDiscountPercent: 6, totals: {}, issues: [], compositions: [snapshotComposition],
+    }];
+    const openRevision = additive('open', [divergent('open-c')], {
+      status: 'aditivo_contratado', isContracted: true, editUnlocked: true,
+    });
+    const result = synchronizeAdditiveCompositionOccurrences(
+      [additive('source-add', [source]), ...locked, openRevision], [],
+      'source-add', source.id, () => 'new-id',
+    );
+    expect(result.synchronized.map(item => item.additiveId)).toEqual(['open']);
+    expect(result.additives.slice(1, 4).map(item => item.compositions[0].description))
+      .toEqual(['Congelada', 'Congelada', 'Congelada']);
+    expect(result.additives[1].approvalSnapshots?.[0].compositions[0].description).toBe('Congelada');
+    expect(result.additives[4].compositions[0].description).toBe('Vigente');
+  });
+
+  it('reconcilia pelo catálogo existente e não escolhe uma estrutura em legado sem catálogo', () => {
+    const master = { ...composition('master', '2.9.1', 'ABHI_4'), description: 'Catálogo vigente' };
+    const divergent = { ...composition('old', '4.9.1', 'ABHI4'), description: 'Legado divergente' };
+    const catalog = upsertAdditiveCompositionTemplate([], master);
+    const reconciled = reconcileAdditiveCompositionsFromCatalog(
+      [additive('draft', [divergent])], catalog, () => 'reconciled-input',
+    );
+    expect(reconciled.reconciled).toHaveLength(1);
+    expect(reconciled.additives[0].compositions[0].description).toBe('Catálogo vigente');
+
+    const untouched = reconcileAdditiveCompositionsFromCatalog(
+      [additive('legacy', [master, divergent])], [], () => 'unused',
+    );
+    expect(untouched.reconciled).toHaveLength(0);
+    expect(untouched.additives[0].compositions.map(item => item.description))
+      .toEqual(['Catálogo vigente', 'Legado divergente']);
+  });
 });
 
 describe('catálogo de composições aditivadas', () => {

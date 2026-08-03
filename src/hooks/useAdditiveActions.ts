@@ -23,11 +23,11 @@ import { calculateLineTotal, trunc2 } from '@/lib/financialEngine';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
 import {
   cloneTemplateTechnicalPatch,
-  consolidateAdditiveCompositionCatalog,
+  reconcileAdditiveCompositionsFromCatalog,
   removeNewServiceAndCompact,
   reorderNewService,
   resolveAdditiveCompositionTemplate,
-  restoreIncompleteNewServices,
+  synchronizeAdditiveCompositionOccurrences,
   upsertAdditiveCompositionTemplate,
 } from '@/lib/additiveCompositionCatalog';
 import {
@@ -109,9 +109,19 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
       code: string; previousPrice: number; newPrice: number;
       occurrences: number; affectedCompositions: Array<{ id: string; item?: string; description: string }>;
     }> = [];
+    let compositionSyncLog: {
+      code: string;
+      sourceCompositionId: string;
+      synchronizedCount: number;
+      occurrences: Array<{ additiveId: string; compositionId: string; item?: string }>;
+    } | null = null;
 
     const activeIdForUpdate = active?.id;
     if (!activeIdForUpdate) return;
+    const technicalPatchChanged = [
+      'code', 'bank', 'description', 'unit', 'unitPriceNoBDIInformed',
+      'analyticReferenceUnitPriceNoBDI', 'inputs',
+    ].some(field => Object.prototype.hasOwnProperty.call(patch, field));
 
     onProjectChange(prev => {
       const catalog = prev.additiveCompositionCatalog ?? [];
@@ -124,11 +134,10 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
 
       let effectivePatch: Partial<AdditiveComposition> = { ...patch };
 
-      // Autofill por código/banco: reutiliza outra composição ativa ou o catálogo técnico da obra.
+      // Autofill por código: reutiliza outra composição ativa ou o catálogo técnico da obra.
       const codeChanged = Object.prototype.hasOwnProperty.call(patch, 'code');
-      const bankChanged = Object.prototype.hasOwnProperty.call(patch, 'bank');
       const isNew = !!target.isNewService;
-      if ((codeChanged || bankChanged) && isNew) {
+      if (codeChanged && isNew) {
         const nextCode = codeChanged ? String(patch.code ?? '') : target.code;
         const resolution = resolveAdditiveCompositionTemplate(
           catalog, allCandidateCompositions, compId, nextCode,
@@ -137,6 +146,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
             const source = resolution.template;
             effectivePatch = {
               ...effectivePatch,
+              code: source.code,
               ...cloneTemplateTechnicalPatch(source, genId),
             };
             autofillLog = {
@@ -215,12 +225,26 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
       });
       if (!updatedTarget) return prev;
       if (!updatedTarget.isNewService) return { ...prev, additives };
+      if (!technicalPatchChanged) return { ...prev, additives };
+      const sync = synchronizeAdditiveCompositionOccurrences(
+        additives,
+        upsertAdditiveCompositionTemplate(catalog, updatedTarget, activeIdForUpdate),
+        activeIdForUpdate,
+        compId,
+        genId,
+      );
+      if (sync.synchronized.length > 0) {
+        compositionSyncLog = {
+          code: updatedTarget.code,
+          sourceCompositionId: compId,
+          synchronizedCount: sync.synchronized.length,
+          occurrences: sync.synchronized,
+        };
+      }
       return {
         ...prev,
-        additives,
-        additiveCompositionCatalog: upsertAdditiveCompositionTemplate(
-          catalog, updatedTarget, activeIdForUpdate,
-        ),
+        additives: sync.additives,
+        additiveCompositionCatalog: sync.catalog,
       };
     });
 
@@ -245,41 +269,36 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
         });
       }
     }
+    if (compositionSyncLog && active) {
+      toast.success(`Composição ${compositionSyncLog.code} sincronizada em ${compositionSyncLog.synchronizedCount} outra(s) ocorrência(s).`);
+      logAdd(active.id, {
+        action: 'updated',
+        title: 'Composições de novo serviço sincronizadas por código',
+        metadata: compositionSyncLog,
+      });
+    }
   }, [active, onProjectChange, logAdd]);
 
   useEffect(() => {
     const additiveId = active?.id;
-    if (!additiveId || isLocked) return;
+    if (!additiveId) return;
     const makeInputId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
       ? crypto.randomUUID()
       : `inp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 
     onProjectChange(prev => {
-      const additive = (prev.additives ?? []).find(candidate => candidate.id === additiveId);
-      if (!additive) return prev;
-      const catalogConsolidation = consolidateAdditiveCompositionCatalog(
-        prev.additiveCompositionCatalog ?? [],
+      if (!(prev.additives ?? []).some(candidate => candidate.id === additiveId)) return prev;
+      const reconciliation = reconcileAdditiveCompositionsFromCatalog(
+        prev.additives ?? [], prev.additiveCompositionCatalog ?? [], makeInputId,
       );
-      const catalog = catalogConsolidation.catalog;
-      const candidates = additiveCompositionsOldestToNewest(prev.additives ?? []);
-      const repair = restoreIncompleteNewServices(
-        catalog, additive.compositions, candidates, makeInputId,
-      );
-      if (!catalogConsolidation.changed && repair.restored.length === 0) return prev;
+      if (!reconciliation.catalogChanged && reconciliation.reconciled.length === 0) return prev;
 
-      let nextCatalog = catalog;
-      for (const restored of repair.restored) {
-        const composition = repair.compositions.find(candidate => candidate.id === restored.compositionId);
-        if (composition) nextCatalog = upsertAdditiveCompositionTemplate(nextCatalog, composition, additiveId);
-      }
       let nextProject: Project = {
         ...prev,
-        additiveCompositionCatalog: nextCatalog,
-        additives: (prev.additives ?? []).map(candidate => candidate.id === additiveId
-          ? { ...candidate, compositions: repair.compositions }
-          : candidate),
+        additiveCompositionCatalog: reconciliation.catalog,
+        additives: reconciliation.additives,
       };
-      if (catalogConsolidation.changed) {
+      if (reconciliation.catalogChanged) {
         nextProject = logToProject(nextProject, {
           ...auditUser,
           entityType: 'additive',
@@ -287,27 +306,27 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
           action: 'updated',
           title: 'Catálogo de composições consolidado por código',
           metadata: {
-            consolidatedCount: catalogConsolidation.consolidatedCodes.length,
-            consolidatedCodes: catalogConsolidation.consolidatedCodes,
+            consolidatedCount: reconciliation.consolidatedCodes.length,
+            consolidatedCodes: reconciliation.consolidatedCodes,
           },
         });
       }
-      if (repair.restored.length > 0) {
+      if (reconciliation.reconciled.length > 0) {
         nextProject = logToProject(nextProject, {
           ...auditUser,
           entityType: 'additive',
           entityId: additiveId,
           action: 'updated',
-          title: 'Composições incompletas restauradas pelo catálogo da obra',
+          title: 'Composições equivalentes reconciliadas pelo catálogo da obra',
           metadata: {
-            restoredCount: repair.restored.length,
-            restored: repair.restored,
+            reconciledCount: reconciliation.reconciled.length,
+            reconciled: reconciliation.reconciled,
           },
         });
       }
       return nextProject;
     });
-  }, [active?.id, isLocked, onProjectChange, project.additiveCompositionCatalog, auditUser]);
+  }, [active?.id, onProjectChange, project.additiveCompositionCatalog, auditUser]);
 
   const handleReorderComposition = useCallback((compId: string, requestedItem: string) => {
     if (!active || isLocked) return;
@@ -954,17 +973,28 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     }
     const activeIdForImport = active.id;
     const updated = applyAdditiveAnalyticImport(active, blocks, preview);
+    let synchronizedOccurrences = 0;
     onProjectChange(prev => {
       let catalog = prev.additiveCompositionCatalog ?? [];
+      let additives = (prev.additives ?? []).map(additive =>
+        additive.id === activeIdForImport ? updated : additive,
+      );
+      const makeInputId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+        ? crypto.randomUUID()
+        : `inp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
       for (const composition of updated.compositions.filter(candidate => candidate.isNewService)) {
         catalog = upsertAdditiveCompositionTemplate(catalog, composition, activeIdForImport);
+        const sync = synchronizeAdditiveCompositionOccurrences(
+          additives, catalog, activeIdForImport, composition.id, makeInputId,
+        );
+        additives = sync.additives;
+        catalog = sync.catalog;
+        synchronizedOccurrences += sync.synchronized.length;
       }
       return logToProject({
         ...prev,
         additiveCompositionCatalog: catalog,
-        additives: (prev.additives ?? []).map(additive =>
-          additive.id === activeIdForImport ? updated : additive,
-        ),
+        additives,
       }, {
         ...auditUser,
         entityType: 'additive',
@@ -980,10 +1010,11 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
           conflicts: preview.conflicts,
           priceDivergences: preview.priceDivergences,
           contractedCompositionsAffected: 0,
+          synchronizedOccurrences,
         },
       });
     });
-    toast.success(`Analítica importada: ${preview.matched} composição(ões) e ${preview.inputsToReplace} insumo(s) atualizados.`);
+    toast.success(`Analítica importada: ${preview.matched} composição(ões), ${preview.inputsToReplace} insumo(s) e ${synchronizedOccurrences} ocorrência(s) equivalente(s) atualizados.`);
   };
 
   const handleConfirmSyntheticPrepared = async (

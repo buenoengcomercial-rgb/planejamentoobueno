@@ -59,7 +59,7 @@ describe('useAdditiveActions catálogo atual da obra', () => {
 
     const restored = currentProject.additives?.[0].compositions.find(candidate => candidate.id === target.id);
     expect(restored).toMatchObject({
-      code: 'FIXA1', bank: 'PRÓPRIO', description: 'FIXAÇÃO DE TUBO VERTICAL',
+      code: 'FIXA_1', bank: 'PRÓPRIO', description: 'FIXAÇÃO DE TUBO VERTICAL',
       unitPriceNoBDIInformed: 12.81, addedQuantity: 7,
       calculationMemory: [{ id: 'memory', type: 'acrescida', partial: 7 }],
       phaseId: 'phase-6-9', itemNumber: '6.9.3',
@@ -89,11 +89,11 @@ describe('useAdditiveActions catálogo atual da obra', () => {
 
     const restored = currentProject.additives?.[0].compositions[0];
     expect(restored).toMatchObject({
-      code: 'PINT02', bank: 'PRÓPRIO', description: 'PINTURA DE IDENTIFICAÇÃO',
+      code: 'PINT_02', bank: 'PRÓPRIO', description: 'PINTURA DE IDENTIFICAÇÃO',
       itemNumber: '6.9.3', phaseId: 'phase-6-9', addedQuantity: 7,
     });
     expect(restored?.inputs).toHaveLength(1);
-    expect(currentProject.auditLogs?.at(-1)?.title).toBe('Composições incompletas restauradas pelo catálogo da obra');
+    expect(currentProject.auditLogs?.at(-1)?.title).toBe('Composições equivalentes reconciliadas pelo catálogo da obra');
   });
 
   it('consolida versões legadas e repara o FIXA_1 vazio pela completa mais recente', () => {
@@ -129,7 +129,51 @@ describe('useAdditiveActions catálogo atual da obra', () => {
     expect(currentProject.additiveCompositionCatalog?.[0].id).toBe('additive-template:FIXA1');
     expect(currentProject.auditLogs?.map(log => log.title)).toEqual(expect.arrayContaining([
       'Catálogo de composições consolidado por código',
-      'Composições incompletas restauradas pelo catálogo da obra',
+      'Composições equivalentes reconciliadas pelo catálogo da obra',
     ]));
+  });
+
+  it('sincroniza edição, inclusão e ordem dos insumos sem alterar quantidade ou memória local', () => {
+    const second = {
+      ...source,
+      id: 'second',
+      code: 'FIXA1',
+      item: '6.9.3',
+      itemNumber: '6.9.3',
+      phaseId: 'phase-6-9',
+      addedQuantity: 9,
+      calculationMemory: [{ id: 'memory-second', type: 'acrescida' as const, partial: 9 }],
+      inputs: source.inputs.map(input => ({ ...input, id: 'second-input' })),
+    };
+    const additive = additiveWith([source, second]);
+    const catalog = upsertAdditiveCompositionTemplate([], source, additive.id);
+    let currentProject = {
+      id: 'project-1', phases: [], additives: [additive], additiveCompositionCatalog: catalog,
+    } as unknown as Project;
+    const onProjectChange = vi.fn((next: Project | ((prev: Project) => Project)) => {
+      currentProject = typeof next === 'function' ? next(currentProject) : next;
+    });
+    const state = { active: additive, activeId: additive.id, isLocked: false } as unknown as AdditiveStateApi;
+    const { result } = renderHook(() => useAdditiveActions({ project: currentProject, onProjectChange, state }));
+    const inputs = [
+      { ...source.inputs[0], description: 'Auxiliar corrigido', coefficient: 0.1 },
+      { id: 'new-source-input', code: 'NOVO', bank: 'SBC', description: 'Novo insumo', unit: 'UN', coefficient: 2, unitPrice: 4, total: 8 },
+    ];
+
+    act(() => result.current.updateComposition(source.id, {
+      description: 'FIXAÇÃO CORRIGIDA',
+      inputs,
+    }));
+
+    const synced = currentProject.additives?.[0].compositions.find(item => item.id === second.id);
+    expect(synced?.description).toBe('FIXAÇÃO CORRIGIDA');
+    expect(synced?.inputs.map(input => [input.code, input.description, input.coefficient]))
+      .toEqual([['88248', 'Auxiliar corrigido', 0.1], ['NOVO', 'Novo insumo', 2]]);
+    expect(synced?.addedQuantity).toBe(9);
+    expect(synced?.calculationMemory).toEqual([
+      { id: 'memory-second', type: 'acrescida', partial: 9 },
+    ]);
+    expect(currentProject.auditLogs?.at(-1)?.title)
+      .toBe('Composições de novo serviço sincronizadas por código');
   });
 });
