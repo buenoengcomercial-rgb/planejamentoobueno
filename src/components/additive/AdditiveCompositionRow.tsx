@@ -281,6 +281,13 @@ function AdditiveCompositionRowImpl({
     r.valorSuprimido > 0 ||
     Math.abs(r.diferenca) > 0.005
   );
+  const hasAddition = r.qtdAcrescida > 0;
+  const hasSuppression = r.qtdSuprimida > 0;
+  const identificationTextClass = hasAddition && !hasSuppression
+    ? 'text-blue-700'
+    : hasSuppression && !hasAddition
+      ? 'text-rose-700'
+      : '';
 
   const isSelected = selectedDetail?.compositionId === c.id;
   const selectDetail = (mode: AdditiveDetailMode, qtyType?: AdditiveMemoryQtyType) => {
@@ -347,7 +354,7 @@ function AdditiveCompositionRowImpl({
           </button>
         </td>
         {/* Identificação */}
-        <td className={`px-1 py-1 align-top ${G_BG.id}`}>
+        <td className={`px-1 py-1 align-top ${G_BG.id} ${identificationTextClass}`}>
           {isNew && !isLocked ? (
             <TextCommitCell
               value={c.itemNumber || c.item}
@@ -357,7 +364,7 @@ function AdditiveCompositionRowImpl({
             />
           ) : c.itemNumber || c.item}
         </td>
-        <td className={`px-1 py-1 align-top font-mono text-[11px] break-words whitespace-normal ${G_BG.id}`}>
+        <td className={`px-1 py-1 align-top font-mono text-[11px] break-words whitespace-normal ${G_BG.id} ${identificationTextClass}`}>
           {isNew && !isLocked ? (
             <TextCommitCell
               value={c.code}
@@ -368,7 +375,7 @@ function AdditiveCompositionRowImpl({
             />
           ) : c.code}
         </td>
-        <td className={`px-1 py-1 align-top break-words whitespace-normal ${G_BG.id}`}>
+        <td className={`px-1 py-1 align-top break-words whitespace-normal ${G_BG.id} ${identificationTextClass}`}>
           {isNew && !isLocked ? (
             <TextCommitCell
               value={c.bank}
@@ -379,7 +386,7 @@ function AdditiveCompositionRowImpl({
             />
           ) : c.bank}
         </td>
-        <td className={`px-1 py-1 align-top ${G_BG.id}`}>
+        <td className={`px-1 py-1 align-top ${G_BG.id} ${identificationTextClass}`}>
           {isNew && !isLocked ? (
             <TextareaCommitCell
               value={c.description}
@@ -490,21 +497,21 @@ function AdditiveCompositionRowImpl({
             </AlertDialog>
           )}
         </td>
-        <td className={`px-1 py-1 align-top text-center ${G_BG.id}`}>
+        <td className={`px-1 py-1 align-top text-center ${G_BG.id} ${identificationTextClass}`}>
           {isNew && !isLocked ? (
             <TextCommitCell
               value={c.unit}
               gridId={MAIN_GRID} rowIndex={rowIndex} colIndex={3}
               onCommit={v => onUpdateComposition(c.id, { unit: v })}
-              className="h-7 w-full text-xs"
+              className="h-7 w-full text-xs text-center"
               placeholder="Un"
             />
           ) : c.unit}
         </td>
         {/* Quantidades */}
-        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums ${G_BG.qty} ${BORDER_L}`}>
+        <td className={`px-1 py-1 align-top text-center whitespace-nowrap tabular-nums ${G_BG.qty} ${BORDER_L}`}>
           <span
-            className="block w-full text-right px-1 text-xs text-muted-foreground select-text"
+            className="block w-full text-center px-1 text-xs text-muted-foreground select-text"
             title="Quantidade contratada (somente leitura — vem do contrato original)"
           >
             {fmtQty2(c.originalQuantity ?? 0)}
@@ -512,7 +519,7 @@ function AdditiveCompositionRowImpl({
         </td>
         <td
           data-detail-cell="true"
-          className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums ${G_BG.suppressed} text-rose-700`}
+          className={`px-1 py-1 align-top text-center whitespace-nowrap tabular-nums ${G_BG.suppressed} text-rose-700`}
           onClick={isLocked ? undefined : () => openMemoryFor('suprimida')}
         >
           <QtyCell
@@ -520,14 +527,14 @@ function AdditiveCompositionRowImpl({
             disabled={isLocked || hasMemory}
             allowEmptyZero={isNew}
             onCommit={n => { onUpdateComposition(c.id, { suppressedQuantity: n }); onUpdateQuantity(c.id, 'suppressedQuantity', n); }}
-            className="h-7 w-full text-xs text-right px-1 border-rose-200 text-rose-700"
+            className="h-7 w-full text-xs text-center px-1 border-rose-200 text-rose-700"
             gridId={MAIN_GRID} rowIndex={rowIndex} colIndex={5}
             onFocusCell={isLocked ? undefined : () => openMemoryFor('suprimida')}
           />
         </td>
         <td
           data-detail-cell="true"
-          className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums ${G_BG.added} text-emerald-700`}
+          className={`px-1 py-1 align-top text-center whitespace-nowrap tabular-nums ${G_BG.added} text-emerald-700`}
           onClick={isLocked ? undefined : () => openMemoryFor('acrescida')}
         >
           <QtyCell
@@ -535,19 +542,19 @@ function AdditiveCompositionRowImpl({
             disabled={isLocked || hasMemory}
             allowEmptyZero={isNew}
             onCommit={n => { onUpdateComposition(c.id, { addedQuantity: n }); onUpdateQuantity(c.id, 'addedQuantity', n); }}
-            className="h-7 w-full text-xs text-right px-1 border-emerald-200 text-emerald-700"
+            className="h-7 w-full text-xs text-center px-1 border-emerald-200 text-emerald-700"
             gridId={MAIN_GRID} rowIndex={rowIndex} colIndex={6}
             onFocusCell={isLocked ? undefined : () => openMemoryFor('acrescida')}
           />
         </td>
-        <td className={`px-1 py-1 align-top text-right font-medium whitespace-nowrap tabular-nums ${G_BG.qty}`}>{fmtQty2(r.qtdFinal)}</td>
+        <td className={`px-1 py-1 align-top text-center font-medium whitespace-nowrap tabular-nums ${G_BG.qty}`}>{fmtQty2(r.qtdFinal)}</td>
         {/* Valores */}
-        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums ${G_BG.val} ${BORDER_L}`}>
+        <td className={`px-1 py-1 align-top text-center whitespace-nowrap tabular-nums ${G_BG.val} ${BORDER_L}`}>
           {isNew && !isLocked && c.inputs.length === 0 ? (
             <MoneyCell
               value={c.unitPriceNoBDIInformed ?? 0}
               onCommit={n => onUpdateComposition(c.id, { unitPriceNoBDIInformed: n })}
-              className="h-7 w-full text-xs text-right px-1"
+              className="h-7 w-full text-xs text-center px-1"
               title={globalDiscount > 0 ? `Informe a referência s/ BDI. Desconto licit. ${globalDiscount}% será aplicado.` : 'Valor s/ BDI'}
               gridId={MAIN_GRID} rowIndex={rowIndex} colIndex={7}
             />
@@ -557,35 +564,35 @@ function AdditiveCompositionRowImpl({
             </span>
           )}
         </td>
-        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums ${G_BG.val}`}>
+        <td className={`px-1 py-1 align-top text-center whitespace-nowrap tabular-nums ${G_BG.val}`}>
           <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('analytic')}>
             {fmtBRL(r.unitPriceWithBDI)}
           </button>
         </td>
-        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums text-muted-foreground ${G_BG.val}`}>
+        <td className={`px-1 py-1 align-top text-center whitespace-nowrap tabular-nums text-muted-foreground ${G_BG.val}`}>
           <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
             {fmtBRL(r.totalFonte)}
           </button>
         </td>
-        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums ${G_BG.val}`}>
+        <td className={`px-1 py-1 align-top text-center whitespace-nowrap tabular-nums ${G_BG.val}`}>
           <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
             {fmtBRL(isNew ? 0 : r.valorContratadoOriginalPreservado)}
           </button>
         </td>
         {/* Impacto */}
-        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums text-rose-700 font-medium ${G_BG.suppressed} ${BORDER_L}`}>
+        <td className={`px-1 py-1 align-top text-center whitespace-nowrap tabular-nums text-rose-700 font-medium ${G_BG.suppressed} ${BORDER_L}`}>
           {r.valorSuprimido > 0 ? fmtBRL(-r.valorSuprimido) : fmtBRL(0)}
         </td>
-        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums text-emerald-700 font-medium ${G_BG.added}`}>{fmtBRL(r.valorAcrescido)}</td>
-        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums font-medium ${G_BG.impact}`}>
+        <td className={`px-1 py-1 align-top text-center whitespace-nowrap tabular-nums text-emerald-700 font-medium ${G_BG.added}`}>{fmtBRL(r.valorAcrescido)}</td>
+        <td className={`px-1 py-1 align-top text-center whitespace-nowrap tabular-nums font-medium ${G_BG.impact}`}>
           <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectDetail('classification')}>
             {fmtBRL(r.valorFinal)}
           </button>
         </td>
-        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums font-medium ${r.diferenca < 0 ? 'text-rose-700' : r.diferenca > 0 ? 'text-emerald-700' : 'text-foreground'}`}>
+        <td className={`px-1 py-1 align-top text-center whitespace-nowrap tabular-nums font-medium ${r.diferenca < 0 ? 'text-rose-700' : r.diferenca > 0 ? 'text-emerald-700' : 'text-foreground'}`}>
           {fmtBRL(r.diferenca)}
         </td>
-        <td className={`px-1 py-1 align-top text-right whitespace-nowrap tabular-nums ${r.percentVar < 0 ? 'text-rose-700' : r.percentVar > 0 ? 'text-emerald-700' : 'text-foreground'}`}>
+        <td className={`px-1 py-1 align-top text-center whitespace-nowrap tabular-nums ${r.percentVar < 0 ? 'text-rose-700' : r.percentVar > 0 ? 'text-emerald-700' : 'text-foreground'}`}>
           {fmtPct(r.percentVar)}
         </td>
       </tr>

@@ -75,4 +75,36 @@ describe('AdditiveCompositionRow detail selection', () => {
     expect(screen.queryByPlaceholderText('Item')).not.toBeInTheDocument();
     expect(screen.getByText('1.1.1')).toBeInTheDocument();
   });
+
+  it('colore a identificação em azul para acréscimo e centraliza as colunas numéricas', () => {
+    renderRow({ mode: 'analytic', isOpen: false, composition: { ...composition, addedQuantity: 2 } });
+    const row = screen.getAllByText('ADM04')[0].closest('tr')!;
+    const cells = Array.from(row.querySelectorAll(':scope > td'));
+    cells.slice(1, 6).forEach(cell => expect(cell).toHaveClass('text-blue-700'));
+    cells.slice(6).forEach(cell => expect(cell).toHaveClass('text-center'));
+  });
+
+  it('colore a identificação em vermelho para supressão e deixa dado misto neutro', () => {
+    const { unmount } = render(
+      <table><tbody>
+        <AdditiveCompositionRow
+          project={project} c={{ ...composition, suppressedQuantity: 2 }} bdi={27.58} globalDiscount={0}
+          isLocked isOpen={false} isMemoryOpen={false} showAnalytic={false}
+          onToggleExpand={vi.fn()} onUpdateComposition={vi.fn()} onReorderComposition={vi.fn()}
+          onUpdateQuantity={vi.fn()} onRemoveComposition={vi.fn()} onChangeMemory={vi.fn()}
+        />
+      </tbody></table>,
+    );
+    let row = screen.getAllByText('ADM04')[0].closest('tr')!;
+    Array.from(row.querySelectorAll(':scope > td')).slice(1, 6)
+      .forEach(cell => expect(cell).toHaveClass('text-rose-700'));
+    unmount();
+
+    renderRow({ mode: 'analytic', isOpen: false, composition: { ...composition, addedQuantity: 2, suppressedQuantity: 1 } });
+    row = screen.getAllByText('ADM04')[0].closest('tr')!;
+    Array.from(row.querySelectorAll(':scope > td')).slice(1, 6).forEach(cell => {
+      expect(cell).not.toHaveClass('text-blue-700');
+      expect(cell).not.toHaveClass('text-rose-700');
+    });
+  });
 });

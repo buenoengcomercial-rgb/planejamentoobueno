@@ -195,14 +195,14 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
             <th className="text-left px-1.5 py-1 font-medium">Banco</th>
             <th className="text-left px-1.5 py-1 font-medium">Descrição</th>
             <th className="text-left px-1.5 py-1 font-medium">Un</th>
-            <th className="text-right px-1.5 py-1 font-medium">Coef.</th>
-            <th className="text-right px-1.5 py-1 font-medium">V. Unit s/ BDI</th>
+            <th className="text-center px-1.5 py-1 font-medium">Coef.</th>
+            <th className="text-center px-1.5 py-1 font-medium">V. Unit s/ BDI</th>
             {showDiscount && (
-              <th className="text-right px-1.5 py-1 font-medium text-sky-700">V. Unit c/ Desc.</th>
+              <th className="text-center px-1.5 py-1 font-medium text-sky-700">V. Unit c/ Desc.</th>
             )}
-            <th className="text-right px-1.5 py-1 font-medium">Total s/ BDI</th>
+            <th className="text-center px-1.5 py-1 font-medium">Total s/ BDI</th>
             {showDiscount && (
-              <th className="text-right px-1.5 py-1 font-medium text-sky-700">Total c/ Desc.</th>
+              <th className="text-center px-1.5 py-1 font-medium text-sky-700">Total c/ Desc.</th>
             )}
             {editable && <th className="px-1.5 py-1 text-right">Ações</th>}
           </tr>
@@ -241,32 +241,32 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
                     <TextCell value={i.unit} onCommit={v => patchInput(i.id, { unit: v })} className="h-6 w-full text-[11px] px-1" gridId={gridId} rowIndex={rowIdx} colIndex={3} />
                   ) : i.unit}
                 </td>
-                <td className="px-1.5 py-1 text-right align-middle">
+                <td className="px-1.5 py-1 text-center align-middle">
                   {editable ? (
                     <NumCell
                       value={i.coefficient}
                       onCommit={n => patchInput(i.id, { coefficient: n })}
-                      className="h-6 w-full text-[11px] text-right px-1"
+                      className="h-6 w-full text-[11px] text-center px-1"
                       gridId={gridId} rowIndex={rowIdx} colIndex={4}
                     />
                   ) : formatCoefficient(i.coefficient)}
                 </td>
-                <td className="px-1.5 py-1 text-right align-middle">
+                <td className="px-1.5 py-1 text-center align-middle">
                   {editable ? (
                     <NumCell
                       value={i.unitPrice}
                       onCommit={n => patchInput(i.id, { unitPrice: n })}
-                      className="h-6 w-full text-[11px] text-right px-1"
+                      className="h-6 w-full text-[11px] text-center px-1"
                       gridId={gridId} rowIndex={rowIdx} colIndex={5}
                     />
                   ) : fmtBRL(i.unitPrice)}
                 </td>
                 {showDiscount && (
-                  <td className="px-1.5 py-1 text-right text-sky-700 align-middle">{fmtBRL(unitDisc)}</td>
+                  <td className="px-1.5 py-1 text-center text-sky-700 align-middle">{fmtBRL(unitDisc)}</td>
                 )}
-                <td className="px-1.5 py-1 text-right align-middle">{fmtBRL(i.total)}</td>
+                <td className="px-1.5 py-1 text-center align-middle">{fmtBRL(i.total)}</td>
                 {showDiscount && (
-                  <td className="px-1.5 py-1 text-right text-sky-700 align-middle">{fmtBRL(totalDisc)}</td>
+                  <td className="px-1.5 py-1 text-center text-sky-700 align-middle">{fmtBRL(totalDisc)}</td>
                 )}
                 {editable && (
                   <td className="px-1.5 py-1 text-right whitespace-nowrap align-middle">
@@ -294,7 +294,7 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
           <tr className="border-t font-medium">
             <td colSpan={6} className="px-1.5 py-1 text-right">Soma analítica s/ BDI:</td>
             {showDiscount && <td />}
-            <td className="px-1.5 py-1 text-right">{fmtBRL(sumNoBDI)}</td>
+            <td className="px-1.5 py-1 text-center">{fmtBRL(sumNoBDI)}</td>
             {showDiscount && <td />}
             {editable && <td />}
           </tr>
@@ -302,14 +302,14 @@ function AdditiveAnalyticRowsImpl({ c, bdi, globalDiscount, isLocked, cb, onUpda
             <tr className="font-medium text-sky-700">
               <td colSpan={6} className="px-1.5 py-1 text-right">Soma c/ desconto ({globalDiscount}%):</td>
               <td />
-              <td className="px-1.5 py-1 text-right">{fmtBRL(sumNoBDIDisc)}</td>
+              <td className="px-1.5 py-1 text-center">{fmtBRL(sumNoBDIDisc)}</td>
               <td />
               {editable && <td />}
             </tr>
           )}
           <tr className="font-medium text-primary">
             <td colSpan={showDiscount ? 8 : 6} className="px-1.5 py-1 text-right">Valor analítico c/ BDI calculado (× qtd):</td>
-            <td className="px-1.5 py-1 text-right">{fmtBRL(totalAnalyticWithBDI)}</td>
+            <td className="px-1.5 py-1 text-center">{fmtBRL(totalAnalyticWithBDI)}</td>
             {editable && <td />}
           </tr>
         </tbody>

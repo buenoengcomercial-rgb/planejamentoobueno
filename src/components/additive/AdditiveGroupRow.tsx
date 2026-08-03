@@ -82,25 +82,25 @@ function AdditiveGroupRowImpl(props: Props) {
         {/* Valor Unit / Valor Unit c/ BDI */}
         <td /><td />
         {/* Total Fonte */}
-        <td className="px-1 py-1.5 text-right text-[12px]">{fmtBRL(g.subtotalTotalFonte)}</td>
+        <td className="px-1 py-1.5 text-center text-[12px]">{fmtBRL(g.subtotalTotalFonte)}</td>
         {/* Valor Contratado */}
-        <td className="px-1 py-1.5 text-right text-[12px]">{fmtBRL(g.subtotalContratado)}</td>
+        <td className="px-1 py-1.5 text-center text-[12px]">{fmtBRL(g.subtotalContratado)}</td>
         {/* Valor Suprimido */}
-        <td className="px-1 py-1.5 text-right text-[12px] bg-rose-50 text-rose-700">
+        <td className="px-1 py-1.5 text-center text-[12px] bg-rose-50 text-rose-700">
           {g.subtotalSuprimido ? fmtBRL(g.subtotalSuprimido) : ''}
         </td>
         {/* Valor Acrescido */}
-        <td className="px-1 py-1.5 text-right text-[12px] bg-emerald-50 text-emerald-700">
+        <td className="px-1 py-1.5 text-center text-[12px] bg-emerald-50 text-emerald-700">
           {g.subtotalAcrescido ? fmtBRL(g.subtotalAcrescido) : ''}
         </td>
         {/* Valor Final */}
-        <td className="px-1 py-1.5 text-right text-[12px] font-bold">{fmtBRL(g.subtotalFinal)}</td>
+        <td className="px-1 py-1.5 text-center text-[12px] font-bold">{fmtBRL(g.subtotalFinal)}</td>
         {/* Diferença */}
-        <td className={`px-1 py-1.5 text-right text-[12px] ${g.subtotalDiferenca < 0 ? 'text-rose-700' : g.subtotalDiferenca > 0 ? 'text-emerald-700' : ''}`}>
+        <td className={`px-1 py-1.5 text-center text-[12px] ${g.subtotalDiferenca < 0 ? 'text-rose-700' : g.subtotalDiferenca > 0 ? 'text-emerald-700' : ''}`}>
           {g.subtotalDiferenca ? fmtBRL(g.subtotalDiferenca) : ''}
         </td>
         {/* % Var */}
-        <td className={`px-1 py-1.5 text-right text-[12px] ${pctVar < 0 ? 'text-rose-700' : pctVar > 0 ? 'text-emerald-700' : ''}`}>
+        <td className={`px-1 py-1.5 text-center text-[12px] ${pctVar < 0 ? 'text-rose-700' : pctVar > 0 ? 'text-emerald-700' : ''}`}>
           {pctVar ? fmtPct(pctVar) : ''}
         </td>
       </tr>

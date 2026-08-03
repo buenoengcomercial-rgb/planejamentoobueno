@@ -117,4 +117,11 @@ describe('AdditiveGroupRow', () => {
     const action = screen.getByRole('button', { name: /novo serviço em 2\.9 serviços - itens novos/i });
     expect(action.parentElement).toHaveStyle({ paddingLeft: '24px' });
   });
+
+  it('centraliza os subtotais numéricos do capítulo', () => {
+    renderGroup({ ...rootGroup, subtotalTotalFonte: 10, subtotalContratado: 9, subtotalFinal: 11 });
+    const row = screen.getByText('INCÊNDIO - PALÁCIO CENTRAL').closest('tr')!;
+    const cells = Array.from(row.children).filter((cell): cell is HTMLTableCellElement => cell instanceof HTMLTableCellElement);
+    cells.slice(12).forEach(cell => expect(cell).toHaveClass('text-center'));
+  });
 });
