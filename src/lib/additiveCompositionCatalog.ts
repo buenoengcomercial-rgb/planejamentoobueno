@@ -130,6 +130,65 @@ export function cloneTemplateTechnicalPatch(
   };
 }
 
+function normalizedDescription(value?: string | null): string {
+  return (value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase();
+}
+
+/**
+ * Linha criada manualmente que recebeu apenas o código, mas ainda conserva
+ * integralmente a estrutura técnica padrão do botão "Novo serviço".
+ */
+export function isIncompleteNewService(composition: AdditiveComposition): boolean {
+  const hasReferencePrice = [
+    composition.unitPriceNoBDIInformed,
+    composition.analyticReferenceUnitPriceNoBDI,
+    composition.unitPriceNoBDI,
+  ].some(value => Number.isFinite(value) && Number(value) > 0);
+  const description = normalizedDescription(composition.description);
+  return !!composition.isNewService
+    && !!normalizeAdditiveCatalogCode(composition.code)
+    && !normalizeAdditiveCatalogBank(composition.bank)
+    && (description === '' || description === 'NOVO SERVICO')
+    && (composition.inputs ?? []).length === 0
+    && !hasReferencePrice;
+}
+
+export interface RestoreIncompleteResult {
+  compositions: AdditiveComposition[];
+  restored: Array<{ compositionId: string; code: string; sourceTemplateId: string }>;
+}
+
+/** Restaura somente linhas totalmente vazias; preenchimentos parciais permanecem intocados. */
+export function restoreIncompleteNewServices(
+  catalog: AdditiveCompositionTemplate[] = [],
+  compositions: AdditiveComposition[] = [],
+  candidates: AdditiveComposition[] = compositions,
+  makeInputId: () => string,
+): RestoreIncompleteResult {
+  const restored: RestoreIncompleteResult['restored'] = [];
+  const next = compositions.map(composition => {
+    if (!isIncompleteNewService(composition)) return composition;
+    const resolution = resolveAdditiveCompositionTemplate(
+      catalog, candidates, composition.id, composition.code, composition.bank,
+    );
+    if (!resolution.template) return composition;
+    restored.push({
+      compositionId: composition.id,
+      code: composition.code,
+      sourceTemplateId: resolution.template.id,
+    });
+    return {
+      ...composition,
+      ...cloneTemplateTechnicalPatch(resolution.template, makeInputId),
+    };
+  });
+  return { compositions: restored.length > 0 ? next : compositions, restored };
+}
+
 const itemNumberOf = (composition: AdditiveComposition) => composition.itemNumber || composition.item || '';
 
 function itemSuffix(composition: AdditiveComposition, prefix: string): number {

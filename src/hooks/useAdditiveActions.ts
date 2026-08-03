@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
   hasAdditiveUserWork,
@@ -25,6 +25,7 @@ import {
   removeNewServiceAndCompact,
   reorderNewService,
   resolveAdditiveCompositionTemplate,
+  restoreIncompleteNewServices,
   upsertAdditiveCompositionTemplate,
 } from '@/lib/additiveCompositionCatalog';
 import {
@@ -103,7 +104,15 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
       occurrences: number; affectedCompositions: Array<{ id: string; item?: string; description: string }>;
     }> = [];
 
-    updateAdditive(a => {
+    const activeIdForUpdate = active?.id;
+    if (!activeIdForUpdate) return;
+
+    onProjectChange(prev => {
+      const catalog = prev.additiveCompositionCatalog ?? [];
+      const allCandidateCompositions = (prev.additives ?? []).flatMap(additive => additive.compositions ?? []);
+      let updatedTarget: AdditiveComposition | undefined;
+      const additives = (prev.additives ?? []).map(a => {
+        if (a.id !== activeIdForUpdate) return a;
       const target = a.compositions.find(c => c.id === compId);
       if (!target) return a;
 
@@ -117,7 +126,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
         const nextCode = codeChanged ? String(patch.code ?? '') : target.code;
         const nextBank = bankChanged ? String(patch.bank ?? '') : target.bank;
         const resolution = resolveAdditiveCompositionTemplate(
-          project.additiveCompositionCatalog ?? [], a.compositions, compId, nextCode, nextBank,
+          catalog, allCandidateCompositions, compId, nextCode, nextBank,
         );
         if (resolution.template) {
             const source = resolution.template;
@@ -196,18 +205,16 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
         }
       }
 
-      return { ...a, compositions: finalCompositions };
-    });
-
-    // Catálogo técnico da obra: não armazena quantidades nem memória de cálculo.
-    onProjectChange(prev => {
-      const additive = (prev.additives ?? []).find(candidate => candidate.id === active?.id);
-      const composition = additive?.compositions.find(candidate => candidate.id === compId);
-      if (!composition?.isNewService) return prev;
+        updatedTarget = finalCompositions.find(composition => composition.id === compId);
+        return { ...a, compositions: finalCompositions };
+      });
+      if (!updatedTarget) return prev;
+      if (!updatedTarget.isNewService) return { ...prev, additives };
       return {
         ...prev,
+        additives,
         additiveCompositionCatalog: upsertAdditiveCompositionTemplate(
-          prev.additiveCompositionCatalog ?? [], composition, additive?.id,
+          catalog, updatedTarget, activeIdForUpdate,
         ),
       };
     });
@@ -236,7 +243,49 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
         });
       }
     }
-  }, [updateAdditive, active, onProjectChange, project.additiveCompositionCatalog, logAdd]);
+  }, [active, onProjectChange, logAdd]);
+
+  useEffect(() => {
+    const additiveId = active?.id;
+    if (!additiveId || isLocked) return;
+    const makeInputId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+      ? crypto.randomUUID()
+      : `inp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+
+    onProjectChange(prev => {
+      const additive = (prev.additives ?? []).find(candidate => candidate.id === additiveId);
+      if (!additive) return prev;
+      const catalog = prev.additiveCompositionCatalog ?? [];
+      const candidates = (prev.additives ?? []).flatMap(candidate => candidate.compositions ?? []);
+      const repair = restoreIncompleteNewServices(
+        catalog, additive.compositions, candidates, makeInputId,
+      );
+      if (repair.restored.length === 0) return prev;
+
+      let nextCatalog = catalog;
+      for (const restored of repair.restored) {
+        const composition = repair.compositions.find(candidate => candidate.id === restored.compositionId);
+        if (composition) nextCatalog = upsertAdditiveCompositionTemplate(nextCatalog, composition, additiveId);
+      }
+      return logToProject({
+        ...prev,
+        additiveCompositionCatalog: nextCatalog,
+        additives: (prev.additives ?? []).map(candidate => candidate.id === additiveId
+          ? { ...candidate, compositions: repair.compositions }
+          : candidate),
+      }, {
+        ...auditUser,
+        entityType: 'additive',
+        entityId: additiveId,
+        action: 'updated',
+        title: 'Composições incompletas restauradas pelo catálogo da obra',
+        metadata: {
+          restoredCount: repair.restored.length,
+          restored: repair.restored,
+        },
+      });
+    });
+  }, [active?.id, isLocked, onProjectChange, project.additiveCompositionCatalog, auditUser]);
 
   const handleReorderComposition = useCallback((compId: string, requestedItem: string) => {
     if (!active || isLocked) return;

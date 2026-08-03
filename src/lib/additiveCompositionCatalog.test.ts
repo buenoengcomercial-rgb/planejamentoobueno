@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { AdditiveComposition, Project } from '@/types/project';
 import {
   cloneTemplateTechnicalPatch,
+  isIncompleteNewService,
   normalizeAdditiveCatalogCode,
   removeNewServiceAndCompact,
   reorderNewService,
   resolveAdditiveCompositionTemplate,
+  restoreIncompleteNewServices,
   upsertAdditiveCompositionTemplate,
 } from './additiveCompositionCatalog';
 import { stripNormalizedCollections } from './projectSync';
@@ -49,6 +51,52 @@ describe('catálogo de composições aditivadas', () => {
     const catalog = upsertAdditiveCompositionTemplate([], composition('source', '3.10.1'));
     const project = { id: 'project-1', additives: [], analyticCompositions: [], additiveCompositionCatalog: catalog } as unknown as Project;
     expect(stripNormalizedCollections(project).additiveCompositionCatalog).toEqual(catalog);
+  });
+
+  it('recupera uma linha incompleta em outro subcapítulo sem restaurar quantidade ou memória', () => {
+    const source = {
+      ...composition('source', '5.10.3', 'FIXA_1'),
+      addedQuantity: 42,
+      calculationMemory: [{ id: 'm1', type: 'acrescida' as const, partial: 42 }],
+    };
+    const catalog = upsertAdditiveCompositionTemplate([], source);
+    const target: AdditiveComposition = {
+      ...composition('target', '6.9.3', 'FIXA1'),
+      phaseId: 'phase-6-9',
+      phaseChain: '6.9 SERVIÇOS - ITENS NOVOS',
+      bank: '',
+      description: 'Novo serviço',
+      unitPriceNoBDI: 0,
+      unitPriceNoBDIInformed: 0,
+      inputs: [],
+      addedQuantity: 0,
+      calculationMemory: [],
+    };
+    expect(isIncompleteNewService(target)).toBe(true);
+    const result = restoreIncompleteNewServices(catalog, [target], [target], () => 'restored-input');
+    expect(result.restored).toHaveLength(1);
+    expect(result.compositions[0]).toMatchObject({
+      itemNumber: '6.9.3', phaseId: 'phase-6-9', bank: 'ORSE',
+      description: 'Serviço source', addedQuantity: 0, calculationMemory: [],
+    });
+    expect(result.compositions[0].inputs[0].id).toBe('restored-input');
+  });
+
+  it('não sobrescreve linha parcialmente preenchida nem resolve definição ambígua', () => {
+    const first = composition('first', '5.10.3', 'PINT_02');
+    const second = { ...composition('second', '6.10.2', 'PINT02'), bank: 'SINAPI' };
+    const catalog = upsertAdditiveCompositionTemplate(upsertAdditiveCompositionTemplate([], first), second);
+    const partial = {
+      ...composition('partial', '6.9.4', 'PINT02'), bank: '', description: 'Descrição manual',
+      unitPriceNoBDI: 0, unitPriceNoBDIInformed: 0, inputs: [],
+    };
+    const blank = { ...partial, id: 'blank', description: 'Novo serviço' };
+    const priced = { ...blank, id: 'priced', unitPriceNoBDI: 5 };
+    expect(isIncompleteNewService(partial)).toBe(false);
+    expect(isIncompleteNewService(priced)).toBe(false);
+    const result = restoreIncompleteNewServices(catalog, [partial, blank], [partial, blank], () => 'new-id');
+    expect(result.restored).toHaveLength(0);
+    expect(result.compositions).toEqual([partial, blank]);
   });
 });
 
