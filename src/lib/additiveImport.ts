@@ -41,6 +41,7 @@ function asString(v: unknown): string {
 import {
   trunc2 as _trunc2,
   money2 as _money2,
+  sumMoney,
   calculateAnalyticTotalNoBDI,
   calculateAnalyticLineTotal,
   calculateUnitPriceWithBDI,
@@ -1537,9 +1538,7 @@ export function computeAdditiveRow(
 export function getOfficialContractedTotal(project: Project | null | undefined): number | null {
   const items = project?.budgetItems?.filter(b => b.source === 'sintetica') ?? [];
   if (items.length === 0) return null;
-  let acc = 0;
-  for (const it of items) acc += Number(it.totalWithBDI) || 0;
-  return _money2(acc);
+  return sumMoney(items.map(it => Number(it.totalWithBDI) || 0));
 }
 
 export function additiveTotals(add: Additive, project?: Project | null) {
@@ -1547,41 +1546,30 @@ export function additiveTotals(add: Additive, project?: Project | null) {
   const discount = add.globalDiscountPercent ?? 0;
   const pricingRule = resolveAdditivePricingRule(add);
   const compCount = add.compositions.length;
-  const totalSemBDI = add.compositions.reduce(
-    (a, c) => truncar2(a + money2(c.totalNoBDI ?? c.unitPriceNoBDI * c.quantity)),
-    0,
+  const computedWithBDI = add.compositions.map(c => computeCompositionWithBDI(c, bdi, pricingRule));
+  const totalSemBDI = sumMoney(
+    add.compositions.map(c => money2(c.totalNoBDI ?? c.unitPriceNoBDI * c.quantity)),
   );
-  const totalComBDI = add.compositions.reduce((a, c) => {
-    const { totalSyntheticWithBDI } = computeCompositionWithBDI(c, bdi, pricingRule);
-    return truncar2(a + totalSyntheticWithBDI);
-  }, 0);
+  const totalComBDI = sumMoney(computedWithBDI.map(r => r.totalSyntheticWithBDI));
   // Impacto líquido (acrescido positivo, suprimido negativo)
-  const impactoSemBDI = add.compositions.reduce((a, c) => truncar2(a + computeCompositionWithBDI(c, bdi, pricingRule).impactoSemBDI), 0);
-  const impactoComBDI = add.compositions.reduce((a, c) => truncar2(a + computeCompositionWithBDI(c, bdi, pricingRule).impactoComBDI), 0);
+  const impactoSemBDI = sumMoney(computedWithBDI.map(r => r.impactoSemBDI));
+  const impactoComBDI = sumMoney(computedWithBDI.map(r => r.impactoComBDI));
   const inputCount = add.compositions.reduce((a, c) => a + c.inputs.length, 0);
   const semAnalitico = add.compositions.filter(c => c.inputs.length === 0).length;
   const acrescidos = add.compositions.filter(c => (c.addedQuantity ?? 0) > 0).length;
   const suprimidos = add.compositions.filter(c => (c.suppressedQuantity ?? 0) > 0).length;
 
   // Bloco TOTAL GERAL (modelo Excel)
-  let totalContratadoOriginal = 0;
-  let totalSuprimido = 0;
-  let totalAcrescido = 0;
-  let totalAcrescidoExistentes = 0;
-  let totalNovosServicos = 0;
-  let valorFinal = 0;
-  for (const c of add.compositions) {
-    const r = computeAdditiveRow(c, bdi, discount, pricingRule);
-    totalContratadoOriginal = truncar2(totalContratadoOriginal + r.valorContratadoOriginalPreservado);
-    totalSuprimido = truncar2(totalSuprimido + r.valorSuprimido);
-    totalAcrescido = truncar2(totalAcrescido + r.valorAcrescido);
-    if (r.isNewService) {
-      totalNovosServicos = truncar2(totalNovosServicos + r.valorAcrescido);
-    } else {
-      totalAcrescidoExistentes = truncar2(totalAcrescidoExistentes + r.valorAcrescido);
-    }
-    valorFinal = truncar2(valorFinal + r.valorFinal);
-  }
+  const computedRows = add.compositions.map(c => computeAdditiveRow(c, bdi, discount, pricingRule));
+  let totalContratadoOriginal = sumMoney(computedRows.map(r => r.valorContratadoOriginalPreservado));
+  const totalSuprimido = sumMoney(computedRows.map(r => r.valorSuprimido));
+  const totalAcrescidoExistentes = sumMoney(
+    computedRows.filter(r => !r.isNewService).map(r => r.valorAcrescido),
+  );
+  const totalNovosServicos = sumMoney(
+    computedRows.filter(r => r.isNewService).map(r => r.valorAcrescido),
+  );
+  const totalAcrescido = sumMoney([totalAcrescidoExistentes, totalNovosServicos]);
   // Total contratado oficial: prioriza a Sintética/Medição (project.budgetItems source==='sintetica').
   // Só cai no fallback (reconstrução por linhas) se não houver Sintética importada.
   const officialContracted = getOfficialContractedTotal(project ?? null);
@@ -1589,8 +1577,8 @@ export function additiveTotals(add: Additive, project?: Project | null) {
     totalContratadoOriginal = officialContracted;
   }
   // Recalcula valorFinal a partir do total oficial: oficial - suprimido + acrescido
-  valorFinal = truncar2(totalContratadoOriginal - totalSuprimido + totalAcrescido);
-  const diferencaLiquida = truncar2(valorFinal - totalContratadoOriginal);
+  const valorFinal = sumMoney([totalContratadoOriginal, -totalSuprimido, totalAcrescido]);
+  const diferencaLiquida = sumMoney([valorFinal, -totalContratadoOriginal]);
   const percentVariacaoLiquida = totalContratadoOriginal > 0 ? diferencaLiquida / totalContratadoOriginal : 0;
   const percentSupressao = totalContratadoOriginal > 0 ? totalSuprimido / totalContratadoOriginal : 0;
   const percentAcrescimo = totalContratadoOriginal > 0 ? totalAcrescido / totalContratadoOriginal : 0;
@@ -2118,8 +2106,8 @@ export async function exportAdditiveNewServicesToExcel(
     header,
   ];
 
-  let totalAcrescido = 0;
-  let totalFinal = 0;
+  const valoresAcrescidos: number[] = [];
+  const valoresFinais: number[] = [];
 
   const numericFmt: Record<number, string> = {
     5: FMT_QTD, 6: FMT_BRL, 7: FMT_PCT, 8: FMT_BRL, 9: FMT_PCT,
@@ -2146,8 +2134,8 @@ export async function exportAdditiveNewServicesToExcel(
         r.valorAcrescido, r.valorFinal,
         obs,
       ]);
-      totalAcrescido = money2(totalAcrescido + r.valorAcrescido);
-      totalFinal = money2(totalFinal + r.valorFinal);
+      valoresAcrescidos.push(r.valorAcrescido);
+      valoresFinais.push(r.valorFinal);
     },
     onOrphanStart: () => aoa.push(['Sem capítulo (não vinculado à EAP)']),
   });
@@ -2155,7 +2143,7 @@ export async function exportAdditiveNewServicesToExcel(
   aoa.push([]);
   aoa.push([
     'TOTAL NOVAS COMPOSIÇÕES', '', '', '', '', '', '', '', '', '', '',
-    totalAcrescido, totalFinal, '',
+    sumMoney(valoresAcrescidos), sumMoney(valoresFinais), '',
   ]);
   const totalRow = aoa.length;
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { trunc2, calculateUnitPriceWithBDI, calculateLineTotal, calculateNewServiceUnitPrices, calculateAnalyticTotalNoBDI } from './financialEngine';
+import { trunc2, sumMoney, calculateUnitPriceWithBDI, calculateLineTotal, calculateNewServiceUnitPrices, calculateAnalyticTotalNoBDI } from './financialEngine';
 import {
   ADMINISTRATION_PRICING_RULE,
   LEGACY_PRICING_RULE,
@@ -17,6 +17,9 @@ describe('financialEngine truncation', () => {
   it('trunc2(16069.379) → 16069.37', () => expect(trunc2(16069.379)).toBe(16069.37));
   it('BDI 27.58 sobre 424.83 → 541.99', () => expect(calculateUnitPriceWithBDI(424.83, 27.58)).toBe(541.99));
   it('linha unit×qty trunca', () => expect(calculateLineTotal(5313.52, 6)).toBe(31881.12));
+  it('soma valores finalizados em centavos sem perder resíduos binários', () => {
+    expect(sumMoney([300_138.69, 129.47])).toBe(300_268.16);
+  });
   it('totais analíticos truncam 3,645 e 0,9675 sem arredondar', () => {
     expect(calculateLineTotal(14.58, 0.25)).toBe(3.64);
     expect(calculateLineTotal(3.87, 0.25)).toBe(0.96);
@@ -178,7 +181,7 @@ describe('Aditivo trunc2 nas operações', () => {
     expect(r.valorFinal).toBe(19203.94);
     expect(r.diferenca).toBe(0);
   });
-  it('additiveTotals soma com trunc2', () => {
+  it('additiveTotals soma linhas monetárias em centavos inteiros', () => {
     const add: Additive = {
       id: 'a', name: 't', importedAt: '', compositions: [
         comp({ id: 'a1', addedQuantity: 1 }),
@@ -189,7 +192,35 @@ describe('Aditivo trunc2 nas operações', () => {
     // não deve haver dízima — sempre 2 casas
     expect(Math.round(t.totalAcrescido * 100) / 100).toBe(t.totalAcrescido);
     expect(Math.round(t.valorFinal * 100) / 100).toBe(t.valorFinal);
-});
+  });
+
+  it('preserva PINT_04 em R$ 129,47 e não perde centavo no total acumulado', () => {
+    const anterior = comp({
+      id: 'anterior', code: 'ANTERIOR', isNewService: true,
+      quantity: 0, originalQuantity: 0, addedQuantity: 1,
+      unitPriceNoBDI: 300_138.69, analyticReferenceUnitPriceNoBDI: 300_138.69,
+      total: 0, totalWithBDI: 0,
+    });
+    const pint04 = comp({
+      id: 'pint-04', item: '2.9.16', code: 'PINT_04', isNewService: true,
+      quantity: 0, originalQuantity: 0, addedQuantity: 30.11,
+      unitPriceNoBDI: 4.30, analyticReferenceUnitPriceNoBDI: 4.30,
+      total: 0, totalWithBDI: 0,
+    });
+    const add: Additive = {
+      id: 'a', name: 't', importedAt: '', compositions: [anterior, pint04],
+      issues: [], bdiPercent: 0, globalDiscountPercent: 0, status: 'rascunho',
+    } as Additive;
+
+    const pintRow = computeAdditiveRow(pint04, 0, 0, ADMINISTRATION_PRICING_RULE);
+    const totals = additiveTotals(add);
+
+    expect(pintRow.valorAcrescido).toBe(129.47);
+    expect(totals.totalNovosServicos).toBe(300_268.16);
+    expect(totals.totalAcrescido).toBe(300_268.16);
+    expect(sumMoney([totals.totalAcrescidoExistentes, totals.totalNovosServicos]))
+      .toBe(totals.totalAcrescido);
+  });
 
   it('quantidade vinda da memória (32.99684699999995) é truncada para 32.99', () => {
     expect(trunc2(32.99684699999995)).toBe(32.99);

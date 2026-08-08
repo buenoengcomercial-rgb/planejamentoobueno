@@ -36,6 +36,23 @@ export function money2(value: number | null | undefined): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
+/**
+ * Soma valores monetários já finalizados usando centavos inteiros.
+ *
+ * Não recalcula nem arredonda as linhas: apenas impede que resíduos binários
+ * do JavaScript virem perdas de centavos durante a acumulação.
+ */
+export function sumMoney(values: Iterable<number | null | undefined>): number {
+  let cents = 0;
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    const n = Number(value);
+    if (!Number.isFinite(n)) continue;
+    cents += Math.round(n * 100);
+  }
+  return cents / 100;
+}
+
 /** Preço unitário c/ BDI: trunc2(unit × (1 + bdi/100)). */
 export function calculateUnitPriceWithBDI(unitPriceNoBDI: number, bdiPercent: number): number {
   const u = Number(unitPriceNoBDI) || 0;

@@ -17,7 +17,7 @@ import {
   totalAfterAdditive,
   money2,
 } from './additiveImport';
-import { calculateAnalyticLineTotal, trunc2 } from './financialEngine';
+import { calculateAnalyticLineTotal, sumMoney, trunc2 } from './financialEngine';
 import { resolveMemoryColumnLabels, validMemoryRows } from './calculationMemory';
 import { getChapterTree, getChapterNumbering, type ChapterNode } from './chapters';
 import { loadCompanyLogoForPdf, company } from './companyBranding';
@@ -632,12 +632,12 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
     descendants.forEach(c => {
       const lv = lineValuesByCompId.get(c.id);
       if (!lv) return;
-      sFonte = trunc2(sFonte + lv.totalFonte);
-      sContr = trunc2(sContr + lv.valorContratado);
-      sSup = trunc2(sSup + lv.valorSuprimido);
-      sAcr = trunc2(sAcr + lv.valorAcrescido);
-      sFinal = trunc2(sFinal + lv.valorFinal);
-      sDif = trunc2(sDif + lv.diferenca);
+      sFonte = sumMoney([sFonte, lv.totalFonte]);
+      sContr = sumMoney([sContr, lv.valorContratado]);
+      sSup = sumMoney([sSup, lv.valorSuprimido]);
+      sAcr = sumMoney([sAcr, lv.valorAcrescido]);
+      sFinal = sumMoney([sFinal, lv.valorFinal]);
+      sDif = sumMoney([sDif, lv.diferenca]);
     });
     const fill = COLOR.subtotal;
     const label = `${'    '.repeat(depth)}Subtotal ${number} — ${name}`;
@@ -806,8 +806,8 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
         tCell(obs, rowFill),
       ]);
       rowHeights.push(estimateRowHeight(c.description || ''));
-      totAcr = trunc2(totAcr + r.valorAcrescido);
-      totFinal = trunc2(totFinal + r.valorFinal);
+      totAcr = sumMoney([totAcr, r.valorAcrescido]);
+      totFinal = sumMoney([totFinal, r.valorFinal]);
 
       // ---- Insumos analíticos da composição (formação de preço) ----
       const inputs = c.inputs ?? [];
@@ -1263,11 +1263,11 @@ export async function exportAdditiveSyntheticCompletePdf(project: Project, add: 
         valorFinal: lineValorFinal,
         diferenca: lineDiferenca,
       });
-      exportTotalContratado = trunc2(exportTotalContratado + lineValorContratado);
-      exportTotalSuprimido = trunc2(exportTotalSuprimido + lineValorSuprimido);
-      exportTotalAcrescido = trunc2(exportTotalAcrescido + lineValorAcrescido);
-      exportTotalFinal = trunc2(exportTotalFinal + lineValorFinal);
-      exportTotalDiferenca = trunc2(exportTotalDiferenca + lineDiferenca);
+      exportTotalContratado = sumMoney([exportTotalContratado, lineValorContratado]);
+      exportTotalSuprimido = sumMoney([exportTotalSuprimido, lineValorSuprimido]);
+      exportTotalAcrescido = sumMoney([exportTotalAcrescido, lineValorAcrescido]);
+      exportTotalFinal = sumMoney([exportTotalFinal, lineValorFinal]);
+      exportTotalDiferenca = sumMoney([exportTotalDiferenca, lineDiferenca]);
 
       const rowFill: [number, number, number] | undefined = c.isNewService
         ? [239, 246, 255]
@@ -1303,10 +1303,10 @@ export async function exportAdditiveSyntheticCompletePdf(project: Project, add: 
       descendants.forEach(c => {
         const lv = lineValuesByCompId.get(c.id);
         if (!lv) return;
-        sSup = trunc2(sSup + lv.valorSuprimido);
-        sAcr = trunc2(sAcr + lv.valorAcrescido);
-        sFinal = trunc2(sFinal + lv.valorFinal);
-        sDif = trunc2(sDif + lv.diferenca);
+        sSup = sumMoney([sSup, lv.valorSuprimido]);
+        sAcr = sumMoney([sAcr, lv.valorAcrescido]);
+        sFinal = sumMoney([sFinal, lv.valorFinal]);
+        sDif = sumMoney([sDif, lv.diferenca]);
       });
       body.push([
         { content: `${'    '.repeat(ch.depth)}Subtotal ${ch.number} ${ch.name}`, colSpan: 11, styles: { fillColor: [229, 231, 235], fontStyle: 'bold' } },
@@ -1387,7 +1387,8 @@ export async function exportAdditiveNewServicesPdf(project: Project, add: Additi
         { content: fmtBRL(r.valorFinal), styles: { fillColor: fill, halign: 'right' } },
         { content: obs, styles: { fillColor: fill } },
       ]);
-      totAcr += r.valorAcrescido; totFinal += r.valorFinal;
+      totAcr = sumMoney([totAcr, r.valorAcrescido]);
+      totFinal = sumMoney([totFinal, r.valorFinal]);
 
       const inputs = c.inputs ?? [];
       if (inputs.length > 0) {
