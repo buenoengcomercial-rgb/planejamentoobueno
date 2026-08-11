@@ -1957,11 +1957,21 @@ function appendFinancialSummaryAoA(
   const entries = getAdditiveExportSummary(additiveTotals(add, project));
   aoa.push([]);
   aoa.push(['RESUMO FINANCEIRO DO ADITIVO']);
-  for (let index = 0; index < entries.length; index += 2) {
-    const pair = entries.slice(index, index + 2);
-    aoa.push(pair.flatMap(entry => [entry.label, entry.value]));
+  const blockHeader = Array<string | number>(16).fill('');
+  blockHeader[0] = 'BASE CONTRATUAL';
+  blockHeader[8] = 'RESULTADO DO ADITIVO';
+  aoa.push(blockHeader);
+  for (let index = 0; index < 3; index++) {
+    const left = entries[index];
+    const right = entries[index + 3];
+    const row = Array<string | number>(16).fill('');
+    row[0] = left.label;
+    row[5] = left.value;
+    row[8] = right.label;
+    row[12] = right.value;
+    aoa.push(row);
   }
-  return aoa.length - 4;
+  return aoa.length - 5;
 }
 
 /**
@@ -2312,26 +2322,39 @@ export async function exportAdditiveToExcel(add: Additive, project?: Project | n
   ];
   const summaryStartRow = appendFinancialSummaryAoA(synthAoA, add, project);
   const wsSynth = XLSX.utils.aoa_to_sheet(synthAoA);
-  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 1, c: 1 }), FMT_BRL);
-  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 1, c: 3 }), FMT_BRL);
-  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 2, c: 1 }), FMT_PCT);
-  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 2, c: 3 }), FMT_BRL);
-  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 3, c: 1 }), FMT_PCT);
-  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 3, c: 3 }), FMT_BRL);
+  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 2, c: 5 }), FMT_BRL);
+  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 2, c: 12 }), FMT_BRL);
+  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 3, c: 5 }), FMT_BRL);
+  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 3, c: 12 }), FMT_PCT);
+  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 4, c: 5 }), FMT_PCT);
+  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 4, c: 12 }), FMT_BRL);
   const summaryStyle = (fill: string, color = '000000') => ({
     font: { bold: true, color: { rgb: color } },
     fill: { patternType: 'solid', fgColor: { rgb: fill } },
   });
   wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow, c: 0 })].s = summaryStyle('1F2937', 'FFFFFF');
-  [1, 2, 3].forEach(row => {
-    [0, 2].forEach(col => { wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + row, c: col })].s = summaryStyle('E2E8F0'); });
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 1, c: 0 })].s = summaryStyle('1E293B', 'FFFFFF');
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 1, c: 2 })].s = summaryStyle('047857', 'FFFFFF');
+  [2, 3, 4].forEach(row => {
+    [0, 8].forEach(col => { wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + row, c: col })].s = summaryStyle('E2E8F0'); });
   });
-  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 1, c: 1 })].s = summaryStyle('F8FAFC');
-  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 1, c: 3 })].s = summaryStyle('FEE2E2', 'B91C1C');
-  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 2, c: 1 })].s = summaryStyle('F8FAFC');
-  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 2, c: 3 })].s = summaryStyle('DCFCE7', '047857');
-  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 3, c: 1 })].s = summaryStyle('F8FAFC');
-  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 3, c: 3 })].s = summaryStyle('1F2937', 'FFFFFF');
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 2, c: 5 })].s = summaryStyle('F8FAFC');
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 2, c: 12 })].s = summaryStyle('DCFCE7', '047857');
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 3, c: 5 })].s = summaryStyle('FEE2E2', 'B91C1C');
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 3, c: 12 })].s = summaryStyle('F8FAFC');
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 4, c: 5 })].s = summaryStyle('F8FAFC');
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 4, c: 12 })].s = summaryStyle('1F2937', 'FFFFFF');
+  wsSynth['!merges'] = [
+    { s: { r: summaryStartRow, c: 0 }, e: { r: summaryStartRow, c: synthHeader.length - 1 } },
+    { s: { r: summaryStartRow + 1, c: 0 }, e: { r: summaryStartRow + 1, c: 7 } },
+    { s: { r: summaryStartRow + 1, c: 8 }, e: { r: summaryStartRow + 1, c: synthHeader.length - 1 } },
+    ...[2, 3, 4].flatMap(row => [
+      { s: { r: summaryStartRow + row, c: 0 }, e: { r: summaryStartRow + row, c: 4 } },
+      { s: { r: summaryStartRow + row, c: 5 }, e: { r: summaryStartRow + row, c: 7 } },
+      { s: { r: summaryStartRow + row, c: 8 }, e: { r: summaryStartRow + row, c: 11 } },
+      { s: { r: summaryStartRow + row, c: 12 }, e: { r: summaryStartRow + row, c: synthHeader.length - 1 } },
+    ]),
+  ];
 
   const analyHeader = [
     'Item composição', 'Código composição', 'Descrição composição',
@@ -2592,8 +2615,14 @@ export async function exportAdditiveToPdf(
   const summaryEntries = getAdditiveExportSummary(additiveTotals(safeAdd, project));
   autoTable(doc, {
     startY: cursorY,
-    head: [[{ content: 'RESUMO FINANCEIRO DO ADITIVO', colSpan: 4, styles: { fillColor: [31, 41, 55], textColor: 255, fontStyle: 'bold' } }]],
-    body: Array.from({ length: 3 }, (_, index) => summaryEntries.slice(index * 2, index * 2 + 2).flatMap(entry => [
+    head: [
+      [{ content: 'RESUMO FINANCEIRO DO ADITIVO', colSpan: 4, styles: { fillColor: [31, 41, 55], textColor: 255, fontStyle: 'bold' } }],
+      [
+        { content: 'BASE CONTRATUAL', colSpan: 2, styles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: 'bold' } },
+        { content: 'RESULTADO DO ADITIVO', colSpan: 2, styles: { fillColor: [4, 120, 87], textColor: 255, fontStyle: 'bold' } },
+      ],
+    ],
+    body: Array.from({ length: 3 }, (_, index) => [summaryEntries[index], summaryEntries[index + 3]].flatMap(entry => [
       { content: entry.label, styles: { fillColor: [226, 232, 240], fontStyle: 'bold' } },
       {
         content: entry.kind === 'percent' ? `${(entry.value * 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%` : fmtBRL(entry.value),

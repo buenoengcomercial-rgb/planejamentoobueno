@@ -162,6 +162,10 @@ function appendFinancialSummaryExcel(
   project: Project, add: Additive,
 ) {
   const entries = getAdditiveExportSummary(additiveTotals(add, project));
+  const split = Math.floor(totalCols / 2);
+  const leftLabelEnd = Math.max(0, Math.floor(split * 0.55) - 1);
+  const rightLabelEnd = split + Math.max(0, Math.floor((totalCols - split) * 0.55) - 1);
+  const emptyRow = (fill = COLOR.brandBg): Row => Array.from({ length: totalCols }, () => tCell('', fill));
   rows.push(Array(totalCols).fill(''));
   rowHeights.push(8);
   const titleRow = rows.length;
@@ -172,18 +176,31 @@ function appendFinancialSummaryExcel(
   merges.push({ s: { r: titleRow, c: 0 }, e: { r: titleRow, c: totalCols - 1 } });
   rowHeights.push(22);
 
-  for (let index = 0; index < entries.length; index += 2) {
-    const cells: Row = [];
-    for (const entry of entries.slice(index, index + 2)) {
-      const style = summaryFill(entry);
-      cells.push(
-        tCell(entry.label, COLOR.ident, true, undefined, 'left'),
-        nCell(entry.value, summaryFormat(entry), style.bg, style.fg, true),
-      );
-    }
-    while (cells.length < Math.min(totalCols, 4)) cells.push(tCell(''));
-    while (cells.length < totalCols) cells.push(tCell(''));
+  const blockHeaderRow = rows.length;
+  const blockHeaders = emptyRow(COLOR.brandBg);
+  blockHeaders[0] = tCell('BASE CONTRATUAL', COLOR.headerBlack, true, COLOR.headerWhite, 'left');
+  blockHeaders[split] = tCell('RESULTADO DO ADITIVO', COLOR.acrescidoFg, true, COLOR.headerWhite, 'left');
+  rows.push(blockHeaders);
+  merges.push({ s: { r: blockHeaderRow, c: 0 }, e: { r: blockHeaderRow, c: split - 1 } });
+  merges.push({ s: { r: blockHeaderRow, c: split }, e: { r: blockHeaderRow, c: totalCols - 1 } });
+  rowHeights.push(20);
+
+  for (let rowIndex = 0; rowIndex < 3; rowIndex++) {
+    const left = entries[rowIndex];
+    const right = entries[rowIndex + 3];
+    const cells = emptyRow();
+    const leftStyle = summaryFill(left);
+    const rightStyle = summaryFill(right);
+    cells[0] = tCell(left.label, COLOR.ident, true, undefined, 'left');
+    cells[leftLabelEnd + 1] = nCell(left.value, summaryFormat(left), leftStyle.bg, leftStyle.fg, true);
+    cells[split] = tCell(right.label, COLOR.ident, true, undefined, 'left');
+    cells[rightLabelEnd + 1] = nCell(right.value, summaryFormat(right), rightStyle.bg, rightStyle.fg, true);
     rows.push(cells);
+    const row = rows.length - 1;
+    merges.push({ s: { r: row, c: 0 }, e: { r: row, c: leftLabelEnd } });
+    merges.push({ s: { r: row, c: leftLabelEnd + 1 }, e: { r: row, c: split - 1 } });
+    merges.push({ s: { r: row, c: split }, e: { r: row, c: rightLabelEnd } });
+    merges.push({ s: { r: row, c: rightLabelEnd + 1 }, e: { r: row, c: totalCols - 1 } });
     rowHeights.push(21);
   }
 }
@@ -758,7 +775,7 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
   const subHeaderRowIdx = hdr.rows.length + 1;
   const firstDataRowIdx = subHeaderRowIdx + 1;
   (ws as any)['!views'] = [{ state: 'frozen', ySplit: firstDataRowIdx }];
-  const lastRowIdx = rows.length - 1;
+  const lastRowIdx = totalRowIdx;
   ws['!autofilter'] = {
     ref: `${XLSX.utils.encode_cell({ r: subHeaderRowIdx, c: 0 })}:${XLSX.utils.encode_cell({ r: lastRowIdx, c: totalCols - 1 })}`,
   };
@@ -947,7 +964,7 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
   const subHeaderRowIdx = hdr.rows.length + 1;
   const firstDataRowIdx = subHeaderRowIdx + 1;
   (ws as any)['!views'] = [{ state: 'frozen', ySplit: firstDataRowIdx }];
-  const lastRowIdx = rows.length - 1;
+  const lastRowIdx = totalRowIdx;
   ws['!autofilter'] = {
     ref: `${XLSX.utils.encode_cell({ r: subHeaderRowIdx, c: 0 })}:${XLSX.utils.encode_cell({ r: lastRowIdx, c: totalCols - 1 })}`,
   };
@@ -1253,8 +1270,7 @@ function drawFinancialSummaryPdf(
     cursorY = margin;
   }
   const entries = getAdditiveExportSummary(additiveTotals(add, project));
-  const body = Array.from({ length: 3 }, (_, rowIndex) => entries
-    .slice(rowIndex * 2, rowIndex * 2 + 2)
+  const body = Array.from({ length: 3 }, (_, rowIndex) => [entries[rowIndex], entries[rowIndex + 3]]
     .flatMap(entry => {
       const style = summaryFill(entry);
       return [
@@ -1267,7 +1283,13 @@ function drawFinancialSummaryPdf(
     }));
   autoTable(doc, {
     startY: cursorY,
-    head: [[{ content: 'RESUMO FINANCEIRO DO ADITIVO', colSpan: 4, styles: { fillColor: [31, 41, 55], textColor: 255, fontStyle: 'bold' } }]],
+    head: [
+      [{ content: 'RESUMO FINANCEIRO DO ADITIVO', colSpan: 4, styles: { fillColor: [31, 41, 55], textColor: 255, fontStyle: 'bold' } }],
+      [
+        { content: 'BASE CONTRATUAL', colSpan: 2, styles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: 'bold' } },
+        { content: 'RESULTADO DO ADITIVO', colSpan: 2, styles: { fillColor: [4, 120, 87], textColor: 255, fontStyle: 'bold' } },
+      ],
+    ],
     body,
     margin: { left: margin, right: margin },
     styles: { fontSize: 8, cellPadding: 1.4, lineColor: [203, 213, 225], lineWidth: 0.1 },
