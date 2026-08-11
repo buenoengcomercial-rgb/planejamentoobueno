@@ -14,6 +14,7 @@ import { getChapterTree, getChapterNumbering, type ChapterNode } from '@/lib/cha
 import { resolveMemoryColumnLabels, validMemoryRows } from '@/lib/calculationMemory';
 import { applyAdditiveProductivityToTask } from '@/lib/additiveProductivity';
 import { resolveAnalyticComposition } from '@/lib/analyticLinks';
+import { getAdditiveExportSummary } from './additiveExportSummary';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
@@ -1948,6 +1949,21 @@ function applyColumnFormats(
   }
 }
 
+function appendFinancialSummaryAoA(
+  aoa: (string | number)[][],
+  add: Additive,
+  project: Project | null | undefined,
+): number {
+  const entries = getAdditiveExportSummary(additiveTotals(add, project));
+  aoa.push([]);
+  aoa.push(['RESUMO FINANCEIRO DO ADITIVO']);
+  for (let index = 0; index < entries.length; index += 2) {
+    const pair = entries.slice(index, index + 2);
+    aoa.push(pair.flatMap(entry => [entry.label, entry.value]));
+  }
+  return aoa.length - 4;
+}
+
 /**
  * Caminha pelas composições de um aditivo seguindo a ordem da EAP
  * (Capítulo > Subcapítulo > Composição), igual à visualização da aba Aditivo.
@@ -2263,7 +2279,7 @@ export async function exportAdditiveCalculationMemoryToExcel(
   XLSX.writeFile(wb, `aditivo_memoria_calculo_${safeFileName(add.name)}.xlsx`);
 }
 
-export async function exportAdditiveToExcel(add: Additive) {
+export async function exportAdditiveToExcel(add: Additive, project?: Project | null) {
   const XLSX = await import('xlsx');
   const bdi = add.bdiPercent ?? 0;
   const pricingRule = resolveAdditivePricingRule(add);
@@ -2287,13 +2303,35 @@ export async function exportAdditiveToExcel(add: Additive) {
       r.sumAnalyticNoBDI, r.totalAnalyticWithBDI, r.diff,
     ];
   });
-  const wsSynth = XLSX.utils.aoa_to_sheet([
+  const synthAoA: (string | number)[][] = [
     [`Aditivo: ${add.name}`],
     [`BDI: ${bdi.toFixed(2)}%   |   Status: ${add.status ?? 'rascunho'}`],
     [],
     synthHeader,
     ...synthRows,
-  ]);
+  ];
+  const summaryStartRow = appendFinancialSummaryAoA(synthAoA, add, project);
+  const wsSynth = XLSX.utils.aoa_to_sheet(synthAoA);
+  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 1, c: 1 }), FMT_BRL);
+  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 1, c: 3 }), FMT_BRL);
+  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 2, c: 1 }), FMT_PCT);
+  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 2, c: 3 }), FMT_BRL);
+  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 3, c: 1 }), FMT_PCT);
+  applyNumberFormat(wsSynth, XLSX.utils.encode_cell({ r: summaryStartRow + 3, c: 3 }), FMT_BRL);
+  const summaryStyle = (fill: string, color = '000000') => ({
+    font: { bold: true, color: { rgb: color } },
+    fill: { patternType: 'solid', fgColor: { rgb: fill } },
+  });
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow, c: 0 })].s = summaryStyle('1F2937', 'FFFFFF');
+  [1, 2, 3].forEach(row => {
+    [0, 2].forEach(col => { wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + row, c: col })].s = summaryStyle('E2E8F0'); });
+  });
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 1, c: 1 })].s = summaryStyle('F8FAFC');
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 1, c: 3 })].s = summaryStyle('FEE2E2', 'B91C1C');
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 2, c: 1 })].s = summaryStyle('F8FAFC');
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 2, c: 3 })].s = summaryStyle('DCFCE7', '047857');
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 3, c: 1 })].s = summaryStyle('F8FAFC');
+  wsSynth[XLSX.utils.encode_cell({ r: summaryStartRow + 3, c: 3 })].s = summaryStyle('1F2937', 'FFFFFF');
 
   const analyHeader = [
     'Item composição', 'Código composição', 'Descrição composição',
@@ -2546,6 +2584,30 @@ export async function exportAdditiveToPdf(
       cursorY = margin;
     }
   }
+
+  if (cursorY > doc.internal.pageSize.getHeight() - 42) {
+    doc.addPage();
+    cursorY = margin;
+  }
+  const summaryEntries = getAdditiveExportSummary(additiveTotals(safeAdd, project));
+  autoTable(doc, {
+    startY: cursorY,
+    head: [[{ content: 'RESUMO FINANCEIRO DO ADITIVO', colSpan: 4, styles: { fillColor: [31, 41, 55], textColor: 255, fontStyle: 'bold' } }]],
+    body: Array.from({ length: 3 }, (_, index) => summaryEntries.slice(index * 2, index * 2 + 2).flatMap(entry => [
+      { content: entry.label, styles: { fillColor: [226, 232, 240], fontStyle: 'bold' } },
+      {
+        content: entry.kind === 'percent' ? `${(entry.value * 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%` : fmtBRL(entry.value),
+        styles: {
+          fillColor: entry.kind === 'suppressed' ? [254, 226, 226] : entry.kind === 'added' ? [220, 252, 231] : entry.kind === 'final' ? [31, 41, 55] : [248, 250, 252],
+          textColor: entry.kind === 'suppressed' ? [185, 28, 28] : entry.kind === 'added' ? [4, 120, 87] : entry.kind === 'final' ? 255 : 20,
+          fontStyle: 'bold', halign: 'right',
+        },
+      },
+    ])),
+    margin: { left: margin, right: margin },
+    styles: { fontSize: 8, cellPadding: 1.4, lineColor: [203, 213, 225], lineWidth: 0.1 },
+    columnStyles: { 0: { cellWidth: 45 }, 1: { cellWidth: 45 }, 2: { cellWidth: 45 }, 3: { cellWidth: 45 } },
+  });
 
   const pageCount = (doc as any).internal.getNumberOfPages();
   for (let p = 1; p <= pageCount; p++) {

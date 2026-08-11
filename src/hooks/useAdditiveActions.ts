@@ -529,7 +529,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
   const handleExportExcel = async () => {
     if (!active) return;
     try {
-      await exportAdditiveToExcel(active);
+      await exportAdditiveToExcel(active, project);
       toast.success('Excel gerado');
       logAdd(active.id, { action: 'exported', title: 'Aditivo exportado em Excel' });
     } catch { toast.error('Falha ao gerar Excel'); }

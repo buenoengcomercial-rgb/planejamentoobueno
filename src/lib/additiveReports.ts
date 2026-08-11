@@ -16,8 +16,10 @@ import {
   resolveAdditivePricingRule,
   totalAfterAdditive,
   money2,
+  additiveTotals,
 } from './additiveImport';
 import { calculateAnalyticLineTotal, sumMoney, trunc2 } from './financialEngine';
+import { getAdditiveExportSummary, type AdditiveExportSummaryEntry } from './additiveExportSummary';
 import { resolveMemoryColumnLabels, validMemoryRows } from './calculationMemory';
 import { getChapterTree, getChapterNumbering, type ChapterNode } from './chapters';
 import { loadCompanyLogoForPdf, company } from './companyBranding';
@@ -141,6 +143,48 @@ function statusLabel(s?: string): string {
     case 'aprovado': return 'Aprovado';
     case 'aditivo_contratado': return 'Aditivo Contratado';
     default: return String(s ?? '-');
+  }
+}
+
+function summaryFill(entry: AdditiveExportSummaryEntry): { bg: string; fg?: string } {
+  if (entry.kind === 'suppressed') return { bg: COLOR.suprimidoBg, fg: COLOR.suprimidoFg };
+  if (entry.kind === 'added') return { bg: COLOR.acrescidoBg, fg: COLOR.acrescidoFg };
+  if (entry.kind === 'final') return { bg: COLOR.totalGeralBg, fg: COLOR.totalGeralFg };
+  return { bg: COLOR.brandBg };
+}
+
+function summaryFormat(entry: AdditiveExportSummaryEntry): string {
+  return entry.kind === 'percent' ? FMT_PCT : FMT_BRL;
+}
+
+function appendFinancialSummaryExcel(
+  rows: Row[], merges: unknown[], rowHeights: number[], totalCols: number,
+  project: Project, add: Additive,
+) {
+  const entries = getAdditiveExportSummary(additiveTotals(add, project));
+  rows.push(Array(totalCols).fill(''));
+  rowHeights.push(8);
+  const titleRow = rows.length;
+  rows.push([
+    tCell('RESUMO FINANCEIRO DO ADITIVO', COLOR.totalGeralBg, true, COLOR.totalGeralFg, 'left'),
+    ...Array(totalCols - 1).fill({ v: '', s: { fill: { patternType: 'solid', fgColor: { rgb: COLOR.totalGeralBg } } } }),
+  ]);
+  merges.push({ s: { r: titleRow, c: 0 }, e: { r: titleRow, c: totalCols - 1 } });
+  rowHeights.push(22);
+
+  for (let index = 0; index < entries.length; index += 2) {
+    const cells: Row = [];
+    for (const entry of entries.slice(index, index + 2)) {
+      const style = summaryFill(entry);
+      cells.push(
+        tCell(entry.label, COLOR.ident, true, undefined, 'left'),
+        nCell(entry.value, summaryFormat(entry), style.bg, style.fg, true),
+      );
+    }
+    while (cells.length < Math.min(totalCols, 4)) cells.push(tCell(''));
+    while (cells.length < totalCols) cells.push(tCell(''));
+    rows.push(cells);
+    rowHeights.push(21);
   }
 }
 
@@ -690,6 +734,8 @@ export async function exportAdditiveSyntheticCompletePro(project: Project, add: 
   merges.push({ s: { r: totalRowIdx, c: 0 }, e: { r: totalRowIdx, c: 10 } });
   rowHeights.push(24);
 
+  appendFinancialSummaryExcel(rows, merges, rowHeights, totalCols, project, add);
+
   const ws = XLSX.utils.aoa_to_sheet(rows.map(r => r.map(c => (c && typeof c === 'object') ? (c as any).v : c)));
   for (let r = 0; r < rows.length; r++) {
     for (let c = 0; c < rows[r].length; c++) {
@@ -881,6 +927,8 @@ export async function exportAdditiveNewServicesPro(project: Project, add: Additi
   ]);
   merges.push({ s: { r: totalRowIdx, c: 0 }, e: { r: totalRowIdx, c: 10 } });
   rowHeights.push(24);
+
+  appendFinancialSummaryExcel(rows, merges, rowHeights, totalCols, project, add);
 
   const ws = XLSX.utils.aoa_to_sheet(rows.map(r => r.map(c => (c && typeof c === 'object') ? (c as any).v : c)));
   for (let r = 0; r < rows.length; r++) for (let c = 0; c < rows[r].length; c++) {
@@ -1095,6 +1143,8 @@ export async function exportAdditiveCalculationMemoryPro(project: Project, add: 
   merges.push({ s: { r: rDL, c: 0 }, e: { r: rDL, c: 7 } });
   rowHeights.push(22);
 
+  appendFinancialSummaryExcel(rows, merges, rowHeights, totalCols, project, add);
+
   const ws = XLSX.utils.aoa_to_sheet(rows.map(r => r.map(c => (c && typeof c === 'object') ? (c as any).v : c)));
   for (let r = 0; r < rows.length; r++) for (let c = 0; c < rows[r].length; c++) {
     const cell = rows[r][c];
@@ -1188,6 +1238,44 @@ async function drawPdfFormalHeader(
   });
   return ((doc as any).lastAutoTable?.finalY ?? cursorY) + 3;
 }
+
+function hexToRgb(hex: string): [number, number, number] {
+  const normalized = hex.replace('#', '');
+  return [0, 2, 4].map(offset => Number.parseInt(normalized.slice(offset, offset + 2), 16)) as [number, number, number];
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function drawFinancialSummaryPdf(
+  doc: any, autoTable: any, cursorY: number, project: Project, add: Additive, margin: number,
+): number {
+  if (cursorY > doc.internal.pageSize.getHeight() - 42) {
+    doc.addPage();
+    cursorY = margin;
+  }
+  const entries = getAdditiveExportSummary(additiveTotals(add, project));
+  const body = Array.from({ length: 3 }, (_, rowIndex) => entries
+    .slice(rowIndex * 2, rowIndex * 2 + 2)
+    .flatMap(entry => {
+      const style = summaryFill(entry);
+      return [
+        { content: entry.label, styles: { fillColor: [226, 232, 240], fontStyle: 'bold' } },
+        {
+          content: entry.kind === 'percent' ? fmtPctBR(entry.value) : fmtBRL(entry.value),
+          styles: { fillColor: hexToRgb(style.bg), textColor: style.fg ? hexToRgb(style.fg) : [15, 23, 42], fontStyle: 'bold', halign: 'right' },
+        },
+      ];
+    }));
+  autoTable(doc, {
+    startY: cursorY,
+    head: [[{ content: 'RESUMO FINANCEIRO DO ADITIVO', colSpan: 4, styles: { fillColor: [31, 41, 55], textColor: 255, fontStyle: 'bold' } }]],
+    body,
+    margin: { left: margin, right: margin },
+    styles: { fontSize: 8, cellPadding: 1.4, lineColor: [203, 213, 225], lineWidth: 0.1 },
+    columnStyles: { 0: { cellWidth: 45 }, 1: { cellWidth: 45 }, 2: { cellWidth: 45 }, 3: { cellWidth: 45 } },
+  });
+  return (doc as any).lastAutoTable.finalY + 3;
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 function pdfFooter(doc: any) {
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -1340,6 +1428,8 @@ export async function exportAdditiveSyntheticCompletePdf(project: Project, add: 
     didDrawPage: () => {/* footer added later */},
   });
 
+  drawFinancialSummaryPdf(doc, autoTable, (doc as any).lastAutoTable.finalY + 3, project, add, margin);
+
   pdfFooter(doc);
   downloadPdfBlob(doc, `aditivo_sintetica_completa_${safeFile(add.name)}.pdf`);
 }
@@ -1437,6 +1527,8 @@ export async function exportAdditiveNewServicesPdf(project: Project, add: Additi
     headStyles: { fillColor: [30, 41, 59], textColor: 255, fontSize: 7, halign: 'center' },
     columnStyles: { 3: { cellWidth: 'auto' } },
   });
+
+  drawFinancialSummaryPdf(doc, autoTable, (doc as any).lastAutoTable.finalY + 3, project, add, margin);
 
   pdfFooter(doc);
   downloadPdfBlob(doc, `aditivo_novas_composicoes_${safeFile(add.name)}.pdf`);
@@ -1549,6 +1641,8 @@ export async function exportAdditiveCalculationMemoryPdf(project: Project, add: 
     styles: { fontSize: 9, cellPadding: 2 },
     columnStyles: { 0: { cellWidth: 80 }, 1: { cellWidth: 60 } },
   });
+
+  drawFinancialSummaryPdf(doc, autoTable, (doc as any).lastAutoTable.finalY + 3, project, add, margin);
 
   pdfFooter(doc);
   downloadPdfBlob(doc, `aditivo_memoria_calculo_${safeFile(add.name)}.pdf`);
