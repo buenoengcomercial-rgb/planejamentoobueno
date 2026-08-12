@@ -8,15 +8,10 @@ import { fmtBRL, fmtPct } from './types';
 interface Totals {
   totalContratadoOriginal: number;
   totalSuprimido: number;
-  totalAcrescidoExistentes: number;
-  totalNovosServicos: number;
   totalAcrescido: number;
   valorFinal: number;
-  diferencaLiquida: number;
-  percentVariacaoLiquida: number;
   percentSupressao: number;
   percentAcrescimo: number;
-  percentImpactoLiquido: number;
   limitStatus: 'ok' | 'warn' | 'error' | string;
   limitPercent: number;
 }
@@ -33,7 +28,7 @@ export default function AdditiveTotalsBlock({ active, totals, isLocked, onChange
     <Card className="p-4 space-y-4">
       <div>
         <h3 className="text-sm font-bold mb-2 text-primary">TOTAL GERAL</h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
           <div>
             <div className="text-[11px] text-muted-foreground">Total contratado original</div>
             <div className="font-semibold">{fmtBRL(totals.totalContratadoOriginal)}</div>
@@ -43,54 +38,18 @@ export default function AdditiveTotalsBlock({ active, totals, isLocked, onChange
             <div className="font-semibold text-rose-700">
               {totals.totalSuprimido > 0 ? fmtBRL(-totals.totalSuprimido) : fmtBRL(0)}
             </div>
-          </div>
-          <div>
-            <div className="text-[11px] text-muted-foreground">Total acrescido (existentes)</div>
-            <div className="font-semibold text-emerald-700">{fmtBRL(totals.totalAcrescidoExistentes)}</div>
-          </div>
-          <div>
-            <div className="text-[11px] text-muted-foreground">Total novos serviços</div>
-            <div className="font-semibold text-sky-700">{fmtBRL(totals.totalNovosServicos)}</div>
+            <div className="mt-3 text-[11px] text-muted-foreground">% Supressão</div>
+            <div className="font-semibold text-rose-700">{fmtPct(totals.percentSupressao)}</div>
           </div>
           <div>
             <div className="text-[11px] text-muted-foreground">Total acrescido (geral)</div>
             <div className="font-semibold text-emerald-700">{fmtBRL(totals.totalAcrescido)}</div>
+            <div className="mt-3 text-[11px] text-muted-foreground">% Acréscimo</div>
+            <div className="font-semibold text-emerald-700">{fmtPct(totals.percentAcrescimo)}</div>
           </div>
           <div>
             <div className="text-[11px] text-muted-foreground">Valor final</div>
             <div className="font-semibold">{fmtBRL(totals.valorFinal)}</div>
-          </div>
-          <div>
-            <div className="text-[11px] text-muted-foreground">Diferença líquida</div>
-            <div className={`font-semibold ${totals.diferencaLiquida < 0 ? 'text-rose-700' : totals.diferencaLiquida > 0 ? 'text-emerald-700' : ''}`}>
-              {fmtBRL(totals.diferencaLiquida)}
-            </div>
-          </div>
-          <div>
-            <div className="text-[11px] text-muted-foreground">% variação líquida</div>
-            <div className={`font-semibold ${totals.percentVariacaoLiquida < 0 ? 'text-rose-700' : totals.percentVariacaoLiquida > 0 ? 'text-emerald-700' : ''}`}>
-              {fmtPct(totals.percentVariacaoLiquida)}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="border-t pt-3">
-        <h3 className="text-sm font-bold mb-2">PERCENTUAIS SOBRE O VALOR CONTRATADO</h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
-          <div>
-            <div className="text-[11px] text-muted-foreground">% Supressão</div>
-            <div className="font-semibold text-rose-700">{fmtPct(totals.percentSupressao)}</div>
-          </div>
-          <div>
-            <div className="text-[11px] text-muted-foreground">% Acréscimo</div>
-            <div className="font-semibold text-emerald-700">{fmtPct(totals.percentAcrescimo)}</div>
-          </div>
-          <div>
-            <div className="text-[11px] text-muted-foreground">% Impacto líquido</div>
-            <div className={`font-semibold ${totals.percentImpactoLiquido < 0 ? 'text-rose-700' : totals.percentImpactoLiquido > 0 ? 'text-emerald-700' : ''}`}>
-              {fmtPct(totals.percentImpactoLiquido)}
-            </div>
           </div>
         </div>
       </div>
@@ -128,11 +87,6 @@ export default function AdditiveTotalsBlock({ active, totals, isLocked, onChange
                 <><AlertTriangle className="w-3 h-3 mr-1" /> Revisar Limite</>
               )}
             </Badge>
-          </div>
-          <div className="text-[11px] text-muted-foreground">
-            Impacto líquido atual: <span className="font-semibold">{fmtPct(totals.percentImpactoLiquido)}</span>
-            {' · '}
-            Limite: <span className="font-semibold">{fmtPct(totals.limitPercent)}</span>
           </div>
         </div>
       </div>
