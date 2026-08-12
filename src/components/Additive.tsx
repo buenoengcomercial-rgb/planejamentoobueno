@@ -12,7 +12,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import type { Project } from '@/types/project';
-import { additiveTotals, resolveAdditivePricingRule } from '@/lib/additiveImport';
+import { resolveAdditivePricingRule } from '@/lib/additiveImport';
 import AuditHistoryPanel from '@/components/AuditHistoryPanel';
 
 import { useAdditiveState } from '@/hooks/useAdditiveState';
@@ -22,7 +22,6 @@ import { useAdditiveGroups } from '@/hooks/useAdditiveGroups';
 import AdditiveHeader from '@/components/additive/AdditiveHeader';
 import AdditiveTabs from '@/components/additive/AdditiveTabs';
 import AdditiveApprovalBanner from '@/components/additive/AdditiveApprovalBanner';
-import AdditiveSummaryCards from '@/components/additive/AdditiveSummaryCards';
 import AdditiveFilters from '@/components/additive/AdditiveFilters';
 import AdditiveTable from '@/components/additive/AdditiveTable';
 import AdditiveTotalsBlock from '@/components/additive/AdditiveTotalsBlock';
@@ -61,7 +60,6 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
     toggleExpand, toggleCollapsed, collapseAllGroups, expandAllGroups,
   } = state;
 
-  const totals = useMemo(() => (active ? additiveTotals(active, project) : null), [active, project]);
   const pricingRule = useMemo(() => (active ? resolveAdditivePricingRule(active) : undefined), [active]);
   const analyticImportPhaseIds = useMemo(() => project.phases
     .filter(phase => phase.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().includes('SERVICOS - ITENS NOVOS'))
@@ -153,7 +151,7 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
         </Card>
       )}
 
-      {active && totals && (
+      {active && (
         <>
           <AdditiveApprovalBanner
             status={status}
@@ -175,8 +173,6 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
             onChangeGlobalDiscount={actions.handleChangeGlobalDiscount}
             onUpdateAdditive={actions.updateAdditive}
           />
-
-          <AdditiveSummaryCards totals={totals} />
 
           <AdditiveFilters
             search={search}
