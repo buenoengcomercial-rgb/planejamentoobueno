@@ -12,7 +12,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import type { Project } from '@/types/project';
-import { resolveAdditivePricingRule } from '@/lib/additiveImport';
+import { additiveTotals, resolveAdditivePricingRule } from '@/lib/additiveImport';
 import AuditHistoryPanel from '@/components/AuditHistoryPanel';
 
 import { useAdditiveState } from '@/hooks/useAdditiveState';
