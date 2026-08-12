@@ -12,7 +12,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import type { Project } from '@/types/project';
-import { resolveAdditivePricingRule } from '@/lib/additiveImport';
+import { additiveTotals, resolveAdditivePricingRule } from '@/lib/additiveImport';
 import AuditHistoryPanel from '@/components/AuditHistoryPanel';
 
 import { useAdditiveState } from '@/hooks/useAdditiveState';
@@ -61,6 +61,7 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
   } = state;
 
   const pricingRule = useMemo(() => (active ? resolveAdditivePricingRule(active) : undefined), [active]);
+  const totals = useMemo(() => (active ? additiveTotals(active, project) : null), [active, project]);
   const analyticImportPhaseIds = useMemo(() => project.phases
     .filter(phase => phase.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().includes('SERVICOS - ITENS NOVOS'))
     .map(phase => phase.id), [project.phases]);
