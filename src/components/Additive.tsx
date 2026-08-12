@@ -61,6 +61,7 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
   } = state;
 
   const pricingRule = useMemo(() => (active ? resolveAdditivePricingRule(active) : undefined), [active]);
+  const totals = useMemo(() => (active ? additiveTotals(active, project) : null), [active, project]);
   const analyticImportPhaseIds = useMemo(() => project.phases
     .filter(phase => phase.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().includes('SERVICOS - ITENS NOVOS'))
     .map(phase => phase.id), [project.phases]);
