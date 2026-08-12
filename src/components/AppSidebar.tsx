@@ -282,7 +282,7 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
   };
 
   return (
-    <aside className={`${collapsed ? 'w-16' : 'w-64'} min-h-screen flex flex-col bg-[hsl(var(--sidebar-bg))] text-[hsl(var(--sidebar-fg))] transition-all duration-300`}>
+    <aside className={`${collapsed ? 'w-16' : 'w-64'} h-svh min-h-0 flex flex-col bg-[hsl(var(--sidebar-bg))] text-[hsl(var(--sidebar-fg))] transition-all duration-300`}>
       <input
         ref={importInputRef}
         type="file"
