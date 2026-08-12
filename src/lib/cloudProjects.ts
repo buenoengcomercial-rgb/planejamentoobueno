@@ -111,7 +111,9 @@ export async function upsertCloudProject(project: Project, organizationId: strin
   const isNewProject = !existing;
   if (isNewProject && project.contractSchemaVersion === 2) {
     const contractPayload = buildContractImportPayload(project);
-    const { data, error } = await supabase.rpc('create_contract_project_v2', {
+    const { data, error } = await (supabase.rpc as unknown as (
+      fn: string, args: Record<string, unknown>,
+    ) => Promise<{ data: unknown; error: { code?: string; message: string } | null }>)('create_contract_project_v2', {
       p_project_id: slim.id,
       p_organization_id: organizationId,
       p_name: slim.name,
@@ -123,7 +125,7 @@ export async function upsertCloudProject(project: Project, organizationId: strin
     });
     if (!error) {
       setCloudSnapshot(project.id, project);
-      return data;
+      return String(data ?? '');
     }
     const missingRpc = error.code === 'PGRST202'
       || /create_contract_project_v2|schema cache|could not find the function/i.test(error.message);
