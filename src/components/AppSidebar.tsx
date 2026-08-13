@@ -1,5 +1,5 @@
 import { AppView } from '@/types/project';
-import { LayoutDashboard, GanttChart, ListTodo, ClipboardList, ClipboardCheck, HardHat, Sparkles, ChevronsLeft, ChevronsRight, FolderOpen, Plus, ChevronDown, ChevronRight, Pencil, Copy, Trash2, Check, X, MoreHorizontal, Download, Upload, FileDown, Building2, Users, NotebookPen, FilePlus2, CircleDollarSign, Package, Warehouse } from 'lucide-react';
+import { LayoutDashboard, GanttChart, ListTodo, ClipboardList, ClipboardCheck, HardHat, Sparkles, ChevronsLeft, ChevronsRight, FolderOpen, Plus, ChevronDown, ChevronRight, Pencil, Copy, Trash2, Check, X, MoreHorizontal, Download, Upload, FileDown, Building2, Users, NotebookPen, FilePlus2, CircleDollarSign, Package, Warehouse, CalendarClock } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
@@ -109,6 +109,7 @@ const navItems: { view: AppView; label: string; icon: React.ElementType; tone?: 
   { view: 'measurement', label: 'Medição', icon: ClipboardList },
   { view: 'dailyReport', label: 'Diário de Obra', icon: NotebookPen },
   { view: 'additive', label: 'Aditivo', icon: FilePlus2 },
+  { view: 'additiveSchedule', label: 'Cronograma do Aditivo', icon: CalendarClock, tone: 'rose' },
   { view: 'realCost', label: 'Custo real de obra', icon: CircleDollarSign },
   { view: 'materials', label: 'Lista de Material', icon: Package },
   { view: 'warehouse', label: 'Almoxarifado', icon: Warehouse },
@@ -125,6 +126,7 @@ const navToneByView: Partial<Record<AppView, NavTone>> = {
   tasks: 'violet',
   measurement: 'amber',
   additive: 'rose',
+  additiveSchedule: 'rose',
   realCost: 'emerald',
   materials: 'cyan',
   warehouse: 'blue',
@@ -134,6 +136,7 @@ const navLabelByView: Partial<Record<AppView, string>> = {
   management: 'Rotina',
   tasks: 'Producao',
   measurement: 'Medicao',
+  additiveSchedule: 'Cronog. Aditivo',
   realCost: 'Custos',
   materials: 'Material',
   warehouse: 'Almoxarifado',

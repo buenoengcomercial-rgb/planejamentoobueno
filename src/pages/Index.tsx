@@ -22,6 +22,7 @@ const GanttChart = lazyWithReload(() => import('@/components/GanttChart'));
 const Measurement = lazyWithReload(() => import('@/components/Measurement'));
 const DailyProductionWorkspace = lazyWithReload(() => import('@/components/DailyProductionWorkspace'));
 const Additive = lazyWithReload(() => import('@/components/Additive'));
+const AdditiveSchedule = lazyWithReload(() => import('@/components/AdditiveSchedule'));
 const RealCost = lazyWithReload(() => import('@/components/RealCost'));
 const Materials = lazyWithReload(() => import('@/components/Materials'));
 const WarehouseView = lazyWithReload(() => import('@/components/warehouse/Warehouse'));
@@ -49,7 +50,7 @@ const SAVE_DEBOUNCE_MS = 4000;
 const UNSAVED_DRAFT_VERSION = 1;
 const UI_SESSION_VERSION = 1;
 const APP_UI_SESSION_KEY = 'obraplanner:ui-session';
-const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'realCost', 'materials', 'warehouse'];
+const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse'];
 
 type UndoStacks = Record<AppView, Project[]>;
 
@@ -205,7 +206,7 @@ export default function Index() {
     setSidebarOpen(false);
   }, []);
 
-  const undoStacksRef = useRef<UndoStacks>({ dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], realCost: [], materials: [], warehouse: [] });
+  const undoStacksRef = useRef<UndoStacks>({ dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] });
   const [undoVersion, setUndoVersion] = useState(0);
   const rawProjectRef = useRef<Project | null>(null);
   const saveTimerRef = useRef<number | null>(null);
@@ -577,6 +578,7 @@ export default function Index() {
   const measurementSetter = useMemo(() => makeViewSetter('measurement'), [makeViewSetter]);
   const dailyReportSetter = useMemo(() => makeViewSetter('dailyReport'), [makeViewSetter]);
   const additiveSetter = useMemo(() => makeViewSetter('additive'), [makeViewSetter]);
+  const additiveScheduleSetter = useMemo(() => makeViewSetter('additiveSchedule'), [makeViewSetter]);
   const materialsSetter = useMemo(() => makeViewSetter('materials'), [makeViewSetter]);
   const warehouseSetter = useMemo(() => makeViewSetter('warehouse'), [makeViewSetter]);
 
@@ -600,7 +602,7 @@ export default function Index() {
       const record = await loadCloudProjectRecord(id);
       if (record) {
         replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied);
-        undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], realCost: [], materials: [], warehouse: [] };
+        undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
         setUndoVersion(v => v + 1);
       }
     } catch {
@@ -645,7 +647,7 @@ export default function Index() {
     }
     const list = await refreshCloudList();
     replaceProjectWithoutAutoSave(persisted.project, list.find(p => p.id === projectWithName.id)?.updatedAt ?? persisted.updatedAt ?? updatedAt);
-    undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], realCost: [], materials: [], warehouse: [] };
+    undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
     setUndoVersion(v => v + 1);
     setCurrentView('dashboard');
     setSidebarOpen(false);
@@ -698,7 +700,7 @@ export default function Index() {
           const record = await loadCloudProjectRecord(next.id);
           if (record) {
             replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied);
-            undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], realCost: [], materials: [], warehouse: [] };
+            undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
           }
         }
       }
@@ -796,6 +798,8 @@ export default function Index() {
         );
       case 'additive':
         return <Additive project={project} onProjectChange={additiveSetter} canFormalize={role === 'owner' || role === 'admin'} undoButton={<UndoButton canUndo={canUndo('additive')} onUndo={() => handleUndo('additive')} />} />;
+      case 'additiveSchedule':
+        return <AdditiveSchedule project={project} onProjectChange={additiveScheduleSetter} undoButton={<UndoButton canUndo={canUndo('additiveSchedule')} onUndo={() => handleUndo('additiveSchedule')} />} />;
       case 'realCost':
         return <RealCost project={project} />;
       case 'materials':

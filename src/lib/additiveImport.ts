@@ -9,6 +9,7 @@ import type {
   Project,
   Task,
   Phase,
+  AdditiveSchedulePlannedTask,
 } from '@/types/project';
 import { getChapterTree, getChapterNumbering, type ChapterNode } from '@/lib/chapters';
 import { resolveMemoryColumnLabels, validMemoryRows } from '@/lib/calculationMemory';
@@ -2712,6 +2713,23 @@ export function createNewServiceComposition(
   };
 }
 
+function applyPlannedAdditiveSchedule(task: Task, planned?: AdditiveSchedulePlannedTask): Task {
+  if (!planned) return task;
+  return {
+    ...task,
+    startDate: planned.startDate,
+    duration: Math.max(1, planned.duration),
+    dependencies: planned.dependencies ?? [],
+    dependencyDetails: planned.dependencyDetails,
+    responsible: planned.responsible ?? '',
+    team: planned.team,
+    scheduleOrder: planned.scheduleOrder,
+    durationMode: planned.durationMode ?? 'manual',
+    isManual: planned.isManual ?? true,
+    manualDuration: planned.manualDuration ?? planned.duration,
+  };
+}
+
 /**
  * Integra o aditivo ao projeto:
  *  - novos serviços viram tarefas reais na EAP no capítulo correto;
@@ -2737,6 +2755,9 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
   const effectiveDate = add.effectiveDate;
 
   const novos = add.compositions.filter(c => c.isNewService);
+  const plannedScheduleByComposition = new Map(
+    (add.scheduleDraft?.plannedTasks ?? []).map(task => [task.compositionId, task]),
+  );
   const activeNewTaskIds = new Set(novos.map(n => `add-${add.id}-${n.id}`));
   const taskById = new Map(project.phases.flatMap(phase => phase.tasks).map(task => [task.id, task]));
   const ajustes = add.compositions.filter(c => {
@@ -2873,7 +2894,8 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
               }]
             : currentTask.additiveHistory,
         };
-        const nextTask = applyAdditiveProductivityToTask(project, revisedTask, n, { overwriteExisting: false }).task;
+        const productivityTask = applyAdditiveProductivityToTask(project, revisedTask, n, { overwriteExisting: false }).task;
+        const nextTask = applyPlannedAdditiveSchedule(productivityTask, plannedScheduleByComposition.get(n.id));
         updatedTasks = updatedTasks.map(t => t.id === taskId ? nextTask : t);
         if (changed) mutated = true;
         continue;
@@ -2926,19 +2948,22 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
               }]
             : existingTask.additiveHistory,
         };
-        const nextTask = applyAdditiveProductivityToTask(project, revisedTask, n, { overwriteExisting: false }).task;
+        const productivityTask = applyAdditiveProductivityToTask(project, revisedTask, n, { overwriteExisting: false }).task;
+        const nextTask = applyPlannedAdditiveSchedule(productivityTask, plannedScheduleByComposition.get(n.id));
         updatedTasks = updatedTasks.map(t => t.id === taskId ? nextTask : t);
         if (changed) mutated = true;
         continue;
       }
+      const plannedSchedule = plannedScheduleByComposition.get(n.id);
       const baseTask: Task = {
         id: taskId,
         name: n.description || 'Novo serviço (Aditivo)',
         phase: phase.id,
-        startDate: project.startDate,
-        duration: 1,
-        dependencies: [],
-        responsible: '',
+        startDate: plannedSchedule?.startDate ?? project.startDate,
+        duration: plannedSchedule?.duration ?? 1,
+        dependencies: plannedSchedule?.dependencies ?? [],
+        dependencyDetails: plannedSchedule?.dependencyDetails,
+        responsible: plannedSchedule?.responsible ?? '',
         percentComplete: 0,
         materials: [],
         level: 0,
@@ -2948,9 +2973,11 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
         unitPriceNoBDI: baseUnitNoBDI,
         itemCode: n.code,
         priceBank: n.bank,
-        durationMode: 'manual',
-        isManual: true,
-        manualDuration: 1,
+        team: plannedSchedule?.team,
+        scheduleOrder: plannedSchedule?.scheduleOrder,
+        durationMode: plannedSchedule?.durationMode ?? 'manual',
+        isManual: plannedSchedule?.isManual ?? true,
+        manualDuration: plannedSchedule?.manualDuration ?? plannedSchedule?.duration ?? 1,
         originAdditiveId: add.id,
         originAdditiveName: add.name,
         originAdditiveVersion: version,
@@ -2971,7 +2998,8 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
           user,
         }],
       };
-      newTasks.push(applyAdditiveProductivityToTask(project, baseTask, n, { overwriteExisting: true }).task);
+      const productivityTask = applyAdditiveProductivityToTask(project, baseTask, n, { overwriteExisting: true }).task;
+      newTasks.push(applyPlannedAdditiveSchedule(productivityTask, plannedSchedule));
       mutated = true;
     }
     if (!mutated) return phase;
@@ -3037,6 +3065,11 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
     editUnlockedAt: undefined,
     editUnlockedBy: undefined,
     version,
+    scheduleSnapshots: (add.scheduleSnapshots ?? []).map(snapshot => (
+      snapshot.version === (add.scheduleDraft?.version ?? version)
+        ? { ...snapshot, contractRevisionId: revisionId }
+        : snapshot
+    )),
   };
   const nextAdditives = (project.additives ?? []).map(a => a.id === add.id ? updatedAdditive : a);
   const revision = {

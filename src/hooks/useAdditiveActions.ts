@@ -43,6 +43,12 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { logToProject, userInfoFromSupabaseUser } from '@/lib/audit';
 import type { AdditiveStateApi } from '@/hooks/useAdditiveState';
+import {
+  buildAdditiveSchedulePreviewProject,
+  createAdditiveScheduleRevisionDraft,
+  createAdditiveScheduleSnapshot,
+  validateAdditiveSchedule,
+} from '@/lib/additiveSchedule';
 
 interface Params {
   project: Project;
@@ -1085,6 +1091,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     }
     const now = new Date().toISOString();
     onProjectChange(prev => {
+      const scheduleDraft = createAdditiveScheduleRevisionDraft(prev, active.id, now);
       const nextAdditives = (prev.additives ?? []).map(a =>
         a.id === active.id
           ? {
@@ -1092,6 +1099,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
               editUnlocked: true,
               editUnlockedAt: now,
               editUnlockedBy: auditUser.userName || auditUser.userEmail,
+              scheduleDraft,
             }
           : a,
       );
@@ -1125,10 +1133,36 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
       toast.error('Informe e salve a data de vigencia contratual antes de contratar o aditivo.');
       return;
     }
+    const scheduleIssues = validateAdditiveSchedule(project, active);
+    if (scheduleIssues.length > 0) {
+      toast.error(`Conclua o Cronograma do Aditivo antes da contratação: ${scheduleIssues.slice(0, 3).join(' ')}`);
+      return;
+    }
     const isReintegration = !!active.isContracted;
     const novosServicos = active.compositions.filter(c => c.isNewService);
     onProjectChange(prev => {
-      const next = contractAdditive(prev, active.id, auditUser?.userName || auditUser?.userEmail);
+      const currentAdditive = (prev.additives ?? []).find(item => item.id === active.id);
+      if (!currentAdditive?.scheduleDraft) return prev;
+      const preview = buildAdditiveSchedulePreviewProject(prev, currentAdditive, currentAdditive.scheduleDraft);
+      const snapshot = createAdditiveScheduleSnapshot(
+        prev,
+        currentAdditive,
+        preview,
+        auditUser?.userName || auditUser?.userEmail,
+      );
+      const prepared = {
+        ...prev,
+        additives: (prev.additives ?? []).map(item => item.id === active.id
+          ? {
+              ...item,
+              scheduleSnapshots: [
+                ...(item.scheduleSnapshots ?? []).filter(existing => existing.id !== snapshot.id),
+                snapshot,
+              ],
+            }
+          : item),
+      };
+      const next = contractAdditive(prepared, active.id, auditUser?.userName || auditUser?.userEmail);
       return logToProject(next, {
         ...auditUser,
         entityType: 'additive',

@@ -24,14 +24,36 @@ import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
 import GanttFinancialForecast from './gantt/GanttFinancialForecast';
 import { sortTasksForSchedule, withScheduleOrderForMove } from '@/lib/taskOrdering';
 import { buildLaborPlanningAnalysis, type LaborPlanningGranularity } from '@/lib/laborDimensioning';
+import {
+  buildPendingAdditiveSuspensionMap,
+  type AdditiveScheduleSuspensionMeta,
+} from '@/lib/additiveSchedule';
 
 interface GanttChartProps {
   project: Project;
   onProjectChange?: (project: Project) => void;
   undoButton?: React.ReactNode;
+  context?: 'official' | 'additive-preview';
+  title?: string;
+  subtitle?: string;
+  suspensionMap?: Record<string, AdditiveScheduleSuspensionMeta>;
+  onToggleSuspension?: (taskId: string, checked: boolean) => void;
+  financialForecastNode?: React.ReactNode | null;
+  readOnly?: boolean;
 }
 
-export default function GanttChart({ project, onProjectChange, undoButton }: GanttChartProps) {
+export default function GanttChart({
+  project,
+  onProjectChange,
+  undoButton,
+  context = 'official',
+  title = 'Cronograma',
+  subtitle = 'Gantt Interativo com CPM',
+  suspensionMap: providedSuspensionMap,
+  onToggleSuspension,
+  financialForecastNode,
+  readOnly = false,
+}: GanttChartProps) {
   // Lista de equipes do projeto (com fallback aos defaults).
   const projectTeams: TeamDefinition[] = project.teams ?? DEFAULT_TEAMS;
   // Helper local que sempre busca a definição na lista do projeto.
@@ -74,6 +96,10 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
   const [laborIssueMode, setLaborIssueMode] = useState<'deficit' | 'availability' | 'data'>('deficit');
   const [highlightedLaborTaskIds, setHighlightedLaborTaskIds] = useState<Set<string>>(() => new Set());
   const [obraConfig, setObraConfig] = useState<ObraConfig>(loadObraConfig);
+  const suspensionMap = useMemo(
+    () => providedSuspensionMap ?? (context === 'official' ? buildPendingAdditiveSuspensionMap(project) : {}),
+    [context, project, providedSuspensionMap],
+  );
 
   // Persiste no projeto sempre que o conjunto de minimizados mudar (com guard de igualdade).
   useEffect(() => {
@@ -1009,8 +1035,9 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
     return result.dias === 0;
   }, [obraConfig]);
 
-  const sidebarCols = '24px 1fr 88px 88px 44px 22px 60px 60px 52px 48px 56px';
-  const sidebarWidth = 760;
+  const showSuspensionColumn = context === 'additive-preview';
+  const sidebarCols = `${showSuspensionColumn ? '32px ' : ''}24px 1fr 88px 88px 44px 22px 60px 60px 52px 48px 56px`;
+  const sidebarWidth = showSuspensionColumn ? 792 : 760;
 
   // Toggle duration mode and recalculate if switching to RUP
   const toggleDurationMode = (taskId: string) => {
@@ -1172,8 +1199,8 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
         {/* Toolbar */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
-            <h2 className="text-lg font-bold text-foreground">Cronograma</h2>
-            <p className="text-[10px] text-muted-foreground">Gantt Interativo com CPM</p>
+            <h2 className="text-lg font-bold text-foreground">{title}</h2>
+            <p className="text-[10px] text-muted-foreground">{subtitle}</p>
           </div>
           <div className="flex items-center gap-2">
             {undoButton}
@@ -1675,7 +1702,9 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
 
         )}
 
-        <GanttFinancialForecast project={project} trabalhaSabado={obraConfig.trabalhaSabado} />
+        {financialForecastNode === undefined
+          ? <GanttFinancialForecast project={project} trabalhaSabado={obraConfig.trabalhaSabado} />
+          : financialForecastNode}
 
         {/* Legend */}
         <div className="flex items-center gap-3 text-[9px] text-muted-foreground flex-wrap">
@@ -1730,6 +1759,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                 className="border-b border-border bg-secondary/50 grid items-center px-1"
                 style={{ height: headerHeightPx, gridTemplateColumns: sidebarCols }}
               >
+                {showSuspensionColumn && <span className="text-[8px] font-semibold text-muted-foreground uppercase text-center" title="Serviço suspenso por aditivo">Susp.</span>}
                 <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-center">#</span>
                 <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider pl-1">Tarefa</span>
                 <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-center">Início</span>
@@ -1851,6 +1881,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                         className="border-b border-border bg-secondary/30 grid items-center px-1"
                         style={{ height: taskSubHeaderHeight, gridTemplateColumns: sidebarCols }}
                       >
+                        {showSuspensionColumn && <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase text-center">Susp.</span>}
                         <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center">#</span>
                         <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider pl-1">Descrição</span>
                         <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center">Início</span>
@@ -1881,6 +1912,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                             laborConflict.missingAvailability.length > 0
                           );
                           const isLaborHighlighted = highlightedLaborTaskIds.has(task.id);
+                          const suspension = suspensionMap[task.id];
 
                           const rowTeamDef = teamDef(task.team);
                           const isReorderDragging = reorderDragTaskId === task.id;
@@ -1888,13 +1920,13 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                           return (
                             <div
                               key={task.id}
-                              draggable
+                              draggable={!readOnly}
                               onDragStart={(e) => handleRowDragStart(e, phase.id, task.id)}
                               onDragOver={(e) => handleRowDragOver(e, task.id)}
                               onDrop={(e) => handleRowDrop(e, phase.id, task.id)}
                               onDragEnd={handleRowDragEnd}
                               title="Arraste para reordenar a tarefa"
-                              className={`grid items-center gap-0.5 px-1 border-b border-border hover:brightness-110 transition-colors cursor-grab active:cursor-grabbing ${
+                              className={`grid items-center gap-0.5 px-1 border-b border-border hover:brightness-110 transition-colors ${readOnly ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'} ${
                                 !rowTeamDef ? (idx % 2 === 0 ? 'bg-card' : 'bg-muted/10') : ''
                               } ${task.isCritical && !rowTeamDef ? 'bg-destructive/5' : ''} ${noWorkDays && !rowTeamDef ? 'bg-warning/10' : ''} ${
                                 isLaborHighlighted ? 'ring-2 ring-inset ring-blue-500 bg-blue-50/80' : ''
@@ -1904,6 +1936,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                 isReorderTarget && reorderDropPos === 'before' ? 'border-t-2 border-t-primary' : ''
                               } ${
                                 isReorderTarget && reorderDropPos === 'after' ? 'border-b-2 border-b-primary' : ''
+                              } ${suspension ? 'bg-amber-50/80 ring-1 ring-inset ring-amber-300' : ''
                               }`}
                               style={{
                                 height: taskRowHeight,
@@ -1914,6 +1947,27 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                 } : {}),
                               }}
                             >
+                              {showSuspensionColumn && (
+                                <div className="flex justify-center">
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <input
+                                        type="checkbox"
+                                        aria-label={`Suspender ${task.name}`}
+                                        checked={!!suspension?.checked}
+                                        disabled={readOnly || suspension?.disabled}
+                                        onChange={event => onToggleSuspension?.(task.id, event.target.checked)}
+                                        className="h-3.5 w-3.5 accent-amber-600"
+                                      />
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="max-w-sm text-xs">
+                                      {suspension?.disabled
+                                        ? `${suspension.label}. Marcação automática e obrigatória.`
+                                        : suspension?.label || 'Marcar como serviço contratado dependente do aditivo.'}
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </div>
+                              )}
                               <div className="text-center">
                                 <span className={`text-[9px] font-mono ${rowTeamDef ? 'opacity-70' : 'text-muted-foreground'}`}>{taskNum}</span>
                               </div>
@@ -1952,6 +2006,18 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                   compact
                                   className="ml-1 flex-shrink-0"
                                 />
+                                {suspension && (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <AlertTriangle className="h-3 w-3 flex-shrink-0 text-amber-700" aria-label={suspension.label} />
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="max-w-md whitespace-normal text-xs">
+                                      <div className="font-semibold">{suspension.label}</div>
+                                      <div>{suspension.reason}</div>
+                                      <div className="mt-1 text-muted-foreground">{suspension.additiveName}</div>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                )}
                               </div>
                               
                               <div className="flex flex-col gap-0.5">
@@ -1991,7 +2057,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                   return (
                                     <Popover>
                                       <PopoverTrigger asChild>
-                                        <button className={`text-center w-full leading-tight transition-colors ${rowTeamDef ? 'hover:opacity-70' : 'hover:text-primary'}`}>
+                                        <button disabled={readOnly} className={`text-center w-full leading-tight transition-colors ${readOnly ? 'cursor-default' : rowTeamDef ? 'hover:opacity-70' : 'hover:text-primary'}`}>
                                           {labelEl}
                                         </button>
                                       </PopoverTrigger>
@@ -2053,7 +2119,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                   return (
                                     <Popover>
                                       <PopoverTrigger asChild>
-                                        <button className={`text-center w-full leading-tight transition-colors ${rowTeamDef ? 'hover:opacity-70' : 'hover:text-primary'}`}>
+                                        <button disabled={readOnly} className={`text-center w-full leading-tight transition-colors ${readOnly ? 'cursor-default' : rowTeamDef ? 'hover:opacity-70' : 'hover:text-primary'}`}>
                                           {labelEl}
                                         </button>
                                       </PopoverTrigger>
@@ -2082,6 +2148,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                   className={`w-full text-[10px] font-medium bg-transparent border-b border-border/50 text-center focus:outline-none focus:border-primary appearance-none ${rowTeamDef ? '' : 'text-foreground'}`}
                                   style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined}
                                   defaultValue={task.duration}
+                                  disabled={readOnly}
                                   key={`dur-${task.id}-${task.duration}`}
                                   onBlur={(e) => handleDurationChange(task.id, e.target.value)}
                                   onKeyDown={(e) => {
@@ -2101,6 +2168,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <button
+                                      disabled={readOnly}
                                       onClick={() => toggleDurationMode(task.id)}
                                       className={`text-[8px] font-bold rounded px-0.5 py-0 transition-colors ${
                                         rowTeamDef
@@ -2478,6 +2546,7 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                               laborConflict.missingAvailability.length > 0
                             );
                             const isLaborHighlighted = highlightedLaborTaskIds.has(task.id);
+                            const suspension = suspensionMap[task.id];
 
                             // Compute current bar position with drag/resize/propagation
                             let currentLeft = bar.left;
@@ -2529,8 +2598,10 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                   return (
                                 <div
                                   ref={setBarRef(task.id)}
-                                  className={`absolute rounded-md ${hasViolation ? 'animate-pulse ring-2 ring-destructive' : ''} ${noWorkDays ? 'ring-2 ring-warning' : ''} ${hasLaborConflict ? 'ring-2 ring-orange-400' : ''} ${isLaborHighlighted ? 'ring-4 ring-blue-500' : ''}`}
-                                  title={`${formatDateFull(task.startDate)} → ${formatDateFull(getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado))} | ${task.duration}d — Arraste para mover`}
+                                  className={`absolute rounded-md ${hasViolation ? 'animate-pulse ring-2 ring-destructive' : ''} ${noWorkDays ? 'ring-2 ring-warning' : ''} ${hasLaborConflict ? 'ring-2 ring-orange-400' : ''} ${isLaborHighlighted ? 'ring-4 ring-blue-500' : ''} ${suspension ? 'ring-2 ring-amber-500' : ''}`}
+                                  title={suspension
+                                    ? `${suspension.label} | ${suspension.reason}`
+                                    : `${formatDateFull(task.startDate)} → ${formatDateFull(getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado))} | ${task.duration}d - Arraste para mover`}
                                   style={{
                                     left: barLeft,
                                     width: barWidth,
@@ -2552,9 +2623,10 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                     opacity: isDragPropagated ? 0.85 : 0.95,
                                     transition: (isDragging || isResizing || isDragPropagated) ? 'none' : 'left 0.2s ease, width 0.2s ease',
                                     zIndex: 10,
-                                    cursor: 'grab',
+                                    cursor: readOnly ? 'default' : 'grab',
                                   }}
                                   onMouseDown={(e) => {
+                                    if (readOnly) return;
                                     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                                     const relX = e.clientX - rect.left;
                                     const barW = rect.width;
@@ -2585,6 +2657,11 @@ export default function GanttChart({ project, onProjectChange, undoButton }: Gan
                                     className="h-full rounded-md opacity-30"
                                     style={{ width: `${task.percentComplete}%`, background: 'white', borderRadius: 6 }}
                                   />
+                                  {suspension && barWidth >= 160 && (
+                                    <div className="absolute inset-0 flex items-center justify-center overflow-hidden px-2 text-[8px] font-bold text-white drop-shadow-sm pointer-events-none">
+                                      <span className="truncate">{suspension.label}</span>
+                                    </div>
+                                  )}
                                   {/* Indicador de ritmo (faixa direita) — só com apontamentos */}
                                   {(() => {
                                     const logs = (task.dailyLogs || []).filter(l => (l.actualQuantity ?? 0) > 0);

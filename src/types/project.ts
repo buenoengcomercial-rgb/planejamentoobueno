@@ -1258,6 +1258,80 @@ export interface AdditiveApprovalSnapshot {
   issues: AdditiveImportIssue[];
 }
 
+export type AdditiveScheduleClassification =
+  | 'contracted_released'
+  | 'contracted_suspended'
+  | 'proposed_addition'
+  | 'proposed_suppression';
+
+/** Programação preliminar de um serviço novo, ainda isolada do contrato vigente. */
+export interface AdditiveSchedulePlannedTask {
+  compositionId: string;
+  taskId: string;
+  phaseId: string;
+  name: string;
+  startDate: string;
+  duration: number;
+  dependencies: string[];
+  dependencyDetails?: TaskDependency[];
+  responsible: string;
+  team?: TeamCode;
+  scheduleOrder?: number;
+  durationMode?: 'manual' | 'rup';
+  isManual?: boolean;
+  manualDuration?: number;
+  /** Exige uma decisão consciente sobre data/duração antes da contratação. */
+  datesConfirmed?: boolean;
+}
+
+/** Rascunho editável do cronograma associado a uma versão do aditivo. */
+export interface AdditiveScheduleDraft {
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  /** Tarefas contratadas que dependem tecnicamente do aditivo. */
+  dependentTaskIds: string[];
+  /** Somente serviços novos ficam aqui; tarefas contratadas permanecem em Project.phases. */
+  plannedTasks: AdditiveSchedulePlannedTask[];
+}
+
+/** Linha congelada usada na leitura histórica e nas exportações da prévia formalizada. */
+export interface AdditiveScheduleSnapshotRow {
+  taskId: string;
+  compositionId?: string;
+  phaseId: string;
+  phaseName: string;
+  item?: string;
+  code?: string;
+  description: string;
+  classification: AdditiveScheduleClassification;
+  statusLabel: string;
+  startDate: string;
+  duration: number;
+  dependencies: string[];
+  dependencyDetails?: TaskDependency[];
+  responsible: string;
+  team?: TeamCode;
+  scheduleOrder?: number;
+  durationMode?: 'manual' | 'rup';
+  isManual?: boolean;
+  manualDuration?: number;
+  quantity: number;
+  unit?: string;
+  unitPriceWithBDI: number;
+  totalWithBDI: number;
+}
+
+export interface AdditiveScheduleSnapshot {
+  id: string;
+  version: number;
+  archivedAt: string;
+  archivedBy?: string;
+  contractRevisionId?: string;
+  referenceDocument: string;
+  rows: AdditiveScheduleSnapshotRow[];
+}
+
 export interface Additive {
   id: string;
   name: string;
@@ -1309,6 +1383,10 @@ export interface Additive {
   headerIssueDate?: string;
   /** Responsável exibido no cabeçalho exportado (sobrepõe approvedBy). */
   headerResponsible?: string;
+  /** Cronograma preliminar editável, sem efeitos na execução enquanto o aditivo não for contratado. */
+  scheduleDraft?: AdditiveScheduleDraft;
+  /** Versões congeladas do cronograma que subsidiou cada contratação/reintegração. */
+  scheduleSnapshots?: AdditiveScheduleSnapshot[];
 }
 
 export interface AdditiveUiState {
@@ -1361,4 +1439,4 @@ export interface AuditLog {
 }
 
 export type ViewMode = 'days' | 'weeks' | 'months';
-export type AppView = 'dashboard' | 'management' | 'gantt' | 'tasks' | 'measurement' | 'dailyReport' | 'additive' | 'realCost' | 'materials' | 'warehouse';
+export type AppView = 'dashboard' | 'management' | 'gantt' | 'tasks' | 'measurement' | 'dailyReport' | 'additive' | 'additiveSchedule' | 'realCost' | 'materials' | 'warehouse';
