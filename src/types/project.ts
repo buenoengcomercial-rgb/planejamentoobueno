@@ -262,6 +262,8 @@ export interface ProjectUiState {
   collapsedPhaseIds?: string[];
   /** IDs de capítulos/subcapítulos atualmente recolhidos na aba Cronograma (Gantt). */
   ganttCollapsedPhaseIds?: string[];
+  /** Última data inicial da Medição já aplicada ao deslocamento global do cronograma. */
+  ganttWorkStartDateApplied?: string;
 }
 
 export interface ContractInfo {

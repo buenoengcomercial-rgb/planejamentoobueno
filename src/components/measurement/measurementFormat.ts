@@ -248,12 +248,28 @@ export function syncMeasurementDatesWithGantt(
     changed = true;
   }
 
+  // A sincronização manual Gantt -> Medição já parte do cronograma atual.
+  // Marcar a data como aplicada evita deslocar o mesmo intervalo uma segunda vez.
+  const authoritativeStart = updated[0]?.startDate ?? nextDraft?.startDate;
+  const markGanttStartAsApplied = authoritativeStart === ganttStart;
+  if (markGanttStartAsApplied && project.uiState?.ganttWorkStartDateApplied !== ganttStart) {
+    changed = true;
+  }
+
   if (!changed) {
     return { project, changed: false, protectedCount, ganttStart };
   }
 
   return {
-    project: { ...project, measurements: updated, measurementDraft: nextDraft },
+    project: {
+      ...project,
+      measurements: updated,
+      measurementDraft: nextDraft,
+      uiState: markGanttStartAsApplied ? {
+        ...(project.uiState ?? {}),
+        ganttWorkStartDateApplied: ganttStart,
+      } : project.uiState,
+    },
     changed: true,
     protectedCount,
     ganttStart,

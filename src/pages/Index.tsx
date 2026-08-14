@@ -13,6 +13,7 @@ import { applyRupToProject, applyDailyLogsToProject, calculateCPM, captureBaseli
 import { loadObraConfig } from '@/components/ConfiguracaoObra';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 import { lazyWithReload } from '@/lib/lazyWithReload';
+import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
 
 // Lazy load: cada aba só baixa seu bundle quando aberta pela primeira vez.
 // Usa lazyWithReload para recuperar automaticamente de chunks obsoletos após deploy.
@@ -396,6 +397,22 @@ export default function Index() {
     rawProjectRef.current = rawProject;
   }, [rawProject]);
 
+  const measurementWorkStart = rawProject ? getMeasurementWorkStartDate(rawProject) : undefined;
+  const appliedWorkStart = rawProject?.uiState?.ganttWorkStartDateApplied;
+  useEffect(() => {
+    if (!editor || !measurementWorkStart) return;
+    setRawProject(previous => {
+      if (!previous) return previous;
+      const synchronized = synchronizeProjectScheduleToWorkStart(previous);
+      if (synchronized === previous) return previous;
+      skipNextAutoSaveRef.current = false;
+      rawProjectRef.current = synchronized;
+      writeUnsavedDraft(synchronized, currentProjectUpdatedAtRef.current);
+      setSaveStatus('saving');
+      return synchronized;
+    });
+  }, [appliedWorkStart, editor, measurementWorkStart, rawProject?.id]);
+
   const flushPendingSave = useCallback(async () => {
     if (!user || !orgId || !rawProject || !initialLoadRef.current || !editor) return true;
 
@@ -560,14 +577,15 @@ export default function Index() {
       setRawProject(prev => {
         if (!prev) return prev;
         const resolved = typeof next === 'function' ? (next as (p: Project) => Project)(prev) : next;
-        if (resolved === prev) return prev;
+        const synchronized = synchronizeProjectScheduleToWorkStart(resolved);
+        if (synchronized === prev) return prev;
         const stack = undoStacksRef.current[view];
         stack.push(prev);
         if (stack.length > UNDO_LIMIT) stack.shift();
-        rawProjectRef.current = resolved;
-        writeUnsavedDraft(resolved, currentProjectUpdatedAtRef.current);
+        rawProjectRef.current = synchronized;
+        writeUnsavedDraft(synchronized, currentProjectUpdatedAtRef.current);
         setUndoVersion(v => v + 1);
-        return resolved;
+        return synchronized;
       });
     };
   }, [editor]);

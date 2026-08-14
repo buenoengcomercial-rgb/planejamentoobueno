@@ -52,6 +52,14 @@ describe('AdditiveSchedule - composições bloqueadoras', () => {
     const onProjectChange = vi.fn();
     const view = render(<AdditiveSchedule project={project} onProjectChange={onProjectChange} />);
 
+    expect(screen.getByText('Previsão físico-financeira da retomada parcial')).toBeInTheDocument();
+    expect(screen.queryByText('Atividades exibidas')).not.toBeInTheDocument();
+    expect(screen.queryByText('Execução parcial')).not.toBeInTheDocument();
+    expect(screen.queryByText('Suspensão automática')).not.toBeInTheDocument();
+    expect(screen.queryByText('Dependências marcadas')).not.toBeInTheDocument();
+    expect(screen.queryByText('Linhas da proposta')).not.toBeInTheDocument();
+    expect(screen.queryByText('PLANEJAMENTO PRELIMINAR - NÃO AUTORIZA EXECUÇÃO')).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByRole('checkbox', { name: 'Suspender Porta de Vidro' }));
     const dialog = screen.getByRole('dialog');
     const newGroup = within(dialog).getByTestId('blocking-group-new');
