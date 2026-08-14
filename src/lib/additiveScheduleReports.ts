@@ -1,6 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { Additive, AdditiveScheduleSnapshotRow, Project } from '@/types/project';
+import type { Additive, AdditiveScheduleSnapshotRow, Phase, Project } from '@/types/project';
 import { buildAdditiveScheduleForecast } from '@/lib/additiveScheduleForecast';
+import { flattenPhasesByChapter, getChapterNumbering } from '@/lib/chapters';
+import { sortTasksForSchedule } from '@/lib/taskOrdering';
+import { getWorkStartDate } from '@/lib/workStartDate';
 import {
   ADDITIVE_SCHEDULE_GUIDANCE,
   ADDITIVE_SCHEDULE_REFERENCE,
@@ -374,20 +377,342 @@ function drawGanttPages(
   });
 }
 
+export type AdditivePdfGanttRow =
+  | { kind: 'phase'; phaseId: string; phaseNumber: string; phaseName: string; depth: number; taskCount: number; startDate: string; endDate: string; ancestorPhaseIds: string[]; continuation?: boolean }
+  | { kind: 'taskHeader'; phaseId: string; ancestorPhaseIds: string[] }
+  | { kind: 'task'; phaseId: string; ancestorPhaseIds: string[]; item: string; row: AdditiveScheduleSnapshotRow };
+
+const isValidISODate = (value: string | undefined) => !!value && /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+function getPhaseAncestors(phase: Phase, phaseById: Map<string, Phase>): string[] {
+  const ancestors: string[] = [];
+  const visited = new Set<string>([phase.id]);
+  let current = phase;
+  while (current.parentId && !visited.has(current.parentId)) {
+    const parent = phaseById.get(current.parentId);
+    if (!parent) break;
+    ancestors.unshift(parent.id);
+    visited.add(parent.id);
+    current = parent;
+  }
+  return ancestors;
+}
+
+/** Builds the same expanded hierarchy shown by GanttChart, independently of UI collapse state. */
+export function buildAdditivePdfGanttRows(
+  scheduleProject: Project,
+  sourceRows: AdditiveScheduleSnapshotRow[],
+): AdditivePdfGanttRow[] {
+  const rows = sourceRows.filter(row => !(row.compositionId && row.description.startsWith('Impacto do aditivo - ')));
+  const phases = flattenPhasesByChapter(scheduleProject);
+  const phaseById = new Map(scheduleProject.phases.map(phase => [phase.id, phase]));
+  const numbering = getChapterNumbering(scheduleProject);
+  const rowByTaskId = new Map(rows.map(row => [row.taskId, row]));
+  const taskById = new Map(scheduleProject.phases.flatMap(phase => phase.tasks).map(task => [task.id, task]));
+  const directRowsByPhase = new Map<string, AdditiveScheduleSnapshotRow[]>();
+
+  phases.forEach(phase => {
+    const ordered: AdditiveScheduleSnapshotRow[] = [];
+    const seen = new Set<string>();
+    sortTasksForSchedule(phase.tasks).forEach(task => {
+      const row = rowByTaskId.get(task.id);
+      if (row && row.phaseId === phase.id && !seen.has(row.taskId)) {
+        ordered.push(row);
+        seen.add(row.taskId);
+      }
+    });
+    rows
+      .filter(row => row.phaseId === phase.id && !seen.has(row.taskId))
+      .sort((left, right) => (left.scheduleOrder ?? Number.MAX_SAFE_INTEGER) - (right.scheduleOrder ?? Number.MAX_SAFE_INTEGER))
+      .forEach(row => { ordered.push(row); seen.add(row.taskId); });
+    directRowsByPhase.set(phase.id, ordered);
+  });
+
+  const collectRows = (phaseId: string, visited = new Set<string>()): AdditiveScheduleSnapshotRow[] => {
+    if (visited.has(phaseId)) return [];
+    visited.add(phaseId);
+    return [
+      ...(directRowsByPhase.get(phaseId) ?? []),
+      ...scheduleProject.phases
+        .filter(phase => phase.parentId === phaseId)
+        .flatMap(phase => collectRows(phase.id, visited)),
+    ];
+  };
+
+  const result: AdditivePdfGanttRow[] = [];
+  phases.forEach(phase => {
+    const ancestors = getPhaseAncestors(phase, phaseById);
+    const directRows = directRowsByPhase.get(phase.id) ?? [];
+    const scheduled = collectRows(phase.id).filter(row => isValidISODate(row.startDate) && !isStatusOnlyScheduleRow(row));
+    const starts = scheduled.map(row => row.startDate).sort();
+    const ends = scheduled.map(row => endDate(row.startDate, row.duration)).sort();
+    const phaseNumber = numbering.get(phase.id) ?? '';
+    result.push({
+      kind: 'phase',
+      phaseId: phase.id,
+      phaseNumber,
+      phaseName: phase.name,
+      depth: ancestors.length,
+      taskCount: directRows.length,
+      startDate: starts[0] ?? '',
+      endDate: ends.at(-1) ?? '',
+      ancestorPhaseIds: ancestors,
+    });
+    if (!directRows.length) return;
+    const taskAncestors = [...ancestors, phase.id];
+    result.push({ kind: 'taskHeader', phaseId: phase.id, ancestorPhaseIds: taskAncestors });
+    directRows.forEach((row, index) => {
+      const task = taskById.get(row.taskId);
+      const item = row.item?.trim() || task?.contractItem?.trim() || `${phaseNumber}.${index + 1}`;
+      result.push({ kind: 'task', phaseId: phase.id, ancestorPhaseIds: taskAncestors, item, row });
+    });
+  });
+  return result;
+}
+
+const pdfGanttRowHeight = (row: AdditivePdfGanttRow) => row.kind === 'phase' ? 12 : row.kind === 'taskHeader' ? 6 : 10;
+
+function paginatePdfGanttRows(rows: AdditivePdfGanttRow[], maxHeight: number): AdditivePdfGanttRow[][] {
+  const phaseRows = new Map(rows
+    .filter((row): row is Extract<AdditivePdfGanttRow, { kind: 'phase' }> => row.kind === 'phase')
+    .map(row => [row.phaseId, row]));
+  const pages: AdditivePdfGanttRow[][] = [];
+  let page: AdditivePdfGanttRow[] = [];
+  let used = 0;
+  const finishPage = () => { pages.push(page); page = []; used = 0; };
+
+  rows.forEach((row, index) => {
+    const height = pdfGanttRowHeight(row);
+    const mustKeepNext = row.kind === 'phase' || row.kind === 'taskHeader';
+    const nextHeight = mustKeepNext && rows[index + 1] ? pdfGanttRowHeight(rows[index + 1]) : 0;
+    if (page.length && used + height + nextHeight > maxHeight) {
+      finishPage();
+      row.ancestorPhaseIds.forEach(id => {
+        const context = phaseRows.get(id);
+        if (!context || used + pdfGanttRowHeight(context) > maxHeight) return;
+        page.push({ ...context, continuation: true });
+        used += pdfGanttRowHeight(context);
+      });
+      if (row.kind === 'task') {
+        const header: AdditivePdfGanttRow = { kind: 'taskHeader', phaseId: row.phaseId, ancestorPhaseIds: row.ancestorPhaseIds };
+        page.push(header);
+        used += pdfGanttRowHeight(header);
+      }
+    }
+    page.push(row);
+    used += height;
+  });
+  if (page.length || !pages.length) pages.push(page);
+  return pages;
+}
+
+function drawHierarchicalGanttPages(
+  doc: any,
+  rows: AdditiveScheduleSnapshotRow[],
+  project: Project,
+  scheduleProject: Project,
+  additive: Additive,
+  trabalhaSabado = false,
+) {
+  const renderRows = buildAdditivePdfGanttRows(scheduleProject, rows);
+  const scheduledRows = rows.filter(row => isValidISODate(row.startDate) && !isStatusOnlyScheduleRow(row));
+  const earliestTask = scheduledRows.map(row => row.startDate).sort()[0] || scheduleProject.startDate;
+  const workStartDate = getWorkStartDate(scheduleProject, earliestTask);
+  const allStart = [earliestTask, workStartDate].filter(isValidISODate).sort()[0] || scheduleProject.startDate;
+  const latestTask = scheduledRows.map(row => endDate(row.startDate, row.duration)).sort().at(-1) || scheduleProject.endDate || scheduleProject.startDate;
+  const allEnd = [latestTask, workStartDate].filter(isValidISODate).sort().at(-1) || latestTask;
+  const firstDate = new Date(`${allStart}T12:00:00`);
+  const lastDate = new Date(`${allEnd}T12:00:00`);
+  const timelineStart = new Date(firstDate.getFullYear(), firstDate.getMonth(), 1, 12);
+  const timelineEnd = new Date(lastDate.getFullYear(), lastDate.getMonth() + 1, 0, 12);
+  const totalDays = Math.max(1, Math.round((timelineEnd.getTime() - timelineStart.getTime()) / 86400000) + 1);
+  const forecast = buildAdditiveScheduleForecast(rows, trabalhaSabado);
+  const forecastByMonth = new Map(forecast.months.map(month => [month.key, month]));
+  const months: Array<{ key: string; label: string; offset: number; days: number }> = [];
+  let monthCursor = new Date(timelineStart);
+  while (monthCursor <= timelineEnd) {
+    const monthEnd = new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 0, 12);
+    const visibleEnd = monthEnd < timelineEnd ? monthEnd : timelineEnd;
+    months.push({
+      key: `${monthCursor.getFullYear()}-${String(monthCursor.getMonth() + 1).padStart(2, '0')}`,
+      label: monthCursor.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }).replace('.', ''),
+      offset: Math.round((monthCursor.getTime() - timelineStart.getTime()) / 86400000),
+      days: Math.round((visibleEnd.getTime() - monthCursor.getTime()) / 86400000) + 1,
+    });
+    monthCursor = new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1, 12);
+  }
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 8;
+  const sidebarColumns = [14, 46, 16, 16, 9, 10, 8, 11];
+  const sidebarWidth = sidebarColumns.reduce((sum, value) => sum + value, 0);
+  const chartX = margin + sidebarWidth;
+  const chartWidth = pageWidth - chartX - margin;
+  const headerHeight = 17;
+  const pages = paginatePdfGanttRows(renderRows, 142);
+  const itemByTaskId = new Map(renderRows
+    .filter((row): row is Extract<AdditivePdfGanttRow, { kind: 'task' }> => row.kind === 'task')
+    .map(row => [row.row.taskId, row.item]));
+  const xForDate = (iso: string) => {
+    const value = new Date(`${iso}T12:00:00`);
+    const offset = (value.getTime() - timelineStart.getTime()) / 86400000;
+    return chartX + Math.max(0, Math.min(totalDays, offset)) / totalDays * chartWidth;
+  };
+  const clippedLine = (text: string, width: number) => doc.splitTextToSize(text || '-', Math.max(2, width))[0] || '';
+
+  pages.forEach((pageRows, pageIndex) => {
+    if (pageIndex > 0) doc.addPage();
+    const y = drawHeader(doc, project, additive, `DIAGRAMA DE GANTT - PARTE ${pageIndex + 1}/${pages.length}`);
+    const bodyHeight = pageRows.reduce((sum, row) => sum + pdfGanttRowHeight(row), 0);
+    const bodyBottom = y + headerHeight + bodyHeight;
+    doc.setFillColor(226, 232, 240);
+    doc.rect(margin, y, pageWidth - margin * 2, headerHeight, 'F');
+    doc.setDrawColor(203, 213, 225);
+    doc.setLineWidth(0.2);
+
+    const headers = ['ITEM', 'TAREFA', 'INÍCIO', 'FIM', 'DUR.', 'DEP.', 'TIPO', 'EQUIPE'];
+    let headerX = margin;
+    headers.forEach((label, index) => {
+      const width = sidebarColumns[index];
+      doc.line(headerX, y, headerX, bodyBottom);
+      doc.setTextColor(51, 65, 85); doc.setFont('helvetica', 'bold'); doc.setFontSize(index === 1 ? 5.5 : 5.1);
+      doc.text(label, headerX + width / 2, y + 9, { align: 'center' });
+      headerX += width;
+    });
+    doc.line(chartX, y, chartX, bodyBottom);
+    months.forEach(month => {
+      const x = chartX + month.offset / totalDays * chartWidth;
+      const width = month.days / totalDays * chartWidth;
+      doc.line(x, y, x, bodyBottom);
+      doc.setTextColor(15, 23, 42); doc.setFont('helvetica', 'bold'); doc.setFontSize(5.4);
+      doc.text(month.label, x + width / 2, y + 3.6, { align: 'center' });
+      const monthForecast = forecastByMonth.get(month.key);
+      if (monthForecast) {
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(4.2); doc.setTextColor(4, 120, 87);
+        doc.text(clippedLine(brl(monthForecast.contractedReleased), width - 1), x + width / 2, y + 8.5, { align: 'center' });
+        doc.setTextColor(190, 18, 60);
+        doc.text(clippedLine(brl(monthForecast.proposed), width - 1), x + width / 2, y + 13, { align: 'center' });
+      }
+    });
+    doc.line(chartX + chartWidth, y, chartX + chartWidth, bodyBottom);
+    doc.line(margin, y, pageWidth - margin, y);
+    doc.line(margin, y + headerHeight, pageWidth - margin, y + headerHeight);
+
+    let rowY = y + headerHeight;
+    pageRows.forEach((renderRow, rowIndex) => {
+      const height = pdfGanttRowHeight(renderRow);
+      if (renderRow.kind === 'phase') {
+        if (renderRow.depth === 0) doc.setFillColor(226, 232, 240);
+        else doc.setFillColor(241, 245, 249);
+        doc.rect(margin, rowY, pageWidth - margin * 2, height, 'F');
+        doc.setTextColor(15, 23, 42); doc.setFont('helvetica', 'bold'); doc.setFontSize(renderRow.depth === 0 ? 7.5 : 6.8);
+        const suffix = renderRow.continuation ? ' (CONTINUAÇÃO)' : '';
+        doc.text(clippedLine(`${renderRow.phaseNumber}  ${renderRow.phaseName}${suffix}`, sidebarWidth - 8 - renderRow.depth * 4), margin + 3 + renderRow.depth * 4, rowY + 4.5);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(4.8); doc.setTextColor(71, 85, 105);
+        const range = renderRow.startDate ? `Início: ${dateBR(renderRow.startDate)}   Fim: ${dateBR(renderRow.endDate)}` : 'Início: -   Fim: -';
+        doc.text(range, margin + 3 + renderRow.depth * 4, rowY + 9.2);
+        doc.text(`${renderRow.taskCount} tarefa(s)`, chartX - 2, rowY + 4.5, { align: 'right' });
+        if (renderRow.startDate && renderRow.endDate) {
+          const startX = xForDate(renderRow.startDate);
+          const endX = xForDate(renderRow.endDate);
+          const centerY = rowY + height / 2;
+          doc.setDrawColor(55, 65, 81); doc.setFillColor(55, 65, 81); doc.setLineWidth(0.45);
+          doc.line(startX, centerY, endX, centerY);
+          [startX, endX].forEach(markerX => {
+            doc.triangle(markerX, centerY - 1.7, markerX + 1.7, centerY, markerX, centerY + 1.7, 'F');
+            doc.triangle(markerX, centerY - 1.7, markerX - 1.7, centerY, markerX, centerY + 1.7, 'F');
+          });
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(4.8); doc.setTextColor(30, 41, 59);
+          doc.text(clippedLine(renderRow.phaseName, Math.max(12, chartX + chartWidth - startX - 3)), Math.min(startX + 3, chartX + chartWidth - 3), centerY + 4.1);
+        }
+      } else if (renderRow.kind === 'taskHeader') {
+        doc.setFillColor(248, 250, 252); doc.rect(margin, rowY, pageWidth - margin * 2, height, 'F');
+        doc.setTextColor(100, 116, 139); doc.setFont('helvetica', 'bold'); doc.setFontSize(4.4);
+        doc.text('TAREFAS DO CAPÍTULO', margin + 3, rowY + 4.1);
+        doc.text('PLANEJAMENTO MENSAL', chartX + 2, rowY + 4.1);
+      } else {
+        const row = renderRow.row;
+        if (rowIndex % 2) { doc.setFillColor(248, 250, 252); doc.rect(margin, rowY, pageWidth - margin * 2, height, 'F'); }
+        const dependencyIds = row.dependencyDetails?.length ? row.dependencyDetails.map(dep => dep.taskId) : row.dependencies;
+        const dependencyItems = dependencyIds.map(id => itemByTaskId.get(id)).filter(Boolean).join(', ');
+        const dependencyTypes = row.dependencyDetails?.map(dep => dep.type).filter(Boolean).join(', ') || '';
+        const finish = isValidISODate(row.startDate) ? endDate(row.startDate, row.duration) : '';
+        const statusOnly = isStatusOnlyScheduleRow(row);
+        const values = [
+          renderRow.item, row.description, statusOnly ? '-' : dateBR(row.startDate), statusOnly ? '-' : dateBR(finish),
+          statusOnly ? '-' : `${row.duration}d`, dependencyItems || '-', dependencyTypes || '-', row.team || '-',
+        ];
+        let cellX = margin;
+        values.forEach((value, index) => {
+          const width = sidebarColumns[index];
+          doc.setTextColor(15, 23, 42); doc.setFont('helvetica', index === 1 ? 'normal' : 'bold'); doc.setFontSize(index === 1 ? 5.2 : 4.7);
+          if (index === 1) {
+            doc.text(clippedLine(value, width - 2), cellX + 1, rowY + 3.4);
+            const secondary = row.quantityRestriction ? row.statusLabel : classificationLabel(row);
+            doc.setFont('helvetica', 'bold'); doc.setFontSize(3.9);
+            if (row.quantityRestriction) doc.setTextColor(7, 89, 133); else doc.setTextColor(100, 116, 139);
+            doc.text(clippedLine(secondary, width - 2), cellX + 1, rowY + 7.5);
+          } else {
+            doc.text(clippedLine(value, width - 1.5), cellX + width / 2, rowY + 5.8, { align: 'center' });
+          }
+          cellX += width;
+        });
+        const presentationOnly = statusOnly || row.classification === 'proposed_addition';
+        if (presentationOnly) {
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(5.2);
+          if (row.scheduleState === 'fully_suppressed') doc.setTextColor(159, 18, 57);
+          else if (row.classification === 'proposed_addition') doc.setTextColor(190, 18, 60);
+          else doc.setTextColor(146, 64, 14);
+          doc.text(clippedLine(row.statusLabel, chartWidth - 4), chartX + 2, rowY + 6.1);
+        } else if (isValidISODate(row.startDate)) {
+          const rowStart = new Date(`${row.startDate}T12:00:00`);
+          const rowEnd = new Date(`${finish}T12:00:00`);
+          const left = Math.max(0, (rowStart.getTime() - timelineStart.getTime()) / 86400000) / totalDays * chartWidth;
+          const barDays = Math.max(1, (rowEnd.getTime() - rowStart.getTime()) / 86400000 + 1);
+          const barWidth = Math.max(1.8, barDays / totalDays * chartWidth);
+          const [red, green, blue] = classificationColor(row);
+          doc.setFillColor(red, green, blue);
+          doc.roundedRect(chartX + left, rowY + 2.7, Math.min(barWidth, chartWidth - left), 4.6, 1, 1, 'F');
+        }
+      }
+      doc.setDrawColor(226, 232, 240); doc.setLineWidth(0.18);
+      doc.line(margin, rowY + height, pageWidth - margin, rowY + height);
+      rowY += height;
+    });
+
+    if (isValidISODate(workStartDate)) {
+      const markerX = xForDate(workStartDate);
+      doc.setDrawColor(5, 150, 105); doc.setLineWidth(0.5);
+      doc.line(markerX, y + headerHeight, markerX, bodyBottom);
+      doc.setFillColor(5, 150, 105);
+      doc.triangle(markerX, y + headerHeight, markerX + 2.5, y + headerHeight + 1.5, markerX, y + headerHeight + 3, 'F');
+      const markerLabel = `INÍCIO DA OBRA ${dateBR(workStartDate)}`;
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(4.2);
+      const labelWidth = Math.min(38, doc.getTextWidth(markerLabel) + 3);
+      const labelX = markerX + labelWidth + 1 > chartX + chartWidth ? markerX - labelWidth - 1 : markerX + 1;
+      doc.roundedRect(labelX, y + headerHeight + 0.7, labelWidth, 4.2, 0.7, 0.7, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.text(markerLabel, labelX + labelWidth / 2, y + headerHeight + 3.5, { align: 'center' });
+    }
+  });
+}
+
 export async function buildAdditiveSchedulePdfDocument(
   project: Project,
   additive: Additive,
   rows: AdditiveScheduleSnapshotRow[],
   trabalhaSabado = false,
+  scheduleProject: Project = project,
 ) {
   rows = normalizeLegacyRows(rows, additive);
   const { jsPDF } = await loadPdf();
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   doc.setProperties({ title: `Cronograma do Aditivo - ${additive.name}`, subject: ADDITIVE_SCHEDULE_WARNING, author: project.contractInfo?.contracted || project.name });
-  drawGanttPages(
+  drawHierarchicalGanttPages(
     doc,
     rows.filter(row => !row.description.startsWith('Impacto do aditivo - ')),
     project,
+    scheduleProject,
     additive,
     trabalhaSabado,
   );
@@ -399,7 +724,7 @@ export async function buildAdditiveSchedulePdfDocument(
   return doc;
 }
 
-export async function exportAdditiveSchedulePdf(project: Project, additive: Additive, rows: AdditiveScheduleSnapshotRow[], trabalhaSabado = false) {
-  const doc = await buildAdditiveSchedulePdfDocument(project, additive, rows, trabalhaSabado);
+export async function exportAdditiveSchedulePdf(project: Project, additive: Additive, rows: AdditiveScheduleSnapshotRow[], trabalhaSabado = false, scheduleProject: Project = project) {
+  const doc = await buildAdditiveSchedulePdfDocument(project, additive, rows, trabalhaSabado, scheduleProject);
   doc.save(`cronograma_aditivo_${safeFile(additive.name)}.pdf`);
 }

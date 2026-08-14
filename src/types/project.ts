@@ -1390,6 +1390,15 @@ export interface AdditiveScheduleSnapshotRow {
   totalWithBDI: number;
 }
 
+/** Estrutura hierarquica congelada para reproduzir o Gantt arquivado. */
+export interface AdditiveScheduleSnapshotPhase {
+  id: string;
+  name: string;
+  parentId?: string;
+  order?: number;
+  customNumber?: string;
+}
+
 export interface AdditiveScheduleSnapshot {
   id: string;
   version: number;
@@ -1397,6 +1406,8 @@ export interface AdditiveScheduleSnapshot {
   archivedBy?: string;
   contractRevisionId?: string;
   referenceDocument: string;
+  /** Optional for backwards compatibility with snapshots created before hierarchy export. */
+  phases?: AdditiveScheduleSnapshotPhase[];
   rows: AdditiveScheduleSnapshotRow[];
 }
 

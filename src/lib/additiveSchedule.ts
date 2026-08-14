@@ -937,12 +937,25 @@ export function createAdditiveScheduleSnapshot(
     archivedAt,
     archivedBy: user,
     referenceDocument: ADDITIVE_SCHEDULE_REFERENCE,
+    phases: preview.phases.map(phase => ({
+      id: phase.id,
+      name: phase.name,
+      parentId: phase.parentId,
+      order: phase.order,
+      customNumber: phase.customNumber,
+    })),
     rows: buildAdditiveScheduleRows(project, additive, preview),
   };
 }
 
 export function buildProjectFromScheduleSnapshot(project: Project, snapshot: AdditiveScheduleSnapshot): Project {
-  const phases = snapshot.rows.reduce<Project['phases']>((acc, row) => {
+  const originalPhaseById = new Map(project.phases.map(phase => [phase.id, phase]));
+  const phases: Project['phases'] = (snapshot.phases ?? []).map(phase => ({
+    ...phase,
+    color: originalPhaseById.get(phase.id)?.color ?? '#64748b',
+    tasks: [],
+  }));
+  snapshot.rows.reduce<Project['phases']>((acc, row) => {
     if (row.compositionId && row.description.startsWith('Impacto do aditivo - ')) return acc;
     let phase = acc.find(item => item.id === row.phaseId);
     if (!phase) {
@@ -974,6 +987,6 @@ export function buildProjectFromScheduleSnapshot(project: Project, snapshot: Add
       contractItem: row.item,
     });
     return acc;
-  }, []);
+  }, phases);
   return { ...project, phases };
 }

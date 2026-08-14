@@ -23,7 +23,7 @@ import {
   validateAdditiveSchedule,
 } from './additiveSchedule';
 import { buildAdditiveScheduleForecast } from './additiveScheduleForecast';
-import { buildAdditiveSchedulePdfDocument, buildAdditiveScheduleWorkbook } from './additiveScheduleReports';
+import { buildAdditivePdfGanttRows, buildAdditiveSchedulePdfDocument, buildAdditiveScheduleWorkbook } from './additiveScheduleReports';
 import { contractAdditive } from './additiveImport';
 
 const existingComposition: AdditiveComposition = {
@@ -535,6 +535,110 @@ describe('Cronograma do Aditivo', () => {
       mkdirSync(process.env.ADDITIVE_SCHEDULE_QA_DIR, { recursive: true });
       writeFileSync(join(process.env.ADDITIVE_SCHEDULE_QA_DIR, 'cronograma-aditivo-qa.pdf'), Buffer.from(doc.output('arraybuffer')));
       XLSX.writeFile(workbook, join(process.env.ADDITIVE_SCHEDULE_QA_DIR, 'cronograma-aditivo-qa.xlsx'));
+    }
+  });
+
+  it('congela e restaura a hierarquia completa, inclusive capitulos vazios', () => {
+    const hierarchicalPreview: Project = {
+      ...project,
+      phases: [
+        { id: 'root', name: 'Incendio', color: '#334155', order: 0, customNumber: '2', tasks: [] },
+        { id: 'child', name: 'Hidrantes', color: '#64748b', parentId: 'root', order: 0, customNumber: '2.1', tasks: project.phases[0].tasks },
+        { id: 'empty', name: 'Outros', color: '#64748b', order: 1, customNumber: '3', tasks: [] },
+      ],
+    };
+    const prepared = syncAdditiveScheduleDraft({ ...project, phases: hierarchicalPreview.phases }, additive.id);
+    const active = prepared.additives![0];
+    const preview = { ...hierarchicalPreview, additives: prepared.additives };
+    const snapshot = createAdditiveScheduleSnapshot(prepared, active, preview, 'Administrador', '2026-08-13T14:00:00.000Z');
+
+    expect(snapshot.phases).toEqual([
+      { id: 'root', name: 'Incendio', parentId: undefined, order: 0, customNumber: '2' },
+      { id: 'child', name: 'Hidrantes', parentId: 'root', order: 0, customNumber: '2.1' },
+      { id: 'empty', name: 'Outros', parentId: undefined, order: 1, customNumber: '3' },
+    ]);
+    const restored = buildProjectFromScheduleSnapshot(project, snapshot);
+    expect(restored.phases.map(phase => ({ id: phase.id, parentId: phase.parentId, taskCount: phase.tasks.length }))).toEqual([
+      { id: 'root', parentId: undefined, taskCount: 0 },
+      { id: 'child', parentId: 'root', taskCount: 2 },
+      { id: 'empty', parentId: undefined, taskCount: 0 },
+    ]);
+    const legacy = buildProjectFromScheduleSnapshot(project, { ...snapshot, phases: undefined });
+    expect(legacy.phases.map(phase => phase.id)).toEqual(['child']);
+    expect(legacy.phases[0].tasks).toHaveLength(2);
+  });
+
+  it('monta o PDF com capitulos expandidos e numeros hierarquicos de item', async () => {
+    const scheduleProject: Project = {
+      ...project,
+      phases: [
+        { id: 'root', name: 'Incendio', color: '#334155', order: 0, customNumber: '2', tasks: [] },
+        {
+          id: 'child', name: 'Hidrantes', color: '#64748b', parentId: 'root', order: 0, customNumber: '2.2',
+          tasks: [
+            { ...project.phases[0].tasks[0], phase: 'child', contractItem: '5.1.1' },
+            { ...project.phases[0].tasks[1], phase: 'child' },
+          ],
+        },
+        { id: 'empty', name: 'Outros', color: '#64748b', order: 1, customNumber: '3', tasks: [] },
+      ],
+    };
+    const sourceRows = project.phases[0].tasks.map((task, index) => ({
+      taskId: task.id,
+      phaseId: 'child',
+      phaseName: 'Hidrantes',
+      item: index === 0 ? '5.1.1' : undefined,
+      description: task.name,
+      classification: 'contracted_released' as const,
+      statusLabel: 'CONTRATADO - LIBERADO PARA PLANEJAMENTO',
+      scheduleState: 'scheduled' as const,
+      startDate: task.startDate,
+      duration: task.duration,
+      dependencies: task.dependencies,
+      responsible: task.responsible,
+      quantity: task.quantity ?? 0,
+      unitPriceWithBDI: task.unitPrice ?? 0,
+      totalWithBDI: (task.quantity ?? 0) * (task.unitPrice ?? 0),
+    }));
+    const layout = buildAdditivePdfGanttRows(scheduleProject, sourceRows);
+    const phases = layout.filter(row => row.kind === 'phase');
+    const tasks = layout.filter((row): row is Extract<(typeof layout)[number], { kind: 'task' }> => row.kind === 'task');
+
+    expect(phases.map(row => [row.phaseNumber, row.phaseName, row.depth])).toEqual([
+      ['2', 'Incendio', 0], ['2.2', 'Hidrantes', 1], ['3', 'Outros', 0],
+    ]);
+    expect(tasks.map(row => row.item)).toEqual(['5.1.1', '2.2.2']);
+    expect(tasks.map(row => row.item)).not.toContain('76');
+    expect(tasks.map(row => row.item)).not.toContain('458');
+    const doc = await buildAdditiveSchedulePdfDocument(scheduleProject, additive, sourceRows, false, scheduleProject);
+    const pdfCommands = ((doc as any).internal.pages as string[][]).flat().join('\n');
+    expect(pdfCommands).toContain('Hidrantes');
+    expect(pdfCommands).toContain('ITEM');
+    const longTasks = Array.from({ length: 25 }, (_, index) => ({
+      ...scheduleProject.phases[1].tasks[index % 2],
+      id: `long-${index + 1}`,
+      phase: 'child',
+      contractItem: `2.2.${index + 1}`,
+      scheduleOrder: index,
+    }));
+    const longProject: Project = {
+      ...scheduleProject,
+      phases: scheduleProject.phases.map(phase => phase.id === 'child' ? { ...phase, tasks: longTasks } : phase),
+    };
+    const longRows = longTasks.map(task => ({
+      taskId: task.id, phaseId: 'child', phaseName: 'Hidrantes', item: task.contractItem,
+      description: task.name, classification: 'contracted_released' as const,
+      statusLabel: 'CONTRATADO - LIBERADO PARA PLANEJAMENTO', scheduleState: 'scheduled' as const,
+      startDate: task.startDate, duration: task.duration, dependencies: task.dependencies,
+      responsible: task.responsible, scheduleOrder: task.scheduleOrder, quantity: task.quantity ?? 0,
+      unitPriceWithBDI: task.unitPrice ?? 0, totalWithBDI: (task.quantity ?? 0) * (task.unitPrice ?? 0),
+    }));
+    const longDoc = await buildAdditiveSchedulePdfDocument(longProject, additive, longRows, false, longProject);
+    expect(longDoc.getNumberOfPages()).toBeGreaterThan(1);
+    expect(((longDoc as any).internal.pages as string[][]).flat().join('\n')).toContain('CONTINUA');
+    if (process.env.ADDITIVE_SCHEDULE_QA_DIR) {
+      mkdirSync(process.env.ADDITIVE_SCHEDULE_QA_DIR, { recursive: true });
+      writeFileSync(join(process.env.ADDITIVE_SCHEDULE_QA_DIR, 'cronograma-aditivo-hierarquia-qa.pdf'), Buffer.from(doc.output('arraybuffer')));
     }
   });
 });

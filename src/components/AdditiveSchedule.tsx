@@ -161,7 +161,7 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
     if (!active) return;
     try {
       toast.loading('Gerando PDF do Cronograma do Aditivo...', { id: 'additive-schedule-pdf' });
-      await exportAdditiveSchedulePdf(project, active, rows, obraConfig.trabalhaSabado);
+      await exportAdditiveSchedulePdf(project, active, rows, obraConfig.trabalhaSabado, preview ?? project);
       toast.success('PDF gerado.', { id: 'additive-schedule-pdf' });
     } catch (error) {
       console.error(error);
