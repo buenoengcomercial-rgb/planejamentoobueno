@@ -390,16 +390,17 @@ export interface MaterialSuggestion {
   key: string;
   description: string;
   unit: string;
+  /** Quantidade projetada = saldo contratado + todos os acréscimos ativos. */
   quantity: number;
-  /** Quantidade do contrato-base + aditivos formalizados, antes das propostas pendentes. */
+  /** Saldo do contrato-base após todas as supressões ativas; não inclui acréscimos. */
   contractedQuantity: number;
-  /** Saldo líquido de propostas ainda não formalizadas. */
+  /** Soma de todos os acréscimos ativos, pendentes ou formalizados; nunca é negativa. */
   additiveQuantity: number;
   /** Acréscimos de propostas ainda não formalizadas. */
   pendingAddedQuantity: number;
   /** Supressões de propostas ainda não formalizadas. */
   pendingSuppressedQuantity: number;
-  /** Quantidade segura para compra, sem liberar acréscimos pendentes. */
+  /** Saldo contratado + acréscimos formalizados; não libera acréscimos pendentes. */
   purchasableQuantity: number;
   code?: string;
   bank?: string;
@@ -443,6 +444,15 @@ function makeKey(code: string | undefined, description: string, unit: string, ba
   return `description:${normalizeMaterialDescription(description)}|${normalizeMaterialKeyPart(unit)}`;
 }
 
+type MaterialSuggestionContribution = Omit<
+  MaterialSuggestion,
+  'quantity' | 'contractedQuantity' | 'additiveQuantity' | 'purchasableQuantity'
+> & {
+  baseContractQuantity: number;
+  addedQuantity: number;
+  suppressedQuantity: number;
+};
+
 export function suggestMaterialsFromProject(project: Project): MaterialSuggestion[] {
   return suggestMaterialsWithDiagnostics(project).suggestions;
 }
@@ -450,7 +460,7 @@ export function suggestMaterialsFromProject(project: Project): MaterialSuggestio
 export function suggestMaterialsWithDiagnostics(
   project: Project,
 ): { suggestions: MaterialSuggestion[]; diagnostics: MaterialSuggestionDiagnostics } {
-  const suggestions = new Map<string, MaterialSuggestion>();
+  const suggestions = new Map<string, MaterialSuggestionContribution>();
   const diag: MaterialSuggestionDiagnostics = {
     additiveCompositionsWithAnalytic: 0,
     additiveAnalyticInputs: 0,
@@ -464,15 +474,14 @@ export function suggestMaterialsWithDiagnostics(
     groupedInputs: 0,
   };
 
-  const upsert = (s: MaterialSuggestion) => {
+  const upsert = (s: MaterialSuggestionContribution) => {
     const cur = suggestions.get(s.key);
     if (cur) {
-      cur.contractedQuantity = trunc2(cur.contractedQuantity + s.contractedQuantity);
-      cur.additiveQuantity = trunc2(cur.additiveQuantity + s.additiveQuantity);
+      cur.baseContractQuantity = trunc2(cur.baseContractQuantity + s.baseContractQuantity);
+      cur.addedQuantity = trunc2(cur.addedQuantity + s.addedQuantity);
+      cur.suppressedQuantity = trunc2(cur.suppressedQuantity + s.suppressedQuantity);
       cur.pendingAddedQuantity = trunc2(cur.pendingAddedQuantity + s.pendingAddedQuantity);
       cur.pendingSuppressedQuantity = trunc2(cur.pendingSuppressedQuantity + s.pendingSuppressedQuantity);
-      cur.quantity = trunc2(cur.contractedQuantity + cur.additiveQuantity);
-      cur.purchasableQuantity = trunc2(Math.max(0, cur.contractedQuantity - cur.pendingSuppressedQuantity));
       cur.hasBaseContractSource ||= s.hasBaseContractSource;
       cur.hasFormalizedAdditiveSource ||= s.hasFormalizedAdditiveSource;
       cur.hasPendingAdditiveSource ||= s.hasPendingAdditiveSource;
@@ -501,18 +510,13 @@ export function suggestMaterialsWithDiagnostics(
         cur.sourceDetail = s.sourceDetail;
       }
     } else {
-      const contractedQuantity = trunc2(s.contractedQuantity);
-      const additiveQuantity = trunc2(s.additiveQuantity);
-      const pendingAddedQuantity = trunc2(s.pendingAddedQuantity);
-      const pendingSuppressedQuantity = trunc2(s.pendingSuppressedQuantity);
       suggestions.set(s.key, {
         ...s,
-        contractedQuantity,
-        additiveQuantity,
-        pendingAddedQuantity,
-        pendingSuppressedQuantity,
-        quantity: trunc2(contractedQuantity + additiveQuantity),
-        purchasableQuantity: trunc2(Math.max(0, contractedQuantity - pendingSuppressedQuantity)),
+        baseContractQuantity: trunc2(s.baseContractQuantity),
+        addedQuantity: trunc2(s.addedQuantity),
+        suppressedQuantity: trunc2(s.suppressedQuantity),
+        pendingAddedQuantity: trunc2(s.pendingAddedQuantity),
+        pendingSuppressedQuantity: trunc2(s.pendingSuppressedQuantity),
       });
     }
   };
@@ -558,8 +562,7 @@ export function suggestMaterialsWithDiagnostics(
       for (const inp of inputs) {
         const addedQty = trunc2(Math.max(0, (inp.coefficient || 0) * delta.added));
         const suppressedQty = trunc2(Math.max(0, (inp.coefficient || 0) * delta.suppressed));
-        const qty = trunc2(addedQty - suppressedQty);
-        if (!qty && !addedQty && !suppressedQty) continue;
+        if (!addedQty && !suppressedQty) continue;
         diag.additiveAnalyticInputs += 1;
         // O desconto licitatório é global da composição; nunca altera o
         // preço de referência de cada material para planejamento de compra.
@@ -568,12 +571,11 @@ export function suggestMaterialsWithDiagnostics(
           key: makeKey(inp.code, inp.description, inp.unit, inp.bank),
           description: inp.description,
           unit: inp.unit,
-          quantity: qty,
-          contractedQuantity: isContracted ? qty : 0,
-          additiveQuantity: isContracted ? 0 : qty,
+          baseContractQuantity: 0,
+          addedQuantity: addedQty,
+          suppressedQuantity: suppressedQty,
           pendingAddedQuantity: isContracted ? 0 : addedQty,
           pendingSuppressedQuantity: isContracted ? 0 : suppressedQty,
-          purchasableQuantity: isContracted ? Math.max(0, qty) : 0,
           code: inp.code || undefined,
           bank: inp.bank || undefined,
           referencePrice: referencePrice || undefined,
@@ -606,12 +608,11 @@ export function suggestMaterialsWithDiagnostics(
         key: makeKey(inp.code, inp.description, inp.unit, inp.bank),
         description: inp.description,
         unit: inp.unit,
-        quantity: qty,
-        contractedQuantity: qty,
-        additiveQuantity: 0,
+        baseContractQuantity: qty,
+        addedQuantity: 0,
+        suppressedQuantity: 0,
         pendingAddedQuantity: 0,
         pendingSuppressedQuantity: 0,
-        purchasableQuantity: Math.max(0, qty),
         code: inp.code || undefined,
         bank: inp.bank || undefined,
         referencePrice: inp.unitPrice || undefined,
@@ -642,12 +643,11 @@ export function suggestMaterialsWithDiagnostics(
         key: makeKey(undefined, m.name, m.unit),
         description: m.name,
         unit: m.unit,
-        quantity: trunc2(m.quantity || 0),
-        contractedQuantity: trunc2(m.quantity || 0),
-        additiveQuantity: 0,
+        baseContractQuantity: trunc2(m.quantity || 0),
+        addedQuantity: 0,
+        suppressedQuantity: 0,
         pendingAddedQuantity: 0,
         pendingSuppressedQuantity: 0,
-        purchasableQuantity: trunc2(Math.max(0, m.quantity || 0)),
         referencePrice: refPrice,
         sourceType: 'task_material',
         sourceId: t.id,
@@ -655,9 +655,23 @@ export function suggestMaterialsWithDiagnostics(
     }
   }
 
-  const sorted = Array.from(suggestions.values()).sort((a, b) =>
-    a.description.localeCompare(b.description, 'pt-BR'),
-  );
+  const sorted = Array.from(suggestions.values())
+    .map(({ baseContractQuantity, addedQuantity, suppressedQuantity, ...suggestion }): MaterialSuggestion => {
+      const contractedQuantity = trunc2(Math.max(0, baseContractQuantity - suppressedQuantity));
+      const additiveQuantity = trunc2(Math.max(0, addedQuantity));
+      const pendingAddedQuantity = trunc2(Math.min(additiveQuantity, Math.max(0, suggestion.pendingAddedQuantity)));
+      const formalizedAddedQuantity = trunc2(Math.max(0, additiveQuantity - pendingAddedQuantity));
+      return {
+        ...suggestion,
+        contractedQuantity,
+        additiveQuantity,
+        pendingAddedQuantity,
+        pendingSuppressedQuantity: trunc2(Math.max(0, suggestion.pendingSuppressedQuantity)),
+        quantity: trunc2(contractedQuantity + additiveQuantity),
+        purchasableQuantity: trunc2(contractedQuantity + formalizedAddedQuantity),
+      };
+    })
+    .sort((a, b) => a.description.localeCompare(b.description, 'pt-BR'));
   diag.groupedInputs = sorted.filter(s => !s.warning).length;
   return { suggestions: sorted, diagnostics: diag };
 }

@@ -260,7 +260,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
 
   const changeGroup = (s: MC.MaterialSuggestion, targetCompId: string | null) => {
     if (targetCompId && s.purchasableQuantity <= 0) {
-      toast.error('Este insumo não possui saldo liberado para compra após as supressões em andamento.');
+      toast.error('Este insumo não possui quantidade liberada para compra; acréscimos pendentes são apenas informativos.');
       return;
     }
     onProjectChange(prev => MC.setSuggestionLink(prev, suggestionToPayload(s), targetCompId));
@@ -497,7 +497,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                         checked={checked}
                         disabled={s.purchasableQuantity <= 0}
                         onCheckedChange={v => setSelectedKeys(prev => ({ ...prev, [s.key]: !!v }))}
-                        title={s.purchasableQuantity <= 0 ? 'Sem saldo liberado para compra após as supressões em andamento' : undefined}
+                        title={s.purchasableQuantity <= 0 ? 'Sem quantidade liberada para compra; acréscimos pendentes são apenas informativos' : undefined}
                       />
                     </td>
                     <td className="p-1.5 align-middle font-mono text-[10px]">{s.code || '—'}</td>
@@ -524,7 +524,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                       </div>
                     </td>
                     <td className="p-1.5 align-middle text-right font-mono font-semibold">{formatQty(s.contractedQuantity)}</td>
-                    <td className={`p-1.5 align-middle text-right font-mono ${s.additiveQuantity < 0 ? 'text-destructive font-semibold' : s.additiveQuantity > 0 ? 'text-primary' : 'text-muted-foreground'}`}>
+                    <td className={`p-1.5 align-middle text-right font-mono ${s.additiveQuantity > 0 ? 'text-primary' : 'text-muted-foreground'}`}>
                       {formatQty(s.additiveQuantity)}
                     </td>
                     <td className="p-1.5 align-middle text-right font-mono">{formatQty(s.quantity)}</td>
@@ -537,7 +537,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                         title={linkLocked
                           ? 'Comparativo fechado: vínculo preservado como histórico'
                           : s.purchasableQuantity <= 0 && !linkedTo
-                            ? 'Sem saldo liberado para compra após as supressões em andamento'
+                            ? 'Sem quantidade liberada para compra; acréscimos pendentes são apenas informativos'
                             : undefined}
                         className="h-7 w-full text-[11px] border border-border rounded px-1.5 bg-background"
                       >
