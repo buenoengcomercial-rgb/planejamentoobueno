@@ -179,6 +179,52 @@ describe('quantidades contratuais e de aditivo dos materiais', () => {
     });
   });
 
+  it('consolida referências do mesmo banco e código mesmo com descrições diferentes', () => {
+    const hoseInput = (id: string, description: string, code = '37527', bank = 'SINAPI') => ({
+      ...input(id),
+      code,
+      bank,
+      description,
+      unit: 'UN',
+      coefficient: 1,
+      unitPrice: 658.68,
+      total: 658.68,
+    });
+    const shortDescription = 'MANGUEIRA DE INCENDIO, TIPO 2, DE 1 1/2, COMPRIMENTO = 15 M';
+    const fullDescription = `${shortDescription}, TECIDO EM FIO DE POLIESTER E TUBO INTERNO EM BORRACHA SINTETICA, COM UNIOES ENGATE RAPIDO`;
+    const project = projectWith({
+      additives: [additive('rascunho', 'rascunho', [
+        composition('mangueira-126', {
+          isNewService: true,
+          addedQuantity: 126,
+          inputs: [hoseInput('hose-126', shortDescription)],
+        }),
+        composition('mangueira-82', {
+          isNewService: true,
+          addedQuantity: 82,
+          inputs: [hoseInput('hose-82', ` ${fullDescription} `, ' 37527 ')],
+        }),
+        composition('mangueira-24', {
+          isNewService: true,
+          addedQuantity: 24,
+          inputs: [hoseInput('hose-24', `${fullDescription}  `, '37527', ' sinapi ')],
+        }),
+      ])],
+    });
+
+    const rows = suggestMaterialsFromProject(project).filter(item => item.code?.trim() === '37527');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      description: fullDescription,
+      contractedQuantity: 0,
+      additiveQuantity: 232,
+      pendingAddedQuantity: 232,
+      pendingSuppressedQuantity: 0,
+      purchasableQuantity: 0,
+      quantity: 232,
+    });
+  });
+
   it('sincroniza somente comparativos abertos e preserva preços e pedidos', () => {
     const item = {
       id: 'item',

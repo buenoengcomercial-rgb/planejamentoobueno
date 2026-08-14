@@ -428,8 +428,19 @@ export interface MaterialSuggestionDiagnostics {
   groupedInputs: number;
 }
 
+function normalizeMaterialKeyPart(value?: string | null): string {
+  return (value ?? '').trim().toUpperCase().replace(/\s+/g, '');
+}
+
+function normalizeMaterialDescription(value?: string | null): string {
+  return (value ?? '').trim().replace(/\s+/g, ' ').toLocaleUpperCase('pt-BR');
+}
+
 function makeKey(code: string | undefined, description: string, unit: string, bank?: string): string {
-  return [code ?? '', bank ?? '', description, unit].join('|').toLowerCase();
+  const normalizedCode = normalizeMaterialKeyPart(code);
+  const normalizedBank = normalizeMaterialKeyPart(bank);
+  if (normalizedCode) return `code:${normalizedBank}|${normalizedCode}`;
+  return `description:${normalizeMaterialDescription(description)}|${normalizeMaterialKeyPart(unit)}`;
 }
 
 export function suggestMaterialsFromProject(project: Project): MaterialSuggestion[] {
@@ -472,6 +483,11 @@ export function suggestMaterialsWithDiagnostics(
       }
       if (!cur.referencePrice && s.referencePrice) cur.referencePrice = s.referencePrice;
       if (!cur.legacyInputType && s.legacyInputType) cur.legacyInputType = s.legacyInputType;
+      // O mesmo código pode vir com descrições abreviadas em analíticas diferentes.
+      // Mantém a versão mais informativa sem fragmentar o saldo do material.
+      if (normalizeMaterialDescription(s.description).length > normalizeMaterialDescription(cur.description).length) {
+        cur.description = s.description.trim();
+      }
       // Se origens diferem dentro do mesmo insumo, manter o detalhe "alterado"
       // como mais informativo do que "contratado".
       if (s.sourceDetail && cur.sourceDetail && s.sourceDetail !== cur.sourceDetail) {
