@@ -16,6 +16,7 @@ import type {
 } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
 import { trunc2 } from '@/lib/financialEngine';
+import { compositionWithResolvedInputs } from '@/lib/analyticLinks';
 
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const nowISO = () => new Date().toISOString();
@@ -390,10 +391,16 @@ export interface MaterialSuggestion {
   description: string;
   unit: string;
   quantity: number;
-  /** Quantidade liberada: contrato-base + aditivos formalizados. */
+  /** Quantidade do contrato-base + aditivos formalizados, antes das propostas pendentes. */
   contractedQuantity: number;
   /** Saldo líquido de propostas ainda não formalizadas. */
   additiveQuantity: number;
+  /** Acréscimos de propostas ainda não formalizadas. */
+  pendingAddedQuantity: number;
+  /** Supressões de propostas ainda não formalizadas. */
+  pendingSuppressedQuantity: number;
+  /** Quantidade segura para compra, sem liberar acréscimos pendentes. */
+  purchasableQuantity: number;
   code?: string;
   bank?: string;
   referencePrice?: number;
@@ -451,7 +458,10 @@ export function suggestMaterialsWithDiagnostics(
     if (cur) {
       cur.contractedQuantity = trunc2(cur.contractedQuantity + s.contractedQuantity);
       cur.additiveQuantity = trunc2(cur.additiveQuantity + s.additiveQuantity);
+      cur.pendingAddedQuantity = trunc2(cur.pendingAddedQuantity + s.pendingAddedQuantity);
+      cur.pendingSuppressedQuantity = trunc2(cur.pendingSuppressedQuantity + s.pendingSuppressedQuantity);
       cur.quantity = trunc2(cur.contractedQuantity + cur.additiveQuantity);
+      cur.purchasableQuantity = trunc2(Math.max(0, cur.contractedQuantity - cur.pendingSuppressedQuantity));
       cur.hasBaseContractSource ||= s.hasBaseContractSource;
       cur.hasFormalizedAdditiveSource ||= s.hasFormalizedAdditiveSource;
       cur.hasPendingAdditiveSource ||= s.hasPendingAdditiveSource;
@@ -477,24 +487,39 @@ export function suggestMaterialsWithDiagnostics(
     } else {
       const contractedQuantity = trunc2(s.contractedQuantity);
       const additiveQuantity = trunc2(s.additiveQuantity);
+      const pendingAddedQuantity = trunc2(s.pendingAddedQuantity);
+      const pendingSuppressedQuantity = trunc2(s.pendingSuppressedQuantity);
       suggestions.set(s.key, {
         ...s,
         contractedQuantity,
         additiveQuantity,
+        pendingAddedQuantity,
+        pendingSuppressedQuantity,
         quantity: trunc2(contractedQuantity + additiveQuantity),
+        purchasableQuantity: trunc2(Math.max(0, contractedQuantity - pendingSuppressedQuantity)),
       });
     }
   };
 
   const additiveDelta = (c: AdditiveComposition) => {
-    const suppressed = c.suppressedQuantity ?? 0;
-    if (c.isNewService) return (c.addedQuantity ?? c.quantity ?? 0) - suppressed;
-    if (c.addedQuantity != null || c.suppressedQuantity != null) {
-      return (c.addedQuantity ?? 0) - suppressed;
+    const suppressed = Math.max(0, c.suppressedQuantity ?? 0);
+    if (c.isNewService) {
+      const added = Math.max(0, c.addedQuantity ?? c.quantity ?? 0);
+      return { added, suppressed };
     }
-    if (c.changeKind === 'acrescido') return c.quantity ?? 0;
-    if (c.changeKind === 'suprimido') return -(c.quantity ?? 0);
-    return 0;
+    if (c.addedQuantity != null || c.suppressedQuantity != null) {
+      const added = Math.max(0, c.addedQuantity ?? 0);
+      return { added, suppressed };
+    }
+    if (c.changeKind === 'acrescido') {
+      const added = Math.max(0, c.quantity ?? 0);
+      return { added, suppressed: 0 };
+    }
+    if (c.changeKind === 'suprimido') {
+      const legacySuppressed = Math.max(0, c.quantity ?? 0);
+      return { added: 0, suppressed: legacySuppressed };
+    }
+    return { added: 0, suppressed: 0 };
   };
 
   // A) FONTE PRINCIPAL — Insumos analíticos das composições da aba ADITIVO.
@@ -506,17 +531,19 @@ export function suggestMaterialsWithDiagnostics(
     const isContracted = ad.isContracted === true || ad.status === 'contratado' || ad.status === 'aditivo_contratado';
     if (isContracted) diag.contractedAdditivesRead += 1;
     for (const comp of ad.compositions ?? []) {
-      const compQty = additiveDelta(comp);
-      const inputs = comp.inputs ?? [];
-      if (!compQty || inputs.length === 0) continue;
+      const delta = additiveDelta(comp);
+      const inputs = compositionWithResolvedInputs(project, comp).composition.inputs ?? [];
+      if ((!delta.added && !delta.suppressed) || inputs.length === 0) continue;
       diag.additiveCompositionsWithAnalytic += 1;
       const isNew = comp.isNewService === true;
       const detail: MaterialSuggestionDetail = isNew
         ? 'additive_new_service'
         : 'additive_existing_changed';
       for (const inp of inputs) {
-        const qty = trunc2((inp.coefficient || 0) * compQty);
-        if (!qty) continue;
+        const addedQty = trunc2(Math.max(0, (inp.coefficient || 0) * delta.added));
+        const suppressedQty = trunc2(Math.max(0, (inp.coefficient || 0) * delta.suppressed));
+        const qty = trunc2(addedQty - suppressedQty);
+        if (!qty && !addedQty && !suppressedQty) continue;
         diag.additiveAnalyticInputs += 1;
         // O desconto licitatório é global da composição; nunca altera o
         // preço de referência de cada material para planejamento de compra.
@@ -528,6 +555,9 @@ export function suggestMaterialsWithDiagnostics(
           quantity: qty,
           contractedQuantity: isContracted ? qty : 0,
           additiveQuantity: isContracted ? 0 : qty,
+          pendingAddedQuantity: isContracted ? 0 : addedQty,
+          pendingSuppressedQuantity: isContracted ? 0 : suppressedQty,
+          purchasableQuantity: isContracted ? Math.max(0, qty) : 0,
           code: inp.code || undefined,
           bank: inp.bank || undefined,
           referencePrice: referencePrice || undefined,
@@ -563,6 +593,9 @@ export function suggestMaterialsWithDiagnostics(
         quantity: qty,
         contractedQuantity: qty,
         additiveQuantity: 0,
+        pendingAddedQuantity: 0,
+        pendingSuppressedQuantity: 0,
+        purchasableQuantity: Math.max(0, qty),
         code: inp.code || undefined,
         bank: inp.bank || undefined,
         referencePrice: inp.unitPrice || undefined,
@@ -596,6 +629,9 @@ export function suggestMaterialsWithDiagnostics(
         quantity: trunc2(m.quantity || 0),
         contractedQuantity: trunc2(m.quantity || 0),
         additiveQuantity: 0,
+        pendingAddedQuantity: 0,
+        pendingSuppressedQuantity: 0,
+        purchasableQuantity: trunc2(Math.max(0, m.quantity || 0)),
         referencePrice: refPrice,
         sourceType: 'task_material',
         sourceId: t.id,
@@ -626,24 +662,33 @@ export function linkKeyOf(x: SuggestionLikeKey): string {
 
 function synchronizeComparisonItemQuantity(
   item: ComparisonItem,
-  quantities: { contractedQuantity: number; additiveQuantity: number; totalQuantity: number; sourceId?: string },
+  quantities: {
+    contractedQuantity: number;
+    additiveQuantity: number;
+    totalQuantity: number;
+    purchasableQuantity?: number;
+    sourceId?: string;
+  },
 ): ComparisonItem {
-  const quantity = trunc2(Math.max(0, quantities.contractedQuantity || 0));
+  const contractedQuantity = trunc2(Math.max(0, quantities.contractedQuantity || 0));
+  const quantity = trunc2(Math.max(0, quantities.purchasableQuantity ?? contractedQuantity));
   const additiveQuantity = trunc2(quantities.additiveQuantity || 0);
   const totalQuantity = trunc2(quantities.totalQuantity || 0);
   const unchanged =
     item.quantity === quantity &&
-    item.contractedQuantity === quantity &&
+    item.contractedQuantity === contractedQuantity &&
     item.additiveQuantity === additiveQuantity &&
     item.totalQuantity === totalQuantity &&
+    item.purchasableQuantity === quantity &&
     (!quantities.sourceId || item.sourceId === quantities.sourceId);
   if (unchanged) return item;
   return {
     ...item,
     quantity,
-    contractedQuantity: quantity,
+    contractedQuantity,
     additiveQuantity,
     totalQuantity,
+    purchasableQuantity: quantity,
     sourceId: quantities.sourceId ?? item.sourceId,
     prices: item.prices.map(price => ({
       ...price,
@@ -672,6 +717,7 @@ export function syncOpenComparisonSuggestionQuantities(
         contractedQuantity: suggestion.contractedQuantity,
         additiveQuantity: suggestion.additiveQuantity,
         totalQuantity: suggestion.quantity,
+        purchasableQuantity: suggestion.purchasableQuantity,
         sourceId: suggestion.sourceId,
       });
       if (next !== item) comparisonChanged = true;
@@ -814,10 +860,11 @@ function compositionQtyFinal(c: { quantity?: number; originalQuantity?: number; 
 
 export function getMaterialCompositionBreakdown(project: Project, comp: AdditiveComposition, source = 'Composição'): MaterialCompositionClassBreakdown | null {
   const qty = compositionQtyFinal(comp);
-  if (qty <= 0 || !comp.inputs?.length) return null;
+  const resolvedComposition = compositionWithResolvedInputs(project, comp).composition;
+  if (qty <= 0 || !resolvedComposition.inputs?.length) return null;
   const rows = computeMaterialCostClassTotals(
     project,
-    comp.inputs
+    resolvedComposition.inputs
       .map(inp => ({
         key: makeKey(inp.code, inp.description, inp.unit, inp.bank),
         description: inp.description,
@@ -825,6 +872,9 @@ export function getMaterialCompositionBreakdown(project: Project, comp: Additive
         quantity: trunc2((inp.coefficient || 0) * qty),
         contractedQuantity: trunc2((inp.coefficient || 0) * qty),
         additiveQuantity: 0,
+        pendingAddedQuantity: 0,
+        pendingSuppressedQuantity: 0,
+        purchasableQuantity: trunc2(Math.max(0, (inp.coefficient || 0) * qty)),
         code: inp.code || undefined,
         bank: inp.bank || undefined,
         referencePrice: inp.unitPrice || undefined,
@@ -887,7 +937,8 @@ export function setSuggestionLink(
   targetComparisonId: string | null,
 ): Project {
   const contractedQuantity = trunc2(Math.max(0, suggestion.contractedQuantity ?? suggestion.quantity));
-  if (targetComparisonId && contractedQuantity <= 0) return project;
+  const purchasableQuantity = trunc2(Math.max(0, suggestion.purchasableQuantity ?? contractedQuantity));
+  if (targetComparisonId && purchasableQuantity <= 0) return project;
   const key = linkKeyOf(suggestion);
   const list = project.materialComparisons ?? [];
   const lockedLocation = list.find(comparison =>
@@ -905,6 +956,7 @@ export function setSuggestionLink(
           contractedQuantity,
           additiveQuantity: suggestion.additiveQuantity ?? 0,
           totalQuantity: suggestion.totalQuantity ?? contractedQuantity,
+          purchasableQuantity,
         });
         return next === has ? c : {
           ...c,
@@ -917,10 +969,11 @@ export function setSuggestionLink(
         prices: [],
         status: 'pendente',
         ...suggestion,
-        quantity: contractedQuantity,
+        quantity: purchasableQuantity,
         contractedQuantity,
         additiveQuantity: suggestion.additiveQuantity ?? 0,
         totalQuantity: suggestion.totalQuantity ?? contractedQuantity,
+        purchasableQuantity,
       };
       return { ...c, items: [...c.items, it], updatedAt: ts };
     }

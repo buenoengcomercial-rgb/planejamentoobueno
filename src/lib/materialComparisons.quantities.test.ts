@@ -72,6 +72,9 @@ describe('quantidades contratuais e de aditivo dos materiais', () => {
     expect(row).toMatchObject({
       contractedQuantity: 24,
       additiveQuantity: 4,
+      pendingAddedQuantity: 6,
+      pendingSuppressedQuantity: 2,
+      purchasableQuantity: 22,
       quantity: 28,
       hasBaseContractSource: true,
       hasFormalizedAdditiveSource: true,
@@ -99,7 +102,81 @@ describe('quantidades contratuais e de aditivo dos materiais', () => {
     const row = suggestMaterialsFromProject(project).find(item => item.code === 'MAT-1');
     expect(row?.contractedQuantity).toBe(10);
     expect(row?.additiveQuantity).toBe(-4);
+    expect(row?.pendingSuppressedQuantity).toBe(4);
+    expect(row?.purchasableQuantity).toBe(6);
     expect(row?.quantity).toBe(6);
+  });
+
+  it('desconta supressão total quando a composição usa a analítica herdada do contrato', () => {
+    const base = composition('base', { quantity: 5 });
+    const project = projectWith({
+      analyticCompositions: [base],
+      additives: [additive('supressao-herdada', 'rascunho', [composition('alterada', {
+        code: base.code,
+        inputs: [],
+        baseAnalyticCompositionId: base.id,
+        originalQuantity: 5,
+        addedQuantity: 0,
+        suppressedQuantity: 5,
+      })])],
+    });
+
+    const row = suggestMaterialsFromProject(project).find(item => item.code === 'MAT-1');
+    expect(row).toMatchObject({
+      contractedQuantity: 10,
+      additiveQuantity: -10,
+      pendingAddedQuantity: 0,
+      pendingSuppressedQuantity: 10,
+      purchasableQuantity: 0,
+      quantity: 0,
+      hasBaseContractSource: true,
+      hasPendingAdditiveSource: true,
+    });
+  });
+
+  it('separa suporte contratado, supressão pendente e novo serviço sem liberar o acréscimo para compra', () => {
+    const supportInput = (id: string) => ({
+      id,
+      code: '8442',
+      bank: 'SBC',
+      description: 'SUPORTE BASCULANTE PARA MANGUEIRA DE INCENDIO',
+      unit: 'UN',
+      coefficient: 1,
+      unitPrice: 109.14,
+      total: 109.14,
+    });
+    const suppressedBase = composition('abhi1', { code: 'ABHI1', quantity: 75, inputs: [supportInput('support-abhi1')] });
+    const unchangedBase = composition('abhi2', { code: 'ABHI2', quantity: 38, inputs: [supportInput('support-abhi2')] });
+    const project = projectWith({
+      analyticCompositions: [suppressedBase, unchangedBase],
+      additives: [additive('rascunho', 'rascunho', [
+        composition('abhi1-alterada', {
+          code: 'ABHI1',
+          inputs: [],
+          baseAnalyticCompositionId: suppressedBase.id,
+          originalQuantity: 75,
+          suppressedQuantity: 75,
+          addedQuantity: 0,
+        }),
+        composition('novo-abrigo', {
+          code: 'ABHI-NOVO',
+          inputs: [supportInput('support-novo')],
+          isNewService: true,
+          originalQuantity: 0,
+          addedQuantity: 12,
+        }),
+      ])],
+    });
+
+    const row = suggestMaterialsFromProject(project).find(item => item.code === '8442');
+    expect(row).toMatchObject({
+      contractedQuantity: 113,
+      additiveQuantity: -63,
+      pendingAddedQuantity: 12,
+      pendingSuppressedQuantity: 75,
+      purchasableQuantity: 38,
+      quantity: 50,
+    });
   });
 
   it('sincroniza somente comparativos abertos e preserva preços e pedidos', () => {
@@ -131,7 +208,7 @@ describe('quantidades contratuais e de aditivo dos materiais', () => {
     const next = syncOpenComparisonSuggestionQuantities(project);
     const openItem = next.materialComparisons?.[0].items[0];
     const closedItem = next.materialComparisons?.[1].items[0];
-    expect(openItem).toMatchObject({ quantity: 10, contractedQuantity: 10, additiveQuantity: 0, totalQuantity: 10 });
+    expect(openItem).toMatchObject({ quantity: 10, contractedQuantity: 10, additiveQuantity: 0, totalQuantity: 10, purchasableQuantity: 10 });
     expect(openItem?.prices[0].total).toBe(30);
     expect(openItem?.purchaseOrders).toEqual(item.purchaseOrders);
     expect(closedItem?.quantity).toBe(99);
@@ -154,6 +231,7 @@ describe('quantidades contratuais e de aditivo dos materiais', () => {
       contractedQuantity: 10,
       additiveQuantity: 5,
       totalQuantity: 15,
+      purchasableQuantity: 10,
     };
     const linked = setSuggestionLink(baseProject, payload, 'comparison');
     expect(linked.materialComparisons?.[0].items[0]).toMatchObject({
@@ -161,13 +239,23 @@ describe('quantidades contratuais e de aditivo dos materiais', () => {
       contractedQuantity: 10,
       additiveQuantity: 5,
       totalQuantity: 15,
+      purchasableQuantity: 10,
     });
 
     const blocked = setSuggestionLink(baseProject, {
       ...payload,
       contractedQuantity: 0,
       additiveQuantity: 15,
+      purchasableQuantity: 0,
     }, 'comparison');
     expect(blocked).toBe(baseProject);
+
+    const blockedBySuppression = setSuggestionLink(baseProject, {
+      ...payload,
+      additiveQuantity: -10,
+      totalQuantity: 0,
+      purchasableQuantity: 0,
+    }, 'comparison');
+    expect(blockedBySuppression).toBe(baseProject);
   });
 });

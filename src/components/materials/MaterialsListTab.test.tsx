@@ -72,7 +72,7 @@ describe('MaterialsListTab', () => {
     expect(screen.getByText('Qtd. total')).toBeInTheDocument();
     expect(screen.getByText('Material ainda não contratado')).toBeInTheDocument();
     expect(screen.getAllByRole('checkbox').at(-1)).toBeDisabled();
-    expect(screen.getAllByTitle('Sem quantidade contratada liberada para compra')).toHaveLength(2);
-    expect(screen.getAllByTitle('Sem quantidade contratada liberada para compra')[1]).toBeDisabled();
+    expect(screen.getAllByTitle('Sem saldo liberado para compra após as supressões em andamento')).toHaveLength(2);
+    expect(screen.getAllByTitle('Sem saldo liberado para compra após as supressões em andamento')[1]).toBeDisabled();
   });
 });

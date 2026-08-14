@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import type { ElementType, ReactNode } from 'react';
-import type { Project, MaterialComparison } from '@/types/project';
+import type { Project, MaterialComparison, AdditiveComposition } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -83,7 +83,10 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   const [showManual, setShowManual] = useState(false);
   const [manual, setManual] = useState({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '' });
 
-  const allComparisons = project.materialComparisons ?? [];
+  const allComparisons = useMemo(
+    () => project.materialComparisons ?? [],
+    [project.materialComparisons],
+  );
   const visibleProject = useMemo(
     () => ({
       ...project,
@@ -145,8 +148,8 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     () => MC.computeMaterialCostClassTotals(
       visibleProject,
       realSuggestions
-        .filter(item => item.contractedQuantity > 0)
-        .map(item => ({ ...item, quantity: item.contractedQuantity })),
+        .filter(item => item.purchasableQuantity > 0)
+        .map(item => ({ ...item, quantity: item.purchasableQuantity })),
     ),
     [realSuggestions, visibleProject],
   );
@@ -210,7 +213,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     try {
       const buf = await file.arrayBuffer();
       const baseItems = (project.budgetItems ?? []).filter(b => b.source === 'sintetica');
-      let compositions: any[] = [];
+      let compositions: AdditiveComposition[] = [];
       let info = '';
       const combined = await extractBaseAnalyticCompositions(buf);
       if (combined.hasAnalyticSheet && combined.compositions.length > 0) {
@@ -233,8 +236,9 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
       }
       onProjectChange(prev => ({ ...prev, analyticCompositions: compositions }));
       setLinkMsg({ kind: 'ok', text: info });
-    } catch (err: any) {
-      setLinkMsg({ kind: 'err', text: `Falha ao ler Analítica: ${err?.message ?? 'erro desconhecido'}.` });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'erro desconhecido';
+      setLinkMsg({ kind: 'err', text: `Falha ao ler Analítica: ${message}.` });
     }
     setLinkingAnalytic(false);
   }, [project, onProjectChange]);
@@ -242,10 +246,11 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   const suggestionToPayload = (s: MC.MaterialSuggestion) => ({
     description: s.description,
     unit: s.unit,
-    quantity: trunc2(Math.max(0, s.contractedQuantity)),
+    quantity: trunc2(Math.max(0, s.purchasableQuantity)),
     contractedQuantity: trunc2(Math.max(0, s.contractedQuantity)),
     additiveQuantity: trunc2(s.additiveQuantity),
     totalQuantity: trunc2(s.quantity),
+    purchasableQuantity: trunc2(Math.max(0, s.purchasableQuantity)),
     referencePrice: s.referencePrice,
     code: s.code,
     sourceType: s.sourceType,
@@ -254,8 +259,8 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   });
 
   const changeGroup = (s: MC.MaterialSuggestion, targetCompId: string | null) => {
-    if (targetCompId && s.contractedQuantity <= 0) {
-      toast.error('Este insumo ainda não possui quantidade contratada liberada para compra.');
+    if (targetCompId && s.purchasableQuantity <= 0) {
+      toast.error('Este insumo não possui saldo liberado para compra após as supressões em andamento.');
       return;
     }
     onProjectChange(prev => MC.setSuggestionLink(prev, suggestionToPayload(s), targetCompId));
@@ -278,7 +283,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
       toast.error('Selecione ou crie um comparativo antes de vincular insumos.');
       return;
     }
-    const picked = realSuggestions.filter(s => selectedKeys[s.key] && s.contractedQuantity > 0);
+    const picked = realSuggestions.filter(s => selectedKeys[s.key] && s.purchasableQuantity > 0);
     if (picked.length === 0) return;
     onProjectChange(prev => picked.reduce(
       (next, s) => MC.setSuggestionLink(next, suggestionToPayload(s), comparison.id),
@@ -302,7 +307,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   };
 
   const selectedCount = Object.values(selectedKeys).filter(Boolean).length;
-  const selectableFiltered = filtered.filter(s => s.contractedQuantity > 0);
+  const selectableFiltered = filtered.filter(s => s.purchasableQuantity > 0);
   const allVisibleSelected = selectableFiltered.length > 0 && selectableFiltered.every(s => selectedKeys[s.key]);
   const toggleAllVisible = (v: boolean) => {
     setSelectedKeys(prev => {
@@ -490,9 +495,9 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                     <td className="p-1.5 align-middle">
                       <Checkbox
                         checked={checked}
-                        disabled={s.contractedQuantity <= 0}
+                        disabled={s.purchasableQuantity <= 0}
                         onCheckedChange={v => setSelectedKeys(prev => ({ ...prev, [s.key]: !!v }))}
-                        title={s.contractedQuantity <= 0 ? 'Sem quantidade contratada liberada para compra' : undefined}
+                        title={s.purchasableQuantity <= 0 ? 'Sem saldo liberado para compra após as supressões em andamento' : undefined}
                       />
                     </td>
                     <td className="p-1.5 align-middle font-mono text-[10px]">{s.code || '—'}</td>
@@ -528,11 +533,11 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                       <select
                         value={linkedTo}
                         onChange={e => changeGroup(s, e.target.value || null)}
-                        disabled={linkLocked || (s.contractedQuantity <= 0 && !linkedTo)}
+                        disabled={linkLocked || (s.purchasableQuantity <= 0 && !linkedTo)}
                         title={linkLocked
                           ? 'Comparativo fechado: vínculo preservado como histórico'
-                          : s.contractedQuantity <= 0 && !linkedTo
-                            ? 'Sem quantidade contratada liberada para compra'
+                          : s.purchasableQuantity <= 0 && !linkedTo
+                            ? 'Sem saldo liberado para compra após as supressões em andamento'
                             : undefined}
                         className="h-7 w-full text-[11px] border border-border rounded px-1.5 bg-background"
                       >

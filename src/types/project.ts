@@ -961,13 +961,16 @@ export interface ComparisonItem {
   code?: string;
   description: string;
   unit: string;
+  /** Quantidade liberada para compra, já descontadas as supressões pendentes. */
   quantity: number;
-  /** Quantidade efetivamente liberada pelo contrato vigente no momento do vínculo. */
+  /** Quantidade do contrato-base + aditivos formalizados, antes das propostas pendentes. */
   contractedQuantity?: number;
   /** Saldo líquido de propostas de aditivo ainda não formalizadas. */
   additiveQuantity?: number;
   /** Quantidade projetada = contratada + aditivo pendente. */
   totalQuantity?: number;
+  /** Quantidade segura para compra = contratada - supressões pendentes; não libera acréscimos pendentes. */
+  purchasableQuantity?: number;
   /** Preço de referência (orçamento/SINAPI/anterior). */
   referencePrice?: number;
   /** Fornecedor escolhido manualmente; quando ausente, usa-se o menor preço. */
