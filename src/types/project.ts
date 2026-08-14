@@ -1266,6 +1266,47 @@ export type AdditiveScheduleClassification =
 
 export type AdditiveScheduleState = 'scheduled' | 'suspended' | 'fully_suppressed';
 export type AdditiveScheduleFinancialTreatment = 'monthly' | 'total_only' | 'excluded';
+export type AdditiveScheduleRestrictionKind = 'contracted_balance_only';
+
+export interface AdditiveScheduleQuantityRestriction {
+  kind: AdditiveScheduleRestrictionKind;
+  contractedQuantity: number;
+  executableQuantity: number;
+  addedQuantity: number;
+  suppressedQuantity: number;
+  unit?: string;
+}
+
+export interface AdditiveScheduleBlockingCompositionRef {
+  compositionId: string;
+  item?: string;
+  code?: string;
+  description: string;
+  quantity: number;
+  unit?: string;
+}
+
+/** Planejamento isolado de uma tarefa contratada com execução quantitativa limitada. */
+export interface AdditiveScheduleContractedTaskPlan {
+  taskId: string;
+  startDate: string;
+  duration: number;
+  dependencies: string[];
+  dependencyDetails?: TaskDependency[];
+  responsible: string;
+  team?: TeamCode;
+  scheduleOrder?: number;
+  durationMode?: 'manual' | 'rup';
+  isManual?: boolean;
+  manualDuration?: number;
+}
+
+/** Relação documental entre uma tarefa suspensa e as composições que a bloqueiam. */
+export interface AdditiveScheduleDependencyBlock {
+  taskId: string;
+  compositionIds: string[];
+  note?: string;
+}
 
 /** Programação preliminar de um serviço novo, ainda isolada do contrato vigente. */
 export interface AdditiveSchedulePlannedTask {
@@ -1296,6 +1337,10 @@ export interface AdditiveScheduleDraft {
   dependentTaskIds: string[];
   /** Somente serviços novos ficam aqui; tarefas contratadas permanecem em Project.phases. */
   plannedTasks: AdditiveSchedulePlannedTask[];
+  /** Planejamento isolado das tarefas com saldo contratado liberado. */
+  contractedTaskPlans?: AdditiveScheduleContractedTaskPlan[];
+  /** Composições que justificam cada suspensão manual. */
+  dependencyBlocks?: AdditiveScheduleDependencyBlock[];
 }
 
 /** Linha congelada usada na leitura histórica e nas exportações da prévia formalizada. */
@@ -1313,6 +1358,11 @@ export interface AdditiveScheduleSnapshotRow {
   scheduleState?: AdditiveScheduleState;
   /** Controls monthly allocation without changing the contractual value. */
   financialTreatment?: AdditiveScheduleFinancialTreatment;
+  /** Quantidades congeladas para distinguir execução contratada de impactos pendentes. */
+  quantityRestriction?: AdditiveScheduleQuantityRestriction;
+  /** Referências congeladas das composições que bloquearam a tarefa. */
+  blockingCompositions?: AdditiveScheduleBlockingCompositionRef[];
+  blockingNote?: string;
   startDate: string;
   duration: number;
   dependencies: string[];

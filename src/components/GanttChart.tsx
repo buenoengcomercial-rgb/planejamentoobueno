@@ -4,7 +4,7 @@ import GerenciarEquipes from './GerenciarEquipes';
 import { Settings2 } from 'lucide-react';
 import { getAllTasks } from '@/data/sampleProject';
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
-import { ChevronDown, ChevronRight, AlertTriangle, Flag } from 'lucide-react';
+import { ChevronDown, ChevronRight, AlertTriangle, Flag, Pencil } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { GanttDatePickerCalendar } from './gantt/GanttDatePickerCalendar';
@@ -40,6 +40,7 @@ interface GanttChartProps {
   subtitle?: string;
   suspensionMap?: Record<string, AdditiveScheduleSuspensionMeta>;
   onToggleSuspension?: (taskId: string, checked: boolean) => void;
+  onEditSuspension?: (taskId: string) => void;
   financialForecastNode?: React.ReactNode | null;
   readOnly?: boolean;
 }
@@ -53,6 +54,7 @@ export default function GanttChart({
   subtitle = 'Gantt Interativo com CPM',
   suspensionMap: providedSuspensionMap,
   onToggleSuspension,
+  onEditSuspension,
   financialForecastNode,
   readOnly = false,
 }: GanttChartProps) {
@@ -328,7 +330,9 @@ export default function GanttChart({
   );
   const totalDays = useMemo(() => diffDays(projectStart, projectEnd) + 10, [projectStart, projectEnd]);
   const dayWidth = DAY_WIDTH[viewMode];
-  const taskRowHeight = density === 'compact' ? 24 : ROW_HEIGHT;
+  const taskRowHeight = context === 'additive-preview'
+    ? (density === 'compact' ? 34 : 40)
+    : density === 'compact' ? 24 : ROW_HEIGHT;
   const phaseHeaderHeight = taskRowHeight + (density === 'compact' ? 16 : 20);
   const taskSubHeaderHeight = density === 'compact' ? 16 : 18;
   const chartWidth = useMemo(() => totalDays * dayWidth, [totalDays, dayWidth]);
@@ -1058,8 +1062,8 @@ export default function GanttChart({
   }, [obraConfig]);
 
   const showSuspensionColumn = context === 'additive-preview';
-  const sidebarCols = `${showSuspensionColumn ? '32px ' : ''}24px 1fr 88px 88px 44px 22px 60px 60px 52px 48px 56px`;
-  const sidebarWidth = showSuspensionColumn ? 792 : 760;
+  const sidebarCols = `${showSuspensionColumn ? '46px ' : ''}24px 1fr 88px 88px 44px 22px 60px 60px 52px 48px 56px`;
+  const sidebarWidth = showSuspensionColumn ? 806 : 760;
 
   // Toggle duration mode and recalculate if switching to RUP
   const toggleDurationMode = (taskId: string) => {
@@ -1970,7 +1974,7 @@ export default function GanttChart({
                               }}
                             >
                               {showSuspensionColumn && (
-                                <div className="flex justify-center">
+                                <div className="flex items-center justify-center gap-1">
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <input
@@ -1986,8 +1990,26 @@ export default function GanttChart({
                                       {suspension?.disabled
                                         ? `${suspension.label}. Marcação automática e obrigatória.`
                                         : suspension?.label || 'Marcar como serviço contratado dependente do aditivo.'}
+                                      {!!suspension?.blockingCompositions?.length && (
+                                        <div className="mt-2 space-y-1 border-t border-border pt-2">
+                                          {suspension.blockingCompositions.map(item => (
+                                            <div key={item.compositionId}>{[item.item, item.code].filter(Boolean).join(' - ')} {item.description}</div>
+                                          ))}
+                                        </div>
+                                      )}
                                     </TooltipContent>
                                   </Tooltip>
+                                  {suspension?.kind === 'manual' && !readOnly && onEditSuspension && (
+                                    <button
+                                      type="button"
+                                      onClick={() => onEditSuspension(task.id)}
+                                      className="rounded p-0.5 text-amber-700 hover:bg-amber-100"
+                                      aria-label={`Editar bloqueadores de ${task.name}`}
+                                      title="Editar composições bloqueadoras"
+                                    >
+                                      <Pencil className="h-3 w-3" />
+                                    </button>
+                                  )}
                                 </div>
                               )}
                               <div className="text-center">
@@ -2011,14 +2033,30 @@ export default function GanttChart({
                                     </TooltipContent>
                                   </Tooltip>
                                 )}
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <p className={`text-[11px] font-medium line-clamp-2 break-words leading-tight ${rowTeamDef ? '' : 'text-foreground'}`}>{task.name}</p>
-                                  </TooltipTrigger>
-                                  <TooltipContent side="top" className="max-w-md whitespace-normal break-words text-xs">
-                                    {task.name}
-                                  </TooltipContent>
-                                </Tooltip>
+                                <div className="min-w-0 flex-1">
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <p className={`truncate text-[11px] font-medium leading-tight ${rowTeamDef ? '' : 'text-foreground'}`}>{task.name}</p>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="max-w-md whitespace-normal break-words text-xs">
+                                      {task.name}
+                                    </TooltipContent>
+                                  </Tooltip>
+                                  {context === 'additive-preview' && suspension?.kind === 'quantity_limited' && (
+                                    <p
+                                      data-testid={`gantt-quantity-limited-${task.id}`}
+                                      className="truncate text-[8px] font-bold leading-tight text-sky-800"
+                                      title={suspension.label}
+                                    >
+                                      {suspension.label}
+                                    </p>
+                                  )}
+                                  {context === 'additive-preview' && suspension?.kind === 'manual' && !!suspension.blockingCompositions?.length && (
+                                    <p className="truncate text-[8px] font-semibold leading-tight text-amber-800">
+                                      Bloqueado por {suspension.blockingCompositions.length} composição(ões) do aditivo
+                                    </p>
+                                  )}
+                                </div>
                                 <AdditiveBadge
                                   originAdditiveId={task.originAdditiveId}
                                   originAdditiveName={task.originAdditiveName}
@@ -2036,6 +2074,15 @@ export default function GanttChart({
                                     <TooltipContent side="top" className="max-w-md whitespace-normal text-xs">
                                       <div className="font-semibold">{suspension.label}</div>
                                       <div>{suspension.reason}</div>
+                                      {!!suspension.blockingCompositions?.length && (
+                                        <div className="mt-2 border-t border-border pt-2">
+                                          <div className="font-semibold">Composições bloqueadoras:</div>
+                                          {suspension.blockingCompositions.map(item => (
+                                            <div key={item.compositionId}>{[item.item, item.code].filter(Boolean).join(' - ')} {item.description}</div>
+                                          ))}
+                                          {suspension.blockingNote && <div className="mt-1 italic">{suspension.blockingNote}</div>}
+                                        </div>
+                                      )}
                                       <div className="mt-1 text-muted-foreground">{suspension.additiveName}</div>
                                     </TooltipContent>
                                   </Tooltip>
@@ -2693,7 +2740,7 @@ export default function GanttChart({
                                     className="h-full rounded-md opacity-30"
                                     style={{ width: `${task.percentComplete}%`, background: 'white', borderRadius: 6 }}
                                   />
-                                  {suspension && barWidth >= 160 && (
+                                  {suspension && suspension.kind !== 'quantity_limited' && barWidth >= 160 && (
                                     <div className="absolute inset-0 flex items-center justify-center overflow-hidden px-2 text-[8px] font-bold text-white drop-shadow-sm pointer-events-none">
                                       <span className="truncate">{suspension.label}</span>
                                     </div>

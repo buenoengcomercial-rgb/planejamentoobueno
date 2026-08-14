@@ -5,7 +5,10 @@ import type { Additive, AdditiveScheduleSnapshotRow, Project } from '@/types/pro
 import GanttChart from '@/components/GanttChart';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
+import { loadObraConfig } from '@/components/ConfiguracaoObra';
 import AdditiveScheduleFinancialForecast from '@/components/additiveSchedule/AdditiveScheduleFinancialForecast';
 import {
   ADDITIVE_SCHEDULE_GUIDANCE,
@@ -17,10 +20,13 @@ import {
   buildPreviewSuspensionMap,
   buildProjectFromScheduleSnapshot,
   confirmAdditiveScheduleDates,
+  getBlockingCompositionRefs,
   getFullySuppressedTaskIds,
+  isDirectlyChangedComposition,
   mergeAdditiveSchedulePreviewChanges,
   resolveAdditiveScheduleFinancialTreatment,
   resolveAdditiveScheduleState,
+  setAdditiveScheduleDependencyBlock,
   setAdditiveScheduleDependentTask,
   syncAdditiveScheduleDraft,
   validateAdditiveSchedule,
@@ -40,17 +46,23 @@ function snapshotSuspensionMap(rows: AdditiveScheduleSnapshotRow[], additive: Ad
   rows.forEach(row => {
     if (row.description.startsWith('Impacto do aditivo - ')) return;
     const fallbackState = legacyFullySuppressed.has(row.taskId) ? 'fully_suppressed' : resolveAdditiveScheduleState(row);
-    if (fallbackState === 'scheduled' && row.classification === 'contracted_released') return;
+    if (fallbackState === 'scheduled' && row.classification === 'contracted_released' && !row.quantityRestriction) return;
+    const isManual = row.classification === 'contracted_suspended' && !!row.blockingCompositions?.length;
     result[row.taskId] = {
-      kind: row.classification === 'contracted_suspended' ? 'automatic' : 'proposed',
+      kind: row.quantityRestriction && fallbackState === 'scheduled'
+        ? 'quantity_limited'
+        : isManual ? 'manual' : row.classification === 'contracted_suspended' ? 'automatic' : 'proposed',
       label: fallbackState === 'fully_suppressed' ? FULLY_SUPPRESSED_STATUS_LABEL : row.statusLabel,
       reason: ADDITIVE_SCHEDULE_GUIDANCE,
       additiveId: 'snapshot',
       additiveName: 'Versão arquivada',
-      checked: true,
+      checked: fallbackState !== 'scheduled',
       disabled: true,
       scheduleState: fallbackState,
       financialTreatment: resolveAdditiveScheduleFinancialTreatment(row),
+      quantityRestriction: row.quantityRestriction,
+      blockingCompositions: row.blockingCompositions,
+      blockingNote: row.blockingNote,
     };
   });
   return result;
@@ -60,7 +72,11 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
   const additives = project.additives ?? [];
   const preferred = additives.find(additive => !additive.isContracted || additive.editUnlocked) ?? additives[0];
   const [activeId, setActiveId] = useState(preferred?.id ?? '');
+  const [blockTaskId, setBlockTaskId] = useState<string | null>(null);
+  const [blockerIds, setBlockerIds] = useState<string[]>([]);
+  const [blockerNote, setBlockerNote] = useState('');
   const active = additives.find(additive => additive.id === activeId) ?? preferred;
+  const obraConfig = useMemo(loadObraConfig, []);
 
   useEffect(() => {
     if (!active && preferred) setActiveId(preferred.id);
@@ -77,8 +93,8 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
   const preview = useMemo(() => {
     if (!active) return null;
     if (isArchived) return latestSnapshot ? buildProjectFromScheduleSnapshot(project, latestSnapshot) : null;
-    return active.scheduleDraft ? buildAdditiveSchedulePreviewProject(project, active, active.scheduleDraft) : null;
-  }, [active, isArchived, latestSnapshot, project]);
+    return active.scheduleDraft ? buildAdditiveSchedulePreviewProject(project, active, active.scheduleDraft, obraConfig) : null;
+  }, [active, isArchived, latestSnapshot, obraConfig, project]);
   const rows = useMemo(() => {
     if (!active || !preview) return [];
     return isArchived && latestSnapshot ? latestSnapshot.rows : buildAdditiveScheduleRows(project, active, preview);
@@ -90,13 +106,45 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
   const issues = active ? validateAdditiveSchedule(project, active) : [];
   const directSuspended = Object.values(suspensions).filter(meta => meta.kind === 'automatic').length;
   const manualSuspended = Object.values(suspensions).filter(meta => meta.kind === 'manual').length;
+  const quantityLimited = Object.values(suspensions).filter(meta => meta.kind === 'quantity_limited').length;
   const proposed = rows.filter(row => row.classification === 'proposed_addition' || row.classification === 'proposed_suppression').length;
+  const eligibleBlockingCompositions = useMemo(() => (
+    active ? active.compositions.filter(composition => isDirectlyChangedComposition(project, composition)) : []
+  ), [active, project]);
+  const blockerRefs = useMemo(() => (
+    active ? getBlockingCompositionRefs(active, eligibleBlockingCompositions.map(composition => composition.id)) : []
+  ), [active, eligibleBlockingCompositions]);
+  const blockingTaskName = preview?.phases.flatMap(phase => phase.tasks).find(task => task.id === blockTaskId)?.name;
+
+  const openBlockDialog = (taskId: string) => {
+    if (!active) return;
+    const current = active.scheduleDraft?.dependencyBlocks?.find(block => block.taskId === taskId);
+    setBlockTaskId(taskId);
+    setBlockerIds(current?.compositionIds ?? []);
+    setBlockerNote(current?.note ?? '');
+  };
+
+  const closeBlockDialog = () => {
+    setBlockTaskId(null);
+    setBlockerIds([]);
+    setBlockerNote('');
+  };
+
+  const saveBlock = () => {
+    if (!active || !blockTaskId) return;
+    if (!blockerIds.length) {
+      toast.error('Selecione ao menos uma composição que impede a execução.');
+      return;
+    }
+    onProjectChange(setAdditiveScheduleDependencyBlock(project, active.id, blockTaskId, blockerIds, blockerNote));
+    closeBlockDialog();
+  };
 
   const exportPdf = async () => {
     if (!active) return;
     try {
       toast.loading('Gerando PDF do Cronograma do Aditivo...', { id: 'additive-schedule-pdf' });
-      await exportAdditiveSchedulePdf(project, active, rows);
+      await exportAdditiveSchedulePdf(project, active, rows, obraConfig.trabalhaSabado);
       toast.success('PDF gerado.', { id: 'additive-schedule-pdf' });
     } catch (error) {
       console.error(error);
@@ -108,7 +156,7 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
     if (!active) return;
     try {
       toast.loading('Gerando Excel do Cronograma do Aditivo...', { id: 'additive-schedule-xlsx' });
-      await exportAdditiveScheduleExcel(project, active, rows);
+      await exportAdditiveScheduleExcel(project, active, rows, obraConfig.trabalhaSabado);
       toast.success('Excel gerado.', { id: 'additive-schedule-xlsx' });
     } catch (error) {
       console.error(error);
@@ -159,8 +207,9 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
         )}
       </div>
 
-      <div className="grid gap-2 md:grid-cols-4">
+      <div className="grid gap-2 md:grid-cols-5">
         <Card className="p-3"><div className="text-[10px] font-semibold uppercase text-muted-foreground">Atividades exibidas</div><div className="text-2xl font-bold">{preview?.phases.reduce((sum, phase) => sum + phase.tasks.length, 0) ?? 0}</div></Card>
+        <Card className="border-sky-200 bg-sky-50 p-3"><div className="text-[10px] font-semibold uppercase text-sky-800">Execução parcial</div><div className="text-2xl font-bold text-sky-900">{quantityLimited}</div></Card>
         <Card className="border-amber-200 bg-amber-50 p-3"><div className="text-[10px] font-semibold uppercase text-amber-800">Suspensão automática</div><div className="text-2xl font-bold text-amber-900">{directSuspended}</div></Card>
         <Card className="border-orange-200 bg-orange-50 p-3"><div className="text-[10px] font-semibold uppercase text-orange-800">Dependências marcadas</div><div className="text-2xl font-bold text-orange-900">{manualSuspended}</div></Card>
         <Card className="border-rose-200 bg-rose-50 p-3"><div className="text-[10px] font-semibold uppercase text-rose-800">Linhas da proposta</div><div className="text-2xl font-bold text-rose-900">{proposed}</div></Card>
@@ -192,11 +241,63 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
           title="Cronograma do Aditivo"
           subtitle={isArchived ? 'Versão histórica somente para leitura' : 'Planejamento preliminar físico-financeiro'}
           suspensionMap={suspensions}
-          onToggleSuspension={isArchived ? undefined : (taskId, checked) => onProjectChange(setAdditiveScheduleDependentTask(project, active.id, taskId, checked))}
+          onToggleSuspension={isArchived ? undefined : (taskId, checked) => {
+            if (checked) openBlockDialog(taskId);
+            else onProjectChange(setAdditiveScheduleDependentTask(project, active.id, taskId, false));
+          }}
+          onEditSuspension={isArchived ? undefined : openBlockDialog}
           readOnly={isArchived}
-          financialForecastNode={<AdditiveScheduleFinancialForecast rows={rows} />}
+          financialForecastNode={<AdditiveScheduleFinancialForecast rows={rows} trabalhaSabado={obraConfig.trabalhaSabado} />}
         />
       )}
+
+      <Dialog open={!!blockTaskId} onOpenChange={open => { if (!open) closeBlockDialog(); }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Composições que bloqueiam a execução</DialogTitle>
+            <DialogDescription>
+              Selecione os itens do aditivo necessários antes de executar “{blockingTaskName || 'tarefa selecionada'}”. A seleção será registrada no histórico, PDF e Excel.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[46vh] space-y-2 overflow-y-auto pr-1">
+            {blockerRefs.map(ref => {
+              const checked = blockerIds.includes(ref.compositionId);
+              const quantity = Math.abs(ref.quantity);
+              const quantityText = quantity > 0
+                ? `${quantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}${ref.unit ? ` ${ref.unit}` : ''}`
+                : 'alteração de preço/escopo';
+              return (
+                <label key={ref.compositionId} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${checked ? 'border-amber-400 bg-amber-50' : 'border-border bg-card'}`}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={event => setBlockerIds(current => event.target.checked
+                      ? [...current, ref.compositionId]
+                      : current.filter(id => id !== ref.compositionId))}
+                    className="mt-1 h-4 w-4 accent-amber-600"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-xs font-bold text-foreground">{[ref.item, ref.code].filter(Boolean).join(' - ') || 'Composição do aditivo'}</span>
+                    <span className="block text-sm text-foreground">{ref.description}</span>
+                    <span className="block text-xs font-semibold text-amber-800">Impacto: {quantityText}</span>
+                  </span>
+                </label>
+              );
+            })}
+            {!blockerRefs.length && <div className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">Não há composições alteradas disponíveis neste aditivo.</div>}
+          </div>
+          <Textarea
+            value={blockerNote}
+            onChange={event => setBlockerNote(event.target.value)}
+            placeholder="Justificativa opcional da dependência técnica, física ou operacional"
+            rows={3}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={closeBlockDialog}>Cancelar</Button>
+            <Button onClick={saveBlock} disabled={!blockerIds.length}>Suspender tarefa</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -9,6 +9,7 @@ import type {
   Project,
   Task,
   Phase,
+  AdditiveScheduleContractedTaskPlan,
   AdditiveSchedulePlannedTask,
 } from '@/types/project';
 import { getChapterTree, getChapterNumbering, type ChapterNode } from '@/lib/chapters';
@@ -16,6 +17,7 @@ import { resolveMemoryColumnLabels, validMemoryRows } from '@/lib/calculationMem
 import { applyAdditiveProductivityToTask } from '@/lib/additiveProductivity';
 import { resolveAnalyticComposition } from '@/lib/analyticLinks';
 import { getAdditiveExportSummary } from './additiveExportSummary';
+import { calculateRupDuration, type JornadaConfig } from '@/lib/calculations';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
@@ -2730,6 +2732,32 @@ function applyPlannedAdditiveSchedule(task: Task, planned?: AdditiveSchedulePlan
   };
 }
 
+function applyContractedAdditiveSchedule(
+  task: Task,
+  planned?: AdditiveScheduleContractedTaskPlan,
+  jornadaConfig?: JornadaConfig,
+): Task {
+  if (!planned) return task;
+  let scheduled: Task = {
+    ...task,
+    startDate: planned.startDate,
+    duration: Math.max(1, planned.duration),
+    dependencies: planned.dependencies ?? [],
+    dependencyDetails: planned.dependencyDetails,
+    responsible: planned.responsible ?? '',
+    team: planned.team,
+    scheduleOrder: planned.scheduleOrder,
+    durationMode: planned.durationMode ?? 'manual',
+    isManual: planned.isManual ?? planned.durationMode !== 'rup',
+    manualDuration: planned.manualDuration ?? planned.duration,
+  };
+  if ((scheduled.durationMode ?? 'manual') === 'rup') {
+    const calculated = calculateRupDuration(scheduled, jornadaConfig);
+    scheduled = { ...scheduled, ...calculated, calculatedDuration: calculated.duration, isManual: false };
+  }
+  return scheduled;
+}
+
 /**
  * Integra o aditivo ao projeto:
  *  - novos serviços viram tarefas reais na EAP no capítulo correto;
@@ -2739,7 +2767,7 @@ function applyPlannedAdditiveSchedule(task: Task, planned?: AdditiveSchedulePlan
  *  - operação idempotente: id determinístico para tarefas novas e chave
  *    `(additiveId, version)` para impedir reaplicação do delta.
  */
-export function contractAdditive(project: Project, additiveId: string, user?: string): Project {
+export function contractAdditive(project: Project, additiveId: string, user?: string, jornadaConfig?: JornadaConfig): Project {
   const add = (project.additives ?? []).find(a => a.id === additiveId);
   if (!add) return project;
   const bdi = add.bdiPercent ?? 0;
@@ -2757,6 +2785,9 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
   const novos = add.compositions.filter(c => c.isNewService);
   const plannedScheduleByComposition = new Map(
     (add.scheduleDraft?.plannedTasks ?? []).map(task => [task.compositionId, task]),
+  );
+  const plannedContractedByTask = new Map(
+    (add.scheduleDraft?.contractedTaskPlans ?? []).map(task => [task.taskId, task]),
   );
   const activeNewTaskIds = new Set(novos.map(n => `add-${add.id}-${n.id}`));
   const taskById = new Map(project.phases.flatMap(phase => phase.tasks).map(task => [task.id, task]));
@@ -2788,9 +2819,14 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
     let mutated = keptTasks.length !== phase.tasks.length;
     let updatedTasks: Task[] = keptTasks.map(task => {
       const ajuste = ajustes.find(a => a.taskId === task.id);
+      const contractedPlan = plannedContractedByTask.get(task.id);
       const previousEntriesFromThisAdditive = (task.additiveHistory ?? [])
         .filter(h => h.additiveId === add.id && h.kind !== 'novo');
-      if (!ajuste && previousEntriesFromThisAdditive.length === 0) return task;
+      if (!ajuste && previousEntriesFromThisAdditive.length === 0) {
+        if (!contractedPlan) return task;
+        mutated = true;
+        return applyContractedAdditiveSchedule(task, contractedPlan, jornadaConfig);
+      }
       // A revisao atual e a fonte da verdade. Se um ajuste integrado foi removido
       // da aba do aditivo, o desejado vira zero e a reintegracao reverte o delta antigo.
       const added = ajuste?.addedQuantity ?? 0;
@@ -2807,7 +2843,11 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
       const nextUnitNoBDI = ajuste?.unitPriceNoBDI ?? task.unitPriceNoBDI;
       const priceChanged = Math.abs(nextUnit - previousUnit) >= 0.01
         || Math.abs((nextUnitNoBDI ?? 0) - (task.unitPriceNoBDI ?? 0)) >= 0.01;
-      if (Math.abs(delta) < 0.000001 && !priceChanged) return task;
+      if (Math.abs(delta) < 0.000001 && !priceChanged) {
+        if (!contractedPlan) return task;
+        mutated = true;
+        return applyContractedAdditiveSchedule(task, contractedPlan, jornadaConfig);
+      }
       const previousTotal = truncar2(previousUnit * previousQuantity);
       const newTotal = truncar2(nextUnit * newQuantity);
       const deltaAdded = delta > 0 ? delta : 0;
@@ -2830,7 +2870,7 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
         user,
       };
       mutated = true;
-      return {
+      const revisedTask: Task = {
         ...task,
         quantity: newQuantity,
         unitPrice: nextUnit,
@@ -2838,6 +2878,7 @@ export function contractAdditive(project: Project, additiveId: string, user?: st
         suppressedByAdditive: newQuantity === 0,
         additiveHistory: [...(task.additiveHistory ?? []), entry],
       };
+      return applyContractedAdditiveSchedule(revisedTask, contractedPlan, jornadaConfig);
     });
 
     // Anexa novos serviços desta phase (idempotente por id determinístico)

@@ -60,6 +60,9 @@ export default function AdditiveScheduleFinancialForecast({ rows, trabalhaSabado
             )}
           </tbody>
         </table>
+        <p className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-[10px] text-slate-600">
+          O valor mensal representa somente a execução contratada liberada. Os impactos da proposta são deltas contratuais e não devem ser somados diretamente a essa coluna.
+        </p>
       </div>
     </section>
   );

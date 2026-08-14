@@ -37,6 +37,15 @@ const classificationColor = (row: AdditiveScheduleSnapshotRow): [number, number,
   proposed_suppression: [185, 28, 28],
 }[row.classification] as [number, number, number]);
 
+const blockingLabel = (row: AdditiveScheduleSnapshotRow) => (row.blockingCompositions ?? [])
+  .map(item => {
+    const ref = [item.item, item.code].filter(Boolean).join(' - ');
+    const quantity = Math.abs(item.quantity);
+    const impact = quantity > 0 ? `${quantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}${item.unit ? ` ${item.unit}` : ''}` : 'alteração de preço/escopo';
+    return `${ref ? `${ref}: ` : ''}${item.description} (${impact})`;
+  })
+  .join('; ');
+
 async function loadXlsx() {
   const mod: any = await import('xlsx-js-style');
   return mod.default || mod;
@@ -87,7 +96,7 @@ export async function buildAdditiveScheduleWorkbook(
     [ADDITIVE_SCHEDULE_GUIDANCE],
     [ADDITIVE_SCHEDULE_REFERENCE],
     [],
-    ['Item', 'Código', 'Capítulo', 'Descrição', 'Classificação', 'Situação', 'Início', 'Fim', 'Duração (d)', 'Quantidade', 'Unidade', 'Valor unitário c/ BDI', 'Total c/ BDI', 'Responsável', 'Equipe', 'Dependências'],
+    ['Item', 'Código', 'Capítulo', 'Descrição', 'Classificação', 'Situação', 'Início', 'Fim', 'Duração (d)', 'Quantidade', 'Unidade', 'Valor unitário c/ BDI', 'Total c/ BDI', 'Responsável', 'Equipe', 'Dependências', 'Composições bloqueadoras', 'Justificativa do bloqueio'],
     ...rows.map(row => {
       const statusOnly = isStatusOnlyScheduleRow(row);
       return [
@@ -95,25 +104,26 @@ export async function buildAdditiveScheduleWorkbook(
         statusOnly ? '' : excelDate(row.startDate), statusOnly ? '' : excelDate(endDate(row.startDate, row.duration)), statusOnly ? '' : row.duration,
         row.quantity, row.unit || '', row.unitPriceWithBDI, row.totalWithBDI,
         statusOnly ? '' : row.responsible || '', statusOnly ? '' : row.team || '', statusOnly ? '' : row.dependencies.join(', '),
+        blockingLabel(row), row.blockingNote || '',
       ];
     }),
   ];
   const wsActivities = XLSX.utils.aoa_to_sheet(activities);
   wsActivities['!merges'] = [
-    { s: { r: 0, c: 0 }, e: { r: 0, c: 15 } },
-    { s: { r: 1, c: 0 }, e: { r: 1, c: 15 } },
-    { s: { r: 2, c: 0 }, e: { r: 2, c: 15 } },
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 17 } },
+    { s: { r: 1, c: 0 }, e: { r: 1, c: 17 } },
+    { s: { r: 2, c: 0 }, e: { r: 2, c: 17 } },
   ];
-  wsActivities['!cols'] = [8, 12, 24, 48, 22, 44, 12, 12, 11, 12, 10, 18, 18, 22, 14, 24].map(wch => ({ wch }));
+  wsActivities['!cols'] = [8, 12, 24, 48, 22, 48, 12, 12, 11, 12, 10, 18, 18, 22, 14, 24, 58, 36].map(wch => ({ wch }));
   styleSheet(XLSX, wsActivities, 4);
   wsActivities.A1.s = { font: { bold: true, color: { rgb: '991B1B' }, sz: 14 }, fill: { fgColor: { rgb: 'FEE2E2' } }, alignment: { horizontal: 'center' } };
   wsActivities.A2.s = { font: { color: { rgb: '7C2D12' } }, fill: { fgColor: { rgb: 'FFF7ED' } }, alignment: { wrapText: true } };
   wsActivities.A3.s = { font: { italic: true, color: { rgb: '475569' } }, fill: { fgColor: { rgb: 'F8FAFC' } } };
   wsActivities['!rows'] = [{ hpt: 24 }, { hpt: 34 }, { hpt: 20 }, { hpt: 8 }, { hpt: 30 }, ...rows.map(() => ({ hpt: 30 }))];
   for (let index = 5; index < activities.length; index += 1) {
-    for (let col = 0; col < 16; col += 1) {
+    for (let col = 0; col < 18; col += 1) {
       const cell = wsActivities[XLSX.utils.encode_cell({ r: index, c: col })];
-      if (cell) cell.s = bodyStyle(index % 2 ? 'FFFFFF' : 'F8FAFC', { centered: col >= 6 && col <= 10, wrap: [2, 3, 4, 5, 13, 15].includes(col) });
+      if (cell) cell.s = bodyStyle(index % 2 ? 'FFFFFF' : 'F8FAFC', { centered: col >= 6 && col <= 10, wrap: [2, 3, 4, 5, 13, 15, 16, 17].includes(col) });
     }
     const totalCell = wsActivities[XLSX.utils.encode_cell({ r: index, c: 12 })];
     const unitCell = wsActivities[XLSX.utils.encode_cell({ r: index, c: 11 })];
@@ -164,7 +174,7 @@ export async function buildAdditiveScheduleWorkbook(
       ? [{ s: { r: rowIndex + 1, c: 4 }, e: { r: rowIndex + 1, c: 3 + weekStarts.length } }]
       : []
   ));
-  wsGantt['!cols'] = [{ wch: 52 }, { wch: 24 }, { wch: 12 }, { wch: 12 }, ...weekStarts.map(() => ({ wch: 11 }))];
+  wsGantt['!cols'] = [{ wch: 52 }, { wch: 52 }, { wch: 12 }, { wch: 12 }, ...weekStarts.map(() => ({ wch: 11 }))];
   styleSheet(XLSX, wsGantt, 0);
   ganttSourceRows.forEach((row, rowIndex) => {
     for (let col = 0; col < 4 + weekStarts.length; col += 1) {
@@ -218,13 +228,20 @@ export async function buildAdditiveScheduleWorkbook(
     cell.v = value;
   });
   wsForecast['!rows'] = [{ hpt: 28 }, ...forecastRows.slice(1).map(() => ({ hpt: 24 }))];
+  const forecastNoteRow = forecastRows.length + 1;
+  XLSX.utils.sheet_add_aoa(wsForecast, [[
+    'Nota: o valor mensal representa somente a execução contratada liberada. Os impactos da proposta são deltas contratuais e não devem ser somados diretamente a essa coluna.',
+  ]], { origin: `A${forecastNoteRow}` });
+  wsForecast['!merges'] = [{ s: { r: forecastNoteRow - 1, c: 0 }, e: { r: forecastNoteRow - 1, c: 2 } }];
+  wsForecast[`A${forecastNoteRow}`].s = { font: { italic: true, color: { rgb: '475569' } }, fill: { fgColor: { rgb: 'F8FAFC' } }, alignment: { wrapText: true, vertical: 'center' } };
+  wsForecast['!rows'][forecastNoteRow - 1] = { hpt: 34 };
   XLSX.utils.book_append_sheet(wb, wsForecast, 'Previsão Financeira');
   wb.Props = { Title: `Cronograma do Aditivo - ${additive.name}`, Subject: ADDITIVE_SCHEDULE_WARNING, Company: project.contractInfo?.contracted || project.name };
   return { XLSX, workbook: wb };
 }
 
-export async function exportAdditiveScheduleExcel(project: Project, additive: Additive, rows: AdditiveScheduleSnapshotRow[]) {
-  const { XLSX, workbook } = await buildAdditiveScheduleWorkbook(project, additive, rows);
+export async function exportAdditiveScheduleExcel(project: Project, additive: Additive, rows: AdditiveScheduleSnapshotRow[], trabalhaSabado = false) {
+  const { XLSX, workbook } = await buildAdditiveScheduleWorkbook(project, additive, rows, trabalhaSabado);
   XLSX.writeFile(workbook, `cronograma_aditivo_${safeFile(additive.name)}.xlsx`);
 }
 
@@ -260,7 +277,7 @@ function drawHeader(doc: any, project: Project, additive: Additive, subtitle: st
 
 function drawGanttPages(doc: any, rows: AdditiveScheduleSnapshotRow[], project: Project, additive: Additive) {
   const chunks: AdditiveScheduleSnapshotRow[][] = [];
-  for (let index = 0; index < rows.length; index += 20) chunks.push(rows.slice(index, index + 20));
+  for (let index = 0; index < rows.length; index += 14) chunks.push(rows.slice(index, index + 14));
   const scheduledRows = rows.filter(row => !isStatusOnlyScheduleRow(row));
   const allStart = scheduledRows.map(row => row.startDate).filter(Boolean).sort()[0] || project.startDate;
   const allEnd = scheduledRows.map(row => endDate(row.startDate, row.duration)).filter(Boolean).sort().at(-1) || project.endDate || project.startDate;
@@ -271,10 +288,10 @@ function drawGanttPages(doc: any, rows: AdditiveScheduleSnapshotRow[], project: 
     doc.addPage();
     const y = drawHeader(doc, project, additive, `DIAGRAMA DE GANTT - PARTE ${chunkIndex + 1}/${chunks.length}`);
     const pageWidth = doc.internal.pageSize.getWidth();
-    const labelWidth = 92;
+    const labelWidth = 108;
     const chartX = 8 + labelWidth;
     const chartWidth = pageWidth - chartX - 8;
-    const rowHeight = 7;
+    const rowHeight = 10;
     doc.setFontSize(7);
     doc.setFillColor(226, 232, 240);
     doc.rect(8, y, pageWidth - 16, rowHeight, 'F');
@@ -294,13 +311,20 @@ function drawGanttPages(doc: any, rows: AdditiveScheduleSnapshotRow[], project: 
       if (index % 2) { doc.setFillColor(248, 250, 252); doc.rect(8, rowY, pageWidth - 16, rowHeight, 'F'); }
       doc.setDrawColor(226, 232, 240); doc.line(8, rowY + rowHeight, pageWidth - 8, rowY + rowHeight);
       doc.setTextColor(15, 23, 42); doc.setFont('helvetica', 'normal');
-      doc.text(doc.splitTextToSize(row.description, labelWidth - 5)[0], 10, rowY + 3.2);
-      doc.setFontSize(5.7); doc.text(classificationLabel(row), 10, rowY + 5.8); doc.setFontSize(7);
+      doc.text(doc.splitTextToSize(row.description, labelWidth - 5)[0], 10, rowY + 2.8);
+      if (row.quantityRestriction && !isStatusOnlyScheduleRow(row)) {
+        const statusLines = doc.splitTextToSize(row.statusLabel, labelWidth - 5).slice(0, 2);
+        doc.setFont('helvetica', 'bold'); doc.setTextColor(7, 89, 133); doc.setFontSize(4.8);
+        doc.text(statusLines, 10, rowY + 5.2);
+      } else {
+        doc.setFontSize(5.7); doc.text(classificationLabel(row), 10, rowY + 6.5);
+      }
+      doc.setFontSize(7);
       if (isStatusOnlyScheduleRow(row)) {
         doc.setFont('helvetica', 'bold');
         if (row.scheduleState === 'fully_suppressed') doc.setTextColor(159, 18, 57);
         else doc.setTextColor(146, 64, 14);
-        doc.text(row.statusLabel, chartX + 2, rowY + 4.6);
+        doc.text(row.statusLabel, chartX + 2, rowY + 6.1);
         return;
       }
       const rowStart = new Date(`${row.startDate}T12:00:00`);
@@ -309,7 +333,7 @@ function drawGanttPages(doc: any, rows: AdditiveScheduleSnapshotRow[], project: 
       const barDays = Math.max(1, (rowEnd.getTime() - rowStart.getTime()) / 86400000 + 1);
       const barWidth = Math.max(2, barDays / days * chartWidth);
       const [r, g, b] = classificationColor(row);
-      doc.setFillColor(r, g, b); doc.roundedRect(chartX + left, rowY + 1.4, barWidth, 4.2, 1, 1, 'F');
+      doc.setFillColor(r, g, b); doc.roundedRect(chartX + left, rowY + 2.6, barWidth, 4.6, 1, 1, 'F');
     });
   });
 }
@@ -327,22 +351,23 @@ export async function buildAdditiveSchedulePdfDocument(
   let y = drawHeader(doc, project, additive, 'QUADRO DE ATIVIDADES');
   autoTable(doc, {
     startY: y,
-    head: [['Item', 'Atividade', 'Classificação', 'Situação', 'Início', 'Fim', 'Dur.', 'Responsável', 'Equipe', 'Dep.', 'Total c/ BDI']],
+    head: [['Item', 'Atividade', 'Classificação', 'Situação', 'Início', 'Fim', 'Dur.', 'Responsável', 'Equipe', 'Dep.', 'Bloqueadores', 'Total c/ BDI']],
     body: rows.map(row => {
       const statusOnly = isStatusOnlyScheduleRow(row);
       return [
         row.item || '', row.description, classificationLabel(row), row.statusLabel,
         statusOnly ? '' : dateBR(row.startDate), statusOnly ? '' : dateBR(endDate(row.startDate, row.duration)), statusOnly ? '' : `${row.duration} d`,
-        statusOnly ? '' : row.responsible || '', statusOnly ? '' : row.team || '', statusOnly ? '' : row.dependencies.join(', '), brl(row.totalWithBDI),
+        statusOnly ? '' : row.responsible || '', statusOnly ? '' : row.team || '', statusOnly ? '' : row.dependencies.join(', '),
+        [blockingLabel(row), row.blockingNote].filter(Boolean).join(' | '), brl(row.totalWithBDI),
       ];
     }),
     styles: { font: 'helvetica', fontSize: 6.6, cellPadding: 1.3, overflow: 'linebreak', valign: 'middle' },
-    tableWidth: 224,
+    tableWidth: 265,
     headStyles: { fillColor: [51, 65, 85], textColor: 255, fontStyle: 'bold' },
     columnStyles: {
-      0: { cellWidth: 10 }, 1: { cellWidth: 38 }, 2: { cellWidth: 22 }, 3: { cellWidth: 44 },
-      4: { cellWidth: 15 }, 5: { cellWidth: 15 }, 6: { cellWidth: 9 }, 7: { cellWidth: 18 },
-      8: { cellWidth: 12 }, 9: { cellWidth: 16 }, 10: { cellWidth: 25, halign: 'right' },
+      0: { cellWidth: 9 }, 1: { cellWidth: 34 }, 2: { cellWidth: 20 }, 3: { cellWidth: 42 },
+      4: { cellWidth: 14 }, 5: { cellWidth: 14 }, 6: { cellWidth: 8 }, 7: { cellWidth: 16 },
+      8: { cellWidth: 11 }, 9: { cellWidth: 14 }, 10: { cellWidth: 57 }, 11: { cellWidth: 26, halign: 'right' },
     },
     margin: { left: 8, right: 8, top: 46, bottom: 10 },
     didDrawPage: (data: any) => { if (data.pageNumber > 1) drawHeader(doc, project, additive, 'QUADRO DE ATIVIDADES'); },
@@ -381,6 +406,14 @@ export async function buildAdditiveSchedulePdfDocument(
       noteY,
     );
   }
+  const distinctionY = ((doc as any).lastAutoTable?.finalY ?? y) + (forecast.totalOnlyProposed !== 0 ? 12 : 6);
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(7.5);
+  doc.setTextColor(71, 85, 105);
+  doc.text(doc.splitTextToSize(
+    'O valor mensal representa somente a execução contratada liberada. Os impactos da proposta são deltas contratuais e não devem ser somados diretamente a essa coluna.',
+    doc.internal.pageSize.getWidth() - 40,
+  ), 20, distinctionY);
   const pages = doc.getNumberOfPages();
   for (let page = 1; page <= pages; page += 1) {
     doc.setPage(page); doc.setFontSize(6.5); doc.setTextColor(100);
@@ -389,7 +422,7 @@ export async function buildAdditiveSchedulePdfDocument(
   return doc;
 }
 
-export async function exportAdditiveSchedulePdf(project: Project, additive: Additive, rows: AdditiveScheduleSnapshotRow[]) {
-  const doc = await buildAdditiveSchedulePdfDocument(project, additive, rows);
+export async function exportAdditiveSchedulePdf(project: Project, additive: Additive, rows: AdditiveScheduleSnapshotRow[], trabalhaSabado = false) {
+  const doc = await buildAdditiveSchedulePdfDocument(project, additive, rows, trabalhaSabado);
   doc.save(`cronograma_aditivo_${safeFile(additive.name)}.pdf`);
 }

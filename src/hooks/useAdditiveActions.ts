@@ -49,6 +49,7 @@ import {
   createAdditiveScheduleSnapshot,
   validateAdditiveSchedule,
 } from '@/lib/additiveSchedule';
+import { loadObraConfig } from '@/components/ConfiguracaoObra';
 
 interface Params {
   project: Project;
@@ -72,6 +73,7 @@ const createPhaseId = () => {
 export function useAdditiveActions({ project, onProjectChange, state, canFormalize = false }: Params) {
   const { user } = useAuth();
   const auditUser = useMemo(() => userInfoFromSupabaseUser(user), [user]);
+  const obraConfig = useMemo(loadObraConfig, []);
   const {
     active, isLocked,
     setActiveId,
@@ -1143,7 +1145,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     onProjectChange(prev => {
       const currentAdditive = (prev.additives ?? []).find(item => item.id === active.id);
       if (!currentAdditive?.scheduleDraft) return prev;
-      const preview = buildAdditiveSchedulePreviewProject(prev, currentAdditive, currentAdditive.scheduleDraft);
+      const preview = buildAdditiveSchedulePreviewProject(prev, currentAdditive, currentAdditive.scheduleDraft, obraConfig);
       const snapshot = createAdditiveScheduleSnapshot(
         prev,
         currentAdditive,
@@ -1162,7 +1164,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
             }
           : item),
       };
-      const next = contractAdditive(prepared, active.id, auditUser?.userName || auditUser?.userEmail);
+      const next = contractAdditive(prepared, active.id, auditUser?.userName || auditUser?.userEmail, obraConfig);
       return logToProject(next, {
         ...auditUser,
         entityType: 'additive',

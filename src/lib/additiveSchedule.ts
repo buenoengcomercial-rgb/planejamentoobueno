@@ -1,9 +1,13 @@
 import type {
   Additive,
   AdditiveComposition,
+  AdditiveScheduleBlockingCompositionRef,
+  AdditiveScheduleContractedTaskPlan,
   AdditiveScheduleDraft,
+  AdditiveScheduleDependencyBlock,
   AdditiveScheduleFinancialTreatment,
   AdditiveSchedulePlannedTask,
+  AdditiveScheduleQuantityRestriction,
   AdditiveScheduleState,
   AdditiveScheduleSnapshot,
   AdditiveScheduleSnapshotRow,
@@ -11,6 +15,7 @@ import type {
   Task,
 } from '@/types/project';
 import { computeAdditiveRow, resolveAdditivePricingRule } from '@/lib/additiveImport';
+import { calculateRupDuration, type JornadaConfig } from '@/lib/calculations';
 
 export const ADDITIVE_SCHEDULE_REFERENCE = 'Termo de Retomada Parcial - SEI nº 74863858';
 export const ADDITIVE_SCHEDULE_WARNING = 'PLANEJAMENTO PRELIMINAR - NÃO AUTORIZA EXECUÇÃO';
@@ -23,7 +28,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const isValidDate = (value: string | undefined) => !!value && ISO_DATE.test(value) && !Number.isNaN(new Date(`${value}T12:00:00`).getTime());
 
 export interface AdditiveScheduleSuspensionMeta {
-  kind: 'automatic' | 'manual' | 'proposed';
+  kind: 'automatic' | 'manual' | 'proposed' | 'quantity_limited';
   label: string;
   reason: string;
   additiveId: string;
@@ -32,6 +37,15 @@ export interface AdditiveScheduleSuspensionMeta {
   disabled: boolean;
   scheduleState: AdditiveScheduleState;
   financialTreatment: AdditiveScheduleFinancialTreatment;
+  quantityRestriction?: AdditiveScheduleQuantityRestriction;
+  blockingCompositions?: AdditiveScheduleBlockingCompositionRef[];
+  blockingNote?: string;
+}
+
+export interface AdditiveScheduleQuantityTaskMeta {
+  compositionId: string;
+  restriction: AdditiveScheduleQuantityRestriction;
+  label: string;
 }
 
 const taskIdForComposition = (additiveId: string, compositionId: string) => `add-${additiveId}-${compositionId}`;
@@ -61,11 +75,83 @@ export function isDirectlyChangedComposition(project: Project, composition: Addi
     || Math.abs((composition.unitPriceNoBDI ?? 0) - (task.unitPriceNoBDI ?? 0)) >= 0.01;
 }
 
+function hasUnitPriceChange(project: Project, composition: AdditiveComposition): boolean {
+  const task = findTask(project, compositionTaskId(composition));
+  if (!task) return false;
+  const withBdi = Number(composition.unitPriceWithBDI ?? 0);
+  const withoutBdi = Number(composition.unitPriceNoBDI ?? 0);
+  const changedWithBdi = withBdi > 0 && Number(task.unitPrice ?? 0) > 0
+    && Math.abs(withBdi - Number(task.unitPrice ?? 0)) >= 0.01;
+  const changedWithoutBdi = withoutBdi > 0 && Number(task.unitPriceNoBDI ?? 0) > 0
+    && Math.abs(withoutBdi - Number(task.unitPriceNoBDI ?? 0)) >= 0.01;
+  return changedWithBdi || changedWithoutBdi;
+}
+
+const quantityLabel = (value: number) => Number(value || 0).toLocaleString('pt-BR', {
+  minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+  maximumFractionDigits: 2,
+});
+
+export function formatQuantityRestrictionLabel(restriction: AdditiveScheduleQuantityRestriction): string {
+  const unit = restriction.unit ? ` ${restriction.unit}` : '';
+  const parts = [restriction.suppressedQuantity > 0
+    ? `EXECUTAR SALDO: ${quantityLabel(restriction.executableQuantity)}${unit}`
+    : `EXECUTAR: ${quantityLabel(restriction.executableQuantity)}${unit} CONTRATADAS`];
+  if (restriction.addedQuantity > 0) {
+    parts.push(`ACRÉSCIMO DE ${quantityLabel(restriction.addedQuantity)}${unit} AGUARDA ADITIVO`);
+  }
+  if (restriction.suppressedQuantity > 0) {
+    parts.push(`SUPRESSÃO PROPOSTA: ${quantityLabel(restriction.suppressedQuantity)}${unit}`);
+  }
+  return parts.join(' | ');
+}
+
+export function getQuantitativelyRestrictedTasks(
+  project: Project,
+  additive: Additive,
+): Map<string, AdditiveScheduleQuantityTaskMeta> {
+  const candidates = new Map<string, AdditiveComposition[]>();
+  additive.compositions.forEach(composition => {
+    if (composition.isNewService) return;
+    const taskId = compositionTaskId(composition);
+    if (!taskId) return;
+    const list = candidates.get(taskId) ?? [];
+    if (isDirectlyChangedComposition(project, composition)) list.push(composition);
+    candidates.set(taskId, list);
+  });
+  const result = new Map<string, AdditiveScheduleQuantityTaskMeta>();
+  candidates.forEach((compositions, taskId) => {
+    // Um vínculo ambíguo entre várias composições e a mesma tarefa exige decisão manual.
+    if (compositions.length !== 1) return;
+    const composition = compositions[0];
+    const financial = computeAdditiveRow(
+      composition,
+      additive.bdiPercent ?? 0,
+      additive.globalDiscountPercent ?? 0,
+      resolveAdditivePricingRule(additive),
+    );
+    const hasQuantityChange = financial.qtdAcrescida > 0 || financial.qtdSuprimida > 0;
+    const executableQuantity = Math.max(0, financial.qtdContratada - financial.qtdSuprimida);
+    if (!hasQuantityChange || financial.qtdContratada <= 0 || executableQuantity <= 0 || hasUnitPriceChange(project, composition)) return;
+    const restriction: AdditiveScheduleQuantityRestriction = {
+      kind: 'contracted_balance_only',
+      contractedQuantity: financial.qtdContratada,
+      executableQuantity,
+      addedQuantity: financial.qtdAcrescida,
+      suppressedQuantity: financial.qtdSuprimida,
+      unit: composition.unit,
+    };
+    result.set(taskId, { compositionId: composition.id, restriction, label: formatQuantityRestrictionLabel(restriction) });
+  });
+  return result;
+}
+
 export function getAutomaticSuspendedTaskIds(project: Project, additive: Additive): Set<string> {
+  const quantitative = getQuantitativelyRestrictedTasks(project, additive);
   return new Set(additive.compositions
     .filter(composition => !composition.isNewService && isDirectlyChangedComposition(project, composition))
     .map(compositionTaskId)
-    .filter((taskId): taskId is string => !!taskId));
+    .filter((taskId): taskId is string => !!taskId && !quantitative.has(taskId)));
 }
 
 export function isFullySuppressedComposition(additive: Additive, composition: AdditiveComposition): boolean {
@@ -84,6 +170,60 @@ export function getFullySuppressedTaskIds(additive: Additive): Set<string> {
     .filter(composition => isFullySuppressedComposition(additive, composition))
     .map(compositionTaskId)
     .filter((taskId): taskId is string => !!taskId));
+}
+
+function taskToContractedPlan(task: Task): AdditiveScheduleContractedTaskPlan {
+  return {
+    taskId: task.id,
+    startDate: task.startDate,
+    duration: task.duration,
+    dependencies: task.dependencies ?? [],
+    dependencyDetails: task.dependencyDetails,
+    responsible: task.responsible ?? '',
+    team: task.team,
+    scheduleOrder: task.scheduleOrder,
+    durationMode: task.durationMode ?? 'manual',
+    isManual: task.isManual ?? (task.durationMode !== 'rup'),
+    manualDuration: task.manualDuration ?? task.duration,
+  };
+}
+
+function manualBlockedTaskIds(additive: Additive): Set<string> {
+  return new Set([
+    ...(additive.scheduleDraft?.dependentTaskIds ?? []),
+    ...(additive.scheduleDraft?.dependencyBlocks ?? []).map(block => block.taskId),
+  ]);
+}
+
+export function getBlockingCompositionRefs(
+  additive: Additive,
+  compositionIds: string[],
+): AdditiveScheduleBlockingCompositionRef[] {
+  const selected = new Set(compositionIds);
+  return additive.compositions
+    .filter(composition => selected.has(composition.id))
+    .map(composition => {
+      const financial = computeAdditiveRow(
+        composition,
+        additive.bdiPercent ?? 0,
+        additive.globalDiscountPercent ?? 0,
+        resolveAdditivePricingRule(additive),
+      );
+      return {
+        compositionId: composition.id,
+        item: composition.itemNumber || composition.item,
+        code: composition.code,
+        description: composition.description,
+        quantity: composition.isNewService
+          ? financial.qtdAcrescida
+          : financial.qtdAcrescida - financial.qtdSuprimida,
+        unit: composition.unit,
+      };
+    });
+}
+
+function dependencyBlockForTask(additive: Additive, taskId: string): AdditiveScheduleDependencyBlock | undefined {
+  return additive.scheduleDraft?.dependencyBlocks?.find(block => block.taskId === taskId);
 }
 
 export function isStatusOnlySuspension(meta: AdditiveScheduleSuspensionMeta | undefined): boolean {
@@ -167,11 +307,28 @@ export function syncAdditiveScheduleDraft(project: Project, additiveId: string, 
       };
     });
   const automatic = getAutomaticSuspendedTaskIds(project, additive);
-  const dependentTaskIds = (previous?.dependentTaskIds ?? []).filter(taskId => !!findTask(project, taskId) && !automatic.has(taskId));
+  const validCompositionIds = new Set(additive.compositions.map(composition => composition.id));
+  const dependencyBlocks = (previous?.dependencyBlocks ?? []).flatMap(block => {
+    if (!findTask(project, block.taskId) || automatic.has(block.taskId)) return [];
+    const compositionIds = block.compositionIds.filter(id => validCompositionIds.has(id));
+    return compositionIds.length ? [{ ...block, compositionIds }] : [];
+  });
+  const dependentTaskIds = Array.from(new Set([
+    ...(previous?.dependentTaskIds ?? []).filter(taskId => !!findTask(project, taskId) && !automatic.has(taskId)),
+    ...dependencyBlocks.map(block => block.taskId),
+  ]));
+  const previousPlans = new Map((previous?.contractedTaskPlans ?? []).map(plan => [plan.taskId, plan]));
+  const contractedTaskPlans = Array.from(getQuantitativelyRestrictedTasks(project, additive).keys()).flatMap(taskId => {
+    const task = findTask(project, taskId);
+    if (!task) return [];
+    return [previousPlans.get(taskId) ?? taskToContractedPlan(task)];
+  });
   const changed = !previous
     || previous.version !== version
     || JSON.stringify(previous.plannedTasks) !== JSON.stringify(plannedTasks)
-    || JSON.stringify(previous.dependentTaskIds) !== JSON.stringify(dependentTaskIds);
+    || JSON.stringify(previous.dependentTaskIds) !== JSON.stringify(dependentTaskIds)
+    || JSON.stringify(previous.contractedTaskPlans ?? []) !== JSON.stringify(contractedTaskPlans)
+    || JSON.stringify(previous.dependencyBlocks ?? []) !== JSON.stringify(dependencyBlocks);
   if (!changed) return project;
   const scheduleDraft: AdditiveScheduleDraft = {
     version,
@@ -179,6 +336,8 @@ export function syncAdditiveScheduleDraft(project: Project, additiveId: string, 
     updatedAt: now,
     dependentTaskIds,
     plannedTasks,
+    contractedTaskPlans,
+    dependencyBlocks,
   };
   return {
     ...project,
@@ -220,6 +379,8 @@ export function createAdditiveScheduleRevisionDraft(project: Project, additiveId
     updatedAt: now,
     dependentTaskIds: previous?.dependentTaskIds ?? [],
     plannedTasks,
+    contractedTaskPlans: previous?.contractedTaskPlans ?? [],
+    dependencyBlocks: previous?.dependencyBlocks ?? [],
   };
 }
 
@@ -257,7 +418,12 @@ function plannedTaskToTask(project: Project, additive: Additive, planned: Additi
   };
 }
 
-export function buildAdditiveSchedulePreviewProject(project: Project, additive: Additive, draft: AdditiveScheduleDraft): Project {
+export function buildAdditiveSchedulePreviewProject(
+  project: Project,
+  additive: Additive,
+  draft: AdditiveScheduleDraft,
+  jornadaConfig?: JornadaConfig,
+): Project {
   const plannedByPhase = new Map<string, Task[]>();
   draft.plannedTasks.forEach(planned => {
     const tasks = plannedByPhase.get(planned.phaseId) ?? [];
@@ -265,10 +431,35 @@ export function buildAdditiveSchedulePreviewProject(project: Project, additive: 
     plannedByPhase.set(planned.phaseId, tasks);
   });
   const plannedIds = new Set(draft.plannedTasks.map(task => task.taskId));
+  const quantityRestrictions = getQuantitativelyRestrictedTasks(project, additive);
+  const contractedPlans = new Map((draft.contractedTaskPlans ?? []).map(plan => [plan.taskId, plan]));
   let phases = project.phases.map(phase => ({
     ...phase,
     tasks: [
-      ...phase.tasks.filter(task => !plannedIds.has(task.id)),
+      ...phase.tasks.filter(task => !plannedIds.has(task.id)).map(task => {
+        const restricted = quantityRestrictions.get(task.id);
+        if (!restricted) return task;
+        const plan = contractedPlans.get(task.id) ?? taskToContractedPlan(task);
+        let previewTask: Task = {
+          ...task,
+          startDate: plan.startDate,
+          duration: plan.duration,
+          dependencies: plan.dependencies ?? [],
+          dependencyDetails: plan.dependencyDetails,
+          responsible: plan.responsible,
+          team: plan.team,
+          scheduleOrder: plan.scheduleOrder,
+          durationMode: plan.durationMode,
+          isManual: plan.isManual,
+          manualDuration: plan.manualDuration,
+          quantity: restricted.restriction.executableQuantity,
+        };
+        if ((previewTask.durationMode ?? 'manual') === 'rup') {
+          const calculated = calculateRupDuration(previewTask, jornadaConfig);
+          previewTask = { ...previewTask, ...calculated, calculatedDuration: calculated.duration };
+        }
+        return previewTask;
+      }),
       ...(plannedByPhase.get(phase.id) ?? []),
     ],
   }));
@@ -310,16 +501,18 @@ export function mergeAdditiveSchedulePreviewChanges(
   const draft = additive?.scheduleDraft;
   if (!additive || !draft) return project;
   const plannedIds = new Set(draft.plannedTasks.map(task => task.taskId));
+  const restrictedIds = new Set(getQuantitativelyRestrictedTasks(project, additive).keys());
+  const manualIds = manualBlockedTaskIds(additive);
   const statusOnlyIds = new Set([
     ...getAutomaticSuspendedTaskIds(project, additive),
-    ...draft.dependentTaskIds,
+    ...manualIds,
   ]);
   const nextTasks = new Map(allPhaseTasks(nextPreview).map(task => [task.id, task]));
   const previousTasks = new Map(allPhaseTasks(previousPreview).map(task => [task.id, task]));
   const phases = project.phases.map(phase => ({
     ...phase,
     tasks: phase.tasks.map(task => {
-      if (plannedIds.has(task.id) || statusOnlyIds.has(task.id)) return task;
+      if (plannedIds.has(task.id) || statusOnlyIds.has(task.id) || restrictedIds.has(task.id)) return task;
       const next = nextTasks.get(task.id);
       return next ? { ...task, ...schedulePatch(next) } : task;
     }),
@@ -346,7 +539,28 @@ export function mergeAdditiveSchedulePreviewChanges(
       datesConfirmed: planned.datesConfirmed || datesChanged,
     };
   });
-  const scheduleDraft = { ...draft, plannedTasks, updatedAt: now };
+  const existingPlans = new Map((draft.contractedTaskPlans ?? []).map(plan => [plan.taskId, plan]));
+  const contractedTaskPlans = Array.from(restrictedIds).flatMap(taskId => {
+    const next = nextTasks.get(taskId);
+    if (!next || statusOnlyIds.has(taskId)) {
+      const current = existingPlans.get(taskId);
+      return current ? [current] : [];
+    }
+    return [{
+      taskId,
+      startDate: next.startDate,
+      duration: next.duration,
+      dependencies: next.dependencies ?? [],
+      dependencyDetails: next.dependencyDetails,
+      responsible: next.responsible ?? '',
+      team: next.team,
+      scheduleOrder: next.scheduleOrder,
+      durationMode: next.durationMode,
+      isManual: next.isManual,
+      manualDuration: next.manualDuration,
+    }];
+  });
+  const scheduleDraft = { ...draft, plannedTasks, contractedTaskPlans, updatedAt: now };
   return {
     ...project,
     phases,
@@ -360,7 +574,39 @@ export function setAdditiveScheduleDependentTask(project: Project, additiveId: s
   if (getAutomaticSuspendedTaskIds(project, additive).has(taskId)) return project;
   const ids = new Set(additive.scheduleDraft.dependentTaskIds);
   if (checked) ids.add(taskId); else ids.delete(taskId);
-  const scheduleDraft = { ...additive.scheduleDraft, dependentTaskIds: [...ids], updatedAt: new Date().toISOString() };
+  const dependencyBlocks = checked
+    ? additive.scheduleDraft.dependencyBlocks ?? []
+    : (additive.scheduleDraft.dependencyBlocks ?? []).filter(block => block.taskId !== taskId);
+  const scheduleDraft = { ...additive.scheduleDraft, dependentTaskIds: [...ids], dependencyBlocks, updatedAt: new Date().toISOString() };
+  return { ...project, additives: (project.additives ?? []).map(item => item.id === additiveId ? { ...item, scheduleDraft } : item) };
+}
+
+export function setAdditiveScheduleDependencyBlock(
+  project: Project,
+  additiveId: string,
+  taskId: string,
+  compositionIds: string[],
+  note?: string,
+): Project {
+  const additive = (project.additives ?? []).find(item => item.id === additiveId);
+  if (!additive?.scheduleDraft || getAutomaticSuspendedTaskIds(project, additive).has(taskId)) return project;
+  const validIds = new Set(additive.compositions
+    .filter(composition => isDirectlyChangedComposition(project, composition))
+    .map(composition => composition.id));
+  const selected = Array.from(new Set(compositionIds.filter(id => validIds.has(id))));
+  if (!selected.length) return setAdditiveScheduleDependentTask(project, additiveId, taskId, false);
+  const ids = new Set(additive.scheduleDraft.dependentTaskIds);
+  ids.add(taskId);
+  const dependencyBlocks = [
+    ...(additive.scheduleDraft.dependencyBlocks ?? []).filter(block => block.taskId !== taskId),
+    { taskId, compositionIds: selected, note: note?.trim() || undefined },
+  ];
+  const scheduleDraft: AdditiveScheduleDraft = {
+    ...additive.scheduleDraft,
+    dependentTaskIds: [...ids],
+    dependencyBlocks,
+    updatedAt: new Date().toISOString(),
+  };
   return { ...project, additives: (project.additives ?? []).map(item => item.id === additiveId ? { ...item, scheduleDraft } : item) };
 }
 
@@ -392,10 +638,18 @@ export function validateAdditiveSchedule(project: Project, additive: Additive): 
 }
 
 export function buildPreviewSuspensionMap(project: Project, additive: Additive): Record<string, AdditiveScheduleSuspensionMeta> {
+  const quantitative = getQuantitativelyRestrictedTasks(project, additive);
   const automatic = getAutomaticSuspendedTaskIds(project, additive);
   const fullySuppressed = getFullySuppressedTaskIds(additive);
-  const manual = new Set(additive.scheduleDraft?.dependentTaskIds ?? []);
+  const manual = manualBlockedTaskIds(additive);
   const result: Record<string, AdditiveScheduleSuspensionMeta> = {};
+  quantitative.forEach((meta, taskId) => {
+    result[taskId] = {
+      kind: 'quantity_limited', label: meta.label, reason: 'A execução está limitada ao saldo contratado indicado; os impactos adicionais permanecem sem programação até a formalização.',
+      additiveId: additive.id, additiveName: additive.name, checked: false, disabled: false,
+      scheduleState: 'scheduled', financialTreatment: 'monthly', quantityRestriction: meta.restriction,
+    };
+  });
   automatic.forEach(taskId => {
     const isFullySuppressed = fullySuppressed.has(taskId);
     result[taskId] = {
@@ -405,11 +659,15 @@ export function buildPreviewSuspensionMap(project: Project, additive: Additive):
     };
   });
   manual.forEach(taskId => {
-    if (result[taskId]) return;
+    if (result[taskId]?.kind === 'automatic') return;
+    const block = dependencyBlockForTask(additive, taskId);
     result[taskId] = {
       kind: 'manual', label: SUSPENDED_STATUS_LABEL, reason: ADDITIVE_SCHEDULE_GUIDANCE,
       additiveId: additive.id, additiveName: additive.name, checked: true, disabled: false,
       scheduleState: 'suspended', financialTreatment: 'excluded',
+      quantityRestriction: quantitative.get(taskId)?.restriction,
+      blockingCompositions: block ? getBlockingCompositionRefs(additive, block.compositionIds) : undefined,
+      blockingNote: block?.note,
     };
   });
   (additive.scheduleDraft?.plannedTasks ?? []).forEach(task => {
@@ -429,28 +687,37 @@ export function buildPendingAdditiveSuspensionMap(project: Project): Record<stri
     Object.entries(preview).forEach(([taskId, meta]) => {
       if (meta.kind === 'proposed') return;
       const previous = result[taskId];
-      result[taskId] = previous
-        ? { ...previous, additiveName: `${previous.additiveName}; ${meta.additiveName}` }
-        : meta;
+      if (!previous) {
+        result[taskId] = meta;
+        return;
+      }
+      const previousStatusOnly = isStatusOnlySuspension(previous);
+      const nextStatusOnly = isStatusOnlySuspension(meta);
+      const selected = nextStatusOnly && !previousStatusOnly ? meta : previous;
+      result[taskId] = { ...selected, additiveName: `${previous.additiveName}; ${meta.additiveName}` };
     });
   });
   return result;
 }
 
-function taskValue(task: Task): number {
-  return Number(((task.quantity ?? 0) * (task.unitPrice ?? 0)).toFixed(2));
+function taskValue(task: Task, quantity = task.quantity ?? 0): number {
+  return Number((quantity * (task.unitPrice ?? 0)).toFixed(2));
 }
 
 export function buildAdditiveScheduleRows(project: Project, additive: Additive, preview: Project): AdditiveScheduleSnapshotRow[] {
   const phaseName = new Map(preview.phases.map(phase => [phase.id, phase.name]));
   const automatic = getAutomaticSuspendedTaskIds(project, additive);
   const fullySuppressed = getFullySuppressedTaskIds(additive);
-  const manual = new Set(additive.scheduleDraft?.dependentTaskIds ?? []);
+  const quantitative = getQuantitativelyRestrictedTasks(project, additive);
+  const manual = manualBlockedTaskIds(additive);
   const plannedIds = new Set(additive.scheduleDraft?.plannedTasks.map(task => task.taskId) ?? []);
   const rows: AdditiveScheduleSnapshotRow[] = [];
   preview.phases.forEach(phase => phase.tasks.forEach(task => {
     if (plannedIds.has(task.id)) return;
     const suspended = automatic.has(task.id) || manual.has(task.id);
+    const restriction = quantitative.get(task.id)?.restriction;
+    const block = dependencyBlockForTask(additive, task.id);
+    const blockingCompositions = block ? getBlockingCompositionRefs(additive, block.compositionIds) : undefined;
     const scheduleState: AdditiveScheduleState = fullySuppressed.has(task.id)
       ? 'fully_suppressed'
       : suspended ? 'suspended' : 'scheduled';
@@ -464,9 +731,14 @@ export function buildAdditiveScheduleRows(project: Project, additive: Additive, 
       classification: suspended ? 'contracted_suspended' : 'contracted_released',
       statusLabel: scheduleState === 'fully_suppressed'
         ? FULLY_SUPPRESSED_STATUS_LABEL
-        : suspended ? SUSPENDED_STATUS_LABEL : 'CONTRATADO - LIBERADO PARA PLANEJAMENTO',
+        : suspended ? SUSPENDED_STATUS_LABEL
+          : restriction ? formatQuantityRestrictionLabel(restriction)
+            : 'CONTRATADO - LIBERADO PARA PLANEJAMENTO',
       scheduleState,
       financialTreatment: suspended ? 'excluded' : 'monthly',
+      quantityRestriction: restriction,
+      blockingCompositions,
+      blockingNote: block?.note,
       startDate: task.startDate,
       duration: task.duration,
       dependencies: task.dependencies ?? [],
@@ -477,10 +749,10 @@ export function buildAdditiveScheduleRows(project: Project, additive: Additive, 
       durationMode: task.durationMode,
       isManual: task.isManual,
       manualDuration: task.manualDuration,
-      quantity: task.quantity ?? 0,
+      quantity: restriction?.executableQuantity ?? task.quantity ?? 0,
       unit: task.unit,
       unitPriceWithBDI: task.unitPrice ?? 0,
-      totalWithBDI: taskValue(task),
+      totalWithBDI: taskValue(task, restriction?.executableQuantity ?? task.quantity ?? 0),
     });
   }));
 

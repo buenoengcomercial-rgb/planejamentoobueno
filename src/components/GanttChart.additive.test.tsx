@@ -25,6 +25,11 @@ const project: Project = {
         dependencies: [], responsible: 'Encarregado', team: 'alpha', percentComplete: 0, materials: [], level: 0,
         quantity: 1, unit: 'UN',
       },
+      {
+        id: 'partial-existing', name: 'Extintor contratado com acréscimo', phase: 'phase-1', startDate: '2026-08-17', duration: 2,
+        dependencies: [], responsible: 'Encarregado', team: 'alpha', percentComplete: 0, materials: [], level: 0,
+        quantity: 10, unit: 'UN',
+      },
     ],
   }],
 };
@@ -52,6 +57,21 @@ const suspensionMap: Record<string, AdditiveScheduleSuspensionMeta> = {
     scheduleState: 'scheduled',
     financialTreatment: 'monthly',
   },
+  'partial-existing': {
+    kind: 'quantity_limited',
+    label: 'EXECUTAR: 10 UN CONTRATADAS | ACRÉSCIMO DE 2 UN AGUARDA ADITIVO',
+    reason: 'Execução limitada ao contrato vigente.',
+    additiveId: 'add-1',
+    additiveName: '1º Aditivo',
+    checked: false,
+    disabled: false,
+    scheduleState: 'scheduled',
+    financialTreatment: 'monthly',
+    quantityRestriction: {
+      kind: 'contracted_balance_only', contractedQuantity: 10, executableQuantity: 10,
+      addedQuantity: 2, suppressedQuantity: 0, unit: 'UN',
+    },
+  },
 };
 
 describe('GanttChart no Cronograma do Aditivo', () => {
@@ -70,6 +90,8 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     );
     expect(screen.queryByTestId('gantt-bar-suspended-1d')).not.toBeInTheDocument();
     expect(screen.getByTestId('gantt-bar-scheduled-new')).toBeInTheDocument();
+    expect(screen.getByTestId('gantt-bar-partial-existing')).toBeInTheDocument();
+    expect(screen.getByTestId('gantt-quantity-limited-partial-existing')).toHaveTextContent('EXECUTAR: 10 UN CONTRATADAS');
 
     fireEvent.click(screen.getByRole('button', { name: 'Dias' }));
     expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('SUSPENSO - AGUARDA FORMALIZAÇÃO DO ADITIVO');

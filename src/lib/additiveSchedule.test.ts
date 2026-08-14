@@ -12,7 +12,9 @@ import {
   confirmAdditiveScheduleDates,
   createAdditiveScheduleSnapshot,
   getAutomaticSuspendedTaskIds,
+  getQuantitativelyRestrictedTasks,
   mergeAdditiveSchedulePreviewChanges,
+  setAdditiveScheduleDependencyBlock,
   setAdditiveScheduleDependentTask,
   syncAdditiveScheduleDraft,
   validateAdditiveSchedule,
@@ -52,12 +54,15 @@ const project: Project = {
 };
 
 describe('Cronograma do Aditivo', () => {
-  it('mantém tarefas virtuais isoladas e sincroniza apenas as datas contratadas', () => {
+  it('isola tarefas virtuais e o planejamento da execução quantitativa parcial', () => {
     const withDraft = syncAdditiveScheduleDraft(project, additive.id, '2026-08-13T12:00:00.000Z');
     const active = withDraft.additives![0];
     expect(active.scheduleDraft?.plannedTasks).toHaveLength(1);
     expect(validateAdditiveSchedule(withDraft, active)[0]).toMatch(/não confirmadas/i);
-    expect(getAutomaticSuspendedTaskIds(withDraft, active)).toEqual(new Set(['task-1']));
+    expect(getAutomaticSuspendedTaskIds(withDraft, active)).toEqual(new Set());
+    expect(getQuantitativelyRestrictedTasks(withDraft, active).get('task-1')?.restriction).toMatchObject({
+      contractedQuantity: 10, executableQuantity: 10, addedQuantity: 2, suppressedQuantity: 0,
+    });
 
     const withManual = setAdditiveScheduleDependentTask(withDraft, active.id, 'task-2', true);
     const selected = withManual.additives![0];
@@ -70,7 +75,9 @@ describe('Cronograma do Aditivo', () => {
       ...preview,
       phases: preview.phases.map(phase => ({
         ...phase,
-        tasks: phase.tasks.map(task => task.id === 'task-2'
+        tasks: phase.tasks.map(task => task.id === 'task-1'
+          ? { ...task, startDate: '2026-08-15' }
+          : task.id === 'task-2'
           ? { ...task, startDate: '2026-09-01' }
           : task.id === 'add-add-1-new-comp'
             ? { ...task, startDate: '2026-11-10', duration: 8 }
@@ -78,11 +85,13 @@ describe('Cronograma do Aditivo', () => {
       })),
     };
     const merged = mergeAdditiveSchedulePreviewChanges(withManual, active.id, preview, nextPreview, '2026-08-13T13:00:00.000Z');
+    expect(merged.phases[0].tasks.find(task => task.id === 'task-1')?.startDate).toBe('2026-08-10');
     expect(merged.phases[0].tasks.find(task => task.id === 'task-2')?.startDate).toBe('2026-08-20');
     expect(merged.phases[0].tasks.map(task => task.id)).not.toContain('add-add-1-new-comp');
     expect(merged.additives![0].scheduleDraft?.plannedTasks[0]).toMatchObject({ startDate: '2026-11-10', duration: 8, datesConfirmed: true });
+    expect(merged.additives![0].scheduleDraft?.contractedTaskPlans?.[0]).toMatchObject({ taskId: 'task-1', startDate: '2026-08-15' });
     expect(validateAdditiveSchedule(merged, merged.additives![0])).toEqual([]);
-    expect(buildPendingAdditiveSuspensionMap(merged)).toMatchObject({ 'task-1': { kind: 'automatic' }, 'task-2': { kind: 'manual' } });
+    expect(buildPendingAdditiveSuspensionMap(merged)).toMatchObject({ 'task-1': { kind: 'quantity_limited' }, 'task-2': { kind: 'manual' } });
 
     const released = setAdditiveScheduleDependentTask(merged, active.id, 'task-2', false);
     const releasedActive = released.additives![0];
@@ -98,7 +107,7 @@ describe('Cronograma do Aditivo', () => {
     expect(releasedMerged.phases[0].tasks.find(task => task.id === 'task-2')?.startDate).toBe('2026-09-01');
   });
 
-  it('classifica suspensão automática, manual, supressão integral e novos serviços', () => {
+  it('classifica execução parcial, suspensão integral e novos serviços', () => {
     const fullSuppression: AdditiveComposition = {
       ...existingComposition,
       id: 'fully-suppressed',
@@ -114,19 +123,54 @@ describe('Cronograma do Aditivo', () => {
     const partialSuppression: AdditiveComposition = {
       ...existingComposition,
       id: 'partially-suppressed',
+      taskId: 'task-3',
+      code: 'EX-3',
       description: 'Serviço parcialmente suprimido',
       addedQuantity: 0,
       suppressedQuantity: 2,
       changeKind: 'suprimido',
     };
+    const priceChange: AdditiveComposition = {
+      ...existingComposition,
+      id: 'price-change',
+      taskId: 'task-4',
+      code: 'EX-4',
+      description: 'Serviço com novo preço',
+      quantity: 5,
+      originalQuantity: 5,
+      addedQuantity: 0,
+      suppressedQuantity: 0,
+      changeKind: 'sem_alteracao',
+      unitPriceNoBDI: 88,
+      unitPriceWithBDI: 110,
+      total: 550,
+      totalWithBDI: 550,
+    };
     const changedProject: Project = {
       ...project,
-      additives: [{ ...additive, compositions: [existingComposition, partialSuppression, fullSuppression, newComposition] }],
+      phases: project.phases.map(phase => ({
+        ...phase,
+        tasks: [...phase.tasks, {
+          id: 'task-3', name: 'Serviço parcialmente suprimido', phase: 'phase-1', startDate: '2026-08-25', duration: 5,
+          dependencies: [], responsible: '', percentComplete: 0, materials: [], level: 0, quantity: 10, unit: 'UN',
+          unitPrice: 100, unitPriceNoBDI: 80, itemCode: 'EX-3',
+        }, {
+          id: 'task-4', name: 'Serviço com novo preço', phase: 'phase-1', startDate: '2026-08-28', duration: 3,
+          dependencies: [], responsible: '', percentComplete: 0, materials: [], level: 0, quantity: 5, unit: 'UN',
+          unitPrice: 100, unitPriceNoBDI: 80, itemCode: 'EX-4',
+        }],
+      })),
+      additives: [{ ...additive, compositions: [existingComposition, partialSuppression, fullSuppression, priceChange, newComposition] }],
     };
     const withDraft = syncAdditiveScheduleDraft(changedProject, additive.id);
     const active = withDraft.additives![0];
     const map = buildPreviewSuspensionMap(withDraft, active);
-    expect(map['task-1']).toMatchObject({ scheduleState: 'suspended', financialTreatment: 'excluded' });
+    expect(map['task-1']).toMatchObject({ kind: 'quantity_limited', scheduleState: 'scheduled', financialTreatment: 'monthly' });
+    expect(map['task-3']).toMatchObject({
+      kind: 'quantity_limited', scheduleState: 'scheduled',
+      quantityRestriction: { contractedQuantity: 10, executableQuantity: 8, suppressedQuantity: 2 },
+    });
+    expect(map['task-4']).toMatchObject({ kind: 'automatic', scheduleState: 'suspended', financialTreatment: 'excluded' });
     expect(map['task-2']).toMatchObject({
       scheduleState: 'fully_suppressed',
       financialTreatment: 'excluded',
@@ -136,6 +180,12 @@ describe('Cronograma do Aditivo', () => {
 
     const preview = buildAdditiveSchedulePreviewProject(withDraft, active, active.scheduleDraft!);
     const rows = buildAdditiveScheduleRows(withDraft, active, preview);
+    expect(rows.find(row => row.taskId === 'task-1' && !row.compositionId)).toMatchObject({
+      scheduleState: 'scheduled', financialTreatment: 'monthly', quantity: 10, totalWithBDI: 1000,
+    });
+    expect(rows.find(row => row.taskId === 'task-3' && !row.compositionId)).toMatchObject({
+      scheduleState: 'scheduled', financialTreatment: 'monthly', quantity: 8, totalWithBDI: 800,
+    });
     expect(rows.find(row => row.taskId === 'task-2' && !row.compositionId)).toMatchObject({
       scheduleState: 'fully_suppressed', financialTreatment: 'excluded',
     });
@@ -146,7 +196,50 @@ describe('Cronograma do Aditivo', () => {
       scheduleState: 'suspended', financialTreatment: 'total_only', totalWithBDI: -200,
     });
     const analysis = buildAdditiveScheduleAnalysisProject(preview, map);
-    expect(analysis.phases.flatMap(phase => phase.tasks).map(task => task.id)).toEqual(['add-add-1-new-comp']);
+    expect(analysis.phases.flatMap(phase => phase.tasks).map(task => task.id)).toEqual(['task-1', 'task-3', 'add-add-1-new-comp']);
+  });
+
+  it('registra e remove composições bloqueadoras de uma suspensão manual', () => {
+    const withDraft = syncAdditiveScheduleDraft(project, additive.id);
+    const blockedPartial = setAdditiveScheduleDependencyBlock(withDraft, additive.id, 'task-1', ['new-comp'], 'Acréscimo necessário ao sistema');
+    expect(buildPreviewSuspensionMap(blockedPartial, blockedPartial.additives![0])['task-1']).toMatchObject({
+      kind: 'manual', scheduleState: 'suspended', quantityRestriction: { executableQuantity: 10 },
+    });
+    const restoredPartial = setAdditiveScheduleDependentTask(blockedPartial, additive.id, 'task-1', false);
+    expect(buildPreviewSuspensionMap(restoredPartial, restoredPartial.additives![0])['task-1']).toMatchObject({
+      kind: 'quantity_limited', scheduleState: 'scheduled',
+    });
+
+    const blocked = setAdditiveScheduleDependencyBlock(withDraft, additive.id, 'task-2', ['existing-comp', 'new-comp'], 'Sistema incompleto');
+    const active = blocked.additives![0];
+    expect(active.scheduleDraft?.dependencyBlocks?.[0]).toMatchObject({
+      taskId: 'task-2', compositionIds: ['existing-comp', 'new-comp'], note: 'Sistema incompleto',
+    });
+    expect(buildPreviewSuspensionMap(blocked, active)['task-2']).toMatchObject({
+      kind: 'manual', scheduleState: 'suspended', blockingNote: 'Sistema incompleto',
+    });
+    expect(buildPreviewSuspensionMap(blocked, active)['task-2'].blockingCompositions).toHaveLength(2);
+    const preview = buildAdditiveSchedulePreviewProject(blocked, active, active.scheduleDraft!);
+    expect(buildAdditiveScheduleRows(blocked, active, preview).find(row => row.taskId === 'task-2' && !row.compositionId)?.blockingCompositions).toHaveLength(2);
+
+    const released = setAdditiveScheduleDependentTask(blocked, additive.id, 'task-2', false);
+    expect(released.additives![0].scheduleDraft?.dependencyBlocks).toEqual([]);
+    expect(buildPreviewSuspensionMap(released, released.additives![0])['task-2']).toBeUndefined();
+  });
+
+  it('congela os bloqueadores e os inclui nos documentos', async () => {
+    const withDraft = syncAdditiveScheduleDraft(project, additive.id);
+    const blocked = setAdditiveScheduleDependencyBlock(withDraft, additive.id, 'task-2', ['existing-comp', 'new-comp'], 'Bomba depende do sistema completo');
+    const active = blocked.additives![0];
+    const preview = buildAdditiveSchedulePreviewProject(blocked, active, active.scheduleDraft!);
+    const snapshot = createAdditiveScheduleSnapshot(blocked, active, preview);
+    const taskRow = snapshot.rows.find(row => row.taskId === 'task-2' && !row.compositionId);
+    expect(taskRow).toMatchObject({ blockingNote: 'Bomba depende do sistema completo' });
+    expect(taskRow?.blockingCompositions).toHaveLength(2);
+
+    const { workbook } = await buildAdditiveScheduleWorkbook(blocked, active, snapshot.rows);
+    expect(workbook.Sheets.Atividades.Q7.v).toContain('Serviço contratado alterado');
+    expect(workbook.Sheets.Atividades.R7.v).toBe('Bomba depende do sistema completo');
   });
 
   it('exige confirmação explícita quando as datas sugeridas não foram editadas', () => {
@@ -191,6 +284,41 @@ describe('Cronograma do Aditivo', () => {
     const archivedPreview = buildProjectFromScheduleSnapshot(contracted, contracted.additives![0].scheduleSnapshots![0]);
     expect(archivedPreview.phases.flatMap(phase => phase.tasks).find(item => item.id === task?.id)).toMatchObject({
       startDate: '2026-11-10', duration: 8, dependencies: ['task-2'], responsible: 'Encarregado', team: 'alpha',
+    });
+  });
+
+  it('recalcula RUP pelo saldo na prévia e pela quantidade final na contratação', () => {
+    const rupProject: Project = {
+      ...project,
+      phases: project.phases.map(phase => ({
+        ...phase,
+        tasks: phase.tasks.map(task => task.id === 'task-1' ? {
+          ...task,
+          durationMode: 'rup' as const,
+          isManual: false,
+          laborCompositions: [{ id: 'labor-1', role: 'Instalador', rup: 8, workerCount: 1 }],
+        } : task),
+      })),
+    };
+    let prepared = syncAdditiveScheduleDraft(rupProject, additive.id);
+    const active = prepared.additives![0];
+    const preview = buildAdditiveSchedulePreviewProject(prepared, active, active.scheduleDraft!, { jornadaDiaria: 8, trabalhaSabado: false });
+    const previewTask = preview.phases[0].tasks.find(task => task.id === 'task-1');
+    expect(previewTask).toMatchObject({ quantity: 10, duration: 10, durationMode: 'rup' });
+    expect(prepared.phases[0].tasks.find(task => task.id === 'task-1')).toMatchObject({ quantity: 10, duration: 5 });
+
+    const editedPreview: Project = {
+      ...preview,
+      phases: preview.phases.map(phase => ({
+        ...phase,
+        tasks: phase.tasks.map(task => task.id === 'task-1' ? { ...task, startDate: '2026-09-10', team: 'alpha' as const } : task),
+      })),
+    };
+    prepared = mergeAdditiveSchedulePreviewChanges(prepared, additive.id, preview, editedPreview);
+    expect(prepared.phases[0].tasks.find(task => task.id === 'task-1')?.startDate).toBe('2026-08-10');
+    const contracted = contractAdditive(prepared, additive.id, 'Administrador', { jornadaDiaria: 8, trabalhaSabado: false });
+    expect(contracted.phases[0].tasks.find(task => task.id === 'task-1')).toMatchObject({
+      quantity: 12, duration: 12, startDate: '2026-09-10', team: 'alpha', durationMode: 'rup',
     });
   });
 
@@ -247,9 +375,14 @@ describe('Cronograma do Aditivo', () => {
     const rows = buildAdditiveScheduleRows(withDraft, active, preview);
     const { XLSX, workbook } = await buildAdditiveScheduleWorkbook(withDraft, active, rows);
     expect(workbook.SheetNames).toEqual(['Atividades', 'Gantt', 'Previsão Financeira']);
-    expect(workbook.Sheets.Atividades.G6.v).toBe('');
-    expect(workbook.Sheets.Atividades.N6.v).toBe('');
-    expect(workbook.Sheets.Gantt.E2.v).toBe('SUSPENSO - AGUARDA FORMALIZAÇÃO DO ADITIVO');
+    expect(workbook.Sheets.Atividades.F6.v).toContain('EXECUTAR: 10 UN CONTRATADAS');
+    expect(workbook.Sheets.Atividades.G6.v).toBeTypeOf('number');
+    expect(workbook.Sheets.Atividades.F7.v).toBe('ITEM SUPRIMIDO - QUANTIDADE A EXECUTAR: 0');
+    expect(workbook.Sheets.Atividades.G7.v).toBe('');
+    expect(workbook.Sheets.Atividades.N7.v).toBe('');
+    expect(workbook.Sheets.Gantt.B2.v).toContain('EXECUTAR: 10 UN CONTRATADAS');
+    expect(workbook.Sheets.Gantt.E2.v).toBe('■');
+    expect(workbook.Sheets.Gantt.E3.v).toBe('ITEM SUPRIMIDO - QUANTIDADE A EXECUTAR: 0');
     expect(Object.values(workbook.Sheets['Previsão Financeira']).some((cell: unknown) => (
       typeof cell === 'object' && cell !== null && 'v' in cell && (cell as { v?: unknown }).v === -50
     ))).toBe(true);
