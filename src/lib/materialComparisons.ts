@@ -390,6 +390,10 @@ export interface MaterialSuggestion {
   description: string;
   unit: string;
   quantity: number;
+  /** Quantidade liberada: contrato-base + aditivos formalizados. */
+  contractedQuantity: number;
+  /** Saldo líquido de propostas ainda não formalizadas. */
+  additiveQuantity: number;
   code?: string;
   bank?: string;
   referencePrice?: number;
@@ -397,6 +401,9 @@ export interface MaterialSuggestion {
   sourceDetail?: MaterialSuggestionDetail;
   sourceId: string;
   legacyInputType?: AdditiveInputType;
+  hasBaseContractSource?: boolean;
+  hasFormalizedAdditiveSource?: boolean;
+  hasPendingAdditiveSource?: boolean;
   /** Aviso opcional (ex.: composição sem analítico). */
   warning?: string;
 }
@@ -442,7 +449,17 @@ export function suggestMaterialsWithDiagnostics(
   const upsert = (s: MaterialSuggestion) => {
     const cur = suggestions.get(s.key);
     if (cur) {
-      cur.quantity = trunc2(cur.quantity + s.quantity);
+      cur.contractedQuantity = trunc2(cur.contractedQuantity + s.contractedQuantity);
+      cur.additiveQuantity = trunc2(cur.additiveQuantity + s.additiveQuantity);
+      cur.quantity = trunc2(cur.contractedQuantity + cur.additiveQuantity);
+      cur.hasBaseContractSource ||= s.hasBaseContractSource;
+      cur.hasFormalizedAdditiveSource ||= s.hasFormalizedAdditiveSource;
+      cur.hasPendingAdditiveSource ||= s.hasPendingAdditiveSource;
+      // A identidade do insumo do contrato-base é a referência estável para vínculos já existentes.
+      if (s.hasBaseContractSource) {
+        cur.sourceId = s.sourceId;
+        cur.sourceType = s.sourceType;
+      }
       if (!cur.referencePrice && s.referencePrice) cur.referencePrice = s.referencePrice;
       if (!cur.legacyInputType && s.legacyInputType) cur.legacyInputType = s.legacyInputType;
       // Se origens diferem dentro do mesmo insumo, manter o detalhe "alterado"
@@ -458,41 +475,45 @@ export function suggestMaterialsWithDiagnostics(
         cur.sourceDetail = s.sourceDetail;
       }
     } else {
-      suggestions.set(s.key, { ...s, quantity: trunc2(s.quantity) });
+      const contractedQuantity = trunc2(s.contractedQuantity);
+      const additiveQuantity = trunc2(s.additiveQuantity);
+      suggestions.set(s.key, {
+        ...s,
+        contractedQuantity,
+        additiveQuantity,
+        quantity: trunc2(contractedQuantity + additiveQuantity),
+      });
     }
   };
 
-  // Qtd Final exibida na tabela do Aditivo:
-  //   se houver original/added/suppressed → original + added − suppressed
-  //   senão → quantity da composição.
-  const qtyFinal = (c: { quantity?: number; originalQuantity?: number; addedQuantity?: number; suppressedQuantity?: number }) => {
-    const hasDelta = c.originalQuantity != null || c.addedQuantity != null || c.suppressedQuantity != null;
-    if (hasDelta) {
-      return (c.originalQuantity ?? 0) + (c.addedQuantity ?? 0) - (c.suppressedQuantity ?? 0);
+  const additiveDelta = (c: AdditiveComposition) => {
+    const suppressed = c.suppressedQuantity ?? 0;
+    if (c.isNewService) return (c.addedQuantity ?? c.quantity ?? 0) - suppressed;
+    if (c.addedQuantity != null || c.suppressedQuantity != null) {
+      return (c.addedQuantity ?? 0) - suppressed;
     }
-    return c.quantity ?? 0;
+    if (c.changeKind === 'acrescido') return c.quantity ?? 0;
+    if (c.changeKind === 'suprimido') return -(c.quantity ?? 0);
+    return 0;
   };
 
   // A) FONTE PRINCIPAL — Insumos analíticos das composições da aba ADITIVO.
   //    Lê todos os aditivos (inclusive rascunho/em análise) apenas para fins
   //    de planejamento de compra. Não integra Medição/Cronograma/EAP/Diário.
   for (const ad of project.additives ?? []) {
+    if (ad.status === 'rejeitado' || ad.status === 'reprovado' || ad.status === 'cancelado') continue;
     diag.additivesRead += 1;
-    const isContracted = ad.isContracted === true || ad.status === 'aditivo_contratado';
+    const isContracted = ad.isContracted === true || ad.status === 'contratado' || ad.status === 'aditivo_contratado';
     if (isContracted) diag.contractedAdditivesRead += 1;
     for (const comp of ad.compositions ?? []) {
-      const compQty = qtyFinal(comp);
+      const compQty = additiveDelta(comp);
       const inputs = comp.inputs ?? [];
-      if (compQty <= 0 || inputs.length === 0) continue;
+      if (!compQty || inputs.length === 0) continue;
       diag.additiveCompositionsWithAnalytic += 1;
       const isNew = comp.isNewService === true;
-      const added = comp.addedQuantity ?? 0;
-      const suppressed = comp.suppressedQuantity ?? 0;
       const detail: MaterialSuggestionDetail = isNew
         ? 'additive_new_service'
-        : added > 0 || suppressed > 0
-          ? 'additive_existing_changed'
-          : 'contracted_item';
+        : 'additive_existing_changed';
       for (const inp of inputs) {
         const qty = trunc2((inp.coefficient || 0) * compQty);
         if (!qty) continue;
@@ -505,6 +526,8 @@ export function suggestMaterialsWithDiagnostics(
           description: inp.description,
           unit: inp.unit,
           quantity: qty,
+          contractedQuantity: isContracted ? qty : 0,
+          additiveQuantity: isContracted ? 0 : qty,
           code: inp.code || undefined,
           bank: inp.bank || undefined,
           referencePrice: referencePrice || undefined,
@@ -512,6 +535,8 @@ export function suggestMaterialsWithDiagnostics(
           sourceDetail: detail,
           sourceId: inp.id,
           legacyInputType: inp.type,
+          hasFormalizedAdditiveSource: isContracted,
+          hasPendingAdditiveSource: !isContracted,
         });
       }
     }
@@ -536,12 +561,15 @@ export function suggestMaterialsWithDiagnostics(
         description: inp.description,
         unit: inp.unit,
         quantity: qty,
+        contractedQuantity: qty,
+        additiveQuantity: 0,
         code: inp.code || undefined,
         bank: inp.bank || undefined,
         referencePrice: inp.unitPrice || undefined,
         sourceType: 'analytic_input',
         sourceId: inp.id,
         legacyInputType: inp.type,
+        hasBaseContractSource: true,
       });
     }
   }
@@ -566,6 +594,8 @@ export function suggestMaterialsWithDiagnostics(
         description: m.name,
         unit: m.unit,
         quantity: trunc2(m.quantity || 0),
+        contractedQuantity: trunc2(m.quantity || 0),
+        additiveQuantity: 0,
         referencePrice: refPrice,
         sourceType: 'task_material',
         sourceId: t.id,
@@ -592,6 +622,66 @@ export interface SuggestionLikeKey {
 export function linkKeyOf(x: SuggestionLikeKey): string {
   if (x.sourceId) return `id:${x.sourceId}`;
   return `k:${(x.code ?? '').trim().toLowerCase()}|${(x.description ?? '').trim().toLowerCase()}|${(x.unit ?? '').trim().toLowerCase()}`;
+}
+
+function synchronizeComparisonItemQuantity(
+  item: ComparisonItem,
+  quantities: { contractedQuantity: number; additiveQuantity: number; totalQuantity: number; sourceId?: string },
+): ComparisonItem {
+  const quantity = trunc2(Math.max(0, quantities.contractedQuantity || 0));
+  const additiveQuantity = trunc2(quantities.additiveQuantity || 0);
+  const totalQuantity = trunc2(quantities.totalQuantity || 0);
+  const unchanged =
+    item.quantity === quantity &&
+    item.contractedQuantity === quantity &&
+    item.additiveQuantity === additiveQuantity &&
+    item.totalQuantity === totalQuantity &&
+    (!quantities.sourceId || item.sourceId === quantities.sourceId);
+  if (unchanged) return item;
+  return {
+    ...item,
+    quantity,
+    contractedQuantity: quantity,
+    additiveQuantity,
+    totalQuantity,
+    sourceId: quantities.sourceId ?? item.sourceId,
+    prices: item.prices.map(price => ({
+      ...price,
+      total: +(price.price * quantity).toFixed(2),
+    })),
+  };
+}
+
+/** Atualiza somente comparativos abertos; fechados e comprados permanecem snapshots históricos. */
+export function syncOpenComparisonSuggestionQuantities(
+  project: Project,
+  materialSuggestions: MaterialSuggestion[] = suggestMaterialsFromProject(project).filter(item => !item.warning),
+): Project {
+  const byKey = new Map(materialSuggestions.map(item => [linkKeyOf(item), item]));
+  const identity = (item: Pick<SuggestionLikeKey, 'code' | 'description' | 'unit'>) =>
+    `${(item.code ?? '').trim().toLowerCase()}|${item.description.trim().toLowerCase()}|${item.unit.trim().toLowerCase()}`;
+  const byIdentity = new Map(materialSuggestions.map(item => [identity(item), item]));
+  let projectChanged = false;
+  const comparisons = (project.materialComparisons ?? []).map(comparison => {
+    if (comparison.status !== 'rascunho' && comparison.status !== 'em_cotacao') return comparison;
+    let comparisonChanged = false;
+    const items = comparison.items.map(item => {
+      const suggestion = byKey.get(linkKeyOf(item)) ?? byIdentity.get(identity(item));
+      if (!suggestion) return item;
+      const next = synchronizeComparisonItemQuantity(item, {
+        contractedQuantity: suggestion.contractedQuantity,
+        additiveQuantity: suggestion.additiveQuantity,
+        totalQuantity: suggestion.quantity,
+        sourceId: suggestion.sourceId,
+      });
+      if (next !== item) comparisonChanged = true;
+      return next;
+    });
+    if (!comparisonChanged) return comparison;
+    projectChanged = true;
+    return { ...comparison, items, updatedAt: nowISO() };
+  });
+  return projectChanged ? { ...project, materialComparisons: comparisons } : project;
 }
 
 export const MATERIAL_COST_CLASS_ORDER: MaterialCostClass[] = ['material', 'labor', 'equipment', 'unclassified'];
@@ -733,6 +823,8 @@ export function getMaterialCompositionBreakdown(project: Project, comp: Additive
         description: inp.description,
         unit: inp.unit,
         quantity: trunc2((inp.coefficient || 0) * qty),
+        contractedQuantity: trunc2((inp.coefficient || 0) * qty),
+        additiveQuantity: 0,
         code: inp.code || undefined,
         bank: inp.bank || undefined,
         referencePrice: inp.unitPrice || undefined,
@@ -794,14 +886,42 @@ export function setSuggestionLink(
   suggestion: Omit<ComparisonItem, 'id' | 'prices' | 'status'> & { sourceType?: ComparisonItem['sourceType']; sourceDetail?: ComparisonItem['sourceDetail']; sourceId?: string },
   targetComparisonId: string | null,
 ): Project {
+  const contractedQuantity = trunc2(Math.max(0, suggestion.contractedQuantity ?? suggestion.quantity));
+  if (targetComparisonId && contractedQuantity <= 0) return project;
   const key = linkKeyOf(suggestion);
   const list = project.materialComparisons ?? [];
+  const lockedLocation = list.find(comparison =>
+    (comparison.status === 'fechado' || comparison.status === 'comprado') &&
+    comparison.items.some(item => linkKeyOf(item) === key),
+  );
+  if (lockedLocation && lockedLocation.id !== targetComparisonId) return project;
   const ts = nowISO();
   const updated = list.map(c => {
     const has = c.items.find(it => linkKeyOf(it) === key);
     if (c.id === targetComparisonId) {
-      if (has) return c; // já está no destino
-      const it: ComparisonItem = { id: uid(), prices: [], status: 'pendente', ...suggestion };
+      if (has) {
+        if (c.status !== 'rascunho' && c.status !== 'em_cotacao') return c;
+        const next = synchronizeComparisonItemQuantity(has, {
+          contractedQuantity,
+          additiveQuantity: suggestion.additiveQuantity ?? 0,
+          totalQuantity: suggestion.totalQuantity ?? contractedQuantity,
+        });
+        return next === has ? c : {
+          ...c,
+          items: c.items.map(item => item.id === has.id ? next : item),
+          updatedAt: ts,
+        };
+      }
+      const it: ComparisonItem = {
+        id: uid(),
+        prices: [],
+        status: 'pendente',
+        ...suggestion,
+        quantity: contractedQuantity,
+        contractedQuantity,
+        additiveQuantity: suggestion.additiveQuantity ?? 0,
+        totalQuantity: suggestion.totalQuantity ?? contractedQuantity,
+      };
       return { ...c, items: [...c.items, it], updatedAt: ts };
     }
     if (has) {

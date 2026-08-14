@@ -962,6 +962,12 @@ export interface ComparisonItem {
   description: string;
   unit: string;
   quantity: number;
+  /** Quantidade efetivamente liberada pelo contrato vigente no momento do vínculo. */
+  contractedQuantity?: number;
+  /** Saldo líquido de propostas de aditivo ainda não formalizadas. */
+  additiveQuantity?: number;
+  /** Quantidade projetada = contratada + aditivo pendente. */
+  totalQuantity?: number;
   /** Preço de referência (orçamento/SINAPI/anterior). */
   referencePrice?: number;
   /** Fornecedor escolhido manualmente; quando ausente, usa-se o menor preço. */

@@ -674,6 +674,8 @@ function buildInputRows(
       description: input.description,
       unit: input.unit,
       quantity: totalQuantity,
+      contractedQuantity: totalQuantity,
+      additiveQuantity: 0,
       referencePrice: input.unitPrice || undefined,
       sourceType,
       sourceId: input.id,

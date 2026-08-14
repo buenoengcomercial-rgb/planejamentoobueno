@@ -32,11 +32,18 @@ const DETAIL_BADGE: Record<string, string> = {
   additive_new_service: 'bg-primary/15 text-primary border-primary/40',
 };
 
-function originBadge(sourceType: MC.MaterialSuggestionSource, detail?: MC.MaterialSuggestionDetail) {
-  if (sourceType === 'additive_input' && detail) {
-    return { label: DETAIL_LABEL[detail], cls: DETAIL_BADGE[detail] };
-  }
+function originBadge(suggestion: MC.MaterialSuggestion) {
+  const { sourceType, sourceDetail } = suggestion;
   if (sourceType === 'task_material') return { label: 'Material manual', cls: 'bg-muted text-muted-foreground border-border' };
+  if (suggestion.hasBaseContractSource && (suggestion.hasFormalizedAdditiveSource || suggestion.hasPendingAdditiveSource)) {
+    return { label: 'Contrato + Aditivo', cls: 'bg-warning/15 text-warning border-warning/40' };
+  }
+  if (suggestion.hasFormalizedAdditiveSource) {
+    return { label: 'Aditivo contratado', cls: 'bg-success/15 text-success border-success/40' };
+  }
+  if (sourceType === 'additive_input' && sourceDetail) {
+    return { label: DETAIL_LABEL[sourceDetail], cls: DETAIL_BADGE[sourceDetail] };
+  }
   if (sourceType === 'analytic_input') return { label: 'Analítico do contrato', cls: 'bg-secondary text-secondary-foreground border-border' };
   return { label: 'Aditivo', cls: 'bg-muted text-muted-foreground border-border' };
 }
@@ -55,7 +62,7 @@ const COST_CLASS_BADGE: Record<MaterialCostClass, string> = {
   unclassified: 'border-slate-300 bg-slate-50 text-slate-600',
 };
 
-type SortColumn = 'unit' | 'description' | 'origin' | 'class' | 'quantity' | 'price' | 'group';
+type SortColumn = 'unit' | 'description' | 'origin' | 'class' | 'contractedQuantity' | 'additiveQuantity' | 'quantity' | 'price' | 'group';
 type SortState = { column: SortColumn; direction: 'asc' | 'desc' };
 
 function CostClassIcon({ costClass, className = 'w-3.5 h-3.5' }: { costClass: MaterialCostClass; className?: string }) {
@@ -109,6 +116,10 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   );
   const suggestions = useMemo(() => MC.suggestMaterialsFromProject(project), [project]);
 
+  useEffect(() => {
+    onProjectChange(prev => MC.syncOpenComparisonSuggestionQuantities(prev));
+  }, [onProjectChange, suggestions]);
+
   const needsAnalyticLink =
     diagnostics.additiveAnalyticInputs === 0 &&
     diagnostics.baseCompositionsWithAnalytic === 0 &&
@@ -131,14 +142,19 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     [suggestions],
   );
   const costClassTotals = useMemo(
-    () => MC.computeMaterialCostClassTotals(visibleProject, realSuggestions),
+    () => MC.computeMaterialCostClassTotals(
+      visibleProject,
+      realSuggestions
+        .filter(item => item.contractedQuantity > 0)
+        .map(item => ({ ...item, quantity: item.contractedQuantity })),
+    ),
     [realSuggestions, visibleProject],
   );
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return realSuggestions;
     return realSuggestions.filter(s => {
-      const origin = originBadge(s.sourceType, s.sourceDetail).label.toLowerCase();
+      const origin = originBadge(s).label.toLowerCase();
       return (
         (s.code ?? '').toLowerCase().includes(q) ||
         (s.bank ?? '').toLowerCase().includes(q) ||
@@ -157,8 +173,10 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     };
     if (column === 'unit') return text(s.unit);
     if (column === 'description') return text(s.description);
-    if (column === 'origin') return text(originBadge(s.sourceType, s.sourceDetail).label);
+    if (column === 'origin') return text(originBadge(s).label);
     if (column === 'class') return text(MC.MATERIAL_COST_CLASS_LABEL[MC.resolveMaterialCostClass(visibleProject, s)]);
+    if (column === 'contractedQuantity') return number(s.contractedQuantity);
+    if (column === 'additiveQuantity') return number(s.additiveQuantity);
     if (column === 'quantity') return number(s.quantity);
     if (column === 'price') return number(s.referencePrice);
     return text(comparisonName(s));
@@ -224,7 +242,10 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   const suggestionToPayload = (s: MC.MaterialSuggestion) => ({
     description: s.description,
     unit: s.unit,
-    quantity: trunc2(s.quantity),
+    quantity: trunc2(Math.max(0, s.contractedQuantity)),
+    contractedQuantity: trunc2(Math.max(0, s.contractedQuantity)),
+    additiveQuantity: trunc2(s.additiveQuantity),
+    totalQuantity: trunc2(s.quantity),
     referencePrice: s.referencePrice,
     code: s.code,
     sourceType: s.sourceType,
@@ -233,6 +254,10 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   });
 
   const changeGroup = (s: MC.MaterialSuggestion, targetCompId: string | null) => {
+    if (targetCompId && s.contractedQuantity <= 0) {
+      toast.error('Este insumo ainda não possui quantidade contratada liberada para compra.');
+      return;
+    }
     onProjectChange(prev => MC.setSuggestionLink(prev, suggestionToPayload(s), targetCompId));
   };
 
@@ -253,7 +278,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
       toast.error('Selecione ou crie um comparativo antes de vincular insumos.');
       return;
     }
-    const picked = realSuggestions.filter(s => selectedKeys[s.key]);
+    const picked = realSuggestions.filter(s => selectedKeys[s.key] && s.contractedQuantity > 0);
     if (picked.length === 0) return;
     onProjectChange(prev => picked.reduce(
       (next, s) => MC.setSuggestionLink(next, suggestionToPayload(s), comparison.id),
@@ -277,11 +302,12 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   };
 
   const selectedCount = Object.values(selectedKeys).filter(Boolean).length;
-  const allVisibleSelected = filtered.length > 0 && filtered.every(s => selectedKeys[s.key]);
+  const selectableFiltered = filtered.filter(s => s.contractedQuantity > 0);
+  const allVisibleSelected = selectableFiltered.length > 0 && selectableFiltered.every(s => selectedKeys[s.key]);
   const toggleAllVisible = (v: boolean) => {
     setSelectedKeys(prev => {
       const next = { ...prev };
-      filtered.forEach(s => { next[s.key] = v; });
+      selectableFiltered.forEach(s => { next[s.key] = v; });
       return next;
     });
   };
@@ -431,7 +457,9 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                 <th className="p-2 text-left"><SortButton column="description">Descricao</SortButton></th>
                 <th className="p-2 text-left w-40"><SortButton column="origin">Origem</SortButton></th>
                 <th className="p-2 text-left w-36"><SortButton column="class">Classe</SortButton></th>
-                <th className="p-2 text-right w-20"><SortButton column="quantity" className="justify-end">Qtd</SortButton></th>
+                <th className="p-2 text-right w-24"><SortButton column="contractedQuantity" className="justify-end">Qtd. contratada</SortButton></th>
+                <th className="p-2 text-right w-24"><SortButton column="additiveQuantity" className="justify-end">Qtd. aditivo</SortButton></th>
+                <th className="p-2 text-right w-20"><SortButton column="quantity" className="justify-end">Qtd. total</SortButton></th>
                 <th className="p-2 text-right w-24"><SortButton column="price" className="justify-end">Preco ref.</SortButton></th>
                 <th className="p-2 text-left w-44"><SortButton column="group">Grupo de compra</SortButton></th>
               </tr>
@@ -439,7 +467,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="p-6 text-center text-muted-foreground text-xs">
+                  <td colSpan={12} className="p-6 text-center text-muted-foreground text-xs">
                     {realSuggestions.length === 0
                       ? (diagnostics.additivesRead > 0
                           ? 'Nenhum insumo analítico encontrado no Aditivo atual.'
@@ -451,14 +479,21 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                 </tr>
               )}
               {sortedFiltered.map(s => {
-                const badge = originBadge(s.sourceType, s.sourceDetail);
+                const badge = originBadge(s);
                 const checked = !!selectedKeys[s.key];
                 const linkedTo = linkedByKey.get(MC.linkKeyOf(s)) ?? '';
+                const linkedComparison = allComparisons.find(comparison => comparison.id === linkedTo);
+                const linkLocked = linkedComparison?.status === 'fechado' || linkedComparison?.status === 'comprado';
                 const costClass = MC.resolveMaterialCostClass(visibleProject, s);
                 return (
                   <tr key={s.key} className={`border-t border-border hover:bg-muted/30 ${linkedTo ? 'bg-primary/5' : ''}`}>
                     <td className="p-1.5 align-middle">
-                      <Checkbox checked={checked} onCheckedChange={v => setSelectedKeys(prev => ({ ...prev, [s.key]: !!v }))} />
+                      <Checkbox
+                        checked={checked}
+                        disabled={s.contractedQuantity <= 0}
+                        onCheckedChange={v => setSelectedKeys(prev => ({ ...prev, [s.key]: !!v }))}
+                        title={s.contractedQuantity <= 0 ? 'Sem quantidade contratada liberada para compra' : undefined}
+                      />
                     </td>
                     <td className="p-1.5 align-middle font-mono text-[10px]">{s.code || '—'}</td>
                     <td className="p-1.5 align-middle text-[10px] text-muted-foreground">{s.bank || '—'}</td>
@@ -483,12 +518,22 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                         </select>
                       </div>
                     </td>
+                    <td className="p-1.5 align-middle text-right font-mono font-semibold">{formatQty(s.contractedQuantity)}</td>
+                    <td className={`p-1.5 align-middle text-right font-mono ${s.additiveQuantity < 0 ? 'text-destructive font-semibold' : s.additiveQuantity > 0 ? 'text-primary' : 'text-muted-foreground'}`}>
+                      {formatQty(s.additiveQuantity)}
+                    </td>
                     <td className="p-1.5 align-middle text-right font-mono">{formatQty(s.quantity)}</td>
                     <td className="p-1.5 align-middle text-right font-mono">{s.referencePrice ? formatBRL(s.referencePrice) : '—'}</td>
                     <td className="p-1.5 align-middle">
                       <select
                         value={linkedTo}
                         onChange={e => changeGroup(s, e.target.value || null)}
+                        disabled={linkLocked || (s.contractedQuantity <= 0 && !linkedTo)}
+                        title={linkLocked
+                          ? 'Comparativo fechado: vínculo preservado como histórico'
+                          : s.contractedQuantity <= 0 && !linkedTo
+                            ? 'Sem quantidade contratada liberada para compra'
+                            : undefined}
                         className="h-7 w-full text-[11px] border border-border rounded px-1.5 bg-background"
                       >
                         <option value="">— sem grupo —</option>
