@@ -70,6 +70,7 @@ function buildQuoteIndex(project: Project): Map<string, DashboardQuoteSelection>
 
   for (const comparison of project.materialComparisons ?? []) {
     for (const item of comparison.items ?? []) {
+      if (item.archivedReason === 'fully_suppressed') continue;
       const unitPrice = selectQuote(item);
       if (unitPrice == null) continue;
 

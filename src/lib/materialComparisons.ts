@@ -118,7 +118,7 @@ export function setItemPrice(comp: MaterialComparison, itemId: string, supplierI
   return {
     ...comp,
     items: comp.items.map(it => {
-      if (it.id !== itemId) return it;
+      if (it.id !== itemId || isComparisonItemArchived(it)) return it;
       const idx = it.prices.findIndex(p => p.supplierId === supplierId);
       const total = +(price * (it.quantity || 0)).toFixed(2);
       const entry: ComparisonItemPrice = { supplierId, price, total, available: true, ...extras };
@@ -132,6 +132,7 @@ export function setItemPrice(comp: MaterialComparison, itemId: string, supplierI
 }
 
 export function setChosenSupplier(comp: MaterialComparison, itemId: string, supplierId: string | undefined): MaterialComparison {
+  if (comp.items.some(item => item.id === itemId && isComparisonItemArchived(item))) return comp;
   return updateItem(comp, itemId, { chosenSupplierId: supplierId });
 }
 
@@ -144,11 +145,20 @@ export function getPurchasedQuantity(item: ComparisonItem): number {
 }
 
 export function getPendingPurchaseQuantity(item: ComparisonItem): number {
+  if (isComparisonItemArchived(item)) return 0;
   return trunc2(Math.max(0, (item.quantity || 0) - getPurchasedQuantity(item)));
 }
 
 export function getLastPurchase(item: ComparisonItem): ComparisonItemPurchase | undefined {
   return item.purchaseOrders?.[item.purchaseOrders.length - 1];
+}
+
+export function isComparisonItemArchived(item: Pick<ComparisonItem, 'archivedReason'>): boolean {
+  return item.archivedReason === 'fully_suppressed';
+}
+
+export function getActiveComparisonItems(comp: Pick<MaterialComparison, 'items'>): ComparisonItem[] {
+  return comp.items.filter(item => !isComparisonItemArchived(item));
 }
 
 export function confirmItemPurchase(
@@ -164,7 +174,7 @@ export function confirmItemPurchase(
   return {
     ...comp,
     items: comp.items.map(it => {
-      if (it.id !== itemId) return it;
+      if (it.id !== itemId || isComparisonItemArchived(it)) return it;
       const pending = getPendingPurchaseQuantity(it);
       const confirmedQuantity = trunc2(Math.min(safeQuantity, pending));
       if (confirmedQuantity <= 0) return it;
@@ -193,6 +203,7 @@ export function chooseLowestPrices(comp: MaterialComparison): MaterialComparison
   return {
     ...comp,
     items: comp.items.map(it => {
+      if (isComparisonItemArchived(it)) return it;
       const bestSupplierId = analyzeItem(it).bestSupplierId;
       if (!bestSupplierId) return it;
       return {
@@ -255,10 +266,11 @@ export interface SupplierTotal {
 }
 
 export function totalsBySupplier(comp: MaterialComparison): SupplierTotal[] {
+  const items = getActiveComparisonItems(comp);
   return comp.suppliers.map(s => {
     let total = 0;
     let covered = 0;
-    for (const it of comp.items) {
+    for (const it of items) {
       const p = it.prices.find(pp => pp.supplierId === s.id);
       if (p && p.price > 0) {
         total += p.price * it.quantity;
@@ -269,7 +281,7 @@ export function totalsBySupplier(comp: MaterialComparison): SupplierTotal[] {
       supplierId: s.id,
       supplierName: s.name,
       total: +total.toFixed(2),
-      itemsCount: comp.items.length,
+      itemsCount: items.length,
       itemsCovered: covered,
     };
   });
@@ -303,7 +315,7 @@ export function optimizedPurchasePlan(comp: MaterialComparison): OptimizedPlan {
   let referenceTotal = 0;
   const supplierMap = new Map(comp.suppliers.map(s => [s.id, s.name] as const));
 
-  for (const it of comp.items) {
+  for (const it of getActiveComparisonItems(comp)) {
     const an = analyzeItem(it);
     if (it.referencePrice != null) referenceTotal += it.referencePrice * it.quantity;
     if (!an.chosenSupplierId || an.chosenPrice == null) {
@@ -431,6 +443,14 @@ export interface MaterialSuggestionDiagnostics {
 
 function normalizeMaterialKeyPart(value?: string | null): string {
   return (value ?? '').trim().toUpperCase().replace(/\s+/g, '');
+}
+
+export function isFullySuppressedSuggestion(
+  suggestion: Pick<MaterialSuggestion, 'contractedQuantity' | 'additiveQuantity' | 'quantity'>,
+): boolean {
+  return suggestion.contractedQuantity <= 0
+    && suggestion.additiveQuantity <= 0
+    && suggestion.quantity <= 0;
 }
 
 function normalizeMaterialDescription(value?: string | null): string {
@@ -727,7 +747,11 @@ function synchronizeComparisonItemQuantity(
   };
 }
 
-/** Atualiza somente comparativos abertos; fechados e comprados permanecem snapshots históricos. */
+/**
+ * Reconcilia as quantidades dos comparativos abertos e retira itens 100% suprimidos
+ * de todos os fluxos de compra. Itens já comprados são arquivados para preservar
+ * estoque e histórico; itens sem compra são removidos inclusive de comparativos fechados.
+ */
 export function syncOpenComparisonSuggestionQuantities(
   project: Project,
   materialSuggestions: MaterialSuggestion[] = suggestMaterialsFromProject(project).filter(item => !item.warning),
@@ -737,12 +761,27 @@ export function syncOpenComparisonSuggestionQuantities(
     `${(item.code ?? '').trim().toLowerCase()}|${item.description.trim().toLowerCase()}|${item.unit.trim().toLowerCase()}`;
   const byIdentity = new Map(materialSuggestions.map(item => [identity(item), item]));
   let projectChanged = false;
+  const reconciledAt = nowISO();
   const comparisons = (project.materialComparisons ?? []).map(comparison => {
-    if (comparison.status !== 'rascunho' && comparison.status !== 'em_cotacao') return comparison;
     let comparisonChanged = false;
-    const items = comparison.items.map(item => {
+    const open = comparison.status === 'rascunho' || comparison.status === 'em_cotacao';
+    const items = comparison.items.flatMap(item => {
+      if (isComparisonItemArchived(item)) return [item];
       const suggestion = byKey.get(linkKeyOf(item)) ?? byIdentity.get(identity(item));
-      if (!suggestion) return item;
+      if (!suggestion) return [item];
+      if (isFullySuppressedSuggestion(suggestion)) {
+        comparisonChanged = true;
+        const hasPurchaseHistory = getPurchasedQuantity(item) > 0
+          || item.status === 'pedido_parcial'
+          || item.status === 'comprado';
+        if (!hasPurchaseHistory) return [];
+        return [{
+          ...item,
+          archivedReason: 'fully_suppressed' as const,
+          archivedAt: item.archivedAt ?? reconciledAt,
+        }];
+      }
+      if (!open) return [item];
       const next = synchronizeComparisonItemQuantity(item, {
         contractedQuantity: suggestion.contractedQuantity,
         additiveQuantity: suggestion.additiveQuantity,
@@ -751,7 +790,7 @@ export function syncOpenComparisonSuggestionQuantities(
         sourceId: suggestion.sourceId,
       });
       if (next !== item) comparisonChanged = true;
-      return next;
+      return [next];
     });
     if (!comparisonChanged) return comparison;
     projectChanged = true;
@@ -950,6 +989,7 @@ export function findLinkedLocations(
   const out: Array<{ comparisonId: string; itemId: string }> = [];
   for (const c of project.materialComparisons ?? []) {
     for (const it of c.items) {
+      if (isComparisonItemArchived(it)) continue;
       if (linkKeyOf(it) === key) out.push({ comparisonId: c.id, itemId: it.id });
     }
   }
@@ -973,12 +1013,12 @@ export function setSuggestionLink(
   const list = project.materialComparisons ?? [];
   const lockedLocation = list.find(comparison =>
     (comparison.status === 'fechado' || comparison.status === 'comprado') &&
-    comparison.items.some(item => linkKeyOf(item) === key),
+    comparison.items.some(item => !isComparisonItemArchived(item) && linkKeyOf(item) === key),
   );
   if (lockedLocation && lockedLocation.id !== targetComparisonId) return project;
   const ts = nowISO();
   const updated = list.map(c => {
-    const has = c.items.find(it => linkKeyOf(it) === key);
+    const has = c.items.find(it => !isComparisonItemArchived(it) && linkKeyOf(it) === key);
     if (c.id === targetComparisonId) {
       if (has) {
         if (c.status !== 'rascunho' && c.status !== 'em_cotacao') return c;
@@ -1008,7 +1048,11 @@ export function setSuggestionLink(
       return { ...c, items: [...c.items, it], updatedAt: ts };
     }
     if (has) {
-      return { ...c, items: c.items.filter(it => linkKeyOf(it) !== key), updatedAt: ts };
+      return {
+        ...c,
+        items: c.items.filter(it => isComparisonItemArchived(it) || linkKeyOf(it) !== key),
+        updatedAt: ts,
+      };
     }
     return c;
   });

@@ -55,8 +55,9 @@ export default function PurchaseOrderTab({ project, comparison, onProjectChange 
       confirmedQuantity += qty;
     }
 
-    const hasItems = nextComparison.items.length > 0;
-    const allPurchased = hasItems && nextComparison.items.every(item => MC.getPendingPurchaseQuantity(item) <= 0);
+    const activeItems = MC.getActiveComparisonItems(nextComparison);
+    const hasItems = activeItems.length > 0;
+    const allPurchased = hasItems && activeItems.every(item => MC.getPendingPurchaseQuantity(item) <= 0);
     if (allPurchased) {
       nextComparison = MC.setComparisonStatus(nextComparison, 'comprado');
     }

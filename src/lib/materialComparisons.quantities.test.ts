@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Additive, AdditiveComposition, MaterialComparison, Project } from '@/types/project';
 import {
+  computeStockRows,
+  getActiveComparisonItems,
+  isComparisonItemArchived,
+  isFullySuppressedSuggestion,
+  optimizedPurchasePlan,
   setSuggestionLink,
   suggestMaterialsFromProject,
   syncOpenComparisonSuggestionQuantities,
@@ -257,7 +262,7 @@ describe('quantidades contratuais e de aditivo dos materiais', () => {
     });
   });
 
-  it('sincroniza somente comparativos abertos e preserva preços e pedidos', () => {
+  it('sincroniza comparativos abertos e preserva snapshots ativos dos fechados', () => {
     const item = {
       id: 'item',
       sourceId: 'input-base',
@@ -301,6 +306,103 @@ describe('quantidades contratuais e de aditivo dos materiais', () => {
     expect(openItem?.purchaseOrders).toEqual(item.purchaseOrders);
     expect(closedItem?.quantity).toBe(99);
     expect(closedItem?.prices[0].total).toBe(297);
+  });
+
+  it('remove suprimidos sem compra e arquiva os comprados preservando estoque e histórico', () => {
+    const base = composition('base', { quantity: 5 });
+    const comparisonItem = {
+      id: 'item',
+      sourceId: 'input-base',
+      code: 'MAT-1',
+      description: 'Tubo de aço',
+      unit: 'M',
+      quantity: 10,
+      contractedQuantity: 10,
+      additiveQuantity: 0,
+      totalQuantity: 10,
+      purchasableQuantity: 10,
+      prices: [{ supplierId: 'supplier', price: 3, total: 30 }],
+      status: 'orcado' as const,
+    };
+    const comparison = (
+      id: string,
+      status: MaterialComparison['status'],
+      itemPatch: Partial<typeof comparisonItem> = {},
+    ): MaterialComparison => ({
+      id,
+      name: id,
+      status,
+      suppliers: [{ id: 'supplier', name: 'Fornecedor' }],
+      items: [{ ...comparisonItem, ...itemPatch }],
+      createdAt: '2026-08-14',
+      updatedAt: '2026-08-14',
+    });
+    const project = projectWith({
+      analyticCompositions: [base],
+      additives: [additive('supressao-total', 'rascunho', [composition('alterada', {
+        code: base.code,
+        inputs: [],
+        baseAnalyticCompositionId: base.id,
+        originalQuantity: 5,
+        addedQuantity: 0,
+        suppressedQuantity: 5,
+      })])],
+      materialComparisons: [
+        comparison('aberto', 'em_cotacao'),
+        comparison('fechado', 'fechado'),
+        comparison('comprado', 'comprado', {
+          status: 'comprado',
+          purchaseOrders: [{
+            id: 'order', supplierId: 'supplier', quantity: 2, unitPrice: 3, confirmedAt: '2026-08-14',
+          }],
+        }),
+      ],
+    });
+
+    const suggestion = suggestMaterialsFromProject(project).find(item => item.code === 'MAT-1');
+    expect(suggestion && isFullySuppressedSuggestion(suggestion)).toBe(true);
+
+    const next = syncOpenComparisonSuggestionQuantities(project);
+    expect(next.materialComparisons?.[0].items).toHaveLength(0);
+    expect(next.materialComparisons?.[1].items).toHaveLength(0);
+
+    const purchasedComparison = next.materialComparisons?.[2];
+    const archived = purchasedComparison?.items[0];
+    expect(archived).toMatchObject({
+      archivedReason: 'fully_suppressed',
+      purchaseOrders: [{ id: 'order', quantity: 2 }],
+    });
+    expect(archived?.archivedAt).toBeTruthy();
+    expect(archived && isComparisonItemArchived(archived)).toBe(true);
+    expect(purchasedComparison && getActiveComparisonItems(purchasedComparison)).toHaveLength(0);
+    expect(purchasedComparison && optimizedPurchasePlan(purchasedComparison)).toMatchObject({
+      rows: [],
+      unresolvedItems: [],
+      totalCost: 0,
+    });
+
+    const stock = computeStockRows(next, { confirmedOnly: true });
+    expect(stock).toHaveLength(1);
+    expect(stock[0]).toMatchObject({ code: 'MAT-1', planned: 10, purchased: 2 });
+  });
+
+  it('restaura o material na lista quando a supressão é rejeitada', () => {
+    const base = composition('base', { quantity: 5 });
+    const project = projectWith({
+      analyticCompositions: [base],
+      additives: [additive('supressao-rejeitada', 'rejeitado', [composition('alterada', {
+        code: base.code,
+        inputs: [],
+        baseAnalyticCompositionId: base.id,
+        originalQuantity: 5,
+        addedQuantity: 0,
+        suppressedQuantity: 5,
+      })])],
+    });
+
+    const suggestion = suggestMaterialsFromProject(project).find(item => item.code === 'MAT-1');
+    expect(suggestion).toMatchObject({ contractedQuantity: 10, additiveQuantity: 0, quantity: 10 });
+    expect(suggestion && isFullySuppressedSuggestion(suggestion)).toBe(false);
   });
 
   it('vincula somente a quantidade contratada e rejeita item exclusivamente proposto', () => {

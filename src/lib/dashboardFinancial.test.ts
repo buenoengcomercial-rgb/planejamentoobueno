@@ -165,6 +165,37 @@ describe('buildDashboardFinancialSummary', () => {
     expect(summary.quotedItemsCount).toBe(1);
   });
 
+  it('ignora cotação arquivada por supressão total nos indicadores ativos', () => {
+    const project = baseProject();
+    project.materialComparisons = [{
+      id: 'cmp-1',
+      name: 'Cotacao arquivada',
+      status: 'comprado',
+      suppliers: [{ id: 's1', name: 'Fornecedor 1' }],
+      items: [{
+        id: 'q1',
+        code: 'M1',
+        description: 'TUBO PVC',
+        unit: 'M',
+        quantity: 6,
+        referencePrice: 10,
+        sourceType: 'analytic_input',
+        sourceId: 'i-material',
+        chosenSupplierId: 's1',
+        archivedReason: 'fully_suppressed',
+        archivedAt: '2026-08-14',
+        prices: [{ supplierId: 's1', price: 8, total: 48 }],
+      }],
+      createdAt: '2026-01-01',
+      updatedAt: '2026-01-01',
+    }];
+
+    const summary = buildDashboardFinancialSummary(project);
+    expect(summary.quotedItemsCount).toBe(0);
+    expect(summary.quotedLocalTotal).toBe(0);
+    expect(summary.pendingQuoteItemsCount).toBe(4);
+  });
+
   it('calcula aumento de custo quando o cotado e maior que o orcado', () => {
     const project = baseProject();
     project.materialComparisons = [{

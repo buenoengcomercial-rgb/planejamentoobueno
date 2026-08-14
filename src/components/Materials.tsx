@@ -113,6 +113,10 @@ export default function Materials({ project, onProjectChange }: Props) {
     writeMaterialsUiSession(project.id, { section, tab });
   }, [project.id, section, tab]);
 
+  useEffect(() => {
+    onProjectChange(prev => MC.syncOpenComparisonSuggestionQuantities(prev));
+  }, [onProjectChange, project.additives, project.analyticCompositions, project.phases]);
+
   const globalSuppliers = useMemo(() => MC.getProjectSuppliers(project), [project]);
   const activeSuppliers = useMemo(
     () => ctl.active ? MC.getComparisonSuppliers(project, ctl.active) : [],
@@ -280,7 +284,7 @@ export default function Materials({ project, onProjectChange }: Props) {
                           CMP{String(index + 1).padStart(4, '0')}
                         </span>
                         <span className="block truncate text-xs font-semibold">{c.name}</span>
-                        <span className="text-[11px] font-medium">{c.items.length} itens</span>
+                        <span className="text-[11px] font-medium">{MC.getActiveComparisonItems(c).length} itens</span>
                       </button>
                     );
                   })
@@ -414,7 +418,7 @@ export default function Materials({ project, onProjectChange }: Props) {
               className="w-full"
             >
               <TabsList className="bg-muted h-9">
-                <TabsTrigger value="comparativo" className="text-xs"><ListChecks className="w-3.5 h-3.5 mr-1" /> Cotação ({ctl.active.items.length})</TabsTrigger>
+                <TabsTrigger value="comparativo" className="text-xs"><ListChecks className="w-3.5 h-3.5 mr-1" /> Cotação ({MC.getActiveComparisonItems(ctl.active).length})</TabsTrigger>
                 <TabsTrigger value="fornecedores" className="text-xs"><Truck className="w-3.5 h-3.5 mr-1" /> Cadastro global</TabsTrigger>
                 <TabsTrigger value="pedido" className="text-xs"><ShoppingCart className="w-3.5 h-3.5 mr-1" /> Pedido</TabsTrigger>
                 <TabsTrigger value="estoque" className="text-xs"><Warehouse className="w-3.5 h-3.5 mr-1" /> Estoque</TabsTrigger>

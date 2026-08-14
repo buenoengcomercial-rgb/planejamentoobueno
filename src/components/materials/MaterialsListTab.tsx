@@ -5,7 +5,7 @@ import * as MC from '@/lib/materialComparisons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { AlertTriangle, Link2, Loader2, Check, Search, Plus, BrickWall, HardHat, Truck, CircleSlash, ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
+import { AlertTriangle, Link2, Loader2, Check, Search, Plus, BrickWall, HardHat, Truck, CircleSlash, ArrowDown, ArrowUp, ArrowUpDown, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { parseBR, trunc2, formatBRL, formatQty } from './numberInput';
 import {
@@ -33,6 +33,9 @@ const DETAIL_BADGE: Record<string, string> = {
 };
 
 function originBadge(suggestion: MC.MaterialSuggestion) {
+  if (MC.isFullySuppressedSuggestion(suggestion)) {
+    return { label: '100% suprimido', cls: 'bg-muted text-muted-foreground border-border' };
+  }
   const { sourceType, sourceDetail } = suggestion;
   if (sourceType === 'task_material') return { label: 'Material manual', cls: 'bg-muted text-muted-foreground border-border' };
   if (suggestion.hasBaseContractSource && (suggestion.hasFormalizedAdditiveSource || suggestion.hasPendingAdditiveSource)) {
@@ -75,6 +78,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortState | null>(null);
   const [sortOrderKeys, setSortOrderKeys] = useState<string[] | null>(null);
+  const [showFullySuppressed, setShowFullySuppressed] = useState(false);
   const [classDrafts, setClassDrafts] = useState<Record<string, MaterialCostClass>>({});
   const fileRef = useRef<HTMLInputElement>(null);
   const [linkingAnalytic, setLinkingAnalytic] = useState(false);
@@ -113,15 +117,15 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     });
   }, [project.materialCostClasses]);
 
+  useEffect(() => {
+    setShowFullySuppressed(false);
+  }, [project.id]);
+
   const diagnostics = useMemo(
     () => MC.suggestMaterialsWithDiagnostics(project).diagnostics,
     [project],
   );
   const suggestions = useMemo(() => MC.suggestMaterialsFromProject(project), [project]);
-
-  useEffect(() => {
-    onProjectChange(prev => MC.syncOpenComparisonSuggestionQuantities(prev));
-  }, [onProjectChange, suggestions]);
 
   const needsAnalyticLink =
     diagnostics.additiveAnalyticInputs === 0 &&
@@ -134,24 +138,34 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     const map = new Map<string, string>();
     for (const c of allComparisons) {
       for (const it of c.items) {
+        if (MC.isComparisonItemArchived(it)) continue;
         map.set(MC.linkKeyOf(it), c.id);
       }
     }
     return map;
   }, [allComparisons]);
 
-  const realSuggestions = useMemo(
+  const allRealSuggestions = useMemo(
     () => suggestions.filter(s => !s.warning),
     [suggestions],
   );
+  const fullySuppressedSuggestions = useMemo(
+    () => allRealSuggestions.filter(MC.isFullySuppressedSuggestion),
+    [allRealSuggestions],
+  );
+  const activeSuggestions = useMemo(
+    () => allRealSuggestions.filter(s => !MC.isFullySuppressedSuggestion(s)),
+    [allRealSuggestions],
+  );
+  const realSuggestions = showFullySuppressed ? allRealSuggestions : activeSuggestions;
   const costClassTotals = useMemo(
     () => MC.computeMaterialCostClassTotals(
       visibleProject,
-      realSuggestions
+      activeSuggestions
         .filter(item => item.purchasableQuantity > 0)
         .map(item => ({ ...item, quantity: item.purchasableQuantity })),
     ),
-    [realSuggestions, visibleProject],
+    [activeSuggestions, visibleProject],
   );
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -346,10 +360,10 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
   };
 
   const linkedCount = useMemo(
-    () => realSuggestions.filter(s => linkedByKey.has(MC.linkKeyOf(s))).length,
-    [realSuggestions, linkedByKey],
+    () => activeSuggestions.filter(s => linkedByKey.has(MC.linkKeyOf(s))).length,
+    [activeSuggestions, linkedByKey],
   );
-  const activeLinkedCount = comparison?.items.length ?? 0;
+  const activeLinkedCount = comparison ? MC.getActiveComparisonItems(comparison).length : 0;
 
   return (
     <div className="space-y-2">
@@ -400,7 +414,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
           />
         </div>
         <span className="text-[11px] text-muted-foreground whitespace-nowrap">
-          <strong className="text-foreground">{filtered.length}</strong> de {realSuggestions.length} insumos disponíveis
+          <strong className="text-foreground">{filtered.length}</strong> de {realSuggestions.length} {showFullySuppressed ? 'itens exibidos' : 'insumos disponíveis'}
           <span className="mx-1.5">·</span>
           <strong className="text-foreground">{linkedCount}</strong> vinculados no projeto
           {comparison && (
@@ -410,6 +424,19 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
             </>
           )}
         </span>
+        {fullySuppressedSuggestions.length > 0 && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 text-xs"
+            onClick={() => setShowFullySuppressed(value => !value)}
+          >
+            {showFullySuppressed
+              ? <EyeOff className="w-3.5 h-3.5 mr-1" />
+              : <Eye className="w-3.5 h-3.5 mr-1" />}
+            {showFullySuppressed ? 'Ocultar' : 'Exibir'} suprimidos ({fullySuppressedSuggestions.length})
+          </Button>
+        )}
         <Button size="sm" className="h-8 text-xs" onClick={linkSelectedToActive} disabled={selectedCount === 0}>
           <Link2 className="w-3.5 h-3.5 mr-1" /> Vincular selecionados {selectedCount > 0 && `(${selectedCount})`}
         </Button>
@@ -485,19 +512,24 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
               )}
               {sortedFiltered.map(s => {
                 const badge = originBadge(s);
+                const fullySuppressed = MC.isFullySuppressedSuggestion(s);
                 const checked = !!selectedKeys[s.key];
                 const linkedTo = linkedByKey.get(MC.linkKeyOf(s)) ?? '';
                 const linkedComparison = allComparisons.find(comparison => comparison.id === linkedTo);
                 const linkLocked = linkedComparison?.status === 'fechado' || linkedComparison?.status === 'comprado';
                 const costClass = MC.resolveMaterialCostClass(visibleProject, s);
                 return (
-                  <tr key={s.key} className={`border-t border-border hover:bg-muted/30 ${linkedTo ? 'bg-primary/5' : ''}`}>
+                  <tr key={s.key} className={`border-t border-border hover:bg-muted/30 ${linkedTo ? 'bg-primary/5' : ''} ${fullySuppressed ? 'bg-muted/20 opacity-60' : ''}`}>
                     <td className="p-1.5 align-middle">
                       <Checkbox
                         checked={checked}
                         disabled={s.purchasableQuantity <= 0}
                         onCheckedChange={v => setSelectedKeys(prev => ({ ...prev, [s.key]: !!v }))}
-                        title={s.purchasableQuantity <= 0 ? 'Sem quantidade liberada para compra; acréscimos pendentes são apenas informativos' : undefined}
+                        title={s.purchasableQuantity <= 0
+                          ? fullySuppressed
+                            ? 'Item 100% suprimido; compra bloqueada'
+                            : 'Sem quantidade liberada para compra; acréscimos pendentes são apenas informativos'
+                          : undefined}
                       />
                     </td>
                     <td className="p-1.5 align-middle font-mono text-[10px]">{s.code || '—'}</td>
@@ -537,7 +569,9 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
                         title={linkLocked
                           ? 'Comparativo fechado: vínculo preservado como histórico'
                           : s.purchasableQuantity <= 0 && !linkedTo
-                            ? 'Sem quantidade liberada para compra; acréscimos pendentes são apenas informativos'
+                            ? fullySuppressed
+                              ? 'Item 100% suprimido; compra bloqueada'
+                              : 'Sem quantidade liberada para compra; acréscimos pendentes são apenas informativos'
                             : undefined}
                         className="h-7 w-full text-[11px] border border-border rounded px-1.5 bg-background"
                       >

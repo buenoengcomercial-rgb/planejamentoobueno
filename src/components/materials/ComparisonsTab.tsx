@@ -32,6 +32,7 @@ export default function ComparisonsTab({ project, comparison, onApply, onProject
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const globalSuppliers = useMemo(() => MC.getProjectSuppliers(project), [project]);
   const suppliers = useMemo(() => MC.getComparisonSuppliers(project, comparison), [project, comparison]);
+  const activeItems = useMemo(() => MC.getActiveComparisonItems(comparison), [comparison]);
   const totals = useMemo(() => MC.totalsBySupplier({ ...comparison, suppliers }), [comparison, suppliers]);
   const plan = useMemo(() => MC.optimizedPurchasePlan({ ...comparison, suppliers }), [comparison, suppliers]);
   const supplierMap = useMemo(() => new Map(suppliers.map(s => [s.id, s.name] as const)), [suppliers]);
@@ -156,7 +157,7 @@ export default function ComparisonsTab({ project, comparison, onApply, onProject
 
       {suppliers.length === 0 ? (
         <Empty msg="Adicione fornecedores participantes acima para começar a comparar preços." />
-      ) : comparison.items.length === 0 ? (
+      ) : activeItems.length === 0 ? (
         <Empty msg="Vincule insumos em 'Insumos do Projeto' para começar a comparar." />
       ) : (
         <>
@@ -194,7 +195,7 @@ export default function ComparisonsTab({ project, comparison, onApply, onProject
                 </tr>
               </thead>
               <tbody>
-                {comparison.items.map((it, rowIndex) => {
+                {activeItems.map((it, rowIndex) => {
                   const an = MC.analyzeItem({ ...it, prices: it.prices.filter(p => participatingIds.has(p.supplierId)) });
                   const rowTone = rowIndex % 2 === 0 ? 'bg-background' : 'bg-slate-50/80';
                   return (
