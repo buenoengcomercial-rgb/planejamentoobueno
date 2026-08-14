@@ -359,6 +359,34 @@ export function syncAdditiveScheduleDraft(project: Project, additiveId: string, 
   };
 }
 
+/** Persists only the visual collapse preference of one additive schedule. */
+export function setAdditiveScheduleCollapsedPhaseIds(
+  project: Project,
+  additiveId: string,
+  phaseIds: string[],
+): Project {
+  const normalized = [...new Set(phaseIds)].sort();
+  const additive = (project.additives ?? []).find(item => item.id === additiveId);
+  if (!additive) return project;
+  const previous = [...(additive.uiState?.scheduleCollapsedPhaseIds ?? [])].sort();
+  const same = normalized.length === previous.length
+    && normalized.every((phaseId, index) => phaseId === previous[index]);
+  if (same) return project;
+
+  return {
+    ...project,
+    additives: (project.additives ?? []).map(item => item.id === additiveId
+      ? {
+          ...item,
+          uiState: {
+            ...(item.uiState ?? {}),
+            scheduleCollapsedPhaseIds: normalized,
+          },
+        }
+      : item),
+  };
+}
+
 export function createAdditiveScheduleRevisionDraft(project: Project, additiveId: string, now = new Date().toISOString()): AdditiveScheduleDraft | undefined {
   const additive = (project.additives ?? []).find(item => item.id === additiveId);
   if (!additive) return undefined;

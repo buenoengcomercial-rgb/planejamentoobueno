@@ -15,6 +15,7 @@ import {
   getEligibleBlockingCompositions,
   getQuantitativelyRestrictedTasks,
   mergeAdditiveSchedulePreviewChanges,
+  setAdditiveScheduleCollapsedPhaseIds,
   setAdditiveScheduleDependencyBlock,
   setAdditiveScheduleDependentTask,
   syncAdditiveScheduleDraft,
@@ -55,6 +56,23 @@ const project: Project = {
 };
 
 describe('Cronograma do Aditivo', () => {
+  it('mantém capítulos recolhidos separados por aditivo sem alterar o rascunho', () => {
+    const first = syncAdditiveScheduleDraft(project, additive.id, '2026-08-13T12:00:00.000Z');
+    const secondAdditive: Additive = { ...additive, id: 'add-2', name: '2º Aditivo', scheduleDraft: undefined };
+    const withTwo = { ...first, additives: [...first.additives!, secondAdditive] };
+    const originalDraft = first.additives![0].scheduleDraft;
+
+    const firstCollapsed = setAdditiveScheduleCollapsedPhaseIds(withTwo, 'add-1', ['child', 'parent', 'child']);
+    const secondCollapsed = setAdditiveScheduleCollapsedPhaseIds(firstCollapsed, 'add-2', ['other']);
+
+    expect(secondCollapsed.additives?.find(item => item.id === 'add-1')?.uiState?.scheduleCollapsedPhaseIds)
+      .toEqual(['child', 'parent']);
+    expect(secondCollapsed.additives?.find(item => item.id === 'add-2')?.uiState?.scheduleCollapsedPhaseIds)
+      .toEqual(['other']);
+    expect(secondCollapsed.additives?.find(item => item.id === 'add-1')?.scheduleDraft).toEqual(originalDraft);
+    expect(secondCollapsed.phases).toBe(project.phases);
+  });
+
   it('isola tarefas virtuais e o planejamento da execução quantitativa parcial', () => {
     const withDraft = syncAdditiveScheduleDraft(project, additive.id, '2026-08-13T12:00:00.000Z');
     const active = withDraft.additives![0];

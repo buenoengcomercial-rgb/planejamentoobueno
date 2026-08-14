@@ -1449,6 +1449,8 @@ export interface Additive {
 export interface AdditiveUiState {
   /** IDs (phaseId) de capítulos/subcapítulos recolhidos na tabela do Aditivo. */
   collapsedGroupIds?: string[];
+  /** IDs de capítulos/subcapítulos recolhidos somente no Cronograma do Aditivo. */
+  scheduleCollapsedPhaseIds?: string[];
   /** IDs de composições com painel analítico expandido. */
   expandedCompositionIds?: string[];
   /** IDs de composições com painel de memória de cálculo expandido. */

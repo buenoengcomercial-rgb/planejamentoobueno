@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import GanttChart from './GanttChart';
 import type { AdditiveScheduleSuspensionMeta } from '@/lib/additiveSchedule';
@@ -131,4 +131,119 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     expect(screen.getByTestId('gantt-bar-scheduled-new')).toBeInTheDocument();
     expect(screen.getByTestId('gantt-bar-scheduled-new-long')).toBeInTheDocument();
   });
+
+  it('mostra o marco visual da data inicial da medição em Dias, Semanas e Meses sem mutar tarefas', () => {
+    const projectWithMeasurementDraft: Project = {
+      ...project,
+      measurementDraft: { number: 1, startDate: '2026-08-24', endDate: '2026-09-22' },
+    };
+    const originalPhases = structuredClone(projectWithMeasurementDraft.phases);
+
+    render(<GanttChart project={projectWithMeasurementDraft} context="official" readOnly />);
+
+    for (const mode of ['Semanas', 'Dias', 'Meses']) {
+      fireEvent.click(screen.getByRole('button', { name: mode }));
+      expect(screen.getByTestId('gantt-work-start-marker')).toHaveAttribute(
+        'title',
+        'Início da obra: 24/08/2026',
+      );
+      expect(screen.getByTestId('gantt-work-start-marker')).toHaveTextContent('24/08/2026');
+    }
+    expect(projectWithMeasurementDraft.phases).toEqual(originalPhases);
+  });
+
+  it('controla e restaura capítulos e subcapítulos recolhidos de forma independente', () => {
+    const collapseProject: Project = {
+      ...project,
+      id: 'gantt-collapse-test',
+      phases: [{
+        id: 'parent', name: 'Capítulo pai', color: '#64748b', tasks: [{
+          ...project.phases[0].tasks[0], id: 'parent-task', phase: 'parent', name: 'Tarefa do pai', dependencies: [],
+        }],
+      }, {
+        id: 'child', parentId: 'parent', name: 'Subcapítulo filho', color: '#64748b', tasks: [{
+          ...project.phases[0].tasks[1], id: 'child-task', phase: 'child', name: 'Tarefa do filho', dependencies: [],
+        }],
+      }],
+    };
+    const onCollapsedPhaseIdsChange = vi.fn();
+    const view = render(
+      <GanttChart
+        project={collapseProject}
+        collapsedPhaseIds={['child']}
+        onCollapsedPhaseIdsChange={onCollapsedPhaseIdsChange}
+        readOnly
+      />,
+    );
+
+    expect(screen.getByTestId('gantt-bar-parent-task')).toBeInTheDocument();
+    expect(screen.queryByTestId('gantt-bar-child-task')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Capítulo pai/i }));
+    expect(onCollapsedPhaseIdsChange).toHaveBeenLastCalledWith(['child', 'parent']);
+
+    view.rerender(
+      <GanttChart
+        project={collapseProject}
+        collapsedPhaseIds={['child', 'parent']}
+        onCollapsedPhaseIdsChange={onCollapsedPhaseIdsChange}
+        readOnly
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Capítulo pai/i }));
+    expect(onCollapsedPhaseIdsChange).toHaveBeenLastCalledWith(['child']);
+
+    view.unmount();
+    render(
+      <GanttChart
+        project={collapseProject}
+        collapsedPhaseIds={['child']}
+        onCollapsedPhaseIdsChange={onCollapsedPhaseIdsChange}
+        readOnly
+      />,
+    );
+    expect(screen.getByTestId('gantt-bar-parent-task')).toBeInTheDocument();
+    expect(screen.queryByTestId('gantt-bar-child-task')).not.toBeInTheDocument();
+  });
+
+  it.each(['official', 'additive-preview'] as const)(
+    'salva a dependência e a data recalculada em uma única atualização no contexto %s',
+    context => {
+      const dependencyProject: Project = {
+        ...project,
+        id: `gantt-dependency-${context}`,
+        phases: [{
+          ...project.phases[0],
+          tasks: [{
+            ...project.phases[0].tasks[0],
+            id: 'predecessor',
+            name: 'Predecessora',
+            startDate: '2026-08-14',
+            duration: 1,
+            dependencies: [],
+          }, {
+            ...project.phases[0].tasks[1],
+            id: 'successor',
+            name: 'Sucessora',
+            startDate: '2026-07-10',
+            duration: 1,
+            dependencies: [],
+          }],
+        }],
+      };
+      const onProjectChange = vi.fn();
+      render(<GanttChart project={dependencyProject} context={context} onProjectChange={onProjectChange} />);
+
+      const successorDependencyInput = screen.getAllByTitle('Nº da tarefa predecessora (ex: 3, 7)')[1];
+      fireEvent.change(successorDependencyInput, { target: { value: '1' } });
+      fireEvent.blur(successorDependencyInput);
+
+      expect(onProjectChange).toHaveBeenCalledTimes(1);
+      const updated = onProjectChange.mock.calls[0][0] as Project;
+      expect(updated.phases[0].tasks[1]).toMatchObject({
+        startDate: '2026-08-17',
+        dependencies: ['predecessor'],
+        dependencyDetails: [{ taskId: 'predecessor', type: 'TI' }],
+      });
+    },
+  );
 });

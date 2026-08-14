@@ -27,6 +27,7 @@ import {
   resolveAdditiveScheduleFinancialTreatment,
   resolveAdditiveScheduleState,
   setAdditiveScheduleDependencyBlock,
+  setAdditiveScheduleCollapsedPhaseIds,
   setAdditiveScheduleDependentTask,
   syncAdditiveScheduleDraft,
   validateAdditiveSchedule,
@@ -255,6 +256,10 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
           title="Cronograma do Aditivo"
           subtitle={isArchived ? 'Versão histórica somente para leitura' : 'Planejamento preliminar físico-financeiro'}
           suspensionMap={suspensions}
+          collapsedPhaseIds={active.uiState?.scheduleCollapsedPhaseIds ?? []}
+          onCollapsedPhaseIdsChange={phaseIds => onProjectChange(previous => (
+            setAdditiveScheduleCollapsedPhaseIds(previous, active.id, phaseIds)
+          ))}
           onToggleSuspension={isArchived ? undefined : (taskId, checked) => {
             if (checked) openBlockDialog(taskId);
             else onProjectChange(setAdditiveScheduleDependentTask(project, active.id, taskId, false));

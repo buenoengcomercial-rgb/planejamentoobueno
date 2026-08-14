@@ -493,14 +493,180 @@ export function suggestOptimizations(project: Project): { taskId: string; taskNa
 
 // ─── Dependency Propagation Engine ───────────────────────────────────
 
-function dateToISO(d: Date): string {
-  return d.toISOString().split('T')[0];
+function dependencyDetailsFor(task: Task) {
+  return (task.dependencyDetails && task.dependencyDetails.length)
+    ? task.dependencyDetails
+    : (task.dependencies || []).map(taskId => ({ taskId, type: 'TI' as DependencyType }));
 }
 
-function addDaysCalc(date: Date, days: number): Date {
-  const r = new Date(date);
-  r.setDate(r.getDate() + days);
-  return r;
+function previousWorkStartForEnd(endDate: Date, duration: number, cal?: WorkCalendar): Date {
+  let current = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+  let remaining = Math.max(1, Math.ceil(duration)) - 1;
+  let safety = 0;
+
+  while (remaining > 0 && safety < 5000) {
+    safety++;
+    current.setDate(current.getDate() - 1);
+    if (cal) {
+      if (!isDiaUtil(current, cal.uf, cal.municipio, cal.trabalhaSabado)) continue;
+      remaining -= current.getDay() === 6 && cal.trabalhaSabado ? 0.5 : 1;
+    } else {
+      if (current.getDay() === 0) continue;
+      remaining -= 1;
+    }
+  }
+
+  return nextWorkDay(current, cal);
+}
+
+/** Required successor start for one exact, zero-lag dependency. */
+export function dependencyRequiredStart(
+  predecessor: Task,
+  successor: Task,
+  type: DependencyType,
+  cal?: WorkCalendar,
+): Date {
+  const predecessorStart = nextWorkDay(parseISODateLocal(predecessor.startDate), cal);
+  const predecessorEnd = workEndDate(predecessor.startDate, predecessor.duration, cal);
+
+  switch (type) {
+    case 'TI': return nextWorkDayAfter(predecessorEnd, cal);
+    case 'II': return predecessorStart;
+    case 'TT': return previousWorkStartForEnd(predecessorEnd, successor.duration, cal);
+    case 'IT': return previousWorkStartForEnd(predecessorStart, successor.duration, cal);
+  }
+}
+
+/** True when adding predecessor -> successor would close a cycle. */
+export function wouldCreateDependencyCycle(
+  tasks: Task[],
+  successorId: string,
+  predecessorId: string,
+): boolean {
+  if (successorId === predecessorId) return true;
+  const validIds = new Set(tasks.map(task => task.id));
+  if (!validIds.has(successorId) || !validIds.has(predecessorId)) return false;
+
+  const successors = new Map<string, Set<string>>();
+  for (const task of tasks) {
+    const seen = new Set<string>();
+    for (const dependency of dependencyDetailsFor(task)) {
+      if (!validIds.has(dependency.taskId) || dependency.taskId === task.id || seen.has(dependency.taskId)) continue;
+      seen.add(dependency.taskId);
+      if (!successors.has(dependency.taskId)) successors.set(dependency.taskId, new Set());
+      successors.get(dependency.taskId)!.add(task.id);
+    }
+  }
+
+  const pending = [successorId];
+  const visited = new Set<string>();
+  while (pending.length) {
+    const current = pending.pop()!;
+    if (current === predecessorId) return true;
+    if (visited.has(current)) continue;
+    visited.add(current);
+    for (const next of successors.get(current) ?? []) pending.push(next);
+  }
+  return false;
+}
+
+interface DependencyGraph {
+  predecessors: Map<string, { taskId: string; type: DependencyType }[]>;
+  successors: Map<string, Set<string>>;
+}
+
+function buildAcyclicDependencyGraph(tasks: Task[]): DependencyGraph {
+  const validIds = new Set(tasks.map(task => task.id));
+  const predecessors = new Map<string, { taskId: string; type: DependencyType }[]>();
+  const successors = new Map<string, Set<string>>();
+
+  const reaches = (fromId: string, targetId: string): boolean => {
+    const pending = [fromId];
+    const visited = new Set<string>();
+    while (pending.length) {
+      const current = pending.pop()!;
+      if (current === targetId) return true;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      for (const next of successors.get(current) ?? []) pending.push(next);
+    }
+    return false;
+  };
+
+  for (const task of tasks) {
+    const seen = new Set<string>();
+    for (const dependency of dependencyDetailsFor(task)) {
+      const predecessorId = dependency.taskId;
+      if (!validIds.has(predecessorId) || predecessorId === task.id || seen.has(predecessorId)) continue;
+      seen.add(predecessorId);
+      if (reaches(task.id, predecessorId)) continue;
+
+      if (!predecessors.has(task.id)) predecessors.set(task.id, []);
+      predecessors.get(task.id)!.push({ taskId: predecessorId, type: dependency.type || 'TI' });
+      if (!successors.has(predecessorId)) successors.set(predecessorId, new Set());
+      successors.get(predecessorId)!.add(task.id);
+    }
+  }
+
+  return { predecessors, successors };
+}
+
+function cascadeDependencyDates(
+  tasks: Task[],
+  initialTaskIds: string[],
+  cal?: WorkCalendar,
+): { tasks: Task[]; changed: boolean; adjustedTypes: Set<DependencyType> } {
+  const taskMap = new Map(tasks.map(task => [task.id, { ...task }]));
+  const graph = buildAcyclicDependencyGraph(tasks);
+  const queue = initialTaskIds.filter(taskId => taskMap.has(taskId));
+  const queued = new Set(queue);
+  const visits = new Map<string, number>();
+  const adjustedTypes = new Set<DependencyType>();
+  let changed = false;
+
+  while (queue.length) {
+    const taskId = queue.shift()!;
+    queued.delete(taskId);
+    const visitCount = (visits.get(taskId) ?? 0) + 1;
+    visits.set(taskId, visitCount);
+    if (visitCount > tasks.length + 1) continue;
+
+    const successor = taskMap.get(taskId);
+    if (!successor) continue;
+    const dependencies = graph.predecessors.get(taskId) ?? [];
+    let controlling: { start: Date; type: DependencyType } | null = null;
+
+    for (const dependency of dependencies) {
+      const predecessor = taskMap.get(dependency.taskId);
+      if (!predecessor) continue;
+      const candidate = dependencyRequiredStart(predecessor, successor, dependency.type, cal);
+      if (!controlling || candidate.getTime() > controlling.start.getTime()) {
+        controlling = { start: candidate, type: dependency.type };
+      }
+    }
+
+    if (controlling) {
+      const nextStartDate = toISODateLocal(controlling.start);
+      if (nextStartDate !== successor.startDate) {
+        taskMap.set(taskId, { ...successor, startDate: nextStartDate });
+        changed = true;
+        adjustedTypes.add(controlling.type);
+      }
+    }
+
+    for (const successorId of graph.successors.get(taskId) ?? []) {
+      if (!queued.has(successorId)) {
+        queue.push(successorId);
+        queued.add(successorId);
+      }
+    }
+  }
+
+  return {
+    tasks: tasks.map(task => taskMap.get(task.id) ?? task),
+    changed,
+    adjustedTypes,
+  };
 }
 
 /**
@@ -514,118 +680,17 @@ export function propagateAllDependencies(
   changedTaskId: string,
   cal?: WorkCalendar,
 ): { tasks: Task[]; changed: boolean; adjustedTypes: Set<DependencyType> } {
-  const taskMap = new Map(tasks.map(t => [t.id, { ...t }]));
-  const visited = new Set<string>();
-  let anyChanged = false;
-  const adjustedTypes = new Set<DependencyType>();
+  const graph = buildAcyclicDependencyGraph(tasks);
+  return cascadeDependencyDates(tasks, [...(graph.successors.get(changedTaskId) ?? [])], cal);
+}
 
-  // Build successor index: predId -> [{successorId, type}]
-  const successorIndex = new Map<string, { successorId: string; type: DependencyType }[]>();
-  tasks.forEach(t => {
-    const details = (t.dependencyDetails && t.dependencyDetails.length)
-      ? t.dependencyDetails
-      : (t.dependencies || []).map(id => ({ taskId: id, type: 'TI' as DependencyType }));
-    details.forEach(dep => {
-      if (!successorIndex.has(dep.taskId)) successorIndex.set(dep.taskId, []);
-      successorIndex.get(dep.taskId)!.push({ successorId: t.id, type: dep.type });
-    });
-  });
-
-  function propagate(predId: string, depth: number) {
-    if (depth > 50 || visited.has(predId)) return;
-    visited.add(predId);
-
-    const succs = successorIndex.get(predId);
-    if (!succs) return;
-
-    for (const { successorId, type } of succs) {
-      const pred = taskMap.get(predId)!;
-      const succ = taskMap.get(successorId)!;
-      if (!pred || !succ) continue;
-
-      const predStart = nextWorkDay(parseISODateLocal(pred.startDate), cal);
-      // Último dia trabalhado da predecessora respeitando o calendário
-      const predLastWorkDay = workEndDate(pred.startDate, pred.duration, cal);
-      // Próximo dia útil estritamente após o término real da predecessora
-      const predNextStart = nextWorkDayAfter(predLastWorkDay, cal);
-
-      let newStartDate: Date | null = null;
-
-      switch (type) {
-        case 'TI':
-          // Sucessora começa NO PRÓXIMO DIA ÚTIL após o último dia trabalhado da predecessora
-          newStartDate = predNextStart;
-          break;
-        case 'II':
-          // Início da sucessora = início (útil) da predecessora
-          newStartDate = predStart;
-          break;
-        case 'TT': {
-          // Fim da sucessora = fim da predecessora
-          // Calculamos o início que produz esse fim, recuando dias úteis.
-          // Aproximação: encontrar start tal que workEndDate(start, succ.duration) == predLastWorkDay
-          // Recuamos a partir de predLastWorkDay duration−1 dias úteis.
-          const dur = Math.max(1, Math.ceil(succ.duration));
-          let cur = new Date(predLastWorkDay);
-          let remaining = dur - 1;
-          let safety = 0;
-          while (remaining > 0 && safety < 5000) {
-            safety++;
-            cur.setDate(cur.getDate() - 1);
-            if (cal) {
-              if (!isDiaUtil(cur, cal.uf, cal.municipio, cal.trabalhaSabado)) continue;
-              if (cur.getDay() === 6 && cal.trabalhaSabado) remaining -= 0.5;
-              else remaining -= 1;
-            } else {
-              if (cur.getDay() === 0) continue;
-              remaining -= 1;
-            }
-          }
-          newStartDate = nextWorkDay(cur, cal);
-          break;
-        }
-        case 'IT': {
-          // Fim da sucessora = início da predecessora (rara; mantém comportamento)
-          const dur = Math.max(1, Math.ceil(succ.duration));
-          let cur = new Date(predStart);
-          let remaining = dur;
-          let safety = 0;
-          while (remaining > 0 && safety < 5000) {
-            safety++;
-            cur.setDate(cur.getDate() - 1);
-            if (cal) {
-              if (!isDiaUtil(cur, cal.uf, cal.municipio, cal.trabalhaSabado)) continue;
-              if (cur.getDay() === 6 && cal.trabalhaSabado) remaining -= 0.5;
-              else remaining -= 1;
-            } else {
-              if (cur.getDay() === 0) continue;
-              remaining -= 1;
-            }
-          }
-          newStartDate = nextWorkDay(cur, cal);
-          break;
-        }
-      }
-
-      if (newStartDate !== null) {
-        const newISO = toISODateLocal(newStartDate);
-        if (newISO !== succ.startDate) {
-          taskMap.set(successorId, { ...succ, startDate: newISO });
-          anyChanged = true;
-          adjustedTypes.add(type);
-          propagate(successorId, depth + 1);
-        }
-      }
-    }
-  }
-
-  propagate(changedTaskId, 0);
-
-  return {
-    tasks: tasks.map(t => taskMap.get(t.id) || t),
-    changed: anyChanged,
-    adjustedTypes,
-  };
+/** Recalculates the edited task first and then its entire successor chain. */
+export function recalculateTaskAndSuccessors(
+  tasks: Task[],
+  editedTaskId: string,
+  cal?: WorkCalendar,
+): { tasks: Task[]; changed: boolean; adjustedTypes: Set<DependencyType> } {
+  return cascadeDependencyDates(tasks, [editedTaskId], cal);
 }
 
 /**
