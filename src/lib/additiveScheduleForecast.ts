@@ -1,19 +1,19 @@
 import type { AdditiveScheduleSnapshotRow } from '@/types/project';
 import { countWorkDays, getWorkEndDate, parseISODateLocal } from '@/components/gantt/utils';
+import { resolveAdditiveScheduleFinancialTreatment } from '@/lib/additiveSchedule';
 
 export interface AdditiveScheduleForecastMonth {
   key: string;
   label: string;
   contractedReleased: number;
-  contractedSuspended: number;
   proposed: number;
 }
 
 export interface AdditiveScheduleForecastResult {
   months: AdditiveScheduleForecastMonth[];
   totalContractedReleased: number;
-  totalContractedSuspended: number;
   totalProposed: number;
+  totalOnlyProposed: number;
 }
 
 const money = (value: number) => Math.round((Number(value) || 0) * 100) / 100;
@@ -51,9 +51,26 @@ export function buildAdditiveScheduleForecast(
   rows: AdditiveScheduleSnapshotRow[],
   trabalhaSabado = false,
 ): AdditiveScheduleForecastResult {
-  const valid = rows.filter(row => /^\d{4}-\d{2}-\d{2}$/.test(row.startDate) && row.duration > 0);
+  const monthlyRows = rows.filter(row => (
+    resolveAdditiveScheduleFinancialTreatment(row) === 'monthly'
+    && /^\d{4}-\d{2}-\d{2}$/.test(row.startDate)
+    && row.duration > 0
+  ));
+  const proposedRows = rows.filter(row => (
+    (row.classification === 'proposed_addition' || row.classification === 'proposed_suppression')
+    && resolveAdditiveScheduleFinancialTreatment(row) !== 'excluded'
+  ));
+  const totalContractedReleased = money(monthlyRows
+    .filter(row => row.classification === 'contracted_released')
+    .reduce((sum, row) => sum + row.totalWithBDI, 0));
+  const totalProposed = money(proposedRows.reduce((sum, row) => sum + row.totalWithBDI, 0));
+  const totalOnlyProposed = money(proposedRows
+    .filter(row => resolveAdditiveScheduleFinancialTreatment(row) === 'total_only')
+    .reduce((sum, row) => sum + row.totalWithBDI, 0));
+
+  const valid = monthlyRows;
   if (!valid.length) {
-    return { months: [], totalContractedReleased: 0, totalContractedSuspended: 0, totalProposed: 0 };
+    return { months: [], totalContractedReleased, totalProposed, totalOnlyProposed };
   }
   const ranges = valid.map(row => ({
     row,
@@ -66,7 +83,6 @@ export function buildAdditiveScheduleForecast(
     key,
     label: monthLabel(key),
     contractedReleased: 0,
-    contractedSuspended: 0,
     proposed: 0,
   }));
   const byKey = new Map(months.map(month => [month.key, month]));
@@ -86,15 +102,16 @@ export function buildAdditiveScheduleForecast(
       const month = byKey.get(key);
       if (!month) return;
       if (row.classification === 'contracted_released') month.contractedReleased = money(month.contractedReleased + value);
-      else if (row.classification === 'contracted_suspended') month.contractedSuspended = money(month.contractedSuspended + value);
-      else month.proposed = money(month.proposed + value);
+      else if (row.classification === 'proposed_addition' || row.classification === 'proposed_suppression') {
+        month.proposed = money(month.proposed + value);
+      }
     });
   });
 
   return {
     months,
-    totalContractedReleased: money(valid.filter(row => row.classification === 'contracted_released').reduce((sum, row) => sum + row.totalWithBDI, 0)),
-    totalContractedSuspended: money(valid.filter(row => row.classification === 'contracted_suspended').reduce((sum, row) => sum + row.totalWithBDI, 0)),
-    totalProposed: money(valid.filter(row => row.classification === 'proposed_addition' || row.classification === 'proposed_suppression').reduce((sum, row) => sum + row.totalWithBDI, 0)),
+    totalContractedReleased,
+    totalProposed,
+    totalOnlyProposed,
   };
 }

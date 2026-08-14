@@ -5,6 +5,9 @@ import {
   ADDITIVE_SCHEDULE_GUIDANCE,
   ADDITIVE_SCHEDULE_REFERENCE,
   ADDITIVE_SCHEDULE_WARNING,
+  FULLY_SUPPRESSED_STATUS_LABEL,
+  getFullySuppressedTaskIds,
+  isStatusOnlyScheduleRow,
 } from '@/lib/additiveSchedule';
 
 const safeFile = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9_-]+/g, '_');
@@ -63,12 +66,20 @@ const bodyStyle = (fill = 'FFFFFF', options?: { centered?: boolean; wrap?: boole
 
 const excelDate = (date: string) => new Date(`${date}T12:00:00`);
 
+const normalizeLegacyRows = (rows: AdditiveScheduleSnapshotRow[], additive: Additive) => {
+  const fullySuppressedTaskIds = getFullySuppressedTaskIds(additive);
+  return rows.map(row => fullySuppressedTaskIds.has(row.taskId) && isStatusOnlyScheduleRow(row)
+    ? { ...row, scheduleState: 'fully_suppressed' as const, statusLabel: FULLY_SUPPRESSED_STATUS_LABEL }
+    : row);
+};
+
 export async function buildAdditiveScheduleWorkbook(
   project: Project,
   additive: Additive,
   rows: AdditiveScheduleSnapshotRow[],
   trabalhaSabado = false,
 ) {
+  rows = normalizeLegacyRows(rows, additive);
   const XLSX = await loadXlsx();
   const wb = XLSX.utils.book_new();
   const activities = [
@@ -77,11 +88,15 @@ export async function buildAdditiveScheduleWorkbook(
     [ADDITIVE_SCHEDULE_REFERENCE],
     [],
     ['Item', 'Código', 'Capítulo', 'Descrição', 'Classificação', 'Situação', 'Início', 'Fim', 'Duração (d)', 'Quantidade', 'Unidade', 'Valor unitário c/ BDI', 'Total c/ BDI', 'Responsável', 'Equipe', 'Dependências'],
-    ...rows.map(row => [
-      row.item || '', row.code || '', row.phaseName, row.description, classificationLabel(row), row.statusLabel,
-      excelDate(row.startDate), excelDate(endDate(row.startDate, row.duration)), row.duration, row.quantity, row.unit || '',
-      row.unitPriceWithBDI, row.totalWithBDI, row.responsible || '', row.team || '', row.dependencies.join(', '),
-    ]),
+    ...rows.map(row => {
+      const statusOnly = isStatusOnlyScheduleRow(row);
+      return [
+        row.item || '', row.code || '', row.phaseName, row.description, classificationLabel(row), row.statusLabel,
+        statusOnly ? '' : excelDate(row.startDate), statusOnly ? '' : excelDate(endDate(row.startDate, row.duration)), statusOnly ? '' : row.duration,
+        row.quantity, row.unit || '', row.unitPriceWithBDI, row.totalWithBDI,
+        statusOnly ? '' : row.responsible || '', statusOnly ? '' : row.team || '', statusOnly ? '' : row.dependencies.join(', '),
+      ];
+    }),
   ];
   const wsActivities = XLSX.utils.aoa_to_sheet(activities);
   wsActivities['!merges'] = [
@@ -111,7 +126,8 @@ export async function buildAdditiveScheduleWorkbook(
   }
   XLSX.utils.book_append_sheet(wb, wsActivities, 'Atividades');
 
-  const validRows = rows.filter(row => /^\d{4}-\d{2}-\d{2}$/.test(row.startDate));
+  const ganttSourceRows = rows.filter(row => !(row.compositionId && row.description.startsWith('Impacto do aditivo - ')));
+  const validRows = ganttSourceRows.filter(row => !isStatusOnlyScheduleRow(row) && /^\d{4}-\d{2}-\d{2}$/.test(row.startDate));
   const min = validRows.reduce((value, row) => !value || row.startDate < value ? row.startDate : value, '');
   const max = validRows.reduce((value, row) => {
     const end = endDate(row.startDate, row.duration);
@@ -119,31 +135,51 @@ export async function buildAdditiveScheduleWorkbook(
   }, '');
   const weekStarts: string[] = [];
   if (min && max) {
+    const minimumTimelineEnd = new Date(`${min}T12:00:00`);
+    minimumTimelineEnd.setDate(minimumTimelineEnd.getDate() + 27);
+    const displayMax = minimumTimelineEnd.toISOString().slice(0, 10) > max
+      ? minimumTimelineEnd.toISOString().slice(0, 10)
+      : max;
     const cursor = new Date(`${min}T12:00:00`);
-    while (cursor.toISOString().slice(0, 10) <= max) {
+    while (cursor.toISOString().slice(0, 10) <= displayMax) {
       weekStarts.push(cursor.toISOString().slice(0, 10));
       cursor.setDate(cursor.getDate() + 7);
     }
   }
   const ganttRows = [
     ['Descrição', 'Situação', 'Início', 'Fim', ...weekStarts.map(dateBR)],
-    ...rows.map(row => {
+    ...ganttSourceRows.map(row => {
+      const statusOnly = isStatusOnlyScheduleRow(row);
       const finish = endDate(row.startDate, row.duration);
-      return [row.description, classificationLabel(row), dateBR(row.startDate), dateBR(finish), ...weekStarts.map(week => {
+      return [row.description, row.statusLabel, statusOnly ? '' : dateBR(row.startDate), statusOnly ? '' : dateBR(finish), ...weekStarts.map((week, weekIndex) => {
+        if (statusOnly) return weekIndex === 0 ? row.statusLabel : '';
         const weekEnd = new Date(`${week}T12:00:00`); weekEnd.setDate(weekEnd.getDate() + 6);
         return week <= finish && weekEnd.toISOString().slice(0, 10) >= row.startDate ? '■' : '';
       })];
     }),
   ];
   const wsGantt = XLSX.utils.aoa_to_sheet(ganttRows);
+  wsGantt['!merges'] = ganttSourceRows.flatMap((row, rowIndex) => (
+    isStatusOnlyScheduleRow(row) && weekStarts.length > 1
+      ? [{ s: { r: rowIndex + 1, c: 4 }, e: { r: rowIndex + 1, c: 3 + weekStarts.length } }]
+      : []
+  ));
   wsGantt['!cols'] = [{ wch: 52 }, { wch: 24 }, { wch: 12 }, { wch: 12 }, ...weekStarts.map(() => ({ wch: 11 }))];
   styleSheet(XLSX, wsGantt, 0);
-  rows.forEach((row, rowIndex) => {
+  ganttSourceRows.forEach((row, rowIndex) => {
     for (let col = 0; col < 4 + weekStarts.length; col += 1) {
       const cell = wsGantt[XLSX.utils.encode_cell({ r: rowIndex + 1, c: col })];
       if (cell) cell.s = bodyStyle(rowIndex % 2 ? 'F8FAFC' : 'FFFFFF', { centered: col >= 1, wrap: col <= 1 });
     }
-    for (let col = 4; col < 4 + weekStarts.length; col += 1) {
+    if (isStatusOnlyScheduleRow(row) && weekStarts.length) {
+      const statusCell = wsGantt[XLSX.utils.encode_cell({ r: rowIndex + 1, c: 4 })];
+      if (statusCell) statusCell.s = {
+        font: { bold: true, color: { rgb: row.scheduleState === 'fully_suppressed' ? '9F1239' : '92400E' } },
+        fill: { fgColor: { rgb: row.scheduleState === 'fully_suppressed' ? 'FFF1F2' : 'FFFBEB' } },
+        alignment: { horizontal: 'left', vertical: 'center' },
+      };
+    }
+    for (let col = 4; col < 4 + weekStarts.length && !isStatusOnlyScheduleRow(row); col += 1) {
       const cell = wsGantt[XLSX.utils.encode_cell({ r: rowIndex + 1, c: col })];
       if (cell?.v) {
         const [r, g, b] = classificationColor(row);
@@ -151,20 +187,21 @@ export async function buildAdditiveScheduleWorkbook(
       }
     }
   });
-  wsGantt['!rows'] = [{ hpt: 28 }, ...rows.map(() => ({ hpt: 26 }))];
+  wsGantt['!rows'] = [{ hpt: 28 }, ...ganttSourceRows.map(() => ({ hpt: 26 }))];
   XLSX.utils.book_append_sheet(wb, wsGantt, 'Gantt');
 
   const forecast = buildAdditiveScheduleForecast(rows, trabalhaSabado);
   const forecastRows = [
-    ['Mês', 'Contratados liberados', 'Contratados suspensos', 'Proposta não contratada'],
-    ...forecast.months.map(month => [month.label, month.contractedReleased, month.contractedSuspended, month.proposed]),
-    ['TOTAL', forecast.totalContractedReleased, forecast.totalContractedSuspended, forecast.totalProposed],
+    ['Mês', 'Contratados liberados', 'Proposta não contratada'],
+    ...forecast.months.map(month => [month.label, month.contractedReleased, month.proposed]),
+    ...(forecast.totalOnlyProposed !== 0 ? [['Impactos sem distribuição mensal', '', forecast.totalOnlyProposed]] : []),
+    ['TOTAL', forecast.totalContractedReleased, forecast.totalProposed],
   ];
   const wsForecast = XLSX.utils.aoa_to_sheet(forecastRows);
-  wsForecast['!cols'] = [{ wch: 16 }, { wch: 24 }, { wch: 24 }, { wch: 26 }];
+  wsForecast['!cols'] = [{ wch: 34 }, { wch: 24 }, { wch: 28 }];
   styleSheet(XLSX, wsForecast, 0);
   for (let row = 1; row < forecastRows.length; row += 1) {
-    for (let col = 1; col <= 3; col += 1) {
+    for (let col = 1; col <= 2; col += 1) {
       const cell = wsForecast[XLSX.utils.encode_cell({ r: row, c: col })];
       if (cell) {
         cell.s = bodyStyle(row === forecastRows.length - 1 ? 'E2E8F0' : (row % 2 ? 'FFFFFF' : 'F8FAFC'), { centered: false, bold: row === forecastRows.length - 1 });
@@ -175,7 +212,7 @@ export async function buildAdditiveScheduleWorkbook(
     if (label) label.s = bodyStyle(row === forecastRows.length - 1 ? 'E2E8F0' : (row % 2 ? 'FFFFFF' : 'F8FAFC'), { bold: row === forecastRows.length - 1 });
   }
   const totalRow = forecastRows.length;
-  [forecast.totalContractedReleased, forecast.totalContractedSuspended, forecast.totalProposed].forEach((value, index) => {
+  [forecast.totalContractedReleased, forecast.totalProposed].forEach((value, index) => {
     const cell = wsForecast[XLSX.utils.encode_cell({ r: totalRow - 1, c: index + 1 })];
     cell.f = `SUM(${XLSX.utils.encode_col(index + 1)}2:${XLSX.utils.encode_col(index + 1)}${totalRow - 1})`;
     cell.v = value;
@@ -224,11 +261,12 @@ function drawHeader(doc: any, project: Project, additive: Additive, subtitle: st
 function drawGanttPages(doc: any, rows: AdditiveScheduleSnapshotRow[], project: Project, additive: Additive) {
   const chunks: AdditiveScheduleSnapshotRow[][] = [];
   for (let index = 0; index < rows.length; index += 20) chunks.push(rows.slice(index, index + 20));
-  const allStart = rows.map(row => row.startDate).filter(Boolean).sort()[0] || project.startDate;
-  const allEnd = rows.map(row => endDate(row.startDate, row.duration)).filter(Boolean).sort().at(-1) || project.endDate;
+  const scheduledRows = rows.filter(row => !isStatusOnlyScheduleRow(row));
+  const allStart = scheduledRows.map(row => row.startDate).filter(Boolean).sort()[0] || project.startDate;
+  const allEnd = scheduledRows.map(row => endDate(row.startDate, row.duration)).filter(Boolean).sort().at(-1) || project.endDate || project.startDate;
   const start = new Date(`${allStart}T12:00:00`);
   const end = new Date(`${allEnd}T12:00:00`);
-  const days = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
+  const days = Math.max(14, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
   chunks.forEach((chunk, chunkIndex) => {
     doc.addPage();
     const y = drawHeader(doc, project, additive, `DIAGRAMA DE GANTT - PARTE ${chunkIndex + 1}/${chunks.length}`);
@@ -247,7 +285,9 @@ function drawGanttPages(doc: any, rows: AdditiveScheduleSnapshotRow[], project: 
       const x = chartX + chartWidth * tick / 6;
       doc.setDrawColor(203, 213, 225);
       doc.line(x, y, x, y + rowHeight * (chunk.length + 1));
-      doc.text(dateBR(date.toISOString().slice(0, 10)), x + 1, y + 4.7);
+      const tickLabel = dateBR(date.toISOString().slice(0, 10));
+      if (tick === 6) doc.text(tickLabel, x - 1, y + 4.7, { align: 'right' });
+      else doc.text(tickLabel, x + 1, y + 4.7);
     }
     chunk.forEach((row, index) => {
       const rowY = y + rowHeight * (index + 1);
@@ -256,6 +296,13 @@ function drawGanttPages(doc: any, rows: AdditiveScheduleSnapshotRow[], project: 
       doc.setTextColor(15, 23, 42); doc.setFont('helvetica', 'normal');
       doc.text(doc.splitTextToSize(row.description, labelWidth - 5)[0], 10, rowY + 3.2);
       doc.setFontSize(5.7); doc.text(classificationLabel(row), 10, rowY + 5.8); doc.setFontSize(7);
+      if (isStatusOnlyScheduleRow(row)) {
+        doc.setFont('helvetica', 'bold');
+        if (row.scheduleState === 'fully_suppressed') doc.setTextColor(159, 18, 57);
+        else doc.setTextColor(146, 64, 14);
+        doc.text(row.statusLabel, chartX + 2, rowY + 4.6);
+        return;
+      }
       const rowStart = new Date(`${row.startDate}T12:00:00`);
       const rowEnd = new Date(`${endDate(row.startDate, row.duration)}T12:00:00`);
       const left = Math.max(0, (rowStart.getTime() - start.getTime()) / 86400000) / days * chartWidth;
@@ -273,17 +320,30 @@ export async function buildAdditiveSchedulePdfDocument(
   rows: AdditiveScheduleSnapshotRow[],
   trabalhaSabado = false,
 ) {
+  rows = normalizeLegacyRows(rows, additive);
   const { jsPDF, autoTable } = await loadPdf();
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   doc.setProperties({ title: `Cronograma do Aditivo - ${additive.name}`, subject: ADDITIVE_SCHEDULE_WARNING, author: project.contractInfo?.contracted || project.name });
   let y = drawHeader(doc, project, additive, 'QUADRO DE ATIVIDADES');
   autoTable(doc, {
     startY: y,
-    head: [['Item', 'Atividade', 'Classificação', 'Situação', 'Início', 'Fim', 'Dur.', 'Total c/ BDI']],
-    body: rows.map(row => [row.item || '', row.description, classificationLabel(row), row.statusLabel, dateBR(row.startDate), dateBR(endDate(row.startDate, row.duration)), `${row.duration} d`, brl(row.totalWithBDI)]),
+    head: [['Item', 'Atividade', 'Classificação', 'Situação', 'Início', 'Fim', 'Dur.', 'Responsável', 'Equipe', 'Dep.', 'Total c/ BDI']],
+    body: rows.map(row => {
+      const statusOnly = isStatusOnlyScheduleRow(row);
+      return [
+        row.item || '', row.description, classificationLabel(row), row.statusLabel,
+        statusOnly ? '' : dateBR(row.startDate), statusOnly ? '' : dateBR(endDate(row.startDate, row.duration)), statusOnly ? '' : `${row.duration} d`,
+        statusOnly ? '' : row.responsible || '', statusOnly ? '' : row.team || '', statusOnly ? '' : row.dependencies.join(', '), brl(row.totalWithBDI),
+      ];
+    }),
     styles: { font: 'helvetica', fontSize: 6.6, cellPadding: 1.3, overflow: 'linebreak', valign: 'middle' },
+    tableWidth: 224,
     headStyles: { fillColor: [51, 65, 85], textColor: 255, fontStyle: 'bold' },
-    columnStyles: { 0: { cellWidth: 14 }, 1: { cellWidth: 58 }, 2: { cellWidth: 33 }, 3: { cellWidth: 64 }, 4: { cellWidth: 18 }, 5: { cellWidth: 18 }, 6: { cellWidth: 12 }, 7: { cellWidth: 27, halign: 'right' } },
+    columnStyles: {
+      0: { cellWidth: 10 }, 1: { cellWidth: 38 }, 2: { cellWidth: 22 }, 3: { cellWidth: 44 },
+      4: { cellWidth: 15 }, 5: { cellWidth: 15 }, 6: { cellWidth: 9 }, 7: { cellWidth: 18 },
+      8: { cellWidth: 12 }, 9: { cellWidth: 16 }, 10: { cellWidth: 25, halign: 'right' },
+    },
     margin: { left: 8, right: 8, top: 46, bottom: 10 },
     didDrawPage: (data: any) => { if (data.pageNumber > 1) drawHeader(doc, project, additive, 'QUADRO DE ATIVIDADES'); },
   });
@@ -294,21 +354,33 @@ export async function buildAdditiveSchedulePdfDocument(
   const forecast = buildAdditiveScheduleForecast(rows, trabalhaSabado);
   autoTable(doc, {
     startY: y,
-    head: [['Mês', 'Contratados liberados', 'Contratados suspensos', 'Proposta não contratada']],
+    head: [['Mês', 'Contratados liberados', 'Proposta não contratada']],
     body: [
-      ...forecast.months.map(month => [month.label, brl(month.contractedReleased), brl(month.contractedSuspended), brl(month.proposed)]),
-      ['TOTAL', brl(forecast.totalContractedReleased), brl(forecast.totalContractedSuspended), brl(forecast.totalProposed)],
+      ...forecast.months.map(month => [month.label, brl(month.contractedReleased), brl(month.proposed)]),
+      ...(forecast.totalOnlyProposed !== 0 ? [['Impactos sem distribuição mensal', '-', brl(forecast.totalOnlyProposed)]] : []),
+      ['TOTAL', brl(forecast.totalContractedReleased), brl(forecast.totalProposed)],
     ],
     styles: { font: 'helvetica', fontSize: 8, cellPadding: 2, halign: 'right', overflow: 'linebreak' },
+    tableWidth: 190,
     headStyles: { fillColor: [51, 65, 85], textColor: 255, fontStyle: 'bold' },
     columnStyles: {
-      0: { halign: 'left', cellWidth: 35 },
-      1: { textColor: [4, 120, 87], cellWidth: 67 },
-      2: { textColor: [180, 83, 9], cellWidth: 67 },
-      3: { textColor: [190, 18, 60], cellWidth: 67 },
+      0: { halign: 'left', cellWidth: 30 },
+      1: { textColor: [4, 120, 87], cellWidth: 80 },
+      2: { textColor: [190, 18, 60], cellWidth: 80 },
     },
     margin: { left: 20, right: 20 },
   });
+  if (forecast.totalOnlyProposed !== 0) {
+    const noteY = ((doc as any).lastAutoTable?.finalY ?? y) + 6;
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(7.5);
+    doc.setTextColor(100);
+    doc.text(
+      `Nota: o total da proposta inclui ${brl(forecast.totalOnlyProposed)} sem distribuição mensal. Serviços contratados suspensos não compõem os valores da retomada.`,
+      20,
+      noteY,
+    );
+  }
   const pages = doc.getNumberOfPages();
   for (let page = 1; page <= pages; page += 1) {
     doc.setPage(page); doc.setFontSize(6.5); doc.setTextColor(100);

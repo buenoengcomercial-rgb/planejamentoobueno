@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, LockKeyhole } from 'lucide-react';
 import { toast } from 'sonner';
-import type { AdditiveScheduleSnapshotRow, Project } from '@/types/project';
+import type { Additive, AdditiveScheduleSnapshotRow, Project } from '@/types/project';
 import GanttChart from '@/components/GanttChart';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -11,12 +11,16 @@ import {
   ADDITIVE_SCHEDULE_GUIDANCE,
   ADDITIVE_SCHEDULE_REFERENCE,
   ADDITIVE_SCHEDULE_WARNING,
+  FULLY_SUPPRESSED_STATUS_LABEL,
   buildAdditiveSchedulePreviewProject,
   buildAdditiveScheduleRows,
   buildPreviewSuspensionMap,
   buildProjectFromScheduleSnapshot,
   confirmAdditiveScheduleDates,
+  getFullySuppressedTaskIds,
   mergeAdditiveSchedulePreviewChanges,
+  resolveAdditiveScheduleFinancialTreatment,
+  resolveAdditiveScheduleState,
   setAdditiveScheduleDependentTask,
   syncAdditiveScheduleDraft,
   validateAdditiveSchedule,
@@ -30,19 +34,23 @@ interface Props {
   undoButton?: React.ReactNode;
 }
 
-function snapshotSuspensionMap(rows: AdditiveScheduleSnapshotRow[]): Record<string, AdditiveScheduleSuspensionMeta> {
+function snapshotSuspensionMap(rows: AdditiveScheduleSnapshotRow[], additive: Additive): Record<string, AdditiveScheduleSuspensionMeta> {
   const result: Record<string, AdditiveScheduleSuspensionMeta> = {};
+  const legacyFullySuppressed = getFullySuppressedTaskIds(additive);
   rows.forEach(row => {
     if (row.description.startsWith('Impacto do aditivo - ')) return;
-    if (row.classification === 'contracted_released') return;
+    const fallbackState = legacyFullySuppressed.has(row.taskId) ? 'fully_suppressed' : resolveAdditiveScheduleState(row);
+    if (fallbackState === 'scheduled' && row.classification === 'contracted_released') return;
     result[row.taskId] = {
       kind: row.classification === 'contracted_suspended' ? 'automatic' : 'proposed',
-      label: row.statusLabel,
+      label: fallbackState === 'fully_suppressed' ? FULLY_SUPPRESSED_STATUS_LABEL : row.statusLabel,
       reason: ADDITIVE_SCHEDULE_GUIDANCE,
       additiveId: 'snapshot',
       additiveName: 'Versão arquivada',
       checked: true,
       disabled: true,
+      scheduleState: fallbackState,
+      financialTreatment: resolveAdditiveScheduleFinancialTreatment(row),
     };
   });
   return result;
@@ -77,7 +85,7 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
   }, [active, isArchived, latestSnapshot, preview, project]);
   const suspensions = useMemo(() => {
     if (!active) return {};
-    return isArchived && latestSnapshot ? snapshotSuspensionMap(latestSnapshot.rows) : buildPreviewSuspensionMap(project, active);
+    return isArchived && latestSnapshot ? snapshotSuspensionMap(latestSnapshot.rows, active) : buildPreviewSuspensionMap(project, active);
   }, [active, isArchived, latestSnapshot, project]);
   const issues = active ? validateAdditiveSchedule(project, active) : [];
   const directSuspended = Object.values(suspensions).filter(meta => meta.kind === 'automatic').length;

@@ -2,7 +2,9 @@ import type {
   Additive,
   AdditiveComposition,
   AdditiveScheduleDraft,
+  AdditiveScheduleFinancialTreatment,
   AdditiveSchedulePlannedTask,
+  AdditiveScheduleState,
   AdditiveScheduleSnapshot,
   AdditiveScheduleSnapshotRow,
   Project,
@@ -15,6 +17,7 @@ export const ADDITIVE_SCHEDULE_WARNING = 'PLANEJAMENTO PRELIMINAR - NÃO AUTORIZ
 export const ADDITIVE_SCHEDULE_GUIDANCE = 'Os itens submetidos ao aditamento e os serviços deles dependentes permanecem suspensos até deliberação administrativa, formalização do termo aditivo e liberação formal da fiscalização.';
 export const PROPOSED_STATUS_LABEL = 'A CONTRATAR - EXECUÇÃO NÃO AUTORIZADA';
 export const SUSPENDED_STATUS_LABEL = 'SUSPENSO - AGUARDA FORMALIZAÇÃO DO ADITIVO';
+export const FULLY_SUPPRESSED_STATUS_LABEL = 'ITEM SUPRIMIDO - QUANTIDADE A EXECUTAR: 0';
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const isValidDate = (value: string | undefined) => !!value && ISO_DATE.test(value) && !Number.isNaN(new Date(`${value}T12:00:00`).getTime());
@@ -27,6 +30,8 @@ export interface AdditiveScheduleSuspensionMeta {
   additiveName: string;
   checked: boolean;
   disabled: boolean;
+  scheduleState: AdditiveScheduleState;
+  financialTreatment: AdditiveScheduleFinancialTreatment;
 }
 
 const taskIdForComposition = (additiveId: string, compositionId: string) => `add-${additiveId}-${compositionId}`;
@@ -61,6 +66,66 @@ export function getAutomaticSuspendedTaskIds(project: Project, additive: Additiv
     .filter(composition => !composition.isNewService && isDirectlyChangedComposition(project, composition))
     .map(compositionTaskId)
     .filter((taskId): taskId is string => !!taskId));
+}
+
+export function isFullySuppressedComposition(additive: Additive, composition: AdditiveComposition): boolean {
+  if (composition.isNewService) return false;
+  const financial = computeAdditiveRow(
+    composition,
+    additive.bdiPercent ?? 0,
+    additive.globalDiscountPercent ?? 0,
+    resolveAdditivePricingRule(additive),
+  );
+  return financial.qtdSuprimida > 0 && financial.qtdFinal <= 0;
+}
+
+export function getFullySuppressedTaskIds(additive: Additive): Set<string> {
+  return new Set(additive.compositions
+    .filter(composition => isFullySuppressedComposition(additive, composition))
+    .map(compositionTaskId)
+    .filter((taskId): taskId is string => !!taskId));
+}
+
+export function isStatusOnlySuspension(meta: AdditiveScheduleSuspensionMeta | undefined): boolean {
+  return meta?.scheduleState === 'suspended' || meta?.scheduleState === 'fully_suppressed';
+}
+
+export function resolveAdditiveScheduleState(row: AdditiveScheduleSnapshotRow): AdditiveScheduleState {
+  if (row.scheduleState) return row.scheduleState;
+  if (row.classification === 'contracted_suspended' || row.description.startsWith('Impacto do aditivo - ')) {
+    return 'suspended';
+  }
+  return 'scheduled';
+}
+
+export function resolveAdditiveScheduleFinancialTreatment(
+  row: AdditiveScheduleSnapshotRow,
+): AdditiveScheduleFinancialTreatment {
+  if (row.financialTreatment) return row.financialTreatment;
+  if (row.classification === 'contracted_suspended') return 'excluded';
+  if (row.description.startsWith('Impacto do aditivo - ')) return 'total_only';
+  return 'monthly';
+}
+
+export function isStatusOnlyScheduleRow(row: AdditiveScheduleSnapshotRow): boolean {
+  return resolveAdditiveScheduleState(row) !== 'scheduled';
+}
+
+export function buildAdditiveScheduleAnalysisProject(
+  project: Project,
+  suspensionMap: Record<string, AdditiveScheduleSuspensionMeta>,
+): Project {
+  const statusOnlyIds = new Set(Object.entries(suspensionMap)
+    .filter(([, meta]) => isStatusOnlySuspension(meta))
+    .map(([taskId]) => taskId));
+  if (!statusOnlyIds.size) return project;
+  return {
+    ...project,
+    phases: project.phases.map(phase => ({
+      ...phase,
+      tasks: phase.tasks.filter(task => !statusOnlyIds.has(task.id)),
+    })),
+  };
 }
 
 function initialPlannedTask(project: Project, additive: Additive, composition: AdditiveComposition): AdditiveSchedulePlannedTask {
@@ -245,12 +310,16 @@ export function mergeAdditiveSchedulePreviewChanges(
   const draft = additive?.scheduleDraft;
   if (!additive || !draft) return project;
   const plannedIds = new Set(draft.plannedTasks.map(task => task.taskId));
+  const statusOnlyIds = new Set([
+    ...getAutomaticSuspendedTaskIds(project, additive),
+    ...draft.dependentTaskIds,
+  ]);
   const nextTasks = new Map(allPhaseTasks(nextPreview).map(task => [task.id, task]));
   const previousTasks = new Map(allPhaseTasks(previousPreview).map(task => [task.id, task]));
   const phases = project.phases.map(phase => ({
     ...phase,
     tasks: phase.tasks.map(task => {
-      if (plannedIds.has(task.id)) return task;
+      if (plannedIds.has(task.id) || statusOnlyIds.has(task.id)) return task;
       const next = nextTasks.get(task.id);
       return next ? { ...task, ...schedulePatch(next) } : task;
     }),
@@ -324,12 +393,15 @@ export function validateAdditiveSchedule(project: Project, additive: Additive): 
 
 export function buildPreviewSuspensionMap(project: Project, additive: Additive): Record<string, AdditiveScheduleSuspensionMeta> {
   const automatic = getAutomaticSuspendedTaskIds(project, additive);
+  const fullySuppressed = getFullySuppressedTaskIds(additive);
   const manual = new Set(additive.scheduleDraft?.dependentTaskIds ?? []);
   const result: Record<string, AdditiveScheduleSuspensionMeta> = {};
   automatic.forEach(taskId => {
+    const isFullySuppressed = fullySuppressed.has(taskId);
     result[taskId] = {
-      kind: 'automatic', label: SUSPENDED_STATUS_LABEL, reason: ADDITIVE_SCHEDULE_GUIDANCE,
+      kind: 'automatic', label: isFullySuppressed ? FULLY_SUPPRESSED_STATUS_LABEL : SUSPENDED_STATUS_LABEL, reason: ADDITIVE_SCHEDULE_GUIDANCE,
       additiveId: additive.id, additiveName: additive.name, checked: true, disabled: true,
+      scheduleState: isFullySuppressed ? 'fully_suppressed' : 'suspended', financialTreatment: 'excluded',
     };
   });
   manual.forEach(taskId => {
@@ -337,12 +409,14 @@ export function buildPreviewSuspensionMap(project: Project, additive: Additive):
     result[taskId] = {
       kind: 'manual', label: SUSPENDED_STATUS_LABEL, reason: ADDITIVE_SCHEDULE_GUIDANCE,
       additiveId: additive.id, additiveName: additive.name, checked: true, disabled: false,
+      scheduleState: 'suspended', financialTreatment: 'excluded',
     };
   });
   (additive.scheduleDraft?.plannedTasks ?? []).forEach(task => {
     result[task.taskId] = {
       kind: 'proposed', label: PROPOSED_STATUS_LABEL, reason: ADDITIVE_SCHEDULE_GUIDANCE,
       additiveId: additive.id, additiveName: additive.name, checked: true, disabled: true,
+      scheduleState: 'scheduled', financialTreatment: 'monthly',
     };
   });
   return result;
@@ -370,12 +444,16 @@ function taskValue(task: Task): number {
 export function buildAdditiveScheduleRows(project: Project, additive: Additive, preview: Project): AdditiveScheduleSnapshotRow[] {
   const phaseName = new Map(preview.phases.map(phase => [phase.id, phase.name]));
   const automatic = getAutomaticSuspendedTaskIds(project, additive);
+  const fullySuppressed = getFullySuppressedTaskIds(additive);
   const manual = new Set(additive.scheduleDraft?.dependentTaskIds ?? []);
   const plannedIds = new Set(additive.scheduleDraft?.plannedTasks.map(task => task.taskId) ?? []);
   const rows: AdditiveScheduleSnapshotRow[] = [];
   preview.phases.forEach(phase => phase.tasks.forEach(task => {
     if (plannedIds.has(task.id)) return;
     const suspended = automatic.has(task.id) || manual.has(task.id);
+    const scheduleState: AdditiveScheduleState = fullySuppressed.has(task.id)
+      ? 'fully_suppressed'
+      : suspended ? 'suspended' : 'scheduled';
     rows.push({
       taskId: task.id,
       phaseId: phase.id,
@@ -384,7 +462,11 @@ export function buildAdditiveScheduleRows(project: Project, additive: Additive, 
       code: task.itemCode,
       description: task.name,
       classification: suspended ? 'contracted_suspended' : 'contracted_released',
-      statusLabel: suspended ? SUSPENDED_STATUS_LABEL : 'CONTRATADO - LIBERADO PARA PLANEJAMENTO',
+      statusLabel: scheduleState === 'fully_suppressed'
+        ? FULLY_SUPPRESSED_STATUS_LABEL
+        : suspended ? SUSPENDED_STATUS_LABEL : 'CONTRATADO - LIBERADO PARA PLANEJAMENTO',
+      scheduleState,
+      financialTreatment: suspended ? 'excluded' : 'monthly',
       startDate: task.startDate,
       duration: task.duration,
       dependencies: task.dependencies ?? [],
@@ -412,6 +494,7 @@ export function buildAdditiveScheduleRows(project: Project, additive: Additive, 
     const financial = computeAdditiveRow(composition, additive.bdiPercent ?? 0, additive.globalDiscountPercent ?? 0, resolveAdditivePricingRule(additive));
     const impact = financial.diferenca;
     if (!composition.isNewService && Math.abs(impact) < 0.005) return;
+    const fullySuppressedImpact = !composition.isNewService && isFullySuppressedComposition(additive, composition);
     rows.push({
       taskId: task.id,
       compositionId: composition.id,
@@ -421,7 +504,9 @@ export function buildAdditiveScheduleRows(project: Project, additive: Additive, 
       code: composition.code,
       description: composition.isNewService ? composition.description : `Impacto do aditivo - ${composition.description}`,
       classification: impact < 0 ? 'proposed_suppression' : 'proposed_addition',
-      statusLabel: PROPOSED_STATUS_LABEL,
+      statusLabel: fullySuppressedImpact ? FULLY_SUPPRESSED_STATUS_LABEL : PROPOSED_STATUS_LABEL,
+      scheduleState: composition.isNewService ? 'scheduled' : fullySuppressedImpact ? 'fully_suppressed' : 'suspended',
+      financialTreatment: composition.isNewService ? 'monthly' : 'total_only',
       startDate: task.startDate,
       duration: task.duration,
       dependencies: task.dependencies ?? [],

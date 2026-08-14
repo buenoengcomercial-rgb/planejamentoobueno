@@ -1264,6 +1264,9 @@ export type AdditiveScheduleClassification =
   | 'proposed_addition'
   | 'proposed_suppression';
 
+export type AdditiveScheduleState = 'scheduled' | 'suspended' | 'fully_suppressed';
+export type AdditiveScheduleFinancialTreatment = 'monthly' | 'total_only' | 'excluded';
+
 /** Programação preliminar de um serviço novo, ainda isolada do contrato vigente. */
 export interface AdditiveSchedulePlannedTask {
   compositionId: string;
@@ -1306,6 +1309,10 @@ export interface AdditiveScheduleSnapshotRow {
   description: string;
   classification: AdditiveScheduleClassification;
   statusLabel: string;
+  /** Optional for backwards compatibility; legacy rows are inferred at runtime. */
+  scheduleState?: AdditiveScheduleState;
+  /** Controls monthly allocation without changing the contractual value. */
+  financialTreatment?: AdditiveScheduleFinancialTreatment;
   startDate: string;
   duration: number;
   dependencies: string[];

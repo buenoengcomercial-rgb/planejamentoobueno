@@ -25,7 +25,9 @@ import GanttFinancialForecast from './gantt/GanttFinancialForecast';
 import { sortTasksForSchedule, withScheduleOrderForMove } from '@/lib/taskOrdering';
 import { buildLaborPlanningAnalysis, type LaborPlanningGranularity } from '@/lib/laborDimensioning';
 import {
+  buildAdditiveScheduleAnalysisProject,
   buildPendingAdditiveSuspensionMap,
+  isStatusOnlySuspension,
   type AdditiveScheduleSuspensionMeta,
 } from '@/lib/additiveSchedule';
 
@@ -99,6 +101,16 @@ export default function GanttChart({
   const suspensionMap = useMemo(
     () => providedSuspensionMap ?? (context === 'official' ? buildPendingAdditiveSuspensionMap(project) : {}),
     [context, project, providedSuspensionMap],
+  );
+  const isStatusOnlyTask = useCallback(
+    (taskId: string) => context === 'additive-preview' && isStatusOnlySuspension(suspensionMap[taskId]),
+    [context, suspensionMap],
+  );
+  const analysisProject = useMemo(
+    () => context === 'additive-preview'
+      ? buildAdditiveScheduleAnalysisProject(project, suspensionMap)
+      : project,
+    [context, project, suspensionMap],
   );
 
   // Persiste no projeto sempre que o conjunto de minimizados mudar (com guard de igualdade).
@@ -225,9 +237,10 @@ export default function GanttChart({
   }, [today]);
 
   const tasks = useMemo(() => getAllTasks(project), [project]);
+  const scheduledTasks = useMemo(() => getAllTasks(analysisProject), [analysisProject]);
   const laborPlanning = useMemo(
-    () => buildLaborPlanningAnalysis(project, laborPeriodMode),
-    [project, laborPeriodMode],
+    () => buildLaborPlanningAnalysis(analysisProject, laborPeriodMode),
+    [analysisProject, laborPeriodMode],
   );
   const laborRowsToShow = useMemo(() => {
     const baseRows =
@@ -272,17 +285,18 @@ export default function GanttChart({
 
   const visibleTaskIds = useMemo(() => {
     return new Set(tasks
-      .filter(task => showZeroSuppressed || !isZeroOrSuppressedTask(task))
-      .filter(task => teamFilter === 'all' || (task.team ?? '_none') === teamFilter)
+      .filter(task => isStatusOnlyTask(task.id) || showZeroSuppressed || !isZeroOrSuppressedTask(task))
+      .filter(task => isStatusOnlyTask(task.id) || teamFilter === 'all' || (task.team ?? '_none') === teamFilter)
       .filter(task => !selectedPhaseIds || project.phases.some(phase => (
         selectedPhaseIds.has(phase.id) && phase.tasks.some(t => t.id === task.id)
       )))
-      .filter(task => !showDelayedOnly || isDelayedTask(task))
-      .filter(task => !showWithDependenciesOnly || (task.dependencies?.length ?? 0) > 0 || (task.dependencyDetails?.length ?? 0) > 0)
-      .filter(task => !showCriticalOnly || task.isCritical)
+      .filter(task => isStatusOnlyTask(task.id) || !showDelayedOnly || isDelayedTask(task))
+      .filter(task => isStatusOnlyTask(task.id) || !showWithDependenciesOnly || (task.dependencies?.length ?? 0) > 0 || (task.dependencyDetails?.length ?? 0) > 0)
+      .filter(task => isStatusOnlyTask(task.id) || !showCriticalOnly || task.isCritical)
       .map(task => task.id));
   }, [
     isDelayedTask,
+    isStatusOnlyTask,
     isZeroOrSuppressedTask,
     project.phases,
     selectedPhaseIds,
@@ -296,14 +310,21 @@ export default function GanttChart({
   const getVisiblePhaseTasks = useCallback((phase: typeof project.phases[0]) => (
     sortTasksForSchedule(phase.tasks).filter(task => visibleTaskIds.has(task.id))
   ), [visibleTaskIds]);
-  const criticalCount = useMemo(() => tasks.filter(t => t.isCritical && visibleTaskIds.has(t.id)).length, [tasks, visibleTaskIds]);
+  const criticalCount = useMemo(
+    () => tasks.filter(task => task.isCritical && visibleTaskIds.has(task.id) && !isStatusOnlyTask(task.id)).length,
+    [isStatusOnlyTask, tasks, visibleTaskIds],
+  );
   const projectStart = useMemo(
-    () => new Date(Math.min(...tasks.map(t => parseISODateLocal(t.startDate).getTime()))),
-    [tasks],
+    () => scheduledTasks.length
+      ? new Date(Math.min(...scheduledTasks.map(t => parseISODateLocal(t.startDate).getTime())))
+      : parseISODateLocal(project.startDate),
+    [project.startDate, scheduledTasks],
   );
   const projectEnd = useMemo(
-    () => new Date(Math.max(...tasks.map(t => addDays(parseISODateLocal(t.startDate), Math.max(0, t.duration - 1)).getTime()))),
-    [tasks],
+    () => scheduledTasks.length
+      ? new Date(Math.max(...scheduledTasks.map(t => addDays(parseISODateLocal(t.startDate), Math.max(0, t.duration - 1)).getTime())))
+      : parseISODateLocal(project.endDate || project.startDate),
+    [project.endDate, project.startDate, scheduledTasks],
   );
   const totalDays = useMemo(() => diffDays(projectStart, projectEnd) + 10, [projectStart, projectEnd]);
   const dayWidth = DAY_WIDTH[viewMode];
@@ -332,8 +353,8 @@ export default function GanttChart({
 
   // Coleta tarefas do capítulo: se for capítulo principal, inclui as dos subcapítulos.
   const getEffectiveChapterTasks = useCallback((phase: typeof project.phases[0]) => {
-    return getChapterTasks(project, phase.id).filter(task => visibleTaskIds.has(task.id));
-  }, [project, visibleTaskIds]);
+    return getChapterTasks(project, phase.id).filter(task => visibleTaskIds.has(task.id) && !isStatusOnlyTask(task.id));
+  }, [isStatusOnlyTask, project, visibleTaskIds]);
 
   // Chapter business days
   const getChapterDiasUteis = useCallback((phase: typeof project.phases[0]) => {
@@ -458,10 +479,11 @@ export default function GanttChart({
   const violationMap = useMemo(() => {
     const map = new Map<string, Set<string>>();
     tasks.forEach(task => {
+      if (isStatusOnlyTask(task.id)) return;
       const details = task.dependencyDetails || [];
       details.forEach(dep => {
         const pred = tasks.find(t => t.id === dep.taskId);
-        if (!pred) return;
+        if (!pred || isStatusOnlyTask(pred.id)) return;
         const predStart = parseISODateLocal(pred.startDate);
         const predEnd = addDays(predStart, pred.duration);
         const taskStart = parseISODateLocal(task.startDate);
@@ -480,7 +502,7 @@ export default function GanttChart({
       });
     });
     return map;
-  }, [tasks]);
+  }, [isStatusOnlyTask, tasks]);
 
   const weekDates = useMemo(() => {
     const dates: { day: number; month: number; year: number; offset: number; width: number }[] = [];
@@ -1168,7 +1190,7 @@ export default function GanttChart({
 
   // Get chapter bar info for milestones
   const getChapterBarInfo = (phase: typeof project.phases[0]) => {
-    const items = getVisiblePhaseTasks(phase);
+    const items = getVisiblePhaseTasks(phase).filter(task => !isStatusOnlyTask(task.id));
     if (items.length === 0) return null;
     const starts = items.map(t => parseISODateLocal(t.startDate).getTime());
     const ends = items.map(t => addDays(parseISODateLocal(t.startDate), t.duration).getTime());
@@ -1859,7 +1881,7 @@ export default function GanttChart({
                         </Popover>
                         <span className="ml-auto flex items-center gap-2 text-muted-foreground">
                           {(() => {
-                            const items = visiblePhaseTasks;
+                            const items = visiblePhaseTasks.filter(task => !isStatusOnlyTask(task.id));
                             if (items.length === 0) return null;
                             const totalDur = items.reduce((s, t) => s + Math.max(1, t.duration), 0) || 1;
                             const weighted = items.reduce((s, t) => s + (t.physicalProgress ?? t.percentComplete ?? 0) * Math.max(1, t.duration), 0);
@@ -1898,35 +1920,35 @@ export default function GanttChart({
                     {!collapsedPhases.has(phase.id) &&
                       visiblePhaseTasks
                         .map((task, idx) => {
+                          const suspension = suspensionMap[task.id];
+                          const statusOnly = isStatusOnlyTask(task.id);
                           const endDate = getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado);
                           const taskNum = taskNumbering.get(task.id) || 0;
-                          const violations = getViolations(task);
+                          const violations = statusOnly ? [] : getViolations(task);
                           const hasViolation = violations.length > 0;
                           const depDisplay = getDepDisplay(task);
                           const depTypes = getDepTypes(task);
-                          const noWorkDays = hasNoWorkingDays(task);
-                          const laborConflict = laborPlanning.taskConflictMap[task.id];
+                          const noWorkDays = !statusOnly && hasNoWorkingDays(task);
+                          const laborConflict = statusOnly ? undefined : laborPlanning.taskConflictMap[task.id];
                           const hasLaborConflict = !!laborConflict && (
                             laborConflict.roleDeficits.length > 0 ||
                             laborConflict.teamConflicts.length > 0 ||
                             laborConflict.missingAvailability.length > 0
                           );
                           const isLaborHighlighted = highlightedLaborTaskIds.has(task.id);
-                          const suspension = suspensionMap[task.id];
-
-                          const rowTeamDef = teamDef(task.team);
+                          const rowTeamDef = statusOnly ? undefined : teamDef(task.team);
                           const isReorderDragging = reorderDragTaskId === task.id;
                           const isReorderTarget = reorderDropTargetId === task.id && reorderDragTaskId && reorderDragTaskId !== task.id;
                           return (
                             <div
                               key={task.id}
-                              draggable={!readOnly}
+                              draggable={!readOnly && !statusOnly}
                               onDragStart={(e) => handleRowDragStart(e, phase.id, task.id)}
                               onDragOver={(e) => handleRowDragOver(e, task.id)}
                               onDrop={(e) => handleRowDrop(e, phase.id, task.id)}
                               onDragEnd={handleRowDragEnd}
-                              title="Arraste para reordenar a tarefa"
-                              className={`grid items-center gap-0.5 px-1 border-b border-border hover:brightness-110 transition-colors ${readOnly ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'} ${
+                              title={statusOnly ? suspension?.label : 'Arraste para reordenar a tarefa'}
+                              className={`grid items-center gap-0.5 px-1 border-b border-border hover:brightness-110 transition-colors ${readOnly || statusOnly ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'} ${
                                 !rowTeamDef ? (idx % 2 === 0 ? 'bg-card' : 'bg-muted/10') : ''
                               } ${task.isCritical && !rowTeamDef ? 'bg-destructive/5' : ''} ${noWorkDays && !rowTeamDef ? 'bg-warning/10' : ''} ${
                                 isLaborHighlighted ? 'ring-2 ring-inset ring-blue-500 bg-blue-50/80' : ''
@@ -2021,7 +2043,7 @@ export default function GanttChart({
                               </div>
                               
                               <div className="flex flex-col gap-0.5">
-                                {(() => {
+                                {statusOnly ? <span className="text-center text-[10px] text-muted-foreground">—</span> : (() => {
                                   const hasLogs = (task.dailyLogs?.length ?? 0) > 0;
                                   const hasRealData = (task.dailyLogs || []).some(l => (l.actualQuantity ?? 0) > 0) && !!task.current?.startDate;
                                   const startNonUtil = !isDiaUtil(parseISODateLocal(task.startDate), obraConfig.uf, obraConfig.municipio, obraConfig.trabalhaSabado);
@@ -2078,7 +2100,7 @@ export default function GanttChart({
                                 })()}
                               </div>
                               <div className="flex flex-col gap-0.5">
-                                {(() => {
+                                {statusOnly ? <span className="text-center text-[10px] text-muted-foreground">—</span> : (() => {
                                   const hasLogs = (task.dailyLogs?.length ?? 0) > 0;
                                   const hasRealData = (task.dailyLogs || []).some(l => (l.actualQuantity ?? 0) > 0) && !!task.current?.startDate;
                                   const endNonUtil = !isDiaUtil(parseISODateLocal(endDate), obraConfig.uf, obraConfig.municipio, obraConfig.trabalhaSabado);
@@ -2141,7 +2163,7 @@ export default function GanttChart({
                               </div>
                               {/* Duração (editável — força modo Manual) */}
                               <div className="text-center">
-                                <input
+                                {statusOnly ? <span className="text-[10px] text-muted-foreground">—</span> : <input
                                   type="number"
                                   min={1}
                                   step={1}
@@ -2161,11 +2183,11 @@ export default function GanttChart({
                                   title={(task.durationMode || 'manual') === 'rup'
                                     ? 'Editar a duração mudará para modo Manual'
                                     : 'Duração em dias (modo Manual)'}
-                                />
+                                />}
                               </div>
                               {/* Modo: RUP / Manual */}
                               <div className="text-center">
-                                <Tooltip>
+                                {statusOnly ? <span className="text-[10px] text-muted-foreground">—</span> : <Tooltip>
                                   <TooltipTrigger asChild>
                                     <button
                                       disabled={readOnly}
@@ -2189,7 +2211,7 @@ export default function GanttChart({
                                         : 'Duração manual — clique para calcular via RUP'}
                                     </p>
                                   </TooltipContent>
-                                </Tooltip>
+                                </Tooltip>}
                               </div>
                               {/* % Concluído */}
                               <div className="text-center">
@@ -2236,6 +2258,7 @@ export default function GanttChart({
                               {/* Prod./Dia (planejado vs realizado) */}
                               <div className="text-center">
                                 {(() => {
+                                  if (statusOnly) return <span className="text-[9px] text-muted-foreground">—</span>;
                                   const plannedDaily = task.quantity && task.duration > 0
                                     ? task.quantity / task.duration
                                     : null;
@@ -2267,7 +2290,7 @@ export default function GanttChart({
                                 })()}
                               </div>
                               <div className="text-center">
-                                <input
+                                {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : <input
                                   className={`w-full text-[9px] bg-transparent border-b border-border/50 text-center focus:outline-none focus:border-primary ${rowTeamDef ? 'opacity-80' : 'text-muted-foreground'}`}
                                   style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined}
                                   defaultValue={depDisplay}
@@ -2275,10 +2298,10 @@ export default function GanttChart({
                                   placeholder="—"
                                   onBlur={(e) => handleDepChange(task.id, e.target.value)}
                                   title="Nº da tarefa predecessora (ex: 3, 7)"
-                                />
+                                />}
                               </div>
                               <div className="text-center">
-                                {depTypes.length > 0 ? (
+                                {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : depTypes.length > 0 ? (
                                   <Select
                                     value={depTypes[0].type}
                                     onValueChange={(val) => handleDepTypeChange(task.id, 0, val as DependencyType)}
@@ -2298,7 +2321,7 @@ export default function GanttChart({
                                 )}
                               </div>
                               <div className="text-center">
-                                <Select
+                                {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : <Select
                                   value={task.team || '_none'}
                                   onValueChange={(val) => {
                                     const newTeam = val === '_none' ? undefined : val as TeamCode;
@@ -2324,7 +2347,7 @@ export default function GanttChart({
                                       </SelectItem>
                                     ))}
                                   </SelectContent>
-                                </Select>
+                                </Select>}
                               </div>
                             </div>
                           );
@@ -2432,7 +2455,7 @@ export default function GanttChart({
                   {/* Dependency arrows */}
                   {(() => {
                     // During drag, provide tasks with temporary positions for arrows
-                    let arrowTasks = tasks.filter(task => visibleTaskIds.has(task.id));
+                    let arrowTasks = tasks.filter(task => visibleTaskIds.has(task.id) && !isStatusOnlyTask(task.id));
                     if (draggingTaskId && (dragOffset !== 0 || dragTempTasks.size > 0)) {
                       const daysMoved = Math.round(dragOffset / dayWidth);
                       arrowTasks = arrowTasks.map(t => {
@@ -2533,21 +2556,21 @@ export default function GanttChart({
                       {!collapsedPhases.has(phase.id) &&
                         visiblePhaseTasks
                           .map((task, idx) => {
+                            const suspension = suspensionMap[task.id];
+                            const statusOnly = isStatusOnlyTask(task.id);
                             const bar = getBarStyle(task);
                             const isDragging = draggingTaskId === task.id;
                             const isResizing = resizingTaskId === task.id;
-                            const violations = getViolations(task);
+                            const violations = statusOnly ? [] : getViolations(task);
                             const hasViolation = violations.length > 0;
-                            const noWorkDays = hasNoWorkingDays(task);
-                            const laborConflict = laborPlanning.taskConflictMap[task.id];
+                            const noWorkDays = !statusOnly && hasNoWorkingDays(task);
+                            const laborConflict = statusOnly ? undefined : laborPlanning.taskConflictMap[task.id];
                             const hasLaborConflict = !!laborConflict && (
                               laborConflict.roleDeficits.length > 0 ||
                               laborConflict.teamConflicts.length > 0 ||
                               laborConflict.missingAvailability.length > 0
                             );
                             const isLaborHighlighted = highlightedLaborTaskIds.has(task.id);
-                            const suspension = suspensionMap[task.id];
-
                             // Compute current bar position with drag/resize/propagation
                             let currentLeft = bar.left;
                             let currentWidth = bar.width;
@@ -2592,11 +2615,24 @@ export default function GanttChart({
                                 style={{ height: taskRowHeight }}
                               >
                                 {/* Barra planejada = task.startDate + task.duration (Manual ou RUP) */}
-                                {(() => {
+                                {statusOnly ? (
+                                  <div
+                                    data-testid={`gantt-status-only-${task.id}`}
+                                    className={`absolute left-2 top-1/2 z-20 -translate-y-1/2 whitespace-nowrap rounded px-2 py-1 text-[10px] font-extrabold tracking-wide ${
+                                      suspension?.scheduleState === 'fully_suppressed'
+                                        ? 'bg-rose-50 text-rose-800'
+                                        : 'bg-amber-50 text-amber-900'
+                                    }`}
+                                    title={`${suspension?.label ?? ''} | ${suspension?.reason ?? ''}`}
+                                  >
+                                    {suspension?.label}
+                                  </div>
+                                ) : (() => {
                                   const barLeft = currentLeft;
                                   const barWidth = currentWidth;
                                   return (
                                 <div
+                                  data-testid={`gantt-bar-${task.id}`}
                                   ref={setBarRef(task.id)}
                                   className={`absolute rounded-md ${hasViolation ? 'animate-pulse ring-2 ring-destructive' : ''} ${noWorkDays ? 'ring-2 ring-warning' : ''} ${hasLaborConflict ? 'ring-2 ring-orange-400' : ''} ${isLaborHighlighted ? 'ring-4 ring-blue-500' : ''} ${suspension ? 'ring-2 ring-amber-500' : ''}`}
                                   title={suspension
@@ -2690,7 +2726,7 @@ export default function GanttChart({
                                 })()}
 
                                 {/* Linha tracejada: intervalo Real → Previsto (apontamento diário) */}
-                                {(() => {
+                                {statusOnly ? null : (() => {
                                   const hasRealData = (task.dailyLogs || []).some(l => (l.actualQuantity ?? 0) > 0) && !!task.current?.startDate;
                                   if (!hasRealData) return null;
                                   const realStartISO = task.current!.startDate;
