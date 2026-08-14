@@ -75,6 +75,20 @@ export function isDirectlyChangedComposition(project: Project, composition: Addi
     || Math.abs((composition.unitPriceNoBDI ?? 0) - (task.unitPriceNoBDI ?? 0)) >= 0.01;
 }
 
+/** Fonte única das composições que podem justificar uma suspensão manual. */
+export function getEligibleBlockingCompositions(
+  project: Project,
+  additive: Additive,
+): AdditiveComposition[] {
+  const plannedCompositionIds = new Set(
+    (additive.scheduleDraft?.plannedTasks ?? []).map(task => task.compositionId),
+  );
+  return additive.compositions.filter(composition => (
+    plannedCompositionIds.has(composition.id)
+    || isDirectlyChangedComposition(project, composition)
+  ));
+}
+
 function hasUnitPriceChange(project: Project, composition: AdditiveComposition): boolean {
   const task = findTask(project, compositionTaskId(composition));
   if (!task) return false;
@@ -590,9 +604,9 @@ export function setAdditiveScheduleDependencyBlock(
 ): Project {
   const additive = (project.additives ?? []).find(item => item.id === additiveId);
   if (!additive?.scheduleDraft || getAutomaticSuspendedTaskIds(project, additive).has(taskId)) return project;
-  const validIds = new Set(additive.compositions
-    .filter(composition => isDirectlyChangedComposition(project, composition))
-    .map(composition => composition.id));
+  const validIds = new Set(
+    getEligibleBlockingCompositions(project, additive).map(composition => composition.id),
+  );
   const selected = Array.from(new Set(compositionIds.filter(id => validIds.has(id))));
   if (!selected.length) return setAdditiveScheduleDependentTask(project, additiveId, taskId, false);
   const ids = new Set(additive.scheduleDraft.dependentTaskIds);

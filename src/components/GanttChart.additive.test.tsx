@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { Project } from '@/types/project';
 import GanttChart from './GanttChart';
 import type { AdditiveScheduleSuspensionMeta } from '@/lib/additiveSchedule';
@@ -21,7 +21,12 @@ const project: Project = {
         quantity: 1, unit: 'UN',
       },
       {
-        id: 'scheduled-new', name: 'Novo serviço programado', phase: 'phase-1', startDate: '2026-08-10', duration: 5,
+        id: 'scheduled-new', name: 'Novo serviço programado', phase: 'phase-1', startDate: '2026-08-10', duration: 1,
+        dependencies: [], responsible: 'Encarregado', team: 'alpha', percentComplete: 0, materials: [], level: 0,
+        quantity: 1, unit: 'UN',
+      },
+      {
+        id: 'scheduled-new-long', name: 'Novo serviço programado longo', phase: 'phase-1', startDate: '2026-08-12', duration: 45,
         dependencies: [], responsible: 'Encarregado', team: 'alpha', percentComplete: 0, materials: [], level: 0,
         quantity: 1, unit: 'UN',
       },
@@ -57,6 +62,17 @@ const suspensionMap: Record<string, AdditiveScheduleSuspensionMeta> = {
     scheduleState: 'scheduled',
     financialTreatment: 'monthly',
   },
+  'scheduled-new-long': {
+    kind: 'proposed',
+    label: 'A CONTRATAR - EXECUÇÃO NÃO AUTORIZADA',
+    reason: 'Planejamento preliminar.',
+    additiveId: 'add-1',
+    additiveName: '1º Aditivo',
+    checked: true,
+    disabled: true,
+    scheduleState: 'scheduled',
+    financialTreatment: 'monthly',
+  },
   'partial-existing': {
     kind: 'quantity_limited',
     label: 'EXECUTAR: 10 UN CONTRATADAS | ACRÉSCIMO DE 2 UN AGUARDA ADITIVO',
@@ -75,7 +91,9 @@ const suspensionMap: Record<string, AdditiveScheduleSuspensionMeta> = {
 };
 
 describe('GanttChart no Cronograma do Aditivo', () => {
-  it('mostra a situação integral sem barra e mantém novos serviços programados', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('mostra suspensões e serviços novos somente como advertência no cronograma do aditivo', () => {
     render(
       <GanttChart
         project={project}
@@ -89,19 +107,28 @@ describe('GanttChart no Cronograma do Aditivo', () => {
       'SUSPENSO - AGUARDA FORMALIZAÇÃO DO ADITIVO',
     );
     expect(screen.queryByTestId('gantt-bar-suspended-1d')).not.toBeInTheDocument();
-    expect(screen.getByTestId('gantt-bar-scheduled-new')).toBeInTheDocument();
+    expect(screen.getByTestId('gantt-proposed-label-scheduled-new')).toHaveTextContent('A CONTRATAR - EXECUÇÃO NÃO AUTORIZADA');
+    expect(screen.getByTestId('gantt-proposed-label-scheduled-new-long')).toHaveTextContent('A CONTRATAR - EXECUÇÃO NÃO AUTORIZADA');
+    expect(screen.queryByTestId('gantt-bar-scheduled-new')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('gantt-bar-scheduled-new-long')).not.toBeInTheDocument();
     expect(screen.getByTestId('gantt-bar-partial-existing')).toBeInTheDocument();
     expect(screen.getByTestId('gantt-quantity-limited-partial-existing')).toHaveTextContent('EXECUTAR: 10 UN CONTRATADAS');
 
     fireEvent.click(screen.getByRole('button', { name: 'Dias' }));
     expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('SUSPENSO - AGUARDA FORMALIZAÇÃO DO ADITIVO');
+    expect(screen.getByTestId('gantt-proposed-label-scheduled-new')).toBeInTheDocument();
+    expect(screen.getByTestId('gantt-proposed-label-scheduled-new-long')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Meses' }));
     expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('SUSPENSO - AGUARDA FORMALIZAÇÃO DO ADITIVO');
+    expect(screen.getByTestId('gantt-proposed-label-scheduled-new')).toBeInTheDocument();
+    expect(screen.getByTestId('gantt-proposed-label-scheduled-new-long')).toBeInTheDocument();
   });
 
   it('preserva a barra no cronograma oficial', () => {
     render(<GanttChart project={project} context="official" suspensionMap={suspensionMap} readOnly />);
     expect(screen.queryByTestId('gantt-status-only-suspended-1d')).not.toBeInTheDocument();
     expect(screen.getByTestId('gantt-bar-suspended-1d')).toBeInTheDocument();
+    expect(screen.getByTestId('gantt-bar-scheduled-new')).toBeInTheDocument();
+    expect(screen.getByTestId('gantt-bar-scheduled-new-long')).toBeInTheDocument();
   });
 });

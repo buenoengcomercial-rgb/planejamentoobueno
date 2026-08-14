@@ -2605,6 +2605,7 @@ export default function GanttChart({
                           .map((task, idx) => {
                             const suspension = suspensionMap[task.id];
                             const statusOnly = isStatusOnlyTask(task.id);
+                            const proposedLabelOnly = context === 'additive-preview' && suspension?.kind === 'proposed';
                             const bar = getBarStyle(task);
                             const isDragging = draggingTaskId === task.id;
                             const isResizing = resizingTaskId === task.id;
@@ -2662,14 +2663,19 @@ export default function GanttChart({
                                 style={{ height: taskRowHeight }}
                               >
                                 {/* Barra planejada = task.startDate + task.duration (Manual ou RUP) */}
-                                {statusOnly ? (
+                                {statusOnly || proposedLabelOnly ? (
                                   <div
-                                    data-testid={`gantt-status-only-${task.id}`}
-                                    className={`absolute left-2 top-1/2 z-20 -translate-y-1/2 whitespace-nowrap rounded px-2 py-1 text-[10px] font-extrabold tracking-wide ${
-                                      suspension?.scheduleState === 'fully_suppressed'
-                                        ? 'bg-rose-50 text-rose-800'
-                                        : 'bg-amber-50 text-amber-900'
+                                    data-testid={proposedLabelOnly
+                                      ? `gantt-proposed-label-${task.id}`
+                                      : `gantt-status-only-${task.id}`}
+                                    className={`absolute top-1/2 z-20 -translate-y-1/2 whitespace-nowrap rounded px-2 py-1 text-[10px] font-extrabold tracking-wide ${
+                                      proposedLabelOnly
+                                        ? 'border-l-2 border-amber-500 bg-sky-50 text-sky-900'
+                                        : suspension?.scheduleState === 'fully_suppressed'
+                                          ? 'bg-rose-50 text-rose-800'
+                                          : 'bg-amber-50 text-amber-900'
                                     }`}
+                                    style={{ left: proposedLabelOnly ? currentLeft : 8 }}
                                     title={`${suspension?.label ?? ''} | ${suspension?.reason ?? ''}`}
                                   >
                                     {suspension?.label}

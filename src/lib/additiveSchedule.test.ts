@@ -12,6 +12,7 @@ import {
   confirmAdditiveScheduleDates,
   createAdditiveScheduleSnapshot,
   getAutomaticSuspendedTaskIds,
+  getEligibleBlockingCompositions,
   getQuantitativelyRestrictedTasks,
   mergeAdditiveSchedulePreviewChanges,
   setAdditiveScheduleDependencyBlock,
@@ -201,6 +202,8 @@ describe('Cronograma do Aditivo', () => {
 
   it('registra e remove composições bloqueadoras de uma suspensão manual', () => {
     const withDraft = syncAdditiveScheduleDraft(project, additive.id);
+    expect(getEligibleBlockingCompositions(withDraft, withDraft.additives![0]).map(item => item.id))
+      .toEqual(['existing-comp', 'new-comp']);
     const blockedPartial = setAdditiveScheduleDependencyBlock(withDraft, additive.id, 'task-1', ['new-comp'], 'Acréscimo necessário ao sistema');
     expect(buildPreviewSuspensionMap(blockedPartial, blockedPartial.additives![0])['task-1']).toMatchObject({
       kind: 'manual', scheduleState: 'suspended', quantityRestriction: { executableQuantity: 10 },

@@ -21,8 +21,8 @@ import {
   buildProjectFromScheduleSnapshot,
   confirmAdditiveScheduleDates,
   getBlockingCompositionRefs,
+  getEligibleBlockingCompositions,
   getFullySuppressedTaskIds,
-  isDirectlyChangedComposition,
   mergeAdditiveSchedulePreviewChanges,
   resolveAdditiveScheduleFinancialTreatment,
   resolveAdditiveScheduleState,
@@ -108,12 +108,26 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
   const manualSuspended = Object.values(suspensions).filter(meta => meta.kind === 'manual').length;
   const quantityLimited = Object.values(suspensions).filter(meta => meta.kind === 'quantity_limited').length;
   const proposed = rows.filter(row => row.classification === 'proposed_addition' || row.classification === 'proposed_suppression').length;
-  const eligibleBlockingCompositions = useMemo(() => (
-    active ? active.compositions.filter(composition => isDirectlyChangedComposition(project, composition)) : []
-  ), [active, project]);
-  const blockerRefs = useMemo(() => (
-    active ? getBlockingCompositionRefs(active, eligibleBlockingCompositions.map(composition => composition.id)) : []
-  ), [active, eligibleBlockingCompositions]);
+  const blockerGroups = useMemo(() => {
+    if (!active) return [];
+    const plannedCompositionIds = new Set(
+      (active.scheduleDraft?.plannedTasks ?? []).map(task => task.compositionId),
+    );
+    const refs = getBlockingCompositionRefs(
+      active,
+      getEligibleBlockingCompositions(project, active).map(composition => composition.id),
+    );
+    return [{
+      id: 'new',
+      label: 'SERVIÇOS - ITENS NOVOS',
+      refs: refs.filter(ref => plannedCompositionIds.has(ref.compositionId)),
+    }, {
+      id: 'contracted',
+      label: 'ITENS CONTRATADOS ALTERADOS',
+      refs: refs.filter(ref => !plannedCompositionIds.has(ref.compositionId)),
+    }].filter(group => group.refs.length > 0);
+  }, [active, project]);
+  const blockerCount = blockerGroups.reduce((sum, group) => sum + group.refs.length, 0);
   const blockingTaskName = preview?.phases.flatMap(phase => phase.tasks).find(task => task.id === blockTaskId)?.name;
 
   const openBlockDialog = (taskId: string) => {
@@ -259,32 +273,42 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
               Selecione os itens do aditivo necessários antes de executar “{blockingTaskName || 'tarefa selecionada'}”. A seleção será registrada no histórico, PDF e Excel.
             </DialogDescription>
           </DialogHeader>
-          <div className="max-h-[46vh] space-y-2 overflow-y-auto pr-1">
-            {blockerRefs.map(ref => {
-              const checked = blockerIds.includes(ref.compositionId);
-              const quantity = Math.abs(ref.quantity);
-              const quantityText = quantity > 0
-                ? `${quantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}${ref.unit ? ` ${ref.unit}` : ''}`
-                : 'alteração de preço/escopo';
-              return (
-                <label key={ref.compositionId} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${checked ? 'border-amber-400 bg-amber-50' : 'border-border bg-card'}`}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={event => setBlockerIds(current => event.target.checked
-                      ? [...current, ref.compositionId]
-                      : current.filter(id => id !== ref.compositionId))}
-                    className="mt-1 h-4 w-4 accent-amber-600"
-                  />
-                  <span className="min-w-0">
-                    <span className="block text-xs font-bold text-foreground">{[ref.item, ref.code].filter(Boolean).join(' - ') || 'Composição do aditivo'}</span>
-                    <span className="block text-sm text-foreground">{ref.description}</span>
-                    <span className="block text-xs font-semibold text-amber-800">Impacto: {quantityText}</span>
-                  </span>
-                </label>
-              );
-            })}
-            {!blockerRefs.length && <div className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">Não há composições alteradas disponíveis neste aditivo.</div>}
+          <div className="max-h-[46vh] space-y-4 overflow-y-auto pr-1">
+            {blockerGroups.map(group => (
+              <section key={group.id} data-testid={`blocking-group-${group.id}`} className="space-y-2">
+                <div className="sticky top-0 z-10 flex items-center justify-between rounded-md bg-muted px-3 py-2 text-xs font-bold text-foreground shadow-sm">
+                  <span>{group.label}</span>
+                  <span className="rounded-full bg-background px-2 py-0.5 text-[10px] text-muted-foreground">{group.refs.length}</span>
+                </div>
+                {group.refs.map(ref => {
+                  const checked = blockerIds.includes(ref.compositionId);
+                  const quantity = Math.abs(ref.quantity);
+                  const quantityText = quantity > 0
+                    ? `${quantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}${ref.unit ? ` ${ref.unit}` : ''}`
+                    : 'alteração de preço/escopo';
+                  const referenceLabel = [ref.item, ref.code].filter(Boolean).join(' - ') || 'Composição do aditivo';
+                  return (
+                    <label key={ref.compositionId} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${checked ? 'border-amber-400 bg-amber-50' : 'border-border bg-card'}`}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Selecionar ${referenceLabel} ${ref.description}`}
+                        checked={checked}
+                        onChange={event => setBlockerIds(current => event.target.checked
+                          ? [...current, ref.compositionId]
+                          : current.filter(id => id !== ref.compositionId))}
+                        className="mt-1 h-4 w-4 accent-amber-600"
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-xs font-bold text-foreground">{referenceLabel}</span>
+                        <span className="block text-sm text-foreground">{ref.description}</span>
+                        <span className="block text-xs font-semibold text-amber-800">Impacto: {quantityText}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </section>
+            ))}
+            {!blockerCount && <div className="rounded-lg border border-dashed p-5 text-center text-sm text-muted-foreground">Não há composições alteradas ou novas disponíveis neste aditivo.</div>}
           </div>
           <Textarea
             value={blockerNote}
