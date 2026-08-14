@@ -161,6 +161,7 @@ export default function GanttChart({
   const [dragOffset, setDragOffset] = useState(0);
   const dragStartX = useRef(0);
   const dragStartLeft = useRef(0);
+  const ganttRootRef = useRef<HTMLDivElement>(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   // Refs para throttle do drag (rAF) — evita re-render por pixel
   const dragRafPending = useRef(false);
@@ -1051,6 +1052,15 @@ export default function GanttChart({
       seen.add(depTaskId);
       deps.push({ taskId: depTaskId, type: existingByTaskId.get(depTaskId) || 'TI' });
     }
+    const unchanged = deps.length === existingDetails.length
+      && deps.every((dependency, index) => (
+        dependency.taskId === existingDetails[index]?.taskId
+        && dependency.type === existingDetails[index]?.type
+      ));
+    if (unchanged) {
+      if (ignored > 0) toast.warning('Depend\u00eancias inv\u00e1lidas, duplicadas ou c\u00edclicas foram ignoradas.');
+      return;
+    }
     const updatedProject = {
       ...project,
       phases: project.phases.map(phase => ({
@@ -1062,6 +1072,27 @@ export default function GanttChart({
     };
     commitWithDependencyPropagation(updatedProject, taskId, true);
     if (ignored > 0) toast.warning('Depend\u00eancias inv\u00e1lidas, duplicadas ou c\u00edclicas foram ignoradas.');
+  };
+
+  const handleDependencyKeyDown = (taskId: string, event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    event.preventDefault();
+    const inputs = Array.from(ganttRootRef.current?.querySelectorAll<HTMLInputElement>(
+      '[data-gantt-dependency-input="true"]:not(:disabled)',
+    ) ?? []);
+    const currentIndex = inputs.indexOf(event.currentTarget);
+    const direction = event.key === 'ArrowUp' ? -1 : 1;
+    const targetTaskId = inputs[currentIndex + direction]?.dataset.ganttDependencyTaskId ?? taskId;
+
+    // O blur confirma a edição uma única vez; depois buscamos o DOM atualizado e movemos o foco.
+    event.currentTarget.blur();
+    window.setTimeout(() => {
+      const nextInput = Array.from(ganttRootRef.current?.querySelectorAll<HTMLInputElement>(
+        '[data-gantt-dependency-input="true"]:not(:disabled)',
+      ) ?? []).find(input => input.dataset.ganttDependencyTaskId === targetTaskId);
+      nextInput?.focus();
+      nextInput?.select();
+    }, 0);
   };
 
   const handleDepTypeChange = (taskId: string, depIndex: number, newType: DependencyType) => {
@@ -1293,7 +1324,7 @@ export default function GanttChart({
 
   return (
     <TooltipProvider>
-      <div className="p-4 space-y-3">
+      <div ref={ganttRootRef} className="p-4 space-y-3">
         {/* Toolbar */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
@@ -2415,7 +2446,10 @@ export default function GanttChart({
                                   defaultValue={depDisplay}
                                   key={depDisplay}
                                   placeholder="—"
+                                  data-gantt-dependency-input="true"
+                                  data-gantt-dependency-task-id={task.id}
                                   onBlur={(e) => handleDepChange(task.id, e.target.value)}
+                                  onKeyDown={(e) => handleDependencyKeyDown(task.id, e)}
                                   title="Nº da tarefa predecessora (ex: 3, 7)"
                                 />}
                               </div>

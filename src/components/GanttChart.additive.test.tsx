@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import GanttChart from './GanttChart';
@@ -288,5 +288,44 @@ describe('GanttChart no Cronograma do Aditivo', () => {
         { taskId: 'pred-b', type: 'TI' },
       ],
     });
+  });
+
+  it('confirma a dependência com as setas e move o foco para o campo vertical seguinte', async () => {
+    const keyboardProject: Project = {
+      ...project,
+      id: 'gantt-dependency-keyboard',
+      phases: [{
+        ...project.phases[0],
+        tasks: [{
+          ...project.phases[0].tasks[0],
+          id: 'keyboard-a', name: 'Tarefa A', startDate: '2026-08-14', duration: 1, dependencies: [], dependencyDetails: [],
+        }, {
+          ...project.phases[0].tasks[1],
+          id: 'keyboard-b', name: 'Tarefa B', startDate: '2026-07-10', duration: 1, dependencies: [], dependencyDetails: [],
+        }, {
+          ...project.phases[0].tasks[2],
+          id: 'keyboard-c', name: 'Tarefa C', startDate: '2026-07-11', duration: 1, dependencies: [], dependencyDetails: [],
+        }],
+      }],
+    };
+    const onProjectChange = vi.fn();
+    render(<GanttChart project={keyboardProject} context="additive-preview" onProjectChange={onProjectChange} />);
+    const inputs = screen.getAllByTitle('Nº da tarefa predecessora (ex: 3, 7)') as HTMLInputElement[];
+
+    inputs[1].focus();
+    fireEvent.change(inputs[1], { target: { value: '1' } });
+    fireEvent.keyDown(inputs[1], { key: 'ArrowDown' });
+
+    expect(onProjectChange).toHaveBeenCalledTimes(1);
+    expect((onProjectChange.mock.calls[0][0] as Project).phases[0].tasks[1]).toMatchObject({
+      startDate: '2026-08-17',
+      dependencies: ['keyboard-a'],
+      dependencyDetails: [{ taskId: 'keyboard-a', type: 'TI' }],
+    });
+    await waitFor(() => expect(inputs[2]).toHaveFocus());
+
+    fireEvent.keyDown(inputs[2], { key: 'ArrowUp' });
+    await waitFor(() => expect(inputs[1]).toHaveFocus());
+    expect(onProjectChange).toHaveBeenCalledTimes(1);
   });
 });
