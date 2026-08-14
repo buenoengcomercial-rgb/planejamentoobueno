@@ -246,10 +246,9 @@ export async function exportAdditiveScheduleExcel(project: Project, additive: Ad
 }
 
 async function loadPdf() {
-  const [jspdf, autotable] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
+  const jspdf = await import('jspdf');
   return {
     jsPDF: (jspdf as any).default || (jspdf as any).jsPDF || jspdf,
-    autoTable: (autotable as any).default || (autotable as any).autoTable || autotable,
   };
 }
 
@@ -275,39 +274,76 @@ function drawHeader(doc: any, project: Project, additive: Additive, subtitle: st
   return 34 + guidance.length * 3.4 + 2;
 }
 
-function drawGanttPages(doc: any, rows: AdditiveScheduleSnapshotRow[], project: Project, additive: Additive) {
+function drawGanttPages(
+  doc: any,
+  rows: AdditiveScheduleSnapshotRow[],
+  project: Project,
+  additive: Additive,
+  trabalhaSabado = false,
+) {
   const chunks: AdditiveScheduleSnapshotRow[][] = [];
   for (let index = 0; index < rows.length; index += 14) chunks.push(rows.slice(index, index + 14));
+  if (!chunks.length) chunks.push([]);
   const scheduledRows = rows.filter(row => !isStatusOnlyScheduleRow(row));
   const allStart = scheduledRows.map(row => row.startDate).filter(Boolean).sort()[0] || project.startDate;
   const allEnd = scheduledRows.map(row => endDate(row.startDate, row.duration)).filter(Boolean).sort().at(-1) || project.endDate || project.startDate;
-  const start = new Date(`${allStart}T12:00:00`);
-  const end = new Date(`${allEnd}T12:00:00`);
-  const days = Math.max(14, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
+  const firstDate = new Date(`${allStart}T12:00:00`);
+  const lastDate = new Date(`${allEnd}T12:00:00`);
+  const start = new Date(firstDate.getFullYear(), firstDate.getMonth(), 1, 12);
+  const end = new Date(lastDate.getFullYear(), lastDate.getMonth() + 1, 0, 12);
+  const days = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
+  const forecast = buildAdditiveScheduleForecast(rows, trabalhaSabado);
+  const forecastByMonth = new Map(forecast.months.map(month => [month.key, month]));
+  const months: Array<{ key: string; label: string; offset: number; days: number }> = [];
+  let monthCursor = new Date(start);
+  while (monthCursor <= end) {
+    const monthEnd = new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 0, 12);
+    const visibleEnd = monthEnd < end ? monthEnd : end;
+    months.push({
+      key: `${monthCursor.getFullYear()}-${String(monthCursor.getMonth() + 1).padStart(2, '0')}`,
+      label: monthCursor.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }).replace('.', ''),
+      offset: Math.round((monthCursor.getTime() - start.getTime()) / 86400000),
+      days: Math.round((visibleEnd.getTime() - monthCursor.getTime()) / 86400000) + 1,
+    });
+    monthCursor = new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1, 12);
+  }
   chunks.forEach((chunk, chunkIndex) => {
-    doc.addPage();
+    if (chunkIndex > 0) doc.addPage();
     const y = drawHeader(doc, project, additive, `DIAGRAMA DE GANTT - PARTE ${chunkIndex + 1}/${chunks.length}`);
     const pageWidth = doc.internal.pageSize.getWidth();
-    const labelWidth = 108;
+    const labelWidth = 92;
     const chartX = 8 + labelWidth;
     const chartWidth = pageWidth - chartX - 8;
     const rowHeight = 10;
+    const headerHeight = 16;
     doc.setFontSize(7);
     doc.setFillColor(226, 232, 240);
-    doc.rect(8, y, pageWidth - 16, rowHeight, 'F');
+    doc.rect(8, y, pageWidth - 16, headerHeight, 'F');
     doc.setFont('helvetica', 'bold');
-    doc.text('ATIVIDADE / SITUAÇÃO', 10, y + 4.7);
-    for (let tick = 0; tick <= 6; tick += 1) {
-      const date = new Date(start); date.setDate(date.getDate() + Math.round((days - 1) * tick / 6));
-      const x = chartX + chartWidth * tick / 6;
+    doc.text('ATIVIDADE / SITUAÇÃO', 10, y + 7.2);
+    months.forEach(month => {
+      const x = chartX + (month.offset / days) * chartWidth;
+      const width = (month.days / days) * chartWidth;
       doc.setDrawColor(203, 213, 225);
-      doc.line(x, y, x, y + rowHeight * (chunk.length + 1));
-      const tickLabel = dateBR(date.toISOString().slice(0, 10));
-      if (tick === 6) doc.text(tickLabel, x - 1, y + 4.7, { align: 'right' });
-      else doc.text(tickLabel, x + 1, y + 4.7);
-    }
+      doc.line(x, y, x, y + headerHeight + rowHeight * chunk.length);
+      doc.setTextColor(15, 23, 42);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(5.7);
+      doc.text(month.label, x + width / 2, y + 3.5, { align: 'center' });
+      const monthForecast = forecastByMonth.get(month.key);
+      if (monthForecast) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(4.4);
+        doc.setTextColor(4, 120, 87);
+        doc.text(brl(monthForecast.contractedReleased), x + width / 2, y + 8.3, { align: 'center', maxWidth: Math.max(5, width - 1) });
+        doc.setTextColor(190, 18, 60);
+        doc.text(brl(monthForecast.proposed), x + width / 2, y + 12.7, { align: 'center', maxWidth: Math.max(5, width - 1) });
+      }
+    });
+    doc.setDrawColor(203, 213, 225);
+    doc.line(chartX + chartWidth, y, chartX + chartWidth, y + headerHeight + rowHeight * chunk.length);
     chunk.forEach((row, index) => {
-      const rowY = y + rowHeight * (index + 1);
+      const rowY = y + headerHeight + rowHeight * index;
       if (index % 2) { doc.setFillColor(248, 250, 252); doc.rect(8, rowY, pageWidth - 16, rowHeight, 'F'); }
       doc.setDrawColor(226, 232, 240); doc.line(8, rowY + rowHeight, pageWidth - 8, rowY + rowHeight);
       doc.setTextColor(15, 23, 42); doc.setFont('helvetica', 'normal');
@@ -345,75 +381,16 @@ export async function buildAdditiveSchedulePdfDocument(
   trabalhaSabado = false,
 ) {
   rows = normalizeLegacyRows(rows, additive);
-  const { jsPDF, autoTable } = await loadPdf();
+  const { jsPDF } = await loadPdf();
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   doc.setProperties({ title: `Cronograma do Aditivo - ${additive.name}`, subject: ADDITIVE_SCHEDULE_WARNING, author: project.contractInfo?.contracted || project.name });
-  let y = drawHeader(doc, project, additive, 'QUADRO DE ATIVIDADES');
-  autoTable(doc, {
-    startY: y,
-    head: [['Item', 'Atividade', 'Classificação', 'Situação', 'Início', 'Fim', 'Dur.', 'Responsável', 'Equipe', 'Dep.', 'Bloqueadores', 'Total c/ BDI']],
-    body: rows.map(row => {
-      const statusOnly = isStatusOnlyScheduleRow(row);
-      return [
-        row.item || '', row.description, classificationLabel(row), row.statusLabel,
-        statusOnly ? '' : dateBR(row.startDate), statusOnly ? '' : dateBR(endDate(row.startDate, row.duration)), statusOnly ? '' : `${row.duration} d`,
-        statusOnly ? '' : row.responsible || '', statusOnly ? '' : row.team || '', statusOnly ? '' : row.dependencies.join(', '),
-        [blockingLabel(row), row.blockingNote || row.suspensionReason].filter(Boolean).join(' | '), brl(row.totalWithBDI),
-      ];
-    }),
-    styles: { font: 'helvetica', fontSize: 6.6, cellPadding: 1.3, overflow: 'linebreak', valign: 'middle' },
-    tableWidth: 265,
-    headStyles: { fillColor: [51, 65, 85], textColor: 255, fontStyle: 'bold' },
-    columnStyles: {
-      0: { cellWidth: 9 }, 1: { cellWidth: 34 }, 2: { cellWidth: 20 }, 3: { cellWidth: 42 },
-      4: { cellWidth: 14 }, 5: { cellWidth: 14 }, 6: { cellWidth: 8 }, 7: { cellWidth: 16 },
-      8: { cellWidth: 11 }, 9: { cellWidth: 14 }, 10: { cellWidth: 57 }, 11: { cellWidth: 26, halign: 'right' },
-    },
-    margin: { left: 8, right: 8, top: 46, bottom: 10 },
-    didDrawPage: (data: any) => { if (data.pageNumber > 1) drawHeader(doc, project, additive, 'QUADRO DE ATIVIDADES'); },
-  });
-  drawGanttPages(doc, rows.filter(row => !row.description.startsWith('Impacto do aditivo - ')), project, additive);
-
-  doc.addPage();
-  y = drawHeader(doc, project, additive, 'PREVISÃO FÍSICO-FINANCEIRA');
-  const forecast = buildAdditiveScheduleForecast(rows, trabalhaSabado);
-  autoTable(doc, {
-    startY: y,
-    head: [['Mês', 'Contratados liberados', 'Proposta não contratada']],
-    body: [
-      ...forecast.months.map(month => [month.label, brl(month.contractedReleased), brl(month.proposed)]),
-      ...(forecast.totalOnlyProposed !== 0 ? [['Impactos sem distribuição mensal', '-', brl(forecast.totalOnlyProposed)]] : []),
-      ['TOTAL', brl(forecast.totalContractedReleased), brl(forecast.totalProposed)],
-    ],
-    styles: { font: 'helvetica', fontSize: 8, cellPadding: 2, halign: 'right', overflow: 'linebreak' },
-    tableWidth: 190,
-    headStyles: { fillColor: [51, 65, 85], textColor: 255, fontStyle: 'bold' },
-    columnStyles: {
-      0: { halign: 'left', cellWidth: 30 },
-      1: { textColor: [4, 120, 87], cellWidth: 80 },
-      2: { textColor: [190, 18, 60], cellWidth: 80 },
-    },
-    margin: { left: 20, right: 20 },
-  });
-  if (forecast.totalOnlyProposed !== 0) {
-    const noteY = ((doc as any).lastAutoTable?.finalY ?? y) + 6;
-    doc.setFont('helvetica', 'italic');
-    doc.setFontSize(7.5);
-    doc.setTextColor(100);
-    doc.text(
-      `Nota: o total da proposta inclui ${brl(forecast.totalOnlyProposed)} sem distribuição mensal. Serviços contratados suspensos não compõem os valores da retomada.`,
-      20,
-      noteY,
-    );
-  }
-  const distinctionY = ((doc as any).lastAutoTable?.finalY ?? y) + (forecast.totalOnlyProposed !== 0 ? 12 : 6);
-  doc.setFont('helvetica', 'italic');
-  doc.setFontSize(7.5);
-  doc.setTextColor(71, 85, 105);
-  doc.text(doc.splitTextToSize(
-    'O valor mensal representa somente a execução contratada liberada. Os impactos da proposta são deltas contratuais e não devem ser somados diretamente a essa coluna.',
-    doc.internal.pageSize.getWidth() - 40,
-  ), 20, distinctionY);
+  drawGanttPages(
+    doc,
+    rows.filter(row => !row.description.startsWith('Impacto do aditivo - ')),
+    project,
+    additive,
+    trabalhaSabado,
+  );
   const pages = doc.getNumberOfPages();
   for (let page = 1; page <= pages; page += 1) {
     doc.setPage(page); doc.setFontSize(6.5); doc.setTextColor(100);

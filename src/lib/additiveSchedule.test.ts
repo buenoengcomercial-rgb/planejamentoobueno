@@ -524,7 +524,12 @@ describe('Cronograma do Aditivo', () => {
       typeof cell === 'object' && cell !== null && 'v' in cell && (cell as { v?: unknown }).v === -50
     ))).toBe(true);
     const doc = await buildAdditiveSchedulePdfDocument(withDraft, active, rows);
-    expect(doc.getNumberOfPages()).toBeGreaterThanOrEqual(3);
+    const ganttRows = rows.filter(row => !row.description.startsWith('Impacto do aditivo - '));
+    expect(doc.getNumberOfPages()).toBe(Math.max(1, Math.ceil(ganttRows.length / 14)));
+    const pdfCommands = ((doc as any).internal.pages as string[][]).flat().join('\n');
+    expect(pdfCommands).toContain('DIAGRAMA DE GANTT');
+    expect(pdfCommands).not.toContain('QUADRO DE ATIVIDADES');
+    expect(pdfCommands).not.toContain('PREVISÃO FÍSICO-FINANCEIRA');
     expect(doc.output('arraybuffer').byteLength).toBeGreaterThan(5000);
     if (process.env.ADDITIVE_SCHEDULE_QA_DIR) {
       mkdirSync(process.env.ADDITIVE_SCHEDULE_QA_DIR, { recursive: true });

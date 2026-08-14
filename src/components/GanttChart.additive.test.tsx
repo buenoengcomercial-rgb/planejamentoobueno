@@ -132,6 +132,26 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     expect(screen.getByTestId('gantt-bar-scheduled-new-long')).toBeInTheDocument();
   });
 
+  it('mostra os valores da previsão financeira dentro das colunas mensais', () => {
+    render(
+      <GanttChart
+        project={project}
+        context="additive-preview"
+        suspensionMap={suspensionMap}
+        monthlyFinancialForecast={[
+          { key: '2026-08', contractedReleased: 110457.49, proposed: 2218214.14 },
+          { key: '2026-09', contractedReleased: 478274.39, proposed: -1693.47 },
+        ]}
+        readOnly
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Meses' }));
+    expect(screen.getByTestId('gantt-month-financial-2026-08')).toHaveTextContent('R$ 110.457,49');
+    expect(screen.getByTestId('gantt-month-financial-2026-08')).toHaveTextContent('R$ 2.218.214,14');
+    expect(screen.getByTestId('gantt-month-financial-2026-09')).toHaveTextContent('-R$ 1.693,47');
+  });
+
   it('mostra o marco visual da data inicial da medição em Dias, Semanas e Meses sem mutar tarefas', () => {
     const projectWithMeasurementDraft: Project = {
       ...project,

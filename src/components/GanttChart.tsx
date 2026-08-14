@@ -49,6 +49,11 @@ interface GanttChartProps {
   onToggleSuspension?: (taskId: string, checked: boolean) => void;
   onEditSuspension?: (taskId: string) => void;
   financialForecastNode?: React.ReactNode | null;
+  monthlyFinancialForecast?: Array<{
+    key: string;
+    contractedReleased: number;
+    proposed: number;
+  }>;
   readOnly?: boolean;
   collapsedPhaseIds?: string[];
   onCollapsedPhaseIdsChange?: (phaseIds: string[]) => void;
@@ -65,6 +70,7 @@ export default function GanttChart({
   onToggleSuspension,
   onEditSuspension,
   financialForecastNode,
+  monthlyFinancialForecast,
   readOnly = false,
   collapsedPhaseIds: controlledCollapsedPhaseIds,
   onCollapsedPhaseIdsChange,
@@ -563,7 +569,7 @@ export default function GanttChart({
 
   const monthGroups = useMemo(() => {
     if (viewMode !== 'weeks' || weekDates.length === 0) return [];
-    const groups: { label: string; offset: number; width: number }[] = [];
+    const groups: { key: string; label: string; offset: number; width: number }[] = [];
     let currentKey = `${weekDates[0].year}-${weekDates[0].month}`;
     let currentOffset = weekDates[0].offset;
     let currentWidth = weekDates[0].width;
@@ -575,7 +581,7 @@ export default function GanttChart({
       if (key === currentKey) {
         currentWidth += weekDates[i].width;
       } else {
-        groups.push({ label: `${MONTH_NAMES_PT[currentMonth]} ${currentYear}`, offset: currentOffset, width: currentWidth });
+        groups.push({ key: `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}`, label: `${MONTH_NAMES_PT[currentMonth]} ${currentYear}`, offset: currentOffset, width: currentWidth });
         currentKey = key;
         currentOffset = weekDates[i].offset;
         currentWidth = weekDates[i].width;
@@ -583,12 +589,12 @@ export default function GanttChart({
         currentYear = weekDates[i].year;
       }
     }
-    groups.push({ label: `${MONTH_NAMES_PT[currentMonth]} ${currentYear}`, offset: currentOffset, width: currentWidth });
+    groups.push({ key: `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}`, label: `${MONTH_NAMES_PT[currentMonth]} ${currentYear}`, offset: currentOffset, width: currentWidth });
     return groups;
   }, [weekDates, viewMode]);
 
   const headerDates = useMemo(() => {
-    const dates: { label: string; offset: number; width: number }[] = [];
+    const dates: { key?: string; label: string; offset: number; width: number }[] = [];
     if (viewMode === 'days') {
       for (let i = 0; i < totalDays; i++) {
         const d = addDays(projectStart, i);
@@ -603,11 +609,14 @@ export default function GanttChart({
       let current = new Date(projectStart);
       while (current <= projectEnd) {
         const monthStart = diffDays(projectStart, current);
-        const daysInMonth = new Date(current.getFullYear(), current.getMonth() + 1, 0).getDate();
+        const monthEnd = new Date(current.getFullYear(), current.getMonth() + 1, 0);
+        const visibleEnd = monthEnd < projectEnd ? monthEnd : projectEnd;
+        const visibleDays = diffDays(current, visibleEnd) + 1;
         dates.push({
+          key: `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`,
           label: current.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }),
           offset: monthStart * dayWidth,
-          width: daysInMonth * dayWidth,
+          width: visibleDays * dayWidth,
         });
         current = new Date(current.getFullYear(), current.getMonth() + 1, 1);
       }
@@ -1128,7 +1137,17 @@ export default function GanttChart({
     })).filter(d => d.num > 0);
   };
 
-  const headerHeightPx = viewMode === 'weeks' ? 52 : 32;
+  const financialByMonth = useMemo(
+    () => new Map((monthlyFinancialForecast ?? []).map(month => [month.key, month])),
+    [monthlyFinancialForecast],
+  );
+  const showMonthlyFinancialHeader = financialByMonth.size > 0 && viewMode !== 'days';
+  const headerHeightPx = viewMode === 'weeks'
+    ? (showMonthlyFinancialHeader ? 68 : 52)
+    : viewMode === 'months' && showMonthlyFinancialHeader ? 54 : 32;
+  const formatHeaderMoney = (value: number) => value.toLocaleString('pt-BR', {
+    style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
 
   const getDragDate = (task: Task) => {
     if (draggingTaskId !== task.id) return null;
@@ -2534,17 +2553,28 @@ export default function GanttChart({
                     {monthGroups.map((g, i) => (
                       <div
                         key={i}
-                        className="absolute top-0 flex items-center justify-center text-[9px] text-foreground font-semibold border-r border-b border-border"
-                        style={{ left: g.offset, width: g.width, height: headerHeightPx / 2 }}
+                        data-testid={financialByMonth.has(g.key) ? `gantt-month-financial-${g.key}` : undefined}
+                        className="absolute top-0 flex flex-col items-center justify-center overflow-hidden text-[9px] text-foreground font-semibold border-r border-b border-border"
+                        style={{ left: g.offset, width: g.width, height: showMonthlyFinancialHeader ? 44 : headerHeightPx / 2 }}
                       >
-                        {g.label}
+                        <span>{g.label}</span>
+                        {financialByMonth.get(g.key) && (
+                          <span className="mt-0.5 flex max-w-full flex-col items-center text-[8px] font-medium leading-tight tabular-nums">
+                            <span className="max-w-full truncate text-emerald-700" title={`Contratados liberados: ${formatHeaderMoney(financialByMonth.get(g.key)!.contractedReleased)}`}>
+                              {formatHeaderMoney(financialByMonth.get(g.key)!.contractedReleased)}
+                            </span>
+                            <span className={`${financialByMonth.get(g.key)!.proposed < 0 ? 'text-destructive' : 'text-rose-700'} max-w-full truncate`} title={`Proposta não contratada: ${formatHeaderMoney(financialByMonth.get(g.key)!.proposed)}`}>
+                              {formatHeaderMoney(financialByMonth.get(g.key)!.proposed)}
+                            </span>
+                          </span>
+                        )}
                       </div>
                     ))}
                     {headerDates.map((d, i) => (
                       <div
                         key={i}
                         className="absolute flex items-center justify-center text-[9px] text-muted-foreground font-medium border-r border-border"
-                        style={{ left: d.offset, width: d.width, top: headerHeightPx / 2, height: headerHeightPx / 2 }}
+                        style={{ left: d.offset, width: d.width, top: showMonthlyFinancialHeader ? 44 : headerHeightPx / 2, height: showMonthlyFinancialHeader ? 24 : headerHeightPx / 2 }}
                       >
                         {d.label}
                       </div>
@@ -2555,10 +2585,21 @@ export default function GanttChart({
                     {headerDates.map((d, i) => (
                       <div
                         key={i}
-                        className="absolute h-full flex items-center justify-center text-[9px] text-muted-foreground font-medium border-r border-border"
+                        data-testid={d.key && financialByMonth.has(d.key) ? `gantt-month-financial-${d.key}` : undefined}
+                        className="absolute h-full flex flex-col items-center justify-center overflow-hidden text-[9px] text-muted-foreground font-medium border-r border-border"
                         style={{ left: d.offset, width: d.width }}
                       >
-                        {d.label}
+                        <span>{d.label}</span>
+                        {d.key && financialByMonth.get(d.key) && (
+                          <span className="mt-1 flex max-w-full flex-col items-center text-[8px] leading-tight tabular-nums">
+                            <span className="max-w-full truncate text-emerald-700" title={`Contratados liberados: ${formatHeaderMoney(financialByMonth.get(d.key)!.contractedReleased)}`}>
+                              {formatHeaderMoney(financialByMonth.get(d.key)!.contractedReleased)}
+                            </span>
+                            <span className={`${financialByMonth.get(d.key)!.proposed < 0 ? 'text-destructive' : 'text-rose-700'} max-w-full truncate`} title={`Proposta não contratada: ${formatHeaderMoney(financialByMonth.get(d.key)!.proposed)}`}>
+                              {formatHeaderMoney(financialByMonth.get(d.key)!.proposed)}
+                            </span>
+                          </span>
+                        )}
                       </div>
                     ))}
                   </div>

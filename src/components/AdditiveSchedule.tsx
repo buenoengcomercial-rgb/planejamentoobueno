@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { loadObraConfig } from '@/components/ConfiguracaoObra';
 import AdditiveScheduleFinancialForecast from '@/components/additiveSchedule/AdditiveScheduleFinancialForecast';
+import { buildAdditiveScheduleForecast } from '@/lib/additiveScheduleForecast';
 import {
   ADDITIVE_SCHEDULE_GUIDANCE,
   FULLY_SUPPRESSED_STATUS_LABEL,
@@ -102,6 +103,10 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
     if (!active || !preview) return [];
     return isArchived && latestSnapshot ? latestSnapshot.rows : buildAdditiveScheduleRows(project, active, preview);
   }, [active, isArchived, latestSnapshot, preview, project]);
+  const financialForecast = useMemo(
+    () => buildAdditiveScheduleForecast(rows, obraConfig.trabalhaSabado),
+    [obraConfig.trabalhaSabado, rows],
+  );
   const suspensions = useMemo(() => {
     if (!active) return {};
     return isArchived && latestSnapshot ? snapshotSuspensionMap(latestSnapshot.rows, active) : buildPreviewSuspensionMap(project, active, preview ?? undefined);
@@ -233,6 +238,7 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
           }}
           onEditSuspension={isArchived ? undefined : openBlockDialog}
           readOnly={isArchived}
+          monthlyFinancialForecast={financialForecast.months}
           financialForecastNode={<AdditiveScheduleFinancialForecast rows={rows} trabalhaSabado={obraConfig.trabalhaSabado} />}
         />
       )}
