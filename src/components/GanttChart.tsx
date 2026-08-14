@@ -2421,43 +2421,35 @@ export default function GanttChart({
                               </div>
                               <div className="text-center">
                                 {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : depTypes.length > 0 ? (
-                                  <Popover>
-                                    <PopoverTrigger asChild>
-                                      <button
-                                        type="button"
-                                        data-testid={`gantt-dependency-types-${task.id}`}
-                                        disabled={readOnly || !onProjectChange}
-                                        className="h-5 w-full truncate border-b border-border/50 bg-transparent px-1 text-[9px] focus:outline-none focus:border-primary disabled:cursor-default"
-                                        style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined}
-                                        title={depTypes.map(dep => `#${dep.num} ${dep.type}`).join(', ')}
-                                      >
-                                        {depTypes.map(dep => dep.type).join('/')}
-                                      </button>
-                                    </PopoverTrigger>
-                                    <PopoverContent align="end" className="w-48 space-y-1.5 p-2">
-                                      <p className="text-[10px] font-semibold text-muted-foreground">Tipo por predecessora</p>
-                                      {depTypes.map(dep => (
-                                        <div key={dep.taskId} className="grid grid-cols-[1fr_72px] items-center gap-2">
-                                          <span className="truncate text-[10px] font-medium" title={`Tarefa #${dep.num}`}>
-                                            Tarefa #{dep.num}
-                                          </span>
-                                          <select
-                                            aria-label={`Tipo da predecessora #${dep.num}`}
-                                            value={dep.type}
-                                            onChange={(event) => handleDepTypeChange(task.id, dep.index, event.target.value as DependencyType)}
-                                            disabled={readOnly || !onProjectChange}
-                                            className="h-7 rounded-md border border-input bg-background px-2 text-[10px] focus:outline-none focus:ring-1 focus:ring-ring"
-                                            data-testid={`gantt-dependency-type-${task.id}-${dep.taskId}`}
-                                          >
-                                            <option value="TI">TI</option>
-                                            <option value="II">II</option>
-                                            <option value="TT">TT</option>
-                                            <option value="IT">IT</option>
-                                          </select>
-                                        </div>
-                                      ))}
-                                    </PopoverContent>
-                                  </Popover>
+                                  <select
+                                    aria-label={`Tipo de dependência da tarefa #${taskNum}`}
+                                    data-testid={`gantt-dependency-types-${task.id}`}
+                                    value={depTypes.length === 1 ? `${depTypes[0].index}:${depTypes[0].type}` : '__multiple__'}
+                                    onChange={(event) => {
+                                      const [depIndex, dependencyType] = event.target.value.split(':');
+                                      if (!dependencyType) return;
+                                      handleDepTypeChange(task.id, Number(depIndex), dependencyType as DependencyType);
+                                    }}
+                                    disabled={readOnly || !onProjectChange}
+                                    className="h-5 w-full border-0 border-b border-border/50 bg-transparent px-0.5 text-center text-[9px] focus:outline-none focus:border-primary disabled:cursor-default"
+                                    style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined}
+                                    title={depTypes.map(dep => `#${dep.num} ${dep.type}`).join(', ')}
+                                  >
+                                    {depTypes.length > 1 && (
+                                      <option value="__multiple__" disabled>{depTypes.map(dep => dep.type).join('/')}</option>
+                                    )}
+                                    {depTypes.map(dep => depTypes.length === 1 ? (
+                                      (['TI', 'II', 'TT', 'IT'] as DependencyType[]).map(type => (
+                                        <option key={type} value={`${dep.index}:${type}`}>{type}</option>
+                                      ))
+                                    ) : (
+                                      <optgroup key={dep.taskId} label={`Tarefa #${dep.num}`}>
+                                        {(['TI', 'II', 'TT', 'IT'] as DependencyType[]).map(type => (
+                                          <option key={type} value={`${dep.index}:${type}`}>{type}</option>
+                                        ))}
+                                      </optgroup>
+                                    ))}
+                                  </select>
                                 ) : (
                                   <span className={`text-[9px] ${rowTeamDef ? 'opacity-60' : 'text-muted-foreground'}`}>—</span>
                                 )}
