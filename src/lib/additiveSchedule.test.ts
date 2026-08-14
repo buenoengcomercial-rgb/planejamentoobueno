@@ -18,6 +18,7 @@ import {
   setAdditiveScheduleCollapsedPhaseIds,
   setAdditiveScheduleDependencyBlock,
   setAdditiveScheduleDependentTask,
+  settleAdditiveScheduleDraft,
   syncAdditiveScheduleDraft,
   validateAdditiveSchedule,
 } from './additiveSchedule';
@@ -123,7 +124,9 @@ describe('Cronograma do Aditivo', () => {
       })),
     };
     const releasedMerged = mergeAdditiveSchedulePreviewChanges(released, active.id, releasedPreview, editedReleasedPreview);
-    expect(releasedMerged.phases[0].tasks.find(task => task.id === 'task-2')?.startDate).toBe('2026-09-01');
+    expect(releasedMerged.phases[0].tasks.find(task => task.id === 'task-2')?.startDate).toBe('2026-08-20');
+    expect(releasedMerged.additives![0].scheduleDraft?.contractedTaskPlans?.find(plan => plan.taskId === 'task-2')?.startDate)
+      .toBe('2026-09-01');
   });
 
   it('classifica execução parcial, suspensão integral e novos serviços', () => {
@@ -218,6 +221,117 @@ describe('Cronograma do Aditivo', () => {
     expect(analysis.phases.flatMap(phase => phase.tasks).map(task => task.id)).toEqual(['task-1', 'task-3', 'add-add-1-new-comp']);
   });
 
+  it('isola, recalcula e suspende toda a cadeia que depende de serviço ainda a contratar', async () => {
+    const chainProject: Project = {
+      ...project,
+      phases: project.phases.map(phase => ({
+        ...phase,
+        tasks: [...phase.tasks, {
+          ...phase.tasks[1],
+          id: 'task-3',
+          name: 'Acabamento sucessor',
+          startDate: '2026-08-25',
+          duration: 1,
+          dependencies: [],
+        }],
+      })),
+    };
+    let prepared = syncAdditiveScheduleDraft(chainProject, additive.id, '2026-08-13T12:00:00.000Z');
+    prepared = {
+      ...prepared,
+      additives: prepared.additives?.map(item => item.id === additive.id && item.scheduleDraft
+        ? {
+            ...item,
+            scheduleDraft: {
+              ...item.scheduleDraft,
+              plannedTasks: item.scheduleDraft.plannedTasks.map(task => ({
+                ...task, startDate: '2026-08-14', datesConfirmed: true,
+              })),
+            },
+          }
+        : item),
+    };
+    let active = prepared.additives![0];
+    const proposedTaskId = active.scheduleDraft!.plannedTasks[0].taskId;
+    const preview = buildAdditiveSchedulePreviewProject(prepared, active, active.scheduleDraft!);
+    const linkedPreview: Project = {
+      ...preview,
+      phases: preview.phases.map(phase => ({
+        ...phase,
+        tasks: phase.tasks.map(task => task.id === 'task-2'
+          ? {
+              ...task,
+              dependencies: [proposedTaskId],
+              dependencyDetails: [{ taskId: proposedTaskId, type: 'TI' as const }],
+            }
+          : task.id === 'task-3'
+            ? {
+                ...task,
+                dependencies: ['task-2'],
+                dependencyDetails: [{ taskId: 'task-2', type: 'TI' as const }],
+              }
+            : task),
+      })),
+    };
+    prepared = mergeAdditiveSchedulePreviewChanges(prepared, additive.id, preview, linkedPreview);
+    prepared = settleAdditiveScheduleDraft(prepared, additive.id, {
+      uf: 'RO', municipio: 'Porto Velho', jornadaDiaria: 8, trabalhaSabado: false,
+    });
+    active = prepared.additives![0];
+    const reopenedPreview = buildAdditiveSchedulePreviewProject(prepared, active, active.scheduleDraft!, {
+      uf: 'RO', municipio: 'Porto Velho', jornadaDiaria: 8, trabalhaSabado: false,
+    });
+    const reopenedTasks = new Map(reopenedPreview.phases.flatMap(phase => phase.tasks).map(task => [task.id, task]));
+
+    expect(prepared.phases).toEqual(chainProject.phases);
+    expect(reopenedTasks.get('task-2')).toMatchObject({ startDate: '2026-08-17', dependencies: [proposedTaskId] });
+    expect(reopenedTasks.get('task-3')).toMatchObject({ startDate: '2026-08-21', dependencies: ['task-2'] });
+    expect(active.scheduleDraft?.contractedTaskPlans?.find(plan => plan.taskId === 'task-2')?.startDate).toBe('2026-08-17');
+    expect(active.scheduleDraft?.contractedTaskPlans?.find(plan => plan.taskId === 'task-3')?.startDate).toBe('2026-08-21');
+
+    const suspensionMap = buildPreviewSuspensionMap(prepared, active, reopenedPreview);
+    expect(suspensionMap['task-2']).toMatchObject({
+      kind: 'dependency', scheduleState: 'suspended', dependencyBlockingTaskIds: [proposedTaskId],
+    });
+    expect(suspensionMap['task-3']).toMatchObject({
+      kind: 'dependency', scheduleState: 'suspended', dependencyBlockingTaskIds: [proposedTaskId],
+    });
+    const rows = buildAdditiveScheduleRows(prepared, active, reopenedPreview);
+    expect(rows.find(row => row.taskId === 'task-3' && !row.compositionId)).toMatchObject({
+      classification: 'contracted_suspended',
+      financialTreatment: 'excluded',
+      dependencyBlockingTaskIds: [proposedTaskId],
+    });
+    expect(rows.find(row => row.taskId === 'task-3' && !row.compositionId)?.suspensionReason)
+      .toContain('Novo serviço do aditivo');
+    expect(buildAdditiveScheduleForecast(rows).totalContractedReleased).toBe(1000);
+    const { workbook } = await buildAdditiveScheduleWorkbook(prepared, active, rows);
+    const exportedValues = Object.entries(workbook.Sheets.Atividades)
+      .filter(([address]) => !address.startsWith('!'))
+      .map(([, cell]) => String(cell.v ?? ''));
+    expect(exportedValues.some(value => value.includes('A execução depende de Novo serviço do aditivo'))).toBe(true);
+
+    const unlinkedPreview: Project = {
+      ...reopenedPreview,
+      phases: reopenedPreview.phases.map(phase => ({
+        ...phase,
+        tasks: phase.tasks.map(task => task.id === 'task-2'
+          ? { ...task, dependencies: [], dependencyDetails: [] }
+          : task),
+      })),
+    };
+    const unlinked = settleAdditiveScheduleDraft(
+      mergeAdditiveSchedulePreviewChanges(prepared, additive.id, reopenedPreview, unlinkedPreview),
+      additive.id,
+      { uf: 'RO', municipio: 'Porto Velho', jornadaDiaria: 8, trabalhaSabado: false },
+    );
+    const unlinkedActive = unlinked.additives![0];
+    const unlinkedReopened = buildAdditiveSchedulePreviewProject(unlinked, unlinkedActive, unlinkedActive.scheduleDraft!);
+    const releasedMap = buildPreviewSuspensionMap(unlinked, unlinkedActive, unlinkedReopened);
+    expect(releasedMap['task-2']).toBeUndefined();
+    expect(releasedMap['task-3']).toBeUndefined();
+  });
+
   it('registra e remove composições bloqueadoras de uma suspensão manual', () => {
     const withDraft = syncAdditiveScheduleDraft(project, additive.id);
     expect(getEligibleBlockingCompositions(withDraft, withDraft.additives![0]).map(item => item.id))
@@ -286,8 +400,10 @@ describe('Cronograma do Aditivo', () => {
         },
       } : item),
     };
+    prepared = settleAdditiveScheduleDraft(prepared, additive.id, { jornadaDiaria: 8, trabalhaSabado: false });
     const active = prepared.additives![0];
     const preview = buildAdditiveSchedulePreviewProject(prepared, active, active.scheduleDraft!);
+    const settledStart = preview.phases.flatMap(phase => phase.tasks).find(item => item.id === 'add-add-1-new-comp')!.startDate;
     const snapshot = createAdditiveScheduleSnapshot(prepared, active, preview, 'Administrador', '2026-08-13T14:00:00.000Z');
     prepared = {
       ...prepared,
@@ -298,13 +414,13 @@ describe('Cronograma do Aditivo', () => {
     const contracted = contractAdditive(prepared, additive.id, 'Administrador');
     const task = contracted.phases[0].tasks.find(item => item.id === 'add-add-1-new-comp');
     expect(task).toMatchObject({
-      startDate: '2026-11-10', duration: 8, manualDuration: 8, dependencies: ['task-2'],
+      startDate: settledStart, duration: 8, manualDuration: 8, dependencies: ['task-2'],
       responsible: 'Encarregado', team: 'alpha', scheduleOrder: 17, originAdditiveId: additive.id,
     });
     expect(contracted.additives![0].scheduleSnapshots?.[0].contractRevisionId).toBeTruthy();
     const archivedPreview = buildProjectFromScheduleSnapshot(contracted, contracted.additives![0].scheduleSnapshots![0]);
     expect(archivedPreview.phases.flatMap(phase => phase.tasks).find(item => item.id === task?.id)).toMatchObject({
-      startDate: '2026-11-10', duration: 8, dependencies: ['task-2'], responsible: 'Encarregado', team: 'alpha',
+      startDate: settledStart, duration: 8, dependencies: ['task-2'], responsible: 'Encarregado', team: 'alpha',
     });
   });
 

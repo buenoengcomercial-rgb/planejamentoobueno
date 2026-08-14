@@ -15,7 +15,12 @@ import type {
   Task,
 } from '@/types/project';
 import { computeAdditiveRow, resolveAdditivePricingRule } from '@/lib/additiveImport';
-import { calculateRupDuration, type JornadaConfig } from '@/lib/calculations';
+import {
+  calculateRupDuration,
+  settleAllDependencies,
+  type JornadaConfig,
+  type WorkCalendar,
+} from '@/lib/calculations';
 
 export const ADDITIVE_SCHEDULE_REFERENCE = 'Termo de Retomada Parcial - SEI nº 74863858';
 export const ADDITIVE_SCHEDULE_WARNING = 'PLANEJAMENTO PRELIMINAR - NÃO AUTORIZA EXECUÇÃO';
@@ -23,12 +28,13 @@ export const ADDITIVE_SCHEDULE_GUIDANCE = 'Os itens submetidos ao aditamento e o
 export const PROPOSED_STATUS_LABEL = 'A CONTRATAR - EXECUÇÃO NÃO AUTORIZADA';
 export const SUSPENDED_STATUS_LABEL = 'SUSPENSO - AGUARDA FORMALIZAÇÃO DO ADITIVO';
 export const FULLY_SUPPRESSED_STATUS_LABEL = 'ITEM SUPRIMIDO - QUANTIDADE A EXECUTAR: 0';
+export const DEPENDENCY_SUSPENDED_STATUS_LABEL = 'SUSPENSO POR DEPENDÊNCIA';
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const isValidDate = (value: string | undefined) => !!value && ISO_DATE.test(value) && !Number.isNaN(new Date(`${value}T12:00:00`).getTime());
 
 export interface AdditiveScheduleSuspensionMeta {
-  kind: 'automatic' | 'manual' | 'proposed' | 'quantity_limited';
+  kind: 'automatic' | 'manual' | 'dependency' | 'proposed' | 'quantity_limited';
   label: string;
   reason: string;
   additiveId: string;
@@ -40,7 +46,21 @@ export interface AdditiveScheduleSuspensionMeta {
   quantityRestriction?: AdditiveScheduleQuantityRestriction;
   blockingCompositions?: AdditiveScheduleBlockingCompositionRef[];
   blockingNote?: string;
+  dependencyBlockingTaskIds?: string[];
 }
+
+type AdditiveScheduleCalendar = JornadaConfig & Partial<Pick<WorkCalendar, 'uf' | 'municipio'>>;
+
+const dependencyCalendar = (config?: AdditiveScheduleCalendar): WorkCalendar | undefined => (
+  config?.uf && config?.municipio
+    ? {
+        uf: config.uf,
+        municipio: config.municipio,
+        trabalhaSabado: config.trabalhaSabado,
+        jornadaDiaria: config.jornadaDiaria,
+      }
+    : undefined
+);
 
 export interface AdditiveScheduleQuantityTaskMeta {
   compositionId: string;
@@ -332,7 +352,12 @@ export function syncAdditiveScheduleDraft(project: Project, additiveId: string, 
     ...dependencyBlocks.map(block => block.taskId),
   ]));
   const previousPlans = new Map((previous?.contractedTaskPlans ?? []).map(plan => [plan.taskId, plan]));
-  const contractedTaskPlans = Array.from(getQuantitativelyRestrictedTasks(project, additive).keys()).flatMap(taskId => {
+  const validTaskIds = new Set(allPhaseTasks(project).map(task => task.id));
+  const requiredPlanIds = new Set([
+    ...Array.from(previousPlans.keys()).filter(taskId => validTaskIds.has(taskId)),
+    ...getQuantitativelyRestrictedTasks(project, additive).keys(),
+  ]);
+  const contractedTaskPlans = Array.from(requiredPlanIds).flatMap(taskId => {
     const task = findTask(project, taskId);
     if (!task) return [];
     return [previousPlans.get(taskId) ?? taskToContractedPlan(task)];
@@ -460,11 +485,11 @@ function plannedTaskToTask(project: Project, additive: Additive, planned: Additi
   };
 }
 
-export function buildAdditiveSchedulePreviewProject(
+function buildAdditiveSchedulePreviewBase(
   project: Project,
   additive: Additive,
   draft: AdditiveScheduleDraft,
-  jornadaConfig?: JornadaConfig,
+  jornadaConfig?: AdditiveScheduleCalendar,
 ): Project {
   const plannedByPhase = new Map<string, Task[]>();
   draft.plannedTasks.forEach(planned => {
@@ -480,8 +505,9 @@ export function buildAdditiveSchedulePreviewProject(
     tasks: [
       ...phase.tasks.filter(task => !plannedIds.has(task.id)).map(task => {
         const restricted = quantityRestrictions.get(task.id);
-        if (!restricted) return task;
-        const plan = contractedPlans.get(task.id) ?? taskToContractedPlan(task);
+        const storedPlan = contractedPlans.get(task.id);
+        if (!restricted && !storedPlan) return task;
+        const plan = storedPlan ?? taskToContractedPlan(task);
         let previewTask: Task = {
           ...task,
           startDate: plan.startDate,
@@ -494,7 +520,7 @@ export function buildAdditiveSchedulePreviewProject(
           durationMode: plan.durationMode,
           isManual: plan.isManual,
           manualDuration: plan.manualDuration,
-          quantity: restricted.restriction.executableQuantity,
+          quantity: restricted?.restriction.executableQuantity ?? task.quantity,
         };
         if ((previewTask.durationMode ?? 'manual') === 'rup') {
           const calculated = calculateRupDuration(previewTask, jornadaConfig);
@@ -517,19 +543,14 @@ export function buildAdditiveSchedulePreviewProject(
   return { ...project, phases };
 }
 
-const SCHEDULE_FIELDS = [
-  'startDate', 'duration', 'dependencies', 'dependencyDetails', 'responsible', 'team',
-  'scheduleOrder', 'ganttOrder', 'ordemExecucao', 'durationMode', 'isManual', 'manualDuration',
-  'calculatedDuration', 'totalHours', 'calendarHours', 'bottleneckRole', 'es', 'ef', 'ls', 'lf',
-  'float', 'isCritical', 'baseline', 'current',
-] as const;
-
-function schedulePatch(task: Task): Partial<Task> {
-  const patch: Partial<Task> = {};
-  SCHEDULE_FIELDS.forEach(field => {
-    (patch as Record<string, unknown>)[field] = task[field] as unknown;
-  });
-  return patch;
+export function buildAdditiveSchedulePreviewProject(
+  project: Project,
+  additive: Additive,
+  draft: AdditiveScheduleDraft,
+  jornadaConfig?: AdditiveScheduleCalendar,
+): Project {
+  const preview = buildAdditiveSchedulePreviewBase(project, additive, draft, jornadaConfig);
+  return settleAllDependencies(preview, dependencyCalendar(jornadaConfig));
 }
 
 export function mergeAdditiveSchedulePreviewChanges(
@@ -544,21 +565,8 @@ export function mergeAdditiveSchedulePreviewChanges(
   if (!additive || !draft) return project;
   const plannedIds = new Set(draft.plannedTasks.map(task => task.taskId));
   const restrictedIds = new Set(getQuantitativelyRestrictedTasks(project, additive).keys());
-  const manualIds = manualBlockedTaskIds(additive);
-  const statusOnlyIds = new Set([
-    ...getAutomaticSuspendedTaskIds(project, additive),
-    ...manualIds,
-  ]);
   const nextTasks = new Map(allPhaseTasks(nextPreview).map(task => [task.id, task]));
   const previousTasks = new Map(allPhaseTasks(previousPreview).map(task => [task.id, task]));
-  const phases = project.phases.map(phase => ({
-    ...phase,
-    tasks: phase.tasks.map(task => {
-      if (plannedIds.has(task.id) || statusOnlyIds.has(task.id) || restrictedIds.has(task.id)) return task;
-      const next = nextTasks.get(task.id);
-      return next ? { ...task, ...schedulePatch(next) } : task;
-    }),
-  }));
   const plannedTasks = draft.plannedTasks.map(planned => {
     const next = nextTasks.get(planned.taskId);
     if (!next) return planned;
@@ -582,32 +590,40 @@ export function mergeAdditiveSchedulePreviewChanges(
     };
   });
   const existingPlans = new Map((draft.contractedTaskPlans ?? []).map(plan => [plan.taskId, plan]));
-  const contractedTaskPlans = Array.from(restrictedIds).flatMap(taskId => {
-    const next = nextTasks.get(taskId);
-    if (!next || statusOnlyIds.has(taskId)) {
-      const current = existingPlans.get(taskId);
-      return current ? [current] : [];
-    }
-    return [{
-      taskId,
-      startDate: next.startDate,
-      duration: next.duration,
-      dependencies: next.dependencies ?? [],
-      dependencyDetails: next.dependencyDetails,
-      responsible: next.responsible ?? '',
-      team: next.team,
-      scheduleOrder: next.scheduleOrder,
-      durationMode: next.durationMode,
-      isManual: next.isManual,
-      manualDuration: next.manualDuration,
-    }];
+  const contractedTaskPlans = project.phases.flatMap(phase => phase.tasks).flatMap(baseTask => {
+    if (plannedIds.has(baseTask.id)) return [];
+    const next = nextTasks.get(baseTask.id);
+    if (!next) return [];
+    const nextPlan = taskToContractedPlan(next);
+    const basePlan = taskToContractedPlan(baseTask);
+    const changedFromOfficial = JSON.stringify(nextPlan) !== JSON.stringify(basePlan);
+    if (!restrictedIds.has(baseTask.id) && !existingPlans.has(baseTask.id) && !changedFromOfficial) return [];
+    if (!restrictedIds.has(baseTask.id) && !changedFromOfficial) return [];
+    return [nextPlan];
   });
+  const unchanged = JSON.stringify(draft.plannedTasks) === JSON.stringify(plannedTasks)
+    && JSON.stringify(draft.contractedTaskPlans ?? []) === JSON.stringify(contractedTaskPlans);
+  if (unchanged) return project;
   const scheduleDraft = { ...draft, plannedTasks, contractedTaskPlans, updatedAt: now };
   return {
     ...project,
-    phases,
     additives: (project.additives ?? []).map(item => item.id === additiveId ? { ...item, scheduleDraft } : item),
   };
+}
+
+/** Reabre o rascunho, resolve toda a rede e grava apenas os ajustes isolados do aditivo. */
+export function settleAdditiveScheduleDraft(
+  project: Project,
+  additiveId: string,
+  jornadaConfig?: AdditiveScheduleCalendar,
+  now = new Date().toISOString(),
+): Project {
+  const additive = (project.additives ?? []).find(item => item.id === additiveId);
+  const draft = additive?.scheduleDraft;
+  if (!additive || !draft || (additive.isContracted && !additive.editUnlocked)) return project;
+  const previousPreview = buildAdditiveSchedulePreviewBase(project, additive, draft, jornadaConfig);
+  const settledPreview = settleAllDependencies(previousPreview, dependencyCalendar(jornadaConfig));
+  return mergeAdditiveSchedulePreviewChanges(project, additiveId, previousPreview, settledPreview, now);
 }
 
 export function setAdditiveScheduleDependentTask(project: Project, additiveId: string, taskId: string, checked: boolean): Project {
@@ -679,7 +695,11 @@ export function validateAdditiveSchedule(project: Project, additive: Additive): 
     });
 }
 
-export function buildPreviewSuspensionMap(project: Project, additive: Additive): Record<string, AdditiveScheduleSuspensionMeta> {
+export function buildPreviewSuspensionMap(
+  project: Project,
+  additive: Additive,
+  previewProject: Project = project,
+): Record<string, AdditiveScheduleSuspensionMeta> {
   const quantitative = getQuantitativelyRestrictedTasks(project, additive);
   const automatic = getAutomaticSuspendedTaskIds(project, additive);
   const fullySuppressed = getFullySuppressedTaskIds(additive);
@@ -719,14 +739,74 @@ export function buildPreviewSuspensionMap(project: Project, additive: Additive):
       scheduleState: 'scheduled', financialTreatment: 'monthly',
     };
   });
+
+  const previewTasks = allPhaseTasks(previewProject);
+  const taskById = new Map(previewTasks.map(task => [task.id, task]));
+  const successors = new Map<string, Set<string>>();
+  previewTasks.forEach(task => {
+    const predecessorIds = task.dependencyDetails?.length
+      ? task.dependencyDetails.map(dependency => dependency.taskId)
+      : task.dependencies ?? [];
+    predecessorIds.forEach(predecessorId => {
+      if (!taskById.has(predecessorId) || predecessorId === task.id) return;
+      const ids = successors.get(predecessorId) ?? new Set<string>();
+      ids.add(task.id);
+      successors.set(predecessorId, ids);
+    });
+  });
+
+  // Itens suspensos e serviços ainda a contratar são raízes de bloqueio operacional.
+  const directBlockingIds = new Set(Object.entries(result)
+    .filter(([, meta]) => isStatusOnlySuspension(meta) || meta.kind === 'proposed')
+    .map(([taskId]) => taskId));
+  const rootBlockingIds = new Map<string, Set<string>>(
+    Array.from(directBlockingIds).map(taskId => [taskId, new Set([taskId])]),
+  );
+  const queue = Array.from(directBlockingIds);
+
+  while (queue.length) {
+    const predecessorId = queue.shift()!;
+    const predecessorRoots = rootBlockingIds.get(predecessorId) ?? new Set([predecessorId]);
+    for (const successorId of successors.get(predecessorId) ?? []) {
+      // Uma causa direta conserva sua classificação, mas continua propagando o bloqueio.
+      if (directBlockingIds.has(successorId)) continue;
+      const existingRoots = rootBlockingIds.get(successorId) ?? new Set<string>();
+      const nextRoots = new Set([...existingRoots, ...predecessorRoots]);
+      if (nextRoots.size === existingRoots.size) continue;
+      rootBlockingIds.set(successorId, nextRoots);
+
+      const sourceNames = Array.from(nextRoots).map(taskId => (
+        taskById.get(taskId)?.name ?? taskId
+      ));
+      const sourceLabel = sourceNames.join(', ');
+      const previousMeta = result[successorId];
+      result[successorId] = {
+        kind: 'dependency',
+        label: `${DEPENDENCY_SUSPENDED_STATUS_LABEL} — ${sourceLabel}`,
+        reason: `A execução depende de ${sourceLabel}, que permanece sem autorização para execução.`,
+        additiveId: additive.id,
+        additiveName: additive.name,
+        checked: true,
+        disabled: true,
+        scheduleState: 'suspended',
+        financialTreatment: 'excluded',
+        quantityRestriction: previousMeta?.quantityRestriction,
+        dependencyBlockingTaskIds: Array.from(nextRoots),
+      };
+      queue.push(successorId);
+    }
+  }
   return result;
 }
 
 export function buildPendingAdditiveSuspensionMap(project: Project): Record<string, AdditiveScheduleSuspensionMeta> {
   const result: Record<string, AdditiveScheduleSuspensionMeta> = {};
   (project.additives ?? []).filter(isAdditiveSchedulePending).forEach(additive => {
-    const preview = buildPreviewSuspensionMap(project, additive);
-    Object.entries(preview).forEach(([taskId, meta]) => {
+    const previewProject = additive.scheduleDraft
+      ? buildAdditiveSchedulePreviewProject(project, additive, additive.scheduleDraft)
+      : project;
+    const suspensionMap = buildPreviewSuspensionMap(project, additive, previewProject);
+    Object.entries(suspensionMap).forEach(([taskId, meta]) => {
       if (meta.kind === 'proposed') return;
       const previous = result[taskId];
       if (!previous) {
@@ -748,21 +828,21 @@ function taskValue(task: Task, quantity = task.quantity ?? 0): number {
 
 export function buildAdditiveScheduleRows(project: Project, additive: Additive, preview: Project): AdditiveScheduleSnapshotRow[] {
   const phaseName = new Map(preview.phases.map(phase => [phase.id, phase.name]));
-  const automatic = getAutomaticSuspendedTaskIds(project, additive);
   const fullySuppressed = getFullySuppressedTaskIds(additive);
   const quantitative = getQuantitativelyRestrictedTasks(project, additive);
-  const manual = manualBlockedTaskIds(additive);
   const plannedIds = new Set(additive.scheduleDraft?.plannedTasks.map(task => task.taskId) ?? []);
+  const suspensionMap = buildPreviewSuspensionMap(project, additive, preview);
   const rows: AdditiveScheduleSnapshotRow[] = [];
   preview.phases.forEach(phase => phase.tasks.forEach(task => {
     if (plannedIds.has(task.id)) return;
-    const suspended = automatic.has(task.id) || manual.has(task.id);
+    const suspension = suspensionMap[task.id];
+    const suspended = isStatusOnlySuspension(suspension);
     const restriction = quantitative.get(task.id)?.restriction;
     const block = dependencyBlockForTask(additive, task.id);
-    const blockingCompositions = block ? getBlockingCompositionRefs(additive, block.compositionIds) : undefined;
-    const scheduleState: AdditiveScheduleState = fullySuppressed.has(task.id)
-      ? 'fully_suppressed'
-      : suspended ? 'suspended' : 'scheduled';
+    const blockingCompositions = suspension?.blockingCompositions
+      ?? (block ? getBlockingCompositionRefs(additive, block.compositionIds) : undefined);
+    const scheduleState: AdditiveScheduleState = suspension?.scheduleState
+      ?? (fullySuppressed.has(task.id) ? 'fully_suppressed' : suspended ? 'suspended' : 'scheduled');
     rows.push({
       taskId: task.id,
       phaseId: phase.id,
@@ -771,16 +851,19 @@ export function buildAdditiveScheduleRows(project: Project, additive: Additive, 
       code: task.itemCode,
       description: task.name,
       classification: suspended ? 'contracted_suspended' : 'contracted_released',
-      statusLabel: scheduleState === 'fully_suppressed'
-        ? FULLY_SUPPRESSED_STATUS_LABEL
-        : suspended ? SUSPENDED_STATUS_LABEL
-          : restriction ? formatQuantityRestrictionLabel(restriction)
-            : 'CONTRATADO - LIBERADO PARA PLANEJAMENTO',
+      statusLabel: suspension?.label
+        ?? (scheduleState === 'fully_suppressed'
+          ? FULLY_SUPPRESSED_STATUS_LABEL
+          : suspended ? SUSPENDED_STATUS_LABEL
+            : restriction ? formatQuantityRestrictionLabel(restriction)
+              : 'CONTRATADO - LIBERADO PARA PLANEJAMENTO'),
       scheduleState,
-      financialTreatment: suspended ? 'excluded' : 'monthly',
+      financialTreatment: suspension?.financialTreatment ?? (suspended ? 'excluded' : 'monthly'),
       quantityRestriction: restriction,
       blockingCompositions,
       blockingNote: block?.note,
+      dependencyBlockingTaskIds: suspension?.dependencyBlockingTaskIds,
+      suspensionReason: suspension?.kind === 'dependency' ? suspension.reason : undefined,
       startDate: task.startDate,
       duration: task.duration,
       dependencies: task.dependencies ?? [],

@@ -1092,8 +1092,8 @@ export default function GanttChart({
   };
 
   const getDepTypes = (task: Task) => {
-    return (task.dependencyDetails || []).map(d => ({
-      taskId: d.taskId, type: d.type, num: taskNumbering.get(d.taskId) || 0,
+    return (task.dependencyDetails || []).map((d, index) => ({
+      taskId: d.taskId, type: d.type, num: taskNumbering.get(d.taskId) || 0, index,
     })).filter(d => d.num > 0);
   };
 
@@ -2421,20 +2421,43 @@ export default function GanttChart({
                               </div>
                               <div className="text-center">
                                 {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : depTypes.length > 0 ? (
-                                  <Select
-                                    value={depTypes[0].type}
-                                    onValueChange={(val) => handleDepTypeChange(task.id, 0, val as DependencyType)}
-                                  >
-                                    <SelectTrigger className="h-5 min-h-0 px-1 py-0 text-[9px] border-border/50 bg-transparent" style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined}>
-                                       <SelectValue />
-                                     </SelectTrigger>
-                                    <SelectContent>
-                                      <SelectItem value="TI" className="text-[10px]">TI</SelectItem>
-                                      <SelectItem value="II" className="text-[10px]">II</SelectItem>
-                                      <SelectItem value="TT" className="text-[10px]">TT</SelectItem>
-                                      <SelectItem value="IT" className="text-[10px]">IT</SelectItem>
-                                    </SelectContent>
-                                  </Select>
+                                  <Popover>
+                                    <PopoverTrigger asChild>
+                                      <button
+                                        type="button"
+                                        data-testid={`gantt-dependency-types-${task.id}`}
+                                        disabled={readOnly || !onProjectChange}
+                                        className="h-5 w-full truncate border-b border-border/50 bg-transparent px-1 text-[9px] focus:outline-none focus:border-primary disabled:cursor-default"
+                                        style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined}
+                                        title={depTypes.map(dep => `#${dep.num} ${dep.type}`).join(', ')}
+                                      >
+                                        {depTypes.map(dep => dep.type).join('/')}
+                                      </button>
+                                    </PopoverTrigger>
+                                    <PopoverContent align="end" className="w-48 space-y-1.5 p-2">
+                                      <p className="text-[10px] font-semibold text-muted-foreground">Tipo por predecessora</p>
+                                      {depTypes.map(dep => (
+                                        <div key={dep.taskId} className="grid grid-cols-[1fr_72px] items-center gap-2">
+                                          <span className="truncate text-[10px] font-medium" title={`Tarefa #${dep.num}`}>
+                                            Tarefa #{dep.num}
+                                          </span>
+                                          <select
+                                            aria-label={`Tipo da predecessora #${dep.num}`}
+                                            value={dep.type}
+                                            onChange={(event) => handleDepTypeChange(task.id, dep.index, event.target.value as DependencyType)}
+                                            disabled={readOnly || !onProjectChange}
+                                            className="h-7 rounded-md border border-input bg-background px-2 text-[10px] focus:outline-none focus:ring-1 focus:ring-ring"
+                                            data-testid={`gantt-dependency-type-${task.id}-${dep.taskId}`}
+                                          >
+                                            <option value="TI">TI</option>
+                                            <option value="II">II</option>
+                                            <option value="TT">TT</option>
+                                            <option value="IT">IT</option>
+                                          </select>
+                                        </div>
+                                      ))}
+                                    </PopoverContent>
+                                  </Popover>
                                 ) : (
                                   <span className={`text-[9px] ${rowTeamDef ? 'opacity-60' : 'text-muted-foreground'}`}>—</span>
                                 )}

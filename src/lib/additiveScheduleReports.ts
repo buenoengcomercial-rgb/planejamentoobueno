@@ -104,7 +104,7 @@ export async function buildAdditiveScheduleWorkbook(
         statusOnly ? '' : excelDate(row.startDate), statusOnly ? '' : excelDate(endDate(row.startDate, row.duration)), statusOnly ? '' : row.duration,
         row.quantity, row.unit || '', row.unitPriceWithBDI, row.totalWithBDI,
         statusOnly ? '' : row.responsible || '', statusOnly ? '' : row.team || '', statusOnly ? '' : row.dependencies.join(', '),
-        blockingLabel(row), row.blockingNote || '',
+        blockingLabel(row), row.blockingNote || row.suspensionReason || '',
       ];
     }),
   ];
@@ -358,7 +358,7 @@ export async function buildAdditiveSchedulePdfDocument(
         row.item || '', row.description, classificationLabel(row), row.statusLabel,
         statusOnly ? '' : dateBR(row.startDate), statusOnly ? '' : dateBR(endDate(row.startDate, row.duration)), statusOnly ? '' : `${row.duration} d`,
         statusOnly ? '' : row.responsible || '', statusOnly ? '' : row.team || '', statusOnly ? '' : row.dependencies.join(', '),
-        [blockingLabel(row), row.blockingNote].filter(Boolean).join(' | '), brl(row.totalWithBDI),
+        [blockingLabel(row), row.blockingNote || row.suspensionReason].filter(Boolean).join(' | '), brl(row.totalWithBDI),
       ];
     }),
     styles: { font: 'helvetica', fontSize: 6.6, cellPadding: 1.3, overflow: 'linebreak', valign: 'middle' },

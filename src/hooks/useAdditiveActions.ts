@@ -47,6 +47,7 @@ import {
   buildAdditiveSchedulePreviewProject,
   createAdditiveScheduleRevisionDraft,
   createAdditiveScheduleSnapshot,
+  settleAdditiveScheduleDraft,
   validateAdditiveSchedule,
 } from '@/lib/additiveSchedule';
 import { loadObraConfig } from '@/components/ConfiguracaoObra';
@@ -1143,18 +1144,19 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     const isReintegration = !!active.isContracted;
     const novosServicos = active.compositions.filter(c => c.isNewService);
     onProjectChange(prev => {
-      const currentAdditive = (prev.additives ?? []).find(item => item.id === active.id);
-      if (!currentAdditive?.scheduleDraft) return prev;
-      const preview = buildAdditiveSchedulePreviewProject(prev, currentAdditive, currentAdditive.scheduleDraft, obraConfig);
+      const settledProject = settleAdditiveScheduleDraft(prev, active.id, obraConfig);
+      const currentAdditive = (settledProject.additives ?? []).find(item => item.id === active.id);
+      if (!currentAdditive?.scheduleDraft) return settledProject;
+      const preview = buildAdditiveSchedulePreviewProject(settledProject, currentAdditive, currentAdditive.scheduleDraft, obraConfig);
       const snapshot = createAdditiveScheduleSnapshot(
-        prev,
+        settledProject,
         currentAdditive,
         preview,
         auditUser?.userName || auditUser?.userEmail,
       );
       const prepared = {
-        ...prev,
-        additives: (prev.additives ?? []).map(item => item.id === active.id
+        ...settledProject,
+        additives: (settledProject.additives ?? []).map(item => item.id === active.id
           ? {
               ...item,
               scheduleSnapshots: [

@@ -27,6 +27,7 @@ import {
   setAdditiveScheduleDependencyBlock,
   setAdditiveScheduleCollapsedPhaseIds,
   setAdditiveScheduleDependentTask,
+  settleAdditiveScheduleDraft,
   syncAdditiveScheduleDraft,
   type AdditiveScheduleSuspensionMeta,
 } from '@/lib/additiveSchedule';
@@ -47,11 +48,13 @@ function snapshotSuspensionMap(rows: AdditiveScheduleSnapshotRow[], additive: Ad
     if (fallbackState === 'scheduled' && row.classification === 'contracted_released' && !row.quantityRestriction) return;
     const isManual = row.classification === 'contracted_suspended' && !!row.blockingCompositions?.length;
     result[row.taskId] = {
-      kind: row.quantityRestriction && fallbackState === 'scheduled'
-        ? 'quantity_limited'
-        : isManual ? 'manual' : row.classification === 'contracted_suspended' ? 'automatic' : 'proposed',
+      kind: row.dependencyBlockingTaskIds?.length
+        ? 'dependency'
+        : row.quantityRestriction && fallbackState === 'scheduled'
+          ? 'quantity_limited'
+          : isManual ? 'manual' : row.classification === 'contracted_suspended' ? 'automatic' : 'proposed',
       label: fallbackState === 'fully_suppressed' ? FULLY_SUPPRESSED_STATUS_LABEL : row.statusLabel,
-      reason: ADDITIVE_SCHEDULE_GUIDANCE,
+      reason: row.suspensionReason ?? ADDITIVE_SCHEDULE_GUIDANCE,
       additiveId: 'snapshot',
       additiveName: 'Versão arquivada',
       checked: fallbackState !== 'scheduled',
@@ -61,6 +64,7 @@ function snapshotSuspensionMap(rows: AdditiveScheduleSnapshotRow[], additive: Ad
       quantityRestriction: row.quantityRestriction,
       blockingCompositions: row.blockingCompositions,
       blockingNote: row.blockingNote,
+      dependencyBlockingTaskIds: row.dependencyBlockingTaskIds,
     };
   });
   return result;
@@ -82,9 +86,10 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
 
   useEffect(() => {
     if (!active || (active.isContracted && !active.editUnlocked)) return;
-    const next = syncAdditiveScheduleDraft(project, active.id);
+    const synced = syncAdditiveScheduleDraft(project, active.id);
+    const next = settleAdditiveScheduleDraft(synced, active.id, obraConfig);
     if (next !== project) onProjectChange(next);
-  }, [active, onProjectChange, project]);
+  }, [active, obraConfig, onProjectChange, project]);
 
   const isArchived = !!active?.isContracted && !active.editUnlocked;
   const latestSnapshot = useMemo(() => active?.scheduleSnapshots?.slice().sort((a, b) => b.version - a.version)[0], [active?.scheduleSnapshots]);
@@ -99,8 +104,8 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
   }, [active, isArchived, latestSnapshot, preview, project]);
   const suspensions = useMemo(() => {
     if (!active) return {};
-    return isArchived && latestSnapshot ? snapshotSuspensionMap(latestSnapshot.rows, active) : buildPreviewSuspensionMap(project, active);
-  }, [active, isArchived, latestSnapshot, project]);
+    return isArchived && latestSnapshot ? snapshotSuspensionMap(latestSnapshot.rows, active) : buildPreviewSuspensionMap(project, active, preview ?? undefined);
+  }, [active, isArchived, latestSnapshot, preview, project]);
   const blockerGroups = useMemo(() => {
     if (!active) return [];
     const plannedCompositionIds = new Set(

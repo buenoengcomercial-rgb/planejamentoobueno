@@ -1288,7 +1288,7 @@ export interface AdditiveScheduleBlockingCompositionRef {
   unit?: string;
 }
 
-/** Planejamento isolado de uma tarefa contratada com execução quantitativa limitada. */
+/** Planejamento isolado de uma tarefa contratada no Cronograma do Aditivo. */
 export interface AdditiveScheduleContractedTaskPlan {
   taskId: string;
   startDate: string;
@@ -1339,7 +1339,7 @@ export interface AdditiveScheduleDraft {
   dependentTaskIds: string[];
   /** Somente serviços novos ficam aqui; tarefas contratadas permanecem em Project.phases. */
   plannedTasks: AdditiveSchedulePlannedTask[];
-  /** Planejamento isolado das tarefas com saldo contratado liberado. */
+  /** Sobrescritas esparsas das tarefas contratadas planejadas neste aditivo. */
   contractedTaskPlans?: AdditiveScheduleContractedTaskPlan[];
   /** Composições que justificam cada suspensão manual. */
   dependencyBlocks?: AdditiveScheduleDependencyBlock[];
@@ -1365,6 +1365,9 @@ export interface AdditiveScheduleSnapshotRow {
   /** Referências congeladas das composições que bloquearam a tarefa. */
   blockingCompositions?: AdditiveScheduleBlockingCompositionRef[];
   blockingNote?: string;
+  /** Causas congeladas quando a suspensão foi herdada de predecessoras sem autorização. */
+  dependencyBlockingTaskIds?: string[];
+  suspensionReason?: string;
   startDate: string;
   duration: number;
   dependencies: string[];

@@ -246,4 +246,49 @@ describe('GanttChart no Cronograma do Aditivo', () => {
       });
     },
   );
+
+  it('edita o tipo de cada predecessora separadamente e recalcula pela mais tardia', () => {
+    const dependencyProject: Project = {
+      ...project,
+      id: 'gantt-multiple-dependencies',
+      phases: [{
+        ...project.phases[0],
+        tasks: [{
+          ...project.phases[0].tasks[0],
+          id: 'pred-a', name: 'Predecessora A', startDate: '2026-08-14', duration: 1, dependencies: [],
+        }, {
+          ...project.phases[0].tasks[1],
+          id: 'pred-b', name: 'Predecessora B', startDate: '2026-08-18', duration: 1, dependencies: [],
+        }, {
+          ...project.phases[0].tasks[2],
+          id: 'successor', name: 'Sucessora', startDate: '2026-08-18', duration: 1,
+          dependencies: ['pred-a', 'pred-b'],
+          dependencyDetails: [
+            { taskId: 'pred-a', type: 'TI' },
+            { taskId: 'pred-b', type: 'II' },
+          ],
+        }],
+      }],
+    };
+    const onProjectChange = vi.fn();
+    render(<GanttChart project={dependencyProject} context="additive-preview" onProjectChange={onProjectChange} />);
+
+    const editorTrigger = screen.getByTestId('gantt-dependency-types-successor');
+    expect(editorTrigger).toHaveTextContent('TI/II');
+    fireEvent.click(editorTrigger);
+    expect(screen.getByText('Tarefa #1')).toBeInTheDocument();
+    expect(screen.getByText('Tarefa #2')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('gantt-dependency-type-successor-pred-b'), { target: { value: 'TI' } });
+
+    expect(onProjectChange).toHaveBeenCalledTimes(1);
+    const updated = onProjectChange.mock.calls[0][0] as Project;
+    expect(updated.phases[0].tasks[2]).toMatchObject({
+      startDate: '2026-08-19',
+      dependencyDetails: [
+        { taskId: 'pred-a', type: 'TI' },
+        { taskId: 'pred-b', type: 'TI' },
+      ],
+    });
+  });
 });
