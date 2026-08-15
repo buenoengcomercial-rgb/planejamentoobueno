@@ -33,6 +33,8 @@ type FiscalNotePayload = {
   invoices?: FiscalInvoice[];
   notes?: string | null;
   confidence?: number | null;
+  documentType?: "nfe" | "nfce" | "cupom_fiscal" | "pedido_venda" | "orcamento" | "recibo" | "outro";
+  documentTypeConfidence?: number | null;
 };
 
 const systemPrompt = `Voce e um assistente especialista em ler notas fiscais brasileiras (DANFE/NFe) de materiais de obra a partir de imagens, PDFs renderizados e texto extraido.
@@ -44,6 +46,8 @@ Retorne APENAS JSON valido neste formato:
   "issueDate": "YYYY-MM-DD"|null,
   "totalAmount": number,
   "confidence": number,
+  "documentType": "nfe"|"nfce"|"cupom_fiscal"|"pedido_venda"|"orcamento"|"recibo"|"outro",
+  "documentTypeConfidence": number,
   "items": [
     {
       "productCode": string|null,
@@ -68,6 +72,8 @@ Retorne APENAS JSON valido neste formato:
   "notes": string|null
 }
 Regras:
+- Primeiro classifique o documento. Pedido de venda, pedido de compra, orcamento, proposta e recibo NAO sao nota fiscal e nunca devem ser classificados como NF-e.
+- Use "nfe", "nfce" ou "cupom_fiscal" apenas quando houver evidencia fiscal clara (DANFE, chave de acesso, NFC-e ou cupom fiscal de compra).
 - Leia fornecedor, CNPJ, numero da nota, data de emissao, valor total e itens.
 - Para CADA item extraia o codigo da coluna "COD. PROD.", "Cod. Prod.", "Codigo", "Cod.", "Ref." ou similar como "productCode" — esse codigo e essencial.
 - Leia tambem a secao FATURA/DUPLICATAS/COBRANCA/PARCELAS quando existir e devolva no array "invoices" cada parcela com numero (ex.: 001, 002), data de vencimento e valor. Se houver apenas uma cobranca/boleto, devolva uma unica linha em "invoices". "paymentMethod" pode ser "Boleto", "PIX", "Cartao", "A vista", etc., quando explicitado.
@@ -86,6 +92,7 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 function normalizePayload(raw: FiscalNotePayload): FiscalNotePayload {
+  const documentTypes = new Set(["nfe", "nfce", "cupom_fiscal", "pedido_venda", "orcamento", "recibo", "outro"]);
   return {
     supplierName: raw.supplierName ?? null,
     supplierCnpj: raw.supplierCnpj ?? null,
@@ -94,6 +101,10 @@ function normalizePayload(raw: FiscalNotePayload): FiscalNotePayload {
     totalAmount: Number(raw.totalAmount ?? 0) || 0,
     notes: raw.notes ?? null,
     confidence: raw.confidence != null ? Math.max(0, Math.min(1, Number(raw.confidence))) : null,
+    documentType: raw.documentType && documentTypes.has(raw.documentType) ? raw.documentType : "outro",
+    documentTypeConfidence: raw.documentTypeConfidence != null
+      ? Math.max(0, Math.min(1, Number(raw.documentTypeConfidence)))
+      : null,
     items: Array.isArray(raw.items)
       ? raw.items.map((item) => ({
           productCode: item.productCode ? String(item.productCode).trim() : null,
@@ -202,7 +213,7 @@ Deno.serve(async (req) => {
     > = [
       {
         type: "text",
-        text: `Extraia os dados desta nota fiscal de materiais. Arquivo: ${fileName}`,
+        text: `Classifique o documento e extraia seus dados. Nao presuma que seja nota fiscal. Arquivo: ${fileName}`,
       },
     ];
     if (extractedText) {

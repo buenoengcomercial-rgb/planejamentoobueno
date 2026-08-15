@@ -19,9 +19,11 @@ import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
+  canManageFiscalNotes?: boolean;
+  actorName?: string;
 }
 
-export default function Warehouse({ project, onProjectChange }: Props) {
+export default function Warehouse({ project, onProjectChange, canManageFiscalNotes = true, actorName }: Props) {
   const [tab, setTab] = useState('painel');
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
@@ -115,7 +117,12 @@ export default function Warehouse({ project, onProjectChange }: Props) {
           <WarehouseStockTab project={ensured} onProjectChange={onProjectChange} />
         </TabsContent>
         <TabsContent value="notas" className="mt-3">
-          <WarehouseFiscalNotesTab project={ensured} onProjectChange={onProjectChange} />
+          <WarehouseFiscalNotesTab
+            project={ensured}
+            onProjectChange={onProjectChange}
+            canManage={canManageFiscalNotes}
+            actorName={actorName}
+          />
         </TabsContent>
         <TabsContent value="movimentos" className="mt-3">
           <WarehouseMovementsTab project={ensured} onProjectChange={onProjectChange} />

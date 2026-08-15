@@ -728,6 +728,9 @@ export interface WarehouseItemConfig {
   purchaseGroupId?: string;
   supplierId?: string;
   defaultLocationId?: string;
+  /** Item oculto das operações correntes, preservado para histórico e auditoria. */
+  archivedAt?: string;
+  archivedReason?: 'fiscal_note_canceled';
 }
 
 export interface WarehouseAttachment {
@@ -787,7 +790,20 @@ export type WarehouseFiscalNoteStatus =
   | 'em_processamento'
   | 'a_conferir'
   | 'aprovada'
-  | 'rejeitada';
+  | 'rejeitada'
+  | 'cancelada';
+
+export type WarehouseFiscalDocumentType =
+  | 'nfe'
+  | 'nfce'
+  | 'cupom_fiscal'
+  | 'pedido_venda'
+  | 'orcamento'
+  | 'recibo'
+  | 'outro';
+
+export type WarehouseFiscalExtractionStatus = 'reading' | 'ready' | 'failed';
+export type WarehouseFiscalArchiveReason = 'comprovante' | 'descartada' | 'lancamento_cancelado';
 
 export type FiscalItemLinkStatus = 'vinculado' | 'pendente' | 'auto';
 
@@ -812,6 +828,9 @@ export interface WarehouseFiscalNoteItem {
   itemKey?: string;
   /** Status do vínculo com material do almoxarifado. */
   linkStatus?: FiscalItemLinkStatus;
+  /** Origem da sugestão automática exibida na conferência. */
+  linkSource?: 'codigo' | 'fornecedor' | 'descricao' | 'similaridade' | 'manual' | 'novo';
+  linkConfidence?: number;
   /** Confiança da IA na leitura deste item (0-1). */
   confidence?: number;
 }
@@ -849,7 +868,10 @@ export interface WarehouseFiscalNote {
   origin: 'upload';
   sourceFileName: string;
   sourceMimeType?: string;
+  /** Legado: primeiro anexo da nota. */
   attachment?: WarehouseAttachment;
+  /** Um PDF ou até quatro fotografias/páginas. */
+  attachments?: WarehouseAttachment[];
   items: WarehouseFiscalNoteItem[];
   /** Faturas / duplicatas / parcelas da nota. */
   invoices?: FiscalInvoiceEntry[];
@@ -857,6 +879,19 @@ export interface WarehouseFiscalNote {
   rejectionReason?: string;
   processingError?: string;
   extractedText?: string;
+  documentType?: WarehouseFiscalDocumentType;
+  documentTypeConfidence?: number;
+  extractionStatus?: WarehouseFiscalExtractionStatus;
+  extractionStartedAt?: string;
+  extractionCompletedAt?: string;
+  archiveReason?: WarehouseFiscalArchiveReason;
+  archivedAt?: string;
+  archivedBy?: string;
+  stockPostedAt?: string;
+  stockPostedBy?: string;
+  canceledAt?: string;
+  canceledBy?: string;
+  cancellationReason?: string;
   /** Confiança média da IA na nota (0-1). */
   aiConfidence?: number;
   /** Justificativa preenchida quando soma dos itens difere do total. */

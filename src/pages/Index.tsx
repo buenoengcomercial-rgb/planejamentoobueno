@@ -884,7 +884,14 @@ export default function Index() {
       case 'materials':
         return <Materials project={project} onProjectChange={materialsSetter} />;
       case 'warehouse':
-        return <WarehouseView project={project} onProjectChange={warehouseSetter} />;
+        return (
+          <WarehouseView
+            project={project}
+            onProjectChange={warehouseSetter}
+            canManageFiscalNotes={role !== 'viewer'}
+            actorName={user?.email ?? undefined}
+          />
+        );
     }
   };
 

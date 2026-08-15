@@ -5,7 +5,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { ExternalLink, History, Plus, Search, Trash2, X } from 'lucide-react';
+import { Archive, ExternalLink, History, Plus, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 
@@ -14,13 +14,15 @@ interface Props { project: Project; onProjectChange: (next: Project) => void; }
 export default function WarehouseStockTab({ project, onProjectChange }: Props) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [search, setSearch] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
   const [showManualForm, setShowManualForm] = useState(false);
   const [manualForm, setManualForm] = useState({ code: '', description: '', unit: '' });
   const [historyFor, setHistoryFor] = useState<{ key: string; description: string } | null>(null);
   const rows = useMemo(
-    () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true }),
-    [project],
+    () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true, includeArchived: showArchived }),
+    [project, showArchived],
   );
+  const archivedCount = project.warehouse?.items.filter(item => !!item.archivedAt).length ?? 0;
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return rows;
@@ -65,6 +67,12 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
           {showManualForm ? <X className="w-3.5 h-3.5 mr-1" /> : <Plus className="w-3.5 h-3.5 mr-1" />}
           Novo item avulso
         </Button>
+        {archivedCount > 0 && (
+          <Button size="sm" variant={showArchived ? 'secondary' : 'outline'} className="h-8 text-xs" onClick={() => setShowArchived(value => !value)}>
+            <Archive className="mr-1 h-3.5 w-3.5" />
+            {showArchived ? 'Ocultar arquivados' : `Exibir arquivados (${archivedCount})`}
+          </Button>
+        )}
         <span className="text-[11px] text-muted-foreground ml-auto">{filtered.length} item(ns)</span>
       </div>
       {showManualForm && (
