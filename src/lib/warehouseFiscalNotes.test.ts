@@ -11,6 +11,8 @@ import {
   ensureWarehouse,
   findFiscalNoteDuplicate,
   isStockFiscalDocument,
+  reconcileFiscalNoteDrafts,
+  updateFiscalItemPurchaseGroup,
 } from './warehouse';
 
 function baseProject(): Project {
@@ -58,13 +60,25 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(findFiscalNoteDuplicate(withNote(existing), candidate)?.id).toBe(existing.id);
   });
 
-  it('arquiva pedido sem criar item, saldo ou movimento', () => {
+  it('lança Pedido de Venda no estoque independentemente da classificação documental', () => {
     const project = withNote(note({ id: 'pedido-915', documentType: 'pedido_venda', invoiceNumber: '915' }));
-    const archived = archiveFiscalNote(project, 'pedido-915', 'comprovante', 'operador@teste');
-    expect(archived.warehouse!.fiscalNotes[0]).toMatchObject({ status: 'rejeitada', archiveReason: 'comprovante' });
-    expect(archived.warehouse!.items).toHaveLength(0);
-    expect(archived.warehouse!.movements).toHaveLength(0);
-    expect(() => approveFiscalNote(project, 'pedido-915')).toThrow(/Somente NF-e/);
+    const posted = approveFiscalNote(project, 'pedido-915', 'operador@teste');
+    expect(posted.warehouse!.fiscalNotes[0].status).toBe('aprovada');
+    expect(posted.warehouse!.items).toHaveLength(1);
+    expect(posted.warehouse!.movements).toHaveLength(1);
+  });
+
+  it.each(['recibo', 'outro'] as const)('lança documento %s quando existe item válido', documentType => {
+    const posted = approveFiscalNote(withNote(note({ documentType })), 'nf-1');
+    expect(posted.warehouse!.fiscalNotes[0].status).toBe('aprovada');
+    expect(computeWarehouseRows(posted, { includeManual: true })[0].balance).toBe(2);
+  });
+
+  it('exige ao menos um item válido e aplica UN quando a unidade está vazia', () => {
+    const invalid = withNote(note({ items: [] }));
+    expect(() => approveFiscalNote(invalid, 'nf-1')).toThrow(/ao menos um item/i);
+    const posted = approveFiscalNote(withNote(note({ items: [{ ...note().items[0], unit: '' }] })), 'nf-1');
+    expect(posted.warehouse!.fiscalNotes[0].items[0].unit).toBe('UN');
   });
 
   it('não gera duas entradas ao repetir a aprovação', () => {
@@ -109,5 +123,43 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(check.allowed).toBe(false);
     expect(check.blockers.join(' ')).toMatch(/retirada posterior/i);
     expect(cancelFiscalNote(approved, 'nf-1', { reason: 'Teste' }).canceled).toBe(false);
+  });
+
+  it('impede definitivamente relançar nota cancelada ou arquivada', () => {
+    const approved = approveFiscalNote(withNote(note()), 'nf-1');
+    const canceled = cancelFiscalNote(approved, 'nf-1', { reason: 'Erro de lançamento' }).project;
+    expect(() => approveFiscalNote(canceled, 'nf-1')).toThrow(/cancelado é definitivo/i);
+    const archived = archiveFiscalNote(withNote(note()), 'nf-1', 'descartada');
+    expect(() => approveFiscalNote(archived, 'nf-1')).toThrow(/arquivado não pode/i);
+  });
+
+  it('reconcilia rascunhos completos uma única vez e preserva incompletos e duplicados', () => {
+    const project = baseProject();
+    const existing = note({ id: 'existing', status: 'aprovada' });
+    const ready = note({ id: 'ready', invoiceNumber: '101' });
+    const duplicate = note({ id: 'duplicate' });
+    const incomplete = note({ id: 'incomplete', invoiceNumber: '102', items: [] });
+    project.warehouse!.fiscalNotes = [existing, ready, duplicate, incomplete];
+    const first = reconcileFiscalNoteDrafts(project, 'operador@teste');
+    expect(first.postedIds).toEqual(['ready']);
+    expect(first.duplicateIds).toEqual(['duplicate']);
+    expect(first.incompleteIds).toEqual(['incomplete']);
+    const second = reconcileFiscalNoteDrafts(first.project, 'operador@teste');
+    expect(second.postedIds).toHaveLength(0);
+    expect(first.project.warehouse!.movements.filter(movement => movement.fiscalNoteId === 'ready')).toHaveLength(1);
+  });
+
+  it('sincroniza grupo global sem alterar movimentos, saldo ou preço', () => {
+    const approved = approveFiscalNote(withNote(note()), 'nf-1');
+    const noteItem = approved.warehouse!.fiscalNotes[0].items[0];
+    const movementsBefore = structuredClone(approved.warehouse!.movements);
+    const balanceBefore = computeWarehouseRows(approved, { includeManual: true })[0].balance;
+    const priceBefore = approved.warehouse!.items[0].unitPrice;
+    const grouped = updateFiscalItemPurchaseGroup(approved, 'nf-1', noteItem.id, 'grupo-eletrica');
+    expect(grouped.warehouse!.fiscalNotes[0].items[0].purchaseGroupId).toBe('grupo-eletrica');
+    expect(grouped.warehouse!.items[0].purchaseGroupId).toBe('grupo-eletrica');
+    expect(grouped.warehouse!.movements).toEqual(movementsBefore);
+    expect(computeWarehouseRows(grouped, { includeManual: true })[0].balance).toBe(balanceBefore);
+    expect(grouped.warehouse!.items[0].unitPrice).toBe(priceBefore);
   });
 });

@@ -1222,15 +1222,21 @@ export function deleteFiscalNote(project: Project, noteId: string): Project {
 export function approveFiscalNote(project: Project, noteId: string, actor?: string): Project {
   let p = ensureWarehouse(project);
   const note = p.warehouse?.fiscalNotes?.find(n => n.id === noteId);
-  if (!note || note.status === 'aprovada') return p;
-  if (!isStockFiscalDocument(note.documentType)) {
-    throw new Error('Somente NF-e, NFC-e ou cupom fiscal de compra pode gerar entrada no estoque.');
-  }
+  if (!note) return p;
+  if (note.status === 'aprovada') return p;
+  if (note.status === 'cancelada') throw new Error('Um lançamento cancelado é definitivo e não pode retornar ao estoque.');
+  if (note.status === 'rejeitada') throw new Error('Um documento arquivado não pode ser lançado no estoque. Envie um novo documento.');
   if (p.warehouse?.movements.some(m => m.fiscalNoteId === noteId && m.type === 'entrada' && !m.reversedById)) {
     return p;
   }
 
-  const linked = linkFiscalNoteItemsToMaterials(p, note.items);
+  const validItems = note.items
+    .filter(item => item.description.trim() && Number(item.quantity || 0) > 0)
+    .map(item => ({ ...item, unit: item.unit?.trim() || 'UN' }));
+  if (!validItems.length) throw new Error('Inclua ao menos um item com descrição e quantidade maior que zero.');
+  const noteForPosting: WarehouseFiscalNote = { ...note, items: validItems };
+
+  const linked = linkFiscalNoteItemsToMaterials(p, noteForPosting.items);
   p = linked.project;
   const wh = p.warehouse!;
   const { rowsByKey, itemKeyByLookup, itemKeyByCode } = mapWarehouseRows(p);
@@ -1239,7 +1245,7 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: stri
   const movements = [...wh.movements];
   const approvedItems = linked.items.map(item => {
     const unit = (item.unit || 'UN').trim() || 'UN';
-    const allocationNote = { ...note, items: linked.items };
+    const allocationNote = { ...noteForPosting, items: linked.items };
     const globalUnitPrice = fiscalItemGlobalUnitPrice(item, allocationNote);
     const globalTotalPrice = fiscalItemGlobalTotal(item, allocationNote);
     const productCode = item.productCode?.trim() || undefined;
@@ -1315,17 +1321,17 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: stri
       id: uid(),
       createdAt: nowISO(),
       type: 'entrada',
-      date: note.issueDate || todayISO(),
+      date: noteForPosting.issueDate || todayISO(),
       itemKey,
       itemCode: productCode || rowsByKey.get(itemKey)?.code,
       itemDescription: item.description.trim(),
       itemUnit: unit,
       quantity: Number(item.quantity || 0),
       unitPrice: globalUnitPrice || undefined,
-      fiscalNoteId: note.id,
-      invoiceNumber: note.invoiceNumber || undefined,
-      notes: `Entrada gerada pela NF ${note.invoiceNumber || note.sourceFileName}`,
-      attachments: note.attachments?.length ? note.attachments : (note.attachment ? [note.attachment] : undefined),
+      fiscalNoteId: noteForPosting.id,
+      invoiceNumber: noteForPosting.invoiceNumber || undefined,
+      notes: `Entrada gerada pelo documento ${noteForPosting.invoiceNumber || noteForPosting.sourceFileName}`,
+      attachments: noteForPosting.attachments?.length ? noteForPosting.attachments : (noteForPosting.attachment ? [noteForPosting.attachment] : undefined),
       responsible: actor,
       user: actor,
     });
@@ -1348,6 +1354,81 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: stri
   );
 
   return setWh(p, { items: itemsConfig, movements, fiscalNotes });
+}
+
+/**
+ * Atualiza apenas a classificação analítica do material. A operação não toca
+ * em quantidades, preços, movimentos ou saldos do almoxarifado.
+ */
+export function updateFiscalItemPurchaseGroup(
+  project: Project,
+  noteId: string,
+  noteItemId: string,
+  purchaseGroupId?: string,
+): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const sourceNote = wh.fiscalNotes.find(note => note.id === noteId);
+  if (!sourceNote) return p;
+  if (sourceNote.status === 'cancelada' || sourceNote.status === 'rejeitada') {
+    throw new Error('Documentos arquivados ou cancelados são somente leitura.');
+  }
+  const sourceItem = sourceNote.items.find(item => item.id === noteItemId);
+  if (!sourceItem) return p;
+  const itemKey = sourceItem.itemKey;
+  const fiscalNotes = wh.fiscalNotes.map(note => ({
+    ...note,
+    items: note.items.map(item => {
+      const isSource = note.id === noteId && item.id === noteItemId;
+      const isSameMaterial = !!itemKey && item.itemKey === itemKey;
+      return isSource || isSameMaterial ? { ...item, purchaseGroupId } : item;
+    }),
+    updatedAt: note.id === noteId || (!!itemKey && note.items.some(item => item.itemKey === itemKey)) ? nowISO() : note.updatedAt,
+  }));
+  const items = itemKey
+    ? wh.items.map(item => item.key === itemKey ? { ...item, purchaseGroupId } : item)
+    : wh.items;
+  return setWh(p, { fiscalNotes, items });
+}
+
+export interface FiscalNoteDraftReconciliation {
+  project: Project;
+  postedIds: string[];
+  incompleteIds: string[];
+  duplicateIds: string[];
+}
+
+/**
+ * Concilia rascunhos legados sem criar uma etapa visual de conferência.
+ * Documentos completos entram uma única vez; incompletos e duplicados ficam
+ * preservados para resolução explícita na interface.
+ */
+export function reconcileFiscalNoteDrafts(project: Project, actor?: string): FiscalNoteDraftReconciliation {
+  let next = ensureWarehouse(project);
+  const draftIds = (next.warehouse?.fiscalNotes ?? [])
+    .filter(note => note.status === 'a_conferir')
+    .map(note => note.id);
+  const postedIds: string[] = [];
+  const incompleteIds: string[] = [];
+  const duplicateIds: string[] = [];
+
+  for (const noteId of draftIds) {
+    const note = next.warehouse?.fiscalNotes.find(entry => entry.id === noteId);
+    if (!note) continue;
+    const hasValidItem = note.items.some(item => item.description.trim() && Number(item.quantity || 0) > 0);
+    if (!hasValidItem) {
+      incompleteIds.push(noteId);
+      continue;
+    }
+    if (findFiscalNoteDuplicate(next, note)) {
+      duplicateIds.push(noteId);
+      continue;
+    }
+    next = approveFiscalNote(next, noteId, actor);
+    postedIds.push(noteId);
+  }
+
+  return { project: next, postedIds, incompleteIds, duplicateIds };
 }
 
 export function archiveFiscalNote(
