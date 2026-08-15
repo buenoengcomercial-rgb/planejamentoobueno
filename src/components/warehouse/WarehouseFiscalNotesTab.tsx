@@ -141,14 +141,14 @@ function parseFiscalNoteText(text: string): Pick<WarehouseFiscalNote, 'supplierN
     .filter(Boolean);
   const cnpj = text.match(/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/)?.[0];
   const invoiceNumber =
-    text.match(/(?:NF-e|NFe|Nota Fiscal|N[ºo]\.?|Numero|Número)\s*(?:n[ºo]\.?)?\s*[:\-]?\s*(\d{3,})/i)?.[1] ??
+    text.match(/(?:NF-e|NFe|Nota Fiscal|N[ºo]\.?|Numero|Número)\s*(?:n[ºo]\.?)?\s*[:-]?\s*(\d{3,})/i)?.[1] ??
     text.match(/\bNFC?e?\s*(\d{3,})\b/i)?.[1];
   const issueDateRaw =
-    text.match(/(?:emissao|emissão|data)\s*[:\-]?\s*(\d{2}\/\d{2}\/\d{4})/i)?.[1] ??
+    text.match(/(?:emissao|emissão|data)\s*[:-]?\s*(\d{2}\/\d{2}\/\d{4})/i)?.[1] ??
     text.match(/\b(\d{2}\/\d{2}\/\d{4})\b/)?.[1];
   const issueDate = issueDateRaw ? issueDateRaw.split('/').reverse().join('-') : undefined;
   const totalRaw =
-    text.match(/(?:valor total|total da nota|total)\s*(?:R\$)?\s*[:\-]?\s*([\d.]+,\d{2})/i)?.[1] ??
+    text.match(/(?:valor total|total da nota|total)\s*(?:R\$)?\s*[:-]?\s*([\d.]+,\d{2})/i)?.[1] ??
     [...text.matchAll(/R\$\s*([\d.]+,\d{2})/gi)].pop()?.[1];
   const supplierName =
     lines.find(line => /LTDA|EIRELI|S\/A|COMERC|MATERIA|CONSTRU|FERRAGEM|ELETRIC|ELÉTRIC/i.test(line) && !/NOTA|DANFE|CNPJ/i.test(line)) ??

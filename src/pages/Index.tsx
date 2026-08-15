@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useDeferredValue, useCallback, useRef, Suspense } from 'react';
 import { flushSync } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AppView, Project } from '@/types/project';
 import AppSidebar from '@/components/AppSidebar';
 import UndoButton from '@/components/UndoButton';
@@ -29,7 +29,7 @@ const Materials = lazyWithReload(() => import('@/components/Materials'));
 const WarehouseView = lazyWithReload(() => import('@/components/warehouse/Warehouse'));
 import { useAuth } from '@/hooks/useAuth';
 import { useOrganization } from '@/hooks/useOrganization';
-import { canCreateProject, canDeleteProject, canEditProject, ROLE_LABELS } from '@/lib/organizations';
+import { canCreateProject, canDeleteProject, canEditDailyReport, canEditProject, ROLE_LABELS } from '@/lib/organizations';
 import { Button } from '@/components/ui/button';
 import {
   listCloudProjects,
@@ -52,6 +52,22 @@ const UNSAVED_DRAFT_VERSION = 1;
 const UI_SESSION_VERSION = 1;
 const APP_UI_SESSION_KEY = 'obraplanner:ui-session';
 const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse'];
+
+const VIEW_ROUTE: Record<AppView, string> = {
+  dashboard: 'dashboard',
+  management: 'rotina',
+  gantt: 'cronograma',
+  tasks: 'producao',
+  dailyReport: 'diario',
+  measurement: 'medicao',
+  additive: 'aditivo',
+  additiveSchedule: 'cronograma-aditivo',
+  realCost: 'custos',
+  materials: 'materiais',
+  warehouse: 'almoxarifado',
+};
+
+const ROUTE_VIEW = Object.fromEntries(Object.entries(VIEW_ROUTE).map(([view, route]) => [route, view])) as Record<string, AppView>;
 
 type UndoStacks = Record<AppView, Project[]>;
 
@@ -121,8 +137,8 @@ function writeAppUiSession(patch: Partial<AppUiSession>) {
   }
 }
 
-function readInitialView(): AppView {
-  return readAppUiSession()?.view ?? 'dashboard';
+function readInitialView(routeView?: string): AppView {
+  return (routeView && ROUTE_VIEW[routeView]) || readAppUiSession()?.view || 'dashboard';
 }
 
 function toTime(value: string | null | undefined): number {
@@ -182,8 +198,11 @@ export default function Index() {
   const { user, loading: authLoading, signOut } = useAuth();
   const { membership, loading: orgLoading } = useOrganization();
   const navigate = useNavigate();
+  const location = useLocation();
+  const { routeProjectId, routeView } = useParams<{ routeProjectId: string; routeView: string }>();
+  const initialRouteProjectIdRef = useRef(routeProjectId);
 
-  const [currentView, setCurrentView] = useState<AppView>(() => readInitialView());
+  const [currentView, setCurrentView] = useState<AppView>(() => readInitialView(routeView));
   const [rawProject, setRawProject] = useState<Project | null>(null);
   const [cloudList, setCloudList] = useState<CloudProjectMeta[]>([]);
   const [bootLoading, setBootLoading] = useState(true);
@@ -203,9 +222,11 @@ export default function Index() {
     setDailyReportInitialFilter(measurementFilter);
     setDailyReportNavKey(k => k + 1); // força re-aplicação mesmo se valores se repetirem
     setProductionWorkspaceInitialTab('dailyReport');
-    setCurrentView('tasks');
+    setCurrentView('dailyReport');
     setSidebarOpen(false);
-  }, []);
+    const projectId = rawProjectRef.current?.id;
+    if (projectId) navigate(`/obras/${projectId}/diario?data=${dateISO}`);
+  }, [navigate]);
 
   const undoStacksRef = useRef<UndoStacks>({ dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] });
   const [undoVersion, setUndoVersion] = useState(0);
@@ -226,12 +247,35 @@ export default function Index() {
   const orgId = membership?.organization.id;
   const role = membership?.role;
   const editor = role ? canEditProject(role) : false;
+  const dailyReportEditor = role ? canEditDailyReport(role) : false;
+  const canPersistProject = editor || dailyReportEditor;
   const creator = role ? canCreateProject(role) : false;
   const remover = role ? canDeleteProject(role) : false;
 
   useEffect(() => {
     if (!authLoading && !user) navigate('/auth', { replace: true });
   }, [authLoading, user, navigate]);
+
+  useEffect(() => {
+    const routedView = routeView ? ROUTE_VIEW[routeView] : undefined;
+    if (routedView) setCurrentView(previous => previous === routedView ? previous : routedView);
+    if (routedView === 'dailyReport') {
+      const date = new URLSearchParams(location.search).get('data') || undefined;
+      if (date) {
+        setDailyReportInitialDate(date);
+        setDailyReportNavKey(key => key + 1);
+      }
+      setProductionWorkspaceInitialTab('dailyReport');
+    }
+  }, [routeView, location.search]);
+
+  useEffect(() => {
+    if (!rawProject?.id) return;
+    const route = `/obras/${rawProject.id}/${VIEW_ROUTE[currentView]}`;
+    const keepSearch = currentView === 'management' || currentView === 'dailyReport';
+    const target = `${route}${keepSearch ? location.search : ''}`;
+    if (`${location.pathname}${location.search}` !== target) navigate(target, { replace: true });
+  }, [currentView, location.pathname, location.search, navigate, rawProject?.id]);
 
   useEffect(() => {
     if (!rawProject?.id) return;
@@ -287,13 +331,13 @@ export default function Index() {
     const restoreKey = `${rawProject.id}:${session.view ?? 'none'}:${session.updatedAt}`;
     if (restoredUiSessionRef.current === restoreKey) return;
 
-    if (session.view && session.view !== currentView) {
+    if (!routeView && session.view && session.view !== currentView) {
       setCurrentView(session.view);
       return;
     }
 
     restoredUiSessionRef.current = restoreKey;
-    // Lovable Preview pode remontar o iframe ao voltar de outro app. Esta restauracao
+    // O preview pode remontar o iframe ao voltar de outro app. Esta restauração
     // devolve a tela para o mesmo ponto visual sem buscar a obra de novo na nuvem.
     window.requestAnimationFrame(() => {
       if (typeof session.windowScrollX === 'number' || typeof session.windowScrollY === 'number') {
@@ -306,7 +350,7 @@ export default function Index() {
         });
       }
     });
-  }, [bootLoading, currentView, rawProject]);
+  }, [bootLoading, currentView, rawProject, routeView]);
 
   const refreshCloudList = useCallback(async (): Promise<CloudProjectMeta[]> => {
     const list = await listCloudProjects();
@@ -414,7 +458,7 @@ export default function Index() {
   }, [appliedWorkStart, editor, measurementWorkStart, rawProject?.id]);
 
   const flushPendingSave = useCallback(async () => {
-    if (!user || !orgId || !rawProject || !initialLoadRef.current || !editor) return true;
+    if (!user || !orgId || !rawProject || !initialLoadRef.current || !canPersistProject) return true;
 
     if (saveTimerRef.current) {
       window.clearTimeout(saveTimerRef.current);
@@ -446,7 +490,7 @@ export default function Index() {
     }
 
     return true;
-  }, [user, orgId, rawProject, editor, persistProject]);
+  }, [user, orgId, rawProject, canPersistProject, persistProject]);
 
   useEffect(() => {
     if (!user || !orgId) return;
@@ -462,7 +506,10 @@ export default function Index() {
           list = await refreshCloudList();
           replaceProjectWithoutAutoSave(created, list.find(p => p.id === created.id)?.updatedAt ?? null);
         } else if (list.length > 0) {
-          const record = await loadCloudProjectRecord(list[0].id);
+          const rememberedProjectId = readAppUiSession()?.projectId;
+          const preferredProjectId = [initialRouteProjectIdRef.current, rememberedProjectId, list[0].id]
+            .find(id => !!id && list.some(projectMeta => projectMeta.id === id)) ?? list[0].id;
+          const record = await loadCloudProjectRecord(preferredProjectId);
           if (cancelled) return;
           if (record) replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied);
         } else {
@@ -482,7 +529,7 @@ export default function Index() {
   // Salvamento debounced (somente se o usuário pode editar)
   useEffect(() => {
     if (!user || !orgId || !rawProject || !initialLoadRef.current) return;
-    if (!editor) return;
+    if (!canPersistProject) return;
     if (conflictDetectedRef.current) return;
     if (skipNextAutoSaveRef.current) {
       skipNextAutoSaveRef.current = false;
@@ -509,10 +556,10 @@ export default function Index() {
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
-  }, [rawProject, user, orgId, editor, persistProject]);
+  }, [rawProject, user, orgId, canPersistProject, persistProject]);
 
   const protectLocalDraftBeforePageSleeps = useCallback(() => {
-    if (!editor || !rawProjectRef.current) return;
+    if (!canPersistProject || !rawProjectRef.current) return;
     try {
       flushSync(() => {
         flushPendingEditCommits();
@@ -521,7 +568,7 @@ export default function Index() {
       flushPendingEditCommits();
     }
     if (rawProjectRef.current) writeUnsavedDraft(rawProjectRef.current, currentProjectUpdatedAtRef.current);
-  }, [editor]);
+  }, [canPersistProject]);
 
   useEffect(() => {
     const handlePageMaySleep = () => {
@@ -570,7 +617,8 @@ export default function Index() {
 
   const makeViewSetter = useCallback((view: AppView) => {
     return (next: Project | ((prev: Project) => Project)) => {
-      if (!editor) {
+      const mayEditView = editor || (view === 'dailyReport' && dailyReportEditor);
+      if (!mayEditView) {
         toast.error('Você não tem permissão para editar.');
         return;
       }
@@ -588,7 +636,7 @@ export default function Index() {
         return synchronized;
       });
     };
-  }, [editor]);
+  }, [dailyReportEditor, editor]);
 
   const ganttSetter = useMemo(() => makeViewSetter('gantt'), [makeViewSetter]);
   const managementSetter = useMemo(() => makeViewSetter('management'), [makeViewSetter]);
@@ -781,9 +829,18 @@ export default function Index() {
       case 'dashboard':
         return <Dashboard project={project} undoButton={<UndoButton canUndo={canUndo('dashboard')} onUndo={() => handleUndo('dashboard')} />} />;
       case 'management':
-        return <ManagementRoutine project={project} onProjectChange={managementSetter} undoButton={<UndoButton canUndo={canUndo('management')} onUndo={() => handleUndo('management')} />} />;
+        return (
+          <ManagementRoutine
+            project={project}
+            onProjectChange={managementSetter}
+            onOpenDailyReport={handleOpenDailyReport}
+            initialWeek={new URLSearchParams(location.search).get('semana') || undefined}
+            onWeekChange={weekStart => navigate(`/obras/${project.id}/rotina?semana=${weekStart}`, { replace: true })}
+            undoButton={<UndoButton canUndo={canUndo('management')} onUndo={() => handleUndo('management')} />}
+          />
+        );
       case 'gantt':
-        return <GanttChart project={project} onProjectChange={ganttSetter} undoButton={<UndoButton canUndo={canUndo('gantt')} onUndo={() => handleUndo('gantt')} size="xs" />} />;
+        return <GanttChart project={project} onProjectChange={ganttSetter} readOnly={!editor} undoButton={<UndoButton canUndo={canUndo('gantt')} onUndo={() => handleUndo('gantt')} size="xs" />} />;
       case 'tasks':
         return (
           <DailyProductionWorkspace
@@ -791,6 +848,8 @@ export default function Index() {
             initialTab={productionWorkspaceInitialTab}
             onProductionChange={tasksSetter}
             onDailyReportChange={dailyReportSetter}
+            productionReadOnly={!editor}
+            dailyReportReadOnly={!dailyReportEditor}
             productionUndoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />}
             dailyReportUndoButton={<UndoButton canUndo={canUndo('dailyReport')} onUndo={() => handleUndo('dailyReport')} />}
             dailyReportInitialDate={dailyReportInitialDate}
@@ -807,6 +866,8 @@ export default function Index() {
             initialTab="dailyReport"
             onProductionChange={tasksSetter}
             onDailyReportChange={dailyReportSetter}
+            productionReadOnly={!editor}
+            dailyReportReadOnly={!dailyReportEditor}
             productionUndoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />}
             dailyReportUndoButton={<UndoButton canUndo={canUndo('dailyReport')} onUndo={() => handleUndo('dailyReport')} />}
             dailyReportInitialDate={dailyReportInitialDate}
@@ -831,7 +892,8 @@ export default function Index() {
     <div className="flex min-h-screen bg-background">
       <button
         onClick={() => setSidebarOpen(!sidebarOpen)}
-        className="fixed top-4 left-4 z-50 lg:hidden bg-card border border-border rounded-lg p-2 shadow-md"
+        aria-label={sidebarOpen ? 'Fechar menu' : 'Abrir menu'}
+        className="fixed top-4 left-4 z-50 flex h-11 w-11 items-center justify-center rounded-lg border border-border bg-card shadow-md lg:hidden"
       >
         {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
       </button>
@@ -845,6 +907,7 @@ export default function Index() {
           currentView={currentView}
           onViewChange={(v) => {
             if (v === 'tasks') setProductionWorkspaceInitialTab('production');
+            if (v === 'dailyReport') setProductionWorkspaceInitialTab('dailyReport');
             setCurrentView(v);
             setSidebarOpen(false);
           }}
@@ -868,7 +931,7 @@ export default function Index() {
         />
       </div>
 
-      <main ref={mainScrollRef} className="flex-1 min-h-screen overflow-y-auto relative">
+      <main ref={mainScrollRef} className="relative min-h-screen flex-1 overflow-y-auto pt-14 lg:pt-0">
         <div className="absolute top-3 right-4 z-20">
           <SaveStatusIndicator status={saveStatus} />
         </div>

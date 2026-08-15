@@ -5,7 +5,7 @@ import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from '@/components/ui/dropdown-menu';
 import {
-  Upload, Download, Printer, CheckCircle2, Lock, XCircle, History, ChevronDown, RotateCcw,
+  Upload, Download, Printer, CheckCircle2, Lock, XCircle, History, ChevronDown, RotateCcw, MoreHorizontal,
 } from 'lucide-react';
 import type { Project, Additive as AdditiveModel, AdditiveStatus } from '@/types/project';
 import { STATUS_BADGE, STATUS_LABEL } from './types';
@@ -57,7 +57,7 @@ export default function AdditiveHeader({
           Aditivo {active ? `— ${active.name}` : ''}
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Importação de planilhas de aditivo contratual (Sintética + Analítica).
+          Importação, análise, aprovação e integração do aditivo contratual.
         </p>
         {active && (
           <div className="mt-2 flex items-center gap-2 flex-wrap">
@@ -126,27 +126,6 @@ export default function AdditiveHeader({
         <Button variant="default" size="sm" onClick={onOpenImport}>
           <Upload className="w-4 h-4 mr-1" /> Importar Excel
         </Button>
-        {(project.budgetItems ?? []).some(b => b.source === 'sintetica') && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onUseSynthetic}
-            title="Cria um aditivo em rascunho a partir da Sintética já importada na Medição/EAP"
-          >
-            <Upload className="w-4 h-4 mr-1" /> Usar Sintética da Medição
-          </Button>
-        )}
-        {active?.isContracted && !active.editUnlocked && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={onUnlockIntegrated}
-            title="Libera este aditivo integrado para revisar quantidades, novas composicoes e exclusoes antes de reintegrar."
-          >
-            <RotateCcw className="w-4 h-4 mr-1" />
-            Reabrir edicao
-          </Button>
-        )}
         {active && (active.status === 'aprovado' || active.isContracted) && (
           <Button
             size="sm"
@@ -210,9 +189,22 @@ export default function AdditiveHeader({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <Button variant="outline" size="sm" disabled={!active} onClick={onOpenHistory}>
-          <History className="w-4 h-4 mr-1" /> Histórico
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm">
+              <MoreHorizontal className="mr-1 h-4 w-4" /> Mais ações
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-64">
+            {(project.budgetItems ?? []).some(b => b.source === 'sintetica') && (
+              <DropdownMenuItem onSelect={onUseSynthetic}><Upload className="mr-2 h-4 w-4" /> Usar Sintética da Medição</DropdownMenuItem>
+            )}
+            {active?.isContracted && !active.editUnlocked && (
+              <DropdownMenuItem onSelect={onUnlockIntegrated}><RotateCcw className="mr-2 h-4 w-4" /> Reabrir edição</DropdownMenuItem>
+            )}
+            <DropdownMenuItem disabled={!active} onSelect={onOpenHistory}><History className="mr-2 h-4 w-4" /> Histórico</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );

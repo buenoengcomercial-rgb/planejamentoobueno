@@ -30,17 +30,17 @@ interface Props {
 
 const SIGNAL_META: Record<RealCostSignal, { label: string; cls: string; dot: string }> = {
   healthy: {
-    label: 'Saudavel',
+    label: 'Saudável',
     cls: 'border-success/35 bg-success/10 text-success',
     dot: 'bg-success',
   },
   attention: {
-    label: 'Atencao',
+    label: 'Atenção',
     cls: 'border-warning/40 bg-warning/10 text-warning',
     dot: 'bg-warning',
   },
   danger: {
-    label: 'Critico',
+    label: 'Crítico',
     cls: 'border-destructive/35 bg-destructive/10 text-destructive',
     dot: 'bg-destructive',
   },
@@ -331,7 +331,7 @@ function RealCostGroupRows({
             <span className="font-mono tabular-nums">{group.number}</span>
             <span className="ml-1 uppercase tracking-wide">{group.name}</span>
             <span className="ml-2 text-[10px] font-medium text-muted-foreground">
-              {group.totals.compositionCount} composicao(oes)
+              {group.totals.compositionCount} composição(ões)
             </span>
           </button>
         </td>
@@ -340,11 +340,11 @@ function RealCostGroupRows({
         <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(group.totals.laborCost)}</td>
         <td className={`px-2 py-1.5 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(group.totals.committedCost)}</td>
         <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(group.totals.realCost)}</td>
-        <td className={`px-2 py-1.5 text-right tabular-nums ${group.totals.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
-          {fmtBRL(group.totals.grossProfit)}
+        <td className={`px-2 py-1.5 text-right tabular-nums ${group.totals.signal === 'incomplete' ? 'text-muted-foreground' : group.totals.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
+          {group.totals.signal === 'incomplete' ? '—' : fmtBRL(group.totals.grossProfit)}
         </td>
-        <td className={`px-2 py-1.5 text-right tabular-nums ${marginTone(group.totals.marginPct)}`}>
-          {fmtPct(group.totals.marginPct)}
+        <td className={`px-2 py-1.5 text-right tabular-nums ${group.totals.signal === 'incomplete' ? 'text-muted-foreground' : marginTone(group.totals.marginPct)}`}>
+          {group.totals.signal === 'incomplete' ? '—' : fmtPct(group.totals.marginPct)}
         </td>
         <td className="px-2 py-1.5 text-center tabular-nums">{group.totals.pendingCompositionCount}</td>
         <td className="px-2 py-1.5 text-center"><SignalBadge signal={group.totals.signal} /></td>
@@ -383,10 +383,12 @@ function RealCostGroupRows({
                   <td className="p-2 align-top text-right tabular-nums">{fmtBRL(row.laborCost)}</td>
                   <td className={`p-2 align-top text-right tabular-nums ${BORDER_L}`}>{fmtBRL(row.committedCost)}</td>
                   <td className="p-2 align-top text-right tabular-nums font-semibold">{fmtBRL(row.realCost)}</td>
-                  <td className={`p-2 align-top text-right tabular-nums font-semibold ${row.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
-                    {fmtBRL(row.grossProfit)}
+                  <td className={`p-2 align-top text-right tabular-nums font-semibold ${row.signal === 'incomplete' ? 'text-muted-foreground' : row.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
+                    {row.signal === 'incomplete' ? '—' : fmtBRL(row.grossProfit)}
                   </td>
-                  <td className={`p-2 align-top text-right tabular-nums font-semibold ${marginTone(row.marginPct)}`}>{fmtPct(row.marginPct)}</td>
+                  <td className={`p-2 align-top text-right tabular-nums font-semibold ${row.signal === 'incomplete' ? 'text-muted-foreground' : marginTone(row.marginPct)}`}>
+                    {row.signal === 'incomplete' ? '—' : fmtPct(row.marginPct)}
+                  </td>
                   <td className="p-2 align-top text-center">{pendingCount(row)}</td>
                   <td className="p-2 align-top text-center"><SignalBadge signal={row.signal} /></td>
                 </tr>
@@ -525,6 +527,10 @@ export default function RealCost({ project }: Props) {
   const visibleCompositionCount = visibleTotals.compositionCount;
 
   const maxMonthValue = Math.max(1, ...analysis.months.map(month => Math.max(month.contractedValue, month.realCost)));
+  const costDataComplete = analysis.totals.signal !== 'incomplete';
+  const costCoverage = analysis.compositions.length > 0
+    ? Math.max(0, Math.round(((analysis.compositions.length - analysis.pending.incompleteCompositions) / analysis.compositions.length) * 100))
+    : 0;
 
   return (
     <div className="p-3 lg:p-4 space-y-3 max-w-[1900px] mx-auto">
@@ -535,14 +541,24 @@ export default function RealCost({ project }: Props) {
               <CircleDollarSign className="h-5 w-5 text-primary" />
               <h1 className="text-xl font-bold text-foreground">Custo real de obra</h1>
             </div>
-            <p className="mt-1 max-w-4xl text-xs text-muted-foreground">
-              Compara o contrato com a referencia da Analitica e com os valores comprometidos em cotacoes e compras.
-              Nao altera Medicao, Aditivo, Cronograma, Lista de Material ou Almoxarifado.
+            <p className="mt-1 max-w-4xl text-sm text-muted-foreground">
+              Compara o contrato com a referência da Analítica e com os valores comprometidos em cotações e compras.
+              Não altera Medição, Aditivo, Cronograma, Lista de Material ou Almoxarifado.
             </p>
           </div>
           <SignalBadge signal={analysis.totals.signal} />
         </div>
       </header>
+
+      {!costDataComplete && (
+        <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+          <div>
+            <p className="font-semibold text-foreground">Cálculo de lucro e margem incompleto</p>
+            <p className="mt-0.5 text-muted-foreground">Existem {analysis.pending.inputsWithoutQuote.toLocaleString('pt-BR')} insumos sem cotação e {analysis.pending.incompleteCompositions.toLocaleString('pt-BR')} composições com margem incompleta.</p>
+          </div>
+        </div>
+      )}
 
       <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-2">
         <StatCard
@@ -550,6 +566,13 @@ export default function RealCost({ project }: Props) {
           value={fmtBRL(analysis.totals.contractedValue)}
           hint="Receita com BDI"
           icon={CircleDollarSign}
+        />
+        <StatCard
+          label="Cobertura dos custos"
+          value={`${costCoverage}%`}
+          hint="Composições com dados suficientes"
+          icon={costDataComplete ? CheckCircle2 : AlertTriangle}
+          tone={costDataComplete ? 'success' : 'warning'}
         />
         <StatCard
           label="Custo comprometido"
@@ -567,25 +590,18 @@ export default function RealCost({ project }: Props) {
         />
         <StatCard
           label="Lucro bruto estimado"
-          value={fmtBRL(analysis.totals.grossProfit)}
-          hint="Contrato - comprometido"
+          value={costDataComplete ? fmtBRL(analysis.totals.grossProfit) : '—'}
+          hint={costDataComplete ? 'Contrato - comprometido' : 'Aguardando custos completos'}
           icon={analysis.totals.grossProfit >= 0 ? TrendingUp : TrendingDown}
-          tone={analysis.totals.grossProfit >= 0 ? 'success' : 'danger'}
+          tone={costDataComplete ? (analysis.totals.grossProfit >= 0 ? 'success' : 'danger') : 'warning'}
         />
         <StatCard
           label="Margem estimada"
-          value={fmtPct(analysis.totals.marginPct)}
-          hint="Semaforo por composicao"
+          value={costDataComplete ? fmtPct(analysis.totals.marginPct) : '—'}
+          hint={costDataComplete ? 'Semáforo por composição' : 'Cálculo incompleto'}
           icon={analysis.totals.marginPct >= 15 ? CheckCircle2 : AlertTriangle}
-          tone={analysis.totals.marginPct >= 15 ? 'success' : analysis.totals.marginPct >= 5 ? 'warning' : 'danger'}
+          tone={costDataComplete ? (analysis.totals.marginPct >= 15 ? 'success' : analysis.totals.marginPct >= 5 ? 'warning' : 'danger') : 'warning'}
         />
-        <Card className="p-3">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Pendencias</p>
-          <div className="mt-2 grid grid-cols-2 gap-1.5">
-            <PendingMini label="sem cotacao" value={analysis.pending.inputsWithoutQuote} />
-            <PendingMini label="margem incompleta" value={analysis.pending.incompleteCompositions} />
-          </div>
-        </Card>
       </section>
 
       <Card className="overflow-hidden">
@@ -594,7 +610,7 @@ export default function RealCost({ project }: Props) {
             <div>
               <h2 className="text-sm font-semibold">Planilha de custo real</h2>
               <p className="text-[11px] text-muted-foreground">
-                Capitulos e composicoes no mesmo quadro. Clique em uma composicao para abrir a analitica do custo real.
+                Capítulos e composições no mesmo quadro. Clique em uma composição para abrir a analítica do custo real.
               </p>
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -630,9 +646,9 @@ export default function RealCost({ project }: Props) {
               className="h-8 rounded-md border border-border bg-background px-2 text-xs"
             >
               <option value="all">Todos os status</option>
-              <option value="healthy">Margem saudavel</option>
-              <option value="attention">Atencao</option>
-              <option value="danger">Critico</option>
+              <option value="healthy">Margem saudável</option>
+              <option value="attention">Atenção</option>
+              <option value="danger">Crítico</option>
               <option value="incomplete">Incompleto</option>
             </select>
             <button
@@ -703,7 +719,7 @@ export default function RealCost({ project }: Props) {
               {filteredGroupTree.length === 0 && (
                 <tr>
                   <td colSpan={TABLE_COLSPAN} className="p-8 text-center text-sm text-muted-foreground">
-                    Nenhuma composicao encontrada com os filtros atuais.
+                    Nenhuma composição encontrada com os filtros atuais.
                   </td>
                 </tr>
               )}
@@ -712,18 +728,18 @@ export default function RealCost({ project }: Props) {
               <tfoot className="sticky bottom-0 z-10">
                 <tr className="border-t-2 border-slate-900 bg-slate-900 font-bold text-white">
                   <td colSpan={8} className="px-2 py-2 text-right uppercase tracking-wide">
-                    Total geral ({visibleCompositionCount} composicao(oes))
+                    Total geral ({visibleCompositionCount} composição(ões))
                   </td>
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(displayTotals.contractedValue)}</td>
                   <td className={`px-2 py-2 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(displayTotals.materialCost)}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(displayTotals.laborCost)}</td>
                   <td className={`px-2 py-2 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(displayTotals.committedCost)}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(displayTotals.realCost)}</td>
-                  <td className={`px-2 py-2 text-right tabular-nums ${displayTotals.grossProfit >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
-                    {fmtBRL(displayTotals.grossProfit)}
+                  <td className={`px-2 py-2 text-right tabular-nums ${displayTotals.signal === 'incomplete' ? 'text-slate-300' : displayTotals.grossProfit >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                    {displayTotals.signal === 'incomplete' ? '—' : fmtBRL(displayTotals.grossProfit)}
                   </td>
-                  <td className={`px-2 py-2 text-right tabular-nums ${displayTotals.marginPct >= 15 ? 'text-emerald-300' : displayTotals.marginPct >= 5 ? 'text-amber-300' : 'text-rose-300'}`}>
-                    {fmtPct(displayTotals.marginPct)}
+                  <td className={`px-2 py-2 text-right tabular-nums ${displayTotals.signal === 'incomplete' ? 'text-slate-300' : displayTotals.marginPct >= 15 ? 'text-emerald-300' : displayTotals.marginPct >= 5 ? 'text-amber-300' : 'text-rose-300'}`}>
+                    {displayTotals.signal === 'incomplete' ? '—' : fmtPct(displayTotals.marginPct)}
                   </td>
                   <td className="px-2 py-2 text-center tabular-nums">{displayTotals.pendingCompositionCount}</td>
                   <td className="px-2 py-2 text-center"><SignalBadge signal={displayTotals.signal} /></td>
@@ -739,7 +755,7 @@ export default function RealCost({ project }: Props) {
           <div>
             <div className="flex items-center gap-2">
               <Layers3 className="h-4 w-4 text-primary" />
-              <h2 className="text-sm font-semibold">Distribuicao mensal pelo Cronograma</h2>
+              <h2 className="text-sm font-semibold">Distribuição mensal pelo Cronograma</h2>
             </div>
             <p className="text-[11px] text-muted-foreground">Receita, custo real cotado, lucro e margem previstos conforme as datas do Gantt.</p>
           </div>
@@ -769,10 +785,12 @@ export default function RealCost({ project }: Props) {
                     <td className="p-2 font-medium">{month.label}</td>
                     <td className="p-2 text-right tabular-nums">{fmtBRL(month.contractedValue)}</td>
                     <td className="p-2 text-right tabular-nums">{fmtBRL(month.realCost)}</td>
-                    <td className={`p-2 text-right tabular-nums font-semibold ${month.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
-                      {fmtBRL(month.grossProfit)}
+                    <td className={`p-2 text-right tabular-nums font-semibold ${month.signal === 'incomplete' ? 'text-muted-foreground' : month.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
+                      {month.signal === 'incomplete' ? '—' : fmtBRL(month.grossProfit)}
                     </td>
-                    <td className={`p-2 text-right tabular-nums font-semibold ${marginTone(month.marginPct)}`}>{fmtPct(month.marginPct)}</td>
+                    <td className={`p-2 text-right tabular-nums font-semibold ${month.signal === 'incomplete' ? 'text-muted-foreground' : marginTone(month.marginPct)}`}>
+                      {month.signal === 'incomplete' ? '—' : fmtPct(month.marginPct)}
+                    </td>
                     <td className="p-2 text-center tabular-nums">{month.taskCount}</td>
                     <td className="p-2">
                       <div className="space-y-1">

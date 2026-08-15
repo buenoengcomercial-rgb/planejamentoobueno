@@ -37,6 +37,22 @@ export const ROLE_LABELS: Record<OrgRole, string> = {
   viewer: 'Visualizador',
 };
 
+export const ROLE_DESCRIPTIONS: Record<OrgRole, string> = {
+  owner: 'Controle total da empresa, usuários, obras e dados contratuais.',
+  admin: 'Gerencia usuários e obras, sem transferir a propriedade da empresa.',
+  engineer: 'Edita planejamento, produção, medições, custos e suprimentos.',
+  field_user: 'Consulta a programação e preenche os Diários de Obra.',
+  viewer: 'Acesso somente para consulta, sem alterações nos dados.',
+};
+
+export const ROLE_PERMISSIONS: Record<OrgRole, string[]> = {
+  owner: ['Administrar usuários', 'Criar e excluir obras', 'Editar todos os módulos'],
+  admin: ['Administrar usuários', 'Criar e excluir obras', 'Editar todos os módulos'],
+  engineer: ['Editar planejamento e campo', 'Gerir medições, custos e suprimentos'],
+  field_user: ['Consultar atividades', 'Preencher Diário de Obra'],
+  viewer: ['Consultar todos os módulos'],
+};
+
 export const STATUS_LABELS: Record<MemberStatus, string> = {
   active: 'Ativo',
   invited: 'Convidado',
@@ -51,6 +67,9 @@ export function canCreateProject(role: OrgRole): boolean {
 }
 export function canEditProject(role: OrgRole): boolean {
   return role === 'owner' || role === 'admin' || role === 'engineer';
+}
+export function canEditDailyReport(role: OrgRole): boolean {
+  return canEditProject(role) || role === 'field_user';
 }
 export function canDeleteProject(role: OrgRole): boolean {
   return role === 'owner' || role === 'admin';
@@ -169,13 +188,14 @@ export async function createMemberWithPassword(
       name: name?.trim() || null,
     },
   });
+  const response = data as { ok?: boolean; error?: string } | null;
   if (error) {
-    const msg = (data as any)?.error || error.message;
+    const msg = response?.error || error.message;
     if (msg === 'already_member') return { ok: false, reason: 'already_member' };
     return { ok: false, reason: 'error', message: msg };
   }
-  if (data && (data as any).ok) return { ok: true };
-  return { ok: false, reason: 'error', message: (data as any)?.error };
+  if (response?.ok) return { ok: true };
+  return { ok: false, reason: 'error', message: response?.error };
 }
 
 export async function updateMemberRole(memberId: string, role: OrgRole): Promise<void> {

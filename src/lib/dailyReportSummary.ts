@@ -1,6 +1,6 @@
 import type { Project, DailyReport } from '@/types/project';
 
-export type DailyEntryStatus = 'filled' | 'pending' | 'noProduction' | 'impediment';
+export type DailyEntryStatus = 'filled' | 'pending' | 'notFilled' | 'noProduction' | 'impediment';
 
 export interface DailyEntrySummary {
   date: string;            // ISO yyyy-mm-dd
@@ -19,6 +19,7 @@ export interface DailyReportPeriodSummary {
   totalDays: number;
   filledReports: number;
   missingReports: number;
+  notFilledReports: number;
   productionDays: number;
   noProductionDays: number;
   impedimentDays: number;
@@ -30,7 +31,8 @@ export interface DailyReportPeriodSummary {
 
 export function isDailyReportEmpty(report?: Partial<DailyReport> | null): boolean {
   if (!report) return true;
-  return !String(report.responsible ?? '').trim()
+  return !report.noProductionDeclared
+    && !String(report.responsible ?? '').trim()
     && !report.weather
     && !String(report.weatherOther ?? '').trim()
     && !report.workCondition
@@ -100,7 +102,11 @@ export function summarizeDailyReportsForPeriod(
   let filledReports = 0;
   let productionDays = 0;
   let impedimentDays = 0;
+  let missingReports = 0;
+  let notFilledReports = 0;
+  let noProductionDays = 0;
   const productionWithoutReportDates: string[] = [];
+  const today = new Date().toISOString().slice(0, 10);
 
   const entries: DailyEntrySummary[] = dates.map(date => {
     const report = reportsMap.get(date);
@@ -110,6 +116,7 @@ export function summarizeDailyReportsForPeriod(
     const hasImpediment = impedimentText.length > 0;
     // "preenchido" = existe um diário com pelo menos um campo significativo.
     const hasReport = !!report && !isDailyReportEmpty(report);
+    const declaredNoProduction = !!report?.noProductionDeclared;
 
     if (hasReport) filledReports++;
     if (hasProduction) productionDays++;
@@ -118,9 +125,14 @@ export function summarizeDailyReportsForPeriod(
 
     let status: DailyEntryStatus;
     if (hasImpediment) status = 'impediment';
+    else if (declaredNoProduction && !hasProduction) status = 'noProduction';
     else if (hasReport) status = 'filled';
-    else if (hasProduction) status = 'pending'; // produção sem diário => pendente
-    else status = 'noProduction'; // sem produção e sem diário => sem produção
+    else if (date <= today) status = 'pending';
+    else status = 'notFilled';
+
+    if (status === 'pending') missingReports++;
+    if (status === 'notFilled') notFilledReports++;
+    if (status === 'noProduction') noProductionDays++;
 
     return {
       date,
@@ -139,9 +151,10 @@ export function summarizeDailyReportsForPeriod(
     endDate,
     totalDays: dates.length,
     filledReports,
-    missingReports: productionWithoutReportDates.length,
+    missingReports,
+    notFilledReports,
     productionDays,
-    noProductionDays: dates.length - productionDays,
+    noProductionDays,
     impedimentDays,
     reportDates: dates,
     entries,
@@ -156,6 +169,7 @@ export interface DailyReportSnapshot {
   totalDays: number;
   filledReports: number;
   missingReports: number;
+  notFilledReports?: number;
   productionDays: number;
   noProductionDays: number;
   impedimentDays: number;
@@ -169,6 +183,7 @@ export function buildDailyReportSnapshot(s: DailyReportPeriodSummary): DailyRepo
     totalDays: s.totalDays,
     filledReports: s.filledReports,
     missingReports: s.missingReports,
+    notFilledReports: s.notFilledReports,
     productionDays: s.productionDays,
     noProductionDays: s.noProductionDays,
     impedimentDays: s.impedimentDays,

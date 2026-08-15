@@ -19,9 +19,13 @@ import { DailyReportPhotoLightbox } from '@/components/dailyReport/DailyReportPh
 import { DailyReportPhotoDeleteDialog } from '@/components/dailyReport/DailyReportPhotoDeleteDialog';
 import { DailyReportProductionSection } from '@/components/dailyReport/DailyReportProductionSection';
 import { PeriodReportsSection } from '@/components/dailyReport/PeriodReportsSection';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { CalendarDays, History } from 'lucide-react';
+import { useState } from 'react';
 
 
-export default function DailyReport({ project, onProjectChange, undoButton, initialDate, initialMeasurementFilter, navKey }: DailyReportProps) {
+export default function DailyReport({ project, onProjectChange, undoButton, readOnly = false, initialDate, initialMeasurementFilter, navKey }: DailyReportProps) {
+  const [activeView, setActiveView] = useState<'day' | 'history'>('day');
   const {
     selectedDate,
     setSelectedDate,
@@ -110,27 +114,51 @@ export default function DailyReport({ project, onProjectChange, undoButton, init
         handlePrintPeriod={handlePrintPeriod}
       />
 
-      {/* Vínculo com Medição */}
-      <DailyReportMeasurementBanner dateMembership={dateMembership} />
+      <Tabs value={activeView} onValueChange={value => setActiveView(value as 'day' | 'history')}>
+        <TabsList className="h-11 w-full justify-start sm:w-auto">
+          <TabsTrigger value="day" className="min-h-10 gap-2 px-4 text-sm"><CalendarDays className="h-4 w-4" /> Registro do dia</TabsTrigger>
+          <TabsTrigger value="history" className="min-h-10 gap-2 px-4 text-sm"><History className="h-4 w-4" /> Histórico da medição</TabsTrigger>
+        </TabsList>
 
-      {/* Diários por Medição (quando há período selecionado) */}
-      {activePeriod && periodSummary && (
-        <PeriodReportsSection
-          period={activePeriod}
-          summary={periodSummary}
-          selectedDate={selectedDate}
-          onSelectDate={setSelectedDate}
-        />
-      )}
+        <TabsContent value="history" className="mt-4">
+          {activePeriod && periodSummary ? (
+            <PeriodReportsSection
+              period={activePeriod}
+              summary={periodSummary}
+              selectedDate={selectedDate}
+              onSelectDate={date => {
+                setSelectedDate(date);
+                setActiveView('day');
+              }}
+            />
+          ) : (
+            <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
+              Selecione uma medição para consultar o histórico de Diários.
+            </div>
+          )}
+        </TabsContent>
 
-      {/* Resumo */}
-      <DailyReportSummaryCards summary={summary} />
+        <TabsContent value="day" className="mt-4 space-y-4">
+          <DailyReportMeasurementBanner dateMembership={dateMembership} />
 
-      {/* Informações gerais */}
-      <DailyReportGeneralInfo currentReport={currentReport} updateField={updateField} onClearDay={clearDailyReport} />
+          <DailyReportSummaryCards summary={summary} />
 
-      {/* Equipes / Equipamentos lado a lado */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {readOnly && (
+            <div role="status" className="rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+              Este perfil pode consultar e imprimir o Diário, mas não pode alterar os registros.
+            </div>
+          )}
+
+          <fieldset disabled={readOnly} className="space-y-4 disabled:opacity-80">
+
+          <DailyReportGeneralInfo
+            currentReport={currentReport}
+            updateField={updateField}
+            onClearDay={clearDailyReport}
+            hasProduction={production.some(item => item.actualQuantity > 0)}
+          />
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <DailyReportTeamsCard
           currentReport={currentReport}
           projectTeams={projectTeams}
@@ -148,13 +176,11 @@ export default function DailyReport({ project, onProjectChange, undoButton, init
           updateEqRow={updateEqRow}
           removeEqRow={removeEqRow}
         />
-      </div>
+          </div>
 
-      {/* Textos longos */}
-      <DailyReportTextAreas currentReport={currentReport} updateField={updateField} />
+          <DailyReportTextAreas currentReport={currentReport} updateField={updateField} />
 
-      {/* Fotos da Obra */}
-      <DailyReportPhotosCard
+          <DailyReportPhotosCard
         photos={photos}
         visiblePhotos={visiblePhotos}
         photosByTask={photosByTask}
@@ -169,15 +195,17 @@ export default function DailyReport({ project, onProjectChange, undoButton, init
         updatePhoto={updatePhoto}
         setLightbox={setLightbox}
         setConfirmDelete={setConfirmDelete}
-      />
+          />
 
-      {/* Produção do dia */}
-      <DailyReportProductionSection
+          <DailyReportProductionSection
         selectedDate={selectedDate}
         grouped={grouped}
         photosByTask={photosByTask}
         setPhotoFilter={setPhotoFilter}
-      />
+          />
+          </fieldset>
+        </TabsContent>
+      </Tabs>
 
       {/* Lightbox */}
       <DailyReportPhotoLightbox lightbox={lightbox} setLightbox={setLightbox} />

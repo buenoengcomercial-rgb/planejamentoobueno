@@ -36,6 +36,7 @@ const App = () => (
               <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="/team" element={<TeamManagement />} />
               <Route path="/" element={<Index />} />
+              <Route path="/obras/:routeProjectId/:routeView" element={<Index />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </OrganizationProvider>

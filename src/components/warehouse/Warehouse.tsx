@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Project } from '@/types/project';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, FileBarChart, Warehouse as WarehouseIcon, RotateCcw, ReceiptText } from 'lucide-react';
+import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, FileBarChart, Warehouse as WarehouseIcon, RotateCcw, ReceiptText, Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { clearWarehouse, ensureWarehouse, panelSummary } from '@/lib/warehouse';
 import { cn } from '@/lib/utils';
@@ -30,8 +31,6 @@ export default function Warehouse({ project, onProjectChange }: Props) {
   const summary = useMemo(() => panelSummary(ensured), [ensured]);
 
   const kpis = [
-    { label: 'Planejado', value: summary.totalPlanned },
-    { label: 'Comprado', value: summary.totalPurchased, tone: 'primary' as const },
     { label: 'Recebido', value: summary.totalReceived, tone: 'ok' as const },
     { label: 'Retirado', value: summary.totalWithdrawn },
     { label: 'Saldo físico', value: summary.totalBalance, tone: 'primary' as const, strong: true },
@@ -63,21 +62,30 @@ export default function Warehouse({ project, onProjectChange }: Props) {
 
   return (
     <div className="p-4 space-y-4">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-start gap-3">
         <WarehouseIcon className="w-5 h-5 text-primary" />
-        <h2 className="text-lg font-bold">Estoque / Almoxarifado</h2>
-        <span className="ml-auto text-[11px] text-muted-foreground">
+        <div>
+          <h2 className="text-xl font-bold">Estoque e Almoxarifado</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Recebimentos, retiradas, requisições e controle físico dos materiais.</p>
+        </div>
+        <span className="ml-auto text-xs text-muted-foreground">
           Abaixo do mínimo: <strong className="text-destructive">{summary.underMinCount}</strong>
           <span className="mx-1.5">·</span>
           Termos abertos: <strong className="text-foreground">{summary.openCustodyCount}</strong>
         </span>
-        <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={handleClearWarehouse}>
-          <RotateCcw className="w-3.5 h-3.5 mr-1" />
-          Limpar almoxarifado
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button type="button" variant="outline" size="sm" className="min-h-10"><Settings2 className="mr-1.5 h-4 w-4" /> Administração</Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={handleClearWarehouse}>
+              <RotateCcw className="mr-2 h-4 w-4" /> Limpar almoxarifado
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {kpis.map(k => (
           <div key={k.label} className="bg-card border border-border rounded-md px-3 py-2">
             <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">{k.label}</div>
@@ -89,7 +97,7 @@ export default function Warehouse({ project, onProjectChange }: Props) {
       </div>
 
       <Tabs value={tab} onValueChange={setTab} className="w-full">
-        <TabsList className="bg-muted h-9 flex-wrap">
+        <TabsList className="h-11 w-full justify-start overflow-x-auto bg-muted">
           <TabsTrigger value="painel" className="text-xs"><LayoutDashboard className="w-3.5 h-3.5 mr-1" /> Painel</TabsTrigger>
           <TabsTrigger value="estoque" className="text-xs"><Boxes className="w-3.5 h-3.5 mr-1" /> Materiais</TabsTrigger>
           <TabsTrigger value="notas" className="text-xs"><ReceiptText className="w-3.5 h-3.5 mr-1" /> Notas fiscais</TabsTrigger>

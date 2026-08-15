@@ -500,8 +500,9 @@ export interface DailyReportAttachment {
 
 export interface DailyReport {
   id: string;
-  /** ISO yyyy-mm-dd — chave por data. */
   date: string;
+  /** Declaração explícita de que não houve produção no dia. */
+  noProductionDeclared?: boolean;
   responsible?: string;
   weather?: WeatherCondition;
   weatherOther?: string;
@@ -594,6 +595,32 @@ export interface ManagementRoutine {
   weeklyChecklist: ManagementChecklistItem[];
   meetings: ManagementWeeklyMeeting[];
   weeklyPlans?: ManagementWeeklyPlanItem[];
+}
+
+export type WeeklyRoutineDiaryStatus = 'notFilled' | 'filled' | 'noProduction' | 'impediment';
+
+/** Modelo somente de apresentação, derivado do Cronograma e dos Diários existentes. */
+export interface WeeklyRoutineActivity {
+  taskId: string;
+  taskName: string;
+  chapterName: string;
+  chapterNumber?: string;
+  date: string;
+  startDate: string;
+  endDate: string;
+  plannedQuantity: number;
+  actualQuantity: number;
+  unit: string;
+  teamCode?: TeamCode;
+  responsible?: string;
+  completed: boolean;
+}
+
+/** Um dia da agenda semanal; não é persistido no projeto. */
+export interface WeeklyRoutineDay {
+  date: string;
+  diaryStatus: WeeklyRoutineDiaryStatus;
+  activities: WeeklyRoutineActivity[];
 }
 
 export interface Project {

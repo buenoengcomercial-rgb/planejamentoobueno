@@ -10,7 +10,6 @@ import {
   BrickWall,
   CheckCircle2,
   CircleSlash,
-  DollarSign,
   HardHat,
   Target,
   TrendingUp,
@@ -140,16 +139,9 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
 
   const cards = [
     { label: 'Progresso Geral', value: `${overallProgress}%`, icon: TrendingUp, color: 'text-primary' },
-    { label: 'Tarefas Concluidas', value: `${completedTasks}/${totalTasks}`, icon: CheckCircle2, color: 'text-success' },
-    { label: 'Caminho Critico', value: `${criticalTasks}`, icon: Target, color: 'text-destructive' },
+    { label: 'Tarefas concluídas', value: `${completedTasks}/${totalTasks}`, icon: CheckCircle2, color: 'text-success' },
+    { label: 'Caminho crítico', value: `${criticalTasks}`, icon: Target, color: 'text-destructive' },
     { label: 'Atrasos', value: `${delayedTasks}`, icon: AlertTriangle, color: 'text-destructive' },
-    {
-      label: 'Custo Cotado',
-      value: compactBRL(financial.quotedLocalTotal),
-      icon: DollarSign,
-      color: 'text-warning',
-      hint: 'Cotacoes selecionadas na aba Custos.',
-    },
   ];
 
   return (
@@ -162,7 +154,7 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
         {undoButton}
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {cards.map((card, i) => (
           <motion.div
             key={card.label}
@@ -181,7 +173,28 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
         ))}
       </div>
 
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }} className="bg-card rounded-xl p-5 border border-border shadow-sm">
+      <section className="rounded-xl border border-border bg-card p-4 shadow-sm" aria-label="Alertas prioritários">
+        <div className="flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 text-warning" />
+          <h3 className="text-sm font-semibold">Alertas prioritários</h3>
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
+          <div className="rounded-lg bg-muted/40 p-3 text-sm"><strong>{delayedTasks}</strong> tarefa(s) atrasada(s)</div>
+          <div className="rounded-lg bg-muted/40 p-3 text-sm"><strong>{criticalTasks}</strong> atividade(s) no caminho crítico</div>
+          <div className="rounded-lg bg-muted/40 p-3 text-sm"><strong>{financial.pendingQuoteItemsCount}</strong> insumo(s) pendente(s) de cotação</div>
+        </div>
+      </section>
+
+      <details className="group overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-wide">Custos da obra</h3>
+            <p className="mt-1 text-sm text-muted-foreground">Cobertura de cotações: {fmtPct(financial.quoteCoveragePct)} · custo cotado: {compactBRL(financial.quotedLocalTotal)}</p>
+          </div>
+          <span className="text-sm font-semibold text-primary group-open:hidden">Ver detalhes</span>
+          <span className="hidden text-sm font-semibold text-primary group-open:inline">Recolher</span>
+        </summary>
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }} className="border-t border-border p-5">
         <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
           <div>
             <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide">Custos da obra</h3>
@@ -261,10 +274,11 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
           </div>
         </div>
       </motion.div>
+      </details>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="lg:col-span-2 bg-card rounded-xl p-5 border border-border shadow-sm">
-          <h3 className="text-sm font-semibold text-foreground mb-4">Progresso por Capitulo</h3>
+          <h3 className="text-sm font-semibold text-foreground mb-4">Progresso por Capítulo</h3>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={phaseData}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -325,7 +339,7 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6 }} className="bg-card rounded-xl p-5 border border-border shadow-sm">
           <h3 className="text-sm font-semibold text-foreground mb-4 flex items-center gap-2">
             <Zap className="w-4 h-4 text-warning" />
-            Sugestoes de Otimizacao (Caminho Critico)
+            Sugestões de otimização (caminho crítico)
           </h3>
           <div className="space-y-2">
             {optimizations.map(opt => (

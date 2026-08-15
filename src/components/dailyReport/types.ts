@@ -22,6 +22,8 @@ export interface DailyReportProps {
   project: Project;
   onProjectChange: (next: Project | ((prev: Project) => Project)) => void;
   undoButton?: React.ReactNode;
+  /** Mantém consulta, impressão e navegação disponíveis, sem expor controles de edição. */
+  readOnly?: boolean;
   /** Data ISO inicial vinda da Medição (ao clicar em "Abrir Diário"). */
   initialDate?: string;
   /** Filtro de medição inicial vindo da Medição (ex.: 'draft' ou id da medição). */

@@ -1192,7 +1192,7 @@ export default function ImportSyntheticDialog({
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div>
           <div className="text-xs font-semibold text-foreground">Conferencia da Sintetica A-J</div>
-          <div className="text-[11px] text-muted-foreground">Valide as colunas e as linhas; o BDI serÃ¡ informado manualmente no contrato.</div>
+          <div className="text-xs text-muted-foreground">Valide as colunas e as linhas; o BDI será informado manualmente no contrato.</div>
         </div>
         <Button type="button" size="sm" variant="outline" className="h-7 text-[11px]" onClick={reprocessSynthetic}>
           Atualizar leitura

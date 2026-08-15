@@ -29,6 +29,7 @@ interface TaskListProps {
   project: Project;
   onProjectChange: (project: Project) => void;
   undoButton?: React.ReactNode;
+  readOnly?: boolean;
 }
 
 const DAILY_HOURS = 8;
@@ -95,7 +96,7 @@ function InlineInput({ value, onChange, type = 'text', className = '', min, max,
   );
 }
 
-export default function TaskList({ project, onProjectChange, undoButton }: TaskListProps) {
+export default function TaskList({ project, onProjectChange, undoButton, readOnly = false }: TaskListProps) {
   // Lista de equipes do projeto (com fallback aos defaults).
   const projectTeams: TeamDefinition[] = project.teams ?? DEFAULT_TEAMS;
   const teamDef = useCallback((code?: TeamCode) => getTeamDefinition(code, projectTeams), [projectTeams]);
@@ -110,6 +111,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
   // Persiste no projeto sempre que o conjunto de capítulos minimizados mudar.
   // Compara antes de propagar para evitar loop com onProjectChange → re-render.
   useEffect(() => {
+    if (readOnly) return;
     const collapsedNow = project.phases
       .filter(p => !expandedPhases.has(p.id))
       .map(p => p.id)
@@ -124,7 +126,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
       uiState: { ...(project.uiState ?? {}), collapsedPhaseIds: collapsedNow },
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expandedPhases, project.phases]);
+  }, [expandedPhases, project.phases, readOnly]);
 
   const [expandedRup, setExpandedRup] = useState<string | null>(null);
   const [expandedDaily, setExpandedDaily] = useState<string | null>(null);
@@ -585,20 +587,28 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
           <p className="text-sm text-muted-foreground mt-1">Tarefas com cálculo RUP e composição de mão de obra</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {undoButton}
-          <button
-            onClick={() => setImportSyntheticOpen(true)}
-            className="flex h-10 items-center gap-2 px-4 rounded-lg bg-success text-success-foreground font-medium text-sm hover:bg-success/90 transition-colors shadow-sm"
-            title="Atualize ou substitua a Sintetica/Analitica de uma obra ja criada."
-          >
-            <Upload className="w-4 h-4" /> Atualizar planilha
-          </button>
-          <button
-            onClick={() => addPhase()}
-            className="flex h-10 items-center gap-2 px-4 rounded-lg border border-border bg-card text-foreground font-medium text-sm hover:bg-muted/50 transition-colors shadow-sm"
-          >
-            <FolderPlus className="w-4 h-4" /> Novo Capítulo
-          </button>
+          {readOnly ? (
+            <span className="inline-flex h-10 items-center rounded-lg border border-border bg-muted/40 px-4 text-sm font-medium text-muted-foreground">
+              Somente leitura
+            </span>
+          ) : (
+            <>
+              {undoButton}
+              <button
+                onClick={() => setImportSyntheticOpen(true)}
+                className="flex h-10 items-center gap-2 px-4 rounded-lg bg-success text-success-foreground font-medium text-sm hover:bg-success/90 transition-colors shadow-sm"
+                title="Atualize ou substitua a Sintética/Analítica de uma obra já criada."
+              >
+                <Upload className="w-4 h-4" /> Atualizar planilha
+              </button>
+              <button
+                onClick={() => addPhase()}
+                className="flex h-10 items-center gap-2 px-4 rounded-lg border border-border bg-card text-foreground font-medium text-sm hover:bg-muted/50 transition-colors shadow-sm"
+              >
+                <FolderPlus className="w-4 h-4" /> Novo capítulo
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -619,7 +629,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
             <span className="text-xs text-muted-foreground">({def.composition})</span>
           </div>
         ))}
-        <Popover>
+        {!readOnly && <Popover>
           <PopoverTrigger asChild>
             <button className="ml-auto inline-flex h-8 items-center gap-1.5 px-3 rounded border border-border text-xs text-muted-foreground hover:text-primary hover:border-primary transition-colors">
               <Settings2 className="w-3.5 h-3.5" /> Gerenciar
@@ -629,7 +639,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
             <div className="text-sm font-semibold text-foreground mb-2">Gerenciar Equipes</div>
             <GerenciarEquipes project={project} onProjectChange={onProjectChange} />
           </PopoverContent>
-        </Popover>
+        </Popover>}
       </div>
 
       {(() => {
@@ -638,6 +648,8 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
 
         const renderActionButtons = (phase: Phase, isSub: boolean) => (
           <>
+            {readOnly ? null : (
+              <>
             {editingPhase === phase.id ? (
               <button onClick={() => renamePhase(phase.id)} className="h-7 w-7 flex items-center justify-center rounded hover:bg-success/20 text-success transition-colors flex-shrink-0" title="Salvar nome">
                 <Check className="w-3.5 h-3.5" />
@@ -673,6 +685,8 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
+              </>
+            )}
           </>
         );
 
@@ -715,11 +729,11 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                 onDrop={e => handleChapterDrop(e, phase.id)}
               >
                 <div
-                  draggable
-                  onDragStart={e => handleChapterDragStart(e, phase.id)}
+                  draggable={!readOnly}
+                  onDragStart={e => { if (!readOnly) handleChapterDragStart(e, phase.id); }}
                   onDragEnd={handleChapterDragEnd}
-                  className={`flex-1 min-w-0 flex items-center gap-3 px-5 py-3 ${headerBgClass} text-foreground transition-colors duration-200 ease-out hover:bg-muted/70 cursor-move`}
-                  title="Arraste para mover/reordenar este capítulo"
+                  className={`flex-1 min-w-0 flex items-center gap-3 px-5 py-3 ${headerBgClass} text-foreground transition-colors duration-200 ease-out hover:bg-muted/70 ${readOnly ? 'cursor-default' : 'cursor-move'}`}
+                  title={readOnly ? undefined : 'Arraste para mover/reordenar este capítulo'}
                 >
                   <GripVertical className="w-3.5 h-3.5 text-muted-foreground/60 flex-shrink-0" />
                   <button
@@ -746,6 +760,8 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                       className="text-xs font-bold text-foreground bg-transparent border border-primary rounded px-1.5 py-0.5 w-16 tabular-nums focus:outline-none"
                       placeholder={String(pi + 1)}
                     />
+                  ) : readOnly ? (
+                    <span className="text-xs font-bold text-muted-foreground tabular-nums px-1.5 py-0.5">{num}</span>
                   ) : (
                     <button
                       onClick={e => { e.stopPropagation(); setEditingNumberId(phase.id); setNumberDraft(phase.customNumber ?? num); }}
@@ -808,14 +824,14 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                 <div className="flex items-center gap-1 mr-2 flex-shrink-0 min-w-0 max-w-[260px]" onMouseDown={e => e.stopPropagation()}>
                   {renderActionButtons(phase, isSub)}
                 </div>
-                <button
+                {!readOnly && <button
                   onClick={() => addTask(phase.id)}
                   onMouseDown={e => e.stopPropagation()}
                   className="mr-4 flex h-8 items-center gap-1.5 text-xs px-3 rounded-md bg-primary/10 text-primary font-medium hover:bg-primary/20 transition-colors"
                   title="Adicionar tarefa"
                 >
                    <Plus className="w-3.5 h-3.5" /> Tarefa
-                </button>
+                </button>}
               </div>
 
               {isExpanded && (
@@ -848,10 +864,10 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                         return (
                           <div
                             key={task.id}
-                            draggable
-                            onDragStart={() => handleDragStart(phase.id, task.id)}
-                            onDragOver={(e) => handleDragOver(e, task.id)}
-                            onDrop={(e) => handleDrop(e, phase.id, task.id)}
+                            draggable={!readOnly}
+                            onDragStart={() => { if (!readOnly) handleDragStart(phase.id, task.id); }}
+                            onDragOver={(e) => { if (!readOnly) handleDragOver(e, task.id); }}
+                            onDrop={(e) => { if (!readOnly) handleDrop(e, phase.id, task.id); }}
                             onDragEnd={handleDragEnd}
                             className={`${dropTargetId === task.id && dragTaskId !== task.id ? 'border-t-2 border-t-primary' : ''} ${dragTaskId === task.id ? 'opacity-40' : ''}`}
                           >
@@ -860,6 +876,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                               return (
                             <div
                               onClick={(e) => {
+                                if (readOnly) return;
                                 // Só dispara se o clique for em área neutra da linha
                                 // (não em inputs, selects, botões, links etc.)
                                 const target = e.target as HTMLElement;
@@ -868,7 +885,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                 setExpandedDaily(prev => (prev === task.id ? null : task.id));
                                 if (expandedRup === task.id) setExpandedRup(null);
                               }}
-                              className={`group grid gap-2 px-3 py-2 border-t border-border hover:brightness-110 transition-colors items-center cursor-pointer min-h-[46px] ${
+                              className={`group grid gap-2 px-3 py-2 border-t border-border hover:brightness-110 transition-colors items-center min-h-[46px] ${readOnly ? 'cursor-default' : 'cursor-pointer'} ${
                                 expandedDaily === task.id ? 'ring-1 ring-info/40 bg-info/[0.04]' : ''
                               } ${
                                 !rowTeam ? (isDelayed ? 'bg-destructive/5' : task.isCritical ? 'bg-destructive/[0.03]' : '') : ''
@@ -878,9 +895,10 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                               {/* Equipe inicial */}
                               <div className="flex items-center justify-center">
                                 <select
+                                  disabled={readOnly}
                                   value={task.team || ''}
                                   onChange={e => updateTask(phase.id, task.id, { team: (e.target.value || undefined) as TeamCode | undefined })}
-                                  className="w-9 h-8 text-xs font-bold text-center rounded cursor-pointer border-0 appearance-none"
+                                  className="w-9 h-8 text-xs font-bold text-center rounded disabled:cursor-default cursor-pointer border-0 appearance-none"
                                   style={rowTeam
                                     ? { backgroundColor: rowTeam.bgColor, color: rowTeam.textColor, border: `2px solid ${rowTeam.borderColor}` }
                                     : { backgroundColor: 'hsl(var(--muted))', color: 'hsl(var(--muted-foreground))' }
@@ -1043,16 +1061,20 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                       style={{ width: `${task.percentComplete}%` }}
                                     />
                                   </div>
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    max={100}
-                                    value={task.percentComplete}
-                                    onFocus={e => e.currentTarget.select()}
-                                    onChange={e => updateTask(phase.id, task.id, { percentComplete: Math.min(100, Math.max(0, Number(e.target.value))) })}
-                                    className={`w-11 text-xs font-bold text-center bg-transparent border rounded px-0.5 py-0.5 ${rowTeam ? 'border-current/30' : 'border-border'}`}
-                                    style={rowTeam ? { color: 'inherit' } : undefined}
-                                  />
+                                  {readOnly ? (
+                                    <span className="w-11 text-xs font-bold text-center tabular-nums">{task.percentComplete}%</span>
+                                  ) : (
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      max={100}
+                                      value={task.percentComplete}
+                                      onFocus={e => e.currentTarget.select()}
+                                      onChange={e => updateTask(phase.id, task.id, { percentComplete: Math.min(100, Math.max(0, Number(e.target.value))) })}
+                                      className={`w-11 text-xs font-bold text-center bg-transparent border rounded px-0.5 py-0.5 ${rowTeam ? 'border-current/30' : 'border-border'}`}
+                                      style={rowTeam ? { color: 'inherit' } : undefined}
+                                    />
+                                  )}
                                 </div>
                               </div>
 
@@ -1068,7 +1090,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                 >
                                   <Zap className="w-3.5 h-3.5" />
                                 </button>
-                                <button
+                                {!readOnly && <button
                                   onClick={() => confirmDelete(
                                     {
                                       title: 'Deseja realmente excluir esta tarefa?',
@@ -1089,8 +1111,8 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                   title="Excluir tarefa"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                                <div className="hidden group-hover:flex items-center gap-1">
+                                </button>}
+                                {!readOnly && <div className="hidden group-hover:flex items-center gap-1">
                                   {isEditing ? (
                                     <button onClick={() => setEditingTask(null)} className="p-1 rounded hover:bg-success/20 text-success transition-colors" title="Salvar">
                                       <Check className="w-3 h-3" />
@@ -1101,7 +1123,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                     </button>
                                   )}
                                   
-                                </div>
+                                </div>}
                               </div>
                             </div>
                               );
@@ -1125,13 +1147,13 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
 
                                     <div className="grid grid-cols-7 gap-2 text-xs font-semibold text-muted-foreground uppercase">
                                       <div>
-                                        <button
+                                        {!readOnly && <button
                                           onClick={() => addLabor(phase.id, task.id)}
                                           className="text-xs font-semibold uppercase text-primary hover:text-primary/80 flex items-center gap-1 transition-colors"
                                           title="Adicionar profissional"
                                         >
                                           <Plus className="w-3 h-3" /> Profissional
-                                        </button>
+                                        </button>}
                                       </div>
                                       <div className="text-center">Cargo normalizado</div>
                                       <div className="text-center">RUP (h/{task.unit})</div>
@@ -1198,19 +1220,21 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                                             ) : comp.rup}
                                           </div>
                                           <div className="text-center">
-                                            <input
-                                              type="number"
-                                              min={1}
-                                              value={comp.workerCount}
-                                              onFocus={e => e.currentTarget.select()}
-                                              onChange={e => updateLaborComp(phase.id, task.id, comp.id, { workerCount: Math.max(1, Number(e.target.value)) })}
-                                              className="w-12 text-center bg-transparent border border-border rounded px-1 py-0.5 text-xs"
-                                            />
+                                            {readOnly ? comp.workerCount : (
+                                              <input
+                                                type="number"
+                                                min={1}
+                                                value={comp.workerCount}
+                                                onFocus={e => e.currentTarget.select()}
+                                                onChange={e => updateLaborComp(phase.id, task.id, comp.id, { workerCount: Math.max(1, Number(e.target.value)) })}
+                                                className="w-12 text-center bg-transparent border border-border rounded px-1 py-0.5 text-xs"
+                                              />
+                                            )}
                                           </div>
                                           <div className="text-center">{Math.round(totalH)}h</div>
                                           <div className="text-center">{Math.round(effectiveH)}h</div>
                                           <div className="text-center">
-                                            {(task.laborCompositions?.length || 0) > 1 && (
+                                            {!readOnly && (task.laborCompositions?.length || 0) > 1 && (
                                               <button
                                                 onClick={() => confirmDelete(
                                                   {
@@ -1351,7 +1375,7 @@ export default function TaskList({ project, onProjectChange, undoButton }: TaskL
                   {expandedPhases.has(node.phase.id) && node.children.map((child, cIdx) =>
                     renderNode(child, idx * 100 + cIdx, depth + 1),
                   )}
-                  {expandedPhases.has(node.phase.id) && (() => {
+                  {!readOnly && expandedPhases.has(node.phase.id) && (() => {
                     const isAddDropActive =
                       dragChapterId &&
                       dragChapterId !== node.phase.id &&

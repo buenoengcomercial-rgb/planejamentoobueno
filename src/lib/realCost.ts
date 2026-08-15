@@ -275,7 +275,7 @@ const additiveDetailLabel = (composition: AdditiveComposition) => {
   if (added > 0 && suppressed > 0) return 'Acrescimo e supressao';
   if (added > 0) return 'Acrescimo';
   if (suppressed > 0) return 'Supressao';
-  return 'Sem alteracao';
+  return 'Sem alteração';
 };
 
 const hasAdditiveReference = (composition: AdditiveComposition) =>
@@ -757,7 +757,7 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
     const hasAnalytic = inputs.length > 0;
     const hasScheduleLink = !!(matchedTask || source.phaseId);
     const hasContractValue = source.contractedValue > 0;
-    const complete = hasAnalytic && hasScheduleLink && hasContractValue;
+    const complete = hasAnalytic && hasScheduleLink && hasContractValue && missingQuoteCount === 0;
     const grossProfit = money2(source.contractedValue - realCost);
     const marginPct = source.contractedValue > 0 ? trunc2((grossProfit / source.contractedValue) * 100) : 0;
 
@@ -1022,6 +1022,7 @@ function buildMonthlyRows(
 
   const months = buildMonthSkeleton(minDate, maxDate);
   const monthMap = new Map(months.map(month => [month.key, month]));
+  const incompleteMonthKeys = new Set<string>();
 
   for (const composition of compositions) {
     const dates = taskDates.get(composition.id);
@@ -1043,7 +1044,10 @@ function buildMonthlyRows(
 
     for (const key of touchedMonths) {
       const target = monthMap.get(key);
-      if (target) target.taskCount += 1;
+      if (target) {
+        target.taskCount += 1;
+        if (composition.signal === 'incomplete') incompleteMonthKeys.add(key);
+      }
     }
   }
 
@@ -1054,7 +1058,10 @@ function buildMonthlyRows(
       ...month,
       grossProfit,
       marginPct,
-      signal: signalFromMargin(marginPct, month.contractedValue > 0 && month.taskCount > 0),
+      signal: signalFromMargin(
+        marginPct,
+        month.contractedValue > 0 && month.taskCount > 0 && !incompleteMonthKeys.has(month.key),
+      ),
     };
   });
 }

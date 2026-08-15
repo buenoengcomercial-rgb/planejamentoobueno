@@ -30,6 +30,7 @@ export const WEATHER_LABEL_MAP: Record<string, string> = {
 export const STATUS_META = {
   filled:       { label: 'Preenchido',     row: 'bg-success/5 hover:bg-success/10',           pill: 'text-success border-success/40 bg-success/10',           icon: CheckCircle2 },
   pending:      { label: 'Pendente',       row: 'bg-warning/5 hover:bg-warning/10',           pill: 'text-warning border-warning/40 bg-warning/10',           icon: Clock4 },
+  notFilled:    { label: 'Não preenchido', row: 'bg-muted/20 hover:bg-muted/40',               pill: 'text-muted-foreground border-border bg-muted/40',         icon: Clock4 },
   noProduction: { label: 'Sem produção',   row: 'bg-orange-500/5 hover:bg-orange-500/10',     pill: 'text-orange-600 border-orange-500/40 bg-orange-500/10', icon: FileText },
   impediment:   { label: 'Com impedimento',row: 'bg-destructive/5 hover:bg-destructive/10',   pill: 'text-destructive border-destructive/40 bg-destructive/10', icon: AlertOctagon },
 } as const;
@@ -64,7 +65,7 @@ export function shortTaskName(raw?: string, max = 50): string {
   if (!raw) return '—';
   let s = raw.trim();
   // Corta no primeiro separador estrutural
-  const cut = s.search(/[,.;\-–—()\/]/);
+  const cut = s.search(/[,.;–—()/-]/);
   if (cut > 0) s = s.slice(0, cut).trim();
   if (s.length > max) s = s.slice(0, max - 1).trimEnd() + '…';
   return s || '—';

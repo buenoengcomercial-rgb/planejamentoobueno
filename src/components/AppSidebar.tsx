@@ -1,5 +1,5 @@
 import { AppView } from '@/types/project';
-import { LayoutDashboard, GanttChart, ListTodo, ClipboardList, ClipboardCheck, HardHat, Sparkles, ChevronsLeft, ChevronsRight, FolderOpen, Plus, ChevronDown, ChevronRight, Pencil, Copy, Trash2, Check, X, MoreHorizontal, Download, Upload, FileDown, Building2, Users, NotebookPen, FilePlus2, CircleDollarSign, Package, Warehouse, CalendarClock } from 'lucide-react';
+import { LayoutDashboard, GanttChart, ListTodo, ClipboardList, ClipboardCheck, ChevronsLeft, ChevronsRight, FolderOpen, Plus, ChevronDown, ChevronRight, Pencil, Copy, Trash2, Check, X, MoreHorizontal, Download, Upload, FileDown, Building2, Users, NotebookPen, FilePlus2, CircleDollarSign, Package, Warehouse, CalendarClock, LogOut } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
@@ -61,86 +61,46 @@ interface AppSidebarProps {
   onOpenTeam?: () => void;
 }
 
-type NavTone = 'blue' | 'emerald' | 'cyan' | 'violet' | 'amber' | 'rose' | 'slate';
+interface NavigationItem {
+  view: AppView;
+  label: string;
+  icon: React.ElementType;
+  nested?: boolean;
+}
 
-const navToneClasses: Record<NavTone, { base: string; active: string; ring: string }> = {
-  blue: {
-    base: 'bg-blue-500/12 text-blue-200 border-blue-400/20',
-    active: 'bg-blue-500 text-white border-blue-300/70',
-    ring: 'shadow-[0_0_0_1px_rgba(96,165,250,0.35)]',
+const navGroups: Array<{ label: string; items: NavigationItem[] }> = [
+  {
+    label: 'Visão geral',
+    items: [
+      { view: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      { view: 'management', label: 'Rotina semanal', icon: ClipboardCheck },
+    ],
   },
-  emerald: {
-    base: 'bg-emerald-500/12 text-emerald-200 border-emerald-400/20',
-    active: 'bg-emerald-500 text-white border-emerald-300/70',
-    ring: 'shadow-[0_0_0_1px_rgba(52,211,153,0.35)]',
+  {
+    label: 'Planejamento e campo',
+    items: [
+      { view: 'gantt', label: 'Cronograma', icon: GanttChart },
+      { view: 'tasks', label: 'Produção', icon: ListTodo },
+      { view: 'dailyReport', label: 'Diário de obra', icon: NotebookPen },
+    ],
   },
-  cyan: {
-    base: 'bg-cyan-500/12 text-cyan-200 border-cyan-400/20',
-    active: 'bg-cyan-500 text-white border-cyan-300/70',
-    ring: 'shadow-[0_0_0_1px_rgba(34,211,238,0.35)]',
+  {
+    label: 'Contrato e financeiro',
+    items: [
+      { view: 'measurement', label: 'Medição', icon: ClipboardList },
+      { view: 'additive', label: 'Aditivo', icon: FilePlus2 },
+      { view: 'additiveSchedule', label: 'Cronograma do aditivo', icon: CalendarClock, nested: true },
+      { view: 'realCost', label: 'Custos', icon: CircleDollarSign },
+    ],
   },
-  violet: {
-    base: 'bg-violet-500/12 text-violet-200 border-violet-400/20',
-    active: 'bg-violet-500 text-white border-violet-300/70',
-    ring: 'shadow-[0_0_0_1px_rgba(167,139,250,0.35)]',
+  {
+    label: 'Suprimentos',
+    items: [
+      { view: 'materials', label: 'Materiais e compras', icon: Package },
+      { view: 'warehouse', label: 'Almoxarifado', icon: Warehouse },
+    ],
   },
-  amber: {
-    base: 'bg-amber-500/12 text-amber-200 border-amber-400/20',
-    active: 'bg-amber-500 text-slate-950 border-amber-300/70',
-    ring: 'shadow-[0_0_0_1px_rgba(251,191,36,0.35)]',
-  },
-  rose: {
-    base: 'bg-rose-500/12 text-rose-200 border-rose-400/20',
-    active: 'bg-rose-500 text-white border-rose-300/70',
-    ring: 'shadow-[0_0_0_1px_rgba(251,113,133,0.35)]',
-  },
-  slate: {
-    base: 'bg-slate-500/12 text-slate-200 border-slate-400/20',
-    active: 'bg-slate-200 text-slate-950 border-white/70',
-    ring: 'shadow-[0_0_0_1px_rgba(226,232,240,0.28)]',
-  },
-};
-
-const navItems: { view: AppView; label: string; icon: React.ElementType; tone?: NavTone }[] = [
-  { view: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, tone: 'blue' },
-  { view: 'management', label: 'Rotina', icon: ClipboardCheck, tone: 'emerald' },
-  { view: 'gantt', label: 'Cronograma', icon: GanttChart, tone: 'cyan' },
-  { view: 'tasks', label: 'Producao', icon: ListTodo, tone: 'violet' },
-  { view: 'measurement', label: 'Medição', icon: ClipboardList },
-  { view: 'dailyReport', label: 'Diário de Obra', icon: NotebookPen },
-  { view: 'additive', label: 'Aditivo', icon: FilePlus2 },
-  { view: 'additiveSchedule', label: 'Cronograma do Aditivo', icon: CalendarClock, tone: 'rose' },
-  { view: 'realCost', label: 'Custo real de obra', icon: CircleDollarSign },
-  { view: 'materials', label: 'Lista de Material', icon: Package },
-  { view: 'warehouse', label: 'Almoxarifado', icon: Warehouse },
 ];
-
-const visibleNavItems = navItems
-  .filter(item => item.view !== 'dailyReport')
-  .map(item => item.view === 'tasks' ? { ...item, label: 'Produção diária' } : item);
-
-const navToneByView: Partial<Record<AppView, NavTone>> = {
-  dashboard: 'blue',
-  management: 'emerald',
-  gantt: 'cyan',
-  tasks: 'violet',
-  measurement: 'amber',
-  additive: 'rose',
-  additiveSchedule: 'rose',
-  realCost: 'emerald',
-  materials: 'cyan',
-  warehouse: 'blue',
-};
-
-const navLabelByView: Partial<Record<AppView, string>> = {
-  management: 'Rotina',
-  tasks: 'Producao',
-  measurement: 'Medicao',
-  additiveSchedule: 'Cronog. Aditivo',
-  realCost: 'Custos',
-  materials: 'Material',
-  warehouse: 'Almoxarifado',
-};
 
 export default function AppSidebar({ currentView, onViewChange, projectName, collapsed, onToggleCollapse, onSwitchProject, onCreateProject, onRenameProject, onDuplicateProject, onDeleteProject, onImportedProject, activeProjectId, projectsList, userEmail, onLogout, orgName, roleLabel, canManageTeam, onOpenTeam }: AppSidebarProps) {
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
@@ -542,58 +502,48 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
       </AlertDialog>
 
       <nav className="flex-1 p-2 overflow-y-auto">
-        {!collapsed && (
-          <div className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-wide text-[hsl(var(--sidebar-fg))]/45">
-            Modulos
-          </div>
-        )}
-        <div className="grid grid-cols-1 gap-1.5">
-          {visibleNavItems.map(({ view, label, icon: Icon, tone }) => {
-            const isActive = currentView === view;
-            const displayLabel = navLabelByView[view] ?? label;
-            const color = navToneClasses[tone ?? navToneByView[view] ?? 'slate'];
-            return (
-              <button
-                key={view}
-                onClick={() => onViewChange(view)}
-                className={`group relative rounded-md border text-left transition-all ${
-                  isActive
-                    ? `bg-white/10 border-white/20 text-white ${color.ring}`
-                    : 'bg-white/[0.035] border-white/10 text-[hsl(var(--sidebar-fg))]/80 hover:bg-white/[0.07] hover:border-white/20 hover:text-white'
-                } ${collapsed ? 'min-h-[44px] px-1.5 py-1.5 flex items-center justify-center' : 'min-h-[46px] px-2.5 py-2'}`}
-                title={collapsed ? displayLabel : undefined}
-              >
-                {isActive && (
-                  <motion.span
-                    layoutId="sidebar-active-tile"
-                    className="absolute inset-0 rounded-md bg-white/[0.035]"
-                    transition={{ type: 'spring', stiffness: 380, damping: 32 }}
-                  />
-                )}
-                <span className="relative z-10 flex items-center justify-center gap-2">
-                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors ${isActive ? color.active : color.base}`}>
-                    <Icon className="h-[17px] w-[17px]" strokeWidth={isActive ? 2.35 : 1.85} />
-                  </span>
-                  {!collapsed && (
-                    <span className="min-w-0 flex-1 text-left text-[12px] font-semibold leading-tight">
-                      {displayLabel}
-                    </span>
-                  )}
-                </span>
-              </button>
-            );
-          })}
+        <div className="space-y-4">
+          {navGroups.map(group => (
+            <section key={group.label} aria-label={group.label}>
+              {!collapsed && (
+                <p className="px-2 pb-1.5 text-xs font-semibold uppercase tracking-[0.08em] text-[hsl(var(--sidebar-fg))]/45">
+                  {group.label}
+                </p>
+              )}
+              <div className="space-y-1">
+                {group.items.map(({ view, label, icon: Icon, nested }) => {
+                  const isActive = currentView === view;
+                  return (
+                    <button
+                      key={view}
+                      onClick={() => onViewChange(view)}
+                      className={`group relative flex min-h-11 w-full items-center rounded-lg text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 ${
+                        isActive
+                          ? 'bg-white/12 text-white'
+                          : 'text-[hsl(var(--sidebar-fg))]/75 hover:bg-white/[0.07] hover:text-white'
+                      } ${collapsed ? 'justify-center px-2' : nested ? 'pl-8 pr-3' : 'px-3'}`}
+                      title={collapsed ? label : undefined}
+                      aria-current={isActive ? 'page' : undefined}
+                    >
+                      {isActive && (
+                        <motion.span
+                          layoutId="sidebar-active-indicator"
+                          className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-white"
+                          transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+                        />
+                      )}
+                      <Icon className={`h-[18px] w-[18px] shrink-0 ${isActive ? 'text-white' : 'text-[hsl(var(--sidebar-fg))]/55 group-hover:text-white'}`} strokeWidth={isActive ? 2.2 : 1.8} />
+                      {!collapsed && <span className="ml-3 min-w-0 flex-1 truncate text-sm font-medium">{label}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
         </div>
       </nav>
 
       <div className="p-2 border-t border-[hsl(var(--sidebar-border))] space-y-1">
-        <button
-          className={`w-full flex items-center ${collapsed ? 'justify-center' : ''} gap-3 px-3 py-2.5 rounded-lg text-sm font-medium bg-accent/10 text-accent hover:bg-accent/20 transition-colors`}
-          title={collapsed ? 'Gerar com IA' : undefined}
-        >
-          <Sparkles className="w-4 h-4" />
-          {!collapsed && 'Gerar com IA'}
-        </button>
         {canManageTeam && onOpenTeam && (
           <button
             onClick={onOpenTeam}
@@ -610,7 +560,7 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
             className={`w-full flex items-center ${collapsed ? 'justify-center' : ''} gap-3 px-3 py-2 rounded-lg text-xs font-medium hover:bg-[hsl(var(--sidebar-hover))] transition-colors opacity-80`}
             title={collapsed ? `Sair (${userEmail ?? ''})` : 'Sair'}
           >
-            <X className="w-4 h-4" />
+            <LogOut className="w-4 h-4" />
             {!collapsed && (
               <span className="truncate flex-1 text-left">
                 Sair{userEmail ? ` · ${userEmail}` : ''}

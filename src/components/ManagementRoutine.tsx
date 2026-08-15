@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type {
   ManagementActionStatus,
   ManagementChecklistItem,
@@ -7,43 +7,61 @@ import type {
   ManagementRoleAssignment,
   ManagementRoutine as ManagementRoutineData,
   ManagementWeeklyMeeting,
-  ManagementWeeklyPlanItem,
-  ManagementWeeklyTaskStatus,
   Project,
-  Task,
+  WeeklyRoutineActivity,
+  WeeklyRoutineDiaryStatus,
 } from '@/types/project';
-import { getAllTasks } from '@/data/sampleProject';
-import { DEFAULT_TEAMS, getTeamDefinition, type TeamCode } from '@/lib/teams';
+import { DEFAULT_TEAMS, getTeamDefinition } from '@/lib/teams';
+import {
+  addDaysISO,
+  buildWeeklyRoutine,
+  findNextScheduledActivity,
+  startOfWeekISO,
+  todayISO,
+} from '@/lib/weeklyRoutine';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
-  AlertTriangle,
+  ArrowRight,
   CalendarCheck2,
+  CalendarDays,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
   ClipboardCheck,
   ClipboardList,
+  Clock3,
+  NotebookPen,
   Plus,
   Save,
+  Settings2,
   Users,
 } from 'lucide-react';
 
 interface Props {
   project: Project;
   onProjectChange: (next: Project | ((prev: Project) => Project)) => void;
+  onOpenDailyReport: (dateISO: string) => void;
+  initialWeek?: string;
+  onWeekChange?: (weekStartISO: string) => void;
   undoButton?: React.ReactNode;
 }
+
+const DAY_NAMES = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
 
 const ROLE_LABEL: Record<ManagementRoleAssignment['role'], string> = {
   gestor_obra: 'Gestor da obra',
   mestre_encarregado: 'Mestre / encarregado',
   compras: 'Compras',
-  medicao: 'Medicao',
-  diario_obra: 'Diario de obra',
+  medicao: 'Medição',
+  diario_obra: 'Diário de obra',
   almoxarifado: 'Almoxarifado',
   financeiro: 'Financeiro',
   qualidade: 'Qualidade',
@@ -58,27 +76,19 @@ const CHECK_STATUS_LABEL: Record<ManagementChecklistStatus, string> = {
 const ACTION_STATUS_LABEL: Record<ManagementActionStatus, string> = {
   aberta: 'Aberta',
   em_andamento: 'Em andamento',
-  concluida: 'Concluida',
+  concluida: 'Concluída',
   cancelada: 'Cancelada',
-};
-
-const WEEKLY_TASK_STATUS_LABEL: Record<ManagementWeeklyTaskStatus, string> = {
-  planejada: 'Planejada',
-  cumprida: 'Cumprida',
-  parcial: 'Parcial',
-  nao_cumprida: 'Nao cumprida',
-  reprogramar: 'Reprogramar',
 };
 
 const DEFAULT_CHECKLIST: Array<Pick<ManagementChecklistItem, 'id' | 'title' | 'ownerRole' | 'status'>> = [
   { id: 'cronograma-atualizado', title: 'Cronograma atualizado', ownerRole: 'gestor_obra', status: 'pendente' },
-  { id: 'diario-preenchido', title: 'Diario de obra preenchido', ownerRole: 'diario_obra', status: 'pendente' },
-  { id: 'restricoes-revisadas', title: 'Restricoes da semana revisadas', ownerRole: 'gestor_obra', status: 'pendente' },
-  { id: 'materiais-criticos', title: 'Materiais criticos conferidos', ownerRole: 'compras', status: 'pendente' },
-  { id: 'medicoes-pendentes', title: 'Medicoes pendentes revisadas', ownerRole: 'medicao', status: 'pendente' },
+  { id: 'diario-preenchido', title: 'Diário de obra preenchido', ownerRole: 'diario_obra', status: 'pendente' },
+  { id: 'restricoes-revisadas', title: 'Restrições da semana revisadas', ownerRole: 'gestor_obra', status: 'pendente' },
+  { id: 'materiais-criticos', title: 'Materiais críticos conferidos', ownerRole: 'compras', status: 'pendente' },
+  { id: 'medicoes-pendentes', title: 'Medições pendentes revisadas', ownerRole: 'medicao', status: 'pendente' },
   { id: 'notas-pendentes', title: 'Notas fiscais pendentes conferidas', ownerRole: 'almoxarifado', status: 'pendente' },
   { id: 'custo-real', title: 'Custo real atualizado', ownerRole: 'financeiro', status: 'pendente' },
-  { id: 'decisoes-registradas', title: 'Decisoes da semana registradas', ownerRole: 'gestor_obra', status: 'pendente' },
+  { id: 'decisoes-registradas', title: 'Decisões da semana registradas', ownerRole: 'gestor_obra', status: 'pendente' },
 ];
 
 const DEFAULT_ROLES: ManagementRoleAssignment[] = [
@@ -97,42 +107,18 @@ function uid(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function parseISODate(value: string) {
-  const [year, month, day] = value.slice(0, 10).split('-').map(Number);
-  return new Date(year, (month || 1) - 1, day || 1);
-}
-
-function toISODate(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
-function todayISO() {
-  return toISODate(new Date());
-}
-
 function nowISO() {
   return new Date().toISOString();
 }
 
-function weekStartISO(value: string) {
-  const date = parseISODate(value);
-  const day = date.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  date.setDate(date.getDate() + diff);
-  return toISODate(date);
-}
-
-function addDaysISO(value: string, days: number) {
-  const date = parseISODate(value);
-  date.setDate(date.getDate() + days);
-  return toISODate(date);
-}
-
-function formatDateBR(value?: string) {
-  if (!value) return '-';
+function formatDateBR(value: string) {
   const [year, month, day] = value.slice(0, 10).split('-');
-  if (!year || !month || !day) return value;
   return `${day}/${month}/${year}`;
+}
+
+function formatShortDate(value: string) {
+  const [, month, day] = value.slice(0, 10).split('-');
+  return `${day}/${month}`;
 }
 
 function ensureRoutine(project: Project): ManagementRoutineData {
@@ -153,146 +139,108 @@ function ensureRoutine(project: Project): ManagementRoutineData {
   };
 }
 
-function taskEndISO(task: Task) {
-  const date = parseISODate(task.current?.endDate ?? task.baseline?.endDate ?? task.startDate);
-  if (!task.current?.endDate && !task.baseline?.endDate) date.setDate(date.getDate() + Math.max(0, (task.duration || 1) - 1));
-  return toISODate(date);
-}
+const DIARY_META: Record<WeeklyRoutineDiaryStatus, { label: string; className: string }> = {
+  notFilled: { label: 'Não preenchido', className: 'border-border bg-muted/40 text-muted-foreground' },
+  filled: { label: 'Preenchido', className: 'border-success/30 bg-success/10 text-success' },
+  noProduction: { label: 'Sem produção', className: 'border-warning/30 bg-warning/10 text-warning' },
+  impediment: { label: 'Com impedimento', className: 'border-destructive/30 bg-destructive/10 text-destructive' },
+};
 
-function overlapDays(startA: string, endA: string, startB: string, endB: string) {
-  const start = Math.max(parseISODate(startA).getTime(), parseISODate(startB).getTime());
-  const end = Math.min(parseISODate(endA).getTime(), parseISODate(endB).getTime());
-  if (end < start) return 0;
-  return Math.floor((end - start) / 86400000) + 1;
-}
-
-function plannedQuantityForWeek(task: Task, weekStart: string, weekEnd: string) {
-  const logsInWeek = (task.dailyLogs ?? []).filter(log => log.date >= weekStart && log.date <= weekEnd);
-  const loggedPlanned = logsInWeek.reduce((sum, log) => sum + (Number(log.plannedQuantity) || 0), 0);
-  if (loggedPlanned > 0) return Math.round(loggedPlanned * 100) / 100;
-  const total = Number(task.quantity) || 0;
-  const duration = task.originalDuration ?? task.baseline?.duration ?? task.duration ?? 0;
-  if (!total || !duration) return 0;
-  const days = overlapDays(task.current?.startDate ?? task.baseline?.startDate ?? task.startDate, taskEndISO(task), weekStart, weekEnd);
-  return Math.round((total / Math.max(1, duration)) * days * 100) / 100;
-}
-
-function actualQuantityFromLogs(task: Task, weekStart: string, weekEnd: string) {
-  return Math.round((task.dailyLogs ?? [])
-    .filter(log => log.date >= weekStart && log.date <= weekEnd)
-    .reduce((sum, log) => sum + (Number(log.actualQuantity) || 0), 0) * 100) / 100;
-}
-
-function taskWasFullySuppressed(task: Task) {
-  if (task.suppressedByAdditive) return true;
-  return (Number(task.quantity) || 0) <= 0 && (task.additiveHistory ?? []).some(h => (h.suppressedQuantity || 0) > 0);
-}
-
-function approvedAdditiveTaskIds(project: Project) {
-  const ids = new Set<string>();
-  for (const additive of project.additives ?? []) {
-    const approved = additive.status === 'aprovado' || additive.status === 'aditivo_contratado' || additive.isContracted;
-    if (!approved) continue;
-    for (const composition of additive.compositions ?? []) {
-      const original = Number(composition.originalQuantity ?? composition.quantity ?? 0) || 0;
-      const suppressed = Number(composition.suppressedQuantity ?? 0) || 0;
-      const added = Number(composition.addedQuantity ?? 0) || 0;
-      const finalQuantity = composition.isNewService ? added : Math.max(0, original + added - suppressed);
-      if (finalQuantity <= 0) continue;
-      if (composition.linkedTaskId) ids.add(composition.linkedTaskId);
-      if (composition.taskId) ids.add(composition.taskId);
-      if (composition.isNewService) ids.add(`add-${additive.id}-${composition.id}`);
-    }
-  }
-  return ids;
-}
-
-function deriveWeeklyStatus(planned: number, actual: number): ManagementWeeklyTaskStatus {
-  if (planned <= 0 && actual <= 0) return 'planejada';
-  if (actual >= planned) return 'cumprida';
-  if (actual > 0) return 'parcial';
-  return 'nao_cumprida';
-}
-
-function updateTaskTeam(project: Project, taskId: string, team: TeamCode | undefined): Project {
-  const mapTask = (task: Task): Task => ({
-    ...task,
-    team: task.id === taskId ? team : task.team,
-    children: task.children?.map(mapTask),
-  });
-  return {
-    ...project,
-    phases: project.phases.map(phase => ({
-      ...phase,
-      tasks: phase.tasks.map(mapTask),
-    })),
-  };
-}
-
-function buildMainChapterIndex(project: Project) {
-  const phaseById = new Map(project.phases.map(phase => [phase.id, phase]));
-  const orderByRoot = new Map<string, number>();
-  project.phases
-    .filter(phase => !phase.parentId)
-    .sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER))
-    .forEach((phase, index) => orderByRoot.set(phase.id, index));
-
-  const rootForPhase = (phaseId: string) => {
-    let current = phaseById.get(phaseId);
-    while (current?.parentId && phaseById.has(current.parentId)) {
-      current = phaseById.get(current.parentId);
-    }
-    return current ?? phaseById.get(phaseId);
-  };
-
-  const taskChapter = new Map<string, { id: string; name: string; order: number }>();
-  const visitTask = (task: Task, chapter: { id: string; name: string; order: number }) => {
-    taskChapter.set(task.id, chapter);
-    task.children?.forEach(child => visitTask(child, chapter));
-  };
-
-  for (const phase of project.phases) {
-    const root = rootForPhase(phase.id);
-    const chapter = {
-      id: root?.id ?? phase.id,
-      name: root?.name ?? phase.name,
-      order: orderByRoot.get(root?.id ?? phase.id) ?? Number.MAX_SAFE_INTEGER,
-    };
-    phase.tasks.forEach(task => visitTask(task, chapter));
-  }
-  return taskChapter;
-}
-
-function StatCard({ label, value, tone = 'default' }: { label: string; value: string | number; tone?: 'default' | 'success' | 'warning' | 'danger' }) {
-  const color =
-    tone === 'success' ? 'text-success' :
-    tone === 'warning' ? 'text-warning' :
-    tone === 'danger' ? 'text-destructive' :
-    'text-primary';
+function ActivityCard({
+  activity,
+  onOpen,
+  teams,
+}: {
+  activity: WeeklyRoutineActivity;
+  onOpen: () => void;
+  teams: Project['teams'];
+}) {
+  const team = getTeamDefinition(activity.teamCode, teams?.length ? teams : DEFAULT_TEAMS);
   return (
-    <Card className="p-3">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className={`mt-1 text-xl font-bold tabular-nums ${color}`}>{value}</p>
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group w-full rounded-lg border border-border bg-background p-3 text-left transition hover:border-primary/40 hover:bg-primary/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      aria-label={`Abrir diário de ${formatDateBR(activity.date)} para ${activity.taskName}`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <p className="line-clamp-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {activity.chapterNumber ? `${activity.chapterNumber} · ` : ''}{activity.chapterName}
+        </p>
+        {activity.completed && <CheckCircle2 className="h-4 w-4 shrink-0 text-success" aria-label="Atividade concluída" />}
+      </div>
+      <p className="mt-1 line-clamp-3 text-sm font-semibold leading-snug text-foreground">{activity.taskName}</p>
+      <dl className="mt-3 grid grid-cols-2 gap-x-2 gap-y-1 text-xs text-muted-foreground">
+        <div>
+          <dt className="sr-only">Equipe</dt>
+          <dd>{team?.label ?? 'Sem equipe'}</dd>
+        </div>
+        <div className="text-right tabular-nums">
+          <dt className="sr-only">Quantidade prevista</dt>
+          <dd>{activity.plannedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {activity.unit}</dd>
+        </div>
+        <div>
+          <dt className="sr-only">Período</dt>
+          <dd>{formatShortDate(activity.startDate)}–{formatShortDate(activity.endDate)}</dd>
+        </div>
+        <div className="truncate text-right">
+          <dt className="sr-only">Responsável</dt>
+          <dd>{activity.responsible || 'Sem responsável'}</dd>
+        </div>
+      </dl>
+      <span className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-primary">
+        Abrir diário <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+      </span>
+    </button>
+  );
+}
+
+function MetricCard({ label, value, icon: Icon, tone = 'primary' }: {
+  label: string;
+  value: number;
+  icon: React.ElementType;
+  tone?: 'primary' | 'success' | 'warning' | 'danger';
+}) {
+  const toneClass = tone === 'success' ? 'text-success' : tone === 'warning' ? 'text-warning' : tone === 'danger' ? 'text-destructive' : 'text-primary';
+  return (
+    <Card className="p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+          <p className={`mt-1 text-2xl font-bold tabular-nums ${toneClass}`}>{value}</p>
+        </div>
+        <Icon className={`h-5 w-5 ${toneClass}`} />
+      </div>
     </Card>
   );
 }
 
-function statusClass(status: ManagementWeeklyTaskStatus) {
-  if (status === 'cumprida') return 'border-success/30 bg-success/10 text-success';
-  if (status === 'parcial') return 'border-warning/35 bg-warning/10 text-warning';
-  if (status === 'nao_cumprida') return 'border-destructive/30 bg-destructive/10 text-destructive';
-  if (status === 'reprogramar') return 'border-primary/30 bg-primary/10 text-primary';
-  return 'border-border bg-muted text-muted-foreground';
-}
-
-export default function ManagementRoutine({ project, onProjectChange, undoButton }: Props) {
+export default function ManagementRoutine({ project, onProjectChange, onOpenDailyReport, initialWeek, onWeekChange, undoButton }: Props) {
   const routine = useMemo(() => ensureRoutine(project), [project]);
-  const tasks = useMemo(() => getAllTasks(project), [project]);
-  const additiveTaskIds = useMemo(() => approvedAdditiveTaskIds(project), [project.additives]);
-  const mainChapterByTask = useMemo(() => buildMainChapterIndex(project), [project.phases]);
-  const teams = project.teams?.length ? project.teams : DEFAULT_TEAMS;
-  const [selectedWeekStart, setSelectedWeekStart] = useState(() => weekStartISO(todayISO()));
+  const [activeTab, setActiveTab] = useState('agenda');
+  const [selectedDayDate, setSelectedDayDate] = useState<string | null>(null);
+  const [selectedWeekStart, setSelectedWeekStart] = useState(() => startOfWeekISO(initialWeek || todayISO()));
   const selectedWeekEnd = addDaysISO(selectedWeekStart, 6);
+  const week = useMemo(() => buildWeeklyRoutine(project, selectedWeekStart), [project, selectedWeekStart]);
+  const activities = week.flatMap(day => day.activities);
+  const uniqueActivities = new Set(activities.map(activity => activity.taskId)).size;
+  const completedActivities = new Set(activities.filter(activity => activity.completed).map(activity => activity.taskId)).size;
+  const activeDays = week.filter(day => day.activities.length > 0);
+  const filledReports = activeDays.filter(day => day.diaryStatus === 'filled' || day.diaryStatus === 'impediment' || day.diaryStatus === 'noProduction').length;
+  const pendingReports = activeDays.filter(day => day.date <= todayISO() && day.diaryStatus === 'notFilled').length;
+  const nextActivity = useMemo(() => findNextScheduledActivity(project, addDaysISO(selectedWeekEnd, 1)), [project, selectedWeekEnd]);
+  const selectedDay = selectedDayDate ? week.find(day => day.date === selectedDayDate) : undefined;
+
+  useEffect(() => {
+    if (initialWeek) setSelectedWeekStart(startOfWeekISO(initialWeek));
+  }, [initialWeek]);
+
+  const selectWeek = (weekStart: string) => {
+    const normalized = startOfWeekISO(weekStart);
+    setSelectedWeekStart(normalized);
+    onWeekChange?.(normalized);
+  };
+
   const [meetingDraft, setMeetingDraft] = useState<ManagementWeeklyMeeting>(() => ({
     id: uid('meeting'),
     date: todayISO(),
@@ -313,7 +261,7 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
   });
 
   const updateRoutine = (patch: Partial<ManagementRoutineData>) => {
-    onProjectChange(prev => ({ ...prev, managementRoutine: { ...ensureRoutine(prev), ...patch } }));
+    onProjectChange(previous => ({ ...previous, managementRoutine: { ...ensureRoutine(previous), ...patch } }));
   };
 
   const updateRole = (role: ManagementRoleAssignment['role'], patch: Partial<ManagementRoleAssignment>) => {
@@ -326,451 +274,292 @@ export default function ManagementRoutine({ project, onProjectChange, undoButton
     });
   };
 
-  const updateWeeklyPlanItem = (task: Task, patch: Partial<ManagementWeeklyPlanItem>) => {
-    const plannedQuantity = plannedQuantityForWeek(task, selectedWeekStart, selectedWeekEnd);
-    const existing = routine.weeklyPlans?.find(item => item.taskId === task.id && item.weekStart === selectedWeekStart);
-    const actualQuantity = patch.actualQuantity ?? existing?.actualQuantity ?? actualQuantityFromLogs(task, selectedWeekStart, selectedWeekEnd);
-    const nextItem: ManagementWeeklyPlanItem = {
-      id: existing?.id ?? uid('weekly-plan'),
-      taskId: task.id,
-      weekStart: selectedWeekStart,
-      weekEnd: selectedWeekEnd,
-      plannedQuantity,
-      actualQuantity,
-      teamCode: patch.teamCode ?? existing?.teamCode ?? task.team,
-      responsible: patch.responsible ?? existing?.responsible ?? task.responsible,
-      status: patch.status ?? existing?.status ?? deriveWeeklyStatus(plannedQuantity, actualQuantity),
-      notes: patch.notes ?? existing?.notes,
-      updatedAt: nowISO(),
-    };
-    const others = (routine.weeklyPlans ?? []).filter(item => !(item.taskId === task.id && item.weekStart === selectedWeekStart));
-    updateRoutine({ weeklyPlans: [...others, nextItem] });
-  };
-
-  const updateTeam = (task: Task, value: string) => {
-    const team = value ? value as TeamCode : undefined;
-    onProjectChange(prev => {
-      const nextProject = updateTaskTeam(prev, task.id, team);
-      const nextRoutine = ensureRoutine(nextProject);
-      const existing = nextRoutine.weeklyPlans?.find(item => item.taskId === task.id && item.weekStart === selectedWeekStart);
-      const item: ManagementWeeklyPlanItem = {
-        id: existing?.id ?? uid('weekly-plan'),
-        taskId: task.id,
-        weekStart: selectedWeekStart,
-        weekEnd: selectedWeekEnd,
-        plannedQuantity: plannedQuantityForWeek(task, selectedWeekStart, selectedWeekEnd),
-        actualQuantity: existing?.actualQuantity ?? actualQuantityFromLogs(task, selectedWeekStart, selectedWeekEnd),
-        teamCode: team,
-        responsible: existing?.responsible ?? task.responsible,
-        status: existing?.status ?? deriveWeeklyStatus(plannedQuantityForWeek(task, selectedWeekStart, selectedWeekEnd), existing?.actualQuantity ?? actualQuantityFromLogs(task, selectedWeekStart, selectedWeekEnd)),
-        notes: existing?.notes,
-        updatedAt: nowISO(),
-      };
-      const others = (nextRoutine.weeklyPlans ?? []).filter(plan => !(plan.taskId === task.id && plan.weekStart === selectedWeekStart));
-      return { ...nextProject, managementRoutine: { ...nextRoutine, weeklyPlans: [...others, item] } };
-    });
-  };
-
-  const weeklyRows = useMemo(() => {
-    const hasApprovedAdditiveScope = additiveTaskIds.size > 0;
-    return tasks
-      .filter(task => !taskWasFullySuppressed(task))
-      .filter(task => !hasApprovedAdditiveScope || additiveTaskIds.has(task.id))
-      .map(task => {
-        const start = task.current?.startDate ?? task.baseline?.startDate ?? task.startDate;
-        const end = taskEndISO(task);
-        const days = overlapDays(start, end, selectedWeekStart, selectedWeekEnd);
-        if (days <= 0) return null;
-        const saved = routine.weeklyPlans?.find(item => item.taskId === task.id && item.weekStart === selectedWeekStart);
-        const plannedQuantity = saved?.plannedQuantity ?? plannedQuantityForWeek(task, selectedWeekStart, selectedWeekEnd);
-        const actualQuantity = saved?.actualQuantity ?? actualQuantityFromLogs(task, selectedWeekStart, selectedWeekEnd);
-        const status = saved?.status ?? deriveWeeklyStatus(plannedQuantity, actualQuantity);
-        const chapter = mainChapterByTask.get(task.id) ?? { id: '__sem_capitulo__', name: 'Sem capitulo', order: Number.MAX_SAFE_INTEGER };
-        return { task, start, end, days, saved, plannedQuantity, actualQuantity, status, chapter };
-      })
-      .filter(Boolean)
-      .sort((a, b) => (
-        a!.chapter.order - b!.chapter.order ||
-        a!.chapter.name.localeCompare(b!.chapter.name) ||
-        a!.start.localeCompare(b!.start) ||
-        a!.task.name.localeCompare(b!.task.name)
-      )) as Array<{
-        task: Task;
-        start: string;
-        end: string;
-        days: number;
-        saved?: ManagementWeeklyPlanItem;
-        plannedQuantity: number;
-        actualQuantity: number;
-        status: ManagementWeeklyTaskStatus;
-        chapter: { id: string; name: string; order: number };
-      }>;
-  }, [additiveTaskIds, mainChapterByTask, routine.weeklyPlans, selectedWeekEnd, selectedWeekStart, tasks]);
-
-  const groupedWeeklyRows = useMemo(() => {
-    const groups: Array<{ chapter: { id: string; name: string; order: number }; rows: typeof weeklyRows }> = [];
-    const byChapter = new Map<string, { chapter: { id: string; name: string; order: number }; rows: typeof weeklyRows }>();
-    for (const row of weeklyRows) {
-      const existing = byChapter.get(row.chapter.id);
-      if (existing) {
-        existing.rows.push(row);
-      } else {
-        const group = { chapter: row.chapter, rows: [row] };
-        byChapter.set(row.chapter.id, group);
-        groups.push(group);
-      }
-    }
-    return groups;
-  }, [weeklyRows]);
-
-  const plannedTotal = weeklyRows.reduce((sum, row) => sum + row.plannedQuantity, 0);
-  const actualTotal = weeklyRows.reduce((sum, row) => sum + row.actualQuantity, 0);
-  const ppc = weeklyRows.length ? Math.round((weeklyRows.filter(row => row.status === 'cumprida').length / weeklyRows.length) * 100) : 0;
-  const openActions = routine.meetings.flatMap(m => m.actions).filter(a => a.status === 'aberta' || a.status === 'em_andamento').length;
-  const rolesFilled = routine.roles.filter(r => r.personName.trim()).length;
-
-  const diagnostic = useMemo(() => {
-    const checks = [
-      { label: 'Cronograma / EAP', ok: tasks.length > 0 },
-      { label: 'Contrato preenchido', ok: !!(project.contractInfo?.contractor || project.contractInfo?.contractNumber || project.contractInfo?.contractObject) },
-      { label: 'Equipes cadastradas', ok: teams.length > 0 },
-      { label: 'Orcamento importado', ok: (project.budgetItems?.length ?? 0) > 0 },
-      { label: 'Diario iniciado', ok: (project.dailyReports?.length ?? 0) > 0 },
-      { label: 'Plano semanal ativo', ok: weeklyRows.length > 0 },
-    ];
-    return Math.round((checks.filter(c => c.ok).length / checks.length) * 100);
-  }, [project, tasks.length, teams.length, weeklyRows.length]);
-
   const addActionToDraft = () => {
     const title = actionDraft.title.trim();
     if (!title) return;
-    setMeetingDraft(prev => ({ ...prev, actions: [...prev.actions, { ...actionDraft, id: uid('action'), title }] }));
+    setMeetingDraft(previous => ({ ...previous, actions: [...previous.actions, { ...actionDraft, id: uid('action'), title }] }));
     setActionDraft({ id: uid('action'), title: '', responsible: '', dueDate: '', status: 'aberta' });
   };
 
   const saveMeeting = () => {
     if (!meetingDraft.date) return;
-    const saved: ManagementWeeklyMeeting = { ...meetingDraft, id: uid('meeting'), createdAt: nowISO(), updatedAt: nowISO() };
+    const saved = { ...meetingDraft, id: uid('meeting'), createdAt: nowISO(), updatedAt: nowISO() };
     updateRoutine({ meetings: [saved, ...routine.meetings].slice(0, 40) });
     setMeetingDraft({ id: uid('meeting'), date: todayISO(), participants: '', problems: '', decisions: '', nextPending: '', actions: [], createdAt: nowISO(), updatedAt: nowISO() });
   };
 
-  const updateSavedAction = (meetingId: string, actionId: string, status: ManagementActionStatus) => {
-    updateRoutine({
-      meetings: routine.meetings.map(meeting => (
-        meeting.id === meetingId
-          ? { ...meeting, updatedAt: nowISO(), actions: meeting.actions.map(action => action.id === actionId ? { ...action, status } : action) }
-          : meeting
-      )),
-    });
-  };
-
   return (
-    <div className="p-4 space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="mx-auto max-w-[1800px] space-y-5 p-4 lg:p-6">
+      <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-foreground">Rotina de Gestao</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{project.name}</p>
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <CalendarCheck2 className="h-4 w-4 text-primary" /> Visão geral
+          </div>
+          <h1 className="mt-1 text-2xl font-bold tracking-tight text-foreground">Rotina semanal</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Atividades programadas e situação dos Diários de Obra, sem duplicar o Cronograma.</p>
         </div>
         {undoButton}
-      </div>
+      </header>
 
-      <Card className="p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold text-foreground">Plano semanal puxado do cronograma</h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Semana de {formatDateBR(selectedWeekStart)} a {formatDateBR(selectedWeekEnd)}. As linhas abaixo mostram somente o recorte previsto para esta semana.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={() => setSelectedWeekStart(addDaysISO(selectedWeekStart, -7))}>
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <Input className="h-9 w-[150px]" type="date" value={selectedWeekStart} onChange={e => setSelectedWeekStart(weekStartISO(e.target.value))} />
-            <Button type="button" variant="outline" size="sm" onClick={() => setSelectedWeekStart(addDaysISO(selectedWeekStart, 7))}>
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="grid h-auto min-h-11 w-full grid-cols-2 sm:inline-flex sm:w-auto">
+          <TabsTrigger value="agenda" className="min-h-10 gap-2 px-4 text-sm"><CalendarDays className="h-4 w-4" /> Agenda da semana</TabsTrigger>
+          <TabsTrigger value="configuracao" className="min-h-10 gap-2 px-4 text-sm"><Settings2 className="h-4 w-4" /> Configuração da rotina</TabsTrigger>
+        </TabsList>
 
-        <div className="mt-4 grid grid-cols-2 lg:grid-cols-5 gap-3">
-          <StatCard label="Atividades da semana" value={weeklyRows.length} />
-          <StatCard label="Previsto" value={plannedTotal.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} />
-          <StatCard label="Executado" value={actualTotal.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} tone={actualTotal >= plannedTotal && plannedTotal > 0 ? 'success' : 'warning'} />
-          <StatCard label="PPC" value={`${ppc}%`} tone={ppc >= 80 ? 'success' : ppc >= 50 ? 'warning' : 'danger'} />
-          <StatCard label="Acoes abertas" value={openActions} tone={openActions > 0 ? 'warning' : 'success'} />
-        </div>
+        <TabsContent value="agenda" className="mt-5 space-y-5">
+          <section className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Semana selecionada</p>
+              <p className="mt-1 text-lg font-semibold">{formatDateBR(selectedWeekStart)} a {formatDateBR(selectedWeekEnd)}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" className="min-h-11" onClick={() => selectWeek(addDaysISO(selectedWeekStart, -7))}>
+                <ChevronLeft className="mr-1 h-4 w-4" /> Semana anterior
+              </Button>
+              <Button variant="outline" size="sm" className="min-h-11" onClick={() => selectWeek(todayISO())}>Hoje</Button>
+              <Button variant="outline" size="sm" className="min-h-11" onClick={() => selectWeek(addDaysISO(selectedWeekStart, 7))}>
+                Próxima semana <ChevronRight className="ml-1 h-4 w-4" />
+              </Button>
+            </div>
+          </section>
 
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[1560px] table-fixed text-xs">
-            <colgroup>
-              <col className="w-[32%]" />
-              <col className="w-[8%]" />
-              <col className="w-[11%]" />
-              <col className="w-[9%]" />
-              <col className="w-[7%]" />
-              <col className="w-[7%]" />
-              <col className="w-[6%]" />
-              <col className="w-[8%]" />
-              <col className="w-[12%]" />
-            </colgroup>
-            <thead>
-              <tr className="border-b border-border text-left text-[10px] uppercase tracking-wide text-muted-foreground">
-                <th className="p-2">Atividade</th>
-                <th className="p-2">Periodo</th>
-                <th className="p-2">Equipe</th>
-                <th className="p-2">Responsavel</th>
-                <th className="p-2 text-right">Previsto</th>
-                <th className="p-2 text-right">Executado</th>
-                <th className="p-2 text-right">Saldo</th>
-                <th className="p-2">Status</th>
-                <th className="p-2">Observacao da reuniao</th>
-              </tr>
-            </thead>
-            <tbody>
-              {weeklyRows.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="p-6 text-center text-sm text-muted-foreground">
-                    Nao ha atividades do cronograma previstas para esta semana.
-                  </td>
-                </tr>
-              )}
-              {groupedWeeklyRows.map(group => (
-                <Fragment key={group.chapter.id}>
-                  <tr className="border-y border-border bg-muted/40">
-                    <td colSpan={9} className="px-2 py-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-xs font-bold uppercase tracking-wide text-foreground">{group.chapter.name}</p>
-                        <span className="text-[10px] font-semibold text-muted-foreground">{group.rows.length} composicao(oes)</span>
+          <section className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <MetricCard label="Atividades programadas" value={uniqueActivities} icon={ClipboardList} />
+            <MetricCard label="Atividades concluídas" value={completedActivities} icon={CheckCircle2} tone="success" />
+            <MetricCard label="Diários preenchidos" value={filledReports} icon={NotebookPen} tone="success" />
+            <MetricCard label="Diários pendentes" value={pendingReports} icon={CircleAlert} tone={pendingReports > 0 ? 'warning' : 'primary'} />
+          </section>
+
+          {activities.length === 0 ? (
+            <Card className="border-dashed">
+              <CardContent className="flex flex-col items-center py-12 text-center">
+                <CalendarDays className="h-9 w-9 text-muted-foreground" />
+                <h2 className="mt-3 text-lg font-semibold">Nenhuma atividade programada nesta semana</h2>
+                {nextActivity ? (
+                  <div className="mt-3 max-w-xl rounded-lg border border-border bg-muted/30 p-4 text-left">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Próxima atividade</p>
+                    <p className="mt-1 font-semibold">{nextActivity.taskName}</p>
+                    <p className="mt-1 text-sm text-muted-foreground">{formatDateBR(nextActivity.date)} · {nextActivity.chapterName}</p>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm text-muted-foreground">O Cronograma ainda não possui outra atividade futura.</p>
+                )}
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              <section className="hidden grid-cols-7 gap-3 lg:grid">
+                {week.map((day, index) => {
+                  const diary = DIARY_META[day.diaryStatus];
+                  const isToday = day.date === todayISO();
+                  return (
+                    <div key={day.date} className={`min-w-0 rounded-xl border bg-card ${isToday ? 'border-primary/50 ring-1 ring-primary/20' : 'border-border'}`}>
+                      <div className="border-b border-border p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{DAY_NAMES[index]}</p>
+                            <p className="text-base font-bold">{formatShortDate(day.date)}</p>
+                          </div>
+                          {isToday && <Badge>Hoje</Badge>}
+                        </div>
+                        <Badge variant="outline" className={`mt-2 max-w-full truncate text-[11px] ${diary.className}`}>{diary.label}</Badge>
+                        <p className="mt-2 text-xs text-muted-foreground">{day.activities.length} atividade(s)</p>
                       </div>
-                    </td>
-                  </tr>
-                  {group.rows.map(row => {
-                    const unit = row.task.unit || 'un';
-                    const team = getTeamDefinition(row.saved?.teamCode ?? row.task.team, teams);
-                    const balance = row.plannedQuantity - row.actualQuantity;
-                    const weekTaskStart = row.start > selectedWeekStart ? row.start : selectedWeekStart;
-                    const weekTaskEnd = row.end < selectedWeekEnd ? row.end : selectedWeekEnd;
-                    return (
-                      <tr key={row.task.id} className="border-b border-border/70 align-top">
-                        <td className="p-2 pr-4">
-                          <p className="font-semibold text-foreground">{row.task.name}</p>
-                          {row.task.frenteServico && <p className="text-[10px] text-muted-foreground">{row.task.frenteServico}</p>}
-                        </td>
-                        <td className="p-2 text-muted-foreground">
-                          {formatDateBR(weekTaskStart)} a {formatDateBR(weekTaskEnd)}
-                          <p className="text-[10px]">recorte semanal: {row.days} dia(s)</p>
-                        </td>
-                        <td className="p-2">
-                          <select className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs" value={row.saved?.teamCode ?? row.task.team ?? ''} onChange={e => updateTeam(row.task, e.target.value)}>
-                            <option value="">Sem equipe</option>
-                            {teams.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}
-                          </select>
-                          {team?.composition && <p className="mt-1 text-[10px] text-muted-foreground">{team.composition}</p>}
-                          {team?.workers?.length ? (
-                            <p className="mt-1 text-[10px] leading-snug text-muted-foreground">
-                              {team.workers.filter(w => w.active !== false).map(w => w.name).join(', ')}
-                            </p>
-                          ) : null}
-                        </td>
-                        <td className="p-2">
-                          <Input className="h-8 text-xs" value={row.saved?.responsible ?? row.task.responsible ?? ''} onChange={e => updateWeeklyPlanItem(row.task, { responsible: e.target.value })} />
-                        </td>
-                        <td className="p-2 text-right font-semibold tabular-nums">
-                          {row.plannedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {unit}
-                        </td>
-                        <td className="p-2">
-                          <Input
-                            className="h-8 text-right text-xs tabular-nums"
-                            type="number"
-                            min={0}
-                            step={0.01}
-                            value={row.actualQuantity}
-                            onChange={e => updateWeeklyPlanItem(row.task, {
-                              actualQuantity: Number(e.target.value),
-                              status: deriveWeeklyStatus(row.plannedQuantity, Number(e.target.value)),
-                            })}
-                          />
-                        </td>
-                        <td className={`p-2 text-right font-semibold tabular-nums ${balance <= 0 ? 'text-success' : 'text-destructive'}`}>
-                          {balance.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {unit}
-                        </td>
-                        <td className="p-2">
-                          <select className={`h-8 w-full rounded-md border px-2 text-xs ${statusClass(row.status)}`} value={row.status} onChange={e => updateWeeklyPlanItem(row.task, { status: e.target.value as ManagementWeeklyTaskStatus })}>
-                            {Object.entries(WEEKLY_TASK_STATUS_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                          </select>
-                        </td>
-                        <td className="p-2">
-                          <Textarea
-                            className="min-h-[64px] resize-y text-xs leading-snug"
-                            placeholder="Causa, decisao, restricao ou encaminhamento da reuniao"
-                            value={row.saved?.notes ?? ''}
-                            onChange={e => updateWeeklyPlanItem(row.task, { notes: e.target.value })}
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-      <section className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        <Card className="p-4 xl:col-span-2">
-          <div className="flex items-center gap-2 mb-3">
-            <CalendarCheck2 className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold">Configuracao da rotina</h3>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Input placeholder="Responsavel pela obra" value={routine.responsibleName ?? ''} onChange={e => updateRoutine({ responsibleName: e.target.value })} />
-            <Input placeholder="Mestre / encarregado" value={routine.foremanName ?? ''} onChange={e => updateRoutine({ foremanName: e.target.value })} />
-            <Input placeholder="Responsavel por compras" value={routine.buyerName ?? ''} onChange={e => updateRoutine({ buyerName: e.target.value })} />
-            <Input placeholder="Responsavel por medicao" value={routine.measurementResponsibleName ?? ''} onChange={e => updateRoutine({ measurementResponsibleName: e.target.value })} />
-            <Input placeholder="Responsavel pelo diario" value={routine.dailyReportResponsibleName ?? ''} onChange={e => updateRoutine({ dailyReportResponsibleName: e.target.value })} />
-            <Input placeholder="Dia da reuniao semanal" value={routine.weeklyMeetingDay ?? ''} onChange={e => updateRoutine({ weeklyMeetingDay: e.target.value })} />
-            <Input placeholder="Periodo padrao de medicao" value={routine.measurementPeriod ?? ''} onChange={e => updateRoutine({ measurementPeriod: e.target.value })} />
-            <Input placeholder="Regra de aprovacao interna" value={routine.internalApprovalRule ?? ''} onChange={e => updateRoutine({ internalApprovalRule: e.target.value })} />
-          </div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <ClipboardCheck className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold">Diagnostico</h3>
-          </div>
-          <StatCard label="Maturidade operacional" value={`${diagnostic}%`} tone={diagnostic >= 75 ? 'success' : diagnostic >= 45 ? 'warning' : 'danger'} />
-          <div className="mt-3 space-y-2">
-            <div className="flex items-center justify-between rounded-md border border-border px-2.5 py-2 text-xs">
-              <span>Plano semanal vinculado ao cronograma</span>
-              {weeklyRows.length > 0 ? <CheckCircle2 className="h-4 w-4 text-success" /> : <AlertTriangle className="h-4 w-4 text-warning" />}
-            </div>
-            <div className="flex items-center justify-between rounded-md border border-border px-2.5 py-2 text-xs">
-              <span>Papeis preenchidos</span>
-              <strong>{rolesFilled}/{routine.roles.length}</strong>
-            </div>
-          </div>
-        </Card>
-      </section>
-
-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <ClipboardList className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold">Checklist de apoio</h3>
-          </div>
-          <div className="space-y-2">
-            {routine.weeklyChecklist.map(item => (
-              <div key={item.id} className="grid grid-cols-1 md:grid-cols-[1fr_150px_120px] gap-2 rounded-md border border-border p-2">
-                <div>
-                  <p className="text-sm font-medium text-foreground">{item.title}</p>
-                  <Input className="mt-1 h-8 text-xs" placeholder="Observacao" value={item.notes ?? ''} onChange={e => updateChecklist(item.id, { notes: e.target.value })} />
-                </div>
-                <select className="h-9 rounded-md border border-input bg-background px-2 text-xs" value={item.ownerRole ?? ''} onChange={e => updateChecklist(item.id, { ownerRole: e.target.value as ManagementRoleAssignment['role'] })}>
-                  <option value="">Sem responsavel</option>
-                  {routine.roles.map(role => <option key={role.role} value={role.role}>{ROLE_LABEL[role.role]}</option>)}
-                </select>
-                <select className="h-9 rounded-md border border-input bg-background px-2 text-xs" value={item.status} onChange={e => updateChecklist(item.id, { status: e.target.value as ManagementChecklistStatus })}>
-                  {Object.entries(CHECK_STATUS_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Users className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold">Papeis e responsabilidades</h3>
-          </div>
-          <div className="space-y-2">
-            {routine.roles.map(role => (
-              <div key={role.role} className="grid grid-cols-1 md:grid-cols-[150px_1fr_1fr] gap-2 rounded-md border border-border p-2">
-                <div className="text-xs font-semibold text-foreground pt-2">{ROLE_LABEL[role.role]}</div>
-                <Input className="h-8 text-xs" placeholder="Responsavel direto" value={role.personName} onChange={e => updateRole(role.role, { personName: e.target.value })} />
-                <Input className="h-8 text-xs" placeholder="Quem aprova" value={role.approvalPersonName ?? ''} onChange={e => updateRole(role.role, { approvalPersonName: e.target.value })} />
-              </div>
-            ))}
-          </div>
-        </Card>
-      </section>
-
-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Plus className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold">Ata da reuniao semanal</h3>
-          </div>
-          <div className="space-y-3">
-            <Input type="date" value={meetingDraft.date} onChange={e => setMeetingDraft(prev => ({ ...prev, date: e.target.value }))} />
-            <Textarea placeholder="Participantes" value={meetingDraft.participants ?? ''} onChange={e => setMeetingDraft(prev => ({ ...prev, participants: e.target.value }))} />
-            <Textarea placeholder="Principais problemas encontrados no plano semanal" value={meetingDraft.problems ?? ''} onChange={e => setMeetingDraft(prev => ({ ...prev, problems: e.target.value }))} />
-            <Textarea placeholder="Decisoes tomadas" value={meetingDraft.decisions ?? ''} onChange={e => setMeetingDraft(prev => ({ ...prev, decisions: e.target.value }))} />
-            <Textarea placeholder="Pendencias para a proxima reuniao" value={meetingDraft.nextPending ?? ''} onChange={e => setMeetingDraft(prev => ({ ...prev, nextPending: e.target.value }))} />
-
-            <div className="rounded-md border border-border p-3 space-y-2">
-              <p className="text-xs font-semibold text-foreground">Acoes da reuniao</p>
-              <div className="grid grid-cols-1 md:grid-cols-[1fr_140px_140px_auto] gap-2">
-                <Input className="h-8 text-xs" placeholder="Acao / decisao" value={actionDraft.title} onChange={e => setActionDraft(prev => ({ ...prev, title: e.target.value }))} />
-                <Input className="h-8 text-xs" placeholder="Responsavel" value={actionDraft.responsible ?? ''} onChange={e => setActionDraft(prev => ({ ...prev, responsible: e.target.value }))} />
-                <Input className="h-8 text-xs" type="date" value={actionDraft.dueDate ?? ''} onChange={e => setActionDraft(prev => ({ ...prev, dueDate: e.target.value }))} />
-                <Button type="button" size="sm" variant="outline" onClick={addActionToDraft}><Plus className="h-3.5 w-3.5" /></Button>
-              </div>
-              {meetingDraft.actions.map(action => (
-                <div key={action.id} className="flex items-center justify-between gap-2 rounded bg-muted/30 px-2 py-1 text-xs">
-                  <span>{action.title}</span>
-                  <span className="text-muted-foreground">{action.responsible || '-'} {action.dueDate ? `- ${formatDateBR(action.dueDate)}` : ''}</span>
-                </div>
-              ))}
-            </div>
-
-            <Button type="button" onClick={saveMeeting} className="w-full">
-              <Save className="mr-2 h-4 w-4" />
-              Salvar reuniao
-            </Button>
-          </div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <CalendarCheck2 className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold">Historico e pendencias</h3>
-          </div>
-          <div className="space-y-3">
-            {routine.meetings.length === 0 && (
-              <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-                Nenhuma reuniao registrada ainda.
-              </div>
-            )}
-            {routine.meetings.map(meeting => (
-              <div key={meeting.id} className="rounded-md border border-border p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-foreground">Reuniao de {formatDateBR(meeting.date)}</p>
-                  <Badge variant="outline">{meeting.actions.length} acao(oes)</Badge>
-                </div>
-                {meeting.decisions && <p className="mt-2 text-xs text-muted-foreground whitespace-pre-wrap">{meeting.decisions}</p>}
-                <div className="mt-3 space-y-2">
-                  {meeting.actions.map(action => (
-                    <div key={action.id} className="grid grid-cols-1 md:grid-cols-[1fr_120px_140px] gap-2 rounded bg-muted/25 p-2 text-xs">
-                      <div>
-                        <p className="font-medium text-foreground">{action.title}</p>
-                        <p className="text-muted-foreground">{action.responsible || 'Sem responsavel'} {action.dueDate ? `- ${formatDateBR(action.dueDate)}` : ''}</p>
+                      <div className="space-y-2 p-2.5">
+                        {day.activities.length ? day.activities.slice(0, 4).map(activity => (
+                          <ActivityCard key={`${day.date}:${activity.taskId}`} activity={activity} teams={project.teams} onOpen={() => onOpenDailyReport(day.date)} />
+                        )) : <p className="py-8 text-center text-xs text-muted-foreground">Sem atividade</p>}
+                        {day.activities.length > 4 && (
+                          <Button variant="outline" size="sm" className="min-h-10 w-full text-xs" onClick={() => setSelectedDayDate(day.date)}>
+                            Ver mais {day.activities.length - 4} atividade(s)
+                          </Button>
+                        )}
                       </div>
-                      <Badge variant="outline" className="w-fit">{ACTION_STATUS_LABEL[action.status]}</Badge>
-                      <select className="h-8 rounded-md border border-input bg-background px-2 text-xs" value={action.status} onChange={e => updateSavedAction(meeting.id, action.id, e.target.value as ManagementActionStatus)}>
-                        {Object.entries(ACTION_STATUS_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                      </select>
+                      <div className="border-t border-border p-2.5">
+                        <Button variant="ghost" size="sm" className="min-h-10 w-full text-xs" onClick={() => onOpenDailyReport(day.date)}>
+                          <NotebookPen className="mr-1.5 h-4 w-4" /> Abrir diário
+                        </Button>
+                      </div>
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
+              </section>
+
+              <section className="space-y-3 lg:hidden">
+                {week.map((day, index) => {
+                  const diary = DIARY_META[day.diaryStatus];
+                  return (
+                    <Card key={day.date}>
+                      <CardHeader className="flex flex-row items-center justify-between gap-3 pb-3">
+                        <div>
+                          <CardTitle className="text-base">{DAY_NAMES[index]}, {formatDateBR(day.date)}</CardTitle>
+                          <Badge variant="outline" className={`mt-2 text-xs ${diary.className}`}>{diary.label}</Badge>
+                          <p className="mt-2 text-xs text-muted-foreground">{day.activities.length} atividade(s)</p>
+                        </div>
+                        <Button size="sm" className="min-h-11" onClick={() => onOpenDailyReport(day.date)}>
+                          <NotebookPen className="mr-1.5 h-4 w-4" /> Abrir diário
+                        </Button>
+                      </CardHeader>
+                      <CardContent className="space-y-2">
+                        {day.activities.length ? day.activities.slice(0, 4).map(activity => (
+                          <ActivityCard key={`${day.date}:${activity.taskId}`} activity={activity} teams={project.teams} onOpen={() => onOpenDailyReport(day.date)} />
+                        )) : <p className="rounded-lg bg-muted/30 p-4 text-sm text-muted-foreground">Sem atividade programada.</p>}
+                        {day.activities.length > 4 && (
+                          <Button variant="outline" className="min-h-11 w-full" onClick={() => setSelectedDayDate(day.date)}>
+                            Ver todas as {day.activities.length} atividades
+                          </Button>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </section>
+            </>
+          )}
+
+          <Dialog open={Boolean(selectedDay)} onOpenChange={open => { if (!open) setSelectedDayDate(null); }}>
+            <DialogContent className="flex max-h-[90vh] max-w-3xl flex-col overflow-hidden">
+              <DialogHeader>
+                <DialogTitle>Atividades de {selectedDay ? formatDateBR(selectedDay.date) : ''}</DialogTitle>
+                <DialogDescription>
+                  {selectedDay?.activities.length ?? 0} atividade(s) derivadas do Cronograma. Selecione uma para abrir o Diário nesta data.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-2 overflow-y-auto pr-2">
+                {selectedDay?.activities.map(activity => (
+                  <ActivityCard
+                    key={`dialog:${selectedDay.date}:${activity.taskId}`}
+                    activity={activity}
+                    teams={project.teams}
+                    onOpen={() => onOpenDailyReport(selectedDay.date)}
+                  />
+                ))}
               </div>
-            ))}
-          </div>
-        </Card>
-      </section>
+            </DialogContent>
+          </Dialog>
+        </TabsContent>
+
+        <TabsContent value="configuracao" className="mt-5 space-y-5">
+          <Card>
+            <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Settings2 className="h-4 w-4 text-primary" /> Responsáveis e parâmetros</CardTitle></CardHeader>
+            <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {[
+                ['Responsável pela obra', 'responsibleName'],
+                ['Mestre / encarregado', 'foremanName'],
+                ['Responsável por compras', 'buyerName'],
+                ['Responsável por medição', 'measurementResponsibleName'],
+                ['Responsável pelo diário', 'dailyReportResponsibleName'],
+                ['Dia da reunião semanal', 'weeklyMeetingDay'],
+                ['Período padrão de medição', 'measurementPeriod'],
+                ['Regra de aprovação interna', 'internalApprovalRule'],
+              ].map(([label, key]) => (
+                <div key={key} className="space-y-1.5">
+                  <Label htmlFor={`routine-${key}`}>{label}</Label>
+                  <Input id={`routine-${key}`} value={String(routine[key as keyof ManagementRoutineData] ?? '')} onChange={event => updateRoutine({ [key]: event.target.value })} />
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+            <Card>
+              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><ClipboardCheck className="h-4 w-4 text-primary" /> Checklist de apoio</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                {routine.weeklyChecklist.map(item => (
+                  <div key={item.id} className="rounded-lg border border-border p-3">
+                    <p className="text-sm font-semibold">{item.title}</p>
+                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_150px]">
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`check-note-${item.id}`} className="text-xs">Observação</Label>
+                        <Input id={`check-note-${item.id}`} value={item.notes ?? ''} onChange={event => updateChecklist(item.id, { notes: event.target.value })} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor={`check-status-${item.id}`} className="text-xs">Situação</Label>
+                        <select id={`check-status-${item.id}`} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={item.status} onChange={event => updateChecklist(item.id, { status: event.target.value as ManagementChecklistStatus })}>
+                          {Object.entries(CHECK_STATUS_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Users className="h-4 w-4 text-primary" /> Papéis e responsabilidades</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                {routine.roles.map(role => (
+                  <div key={role.role} className="grid grid-cols-1 gap-3 rounded-lg border border-border p-3 sm:grid-cols-2">
+                    <p className="sm:col-span-2 text-sm font-semibold">{ROLE_LABEL[role.role]}</p>
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`role-owner-${role.role}`} className="text-xs">Responsável direto</Label>
+                      <Input id={`role-owner-${role.role}`} value={role.personName} onChange={event => updateRole(role.role, { personName: event.target.value })} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`role-approval-${role.role}`} className="text-xs">Quem aprova</Label>
+                      <Input id={`role-approval-${role.role}`} value={role.approvalPersonName ?? ''} onChange={event => updateRole(role.role, { approvalPersonName: event.target.value })} />
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </section>
+
+          <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+            <Card>
+              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Plus className="h-4 w-4 text-primary" /> Ata da reunião semanal</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <div className="space-y-1.5"><Label htmlFor="meeting-date">Data</Label><Input id="meeting-date" type="date" value={meetingDraft.date} onChange={event => setMeetingDraft(previous => ({ ...previous, date: event.target.value }))} /></div>
+                <div className="space-y-1.5"><Label htmlFor="meeting-participants">Participantes</Label><Textarea id="meeting-participants" value={meetingDraft.participants ?? ''} onChange={event => setMeetingDraft(previous => ({ ...previous, participants: event.target.value }))} /></div>
+                <div className="space-y-1.5"><Label htmlFor="meeting-problems">Problemas encontrados</Label><Textarea id="meeting-problems" value={meetingDraft.problems ?? ''} onChange={event => setMeetingDraft(previous => ({ ...previous, problems: event.target.value }))} /></div>
+                <div className="space-y-1.5"><Label htmlFor="meeting-decisions">Decisões tomadas</Label><Textarea id="meeting-decisions" value={meetingDraft.decisions ?? ''} onChange={event => setMeetingDraft(previous => ({ ...previous, decisions: event.target.value }))} /></div>
+                <div className="space-y-1.5"><Label htmlFor="meeting-pending">Pendências para a próxima reunião</Label><Textarea id="meeting-pending" value={meetingDraft.nextPending ?? ''} onChange={event => setMeetingDraft(previous => ({ ...previous, nextPending: event.target.value }))} /></div>
+
+                <div className="rounded-lg border border-border p-3">
+                  <p className="text-sm font-semibold">Ações da reunião</p>
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_150px_145px_auto]">
+                    <Input aria-label="Ação ou decisão" placeholder="Ação ou decisão" value={actionDraft.title} onChange={event => setActionDraft(previous => ({ ...previous, title: event.target.value }))} />
+                    <Input aria-label="Responsável pela ação" placeholder="Responsável" value={actionDraft.responsible ?? ''} onChange={event => setActionDraft(previous => ({ ...previous, responsible: event.target.value }))} />
+                    <Input aria-label="Prazo da ação" type="date" value={actionDraft.dueDate ?? ''} onChange={event => setActionDraft(previous => ({ ...previous, dueDate: event.target.value }))} />
+                    <Button type="button" variant="outline" className="min-h-10" onClick={addActionToDraft}><Plus className="h-4 w-4" /><span className="sr-only">Adicionar ação</span></Button>
+                  </div>
+                  {meetingDraft.actions.length > 0 && (
+                    <ul className="mt-3 space-y-2">
+                      {meetingDraft.actions.map(action => <li key={action.id} className="rounded-md bg-muted/40 p-2 text-sm">{action.title} · {action.responsible || 'Sem responsável'}</li>)}
+                    </ul>
+                  )}
+                </div>
+                <Button onClick={saveMeeting} className="min-h-11"><Save className="mr-2 h-4 w-4" /> Salvar reunião</Button>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Clock3 className="h-4 w-4 text-primary" /> Histórico e pendências</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                {routine.meetings.length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">Nenhuma reunião registrada.</p>
+                ) : routine.meetings.map(meeting => (
+                  <article key={meeting.id} className="rounded-lg border border-border p-4">
+                    <p className="text-sm font-semibold">Reunião de {formatDateBR(meeting.date)}</p>
+                    {meeting.decisions && <p className="mt-2 text-sm text-muted-foreground">{meeting.decisions}</p>}
+                    {meeting.actions.length > 0 && (
+                      <div className="mt-3 space-y-2">
+                        {meeting.actions.map(action => (
+                          <div key={action.id} className="flex items-center justify-between gap-3 rounded-md bg-muted/40 p-2 text-sm">
+                            <span>{action.title}</span>
+                            <Badge variant="outline">{ACTION_STATUS_LABEL[action.status]}</Badge>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </CardContent>
+            </Card>
+          </section>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

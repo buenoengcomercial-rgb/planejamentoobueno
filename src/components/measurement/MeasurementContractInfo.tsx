@@ -60,7 +60,7 @@ export default function MeasurementContractInfo({
                 Boletim de Medicao para Pagamento
               </h2>
               <div className="mt-1 hidden lg:flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                <span>Medicao nÂº <strong className="text-foreground">{effNumber || '-'}</strong></span>
+                <span>Medição nº <strong className="text-foreground">{effNumber || '-'}</strong></span>
                 <span>Periodo <strong className="text-foreground">{fmtDateBR(effStart)} a {fmtDateBR(effEnd)}</strong></span>
                 <span className="truncate">Contratada <strong className="text-foreground">{contracted || '-'}</strong></span>
                 <span>Contrato <strong className="text-foreground">{contractNumber || '-'}</strong></span>
@@ -70,7 +70,7 @@ export default function MeasurementContractInfo({
           </div>
           <div className="flex shrink-0 items-center gap-3 text-right">
             <div>
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Medicao nÂº</p>
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Medição nº</p>
               <p className="text-base font-bold tabular-nums text-foreground leading-none">
                 {effNumber || '-'}
               </p>
@@ -87,7 +87,7 @@ export default function MeasurementContractInfo({
             </h2>
           </div>
           <div className="text-right">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Medicao nÂº</p>
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Medição nº</p>
             <p className="text-lg font-bold tabular-nums text-foreground leading-none">
               {effNumber || '-'}
             </p>
@@ -138,7 +138,7 @@ export default function MeasurementContractInfo({
               placeholder="Descricao resumida do escopo"
             />
           </FormField>
-          <FormField label="NÂº do Contrato" colSpan={3}>
+          <FormField label="Nº do contrato" colSpan={3}>
             <Input
               className="h-7 text-xs border-0 px-0 focus-visible:ring-0 bg-transparent"
               value={contractNumber}
@@ -148,7 +148,7 @@ export default function MeasurementContractInfo({
               placeholder="Ex.: 001/2025"
             />
           </FormField>
-          <FormField label="NÂº ART" colSpan={3}>
+          <FormField label="Nº da ART" colSpan={3}>
             <Input
               className="h-7 text-xs border-0 px-0 focus-visible:ring-0 bg-transparent"
               value={artNumber}
@@ -190,7 +190,7 @@ export default function MeasurementContractInfo({
               onBlur={() => persistContractInfo({ bdiPercent: bdiPercent })}
             />
           </FormField>
-          <FormField label="Medicao nÂº" colSpan={3} bottom>
+          <FormField label="Medição nº" colSpan={3} bottom>
             <Input
               className="h-7 text-xs border-0 px-0 focus-visible:ring-0 bg-transparent tabular-nums font-semibold"
               value={effNumber}

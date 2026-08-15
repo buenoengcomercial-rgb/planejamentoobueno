@@ -4,7 +4,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useOrganization } from '@/hooks/useOrganization';
 import {
   listOrgMembers, inviteMemberByEmail, createMemberWithPassword, updateMemberRole, updateMemberStatus, removeMember,
-  OrgMember, OrgRole, MemberStatus, ROLE_LABELS, STATUS_LABELS, canManageMembers,
+  OrgMember, OrgRole, MemberStatus, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLE_PERMISSIONS, STATUS_LABELS, canManageMembers,
 } from '@/lib/organizations';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -206,7 +206,7 @@ export default function TeamManagement() {
         <div className="space-y-4 max-w-md">
           <h1 className="text-xl font-semibold">Acesso restrito</h1>
           <p className="text-sm text-muted-foreground">Apenas administradores ou proprietários podem gerenciar usuários.</p>
-          <Button variant="outline" onClick={() => navigate('/')}>Voltar</Button>
+          <Button variant="outline" onClick={() => navigate(-1)}>Voltar</Button>
         </div>
       </div>
     );
@@ -217,7 +217,7 @@ export default function TeamManagement() {
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <Button variant="ghost" size="sm" onClick={() => navigate('/')} className="mb-2 -ml-2">
+            <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="mb-2 -ml-2">
               <ArrowLeft className="w-4 h-4 mr-1" /> Voltar
             </Button>
             <h1 className="text-2xl font-bold">Usuários da empresa</h1>
@@ -290,11 +290,30 @@ export default function TeamManagement() {
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">{ROLE_DESCRIPTIONS[inviteRole]}</p>
               </div>
               <Button type="submit" disabled={submitting}>
                 {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <><UserPlus className="w-4 h-4 mr-1" /> {createMode ? 'Criar acesso' : 'Liberar'}</>}
               </Button>
             </form>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Matriz de permissões</CardTitle>
+            <CardDescription>Escolha a função pelo trabalho que a pessoa realmente executará na plataforma.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {ROLE_OPTIONS.map(role => (
+              <div key={role} className="rounded-lg border border-border p-3">
+                <p className="text-sm font-semibold">{ROLE_LABELS[role]}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{ROLE_DESCRIPTIONS[role]}</p>
+                <ul className="mt-3 space-y-1 text-xs text-foreground">
+                  {ROLE_PERMISSIONS[role].map(permission => <li key={permission}>• {permission}</li>)}
+                </ul>
+              </div>
+            ))}
           </CardContent>
         </Card>
 
@@ -306,7 +325,8 @@ export default function TeamManagement() {
             ) : members.length === 0 ? (
               <p className="text-sm text-muted-foreground">Nenhum membro ainda.</p>
             ) : (
-              <Table>
+              <div className="overflow-x-auto">
+              <Table className="min-w-[780px]">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Usuário</TableHead>
@@ -379,6 +399,7 @@ export default function TeamManagement() {
                   })}
                 </TableBody>
               </Table>
+              </div>
             )}
           </CardContent>
         </Card>

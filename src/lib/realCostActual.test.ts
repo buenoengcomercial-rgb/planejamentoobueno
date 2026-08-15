@@ -117,7 +117,11 @@ describe('custo realizado por producao e almoxarifado', () => {
     const analysis = buildRealCostAnalysis(project);
     expect(analysis.compositions).toHaveLength(1);
     expect(analysis.compositions[0].realCost).toBe(230);
+    expect(analysis.compositions[0].missingQuoteCount).toBe(1);
+    expect(analysis.compositions[0].signal).toBe('incomplete');
     expect(analysis.totals.realCost).toBe(230);
     expect(analysis.totals.contractedValue).toBe(1_000);
+    expect(analysis.totals.signal).toBe('incomplete');
+    expect(analysis.months[0]?.signal).toBe('incomplete');
   });
 });

@@ -103,31 +103,31 @@ export default function WarehousePanel({ project, onProjectChange }: Props) {
         <div className="flex items-start justify-between gap-2 mb-2">
           <div>
             <div className="text-xs font-semibold flex items-center gap-1.5">
-              <CalendarDays className="w-3.5 h-3.5 text-primary" /> Pagamentos e custos por mes
+              <CalendarDays className="w-3.5 h-3.5 text-primary" /> Pagamentos e custos por mês
             </div>
             <div className="text-[11px] text-muted-foreground">
-              Usa a data da fatura/parcela; sem fatura preenchida, usa a data de emissao da nota fiscal.
+              Usa a data da fatura/parcela; sem fatura preenchida, usa a data de emissão da nota fiscal.
             </div>
           </div>
         </div>
 
         {monthlyCosts.length === 0 ? (
           <div className="text-xs text-muted-foreground py-4 text-center border border-dashed border-border rounded-md">
-            Ainda nao ha notas fiscais aprovadas para montar o custo mensal.
+            Ainda não há notas fiscais aprovadas para montar o custo mensal.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-xs">
               <thead className="text-muted-foreground">
                 <tr>
-                  <th className="text-left p-1">Mes</th>
+                  <th className="text-left p-1">Mês</th>
                   <th className="text-right p-1">Custo total</th>
                   <th className="text-right p-1">Pago</th>
                   <th className="text-right p-1">Em aberto</th>
                   <th className="text-right p-1">Vencido</th>
                   <th className="text-center p-1">Faturas</th>
                   <th className="text-center p-1">Notas</th>
-                  <th className="text-left p-1">Referencia</th>
+                  <th className="text-left p-1">Referência</th>
                 </tr>
               </thead>
               <tbody>
@@ -154,7 +154,7 @@ export default function WarehousePanel({ project, onProjectChange }: Props) {
                     <td className="p-1 text-center tabular-nums">{row.noteCount}</td>
                     <td className="p-1 text-[11px] text-muted-foreground">
                       {row.fallbackCount > 0
-                        ? `${row.fallbackCount} nota(s) pela emissao`
+                        ? `${row.fallbackCount} nota(s) pela emissão`
                         : 'Fatura / pagamento'}
                     </td>
                   </tr>
@@ -179,7 +179,7 @@ export default function WarehousePanel({ project, onProjectChange }: Props) {
                     <th className="text-left p-1.5">Empresa</th>
                     <th className="text-left p-1.5 w-36">CNPJ</th>
                     <th className="text-left p-1.5 w-28">Fatura</th>
-                    <th className="text-left p-1.5 w-28">Referencia</th>
+                    <th className="text-left p-1.5 w-28">Referência</th>
                     <th className="text-right p-1.5 w-32">Valor</th>
                     <th className="text-left p-1.5 w-32">Status</th>
                   </tr>
@@ -192,7 +192,7 @@ export default function WarehousePanel({ project, onProjectChange }: Props) {
                       <td className="p-1.5 tabular-nums">{entry.invoiceNumber || '-'}</td>
                       <td className="p-1.5 text-muted-foreground">
                         {dateBR(entry.referenceDate)}
-                        {entry.fallbackFromIssueDate && <span className="ml-1 text-[10px]">(emissao)</span>}
+                        {entry.fallbackFromIssueDate && <span className="ml-1 text-[10px]">(emissão)</span>}
                       </td>
                       <td className="p-1.5 text-right font-semibold tabular-nums">{moneyBR(entry.amount)}</td>
                       <td className="p-1.5">
@@ -284,10 +284,10 @@ export default function WarehousePanel({ project, onProjectChange }: Props) {
         <div className="flex items-start justify-between gap-2 mb-2">
           <div>
             <div className="text-xs font-semibold flex items-center gap-1.5">
-              <MapPinned className="w-3.5 h-3.5 text-primary" /> Consumo por capitulo da obra
+              <MapPinned className="w-3.5 h-3.5 text-primary" /> Consumo por capítulo da obra
             </div>
             <div className="text-[11px] text-muted-foreground">
-              Retiradas vinculadas aos capitulos principais da obra.
+              Retiradas vinculadas aos capítulos principais da obra.
             </div>
           </div>
           {usageByChapter.unlinkedMovementCount > 0 && (
@@ -299,13 +299,13 @@ export default function WarehousePanel({ project, onProjectChange }: Props) {
 
         {usageByChapter.rows.length === 0 ? (
           <div className="text-xs text-muted-foreground py-4 text-center border border-dashed border-border rounded-md">
-            Ainda nao ha retirada vinculada a capitulo. Ao registrar uma retirada, selecione o capitulo principal da obra.
+            Ainda não há retirada vinculada a capítulo. Ao registrar uma retirada, selecione o capítulo principal da obra.
           </div>
         ) : (
           <table className="w-full text-xs">
             <thead className="text-muted-foreground">
               <tr>
-                <th className="text-left p-1">Capitulo</th>
+                <th className="text-left p-1">Capítulo</th>
                 <th className="text-center p-1 w-20">Tarefas</th>
                 <th className="text-center p-1 w-20">Itens</th>
                 <th className="text-left p-1">Principais materiais retirados</th>

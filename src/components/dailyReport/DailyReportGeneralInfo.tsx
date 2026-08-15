@@ -7,14 +7,17 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { WEATHER_OPTIONS, WORK_OPTIONS } from '@/components/dailyReport/dailyReportFormat';
+import { Switch } from '@/components/ui/switch';
+import { Ban } from 'lucide-react';
 
 interface DailyReportGeneralInfoProps {
   currentReport: DailyReportEntry;
   updateField: <K extends keyof DailyReportEntry>(key: K, value: DailyReportEntry[K]) => void;
   onClearDay: () => void;
+  hasProduction?: boolean;
 }
 
-export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay }: DailyReportGeneralInfoProps) {
+export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay, hasProduction = false }: DailyReportGeneralInfoProps) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
 
   const handleClearDay = () => {
@@ -42,6 +45,27 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay 
           </Button>
         </CardHeader>
         <CardContent className="space-y-3">
+          <div className="flex flex-col gap-3 rounded-lg border border-border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <Ban className="mt-0.5 h-4 w-4 text-muted-foreground" />
+              <div>
+                <Label htmlFor="no-production-declared" className="text-sm font-semibold">Declarar dia sem produção</Label>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Use somente quando nenhuma atividade foi executada. Ausência de diário continuará como “Não preenchido”.
+                </p>
+              </div>
+            </div>
+            <Switch
+              id="no-production-declared"
+              checked={!!currentReport.noProductionDeclared}
+              disabled={hasProduction}
+              onCheckedChange={checked => updateField('noProductionDeclared', checked || undefined)}
+              aria-label="Declarar dia sem produção"
+            />
+          </div>
+          {hasProduction && (
+            <p className="text-xs text-warning">Há produção apontada nesta data; a declaração de dia sem produção está indisponível.</p>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="space-y-1">
               <Label className="text-sm">Responsável pelo lançamento</Label>

@@ -27,12 +27,12 @@ export function PeriodReportsSection({ period, summary, selectedDate, onSelectDa
           <PeriodStat label="Dias no período" value={summary.totalDays} />
           <PeriodStat label="Diários preenchidos" value={summary.filledReports} tone="success" />
           <PeriodStat label="Diários pendentes" value={summary.missingReports} tone={summary.missingReports > 0 ? 'warning' : 'default'} />
-          <PeriodStat label="Dias com produção" value={summary.productionDays} tone="info" />
+          <PeriodStat label="Não preenchidos" value={summary.notFilledReports} />
           <PeriodStat label="Dias sem produção" value={summary.noProductionDays} />
           <PeriodStat label="Dias com impedimento" value={summary.impedimentDays} tone={summary.impedimentDays > 0 ? 'destructive' : 'default'} />
         </div>
 
-        <div className="border border-border rounded-md overflow-hidden">
+        <div className="hidden border border-border rounded-md overflow-hidden md:block">
           <div className="max-h-[420px] overflow-y-auto">
             <table className="w-full text-sm">
               <thead className="bg-muted/40 text-muted-foreground sticky top-0">
@@ -93,6 +93,32 @@ export function PeriodReportsSection({ period, summary, selectedDate, onSelectDa
               </tbody>
             </table>
           </div>
+        </div>
+
+        <div className="space-y-2 md:hidden">
+          {summary.entries.map(entry => {
+            const meta = STATUS_META[entry.status];
+            const Icon = meta.icon;
+            return (
+              <button
+                type="button"
+                key={entry.date}
+                onClick={() => onSelectDate(entry.date)}
+                className="flex min-h-16 w-full items-center justify-between gap-3 rounded-lg border border-border bg-background p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <div>
+                  <p className="text-sm font-semibold tabular-nums">{formatBR(entry.date)}</p>
+                  <span className={`mt-1 inline-flex items-center gap-1 rounded border px-2 py-1 text-xs ${meta.pill}`}>
+                    <Icon className="h-3.5 w-3.5" /> {meta.label}
+                  </span>
+                </div>
+                <div className="text-right">
+                  {entry.responsible && <p className="max-w-[150px] truncate text-xs text-muted-foreground">{entry.responsible}</p>}
+                  <span className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-primary">Abrir <ArrowRight className="h-3.5 w-3.5" /></span>
+                </div>
+              </button>
+            );
+          })}
         </div>
       </CardContent>
     </Card>

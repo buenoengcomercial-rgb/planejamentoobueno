@@ -84,7 +84,9 @@ export default function GanttChart({
     try {
       const saved = localStorage.getItem(viewModeStorageKey);
       if (saved === 'days' || saved === 'weeks' || saved === 'months') return saved;
-    } catch {}
+    } catch {
+      // O cronograma continua funcional quando o armazenamento local está indisponível.
+    }
     return 'weeks';
   });
   // Recarrega ao trocar de projeto
@@ -93,12 +95,16 @@ export default function GanttChart({
       const saved = localStorage.getItem(`obraplanner-gantt-viewmode-${project.id}`);
       if (saved === 'days' || saved === 'weeks' || saved === 'months') setViewMode(saved);
       else setViewMode('weeks');
-    } catch {}
+    } catch {
+      // O cronograma continua funcional quando o armazenamento local está indisponível.
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
   // Persiste a cada mudança
   useEffect(() => {
-    try { localStorage.setItem(viewModeStorageKey, viewMode); } catch {}
+    try { localStorage.setItem(viewModeStorageKey, viewMode); } catch {
+      // Preferência visual não é crítica para a operação.
+    }
   }, [viewMode, viewModeStorageKey]);
   // Estado de capítulos minimizados — inicializa com a persistência do projeto.
   const [collapsedPhases, setCollapsedPhases] = useState<Set<string>>(
@@ -206,7 +212,9 @@ export default function GanttChart({
     try {
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('text/plain', taskId);
-    } catch {}
+    } catch {
+      // O arraste ainda funciona pelo estado React quando o navegador bloqueia setData.
+    }
   }, []);
 
   const handleRowDragOver = useCallback((e: React.DragEvent, targetTaskId: string) => {
@@ -1473,7 +1481,17 @@ export default function GanttChart({
           </div>
         </div>
 
-        <div className="rounded-lg border border-border bg-card p-3 shadow-sm">
+        <details className="group rounded-lg border border-border bg-card shadow-sm">
+          <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <div>
+              <h3 className="text-sm font-semibold">Análises do Cronograma</h3>
+              <p className="mt-0.5 text-xs text-muted-foreground">Mão de obra, disponibilidade e previsão físico-financeira.</p>
+            </div>
+            <span className="text-xs font-semibold text-primary group-open:hidden">Abrir análises</span>
+            <span className="hidden text-xs font-semibold text-primary group-open:inline">Recolher</span>
+          </summary>
+
+        <div className="border-t border-border p-3">
           <div className="flex flex-wrap items-center gap-2">
             <div className="mr-auto">
               <h3 className="text-sm font-semibold text-foreground">Análise de mão de obra do Cronograma</h3>
@@ -1726,11 +1744,11 @@ export default function GanttChart({
           )}
         </div>
 
-        {false && (
+        {/* Painel legado preservado temporariamente durante a migração visual.
         <div className="rounded-lg border border-border bg-card p-3 shadow-sm">
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <div className="mr-auto">
-              <h3 className="text-sm font-semibold text-foreground">Planejamento de mÃ£o de obra</h3>
+              <h3 className="text-sm font-semibold text-foreground">Planejamento de mão de obra</h3>
               <p className="text-[10px] text-muted-foreground">
                 Compara RUP + datas do Cronograma contra a disponibilidade cadastrada da obra.
               </p>
@@ -1740,7 +1758,7 @@ export default function GanttChart({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="day">DiÃ¡rio</SelectItem>
+                <SelectItem value="day">Diário</SelectItem>
                 <SelectItem value="week">Semanal</SelectItem>
                 <SelectItem value="month">Mensal</SelectItem>
               </SelectContent>
@@ -1751,20 +1769,20 @@ export default function GanttChart({
                 checked={showLaborOnlyDeficits}
                 onChange={e => setShowLaborOnlyDeficits(e.target.checked)}
               />
-              <span>SÃ³ dÃ©ficits</span>
+              <span>Só déficits</span>
             </label>
           </div>
 
           <div className="grid gap-2 md:grid-cols-4">
             <div className={`rounded-md border p-2 ${laborPlanning.totalDeficitPeriods > 0 ? 'border-orange-300 bg-orange-50' : 'border-emerald-200 bg-emerald-50'}`}>
-              <div className="text-[9px] font-semibold uppercase text-muted-foreground">PerÃ­odos com dÃ©ficit</div>
+              <div className="text-xs font-semibold uppercase text-muted-foreground">Períodos com déficit</div>
               <div className={`text-lg font-bold ${laborPlanning.totalDeficitPeriods > 0 ? 'text-orange-700' : 'text-emerald-700'}`}>
                 {laborPlanning.totalDeficitPeriods}
               </div>
               <div className="text-[10px] text-muted-foreground">
                 {laborTopDeficit
                   ? `${laborTopDeficit.roleName}: faltam ${Math.abs(laborTopDeficit.balancePeople)} em ${laborTopDeficit.periodLabel}`
-                  : 'Capacidade suficiente nos perÃ­odos calculados'}
+                  : 'Capacidade suficiente nos períodos calculados'}
               </div>
             </div>
             <div className="rounded-md border border-blue-200 bg-blue-50 p-2">
@@ -1784,20 +1802,20 @@ export default function GanttChart({
               </div>
             </div>
             <div className="rounded-md border border-border bg-background p-2">
-              <div className="text-[9px] font-semibold uppercase text-muted-foreground">SugestÃµes iniciais</div>
+              <div className="text-xs font-semibold uppercase text-muted-foreground">Sugestões iniciais</div>
               <div className="text-lg font-bold text-foreground">{laborPlanning.suggestions.length}</div>
-              <div className="text-[10px] text-muted-foreground">ReprogramaÃ§Ãµes para revisar manualmente</div>
+              <div className="text-xs text-muted-foreground">Reprogramações para revisar manualmente</div>
             </div>
           </div>
 
           <div className="mt-2 overflow-hidden rounded-md border border-border">
             <div className="grid grid-cols-[120px_1fr_70px_70px_70px_1.7fr] bg-secondary/60 px-2 py-1 text-[9px] font-semibold uppercase text-muted-foreground">
-              <span>PerÃ­odo</span>
+              <span>Período</span>
               <span>Cargo</span>
               <span className="text-center">Disp.</span>
               <span className="text-center">Nec.</span>
               <span className="text-center">Saldo</span>
-              <span>Atividades responsÃ¡veis</span>
+              <span>Atividades responsáveis</span>
             </div>
             {laborRowsToShow.length > 0 ? laborRowsToShow.map(row => (
               <div
@@ -1834,25 +1852,26 @@ export default function GanttChart({
               </div>
             )) : (
               <div className="px-2 py-3 text-center text-[11px] text-muted-foreground">
-                Sem demanda de mÃ£o de obra para o filtro atual.
+                Sem demanda de mão de obra para o filtro atual.
               </div>
             )}
           </div>
 
           {laborPlanning.suggestions.length > 0 && (
             <div className="mt-2 rounded-md border border-dashed border-orange-300 bg-orange-50/60 px-3 py-2 text-[10px] text-orange-900">
-              <strong>SugestÃ£o de reprogramaÃ§Ã£o:</strong>{' '}
+              <strong>Sugestão de reprogramação:</strong>{' '}
               {laborPlanning.suggestions[0].taskName} para {formatDateFull(laborPlanning.suggestions[0].suggestedStartDate)}.
               <span className="ml-1 text-orange-800">{laborPlanning.suggestions[0].impactNote}</span>
             </div>
           )}
         </div>
 
-        )}
+        */}
 
         {financialForecastNode === undefined
           ? <GanttFinancialForecast project={project} trabalhaSabado={obraConfig.trabalhaSabado} />
           : financialForecastNode}
+        </details>
 
         {/* Legend */}
         <div className="flex items-center gap-3 text-[9px] text-muted-foreground flex-wrap">

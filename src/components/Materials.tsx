@@ -83,7 +83,7 @@ function writeMaterialsUiSession(projectId: string, patch: Partial<MaterialsUiSe
 export default function Materials({ project, onProjectChange }: Props) {
   const ctl = useMaterialComparisons(project, onProjectChange);
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
-  const [section, setSection] = useState<MaterialsSection>(() => readMaterialsUiSession(project.id)?.section ?? 'grupos');
+  const [section, setSection] = useState<MaterialsSection>(() => readMaterialsUiSession(project.id)?.section ?? 'insumos');
   const [tab, setTab] = useState<MaterialsTab>(() => readMaterialsUiSession(project.id)?.tab ?? 'comparativo');
   const [supplierSearch, setSupplierSearch] = useState('');
   const [showRegisteredSuppliers, setShowRegisteredSuppliers] = useState(false);
@@ -105,7 +105,7 @@ export default function Materials({ project, onProjectChange }: Props) {
 
   useEffect(() => {
     const stored = readMaterialsUiSession(project.id);
-    setSection(stored?.section ?? 'grupos');
+    setSection(stored?.section ?? 'insumos');
     setTab(stored?.tab ?? 'comparativo');
   }, [project.id]);
 
@@ -202,9 +202,10 @@ export default function Materials({ project, onProjectChange }: Props) {
   return (
     <div className="p-4 space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-baseline gap-3">
-          <h2 className="text-lg font-bold text-foreground">Lista de Material</h2>
-          <span className="text-[11px] text-muted-foreground">
+        <div>
+          <h2 className="text-xl font-bold text-foreground">Materiais e compras</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Insumos do projeto, cotações, pedidos, recebimento e histórico em um único fluxo.</p>
+          <span className="mt-2 block text-xs text-muted-foreground">
             Comparativos: <strong className="text-foreground">{summary.count}</strong>
             <span className="mx-1.5">·</span>
             Em aberto: <strong className="text-foreground">{summary.open}</strong>
@@ -224,10 +225,10 @@ export default function Materials({ project, onProjectChange }: Props) {
         className="w-full"
       >
         <TabsList className="bg-muted h-9">
-          <TabsTrigger value="insumos" className="text-xs">
+          <TabsTrigger value="insumos" className="text-sm">
             <Boxes className="w-3.5 h-3.5 mr-1" /> Insumos do Projeto
           </TabsTrigger>
-          <TabsTrigger value="grupos" className="text-xs">
+          <TabsTrigger value="grupos" className="text-sm">
             <ListChecks className="w-3.5 h-3.5 mr-1" /> Grupos de compra
           </TabsTrigger>
         </TabsList>
@@ -418,10 +419,10 @@ export default function Materials({ project, onProjectChange }: Props) {
               className="w-full"
             >
               <TabsList className="bg-muted h-9">
-                <TabsTrigger value="comparativo" className="text-xs"><ListChecks className="w-3.5 h-3.5 mr-1" /> Cotação ({MC.getActiveComparisonItems(ctl.active).length})</TabsTrigger>
-                <TabsTrigger value="fornecedores" className="text-xs"><Truck className="w-3.5 h-3.5 mr-1" /> Cadastro global</TabsTrigger>
-                <TabsTrigger value="pedido" className="text-xs"><ShoppingCart className="w-3.5 h-3.5 mr-1" /> Pedido</TabsTrigger>
-                <TabsTrigger value="estoque" className="text-xs"><Warehouse className="w-3.5 h-3.5 mr-1" /> Estoque</TabsTrigger>
+                <TabsTrigger value="comparativo" className="text-xs"><ListChecks className="w-3.5 h-3.5 mr-1" /> Comparação e cotação ({MC.getActiveComparisonItems(ctl.active).length})</TabsTrigger>
+                <TabsTrigger value="fornecedores" className="text-xs"><Truck className="w-3.5 h-3.5 mr-1" /> Fornecedores</TabsTrigger>
+                <TabsTrigger value="pedido" className="text-xs"><ShoppingCart className="w-3.5 h-3.5 mr-1" /> Pedidos</TabsTrigger>
+                <TabsTrigger value="estoque" className="text-xs"><Warehouse className="w-3.5 h-3.5 mr-1" /> Recebimento e estoque</TabsTrigger>
                 <TabsTrigger value="historico" className="text-xs"><History className="w-3.5 h-3.5 mr-1" /> Histórico</TabsTrigger>
               </TabsList>
 
