@@ -38,6 +38,7 @@ import {
   CheckCircle2,
   ChevronDown,
   FileText,
+  Eye,
   Loader2,
   MoreVertical,
   Paperclip,
@@ -202,7 +203,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     return notes.filter(note => fiscalNoteViewGroup(note) === group).filter(note => !q ||
-      [note.supplierName, note.supplierCnpj, note.invoiceNumber, note.sourceFileName].some(value => value?.toLowerCase().includes(q)));
+      [note.supplierName, note.supplierCnpj, note.invoiceNumber].some(value => value?.toLowerCase().includes(q)));
   }, [group, notes, search]);
   const summary = selected ? linkSummary(selected) : { linked: 0, created: 0, attention: 0 };
   const readOnly = !canManage || selected?.status === 'aprovada' || selected?.status === 'rejeitada' || selected?.status === 'cancelada';
@@ -372,6 +373,29 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
     setSelected({ ...selected, items });
   };
 
+  const openOriginalDocument = async (note: WarehouseFiscalNote, attachmentIndex = 0) => {
+    const attachments = note.attachments?.length ? note.attachments : (note.attachment ? [note.attachment] : []);
+    const attachment = attachments[attachmentIndex];
+    if (!attachment) {
+      toast.error('O documento original não está disponível.');
+      return;
+    }
+    if (attachment.dataUrl) {
+      window.open(attachment.dataUrl, '_blank', 'noopener');
+      return;
+    }
+    if (!attachment.storagePath) {
+      toast.error('O documento original não está disponível.');
+      return;
+    }
+    const { data, error } = await supabase.storage.from('daily-report-photos').createSignedUrl(attachment.storagePath, 300);
+    if (error || !data?.signedUrl) {
+      toast.error('Não foi possível abrir o documento original.');
+      return;
+    }
+    window.open(data.signedUrl, '_blank', 'noopener');
+  };
+
   return (
     <div className="space-y-3">
       <input ref={cameraRef} className="hidden" type="file" accept="image/*" capture="environment" onChange={event => chooseFiles(event.target.files)} />
@@ -399,12 +423,12 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       </Tabs>
 
       <div className="space-y-2 md:hidden">
-        {visible.map(note => <NoteCard key={note.id} note={note} onOpen={() => setSelected(note)} />)}
+        {visible.map(note => <NoteCard key={note.id} note={note} onOpen={() => setSelected(note)} onOpenAttachment={() => void openOriginalDocument(note)} />)}
       </div>
       <div className="hidden overflow-hidden rounded-lg border bg-card md:block">
         <table className="w-full text-sm">
           <thead className="bg-muted/70 text-left text-muted-foreground"><tr><th className="p-3">Documento</th><th className="p-3">Fornecedor</th><th className="p-3">Emissão</th><th className="p-3 text-right">Itens</th><th className="p-3 text-right">Total</th><th className="p-3 text-right">Ação</th></tr></thead>
-          <tbody>{visible.map(note => <tr key={note.id} className="border-t"><td className="p-3"><div className="font-medium">{DOC_LABEL[note.documentType || 'outro']} {note.invoiceNumber ? `nº ${note.invoiceNumber}` : ''}</div><div className="text-xs text-muted-foreground">{note.sourceFileName}</div></td><td className="p-3">{note.supplierName || 'Não identificado'}<div className="text-xs text-muted-foreground">{note.supplierCnpj}</div></td><td className="p-3">{note.issueDate ? note.issueDate.split('-').reverse().join('/') : '—'}</td><td className="p-3 text-right">{note.items.length}</td><td className="p-3 text-right font-semibold">{money(note.totalAmount)}</td><td className="p-3 text-right"><Button variant="outline" onClick={() => setSelected(note)}>{fiscalNoteViewGroup(note) === 'review' ? 'Conferir' : 'Visualizar'}</Button></td></tr>)}</tbody>
+          <tbody>{visible.map(note => <tr key={note.id} className="border-t"><td className="p-3"><div className="font-medium">{DOC_LABEL[note.documentType || 'outro']} {note.invoiceNumber ? `nº ${note.invoiceNumber}` : ''}</div></td><td className="p-3">{note.supplierName || 'Não identificado'}<div className="text-xs text-muted-foreground">{note.supplierCnpj}</div></td><td className="p-3">{note.issueDate ? note.issueDate.split('-').reverse().join('/') : '—'}</td><td className="p-3 text-right">{note.items.length}</td><td className="p-3 text-right font-semibold">{money(note.totalAmount)}</td><td className="p-3"><div className="flex justify-end gap-2"><Button size="icon" variant="ghost" aria-label="Abrir documento original" title="Abrir documento original" onClick={() => void openOriginalDocument(note)}><Eye className="h-4 w-4" /></Button><Button variant="outline" onClick={() => setSelected(note)}>{fiscalNoteViewGroup(note) === 'review' ? 'Conferir' : 'Visualizar'}</Button></div></td></tr>)}</tbody>
         </table>
       </div>
       {!visible.length && <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground"><FileText className="mx-auto mb-3 h-8 w-8" />Nenhum documento nesta área.</div>}
@@ -420,10 +444,11 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       <Dialog open={!!selected} onOpenChange={open => !open && setSelected(null)}>
         <DialogContent className="flex max-h-[95dvh] max-w-5xl flex-col overflow-hidden p-0">
           {selected && <>
-            <DialogHeader className="border-b p-4 pr-12"><div className="flex flex-wrap items-center gap-2"><DialogTitle>{readOnly ? 'Documento' : 'Conferir documento'}</DialogTitle><Badge variant="outline">{DOC_LABEL[selected.documentType || 'outro']}</Badge>{selected.extractionStatus === 'failed' && <Badge variant="destructive">Leitura incompleta</Badge>}</div><DialogDescription>{selected.sourceFileName} · {selected.attachments?.length || (selected.attachment ? 1 : 0)} anexo(s)</DialogDescription></DialogHeader>
+            <DialogHeader className="border-b p-4 pr-12"><div className="flex flex-wrap items-center gap-2"><DialogTitle>{readOnly ? 'Documento' : 'Conferir documento'}</DialogTitle><Badge variant="outline">{DOC_LABEL[selected.documentType || 'outro']}</Badge>{selected.extractionStatus === 'failed' && <Badge variant="destructive">Leitura incompleta</Badge>}</div><DialogDescription>{selected.attachments?.length || (selected.attachment ? 1 : 0)} documento(s) original(is) preservado(s) para auditoria</DialogDescription></DialogHeader>
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 pb-24">
               {selected.processingError && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" />{selected.processingError} {canManage && selected.status === 'a_conferir' && <Button className="ml-2" size="sm" variant="outline" disabled={processing} onClick={retryExtraction}>{processing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}Tentar leitura novamente</Button>}</div>}
               {!isStockFiscalDocument(selected.documentType) && <div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-sm"><Archive className="mr-2 inline h-4 w-4" />Documento não fiscal: pode ser guardado como comprovante, mas nunca altera o estoque.</div>}
+              {(selected.attachments?.length || selected.attachment) && <div className="flex flex-wrap items-center gap-2 rounded-md border p-3"><span className="mr-auto text-sm font-medium">Documento original</span>{(selected.attachments?.length ? selected.attachments : selected.attachment ? [selected.attachment] : []).map((attachment, index) => <Button key={attachment.id} type="button" variant="outline" className="min-h-11" onClick={() => void openOriginalDocument(selected, index)}><Eye className="mr-2 h-4 w-4" />{index === 0 && (selected.attachments?.length || 0) <= 1 ? 'Visualizar documento' : `Visualizar anexo ${index + 1}`}</Button>)}</div>}
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <Field label="Fornecedor" value={selected.supplierName} readOnly={readOnly} onChange={value => setSelected({ ...selected, supplierName: value })} />
                 <Field label="CNPJ" value={selected.supplierCnpj} readOnly={readOnly} onChange={value => setSelected({ ...selected, supplierCnpj: normalizeCnpj(value) })} />
@@ -459,8 +484,8 @@ function Field({ label, value, readOnly, onChange, type = 'text' }: { label: str
   return <div><label className="mb-1 block text-sm font-medium">{label}</label><Input className="min-h-11" type={type} value={value ?? ''} readOnly={readOnly} onChange={event => onChange(event.target.value)} /></div>;
 }
 
-function NoteCard({ note, onOpen }: { note: WarehouseFiscalNote; onOpen: () => void }) {
-  return <button type="button" onClick={onOpen} className="w-full rounded-lg border bg-card p-4 text-left"><div className="flex items-start justify-between gap-2"><div><div className="font-semibold">{note.supplierName || 'Fornecedor não identificado'}</div><div className="mt-1 text-sm text-muted-foreground">{DOC_LABEL[note.documentType || 'outro']} {note.invoiceNumber ? `nº ${note.invoiceNumber}` : ''}</div></div><Badge variant="outline">{note.items.length} itens</Badge></div><div className="mt-3 flex items-end justify-between"><span className="text-xs text-muted-foreground">{note.issueDate ? note.issueDate.split('-').reverse().join('/') : note.sourceFileName}</span><strong>{money(note.totalAmount)}</strong></div></button>;
+function NoteCard({ note, onOpen, onOpenAttachment }: { note: WarehouseFiscalNote; onOpen: () => void; onOpenAttachment: () => void }) {
+  return <div className="w-full rounded-lg border bg-card p-4 text-left"><div className="flex items-start justify-between gap-2"><div><div className="font-semibold">{note.supplierName || 'Fornecedor não identificado'}</div><div className="mt-1 text-sm text-muted-foreground">{DOC_LABEL[note.documentType || 'outro']} {note.invoiceNumber ? `nº ${note.invoiceNumber}` : ''}</div></div><Badge variant="outline">{note.items.length} itens</Badge></div><div className="mt-3 flex items-end justify-between"><span className="text-xs text-muted-foreground">{note.issueDate ? note.issueDate.split('-').reverse().join('/') : 'Sem data de emissão'}</span><strong>{money(note.totalAmount)}</strong></div><div className="mt-3 grid grid-cols-[44px_1fr] gap-2"><Button size="icon" variant="outline" className="min-h-11 min-w-11" aria-label="Abrir documento original" onClick={onOpenAttachment}><Eye className="h-4 w-4" /></Button><Button className="min-h-11" variant="outline" onClick={onOpen}>{fiscalNoteViewGroup(note) === 'review' ? 'Conferir' : 'Visualizar dados'}</Button></div></div>;
 }
 
 function FilePreview({ file }: { file: File }) {
