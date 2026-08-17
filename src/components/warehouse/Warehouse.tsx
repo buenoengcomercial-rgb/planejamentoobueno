@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { clearWarehouse, ensureWarehouse, panelSummary } from '@/lib/warehouse';
-import { cn } from '@/lib/utils';
 import WarehousePanel from './WarehousePanel';
 import WarehouseStockTab from './WarehouseStockTab';
 import WarehouseMovementsTab from './WarehouseMovementsTab';
@@ -31,15 +30,6 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
     if (ensured !== project) onProjectChange(ensured);
   }, [ensured, project, onProjectChange]);
   const summary = useMemo(() => panelSummary(ensured), [ensured]);
-
-  const kpis = [
-    { label: 'Recebido', value: summary.totalReceived, tone: 'ok' as const },
-    { label: 'Retirado', value: summary.totalWithdrawn },
-    { label: 'Saldo físico', value: summary.totalBalance, tone: 'primary' as const, strong: true },
-    { label: 'A comprar', value: summary.totalToPurchase, tone: 'warn' as const },
-  ];
-  const toneCls = (t?: 'primary' | 'ok' | 'warn') =>
-    t === 'primary' ? 'text-primary' : t === 'ok' ? 'text-success' : t === 'warn' ? 'text-warning' : 'text-foreground';
 
   const handleClearWarehouse = () => {
     confirm(
@@ -85,17 +75,6 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-      </div>
-
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {kpis.map(k => (
-          <div key={k.label} className="bg-card border border-border rounded-md px-3 py-2">
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">{k.label}</div>
-            <div className={cn('font-bold tabular-nums', k.strong ? 'text-xl' : 'text-base', toneCls(k.tone))}>
-              {k.value.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}
-            </div>
-          </div>
-        ))}
       </div>
 
       <Tabs value={tab} onValueChange={setTab} className="w-full">
