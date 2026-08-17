@@ -1467,50 +1467,6 @@ export function updateFiscalItemPurchaseGroup(
   return setWh(p, { fiscalNotes, items });
 }
 
-export interface FiscalNoteDraftReconciliation {
-  project: Project;
-  postedIds: string[];
-  incompleteIds: string[];
-  duplicateIds: string[];
-}
-
-/**
- * Concilia rascunhos legados sem criar uma etapa visual de conferência.
- * Documentos completos entram uma única vez; incompletos e duplicados ficam
- * preservados para resolução explícita na interface.
- */
-export function reconcileFiscalNoteDrafts(
-  project: Project,
-  actor?: WarehouseActorInput,
-  ignoredNoteIds: ReadonlySet<string> = new Set(),
-): FiscalNoteDraftReconciliation {
-  let next = ensureWarehouse(project);
-  const draftIds = (next.warehouse?.fiscalNotes ?? [])
-    .filter(note => note.status === 'a_conferir' && !ignoredNoteIds.has(note.id))
-    .map(note => note.id);
-  const postedIds: string[] = [];
-  const incompleteIds: string[] = [];
-  const duplicateIds: string[] = [];
-
-  for (const noteId of draftIds) {
-    const note = next.warehouse?.fiscalNotes.find(entry => entry.id === noteId);
-    if (!note) continue;
-    const hasValidItem = note.items.some(item => item.description.trim() && Number(item.quantity || 0) > 0);
-    if (!hasValidItem) {
-      incompleteIds.push(noteId);
-      continue;
-    }
-    if (findFiscalNoteDuplicate(next, note)) {
-      duplicateIds.push(noteId);
-      continue;
-    }
-    next = approveFiscalNote(next, noteId, actor);
-    postedIds.push(noteId);
-  }
-
-  return { project: next, postedIds, incompleteIds, duplicateIds };
-}
-
 export function archiveFiscalNote(
   project: Project,
   noteId: string,
@@ -1542,6 +1498,25 @@ export function archiveFiscalNote(
       }
     : entry);
   return setWh(p, { fiscalNotes });
+}
+
+export interface LegacyFiscalNoteDraftArchival {
+  project: Project;
+  archivedIds: string[];
+}
+
+/** Arquiva rascunhos persistidos pelo fluxo antigo sem criar movimentos de estoque. */
+export function archiveLegacyFiscalNoteDrafts(
+  project: Project,
+  actor?: WarehouseActorInput,
+  ignoredNoteIds: ReadonlySet<string> = new Set(),
+): LegacyFiscalNoteDraftArchival {
+  let next = ensureWarehouse(project);
+  const archivedIds = (next.warehouse?.fiscalNotes ?? [])
+    .filter(note => note.status === 'a_conferir' && !ignoredNoteIds.has(note.id))
+    .map(note => note.id);
+  for (const noteId of archivedIds) next = archiveFiscalNote(next, noteId, 'descartada', actor);
+  return { project: next, archivedIds };
 }
 
 const CANCELLATION_BLOCKING_TYPES = new Set<WarehouseMovementType>([

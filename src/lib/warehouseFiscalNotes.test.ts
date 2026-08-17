@@ -3,6 +3,7 @@ import type { Project, WarehouseFiscalNote } from '@/types/project';
 import {
   approveFiscalNote,
   archiveFiscalNote,
+  archiveLegacyFiscalNoteDrafts,
   cancelFiscalNote,
   checkFiscalNoteCancellation,
   classifyFiscalDocumentText,
@@ -11,7 +12,6 @@ import {
   ensureWarehouse,
   findFiscalNoteDuplicate,
   isStockFiscalDocument,
-  reconcileFiscalNoteDrafts,
   updateFiscalItemPurchaseGroup,
 } from './warehouse';
 
@@ -152,20 +152,21 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(() => approveFiscalNote(archived, 'nf-1')).toThrow(/arquivado não pode/i);
   });
 
-  it('reconcilia rascunhos completos uma única vez e preserva incompletos e duplicados', () => {
+  it('arquiva rascunhos técnicos antigos sem gerar estoque ou movimentos', () => {
     const project = baseProject();
-    const existing = note({ id: 'existing', status: 'aprovada' });
     const ready = note({ id: 'ready', invoiceNumber: '101' });
-    const duplicate = note({ id: 'duplicate' });
     const incomplete = note({ id: 'incomplete', invoiceNumber: '102', items: [] });
-    project.warehouse!.fiscalNotes = [existing, ready, duplicate, incomplete];
-    const first = reconcileFiscalNoteDrafts(project, 'operador@teste');
-    expect(first.postedIds).toEqual(['ready']);
-    expect(first.duplicateIds).toEqual(['duplicate']);
-    expect(first.incompleteIds).toEqual(['incomplete']);
-    const second = reconcileFiscalNoteDrafts(first.project, 'operador@teste');
-    expect(second.postedIds).toHaveLength(0);
-    expect(first.project.warehouse!.movements.filter(movement => movement.fiscalNoteId === 'ready')).toHaveLength(1);
+    project.warehouse!.fiscalNotes = [ready, incomplete];
+    const first = archiveLegacyFiscalNoteDrafts(project, 'operador@teste');
+    expect(first.archivedIds).toEqual(['ready', 'incomplete']);
+    expect(first.project.warehouse!.fiscalNotes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'ready', status: 'rejeitada', archiveReason: 'descartada' }),
+      expect.objectContaining({ id: 'incomplete', status: 'rejeitada', archiveReason: 'descartada' }),
+    ]));
+    expect(first.project.warehouse!.items).toHaveLength(0);
+    expect(first.project.warehouse!.movements).toHaveLength(0);
+    const second = archiveLegacyFiscalNoteDrafts(first.project, 'operador@teste');
+    expect(second.archivedIds).toHaveLength(0);
   });
 
   it('sincroniza grupo global sem alterar movimentos, saldo ou preço', () => {

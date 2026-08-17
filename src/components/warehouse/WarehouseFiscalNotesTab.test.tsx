@@ -1,9 +1,26 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { useState } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project, WarehouseFiscalNote } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
+
+const { invokeMock, uploadMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
+  uploadMock: vi.fn(),
+}));
+
+vi.mock('@/integrations/supabase/client', () => ({
+  supabase: {
+    functions: { invoke: invokeMock },
+    storage: {
+      from: () => ({
+        upload: uploadMock,
+        createSignedUrl: vi.fn().mockResolvedValue({ data: { signedUrl: 'https://example.test/nota' }, error: null }),
+        download: vi.fn(),
+      }),
+    },
+  },
+}));
 
 function projectWithPostedNote(): Project {
   const fiscalNote: WarehouseFiscalNote = {
@@ -28,24 +45,14 @@ function projectWithPostedNote(): Project {
   return project;
 }
 
-function projectWithDuplicateDraft(): Project {
+function emptyProject(): Project {
   const project = projectWithPostedNote();
-  const posted = project.warehouse!.fiscalNotes[0];
-  project.warehouse!.fiscalNotes.push({
-    ...structuredClone(posted),
-    id: 'duplicate-draft',
-    status: 'a_conferir',
-    sourceFileName: 'duplicada.pdf',
-    createdBy: { userName: 'Operador' },
-    updatedBy: undefined,
-    stockPostedAt: undefined,
-    stockPostedBy: undefined,
-    items: posted.items.map(item => ({ ...item, id: `duplicate-${item.id}`, itemKey: undefined })),
-  });
+  project.warehouse!.fiscalNotes = [];
+  project.warehouse!.items = [];
   return project;
 }
 
-function projectWithIncompleteDraft(): Project {
+function projectWithLegacyDraft(): Project {
   const project = projectWithPostedNote();
   project.warehouse!.items = [];
   project.warehouse!.fiscalNotes = [{
@@ -59,35 +66,33 @@ function projectWithIncompleteDraft(): Project {
   return project;
 }
 
-function projectWithCompleteDraft(): Project {
-  const project = projectWithPostedNote();
-  project.warehouse!.items = [];
-  project.warehouse!.fiscalNotes = [{
-    ...project.warehouse!.fiscalNotes[0],
-    id: 'complete-draft',
-    status: 'a_conferir',
-    invoiceNumber: '2.001',
-    stockPostedAt: undefined,
-    stockPostedBy: undefined,
-    items: project.warehouse!.fiscalNotes[0].items.map(item => ({ ...item, id: 'complete-item', itemKey: undefined })),
-  }];
-  return project;
+async function readDocument(container: HTMLElement, name = 'nota.jpg') {
+  const inputs = container.querySelectorAll<HTMLInputElement>('input[type="file"]');
+  const file = new File(['imagem da nota'], name, { type: 'application/octet-stream' });
+  fireEvent.change(inputs[1], { target: { files: [file] } });
+  fireEvent.click(await screen.findByRole('button', { name: 'Enviar para leitura' }));
+  expect(await screen.findByText('Validar nota antes do lançamento')).toBeInTheDocument();
 }
 
-function StatefulFiscalNotes({ initialProject }: { initialProject: Project }) {
-  const [project, setProject] = useState(initialProject);
-  return <WarehouseFiscalNotesTab project={project} onProjectChange={setProject} canManage auditActor={{ userName: 'Operador' }} />;
-}
+describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', () => {
+  beforeEach(() => {
+    invokeMock.mockReset().mockResolvedValue({
+      data: {
+        ok: true,
+        note: {
+          supplierName: 'FREITAS & CIA LTDA',
+          supplierCnpj: '02.179.328/0001-42',
+          invoiceNumber: '1.301.412',
+          issueDate: '2026-08-14',
+          totalAmount: 85.63,
+          items: [{ id: 'read-item', productCode: '7563', description: 'FITA CREPE 24MM X 50M', quantity: 2, unit: 'UN', unitPrice: 42.815, totalPrice: 85.63 }],
+        },
+      },
+      error: null,
+    });
+    uploadMock.mockReset().mockResolvedValue({ error: null });
+  });
 
-function StaleProjectFiscalNotes({ project, onProjectChange }: { project: Project; onProjectChange: (next: Project) => void }) {
-  const [revision, setRevision] = useState(0);
-  return <>
-    <button onClick={() => setRevision(value => value + 1)}>Forçar nova renderização</button>
-    <WarehouseFiscalNotesTab project={project} onProjectChange={onProjectChange} canManage auditActor={{ userName: `Operador ${revision}` }} />
-  </>;
-}
-
-describe('WarehouseFiscalNotesTab - lançamento simplificado', () => {
   it('mostra somente lançadas/arquivadas e restaura as colunas sem Arquivo', () => {
     render(<WarehouseFiscalNotesTab project={projectWithPostedNote()} onProjectChange={vi.fn()} canManage />);
     expect(screen.queryByText(/Para conferir/i)).not.toBeInTheDocument();
@@ -112,59 +117,74 @@ describe('WarehouseFiscalNotesTab - lançamento simplificado', () => {
     within(dialog).getAllByRole('combobox').forEach(combobox => expect(combobox).toBeEnabled());
   });
 
-  it('bloqueia lançamento duplicado e permite voltar antes de descartar pelo X', async () => {
-    render(<StatefulFiscalNotes initialProject={projectWithDuplicateDraft()} />);
-    expect(await screen.findByText(/Nota já lançada:/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Confirmar lançamento duplicado/i })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    expect(await screen.findByRole('alertdialog', { name: /Descartar este envio/i })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Voltar' }));
-    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
-    expect(screen.getByText(/Nota já lançada:/i)).toBeInTheDocument();
-  });
-
-  it('descarta a duplicata sem reabrir o modal ou alterar o lançamento existente', async () => {
-    render(<StatefulFiscalNotes initialProject={projectWithDuplicateDraft()} />);
-    expect(await screen.findByText(/Nota já lançada:/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Descartar envio' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Confirmar descarte' }));
-    await waitFor(() => expect(screen.queryByText(/Concluir lançamento/i)).not.toBeInTheDocument());
-    expect(screen.getByRole('tab', { name: /Lançadas no estoque \(1\)/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Arquivadas \(1\)/i })).toBeInTheDocument();
-  });
-
-  it('descarta a duplicata e abre o lançamento existente em modo somente leitura', async () => {
-    render(<StatefulFiscalNotes initialProject={projectWithDuplicateDraft()} />);
-    expect(await screen.findByText(/Nota já lançada:/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Descartar e abrir lançamento existente' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Confirmar descarte' }));
-    expect(await screen.findByText('Dados do lançamento')).toBeInTheDocument();
-    expect(screen.queryByText(/Nota já lançada:/i)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Fechar' }));
-    await waitFor(() => expect(screen.queryByText('Dados do lançamento')).not.toBeInTheDocument());
-    expect(screen.getByRole('tab', { name: /Lançadas no estoque \(1\)/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Arquivadas \(1\)/i })).toBeInTheDocument();
-  });
-
-  it('permite descartar pelo X um rascunho sem itens sem prender o operador', async () => {
-    render(<StatefulFiscalNotes initialProject={projectWithIncompleteDraft()} />);
-    expect(await screen.findByText('Concluir lançamento')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Confirmar descarte' }));
-    await waitFor(() => expect(screen.queryByText('Concluir lançamento')).not.toBeInTheDocument());
-    expect(screen.getByRole('tab', { name: /Lançadas no estoque \(0\)/i })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Arquivadas \(1\)/i })).toBeInTheDocument();
-  });
-
-  it('não reconcilia novamente o mesmo rascunho enquanto a atualização do projeto está sendo propagada', async () => {
+  it('lê a nota e abre a validação sem salvar ou movimentar o estoque', async () => {
     const onProjectChange = vi.fn();
-    render(<StaleProjectFiscalNotes project={projectWithCompleteDraft()} onProjectChange={onProjectChange} />);
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={onProjectChange} canManage auditActor={{ userName: 'Operador' }} />);
+    await readDocument(view.container);
+    expect(onProjectChange).not.toHaveBeenCalled();
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(screen.getByText(/O estoque ainda não foi alterado/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirmar lançamento' })).toBeEnabled();
+    expect(screen.queryByText(/pendente.*lançado.*automaticamente/i)).not.toBeInTheDocument();
+  });
+
+  it('fecha pelo X e cancela o envio sem criar registro, material ou movimento', async () => {
+    const onProjectChange = vi.fn();
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={onProjectChange} canManage />);
+    await readDocument(view.container);
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByText('Validar nota antes do lançamento')).not.toBeInTheDocument());
+    expect(onProjectChange).not.toHaveBeenCalled();
+    expect(screen.getByRole('tab', { name: /Lançadas no estoque \(0\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Arquivadas \(0\)/i })).toBeInTheDocument();
+  });
+
+  it('cria nota, material e uma única entrada somente após confirmação', async () => {
+    const onProjectChange = vi.fn();
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={onProjectChange} canManage auditActor={{ userName: 'Operador' }} />);
+    await readDocument(view.container);
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar lançamento' }));
     await waitFor(() => expect(onProjectChange).toHaveBeenCalledTimes(1));
     const posted = onProjectChange.mock.calls[0][0] as Project;
+    expect(posted.warehouse!.fiscalNotes).toHaveLength(1);
     expect(posted.warehouse!.fiscalNotes[0].status).toBe('aprovada');
-    expect(posted.warehouse!.movements).toHaveLength(1);
+    expect(posted.warehouse!.items).toHaveLength(1);
+    expect(posted.warehouse!.movements.filter(movement => movement.type === 'entrada')).toHaveLength(1);
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Forçar nova renderização' }));
+  it('identifica a nota duplicada e permite abrir o lançamento existente sem salvar o novo envio', async () => {
+    const onProjectChange = vi.fn();
+    const view = render(<WarehouseFiscalNotesTab project={projectWithPostedNote()} onProjectChange={onProjectChange} canManage />);
+    await readDocument(view.container, 'duplicada.jpg');
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getAllByText(/FREITAS & CIA LTDA/).length).toBeGreaterThan(0);
+    expect(within(dialog).getByText(/Nota 1\.301\.412/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Confirmar lançamento' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir lançamento existente' }));
+    expect(await screen.findByText('Dados do lançamento')).toBeInTheDocument();
+    expect(onProjectChange).not.toHaveBeenCalled();
+  });
+
+  it('mantém a validação aberta quando a leitura falha e permite preenchimento manual', async () => {
+    invokeMock.mockResolvedValueOnce({ data: { ok: false, error: 'Imagem ilegível' }, error: null });
+    const onProjectChange = vi.fn();
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={onProjectChange} canManage />);
+    await readDocument(view.container, 'ilegivel.jpg');
+    expect(screen.getByText('Imagem ilegível')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tentar leitura novamente' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar item' }));
+    expect(screen.getByText('Itens do documento (1)')).toBeInTheDocument();
+    expect(onProjectChange).not.toHaveBeenCalled();
+  });
+
+  it('arquiva rascunho técnico antigo uma única vez sem movimentar estoque', async () => {
+    const onProjectChange = vi.fn();
+    render(<WarehouseFiscalNotesTab project={projectWithLegacyDraft()} onProjectChange={onProjectChange} canManage auditActor={{ userName: 'Operador' }} />);
     await waitFor(() => expect(onProjectChange).toHaveBeenCalledTimes(1));
+    const archived = onProjectChange.mock.calls[0][0] as Project;
+    expect(archived.warehouse!.fiscalNotes[0]).toMatchObject({ status: 'rejeitada', archiveReason: 'descartada' });
+    expect(archived.warehouse!.items).toHaveLength(0);
+    expect(archived.warehouse!.movements).toHaveLength(0);
   });
 });

@@ -9,7 +9,7 @@ import type {
 } from '@/types/project';
 import {
   approveFiscalNote,
-  archiveFiscalNote,
+  archiveLegacyFiscalNoteDrafts,
   cancelFiscalNote,
   checkFiscalNoteCancellation,
   classifyFiscalDocumentText,
@@ -20,7 +20,6 @@ import {
   makeAttachment,
   nowWarehouseISO,
   readFileAsDataURL,
-  reconcileFiscalNoteDrafts,
   suggestFiscalNoteItemLinks,
   uidWarehouse,
   updateFiscalItemPurchaseGroup,
@@ -28,7 +27,6 @@ import {
 } from '@/lib/warehouse';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -99,6 +97,17 @@ function validateFiles(files: File[]) {
 
 function newItem(): WarehouseFiscalNoteItem {
   return { id: uidWarehouse(), description: '', quantity: 1, unit: 'UN', unitPrice: 0, totalPrice: 0 };
+}
+
+async function makeTransientAttachment(file: File): Promise<WarehouseAttachment> {
+  return {
+    id: uidWarehouse(),
+    name: file.name,
+    mimeType: file.type || 'application/octet-stream',
+    kind: 'nf',
+    uploadedAt: nowWarehouseISO(),
+    dataUrl: await readFileAsDataURL(file),
+  };
 }
 
 async function extractPdf(file: File) {
@@ -175,11 +184,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
   const [processing, setProcessing] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
-  const [discardOpen, setDiscardOpen] = useState(false);
-  const [discardDestination, setDiscardDestination] = useState<'close' | 'existing'>('close');
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const resolvedDraftIdsRef = useRef(new Set<string>());
+  const archivedLegacyDraftIdsRef = useRef(new Set<string>());
   const notes = useMemo(() => project.warehouse?.fiscalNotes ?? [], [project.warehouse?.fiscalNotes]);
   const purchaseGroups = useMemo(() => (project.materialComparisons ?? [])
     .map(comparison => ({ id: comparison.id, name: comparison.name }))
@@ -201,21 +208,13 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
   const cancelCheck = isPosted && selected ? checkFiscalNoteCancellation(project, selected.id) : null;
 
   useEffect(() => {
-    if (!canManage || processing || selected) return;
-    const reconciliation = reconcileFiscalNoteDrafts(project, auditActor, resolvedDraftIdsRef.current);
-    if (reconciliation.postedIds.length) {
-      reconciliation.postedIds.forEach(noteId => resolvedDraftIdsRef.current.add(noteId));
-      onProjectChange(reconciliation.project);
-      setGroup('posted');
-      toast.success(`${reconciliation.postedIds.length} documento(s) pendente(s) lançado(s) automaticamente.`);
-      return;
-    }
-    const unresolvedId = [...reconciliation.incompleteIds, ...reconciliation.duplicateIds]
-      .find(noteId => !resolvedDraftIdsRef.current.has(noteId));
-    if (!unresolvedId) return;
-    const draft = reconciliation.project.warehouse?.fiscalNotes.find(note => note.id === unresolvedId);
-    if (draft) setSelected(draft);
-  }, [auditActor, canManage, notes, onProjectChange, processing, project, selected]);
+    if (!canManage) return;
+    const archival = archiveLegacyFiscalNoteDrafts(project, auditActor, archivedLegacyDraftIdsRef.current);
+    if (!archival.archivedIds.length) return;
+    archival.archivedIds.forEach(noteId => archivedLegacyDraftIdsRef.current.add(noteId));
+    onProjectChange(archival.project);
+    toast.message(`${archival.archivedIds.length} envio(s) antigo(s) arquivado(s) sem alterar o estoque.`);
+  }, [auditActor, canManage, notes, onProjectChange, project]);
 
   const chooseFiles = (incoming: FileList | null) => {
     if (!incoming) return;
@@ -231,30 +230,13 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
     if (fileRef.current) fileRef.current.value = '';
   };
 
-  const finishDraft = (baseProject: Project, note: WarehouseFiscalNote) => {
-    const saved = upsertFiscalNote(baseProject, note, auditActor);
-    const existing = findFiscalNoteDuplicate(saved, note);
-    if (existing) {
-      onProjectChange(saved);
-      setSelected(saved.warehouse?.fiscalNotes.find(entry => entry.id === note.id) ?? note);
-      return false;
-    }
-    const posted = approveFiscalNote(saved, note.id, auditActor);
-    resolvedDraftIdsRef.current.add(note.id);
-    setSelected(null);
-    setGroup('posted');
-    onProjectChange(posted);
-    toast.success('Documento lançado automaticamente no estoque.');
-    return true;
-  };
-
   const processFiles = async () => {
     const selectedFiles = [...files];
     try {
       validateFiles(selectedFiles);
       setProcessing(true);
       const createdAt = nowWarehouseISO();
-      const attachments = await Promise.all(selectedFiles.map(file => makeAttachment(file, project.id, 'nf')));
+      const attachments = await Promise.all(selectedFiles.map(makeTransientAttachment));
       const draft: WarehouseFiscalNote = {
         id: uidWarehouse(), createdAt, updatedAt: createdAt, status: 'a_conferir', origin: 'upload',
         sourceFileName: selectedFiles.length === 1 ? selectedFiles[0].name : `${selectedFiles[0].name} + ${selectedFiles.length - 1} foto(s)`,
@@ -262,24 +244,20 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
         totalAmount: 0, items: [], extractionStatus: 'reading', extractionStartedAt: createdAt,
         documentType: 'outro', documentTypeConfidence: 0,
       };
-      let nextProject = upsertFiscalNote(project, draft, auditActor);
-      onProjectChange(nextProject);
       setUploadOpen(false);
-      setFiles([]);
 
       let urls: string[] = [];
       let extractedText = '';
-      if (selectedFiles[0].type === 'application/pdf' || selectedFiles[0].name.toLowerCase().endsWith('.pdf')) {
-        const extracted = await extractPdf(selectedFiles[0]);
-        urls = extracted.images;
-        extractedText = extracted.text;
-      } else {
-        urls = await Promise.all(selectedFiles.map(readFileAsDataURL));
-      }
-
       let parsed: ParsedNote = { totalAmount: 0, items: [] };
       let processingError: string | undefined;
       try {
+        if (selectedFiles[0].type === 'application/pdf' || selectedFiles[0].name.toLowerCase().endsWith('.pdf')) {
+          const extracted = await extractPdf(selectedFiles[0]);
+          urls = extracted.images;
+          extractedText = extracted.text;
+        } else {
+          urls = attachments.map(attachment => attachment.dataUrl || '').filter(Boolean);
+        }
         parsed = await readWithAi({ name: draft.sourceFileName, type: draft.sourceMimeType, urls, text: extractedText });
       } catch (error) {
         processingError = (error as Error).message;
@@ -289,21 +267,23 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       const finalNote: WarehouseFiscalNote = {
         ...draft, ...parsed,
         supplierCnpj: normalizeCnpj(parsed.supplierCnpj),
-        items: suggestFiscalNoteItemLinks(nextProject, parsed.items ?? [], parsed.supplierCnpj),
+        items: suggestFiscalNoteItemLinks(project, parsed.items ?? [], parsed.supplierCnpj),
         extractedText,
         documentType: deterministicType !== 'outro' ? deterministicType : (parsed.documentType || 'outro'),
         documentTypeConfidence: deterministicType !== 'outro' ? 1 : Number(parsed.documentTypeConfidence || 0),
         extractionStatus: processingError ? 'failed' : 'ready', processingError,
         extractionCompletedAt: completedAt, updatedAt: completedAt,
       };
-      nextProject = upsertFiscalNote(nextProject, finalNote, auditActor);
-      if (!validItems(finalNote).length) {
-        onProjectChange(nextProject);
-        setSelected(finalNote);
-        toast.warning('A leitura não encontrou itens. Inclua ao menos um item para concluir o lançamento.');
+      setSelected(finalNote);
+      if (processingError) {
+        toast.warning('A leitura automática falhou. Tente novamente ou preencha os dados manualmente.');
         return;
       }
-      finishDraft(nextProject, finalNote);
+      if (!validItems(finalNote).length) {
+        toast.warning('A leitura não encontrou itens. Inclua ao menos um item antes de confirmar o lançamento.');
+        return;
+      }
+      toast.success('Leitura concluída. Confira os dados antes de confirmar o lançamento.');
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -337,15 +317,11 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
         documentTypeConfidence: deterministicType !== 'outro' ? 1 : Number(parsed.documentTypeConfidence || 0),
         extractionStatus: 'ready', processingError: undefined, extractionCompletedAt: nowWarehouseISO(),
       };
-      if (validItems(updated).length) finishDraft(project, updated);
-      else {
-        onProjectChange(upsertFiscalNote(project, updated, auditActor));
-        setSelected(updated);
-        toast.warning('A leitura ainda não encontrou itens. Preencha um item manualmente.');
-      }
+      setSelected(updated);
+      if (validItems(updated).length) toast.success('Leitura concluída. Confira os dados antes de confirmar o lançamento.');
+      else toast.warning('A leitura ainda não encontrou itens. Preencha um item manualmente.');
     } catch (error) {
       const failed = { ...selected, extractionStatus: 'failed' as const, processingError: (error as Error).message };
-      onProjectChange(upsertFiscalNote(project, failed, auditActor));
       setSelected(failed);
       toast.error('A leitura falhou novamente. Preencha o item manualmente.');
     } finally {
@@ -353,9 +329,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
     }
   };
 
-  const postSelectedDraft = () => {
+  const postSelectedDraft = async () => {
     if (!selected || !isDraft) return;
-    if (duplicate) return toast.error('Esta nota já foi lançada. Descarte o novo envio ou abra o lançamento existente.');
+    if (duplicate) return toast.error('Esta nota já foi lançada. Cancele o envio ou abra o lançamento existente.');
     if (!validItems(selected).length) return toast.error('Inclua ao menos um item com descrição e quantidade maior que zero.');
     const normalized: WarehouseFiscalNote = {
       ...selected,
@@ -368,9 +344,27 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       })),
     };
     try {
-      finishDraft(project, normalized);
+      setProcessing(true);
+      const sourceFiles = files.length
+        ? files
+        : await Promise.all((normalized.attachments?.length ? normalized.attachments : normalized.attachment ? [normalized.attachment] : []).map(attachmentFile));
+      const attachments = await Promise.all(sourceFiles.map(file => makeAttachment(file, project.id, 'nf')));
+      const persistentNote: WarehouseFiscalNote = {
+        ...normalized,
+        attachment: attachments[0],
+        attachments,
+      };
+      const saved = upsertFiscalNote(project, persistentNote, auditActor);
+      const posted = approveFiscalNote(saved, persistentNote.id, auditActor);
+      onProjectChange(posted);
+      setSelected(null);
+      setFiles([]);
+      setGroup('posted');
+      toast.success(`Nota ${persistentNote.invoiceNumber || ''} lançada no estoque.`.replace(/\s+/g, ' ').trim());
     } catch (error) {
       toast.error((error as Error).message);
+    } finally {
+      setProcessing(false);
     }
   };
 
@@ -425,33 +419,17 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
 
   const requestCloseSelected = () => {
     if (isDraft) {
-      setDiscardDestination('close');
-      setDiscardOpen(true);
+      setSelected(null);
+      setFiles([]);
       return;
     }
     setSelected(null);
   };
 
-  const requestDiscard = (destination: 'close' | 'existing') => {
-    setDiscardDestination(destination);
-    setDiscardOpen(true);
-  };
-
-  const confirmDiscard = () => {
-    if (!selected || !isDraft) return setDiscardOpen(false);
-    const draftId = selected.id;
-    const existing = duplicate;
-    const archived = archiveFiscalNote(project, draftId, 'descartada', auditActor);
-    resolvedDraftIdsRef.current.add(draftId);
-    setDiscardOpen(false);
-    setGroup('posted');
-    if (discardDestination === 'existing' && existing) {
-      setSelected(archived.warehouse?.fiscalNotes.find(note => note.id === existing.id) ?? existing);
-    } else {
-      setSelected(null);
-    }
-    onProjectChange(archived);
-    toast.success('Envio descartado sem alterar o estoque.');
+  const openDuplicate = () => {
+    if (!duplicate) return;
+    setFiles([]);
+    setSelected(duplicate);
   };
 
   return (
@@ -471,7 +449,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
           </div>}
         </div>
         {!canManage && <p className="mt-2 text-sm text-muted-foreground">Seu perfil possui acesso somente para consulta.</p>}
-        {processing && <div className="mt-3 flex items-center rounded-md border border-primary/30 bg-primary/5 p-3 text-sm"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Lendo o documento e preparando a entrada automática no estoque.</div>}
+        {processing && <div className="mt-3 flex items-center rounded-md border border-primary/30 bg-primary/5 p-3 text-sm"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Lendo o documento para validação.</div>}
       </div>
 
       <Tabs value={group} onValueChange={value => setGroup(value as ViewGroup)}>
@@ -493,19 +471,19 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       {!visible.length && <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground"><FileText className="mx-auto mb-3 h-8 w-8" />Nenhum documento nesta área.</div>}
 
       <Dialog open={uploadOpen} onOpenChange={open => !processing && setUploadOpen(open)}>
-        <DialogContent className="max-w-xl"><DialogHeader><DialogTitle>Enviar documento</DialogTitle><DialogDescription>Envie um PDF ou até quatro fotos. Se a leitura encontrar itens, a entrada será lançada automaticamente.</DialogDescription></DialogHeader>
+        <DialogContent className="max-w-xl"><DialogHeader><DialogTitle>Enviar documento para leitura</DialogTitle><DialogDescription>Envie um PDF ou até quatro fotos. Depois da leitura, confira os dados antes de lançar no estoque.</DialogDescription></DialogHeader>
           <div className="space-y-2">{files.map((file, index) => <div key={`${file.name}-${index}`} className="flex min-h-16 items-center gap-3 rounded-md border p-2"><FilePreview file={file} /><span className="min-w-0 flex-1 truncate text-sm">{index + 1}. {file.name}</span><div className="flex gap-1"><Button size="icon" variant="ghost" disabled={index === 0} onClick={() => setFiles(list => list.map((entry, i) => i === index - 1 ? file : i === index ? list[index - 1] : entry))} aria-label="Mover para cima">↑</Button><Button size="icon" variant="ghost" onClick={() => setFiles(list => list.filter((_, i) => i !== index))} aria-label="Remover foto"><X className="h-4 w-4" /></Button></div></div>)}</div>
           {!files.some(file => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) && files.length < MAX_IMAGES && <div className="grid grid-cols-2 gap-2"><Button variant="outline" className="min-h-11" onClick={() => cameraRef.current?.click()}><Camera className="mr-2 h-4 w-4" />Nova captura</Button><Button variant="outline" className="min-h-11" onClick={() => fileRef.current?.click()}><Plus className="mr-2 h-4 w-4" />Adicionar foto</Button></div>}
-          <DialogFooter><Button variant="outline" onClick={() => { setUploadOpen(false); setFiles([]); }}>Cancelar</Button><Button onClick={processFiles} disabled={!files.length || processing}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}Enviar e lançar</Button></DialogFooter>
+          <DialogFooter><Button variant="outline" onClick={() => { setUploadOpen(false); setFiles([]); }}>Cancelar</Button><Button onClick={processFiles} disabled={!files.length || processing}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}Enviar para leitura</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={!!selected} onOpenChange={open => !open && requestCloseSelected()}>
         <DialogContent className="flex max-h-[95dvh] max-w-7xl flex-col overflow-hidden p-0">
           {selected && <>
-            <DialogHeader className="border-b p-4 pr-12"><div className="flex flex-wrap items-center gap-2"><DialogTitle>{isDraft ? 'Concluir lançamento' : 'Dados do lançamento'}</DialogTitle><StatusBadge note={selected} />{selected.extractionStatus === 'failed' && <Badge variant="destructive">Leitura incompleta</Badge>}</div><DialogDescription>{selected.attachments?.length || (selected.attachment ? 1 : 0)} documento(s) original(is) preservado(s) para auditoria</DialogDescription></DialogHeader>
+            <DialogHeader className="border-b p-4 pr-12"><div className="flex flex-wrap items-center gap-2"><DialogTitle>{isDraft ? 'Validar nota antes do lançamento' : 'Dados do lançamento'}</DialogTitle><StatusBadge note={selected} />{selected.extractionStatus === 'failed' && <Badge variant="destructive">Leitura incompleta</Badge>}</div><DialogDescription>{isDraft ? 'Confira e corrija os dados. O estoque ainda não foi alterado.' : `${selected.attachments?.length || (selected.attachment ? 1 : 0)} documento(s) original(is) preservado(s) para auditoria`}</DialogDescription></DialogHeader>
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 pb-24">
-              {duplicate && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" /><strong>Nota já lançada:</strong> existe o lançamento {duplicate.invoiceNumber || duplicate.id} de {duplicate.supplierName || 'fornecedor não identificado'}. Este novo envio não pode gerar outra entrada no estoque.</div>}
+              {duplicate && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" /><strong>Nota já lançada:</strong> {duplicate.supplierName || 'Fornecedor não identificado'} · CNPJ {duplicate.supplierCnpj || '—'} · Nota {duplicate.invoiceNumber || '—'} · Emissão {duplicate.issueDate ? duplicate.issueDate.split('-').reverse().join('/') : '—'} · Valor {money(duplicate.totalAmount)}. Este envio não pode gerar outra entrada no estoque.</div>}
               {selected.processingError && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" />{selected.processingError} {isDraft && <Button className="ml-2" size="sm" variant="outline" disabled={processing} onClick={retryExtraction}>{processing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}Tentar leitura novamente</Button>}</div>}
               {(selected.attachments?.length || selected.attachment) && <div className="flex flex-wrap items-center gap-2 rounded-md border p-3"><span className="mr-auto text-sm font-medium">Documento original</span>{(selected.attachments?.length ? selected.attachments : selected.attachment ? [selected.attachment] : []).map((attachment, index) => <Button key={attachment.id} type="button" variant="outline" className="min-h-11" onClick={() => void openOriginalDocument(selected, index)}><Eye className="mr-2 h-4 w-4" />{index === 0 && (selected.attachments?.length || 0) <= 1 ? 'Visualizar documento' : `Visualizar anexo ${index + 1}`}</Button>)}</div>}
 
@@ -535,27 +513,14 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
             </div>
             <div className="sticky bottom-0 flex flex-wrap items-center justify-end gap-2 border-t bg-background p-3 shadow-[0_-4px_12px_rgba(0,0,0,0.08)]">
               {!isDraft && <Button variant="outline" onClick={() => setSelected(null)}>Fechar</Button>}
-              {isDraft && <Button variant="outline" className="text-destructive" onClick={() => requestDiscard('close')}>Descartar envio</Button>}
-              {isDraft && duplicate && <Button onClick={() => requestDiscard('existing')}>Descartar e abrir lançamento existente</Button>}
-              {isDraft && !duplicate && <Button onClick={postSelectedDraft} disabled={!validItems(selected).length}>Concluir lançamento no estoque</Button>}
+              {isDraft && <Button variant="outline" onClick={requestCloseSelected}>Cancelar envio</Button>}
+              {isDraft && duplicate && <Button onClick={openDuplicate}>Abrir lançamento existente</Button>}
+              {isDraft && !duplicate && <Button onClick={() => void postSelectedDraft()} disabled={!validItems(selected).length || processing}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Confirmar lançamento</Button>}
               {canManage && isPosted && <Button variant="destructive" onClick={() => setCancelOpen(true)}>Cancelar lançamento</Button>}
             </div>
           </>}
         </DialogContent>
       </Dialog>
-
-      <AlertDialog open={discardOpen} onOpenChange={setDiscardOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Descartar este envio?</AlertDialogTitle>
-            <AlertDialogDescription>O documento será preservado em Arquivadas para auditoria, mas não criará materiais, movimentos ou saldo no estoque.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Voltar</AlertDialogCancel>
-            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={confirmDiscard}>Confirmar descarte</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       <Dialog open={cancelOpen} onOpenChange={setCancelOpen}><DialogContent><DialogHeader><DialogTitle>Cancelar lançamento definitivamente</DialogTitle><DialogDescription>A entrada original não será apagada. O sistema criará movimentos de estorno, preservará o documento e impedirá qualquer relançamento deste registro.</DialogDescription></DialogHeader>{cancelCheck && !cancelCheck.allowed && <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"><strong>Cancelamento bloqueado:</strong><ul className="mt-2 list-disc pl-5">{cancelCheck.blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul></div>}<div><label className="mb-1 block text-sm font-medium">Motivo obrigatório</label><Textarea value={cancelReason} onChange={event => setCancelReason(event.target.value)} placeholder="Explique por que o lançamento deve ser cancelado" /></div><DialogFooter><Button variant="outline" onClick={() => setCancelOpen(false)}>Voltar</Button><Button variant="destructive" disabled={!cancelCheck?.allowed || !cancelReason.trim()} onClick={confirmCancel}>Confirmar estorno definitivo</Button></DialogFooter></DialogContent></Dialog>
     </div>
@@ -570,7 +535,7 @@ function StatusBadge({ note }: { note: WarehouseFiscalNote }) {
   if (note.status === 'aprovada') return <Badge variant="outline" className="border-success/30 bg-success/15 text-success">Lançada</Badge>;
   if (note.status === 'cancelada') return <Badge variant="outline" className="border-destructive/30 bg-destructive/10 text-destructive">Cancelada</Badge>;
   if (note.status === 'rejeitada') return <Badge variant="outline">Arquivada</Badge>;
-  return <Badge variant="outline" className="border-warning/30 bg-warning/10 text-warning">Envio incompleto</Badge>;
+  return <Badge variant="outline" className="border-warning/30 bg-warning/10 text-warning">Aguardando confirmação</Badge>;
 }
 
 interface ItemEditorProps {
@@ -590,7 +555,7 @@ function ItemTableRow({ note, item, index, editable, groupEditable, purchaseGrou
 }
 
 function ItemMobileCard({ note, item, index, editable, groupEditable, purchaseGroups, onUpdate, onGroupChange, onRemove }: ItemEditorProps) {
-  return <div className="space-y-3 rounded-md border p-3"><div className="grid gap-3 sm:grid-cols-2"><MobileField label="Cód. prod."><Input className="min-h-11 text-center" value={item.productCode || ''} readOnly={!editable} onChange={event => onUpdate(index, { productCode: event.target.value })} /></MobileField><MobileField label="Descrição"><Input className="min-h-11" value={item.description} readOnly={!editable} onChange={event => onUpdate(index, { description: event.target.value })} /></MobileField><MobileField label="Qtd"><Input className="min-h-11 text-center" type="number" value={item.quantity} readOnly={!editable} onChange={event => onUpdate(index, { quantity: Number(event.target.value) })} /></MobileField><MobileField label="Un"><Input className="min-h-11 text-center" value={item.unit || 'UN'} readOnly={!editable} onChange={event => onUpdate(index, { unit: event.target.value })} /></MobileField><MobileValue label="V. unit. NF" value={money(item.unitPrice)} /><MobileValue label="V. unit. global" value={money(fiscalItemGlobalUnitPrice(item, note))} /><MobileValue label="V. total" value={money(fiscalItemGlobalTotal(item, note))} /><MobileField label="Grupo de compra"><PurchaseGroupSelect value={item.purchaseGroupId} disabled={!groupEditable} groups={purchaseGroups} onChange={onGroupChange} /></MobileField></div>{editable && <Button variant="outline" className="min-h-11 w-full text-destructive" onClick={onRemove}><Trash2 className="mr-2 h-4 w-4" />Remover item</Button>}</div>;
+  return <div className="space-y-3 rounded-md border p-3"><div className="grid gap-3 sm:grid-cols-2"><MobileField label="Cód. prod."><Input className="min-h-11 text-center" value={item.productCode || ''} readOnly={!editable} onChange={event => onUpdate(index, { productCode: event.target.value })} /></MobileField><MobileField label="Descrição"><Input className="min-h-11" value={item.description} readOnly={!editable} onChange={event => onUpdate(index, { description: event.target.value })} /></MobileField><MobileField label="Qtd"><Input className="min-h-11 text-center" type="number" value={item.quantity} readOnly={!editable} onChange={event => onUpdate(index, { quantity: Number(event.target.value) })} /></MobileField><MobileField label="Un"><Input className="min-h-11 text-center" value={item.unit || 'UN'} readOnly={!editable} onChange={event => onUpdate(index, { unit: event.target.value })} /></MobileField><MobileField label="V. unit. NF"><Input className="min-h-11 text-center" type="number" value={item.unitPrice} readOnly={!editable} onChange={event => onUpdate(index, { unitPrice: Number(event.target.value) })} /></MobileField><MobileValue label="V. unit. global" value={money(fiscalItemGlobalUnitPrice(item, note))} /><MobileValue label="V. total" value={money(fiscalItemGlobalTotal(item, note))} /><MobileField label="Grupo de compra"><PurchaseGroupSelect value={item.purchaseGroupId} disabled={!groupEditable} groups={purchaseGroups} onChange={onGroupChange} /></MobileField></div>{editable && <Button variant="outline" className="min-h-11 w-full text-destructive" onClick={onRemove}><Trash2 className="mr-2 h-4 w-4" />Remover item</Button>}</div>;
 }
 
 function PurchaseGroupSelect({ value, disabled, groups, onChange }: { value?: string; disabled: boolean; groups: Array<{ id: string; name: string }>; onChange: (value: string) => void }) {
