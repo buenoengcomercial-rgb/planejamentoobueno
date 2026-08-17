@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { Project, WarehouseMovementType, WarehouseAttachment } from '@/types/project';
+import type { Project, WarehouseAuditActor, WarehouseMovementType, WarehouseAttachment } from '@/types/project';
 import { Button } from '@/components/ui/button';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { Input } from '@/components/ui/input';
@@ -8,8 +8,9 @@ import { addMovement, reverseMovement, removeMovement, MOVEMENT_LABEL, ensureWar
 import { getProjectSuppliers } from '@/lib/materialComparisons';
 import { getAllTasks } from '@/data/sampleProject';
 import { getChapterNumbering } from '@/lib/chapters';
+import WarehouseAuditIdentity from './WarehouseAuditIdentity';
 
-interface Props { project: Project; onProjectChange: (next: Project) => void; }
+interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; }
 
 const TYPES: WarehouseMovementType[] = ['entrada', 'devolucao', 'retirada'];
 
@@ -18,7 +19,7 @@ const inputQty = (value: number | undefined) =>
     ? value.toLocaleString('pt-BR', { maximumFractionDigits: 2 })
     : '';
 
-export default function WarehouseMovementsTab({ project, onProjectChange }: Props) {
+export default function WarehouseMovementsTab({ project, onProjectChange, auditActor }: Props) {
   const wh = ensureWarehouse(project).warehouse!;
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const rows = useMemo(
@@ -45,7 +46,6 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
     invoiceNumber: '',
     notes: '',
     responsible: '',
-    user: '',
     taskId: '',
     chapterId: '',
   });
@@ -71,11 +71,10 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
       invoiceNumber: form.invoiceNumber || undefined,
       notes: form.notes || undefined,
       responsible: form.responsible || undefined,
-      user: form.user || undefined,
       chapterId: form.chapterId || undefined,
       taskId: form.taskId || undefined,
       attachments,
-    }));
+    }, auditActor));
     setOpen(false);
     setForm({ ...form, quantity: '', notes: '', invoiceNumber: '', chapterId: '' });
     setAttachments([]);
@@ -155,7 +154,6 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
                 </>
               )}
               <Input placeholder="Responsável" value={form.responsible} onChange={e => setForm({ ...form, responsible: e.target.value })} className="h-8 text-xs" />
-              <Input placeholder="Usuário" value={form.user} onChange={e => setForm({ ...form, user: e.target.value })} className="h-8 text-xs" />
               <Input placeholder="Observação" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} className="h-8 text-xs col-span-2" />
             </div>
 
@@ -179,7 +177,28 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
           </div>
         )}
 
-        <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="space-y-2 md:hidden">
+          {wh.movements.slice().sort((a, b) => b.date.localeCompare(a.date)).map(m => {
+            const sign = movementSign(m);
+            const reversed = !!m.reversedById;
+            return (
+              <div key={m.id} className={`rounded-lg border bg-card p-3 ${reversed ? 'opacity-50' : ''}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div><div className="font-medium">{m.itemDescription}</div><div className="text-xs text-muted-foreground">{m.date} · {MOVEMENT_LABEL[m.type]}</div></div>
+                  <div className={`font-mono text-sm ${sign > 0 ? 'text-success' : sign < 0 ? 'text-destructive' : ''}`}>{sign > 0 ? '+' : sign < 0 ? '−' : ''}{m.quantity.toLocaleString('pt-BR')} {m.itemUnit}</div>
+                </div>
+                <div className="mt-2 text-xs">Responsável: {m.responsible ?? '—'}</div>
+                <WarehouseAuditIdentity createdBy={m.createdBy} updatedBy={m.updatedBy} className="mt-2 space-y-1 rounded-md bg-muted/40 p-2 text-xs" />
+                {!reversed && m.type !== 'estorno' && <div className="mt-2 flex justify-end gap-2">
+                  <Button size="sm" variant="outline" onClick={() => confirm({ title: 'Estornar este movimento?', description: <p>Será criado um estorno para reverter este lançamento no almoxarifado.</p>, confirmLabel: 'Estornar movimento' }, () => onProjectChange(reverseMovement(project, m.id, auditActor)))}><Undo2 className="mr-1 h-3.5 w-3.5" />Estornar</Button>
+                  <Button size="sm" variant="ghost" className="text-destructive" onClick={() => confirm({ title: 'Excluir movimento?', description: <p>Este lançamento será removido do almoxarifado.</p>, confirmLabel: 'Excluir movimento' }, () => onProjectChange(removeMovement(project, m.id)))}><Trash2 className="mr-1 h-3.5 w-3.5" />Excluir</Button>
+                </div>}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="hidden bg-card border border-border rounded-lg overflow-hidden md:block">
           <div className="max-h-[calc(100vh-360px)] overflow-auto">
             <table className="w-full text-xs">
             <thead className="bg-muted sticky top-0">
@@ -190,6 +209,7 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
                 <th className="p-2 text-right w-20">Qtd</th>
                 <th className="p-2 text-left">Origem/Destino</th>
                 <th className="p-2 text-left w-32">Responsável</th>
+                <th className="min-w-44 p-2 text-left">Incluído / alterado por</th>
                 <th className="p-2 text-center w-16">Anexos</th>
                 <th className="p-2 w-16"></th>
               </tr>
@@ -216,6 +236,7 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
                       {m.notes && `· ${m.notes}`}
                     </td>
                     <td className="p-1.5 text-[10px]">{m.responsible ?? m.user ?? '—'}</td>
+                    <td className="p-1.5"><WarehouseAuditIdentity createdBy={m.createdBy} updatedBy={m.updatedBy} className="space-y-0.5 text-[11px]" /></td>
                     <td className="p-1.5 text-center text-[10px]">{m.attachments?.length ?? 0}</td>
                     <td className="p-1.5 text-right">
                       {!reversed && m.type !== 'estorno' && (
@@ -231,7 +252,7 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
                                 ),
                                 confirmLabel: 'Estornar movimento',
                               },
-                              () => onProjectChange(reverseMovement(project, m.id)),
+                              () => onProjectChange(reverseMovement(project, m.id, auditActor)),
                             );
                           }}>
                             <Undo2 className="w-3.5 h-3.5" />
@@ -259,7 +280,7 @@ export default function WarehouseMovementsTab({ project, onProjectChange }: Prop
                 );
               })}
               {wh.movements.length === 0 && (
-                <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">
+                <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">
                   <div className="text-xs">Nenhuma movimentação registrada.</div>
                   <div className="text-[11px] mt-1">Clique em <strong>Nova movimentação</strong> para registrar a primeira entrada de material.</div>
                 </td></tr>

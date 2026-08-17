@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { Project, WarehouseMovementType } from '@/types/project';
+import type { Project, WarehouseAuditActor, WarehouseMovementType } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import {
   addMovement,
@@ -19,6 +19,7 @@ import { formatQty, parseBR } from './numberInput';
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
+  auditActor?: WarehouseAuditActor;
 }
 
 type StockAction = 'entrada' | 'retirada' | 'ajuste';
@@ -44,7 +45,7 @@ function deriveStatus(row: WarehouseRow): MC.StockStatus {
   return 'em_estoque';
 }
 
-export default function StockTab({ project, onProjectChange }: Props) {
+export default function StockTab({ project, onProjectChange, auditActor }: Props) {
   const rows = useMemo(() => computeWarehouseRows(project), [project]);
   const warehouse = useMemo(() => ensureWarehouse(project).warehouse!, [project]);
   const suppliers = useMemo(() => MC.getProjectSuppliers(project), [project]);
@@ -58,7 +59,7 @@ export default function StockTab({ project, onProjectChange }: Props) {
     quantity: '',
     supplierId: '',
     notes: '',
-    user: '',
+    responsible: '',
     taskId: '',
   });
 
@@ -107,8 +108,8 @@ export default function StockTab({ project, onProjectChange }: Props) {
       supplierId: type === 'entrada' ? (form.supplierId || undefined) : undefined,
       taskId: type === 'retirada' ? (form.taskId || undefined) : undefined,
       notes: form.notes || undefined,
-      user: form.user || undefined,
-    }));
+      responsible: form.responsible || undefined,
+    }, auditActor));
     setForm({ ...form, quantity: '', notes: '', taskId: type === 'retirada' ? form.taskId : '' });
   };
 
@@ -238,8 +239,8 @@ export default function StockTab({ project, onProjectChange }: Props) {
               )}
               <Input
                 placeholder="Responsavel"
-                value={form.user}
-                onChange={e => setForm({ ...form, user: e.target.value })}
+                value={form.responsible}
+                onChange={e => setForm({ ...form, responsible: e.target.value })}
                 className="h-8 text-xs"
               />
               <Input
@@ -283,7 +284,7 @@ export default function StockTab({ project, onProjectChange }: Props) {
                         <button
                           className="text-warning opacity-70 hover:opacity-100"
                           title="Estornar movimento"
-                          onClick={() => onProjectChange(reverseMovement(project, movement.id))}
+                          onClick={() => onProjectChange(reverseMovement(project, movement.id, auditActor))}
                         >
                           <Undo2 className="w-3 h-3" />
                         </button>

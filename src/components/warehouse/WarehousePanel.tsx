@@ -1,4 +1,4 @@
-import type { Project } from '@/types/project';
+import type { Project, WarehouseAuditActor } from '@/types/project';
 import {
   panelSummary,
   computeWarehouseRows,
@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
+  auditActor?: WarehouseAuditActor;
 }
 
 const StatCard = ({ label, value, tone, hint }: { label: string; value: string | number; tone?: 'ok' | 'warn' | 'danger' | 'primary'; hint?: string }) => {
@@ -43,7 +44,7 @@ function dateBR(value?: string) {
   return `${day}/${month}/${year}`;
 }
 
-export default function WarehousePanel({ project, onProjectChange }: Props) {
+export default function WarehousePanel({ project, onProjectChange, auditActor }: Props) {
   const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
   const s = useMemo(() => panelSummary(project), [project]);
   const rows = useMemo(
@@ -74,7 +75,7 @@ export default function WarehousePanel({ project, onProjectChange }: Props) {
             status,
           },
         ];
-    onProjectChange(upsertFiscalNote(project, { ...note, invoices, updatedAt: new Date().toISOString() }));
+    onProjectChange(upsertFiscalNote(project, { ...note, invoices, updatedAt: new Date().toISOString() }, auditActor, true));
   };
 
   return (

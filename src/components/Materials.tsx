@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Project } from '@/types/project';
+import type { Project, WarehouseAuditActor } from '@/types/project';
 import { useMaterialComparisons } from '@/hooks/useMaterialComparisons';
 import * as MC from '@/lib/materialComparisons';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -39,6 +39,7 @@ import { NumberInput, parseBR } from './materials/numberInput';
 interface Props {
   project: Project;
   onProjectChange: (next: Project | ((prev: Project) => Project)) => void;
+  auditActor?: WarehouseAuditActor;
 }
 
 type MaterialsSection = 'insumos' | 'grupos';
@@ -80,7 +81,7 @@ function writeMaterialsUiSession(projectId: string, patch: Partial<MaterialsUiSe
   }
 }
 
-export default function Materials({ project, onProjectChange }: Props) {
+export default function Materials({ project, onProjectChange, auditActor }: Props) {
   const ctl = useMaterialComparisons(project, onProjectChange);
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [section, setSection] = useState<MaterialsSection>(() => readMaterialsUiSession(project.id)?.section ?? 'insumos');
@@ -436,7 +437,7 @@ export default function Materials({ project, onProjectChange }: Props) {
                 <PurchaseOrderTab project={project} comparison={ctl.active} onProjectChange={onProjectChange} />
               </TabsContent>
               <TabsContent value="estoque" className="mt-3">
-                <StockTab project={project} onProjectChange={onProjectChange} />
+                <StockTab project={project} onProjectChange={onProjectChange} auditActor={auditActor} />
               </TabsContent>
               <TabsContent value="historico" className="mt-3">
                 <PriceHistoryTab project={project} />

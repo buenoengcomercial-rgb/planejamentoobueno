@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Project,
   WarehouseAttachment,
+  WarehouseAuditActor,
   WarehouseFiscalDocumentType,
   WarehouseFiscalNote,
   WarehouseFiscalNoteItem,
@@ -50,12 +51,13 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import WarehouseAuditIdentity from './WarehouseAuditIdentity';
 
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
   canManage?: boolean;
-  actorName?: string;
+  auditActor?: WarehouseAuditActor;
 }
 
 type ViewGroup = 'posted' | 'archived';
@@ -162,7 +164,7 @@ async function attachmentFile(attachment: WarehouseAttachment): Promise<File> {
   return new File([blob], attachment.name, { type: attachment.mimeType || blob.type });
 }
 
-export default function WarehouseFiscalNotesTab({ project, onProjectChange, canManage = true, actorName }: Props) {
+export default function WarehouseFiscalNotesTab({ project, onProjectChange, canManage = true, auditActor }: Props) {
   const [group, setGroup] = useState<ViewGroup>('posted');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<WarehouseFiscalNote | null>(null);
@@ -195,7 +197,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
 
   useEffect(() => {
     if (!canManage || processing || selected) return;
-    const reconciliation = reconcileFiscalNoteDrafts(project, actorName);
+    const reconciliation = reconcileFiscalNoteDrafts(project, auditActor);
     if (reconciliation.postedIds.length) {
       onProjectChange(reconciliation.project);
       setGroup('posted');
@@ -206,7 +208,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
     if (!unresolvedId) return;
     const draft = reconciliation.project.warehouse?.fiscalNotes.find(note => note.id === unresolvedId);
     if (draft) setSelected(draft);
-  }, [actorName, canManage, notes, onProjectChange, processing, project, selected]);
+  }, [auditActor, canManage, notes, onProjectChange, processing, project, selected]);
 
   const chooseFiles = (incoming: FileList | null) => {
     if (!incoming) return;
@@ -223,14 +225,14 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
   };
 
   const finishDraft = (baseProject: Project, note: WarehouseFiscalNote, allowDuplicate = false) => {
-    const saved = upsertFiscalNote(baseProject, note);
+    const saved = upsertFiscalNote(baseProject, note, auditActor);
     const existing = findFiscalNoteDuplicate(saved, note);
     if (existing && !allowDuplicate) {
       onProjectChange(saved);
       setSelected(note);
       return false;
     }
-    const posted = approveFiscalNote(saved, note.id, actorName);
+    const posted = approveFiscalNote(saved, note.id, auditActor);
     onProjectChange(posted);
     setSelected(null);
     setGroup('posted');
@@ -252,7 +254,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
         totalAmount: 0, items: [], extractionStatus: 'reading', extractionStartedAt: createdAt,
         documentType: 'outro', documentTypeConfidence: 0,
       };
-      let nextProject = upsertFiscalNote(project, draft);
+      let nextProject = upsertFiscalNote(project, draft, auditActor);
       onProjectChange(nextProject);
       setUploadOpen(false);
       setFiles([]);
@@ -286,7 +288,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
         extractionStatus: processingError ? 'failed' : 'ready', processingError,
         extractionCompletedAt: completedAt, updatedAt: completedAt,
       };
-      nextProject = upsertFiscalNote(nextProject, finalNote);
+      nextProject = upsertFiscalNote(nextProject, finalNote, auditActor);
       if (!validItems(finalNote).length) {
         onProjectChange(nextProject);
         setSelected(finalNote);
@@ -329,13 +331,13 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       };
       if (validItems(updated).length) finishDraft(project, updated);
       else {
-        onProjectChange(upsertFiscalNote(project, updated));
+        onProjectChange(upsertFiscalNote(project, updated, auditActor));
         setSelected(updated);
         toast.warning('A leitura ainda não encontrou itens. Preencha um item manualmente.');
       }
     } catch (error) {
       const failed = { ...selected, extractionStatus: 'failed' as const, processingError: (error as Error).message };
-      onProjectChange(upsertFiscalNote(project, failed));
+      onProjectChange(upsertFiscalNote(project, failed, auditActor));
       setSelected(failed);
       toast.error('A leitura falhou novamente. Preencha o item manualmente.');
     } finally {
@@ -377,7 +379,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       return;
     }
     try {
-      const next = updateFiscalItemPurchaseGroup(project, note.id, item.id, value === '__none__' ? undefined : value);
+      const next = updateFiscalItemPurchaseGroup(project, note.id, item.id, value === '__none__' ? undefined : value, auditActor);
       onProjectChange(next);
       setSelected(next.warehouse?.fiscalNotes.find(entry => entry.id === note.id) ?? note);
       toast.success('Grupo de compra atualizado sem alterar o estoque.');
@@ -388,7 +390,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
 
   const confirmCancel = () => {
     if (!selected) return;
-    const result = cancelFiscalNote(project, selected.id, { reason: cancelReason, actor: actorName });
+    const result = cancelFiscalNote(project, selected.id, { reason: cancelReason, actor: auditActor });
     if (!result.canceled) return toast.error(result.blockers.join(' '));
     onProjectChange(result.project);
     setCancelOpen(false);
@@ -450,10 +452,10 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       <div className="space-y-2 md:hidden">
         {visible.map((note, index) => <NoteCard key={note.id} note={note} sequence={visible.length - index} onOpen={() => setSelected(note)} onOpenAttachment={() => void openOriginalDocument(note)} />)}
       </div>
-      <div className="hidden overflow-hidden rounded-lg border bg-card md:block">
-        <table className="w-full text-xs">
-          <thead className="bg-muted text-muted-foreground"><tr><th className="p-2 text-left">Fornecedor</th><th className="w-14 p-2 text-center">Nº</th><th className="p-2 text-left">CNPJ</th><th className="p-2 text-left">Nota</th><th className="p-2 text-left">Data</th><th className="p-2 text-center">Itens</th><th className="p-2 text-right">Valor</th><th className="p-2 text-left">Status</th><th className="p-2 text-center">Ações</th></tr></thead>
-          <tbody>{visible.map((note, index) => <tr key={note.id} className="border-t hover:bg-muted/30"><td className="p-2 font-medium">{note.supplierName || '—'}</td><td className="p-2 text-center font-mono font-semibold text-primary">{visible.length - index}</td><td className="p-2 font-mono text-muted-foreground">{note.supplierCnpj || '—'}</td><td className="p-2">{note.invoiceNumber || '—'}</td><td className="p-2">{note.issueDate ? note.issueDate.split('-').reverse().join('/') : '—'}</td><td className="p-2 text-center tabular-nums">{note.items.length}</td><td className="p-2 text-right font-semibold">{money(note.totalAmount)}</td><td className="p-2"><StatusBadge note={note} /></td><td className="p-2"><div className="flex items-center justify-center gap-1"><Button size="icon" variant="ghost" className="h-8 w-8" title="Abrir documento original" aria-label="Abrir documento original" onClick={() => void openOriginalDocument(note)}><Eye className="h-4 w-4" /></Button><Button size="icon" variant="ghost" className="h-8 w-8" title="Visualizar dados e grupos" aria-label="Visualizar dados e grupos" onClick={() => setSelected(note)}><Pencil className="h-4 w-4" /></Button>{canManage && note.status === 'aprovada' && <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" title="Cancelar lançamento" aria-label="Cancelar lançamento" onClick={() => { setSelected(note); setCancelOpen(true); }}><Ban className="h-4 w-4" /></Button>}</div></td></tr>)}</tbody>
+      <div className="hidden overflow-x-auto rounded-lg border bg-card md:block">
+        <table className="min-w-[1200px] w-full text-xs">
+          <thead className="bg-muted text-muted-foreground"><tr><th className="p-2 text-left">Fornecedor</th><th className="w-14 p-2 text-center">Nº</th><th className="p-2 text-left">CNPJ</th><th className="p-2 text-left">Nota</th><th className="p-2 text-left">Data</th><th className="p-2 text-center">Itens</th><th className="p-2 text-right">Valor</th><th className="p-2 text-left">Status</th><th className="min-w-44 p-2 text-left">Incluído / alterado por</th><th className="p-2 text-center">Ações</th></tr></thead>
+          <tbody>{visible.map((note, index) => <tr key={note.id} className="border-t hover:bg-muted/30"><td className="p-2 font-medium">{note.supplierName || '—'}</td><td className="p-2 text-center font-mono font-semibold text-primary">{visible.length - index}</td><td className="p-2 font-mono text-muted-foreground">{note.supplierCnpj || '—'}</td><td className="p-2">{note.invoiceNumber || '—'}</td><td className="p-2">{note.issueDate ? note.issueDate.split('-').reverse().join('/') : '—'}</td><td className="p-2 text-center tabular-nums">{note.items.length}</td><td className="p-2 text-right font-semibold">{money(note.totalAmount)}</td><td className="p-2"><StatusBadge note={note} /></td><td className="p-2"><WarehouseAuditIdentity createdBy={note.createdBy} updatedBy={note.updatedBy} legacyCreatedBy={note.stockPostedBy} className="space-y-0.5 text-[11px]" /></td><td className="p-2"><div className="flex items-center justify-center gap-1"><Button size="icon" variant="ghost" className="h-8 w-8" title="Abrir documento original" aria-label="Abrir documento original" onClick={() => void openOriginalDocument(note)}><Eye className="h-4 w-4" /></Button><Button size="icon" variant="ghost" className="h-8 w-8" title="Visualizar dados e grupos" aria-label="Visualizar dados e grupos" onClick={() => setSelected(note)}><Pencil className="h-4 w-4" /></Button>{canManage && note.status === 'aprovada' && <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" title="Cancelar lançamento" aria-label="Cancelar lançamento" onClick={() => { setSelected(note); setCancelOpen(true); }}><Ban className="h-4 w-4" /></Button>}</div></td></tr>)}</tbody>
         </table>
       </div>
       {!visible.length && <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground"><FileText className="mx-auto mb-3 h-8 w-8" />Nenhum documento nesta área.</div>}
@@ -557,7 +559,7 @@ function MobileValue({ label, value }: { label: string; value: string }) {
 }
 
 function NoteCard({ note, sequence, onOpen, onOpenAttachment }: { note: WarehouseFiscalNote; sequence: number; onOpen: () => void; onOpenAttachment: () => void }) {
-  return <div className="rounded-lg border bg-card p-4"><div className="flex items-start justify-between gap-2"><div><div className="font-semibold">{note.supplierName || 'Fornecedor não identificado'}</div><div className="mt-1 text-sm text-muted-foreground">Nº {sequence} · Nota {note.invoiceNumber || '—'}</div></div><StatusBadge note={note} /></div><dl className="mt-3 grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">CNPJ</dt><dd>{note.supplierCnpj || '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Data</dt><dd>{note.issueDate ? note.issueDate.split('-').reverse().join('/') : '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Itens</dt><dd>{note.items.length}</dd></div><div><dt className="text-xs text-muted-foreground">Valor</dt><dd className="font-semibold">{money(note.totalAmount)}</dd></div></dl><div className="mt-3 grid grid-cols-[44px_1fr] gap-2"><Button size="icon" variant="outline" className="min-h-11 min-w-11" aria-label="Abrir documento original" onClick={onOpenAttachment}><Eye className="h-4 w-4" /></Button><Button className="min-h-11" variant="outline" onClick={onOpen}>Visualizar dados e grupos</Button></div></div>;
+  return <div className="rounded-lg border bg-card p-4"><div className="flex items-start justify-between gap-2"><div><div className="font-semibold">{note.supplierName || 'Fornecedor não identificado'}</div><div className="mt-1 text-sm text-muted-foreground">Nº {sequence} · Nota {note.invoiceNumber || '—'}</div></div><StatusBadge note={note} /></div><dl className="mt-3 grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">CNPJ</dt><dd>{note.supplierCnpj || '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Data</dt><dd>{note.issueDate ? note.issueDate.split('-').reverse().join('/') : '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Itens</dt><dd>{note.items.length}</dd></div><div><dt className="text-xs text-muted-foreground">Valor</dt><dd className="font-semibold">{money(note.totalAmount)}</dd></div></dl><WarehouseAuditIdentity createdBy={note.createdBy} updatedBy={note.updatedBy} legacyCreatedBy={note.stockPostedBy} className="mt-3 space-y-1 rounded-md bg-muted/40 p-2 text-xs" /><div className="mt-3 grid grid-cols-[44px_1fr] gap-2"><Button size="icon" variant="outline" className="min-h-11 min-w-11" aria-label="Abrir documento original" onClick={onOpenAttachment}><Eye className="h-4 w-4" /></Button><Button className="min-h-11" variant="outline" onClick={onOpen}>Visualizar dados e grupos</Button></div></div>;
 }
 
 function FilePreview({ file }: { file: File }) {

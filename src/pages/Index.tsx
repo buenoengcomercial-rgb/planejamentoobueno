@@ -14,6 +14,7 @@ import { loadObraConfig } from '@/components/ConfiguracaoObra';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
+import { userInfoFromSupabaseUser } from '@/lib/audit';
 
 // Lazy load: cada aba só baixa seu bundle quando aberta pela primeira vez.
 // Usa lazyWithReload para recuperar automaticamente de chunks obsoletos após deploy.
@@ -196,6 +197,7 @@ function serializeProjectForSave(project: Project): string {
 
 export default function Index() {
   const { user, loading: authLoading, signOut } = useAuth();
+  const auditActor = useMemo(() => userInfoFromSupabaseUser(user), [user]);
   const { membership, loading: orgLoading } = useOrganization();
   const navigate = useNavigate();
   const location = useLocation();
@@ -882,14 +884,14 @@ export default function Index() {
       case 'realCost':
         return <RealCost project={project} />;
       case 'materials':
-        return <Materials project={project} onProjectChange={materialsSetter} />;
+        return <Materials project={project} onProjectChange={materialsSetter} auditActor={auditActor} />;
       case 'warehouse':
         return (
           <WarehouseView
             project={project}
             onProjectChange={warehouseSetter}
             canManageFiscalNotes={role !== 'viewer'}
-            actorName={user?.email ?? undefined}
+            auditActor={auditActor}
           />
         );
     }

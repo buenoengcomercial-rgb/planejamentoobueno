@@ -1,14 +1,14 @@
 import { useMemo, useState } from 'react';
-import type { Project } from '@/types/project';
+import type { Project, WarehouseAuditActor } from '@/types/project';
 import { computeWarehouseRows, addMovement } from '@/lib/warehouse';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Save } from 'lucide-react';
 import { toast } from 'sonner';
 
-interface Props { project: Project; onProjectChange: (next: Project) => void; }
+interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; }
 
-export default function WarehouseInventoryTab({ project, onProjectChange }: Props) {
+export default function WarehouseInventoryTab({ project, onProjectChange, auditActor }: Props) {
   const rows = useMemo(
     () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true }),
     [project],
@@ -35,9 +35,9 @@ export default function WarehouseInventoryTab({ project, onProjectChange }: Prop
         itemDescription: r.description,
         itemUnit: r.unit,
         quantity: Math.abs(diff),
-        user: user || undefined,
+        responsible: user || undefined,
         notes: `Inventário: saldo era ${r.balance}, contado ${counted}`,
-      });
+      }, auditActor);
       applied += 1;
     }
     if (applied > 0) {

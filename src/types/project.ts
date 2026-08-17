@@ -746,12 +746,22 @@ export interface WarehouseAttachment {
   uploadedAt: string;
 }
 
+/** Identidade do usuário autenticado preservada no momento da operação. */
+export interface WarehouseAuditActor {
+  userId?: string;
+  userName?: string;
+  userEmail?: string;
+}
+
 export interface WarehouseMovement {
   id: string;
   type: WarehouseMovementType;
   /** ISO yyyy-mm-dd. */
   date: string;
   createdAt: string;
+  updatedAt?: string;
+  createdBy?: WarehouseAuditActor;
+  updatedBy?: WarehouseAuditActor;
   itemKey: string;
   itemCode?: string;
   itemDescription: string;
@@ -855,6 +865,8 @@ export interface WarehouseFiscalNote {
   id: string;
   createdAt: string;
   updatedAt: string;
+  createdBy?: WarehouseAuditActor;
+  updatedBy?: WarehouseAuditActor;
   supplierName?: string;
   supplierCnpj?: string;
   invoiceNumber?: string;
@@ -928,6 +940,9 @@ export interface WarehouseRequisition {
   /** Se true, foi espelhada no diário do dia. */
   publishedToDailyReportId?: string;
   createdAt: string;
+  updatedAt?: string;
+  createdBy?: WarehouseAuditActor;
+  updatedBy?: WarehouseAuditActor;
 }
 
 export interface Equipment {

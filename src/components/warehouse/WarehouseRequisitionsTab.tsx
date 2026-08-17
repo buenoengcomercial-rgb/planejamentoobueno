@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { Project, WarehouseRequisition, WarehouseRequisitionItem } from '@/types/project';
+import type { Project, WarehouseAuditActor, WarehouseRequisition, WarehouseRequisitionItem } from '@/types/project';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Plus, Trash2, FileDown, Check, X } from 'lucide-react';
@@ -7,10 +7,11 @@ import { ensureWarehouse, createRequisition, deliverRequisition, updateRequisiti
 import { getAllTasks } from '@/data/sampleProject';
 import SignaturePad from './SignaturePad';
 import { generateRequisitionReceipt } from './pdf';
+import WarehouseAuditIdentity from './WarehouseAuditIdentity';
 
-interface Props { project: Project; onProjectChange: (next: Project) => void; }
+interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; }
 
-export default function WarehouseRequisitionsTab({ project, onProjectChange }: Props) {
+export default function WarehouseRequisitionsTab({ project, onProjectChange, auditActor }: Props) {
   const wh = ensureWarehouse(project).warehouse!;
   const tasks = useMemo(() => getAllTasks(project), [project]);
   const rows = useMemo(
@@ -56,8 +57,8 @@ export default function WarehouseRequisitionsTab({ project, onProjectChange }: P
       signatureWarehouse: form.sigWh,
       signatureReceiver: form.sigRec,
       warehouseOperator: form.operator || undefined,
-    });
-    const next = deliver ? deliverRequisition(p, requisition.id, { warehouseOperator: form.operator, publishToDailyReport: true }) : p;
+    }, auditActor);
+    const next = deliver ? deliverRequisition(p, requisition.id, { warehouseOperator: form.operator, publishToDailyReport: true, actor: auditActor }) : p;
     onProjectChange(next);
     setOpen(false);
     setForm({ date: new Date().toISOString().slice(0, 10), taskId: '', teamId: '', requesterName: '', workFront: '', notes: '', items: [], operator: '' });
@@ -134,9 +135,19 @@ export default function WarehouseRequisitionsTab({ project, onProjectChange }: P
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
-        <div className="lg:col-span-3 bg-card border border-border rounded-md overflow-hidden">
+        <div className="lg:col-span-3 bg-card border border-border rounded-md overflow-x-auto">
           <div className="bg-muted/40 px-3 py-2 border-b border-border text-[11px] uppercase tracking-wide font-semibold text-muted-foreground">Requisições</div>
-          <table className="w-full text-xs">
+          <div className="space-y-2 p-2 md:hidden">
+            {wh.requisitions.slice().sort((a, b) => b.date.localeCompare(a.date)).map(r => (
+              <button key={r.id} type="button" className={`w-full rounded-md border p-3 text-left ${activeId === r.id ? 'border-primary bg-primary/5' : ''}`} onClick={() => setActiveId(r.id)}>
+                <div className="flex items-start justify-between gap-2"><span className="font-semibold">{r.number}</span><span className="text-xs text-muted-foreground">{r.date}</span></div>
+                <div className="mt-1 text-xs">Solicitante: {r.requesterName ?? '—'}</div>
+                <div className="text-xs">Status: {r.status} · {r.items.length} item(ns)</div>
+                <WarehouseAuditIdentity createdBy={r.createdBy} updatedBy={r.updatedBy} className="mt-2 space-y-1 rounded-md bg-muted/40 p-2 text-xs" />
+              </button>
+            ))}
+          </div>
+          <table className="hidden min-w-[900px] w-full text-xs md:table">
             <thead className="bg-muted">
               <tr className="text-muted-foreground">
                 <th className="p-2 text-left font-semibold">Nº</th>
@@ -145,6 +156,7 @@ export default function WarehouseRequisitionsTab({ project, onProjectChange }: P
                 <th className="p-2 text-left font-semibold">Tarefa</th>
                 <th className="p-2 text-center font-semibold w-14">Itens</th>
                 <th className="p-2 text-left font-semibold w-24">Status</th>
+                <th className="min-w-44 p-2 text-left font-semibold">Incluído / alterado por</th>
               </tr>
             </thead>
             <tbody>
@@ -161,10 +173,11 @@ export default function WarehouseRequisitionsTab({ project, onProjectChange }: P
                       : r.status === 'cancelada' ? 'bg-muted text-muted-foreground'
                       : 'bg-warning/10 text-warning'}`}>{r.status}</span>
                   </td>
+                  <td className="p-1.5"><WarehouseAuditIdentity createdBy={r.createdBy} updatedBy={r.updatedBy} className="space-y-0.5 text-[11px]" /></td>
                 </tr>
               ))}
               {wh.requisitions.length === 0 && (
-                <tr><td colSpan={6} className="p-8 text-center text-muted-foreground">
+                <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">
                   <div className="text-xs">Nenhuma requisição registrada.</div>
                   <div className="text-[11px] mt-1">Crie uma requisição para registrar a saída de material vinculada a uma tarefa.</div>
                 </td></tr>
@@ -190,6 +203,7 @@ export default function WarehouseRequisitionsTab({ project, onProjectChange }: P
                 <div>Tarefa: {active.taskName ?? '—'}</div>
                 <div>Frente: {active.workFront ?? '—'}</div>
                 <div>Almoxarife: {active.warehouseOperator ?? '—'}</div>
+                <WarehouseAuditIdentity createdBy={active.createdBy} updatedBy={active.updatedBy} className="mt-2 space-y-0.5 text-foreground" />
                 {active.publishedToDailyReportId && <div className="text-success">✓ Publicado no Diário</div>}
               </div>
               <div className="border-t border-border pt-2">
@@ -202,10 +216,10 @@ export default function WarehouseRequisitionsTab({ project, onProjectChange }: P
               </div>
               {active.status === 'rascunho' && (
                 <div className="flex gap-2">
-                  <Button size="sm" className="flex-1" onClick={() => onProjectChange(deliverRequisition(project, active.id, { publishToDailyReport: true }))}>
+                  <Button size="sm" className="flex-1" onClick={() => onProjectChange(deliverRequisition(project, active.id, { publishToDailyReport: true, actor: auditActor }))}>
                     <Check className="w-3 h-3 mr-1" /> Entregar
                   </Button>
-                  <Button size="sm" variant="ghost" className="text-destructive" onClick={() => onProjectChange(updateRequisition(project, active.id, { status: 'cancelada' }))}>
+                  <Button size="sm" variant="ghost" className="text-destructive" onClick={() => onProjectChange(updateRequisition(project, active.id, { status: 'cancelada' }, auditActor))}>
                     <X className="w-3 h-3 mr-1" /> Cancelar
                   </Button>
                 </div>

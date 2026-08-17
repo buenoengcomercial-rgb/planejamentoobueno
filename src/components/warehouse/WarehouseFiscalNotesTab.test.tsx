@@ -7,6 +7,8 @@ import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
 function projectWithPostedNote(): Project {
   const fiscalNote: WarehouseFiscalNote = {
     id: 'posted-note', createdAt: '2026-08-15T10:00:00.000Z', updatedAt: '2026-08-15T10:00:00.000Z',
+    createdBy: { userId: 'user-a', userName: 'Alice', userEmail: 'alice@teste.com' },
+    updatedBy: { userId: 'user-b', userName: 'Bruno', userEmail: 'bruno@teste.com' },
     status: 'aprovada', origin: 'upload', sourceFileName: 'whatsapp-image.jpg',
     supplierName: 'FREITAS & CIA LTDA', supplierCnpj: '02.179.328/0001-42', invoiceNumber: '1.301.412',
     issueDate: '2026-08-14', totalAmount: 85.63,
@@ -32,8 +34,11 @@ describe('WarehouseFiscalNotesTab - lançamento simplificado', () => {
     expect(screen.getByRole('tab', { name: /Lançadas no estoque \(1\)/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Arquivadas \(0\)/i })).toBeInTheDocument();
     const headers = screen.getAllByRole('columnheader').map(header => header.textContent);
-    expect(headers).toEqual(expect.arrayContaining(['Fornecedor', 'Nº', 'CNPJ', 'Nota', 'Data', 'Itens', 'Valor', 'Status', 'Ações']));
+    expect(headers).toEqual(expect.arrayContaining(['Fornecedor', 'Nº', 'CNPJ', 'Nota', 'Data', 'Itens', 'Valor', 'Status', 'Incluído / alterado por', 'Ações']));
     expect(headers).not.toContain('Arquivo');
+    expect(screen.getAllByText(/Incluído por:/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Alice/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Bruno/i).length).toBeGreaterThan(0);
   });
 
   it('não mostra classificação não fiscal e exibe cabeçalhos e grupo de compra', () => {

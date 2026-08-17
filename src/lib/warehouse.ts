@@ -12,6 +12,7 @@ import type {
   WarehouseLocation,
   WarehouseItemConfig,
   WarehouseAttachment,
+  WarehouseAuditActor,
   WarehouseFiscalNote,
   WarehouseFiscalNoteItem,
   WarehouseFiscalDocumentType,
@@ -26,6 +27,32 @@ import { getChapterNumbering } from '@/lib/chapters';
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const nowISO = () => new Date().toISOString();
 const todayISO = () => new Date().toISOString().slice(0, 10);
+
+export type WarehouseActorInput = WarehouseAuditActor | string | null | undefined;
+
+export function normalizeWarehouseActor(actor: WarehouseActorInput): WarehouseAuditActor | undefined {
+  if (!actor) return undefined;
+  if (typeof actor === 'string') {
+    const value = actor.trim();
+    if (!value) return undefined;
+    return value.includes('@') ? { userEmail: value } : { userName: value };
+  }
+  const normalized = {
+    userId: actor.userId?.trim() || undefined,
+    userName: actor.userName?.trim() || undefined,
+    userEmail: actor.userEmail?.trim() || undefined,
+  };
+  return normalized.userId || normalized.userName || normalized.userEmail ? normalized : undefined;
+}
+
+export function warehouseActorName(actor?: WarehouseAuditActor, legacyName?: string): string {
+  return actor?.userName?.trim() || actor?.userEmail?.trim() || legacyName?.trim() || 'Não registrado';
+}
+
+function warehouseActorLegacyValue(actor: WarehouseActorInput): string | undefined {
+  const normalized = normalizeWarehouseActor(actor);
+  return normalized?.userName || normalized?.userEmail;
+}
 
 function normalizeLookup(value?: string) {
   return (value ?? '')
@@ -263,22 +290,33 @@ export function balanceFor(state: WarehouseState, itemKey: string): number {
 export function addMovement(
   project: Project,
   input: Omit<WarehouseMovement, 'id' | 'createdAt'>,
+  actor?: WarehouseActorInput,
 ): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
-  const mv: WarehouseMovement = { id: uid(), createdAt: nowISO(), ...input };
+  const createdAt = nowISO();
+  const mv: WarehouseMovement = {
+    id: uid(),
+    createdAt,
+    ...input,
+    createdBy: input.createdBy ?? normalizeWarehouseActor(actor),
+  };
   return setWh(p, { movements: [...wh.movements, mv] });
 }
 
 /** Cria um movimento de estorno que reverte um movimento original. */
-export function reverseMovement(project: Project, movementId: string, user?: string, notes?: string): Project {
+export function reverseMovement(project: Project, movementId: string, actor?: WarehouseActorInput, notes?: string): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
   const original = wh.movements.find(m => m.id === movementId);
   if (!original || original.reversedById) return p;
+  const updatedAt = nowISO();
+  const auditActor = normalizeWarehouseActor(actor);
+  const actorLabel = warehouseActorLegacyValue(actor);
   const reversal: WarehouseMovement = {
     id: uid(),
-    createdAt: nowISO(),
+    createdAt: updatedAt,
+    createdBy: auditActor,
     type: 'estorno',
     date: todayISO(),
     itemKey: original.itemKey,
@@ -286,12 +324,12 @@ export function reverseMovement(project: Project, movementId: string, user?: str
     itemDescription: original.itemDescription,
     itemUnit: original.itemUnit,
     quantity: original.quantity,
-    user,
+    user: actorLabel,
     notes: notes ?? `Estorno de ${MOVEMENT_LABEL[original.type]} de ${original.date}`,
     reversesId: original.id,
   };
   const movements = wh.movements.map(m =>
-    m.id === original.id ? { ...m, reversedById: reversal.id } : m,
+    m.id === original.id ? { ...m, reversedById: reversal.id, updatedAt, updatedBy: auditActor } : m,
   );
   return setWh(p, { movements: [...movements, reversal] });
 }
@@ -307,23 +345,28 @@ export function nextRequisitionNumber(state: WarehouseState): string {
 export function createRequisition(
   project: Project,
   input: Omit<WarehouseRequisition, 'id' | 'number' | 'createdAt' | 'status'> & { status?: WarehouseRequisition['status'] },
+  actor?: WarehouseActorInput,
 ): { project: Project; requisition: WarehouseRequisition } {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
+  const createdAt = nowISO();
   const req: WarehouseRequisition = {
     id: uid(),
     number: nextRequisitionNumber(wh),
-    createdAt: nowISO(),
+    createdAt,
     status: input.status ?? 'rascunho',
     ...input,
+    createdBy: input.createdBy ?? normalizeWarehouseActor(actor),
   };
   return { project: setWh(p, { requisitions: [...wh.requisitions, req] }), requisition: req };
 }
 
-export function updateRequisition(project: Project, id: string, patch: Partial<WarehouseRequisition>): Project {
+export function updateRequisition(project: Project, id: string, patch: Partial<WarehouseRequisition>, actor?: WarehouseActorInput): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
-  return setWh(p, { requisitions: wh.requisitions.map(r => (r.id === id ? { ...r, ...patch } : r)) });
+  const auditActor = normalizeWarehouseActor(actor);
+  const updatedAt = nowISO();
+  return setWh(p, { requisitions: wh.requisitions.map(r => (r.id === id ? { ...r, ...patch, updatedAt, updatedBy: auditActor ?? r.updatedBy } : r)) });
 }
 
 /**
@@ -333,7 +376,7 @@ export function updateRequisition(project: Project, id: string, patch: Partial<W
 export function deliverRequisition(
   project: Project,
   requisitionId: string,
-  opts?: { warehouseOperator?: string; publishToDailyReport?: boolean },
+  opts?: { warehouseOperator?: string; publishToDailyReport?: boolean; actor?: WarehouseActorInput },
 ): Project {
   let p = ensureWarehouse(project);
   const wh = p.warehouse!;
@@ -357,16 +400,18 @@ export function deliverRequisition(
       workerName: req.requesterName,
       workFront: req.workFront,
       responsible: opts?.warehouseOperator,
+      user: warehouseActorLegacyValue(opts?.actor),
+      createdBy: normalizeWarehouseActor(opts?.actor),
       notes: req.notes,
     };
-    p = addMovement(p, mv);
+    p = addMovement(p, mv, opts?.actor);
     newItems.push({ ...it, movementId: mv.id });
   }
   p = updateRequisition(p, req.id, {
     status: 'entregue',
     items: newItems,
     warehouseOperator: opts?.warehouseOperator,
-  });
+  }, opts?.actor);
   if (opts?.publishToDailyReport) {
     p = publishRequisitionToDailyReport(p, req.id);
   }
@@ -517,7 +562,7 @@ export function removeWarehouseItem(project: Project, itemKey: string): Project 
           : item,
       ),
     })),
-  });
+  }, opts?.actor);
 }
 
 export function removeMovement(project: Project, movementId: string): Project {
@@ -1142,14 +1187,26 @@ export function readFileAsDataURL(file: File): Promise<string> {
   });
 }
 
-export function upsertFiscalNote(project: Project, note: WarehouseFiscalNote): Project {
+export function upsertFiscalNote(
+  project: Project,
+  note: WarehouseFiscalNote,
+  actor?: WarehouseActorInput,
+  markAsUpdate = false,
+): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
   const fiscalNotes = wh.fiscalNotes ?? [];
   const exists = fiscalNotes.some(n => n.id === note.id);
+  const auditActor = normalizeWarehouseActor(actor);
+  const updatedAt = nowISO();
   const nextNotes = exists
-    ? fiscalNotes.map(n => (n.id === note.id ? { ...note, updatedAt: nowISO() } : n))
-    : [{ ...note, updatedAt: note.updatedAt || nowISO() }, ...fiscalNotes];
+    ? fiscalNotes.map(n => (n.id === note.id ? {
+        ...note,
+        createdBy: n.createdBy ?? note.createdBy,
+        updatedAt,
+        updatedBy: markAsUpdate ? (auditActor ?? n.updatedBy) : n.updatedBy,
+      } : n))
+    : [{ ...note, createdBy: note.createdBy ?? auditActor, updatedAt: note.updatedAt || updatedAt }, ...fiscalNotes];
   return setWh(p, { fiscalNotes: nextNotes });
 }
 
@@ -1219,7 +1276,7 @@ export function deleteFiscalNote(project: Project, noteId: string): Project {
   return setWh(p, { fiscalNotes: remainingNotes, movements: remainingMovements, items });
 }
 
-export function approveFiscalNote(project: Project, noteId: string, actor?: string): Project {
+export function approveFiscalNote(project: Project, noteId: string, actor?: WarehouseActorInput): Project {
   let p = ensureWarehouse(project);
   const note = p.warehouse?.fiscalNotes?.find(n => n.id === noteId);
   if (!note) return p;
@@ -1235,6 +1292,8 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: stri
     .map(item => ({ ...item, unit: item.unit?.trim() || 'UN' }));
   if (!validItems.length) throw new Error('Inclua ao menos um item com descrição e quantidade maior que zero.');
   const noteForPosting: WarehouseFiscalNote = { ...note, items: validItems };
+  const auditActor = normalizeWarehouseActor(actor);
+  const actorLabel = warehouseActorLegacyValue(actor);
 
   const linked = linkFiscalNoteItemsToMaterials(p, noteForPosting.items);
   p = linked.project;
@@ -1320,6 +1379,7 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: stri
     movements.push({
       id: uid(),
       createdAt: nowISO(),
+      createdBy: auditActor,
       type: 'entrada',
       date: noteForPosting.issueDate || todayISO(),
       itemKey,
@@ -1332,8 +1392,7 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: stri
       invoiceNumber: noteForPosting.invoiceNumber || undefined,
       notes: `Entrada gerada pelo documento ${noteForPosting.invoiceNumber || noteForPosting.sourceFileName}`,
       attachments: noteForPosting.attachments?.length ? noteForPosting.attachments : (noteForPosting.attachment ? [noteForPosting.attachment] : undefined),
-      responsible: actor,
-      user: actor,
+      user: actorLabel,
     });
 
     return { ...item, productCode, itemKey, unit, globalTotalPrice, linkStatus: 'vinculado' as const };
@@ -1343,10 +1402,11 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: stri
     n.id === noteId
       ? {
           ...n,
+          createdBy: n.createdBy ?? auditActor,
           status: 'aprovada' as const,
           updatedAt: nowISO(),
           stockPostedAt: nowISO(),
-          stockPostedBy: actor,
+          stockPostedBy: actorLabel,
           extractionStatus: 'ready' as const,
           items: approvedItems,
         }
@@ -1365,6 +1425,7 @@ export function updateFiscalItemPurchaseGroup(
   noteId: string,
   noteItemId: string,
   purchaseGroupId?: string,
+  actor?: WarehouseActorInput,
 ): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
@@ -1376,15 +1437,26 @@ export function updateFiscalItemPurchaseGroup(
   const sourceItem = sourceNote.items.find(item => item.id === noteItemId);
   if (!sourceItem) return p;
   const itemKey = sourceItem.itemKey;
-  const fiscalNotes = wh.fiscalNotes.map(note => ({
-    ...note,
-    items: note.items.map(item => {
+  const auditActor = normalizeWarehouseActor(actor);
+  const updatedAt = nowISO();
+  const fiscalNotes = wh.fiscalNotes.map(note => {
+    const changesNote = note.items.some(item => {
       const isSource = note.id === noteId && item.id === noteItemId;
       const isSameMaterial = !!itemKey && item.itemKey === itemKey;
-      return isSource || isSameMaterial ? { ...item, purchaseGroupId } : item;
-    }),
-    updatedAt: note.id === noteId || (!!itemKey && note.items.some(item => item.itemKey === itemKey)) ? nowISO() : note.updatedAt,
-  }));
+      return (isSource || isSameMaterial) && item.purchaseGroupId !== purchaseGroupId;
+    });
+    if (!changesNote) return note;
+    return {
+      ...note,
+      items: note.items.map(item => {
+        const isSource = note.id === noteId && item.id === noteItemId;
+        const isSameMaterial = !!itemKey && item.itemKey === itemKey;
+        return isSource || isSameMaterial ? { ...item, purchaseGroupId } : item;
+      }),
+      updatedAt,
+      updatedBy: auditActor ?? note.updatedBy,
+    };
+  });
   const items = itemKey
     ? wh.items.map(item => item.key === itemKey ? { ...item, purchaseGroupId } : item)
     : wh.items;
@@ -1403,7 +1475,7 @@ export interface FiscalNoteDraftReconciliation {
  * Documentos completos entram uma única vez; incompletos e duplicados ficam
  * preservados para resolução explícita na interface.
  */
-export function reconcileFiscalNoteDrafts(project: Project, actor?: string): FiscalNoteDraftReconciliation {
+export function reconcileFiscalNoteDrafts(project: Project, actor?: WarehouseActorInput): FiscalNoteDraftReconciliation {
   let next = ensureWarehouse(project);
   const draftIds = (next.warehouse?.fiscalNotes ?? [])
     .filter(note => note.status === 'a_conferir')
@@ -1435,7 +1507,7 @@ export function archiveFiscalNote(
   project: Project,
   noteId: string,
   reason: 'comprovante' | 'descartada',
-  actor?: string,
+  actor?: WarehouseActorInput,
 ): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
@@ -1443,14 +1515,17 @@ export function archiveFiscalNote(
   if (!note || note.status === 'rejeitada' || note.status === 'cancelada') return p;
   if (note.status === 'aprovada') throw new Error('Use Cancelar lançamento para uma nota que já alterou o estoque.');
   const archivedAt = nowISO();
+  const auditActor = normalizeWarehouseActor(actor);
+  const actorLabel = warehouseActorLegacyValue(actor);
   const fiscalNotes = (wh.fiscalNotes ?? []).map(entry => entry.id === noteId
     ? {
         ...entry,
         status: 'rejeitada' as const,
         archiveReason: reason,
         archivedAt,
-        archivedBy: actor,
+        archivedBy: actorLabel,
         updatedAt: archivedAt,
+        updatedBy: auditActor ?? entry.updatedBy,
         items: entry.items.map(item => ({
           ...item,
           itemKey: item.linkStatus === 'vinculado' ? item.itemKey : undefined,
@@ -1519,7 +1594,7 @@ export interface CancelFiscalNoteResult {
 export function cancelFiscalNote(
   project: Project,
   noteId: string,
-  input: { reason: string; actor?: string },
+  input: { reason: string; actor?: WarehouseActorInput },
 ): CancelFiscalNoteResult {
   const reason = input.reason.trim();
   if (!reason) return { project, canceled: false, blockers: ['Informe o motivo do cancelamento.'] };
@@ -1530,6 +1605,8 @@ export function cancelFiscalNote(
   const wh = p.warehouse!;
   const entryIds = new Set(check.entryMovementIds);
   const canceledAt = nowISO();
+  const auditActor = normalizeWarehouseActor(input.actor);
+  const actorLabel = warehouseActorLegacyValue(input.actor);
   const reversals: WarehouseMovement[] = [];
   const removedByItem = new Map<string, number>();
   const movements = wh.movements.map(movement => {
@@ -1538,6 +1615,7 @@ export function cancelFiscalNote(
     reversals.push({
       id: reversalId,
       createdAt: canceledAt,
+      createdBy: auditActor,
       type: 'estorno',
       date: todayISO(),
       itemKey: movement.itemKey,
@@ -1548,14 +1626,13 @@ export function cancelFiscalNote(
       unitPrice: movement.unitPrice,
       fiscalNoteId: noteId,
       invoiceNumber: movement.invoiceNumber,
-      responsible: input.actor,
-      user: input.actor,
+      user: actorLabel,
       notes: `Cancelamento da NF ${movement.invoiceNumber || noteId}: ${reason}`,
       reversesId: movement.id,
       attachments: movement.attachments,
     });
     removedByItem.set(movement.itemKey, trunc2((removedByItem.get(movement.itemKey) ?? 0) + movement.quantity));
-    return { ...movement, reversedById: reversalId };
+    return { ...movement, reversedById: reversalId, updatedAt: canceledAt, updatedBy: auditActor ?? movement.updatedBy };
   });
 
   const activeReferences = new Set<string>();
@@ -1587,11 +1664,12 @@ export function cancelFiscalNote(
         status: 'cancelada' as const,
         archiveReason: 'lancamento_cancelado' as const,
         archivedAt: canceledAt,
-        archivedBy: input.actor,
+        archivedBy: actorLabel,
         canceledAt,
-        canceledBy: input.actor,
+        canceledBy: actorLabel,
         cancellationReason: reason,
         updatedAt: canceledAt,
+        updatedBy: auditActor ?? note.updatedBy,
       }
     : note);
 

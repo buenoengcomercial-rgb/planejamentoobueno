@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { Project } from '@/types/project';
+import type { Project, WarehouseAuditActor } from '@/types/project';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, FileBarChart, Warehouse as WarehouseIcon, RotateCcw, ReceiptText, Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -19,10 +19,10 @@ interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
   canManageFiscalNotes?: boolean;
-  actorName?: string;
+  auditActor?: WarehouseAuditActor;
 }
 
-export default function Warehouse({ project, onProjectChange, canManageFiscalNotes = true, actorName }: Props) {
+export default function Warehouse({ project, onProjectChange, canManageFiscalNotes = true, auditActor }: Props) {
   const [tab, setTab] = useState('painel');
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
@@ -90,7 +90,7 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
         </TabsList>
 
         <TabsContent value="painel" className="mt-3">
-          <WarehousePanel project={ensured} onProjectChange={onProjectChange} />
+          <WarehousePanel project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
         </TabsContent>
         <TabsContent value="estoque" className="mt-3">
           <WarehouseStockTab project={ensured} onProjectChange={onProjectChange} />
@@ -100,20 +100,20 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
             project={ensured}
             onProjectChange={onProjectChange}
             canManage={canManageFiscalNotes}
-            actorName={actorName}
+            auditActor={auditActor}
           />
         </TabsContent>
         <TabsContent value="movimentos" className="mt-3">
-          <WarehouseMovementsTab project={ensured} onProjectChange={onProjectChange} />
+          <WarehouseMovementsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
         </TabsContent>
         <TabsContent value="requisicoes" className="mt-3">
-          <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} />
+          <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
         </TabsContent>
         <TabsContent value="equipamentos" className="mt-3">
           <WarehouseEquipmentsTab project={ensured} onProjectChange={onProjectChange} />
         </TabsContent>
         <TabsContent value="inventario" className="mt-3">
-          <WarehouseInventoryTab project={ensured} onProjectChange={onProjectChange} />
+          <WarehouseInventoryTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
         </TabsContent>
         <TabsContent value="relatorios" className="mt-3">
           <WarehouseReportsTab project={ensured} />
