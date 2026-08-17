@@ -202,8 +202,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
 
   useEffect(() => {
     if (!canManage || processing || selected) return;
-    const reconciliation = reconcileFiscalNoteDrafts(project, auditActor);
+    const reconciliation = reconcileFiscalNoteDrafts(project, auditActor, resolvedDraftIdsRef.current);
     if (reconciliation.postedIds.length) {
+      reconciliation.postedIds.forEach(noteId => resolvedDraftIdsRef.current.add(noteId));
       onProjectChange(reconciliation.project);
       setGroup('posted');
       toast.success(`${reconciliation.postedIds.length} documento(s) pendente(s) lançado(s) automaticamente.`);

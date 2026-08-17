@@ -59,9 +59,32 @@ function projectWithIncompleteDraft(): Project {
   return project;
 }
 
+function projectWithCompleteDraft(): Project {
+  const project = projectWithPostedNote();
+  project.warehouse!.items = [];
+  project.warehouse!.fiscalNotes = [{
+    ...project.warehouse!.fiscalNotes[0],
+    id: 'complete-draft',
+    status: 'a_conferir',
+    invoiceNumber: '2.001',
+    stockPostedAt: undefined,
+    stockPostedBy: undefined,
+    items: project.warehouse!.fiscalNotes[0].items.map(item => ({ ...item, id: 'complete-item', itemKey: undefined })),
+  }];
+  return project;
+}
+
 function StatefulFiscalNotes({ initialProject }: { initialProject: Project }) {
   const [project, setProject] = useState(initialProject);
   return <WarehouseFiscalNotesTab project={project} onProjectChange={setProject} canManage auditActor={{ userName: 'Operador' }} />;
+}
+
+function StaleProjectFiscalNotes({ project, onProjectChange }: { project: Project; onProjectChange: (next: Project) => void }) {
+  const [revision, setRevision] = useState(0);
+  return <>
+    <button onClick={() => setRevision(value => value + 1)}>Forçar nova renderização</button>
+    <WarehouseFiscalNotesTab project={project} onProjectChange={onProjectChange} canManage auditActor={{ userName: `Operador ${revision}` }} />
+  </>;
 }
 
 describe('WarehouseFiscalNotesTab - lançamento simplificado', () => {
@@ -131,5 +154,17 @@ describe('WarehouseFiscalNotesTab - lançamento simplificado', () => {
     await waitFor(() => expect(screen.queryByText('Concluir lançamento')).not.toBeInTheDocument());
     expect(screen.getByRole('tab', { name: /Lançadas no estoque \(0\)/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Arquivadas \(1\)/i })).toBeInTheDocument();
+  });
+
+  it('não reconcilia novamente o mesmo rascunho enquanto a atualização do projeto está sendo propagada', async () => {
+    const onProjectChange = vi.fn();
+    render(<StaleProjectFiscalNotes project={projectWithCompleteDraft()} onProjectChange={onProjectChange} />);
+    await waitFor(() => expect(onProjectChange).toHaveBeenCalledTimes(1));
+    const posted = onProjectChange.mock.calls[0][0] as Project;
+    expect(posted.warehouse!.fiscalNotes[0].status).toBe('aprovada');
+    expect(posted.warehouse!.movements).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Forçar nova renderização' }));
+    await waitFor(() => expect(onProjectChange).toHaveBeenCalledTimes(1));
   });
 });

@@ -1479,10 +1479,14 @@ export interface FiscalNoteDraftReconciliation {
  * Documentos completos entram uma única vez; incompletos e duplicados ficam
  * preservados para resolução explícita na interface.
  */
-export function reconcileFiscalNoteDrafts(project: Project, actor?: WarehouseActorInput): FiscalNoteDraftReconciliation {
+export function reconcileFiscalNoteDrafts(
+  project: Project,
+  actor?: WarehouseActorInput,
+  ignoredNoteIds: ReadonlySet<string> = new Set(),
+): FiscalNoteDraftReconciliation {
   let next = ensureWarehouse(project);
   const draftIds = (next.warehouse?.fiscalNotes ?? [])
-    .filter(note => note.status === 'a_conferir')
+    .filter(note => note.status === 'a_conferir' && !ignoredNoteIds.has(note.id))
     .map(note => note.id);
   const postedIds: string[] = [];
   const incompleteIds: string[] = [];
