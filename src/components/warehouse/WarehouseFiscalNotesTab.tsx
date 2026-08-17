@@ -20,11 +20,18 @@ import {
   makeAttachment,
   nowWarehouseISO,
   readFileAsDataURL,
+  reconcileArchivedFiscalNoteStock,
+  reviewArchivedFiscalNoteStock,
   suggestFiscalNoteItemLinks,
   uidWarehouse,
   updateFiscalItemPurchaseGroup,
   upsertFiscalNote,
 } from '@/lib/warehouse';
+import {
+  downloadWarehouseAttachment,
+  openWarehouseAttachment,
+  warehouseAttachmentErrorMessage,
+} from '@/lib/warehouseAttachments';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -37,6 +44,7 @@ import {
   AlertTriangle,
   Ban,
   Camera,
+  Download,
   Eye,
   FileText,
   Loader2,
@@ -47,6 +55,7 @@ import {
   Search,
   Trash2,
   Upload,
+  Wrench,
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -183,6 +192,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
   const [uploadOpen, setUploadOpen] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [reconciliationOpen, setReconciliationOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -191,6 +201,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
   const purchaseGroups = useMemo(() => (project.materialComparisons ?? [])
     .map(comparison => ({ id: comparison.id, name: comparison.name }))
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')), [project.materialComparisons]);
+  const archivedStockReview = useMemo(() => reviewArchivedFiscalNoteStock(project), [project]);
 
   const counts = useMemo(() => ({
     posted: notes.filter(note => fiscalNoteViewGroup(note) === 'posted').length,
@@ -407,14 +418,32 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
     const attachments = note.attachments?.length ? note.attachments : (note.attachment ? [note.attachment] : []);
     const attachment = attachments[attachmentIndex];
     if (!attachment) return toast.error('O documento original não está disponível.');
-    if (attachment.dataUrl) {
-      window.open(attachment.dataUrl, '_blank', 'noopener');
-      return;
+    try {
+      await openWarehouseAttachment(attachment);
+    } catch (error) {
+      toast.error(warehouseAttachmentErrorMessage(error));
     }
-    if (!attachment.storagePath) return toast.error('O documento original não está disponível.');
-    const { data, error } = await supabase.storage.from('daily-report-photos').createSignedUrl(attachment.storagePath, 300);
-    if (error || !data?.signedUrl) return toast.error('Não foi possível abrir o documento original.');
-    window.open(data.signedUrl, '_blank', 'noopener');
+  };
+
+  const downloadOriginalDocument = async (note: WarehouseFiscalNote, attachmentIndex = 0) => {
+    const attachments = note.attachments?.length ? note.attachments : (note.attachment ? [note.attachment] : []);
+    const attachment = attachments[attachmentIndex];
+    if (!attachment) return toast.error('O documento original não está disponível.');
+    try {
+      await downloadWarehouseAttachment(attachment);
+    } catch (error) {
+      toast.error(warehouseAttachmentErrorMessage(error));
+    }
+  };
+
+  const confirmArchivedStockReconciliation = () => {
+    const safeIds = archivedStockReview.issues.filter(issue => issue.canReconcile).map(issue => issue.noteId);
+    if (!safeIds.length) return;
+    const result = reconcileArchivedFiscalNoteStock(project, safeIds, auditActor);
+    if (!result.reconciledNoteIds.length) return toast.error('Nenhum lançamento pôde ser reconciliado.');
+    onProjectChange(result.project);
+    setReconciliationOpen(false);
+    toast.success(`${result.reconciledNoteIds.length} documento(s) reconciliado(s) com estorno auditável.`);
   };
 
   const requestCloseSelected = () => {
@@ -459,6 +488,19 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
         </TabsList>
       </Tabs>
 
+      {group === 'archived' && archivedStockReview.issues.length > 0 && (
+        <div className="flex flex-col gap-3 rounded-lg border border-warning/40 bg-warning/10 p-4 sm:flex-row sm:items-center">
+          <AlertTriangle className="h-5 w-5 shrink-0 text-warning" />
+          <div className="min-w-0 flex-1 text-sm">
+            <div className="font-semibold">Estoque antigo precisa de revisão</div>
+            <div className="text-muted-foreground">
+              {archivedStockReview.safeCount} documento(s) podem ser corrigidos e {archivedStockReview.blockedCount} exigem análise manual.
+            </div>
+          </div>
+          {canManage && <Button className="min-h-11" variant="outline" onClick={() => setReconciliationOpen(true)}><Wrench className="mr-2 h-4 w-4" />Revisar e corrigir estoque</Button>}
+        </div>
+      )}
+
       <div className="space-y-2 md:hidden">
         {visible.map((note, index) => <NoteCard key={note.id} note={note} sequence={visible.length - index} onOpen={() => setSelected(note)} onOpenAttachment={() => void openOriginalDocument(note)} />)}
       </div>
@@ -485,7 +527,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 pb-24">
               {duplicate && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" /><strong>Nota já lançada:</strong> {duplicate.supplierName || 'Fornecedor não identificado'} · CNPJ {duplicate.supplierCnpj || '—'} · Nota {duplicate.invoiceNumber || '—'} · Emissão {duplicate.issueDate ? duplicate.issueDate.split('-').reverse().join('/') : '—'} · Valor {money(duplicate.totalAmount)}. Este envio não pode gerar outra entrada no estoque.</div>}
               {selected.processingError && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" />{selected.processingError} {isDraft && <Button className="ml-2" size="sm" variant="outline" disabled={processing} onClick={retryExtraction}>{processing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}Tentar leitura novamente</Button>}</div>}
-              {(selected.attachments?.length || selected.attachment) && <div className="flex flex-wrap items-center gap-2 rounded-md border p-3"><span className="mr-auto text-sm font-medium">Documento original</span>{(selected.attachments?.length ? selected.attachments : selected.attachment ? [selected.attachment] : []).map((attachment, index) => <Button key={attachment.id} type="button" variant="outline" className="min-h-11" onClick={() => void openOriginalDocument(selected, index)}><Eye className="mr-2 h-4 w-4" />{index === 0 && (selected.attachments?.length || 0) <= 1 ? 'Visualizar documento' : `Visualizar anexo ${index + 1}`}</Button>)}</div>}
+              {(selected.attachments?.length || selected.attachment) && <div className="flex flex-wrap items-center gap-2 rounded-md border p-3"><span className="mr-auto text-sm font-medium">Documento original</span>{(selected.attachments?.length ? selected.attachments : selected.attachment ? [selected.attachment] : []).map((attachment, index) => <div key={attachment.id} className="flex flex-wrap gap-2"><Button type="button" variant="outline" className="min-h-11" onClick={() => void openOriginalDocument(selected, index)}><Eye className="mr-2 h-4 w-4" />{index === 0 && (selected.attachments?.length || 0) <= 1 ? 'Visualizar documento' : `Visualizar anexo ${index + 1}`}</Button><Button type="button" variant="outline" className="min-h-11" onClick={() => void downloadOriginalDocument(selected, index)}><Download className="mr-2 h-4 w-4" />Baixar</Button></div>)}</div>}
 
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 <Field label="Fornecedor" value={selected.supplierName} readOnly={!isDraft} onChange={value => setSelected({ ...selected, supplierName: value })} />
@@ -523,6 +565,32 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       </Dialog>
 
       <Dialog open={cancelOpen} onOpenChange={setCancelOpen}><DialogContent><DialogHeader><DialogTitle>Cancelar lançamento definitivamente</DialogTitle><DialogDescription>A entrada original não será apagada. O sistema criará movimentos de estorno, preservará o documento e impedirá qualquer relançamento deste registro.</DialogDescription></DialogHeader>{cancelCheck && !cancelCheck.allowed && <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"><strong>Cancelamento bloqueado:</strong><ul className="mt-2 list-disc pl-5">{cancelCheck.blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul></div>}<div><label className="mb-1 block text-sm font-medium">Motivo obrigatório</label><Textarea value={cancelReason} onChange={event => setCancelReason(event.target.value)} placeholder="Explique por que o lançamento deve ser cancelado" /></div><DialogFooter><Button variant="outline" onClick={() => setCancelOpen(false)}>Voltar</Button><Button variant="destructive" disabled={!cancelCheck?.allowed || !cancelReason.trim()} onClick={confirmCancel}>Confirmar estorno definitivo</Button></DialogFooter></DialogContent></Dialog>
+
+      <Dialog open={reconciliationOpen} onOpenChange={setReconciliationOpen}>
+        <DialogContent className="max-h-[90dvh] max-w-4xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Revisar estoque de documentos arquivados</DialogTitle>
+            <DialogDescription>Confira o impacto antes de gerar os estornos. Entradas originais e documentos permanecerão preservados para auditoria.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {archivedStockReview.issues.map(issue => (
+              <section key={issue.noteId} className={`rounded-md border p-3 ${issue.canReconcile ? 'border-warning/40' : 'border-destructive/40 bg-destructive/5'}`}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div><strong>{issue.supplierName || 'Fornecedor não identificado'}</strong><div className="text-sm text-muted-foreground">Nota {issue.invoiceNumber || '—'}</div></div>
+                  <Badge variant="outline">{issue.canReconcile ? 'Pronta para corrigir' : 'Análise manual'}</Badge>
+                </div>
+                {issue.entries.length > 0 && <div className="mt-3 overflow-hidden rounded-md border"><table className="w-full text-sm"><thead className="bg-muted text-muted-foreground"><tr><th className="p-2 text-left">Material</th><th className="p-2 text-center">Quantidade a estornar</th></tr></thead><tbody>{issue.entries.map(entry => <tr key={entry.movementId} className="border-t"><td className="p-2">{entry.itemCode ? `${entry.itemCode} · ` : ''}{entry.description}</td><td className="p-2 text-center tabular-nums">{entry.quantity.toLocaleString('pt-BR')} {entry.unit}</td></tr>)}</tbody></table></div>}
+                {issue.materialKeysToArchive.length > 0 && <p className="mt-2 text-sm text-muted-foreground">{issue.materialKeysToArchive.length} material(is) exclusivo(s) ficará(ão) oculto(s) após ficar sem saldo ou referência.</p>}
+                {issue.blockers.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-destructive">{issue.blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul>}
+              </section>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReconciliationOpen(false)}>Voltar sem alterar</Button>
+            <Button disabled={!archivedStockReview.safeCount} onClick={confirmArchivedStockReconciliation}><Wrench className="mr-2 h-4 w-4" />Confirmar {archivedStockReview.safeCount} correção(ões)</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

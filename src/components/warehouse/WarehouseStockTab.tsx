@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
 import type { Project } from '@/types/project';
 import { computeWarehouseRows, createManualWarehouseItem, getMaterialPurchaseHistory, removeWarehouseItem, upsertItemConfig } from '@/lib/warehouse';
-import { supabase } from '@/integrations/supabase/client';
+import { downloadWarehouseAttachment, openWarehouseAttachment, warehouseAttachmentErrorMessage } from '@/lib/warehouseAttachments';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Archive, ExternalLink, History, Plus, Search, Trash2, X } from 'lucide-react';
+import { Archive, Download, Eye, History, Plus, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 
@@ -201,22 +201,19 @@ function PurchaseHistoryDialog({ project, target, onClose }: { project: Project;
   const history = useMemo(() => (target ? getMaterialPurchaseHistory(project, target.key) : []), [project, target]);
 
   const openAttachment = async (att: NonNullable<ReturnType<typeof getMaterialPurchaseHistory>[number]['attachment']>) => {
-    if (att.dataUrl) {
-      window.open(att.dataUrl, '_blank', 'noopener');
-      return;
+    try {
+      await openWarehouseAttachment(att);
+    } catch (error) {
+      toast.error(warehouseAttachmentErrorMessage(error));
     }
-    if (!att.storagePath) {
-      toast.error('Arquivo indisponível.');
-      return;
+  };
+
+  const downloadAttachment = async (att: NonNullable<ReturnType<typeof getMaterialPurchaseHistory>[number]['attachment']>) => {
+    try {
+      await downloadWarehouseAttachment(att);
+    } catch (error) {
+      toast.error(warehouseAttachmentErrorMessage(error));
     }
-    const { data, error } = await supabase.storage
-      .from('daily-report-photos')
-      .createSignedUrl(att.storagePath, 60);
-    if (error || !data?.signedUrl) {
-      toast.error('Falha ao abrir o arquivo.');
-      return;
-    }
-    window.open(data.signedUrl, '_blank', 'noopener');
   };
 
   return (
@@ -250,9 +247,14 @@ function PurchaseHistoryDialog({ project, target, onClose }: { project: Project;
                   <td className="p-2 text-right tabular-nums font-semibold">{moneyBR(h.totalPrice)}</td>
                   <td className="p-2 text-center">
                     {h.attachment ? (
-                      <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openAttachment(h.attachment!)} title="Abrir NF">
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </Button>
+                      <div className="flex items-center justify-center gap-1">
+                        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => void openAttachment(h.attachment!)} title="Visualizar NF" aria-label="Visualizar NF">
+                          <Eye className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => void downloadAttachment(h.attachment!)} title="Baixar NF" aria-label="Baixar NF">
+                          <Download className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
                     ) : (
                       <span className="text-muted-foreground">—</span>
                     )}

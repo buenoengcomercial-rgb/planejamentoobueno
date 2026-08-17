@@ -1,10 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project, WarehouseFiscalNote } from '@/types/project';
-import { emptyWarehouse } from '@/lib/warehouse';
+import { computeWarehouseRows, emptyWarehouse } from '@/lib/warehouse';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
 
-const { invokeMock, uploadMock } = vi.hoisted(() => ({
+const { downloadMock, invokeMock, uploadMock } = vi.hoisted(() => ({
+  downloadMock: vi.fn(),
   invokeMock: vi.fn(),
   uploadMock: vi.fn(),
 }));
@@ -15,8 +16,7 @@ vi.mock('@/integrations/supabase/client', () => ({
     storage: {
       from: () => ({
         upload: uploadMock,
-        createSignedUrl: vi.fn().mockResolvedValue({ data: { signedUrl: 'https://example.test/nota' }, error: null }),
-        download: vi.fn(),
+        download: downloadMock,
       }),
     },
   },
@@ -66,6 +66,26 @@ function projectWithLegacyDraft(): Project {
   return project;
 }
 
+function projectWithArchivedOrphan(): Project {
+  const project = projectWithPostedNote();
+  const note = project.warehouse!.fiscalNotes[0];
+  note.status = 'rejeitada';
+  note.archiveReason = 'descartada';
+  note.stockPostedAt = '2026-08-15T10:00:00.000Z';
+  note.attachment = {
+    id: 'attachment-1', name: 'nota.pdf', mimeType: 'application/pdf', uploadedAt: '2026-08-15T10:00:00.000Z',
+    storagePath: 'project-ui/warehouse/nota.pdf',
+  };
+  note.attachments = [note.attachment];
+  project.warehouse!.items[0].purchasedQuantity = 2;
+  project.warehouse!.movements = [{
+    id: 'entry-1', createdAt: '2026-08-15T10:00:00.000Z', type: 'entrada', date: '2026-08-15',
+    itemKey: 'warehouse-nf|material-1', itemCode: '7563', itemDescription: 'FITA CREPE 24MM X 50M', itemUnit: 'UN',
+    quantity: 2, unitPrice: 42.815, fiscalNoteId: note.id, invoiceNumber: note.invoiceNumber, attachments: note.attachments,
+  }];
+  return project;
+}
+
 async function readDocument(container: HTMLElement, name = 'nota.jpg') {
   const inputs = container.querySelectorAll<HTMLInputElement>('input[type="file"]');
   const file = new File(['imagem da nota'], name, { type: 'application/octet-stream' });
@@ -91,6 +111,7 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
       error: null,
     });
     uploadMock.mockReset().mockResolvedValue({ error: null });
+    downloadMock.mockReset().mockResolvedValue({ data: new Blob(['nota'], { type: 'application/pdf' }), error: null });
   });
 
   it('mostra somente lançadas/arquivadas e restaura as colunas sem Arquivo', () => {
@@ -186,5 +207,30 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(archived.warehouse!.fiscalNotes[0]).toMatchObject({ status: 'rejeitada', archiveReason: 'descartada' });
     expect(archived.warehouse!.items).toHaveLength(0);
     expect(archived.warehouse!.movements).toHaveLength(0);
+  });
+
+  it('revisa e corrige estoque ativo deixado por nota arquivada', async () => {
+    const onProjectChange = vi.fn();
+    render(<WarehouseFiscalNotesTab project={projectWithArchivedOrphan()} onProjectChange={onProjectChange} canManage auditActor={{ userName: 'Administrador' }} />);
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Arquivadas \(1\)/i }), { button: 0, ctrlKey: false });
+    expect(await screen.findByText('Estoque antigo precisa de revisão')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Revisar e corrigir estoque' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(/Quantidade a estornar/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/2 UN/i)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /Confirmar 1 correção/i }));
+    await waitFor(() => expect(onProjectChange).toHaveBeenCalledTimes(1));
+    const reconciled = onProjectChange.mock.calls[0][0] as Project;
+    expect(reconciled.warehouse!.movements.filter(movement => movement.type === 'estorno')).toHaveLength(1);
+    expect(computeWarehouseRows(reconciled, { includeManual: true })).toHaveLength(0);
+  });
+
+  it('oferece visualizar e baixar o documento preservado', () => {
+    render(<WarehouseFiscalNotesTab project={projectWithArchivedOrphan()} onProjectChange={vi.fn()} canManage />);
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Arquivadas \(1\)/i }), { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Visualizar dados e grupos' })[0]);
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByRole('button', { name: /Visualizar documento/i })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Baixar' })).toBeInTheDocument();
   });
 });

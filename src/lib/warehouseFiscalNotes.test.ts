@@ -12,6 +12,8 @@ import {
   ensureWarehouse,
   findFiscalNoteDuplicate,
   isStockFiscalDocument,
+  reconcileArchivedFiscalNoteStock,
+  reviewArchivedFiscalNoteStock,
   updateFiscalItemPurchaseGroup,
 } from './warehouse';
 
@@ -129,6 +131,58 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(result.project.warehouse!.movements.some(movement => movement.type === 'estorno' && !!movement.reversesId)).toBe(true);
     expect(computeWarehouseRows(result.project, { includeManual: true })).toHaveLength(0);
     expect(computeWarehouseRows(result.project, { includeManual: true, includeArchived: true })).toHaveLength(1);
+  });
+
+  it('revisa e reconcilia entrada ativa deixada por nota arquivada antiga', () => {
+    const inconsistent = approveFiscalNote(withNote(note()), 'nf-1', 'operador@teste');
+    inconsistent.warehouse!.fiscalNotes[0] = {
+      ...inconsistent.warehouse!.fiscalNotes[0],
+      status: 'rejeitada',
+      archiveReason: 'descartada',
+      archivedAt: '2026-08-16T10:00:00.000Z',
+    };
+    const review = reviewArchivedFiscalNoteStock(inconsistent);
+    expect(review).toMatchObject({ safeCount: 1, blockedCount: 0, movementCount: 1 });
+    expect(review.issues[0]).toMatchObject({ noteId: 'nf-1', canReconcile: true });
+    expect(review.issues[0].materialKeysToArchive).toHaveLength(1);
+
+    const actor = { userId: 'admin-id', userName: 'Administrador', userEmail: 'admin@teste.com' };
+    const result = reconcileArchivedFiscalNoteStock(inconsistent, ['nf-1'], actor);
+    expect(result.reconciledNoteIds).toEqual(['nf-1']);
+    expect(result.reversedMovementIds).toHaveLength(1);
+    expect(result.archivedMaterialKeys).toHaveLength(1);
+    expect(result.project.warehouse!.movements.some(movement => movement.type === 'estorno' && movement.createdBy?.userId === 'admin-id')).toBe(true);
+    expect(result.project.warehouse!.fiscalNotes[0]).toMatchObject({ status: 'rejeitada', archiveReason: 'descartada', updatedBy: actor });
+    expect(result.project.warehouse!.fiscalNotes[0].cancellationReason).toMatch(/Reconciliação/i);
+    expect(computeWarehouseRows(result.project, { includeManual: true })).toHaveLength(0);
+
+    const repeated = reconcileArchivedFiscalNoteStock(result.project, ['nf-1'], actor);
+    expect(repeated.reconciledNoteIds).toHaveLength(0);
+    expect(repeated.project.warehouse!.movements).toHaveLength(result.project.warehouse!.movements.length);
+  });
+
+  it('bloqueia a reconciliação antiga quando existe movimentação dependente', () => {
+    const inconsistent = approveFiscalNote(withNote(note()), 'nf-1');
+    const entry = inconsistent.warehouse!.movements[0];
+    inconsistent.warehouse!.fiscalNotes[0] = { ...inconsistent.warehouse!.fiscalNotes[0], status: 'cancelada' };
+    inconsistent.warehouse!.movements.push({
+      id: 'retirada-posterior', createdAt: '2099-08-16T10:00:00.000Z', type: 'retirada', date: '2026-08-16',
+      itemKey: entry.itemKey, itemDescription: entry.itemDescription, itemUnit: entry.itemUnit, quantity: 1,
+    });
+    const review = reviewArchivedFiscalNoteStock(inconsistent);
+    expect(review).toMatchObject({ safeCount: 0, blockedCount: 1 });
+    expect(review.issues[0].blockers.join(' ')).toMatch(/retirada posterior/i);
+    const result = reconcileArchivedFiscalNoteStock(inconsistent, ['nf-1'], 'Administrador');
+    expect(result.reconciledNoteIds).toHaveLength(0);
+    expect(result.blocked).toHaveLength(1);
+    expect(result.project.warehouse!.movements).toHaveLength(2);
+  });
+
+  it('não sinaliza documento descartado sem entrada nem lançamento já estornado', () => {
+    const discarded = archiveFiscalNote(withNote(note()), 'nf-1', 'descartada');
+    expect(reviewArchivedFiscalNoteStock(discarded).issues).toHaveLength(0);
+    const canceled = cancelFiscalNote(approveFiscalNote(withNote(note()), 'nf-1'), 'nf-1', { reason: 'Erro' }).project;
+    expect(reviewArchivedFiscalNoteStock(canceled).issues).toHaveLength(0);
   });
 
   it('bloqueia cancelamento depois de uma retirada dependente', () => {

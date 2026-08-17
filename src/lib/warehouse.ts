@@ -1529,6 +1529,56 @@ const CANCELLATION_BLOCKING_TYPES = new Set<WarehouseMovementType>([
   'devolucao',
 ]);
 
+function activeFiscalNoteEntries(state: WarehouseState, noteId: string): WarehouseMovement[] {
+  return state.movements.filter(movement =>
+    movement.fiscalNoteId === noteId && movement.type === 'entrada' && !movement.reversedById,
+  );
+}
+
+function fiscalEntryBlockers(state: WarehouseState, entries: WarehouseMovement[]): string[] {
+  const blockers = new Set<string>();
+  for (const entry of entries) {
+    for (const movement of state.movements) {
+      if (movement.id === entry.id || movement.itemKey !== entry.itemKey || movement.reversesId === entry.id) continue;
+      if (movement.reversedById || movement.createdAt <= entry.createdAt) continue;
+      if (CANCELLATION_BLOCKING_TYPES.has(movement.type)) {
+        blockers.add(`${entry.itemDescription}: existe ${MOVEMENT_LABEL[movement.type].toLowerCase()} posterior em ${movement.date.split('-').reverse().join('/')}.`);
+      }
+    }
+    for (const requisition of state.requisitions) {
+      if (requisition.status === 'cancelada' || requisition.date < entry.date) continue;
+      if (requisition.items.some(item => item.itemKey === entry.itemKey)) {
+        blockers.add(`${entry.itemDescription}: vinculado à requisição ${requisition.number}.`);
+      }
+    }
+  }
+  return [...blockers];
+}
+
+function fiscalItemsArchivedAfterReversal(state: WarehouseState, noteId: string, entries: WarehouseMovement[]): string[] {
+  const removedByItem = new Map<string, number>();
+  entries.forEach(entry => removedByItem.set(
+    entry.itemKey,
+    trunc2((removedByItem.get(entry.itemKey) ?? 0) + entry.quantity),
+  ));
+  const activeReferences = new Set<string>();
+  for (const movement of state.movements) {
+    if (movement.fiscalNoteId === noteId || movement.reversedById || movement.type === 'estorno') continue;
+    activeReferences.add(movement.itemKey);
+  }
+  for (const requisition of state.requisitions) {
+    if (requisition.status === 'cancelada') continue;
+    requisition.items.forEach(item => activeReferences.add(item.itemKey));
+  }
+  return state.items
+    .filter(item => {
+      const removed = removedByItem.get(item.key) ?? 0;
+      const purchasedQuantity = trunc2(Math.max(0, Number(item.purchasedQuantity || 0) - removed));
+      return removed > 0 && item.key.startsWith('warehouse-nf|') && purchasedQuantity <= 0 && !activeReferences.has(item.key);
+    })
+    .map(item => item.key);
+}
+
 export interface FiscalNoteCancellationCheck {
   allowed: boolean;
   blockers: string[];
@@ -1541,31 +1591,12 @@ export function checkFiscalNoteCancellation(project: Project, noteId: string): F
   if (!note || note.status !== 'aprovada') {
     return { allowed: false, blockers: ['A nota não está lançada no estoque.'], entryMovementIds: [] };
   }
-  const entries = wh.movements.filter(movement =>
-    movement.fiscalNoteId === noteId && movement.type === 'entrada' && !movement.reversedById,
-  );
+  const entries = activeFiscalNoteEntries(wh, noteId);
   if (!entries.length) {
     return { allowed: false, blockers: ['Nenhuma entrada ativa foi encontrada para esta nota.'], entryMovementIds: [] };
   }
-
-  const blockers = new Set<string>();
-  for (const entry of entries) {
-    for (const movement of wh.movements) {
-      if (movement.id === entry.id || movement.itemKey !== entry.itemKey || movement.reversesId === entry.id) continue;
-      if (movement.reversedById || movement.createdAt <= entry.createdAt) continue;
-      if (CANCELLATION_BLOCKING_TYPES.has(movement.type)) {
-        blockers.add(`${entry.itemDescription}: existe ${MOVEMENT_LABEL[movement.type].toLowerCase()} posterior em ${movement.date.split('-').reverse().join('/')}.`);
-      }
-    }
-    for (const requisition of wh.requisitions) {
-      if (requisition.status === 'cancelada' || requisition.date < entry.date) continue;
-      if (requisition.items.some(item => item.itemKey === entry.itemKey)) {
-        blockers.add(`${entry.itemDescription}: vinculado à requisição ${requisition.number}.`);
-      }
-    }
-  }
-
-  return { allowed: blockers.size === 0, blockers: [...blockers], entryMovementIds: entries.map(entry => entry.id) };
+  const blockers = fiscalEntryBlockers(wh, entries);
+  return { allowed: blockers.length === 0, blockers, entryMovementIds: entries.map(entry => entry.id) };
 }
 
 export interface CancelFiscalNoteResult {
@@ -1661,6 +1692,188 @@ export function cancelFiscalNote(
     canceled: true,
     blockers: [],
   };
+}
+
+export interface ArchivedFiscalNoteStockEntry {
+  movementId: string;
+  itemKey: string;
+  itemCode?: string;
+  description: string;
+  unit: string;
+  quantity: number;
+}
+
+export interface ArchivedFiscalNoteStockIssue {
+  noteId: string;
+  invoiceNumber?: string;
+  supplierName?: string;
+  status: WarehouseFiscalNote['status'];
+  entries: ArchivedFiscalNoteStockEntry[];
+  blockers: string[];
+  ambiguousMovementIds: string[];
+  materialKeysToArchive: string[];
+  canReconcile: boolean;
+}
+
+export interface ArchivedFiscalNoteStockReview {
+  issues: ArchivedFiscalNoteStockIssue[];
+  safeCount: number;
+  blockedCount: number;
+  movementCount: number;
+}
+
+/**
+ * Localiza documentos arquivados que, por inconsistência de fluxos antigos,
+ * ainda possuem entradas físicas ativas. Somente vínculos diretos por
+ * fiscalNoteId são elegíveis para estorno automático.
+ */
+export function reviewArchivedFiscalNoteStock(project: Project): ArchivedFiscalNoteStockReview {
+  const wh = ensureWarehouse(project).warehouse!;
+  const issues: ArchivedFiscalNoteStockIssue[] = [];
+  for (const note of wh.fiscalNotes ?? []) {
+    if (note.status !== 'rejeitada' && note.status !== 'cancelada') continue;
+    const entries = activeFiscalNoteEntries(wh, note.id);
+    const itemKeys = new Set(note.items.map(item => item.itemKey).filter((key): key is string => !!key));
+    const invoiceNumber = note.invoiceNumber?.trim();
+    const ambiguousMovementIds = note.stockPostedAt && invoiceNumber
+      ? wh.movements
+        .filter(movement =>
+          movement.type === 'entrada' &&
+          !movement.reversedById &&
+          !movement.fiscalNoteId &&
+          movement.invoiceNumber?.trim() === invoiceNumber &&
+          itemKeys.has(movement.itemKey),
+        )
+        .map(movement => movement.id)
+      : [];
+    if (!entries.length && !ambiguousMovementIds.length) continue;
+    const blockers = entries.length ? fiscalEntryBlockers(wh, entries) : [];
+    if (ambiguousMovementIds.length) {
+      blockers.push(`${ambiguousMovementIds.length} entrada(s) antiga(s) sem vínculo técnico direto com a nota exigem análise manual.`);
+    }
+    issues.push({
+      noteId: note.id,
+      invoiceNumber: note.invoiceNumber,
+      supplierName: note.supplierName,
+      status: note.status,
+      entries: entries.map(entry => ({
+        movementId: entry.id,
+        itemKey: entry.itemKey,
+        itemCode: entry.itemCode,
+        description: entry.itemDescription,
+        unit: entry.itemUnit,
+        quantity: entry.quantity,
+      })),
+      blockers,
+      ambiguousMovementIds,
+      materialKeysToArchive: entries.length ? fiscalItemsArchivedAfterReversal(wh, note.id, entries) : [],
+      canReconcile: entries.length > 0 && blockers.length === 0,
+    });
+  }
+  return {
+    issues,
+    safeCount: issues.filter(issue => issue.canReconcile).length,
+    blockedCount: issues.filter(issue => !issue.canReconcile).length,
+    movementCount: issues.reduce((sum, issue) => sum + issue.entries.length, 0),
+  };
+}
+
+export interface ArchivedFiscalNoteStockReconciliationResult {
+  project: Project;
+  reconciledNoteIds: string[];
+  reversedMovementIds: string[];
+  archivedMaterialKeys: string[];
+  blocked: ArchivedFiscalNoteStockIssue[];
+}
+
+export function reconcileArchivedFiscalNoteStock(
+  project: Project,
+  noteIds: readonly string[],
+  actor?: WarehouseActorInput,
+): ArchivedFiscalNoteStockReconciliationResult {
+  let next = ensureWarehouse(project);
+  const requested = new Set(noteIds);
+  const reconciledNoteIds: string[] = [];
+  const reversedMovementIds: string[] = [];
+  const archivedMaterialKeys: string[] = [];
+  const blocked: ArchivedFiscalNoteStockIssue[] = [];
+  const auditActor = normalizeWarehouseActor(actor);
+  const actorLabel = warehouseActorLegacyValue(actor);
+  const reason = 'Reconciliação de lançamento antigo arquivado com estoque ativo.';
+
+  for (const noteId of requested) {
+    const review = reviewArchivedFiscalNoteStock(next);
+    const issue = review.issues.find(current => current.noteId === noteId);
+    if (!issue) continue;
+    if (!issue.canReconcile) {
+      blocked.push(issue);
+      continue;
+    }
+    const wh = next.warehouse!;
+    const note = wh.fiscalNotes.find(current => current.id === noteId);
+    if (!note || (note.status !== 'rejeitada' && note.status !== 'cancelada')) continue;
+    const entryIds = new Set(issue.entries.map(entry => entry.movementId));
+    const reconciledAt = nowISO();
+    const reversals: WarehouseMovement[] = [];
+    const removedByItem = new Map<string, number>();
+    const movements = wh.movements.map(movement => {
+      if (!entryIds.has(movement.id) || movement.reversedById) return movement;
+      const reversalId = uid();
+      reversals.push({
+        id: reversalId,
+        createdAt: reconciledAt,
+        createdBy: auditActor,
+        type: 'estorno',
+        date: todayISO(),
+        itemKey: movement.itemKey,
+        itemCode: movement.itemCode,
+        itemDescription: movement.itemDescription,
+        itemUnit: movement.itemUnit,
+        quantity: movement.quantity,
+        unitPrice: movement.unitPrice,
+        fiscalNoteId: noteId,
+        invoiceNumber: movement.invoiceNumber,
+        user: actorLabel,
+        notes: `${reason} Documento ${note.invoiceNumber || note.id}.`,
+        reversesId: movement.id,
+        attachments: movement.attachments,
+      });
+      removedByItem.set(movement.itemKey, trunc2((removedByItem.get(movement.itemKey) ?? 0) + movement.quantity));
+      reversedMovementIds.push(movement.id);
+      return { ...movement, reversedById: reversalId, updatedAt: reconciledAt, updatedBy: auditActor ?? movement.updatedBy };
+    });
+    if (!reversals.length) continue;
+    const keysToArchive = new Set(issue.materialKeysToArchive);
+    const items = wh.items.map(item => {
+      const removed = removedByItem.get(item.key) ?? 0;
+      if (!removed) return item;
+      const purchasedQuantity = trunc2(Math.max(0, Number(item.purchasedQuantity || 0) - removed));
+      const shouldArchive = keysToArchive.has(item.key);
+      if (shouldArchive) archivedMaterialKeys.push(item.key);
+      return {
+        ...item,
+        purchasedQuantity,
+        archivedAt: shouldArchive ? reconciledAt : item.archivedAt,
+        archivedReason: shouldArchive ? 'fiscal_note_canceled' as const : item.archivedReason,
+      };
+    });
+    const fiscalNotes = wh.fiscalNotes.map(current => current.id === noteId
+      ? {
+          ...current,
+          canceledAt: current.canceledAt ?? reconciledAt,
+          canceledBy: actorLabel ?? current.canceledBy,
+          cancellationReason: current.cancellationReason
+            ? `${current.cancellationReason} | ${reason}`
+            : reason,
+          updatedAt: reconciledAt,
+          updatedBy: auditActor ?? current.updatedBy,
+        }
+      : current);
+    next = setWh(next, { items, movements: [...movements, ...reversals], fiscalNotes });
+    reconciledNoteIds.push(noteId);
+  }
+
+  return { project: next, reconciledNoteIds, reversedMovementIds, archivedMaterialKeys, blocked };
 }
 
 export function uidWarehouse() {
