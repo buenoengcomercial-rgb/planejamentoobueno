@@ -60,6 +60,25 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(findFiscalNoteDuplicate(withNote(existing), candidate)?.id).toBe(existing.id);
   });
 
+  it('bloqueia no domínio uma segunda entrada para nota já aprovada', () => {
+    const existing = note({ id: 'existing', status: 'aprovada' });
+    const candidate = note({ id: 'candidate' });
+    const project = baseProject();
+    project.warehouse!.fiscalNotes = [existing, candidate];
+    expect(() => approveFiscalNote(project, candidate.id)).toThrow(/já foi lançada no estoque/i);
+    expect(project.warehouse!.movements).toHaveLength(0);
+  });
+
+  it.each(['rejeitada', 'cancelada'] as const)('não trata nota %s como bloqueio para novo upload', status => {
+    const previous = note({ id: 'previous', status });
+    const candidate = note({ id: 'candidate' });
+    const project = baseProject();
+    project.warehouse!.fiscalNotes = [previous, candidate];
+    expect(findFiscalNoteDuplicate(project, candidate)).toBeUndefined();
+    const posted = approveFiscalNote(project, candidate.id);
+    expect(posted.warehouse!.fiscalNotes.find(entry => entry.id === candidate.id)?.status).toBe('aprovada');
+  });
+
   it('lança Pedido de Venda no estoque independentemente da classificação documental', () => {
     const project = withNote(note({ id: 'pedido-915', documentType: 'pedido_venda', invoiceNumber: '915' }));
     const posted = approveFiscalNote(project, 'pedido-915', 'operador@teste');

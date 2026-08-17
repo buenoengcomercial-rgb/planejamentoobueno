@@ -1283,6 +1283,10 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
   if (note.status === 'aprovada') return p;
   if (note.status === 'cancelada') throw new Error('Um lançamento cancelado é definitivo e não pode retornar ao estoque.');
   if (note.status === 'rejeitada') throw new Error('Um documento arquivado não pode ser lançado no estoque. Envie um novo documento.');
+  const duplicate = findFiscalNoteDuplicate(p, note);
+  if (duplicate) {
+    throw new Error(`A nota ${duplicate.invoiceNumber || duplicate.id} já foi lançada no estoque e não pode gerar uma segunda entrada.`);
+  }
   if (p.warehouse?.movements.some(m => m.fiscalNoteId === noteId && m.type === 'entrada' && !m.reversedById)) {
     return p;
   }
@@ -1747,7 +1751,7 @@ export function isValidCnpj(value?: string): boolean {
   return d1 === Number(cnpj[12]) && d2 === Number(cnpj[13]);
 }
 
-/** Procura uma nota fiscal duplicada (mesmo CNPJ + número + valor total, ignorando ela mesma). */
+/** Procura uma nota já lançada com o mesmo CNPJ + número + valor total, ignorando ela mesma. */
 export function findFiscalNoteDuplicate(
   project: Project,
   candidate: Pick<WarehouseFiscalNote, 'supplierCnpj' | 'invoiceNumber' | 'totalAmount' | 'id'>,
@@ -1758,6 +1762,7 @@ export function findFiscalNoteDuplicate(
   const total = Number(candidate.totalAmount || 0);
   return (project.warehouse?.fiscalNotes ?? []).find(n =>
     n.id !== candidate.id &&
+    n.status === 'aprovada' &&
     (n.supplierCnpj ?? '').replace(/\D/g, '') === cnpj &&
     (n.invoiceNumber ?? '').trim() === num &&
     Math.abs(Number(n.totalAmount || 0) - total) < 0.01,

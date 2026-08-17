@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Project, WarehouseFiscalNote } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
@@ -27,6 +28,42 @@ function projectWithPostedNote(): Project {
   return project;
 }
 
+function projectWithDuplicateDraft(): Project {
+  const project = projectWithPostedNote();
+  const posted = project.warehouse!.fiscalNotes[0];
+  project.warehouse!.fiscalNotes.push({
+    ...structuredClone(posted),
+    id: 'duplicate-draft',
+    status: 'a_conferir',
+    sourceFileName: 'duplicada.pdf',
+    createdBy: { userName: 'Operador' },
+    updatedBy: undefined,
+    stockPostedAt: undefined,
+    stockPostedBy: undefined,
+    items: posted.items.map(item => ({ ...item, id: `duplicate-${item.id}`, itemKey: undefined })),
+  });
+  return project;
+}
+
+function projectWithIncompleteDraft(): Project {
+  const project = projectWithPostedNote();
+  project.warehouse!.items = [];
+  project.warehouse!.fiscalNotes = [{
+    ...project.warehouse!.fiscalNotes[0],
+    id: 'incomplete-draft',
+    status: 'a_conferir',
+    items: [],
+    stockPostedAt: undefined,
+    stockPostedBy: undefined,
+  }];
+  return project;
+}
+
+function StatefulFiscalNotes({ initialProject }: { initialProject: Project }) {
+  const [project, setProject] = useState(initialProject);
+  return <WarehouseFiscalNotesTab project={project} onProjectChange={setProject} canManage auditActor={{ userName: 'Operador' }} />;
+}
+
 describe('WarehouseFiscalNotesTab - lançamento simplificado', () => {
   it('mostra somente lançadas/arquivadas e restaura as colunas sem Arquivo', () => {
     render(<WarehouseFiscalNotesTab project={projectWithPostedNote()} onProjectChange={vi.fn()} canManage />);
@@ -50,5 +87,49 @@ describe('WarehouseFiscalNotesTab - lançamento simplificado', () => {
     expect(headers).toEqual(expect.arrayContaining(['Cód. prod.', 'Descrição', 'Qtd', 'Un', 'V. unit. NF', 'V. unit. global', 'V. total', 'Grupo de compra']));
     expect(within(dialog).getAllByRole('combobox')).not.toHaveLength(0);
     within(dialog).getAllByRole('combobox').forEach(combobox => expect(combobox).toBeEnabled());
+  });
+
+  it('bloqueia lançamento duplicado e permite voltar antes de descartar pelo X', async () => {
+    render(<StatefulFiscalNotes initialProject={projectWithDuplicateDraft()} />);
+    expect(await screen.findByText(/Nota já lançada:/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Confirmar lançamento duplicado/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(await screen.findByRole('alertdialog', { name: /Descartar este envio/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Voltar' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(screen.getByText(/Nota já lançada:/i)).toBeInTheDocument();
+  });
+
+  it('descarta a duplicata sem reabrir o modal ou alterar o lançamento existente', async () => {
+    render(<StatefulFiscalNotes initialProject={projectWithDuplicateDraft()} />);
+    expect(await screen.findByText(/Nota já lançada:/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Descartar envio' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirmar descarte' }));
+    await waitFor(() => expect(screen.queryByText(/Concluir lançamento/i)).not.toBeInTheDocument());
+    expect(screen.getByRole('tab', { name: /Lançadas no estoque \(1\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Arquivadas \(1\)/i })).toBeInTheDocument();
+  });
+
+  it('descarta a duplicata e abre o lançamento existente em modo somente leitura', async () => {
+    render(<StatefulFiscalNotes initialProject={projectWithDuplicateDraft()} />);
+    expect(await screen.findByText(/Nota já lançada:/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Descartar e abrir lançamento existente' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirmar descarte' }));
+    expect(await screen.findByText('Dados do lançamento')).toBeInTheDocument();
+    expect(screen.queryByText(/Nota já lançada:/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Fechar' }));
+    await waitFor(() => expect(screen.queryByText('Dados do lançamento')).not.toBeInTheDocument());
+    expect(screen.getByRole('tab', { name: /Lançadas no estoque \(1\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Arquivadas \(1\)/i })).toBeInTheDocument();
+  });
+
+  it('permite descartar pelo X um rascunho sem itens sem prender o operador', async () => {
+    render(<StatefulFiscalNotes initialProject={projectWithIncompleteDraft()} />);
+    expect(await screen.findByText('Concluir lançamento')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirmar descarte' }));
+    await waitFor(() => expect(screen.queryByText('Concluir lançamento')).not.toBeInTheDocument());
+    expect(screen.getByRole('tab', { name: /Lançadas no estoque \(0\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Arquivadas \(1\)/i })).toBeInTheDocument();
   });
 });

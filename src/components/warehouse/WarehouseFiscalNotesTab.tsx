@@ -9,6 +9,7 @@ import type {
 } from '@/types/project';
 import {
   approveFiscalNote,
+  archiveFiscalNote,
   cancelFiscalNote,
   checkFiscalNoteCancellation,
   classifyFiscalDocumentText,
@@ -27,6 +28,7 @@ import {
 } from '@/lib/warehouse';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -173,8 +175,11 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
   const [processing, setProcessing] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [discardDestination, setDiscardDestination] = useState<'close' | 'existing'>('close');
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const resolvedDraftIdsRef = useRef(new Set<string>());
   const notes = useMemo(() => project.warehouse?.fiscalNotes ?? [], [project.warehouse?.fiscalNotes]);
   const purchaseGroups = useMemo(() => (project.materialComparisons ?? [])
     .map(comparison => ({ id: comparison.id, name: comparison.name }))
@@ -204,7 +209,8 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       toast.success(`${reconciliation.postedIds.length} documento(s) pendente(s) lançado(s) automaticamente.`);
       return;
     }
-    const unresolvedId = reconciliation.incompleteIds[0] ?? reconciliation.duplicateIds[0];
+    const unresolvedId = [...reconciliation.incompleteIds, ...reconciliation.duplicateIds]
+      .find(noteId => !resolvedDraftIdsRef.current.has(noteId));
     if (!unresolvedId) return;
     const draft = reconciliation.project.warehouse?.fiscalNotes.find(note => note.id === unresolvedId);
     if (draft) setSelected(draft);
@@ -224,18 +230,19 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
     if (fileRef.current) fileRef.current.value = '';
   };
 
-  const finishDraft = (baseProject: Project, note: WarehouseFiscalNote, allowDuplicate = false) => {
+  const finishDraft = (baseProject: Project, note: WarehouseFiscalNote) => {
     const saved = upsertFiscalNote(baseProject, note, auditActor);
     const existing = findFiscalNoteDuplicate(saved, note);
-    if (existing && !allowDuplicate) {
+    if (existing) {
       onProjectChange(saved);
-      setSelected(note);
+      setSelected(saved.warehouse?.fiscalNotes.find(entry => entry.id === note.id) ?? note);
       return false;
     }
     const posted = approveFiscalNote(saved, note.id, auditActor);
-    onProjectChange(posted);
+    resolvedDraftIdsRef.current.add(note.id);
     setSelected(null);
     setGroup('posted');
+    onProjectChange(posted);
     toast.success('Documento lançado automaticamente no estoque.');
     return true;
   };
@@ -345,8 +352,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
     }
   };
 
-  const postSelectedDraft = (allowDuplicate = false) => {
+  const postSelectedDraft = () => {
     if (!selected || !isDraft) return;
+    if (duplicate) return toast.error('Esta nota já foi lançada. Descarte o novo envio ou abra o lançamento existente.');
     if (!validItems(selected).length) return toast.error('Inclua ao menos um item com descrição e quantidade maior que zero.');
     const normalized: WarehouseFiscalNote = {
       ...selected,
@@ -359,7 +367,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       })),
     };
     try {
-      finishDraft(project, normalized, allowDuplicate);
+      finishDraft(project, normalized);
     } catch (error) {
       toast.error((error as Error).message);
     }
@@ -416,10 +424,33 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
 
   const requestCloseSelected = () => {
     if (isDraft) {
-      toast.error('Conclua o lançamento informando ao menos um item. O rascunho continuará preservado.');
+      setDiscardDestination('close');
+      setDiscardOpen(true);
       return;
     }
     setSelected(null);
+  };
+
+  const requestDiscard = (destination: 'close' | 'existing') => {
+    setDiscardDestination(destination);
+    setDiscardOpen(true);
+  };
+
+  const confirmDiscard = () => {
+    if (!selected || !isDraft) return setDiscardOpen(false);
+    const draftId = selected.id;
+    const existing = duplicate;
+    const archived = archiveFiscalNote(project, draftId, 'descartada', auditActor);
+    resolvedDraftIdsRef.current.add(draftId);
+    setDiscardOpen(false);
+    setGroup('posted');
+    if (discardDestination === 'existing' && existing) {
+      setSelected(archived.warehouse?.fiscalNotes.find(note => note.id === existing.id) ?? existing);
+    } else {
+      setSelected(null);
+    }
+    onProjectChange(archived);
+    toast.success('Envio descartado sem alterar o estoque.');
   };
 
   return (
@@ -473,7 +504,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
           {selected && <>
             <DialogHeader className="border-b p-4 pr-12"><div className="flex flex-wrap items-center gap-2"><DialogTitle>{isDraft ? 'Concluir lançamento' : 'Dados do lançamento'}</DialogTitle><StatusBadge note={selected} />{selected.extractionStatus === 'failed' && <Badge variant="destructive">Leitura incompleta</Badge>}</div><DialogDescription>{selected.attachments?.length || (selected.attachment ? 1 : 0)} documento(s) original(is) preservado(s) para auditoria</DialogDescription></DialogHeader>
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 pb-24">
-              {duplicate && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" /><strong>Possível duplicidade:</strong> já existe o lançamento {duplicate.invoiceNumber || duplicate.id} de {duplicate.supplierName || 'fornecedor não identificado'}. O novo saldo somente será criado após confirmação explícita.</div>}
+              {duplicate && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" /><strong>Nota já lançada:</strong> existe o lançamento {duplicate.invoiceNumber || duplicate.id} de {duplicate.supplierName || 'fornecedor não identificado'}. Este novo envio não pode gerar outra entrada no estoque.</div>}
               {selected.processingError && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" />{selected.processingError} {isDraft && <Button className="ml-2" size="sm" variant="outline" disabled={processing} onClick={retryExtraction}>{processing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}Tentar leitura novamente</Button>}</div>}
               {(selected.attachments?.length || selected.attachment) && <div className="flex flex-wrap items-center gap-2 rounded-md border p-3"><span className="mr-auto text-sm font-medium">Documento original</span>{(selected.attachments?.length ? selected.attachments : selected.attachment ? [selected.attachment] : []).map((attachment, index) => <Button key={attachment.id} type="button" variant="outline" className="min-h-11" onClick={() => void openOriginalDocument(selected, index)}><Eye className="mr-2 h-4 w-4" />{index === 0 && (selected.attachments?.length || 0) <= 1 ? 'Visualizar documento' : `Visualizar anexo ${index + 1}`}</Button>)}</div>}
 
@@ -503,12 +534,27 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
             </div>
             <div className="sticky bottom-0 flex flex-wrap items-center justify-end gap-2 border-t bg-background p-3 shadow-[0_-4px_12px_rgba(0,0,0,0.08)]">
               {!isDraft && <Button variant="outline" onClick={() => setSelected(null)}>Fechar</Button>}
-              {isDraft && <Button onClick={() => postSelectedDraft(!!duplicate)} disabled={!validItems(selected).length}>{duplicate ? 'Confirmar lançamento duplicado' : 'Concluir lançamento no estoque'}</Button>}
+              {isDraft && <Button variant="outline" className="text-destructive" onClick={() => requestDiscard('close')}>Descartar envio</Button>}
+              {isDraft && duplicate && <Button onClick={() => requestDiscard('existing')}>Descartar e abrir lançamento existente</Button>}
+              {isDraft && !duplicate && <Button onClick={postSelectedDraft} disabled={!validItems(selected).length}>Concluir lançamento no estoque</Button>}
               {canManage && isPosted && <Button variant="destructive" onClick={() => setCancelOpen(true)}>Cancelar lançamento</Button>}
             </div>
           </>}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={discardOpen} onOpenChange={setDiscardOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Descartar este envio?</AlertDialogTitle>
+            <AlertDialogDescription>O documento será preservado em Arquivadas para auditoria, mas não criará materiais, movimentos ou saldo no estoque.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Voltar</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={confirmDiscard}>Confirmar descarte</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={cancelOpen} onOpenChange={setCancelOpen}><DialogContent><DialogHeader><DialogTitle>Cancelar lançamento definitivamente</DialogTitle><DialogDescription>A entrada original não será apagada. O sistema criará movimentos de estorno, preservará o documento e impedirá qualquer relançamento deste registro.</DialogDescription></DialogHeader>{cancelCheck && !cancelCheck.allowed && <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"><strong>Cancelamento bloqueado:</strong><ul className="mt-2 list-disc pl-5">{cancelCheck.blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul></div>}<div><label className="mb-1 block text-sm font-medium">Motivo obrigatório</label><Textarea value={cancelReason} onChange={event => setCancelReason(event.target.value)} placeholder="Explique por que o lançamento deve ser cancelado" /></div><DialogFooter><Button variant="outline" onClick={() => setCancelOpen(false)}>Voltar</Button><Button variant="destructive" disabled={!cancelCheck?.allowed || !cancelReason.trim()} onClick={confirmCancel}>Confirmar estorno definitivo</Button></DialogFooter></DialogContent></Dialog>
     </div>
