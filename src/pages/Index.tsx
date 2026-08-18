@@ -379,6 +379,7 @@ export default function Index() {
     const request = saveQueueRef.current.catch(() => undefined).then(async () => {
       const updatedAt = await upsertCloudProject(projectToSave, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined);
       conflictDetectedRef.current = false;
+      lastLocalSaveAtRef.current = Date.now();
       currentProjectUpdatedAtRef.current = updatedAt;
       lastSavedProjectJsonRef.current = nextJson;
       setCurrentProjectUpdatedAt(updatedAt);
