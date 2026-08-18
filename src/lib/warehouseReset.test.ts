@@ -12,7 +12,7 @@ describe('prepareWarehouseTestReset', () => {
       totalBudget: 0,
       phases: [],
       stockMovements: [{ id: 'legacy-1', itemKey: 'mat-1', itemDescription: 'Material teste', itemUnit: 'UN', type: 'entrada', quantity: 1, date: '2026-08-18', createdAt: '2026-08-18' }],
-      materialPriceHistory: [{ id: 'price-1', itemCode: 'mat-1', description: 'Material teste', unit: 'UN', supplier: 'Fornecedor', unitPrice: 10, quantity: 1, date: '2026-08-18', totalPrice: 10 }],
+      materialPriceHistory: [{ id: 'price-1', itemCode: 'mat-1', itemDescription: 'Material teste', unit: 'UN', supplierName: 'Fornecedor', price: 10, date: '2026-08-18', comparisonId: 'comparison-1', comparisonName: 'Cotação teste' }],
       warehouse: {
         locations: [{ id: 'loc-1', name: 'Teste' }],
         items: [{ key: 'mat-1', description: 'Material teste', unit: 'UN' }],
