@@ -636,7 +636,11 @@ export default function Index() {
 
       const record = await loadCloudProjectRecord(current.id);
       if (!record) return;
-      if (record.updatedAt && record.updatedAt === currentProjectUpdatedAtRef.current && !record.repairApplied) {
+      const remoteJson = serializeProject(record.project);
+      if (!record.repairApplied && remoteJson === lastSavedProjectJsonRef.current) {
+        currentProjectUpdatedAtRef.current = record.updatedAt;
+        setCurrentProjectUpdatedAt(record.updatedAt);
+        setLastCloudConfirmedAt(new Date().toISOString());
         setSaveStatus('saved');
         return;
       }
