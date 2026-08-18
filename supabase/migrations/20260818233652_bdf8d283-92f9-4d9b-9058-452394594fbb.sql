@@ -1,0 +1,1 @@
+ALTER FUNCTION public.duplicate_project(uuid, uuid, text) SECURITY INVOKER;
