@@ -9,7 +9,7 @@ vi.mock('./WarehouseStockTab', () => ({ default: () => null }));
 vi.mock('./WarehouseMovementsTab', () => ({ default: () => null }));
 vi.mock('./WarehouseRequisitionsTab', () => ({ default: () => null }));
 vi.mock('./WarehouseEquipmentsTab', () => ({ default: () => null }));
-vi.mock('./WarehouseInventoryTab', () => ({ default: () => null }));
+vi.mock('./WarehouseInventoryTab', () => ({ default: () => <div>Conteúdo do inventário</div> }));
 vi.mock('./WarehouseReportsTab', () => ({ default: () => null }));
 vi.mock('./WarehouseFiscalNotesTab', () => ({ default: () => null }));
 
@@ -24,6 +24,14 @@ const project: Project = {
 };
 
 describe('controle de acesso à limpeza do almoxarifado', () => {
+  it('permite acessar todas as áreas pelo seletor móvel', () => {
+    render(<Warehouse project={project} onProjectChange={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText('Área do almoxarifado'), { target: { value: 'inventario' } });
+
+    expect(screen.getByText('Conteúdo do inventário')).toBeInTheDocument();
+  });
+
   it('não mostra Administração para usuários sem permissão de proprietário', () => {
     render(<Warehouse project={project} onProjectChange={vi.fn()} canClearWarehouse={false} />);
     expect(screen.queryByRole('button', { name: /Administração/i })).not.toBeInTheDocument();

@@ -105,34 +105,34 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
         <span className="text-[11px] text-muted-foreground ml-auto">{filtered.length} item(ns)</span>
       </div>
       {showManualForm && (
-        <div className="grid grid-cols-12 gap-2 border-b border-border bg-muted/10 p-2">
+        <div className="grid grid-cols-1 gap-2 border-b border-border bg-muted/10 p-3 md:grid-cols-12 md:p-2">
           <Input
             value={manualForm.code}
             onChange={e => setManualForm({ ...manualForm, code: e.target.value })}
             placeholder="Código opcional"
-            className="col-span-2 h-8 text-xs"
+            className="min-h-11 text-base md:col-span-2 md:h-8 md:min-h-8 md:text-xs"
           />
           <Input
             value={manualForm.description}
             onChange={e => setManualForm({ ...manualForm, description: e.target.value })}
             placeholder="Descrição do material avulso"
-            className="col-span-7 h-8 text-xs"
+            className="min-h-11 text-base md:col-span-7 md:h-8 md:min-h-8 md:text-xs"
           />
           <Input
             value={manualForm.unit}
             onChange={e => setManualForm({ ...manualForm, unit: e.target.value })}
             placeholder="Un."
-            className="col-span-1 h-8 text-xs"
+            className="min-h-11 text-base md:col-span-1 md:h-8 md:min-h-8 md:text-xs"
             onKeyDown={e => {
               if (e.key === 'Enter') createManual();
             }}
           />
-          <Button className="col-span-2 h-8 text-xs" onClick={createManual} disabled={!manualForm.description.trim() || !manualForm.unit.trim()}>
+          <Button className="min-h-11 text-sm md:col-span-2 md:h-8 md:min-h-8 md:text-xs" onClick={createManual} disabled={!manualForm.description.trim() || !manualForm.unit.trim()}>
             Criar material
           </Button>
         </div>
       )}
-      <div className="max-h-[calc(100vh-300px)] overflow-auto">
+      <div className="max-h-[calc(100dvh-300px)] overflow-auto">
         <div className="space-y-2 p-2 md:hidden">{filtered.map(row => <article key={row.key} className={`space-y-3 rounded-md border p-3 ${row.underMin ? 'border-warning/50 bg-warning/5' : ''}`}><div className="flex items-start justify-between gap-2"><div><div className="text-xs text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</div><div className="font-semibold">{row.description}</div></div><Badge variant="outline" className={row.linkStatus === 'linked' ? 'text-success' : row.linkStatus === 'unplanned' ? 'text-warning' : ''}>{row.linkStatus === 'linked' ? 'Vinculado' : row.linkStatus === 'unplanned' ? 'Não previsto' : 'Vínculo pendente'}</Badge></div><dl className="grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Saldo disponível</dt><dd className="font-semibold text-primary">{row.balance.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Estoque mínimo</dt><dd>{row.minStock?.toLocaleString('pt-BR') ?? '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Custo médio</dt><dd>{row.valuationIncomplete || row.averageUnitCost == null ? 'Cálculo incompleto' : row.averageUnitCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</dd></div><div><dt className="text-xs text-muted-foreground">Último movimento</dt><dd>{row.lastMovementDate || '—'}</dd></div></dl><div className="grid grid-cols-3 gap-2"><Button variant="outline" className="min-h-11" onClick={() => setLinkFor(row.key)}><Link2 className="h-4 w-4" /><span className="sr-only">Revisar vínculos</span></Button><Button variant="outline" className="min-h-11" onClick={() => setHistoryFor({ key: row.key, description: row.description })}><History className="h-4 w-4" /><span className="sr-only">Histórico</span></Button><Button variant="outline" className="min-h-11 text-destructive" onClick={() => handleArchiveItem(row.key, row.description)}><Archive className="h-4 w-4" /><span className="sr-only">Arquivar</span></Button></div></article>)}</div>
         <table className="hidden w-full table-fixed text-xs md:table">
           <colgroup>

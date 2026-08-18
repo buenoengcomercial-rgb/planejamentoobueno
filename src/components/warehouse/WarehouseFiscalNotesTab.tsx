@@ -539,8 +539,8 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
 
       <Tabs value={group} onValueChange={value => setGroup(value as ViewGroup)}>
         <TabsList className="h-auto w-full justify-start overflow-x-auto p-1">
-          <TabsTrigger value="posted" className="min-h-10 whitespace-nowrap">Lançadas no estoque ({counts.posted})</TabsTrigger>
-          <TabsTrigger value="archived" className="min-h-10 whitespace-nowrap">Arquivadas ({counts.archived})</TabsTrigger>
+          <TabsTrigger value="posted" className="min-h-11 whitespace-nowrap">Lançadas no estoque ({counts.posted})</TabsTrigger>
+          <TabsTrigger value="archived" className="min-h-11 whitespace-nowrap">Arquivadas ({counts.archived})</TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -578,7 +578,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       </Dialog>
 
       <Dialog open={!!selected} onOpenChange={open => !open && requestCloseSelected()}>
-        <DialogContent className="flex max-h-[95dvh] max-w-7xl flex-col overflow-hidden p-0">
+        <DialogContent className="flex max-h-[95dvh] max-w-7xl flex-col overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11">
           {selected && <>
             <DialogHeader className="border-b p-4 pr-12"><div className="flex flex-wrap items-center gap-2"><DialogTitle>{isDraft ? 'Validar nota antes do lançamento' : 'Dados do lançamento'}</DialogTitle><StatusBadge note={selected} />{selected.extractionStatus === 'failed' && <Badge variant="destructive">Leitura incompleta</Badge>}</div><DialogDescription>{isDraft ? 'Confira e corrija os dados. O estoque ainda não foi alterado.' : `${selected.attachments?.length || (selected.attachment ? 1 : 0)} documento(s) original(is) preservado(s) para auditoria`}</DialogDescription></DialogHeader>
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 pb-24">
@@ -651,7 +651,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
               <details className="rounded-md border p-3"><summary className="cursor-pointer font-medium">Mais detalhes</summary><div className="mt-3 grid gap-3 sm:grid-cols-2"><Field label="Frete" type="number" value={String(selected.freightAmount || '')} readOnly={!isDraft} onChange={value => setSelected({ ...selected, freightAmount: Number(value) })} /><Field label="ICMS adicional" type="number" value={String(selected.icmsAmount || '')} readOnly={!isDraft} onChange={value => setSelected({ ...selected, icmsAmount: Number(value) })} /><div className="sm:col-span-2"><label className="mb-1 block text-sm font-medium">Observações</label><Textarea value={selected.notes || ''} readOnly={!isDraft} onChange={event => setSelected({ ...selected, notes: event.target.value })} /></div><div className="text-sm text-muted-foreground sm:col-span-2">Faturas: {selected.invoices?.length || 0}. Total adicional: {money(Number(selected.freightAmount || 0) + Number(selected.icmsAmount || 0))}.</div></div></details>
               {selected.status === 'cancelada' && <div className="rounded-md border p-3 text-sm"><strong>Cancelamento definitivo</strong><br /><strong>Responsável:</strong> {selected.canceledBy || '—'}<br /><strong>Motivo:</strong> {selected.cancellationReason}</div>}
             </div>
-            <div className="sticky bottom-0 flex flex-wrap items-center justify-end gap-2 border-t bg-background p-3 shadow-[0_-4px_12px_rgba(0,0,0,0.08)]">
+            <div className="sticky bottom-0 flex flex-wrap items-center justify-end gap-2 border-t bg-background p-3 shadow-[0_-4px_12px_rgba(0,0,0,0.08)] [&>button]:min-h-11">
               {!isDraft && <Button variant="outline" onClick={() => setSelected(null)}>Fechar</Button>}
               {isDraft && <Button variant="outline" onClick={requestCloseSelected}>Cancelar envio</Button>}
               {isDraft && duplicate && <Button onClick={openDuplicate}>Abrir lançamento existente</Button>}

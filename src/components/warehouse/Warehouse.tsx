@@ -17,6 +17,17 @@ import WarehouseInventoryTab from './WarehouseInventoryTab';
 import WarehouseReportsTab from './WarehouseReportsTab';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
 
+const WAREHOUSE_TABS = [
+  { value: 'notas', label: 'Notas fiscais', icon: ReceiptText },
+  { value: 'estoque', label: 'Materiais', icon: Boxes },
+  { value: 'requisicoes', label: 'Retiradas', icon: ClipboardList },
+  { value: 'movimentos', label: 'Movimentações', icon: ArrowLeftRight },
+  { value: 'inventario', label: 'Inventário', icon: ListChecks },
+  { value: 'equipamentos', label: 'Equipamentos', icon: HardHat },
+  { value: 'painel', label: 'Painel', icon: LayoutDashboard },
+  { value: 'relatorios', label: 'Relatórios', icon: FileBarChart },
+] as const;
+
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
@@ -55,14 +66,16 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
   };
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="space-y-4 p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:p-4">
       <div className="flex flex-wrap items-start gap-3">
-        <WarehouseIcon className="w-5 h-5 text-primary" />
-        <div>
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <WarehouseIcon className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+          <div className="min-w-0">
           <h2 className="text-xl font-bold">Estoque e Almoxarifado</h2>
           <p className="mt-1 text-sm text-muted-foreground">Compras, estoque, retiradas, inventário e equipamentos em um fluxo rastreável.</p>
+          </div>
         </div>
-        <span className="ml-auto text-xs text-muted-foreground">
+        <span className="w-full text-xs text-muted-foreground sm:ml-auto sm:w-auto">
           Abaixo do mínimo: <strong className="text-destructive">{summary.underMinCount}</strong>
           <span className="mx-1.5">·</span>
           Termos abertos: <strong className="text-foreground">{summary.openCustodyCount}</strong>
@@ -70,7 +83,7 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
         {canClearWarehouse && onClearWarehouse && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button type="button" variant="outline" size="sm" className="min-h-10"><Settings2 className="mr-1.5 h-4 w-4" /> Administração</Button>
+              <Button type="button" variant="outline" size="sm" className="min-h-11"><Settings2 className="mr-1.5 h-4 w-4" /> Administração</Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem
@@ -89,15 +102,23 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
       </div>
 
       <Tabs value={tab} onValueChange={setTab} className="w-full">
-        <TabsList className="h-11 w-full justify-start overflow-x-auto bg-muted">
-          <TabsTrigger value="notas" className="text-xs"><ReceiptText className="w-3.5 h-3.5 mr-1" /> Notas fiscais</TabsTrigger>
-          <TabsTrigger value="estoque" className="text-xs"><Boxes className="w-3.5 h-3.5 mr-1" /> Materiais</TabsTrigger>
-          <TabsTrigger value="requisicoes" className="text-xs"><ClipboardList className="w-3.5 h-3.5 mr-1" /> Retiradas</TabsTrigger>
-          <TabsTrigger value="movimentos" className="text-xs"><ArrowLeftRight className="w-3.5 h-3.5 mr-1" /> Movimentações</TabsTrigger>
-          <TabsTrigger value="inventario" className="text-xs"><ListChecks className="w-3.5 h-3.5 mr-1" /> Inventário</TabsTrigger>
-          <TabsTrigger value="equipamentos" className="text-xs"><HardHat className="w-3.5 h-3.5 mr-1" /> Equipamentos</TabsTrigger>
-          <TabsTrigger value="painel" className="text-xs"><LayoutDashboard className="w-3.5 h-3.5 mr-1" /> Painel</TabsTrigger>
-          <TabsTrigger value="relatorios" className="text-xs"><FileBarChart className="w-3.5 h-3.5 mr-1" /> Relatórios</TabsTrigger>
+        <div className="lg:hidden">
+          <label htmlFor="warehouse-mobile-tab" className="mb-1.5 block text-xs font-semibold text-muted-foreground">Área do almoxarifado</label>
+          <select
+            id="warehouse-mobile-tab"
+            className="min-h-11 w-full rounded-md border border-input bg-background px-3 text-base shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            value={tab}
+            onChange={event => setTab(event.target.value)}
+          >
+            {WAREHOUSE_TABS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+        </div>
+        <TabsList className="hidden h-auto min-h-11 w-full justify-start overflow-x-auto bg-muted lg:flex">
+          {WAREHOUSE_TABS.map(({ value, label, icon: Icon }) => (
+            <TabsTrigger key={value} value={value} className="min-h-11 text-xs">
+              <Icon className="mr-1 h-3.5 w-3.5" /> {label}
+            </TabsTrigger>
+          ))}
         </TabsList>
 
         <TabsContent value="painel" className="mt-3">
@@ -141,7 +162,7 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
           }
         }}
       >
-        <DialogContent>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto [&>button]:h-11 [&>button]:w-11 sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><LockKeyhole className="h-5 w-5 text-destructive" /> Acesso exclusivo do proprietário</DialogTitle>
             <DialogDescription>
@@ -152,6 +173,7 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
             <Label htmlFor="warehouse-owner-password">Confirme a senha da sua conta</Label>
             <Input
               id="warehouse-owner-password"
+              className="min-h-11 text-base"
               type="password"
               autoComplete="current-password"
               value={clearPassword}
@@ -166,8 +188,8 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
             <p className="text-xs text-muted-foreground">A senha não é armazenada. A operação ficará registrada na auditoria.</p>
           </div>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setClearDialogOpen(false)} disabled={clearing}>Cancelar</Button>
-            <Button type="button" variant="destructive" onClick={() => void handleClearWarehouse()} disabled={!clearPassword || clearing}>
+            <Button type="button" variant="outline" className="min-h-11" onClick={() => setClearDialogOpen(false)} disabled={clearing}>Cancelar</Button>
+            <Button type="button" variant="destructive" className="min-h-11" onClick={() => void handleClearWarehouse()} disabled={!clearPassword || clearing}>
               {clearing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Confirmar e limpar
             </Button>

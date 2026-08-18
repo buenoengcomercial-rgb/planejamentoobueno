@@ -130,7 +130,7 @@ export default function WarehouseReportsTab({ project }: Props) {
         <div className="text-sm font-semibold leading-tight">{title}</div>
         <div className="mt-1 text-xs leading-snug text-muted-foreground">{description}</div>
       </div>
-      <Button size="sm" variant="outline" className="min-h-10 self-start text-xs" onClick={onExport}>
+      <Button size="sm" variant="outline" className="min-h-11 w-full justify-start text-xs sm:w-auto" onClick={onExport}>
         <Download className="mr-1.5 h-4 w-4" /> {button}
       </Button>
     </div>

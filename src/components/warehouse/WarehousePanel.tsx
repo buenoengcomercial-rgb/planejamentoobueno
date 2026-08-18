@@ -117,7 +117,22 @@ export default function WarehousePanel({ project, onProjectChange, auditActor }:
             Ainda não há notas fiscais aprovadas para montar o custo mensal.
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <>
+            <div className="space-y-2 md:hidden">
+              {monthlyCosts.slice(0, 12).map(row => (
+                <button
+                  key={row.monthKey}
+                  type="button"
+                  className={`min-h-11 w-full rounded-md border p-3 text-left ${selectedMonth?.monthKey === row.monthKey ? 'border-primary bg-primary/5' : 'bg-background'}`}
+                  onClick={() => setSelectedMonthKey(row.monthKey)}
+                >
+                  <div className="flex items-center justify-between gap-2"><span className="font-semibold capitalize">{row.monthLabel}</span><span className="font-semibold tabular-nums">{moneyBR(row.total)}</span></div>
+                  <dl className="mt-2 grid grid-cols-3 gap-2 text-[11px]"><div><dt className="text-muted-foreground">Pago</dt><dd className="font-medium text-success">{moneyBR(row.paid)}</dd></div><div><dt className="text-muted-foreground">Em aberto</dt><dd className="font-medium text-warning">{moneyBR(row.open)}</dd></div><div><dt className="text-muted-foreground">Vencido</dt><dd className={row.overdue > 0 ? 'font-semibold text-destructive' : 'text-muted-foreground'}>{moneyBR(row.overdue)}</dd></div></dl>
+                  <div className="mt-2 text-[11px] text-muted-foreground">{row.invoiceCount} fatura(s) · {row.noteCount} nota(s){row.fallbackCount > 0 ? ` · ${row.fallbackCount} pela emissão` : ''}</div>
+                </button>
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
             <table className="w-full min-w-[720px] text-xs">
               <thead className="text-muted-foreground">
                 <tr>
@@ -162,7 +177,8 @@ export default function WarehousePanel({ project, onProjectChange, auditActor }:
                 ))}
               </tbody>
             </table>
-          </div>
+            </div>
+          </>
         )}
         {selectedMonth && (
           <div className="mt-3 rounded-md border border-border">
@@ -173,7 +189,16 @@ export default function WarehousePanel({ project, onProjectChange, auditActor }:
               </div>
               <div className="text-xs font-semibold tabular-nums">{moneyBR(selectedMonth.total)}</div>
             </div>
-            <div className="overflow-x-auto">
+            <div className="space-y-2 p-2 md:hidden">
+              {selectedMonth.entries.map(entry => (
+                <article key={`${entry.noteId}-${entry.invoiceId}`} className="rounded-md border bg-background p-3 text-sm">
+                  <div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="font-medium leading-snug">{entry.supplierName || '-'}</div><div className="mt-0.5 text-xs text-muted-foreground">CNPJ {entry.supplierCnpj || '-'}</div></div><strong className="shrink-0 tabular-nums">{moneyBR(entry.amount)}</strong></div>
+                  <dl className="mt-3 grid grid-cols-2 gap-2 text-xs"><div><dt className="text-muted-foreground">Fatura</dt><dd>{entry.invoiceNumber || '-'}</dd></div><div><dt className="text-muted-foreground">Referência</dt><dd>{dateBR(entry.referenceDate)}{entry.fallbackFromIssueDate ? ' (emissão)' : ''}</dd></div></dl>
+                  <div className="mt-3"><label className="mb-1 block text-xs font-semibold">Status do pagamento</label><Select value={entry.status} onValueChange={value => updatePaymentStatus(entry.noteId, entry.invoiceId, value as 'aberta' | 'paga')}><SelectTrigger className="min-h-11 text-sm"><SelectValue /></SelectTrigger><SelectContent className="z-50 bg-popover"><SelectItem value="aberta">Aberto</SelectItem><SelectItem value="paga">Pago</SelectItem></SelectContent></Select></div>
+                </article>
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full min-w-[760px] text-xs">
                 <thead className="text-muted-foreground">
                   <tr>
@@ -258,7 +283,7 @@ export default function WarehousePanel({ project, onProjectChange, auditActor }:
             Tudo certo. Nenhum item abaixo do mínimo configurado.
           </div>
         ) : (
-          <table className="w-full text-xs">
+          <><div className="space-y-2 md:hidden">{underMin.map(r => <article key={r.key} className="rounded-md border p-3 text-sm"><div className="font-medium">{r.description}</div><div className="mt-1 text-xs text-muted-foreground">{r.unit}</div><dl className="mt-2 grid grid-cols-2 gap-2"><div><dt className="text-xs text-muted-foreground">Saldo</dt><dd className="font-mono font-semibold text-destructive">{r.balance.toLocaleString('pt-BR')}</dd></div><div><dt className="text-xs text-muted-foreground">Mínimo</dt><dd className="font-mono">{r.minStock?.toLocaleString('pt-BR')}</dd></div></dl></article>)}</div><table className="hidden w-full text-xs md:table">
             <thead className="text-muted-foreground">
               <tr>
                 <th className="text-left p-1">Descrição</th>
@@ -277,7 +302,7 @@ export default function WarehousePanel({ project, onProjectChange, auditActor }:
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></>
         )}
       </div>
 
@@ -303,7 +328,7 @@ export default function WarehousePanel({ project, onProjectChange, auditActor }:
             Ainda não há retirada vinculada a capítulo. Ao registrar uma retirada, selecione o capítulo principal da obra.
           </div>
         ) : (
-          <table className="w-full text-xs">
+          <><div className="space-y-2 md:hidden">{usageByChapter.rows.slice(0, 8).map(row => <article key={row.phaseId} className="rounded-md border p-3 text-sm"><div className="font-medium">{row.chapter}</div><div className="mt-1 text-xs text-muted-foreground">{row.taskCount} tarefa(s) · {row.itemCount} item(ns) · Última saída {row.lastMovementDate ?? '-'}</div><div className="mt-2 text-xs leading-relaxed">{row.items.map(item => `${item.description}: ${item.quantity.toLocaleString('pt-BR')} ${item.unit}`).join(' | ')}</div></article>)}</div><table className="hidden w-full text-xs md:table">
             <thead className="text-muted-foreground">
               <tr>
                 <th className="text-left p-1">Capítulo</th>
@@ -326,7 +351,7 @@ export default function WarehousePanel({ project, onProjectChange, auditActor }:
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></>
         )}
       </div>
     </div>
