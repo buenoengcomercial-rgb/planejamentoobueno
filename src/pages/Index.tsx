@@ -65,6 +65,7 @@ import { supabase } from '@/integrations/supabase/client';
 const UNDO_LIMIT = 20;
 const SAVE_DEBOUNCE_MS = 4000;
 const REMOTE_VERSION_POLL_MS = 15000;
+const REALTIME_FALLBACK_POLL_MS = 15000;
 const UI_SESSION_VERSION = 1;
 const APP_UI_SESSION_KEY = 'obraplanner:ui-session';
 const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse'];
@@ -170,6 +171,7 @@ export default function Index() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [currentProjectUpdatedAt, setCurrentProjectUpdatedAt] = useState<string | null>(null);
   const [lastCloudConfirmedAt, setLastCloudConfirmedAt] = useState<string | null>(null);
+  const [remoteUpdateAt, setRemoteUpdateAt] = useState<string | null>(null);
   const [draftRecovery, setDraftRecovery] = useState<DraftRecoveryState | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -205,6 +207,9 @@ export default function Index() {
   const conflictDetectedRef = useRef(false);
   const remoteCheckInFlightRef = useRef(false);
   const realtimeRefreshTimerRef = useRef<number | null>(null);
+  const lastLocalSaveAtRef = useRef(0);
+  const realtimeConnectedRef = useRef(false);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
   const mainScrollRef = useRef<HTMLElement | null>(null);
   const restoredUiSessionRef = useRef<string | null>(null);
   const uiSessionSaverReadyRef = useRef<string | null>(null);
@@ -376,6 +381,7 @@ export default function Index() {
     const request = saveQueueRef.current.catch(() => undefined).then(async () => {
       const updatedAt = await upsertCloudProject(projectToSave, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined);
       conflictDetectedRef.current = false;
+      lastLocalSaveAtRef.current = Date.now();
       currentProjectUpdatedAtRef.current = updatedAt;
       lastSavedProjectJsonRef.current = nextJson;
       setCurrentProjectUpdatedAt(updatedAt);
@@ -598,32 +604,65 @@ export default function Index() {
     const current = rawProjectRef.current;
     if (!current || !initialLoadRef.current || remoteCheckInFlightRef.current) return;
     if (saveTimerRef.current || inFlightSaveRef.current) {
+      if (realtimeRefreshTimerRef.current) window.clearTimeout(realtimeRefreshTimerRef.current);
       realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(), 1200);
       return;
     }
     remoteCheckInFlightRef.current = true;
     try {
-      const latestLocal = rawProjectRef.current;
+      let latestLocal = rawProjectRef.current;
       if (!latestLocal || latestLocal.id !== current.id) return;
+
+      // Existe rascunho local: tentar gravar antes de trazer a versão remota,
+      // para que a atualização de outro usuário seja aplicada sem perder o que está na tela.
       if (projectHasLocalChanges(latestLocal, lastSavedProjectJsonRef.current)) {
-        await handleCloudConflict(latestLocal);
-        return;
+        if (!orgId || !canPersistProject) {
+          await handleCloudConflict(latestLocal);
+          return;
+        }
+        try {
+          await persistProject(latestLocal, orgId);
+        } catch (error) {
+          if (error instanceof CloudProjectConflictError) {
+            await handleCloudConflict(latestLocal);
+          } else {
+            throw error;
+          }
+          return;
+        }
+        latestLocal = rawProjectRef.current;
+        if (!latestLocal || latestLocal.id !== current.id) return;
       }
+
       const record = await loadCloudProjectRecord(current.id);
       if (!record) return;
+      const remoteJson = serializeProject(record.project);
+      if (!record.repairApplied && remoteJson === lastSavedProjectJsonRef.current) {
+        currentProjectUpdatedAtRef.current = record.updatedAt;
+        setCurrentProjectUpdatedAt(record.updatedAt);
+        setLastCloudConfirmedAt(new Date().toISOString());
+        setSaveStatus('saved');
+        return;
+      }
       replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false);
+      setRemoteUpdateAt(new Date().toISOString());
+      toast.info('Atualizado com as alterações de outro usuário.');
     } catch (error) {
       console.warn('Falha ao aplicar atualização em tempo real.', error);
       setSaveStatus(navigator.onLine ? 'error' : 'offline');
     } finally {
       remoteCheckInFlightRef.current = false;
     }
-  }, [handleCloudConflict, replaceProjectWithoutAutoSave]);
+  }, [canPersistProject, handleCloudConflict, orgId, persistProject, replaceProjectWithoutAutoSave]);
 
   useEffect(() => {
     const projectId = rawProject?.id;
     if (!projectId || bootLoading) return;
-    const queueRefresh = () => {
+    const queueRefresh = (payload?: { new?: Record<string, unknown> | null }) => {
+      // Ignora o eco da própria gravação (mesma versão que já está carregada aqui).
+      const remoteUpdatedAt = typeof payload?.new?.updated_at === 'string' ? payload.new.updated_at : null;
+      if (remoteUpdatedAt && remoteUpdatedAt === currentProjectUpdatedAtRef.current) return;
+      if (Date.now() - lastLocalSaveAtRef.current < 800) return;
       if (realtimeRefreshTimerRef.current) window.clearTimeout(realtimeRefreshTimerRef.current);
       realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(), 1200);
     };
@@ -642,19 +681,46 @@ export default function Index() {
         event: '*', schema: 'public', table, filter: `project_id=eq.${projectId}`,
       }, queueRefresh);
     });
+    let fallbackTimer: number | null = null;
+    const stopFallback = () => {
+      if (fallbackTimer) { window.clearInterval(fallbackTimer); fallbackTimer = null; }
+    };
+    const startFallback = () => {
+      if (fallbackTimer) return;
+      fallbackTimer = window.setInterval(() => void checkRemoteProjectVersion(), REALTIME_FALLBACK_POLL_MS);
+    };
     channel.subscribe(status => {
-      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+      const connected = status === 'SUBSCRIBED';
+      realtimeConnectedRef.current = connected;
+      setRealtimeConnected(connected);
+      if (connected) {
+        stopFallback();
+        void checkRemoteProjectVersion();
+        return;
+      }
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
         console.warn(`[realtime] Canal da obra ${projectId} indisponível: ${status}`);
+        startFallback();
       }
     });
+    const handleVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (realtimeConnectedRef.current) void checkRemoteProjectVersion();
+      else void channel.subscribe();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      stopFallback();
+      realtimeConnectedRef.current = false;
+      setRealtimeConnected(false);
       if (realtimeRefreshTimerRef.current) {
         window.clearTimeout(realtimeRefreshTimerRef.current);
         realtimeRefreshTimerRef.current = null;
       }
       void supabase.removeChannel(channel);
     };
-  }, [bootLoading, rawProject?.id, refreshProjectFromRealtime]);
+  }, [bootLoading, checkRemoteProjectVersion, rawProject?.id, refreshProjectFromRealtime]);
 
   useEffect(() => {
     if (!rawProject?.id || bootLoading) return;
@@ -1205,7 +1271,7 @@ export default function Index() {
 
       <main ref={mainScrollRef} className="relative min-h-screen flex-1 overflow-y-auto pt-14 lg:pt-0">
         <div className="absolute top-3 right-4 z-20">
-          <SaveStatusIndicator status={saveStatus} confirmedAt={lastCloudConfirmedAt} projectId={rawProject.id} />
+          <SaveStatusIndicator status={saveStatus} confirmedAt={lastCloudConfirmedAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} />
         </div>
         {draftRecovery && !draftRecovery.open && (
           <div role="alert" className="mx-3 mt-14 flex flex-col gap-3 rounded-xl border border-warning/40 bg-warning/10 p-3 text-sm sm:mx-4 sm:flex-row sm:items-center lg:mt-12">
