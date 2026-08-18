@@ -642,6 +642,7 @@ export default function Index() {
       }
       replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false);
       setRemoteUpdateAt(new Date().toISOString());
+      toast.info('Atualizado com as alterações de outro usuário.');
     } catch (error) {
       console.warn('Falha ao aplicar atualização em tempo real.', error);
       setSaveStatus(navigator.onLine ? 'error' : 'offline');
