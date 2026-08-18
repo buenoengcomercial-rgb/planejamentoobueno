@@ -165,11 +165,15 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
       >
         <DialogContent className="warehouse-ui max-h-[calc(100dvh-2rem)] overflow-y-auto [&>button]:h-11 [&>button]:w-11 sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><LockKeyhole className="h-5 w-5 text-destructive" /> Acesso exclusivo do proprietário</DialogTitle>
+            <DialogTitle className="flex items-center gap-2"><LockKeyhole className="h-5 w-5 text-destructive" /> Limpeza dos dados de teste</DialogTitle>
             <DialogDescription>
-              Esta operação limpa entradas, retiradas, notas fiscais, materiais e configurações do almoxarifado. Equipamentos e os demais módulos da obra serão preservados.
+              Apaga notas fiscais, materiais, movimentações, retiradas, inventários e cautelas do Almoxarifado.
             </DialogDescription>
           </DialogHeader>
+          <div className="rounded-lg border border-success/35 bg-success/10 p-3 text-sm">
+            <div className="flex items-center gap-2 font-bold text-success"><HardHat className="h-5 w-5" /> Equipamentos serão preservados</div>
+            <p className="mt-1 text-muted-foreground">Cadastro, código, patrimônio, fotos e identificação não serão apagados. Equipamentos em cautelas de teste voltarão para Disponível; itens em manutenção ou arquivados manterão seu estado.</p>
+          </div>
           <div className="space-y-2">
             <Label htmlFor="warehouse-owner-password">Confirme a senha da sua conta</Label>
             <Input
@@ -186,7 +190,7 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
               autoFocus
             />
             {clearError && <p role="alert" className="text-sm text-destructive">{clearError}</p>}
-            <p className="text-xs text-muted-foreground">A senha não é armazenada. A operação ficará registrada na auditoria.</p>
+            <p className="text-xs text-muted-foreground">A senha não é armazenada. A limpeza ficará registrada na auditoria.</p>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" className="min-h-11" onClick={() => setClearDialogOpen(false)} disabled={clearing}>Cancelar</Button>

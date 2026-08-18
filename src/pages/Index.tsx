@@ -667,7 +667,7 @@ export default function Index() {
     replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied);
     undoStacksRef.current.warehouse = [];
     setUndoVersion(value => value + 1);
-    toast.success('Almoxarifado limpo com segurança. Equipamentos foram preservados.');
+    toast.success('Dados de teste removidos. Equipamentos foram preservados e liberados das cautelas apagadas.');
   }, [flushPendingSave, rawProject, replaceProjectWithoutAutoSave, role]);
 
   const handleUndo = useCallback((view: AppView) => {

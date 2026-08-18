@@ -53,11 +53,15 @@ describe('controle de acesso à limpeza do almoxarifado', () => {
     fireEvent.keyDown(administration, { key: 'Enter', code: 'Enter' });
     fireEvent.click(await screen.findByRole('menuitem', { name: /Limpar almoxarifado/i }));
 
+    expect(await screen.findByText('Equipamentos serão preservados')).toBeInTheDocument();
+    expect(screen.getByText(/Cadastro, código, patrimônio, fotos e identificação não serão apagados/i)).toBeInTheDocument();
+    expect(screen.getByText(/Equipamentos em cautelas de teste voltarão para Disponível/i)).toBeInTheDocument();
+
     const password = await screen.findByLabelText('Confirme a senha da sua conta');
     fireEvent.change(password, { target: { value: 'senha-segura' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirmar e limpar' }));
 
     await waitFor(() => expect(onClearWarehouse).toHaveBeenCalledWith('senha-segura'));
-    await waitFor(() => expect(screen.queryByText('Acesso exclusivo do proprietário')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Limpeza dos dados de teste')).not.toBeInTheDocument());
   });
 });
