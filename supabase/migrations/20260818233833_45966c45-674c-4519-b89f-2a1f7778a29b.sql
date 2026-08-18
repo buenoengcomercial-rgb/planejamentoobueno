@@ -1,0 +1,16 @@
+ALTER TABLE public.projects REPLICA IDENTITY FULL;
+ALTER TABLE public.warehouse_movements REPLICA IDENTITY FULL;
+ALTER TABLE public.warehouse_requisitions REPLICA IDENTITY FULL;
+ALTER TABLE public.warehouse_custody REPLICA IDENTITY FULL;
+ALTER TABLE public.daily_reports REPLICA IDENTITY FULL;
+ALTER TABLE public.task_daily_logs REPLICA IDENTITY FULL;
+ALTER TABLE public.measurements REPLICA IDENTITY FULL;
+ALTER TABLE public.additives REPLICA IDENTITY FULL;
+ALTER TABLE public.audit_logs REPLICA IDENTITY FULL;
+ALTER TABLE public.stock_movements REPLICA IDENTITY FULL;
+ALTER TABLE public.material_price_history REPLICA IDENTITY FULL;
+ALTER TABLE public.budget_items REPLICA IDENTITY FULL;
+ALTER TABLE public.material_comparisons REPLICA IDENTITY FULL;
+ALTER TABLE public.analytic_compositions REPLICA IDENTITY FULL;
+ALTER TABLE public.eap_chapters REPLICA IDENTITY FULL;
+ALTER TABLE public.tasks REPLICA IDENTITY FULL;
