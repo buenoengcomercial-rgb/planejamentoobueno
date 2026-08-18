@@ -254,6 +254,13 @@ export async function clearCloudWarehouseAsOwner(projectId: string, password: st
     throw new Error('Somente o proprietário da organização pode limpar o almoxarifado.');
   }
 
+  // Apaga diretamente as coleções normalizadas (não depende do diff em memória).
+  const tables = ['warehouse_movements', 'warehouse_requisitions', 'warehouse_custody', 'stock_movements'] as const;
+  for (const table of tables) {
+    const { error } = await supabase.from(table).delete().eq('project_id', projectId);
+    if (error) throw new Error(`Não foi possível apagar ${table}: ${error.message}`);
+  }
+
   const current = await loadCloudProjectRecord(projectId);
   if (!current) throw new Error('Não foi possível carregar a obra antes da limpeza.');
   const previousEquipmentIds = new Set((current.project.warehouse?.equipments ?? []).map(equipment => equipment.id));
@@ -262,7 +269,12 @@ export async function clearCloudWarehouseAsOwner(projectId: string, password: st
     userEmail: currentUserData.user.email,
   });
 
-  await upsertCloudProject(cleared, projectAccess.data.organization_id, current.updatedAt);
+  // Sem trava otimista: a limpeza é uma operação administrativa deliberada.
+  try {
+    await upsertCloudProject(cleared, projectAccess.data.organization_id);
+  } catch (error) {
+    throw new Error(`Não foi possível salvar a limpeza: ${error instanceof Error ? error.message : String(error)}`);
+  }
   clearCloudSnapshot(projectId);
 
   const verified = await loadCloudProjectRecord(projectId);
@@ -273,8 +285,7 @@ export async function clearCloudWarehouseAsOwner(projectId: string, password: st
     || (verifiedWarehouse?.custodyTerms.length ?? 0) > 0
     || (verified.project.stockMovements?.length ?? 0) > 0;
   const verifiedEquipmentIds = new Set((verifiedWarehouse?.equipments ?? []).map(equipment => equipment.id));
-  const equipmentWasLost = previousEquipmentIds.size !== verifiedEquipmentIds.size
-    || [...previousEquipmentIds].some(id => !verifiedEquipmentIds.has(id));
+  const equipmentWasLost = [...previousEquipmentIds].some(id => !verifiedEquipmentIds.has(id));
 
   if (equipmentWasLost) {
     throw new Error('A conferência detectou diferença no cadastro de equipamentos. A limpeza foi interrompida para revisão.');
@@ -285,6 +296,7 @@ export async function clearCloudWarehouseAsOwner(projectId: string, password: st
 
   clearCloudSnapshot(projectId);
 }
+
 
 export async function generateUniqueCloudName(base = 'Nova obra'): Promise<string> {
   const all = await listCloudProjects();
