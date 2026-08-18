@@ -23,7 +23,16 @@ Ou seja: a obra que você está vendo (CPA OBRA) já está limpa — só tem os 
 
 Se você quiser que a CPA OBRA também passe pela limpeza (mesmo já estando vazia), ou que eu inclua as duas obras, me avise no comentário da aprovação.
 
+## Correções de tipagem pendentes (build)
+
+O projeto está com erros de TypeScript pré-existentes que também serão corrigidos, todos triviais e sem mudança de comportamento:
+
+- `WarehouseInventoryTab.tsx`: `status.replaceAll('_', ' ')` não é aceito no alvo de compilação atual — trocar por `.split('_').join(' ')`.
+- `warehouseReset.ts`: tipar o `metadata` da auditoria com índice de string (`{ ...summary }` como `Record<string, unknown>`).
+- `warehouseReset.test.ts` e `WarehouseRequisitionsTab.test.tsx`: ajustar os objetos de teste aos tipos atuais (`StockMovement` exige `itemDescription`, `itemUnit`, `createdAt`; nota fiscal usa o campo correto de número; `TeamDefinition` sem `id`).
+
 ## Detalhes técnicos
+
 
 - A limpeza é uma operação de dados, feita diretamente no backend (Lovable Cloud) para esta obra: `DELETE` nas tabelas normalizadas `warehouse_movements`, `warehouse_requisitions`, `warehouse_custody`, `stock_movements` e remoção das coleções `items`, `fiscalNotes`, `materialLinks`, `inventorySessions`, `locations` de `projects.data_json->warehouse`, mantendo a chave `equipments` e normalizando o status dos equipamentos liberados.
 - Nada de schema muda: sem migrações, sem alteração de tabelas, políticas ou telas.
