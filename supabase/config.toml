@@ -5,3 +5,6 @@ verify_jwt = true
 
 [functions.read-fiscal-note]
 verify_jwt = true
+
+[functions.read-equipment]
+verify_jwt = true

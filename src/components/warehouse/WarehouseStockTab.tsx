@@ -1,33 +1,55 @@
 import { useMemo, useState } from 'react';
-import type { Project } from '@/types/project';
-import { computeWarehouseRows, createManualWarehouseItem, getMaterialPurchaseHistory, removeWarehouseItem, upsertItemConfig } from '@/lib/warehouse';
+import type { Project, WarehouseAuditActor } from '@/types/project';
+import {
+  computeWarehouseRows,
+  createManualWarehouseItem,
+  getMaterialPurchaseHistory,
+  removeWarehouseItem,
+  unlinkWarehouseProjectMaterial,
+  upsertItemConfig,
+  upsertWarehouseProjectMaterialLink,
+} from '@/lib/warehouse';
+import { suggestMaterialsFromProject } from '@/lib/materialComparisons';
 import { downloadWarehouseAttachment, openWarehouseAttachment, warehouseAttachmentErrorMessage } from '@/lib/warehouseAttachments';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Archive, Download, Eye, History, Plus, Search, Trash2, X } from 'lucide-react';
+import { Archive, Download, Eye, History, Link2, Plus, Search, Unlink, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 
-interface Props { project: Project; onProjectChange: (next: Project) => void; }
+interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; }
 
-export default function WarehouseStockTab({ project, onProjectChange }: Props) {
+export default function WarehouseStockTab({ project, onProjectChange, auditActor }: Props) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [showManualForm, setShowManualForm] = useState(false);
+  const [linkFilter, setLinkFilter] = useState<'all' | 'linked' | 'pending' | 'unplanned'>('all');
+  const [purchaseGroupFilter, setPurchaseGroupFilter] = useState('all');
+  const [lowOnly, setLowOnly] = useState(false);
+  const [zeroOnly, setZeroOnly] = useState(false);
   const [manualForm, setManualForm] = useState({ code: '', description: '', unit: '' });
   const [historyFor, setHistoryFor] = useState<{ key: string; description: string } | null>(null);
+  const [linkFor, setLinkFor] = useState<string | null>(null);
   const rows = useMemo(
     () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true, includeArchived: showArchived }),
     [project, showArchived],
   );
   const archivedCount = project.warehouse?.items.filter(item => !!item.archivedAt).length ?? 0;
+  const purchaseGroups = useMemo(() => (project.materialComparisons ?? [])
+    .map(comparison => ({ id: comparison.id, name: comparison.name }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')), [project.materialComparisons]);
+  const projectMaterials = useMemo(() => suggestMaterialsFromProject(project).filter(material => material.quantity > 0), [project]);
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(r => r.description.toLowerCase().includes(q) || (r.code ?? '').toLowerCase().includes(q));
-  }, [rows, search]);
+    return rows.filter(r => (!q || r.description.toLowerCase().includes(q) || (r.code ?? '').toLowerCase().includes(q))
+      && (linkFilter === 'all' || r.linkStatus === linkFilter)
+      && (purchaseGroupFilter === 'all' || r.purchaseGroupId === purchaseGroupFilter)
+      && (!lowOnly || r.underMin)
+      && (!zeroOnly || r.balance === 0));
+  }, [linkFilter, lowOnly, purchaseGroupFilter, rows, search, zeroOnly]);
 
   const setMin = (key: string, code: string | undefined, description: string, unit: string, min: number) => {
     onProjectChange(upsertItemConfig(project, { key, code, description, unit, minStock: Number.isFinite(min) ? min : undefined }));
@@ -40,17 +62,17 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
     setShowManualForm(false);
   };
 
-  const handleDeleteItem = (key: string, description: string) => {
+  const handleArchiveItem = (key: string, description: string) => {
     confirm(
       {
-        title: 'Excluir material?',
+        title: 'Arquivar e ocultar material?',
         description: (
           <div className="space-y-2">
-            <p>O material <strong>{description}</strong> será removido da aba Materiais.</p>
-            <p className="font-medium">Também serão removidas movimentações e vínculos do almoxarifado ligados a este material.</p>
+            <p>O material <strong>{description}</strong> será ocultado das operações correntes.</p>
+            <p className="font-medium">Saldo, notas, retiradas, vínculos e histórico permanecerão preservados para auditoria.</p>
           </div>
         ),
-        confirmLabel: 'Excluir material',
+        confirmLabel: 'Arquivar e ocultar',
       },
       () => onProjectChange(removeWarehouseItem(project, key)),
     );
@@ -58,17 +80,21 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
 
   return (
     <div className="bg-card border border-border rounded-md overflow-hidden">
-      <div className="p-2 border-b border-border bg-muted/30 relative flex items-center gap-2">
-        <div className="relative flex-1 max-w-sm">
+      <div className="relative flex flex-wrap items-center gap-2 border-b border-border bg-muted/30 p-2">
+        <div className="relative w-full sm:max-w-sm sm:flex-1">
           <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar insumo por descrição ou código..." className="h-8 pl-7 text-xs" />
+          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar insumo por descrição ou código..." className="min-h-11 pl-8 text-sm" />
         </div>
-        <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setShowManualForm(value => !value)}>
+        <select className="min-h-11 rounded border bg-background px-2 text-sm" value={linkFilter} onChange={event => setLinkFilter(event.target.value as typeof linkFilter)} aria-label="Filtrar por vínculo"><option value="all">Todos os vínculos</option><option value="linked">Vinculados</option><option value="pending">Vínculo pendente</option><option value="unplanned">Não previstos</option></select>
+        <select className="min-h-11 max-w-full rounded border bg-background px-2 text-sm" value={purchaseGroupFilter} onChange={event => setPurchaseGroupFilter(event.target.value)} aria-label="Filtrar por grupo de compra"><option value="all">Todos os grupos</option>{purchaseGroups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
+        <Button size="sm" variant={lowOnly ? 'secondary' : 'outline'} className="min-h-11 text-xs" onClick={() => setLowOnly(value => !value)}>Estoque baixo</Button>
+        <Button size="sm" variant={zeroOnly ? 'secondary' : 'outline'} className="min-h-11 text-xs" onClick={() => setZeroOnly(value => !value)}>Saldo zerado</Button>
+        <Button size="sm" variant="outline" className="min-h-11 text-xs" onClick={() => setShowManualForm(value => !value)}>
           {showManualForm ? <X className="w-3.5 h-3.5 mr-1" /> : <Plus className="w-3.5 h-3.5 mr-1" />}
           Novo item avulso
         </Button>
         {archivedCount > 0 && (
-          <Button size="sm" variant={showArchived ? 'secondary' : 'outline'} className="h-8 text-xs" onClick={() => setShowArchived(value => !value)}>
+          <Button size="sm" variant={showArchived ? 'secondary' : 'outline'} className="min-h-11 text-xs" onClick={() => setShowArchived(value => !value)}>
             <Archive className="mr-1 h-3.5 w-3.5" />
             {showArchived ? 'Ocultar arquivados' : `Exibir arquivados (${archivedCount})`}
           </Button>
@@ -104,7 +130,8 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
         </div>
       )}
       <div className="max-h-[calc(100vh-300px)] overflow-auto">
-        <table className="w-full text-xs table-fixed">
+        <div className="space-y-2 p-2 md:hidden">{filtered.map(row => <article key={row.key} className={`space-y-3 rounded-md border p-3 ${row.underMin ? 'border-warning/50 bg-warning/5' : ''}`}><div className="flex items-start justify-between gap-2"><div><div className="text-xs text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</div><div className="font-semibold">{row.description}</div></div><Badge variant="outline" className={row.linkStatus === 'linked' ? 'text-success' : row.linkStatus === 'unplanned' ? 'text-warning' : ''}>{row.linkStatus === 'linked' ? 'Vinculado' : row.linkStatus === 'unplanned' ? 'Não previsto' : 'Vínculo pendente'}</Badge></div><dl className="grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Saldo disponível</dt><dd className="font-semibold text-primary">{row.balance.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Estoque mínimo</dt><dd>{row.minStock?.toLocaleString('pt-BR') ?? '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Custo médio</dt><dd>{row.valuationIncomplete || row.averageUnitCost == null ? 'Cálculo incompleto' : row.averageUnitCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</dd></div><div><dt className="text-xs text-muted-foreground">Último movimento</dt><dd>{row.lastMovementDate || '—'}</dd></div></dl><div className="grid grid-cols-3 gap-2"><Button variant="outline" className="min-h-11" onClick={() => setLinkFor(row.key)}><Link2 className="h-4 w-4" /><span className="sr-only">Revisar vínculos</span></Button><Button variant="outline" className="min-h-11" onClick={() => setHistoryFor({ key: row.key, description: row.description })}><History className="h-4 w-4" /><span className="sr-only">Histórico</span></Button><Button variant="outline" className="min-h-11 text-destructive" onClick={() => handleArchiveItem(row.key, row.description)}><Archive className="h-4 w-4" /><span className="sr-only">Arquivar</span></Button></div></article>)}</div>
+        <table className="hidden w-full table-fixed text-xs md:table">
           <colgroup>
             <col className="w-24" />
             <col />
@@ -117,6 +144,8 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
             <col className="w-24" />
             <col className="w-24" />
             <col className="w-24" />
+            <col className="w-28" />
+            <col className="w-36" />
             <col className="w-12" />
             <col className="w-12" />
           </colgroup>
@@ -133,8 +162,10 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
               <th className="p-2 text-right font-semibold bg-primary/5">Saldo</th>
               <th className="p-2 text-right font-semibold bg-warning/5">Mínimo</th>
               <th className="p-2 text-left font-semibold">Último mov.</th>
+              <th className="p-2 text-right font-semibold">Custo médio</th>
+              <th className="p-2 text-left font-semibold">Vínculo</th>
               <th className="p-2 text-center font-semibold">Hist.</th>
-              <th className="p-2 text-center font-semibold">Excluir</th>
+              <th className="p-2 text-center font-semibold">Arquivar</th>
             </tr>
           </thead>
           <tbody>
@@ -160,6 +191,8 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
                   />
                 </td>
                 <td className="p-1.5 text-[10px] text-muted-foreground">{r.lastMovementDate ?? '—'}</td>
+                <td className="p-1.5 text-right font-mono text-[11px]">{r.valuationIncomplete || r.averageUnitCost == null ? 'Cálculo incompleto' : r.averageUnitCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
+                <td className="p-1.5"><Button size="sm" variant="ghost" className="h-auto min-h-8 justify-start gap-1 px-1" onClick={() => setLinkFor(r.key)}><Link2 className="h-3.5 w-3.5" /><Badge variant="outline" className={r.linkStatus === 'linked' ? 'border-success/30 text-success' : r.linkStatus === 'unplanned' ? 'border-warning/30 text-warning' : ''}>{r.linkStatus === 'linked' ? `${r.projectLinks.length} vinculado(s)` : r.linkStatus === 'unplanned' ? 'Não previsto' : 'Pendente'}</Badge></Button></td>
                 <td className="p-1.5 text-center">
                   <Button size="icon" variant="ghost" className="h-7 w-7" title="Histórico de compras"
                     onClick={() => setHistoryFor({ key: r.key, description: r.description })}>
@@ -171,25 +204,85 @@ export default function WarehouseStockTab({ project, onProjectChange }: Props) {
                     size="icon"
                     variant="ghost"
                     className="h-7 w-7 text-destructive hover:text-destructive"
-                    title="Excluir material"
-                    onClick={() => handleDeleteItem(r.key, r.description)}
+                    title="Arquivar e ocultar material"
+                    onClick={() => handleArchiveItem(r.key, r.description)}
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    <Archive className="w-3.5 h-3.5" />
                   </Button>
                 </td>
               </tr>
             ))}
             {filtered.length === 0 && (
-              <tr><td colSpan={13} className="p-8 text-center text-muted-foreground italic">Nenhum item encontrado.</td></tr>
+              <tr><td colSpan={15} className="p-8 text-center text-muted-foreground italic">Nenhum item encontrado.</td></tr>
             )}
           </tbody>
         </table>
       </div>
 
+      <MaterialLinkDialog
+        key={linkFor ?? 'closed'}
+        project={project}
+        itemKey={linkFor}
+        projectMaterials={projectMaterials}
+        auditActor={auditActor}
+        onProjectChange={onProjectChange}
+        onClose={() => setLinkFor(null)}
+      />
       <PurchaseHistoryDialog project={project} target={historyFor} onClose={() => setHistoryFor(null)} />
       {confirmDialog}
     </div>
   );
+}
+
+function MaterialLinkDialog({ project, itemKey, projectMaterials, auditActor, onProjectChange, onClose }: {
+  project: Project;
+  itemKey: string | null;
+  projectMaterials: ReturnType<typeof suggestMaterialsFromProject>;
+  auditActor?: WarehouseAuditActor;
+  onProjectChange: (project: Project) => void;
+  onClose: () => void;
+}) {
+  const row = useMemo(() => itemKey ? computeWarehouseRows(project, { includeManual: true, includeArchived: true }).find(candidate => candidate.key === itemKey) : undefined, [itemKey, project]);
+  const [projectMaterialKey, setProjectMaterialKey] = useState('');
+  const [conversionFactor, setConversionFactor] = useState('1');
+  const [unplannedReason, setUnplannedReason] = useState(row?.unplannedReason || '');
+  const selectedMaterial = projectMaterials.find(material => material.key === projectMaterialKey);
+
+  const addLink = () => {
+    if (!row || !selectedMaterial) return toast.error('Selecione um insumo previsto.');
+    const factor = Number(conversionFactor.replace(',', '.'));
+    try {
+      onProjectChange(upsertWarehouseProjectMaterialLink(project, {
+        warehouseItemKey: row.key,
+        projectMaterialKey: selectedMaterial.key,
+        projectMaterialCode: selectedMaterial.code,
+        projectMaterialDescription: selectedMaterial.description,
+        projectMaterialUnit: selectedMaterial.unit,
+        conversionFactor: factor,
+        source: 'manual',
+      }, auditActor));
+      setProjectMaterialKey('');
+      setConversionFactor('1');
+      toast.success('Vínculo confirmado. O previsto foi incorporado ao material canônico.');
+    } catch (error) { toast.error((error as Error).message); }
+  };
+
+  const markUnplanned = () => {
+    if (!row || !unplannedReason.trim()) return toast.error('Informe a justificativa do material não previsto.');
+    onProjectChange(upsertItemConfig(project, {
+      key: row.key,
+      code: row.code,
+      description: row.description,
+      unit: row.unit,
+      manualItem: row.manualItem,
+      minStock: row.minStock,
+      purchaseGroupId: row.purchaseGroupId,
+      unplannedReason: unplannedReason.trim(),
+    }));
+    toast.success('Material classificado como não previsto.');
+  };
+
+  return <Dialog open={!!itemKey} onOpenChange={open => !open && onClose()}><DialogContent className="max-w-3xl"><DialogHeader><DialogTitle>Revisar vínculos do material</DialogTitle><DialogDescription>{row?.description} · Um material físico pode representar mais de um insumo previsto.</DialogDescription></DialogHeader>{row && <div className="space-y-4"><div className="grid gap-3 rounded-md border p-3 md:grid-cols-[1fr_130px_auto]"><div><label className="mb-1 block text-xs font-semibold">Insumo previsto</label><select className="min-h-11 w-full rounded-md border bg-background px-3 text-sm" value={projectMaterialKey} onChange={event => { const key = event.target.value; setProjectMaterialKey(key); const material = projectMaterials.find(candidate => candidate.key === key); setConversionFactor(material && material.unit.trim().toLowerCase() === row.unit.trim().toLowerCase() ? '1' : ''); }}><option value="">Selecionar no orçamento</option>{projectMaterials.map(material => <option key={material.key} value={material.key}>{material.code ? `${material.code} · ` : ''}{material.description} ({material.quantity} {material.unit})</option>)}</select></div><div><label className="mb-1 block text-xs font-semibold">Conversão</label><Input className="min-h-11 text-center" value={conversionFactor} onChange={event => setConversionFactor(event.target.value)} placeholder="Fator" /></div><Button className="min-h-11 self-end" onClick={addLink}><Link2 className="mr-2 h-4 w-4" />Vincular</Button></div><div><h4 className="mb-2 text-sm font-semibold">Vínculos confirmados</h4>{row.projectLinks.map(link => <div key={link.id} className="flex min-h-11 items-center gap-2 border-t py-2"><span className="min-w-0 flex-1 text-sm">{link.projectMaterialCode ? `${link.projectMaterialCode} · ` : ''}{link.projectMaterialDescription} ({link.projectMaterialUnit})</span><span className="text-xs text-muted-foreground">fator {link.conversionFactor}</span><Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => onProjectChange(unlinkWarehouseProjectMaterial(project, link.id, auditActor))} aria-label={`Desvincular ${link.projectMaterialDescription}`}><Unlink className="h-4 w-4" /></Button></div>)}{!row.projectLinks.length && <div className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">Nenhum vínculo confirmado.</div>}</div>{!row.projectLinks.length && <div className="rounded-md border border-warning/30 bg-warning/5 p-3"><label className="mb-1 block text-xs font-semibold">Ou classifique como material não previsto</label><div className="flex gap-2"><Input className="min-h-11" value={unplannedReason} onChange={event => setUnplannedReason(event.target.value)} placeholder="Justificativa obrigatória" /><Button variant="outline" className="min-h-11" onClick={markUnplanned}>Confirmar</Button></div></div>}</div>}<div className="flex justify-end"><Button variant="outline" onClick={onClose}>Fechar</Button></div></DialogContent></Dialog>;
 }
 
 function moneyBR(value?: number) {

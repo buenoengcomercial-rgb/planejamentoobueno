@@ -39,13 +39,18 @@ describe('identidade de auditoria do almoxarifado', () => {
   });
 
   it('separa solicitante e almoxarife dos usuários que criaram e entregaram a requisição', () => {
-    const created = createRequisition(project(), {
+    const stocked = addMovement(project(), {
+      type: 'entrada', date: '2026-08-17', itemKey: 'material-1', itemDescription: 'Material teste', itemUnit: 'UN', quantity: 2, unitPrice: 10,
+    }, alice);
+    const created = createRequisition(stocked, {
       date: '2026-08-17', requesterName: 'Solicitante da obra', warehouseOperator: 'Almoxarife físico',
+      receiverName: 'Solicitante da obra', chapterId: 'chapter-1', teamId: 'alpha', signatureReceiver: 'assinatura',
+      deliveryAttachments: [{ id: 'foto-1', name: 'entrega.jpg', dataUrl: 'data:image/jpeg;base64,AA==', uploadedAt: '2026-08-17T08:00:00.000Z' }],
       items: [{ itemKey: 'material-1', description: 'Material teste', unit: 'UN', quantity: 1 }],
     }, alice);
     const delivered = deliverRequisition(created.project, created.requisition.id, { warehouseOperator: 'Almoxarife físico', actor: bruno });
-    expect(delivered.warehouse!.requisitions[0]).toMatchObject({ createdBy: alice, updatedBy: bruno, requesterName: 'Solicitante da obra', warehouseOperator: 'Almoxarife físico' });
-    expect(delivered.warehouse!.movements[0]).toMatchObject({ createdBy: bruno, responsible: 'Almoxarife físico' });
+    expect(delivered.warehouse!.requisitions[0]).toMatchObject({ createdBy: alice, updatedBy: bruno, requesterName: 'Solicitante da obra', warehouseOperator: 'Bruno' });
+    expect(delivered.warehouse!.movements.find(movement => movement.type === 'retirada')).toMatchObject({ createdBy: bruno, responsible: 'Bruno' });
   });
 
   it('mantém quem incluiu a NF e registra o último usuário que alterou o grupo', () => {

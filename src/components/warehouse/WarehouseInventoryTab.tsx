@@ -1,97 +1,102 @@
 import { useMemo, useState } from 'react';
-import type { Project, WarehouseAuditActor } from '@/types/project';
-import { computeWarehouseRows, addMovement } from '@/lib/warehouse';
+import type { Project, WarehouseAuditActor, WarehouseInventorySession } from '@/types/project';
+import {
+  applyInventorySession,
+  cancelInventorySession,
+  closeInventorySession,
+  createInventorySession,
+  ensureWarehouse,
+  setInventoryCount,
+  warehouseActorName,
+} from '@/lib/warehouse';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Save } from 'lucide-react';
+import { Check, ClipboardCheck, FileDown, Plus, X } from 'lucide-react';
 import { toast } from 'sonner';
+import { generateInventoryReportPdf } from './pdf';
 
-interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; }
+interface Props {
+  project: Project;
+  onProjectChange: (next: Project) => void;
+  auditActor?: WarehouseAuditActor;
+  canApprove?: boolean;
+}
 
-export default function WarehouseInventoryTab({ project, onProjectChange, auditActor }: Props) {
-  const rows = useMemo(
-    () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true }),
-    [project],
-  );
-  const [counts, setCounts] = useState<Record<string, string>>({});
-  const [user, setUser] = useState('');
-  const today = new Date().toISOString().slice(0, 10);
+export default function WarehouseInventoryTab({ project, onProjectChange, auditActor, canApprove = true }: Props) {
+  const wh = ensureWarehouse(project).warehouse!;
+  const sessions = useMemo(() => (wh.inventorySessions ?? []).slice().sort((a, b) => b.startedAt.localeCompare(a.startedAt)), [wh.inventorySessions]);
+  const [selectedId, setSelectedId] = useState<string | null>(() => sessions.find(session => session.status === 'em_contagem' || session.status === 'em_revisao')?.id ?? null);
+  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [justification, setJustification] = useState('');
+  const selected = sessions.find(session => session.id === selectedId) ?? sessions[0];
 
-  const apply = () => {
-    let next = project;
-    let applied = 0;
-    for (const r of rows) {
-      const v = counts[r.key];
-      if (v === undefined || v === '') continue;
-      const counted = parseFloat(v.replace(',', '.'));
-      if (!Number.isFinite(counted)) continue;
-      const diff = +(counted - r.balance).toFixed(2);
-      if (Math.abs(diff) < 0.001) continue;
-      next = addMovement(next, {
-        type: diff > 0 ? 'ajuste_positivo' : 'ajuste_negativo',
-        date: today,
-        itemKey: r.key,
-        itemCode: r.code,
-        itemDescription: r.description,
-        itemUnit: r.unit,
-        quantity: Math.abs(diff),
-        responsible: user || undefined,
-        notes: `Inventário: saldo era ${r.balance}, contado ${counted}`,
-      }, auditActor);
-      applied += 1;
-    }
-    if (applied > 0) {
-      onProjectChange(next);
-      setCounts({});
-      toast.success(`${applied} ajuste(s) de inventário aplicado(s).`);
-    } else {
-      toast.error('Nenhuma diferença a aplicar.');
-    }
+  const create = () => {
+    try {
+      const result = createInventorySession(project, month, auditActor, justification);
+      onProjectChange(result.project);
+      setSelectedId(result.session.id);
+      setJustification('');
+      toast.success(`Inventário ${result.session.number} aberto para contagem cega.`);
+    } catch (error) { toast.error((error as Error).message); }
   };
 
+  const close = () => {
+    if (!selected) return;
+    try {
+      onProjectChange(closeInventorySession(project, selected.id, auditActor));
+      toast.success('Contagem encerrada e diferenças liberadas para revisão.');
+    } catch (error) { toast.error((error as Error).message); }
+  };
+
+  const apply = () => {
+    if (!selected) return;
+    try {
+      onProjectChange(applyInventorySession(project, selected.id, auditActor));
+      toast.success('Inventário aplicado. Os ajustes foram registrados no extrato.');
+    } catch (error) { toast.error((error as Error).message); }
+  };
+
+  const cancel = () => {
+    if (!selected) return;
+    onProjectChange(cancelInventorySession(project, selected.id, auditActor));
+    toast.message('Sessão de inventário cancelada sem alterar o estoque.');
+  };
+
+  const exportCsv = (session: WarehouseInventorySession) => {
+    const lines = [
+      ['Código', 'Material', 'Unidade', 'Esperado', 'Contado', 'Diferença', 'Custo unitário'].join(';'),
+      ...session.lines.map(line => [line.itemCode ?? '', line.itemDescription, line.itemUnit, line.expectedQuantity ?? '', line.countedQuantity ?? '', line.difference ?? '', line.unitCostSnapshot ?? ''].join(';')),
+    ];
+    const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${session.number}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const counted = selected?.lines.filter(line => line.countedQuantity != null).length ?? 0;
+  const total = selected?.lines.length ?? 0;
+
   return (
-    <div className="space-y-3">
-      <div className="bg-card border border-border rounded-md p-2 flex items-center gap-2 flex-wrap">
-        <label className="text-[11px] text-muted-foreground font-semibold whitespace-nowrap">Responsável:</label>
-        <Input placeholder="Nome do responsável pela contagem" className="h-8 text-xs max-w-xs" value={user} onChange={e => setUser(e.target.value)} />
-        <Button size="sm" onClick={apply}><Save className="w-3.5 h-3.5 mr-1" /> Aplicar contagem como ajustes</Button>
-        <span className="text-[11px] text-muted-foreground ml-auto">Itens em branco são ignorados.</span>
-      </div>
-      <div className="bg-card border border-border rounded-md overflow-hidden">
-        <div className="max-h-[calc(100vh-320px)] overflow-auto">
-          <table className="w-full text-xs">
-            <thead className="bg-muted sticky top-0">
-              <tr>
-                <th className="p-2 text-left">Insumo</th>
-                <th className="p-2 text-center w-12">Un</th>
-                <th className="p-2 text-right w-24">Saldo atual</th>
-                <th className="p-2 text-right w-32">Contado</th>
-                <th className="p-2 text-right w-24">Diferença</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(r => {
-                const v = counts[r.key];
-                const counted = v ? parseFloat(v.replace(',', '.')) : NaN;
-                const diff = Number.isFinite(counted) ? +(counted - r.balance).toFixed(2) : null;
-                return (
-                  <tr key={r.key} className="border-t border-border">
-                    <td className="p-1.5">{r.description}</td>
-                    <td className="p-1.5 text-center text-muted-foreground">{r.unit}</td>
-                    <td className="p-1.5 text-right font-mono">{r.balance.toLocaleString('pt-BR')}</td>
-                    <td className="p-1.5">
-                      <Input className="h-7 text-xs text-right" type="number" step="any" value={v ?? ''} onChange={e => setCounts({ ...counts, [r.key]: e.target.value })} />
-                    </td>
-                    <td className={`p-1.5 text-right font-mono ${diff != null && diff < 0 ? 'text-destructive' : diff != null && diff > 0 ? 'text-success' : ''}`}>
-                      {diff != null ? diff.toLocaleString('pt-BR') : '—'}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+    <div className="grid gap-3 lg:grid-cols-[300px_1fr]">
+      <aside className="space-y-3">
+        <div className="rounded-md border bg-card p-3">
+          <h3 className="font-semibold">Inventário mensal</h3>
+          <p className="mt-1 text-sm text-muted-foreground">A contagem é cega. O saldo esperado só aparece depois que todos os materiais forem contados.</p>
+          <div className="mt-3 space-y-2"><Input className="min-h-11" type="month" value={month} onChange={event => setMonth(event.target.value)} /><Input className="min-h-11" value={justification} onChange={event => setJustification(event.target.value)} placeholder="Justificativa para recontagem, se houver" /><Button className="min-h-11 w-full" onClick={create}><Plus className="mr-2 h-4 w-4" />Abrir sessão</Button></div>
+          <div className="mt-3 text-xs text-muted-foreground">Responsável pelo login: <strong className="text-foreground">{warehouseActorName(auditActor)}</strong></div>
         </div>
-      </div>
+        <div className="overflow-hidden rounded-md border bg-card"><div className="border-b bg-muted/40 p-2 text-xs font-semibold uppercase text-muted-foreground">Sessões</div>{sessions.map(session => <button key={session.id} type="button" className={`w-full border-b p-3 text-left last:border-0 ${selected?.id === session.id ? 'bg-primary/10' : 'hover:bg-muted/30'}`} onClick={() => setSelectedId(session.id)}><div className="flex justify-between gap-2"><strong className="text-sm">{session.number}</strong><span className="text-xs">{session.month}</span></div><div className="mt-1 text-xs text-muted-foreground">{session.status.replace('_', ' ')} · {session.lines.length} material(is)</div></button>)}{!sessions.length && <div className="p-5 text-center text-sm text-muted-foreground">Nenhuma sessão.</div>}</div>
+      </aside>
+
+      <section className="overflow-hidden rounded-md border bg-card">
+        {!selected ? <div className="p-10 text-center text-sm text-muted-foreground">Abra o inventário do mês para iniciar a contagem.</div> : <>
+          <div className="flex flex-wrap items-center gap-3 border-b p-3"><div><h3 className="font-semibold">{selected.number}</h3><p className="text-sm text-muted-foreground">{selected.status === 'em_contagem' ? `${counted} de ${total} materiais contados` : `Status: ${selected.status.replace('_', ' ')}`}</p></div><div className="ml-auto flex flex-wrap gap-2">{selected.status === 'em_contagem' && <><Button variant="outline" className="min-h-11" onClick={cancel}><X className="mr-2 h-4 w-4" />Cancelar</Button><Button className="min-h-11" onClick={close} disabled={counted !== total || total === 0}><ClipboardCheck className="mr-2 h-4 w-4" />Encerrar contagem</Button></>}{selected.status === 'em_revisao' && <Button className="min-h-11" disabled={!canApprove} onClick={apply}><Check className="mr-2 h-4 w-4" />{canApprove ? 'Confirmar e aplicar ajustes' : 'Aguardando administrador'}</Button>}{selected.status === 'aplicado' && <><Button variant="outline" className="min-h-11" onClick={() => exportCsv(selected)}><FileDown className="mr-2 h-4 w-4" />CSV</Button><Button variant="outline" className="min-h-11" onClick={() => generateInventoryReportPdf(project, selected)}><FileDown className="mr-2 h-4 w-4" />PDF</Button></>}</div></div>
+          <div className="max-h-[calc(100vh-330px)] overflow-auto"><table className="w-full min-w-[720px] text-sm"><thead className="sticky top-0 bg-muted text-muted-foreground"><tr><th className="p-2 text-left">Material</th><th className="p-2 text-center">Un</th>{selected.status !== 'em_contagem' && <th className="p-2 text-right">Esperado</th>}<th className="p-2 text-right">Contado</th>{selected.status !== 'em_contagem' && <><th className="p-2 text-right">Diferença</th><th className="p-2 text-right">Impacto</th></>}</tr></thead><tbody>{selected.lines.map(line => { const impact = line.difference != null && line.unitCostSnapshot != null ? line.difference * line.unitCostSnapshot : undefined; return <tr key={line.itemKey} className="border-t"><td className="p-2"><div className="font-medium">{line.itemDescription}</div><div className="text-xs text-muted-foreground">{line.itemCode || 'Sem código'}</div></td><td className="p-2 text-center">{line.itemUnit}</td>{selected.status !== 'em_contagem' && <td className="p-2 text-right font-mono">{line.expectedQuantity?.toLocaleString('pt-BR') ?? '—'}</td>}<td className="p-2 text-right">{selected.status === 'em_contagem' ? <Input className="ml-auto min-h-11 w-32 text-right" type="number" min="0" step="any" value={line.countedQuantity ?? ''} onChange={event => { const value = event.target.value === '' ? undefined : Number(event.target.value); try { onProjectChange(setInventoryCount(project, selected.id, line.itemKey, value, auditActor)); } catch (error) { toast.error((error as Error).message); } }} aria-label={`Contagem de ${line.itemDescription}`} /> : <span className="font-mono">{line.countedQuantity?.toLocaleString('pt-BR') ?? '—'}</span>}</td>{selected.status !== 'em_contagem' && <><td className={`p-2 text-right font-mono ${(line.difference ?? 0) < 0 ? 'text-destructive' : (line.difference ?? 0) > 0 ? 'text-success' : ''}`}>{line.difference?.toLocaleString('pt-BR') ?? '—'}</td><td className="p-2 text-right font-mono">{impact == null ? 'Cálculo incompleto' : impact.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td></>}</tr>; })}</tbody></table></div>
+        </>}
+      </section>
     </div>
   );
 }

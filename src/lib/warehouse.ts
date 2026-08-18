@@ -19,8 +19,12 @@ import type {
   FiscalItemLinkStatus,
   FiscalInvoiceEntry,
   DailyReport,
+  WarehouseProjectMaterialLink,
+  WarehouseMaterialLinkSource,
+  WarehouseInventorySession,
+  WarehouseInventoryLine,
 } from '@/types/project';
-import { linkKeyOf } from '@/lib/materialComparisons';
+import { linkKeyOf, suggestMaterialsFromProject, type MaterialSuggestion } from '@/lib/materialComparisons';
 import { trunc2 } from '@/lib/financialEngine';
 import { getChapterNumbering } from '@/lib/chapters';
 
@@ -131,6 +135,9 @@ export function emptyWarehouse(): WarehouseState {
     equipments: [],
     custodyTerms: [],
     fiscalNotes: [],
+    materialLinks: [],
+    inventorySessions: [],
+    valuationMethod: 'weighted_average',
   };
 }
 
@@ -178,6 +185,9 @@ function normalizeWarehouse(state?: Partial<WarehouseState>): WarehouseState {
     equipments: state?.equipments ?? [],
     custodyTerms: state?.custodyTerms ?? [],
     fiscalNotes: normalizeFiscalNotes(state?.fiscalNotes ?? []),
+    materialLinks: state?.materialLinks ?? [],
+    inventorySessions: state?.inventorySessions ?? [],
+    valuationMethod: 'weighted_average',
   };
 }
 
@@ -196,7 +206,10 @@ export function ensureWarehouse(project: Project): Project {
       wh.requisitions !== cur.requisitions ||
       wh.equipments !== cur.equipments ||
       wh.custodyTerms !== cur.custodyTerms ||
-      wh.fiscalNotes !== cur.fiscalNotes
+      wh.fiscalNotes !== cur.fiscalNotes ||
+      wh.materialLinks !== cur.materialLinks ||
+      wh.inventorySessions !== cur.inventorySessions ||
+      wh.valuationMethod !== cur.valuationMethod
     : false;
   let changed = !cur || isPartial;
 
@@ -283,6 +296,65 @@ export function balanceFor(state: WarehouseState, itemKey: string): number {
     bal += movementSign(m) * m.quantity;
   }
   return trunc2(bal);
+}
+
+export interface WarehouseValuationPosition {
+  quantity: number;
+  inventoryValue: number;
+  averageUnitCost?: number;
+  consumedCost: number;
+  incomplete: boolean;
+}
+
+/**
+ * Reconstrói a posição pelo histórico imutável. Entradas alteram a média;
+ * saídas preservam o custo vigente no momento da operação.
+ */
+export function warehouseValuationForItem(
+  state: WarehouseState,
+  itemKey: string,
+  beforeCreatedAt?: string,
+): WarehouseValuationPosition {
+  let quantity = 0;
+  let inventoryValue = 0;
+  let consumedCost = 0;
+  let incomplete = false;
+  const movements = state.movements
+    .filter(m => m.itemKey === itemKey && !m.reversedById && m.type !== 'estorno')
+    .filter(m => !beforeCreatedAt || m.createdAt < beforeCreatedAt)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+
+  for (const movement of movements) {
+    const sign = movementSign(movement);
+    if (!sign) continue;
+    const qty = Math.max(0, Number(movement.quantity || 0));
+    const currentAverage = quantity > 0 ? inventoryValue / quantity : undefined;
+    if (sign > 0) {
+      const price = movement.costSnapshot ?? movement.unitPrice ?? currentAverage;
+      if (price == null || !Number.isFinite(price)) incomplete = true;
+      inventoryValue += qty * (price ?? 0);
+      quantity += qty;
+    } else {
+      const price = movement.costSnapshot ?? currentAverage ?? movement.unitPrice;
+      if (price == null || !Number.isFinite(price)) incomplete = true;
+      const appliedQty = Math.min(quantity, qty);
+      inventoryValue -= appliedQty * (price ?? 0);
+      quantity -= qty;
+      if (movement.type === 'retirada') consumedCost += qty * (price ?? 0);
+      if (quantity <= 0) {
+        quantity = Math.max(0, quantity);
+        inventoryValue = 0;
+      }
+    }
+  }
+
+  return {
+    quantity: trunc2(quantity),
+    inventoryValue: trunc2(inventoryValue),
+    averageUnitCost: quantity > 0 && !incomplete ? trunc2(inventoryValue / quantity) : undefined,
+    consumedCost: trunc2(consumedCost),
+    incomplete,
+  };
 }
 
 // ============== CRUD MOVIMENTOS ==============
@@ -382,8 +454,24 @@ export function deliverRequisition(
   const wh = p.warehouse!;
   const req = wh.requisitions.find(r => r.id === requisitionId);
   if (!req || req.status === 'entregue') return p;
+  if (req.status === 'cancelada') throw new Error('Uma retirada cancelada não pode ser entregue.');
+  if (!req.chapterId) throw new Error('Selecione o prédio/capítulo do orçamento.');
+  if (!req.teamId) throw new Error('Selecione a equipe que receberá os materiais.');
+  if (!(req.receiverName || req.requesterName)?.trim()) throw new Error('Informe quem recebeu os materiais.');
+  if (!req.signatureReceiver) throw new Error('A assinatura de quem recebeu é obrigatória.');
+  if (!req.deliveryAttachments?.length) throw new Error('Adicione ao menos uma foto da entrega.');
+  if (!req.items.length) throw new Error('Adicione ao menos um material à retirada.');
+  for (const item of req.items) {
+    if (!item.itemKey || !(Number(item.quantity) > 0)) throw new Error('Todos os materiais devem ter quantidade positiva.');
+    const available = balanceFor(wh, item.itemKey);
+    if (item.quantity > available) {
+      throw new Error(`${item.description}: quantidade solicitada (${item.quantity}) maior que o saldo disponível (${available}).`);
+    }
+  }
   const newItems: WarehouseRequisitionItem[] = [];
   for (const it of req.items) {
+    const valuation = warehouseValuationForItem(p.warehouse!, it.itemKey);
+    const unitCostSnapshot = valuation.averageUnitCost;
     const mv: WarehouseMovement = {
       id: uid(),
       createdAt: nowISO(),
@@ -394,28 +482,56 @@ export function deliverRequisition(
       itemDescription: it.description,
       itemUnit: it.unit,
       quantity: it.quantity,
+      unitPrice: unitCostSnapshot,
+      costSnapshot: unitCostSnapshot,
       requisitionId: req.id,
+      originType: 'withdrawal',
+      originId: req.id,
+      chapterId: req.chapterId,
       taskId: req.taskId,
       teamId: req.teamId,
-      workerName: req.requesterName,
+      workerName: req.receiverName || req.requesterName,
       workFront: req.workFront,
-      responsible: opts?.warehouseOperator,
+      responsible: warehouseActorLegacyValue(opts?.actor) ?? opts?.warehouseOperator,
       user: warehouseActorLegacyValue(opts?.actor),
       createdBy: normalizeWarehouseActor(opts?.actor),
       notes: req.notes,
+      attachments: req.deliveryAttachments,
     };
     p = addMovement(p, mv, opts?.actor);
-    newItems.push({ ...it, movementId: mv.id });
+    newItems.push({ ...it, movementId: mv.id, unitCostSnapshot });
   }
   p = updateRequisition(p, req.id, {
     status: 'entregue',
     items: newItems,
-    warehouseOperator: opts?.warehouseOperator,
+    warehouseOperator: warehouseActorLegacyValue(opts?.actor) ?? opts?.warehouseOperator,
   }, opts?.actor);
   if (opts?.publishToDailyReport) {
     p = publishRequisitionToDailyReport(p, req.id);
   }
   return p;
+}
+
+/** Cria e entrega em uma única operação; o identificador impede clique duplo. */
+export function createAndDeliverRequisition(
+  project: Project,
+  input: Omit<WarehouseRequisition, 'id' | 'number' | 'createdAt' | 'status'>,
+  opts?: { publishToDailyReport?: boolean; actor?: WarehouseActorInput },
+): { project: Project; requisitionId: string } {
+  const idempotencyKey = input.deliveryIdempotencyKey?.trim();
+  const normalized = ensureWarehouse(project);
+  const existing = idempotencyKey
+    ? normalized.warehouse!.requisitions.find(r => r.deliveryIdempotencyKey === idempotencyKey)
+    : undefined;
+  if (existing) return { project: normalized, requisitionId: existing.id };
+  const created = createRequisition(normalized, { ...input, status: 'rascunho' }, opts?.actor);
+  return {
+    project: deliverRequisition(created.project, created.requisition.id, {
+      publishToDailyReport: opts?.publishToDailyReport,
+      actor: opts?.actor,
+    }),
+    requisitionId: created.requisition.id,
+  };
 }
 
 export function publishRequisitionToDailyReport(project: Project, requisitionId: string): Project {
@@ -429,7 +545,8 @@ export function publishRequisitionToDailyReport(project: Project, requisitionId:
   const summary = req.items
     .map(it => `  • ${it.description} — ${it.quantity} ${it.unit}`)
     .join('\n');
-  const block = `[Almoxarifado ${req.number}${req.requesterName ? ` — ${req.requesterName}` : ''}]\n${summary}`;
+  const context = [req.chapterName, req.teamName, req.receiverName || req.requesterName].filter(Boolean).join(' — ');
+  const block = `[Almoxarifado ${req.number}${context ? ` — ${context}` : ''}]\n${summary}`;
   if (dr) {
     const observations = dr.observations ? `${dr.observations}\n${block}` : block;
     dr = { ...dr, observations, updatedAt: nowISO() };
@@ -449,25 +566,216 @@ export function publishRequisitionToDailyReport(project: Project, requisitionId:
   return updateRequisition({ ...p, dailyReports }, req.id, { publishedToDailyReportId: dr.id });
 }
 
-// ============== EQUIPAMENTOS & TERMOS DE CAUTELA ==============
+// ============== INVENTÁRIO MENSAL ==============
 
-export function addEquipment(project: Project, input: Omit<Equipment, 'id' | 'createdAt'>): Project {
+function nextInventoryNumber(state: WarehouseState, month: string): string {
+  const prefix = `INV-${month.replace('-', '')}`;
+  const count = (state.inventorySessions ?? []).filter(session => session.number.startsWith(prefix)).length + 1;
+  return `${prefix}-${String(count).padStart(2, '0')}`;
+}
+
+export function createInventorySession(
+  project: Project,
+  month = todayISO().slice(0, 7),
+  actor?: WarehouseActorInput,
+  justification?: string,
+): { project: Project; session: WarehouseInventorySession } {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
-  const eq: Equipment = { id: uid(), createdAt: nowISO(), ...input };
+  const active = (wh.inventorySessions ?? []).find(session =>
+    session.month === month && (session.status === 'em_contagem' || session.status === 'em_revisao'),
+  );
+  if (active) return { project: p, session: active };
+  const priorApplied = (wh.inventorySessions ?? []).some(session => session.month === month && session.status === 'aplicado');
+  if (priorApplied && !justification?.trim()) {
+    throw new Error('Informe a justificativa para abrir uma recontagem do mesmo mês.');
+  }
+  const rows = computeWarehouseRows(p, { includeManual: true }).filter(row => !row.archived);
+  const session: WarehouseInventorySession = {
+    id: uid(),
+    number: nextInventoryNumber(wh, month),
+    month,
+    status: 'em_contagem',
+    startedAt: nowISO(),
+    justification: justification?.trim() || undefined,
+    createdBy: normalizeWarehouseActor(actor),
+    lines: rows.map(row => ({
+      itemKey: row.key,
+      itemCode: row.code,
+      itemDescription: row.description,
+      itemUnit: row.unit,
+    })),
+  };
+  return { project: setWh(p, { inventorySessions: [...(wh.inventorySessions ?? []), session] }), session };
+}
+
+export function setInventoryCount(
+  project: Project,
+  sessionId: string,
+  itemKey: string,
+  countedQuantity: number | undefined,
+  actor?: WarehouseActorInput,
+): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const count = countedQuantity == null ? undefined : Number(countedQuantity);
+  if (count != null && (!Number.isFinite(count) || count < 0)) throw new Error('A contagem deve ser um número maior ou igual a zero.');
+  const sessions = (wh.inventorySessions ?? []).map(session => {
+    if (session.id !== sessionId) return session;
+    if (session.status !== 'em_contagem') throw new Error('Somente inventários em contagem podem ser alterados.');
+    return {
+      ...session,
+      updatedBy: normalizeWarehouseActor(actor) ?? session.updatedBy,
+      lines: session.lines.map(line => line.itemKey === itemKey ? { ...line, countedQuantity: count } : line),
+    };
+  });
+  return setWh(p, { inventorySessions: sessions });
+}
+
+export function closeInventorySession(project: Project, sessionId: string, actor?: WarehouseActorInput): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const current = (wh.inventorySessions ?? []).find(session => session.id === sessionId);
+  if (!current || current.status !== 'em_contagem') return p;
+  const missing = current.lines.filter(line => line.countedQuantity == null);
+  if (missing.length) throw new Error(`Conte todos os materiais antes de encerrar. Faltam ${missing.length} item(ns).`);
+  const rows = new Map(computeWarehouseRows(p, { includeManual: true, includeArchived: true }).map(row => [row.key, row] as const));
+  const timestamp = nowISO();
+  const sessions = (wh.inventorySessions ?? []).map(session => session.id === sessionId
+    ? {
+        ...session,
+        status: 'em_revisao' as const,
+        closedAt: timestamp,
+        updatedBy: normalizeWarehouseActor(actor) ?? session.updatedBy,
+        lines: session.lines.map(line => {
+          const row = rows.get(line.itemKey);
+          const expectedQuantity = Number(row?.balance ?? 0);
+          const countedQuantity = Number(line.countedQuantity ?? 0);
+          return {
+            ...line,
+            expectedQuantity,
+            difference: trunc2(countedQuantity - expectedQuantity),
+            unitCostSnapshot: row?.averageUnitCost,
+          };
+        }),
+      }
+    : session);
+  return setWh(p, { inventorySessions: sessions });
+}
+
+export function applyInventorySession(project: Project, sessionId: string, actor?: WarehouseActorInput): Project {
+  let p = ensureWarehouse(project);
+  const current = p.warehouse!.inventorySessions?.find(session => session.id === sessionId);
+  if (!current || current.status === 'aplicado') return p;
+  if (current.status !== 'em_revisao') throw new Error('Encerre a contagem antes de aplicar os ajustes.');
+  const timestamp = nowISO();
+  const movements = [...p.warehouse!.movements];
+  const appliedLines: WarehouseInventoryLine[] = [];
+  for (const line of current.lines) {
+    const difference = Number(line.difference ?? 0);
+    if (Math.abs(difference) < 0.001) {
+      appliedLines.push(line);
+      continue;
+    }
+    const movementId = uid();
+    const movement: WarehouseMovement = {
+      id: movementId,
+      createdAt: timestamp,
+      createdBy: normalizeWarehouseActor(actor),
+      type: difference > 0 ? 'ajuste_positivo' : 'ajuste_negativo',
+      date: todayISO(),
+      itemKey: line.itemKey,
+      itemCode: line.itemCode,
+      itemDescription: line.itemDescription,
+      itemUnit: line.itemUnit,
+      quantity: Math.abs(difference),
+      unitPrice: line.unitCostSnapshot,
+      costSnapshot: line.unitCostSnapshot,
+      originType: 'inventory',
+      originId: current.id,
+      inventorySessionId: current.id,
+      notes: `Ajuste do inventário ${current.number}: esperado ${line.expectedQuantity}, contado ${line.countedQuantity}`,
+      user: warehouseActorLegacyValue(actor),
+    };
+    movements.push(movement);
+    appliedLines.push({ ...line, movementId });
+  }
+  const sessions = (p.warehouse!.inventorySessions ?? []).map(session => session.id === sessionId
+    ? { ...session, status: 'aplicado' as const, appliedAt: timestamp, updatedBy: normalizeWarehouseActor(actor), lines: appliedLines }
+    : session);
+  p = setWh(p, { movements, inventorySessions: sessions });
+  return p;
+}
+
+export function cancelInventorySession(project: Project, sessionId: string, actor?: WarehouseActorInput): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const sessions = (wh.inventorySessions ?? []).map(session => {
+    if (session.id !== sessionId || session.status === 'aplicado') return session;
+    return { ...session, status: 'cancelado' as const, canceledAt: nowISO(), updatedBy: normalizeWarehouseActor(actor) };
+  });
+  return setWh(p, { inventorySessions: sessions });
+}
+
+// ============== EQUIPAMENTOS & TERMOS DE CAUTELA ==============
+
+export function nextEquipmentCode(state: WarehouseState): string {
+  const year = new Date().getFullYear();
+  const prefix = `EQ-${year}-`;
+  const numbers = state.equipments
+    .map(equipment => equipment.internalCode)
+    .filter((code): code is string => !!code?.startsWith(prefix))
+    .map(code => Number(code.slice(prefix.length)))
+    .filter(Number.isFinite);
+  return `${prefix}${String((numbers.length ? Math.max(...numbers) : 0) + 1).padStart(4, '0')}`;
+}
+
+export function addEquipment(
+  project: Project,
+  input: Omit<Equipment, 'id' | 'createdAt'>,
+  actor?: WarehouseActorInput,
+): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const serial = normalizeLookup(input.serial);
+  if (serial && wh.equipments.some(equipment => !equipment.archivedAt && normalizeLookup(equipment.serial) === serial)) {
+    throw new Error('Já existe um equipamento com este número de série nesta obra.');
+  }
+  const eq: Equipment = {
+    id: uid(),
+    createdAt: nowISO(),
+    internalCode: input.internalCode || nextEquipmentCode(wh),
+    status: input.status ?? 'disponivel',
+    extractionStatus: input.extractionStatus ?? 'idle',
+    createdBy: input.createdBy ?? normalizeWarehouseActor(actor),
+    ...input,
+  };
   return setWh(p, { equipments: [...wh.equipments, eq] });
 }
 
-export function updateEquipment(project: Project, id: string, patch: Partial<Equipment>): Project {
+export function updateEquipment(project: Project, id: string, patch: Partial<Equipment>, actor?: WarehouseActorInput): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
-  return setWh(p, { equipments: wh.equipments.map(e => (e.id === id ? { ...e, ...patch } : e)) });
+  const serial = normalizeLookup(patch.serial);
+  if (serial && wh.equipments.some(equipment => equipment.id !== id && !equipment.archivedAt && normalizeLookup(equipment.serial) === serial)) {
+    throw new Error('Já existe um equipamento com este número de série nesta obra.');
+  }
+  return setWh(p, {
+    equipments: wh.equipments.map(e => e.id === id
+      ? { ...e, ...patch, updatedAt: nowISO(), updatedBy: normalizeWarehouseActor(actor) ?? e.updatedBy }
+      : e),
+  });
 }
 
-export function removeEquipment(project: Project, id: string): Project {
+/** Compatibilidade: a antiga remoção agora arquiva e preserva termos e fotos. */
+export function removeEquipment(project: Project, id: string, actor?: WarehouseActorInput): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
-  return setWh(p, { equipments: wh.equipments.filter(e => e.id !== id) });
+  return setWh(p, {
+    equipments: wh.equipments.map(e => e.id === id
+      ? { ...e, status: 'arquivado' as const, archivedAt: nowISO(), updatedAt: nowISO(), updatedBy: normalizeWarehouseActor(actor) ?? e.updatedBy }
+      : e),
+  });
 }
 
 export function nextCustodyNumber(state: WarehouseState): string {
@@ -489,16 +797,27 @@ export function issueCustodyTerm(
     status: input.status ?? 'em_uso',
     ...input,
   };
-  return setWh(p, { custodyTerms: [...wh.custodyTerms, term] });
+  return setWh(p, {
+    custodyTerms: [...wh.custodyTerms, term],
+    equipments: wh.equipments.map(equipment => equipment.id === term.equipmentId
+      ? { ...equipment, status: 'em_uso' as const, updatedAt: nowISO() }
+      : equipment),
+  });
 }
 
 export function returnCustodyTerm(
   project: Project,
   termId: string,
-  data: { stateOnReturn?: string; status?: CustodyTermStatus; divergenceNotes?: string; returnedAt?: string },
+  data: { stateOnReturn?: string; status?: CustodyTermStatus; divergenceNotes?: string; returnedAt?: string; returnAttachments?: WarehouseAttachment[] },
 ): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
+  const term = wh.custodyTerms.find(current => current.id === termId);
+  const nextStatus = data.status === 'danificado' || data.status === 'divergencia'
+    ? 'em_manutencao' as const
+    : data.status === 'perdido'
+      ? 'arquivado' as const
+      : 'disponivel' as const;
   return setWh(p, {
     custodyTerms: wh.custodyTerms.map(t =>
       t.id === termId
@@ -507,10 +826,14 @@ export function returnCustodyTerm(
             returnedAt: data.returnedAt ?? todayISO(),
             stateOnReturn: data.stateOnReturn,
             divergenceNotes: data.divergenceNotes,
+            returnAttachments: data.returnAttachments,
             status: data.status ?? 'devolvido',
           }
         : t,
     ),
+    equipments: wh.equipments.map(equipment => equipment.id === term?.equipmentId
+      ? { ...equipment, status: nextStatus, updatedAt: nowISO(), archivedAt: nextStatus === 'arquivado' ? nowISO() : equipment.archivedAt }
+      : equipment),
   });
 }
 
@@ -544,25 +867,15 @@ export function upsertItemConfig(project: Project, cfg: WarehouseItemConfig): Pr
   return setWh(p, { items });
 }
 
+/** Compatibilidade: a antiga exclusão agora apenas arquiva o material. */
 export function removeWarehouseItem(project: Project, itemKey: string): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
   return setWh(p, {
-    items: wh.items.filter(item => item.key !== itemKey),
-    movements: wh.movements.filter(movement => movement.itemKey !== itemKey),
-    requisitions: wh.requisitions.map(requisition => ({
-      ...requisition,
-      items: requisition.items.filter(item => item.itemKey !== itemKey),
-    })),
-    fiscalNotes: (wh.fiscalNotes ?? []).map(note => ({
-      ...note,
-      items: note.items.map(item =>
-        item.itemKey === itemKey
-          ? { ...item, itemKey: undefined, linkStatus: 'pendente' as const }
-          : item,
-      ),
-    })),
-  }, opts?.actor);
+    items: wh.items.map(item => item.key === itemKey
+      ? { ...item, archivedAt: nowISO(), archivedReason: 'manual_archive' as const }
+      : item),
+  });
 }
 
 export function removeMovement(project: Project, movementId: string): Project {
@@ -597,6 +910,8 @@ export interface WarehouseRow {
   supplierId?: string;
   supplierName?: string;
   unitPrice?: number;
+  purchaseGroupId?: string;
+  unplannedReason?: string;
   planned: number;
   purchased: number;
   received: number;
@@ -608,6 +923,13 @@ export interface WarehouseRow {
   locationId?: string;
   lastMovementDate?: string;
   underMin: boolean;
+  archived?: boolean;
+  projectLinks: WarehouseProjectMaterialLink[];
+  linkStatus: 'linked' | 'pending' | 'unplanned';
+  averageUnitCost?: number;
+  inventoryValue?: number;
+  consumedCost: number;
+  valuationIncomplete: boolean;
 }
 
 export interface WarehouseRowsOptions {
@@ -702,6 +1024,10 @@ export function linkFiscalNoteItemsToMaterials(
         adjustments: 0,
         balance: 0,
         underMin: false,
+        projectLinks: [],
+        linkStatus: 'pending',
+        consumedCost: 0,
+        valuationIncomplete: false,
       });
       itemKeyByLookup.set(lookup, [...(itemKeyByLookup.get(lookup) ?? []), newItemKey]);
       if (productCodeKey) itemKeyByCode.set(productCodeKey, [...(itemKeyByCode.get(productCodeKey) ?? []), newItemKey]);
@@ -737,6 +1063,13 @@ export function computeWarehouseRows(project: Project, opts: WarehouseRowsOption
   const wh = p.warehouse!;
   const map = new Map<string, WarehouseRow>();
   const archivedKeys = new Set(wh.items.filter(item => item.archivedAt).map(item => item.key));
+  const projectMaterials = new Map(suggestMaterialsFromProject(project).map(item => [item.key, item] as const));
+  const linksByWarehouseItem = new Map<string, WarehouseProjectMaterialLink[]>();
+  for (const link of wh.materialLinks ?? []) {
+    const list = linksByWarehouseItem.get(link.warehouseItemKey) ?? [];
+    list.push(link);
+    linksByWarehouseItem.set(link.warehouseItemKey, list);
+  }
   // O Almoxarifado não nasce mais de pedidos confirmados na Lista de Material.
   // Itens entram aqui por cadastro avulso, nota fiscal aprovada ou movimentação física.
   // aplicar config por item
@@ -762,6 +1095,10 @@ export function computeWarehouseRows(project: Project, opts: WarehouseRowsOption
         adjustments: 0,
         balance: 0,
         underMin: false,
+        projectLinks: [],
+        linkStatus: cfg.unplannedReason ? 'unplanned' : 'pending',
+        consumedCost: 0,
+        valuationIncomplete: false,
       };
       map.set(cfg.key, r);
       createdManualRow = true;
@@ -770,6 +1107,8 @@ export function computeWarehouseRows(project: Project, opts: WarehouseRowsOption
       r.manualItem = cfg.manualItem;
       r.supplierId = cfg.supplierId ?? r.supplierId;
       r.unitPrice = cfg.unitPrice ?? r.unitPrice;
+      r.purchaseGroupId = cfg.purchaseGroupId;
+      r.unplannedReason = cfg.unplannedReason;
       r.minStock = cfg.minStock;
       r.locationId = cfg.defaultLocationId;
       if (!createdManualRow && cfg.purchasedQuantity) {
@@ -800,6 +1139,10 @@ export function computeWarehouseRows(project: Project, opts: WarehouseRowsOption
         adjustments: 0,
         balance: 0,
         underMin: false,
+        projectLinks: [],
+        linkStatus: cfg?.unplannedReason ? 'unplanned' : 'pending',
+        consumedCost: 0,
+        valuationIncomplete: false,
       };
       map.set(m.itemKey, r);
     }
@@ -816,6 +1159,20 @@ export function computeWarehouseRows(project: Project, opts: WarehouseRowsOption
     if (!r.lastMovementDate || m.date > r.lastMovementDate) r.lastMovementDate = m.date;
   }
   for (const r of map.values()) {
+    const config = configByKey.get(r.key);
+    const links = linksByWarehouseItem.get(r.key) ?? [];
+    r.projectLinks = links;
+    r.planned = trunc2(links.reduce((total, link) => {
+      const projectMaterial = projectMaterials.get(link.projectMaterialKey);
+      return total + Number(projectMaterial?.quantity ?? 0) * Number(link.conversionFactor || 1);
+    }, config?.plannedQuantity ?? 0));
+    r.linkStatus = links.length ? 'linked' : config?.unplannedReason ? 'unplanned' : 'pending';
+    r.archived = !!config?.archivedAt;
+    const valuation = warehouseValuationForItem(wh, r.key);
+    r.averageUnitCost = valuation.averageUnitCost;
+    r.inventoryValue = valuation.incomplete ? undefined : valuation.inventoryValue;
+    r.consumedCost = valuation.consumedCost;
+    r.valuationIncomplete = valuation.incomplete;
     r.underMin = r.minStock != null && r.balance < r.minStock;
   }
   return Array.from(map.values()).sort((a, b) => a.description.localeCompare(b.description, 'pt-BR'));
@@ -1054,6 +1411,8 @@ export interface WarehouseUsageItem {
   description: string;
   unit: string;
   quantity: number;
+  consumedCost: number;
+  costIncomplete: boolean;
 }
 
 export interface WarehouseUsageByChapterRow {
@@ -1062,6 +1421,8 @@ export interface WarehouseUsageByChapterRow {
   taskCount: number;
   movementCount: number;
   itemCount: number;
+  consumedCost: number;
+  costIncomplete: boolean;
   lastMovementDate?: string;
   items: WarehouseUsageItem[];
 }
@@ -1069,6 +1430,8 @@ export interface WarehouseUsageByChapterRow {
 export interface WarehouseUsageByChapterResult {
   rows: WarehouseUsageByChapterRow[];
   unlinkedMovementCount: number;
+  totalConsumedCost: number;
+  incompleteMovementCount: number;
 }
 
 function buildTaskIndex(project: Project): Map<string, { task: Task; phaseId: string; phaseName: string }> {
@@ -1100,6 +1463,7 @@ export function computeWarehouseUsageByChapter(project: Project): WarehouseUsage
   const phaseById = new Map((p.phases ?? []).map(phase => [phase.id, phase]));
   const byChapter = new Map<string, WarehouseUsageByChapterRow & { taskIds: Set<string>; itemKeys: Set<string> }>();
   let unlinkedMovementCount = 0;
+  let incompleteMovementCount = 0;
 
   for (const movement of wh.movements) {
     if (movement.reversedById || !CONSUMPTION_TYPES.has(movement.type)) continue;
@@ -1133,6 +1497,8 @@ export function computeWarehouseUsageByChapter(project: Project): WarehouseUsage
         taskCount: 0,
         movementCount: 0,
         itemCount: 0,
+        consumedCost: 0,
+        costIncomplete: false,
         items: [],
         taskIds: new Set<string>(),
         itemKeys: new Set<string>(),
@@ -1141,6 +1507,12 @@ export function computeWarehouseUsageByChapter(project: Project): WarehouseUsage
     }
 
     row.movementCount += 1;
+    const movementUnitCost = movement.costSnapshot ?? movement.unitPrice;
+    const movementCostIncomplete = movementUnitCost == null || !Number.isFinite(movementUnitCost);
+    const movementCost = movementCostIncomplete ? 0 : movement.quantity * movementUnitCost;
+    row.consumedCost = trunc2(row.consumedCost + movementCost);
+    row.costIncomplete ||= movementCostIncomplete;
+    if (movementCostIncomplete) incompleteMovementCount += 1;
     if (taskId) row.taskIds.add(taskId);
     row.itemKeys.add(movement.itemKey);
     if (!row.lastMovementDate || movement.date > row.lastMovementDate) {
@@ -1150,12 +1522,16 @@ export function computeWarehouseUsageByChapter(project: Project): WarehouseUsage
     const item = row.items.find(current => current.key === movement.itemKey);
     if (item) {
       item.quantity = trunc2(item.quantity + movement.quantity);
+      item.consumedCost = trunc2(item.consumedCost + movementCost);
+      item.costIncomplete ||= movementCostIncomplete;
     } else {
       row.items.push({
         key: movement.itemKey,
         description: movement.itemDescription,
         unit: movement.itemUnit,
         quantity: trunc2(movement.quantity),
+        consumedCost: trunc2(movementCost),
+        costIncomplete: movementCostIncomplete,
       });
     }
   }
@@ -1166,12 +1542,19 @@ export function computeWarehouseUsageByChapter(project: Project): WarehouseUsage
     taskCount: row.taskIds.size,
     movementCount: row.movementCount,
     itemCount: row.itemKeys.size,
+    consumedCost: row.consumedCost,
+    costIncomplete: row.costIncomplete,
     lastMovementDate: row.lastMovementDate,
     items: row.items.sort((a, b) => b.quantity - a.quantity).slice(0, 4),
   }));
 
   rows.sort((a, b) => a.chapter.localeCompare(b.chapter, 'pt-BR', { numeric: true }));
-  return { rows, unlinkedMovementCount };
+  return {
+    rows,
+    unlinkedMovementCount,
+    totalConsumedCost: trunc2(rows.reduce((sum, row) => sum + row.consumedCost, 0)),
+    incompleteMovementCount,
+  };
 }
 
 // ============== HELPERS ==============
@@ -1306,6 +1689,7 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
 
   let itemsConfig = [...wh.items];
   const movements = [...wh.movements];
+  const materialLinks = [...(wh.materialLinks ?? [])];
   const approvedItems = linked.items.map(item => {
     const unit = (item.unit || 'UN').trim() || 'UN';
     const allocationNote = { ...noteForPosting, items: linked.items };
@@ -1335,6 +1719,7 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
         purchasedQuantity: Number(item.quantity || 0),
         unitPrice: globalUnitPrice || undefined,
         purchaseGroupId: item.purchaseGroupId,
+        unplannedReason: item.projectMaterialDecision === 'unplanned' ? item.projectMaterialJustification : undefined,
       });
       rowsByKey.set(itemKey, {
         key: itemKey,
@@ -1351,6 +1736,10 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
         adjustments: 0,
         balance: 0,
         underMin: false,
+        projectLinks: [],
+        linkStatus: item.projectMaterialDecision === 'linked' ? 'linked' : 'pending',
+        consumedCost: 0,
+        valuationIncomplete: false,
       });
     } else {
       let updatedConfig = false;
@@ -1363,6 +1752,9 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
           code: cfg.code || productCode,
           unitPrice: globalUnitPrice || cfg.unitPrice,
           purchaseGroupId: item.purchaseGroupId ?? cfg.purchaseGroupId,
+          unplannedReason: item.projectMaterialDecision === 'unplanned'
+            ? item.projectMaterialJustification
+            : cfg.unplannedReason,
         };
       });
       if (!updatedConfig) {
@@ -1393,11 +1785,36 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
       quantity: Number(item.quantity || 0),
       unitPrice: globalUnitPrice || undefined,
       fiscalNoteId: noteForPosting.id,
+      originType: 'fiscal_note',
+      originId: noteForPosting.id,
       invoiceNumber: noteForPosting.invoiceNumber || undefined,
       notes: `Entrada gerada pelo documento ${noteForPosting.invoiceNumber || noteForPosting.sourceFileName}`,
       attachments: noteForPosting.attachments?.length ? noteForPosting.attachments : (noteForPosting.attachment ? [noteForPosting.attachment] : undefined),
       user: actorLabel,
     });
+
+    if (item.projectMaterialDecision === 'linked' && item.projectMaterialKey) {
+      const exists = materialLinks.some(link =>
+        link.warehouseItemKey === itemKey && link.projectMaterialKey === item.projectMaterialKey,
+      );
+      if (!exists) {
+        materialLinks.push({
+          id: uid(),
+          warehouseItemKey: itemKey,
+          projectMaterialKey: item.projectMaterialKey,
+          projectMaterialCode: item.projectMaterialCode,
+          projectMaterialDescription: item.projectMaterialDescription || item.description,
+          projectMaterialUnit: item.projectMaterialUnit || unit,
+          conversionFactor: Number(item.projectMaterialConversionFactor || 1),
+          source: item.projectMaterialConfidence != null ? 'similarity' : 'manual',
+          confidence: item.projectMaterialConfidence,
+          supplierCnpj: noteForPosting.supplierCnpj,
+          supplierProductCode: productCode,
+          createdAt: nowISO(),
+          createdBy: auditActor,
+        });
+      }
+    }
 
     return { ...item, productCode, itemKey, unit, globalTotalPrice, linkStatus: 'vinculado' as const };
   });
@@ -1417,7 +1834,7 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
       : n,
   );
 
-  return setWh(p, { items: itemsConfig, movements, fiscalNotes });
+  return setWh(p, { items: itemsConfig, movements, fiscalNotes, materialLinks });
 }
 
 /**
@@ -1897,10 +2314,12 @@ export async function makeAttachment(
   file: File,
   projectId: string,
   kind?: WarehouseAttachment['kind'],
+  folder = 'documents',
 ): Promise<WarehouseAttachment> {
   const id = uid();
   const safeExt = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
-  const path = `${projectId || 'local'}/warehouse/${id}.${safeExt}`;
+  const safeFolder = folder.replace(/[^a-zA-Z0-9_-]/g, '') || 'documents';
+  const path = `${projectId || 'local'}/warehouse/${safeFolder}/${id}.${safeExt}`;
   const mimeType = file.type || 'application/octet-stream';
   const base: WarehouseAttachment = {
     id,
@@ -2016,6 +2435,98 @@ export function findMaterialMatch(
     }
   }
   return best;
+}
+
+export interface ProjectMaterialLinkSuggestion {
+  material: MaterialSuggestion;
+  source: WarehouseMaterialLinkSource;
+  confidence: number;
+}
+
+/** Sugestões para conferência humana; nunca persiste ou une itens automaticamente. */
+export function suggestProjectMaterialLinks(
+  project: Project,
+  item: Pick<WarehouseFiscalNoteItem, 'description' | 'unit' | 'productCode'>,
+  supplierCnpj?: string,
+): ProjectMaterialLinkSuggestion[] {
+  const materials = suggestMaterialsFromProject(project).filter(material => material.quantity > 0);
+  const cnpj = (supplierCnpj ?? '').replace(/\D/g, '');
+  const code = normalizeProductCode(item.productCode);
+  const previous = (project.warehouse?.materialLinks ?? []).find(link =>
+    cnpj &&
+    (link.supplierCnpj ?? '').replace(/\D/g, '') === cnpj &&
+    code &&
+    normalizeProductCode(link.supplierProductCode) === code,
+  );
+  const itemTokens = new Set(tokenize(item.description));
+  const itemUnit = normalizeLookup(item.unit || 'UN');
+
+  return materials
+    .map(material => {
+      if (previous?.projectMaterialKey === material.key) {
+        return { material, source: 'supplier_history' as const, confidence: 1 };
+      }
+      if (code && normalizeProductCode(material.code) === code) {
+        return { material, source: 'exact_code' as const, confidence: 0.99 };
+      }
+      const exactDescription = normalizeLookup(material.description) === normalizeLookup(item.description);
+      const sameUnit = normalizeLookup(material.unit) === itemUnit;
+      if (exactDescription && sameUnit) {
+        return { material, source: 'description_unit' as const, confidence: 0.97 };
+      }
+      const candidateTokens = new Set(tokenize(material.description));
+      let intersection = 0;
+      for (const token of itemTokens) if (candidateTokens.has(token)) intersection += 1;
+      const union = itemTokens.size + candidateTokens.size - intersection;
+      const score = union ? intersection / union + (sameUnit ? 0.05 : 0) : 0;
+      return { material, source: 'similarity' as const, confidence: Math.min(0.95, score) };
+    })
+    .filter(suggestion => suggestion.confidence >= 0.35)
+    .sort((a, b) => b.confidence - a.confidence)
+    .slice(0, 8);
+}
+
+export function upsertWarehouseProjectMaterialLink(
+  project: Project,
+  input: Omit<WarehouseProjectMaterialLink, 'id' | 'createdAt' | 'createdBy' | 'updatedAt' | 'updatedBy'>,
+  actor?: WarehouseActorInput,
+): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const conversionFactor = Number(input.conversionFactor);
+  if (!input.warehouseItemKey || !input.projectMaterialKey) throw new Error('Selecione o material e o insumo previsto.');
+  if (!(conversionFactor > 0)) throw new Error('O fator de conversão deve ser maior que zero.');
+  const auditActor = normalizeWarehouseActor(actor);
+  const timestamp = nowISO();
+  const existing = (wh.materialLinks ?? []).find(link =>
+    link.warehouseItemKey === input.warehouseItemKey && link.projectMaterialKey === input.projectMaterialKey,
+  );
+  const link: WarehouseProjectMaterialLink = existing
+    ? { ...existing, ...input, conversionFactor, updatedAt: timestamp, updatedBy: auditActor ?? existing.updatedBy }
+    : { ...input, conversionFactor, id: uid(), createdAt: timestamp, createdBy: auditActor };
+  const materialLinks = existing
+    ? (wh.materialLinks ?? []).map(current => current.id === existing.id ? link : current)
+    : [...(wh.materialLinks ?? []), link];
+  return setWh(p, { materialLinks });
+}
+
+export function unlinkWarehouseProjectMaterial(
+  project: Project,
+  linkId: string,
+  actor?: WarehouseActorInput,
+): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const materialLinks = (wh.materialLinks ?? []).filter(link => link.id !== linkId);
+  if (materialLinks.length === (wh.materialLinks ?? []).length) return p;
+  const timestamp = nowISO();
+  const auditActor = normalizeWarehouseActor(actor);
+  return setWh(p, {
+    materialLinks,
+    items: wh.items.map(item => item.key === (wh.materialLinks ?? []).find(link => link.id === linkId)?.warehouseItemKey
+      ? { ...item, updatedAt: timestamp, updatedBy: auditActor }
+      : item),
+  });
 }
 
 /** Histórico de compras de um material a partir dos movimentos de entrada da obra. */

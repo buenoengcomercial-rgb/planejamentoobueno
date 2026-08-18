@@ -19,11 +19,12 @@ interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
   canManageFiscalNotes?: boolean;
+  canApproveInventory?: boolean;
   auditActor?: WarehouseAuditActor;
 }
 
-export default function Warehouse({ project, onProjectChange, canManageFiscalNotes = true, auditActor }: Props) {
-  const [tab, setTab] = useState('painel');
+export default function Warehouse({ project, onProjectChange, canManageFiscalNotes = true, canApproveInventory = true, auditActor }: Props) {
+  const [tab, setTab] = useState('notas');
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
   useEffect(() => {
@@ -58,7 +59,7 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
         <WarehouseIcon className="w-5 h-5 text-primary" />
         <div>
           <h2 className="text-xl font-bold">Estoque e Almoxarifado</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Recebimentos, retiradas, requisições e controle físico dos materiais.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Compras, estoque, retiradas, inventário e equipamentos em um fluxo rastreável.</p>
         </div>
         <span className="ml-auto text-xs text-muted-foreground">
           Abaixo do mínimo: <strong className="text-destructive">{summary.underMinCount}</strong>
@@ -79,13 +80,13 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
 
       <Tabs value={tab} onValueChange={setTab} className="w-full">
         <TabsList className="h-11 w-full justify-start overflow-x-auto bg-muted">
-          <TabsTrigger value="painel" className="text-xs"><LayoutDashboard className="w-3.5 h-3.5 mr-1" /> Painel</TabsTrigger>
-          <TabsTrigger value="estoque" className="text-xs"><Boxes className="w-3.5 h-3.5 mr-1" /> Materiais</TabsTrigger>
           <TabsTrigger value="notas" className="text-xs"><ReceiptText className="w-3.5 h-3.5 mr-1" /> Notas fiscais</TabsTrigger>
+          <TabsTrigger value="estoque" className="text-xs"><Boxes className="w-3.5 h-3.5 mr-1" /> Materiais</TabsTrigger>
+          <TabsTrigger value="requisicoes" className="text-xs"><ClipboardList className="w-3.5 h-3.5 mr-1" /> Retiradas</TabsTrigger>
           <TabsTrigger value="movimentos" className="text-xs"><ArrowLeftRight className="w-3.5 h-3.5 mr-1" /> Movimentações</TabsTrigger>
-          <TabsTrigger value="requisicoes" className="text-xs"><ClipboardList className="w-3.5 h-3.5 mr-1" /> Requisições</TabsTrigger>
-          <TabsTrigger value="equipamentos" className="text-xs"><HardHat className="w-3.5 h-3.5 mr-1" /> Equipamentos</TabsTrigger>
           <TabsTrigger value="inventario" className="text-xs"><ListChecks className="w-3.5 h-3.5 mr-1" /> Inventário</TabsTrigger>
+          <TabsTrigger value="equipamentos" className="text-xs"><HardHat className="w-3.5 h-3.5 mr-1" /> Equipamentos</TabsTrigger>
+          <TabsTrigger value="painel" className="text-xs"><LayoutDashboard className="w-3.5 h-3.5 mr-1" /> Painel</TabsTrigger>
           <TabsTrigger value="relatorios" className="text-xs"><FileBarChart className="w-3.5 h-3.5 mr-1" /> Relatórios</TabsTrigger>
         </TabsList>
 
@@ -93,7 +94,7 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
           <WarehousePanel project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
         </TabsContent>
         <TabsContent value="estoque" className="mt-3">
-          <WarehouseStockTab project={ensured} onProjectChange={onProjectChange} />
+          <WarehouseStockTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
         </TabsContent>
         <TabsContent value="notas" className="mt-3">
           <WarehouseFiscalNotesTab
@@ -110,10 +111,10 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
           <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
         </TabsContent>
         <TabsContent value="equipamentos" className="mt-3">
-          <WarehouseEquipmentsTab project={ensured} onProjectChange={onProjectChange} />
+          <WarehouseEquipmentsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
         </TabsContent>
         <TabsContent value="inventario" className="mt-3">
-          <WarehouseInventoryTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
+          <WarehouseInventoryTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canApprove={canApproveInventory} />
         </TabsContent>
         <TabsContent value="relatorios" className="mt-3">
           <WarehouseReportsTab project={ensured} />

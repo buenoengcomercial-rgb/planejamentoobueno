@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Additive, AdditiveComposition, MaterialComparison, Project } from '@/types/project';
+import type { Additive, AdditiveComposition, ComparisonItem, MaterialComparison, Project } from '@/types/project';
 import {
   computeStockRows,
   getActiveComparisonItems,
@@ -310,7 +310,7 @@ describe('quantidades contratuais e de aditivo dos materiais', () => {
 
   it('remove suprimidos sem compra e arquiva os comprados preservando estoque e histórico', () => {
     const base = composition('base', { quantity: 5 });
-    const comparisonItem = {
+    const comparisonItem: ComparisonItem = {
       id: 'item',
       sourceId: 'input-base',
       code: 'MAT-1',

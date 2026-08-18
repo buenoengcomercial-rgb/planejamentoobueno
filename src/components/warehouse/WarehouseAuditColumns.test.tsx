@@ -24,7 +24,9 @@ function auditProject(): Project {
 describe('colunas de auditoria do almoxarifado', () => {
   it('exibe criador e último alterador em Movimentações', () => {
     render(<WarehouseMovementsTab project={auditProject()} onProjectChange={vi.fn()} />);
-    expect(screen.getByRole('columnheader', { name: 'Incluído / alterado por' })).toBeInTheDocument();
+    expect(screen.getByText('Extrato imutável do estoque')).toBeInTheDocument();
+    expect(screen.getAllByText(/Incluído por:/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Alterado por:/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Alice/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Bruno/).length).toBeGreaterThan(0);
   });

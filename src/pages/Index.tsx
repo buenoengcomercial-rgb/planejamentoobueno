@@ -891,6 +891,7 @@ export default function Index() {
             project={project}
             onProjectChange={warehouseSetter}
             canManageFiscalNotes={role !== 'viewer'}
+            canApproveInventory={role === 'owner' || role === 'admin'}
             auditActor={auditActor}
           />
         );

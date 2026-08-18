@@ -1,296 +1,138 @@
 import { useMemo, useState } from 'react';
-import type { Project, WarehouseAuditActor, WarehouseMovementType, WarehouseAttachment } from '@/types/project';
+import type { Project, WarehouseAuditActor, WarehouseMovement, WarehouseMovementOriginType } from '@/types/project';
 import { Button } from '@/components/ui/button';
-import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { Input } from '@/components/ui/input';
-import { Plus, Undo2, Paperclip, Trash2, X } from 'lucide-react';
-import { addMovement, reverseMovement, removeMovement, MOVEMENT_LABEL, ensureWarehouse, makeAttachment, movementSign, computeWarehouseRows } from '@/lib/warehouse';
-import { getProjectSuppliers } from '@/lib/materialComparisons';
-import { getAllTasks } from '@/data/sampleProject';
+import { ChevronDown, FileDown, Paperclip, Search } from 'lucide-react';
+import { ensureWarehouse, MOVEMENT_LABEL, movementSign } from '@/lib/warehouse';
 import { getChapterNumbering } from '@/lib/chapters';
+import { openWarehouseAttachment, warehouseAttachmentErrorMessage } from '@/lib/warehouseAttachments';
+import { generateRequisitionReceipt } from './pdf';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
+import { toast } from 'sonner';
 
 interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; }
 
-const TYPES: WarehouseMovementType[] = ['entrada', 'devolucao', 'retirada'];
+interface MovementGroup {
+  key: string;
+  originType: WarehouseMovementOriginType;
+  originId?: string;
+  label: string;
+  date: string;
+  movements: WarehouseMovement[];
+}
 
-const inputQty = (value: number | undefined) =>
-  value != null && Number.isFinite(value)
-    ? value.toLocaleString('pt-BR', { maximumFractionDigits: 2 })
-    : '';
+function movementOrigin(movement: WarehouseMovement): { type: WarehouseMovementOriginType; id?: string } {
+  if (movement.originType) return { type: movement.originType, id: movement.originId };
+  if (movement.fiscalNoteId) return { type: 'fiscal_note', id: movement.fiscalNoteId };
+  if (movement.requisitionId) return { type: 'withdrawal', id: movement.requisitionId };
+  if (movement.inventorySessionId) return { type: 'inventory', id: movement.inventorySessionId };
+  if (movement.reversesId) return { type: 'reversal', id: movement.reversesId };
+  return { type: 'legacy', id: movement.id };
+}
 
-export default function WarehouseMovementsTab({ project, onProjectChange, auditActor }: Props) {
+const ORIGIN_LABEL: Record<WarehouseMovementOriginType, string> = {
+  fiscal_note: 'Nota fiscal',
+  withdrawal: 'Retirada',
+  inventory: 'Inventário',
+  return: 'Devolução',
+  loss: 'Perda / avaria',
+  reversal: 'Estorno',
+  legacy: 'Registro legado',
+};
+
+export default function WarehouseMovementsTab({ project }: Props) {
   const wh = ensureWarehouse(project).warehouse!;
-  const { confirm, dialog: confirmDialog } = useConfirmDelete();
-  const rows = useMemo(
-    () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true }),
-    [project],
-  );
-  const suppliers = useMemo(() => getProjectSuppliers(project), [project]);
-  const tasks = useMemo(() => getAllTasks(project), [project]);
-  const taskById = useMemo(() => new Map(tasks.map(task => [task.id, task.name])), [tasks]);
-  const chapterNumbering = useMemo(() => getChapterNumbering(project), [project]);
-  const mainChapters = useMemo(
-    () => (project.phases ?? []).filter(phase => !phase.parentId),
-    [project.phases],
-  );
-  const chapterById = useMemo(() => new Map(mainChapters.map(phase => [phase.id, `${chapterNumbering.get(phase.id) ?? ''} ${phase.name}`.trim()])), [mainChapters, chapterNumbering]);
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({
-    type: 'entrada' as WarehouseMovementType,
-    date: new Date().toISOString().slice(0, 10),
-    itemKey: '',
-    quantity: '',
-    unitPrice: '',
-    supplierId: '',
-    invoiceNumber: '',
-    notes: '',
-    responsible: '',
-    taskId: '',
-    chapterId: '',
-  });
-  const [attachments, setAttachments] = useState<WarehouseAttachment[]>([]);
+  const [search, setSearch] = useState('');
+  const [type, setType] = useState('all');
+  const [origin, setOrigin] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const numbering = useMemo(() => getChapterNumbering(project), [project]);
+  const chapterNames = useMemo(() => new Map((project.phases ?? []).filter(phase => !phase.parentId).map(phase => [phase.id, `${numbering.get(phase.id) ?? ''} ${phase.name}`.trim()])), [numbering, project.phases]);
 
-  const item = rows.find(r => r.key === form.itemKey);
-  const shouldLinkChapter = form.type === 'retirada';
+  const groups = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase('pt-BR');
+    const filtered = wh.movements.filter(movement => {
+      const source = movementOrigin(movement);
+      if (type !== 'all' && movement.type !== type) return false;
+      if (origin !== 'all' && source.type !== origin) return false;
+      if (dateFrom && movement.date < dateFrom) return false;
+      if (dateTo && movement.date > dateTo) return false;
+      if (query && ![movement.itemDescription, movement.itemCode, movement.invoiceNumber, movement.workerName, movement.notes, movement.createdBy?.userName, movement.createdBy?.userEmail].some(value => value?.toLocaleLowerCase('pt-BR').includes(query))) return false;
+      return true;
+    });
+    const map = new Map<string, MovementGroup>();
+    for (const movement of filtered) {
+      const source = movementOrigin(movement);
+      const key = `${source.type}:${source.id || movement.id}`;
+      let group = map.get(key);
+      if (!group) {
+        const note = source.type === 'fiscal_note' ? wh.fiscalNotes?.find(candidate => candidate.id === source.id) : undefined;
+        const requisition = source.type === 'withdrawal' ? wh.requisitions.find(candidate => candidate.id === source.id) : undefined;
+        const inventory = source.type === 'inventory' ? wh.inventorySessions?.find(candidate => candidate.id === source.id) : undefined;
+        group = {
+          key,
+          originType: source.type,
+          originId: source.id,
+          label: note ? `Nota ${note.invoiceNumber || note.id}` : requisition?.number || inventory?.number || `${ORIGIN_LABEL[source.type]} ${source.id?.slice(0, 8) || ''}`,
+          date: movement.date,
+          movements: [],
+        };
+        map.set(key, group);
+      }
+      group.movements.push(movement);
+      if (movement.date > group.date) group.date = movement.date;
+    }
+    return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date));
+  }, [dateFrom, dateTo, origin, search, type, wh]);
 
-  const submit = () => {
-    if (!item) return;
-    const qty = parseFloat(form.quantity.replace(',', '.'));
-    if (!qty || qty <= 0) return;
-    onProjectChange(addMovement(project, {
-      type: form.type,
-      date: form.date,
-      itemKey: item.key,
-      itemCode: item.code,
-      itemDescription: item.description,
-      itemUnit: item.unit,
-      quantity: qty,
-      unitPrice: form.unitPrice ? parseFloat(form.unitPrice.replace(',', '.')) : undefined,
-      supplierId: form.supplierId || undefined,
-      invoiceNumber: form.invoiceNumber || undefined,
-      notes: form.notes || undefined,
-      responsible: form.responsible || undefined,
-      chapterId: form.chapterId || undefined,
-      taskId: form.taskId || undefined,
-      attachments,
-    }, auditActor));
-    setOpen(false);
-    setForm({ ...form, quantity: '', notes: '', invoiceNumber: '', chapterId: '' });
-    setAttachments([]);
+  const openAttachments = async (group: MovementGroup) => {
+    const attachment = group.movements.flatMap(movement => movement.attachments ?? [])[0];
+    if (!attachment) return toast.error('Esta operação não possui anexos.');
+    try { await openWarehouseAttachment(attachment); } catch (error) { toast.error(warehouseAttachmentErrorMessage(error)); }
   };
 
-  const handleFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    const made = await Promise.all(files.map(f => makeAttachment(f, project.id, form.type === 'entrada' ? 'nf' : 'outro')));
-    setAttachments(prev => [...prev, ...made]);
-    e.target.value = '';
-  };
-
-  const applyItemDefaults = (itemKey: string, type: WarehouseMovementType = form.type) => {
-    const selected = rows.find(row => row.key === itemKey);
-    const pendingReceipt = selected ? Math.max(0, selected.purchased - selected.received) : 0;
-    setForm(prev => ({
-      ...prev,
-      itemKey,
-      quantity: type === 'entrada' && selected ? inputQty(pendingReceipt || selected.purchased) : prev.quantity,
-      unitPrice: type === 'entrada' && selected ? inputQty(selected.unitPrice) : prev.unitPrice,
-      supplierId: type === 'entrada' && selected ? selected.supplierId ?? '' : prev.supplierId,
-    }));
+  const receipt = (group: MovementGroup) => {
+    const requisition = group.originType === 'withdrawal' ? wh.requisitions.find(candidate => candidate.id === group.originId) : undefined;
+    if (!requisition) return toast.error('Não há comprovante de retirada para esta origem.');
+    generateRequisitionReceipt(project, requisition);
   };
 
   return (
-    <>
-      <div className="space-y-3">
-        <div className="flex items-center gap-2 bg-card border border-border rounded-md p-2">
-          <Button size="sm" onClick={() => setOpen(o => !o)}>
-            <Plus className="w-3.5 h-3.5 mr-1" /> Nova movimentação
-          </Button>
-          <div className="h-5 w-px bg-border mx-1" />
-          <span className="text-[11px] text-muted-foreground">{wh.movements.length} movimento(s)</span>
-          <span className="ml-auto text-[11px] text-muted-foreground">Use <kbd className="px-1 bg-muted rounded">Estornar</kbd> para reverter um lançamento.</span>
-        </div>
-
-        {open && (
-          <div className="bg-card border border-border rounded-lg p-3 space-y-2">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              <select
-                className="h-8 text-xs border border-border rounded px-2 bg-background"
-                value={form.type}
-                onChange={e => {
-                  const nextType = e.target.value as WarehouseMovementType;
-                  setForm(prev => ({
-                    ...prev,
-                    type: nextType,
-                    taskId: '',
-                    chapterId: '',
-                    supplierId: nextType === 'entrada' ? prev.supplierId : '',
-                  }));
-                  if (form.itemKey) applyItemDefaults(form.itemKey, nextType);
-                }}
-              >
-                {TYPES.map(t => <option key={t} value={t}>{MOVEMENT_LABEL[t]}</option>)}
-              </select>
-              <Input type="date" className="h-8 text-xs" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} />
-              <select className="h-8 text-xs border border-border rounded px-2 bg-background col-span-2" value={form.itemKey} onChange={e => applyItemDefaults(e.target.value)}>
-                <option value="">— selecione o insumo —</option>
-                {rows.map(r => <option key={r.key} value={r.key}>{r.description} ({r.unit})</option>)}
-              </select>
-              <Input placeholder={`Quantidade ${item ? `(${item.unit})` : ''}`} value={form.quantity} onChange={e => setForm({ ...form, quantity: e.target.value })} className="h-8 text-xs" />
-              <Input placeholder="Valor unit. (R$)" value={form.unitPrice} onChange={e => setForm({ ...form, unitPrice: e.target.value })} className="h-8 text-xs" />
-              {shouldLinkChapter && (
-                <select className="h-8 text-xs border border-border rounded px-2 bg-background col-span-2" value={form.chapterId} onChange={e => setForm({ ...form, chapterId: e.target.value })}>
-                  <option value="">-- vincular ao capítulo principal --</option>
-                  {mainChapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapterById.get(chapter.id)}</option>)}
-                </select>
-              )}
-              {form.type === 'entrada' && (
-                <>
-                  <select className="h-8 text-xs border border-border rounded px-2 bg-background" value={form.supplierId} onChange={e => setForm({ ...form, supplierId: e.target.value })}>
-                    <option value="">— fornecedor —</option>
-                    {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
-                  <Input placeholder="Nota fiscal" value={form.invoiceNumber} onChange={e => setForm({ ...form, invoiceNumber: e.target.value })} className="h-8 text-xs" />
-                </>
-              )}
-              <Input placeholder="Responsável" value={form.responsible} onChange={e => setForm({ ...form, responsible: e.target.value })} className="h-8 text-xs" />
-              <Input placeholder="Observação" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} className="h-8 text-xs col-span-2" />
-            </div>
-
-            <div className="flex items-center gap-2">
-              <label className="inline-flex items-center gap-1 text-[11px] cursor-pointer border border-border rounded px-2 py-1 hover:bg-muted">
-                <Paperclip className="w-3 h-3" /> Anexar (NF, foto)
-                <input type="file" multiple accept="image/*,application/pdf" className="hidden" onChange={handleFiles} />
-              </label>
-              {attachments.map(a => (
-                <span key={a.id} className="inline-flex items-center gap-1 text-[10px] bg-muted px-1.5 py-0.5 rounded">
-                  {a.name}
-                  <button onClick={() => setAttachments(prev => prev.filter(x => x.id !== a.id))}><X className="w-2.5 h-2.5" /></button>
-                </span>
-              ))}
-            </div>
-
-            <div className="flex justify-end gap-2">
-              <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancelar</Button>
-              <Button size="sm" onClick={submit} disabled={!item || !form.quantity}>Registrar</Button>
-            </div>
-          </div>
-        )}
-
-        <div className="space-y-2 md:hidden">
-          {wh.movements.slice().sort((a, b) => b.date.localeCompare(a.date)).map(m => {
-            const sign = movementSign(m);
-            const reversed = !!m.reversedById;
-            return (
-              <div key={m.id} className={`rounded-lg border bg-card p-3 ${reversed ? 'opacity-50' : ''}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div><div className="font-medium">{m.itemDescription}</div><div className="text-xs text-muted-foreground">{m.date} · {MOVEMENT_LABEL[m.type]}</div></div>
-                  <div className={`font-mono text-sm ${sign > 0 ? 'text-success' : sign < 0 ? 'text-destructive' : ''}`}>{sign > 0 ? '+' : sign < 0 ? '−' : ''}{m.quantity.toLocaleString('pt-BR')} {m.itemUnit}</div>
-                </div>
-                <div className="mt-2 text-xs">Responsável: {m.responsible ?? '—'}</div>
-                <WarehouseAuditIdentity createdBy={m.createdBy} updatedBy={m.updatedBy} className="mt-2 space-y-1 rounded-md bg-muted/40 p-2 text-xs" />
-                {!reversed && m.type !== 'estorno' && <div className="mt-2 flex justify-end gap-2">
-                  <Button size="sm" variant="outline" onClick={() => confirm({ title: 'Estornar este movimento?', description: <p>Será criado um estorno para reverter este lançamento no almoxarifado.</p>, confirmLabel: 'Estornar movimento' }, () => onProjectChange(reverseMovement(project, m.id, auditActor)))}><Undo2 className="mr-1 h-3.5 w-3.5" />Estornar</Button>
-                  <Button size="sm" variant="ghost" className="text-destructive" onClick={() => confirm({ title: 'Excluir movimento?', description: <p>Este lançamento será removido do almoxarifado.</p>, confirmLabel: 'Excluir movimento' }, () => onProjectChange(removeMovement(project, m.id)))}><Trash2 className="mr-1 h-3.5 w-3.5" />Excluir</Button>
-                </div>}
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="hidden bg-card border border-border rounded-lg overflow-hidden md:block">
-          <div className="max-h-[calc(100vh-360px)] overflow-auto">
-            <table className="w-full text-xs">
-            <thead className="bg-muted sticky top-0">
-              <tr>
-                <th className="p-2 text-left w-20">Data</th>
-                <th className="p-2 text-left w-32">Tipo</th>
-                <th className="p-2 text-left">Insumo</th>
-                <th className="p-2 text-right w-20">Qtd</th>
-                <th className="p-2 text-left">Origem/Destino</th>
-                <th className="p-2 text-left w-32">Responsável</th>
-                <th className="min-w-44 p-2 text-left">Incluído / alterado por</th>
-                <th className="p-2 text-center w-16">Anexos</th>
-                <th className="p-2 w-16"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {wh.movements.slice().sort((a, b) => b.date.localeCompare(a.date)).map(m => {
-                const sign = movementSign(m);
-                const reversed = !!m.reversedById;
-                const taskName = m.taskId ? taskById.get(m.taskId) : undefined;
-                const chapterName = m.chapterId ? chapterById.get(m.chapterId) : undefined;
-                return (
-                  <tr key={m.id} className={`border-t border-border ${reversed ? 'opacity-50 line-through' : ''}`}>
-                    <td className="p-1.5 font-mono text-[10px]">{m.date}</td>
-                    <td className="p-1.5">{MOVEMENT_LABEL[m.type]}</td>
-                    <td className="p-1.5">{m.itemDescription}</td>
-                    <td className={`p-1.5 text-right font-mono ${sign > 0 ? 'text-success' : sign < 0 ? 'text-destructive' : ''}`}>
-                      {sign > 0 ? '+' : sign < 0 ? '−' : ''}{m.quantity.toLocaleString('pt-BR')} {m.itemUnit}
-                    </td>
-                    <td className="p-1.5 text-[10px] text-muted-foreground">
-                      {m.invoiceNumber && `NF ${m.invoiceNumber} `}
-                      {m.workerName && `· ${m.workerName} `}
-                      {chapterName && `· ${chapterName} `}
-                      {m.taskId && `· ${taskName ?? `tarefa ${m.taskId.slice(0, 6)}`} `}
-                      {m.notes && `· ${m.notes}`}
-                    </td>
-                    <td className="p-1.5 text-[10px]">{m.responsible ?? m.user ?? '—'}</td>
-                    <td className="p-1.5"><WarehouseAuditIdentity createdBy={m.createdBy} updatedBy={m.updatedBy} className="space-y-0.5 text-[11px]" /></td>
-                    <td className="p-1.5 text-center text-[10px]">{m.attachments?.length ?? 0}</td>
-                    <td className="p-1.5 text-right">
-                      {!reversed && m.type !== 'estorno' && (
-                        <div className="inline-flex items-center justify-end gap-2">
-                          <button title="Estornar" className="text-warning" onClick={() => {
-                            confirm(
-                              {
-                                title: 'Estornar este movimento?',
-                                description: (
-                                  <p>
-                                    Sera criado um estorno para reverter este lancamento no almoxarifado.
-                                  </p>
-                                ),
-                                confirmLabel: 'Estornar movimento',
-                              },
-                              () => onProjectChange(reverseMovement(project, m.id, auditActor)),
-                            );
-                          }}>
-                            <Undo2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button title="Excluir movimento" className="text-destructive" onClick={() => {
-                            confirm(
-                              {
-                                title: 'Excluir movimento?',
-                                description: (
-                                  <p>
-                                    Este lancamento sera removido do almoxarifado. Use esta opcao para registros incluidos indevidamente.
-                                  </p>
-                                ),
-                                confirmLabel: 'Excluir movimento',
-                              },
-                              () => onProjectChange(removeMovement(project, m.id)),
-                            );
-                          }}>
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-              {wh.movements.length === 0 && (
-                <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">
-                  <div className="text-xs">Nenhuma movimentação registrada.</div>
-                  <div className="text-[11px] mt-1">Clique em <strong>Nova movimentação</strong> para registrar a primeira entrada de material.</div>
-                </td></tr>
-              )}
-              </tbody>
-            </table>
-          </div>
+    <div className="space-y-3">
+      <div className="rounded-md border bg-card p-3">
+        <div className="mb-3"><h3 className="font-semibold">Extrato imutável do estoque</h3><p className="text-sm text-muted-foreground">Entradas, saídas, inventários e estornos aparecem automaticamente. Nada é criado, editado ou excluído nesta tela.</p></div>
+        <div className="grid gap-2 md:grid-cols-6">
+          <div className="relative md:col-span-2"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input className="min-h-11 pl-9" value={search} onChange={event => setSearch(event.target.value)} placeholder="Material, nota, recebedor ou usuário" /></div>
+          <select className="min-h-11 rounded-md border bg-background px-3 text-sm" value={type} onChange={event => setType(event.target.value)}><option value="all">Todos os tipos</option>{Object.entries(MOVEMENT_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+          <select className="min-h-11 rounded-md border bg-background px-3 text-sm" value={origin} onChange={event => setOrigin(event.target.value)}><option value="all">Todas as origens</option>{Object.entries(ORIGIN_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+          <Input className="min-h-11" type="date" value={dateFrom} onChange={event => setDateFrom(event.target.value)} aria-label="Período inicial" />
+          <Input className="min-h-11" type="date" value={dateTo} onChange={event => setDateTo(event.target.value)} aria-label="Período final" />
         </div>
       </div>
-      {confirmDialog}
-    </>
+
+      <div className="space-y-2">
+        {groups.map(group => {
+          const quantity = group.movements.reduce((total, movement) => total + movementSign(movement) * movement.quantity, 0);
+          const chapter = group.movements.find(movement => movement.chapterId)?.chapterId;
+          const team = group.movements.find(movement => movement.teamId)?.teamId;
+          const hasAttachments = group.movements.some(movement => movement.attachments?.length);
+          return (
+            <details key={group.key} className="group overflow-hidden rounded-md border bg-card">
+              <summary className="flex min-h-14 cursor-pointer list-none items-center gap-3 p-3 hover:bg-muted/30">
+                <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+                <div className="min-w-0 flex-1"><div className="font-semibold">{group.label}</div><div className="text-xs text-muted-foreground">{ORIGIN_LABEL[group.originType]} · {group.date} · {group.movements.length} movimento(s){chapter ? ` · ${chapterNames.get(chapter) || chapter}` : ''}{team ? ` · Equipe ${team}` : ''}</div></div>
+                <div className={`font-mono text-sm font-semibold ${quantity < 0 ? 'text-destructive' : quantity > 0 ? 'text-success' : ''}`}>{quantity > 0 ? '+' : ''}{quantity.toLocaleString('pt-BR')}</div>
+              </summary>
+              <div className="border-t p-3">
+                <div className="mb-3 flex flex-wrap justify-end gap-2">{group.originType === 'withdrawal' && <Button size="sm" variant="outline" onClick={() => receipt(group)}><FileDown className="mr-2 h-4 w-4" />Ver comprovante</Button>}<Button size="sm" variant="outline" disabled={!hasAttachments} onClick={() => void openAttachments(group)}><Paperclip className="mr-2 h-4 w-4" />Ver anexos</Button></div>
+                <div className="space-y-2">{group.movements.map(movement => { const sign = movementSign(movement); return <div key={movement.id} className={`grid gap-2 rounded-md border p-3 md:grid-cols-[120px_1fr_140px_220px] ${movement.reversedById ? 'opacity-60' : ''}`}><div><div className="text-xs text-muted-foreground">Tipo</div><div className="text-sm font-medium">{MOVEMENT_LABEL[movement.type]}{movement.reversedById ? ' (estornado)' : ''}</div></div><div><div className="text-xs text-muted-foreground">Material</div><div className="text-sm">{movement.itemCode ? `${movement.itemCode} · ` : ''}{movement.itemDescription}</div></div><div><div className="text-xs text-muted-foreground">Quantidade / custo</div><div className="font-mono text-sm">{sign > 0 ? '+' : sign < 0 ? '−' : ''}{movement.quantity.toLocaleString('pt-BR')} {movement.itemUnit}</div><div className="text-xs text-muted-foreground">{movement.costSnapshot != null ? `${movement.costSnapshot.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/un` : 'Cálculo incompleto'}</div></div><WarehouseAuditIdentity createdBy={movement.createdBy} updatedBy={movement.updatedBy} className="space-y-0.5 text-xs" /></div>; })}</div>
+              </div>
+            </details>
+          );
+        })}
+        {!groups.length && <div className="rounded-md border border-dashed p-10 text-center text-sm text-muted-foreground">Nenhum movimento encontrado com os filtros selecionados.</div>}
+      </div>
+    </div>
   );
 }

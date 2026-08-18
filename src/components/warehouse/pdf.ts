@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import type { Project, WarehouseRequisition, CustodyTerm } from '@/types/project';
+import type { Project, WarehouseRequisition, CustodyTerm, WarehouseInventorySession } from '@/types/project';
 
 function header(doc: jsPDF, project: Project, title: string, subtitle: string) {
   doc.setFontSize(14);
@@ -34,10 +34,11 @@ export function generateRequisitionReceipt(project: Project, req: WarehouseRequi
   header(doc, project, 'RECIBO DE RETIRADA DE MATERIAL', `${req.number} · ${req.date}`);
   doc.setFontSize(10);
   let y = 40;
-  doc.text(`Solicitante: ${req.requesterName ?? '—'}`, 14, y); y += 5;
-  doc.text(`Frente de serviço: ${req.workFront ?? '—'}`, 14, y); y += 5;
-  doc.text(`Tarefa/EAP: ${req.taskName ?? '—'}`, 14, y); y += 5;
+  doc.text(`Recebedor: ${req.receiverName ?? req.requesterName ?? '—'}`, 14, y); y += 5;
+  doc.text(`Prédio / capítulo: ${req.chapterName ?? req.taskName ?? '—'}`, 14, y); y += 5;
+  doc.text(`Equipe: ${req.teamName ?? req.teamId ?? '—'}`, 14, y); y += 5;
   doc.text(`Almoxarife: ${req.warehouseOperator ?? '—'}`, 14, y); y += 5;
+  doc.text(`Fotos da entrega: ${req.deliveryAttachments?.length ?? 0}`, 14, y); y += 5;
   if (req.notes) { doc.text(`Observação: ${req.notes}`, 14, y); y += 5; }
 
   autoTable(doc, {
@@ -48,9 +49,35 @@ export function generateRequisitionReceipt(project: Project, req: WarehouseRequi
     headStyles: { fillColor: [60, 60, 60] },
   });
   const finalY = (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y + 30;
-  signatures(doc, finalY + 15, 'Almoxarife', req.signatureWarehouse, 'Recebedor', req.signatureReceiver);
+  signatures(doc, finalY + 15, 'Operador identificado pelo login', undefined, 'Recebedor', req.signatureReceiver);
 
   doc.save(`recibo-${req.number}.pdf`);
+}
+
+export function generateInventoryReportPdf(project: Project, session: WarehouseInventorySession) {
+  const doc = new jsPDF();
+  header(doc, project, 'RELATÓRIO MENSAL DE INVENTÁRIO', `${session.number} · ${session.month}`);
+  autoTable(doc, {
+    startY: 40,
+    head: [['Código', 'Material', 'Un', 'Esperado', 'Contado', 'Diferença', 'Valor']],
+    body: session.lines.map(line => {
+      const impact = line.difference != null && line.unitCostSnapshot != null
+        ? line.difference * line.unitCostSnapshot
+        : undefined;
+      return [
+        line.itemCode ?? '—',
+        line.itemDescription,
+        line.itemUnit,
+        line.expectedQuantity ?? '—',
+        line.countedQuantity ?? '—',
+        line.difference ?? '—',
+        impact == null ? 'Cálculo incompleto' : impact.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }),
+      ];
+    }),
+    styles: { fontSize: 8 },
+    headStyles: { fillColor: [60, 60, 60] },
+  });
+  doc.save(`${session.number}.pdf`);
 }
 
 export function generateCustodyTermPdf(project: Project, term: CustodyTerm) {
@@ -59,7 +86,10 @@ export function generateCustodyTermPdf(project: Project, term: CustodyTerm) {
   doc.setFontSize(10);
   let y = 40;
   const lines = [
+    `Código interno: ${term.equipmentInternalCode ?? '—'}`,
     `Equipamento: ${term.equipmentName}`,
+    `Marca / modelo: ${[term.equipmentBrand, term.equipmentModel].filter(Boolean).join(' ') || '—'}`,
+    `Número de série: ${term.equipmentSerial ?? '—'}`,
     `Patrimônio: ${term.equipmentPatrimony ?? '—'}`,
     `Recebedor: ${term.workerName}`,
     `Devolver até: ${term.dueDate ?? '—'}`,

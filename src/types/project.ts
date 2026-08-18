@@ -730,7 +730,9 @@ export interface WarehouseItemConfig {
   defaultLocationId?: string;
   /** Item oculto das operações correntes, preservado para histórico e auditoria. */
   archivedAt?: string;
-  archivedReason?: 'fiscal_note_canceled';
+  archivedReason?: 'fiscal_note_canceled' | 'manual_archive';
+  /** Justificativa para material comprado que não estava previsto no orçamento. */
+  unplannedReason?: string;
 }
 
 export interface WarehouseAttachment {
@@ -794,7 +796,22 @@ export interface WarehouseMovement {
   reversedById?: string;
   /** ID do diário em que foi publicado (quando aplicável). */
   publishedToDailyReportId?: string;
+  /** Origem imutável da operação que gerou o movimento. */
+  originType?: WarehouseMovementOriginType;
+  originId?: string;
+  inventorySessionId?: string;
+  /** Custo unitário congelado no instante da saída/ajuste. */
+  costSnapshot?: number;
 }
+
+export type WarehouseMovementOriginType =
+  | 'fiscal_note'
+  | 'withdrawal'
+  | 'inventory'
+  | 'return'
+  | 'loss'
+  | 'reversal'
+  | 'legacy';
 
 export type WarehouseFiscalNoteStatus =
   | 'em_processamento'
@@ -843,6 +860,15 @@ export interface WarehouseFiscalNoteItem {
   linkConfidence?: number;
   /** Confiança da IA na leitura deste item (0-1). */
   confidence?: number;
+  /** Insumo previsto confirmado pelo operador. */
+  projectMaterialKey?: string;
+  projectMaterialCode?: string;
+  projectMaterialDescription?: string;
+  projectMaterialUnit?: string;
+  projectMaterialConversionFactor?: number;
+  projectMaterialDecision?: 'linked' | 'unplanned';
+  projectMaterialJustification?: string;
+  projectMaterialConfidence?: number;
 }
 
 export type FiscalInvoicePaymentStatus = 'aberta' | 'paga' | 'vencida' | 'cancelada';
@@ -918,6 +944,8 @@ export interface WarehouseRequisitionItem {
   quantity: number;
   /** Movimento de retirada gerado quando a requisição foi entregue. */
   movementId?: string;
+  /** Custo médio congelado no momento da entrega. */
+  unitCostSnapshot?: number;
 }
 
 export type WarehouseRequisitionStatus = 'rascunho' | 'entregue' | 'cancelada';
@@ -929,14 +957,20 @@ export interface WarehouseRequisition {
   status: WarehouseRequisitionStatus;
   taskId?: string;
   taskName?: string;
+  chapterId?: string;
+  chapterName?: string;
   teamId?: string;
+  teamName?: string;
   requesterName?: string;
+  receiverName?: string;
   workFront?: string;
   notes?: string;
   items: WarehouseRequisitionItem[];
   signatureWarehouse?: string; // dataURL PNG
   signatureReceiver?: string;
   warehouseOperator?: string;
+  deliveryAttachments?: WarehouseAttachment[];
+  deliveryIdempotencyKey?: string;
   /** Se true, foi espelhada no diário do dia. */
   publishedToDailyReportId?: string;
   createdAt: string;
@@ -945,14 +979,30 @@ export interface WarehouseRequisition {
   updatedBy?: WarehouseAuditActor;
 }
 
+export type EquipmentStatus = 'disponivel' | 'em_uso' | 'em_manutencao' | 'arquivado';
+export type EquipmentExtractionStatus = 'idle' | 'reading' | 'ready' | 'failed';
+
 export interface Equipment {
   id: string;
   name: string;
+  description?: string;
   patrimony?: string;
   serial?: string;
+  brand?: string;
+  model?: string;
   category?: string;
   notes?: string;
+  internalCode?: string;
+  status?: EquipmentStatus;
+  photos?: WarehouseAttachment[];
+  extractionStatus?: EquipmentExtractionStatus;
+  extractionError?: string;
+  extractionConfidence?: Partial<Record<'brand' | 'model' | 'serial' | 'category' | 'description', number>>;
   createdAt: string;
+  updatedAt?: string;
+  createdBy?: WarehouseAuditActor;
+  updatedBy?: WarehouseAuditActor;
+  archivedAt?: string;
 }
 
 export type CustodyTermStatus =
@@ -968,6 +1018,11 @@ export interface CustodyTerm {
   equipmentId: string;
   equipmentName: string;
   equipmentPatrimony?: string;
+  equipmentInternalCode?: string;
+  equipmentBrand?: string;
+  equipmentModel?: string;
+  equipmentSerial?: string;
+  equipmentPhoto?: WarehouseAttachment;
   issuedAt: string;
   dueDate?: string;
   workerName: string;
@@ -981,7 +1036,58 @@ export interface CustodyTerm {
   stateOnReturn?: string;
   divergenceNotes?: string;
   attachments?: WarehouseAttachment[];
+  returnAttachments?: WarehouseAttachment[];
   createdAt: string;
+}
+
+export type WarehouseMaterialLinkSource = 'supplier_history' | 'exact_code' | 'description_unit' | 'similarity' | 'manual';
+
+/** Vínculo confirmado entre o material físico canônico e um insumo previsto. */
+export interface WarehouseProjectMaterialLink {
+  id: string;
+  warehouseItemKey: string;
+  projectMaterialKey: string;
+  projectMaterialCode?: string;
+  projectMaterialDescription: string;
+  projectMaterialUnit: string;
+  conversionFactor: number;
+  source: WarehouseMaterialLinkSource;
+  confidence?: number;
+  supplierCnpj?: string;
+  supplierProductCode?: string;
+  createdAt: string;
+  updatedAt?: string;
+  createdBy?: WarehouseAuditActor;
+  updatedBy?: WarehouseAuditActor;
+}
+
+export type WarehouseInventorySessionStatus = 'em_contagem' | 'em_revisao' | 'aplicado' | 'cancelado';
+
+export interface WarehouseInventoryLine {
+  itemKey: string;
+  itemCode?: string;
+  itemDescription: string;
+  itemUnit: string;
+  countedQuantity?: number;
+  expectedQuantity?: number;
+  difference?: number;
+  unitCostSnapshot?: number;
+  movementId?: string;
+}
+
+export interface WarehouseInventorySession {
+  id: string;
+  number: string;
+  month: string;
+  status: WarehouseInventorySessionStatus;
+  startedAt: string;
+  closedAt?: string;
+  appliedAt?: string;
+  canceledAt?: string;
+  justification?: string;
+  lines: WarehouseInventoryLine[];
+  createdBy?: WarehouseAuditActor;
+  updatedBy?: WarehouseAuditActor;
 }
 
 export interface WarehouseState {
@@ -992,6 +1098,9 @@ export interface WarehouseState {
   equipments: Equipment[];
   custodyTerms: CustodyTerm[];
   fiscalNotes?: WarehouseFiscalNote[];
+  materialLinks?: WarehouseProjectMaterialLink[];
+  inventorySessions?: WarehouseInventorySession[];
+  valuationMethod?: 'weighted_average';
 }
 
 // =================== LISTA DE MATERIAL / COMPARATIVOS ===================

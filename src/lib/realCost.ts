@@ -668,15 +668,9 @@ function buildInputRows(
     const marginPct = referenceTotal > 0 ? trunc2((grossProfit / referenceTotal) * 100) : 0;
     const sourceType = source.source === 'additive' ? 'additive_input' : 'analytic_input';
     const costClass = resolveMaterialCostClass(project, {
-      key: `${source.id}:${input.id}`,
       code: input.code || undefined,
-      bank: input.bank || undefined,
       description: input.description,
       unit: input.unit,
-      quantity: totalQuantity,
-      contractedQuantity: totalQuantity,
-      additiveQuantity: 0,
-      referencePrice: input.unitPrice || undefined,
       sourceType,
       sourceId: input.id,
       legacyInputType: input.type,

@@ -94,6 +94,11 @@ async function readDocument(container: HTMLElement, name = 'nota.jpg') {
   expect(await screen.findByText('Validar nota antes do lançamento')).toBeInTheDocument();
 }
 
+async function classifyReadItemAsUnplanned() {
+  fireEvent.change(screen.getByRole('combobox', { name: /Insumo do orçamento para/i }), { target: { value: '__unplanned__' } });
+  fireEvent.change(screen.getByPlaceholderText('Por que não estava previsto?'), { target: { value: 'Compra extraordinária da obra' } });
+}
+
 describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', () => {
   beforeEach(() => {
     invokeMock.mockReset().mockResolvedValue({
@@ -145,6 +150,8 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(onProjectChange).not.toHaveBeenCalled();
     expect(uploadMock).not.toHaveBeenCalled();
     expect(screen.getByText(/O estoque ainda não foi alterado/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirmar lançamento' })).toBeDisabled();
+    await classifyReadItemAsUnplanned();
     expect(screen.getByRole('button', { name: 'Confirmar lançamento' })).toBeEnabled();
     expect(screen.queryByText(/pendente.*lançado.*automaticamente/i)).not.toBeInTheDocument();
   });
@@ -164,6 +171,7 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     const onProjectChange = vi.fn();
     const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={onProjectChange} canManage auditActor={{ userName: 'Operador' }} />);
     await readDocument(view.container);
+    await classifyReadItemAsUnplanned();
     fireEvent.click(screen.getByRole('button', { name: 'Confirmar lançamento' }));
     await waitFor(() => expect(onProjectChange).toHaveBeenCalledTimes(1));
     const posted = onProjectChange.mock.calls[0][0] as Project;

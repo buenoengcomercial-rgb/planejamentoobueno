@@ -854,14 +854,20 @@ export function guessMaterialCostClass(input: {
   return 'unclassified';
 }
 
-export function resolveMaterialCostClass(project: Project, item: MaterialSuggestion | ComparisonItem): MaterialCostClass {
+export function resolveMaterialCostClass(
+  project: Project,
+  item: SuggestionLikeKey & {
+    sourceType?: ComparisonItem['sourceType'];
+    legacyInputType?: AdditiveInputType;
+  },
+): MaterialCostClass {
   const manual = project.materialCostClasses?.[linkKeyOf(item)];
   if (manual) return manual;
   return guessMaterialCostClass({
     description: item.description,
     unit: item.unit,
     sourceType: item.sourceType,
-    legacyInputType: 'legacyInputType' in item ? item.legacyInputType : undefined,
+    legacyInputType: item.legacyInputType,
   });
 }
 

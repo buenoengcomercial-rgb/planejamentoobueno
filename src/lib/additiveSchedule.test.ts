@@ -308,7 +308,7 @@ describe('Cronograma do Aditivo', () => {
     const { workbook } = await buildAdditiveScheduleWorkbook(prepared, active, rows);
     const exportedValues = Object.entries(workbook.Sheets.Atividades)
       .filter(([address]) => !address.startsWith('!'))
-      .map(([, cell]) => String(cell.v ?? ''));
+      .map(([, cell]) => String((cell as { v?: unknown }).v ?? ''));
     expect(exportedValues.some(value => value.includes('A execução depende de Novo serviço do aditivo'))).toBe(true);
 
     const unlinkedPreview: Project = {
@@ -468,6 +468,7 @@ describe('Cronograma do Aditivo', () => {
       isContracted: status === 'aditivo_contratado',
       scheduleDraft: {
         version: 1,
+        createdAt: '2026-08-13T12:00:00.000Z',
         updatedAt: '2026-08-13T12:00:00.000Z',
         plannedTasks: [],
         dependentTaskIds: [index === 0 ? 'task-1' : 'task-2'],
@@ -526,7 +527,7 @@ describe('Cronograma do Aditivo', () => {
     const doc = await buildAdditiveSchedulePdfDocument(withDraft, active, rows);
     const ganttRows = rows.filter(row => !row.description.startsWith('Impacto do aditivo - '));
     expect(doc.getNumberOfPages()).toBe(Math.max(1, Math.ceil(ganttRows.length / 14)));
-    const pdfCommands = ((doc as any).internal.pages as string[][]).flat().join('\n');
+    const pdfCommands = (doc as unknown as { internal: { pages: string[][] } }).internal.pages.flat().join('\n');
     expect(pdfCommands).toContain('DIAGRAMA DE GANTT');
     expect(pdfCommands).not.toContain('QUADRO DE ATIVIDADES');
     expect(pdfCommands).not.toContain('PREVISÃO FÍSICO-FINANCEIRA');
@@ -611,7 +612,7 @@ describe('Cronograma do Aditivo', () => {
     expect(tasks.map(row => row.item)).not.toContain('76');
     expect(tasks.map(row => row.item)).not.toContain('458');
     const doc = await buildAdditiveSchedulePdfDocument(scheduleProject, additive, sourceRows, false, scheduleProject);
-    const pdfCommands = ((doc as any).internal.pages as string[][]).flat().join('\n');
+    const pdfCommands = (doc as unknown as { internal: { pages: string[][] } }).internal.pages.flat().join('\n');
     expect(pdfCommands).toContain('Hidrantes');
     expect(pdfCommands).toContain('ITEM');
     const longTasks = Array.from({ length: 25 }, (_, index) => ({
@@ -635,7 +636,7 @@ describe('Cronograma do Aditivo', () => {
     }));
     const longDoc = await buildAdditiveSchedulePdfDocument(longProject, additive, longRows, false, longProject);
     expect(longDoc.getNumberOfPages()).toBeGreaterThan(1);
-    expect(((longDoc as any).internal.pages as string[][]).flat().join('\n')).toContain('CONTINUA');
+    expect((longDoc as unknown as { internal: { pages: string[][] } }).internal.pages.flat().join('\n')).toContain('CONTINUA');
     if (process.env.ADDITIVE_SCHEDULE_QA_DIR) {
       mkdirSync(process.env.ADDITIVE_SCHEDULE_QA_DIR, { recursive: true });
       writeFileSync(join(process.env.ADDITIVE_SCHEDULE_QA_DIR, 'cronograma-aditivo-hierarquia-qa.pdf'), Buffer.from(doc.output('arraybuffer')));

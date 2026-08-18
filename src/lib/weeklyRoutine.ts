@@ -125,7 +125,7 @@ export function buildWeeklyRoutine(project: Project, weekStart: string): WeeklyR
           completed: plannedQuantity > 0 ? actualQuantity >= plannedQuantity : task.percentComplete >= 100,
         } satisfies WeeklyRoutineActivity;
       })
-      .filter((activity): activity is WeeklyRoutineActivity => activity !== null)
+      .filter((activity): activity is NonNullable<typeof activity> => activity !== null)
       .sort((a, b) => a.chapterName.localeCompare(b.chapterName) || a.taskName.localeCompare(b.taskName));
 
     return {

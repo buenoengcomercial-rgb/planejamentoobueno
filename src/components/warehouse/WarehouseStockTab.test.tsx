@@ -34,7 +34,7 @@ function projectWithPurchaseHistory(): Project {
     quantity: 2, unitPrice: 10, fiscalNoteId: 'note-1', invoiceNumber: '123', attachments: [attachment],
   }];
   project.warehouse!.fiscalNotes = [{
-    id: 'note-1', createdAt: '2026-08-17T10:00:00.000Z', status: 'aprovada', origin: 'upload',
+    id: 'note-1', createdAt: '2026-08-17T10:00:00.000Z', updatedAt: '2026-08-17T10:00:00.000Z', status: 'aprovada', origin: 'upload',
     sourceFileName: 'nota.pdf', supplierName: 'Fornecedor', invoiceNumber: '123', totalAmount: 20,
     attachment, attachments: [attachment],
     items: [{ id: 'item-1', itemKey: 'warehouse-nf|item-1', description: 'Material de teste', quantity: 2, unit: 'UN', unitPrice: 10, totalPrice: 20 }],

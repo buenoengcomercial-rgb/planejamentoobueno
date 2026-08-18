@@ -168,7 +168,7 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
               <card.icon className={`w-4 h-4 ${card.color}`} />
             </div>
             <p className="text-2xl font-bold text-foreground">{card.value}</p>
-            {'hint' in card && card.hint && <p className="mt-1 text-[11px] text-muted-foreground">{card.hint}</p>}
+            {'hint' in card && Boolean(card.hint) && <p className="mt-1 text-[11px] text-muted-foreground">{String(card.hint)}</p>}
           </motion.div>
         ))}
       </div>
