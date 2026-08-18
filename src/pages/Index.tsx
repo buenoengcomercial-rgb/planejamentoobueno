@@ -205,6 +205,9 @@ export default function Index() {
   const conflictDetectedRef = useRef(false);
   const remoteCheckInFlightRef = useRef(false);
   const realtimeRefreshTimerRef = useRef<number | null>(null);
+  const lastLocalSaveAtRef = useRef(0);
+  const realtimeConnectedRef = useRef(false);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
   const mainScrollRef = useRef<HTMLElement | null>(null);
   const restoredUiSessionRef = useRef<string | null>(null);
   const uiSessionSaverReadyRef = useRef<string | null>(null);
