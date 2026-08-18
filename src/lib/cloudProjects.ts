@@ -10,6 +10,7 @@ import {
   buildContractImportPayload,
 } from '@/lib/projectSync';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
+import { prepareWarehouseTestReset } from '@/lib/warehouseReset';
 
 export interface CloudProjectMeta {
   id: string;
@@ -216,10 +217,7 @@ export async function deleteCloudProject(id: string): Promise<void> {
   clearCloudSnapshot(id);
 }
 
-/**
- * Limpa o almoxarifado somente depois de reautenticar o proprietário.
- * A exclusão efetiva e a autorização são executadas pela função protegida no banco.
- */
+/** Limpa os dados de teste pelo fluxo normal de persistência do Lovable Cloud. */
 export async function clearCloudWarehouseAsOwner(projectId: string, password: string): Promise<void> {
   if (!password.trim()) throw new Error('Informe a senha da sua conta.');
 
@@ -237,21 +235,52 @@ export async function clearCloudWarehouseAsOwner(projectId: string, password: st
     throw new Error('Senha incorreta. O almoxarifado não foi alterado.');
   }
 
-  const { error } = await (supabase.rpc as unknown as (
-    fn: string,
-    args: Record<string, unknown>,
-  ) => Promise<{ data: unknown; error: { code?: string; message: string } | null }>)('clear_warehouse_owner', {
-    p_project_id: projectId,
+  const projectAccess = await supabase
+    .from('projects')
+    .select('organization_id')
+    .eq('id', projectId)
+    .maybeSingle();
+  if (projectAccess.error || !projectAccess.data?.organization_id) {
+    throw new Error('Não foi possível localizar a obra no Lovable Cloud.');
+  }
+
+  const membership = await supabase
+    .from('organization_members')
+    .select('role, status')
+    .eq('organization_id', projectAccess.data.organization_id)
+    .eq('user_id', expectedUserId)
+    .maybeSingle();
+  if (membership.error || membership.data?.role !== 'owner' || membership.data.status !== 'active') {
+    throw new Error('Somente o proprietário da organização pode limpar o almoxarifado.');
+  }
+
+  const current = await loadCloudProjectRecord(projectId);
+  if (!current) throw new Error('Não foi possível carregar a obra antes da limpeza.');
+  const previousEquipmentIds = new Set((current.project.warehouse?.equipments ?? []).map(equipment => equipment.id));
+  const { project: cleared } = prepareWarehouseTestReset(current.project, {
+    userId: expectedUserId,
+    userEmail: currentUserData.user.email,
   });
 
-  if (error) {
-    if (/WAREHOUSE_CLEAR_OWNER_ONLY/i.test(error.message)) {
-      throw new Error('Somente o proprietário da organização pode limpar o almoxarifado.');
-    }
-    if (/WAREHOUSE_CLEAR_PASSWORD_REQUIRED/i.test(error.message)) {
-      throw new Error('A confirmação por senha expirou. Digite a senha novamente.');
-    }
-    throw new Error(`Não foi possível limpar o almoxarifado: ${error.message}`);
+  await upsertCloudProject(cleared, projectAccess.data.organization_id, current.updatedAt);
+  clearCloudSnapshot(projectId);
+
+  const verified = await loadCloudProjectRecord(projectId);
+  if (!verified) throw new Error('A limpeza foi salva, mas não foi possível conferir o resultado. Atualize a página.');
+  const verifiedWarehouse = verified.project.warehouse;
+  const historiesRemain = (verifiedWarehouse?.movements.length ?? 0) > 0
+    || (verifiedWarehouse?.requisitions.length ?? 0) > 0
+    || (verifiedWarehouse?.custodyTerms.length ?? 0) > 0
+    || (verified.project.stockMovements?.length ?? 0) > 0;
+  const verifiedEquipmentIds = new Set((verifiedWarehouse?.equipments ?? []).map(equipment => equipment.id));
+  const equipmentWasLost = previousEquipmentIds.size !== verifiedEquipmentIds.size
+    || [...previousEquipmentIds].some(id => !verifiedEquipmentIds.has(id));
+
+  if (equipmentWasLost) {
+    throw new Error('A conferência detectou diferença no cadastro de equipamentos. A limpeza foi interrompida para revisão.');
+  }
+  if (historiesRemain) {
+    throw new Error('Parte do histórico ainda permanece no Lovable Cloud. Tente a limpeza novamente.');
   }
 
   clearCloudSnapshot(projectId);
