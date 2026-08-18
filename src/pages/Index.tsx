@@ -204,7 +204,7 @@ export default function Index() {
   const skipNextAutoSaveRef = useRef(false);
   const conflictDetectedRef = useRef(false);
   const remoteCheckInFlightRef = useRef(false);
-  const realtimeRefreshTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const realtimeRefreshTimerRef = useRef<number | null>(null);
   const mainScrollRef = useRef<HTMLElement | null>(null);
   const restoredUiSessionRef = useRef<string | null>(null);
   const uiSessionSaverReadyRef = useRef<string | null>(null);

@@ -52,7 +52,7 @@ function withoutEmbeddedBinary(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value;
   const sanitized: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if ((key === 'dataUrl' || key.startsWith('signature')) && typeof entry === 'string' && entry.startsWith('data:')) continue;
+    if (key === 'dataUrl' && typeof entry === 'string' && entry.startsWith('data:')) continue;
     sanitized[key] = withoutEmbeddedBinary(entry);
   }
   return sanitized;

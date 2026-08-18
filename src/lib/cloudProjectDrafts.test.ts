@@ -73,6 +73,20 @@ describe('rascunho local seguro', () => {
     expect(inspectProjectDraft(cloud, '2026-08-18T12:00:00.000Z').kind).toBe('identical');
   });
 
+  it('nunca grava arquivos base64 no rascunho e não interrompe a edição se a cota acabar', () => {
+    const local = project();
+    local.warehouse!.fiscalNotes = [note('nf-local', 'Fornecedor', '10')];
+    local.warehouse!.fiscalNotes[0].attachment = {
+      id: 'att-local', name: 'nota.pdf', uploadedAt: '2026-08-18T10:00:00.000Z', dataUrl: 'data:application/pdf;base64,AAAA',
+    };
+    const draft = writeProjectDraft(local, '2026-08-18T12:00:00.000Z');
+    expect(draft?.project.warehouse?.fiscalNotes[0].attachment?.dataUrl).toBeUndefined();
+
+    const fullStorage = { setItem: () => { throw new DOMException('quota', 'QuotaExceededError'); } } as unknown as Storage;
+    expect(() => writeProjectDraft(local, null, fullStorage)).not.toThrow();
+    expect(writeProjectDraft(local, null, fullStorage)).toBeNull();
+  });
+
   it('separa atualização segura de conflito remoto', () => {
     expect(resolveRemoteVersionAction('v2', 'v1', false)).toBe('reload');
     expect(resolveRemoteVersionAction('v2', 'v1', true)).toBe('conflict');
