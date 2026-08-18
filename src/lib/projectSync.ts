@@ -253,14 +253,17 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
     };
   }
   if (dailyReports !== null) next.dailyReports = dailyReports;
-  if (measurements !== null && measurements.length > 0) next.measurements = measurements;
-  if (additives !== null && additives.length > 0) next.additives = additives;
-  if (auditLogs !== null && auditLogs.length > 0) next.auditLogs = auditLogs;
-  if (stockMovements !== null && stockMovements.length > 0) next.stockMovements = stockMovements;
-  if (priceHistory !== null && priceHistory.length > 0) next.materialPriceHistory = priceHistory;
-  if (budgetItems !== null && budgetItems.length > 0) next.budgetItems = budgetItems;
-  if (materialComparisons !== null && materialComparisons.length > 0) next.materialComparisons = materialComparisons;
-  if (analyticCompositions !== null && analyticCompositions.length > 0) next.analyticCompositions = analyticCompositions;
+  // As tabelas normalizadas são a fonte de verdade, inclusive quando vazias.
+  // Manter os valores legados do data_json ao receber [] ressuscitava históricos
+  // já apagados na nuvem após uma limpeza administrativa.
+  if (measurements !== null) next.measurements = measurements;
+  if (additives !== null) next.additives = additives;
+  if (auditLogs !== null) next.auditLogs = auditLogs;
+  if (stockMovements !== null) next.stockMovements = stockMovements;
+  if (priceHistory !== null) next.materialPriceHistory = priceHistory;
+  if (budgetItems !== null) next.budgetItems = budgetItems;
+  if (materialComparisons !== null) next.materialComparisons = materialComparisons;
+  if (analyticCompositions !== null) next.analyticCompositions = analyticCompositions;
 
   // ===== Reconstrói phases[] a partir de eap_chapters + tasks =====
   const chapterRows = chRes.error ? null : (chRes.data ?? []);

@@ -255,7 +255,13 @@ export async function clearCloudWarehouseAsOwner(projectId: string, password: st
   }
 
   // Apaga diretamente as coleções normalizadas (não depende do diff em memória).
-  const tables = ['warehouse_movements', 'warehouse_requisitions', 'warehouse_custody', 'stock_movements'] as const;
+  const tables = [
+    'warehouse_movements',
+    'warehouse_requisitions',
+    'warehouse_custody',
+    'stock_movements',
+    'material_price_history',
+  ] as const;
   for (const table of tables) {
     const { error } = await supabase.from(table).delete().eq('project_id', projectId);
     if (error) throw new Error(`Não foi possível apagar ${table}: ${error.message}`);
@@ -283,7 +289,12 @@ export async function clearCloudWarehouseAsOwner(projectId: string, password: st
   const historiesRemain = (verifiedWarehouse?.movements.length ?? 0) > 0
     || (verifiedWarehouse?.requisitions.length ?? 0) > 0
     || (verifiedWarehouse?.custodyTerms.length ?? 0) > 0
-    || (verified.project.stockMovements?.length ?? 0) > 0;
+    || (verifiedWarehouse?.fiscalNotes?.length ?? 0) > 0
+    || (verifiedWarehouse?.items.length ?? 0) > 0
+    || (verifiedWarehouse?.inventorySessions?.length ?? 0) > 0
+    || (verifiedWarehouse?.materialLinks?.length ?? 0) > 0
+    || (verified.project.stockMovements?.length ?? 0) > 0
+    || (verified.project.materialPriceHistory?.length ?? 0) > 0;
   const verifiedEquipmentIds = new Set((verifiedWarehouse?.equipments ?? []).map(equipment => equipment.id));
   const equipmentWasLost = [...previousEquipmentIds].some(id => !verifiedEquipmentIds.has(id));
 
