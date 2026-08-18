@@ -43,12 +43,21 @@ function project(): Project {
   };
 }
 
-function projectWithEquipment(photo: { dataUrl?: string; storagePath?: string } = { storagePath: 'project-equipment/warehouse/equipment/furadeira.jpg' }): Project {
+type EquipmentPhotoInput = { dataUrl?: string; storagePath?: string; name?: string };
+
+function projectWithEquipment(photoInput: EquipmentPhotoInput | EquipmentPhotoInput[] = { storagePath: 'project-equipment/warehouse/equipment/furadeira.jpg' }): Project {
   const current = project();
+  const photos = (Array.isArray(photoInput) ? photoInput : [photoInput]).map((photo, index) => ({
+    id: `photo-${index + 1}`,
+    name: photo.name || `furadeira-${index + 1}.jpg`,
+    mimeType: 'image/jpeg',
+    uploadedAt: '2026-08-18T10:00:00.000Z',
+    ...photo,
+  }));
   current.warehouse!.equipments = [{
     id: 'equipment-1', name: 'Furadeira Makita', description: 'Furadeira de impacto', internalCode: 'EQ-2026-0001',
     brand: 'Makita', model: 'HP002G', serial: '0029612 Y', status: 'disponivel', createdAt: '2026-08-18T10:00:00.000Z',
-    photos: [{ id: 'photo-1', name: 'furadeira.jpg', mimeType: 'image/jpeg', uploadedAt: '2026-08-18T10:00:00.000Z', ...photo }],
+    photos,
   }];
   return current;
 }
@@ -156,9 +165,30 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     render(<WarehouseEquipmentsTab project={projectWithEquipment({ dataUrl: 'data:image/png;base64,Zm90bw==' })} onProjectChange={vi.fn()} />);
 
     expect(screen.getByTestId('equipment-gallery')).toHaveClass('grid-cols-1', 'sm:grid-cols-2', 'lg:grid-cols-3', 'xl:grid-cols-4');
-    expect(screen.getByRole('button', { name: 'Abrir foto de Furadeira de impacto' })).toHaveClass('h-28', 'sm:h-32');
+    expect(screen.getByRole('button', { name: 'Abrir foto 1 de 1 de Furadeira de impacto' })).toHaveClass('h-28', 'sm:h-32');
     expect(screen.getByRole('img', { name: 'Furadeira de impacto' })).toHaveAttribute('loading', 'lazy');
     expect(screen.getByRole('img', { name: 'Furadeira de impacto' })).toHaveAttribute('decoding', 'async');
+    expect(screen.getByRole('img', { name: 'Furadeira de impacto' })).toHaveClass('object-contain');
+    expect(screen.queryByLabelText('Fotos de Furadeira de impacto')).not.toBeInTheDocument();
+  });
+
+  it('mostra até três miniaturas e troca a foto principal sem recortar', () => {
+    render(<WarehouseEquipmentsTab project={projectWithEquipment([
+      { dataUrl: 'data:image/png;base64,Zm90bzE=' },
+      { dataUrl: 'data:image/png;base64,Zm90bzI=' },
+      { dataUrl: 'data:image/png;base64,Zm90bzM=' },
+    ])} onProjectChange={vi.fn()} />);
+
+    expect(screen.getByLabelText('Fotos de Furadeira de impacto')).toBeInTheDocument();
+    expect(screen.getByText('1 de 3')).toBeInTheDocument();
+    const secondThumbnail = screen.getByRole('button', { name: 'Selecionar foto 2 de 3 de Furadeira de impacto' });
+    fireEvent.click(secondThumbnail);
+
+    expect(secondThumbnail).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('2 de 3')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Furadeira de impacto' })).toHaveAttribute('src', 'data:image/png;base64,Zm90bzI=');
+    expect(screen.getAllByRole('img')).toHaveLength(4);
+    screen.getAllByRole('img').forEach(image => expect(image).toHaveClass('object-contain'));
   });
 
   it('usa a mesma foto otimizada na IA e no armazenamento', async () => {
@@ -183,10 +213,29 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     render(<WarehouseEquipmentsTab project={projectWithEquipment()} onProjectChange={vi.fn()} />);
     await screen.findByRole('img', { name: 'Furadeira de impacto' });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Abrir foto de Furadeira de impacto' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir foto 1 de 1 de Furadeira de impacto' }));
 
     await waitFor(() => expect(replaceMock).toHaveBeenCalledWith('blob:equipment'));
     expect(openMock).toHaveBeenCalledWith('about:blank', '_blank');
     expect(downloadMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('abre a foto selecionada e mantém as demais utilizáveis quando uma falha', async () => {
+    downloadMock.mockImplementation(async (path: string) => path.endsWith('foto-2.jpg')
+      ? { data: null, error: { statusCode: 404, message: 'Not found' } }
+      : { data: new Blob([path], { type: 'image/jpeg' }), error: null });
+    render(<WarehouseEquipmentsTab project={projectWithEquipment([
+      { storagePath: 'project-equipment/warehouse/equipment/foto-1.jpg' },
+      { storagePath: 'project-equipment/warehouse/equipment/foto-2.jpg' },
+      { storagePath: 'project-equipment/warehouse/equipment/foto-3.jpg' },
+    ])} onProjectChange={vi.fn()} />);
+
+    await waitFor(() => expect(downloadMock).toHaveBeenCalledTimes(3));
+    expect(screen.getByText('Erro')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Selecionar foto 3 de 3 de Furadeira de impacto' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir foto 3 de 3 de Furadeira de impacto' }));
+
+    await waitFor(() => expect(replaceMock).toHaveBeenCalledWith('blob:equipment'));
+    expect(downloadMock).toHaveBeenLastCalledWith('project-equipment/warehouse/equipment/foto-3.jpg');
   });
 });

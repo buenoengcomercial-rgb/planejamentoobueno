@@ -181,9 +181,9 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
     popup.document.close();
   };
 
-  const openPhoto = async (equipment: Equipment) => {
-    if (!equipment.photos?.[0]) return toast.error('Equipamento sem foto registrada.');
-    try { await openWarehouseAttachment(equipment.photos[0]); } catch (error) { toast.error(warehouseAttachmentErrorMessage(error)); }
+  const openPhoto = async (attachment?: WarehouseAttachment) => {
+    if (!attachment) return toast.error('Equipamento sem foto registrada.');
+    try { await openWarehouseAttachment(attachment); } catch (error) { toast.error(warehouseAttachmentErrorMessage(error)); }
   };
 
   return (
@@ -198,7 +198,7 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-md border bg-card"><div className="flex items-center border-b bg-muted/40 p-3"><div><h3 className="font-semibold">Patrimônio identificado</h3><p className="text-xs text-muted-foreground">Cada equipamento tem código interno, foto e histórico.</p></div><Button className="ml-auto" variant="outline" onClick={() => setShowArchived(value => !value)}>{showArchived ? 'Ocultar arquivados' : 'Exibir arquivados'}</Button></div><div data-testid="equipment-gallery" className="grid grid-cols-1 gap-2 p-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{equipments.map(equipment => { const title = equipment.description || equipment.name; const identification = [equipment.brand, equipment.model, equipment.serial].filter(Boolean).join(' · ') || 'Identificação pendente'; return <article key={equipment.id} className="min-w-0 overflow-hidden rounded-md border"><button type="button" className="block h-28 w-full overflow-hidden bg-muted sm:h-32" aria-label={`Abrir foto de ${title}`} onClick={() => void openPhoto(equipment)}><EquipmentThumbnail attachment={equipment.photos?.[0]} alt={title} /></button><div className="space-y-1.5 p-2"><div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-bold text-primary">{equipment.internalCode || 'Código legado'}</div><h4 className="line-clamp-2 text-sm font-semibold leading-5" title={title}>{title}</h4></div><span className="h-fit shrink-0 rounded-full bg-muted px-2 py-1 text-[11px]">{(equipment.status || 'disponivel').replace('_', ' ')}</span></div><div className="truncate text-xs text-muted-foreground" title={identification}>{identification}</div><div className="grid grid-cols-2 gap-1.5"><Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => void printLabel(equipment)}><Printer className="mr-1.5 h-4 w-4" />Etiqueta QR</Button>{!equipment.archivedAt && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))}><Archive className="mr-1.5 h-4 w-4" />Arquivar</Button>}</div></div></article>; })}{!equipments.length && <div className="col-span-full p-8 text-center text-sm text-muted-foreground">Nenhum equipamento cadastrado.</div>}</div></section>
+      <section className="overflow-hidden rounded-md border bg-card"><div className="flex items-center border-b bg-muted/40 p-3"><div><h3 className="font-semibold">Patrimônio identificado</h3><p className="text-xs text-muted-foreground">Cada equipamento tem código interno, foto e histórico.</p></div><Button className="ml-auto" variant="outline" onClick={() => setShowArchived(value => !value)}>{showArchived ? 'Ocultar arquivados' : 'Exibir arquivados'}</Button></div><div data-testid="equipment-gallery" className="grid grid-cols-1 gap-2 p-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{equipments.map(equipment => { const title = equipment.description || equipment.name; const identification = [equipment.brand, equipment.model, equipment.serial].filter(Boolean).join(' · ') || 'Identificação pendente'; return <article key={equipment.id} className="min-w-0 overflow-hidden rounded-md border"><EquipmentCardPhotos equipment={equipment} title={title} onOpen={attachment => void openPhoto(attachment)} /><div className="space-y-1.5 p-2"><div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-bold text-primary">{equipment.internalCode || 'Código legado'}</div><h4 className="line-clamp-2 text-sm font-semibold leading-5" title={title}>{title}</h4></div><span className="h-fit shrink-0 rounded-full bg-muted px-2 py-1 text-[11px]">{(equipment.status || 'disponivel').replace('_', ' ')}</span></div><div className="truncate text-xs text-muted-foreground" title={identification}>{identification}</div><div className="grid grid-cols-2 gap-1.5"><Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => void printLabel(equipment)}><Printer className="mr-1.5 h-4 w-4" />Etiqueta QR</Button>{!equipment.archivedAt && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))}><Archive className="mr-1.5 h-4 w-4" />Arquivar</Button>}</div></div></article>; })}{!equipments.length && <div className="col-span-full p-8 text-center text-sm text-muted-foreground">Nenhum equipamento cadastrado.</div>}</div></section>
 
       <section className="overflow-hidden rounded-md border bg-card"><div className="flex items-center border-b bg-muted/40 p-3"><div><h3 className="font-semibold">Termos de cautela</h3><p className="text-xs text-muted-foreground">Entrega e devolução dos equipamentos da empresa.</p></div><Button className="ml-auto min-h-11" onClick={() => setShowTerm(value => !value)}><Plus className="mr-2 h-4 w-4" />Novo termo</Button></div>{showTerm && <div className="grid gap-3 border-b p-3 md:grid-cols-2"><select aria-label="Equipamento disponível" className="min-h-11 rounded-md border bg-background px-3" value={term.equipmentId} onChange={event => setTerm({ ...term, equipmentId: event.target.value })}><option value="">Escolher equipamento disponível</option>{wh.equipments.filter(equipment => !equipment.archivedAt && (equipment.status ?? 'disponivel') === 'disponivel').map(equipment => <option key={equipment.id} value={equipment.id}>{equipment.internalCode} · {equipment.description || equipment.name}</option>)}</select><Input aria-label="Colaborador que recebeu" className="min-h-11" value={term.workerName} onChange={event => setTerm({ ...term, workerName: event.target.value })} placeholder="Colaborador que recebeu" /><Input aria-label="Data prevista para devolução" className="min-h-11" type="date" value={term.dueDate} onChange={event => setTerm({ ...term, dueDate: event.target.value })} /><Input aria-label="Estado na entrega" className="min-h-11" value={term.stateOnDelivery} onChange={event => setTerm({ ...term, stateOnDelivery: event.target.value })} placeholder="Estado na entrega" /><Input aria-label="Acessórios" className="min-h-11 md:col-span-2" value={term.accessories} onChange={event => setTerm({ ...term, accessories: event.target.value })} placeholder="Acessórios" /><div className="md:col-span-2"><SignaturePad label="Assinatura do recebedor" value={term.sigRec} onChange={sigRec => setTerm({ ...term, sigRec })} /></div><div className="flex justify-end gap-2 md:col-span-2"><Button variant="outline" onClick={() => setShowTerm(false)}>Cancelar</Button><Button onClick={submitTerm}>Emitir termo</Button></div></div>}
         <div className="space-y-2 p-3 md:hidden">{wh.custodyTerms.slice().reverse().map(custody => <article key={custody.id} className="space-y-2 rounded-md border p-3"><div className="flex items-start justify-between gap-2"><div><div className="font-mono text-xs text-primary">{custody.number}</div><div className="font-semibold">{custody.equipmentInternalCode || ''} {custody.equipmentName}</div></div><span className="rounded-full bg-muted px-2 py-1 text-xs">{custody.status.replace('_', ' ')}</span></div><div className="text-sm text-muted-foreground">Recebedor: {custody.workerName}</div><div className="grid grid-cols-2 gap-2"><Button className="min-h-11" variant="outline" onClick={() => generateCustodyTermPdf(project, custody)}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{custody.status === 'em_uso' && <Button className="min-h-11" variant="outline" onClick={() => setReturnFor(custody)}><Undo2 className="mr-1 h-4 w-4" />Devolver</Button>}</div></article>)}{!wh.custodyTerms.length && <div className="p-5 text-center text-sm text-muted-foreground">Nenhum termo emitido.</div>}</div>
@@ -215,46 +215,77 @@ function EquipmentField({ label, value, confidence, onChange }: { label: string;
   return <div><label className="mb-1 flex items-center justify-between text-xs font-semibold"><span>{label}</span>{confidence != null && <span className={confidence < 0.6 ? 'text-warning' : 'text-success'}>IA {Math.round(confidence * 100)}%</span>}</label><Input aria-label={label} className="min-h-11" value={value} onChange={event => onChange(event.target.value)} /></div>;
 }
 
-function EquipmentThumbnail({ attachment, alt }: { attachment?: WarehouseAttachment; alt: string }) {
-  const [source, setSource] = useState(attachment?.dataUrl);
-  const [status, setStatus] = useState<'empty' | 'loading' | 'ready' | 'error'>(
-    attachment?.dataUrl ? 'ready' : attachment ? 'loading' : 'empty',
-  );
+type EquipmentPhotoState = {
+  source?: string;
+  status: 'empty' | 'loading' | 'ready' | 'error';
+};
+
+function initialPhotoStates(attachments: WarehouseAttachment[]): EquipmentPhotoState[] {
+  if (!attachments.length) return [{ status: 'empty' }];
+  return attachments.map(attachment => attachment.dataUrl
+    ? { source: attachment.dataUrl, status: 'ready' }
+    : { status: 'loading' });
+}
+
+function EquipmentCardPhotos({ equipment, title, onOpen }: { equipment: Equipment; title: string; onOpen: (attachment?: WarehouseAttachment) => void }) {
+  const attachments = useMemo(() => equipment.photos?.slice(0, 3) ?? [], [equipment.photos]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [photoStates, setPhotoStates] = useState<EquipmentPhotoState[]>(() => initialPhotoStates(attachments));
 
   useEffect(() => {
     let active = true;
-    let objectUrl: string | undefined;
-    if (!attachment) {
-      setSource(undefined);
-      setStatus('empty');
-      return () => { active = false; };
-    }
-    if (attachment.dataUrl) {
-      setSource(attachment.dataUrl);
-      setStatus('ready');
-      return () => { active = false; };
-    }
-    setSource(undefined);
-    setStatus('loading');
-    void loadWarehouseAttachmentBlob(attachment)
-      .then(blob => {
-        if (!active) return;
-        objectUrl = URL.createObjectURL(blob);
-        setSource(objectUrl);
-        setStatus('ready');
-      })
-      .catch(() => {
-        if (active) setStatus('error');
-      });
+    const objectUrls: string[] = [];
+    setSelectedIndex(0);
+    setPhotoStates(initialPhotoStates(attachments));
+
+    const loadPhoto = async (attachment: WarehouseAttachment, index: number) => {
+      if (attachment.dataUrl) return;
+      try {
+        const blob = await loadWarehouseAttachmentBlob(attachment);
+        const objectUrl = URL.createObjectURL(blob);
+        if (!active) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+        objectUrls.push(objectUrl);
+        setPhotoStates(current => current.map((state, stateIndex) => stateIndex === index
+          ? { source: objectUrl, status: 'ready' }
+          : state));
+      } catch {
+        if (active) setPhotoStates(current => current.map((state, stateIndex) => stateIndex === index
+          ? { status: 'error' }
+          : state));
+      }
+    };
+
+    void (async () => {
+      if (attachments[0]) await loadPhoto(attachments[0], 0);
+      if (!active) return;
+      await Promise.all(attachments.slice(1).map((attachment, index) => loadPhoto(attachment, index + 1)));
+    })();
+
     return () => {
       active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      objectUrls.forEach(objectUrl => URL.revokeObjectURL(objectUrl));
     };
-  }, [attachment]);
+  }, [attachments]);
 
-  if (status === 'ready' && source) return <img src={source} alt={alt} className="h-full w-full object-cover" loading="lazy" decoding="async" />;
-  if (status === 'loading') return <span className="flex h-full items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Carregando foto</span>;
-  return <span className="flex h-full items-center justify-center px-3 text-center text-sm text-muted-foreground">{status === 'error' ? 'Foto indisponível' : 'Equipamento sem foto'}</span>;
+  const selectedState = photoStates[selectedIndex] ?? { status: 'empty' as const };
+  return <div className="bg-muted/30">
+    <button type="button" className="relative block h-28 w-full overflow-hidden p-1 sm:h-32" aria-label={`Abrir foto ${selectedIndex + 1} de ${Math.max(attachments.length, 1)} de ${title}`} onClick={() => onOpen(attachments[selectedIndex])}>
+      <EquipmentPhotoContent state={selectedState} alt={title} />
+      {attachments.length > 1 && <span className="absolute bottom-1.5 right-1.5 rounded-full bg-background/90 px-2 py-0.5 text-[11px] font-medium shadow-sm">{selectedIndex + 1} de {attachments.length}</span>}
+    </button>
+    {attachments.length > 1 && <div className="flex min-h-14 items-center gap-1.5 border-t bg-background/70 px-2 py-1.5" aria-label={`Fotos de ${title}`}>
+      {attachments.map((attachment, index) => <button key={attachment.id || `${attachment.name}-${index}`} type="button" className={`h-11 w-11 shrink-0 overflow-hidden rounded border bg-muted/30 p-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selectedIndex === index ? 'border-primary ring-2 ring-primary/30' : 'border-border'}`} aria-label={`Selecionar foto ${index + 1} de ${attachments.length} de ${title}`} aria-pressed={selectedIndex === index} onClick={() => setSelectedIndex(index)}><EquipmentPhotoContent state={photoStates[index] ?? { status: 'loading' }} alt={`Miniatura ${index + 1} de ${title}`} compact /></button>)}
+    </div>}
+  </div>;
+}
+
+function EquipmentPhotoContent({ state, alt, compact = false }: { state: EquipmentPhotoState; alt: string; compact?: boolean }) {
+  if (state.status === 'ready' && state.source) return <img src={state.source} alt={alt} className="h-full w-full object-contain" loading="lazy" decoding="async" />;
+  if (state.status === 'loading') return <span className={`flex h-full items-center justify-center text-muted-foreground ${compact ? '' : 'text-sm'}`}><Loader2 className={`${compact ? 'h-3.5 w-3.5' : 'mr-2 h-4 w-4'} animate-spin`} />{!compact && 'Carregando foto'}</span>;
+  return <span className={`flex h-full items-center justify-center text-center text-muted-foreground ${compact ? 'text-[10px] leading-none' : 'px-3 text-sm'}`}>{state.status === 'error' ? (compact ? 'Erro' : 'Foto indisponível') : (compact ? 'Sem foto' : 'Equipamento sem foto')}</span>;
 }
 
 function EquipmentPhoto({ file, onRemove }: { file: File; onRemove: () => void }) {
