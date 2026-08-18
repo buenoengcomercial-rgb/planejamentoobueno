@@ -65,6 +65,7 @@ import { supabase } from '@/integrations/supabase/client';
 const UNDO_LIMIT = 20;
 const SAVE_DEBOUNCE_MS = 4000;
 const REMOTE_VERSION_POLL_MS = 15000;
+const REALTIME_FALLBACK_POLL_MS = 15000;
 const UI_SESSION_VERSION = 1;
 const APP_UI_SESSION_KEY = 'obraplanner:ui-session';
 const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse'];
