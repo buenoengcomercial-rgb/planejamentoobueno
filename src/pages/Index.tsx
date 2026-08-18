@@ -1266,7 +1266,7 @@ export default function Index() {
 
       <main ref={mainScrollRef} className="relative min-h-screen flex-1 overflow-y-auto pt-14 lg:pt-0">
         <div className="absolute top-3 right-4 z-20">
-          <SaveStatusIndicator status={saveStatus} confirmedAt={lastCloudConfirmedAt} projectId={rawProject.id} />
+          <SaveStatusIndicator status={saveStatus} confirmedAt={lastCloudConfirmedAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} />
         </div>
         {draftRecovery && !draftRecovery.open && (
           <div role="alert" className="mx-3 mt-14 flex flex-col gap-3 rounded-xl border border-warning/40 bg-warning/10 p-3 text-sm sm:mx-4 sm:flex-row sm:items-center lg:mt-12">
