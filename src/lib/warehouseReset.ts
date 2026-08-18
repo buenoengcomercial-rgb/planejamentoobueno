@@ -9,6 +9,7 @@ export interface WarehouseResetSummary {
   items: number;
   inventorySessions: number;
   stockMovements: number;
+  materialPriceHistory: number;
   equipmentsPreserved: number;
   equipmentsReleased: number;
 }
@@ -39,6 +40,7 @@ export function prepareWarehouseTestReset(
     items: current?.items.length ?? 0,
     inventorySessions: current?.inventorySessions?.length ?? 0,
     stockMovements: project.stockMovements?.length ?? 0,
+    materialPriceHistory: project.materialPriceHistory?.length ?? 0,
     equipmentsPreserved: equipments.length,
     equipmentsReleased,
   };
@@ -60,6 +62,7 @@ export function prepareWarehouseTestReset(
     ...project,
     warehouse,
     stockMovements: [],
+    materialPriceHistory: [],
   };
 
   return {
