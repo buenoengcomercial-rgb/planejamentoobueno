@@ -86,7 +86,7 @@ describe('recuperação do Almoxarifado', () => {
     const cloud = project();
     const equipment: Equipment = {
       id: 'equipment-1',
-      code: 'EQ-001',
+      internalCode: 'EQ-001',
       name: 'Furadeira',
       patrimony: 'PAT-1',
       status: 'em_manutencao',
@@ -95,7 +95,7 @@ describe('recuperação do Almoxarifado', () => {
     };
     cloud.warehouse!.equipments = [equipment];
     cloud.warehouse!.fiscalNotes = [note('old-test', 'Fornecedor antigo', '999')];
-    cloud.managementRoutine = { roles: [], weeklyPlans: [], correctiveActions: [], restrictions: [], lessonsLearned: [], meetings: [] } as Project['managementRoutine'];
+    cloud.managementRoutine = { roles: [], weeklyPlans: [], weeklyChecklist: [], correctiveActions: [], restrictions: [], lessonsLearned: [], meetings: [] } as Project['managementRoutine'];
 
     const mobile = project();
     const kennedyNote = note('kennedy-1', 'PL INDUSTRIA', '000106809');

@@ -190,7 +190,7 @@ async function uploadFiscalAttachmentsStrict(files: File[], projectId: string): 
   const uploaded: WarehouseAttachment[] = [];
   try {
     for (const file of files) {
-      uploaded.push(await makeAttachment(file, projectId, 'nf', 'documents', { fallback: 'error' }));
+      uploaded.push(await makeAttachment(file, projectId, 'nf', 'documents'));
     }
     return uploaded;
   } catch (error) {
