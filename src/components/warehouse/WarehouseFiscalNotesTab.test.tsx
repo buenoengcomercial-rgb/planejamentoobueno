@@ -4,9 +4,11 @@ import type { Project, WarehouseFiscalNote } from '@/types/project';
 import { computeWarehouseRows, emptyWarehouse } from '@/lib/warehouse';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
 
-const { downloadMock, invokeMock, uploadMock } = vi.hoisted(() => ({
+const { createObjectURLMock, downloadMock, invokeMock, revokeObjectURLMock, uploadMock } = vi.hoisted(() => ({
+  createObjectURLMock: vi.fn(),
   downloadMock: vi.fn(),
   invokeMock: vi.fn(),
+  revokeObjectURLMock: vi.fn(),
   uploadMock: vi.fn(),
 }));
 
@@ -112,6 +114,10 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     });
     uploadMock.mockReset().mockResolvedValue({ error: null });
     downloadMock.mockReset().mockResolvedValue({ data: new Blob(['nota'], { type: 'application/pdf' }), error: null });
+    createObjectURLMock.mockReset().mockReturnValue('blob:nota-fiscal');
+    revokeObjectURLMock.mockReset();
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURLMock });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURLMock });
   });
 
   it('mostra somente lançadas/arquivadas e restaura as colunas sem Arquivo', () => {
@@ -236,5 +242,31 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('button', { name: /Visualizar documento/i })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Baixar' })).toBeInTheDocument();
+  });
+
+  it('abre o PDF em um visualizador interno sem criar aba em branco', async () => {
+    const open = vi.spyOn(window, 'open');
+    const view = render(<WarehouseFiscalNotesTab project={projectWithArchivedOrphan()} onProjectChange={vi.fn()} canManage />);
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Arquivadas \(1\)/i }), { button: 0, ctrlKey: false });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Abrir documento original' })[0]);
+
+    expect(await screen.findByTitle('Visualização de nota.pdf')).toHaveAttribute('src', 'blob:nota-fiscal');
+    expect(downloadMock).toHaveBeenCalledWith('project-ui/warehouse/nota.pdf');
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Fechar' }));
+    await waitFor(() => expect(revokeObjectURLMock).toHaveBeenCalledWith('blob:nota-fiscal'));
+    view.unmount();
+  });
+
+  it('mostra o erro do Storage dentro do visualizador sem abandonar a tela', async () => {
+    downloadMock.mockResolvedValueOnce({ data: null, error: { statusCode: 403, message: 'Forbidden by policy' } });
+    render(<WarehouseFiscalNotesTab project={projectWithArchivedOrphan()} onProjectChange={vi.fn()} canManage />);
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Arquivadas \(1\)/i }), { button: 0, ctrlKey: false });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Abrir documento original' })[0]);
+
+    expect(await screen.findByText(/não possui permissão para acessar este documento/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Documento original' })).toBeInTheDocument();
   });
 });

@@ -29,7 +29,7 @@ import {
 } from '@/lib/warehouse';
 import {
   downloadWarehouseAttachment,
-  openWarehouseAttachment,
+  loadWarehouseAttachmentBlob,
   warehouseAttachmentErrorMessage,
 } from '@/lib/warehouseAttachments';
 import { supabase } from '@/integrations/supabase/client';
@@ -193,6 +193,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
   const [processing, setProcessing] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [reconciliationOpen, setReconciliationOpen] = useState(false);
+  const [previewAttachment, setPreviewAttachment] = useState<WarehouseAttachment | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -413,15 +414,11 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
     toast.success('Lançamento cancelado definitivamente.');
   };
 
-  const openOriginalDocument = async (note: WarehouseFiscalNote, attachmentIndex = 0) => {
+  const openOriginalDocument = (note: WarehouseFiscalNote, attachmentIndex = 0) => {
     const attachments = note.attachments?.length ? note.attachments : (note.attachment ? [note.attachment] : []);
     const attachment = attachments[attachmentIndex];
     if (!attachment) return toast.error('O documento original não está disponível.');
-    try {
-      await openWarehouseAttachment(attachment);
-    } catch (error) {
-      toast.error(warehouseAttachmentErrorMessage(error));
-    }
+    setPreviewAttachment(attachment);
   };
 
   const downloadOriginalDocument = async (note: WarehouseFiscalNote, attachmentIndex = 0) => {
@@ -591,6 +588,8 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <FiscalAttachmentViewer attachment={previewAttachment} onClose={() => setPreviewAttachment(null)} />
     </div>
   );
 }
@@ -604,6 +603,70 @@ function StatusBadge({ note }: { note: WarehouseFiscalNote }) {
   if (note.status === 'cancelada') return <Badge variant="outline" className="border-destructive/30 bg-destructive/10 text-destructive">Cancelada</Badge>;
   if (note.status === 'rejeitada') return <Badge variant="outline">Arquivada</Badge>;
   return <Badge variant="outline" className="border-warning/30 bg-warning/10 text-warning">Aguardando confirmação</Badge>;
+}
+
+function FiscalAttachmentViewer({ attachment, onClose }: { attachment: WarehouseAttachment | null; onClose: () => void }) {
+  const [state, setState] = useState<{ status: 'idle' | 'loading' | 'ready' | 'error'; url?: string; mimeType?: string; error?: string }>({ status: 'idle' });
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | undefined;
+    if (!attachment) {
+      setState({ status: 'idle' });
+      return () => { active = false; };
+    }
+    setState({ status: 'loading' });
+    void loadWarehouseAttachmentBlob(attachment)
+      .then(blob => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(blob);
+        setState({ status: 'ready', url: objectUrl, mimeType: attachment.mimeType || blob.type });
+      })
+      .catch(error => {
+        if (active) setState({ status: 'error', error: warehouseAttachmentErrorMessage(error) });
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [attachment]);
+
+  const download = async () => {
+    if (!attachment) return;
+    try {
+      await downloadWarehouseAttachment(attachment);
+    } catch (error) {
+      toast.error(warehouseAttachmentErrorMessage(error));
+    }
+  };
+
+  const mimeType = state.mimeType?.toLowerCase() || '';
+  const isImage = mimeType.startsWith('image/');
+  const isPdf = mimeType === 'application/pdf' || attachment?.name.toLowerCase().endsWith('.pdf');
+
+  return (
+    <Dialog open={!!attachment} onOpenChange={open => !open && onClose()}>
+      <DialogContent className="flex max-h-[95dvh] max-w-6xl flex-col overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11">
+        {attachment && <>
+          <DialogHeader className="border-b p-4 pr-14">
+            <DialogTitle>Documento original</DialogTitle>
+            <DialogDescription>{attachment.name}</DialogDescription>
+          </DialogHeader>
+          <div className="flex min-h-[55dvh] flex-1 items-center justify-center overflow-auto bg-muted/30 p-3 sm:min-h-[65dvh]">
+            {state.status === 'loading' && <div className="flex items-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-5 w-5 animate-spin" />Carregando documento...</div>}
+            {state.status === 'error' && <div className="max-w-md rounded-md border border-destructive/30 bg-background p-5 text-center text-sm text-destructive">{state.error}</div>}
+            {state.status === 'ready' && state.url && isImage && <img src={state.url} alt={`Documento ${attachment.name}`} className="max-h-[72dvh] max-w-full object-contain" />}
+            {state.status === 'ready' && state.url && isPdf && <iframe src={state.url} title={`Visualização de ${attachment.name}`} className="h-[70dvh] w-full rounded-md border bg-background" />}
+            {state.status === 'ready' && state.url && !isImage && !isPdf && <div className="max-w-md text-center text-sm text-muted-foreground"><FileText className="mx-auto mb-3 h-8 w-8" />Este tipo de arquivo não possui visualização interna. Use Baixar.</div>}
+          </div>
+          <DialogFooter className="border-t p-3">
+            <Button variant="outline" onClick={onClose}>Fechar</Button>
+            <Button onClick={() => void download()}><Download className="mr-2 h-4 w-4" />Baixar</Button>
+          </DialogFooter>
+        </>}
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 interface ItemEditorProps {
