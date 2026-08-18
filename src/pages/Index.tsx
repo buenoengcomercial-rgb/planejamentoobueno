@@ -40,6 +40,7 @@ import {
   renameCloudProject,
   duplicateCloudProject,
   deleteCloudProject,
+  clearCloudWarehouseAsOwner,
   generateUniqueCloudName,
   getSampleSeed,
   CloudProjectConflictError,
@@ -650,6 +651,25 @@ export default function Index() {
   const materialsSetter = useMemo(() => makeViewSetter('materials'), [makeViewSetter]);
   const warehouseSetter = useMemo(() => makeViewSetter('warehouse'), [makeViewSetter]);
 
+  const handleOwnerClearWarehouse = useCallback(async (password: string) => {
+    if (role !== 'owner' || !rawProject) {
+      throw new Error('Somente o proprietário da organização pode limpar o almoxarifado.');
+    }
+    if (!(await flushPendingSave())) {
+      throw new Error('Existem alterações que não puderam ser salvas. Tente novamente antes de limpar.');
+    }
+
+    await clearCloudWarehouseAsOwner(rawProject.id, password);
+    clearUnsavedDraft(rawProject.id);
+    const record = await loadCloudProjectRecord(rawProject.id);
+    if (!record) throw new Error('O almoxarifado foi limpo, mas não foi possível recarregar a obra. Atualize a página.');
+
+    replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied);
+    undoStacksRef.current.warehouse = [];
+    setUndoVersion(value => value + 1);
+    toast.success('Almoxarifado limpo com segurança. Equipamentos foram preservados.');
+  }, [flushPendingSave, rawProject, replaceProjectWithoutAutoSave, role]);
+
   const handleUndo = useCallback((view: AppView) => {
     const stack = undoStacksRef.current[view];
     if (stack.length === 0) { toast.message('Nada para desfazer'); return; }
@@ -892,6 +912,8 @@ export default function Index() {
             onProjectChange={warehouseSetter}
             canManageFiscalNotes={role !== 'viewer'}
             canApproveInventory={role === 'owner' || role === 'admin'}
+            canClearWarehouse={role === 'owner'}
+            onClearWarehouse={role === 'owner' ? handleOwnerClearWarehouse : undefined}
             auditActor={auditActor}
           />
         );

@@ -141,20 +141,6 @@ export function emptyWarehouse(): WarehouseState {
   };
 }
 
-export function clearWarehouse(project: Project): Project {
-  const currentWarehouse = normalizeWarehouse(project.warehouse);
-  return {
-    ...project,
-    // Limpa apenas o controle físico/operacional do almoxarifado.
-    // A verificação de compra na Lista de Material continua preservada.
-    warehouse: {
-      ...emptyWarehouse(),
-      equipments: currentWarehouse.equipments,
-    },
-    stockMovements: [],
-  };
-}
-
 function normalizeFiscalNotes(notes: WarehouseFiscalNote[] = []): WarehouseFiscalNote[] {
   const needsNormalization = notes.some(note =>
     note.status === 'em_processamento' ||

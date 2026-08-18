@@ -216,6 +216,47 @@ export async function deleteCloudProject(id: string): Promise<void> {
   clearCloudSnapshot(id);
 }
 
+/**
+ * Limpa o almoxarifado somente depois de reautenticar o proprietário.
+ * A exclusão efetiva e a autorização são executadas pela função protegida no banco.
+ */
+export async function clearCloudWarehouseAsOwner(projectId: string, password: string): Promise<void> {
+  if (!password.trim()) throw new Error('Informe a senha da sua conta.');
+
+  const { data: currentUserData, error: currentUserError } = await supabase.auth.getUser();
+  if (currentUserError || !currentUserData.user?.email) {
+    throw new Error('Não foi possível identificar a conta autenticada. Entre novamente e tente de novo.');
+  }
+
+  const expectedUserId = currentUserData.user.id;
+  const { data: reauthenticated, error: passwordError } = await supabase.auth.signInWithPassword({
+    email: currentUserData.user.email,
+    password,
+  });
+  if (passwordError || reauthenticated.user?.id !== expectedUserId) {
+    throw new Error('Senha incorreta. O almoxarifado não foi alterado.');
+  }
+
+  const { error } = await (supabase.rpc as unknown as (
+    fn: string,
+    args: Record<string, unknown>,
+  ) => Promise<{ data: unknown; error: { code?: string; message: string } | null }>)('clear_warehouse_owner', {
+    p_project_id: projectId,
+  });
+
+  if (error) {
+    if (/WAREHOUSE_CLEAR_OWNER_ONLY/i.test(error.message)) {
+      throw new Error('Somente o proprietário da organização pode limpar o almoxarifado.');
+    }
+    if (/WAREHOUSE_CLEAR_PASSWORD_REQUIRED/i.test(error.message)) {
+      throw new Error('A confirmação por senha expirou. Digite a senha novamente.');
+    }
+    throw new Error(`Não foi possível limpar o almoxarifado: ${error.message}`);
+  }
+
+  clearCloudSnapshot(projectId);
+}
+
 export async function generateUniqueCloudName(base = 'Nova obra'): Promise<string> {
   const all = await listCloudProjects();
   const names = new Set(all.map(p => p.name));

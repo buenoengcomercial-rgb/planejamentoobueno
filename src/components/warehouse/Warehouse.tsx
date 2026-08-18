@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Project, WarehouseAuditActor } from '@/types/project';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, FileBarChart, Warehouse as WarehouseIcon, RotateCcw, ReceiptText, Settings2 } from 'lucide-react';
+import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, FileBarChart, Warehouse as WarehouseIcon, RotateCcw, ReceiptText, Settings2, LockKeyhole, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
-import { clearWarehouse, ensureWarehouse, panelSummary } from '@/lib/warehouse';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { ensureWarehouse, panelSummary } from '@/lib/warehouse';
 import WarehousePanel from './WarehousePanel';
 import WarehouseStockTab from './WarehouseStockTab';
 import WarehouseMovementsTab from './WarehouseMovementsTab';
@@ -20,37 +22,36 @@ interface Props {
   onProjectChange: (next: Project) => void;
   canManageFiscalNotes?: boolean;
   canApproveInventory?: boolean;
+  canClearWarehouse?: boolean;
+  onClearWarehouse?: (password: string) => Promise<void>;
   auditActor?: WarehouseAuditActor;
 }
 
-export default function Warehouse({ project, onProjectChange, canManageFiscalNotes = true, canApproveInventory = true, auditActor }: Props) {
+export default function Warehouse({ project, onProjectChange, canManageFiscalNotes = true, canApproveInventory = true, canClearWarehouse = false, onClearWarehouse, auditActor }: Props) {
   const [tab, setTab] = useState('notas');
-  const { confirm, dialog: confirmDialog } = useConfirmDelete();
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [clearPassword, setClearPassword] = useState('');
+  const [clearError, setClearError] = useState('');
+  const [clearing, setClearing] = useState(false);
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
   useEffect(() => {
     if (ensured !== project) onProjectChange(ensured);
   }, [ensured, project, onProjectChange]);
   const summary = useMemo(() => panelSummary(ensured), [ensured]);
 
-  const handleClearWarehouse = () => {
-    confirm(
-      {
-        title: 'Limpar almoxarifado?',
-        description: (
-          <div className="space-y-2">
-            <p>
-              Esta ação remove entradas, retiradas, devoluções, itens avulsos, notas fiscais, requisições,
-              termos de cautela, locais e configurações do almoxarifado.
-            </p>
-            <p className="font-medium">
-              Não remove equipamentos cadastrados, Lista de Material, pedidos confirmados, Medição, Aditivo ou Custo Real.
-            </p>
-          </div>
-        ),
-        confirmLabel: 'Limpar almoxarifado',
-      },
-      () => onProjectChange(clearWarehouse(ensured)),
-    );
+  const handleClearWarehouse = async () => {
+    if (!onClearWarehouse || !clearPassword || clearing) return;
+    setClearing(true);
+    setClearError('');
+    try {
+      await onClearWarehouse(clearPassword);
+      setClearPassword('');
+      setClearDialogOpen(false);
+    } catch (error) {
+      setClearError(error instanceof Error ? error.message : 'Não foi possível limpar o almoxarifado.');
+    } finally {
+      setClearing(false);
+    }
   };
 
   return (
@@ -66,16 +67,25 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
           <span className="mx-1.5">·</span>
           Termos abertos: <strong className="text-foreground">{summary.openCustodyCount}</strong>
         </span>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button type="button" variant="outline" size="sm" className="min-h-10"><Settings2 className="mr-1.5 h-4 w-4" /> Administração</Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={handleClearWarehouse}>
-              <RotateCcw className="mr-2 h-4 w-4" /> Limpar almoxarifado
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {canClearWarehouse && onClearWarehouse && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline" size="sm" className="min-h-10"><Settings2 className="mr-1.5 h-4 w-4" /> Administração</Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                onSelect={() => {
+                  setClearPassword('');
+                  setClearError('');
+                  setClearDialogOpen(true);
+                }}
+              >
+                <RotateCcw className="mr-2 h-4 w-4" /> Limpar almoxarifado
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
 
       <Tabs value={tab} onValueChange={setTab} className="w-full">
@@ -120,7 +130,50 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
           <WarehouseReportsTab project={ensured} />
         </TabsContent>
       </Tabs>
-      {confirmDialog}
+      <Dialog
+        open={clearDialogOpen}
+        onOpenChange={(open) => {
+          if (clearing) return;
+          setClearDialogOpen(open);
+          if (!open) {
+            setClearPassword('');
+            setClearError('');
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><LockKeyhole className="h-5 w-5 text-destructive" /> Acesso exclusivo do proprietário</DialogTitle>
+            <DialogDescription>
+              Esta operação limpa entradas, retiradas, notas fiscais, materiais e configurações do almoxarifado. Equipamentos e os demais módulos da obra serão preservados.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="warehouse-owner-password">Confirme a senha da sua conta</Label>
+            <Input
+              id="warehouse-owner-password"
+              type="password"
+              autoComplete="current-password"
+              value={clearPassword}
+              onChange={(event) => setClearPassword(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void handleClearWarehouse();
+              }}
+              disabled={clearing}
+              autoFocus
+            />
+            {clearError && <p role="alert" className="text-sm text-destructive">{clearError}</p>}
+            <p className="text-xs text-muted-foreground">A senha não é armazenada. A operação ficará registrada na auditoria.</p>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setClearDialogOpen(false)} disabled={clearing}>Cancelar</Button>
+            <Button type="button" variant="destructive" onClick={() => void handleClearWarehouse()} disabled={!clearPassword || clearing}>
+              {clearing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Confirmar e limpar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
