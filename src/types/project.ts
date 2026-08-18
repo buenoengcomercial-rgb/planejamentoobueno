@@ -860,15 +860,6 @@ export interface WarehouseFiscalNoteItem {
   linkConfidence?: number;
   /** Confiança da IA na leitura deste item (0-1). */
   confidence?: number;
-  /** Insumo previsto confirmado pelo operador. */
-  projectMaterialKey?: string;
-  projectMaterialCode?: string;
-  projectMaterialDescription?: string;
-  projectMaterialUnit?: string;
-  projectMaterialConversionFactor?: number;
-  projectMaterialDecision?: 'linked' | 'unplanned';
-  projectMaterialJustification?: string;
-  projectMaterialConfidence?: number;
 }
 
 export type FiscalInvoicePaymentStatus = 'aberta' | 'paga' | 'vencida' | 'cancelada';

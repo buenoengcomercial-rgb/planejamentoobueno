@@ -109,6 +109,33 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(computeWarehouseRows(repeated, { includeManual: true })[0].balance).toBe(2);
   });
 
+  it('ignora classificações orçamentárias legadas da nota e preserva vínculos existentes', () => {
+    const linkedLegacyItem = {
+      ...note().items[0],
+      projectMaterialDecision: 'linked',
+      projectMaterialKey: 'insumo-novo',
+      projectMaterialDescription: 'Insumo novo',
+      projectMaterialUnit: 'SC',
+      projectMaterialConversionFactor: 1,
+    };
+    const unplannedLegacyItem = {
+      id: 'item-2', productCode: 'MAT-02', description: 'Areia lavada', quantity: 1, unit: 'M3', unitPrice: 80, totalPrice: 80,
+      projectMaterialDecision: 'unplanned', projectMaterialJustification: 'Compra extraordinária',
+    };
+    const project = withNote(note({ items: [linkedLegacyItem, unplannedLegacyItem] }));
+    project.warehouse!.materialLinks = [{
+      id: 'link-existente', warehouseItemKey: 'material-existente', projectMaterialKey: 'insumo-existente',
+      projectMaterialDescription: 'Insumo existente', projectMaterialUnit: 'UN', conversionFactor: 1,
+      source: 'manual', createdAt: '2026-08-14T10:00:00.000Z',
+    }];
+
+    const posted = approveFiscalNote(project, 'nf-1');
+
+    expect(posted.warehouse!.materialLinks).toEqual(project.warehouse!.materialLinks);
+    expect(posted.warehouse!.items.find(item => item.code === 'MAT-02')?.unplannedReason).toBeUndefined();
+    expect(posted.warehouse!.movements.filter(movement => movement.type === 'entrada')).toHaveLength(2);
+  });
+
   it('mantém o mesmo material quando o preço muda e atualiza o preço mais recente', () => {
     const first = approveFiscalNote(withNote(note()), 'nf-1');
     const secondNote = note({

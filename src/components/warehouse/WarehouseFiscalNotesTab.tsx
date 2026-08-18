@@ -23,12 +23,10 @@ import {
   reconcileArchivedFiscalNoteStock,
   reviewArchivedFiscalNoteStock,
   suggestFiscalNoteItemLinks,
-  suggestProjectMaterialLinks,
   uidWarehouse,
   updateFiscalItemPurchaseGroup,
   upsertFiscalNote,
 } from '@/lib/warehouse';
-import { suggestMaterialsFromProject } from '@/lib/materialComparisons';
 import {
   downloadWarehouseAttachment,
   openWarehouseAttachment,
@@ -203,11 +201,6 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
   const purchaseGroups = useMemo(() => (project.materialComparisons ?? [])
     .map(comparison => ({ id: comparison.id, name: comparison.name }))
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')), [project.materialComparisons]);
-  const projectMaterials = useMemo(
-    () => suggestMaterialsFromProject(project).filter(material => material.quantity > 0)
-      .sort((a, b) => a.description.localeCompare(b.description, 'pt-BR')),
-    [project],
-  );
   const archivedStockReview = useMemo(() => reviewArchivedFiscalNoteStock(project), [project]);
 
   const counts = useMemo(() => ({
@@ -224,11 +217,6 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
   const isPosted = selected?.status === 'aprovada';
   const isArchived = selected?.status === 'rejeitada' || selected?.status === 'cancelada';
   const cancelCheck = isPosted && selected ? checkFiscalNoteCancellation(project, selected.id) : null;
-  const budgetLinksValid = !!selected && validItems(selected).every(item =>
-    (item.projectMaterialDecision === 'linked' && Number(item.projectMaterialConversionFactor || 0) > 0) ||
-    (item.projectMaterialDecision === 'unplanned' && !!item.projectMaterialJustification?.trim()),
-  );
-
   useEffect(() => {
     if (!canManage) return;
     const archival = archiveLegacyFiscalNoteDrafts(project, auditActor, archivedLegacyDraftIdsRef.current);
@@ -355,16 +343,6 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
     if (!selected || !isDraft) return;
     if (duplicate) return toast.error('Esta nota já foi lançada. Cancele o envio ou abra o lançamento existente.');
     if (!validItems(selected).length) return toast.error('Inclua ao menos um item com descrição e quantidade maior que zero.');
-    const unresolved = validItems(selected).find(item => !item.projectMaterialDecision);
-    if (unresolved) return toast.error(`Classifique o vínculo com o orçamento do item "${unresolved.description}".`);
-    const invalidConversion = validItems(selected).find(item =>
-      item.projectMaterialDecision === 'linked' && !(Number(item.projectMaterialConversionFactor || 0) > 0),
-    );
-    if (invalidConversion) return toast.error(`Informe o fator de conversão do item "${invalidConversion.description}".`);
-    const unjustified = validItems(selected).find(item =>
-      item.projectMaterialDecision === 'unplanned' && !item.projectMaterialJustification?.trim(),
-    );
-    if (unjustified) return toast.error(`Justifique por que o item "${unjustified.description}" não estava previsto.`);
     const normalized: WarehouseFiscalNote = {
       ...selected,
       items: selected.items.map(item => ({
@@ -404,41 +382,6 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
     if (!selected || !isDraft) return;
     const items = selected.items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item);
     setSelected({ ...selected, items });
-  };
-
-  const updateProjectMaterialLink = (index: number, value: string) => {
-    const item = selected?.items[index];
-    if (!item) return;
-    if (value === '__unplanned__') {
-      updateItem(index, {
-        projectMaterialDecision: 'unplanned',
-        projectMaterialKey: undefined,
-        projectMaterialCode: undefined,
-        projectMaterialDescription: undefined,
-        projectMaterialUnit: undefined,
-        projectMaterialConversionFactor: undefined,
-        projectMaterialConfidence: undefined,
-      });
-      return;
-    }
-    const material = projectMaterials.find(candidate => candidate.key === value);
-    if (!material) {
-      updateItem(index, { projectMaterialDecision: undefined, projectMaterialKey: undefined });
-      return;
-    }
-    const suggestion = suggestProjectMaterialLinks(project, item, selected?.supplierCnpj)
-      .find(candidate => candidate.material.key === material.key);
-    const sameUnit = (item.unit || 'UN').trim().toLowerCase() === material.unit.trim().toLowerCase();
-    updateItem(index, {
-      projectMaterialDecision: 'linked',
-      projectMaterialKey: material.key,
-      projectMaterialCode: material.code,
-      projectMaterialDescription: material.description,
-      projectMaterialUnit: material.unit,
-      projectMaterialConversionFactor: sameUnit ? 1 : 0,
-      projectMaterialConfidence: suggestion?.confidence,
-      projectMaterialJustification: undefined,
-    });
   };
 
   const updatePurchaseGroup = (note: WarehouseFiscalNote, item: WarehouseFiscalNoteItem, value: string) => {
@@ -607,47 +550,6 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
                 {!selected.items.length && <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">Nenhum item identificado. Adicione um item para concluir o lançamento.</div>}
               </section>
 
-              {isDraft && selected.items.length > 0 && (
-                <section className="space-y-3 rounded-md border p-3">
-                  <div>
-                    <h3 className="font-semibold">Vínculo com o orçamento</h3>
-                    <p className="text-sm text-muted-foreground">Confirme um insumo previsto ou justifique o material não previsto. Sugestões nunca são aplicadas sem confirmação.</p>
-                  </div>
-                  {selected.items.map((item, index) => {
-                    const suggestedKeys = new Set(suggestProjectMaterialLinks(project, item, selected.supplierCnpj).map(suggestion => suggestion.material.key));
-                    return (
-                      <div key={`budget-${item.id}`} className="grid gap-3 rounded-md bg-muted/30 p-3 md:grid-cols-[minmax(180px,1fr)_minmax(260px,2fr)_180px]">
-                        <div className="min-w-0">
-                          <div className="text-xs font-semibold text-muted-foreground">Material comprado</div>
-                          <div className="truncate text-sm font-medium" title={item.description}>{item.description || `Item ${index + 1}`}</div>
-                          <div className="text-xs text-muted-foreground">{item.quantity} {item.unit || 'UN'}</div>
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-xs font-semibold text-muted-foreground">Insumo do orçamento</label>
-                          <select disabled={!isDraft} className="min-h-11 w-full rounded-md border bg-background px-3 text-sm" aria-label={`Insumo do orçamento para ${item.description}`} value={item.projectMaterialDecision === 'unplanned' ? '__unplanned__' : item.projectMaterialKey || '__pending__'} onChange={event => updateProjectMaterialLink(index, event.target.value)}>
-                            <option value="__pending__">Selecionar insumo previsto</option>
-                            <option value="__unplanned__">Cadastrar como material não previsto</option>
-                            {projectMaterials.map(material => <option key={material.key} value={material.key}>{suggestedKeys.has(material.key) ? '★ ' : ''}{material.code ? `${material.code} · ` : ''}{material.description} ({material.unit})</option>)}
-                          </select>
-                        </div>
-                        {item.projectMaterialDecision === 'linked' ? (
-                          <div>
-                            <label className="mb-1 block text-xs font-semibold text-muted-foreground">Conversão</label>
-                            <Input className="min-h-11 text-center" type="number" min="0" step="any" readOnly={!isDraft} value={item.projectMaterialConversionFactor || ''} onChange={event => updateItem(index, { projectMaterialConversionFactor: Number(event.target.value) })} aria-label={`Fator de conversão de ${item.description}`} />
-                            <div className="mt-1 text-[11px] text-muted-foreground">1 {item.projectMaterialUnit || 'un. prevista'} = fator em {item.unit || 'UN'}</div>
-                          </div>
-                        ) : item.projectMaterialDecision === 'unplanned' ? (
-                          <div>
-                            <label className="mb-1 block text-xs font-semibold text-muted-foreground">Justificativa</label>
-                            <Input className="min-h-11" readOnly={!isDraft} value={item.projectMaterialJustification || ''} onChange={event => updateItem(index, { projectMaterialJustification: event.target.value })} placeholder="Por que não estava previsto?" />
-                          </div>
-                        ) : <div className="self-center text-xs text-warning">Confirmação pendente</div>}
-                      </div>
-                    );
-                  })}
-                </section>
-              )}
-
               <details className="rounded-md border p-3"><summary className="cursor-pointer font-medium">Mais detalhes</summary><div className="mt-3 grid gap-3 sm:grid-cols-2"><Field label="Frete" type="number" value={String(selected.freightAmount || '')} readOnly={!isDraft} onChange={value => setSelected({ ...selected, freightAmount: Number(value) })} /><Field label="ICMS adicional" type="number" value={String(selected.icmsAmount || '')} readOnly={!isDraft} onChange={value => setSelected({ ...selected, icmsAmount: Number(value) })} /><div className="sm:col-span-2"><label className="mb-1 block text-sm font-medium">Observações</label><Textarea value={selected.notes || ''} readOnly={!isDraft} onChange={event => setSelected({ ...selected, notes: event.target.value })} /></div><div className="text-sm text-muted-foreground sm:col-span-2">Faturas: {selected.invoices?.length || 0}. Total adicional: {money(Number(selected.freightAmount || 0) + Number(selected.icmsAmount || 0))}.</div></div></details>
               {selected.status === 'cancelada' && <div className="rounded-md border p-3 text-sm"><strong>Cancelamento definitivo</strong><br /><strong>Responsável:</strong> {selected.canceledBy || '—'}<br /><strong>Motivo:</strong> {selected.cancellationReason}</div>}
             </div>
@@ -655,7 +557,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
               {!isDraft && <Button variant="outline" onClick={() => setSelected(null)}>Fechar</Button>}
               {isDraft && <Button variant="outline" onClick={requestCloseSelected}>Cancelar envio</Button>}
               {isDraft && duplicate && <Button onClick={openDuplicate}>Abrir lançamento existente</Button>}
-              {isDraft && !duplicate && <Button onClick={() => void postSelectedDraft()} disabled={!validItems(selected).length || !budgetLinksValid || processing}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Confirmar lançamento</Button>}
+              {isDraft && !duplicate && <Button onClick={() => void postSelectedDraft()} disabled={!validItems(selected).length || processing}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Confirmar lançamento</Button>}
               {canManage && isPosted && <Button variant="destructive" onClick={() => setCancelOpen(true)}>Cancelar lançamento</Button>}
             </div>
           </>}

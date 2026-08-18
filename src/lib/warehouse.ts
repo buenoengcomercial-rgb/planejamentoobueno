@@ -20,11 +20,10 @@ import type {
   FiscalInvoiceEntry,
   DailyReport,
   WarehouseProjectMaterialLink,
-  WarehouseMaterialLinkSource,
   WarehouseInventorySession,
   WarehouseInventoryLine,
 } from '@/types/project';
-import { linkKeyOf, suggestMaterialsFromProject, type MaterialSuggestion } from '@/lib/materialComparisons';
+import { linkKeyOf, suggestMaterialsFromProject } from '@/lib/materialComparisons';
 import { trunc2 } from '@/lib/financialEngine';
 import { getChapterNumbering } from '@/lib/chapters';
 
@@ -1675,7 +1674,6 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
 
   let itemsConfig = [...wh.items];
   const movements = [...wh.movements];
-  const materialLinks = [...(wh.materialLinks ?? [])];
   const approvedItems = linked.items.map(item => {
     const unit = (item.unit || 'UN').trim() || 'UN';
     const allocationNote = { ...noteForPosting, items: linked.items };
@@ -1705,7 +1703,6 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
         purchasedQuantity: Number(item.quantity || 0),
         unitPrice: globalUnitPrice || undefined,
         purchaseGroupId: item.purchaseGroupId,
-        unplannedReason: item.projectMaterialDecision === 'unplanned' ? item.projectMaterialJustification : undefined,
       });
       rowsByKey.set(itemKey, {
         key: itemKey,
@@ -1723,7 +1720,7 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
         balance: 0,
         underMin: false,
         projectLinks: [],
-        linkStatus: item.projectMaterialDecision === 'linked' ? 'linked' : 'pending',
+        linkStatus: 'pending',
         consumedCost: 0,
         valuationIncomplete: false,
       });
@@ -1738,9 +1735,7 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
           code: cfg.code || productCode,
           unitPrice: globalUnitPrice || cfg.unitPrice,
           purchaseGroupId: item.purchaseGroupId ?? cfg.purchaseGroupId,
-          unplannedReason: item.projectMaterialDecision === 'unplanned'
-            ? item.projectMaterialJustification
-            : cfg.unplannedReason,
+          unplannedReason: cfg.unplannedReason,
         };
       });
       if (!updatedConfig) {
@@ -1779,29 +1774,6 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
       user: actorLabel,
     });
 
-    if (item.projectMaterialDecision === 'linked' && item.projectMaterialKey) {
-      const exists = materialLinks.some(link =>
-        link.warehouseItemKey === itemKey && link.projectMaterialKey === item.projectMaterialKey,
-      );
-      if (!exists) {
-        materialLinks.push({
-          id: uid(),
-          warehouseItemKey: itemKey,
-          projectMaterialKey: item.projectMaterialKey,
-          projectMaterialCode: item.projectMaterialCode,
-          projectMaterialDescription: item.projectMaterialDescription || item.description,
-          projectMaterialUnit: item.projectMaterialUnit || unit,
-          conversionFactor: Number(item.projectMaterialConversionFactor || 1),
-          source: item.projectMaterialConfidence != null ? 'similarity' : 'manual',
-          confidence: item.projectMaterialConfidence,
-          supplierCnpj: noteForPosting.supplierCnpj,
-          supplierProductCode: productCode,
-          createdAt: nowISO(),
-          createdBy: auditActor,
-        });
-      }
-    }
-
     return { ...item, productCode, itemKey, unit, globalTotalPrice, linkStatus: 'vinculado' as const };
   });
 
@@ -1820,7 +1792,7 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
       : n,
   );
 
-  return setWh(p, { items: itemsConfig, movements, fiscalNotes, materialLinks });
+  return setWh(p, { items: itemsConfig, movements, fiscalNotes });
 }
 
 /**
@@ -2421,55 +2393,6 @@ export function findMaterialMatch(
     }
   }
   return best;
-}
-
-export interface ProjectMaterialLinkSuggestion {
-  material: MaterialSuggestion;
-  source: WarehouseMaterialLinkSource;
-  confidence: number;
-}
-
-/** Sugestões para conferência humana; nunca persiste ou une itens automaticamente. */
-export function suggestProjectMaterialLinks(
-  project: Project,
-  item: Pick<WarehouseFiscalNoteItem, 'description' | 'unit' | 'productCode'>,
-  supplierCnpj?: string,
-): ProjectMaterialLinkSuggestion[] {
-  const materials = suggestMaterialsFromProject(project).filter(material => material.quantity > 0);
-  const cnpj = (supplierCnpj ?? '').replace(/\D/g, '');
-  const code = normalizeProductCode(item.productCode);
-  const previous = (project.warehouse?.materialLinks ?? []).find(link =>
-    cnpj &&
-    (link.supplierCnpj ?? '').replace(/\D/g, '') === cnpj &&
-    code &&
-    normalizeProductCode(link.supplierProductCode) === code,
-  );
-  const itemTokens = new Set(tokenize(item.description));
-  const itemUnit = normalizeLookup(item.unit || 'UN');
-
-  return materials
-    .map(material => {
-      if (previous?.projectMaterialKey === material.key) {
-        return { material, source: 'supplier_history' as const, confidence: 1 };
-      }
-      if (code && normalizeProductCode(material.code) === code) {
-        return { material, source: 'exact_code' as const, confidence: 0.99 };
-      }
-      const exactDescription = normalizeLookup(material.description) === normalizeLookup(item.description);
-      const sameUnit = normalizeLookup(material.unit) === itemUnit;
-      if (exactDescription && sameUnit) {
-        return { material, source: 'description_unit' as const, confidence: 0.97 };
-      }
-      const candidateTokens = new Set(tokenize(material.description));
-      let intersection = 0;
-      for (const token of itemTokens) if (candidateTokens.has(token)) intersection += 1;
-      const union = itemTokens.size + candidateTokens.size - intersection;
-      const score = union ? intersection / union + (sameUnit ? 0.05 : 0) : 0;
-      return { material, source: 'similarity' as const, confidence: Math.min(0.95, score) };
-    })
-    .filter(suggestion => suggestion.confidence >= 0.35)
-    .sort((a, b) => b.confidence - a.confidence)
-    .slice(0, 8);
 }
 
 export function upsertWarehouseProjectMaterialLink(
