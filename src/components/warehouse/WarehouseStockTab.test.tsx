@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
 import WarehouseStockTab from './WarehouseStockTab';
@@ -42,7 +42,41 @@ function projectWithPurchaseHistory(): Project {
   return project;
 }
 
+function projectWithPlannedMaterials(): Project {
+  const project = projectWithPurchaseHistory();
+  project.analyticCompositions = [
+    {
+      id: 'composition-1', item: '1.1', code: 'COMP-1', bank: 'SINAPI', description: 'Serviço com argamassa',
+      quantity: 10, unit: 'M²', unitPriceNoBDI: 0, unitPriceWithBDI: 0, total: 0,
+      inputs: [{ id: 'input-1', code: 'ORC-ARG', bank: 'SINAPI', description: 'Argamassa colante AC II', unit: 'KG', coefficient: 2, unitPrice: 1, total: 2 }],
+    },
+    {
+      id: 'composition-2', item: '1.2', code: 'COMP-2', bank: 'SINAPI', description: 'Serviço com tinta',
+      quantity: 5, unit: 'M²', unitPriceNoBDI: 0, unitPriceWithBDI: 0, total: 0,
+      inputs: [{ id: 'input-2', code: 'ORC-TINTA', bank: 'SINAPI', description: 'Tinta acrílica premium', unit: 'L', coefficient: 1, unitPrice: 1, total: 1 }],
+    },
+  ];
+  return project;
+}
+
 describe('WarehouseStockTab - documentos no histórico', () => {
+  beforeAll(() => {
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
+  });
+
+  afterAll(() => {
+    vi.unstubAllGlobals();
+    delete (Element.prototype as Element & { scrollIntoView?: () => void }).scrollIntoView;
+  });
+
   beforeEach(() => {
     downloadAttachmentMock.mockReset().mockResolvedValue(undefined);
     openAttachmentMock.mockReset().mockResolvedValue(undefined);
@@ -58,5 +92,19 @@ describe('WarehouseStockTab - documentos no histórico', () => {
     fireEvent.click(downloadButton);
     expect(openAttachmentMock).toHaveBeenCalledTimes(1);
     expect(downloadAttachmentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('pesquisa insumos previstos pela descrição sem exibir o código', () => {
+    render(<WarehouseStockTab project={projectWithPlannedMaterials()} onProjectChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Revisar vínculos' }));
+    fireEvent.click(screen.getByRole('combobox', { name: 'Selecionar insumo previsto' }));
+
+    const search = screen.getByPlaceholderText('Digite uma palavra-chave...');
+    fireEvent.change(search, { target: { value: 'argamassa' } });
+
+    expect(screen.getByText('Argamassa colante AC II')).toBeInTheDocument();
+    expect(screen.queryByText('Tinta acrílica premium')).not.toBeInTheDocument();
+    expect(screen.queryByText(/ORC-ARG|ORC-TINTA/)).not.toBeInTheDocument();
   });
 });
