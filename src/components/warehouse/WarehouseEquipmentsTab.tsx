@@ -19,6 +19,7 @@ import { supabase } from '@/integrations/supabase/client';
 import QRCode from 'qrcode';
 import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
+import { equipmentAiBackendError, equipmentAiErrorMessage } from '@/lib/equipmentAi';
 
 interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; }
 
@@ -78,8 +79,8 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
         error?: string;
         equipment?: { brand?: string; model?: string; serial?: string; category?: string; description?: string; confidence?: Equipment['extractionConfidence'] };
       }>('read-equipment', { body: { imageDataUrls } });
-      if (error) throw new Error(error.message);
-      if (!data?.ok || !data.equipment) throw new Error(data?.error || 'Não foi possível ler o equipamento.');
+      if (error) throw error;
+      if (!data?.ok || !data.equipment) throw equipmentAiBackendError(data?.error);
       setForm(current => ({
         ...current,
         brand: data.equipment?.brand || current.brand,
@@ -91,7 +92,7 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
       }));
       toast.success('Sugestões preenchidas. Revise todos os campos antes de cadastrar.');
     } catch (error) {
-      toast.warning(`${(error as Error).message} O cadastro manual continua disponível.`);
+      toast.warning(await equipmentAiErrorMessage(error));
     } finally { setReading(false); }
   };
 

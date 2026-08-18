@@ -65,10 +65,25 @@ Deno.serve(async (request) => {
       }),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) return json({ error: data?.error?.message ?? data?.message ?? "Falha na leitura por IA." }, response.status);
+    if (!response.ok) {
+      const gatewayError = response.status === 402
+        ? "Creditos da IA do Lovable esgotados. Adicione creditos na workspace do Lovable."
+        : response.status === 429
+          ? "Limite de requisicoes da IA do Lovable atingido. Tente novamente em instantes."
+          : data?.error?.message ?? data?.message ?? "Falha na leitura por IA.";
+      return json({ error: gatewayError }, response.status);
+    }
     const content = data?.choices?.[0]?.message?.content;
     if (!content) return json({ error: "A IA nao retornou conteudo." }, 502);
-    const parsed = JSON.parse(String(content)) as EquipmentPayload;
+    let parsed: EquipmentPayload;
+    try {
+      parsed = JSON.parse(String(content)) as EquipmentPayload;
+    } catch {
+      return json({ error: "IA retornou JSON invalido." }, 502);
+    }
+    if (![parsed.brand, parsed.model, parsed.serial, parsed.category, parsed.description].some(value => String(value ?? "").trim())) {
+      return json({ error: "Nao foi possivel identificar dados legiveis nas fotos." }, 422);
+    }
     return json({
       ok: true,
       equipment: {
