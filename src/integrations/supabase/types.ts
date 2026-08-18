@@ -87,6 +87,7 @@ export type Database = {
         Row: {
           action: string | null
           created_at: string
+          created_by: string | null
           data: Json
           entity_id: string | null
           entity_type: string | null
@@ -99,6 +100,7 @@ export type Database = {
         Insert: {
           action?: string | null
           created_at?: string
+          created_by?: string | null
           data?: Json
           entity_id?: string | null
           entity_type?: string | null
@@ -111,6 +113,7 @@ export type Database = {
         Update: {
           action?: string | null
           created_at?: string
+          created_by?: string | null
           data?: Json
           entity_id?: string | null
           entity_type?: string | null
