@@ -2428,6 +2428,7 @@ export async function makeAttachment(
   projectId: string,
   kind?: WarehouseAttachment['kind'],
   folder = 'documents',
+  options: { fallback?: 'data-url' | 'error' } = {},
 ): Promise<WarehouseAttachment> {
   const id = uid();
   const safeExt = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -2450,6 +2451,10 @@ export async function makeAttachment(
     if (error) throw error;
     return { ...base, storagePath: path };
   } catch (err) {
+    if (options.fallback === 'error') {
+      console.warn('Anexo: falha no upload obrigatório para o Storage.', err);
+      throw new Error('Não foi possível enviar o documento para a nuvem. Verifique a internet e tente novamente.');
+    }
     console.warn('Anexo: falha no upload para Storage, gravando dataURL como fallback.', err);
     const dataUrl = await readFileAsDataURL(file);
     return { ...base, dataUrl };

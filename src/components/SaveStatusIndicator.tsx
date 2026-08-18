@@ -1,26 +1,47 @@
-import { Cloud, CloudOff, Loader2, Check } from 'lucide-react';
+import { Cloud, CloudOff, Loader2, Check, RefreshCw, TriangleAlert, WifiOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+export type SaveStatus = 'idle' | 'saving' | 'updating' | 'saved' | 'conflict' | 'offline' | 'error';
 
 interface Props {
   status: SaveStatus;
   className?: string;
+  confirmedAt?: string | null;
+  projectId?: string;
 }
 
-export default function SaveStatusIndicator({ status, className }: Props) {
+function timeLabel(value?: string | null) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return null;
+  return parsed.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
+export default function SaveStatusIndicator({ status, className, confirmedAt, projectId }: Props) {
   const map = {
     idle:   { icon: Cloud,   text: 'Pronto',          color: 'text-muted-foreground' },
     saving: { icon: Loader2, text: 'Salvando...',     color: 'text-muted-foreground', spin: true },
-    saved:  { icon: Check,   text: 'Salvo na nuvem',  color: 'text-primary' },
-    error:  { icon: CloudOff, text: 'Erro ao salvar', color: 'text-destructive' },
+    updating: { icon: RefreshCw, text: 'Atualizando dados...', color: 'text-primary', spin: true },
+    saved:  { icon: Check,   text: 'Salvo e conferido na nuvem',  color: 'text-primary' },
+    conflict: { icon: TriangleAlert, text: 'Atualização em outro aparelho', color: 'text-warning' },
+    offline: { icon: WifiOff, text: 'Sem internet', color: 'text-warning' },
+    error:  { icon: CloudOff, text: 'Falha na sincronização', color: 'text-destructive' },
   } as const;
   const cfg = map[status];
   const Icon = cfg.icon;
+  const confirmed = timeLabel(confirmedAt);
+  const shortProjectId = projectId?.slice(0, 8);
   return (
-    <div className={cn('flex items-center gap-1.5 text-xs', cfg.color, className)}>
-      <Icon className={cn('w-3.5 h-3.5', 'spin' in cfg && cfg.spin && 'animate-spin')} />
-      <span>{cfg.text}</span>
+    <div className={cn('flex max-w-[65vw] flex-col items-end text-right text-[11px] leading-tight', cfg.color, className)}>
+      <div className="flex items-center gap-1.5 font-medium">
+        <Icon className={cn('h-3.5 w-3.5 shrink-0', 'spin' in cfg && cfg.spin && 'animate-spin')} />
+        <span>{cfg.text}</span>
+      </div>
+      {(confirmed || shortProjectId) && (
+        <span className="mt-0.5 text-[10px] text-muted-foreground">
+          {confirmed ? `Confirmado ${confirmed}` : 'Ainda não confirmado'}{shortProjectId ? ` · Obra ${shortProjectId}` : ''}
+        </span>
+      )}
     </div>
   );
 }

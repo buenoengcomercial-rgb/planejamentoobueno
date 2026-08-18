@@ -32,6 +32,7 @@ const WAREHOUSE_TABS = [
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
+  onCommitProject?: (next: Project) => Promise<void>;
   canManageFiscalNotes?: boolean;
   canApproveInventory?: boolean;
   canClearWarehouse?: boolean;
@@ -39,7 +40,7 @@ interface Props {
   auditActor?: WarehouseAuditActor;
 }
 
-export default function Warehouse({ project, onProjectChange, canManageFiscalNotes = true, canApproveInventory = true, canClearWarehouse = false, onClearWarehouse, auditActor }: Props) {
+export default function Warehouse({ project, onProjectChange, onCommitProject, canManageFiscalNotes = true, canApproveInventory = true, canClearWarehouse = false, onClearWarehouse, auditActor }: Props) {
   const [tab, setTab] = useState('notas');
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [clearPassword, setClearPassword] = useState('');
@@ -132,6 +133,7 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
           <WarehouseFiscalNotesTab
             project={ensured}
             onProjectChange={onProjectChange}
+            onCommitProject={onCommitProject}
             canManage={canManageFiscalNotes}
             auditActor={auditActor}
           />

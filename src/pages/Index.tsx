@@ -5,9 +5,10 @@ import { AppView, Project } from '@/types/project';
 import AppSidebar from '@/components/AppSidebar';
 import UndoButton from '@/components/UndoButton';
 import SaveStatusIndicator, { SaveStatus } from '@/components/SaveStatusIndicator';
+import CloudDraftRecoveryDialog from '@/components/CloudDraftRecoveryDialog';
 import MigrationDialog from '@/components/MigrationDialog';
 import ImportSyntheticDialog from '@/components/ImportSyntheticDialog';
-import { Menu, X, Loader2, Building2 } from 'lucide-react';
+import { Menu, X, Loader2, Building2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { applyRupToProject, applyDailyLogsToProject, calculateCPM, captureBaseline, syncBaselineWithRup, settleAllDependencies } from '@/lib/calculations';
 import { loadObraConfig } from '@/components/ConfiguracaoObra';
@@ -45,12 +46,24 @@ import {
   getSampleSeed,
   CloudProjectConflictError,
   CloudProjectMeta,
+  getCloudProjectVersion,
 } from '@/lib/cloudProjects';
+import {
+  clearProjectDraft,
+  inspectProjectDraft,
+  projectHasLocalChanges,
+  resolveRemoteVersionAction,
+  restoreWarehouseFromDraft,
+  serializeProject,
+  summarizeWarehouseRecovery,
+  writeProjectDraft,
+  type StoredProjectDraft,
+} from '@/lib/cloudProjectDrafts';
 import type { ProjectMeta } from '@/lib/projectStorage';
 
 const UNDO_LIMIT = 20;
 const SAVE_DEBOUNCE_MS = 4000;
-const UNSAVED_DRAFT_VERSION = 1;
+const REMOTE_VERSION_POLL_MS = 15000;
 const UI_SESSION_VERSION = 1;
 const APP_UI_SESSION_KEY = 'obraplanner:ui-session';
 const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse'];
@@ -73,6 +86,13 @@ const ROUTE_VIEW = Object.fromEntries(Object.entries(VIEW_ROUTE).map(([view, rou
 
 type UndoStacks = Record<AppView, Project[]>;
 
+interface DraftRecoveryState {
+  cloudProject: Project;
+  cloudUpdatedAt: string | null;
+  draft: StoredProjectDraft;
+  open: boolean;
+}
+
 function createDraftProject(name = ''): Project {
   const today = new Date().toISOString().split('T')[0];
   return {
@@ -85,14 +105,6 @@ function createDraftProject(name = ''): Project {
   };
 }
 
-interface UnsavedProjectDraft {
-  version: typeof UNSAVED_DRAFT_VERSION;
-  baseUpdatedAt: string | null;
-  savedAt?: string; // legado: mantido para recuperar rascunhos gravados antes desta blindagem.
-  localDraftUpdatedAt: string;
-  project: Project;
-}
-
 interface AppUiSession {
   version: typeof UI_SESSION_VERSION;
   projectId?: string;
@@ -103,8 +115,6 @@ interface AppUiSession {
   windowScrollY?: number;
   updatedAt: string;
 }
-
-const unsavedDraftKey = (projectId: string) => `obraplanner:unsaved-cloud-draft:${projectId}`;
 
 function isAppView(value: unknown): value is AppView {
   return typeof value === 'string' && APP_VIEWS.includes(value as AppView);
@@ -143,59 +153,6 @@ function readInitialView(routeView?: string): AppView {
   return (routeView && ROUTE_VIEW[routeView]) || readAppUiSession()?.view || 'dashboard';
 }
 
-function toTime(value: string | null | undefined): number {
-  const parsed = Date.parse(value ?? '');
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function readUnsavedDraft(projectId: string, cloudUpdatedAt: string | null): UnsavedProjectDraft | null {
-  try {
-    const raw = localStorage.getItem(unsavedDraftKey(projectId));
-    if (!raw) return null;
-    const draft = JSON.parse(raw) as UnsavedProjectDraft;
-    if (draft.version !== UNSAVED_DRAFT_VERSION) return null;
-    if (!draft.project || draft.project.id !== projectId) return null;
-
-    const localDraftUpdatedAt = draft.localDraftUpdatedAt ?? draft.savedAt;
-    if (!localDraftUpdatedAt) return null;
-
-    const baseMatches = draft.baseUpdatedAt === cloudUpdatedAt;
-    const localIsNewerThanCloud = toTime(localDraftUpdatedAt) >= toTime(cloudUpdatedAt);
-    if (!baseMatches && !localIsNewerThanCloud) return null;
-
-    return { ...draft, localDraftUpdatedAt };
-  } catch {
-    return null;
-  }
-}
-
-function writeUnsavedDraft(project: Project, baseUpdatedAt: string | null) {
-  try {
-    const now = new Date().toISOString();
-    localStorage.setItem(unsavedDraftKey(project.id), JSON.stringify({
-      version: UNSAVED_DRAFT_VERSION,
-      baseUpdatedAt,
-      savedAt: now,
-      localDraftUpdatedAt: now,
-      project,
-    } satisfies UnsavedProjectDraft));
-  } catch (err) {
-    console.warn('Nao foi possivel gravar rascunho local de seguranca.', err);
-  }
-}
-
-function clearUnsavedDraft(projectId: string) {
-  try {
-    localStorage.removeItem(unsavedDraftKey(projectId));
-  } catch {
-    // ignore
-  }
-}
-
-function serializeProjectForSave(project: Project): string {
-  return JSON.stringify(project);
-}
-
 export default function Index() {
   const { user, loading: authLoading, signOut } = useAuth();
   const auditActor = useMemo(() => userInfoFromSupabaseUser(user), [user]);
@@ -211,6 +168,8 @@ export default function Index() {
   const [bootLoading, setBootLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [currentProjectUpdatedAt, setCurrentProjectUpdatedAt] = useState<string | null>(null);
+  const [lastCloudConfirmedAt, setLastCloudConfirmedAt] = useState<string | null>(null);
+  const [draftRecovery, setDraftRecovery] = useState<DraftRecoveryState | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [dailyReportInitialDate, setDailyReportInitialDate] = useState<string | undefined>(undefined);
@@ -243,6 +202,7 @@ export default function Index() {
   const lastSavedProjectJsonRef = useRef<string | null>(null);
   const skipNextAutoSaveRef = useRef(false);
   const conflictDetectedRef = useRef(false);
+  const remoteCheckInFlightRef = useRef(false);
   const mainScrollRef = useRef<HTMLElement | null>(null);
   const restoredUiSessionRef = useRef<string | null>(null);
   const uiSessionSaverReadyRef = useRef<string | null>(null);
@@ -365,57 +325,61 @@ export default function Index() {
     projectToLoad: Project | null,
     updatedAt: string | null = null,
     repairApplied = false,
+    inspectDraft = true,
   ) => {
     let projectForState = projectToLoad;
-    const cloudProjectJson = projectToLoad ? serializeProjectForSave(projectToLoad) : null;
-    const draft = projectToLoad ? readUnsavedDraft(projectToLoad.id, updatedAt) : null;
-    if (draft) {
-      projectForState = draft.project;
-      toast.info('Recuperei alterações locais que ainda não tinham sido salvas na nuvem.');
+    const cloudProjectJson = projectToLoad ? serializeProject(projectToLoad) : null;
+    const draftInspection = projectToLoad && inspectDraft
+      ? inspectProjectDraft(projectToLoad, updatedAt)
+      : { kind: 'none' as const, reason: 'missing' as const };
+    const recoveredDraft = draftInspection.kind === 'recoverable' ? draftInspection.draft : null;
+    if (recoveredDraft) {
+      projectForState = recoveredDraft.project;
+      toast.info('Recuperei um rascunho recente deste aparelho. Ele ainda será conferido na nuvem.');
+    } else if (draftInspection.kind === 'identical' && projectToLoad) {
+      clearProjectDraft(projectToLoad.id);
+    } else if (draftInspection.kind === 'candidate' && projectToLoad) {
+      setDraftRecovery({ cloudProject: projectToLoad, cloudUpdatedAt: updatedAt, draft: draftInspection.draft, open: true });
     }
 
-    skipNextAutoSaveRef.current = !draft && !repairApplied;
-    conflictDetectedRef.current = false;
+    skipNextAutoSaveRef.current = !recoveredDraft && !repairApplied;
+    conflictDetectedRef.current = draftInspection.kind === 'candidate';
     currentProjectUpdatedAtRef.current = updatedAt;
     rawProjectRef.current = projectForState;
-    // Se recuperamos rascunho local, a referencia de "salvo" precisa continuar
-    // sendo a versao da nuvem; assim o autosave percebe a diferenca e reenvia.
     lastSavedProjectJsonRef.current = repairApplied
       ? null
-      : draft ? cloudProjectJson : (projectForState ? serializeProjectForSave(projectForState) : null);
+      : recoveredDraft ? cloudProjectJson : (projectForState ? serializeProject(projectForState) : null);
     setCurrentProjectUpdatedAt(updatedAt);
     setRawProject(projectForState);
-    if (draft || repairApplied) setSaveStatus('saving');
+    setLastCloudConfirmedAt(new Date().toISOString());
+    if (draftInspection.kind === 'candidate') setSaveStatus('conflict');
+    else if (recoveredDraft || repairApplied) setSaveStatus('saving');
+    else setSaveStatus('saved');
   }, []);
 
-  const persistProject = useCallback(async (projectToSave: Project, projectOrgId: string) => {
-    const nextJson = serializeProjectForSave(projectToSave);
+  const persistProject = useCallback(async (
+    projectToSave: Project,
+    projectOrgId: string,
+    options: { retainDraftUntilVerified?: boolean } = {},
+  ) => {
+    const nextJson = serializeProject(projectToSave);
     if (nextJson === lastSavedProjectJsonRef.current) {
-      clearUnsavedDraft(projectToSave.id);
+      if (!options.retainDraftUntilVerified) clearProjectDraft(projectToSave.id);
+      setLastCloudConfirmedAt(new Date().toISOString());
       setSaveStatus('saved');
       return;
     }
 
     const seq = ++saveRequestSeqRef.current;
     const request = saveQueueRef.current.catch(() => undefined).then(async () => {
-      let updatedAt: string;
-      try {
-        updatedAt = await upsertCloudProject(projectToSave, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined);
-      } catch (e) {
-        if (!(e instanceof CloudProjectConflictError)) throw e;
-
-        // Em uso individual/Lovable Preview, conflitos de updated_at costumam
-        // vir de salvamentos concorrentes do mesmo navegador. A versao local
-        // e a mais segura para nao perder trabalho em andamento.
-        updatedAt = await upsertCloudProject(projectToSave, projectOrgId);
-        toast.warning('Mantive suas alteracoes locais e sincronizei novamente com a nuvem.');
-      }
+      const updatedAt = await upsertCloudProject(projectToSave, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined);
       conflictDetectedRef.current = false;
       currentProjectUpdatedAtRef.current = updatedAt;
       lastSavedProjectJsonRef.current = nextJson;
       setCurrentProjectUpdatedAt(updatedAt);
+      setLastCloudConfirmedAt(new Date().toISOString());
       if (seq === saveRequestSeqRef.current && !saveTimerRef.current) {
-        clearUnsavedDraft(projectToSave.id);
+        if (!options.retainDraftUntilVerified) clearProjectDraft(projectToSave.id);
         setSaveStatus('saved');
       }
       setCloudList(prev => {
@@ -440,6 +404,26 @@ export default function Index() {
     }
   }, []);
 
+  const handleCloudConflict = useCallback(async (localProject: Project) => {
+    conflictDetectedRef.current = true;
+    setSaveStatus('conflict');
+    const draft = writeProjectDraft(localProject, currentProjectUpdatedAtRef.current);
+    try {
+      const record = await loadCloudProjectRecord(localProject.id);
+      if (record && draft) {
+        setDraftRecovery({
+          cloudProject: record.project,
+          cloudUpdatedAt: record.updatedAt,
+          draft,
+          open: true,
+        });
+      }
+    } catch (error) {
+      console.warn('Não foi possível carregar a versão concorrente da obra.', error);
+    }
+    toast.error('Esta obra foi atualizada em outro aparelho. Compare as versões antes de continuar.');
+  }, []);
+
   useEffect(() => {
     rawProjectRef.current = rawProject;
   }, [rawProject]);
@@ -454,7 +438,9 @@ export default function Index() {
       if (synchronized === previous) return previous;
       skipNextAutoSaveRef.current = false;
       rawProjectRef.current = synchronized;
-      writeUnsavedDraft(synchronized, currentProjectUpdatedAtRef.current);
+      if (projectHasLocalChanges(synchronized, lastSavedProjectJsonRef.current)) {
+        writeProjectDraft(synchronized, currentProjectUpdatedAtRef.current);
+      }
       setSaveStatus('saving');
       return synchronized;
     });
@@ -472,11 +458,10 @@ export default function Index() {
         return true;
       } catch (e) {
         console.warn(e);
-        setSaveStatus('error');
         if (e instanceof CloudProjectConflictError) {
-          conflictDetectedRef.current = true;
-          toast.error('Esta obra foi alterada em outro local. Reabra a obra antes de continuar salvando.');
+          await handleCloudConflict(rawProject);
         } else {
+          setSaveStatus(navigator.onLine ? 'error' : 'offline');
           toast.error('Erro ao salvar na nuvem. Sua alteração ficou apenas neste navegador.');
         }
         return false;
@@ -487,13 +472,16 @@ export default function Index() {
       try {
         await inFlightSaveRef.current;
         return true;
-      } catch {
+      } catch (e) {
+        if (e instanceof CloudProjectConflictError && rawProjectRef.current) {
+          await handleCloudConflict(rawProjectRef.current);
+        }
         return false;
       }
     }
 
     return true;
-  }, [user, orgId, rawProject, canPersistProject, persistProject]);
+  }, [user, orgId, rawProject, canPersistProject, persistProject, handleCloudConflict]);
 
   useEffect(() => {
     if (!user || !orgId) return;
@@ -547,11 +535,10 @@ export default function Index() {
         await persistProject(rawProject, orgId);
       } catch (e) {
         console.warn(e);
-        setSaveStatus('error');
         if (e instanceof CloudProjectConflictError) {
-          conflictDetectedRef.current = true;
-          toast.error('Esta obra foi alterada em outro local. Reabra a obra antes de continuar salvando.');
+          await handleCloudConflict(rawProject);
         } else {
+          setSaveStatus(navigator.onLine ? 'error' : 'offline');
           toast.error('Erro ao salvar na nuvem. Sua alteração ficou apenas neste navegador.');
         }
       }
@@ -559,7 +546,76 @@ export default function Index() {
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
-  }, [rawProject, user, orgId, canPersistProject, persistProject]);
+  }, [rawProject, user, orgId, canPersistProject, persistProject, handleCloudConflict]);
+
+  const checkRemoteProjectVersion = useCallback(async () => {
+    const current = rawProjectRef.current;
+    if (!current || !initialLoadRef.current || document.visibilityState !== 'visible') return;
+    if (!navigator.onLine) {
+      setSaveStatus('offline');
+      return;
+    }
+    if (remoteCheckInFlightRef.current || conflictDetectedRef.current || saveTimerRef.current || inFlightSaveRef.current) return;
+
+    remoteCheckInFlightRef.current = true;
+    try {
+      const remoteVersion = await getCloudProjectVersion(current.id);
+      if (!remoteVersion) return;
+      setLastCloudConfirmedAt(new Date().toISOString());
+      const hasLocalChanges = projectHasLocalChanges(current, lastSavedProjectJsonRef.current);
+      const action = resolveRemoteVersionAction(remoteVersion.updatedAt, currentProjectUpdatedAtRef.current, hasLocalChanges);
+      if (action === 'current') {
+        setSaveStatus('saved');
+        return;
+      }
+      if (action === 'conflict') {
+        await handleCloudConflict(current);
+        return;
+      }
+
+      setSaveStatus('updating');
+      const record = await loadCloudProjectRecord(current.id);
+      if (!record) throw new Error('A obra não foi encontrada na nuvem.');
+      const latestLocal = rawProjectRef.current;
+      if (!latestLocal || latestLocal.id !== current.id) return;
+      if (projectHasLocalChanges(latestLocal, lastSavedProjectJsonRef.current, !!saveTimerRef.current || !!inFlightSaveRef.current)) {
+        await handleCloudConflict(latestLocal);
+        return;
+      }
+      replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false);
+      toast.info('Dados atualizados a partir de outro aparelho.');
+    } catch (error) {
+      console.warn('Falha ao conferir a versão da obra na nuvem.', error);
+      setSaveStatus(navigator.onLine ? 'error' : 'offline');
+    } finally {
+      remoteCheckInFlightRef.current = false;
+    }
+  }, [handleCloudConflict, replaceProjectWithoutAutoSave]);
+
+  useEffect(() => {
+    if (!rawProject?.id || bootLoading) return;
+    const checkNow = () => void checkRemoteProjectVersion();
+    const handleOnline = () => {
+      setSaveStatus(conflictDetectedRef.current ? 'conflict' : 'updating');
+      checkNow();
+    };
+    const handleOffline = () => setSaveStatus('offline');
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') checkNow();
+    };
+    const timer = window.setInterval(checkNow, REMOTE_VERSION_POLL_MS);
+    window.addEventListener('focus', checkNow);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', checkNow);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [bootLoading, checkRemoteProjectVersion, rawProject?.id]);
 
   const protectLocalDraftBeforePageSleeps = useCallback(() => {
     if (!canPersistProject || !rawProjectRef.current) return;
@@ -570,7 +626,14 @@ export default function Index() {
     } catch {
       flushPendingEditCommits();
     }
-    if (rawProjectRef.current) writeUnsavedDraft(rawProjectRef.current, currentProjectUpdatedAtRef.current);
+    const current = rawProjectRef.current;
+    if (!current) return;
+    const hasPendingSave = !!saveTimerRef.current || !!inFlightSaveRef.current;
+    if (projectHasLocalChanges(current, lastSavedProjectJsonRef.current, hasPendingSave)) {
+      writeProjectDraft(current, currentProjectUpdatedAtRef.current);
+    } else {
+      clearProjectDraft(current.id);
+    }
   }, [canPersistProject]);
 
   useEffect(() => {
@@ -625,6 +688,11 @@ export default function Index() {
         toast.error('Você não tem permissão para editar.');
         return;
       }
+      if (conflictDetectedRef.current) {
+        toast.error('Compare as versões da obra antes de continuar editando.');
+        setDraftRecovery(previous => previous ? { ...previous, open: true } : previous);
+        return;
+      }
       setRawProject(prev => {
         if (!prev) return prev;
         const resolved = typeof next === 'function' ? (next as (p: Project) => Project)(prev) : next;
@@ -634,7 +702,11 @@ export default function Index() {
         stack.push(prev);
         if (stack.length > UNDO_LIMIT) stack.shift();
         rawProjectRef.current = synchronized;
-        writeUnsavedDraft(synchronized, currentProjectUpdatedAtRef.current);
+        if (projectHasLocalChanges(synchronized, lastSavedProjectJsonRef.current)) {
+          writeProjectDraft(synchronized, currentProjectUpdatedAtRef.current);
+        } else {
+          clearProjectDraft(synchronized.id);
+        }
         setUndoVersion(v => v + 1);
         return synchronized;
       });
@@ -651,6 +723,40 @@ export default function Index() {
   const materialsSetter = useMemo(() => makeViewSetter('materials'), [makeViewSetter]);
   const warehouseSetter = useMemo(() => makeViewSetter('warehouse'), [makeViewSetter]);
 
+  const commitProjectNow = useCallback(async (next: Project) => {
+    if (!user || !orgId || !canPersistProject) throw new Error('Você não tem permissão para salvar esta obra.');
+    if (conflictDetectedRef.current) {
+      setDraftRecovery(previous => previous ? { ...previous, open: true } : previous);
+      throw new Error('Esta obra foi atualizada em outro aparelho. Compare as versões antes de continuar.');
+    }
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    if (inFlightSaveRef.current) await inFlightSaveRef.current;
+
+    const synchronized = synchronizeProjectScheduleToWorkStart(next);
+    writeProjectDraft(synchronized, currentProjectUpdatedAtRef.current);
+    setSaveStatus('saving');
+    try {
+      await persistProject(synchronized, orgId);
+    } catch (error) {
+      if (error instanceof CloudProjectConflictError) await handleCloudConflict(synchronized);
+      throw error;
+    }
+
+    const previous = rawProjectRef.current;
+    if (previous) {
+      const stack = undoStacksRef.current.warehouse;
+      stack.push(previous);
+      if (stack.length > UNDO_LIMIT) stack.shift();
+    }
+    skipNextAutoSaveRef.current = true;
+    rawProjectRef.current = synchronized;
+    setRawProject(synchronized);
+    setUndoVersion(value => value + 1);
+  }, [canPersistProject, handleCloudConflict, orgId, persistProject, user]);
+
   const handleOwnerClearWarehouse = useCallback(async (password: string) => {
     if (role !== 'owner' || !rawProject) {
       throw new Error('Somente o proprietário da organização pode limpar o almoxarifado.');
@@ -660,11 +766,11 @@ export default function Index() {
     }
 
     await clearCloudWarehouseAsOwner(rawProject.id, password);
-    clearUnsavedDraft(rawProject.id);
+    clearProjectDraft(rawProject.id);
     const record = await loadCloudProjectRecord(rawProject.id);
     if (!record) throw new Error('O almoxarifado foi limpo, mas não foi possível recarregar a obra. Atualize a página.');
 
-    replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied);
+    replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false);
     undoStacksRef.current.warehouse = [];
     setUndoVersion(value => value + 1);
     toast.success('Dados de teste removidos. Equipamentos foram preservados e liberados das cautelas apagadas.');
@@ -674,7 +780,7 @@ export default function Index() {
     const stack = undoStacksRef.current[view];
     if (stack.length === 0) { toast.message('Nada para desfazer'); return; }
     const prev = stack.pop()!;
-    writeUnsavedDraft(prev, currentProjectUpdatedAtRef.current);
+    writeProjectDraft(prev, currentProjectUpdatedAtRef.current);
     rawProjectRef.current = prev;
     setRawProject(prev);
     setUndoVersion(v => v + 1);
@@ -805,6 +911,75 @@ export default function Index() {
     navigate('/auth', { replace: true });
   };
 
+  const handleUseCloudVersion = useCallback(async () => {
+    const recovery = draftRecovery;
+    if (!recovery) return;
+    const record = await loadCloudProjectRecord(recovery.cloudProject.id);
+    if (!record) throw new Error('Não foi possível reler esta obra na nuvem. Tente novamente.');
+    replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false);
+    clearProjectDraft(record.project.id);
+    setDraftRecovery(null);
+    conflictDetectedRef.current = false;
+    toast.success('Dados da nuvem confirmados. A cópia antiga deste aparelho foi descartada.');
+  }, [draftRecovery, replaceProjectWithoutAutoSave]);
+
+  const handleRestoreDraftWarehouse = useCallback(async () => {
+    const recovery = draftRecovery;
+    if (!recovery || !orgId) return;
+    const latest = await loadCloudProjectRecord(recovery.cloudProject.id);
+    if (!latest) throw new Error('Não foi possível reler esta obra na nuvem. Tente novamente.');
+    if (latest.updatedAt !== recovery.cloudUpdatedAt) {
+      setDraftRecovery(previous => previous ? {
+        ...previous,
+        cloudProject: latest.project,
+        cloudUpdatedAt: latest.updatedAt,
+        open: true,
+      } : previous);
+      throw new Error('A nuvem mudou novamente. A comparação foi atualizada; confira antes de restaurar.');
+    }
+
+    const restored = restoreWarehouseFromDraft(latest.project, recovery.draft.project, auditActor);
+    const expected = summarizeWarehouseRecovery(restored);
+    const preservedEquipmentIds = (latest.project.warehouse?.equipments ?? []).map(item => item.id).sort();
+    currentProjectUpdatedAtRef.current = latest.updatedAt;
+    lastSavedProjectJsonRef.current = serializeProject(latest.project);
+    conflictDetectedRef.current = false;
+    writeProjectDraft(restored, latest.updatedAt);
+    setSaveStatus('saving');
+    try {
+      await persistProject(restored, orgId, { retainDraftUntilVerified: true });
+    } catch (error) {
+      if (error instanceof CloudProjectConflictError) await handleCloudConflict(restored);
+      throw error;
+    }
+
+    const verified = await loadCloudProjectRecord(restored.id);
+    if (!verified) {
+      conflictDetectedRef.current = true;
+      setSaveStatus('conflict');
+      throw new Error('A recuperação foi enviada, mas não pôde ser relida para conferência. O rascunho foi mantido.');
+    }
+    const actual = summarizeWarehouseRecovery(verified.project);
+    const actualEquipmentIds = (verified.project.warehouse?.equipments ?? []).map(item => item.id).sort();
+    if (
+      actual.postedNotes !== expected.postedNotes
+      || actual.archivedNotes !== expected.archivedNotes
+      || actual.materials !== expected.materials
+      || actual.movements !== expected.movements
+      || JSON.stringify(actualEquipmentIds) !== JSON.stringify(preservedEquipmentIds)
+    ) {
+      conflictDetectedRef.current = true;
+      setSaveStatus('conflict');
+      throw new Error('A nuvem não confirmou todos os dados recuperados. O rascunho foi mantido para nova tentativa.');
+    }
+
+    replaceProjectWithoutAutoSave(verified.project, verified.updatedAt, verified.repairApplied, false);
+    clearProjectDraft(verified.project.id);
+    setDraftRecovery(null);
+    conflictDetectedRef.current = false;
+    toast.success('Almoxarifado restaurado, equipamentos preservados e nuvem conferida.');
+  }, [auditActor, draftRecovery, handleCloudConflict, orgId, persistProject, replaceProjectWithoutAutoSave]);
+
   const sidebarProjects: ProjectMeta[] = useMemo(
     () => cloudList.map(p => ({ id: p.id, name: p.name, createdAt: p.createdAt, updatedAt: p.updatedAt })),
     [cloudList]
@@ -910,6 +1085,7 @@ export default function Index() {
           <WarehouseView
             project={project}
             onProjectChange={warehouseSetter}
+            onCommitProject={commitProjectNow}
             canManageFiscalNotes={role !== 'viewer'}
             canApproveInventory={role === 'owner' || role === 'admin'}
             canClearWarehouse={role === 'owner'}
@@ -965,8 +1141,18 @@ export default function Index() {
 
       <main ref={mainScrollRef} className="relative min-h-screen flex-1 overflow-y-auto pt-14 lg:pt-0">
         <div className="absolute top-3 right-4 z-20">
-          <SaveStatusIndicator status={saveStatus} />
+          <SaveStatusIndicator status={saveStatus} confirmedAt={lastCloudConfirmedAt} projectId={rawProject.id} />
         </div>
+        {draftRecovery && !draftRecovery.open && (
+          <div role="alert" className="mx-3 mt-14 flex flex-col gap-3 rounded-xl border border-warning/40 bg-warning/10 p-3 text-sm sm:mx-4 sm:flex-row sm:items-center lg:mt-12">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-warning" />
+            <div className="min-w-0 flex-1">
+              <strong>Esta obra foi atualizada em outro aparelho.</strong>
+              <p className="text-muted-foreground">O salvamento está pausado até você comparar a nuvem com a cópia deste aparelho.</p>
+            </div>
+            <Button type="button" onClick={() => setDraftRecovery(previous => previous ? { ...previous, open: true } : previous)}>Comparar versões</Button>
+          </div>
+        )}
         <Suspense fallback={
           <div className="flex items-center justify-center py-24">
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -992,6 +1178,18 @@ export default function Index() {
       )}
 
       {orgId && <MigrationDialog organizationId={orgId} onMigrated={async () => { await refreshCloudList(); }} />}
+
+      {draftRecovery && (
+        <CloudDraftRecoveryDialog
+          open={draftRecovery.open}
+          cloudProject={draftRecovery.cloudProject}
+          draft={draftRecovery.draft}
+          canRestore={canPersistProject}
+          onOpenChange={open => setDraftRecovery(previous => previous ? { ...previous, open } : previous)}
+          onUseCloud={handleUseCloudVersion}
+          onRestoreWarehouse={handleRestoreDraftWarehouse}
+        />
+      )}
     </div>
   );
 }

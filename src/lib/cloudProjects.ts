@@ -25,6 +25,11 @@ export interface CloudProjectRecord {
   repairApplied?: boolean;
 }
 
+export interface CloudProjectVersion {
+  projectId: string;
+  updatedAt: string;
+}
+
 export class CloudProjectConflictError extends Error {
   constructor() {
     super('Cloud project was modified elsewhere');
@@ -49,6 +54,18 @@ export async function listCloudProjects(): Promise<CloudProjectMeta[]> {
 export async function loadCloudProject(id: string): Promise<Project | null> {
   const record = await loadCloudProjectRecord(id);
   return record?.project ?? null;
+}
+
+/** Consulta leve usada para detectar alterações feitas em outro aparelho. */
+export async function getCloudProjectVersion(id: string): Promise<CloudProjectVersion | null> {
+  const { data, error } = await supabase
+    .from('projects')
+    .select('id, updated_at')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return { projectId: data.id, updatedAt: data.updated_at };
 }
 
 export async function loadCloudProjectRecord(id: string): Promise<CloudProjectRecord | null> {

@@ -66,6 +66,7 @@ import { WarehouseEmptyState, WarehouseSectionHeader, WarehouseStatusBadge } fro
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
+  onCommitProject?: (next: Project) => Promise<void>;
   canManage?: boolean;
   auditActor?: WarehouseAuditActor;
 }
@@ -185,11 +186,32 @@ async function attachmentFile(attachment: WarehouseAttachment): Promise<File> {
   return new File([blob], attachment.name, { type: attachment.mimeType || blob.type });
 }
 
-export default function WarehouseFiscalNotesTab({ project, onProjectChange, canManage = true, auditActor }: Props) {
+async function uploadFiscalAttachmentsStrict(files: File[], projectId: string): Promise<WarehouseAttachment[]> {
+  const uploaded: WarehouseAttachment[] = [];
+  try {
+    for (const file of files) {
+      uploaded.push(await makeAttachment(file, projectId, 'nf', 'documents', { fallback: 'error' }));
+    }
+    return uploaded;
+  } catch (error) {
+    const paths = uploaded.flatMap(attachment => attachment.storagePath ? [attachment.storagePath] : []);
+    if (paths.length) {
+      try {
+        await supabase.storage.from('daily-report-photos').remove(paths);
+      } catch {
+        // A limpeza e complementar; o erro original do envio deve continuar visivel.
+      }
+    }
+    throw error;
+  }
+}
+
+export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCommitProject, canManage = true, auditActor }: Props) {
   const [group, setGroup] = useState<ViewGroup>('posted');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<WarehouseFiscalNote | null>(null);
   const [files, setFiles] = useState<File[]>([]);
+  const [uploadedAttachments, setUploadedAttachments] = useState<WarehouseAttachment[] | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -234,6 +256,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       const next = [...files, ...Array.from(incoming)];
       validateFiles(next);
       setFiles(next);
+      setUploadedAttachments(null);
       setUploadOpen(true);
     } catch (error) {
       toast.error((error as Error).message);
@@ -360,7 +383,8 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       const sourceFiles = files.length
         ? files
         : await Promise.all((normalized.attachments?.length ? normalized.attachments : normalized.attachment ? [normalized.attachment] : []).map(attachmentFile));
-      const attachments = await Promise.all(sourceFiles.map(file => makeAttachment(file, project.id, 'nf')));
+      const attachments = uploadedAttachments ?? await uploadFiscalAttachmentsStrict(sourceFiles, project.id);
+      setUploadedAttachments(attachments);
       const persistentNote: WarehouseFiscalNote = {
         ...normalized,
         attachment: attachments[0],
@@ -368,11 +392,13 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       };
       const saved = upsertFiscalNote(project, persistentNote, auditActor);
       const posted = approveFiscalNote(saved, persistentNote.id, auditActor);
-      onProjectChange(posted);
+      if (onCommitProject) await onCommitProject(posted);
+      else onProjectChange(posted);
       setSelected(null);
       setFiles([]);
+      setUploadedAttachments(null);
       setGroup('posted');
-      toast.success(`Nota ${persistentNote.invoiceNumber || ''} lançada no estoque.`.replace(/\s+/g, ' ').trim());
+      toast.success(`Nota ${persistentNote.invoiceNumber || ''} salva e conferida na nuvem.`.replace(/\s+/g, ' ').trim());
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -447,6 +473,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
     if (isDraft) {
       setSelected(null);
       setFiles([]);
+      setUploadedAttachments(null);
       return;
     }
     setSelected(null);
@@ -455,6 +482,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
   const openDuplicate = () => {
     if (!duplicate) return;
     setFiles([]);
+    setUploadedAttachments(null);
     setSelected(duplicate);
   };
 
@@ -513,9 +541,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
 
       <Dialog open={uploadOpen} onOpenChange={open => !processing && setUploadOpen(open)}>
         <DialogContent className="warehouse-ui max-w-xl"><DialogHeader><DialogTitle>Enviar documento para leitura</DialogTitle><DialogDescription>Envie um PDF ou até quatro fotos. Depois da leitura, confira os dados antes de lançar no estoque.</DialogDescription></DialogHeader>
-          <div className="space-y-2">{files.map((file, index) => <div key={`${file.name}-${index}`} className="flex min-h-16 items-center gap-3 rounded-md border p-2"><FilePreview file={file} /><span className="min-w-0 flex-1 truncate text-sm">{index + 1}. {file.name}</span><div className="flex gap-1"><Button size="icon" variant="ghost" disabled={index === 0} onClick={() => setFiles(list => list.map((entry, i) => i === index - 1 ? file : i === index ? list[index - 1] : entry))} aria-label="Mover para cima">↑</Button><Button size="icon" variant="ghost" onClick={() => setFiles(list => list.filter((_, i) => i !== index))} aria-label="Remover foto"><X className="h-4 w-4" /></Button></div></div>)}</div>
+          <div className="space-y-2">{files.map((file, index) => <div key={`${file.name}-${index}`} className="flex min-h-16 items-center gap-3 rounded-md border p-2"><FilePreview file={file} /><span className="min-w-0 flex-1 truncate text-sm">{index + 1}. {file.name}</span><div className="flex gap-1"><Button size="icon" variant="ghost" disabled={index === 0} onClick={() => { setUploadedAttachments(null); setFiles(list => list.map((entry, i) => i === index - 1 ? file : i === index ? list[index - 1] : entry)); }} aria-label="Mover para cima">↑</Button><Button size="icon" variant="ghost" onClick={() => { setUploadedAttachments(null); setFiles(list => list.filter((_, i) => i !== index)); }} aria-label="Remover foto"><X className="h-4 w-4" /></Button></div></div>)}</div>
           {!files.some(file => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) && files.length < MAX_IMAGES && <div className="grid grid-cols-2 gap-2"><Button variant="outline" className="min-h-11" onClick={() => cameraRef.current?.click()}><Camera className="mr-2 h-4 w-4" />Nova captura</Button><Button variant="outline" className="min-h-11" onClick={() => fileRef.current?.click()}><Plus className="mr-2 h-4 w-4" />Adicionar foto</Button></div>}
-          <DialogFooter><Button variant="outline" onClick={() => { setUploadOpen(false); setFiles([]); }}>Cancelar</Button><Button onClick={processFiles} disabled={!files.length || processing}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}Enviar para leitura</Button></DialogFooter>
+          <DialogFooter><Button variant="outline" onClick={() => { setUploadOpen(false); setFiles([]); setUploadedAttachments(null); }}>Cancelar</Button><Button onClick={processFiles} disabled={!files.length || processing}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}Enviar para leitura</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 

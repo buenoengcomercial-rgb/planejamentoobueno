@@ -4,10 +4,11 @@ import type { Project, WarehouseFiscalNote } from '@/types/project';
 import { computeWarehouseRows, emptyWarehouse } from '@/lib/warehouse';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
 
-const { createObjectURLMock, downloadMock, invokeMock, revokeObjectURLMock, uploadMock } = vi.hoisted(() => ({
+const { createObjectURLMock, downloadMock, invokeMock, removeMock, revokeObjectURLMock, uploadMock } = vi.hoisted(() => ({
   createObjectURLMock: vi.fn(),
   downloadMock: vi.fn(),
   invokeMock: vi.fn(),
+  removeMock: vi.fn(),
   revokeObjectURLMock: vi.fn(),
   uploadMock: vi.fn(),
 }));
@@ -19,6 +20,7 @@ vi.mock('@/integrations/supabase/client', () => ({
       from: () => ({
         upload: uploadMock,
         download: downloadMock,
+        remove: removeMock,
       }),
     },
   },
@@ -113,6 +115,7 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
       error: null,
     });
     uploadMock.mockReset().mockResolvedValue({ error: null });
+    removeMock.mockReset().mockResolvedValue({ error: null });
     downloadMock.mockReset().mockResolvedValue({ data: new Blob(['nota'], { type: 'application/pdf' }), error: null });
     createObjectURLMock.mockReset().mockReturnValue('blob:nota-fiscal');
     revokeObjectURLMock.mockReset();
@@ -181,6 +184,46 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(posted.warehouse!.items).toHaveLength(1);
     expect(posted.warehouse!.movements.filter(movement => movement.type === 'entrada')).toHaveLength(1);
     expect(posted.warehouse!.materialLinks).toHaveLength(0);
+    expect(uploadMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('confirma a nota imediatamente na nuvem antes de fechar o formulário', async () => {
+    const onProjectChange = vi.fn();
+    const onCommitProject = vi.fn().mockResolvedValue(undefined);
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={onProjectChange} onCommitProject={onCommitProject} canManage />);
+    await readDocument(view.container);
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar lançamento' }));
+    await waitFor(() => expect(onCommitProject).toHaveBeenCalledTimes(1));
+    expect(onProjectChange).not.toHaveBeenCalled();
+    expect((onCommitProject.mock.calls[0][0] as Project).warehouse!.fiscalNotes[0].status).toBe('aprovada');
+    await waitFor(() => expect(screen.queryByText('Validar nota antes do lançamento')).not.toBeInTheDocument());
+  });
+
+  it('não lança nem movimenta o estoque quando o anexo falha na nuvem', async () => {
+    uploadMock.mockResolvedValueOnce({ error: new Error('sem conexão') });
+    const onProjectChange = vi.fn();
+    const onCommitProject = vi.fn().mockResolvedValue(undefined);
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={onProjectChange} onCommitProject={onCommitProject} canManage />);
+    await readDocument(view.container);
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar lançamento' }));
+    await waitFor(() => expect(uploadMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Confirmar lançamento' })).toBeEnabled());
+    expect(onCommitProject).not.toHaveBeenCalled();
+    expect(onProjectChange).not.toHaveBeenCalled();
+    expect(screen.getByText('Validar nota antes do lançamento')).toBeInTheDocument();
+  });
+
+  it('reutiliza o anexo já enviado quando a confirmação da obra precisa ser repetida', async () => {
+    const onCommitProject = vi.fn()
+      .mockRejectedValueOnce(new Error('falha temporária'))
+      .mockResolvedValueOnce(undefined);
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={vi.fn()} onCommitProject={onCommitProject} canManage />);
+    await readDocument(view.container);
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar lançamento' }));
+    await waitFor(() => expect(onCommitProject).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Confirmar lançamento' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar lançamento' }));
+    await waitFor(() => expect(onCommitProject).toHaveBeenCalledTimes(2));
     expect(uploadMock).toHaveBeenCalledTimes(1);
   });
 
