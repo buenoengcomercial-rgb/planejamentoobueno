@@ -72,7 +72,7 @@ export function prepareWarehouseTestReset(
       userId: actor?.userId,
       userName: actor?.userName,
       userEmail: actor?.userEmail,
-      metadata: summary,
+      metadata: { ...summary } as Record<string, unknown>,
     }),
     summary,
   };
