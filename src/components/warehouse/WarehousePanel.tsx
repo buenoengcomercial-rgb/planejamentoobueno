@@ -8,9 +8,10 @@ import {
   upsertFiscalNote,
 } from '@/lib/warehouse';
 import { useMemo, useState } from 'react';
-import { AlertTriangle, PackagePlus, ClipboardList, FileWarning, MapPinned, ReceiptText, CalendarDays } from 'lucide-react';
+import { AlertTriangle, PackagePlus, ClipboardList, FileWarning, MapPinned, ReceiptText, CalendarDays, LayoutDashboard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { WarehouseSectionHeader } from './WarehouseVisual';
 
 interface Props {
   project: Project;
@@ -24,11 +25,16 @@ const StatCard = ({ label, value, tone, hint }: { label: string; value: string |
     tone === 'warn' ? 'text-warning' :
     tone === 'danger' ? 'text-destructive' :
     tone === 'primary' ? 'text-primary' : 'text-foreground';
+  const surfaceClass =
+    tone === 'ok' ? 'border-success/25 bg-success/5' :
+    tone === 'warn' ? 'border-warning/30 bg-warning/5' :
+    tone === 'danger' ? 'border-destructive/25 bg-destructive/5' :
+    tone === 'primary' ? 'border-primary/25 bg-primary/5' : 'border-border bg-card';
   return (
-    <div className="bg-card border border-border rounded-md p-3">
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">{label}</div>
-      <div className={`text-lg font-bold tabular-nums ${toneClass}`}>{typeof value === 'number' ? value.toLocaleString('pt-BR', { maximumFractionDigits: 2 }) : value}</div>
-      {hint && <div className="text-[10px] text-muted-foreground mt-0.5">{hint}</div>}
+    <div className={`rounded-xl border p-4 shadow-sm ${surfaceClass}`}>
+      <div className="text-sm font-bold text-muted-foreground">{label}</div>
+      <div className={`mt-1 text-xl font-extrabold tabular-nums ${toneClass}`}>{typeof value === 'number' ? value.toLocaleString('pt-BR', { maximumFractionDigits: 2 }) : value}</div>
+      {hint && <div className="mt-1 text-sm text-muted-foreground">{hint}</div>}
     </div>
   );
 };
@@ -80,6 +86,9 @@ export default function WarehousePanel({ project, onProjectChange, auditActor }:
 
   return (
     <div className="space-y-3">
+      <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <WarehouseSectionHeader icon={LayoutDashboard} title="Painel do almoxarifado" description="Veja primeiro o que precisa de atenção." help="Os indicadores resumem perdas, estoque baixo, cautelas, faturas e consumo já registrados no sistema." />
+      </section>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
         <StatCard label="Perdas" value={s.totalLosses} tone="danger" />
         <StatCard label="Abaixo do mínimo" value={s.underMinCount} tone={s.underMinCount > 0 ? 'danger' : undefined} />

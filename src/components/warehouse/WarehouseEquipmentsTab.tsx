@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Equipment, Project, WarehouseAttachment, WarehouseAuditActor } from '@/types/project';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Archive, Camera, ImagePlus, Loader2, Plus, Printer, Sparkles, X } from 'lucide-react';
+import { Archive, Camera, HardHat, ImagePlus, Loader2, Plus, Printer, Sparkles, X } from 'lucide-react';
 import {
   addEquipment,
   ensureWarehouse,
@@ -17,6 +17,7 @@ import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { equipmentAiBackendError, equipmentAiErrorMessage } from '@/lib/equipmentAi';
 import { optimizeEquipmentPhoto } from '@/lib/equipmentPhotoOptimization';
+import { WarehouseEmptyState, WarehouseField, WarehouseSectionHeader, WarehouseStatusBadge, type WarehouseTone } from './WarehouseVisual';
 
 interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; }
 
@@ -31,7 +32,16 @@ interface EquipmentForm {
   confidence?: Equipment['extractionConfidence'];
 }
 
+type EquipmentErrors = Partial<Record<'description' | 'photos' | 'serialNotes', string>>;
+
 const emptyEquipment = (): EquipmentForm => ({ description: '', brand: '', model: '', serial: '', patrimony: '', category: '', notes: '' });
+
+const equipmentStatus = (status?: Equipment['status']): { label: string; tone: WarehouseTone } => {
+  if (status === 'em_uso') return { label: 'Em uso', tone: 'info' };
+  if (status === 'em_manutencao') return { label: 'Em manutenção', tone: 'warning' };
+  if (status === 'arquivado') return { label: 'Arquivado', tone: 'danger' };
+  return { label: 'Disponível', tone: 'success' };
+};
 
 function escapeLabelHtml(value: string) {
   return value.replace(/[&<>"']/g, character => ({
@@ -47,6 +57,7 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
   const [optimizingPhotos, setOptimizingPhotos] = useState(0);
   const [reading, setReading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState<EquipmentErrors>({});
   const [showArchived, setShowArchived] = useState(false);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
@@ -64,6 +75,7 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
     try {
       const optimized = await Promise.all(accepted.map(optimizeEquipmentPhoto));
       setPhotos(current => [...current, ...optimized].slice(0, 3));
+      setErrors(current => ({ ...current, photos: undefined }));
     } finally {
       setOptimizingPhotos(current => Math.max(0, current - 1));
     }
@@ -97,9 +109,20 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
   };
 
   const submitEquipment = async () => {
-    if (!form.description.trim()) return toast.error('Informe a descrição do equipamento.');
-    if (!photos.length) return toast.error('Adicione ao menos uma foto do equipamento.');
-    if (!form.serial.trim() && !form.notes.trim()) return toast.error('Sem série legível, informe uma justificativa nas observações.');
+    const nextErrors: EquipmentErrors = {};
+    if (!form.description.trim()) nextErrors.description = 'Informe a descrição.';
+    if (!photos.length) nextErrors.photos = 'Adicione ao menos uma foto.';
+    if (!form.serial.trim() && !form.notes.trim()) nextErrors.serialNotes = 'Informe a série ou uma justificativa.';
+    if (Object.keys(nextErrors).length) {
+      setErrors(nextErrors);
+      const target = nextErrors.description ? document.getElementById('equipment-description')
+        : nextErrors.photos ? document.getElementById('equipment-camera')
+          : document.getElementById('equipment-notes');
+      target?.focus();
+      toast.error(nextErrors.description || nextErrors.photos || nextErrors.serialNotes || 'Revise os campos destacados.');
+      return;
+    }
+    setErrors({});
     try {
       setSaving(true);
       const attachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'equipment')));
@@ -119,6 +142,7 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
       }, auditActor));
       setForm(emptyEquipment());
       setPhotos([]);
+      setErrors({});
       toast.success('Equipamento cadastrado com identificação interna.');
     } catch (error) { toast.error((error as Error).message); } finally { setSaving(false); }
   };
@@ -144,23 +168,23 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
     <div className="space-y-4">
       <input ref={cameraRef} className="hidden" type="file" accept="image/*" capture="environment" onChange={event => void addPhotos(event.target.files)} />
       <input ref={galleryRef} className="hidden" type="file" accept="image/*" multiple onChange={event => void addPhotos(event.target.files)} />
-      <section className="rounded-md border bg-card p-3">
-        <div className="mb-3"><h3 className="font-semibold">Cadastrar equipamento da empresa</h3><p className="text-sm text-muted-foreground">Fotografe o equipamento, a etiqueta e a série. A IA apenas sugere; o operador confirma.</p></div>
-        <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
-          <div className="space-y-2"><div className="grid grid-cols-3 gap-2">{photos.map((photo, index) => <EquipmentPhoto key={`${photo.name}-${index}`} file={photo} onRemove={() => setPhotos(current => current.filter((_, photoIndex) => photoIndex !== index))} />)}</div>{optimizingPhotos > 0 && <div className="flex items-center justify-center text-xs text-muted-foreground" role="status" aria-live="polite"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Otimizando fotos...</div>}<div className="grid grid-cols-2 gap-2"><Button variant="outline" className="min-h-11" disabled={photos.length >= 3 || optimizingPhotos > 0} onClick={() => cameraRef.current?.click()}><Camera className="mr-2 h-4 w-4" />Câmera</Button><Button variant="outline" className="min-h-11" disabled={photos.length >= 3 || optimizingPhotos > 0} onClick={() => galleryRef.current?.click()}><ImagePlus className="mr-2 h-4 w-4" />Galeria</Button></div><Button className="min-h-11 w-full" variant="secondary" disabled={reading || optimizingPhotos > 0 || !photos.length} onClick={() => void readEquipment()}>{reading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}Ler etiqueta e equipamento com IA</Button></div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><EquipmentField label="Descrição" value={form.description} confidence={form.confidence?.description} onChange={description => setForm({ ...form, description })} /><EquipmentField label="Marca" value={form.brand} confidence={form.confidence?.brand} onChange={brand => setForm({ ...form, brand })} /><EquipmentField label="Modelo" value={form.model} confidence={form.confidence?.model} onChange={model => setForm({ ...form, model })} /><EquipmentField label="Nº de série" value={form.serial} confidence={form.confidence?.serial} onChange={serial => setForm({ ...form, serial })} /><EquipmentField label="Patrimônio existente" value={form.patrimony} onChange={patrimony => setForm({ ...form, patrimony })} /><EquipmentField label="Categoria" value={form.category} confidence={form.confidence?.category} onChange={category => setForm({ ...form, category })} /><div className="sm:col-span-2 lg:col-span-3"><EquipmentField label="Observações / justificativa se a série estiver ilegível" value={form.notes} onChange={notes => setForm({ ...form, notes })} /></div><Button className="min-h-11 sm:col-span-2 lg:col-span-3" disabled={saving || optimizingPhotos > 0} onClick={() => void submitEquipment()}><Plus className="mr-2 h-4 w-4" />{saving ? 'Salvando...' : 'Confirmar cadastro'}</Button></div>
+      <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <WarehouseSectionHeader icon={HardHat} title="Cadastrar equipamento" description="Fotografe, confira os dados e salve." help="A leitura por IA apenas sugere marca, modelo, série, categoria e descrição. O operador deve revisar todos os campos antes do cadastro." />
+        <div className="grid gap-4 p-3 lg:grid-cols-[320px_1fr]">
+          <div className={`space-y-3 rounded-lg border bg-muted/30 p-3 ${errors.photos ? 'border-destructive bg-destructive/5' : ''}`}><div className="flex items-center gap-2 text-sm font-bold">Fotos do equipamento <span className="rounded-full border bg-background px-2 py-0.5 text-xs text-muted-foreground">Obrigatória</span></div><div className="grid grid-cols-3 gap-2">{photos.map((photo, index) => <EquipmentPhoto key={`${photo.name}-${index}`} file={photo} onRemove={() => setPhotos(current => current.filter((_, photoIndex) => photoIndex !== index))} />)}</div>{!photos.length && <WarehouseEmptyState message="Nenhuma foto" hint="Use Câmera ou Galeria." icon={Camera} className="min-h-24" />}{optimizingPhotos > 0 && <div className="flex items-center justify-center text-sm text-muted-foreground" role="status" aria-live="polite"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Otimizando fotos...</div>}{errors.photos && <div role="alert" className="text-sm font-semibold text-destructive">{errors.photos}</div>}<div className="grid grid-cols-2 gap-2"><Button id="equipment-camera" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3 || optimizingPhotos > 0} onClick={() => cameraRef.current?.click()}><Camera className="mr-2 h-4 w-4" />Câmera</Button><Button variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3 || optimizingPhotos > 0} onClick={() => galleryRef.current?.click()}><ImagePlus className="mr-2 h-4 w-4" />Galeria</Button></div><Button className="min-h-11 w-full font-bold" variant="secondary" disabled={reading || optimizingPhotos > 0 || !photos.length} onClick={() => void readEquipment()}>{reading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}Ler etiqueta e equipamento com IA</Button></div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><EquipmentField id="equipment-description" label="Descrição" value={form.description} confidence={form.confidence?.description} error={errors.description} onChange={description => { setForm({ ...form, description }); setErrors(current => ({ ...current, description: undefined })); }} /><EquipmentField label="Marca" value={form.brand} confidence={form.confidence?.brand} onChange={brand => setForm({ ...form, brand })} /><EquipmentField label="Modelo" value={form.model} confidence={form.confidence?.model} onChange={model => setForm({ ...form, model })} /><EquipmentField label="Nº de série" value={form.serial} confidence={form.confidence?.serial} onChange={serial => { setForm({ ...form, serial }); setErrors(current => ({ ...current, serialNotes: undefined })); }} /><EquipmentField label="Patrimônio existente" value={form.patrimony} optional onChange={patrimony => setForm({ ...form, patrimony })} /><EquipmentField label="Categoria" value={form.category} confidence={form.confidence?.category} optional onChange={category => setForm({ ...form, category })} /><div className="sm:col-span-2 lg:col-span-3"><EquipmentField id="equipment-notes" label="Observações" value={form.notes} optional error={errors.serialNotes} onChange={notes => { setForm({ ...form, notes }); setErrors(current => ({ ...current, serialNotes: undefined })); }} /></div><Button className="min-h-12 font-bold sm:col-span-2 lg:col-span-3" disabled={saving || optimizingPhotos > 0} onClick={() => void submitEquipment()}><Plus className="mr-2 h-4 w-4" />{saving ? 'Salvando...' : 'Confirmar cadastro'}</Button></div>
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-md border bg-card"><div className="flex items-center border-b bg-muted/40 p-3"><div><h3 className="font-semibold">Patrimônio identificado</h3><p className="text-xs text-muted-foreground">Cada equipamento tem código interno, fotos e situação patrimonial.</p></div><Button className="ml-auto" variant="outline" onClick={() => setShowArchived(value => !value)}>{showArchived ? 'Ocultar arquivados' : 'Exibir arquivados'}</Button></div><div data-testid="equipment-gallery" className="grid grid-cols-1 gap-2 p-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{equipments.map(equipment => { const title = equipment.description || equipment.name; const identification = [equipment.brand, equipment.model, equipment.serial].filter(Boolean).join(' · ') || 'Identificação pendente'; return <article key={equipment.id} className="min-w-0 overflow-hidden rounded-md border"><EquipmentCardPhotos equipment={equipment} title={title} onOpen={attachment => void openPhoto(attachment)} /><div className="space-y-1.5 p-2"><div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-bold text-primary">{equipment.internalCode || 'Código legado'}</div><h4 className="line-clamp-2 text-sm font-semibold leading-5" title={title}>{title}</h4></div><span className="h-fit shrink-0 rounded-full bg-muted px-2 py-1 text-[11px]">{(equipment.status || 'disponivel').replace('_', ' ')}</span></div><div className="truncate text-xs text-muted-foreground" title={identification}>{identification}</div><div className="grid grid-cols-2 gap-1.5"><Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => void printLabel(equipment)}><Printer className="mr-1.5 h-4 w-4" />Etiqueta QR</Button>{!equipment.archivedAt && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))}><Archive className="mr-1.5 h-4 w-4" />Arquivar</Button>}</div></div></article>; })}{!equipments.length && <div className="col-span-full p-8 text-center text-sm text-muted-foreground">Nenhum equipamento cadastrado.</div>}</div></section>
+      <section className="overflow-hidden rounded-xl border bg-card"><WarehouseSectionHeader icon={HardHat} title="Patrimônio identificado" description={`${equipments.length} equipamento(s)`} tone="neutral" actions={<Button className="ml-auto bg-background" variant="outline" onClick={() => setShowArchived(value => !value)}>{showArchived ? 'Ocultar arquivados' : 'Exibir arquivados'}</Button>} /><div data-testid="equipment-gallery" className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{equipments.map(equipment => { const title = equipment.description || equipment.name; const identification = [equipment.brand, equipment.model, equipment.serial].filter(Boolean).join(' · ') || 'Identificação pendente'; const visualStatus = equipmentStatus(equipment.status); return <article key={equipment.id} className="min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm transition-shadow hover:shadow-md"><EquipmentCardPhotos equipment={equipment} title={title} onOpen={attachment => void openPhoto(attachment)} /><div className="space-y-2 p-3"><div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-extrabold text-primary">{equipment.internalCode || 'Código legado'}</div><h4 className="line-clamp-2 text-sm font-bold leading-5" title={title}>{title}</h4></div><WarehouseStatusBadge label={visualStatus.label} tone={visualStatus.tone} /></div><div className="truncate text-xs font-medium text-muted-foreground" title={identification}>{identification}</div><div className="grid grid-cols-2 gap-1.5"><Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => void printLabel(equipment)}><Printer className="mr-1.5 h-4 w-4" />Etiqueta QR</Button>{!equipment.archivedAt && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))}><Archive className="mr-1.5 h-4 w-4" />Arquivar</Button>}</div></div></article>; })}{!equipments.length && <div className="col-span-full"><WarehouseEmptyState message="Nenhum equipamento cadastrado" hint="Use o formulário acima para começar." icon={HardHat} /></div>}</div></section>
 
       {confirmDialog}
     </div>
   );
 }
 
-function EquipmentField({ label, value, confidence, onChange }: { label: string; value: string; confidence?: number; onChange: (value: string) => void }) {
-  return <div><label className="mb-1 flex items-center justify-between text-xs font-semibold"><span>{label}</span>{confidence != null && <span className={confidence < 0.6 ? 'text-warning' : 'text-success'}>IA {Math.round(confidence * 100)}%</span>}</label><Input aria-label={label} className="min-h-11" value={value} onChange={event => onChange(event.target.value)} /></div>;
+function EquipmentField({ id, label, value, confidence, optional, error, onChange }: { id?: string; label: string; value: string; confidence?: number; optional?: boolean; error?: string; onChange: (value: string) => void }) {
+  return <WarehouseField label={label} optional={optional} error={error} meta={confidence != null ? <span className={`text-xs font-bold ${confidence < 0.6 ? 'text-warning' : 'text-success'}`}>IA {Math.round(confidence * 100)}%</span> : undefined}><Input id={id} aria-label={label} className="min-h-11" value={value} onChange={event => onChange(event.target.value)} /></WarehouseField>;
 }
 
 type EquipmentPhotoState = {

@@ -16,6 +16,7 @@ import WarehouseEquipmentsTab from './WarehouseEquipmentsTab';
 import WarehouseInventoryTab from './WarehouseInventoryTab';
 import WarehouseReportsTab from './WarehouseReportsTab';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
+import './warehouse-visual.css';
 
 const WAREHOUSE_TABS = [
   { value: 'notas', label: 'Notas fiscais', icon: ReceiptText },
@@ -66,13 +67,13 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
   };
 
   return (
-    <div className="space-y-4 p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:p-4">
-      <div className="flex flex-wrap items-start gap-3">
+    <div className="warehouse-ui space-y-4 p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:p-4">
+      <div className="flex flex-wrap items-start gap-3 rounded-xl border border-primary/15 bg-gradient-to-r from-primary/10 via-card to-card p-4 shadow-sm">
         <div className="flex min-w-0 flex-1 items-start gap-3">
           <WarehouseIcon className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
           <div className="min-w-0">
-          <h2 className="text-xl font-bold">Estoque e Almoxarifado</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Compras, estoque, retiradas, inventário e equipamentos em um fluxo rastreável.</p>
+          <h2 className="text-xl font-extrabold sm:text-2xl">Estoque e Almoxarifado</h2>
+          <p className="mt-1 text-sm font-medium text-muted-foreground">Escolha uma área para consultar ou registrar uma operação.</p>
           </div>
         </div>
         <span className="w-full text-xs text-muted-foreground sm:ml-auto sm:w-auto">
@@ -106,16 +107,16 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
           <label htmlFor="warehouse-mobile-tab" className="mb-1.5 block text-xs font-semibold text-muted-foreground">Área do almoxarifado</label>
           <select
             id="warehouse-mobile-tab"
-            className="min-h-11 w-full rounded-md border border-input bg-background px-3 text-base shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="min-h-12 w-full rounded-lg border-2 border-primary/30 bg-card px-3 text-base font-semibold shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             value={tab}
             onChange={event => setTab(event.target.value)}
           >
             {WAREHOUSE_TABS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
         </div>
-        <TabsList className="hidden h-auto min-h-11 w-full justify-start overflow-x-auto bg-muted lg:flex">
+        <TabsList className="hidden h-auto min-h-12 w-full justify-start overflow-x-auto rounded-xl border bg-muted/70 p-1.5 shadow-sm lg:flex">
           {WAREHOUSE_TABS.map(({ value, label, icon: Icon }) => (
-            <TabsTrigger key={value} value={value} className="min-h-11 text-xs">
+            <TabsTrigger key={value} value={value} className="min-h-11 rounded-lg px-3 text-xs font-bold data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <Icon className="mr-1 h-3.5 w-3.5" /> {label}
             </TabsTrigger>
           ))}
@@ -162,7 +163,7 @@ export default function Warehouse({ project, onProjectChange, canManageFiscalNot
           }
         }}
       >
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto [&>button]:h-11 [&>button]:w-11 sm:max-w-lg">
+        <DialogContent className="warehouse-ui max-h-[calc(100dvh-2rem)] overflow-y-auto [&>button]:h-11 [&>button]:w-11 sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><LockKeyhole className="h-5 w-5 text-destructive" /> Acesso exclusivo do proprietário</DialogTitle>
             <DialogDescription>

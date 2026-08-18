@@ -2,13 +2,14 @@ import { useMemo, useState } from 'react';
 import type { Project, WarehouseAuditActor, WarehouseMovement, WarehouseMovementOriginType } from '@/types/project';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ChevronDown, FileDown, Paperclip, Search } from 'lucide-react';
+import { ArrowLeftRight, ChevronDown, FileDown, Paperclip, Search } from 'lucide-react';
 import { ensureWarehouse, MOVEMENT_LABEL, movementSign } from '@/lib/warehouse';
 import { getChapterNumbering } from '@/lib/chapters';
 import { openWarehouseAttachment, warehouseAttachmentErrorMessage } from '@/lib/warehouseAttachments';
 import { generateRequisitionReceipt } from './pdf';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
 import { toast } from 'sonner';
+import { WarehouseEmptyState, WarehouseField, WarehouseSectionHeader, WarehouseStatusBadge } from './WarehouseVisual';
 
 interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; }
 
@@ -100,14 +101,14 @@ export default function WarehouseMovementsTab({ project }: Props) {
 
   return (
     <div className="space-y-3">
-      <div className="rounded-md border bg-card p-3">
-        <div className="mb-3"><h3 className="font-semibold">Extrato imutável do estoque</h3><p className="text-sm text-muted-foreground">Entradas, saídas, inventários e estornos aparecem automaticamente. Nada é criado, editado ou excluído nesta tela.</p></div>
-        <div className="grid gap-2 md:grid-cols-6">
-          <div className="relative md:col-span-2"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input className="min-h-11 pl-9" value={search} onChange={event => setSearch(event.target.value)} placeholder="Material, nota, recebedor ou usuário" /></div>
-          <select className="min-h-11 rounded-md border bg-background px-3 text-sm" value={type} onChange={event => setType(event.target.value)}><option value="all">Todos os tipos</option>{Object.entries(MOVEMENT_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-          <select className="min-h-11 rounded-md border bg-background px-3 text-sm" value={origin} onChange={event => setOrigin(event.target.value)}><option value="all">Todas as origens</option>{Object.entries(ORIGIN_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-          <Input className="min-h-11" type="date" value={dateFrom} onChange={event => setDateFrom(event.target.value)} aria-label="Período inicial" />
-          <Input className="min-h-11" type="date" value={dateTo} onChange={event => setDateTo(event.target.value)} aria-label="Período final" />
+      <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <WarehouseSectionHeader icon={ArrowLeftRight} title="Extrato do estoque" description="Extrato imutável do estoque" help="Consulte entradas, saídas e ajustes. Os movimentos aparecem automaticamente e não podem ser criados, editados ou excluídos nesta tela." />
+        <div className="grid gap-3 p-3 md:grid-cols-6">
+          <WarehouseField label="Buscar" className="md:col-span-2"><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input className="min-h-11 pl-9" value={search} onChange={event => setSearch(event.target.value)} placeholder="Material, nota ou pessoa" /></div></WarehouseField>
+          <WarehouseField label="Tipo"><select className="min-h-11 rounded-md border bg-background px-3 text-sm" value={type} onChange={event => setType(event.target.value)}><option value="all">Todos os tipos</option>{Object.entries(MOVEMENT_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></WarehouseField>
+          <WarehouseField label="Origem"><select className="min-h-11 rounded-md border bg-background px-3 text-sm" value={origin} onChange={event => setOrigin(event.target.value)}><option value="all">Todas as origens</option>{Object.entries(ORIGIN_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></WarehouseField>
+          <WarehouseField label="Data inicial" optional><Input className="min-h-11" type="date" value={dateFrom} onChange={event => setDateFrom(event.target.value)} aria-label="Período inicial" /></WarehouseField>
+          <WarehouseField label="Data final" optional><Input className="min-h-11" type="date" value={dateTo} onChange={event => setDateTo(event.target.value)} aria-label="Período final" /></WarehouseField>
         </div>
       </div>
 
@@ -118,11 +119,11 @@ export default function WarehouseMovementsTab({ project }: Props) {
           const team = group.movements.find(movement => movement.teamId)?.teamId;
           const hasAttachments = group.movements.some(movement => movement.attachments?.length);
           return (
-            <details key={group.key} className="group overflow-hidden rounded-md border bg-card">
+            <details key={group.key} className="group overflow-hidden rounded-xl border bg-card shadow-sm">
               <summary className="flex min-h-14 cursor-pointer list-none items-center gap-3 p-3 hover:bg-muted/30">
                 <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
                 <div className="min-w-0 flex-1"><div className="font-semibold">{group.label}</div><div className="text-xs text-muted-foreground">{ORIGIN_LABEL[group.originType]} · {group.date} · {group.movements.length} movimento(s){chapter ? ` · ${chapterNames.get(chapter) || chapter}` : ''}{team ? ` · Equipe ${team}` : ''}</div></div>
-                <div className={`font-mono text-sm font-semibold ${quantity < 0 ? 'text-destructive' : quantity > 0 ? 'text-success' : ''}`}>{quantity > 0 ? '+' : ''}{quantity.toLocaleString('pt-BR')}</div>
+                <WarehouseStatusBadge label={`${quantity > 0 ? '+' : ''}${quantity.toLocaleString('pt-BR')}`} tone={quantity < 0 ? 'danger' : quantity > 0 ? 'success' : 'neutral'} />
               </summary>
               <div className="border-t p-3">
                 <div className="mb-3 grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:justify-end">{group.originType === 'withdrawal' && <Button size="sm" variant="outline" className="min-h-11" onClick={() => receipt(group)}><FileDown className="mr-2 h-4 w-4" />Ver comprovante</Button>}<Button size="sm" variant="outline" className="min-h-11" disabled={!hasAttachments} onClick={() => void openAttachments(group)}><Paperclip className="mr-2 h-4 w-4" />Ver anexos</Button></div>
@@ -131,7 +132,7 @@ export default function WarehouseMovementsTab({ project }: Props) {
             </details>
           );
         })}
-        {!groups.length && <div className="rounded-md border border-dashed p-10 text-center text-sm text-muted-foreground">Nenhum movimento encontrado com os filtros selecionados.</div>}
+        {!groups.length && <WarehouseEmptyState message="Nenhum movimento encontrado" hint="Revise os filtros acima." icon={ArrowLeftRight} />}
       </div>
     </div>
   );

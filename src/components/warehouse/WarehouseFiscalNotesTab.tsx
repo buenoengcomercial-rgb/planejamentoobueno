@@ -61,6 +61,7 @@ import {
 import { toast } from 'sonner';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
+import { WarehouseEmptyState, WarehouseSectionHeader, WarehouseStatusBadge } from './WarehouseVisual';
 
 interface Props {
   project: Project;
@@ -462,8 +463,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       <input ref={cameraRef} className="hidden" type="file" accept="image/*" capture="environment" onChange={event => chooseFiles(event.target.files)} />
       <input ref={fileRef} className="hidden" type="file" accept="application/pdf,image/png,image/jpeg,image/webp" multiple onChange={event => chooseFiles(event.target.files)} />
 
-      <div className="rounded-lg border bg-card p-3">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center">
+      <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <WarehouseSectionHeader icon={FileText} title="Notas fiscais" description="Busque uma nota ou envie um documento." help="Envie PDF ou fotos, confira os dados extraídos e somente depois confirme o lançamento no estoque." />
+        <div className="flex flex-col gap-3 p-3 md:flex-row md:items-center">
           <div className="relative min-w-0 flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input className="min-h-11 pl-9" value={search} onChange={event => setSearch(event.target.value)} placeholder="Buscar por fornecedor, CNPJ ou número" />
@@ -473,14 +475,14 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
             <Button className="min-h-11" onClick={() => fileRef.current?.click()} disabled={processing}><Upload className="mr-2 h-4 w-4" /><span className="md:hidden">Arquivo/PDF</span><span className="hidden md:inline">Escolher arquivo/PDF</span></Button>
           </div>}
         </div>
-        {!canManage && <p className="mt-2 text-sm text-muted-foreground">Seu perfil possui acesso somente para consulta.</p>}
-        {processing && <div className="mt-3 flex items-center rounded-md border border-primary/30 bg-primary/5 p-3 text-sm"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Lendo o documento para validação.</div>}
+        {!canManage && <p className="mx-3 mb-3 text-sm font-medium text-muted-foreground">Seu perfil possui acesso somente para consulta.</p>}
+        {processing && <div className="mx-3 mb-3 flex items-center rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm font-semibold"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Lendo o documento para validação.</div>}
       </div>
 
       <Tabs value={group} onValueChange={value => setGroup(value as ViewGroup)}>
-        <TabsList className="h-auto w-full justify-start overflow-x-auto p-1">
-          <TabsTrigger value="posted" className="min-h-11 whitespace-nowrap">Lançadas no estoque ({counts.posted})</TabsTrigger>
-          <TabsTrigger value="archived" className="min-h-11 whitespace-nowrap">Arquivadas ({counts.archived})</TabsTrigger>
+        <TabsList className="h-auto w-full justify-start overflow-x-auto rounded-xl border bg-muted/70 p-1">
+          <TabsTrigger value="posted" className="min-h-11 whitespace-nowrap rounded-lg font-bold data-[state=active]:bg-card data-[state=active]:text-primary">Lançadas no estoque ({counts.posted})</TabsTrigger>
+          <TabsTrigger value="archived" className="min-h-11 whitespace-nowrap rounded-lg font-bold data-[state=active]:bg-card data-[state=active]:text-primary">Arquivadas ({counts.archived})</TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -507,10 +509,10 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
           <tbody>{visible.map((note, index) => <tr key={note.id} className="border-t hover:bg-muted/30"><td className="p-2 font-medium">{note.supplierName || '—'}</td><td className="p-2 text-center font-mono font-semibold text-primary">{visible.length - index}</td><td className="p-2 font-mono text-muted-foreground">{note.supplierCnpj || '—'}</td><td className="p-2">{note.invoiceNumber || '—'}</td><td className="p-2">{note.issueDate ? note.issueDate.split('-').reverse().join('/') : '—'}</td><td className="p-2 text-center tabular-nums">{note.items.length}</td><td className="p-2 text-right font-semibold">{money(note.totalAmount)}</td><td className="p-2"><StatusBadge note={note} /></td><td className="p-2"><WarehouseAuditIdentity createdBy={note.createdBy} updatedBy={note.updatedBy} legacyCreatedBy={note.stockPostedBy} className="space-y-0.5 text-[11px]" /></td><td className="p-2"><div className="flex items-center justify-center gap-1"><Button size="icon" variant="ghost" className="h-8 w-8" title="Abrir documento original" aria-label="Abrir documento original" onClick={() => void openOriginalDocument(note)}><Eye className="h-4 w-4" /></Button><Button size="icon" variant="ghost" className="h-8 w-8" title="Visualizar dados e grupos" aria-label="Visualizar dados e grupos" onClick={() => setSelected(note)}><Pencil className="h-4 w-4" /></Button>{canManage && note.status === 'aprovada' && <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" title="Cancelar lançamento" aria-label="Cancelar lançamento" onClick={() => { setSelected(note); setCancelOpen(true); }}><Ban className="h-4 w-4" /></Button>}</div></td></tr>)}</tbody>
         </table>
       </div>
-      {!visible.length && <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground"><FileText className="mx-auto mb-3 h-8 w-8" />Nenhum documento nesta área.</div>}
+      {!visible.length && <WarehouseEmptyState message="Nenhum documento nesta área" hint={group === 'posted' ? 'Envie um arquivo para começar.' : 'Documentos arquivados aparecerão aqui.'} icon={FileText} />}
 
       <Dialog open={uploadOpen} onOpenChange={open => !processing && setUploadOpen(open)}>
-        <DialogContent className="max-w-xl"><DialogHeader><DialogTitle>Enviar documento para leitura</DialogTitle><DialogDescription>Envie um PDF ou até quatro fotos. Depois da leitura, confira os dados antes de lançar no estoque.</DialogDescription></DialogHeader>
+        <DialogContent className="warehouse-ui max-w-xl"><DialogHeader><DialogTitle>Enviar documento para leitura</DialogTitle><DialogDescription>Envie um PDF ou até quatro fotos. Depois da leitura, confira os dados antes de lançar no estoque.</DialogDescription></DialogHeader>
           <div className="space-y-2">{files.map((file, index) => <div key={`${file.name}-${index}`} className="flex min-h-16 items-center gap-3 rounded-md border p-2"><FilePreview file={file} /><span className="min-w-0 flex-1 truncate text-sm">{index + 1}. {file.name}</span><div className="flex gap-1"><Button size="icon" variant="ghost" disabled={index === 0} onClick={() => setFiles(list => list.map((entry, i) => i === index - 1 ? file : i === index ? list[index - 1] : entry))} aria-label="Mover para cima">↑</Button><Button size="icon" variant="ghost" onClick={() => setFiles(list => list.filter((_, i) => i !== index))} aria-label="Remover foto"><X className="h-4 w-4" /></Button></div></div>)}</div>
           {!files.some(file => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) && files.length < MAX_IMAGES && <div className="grid grid-cols-2 gap-2"><Button variant="outline" className="min-h-11" onClick={() => cameraRef.current?.click()}><Camera className="mr-2 h-4 w-4" />Nova captura</Button><Button variant="outline" className="min-h-11" onClick={() => fileRef.current?.click()}><Plus className="mr-2 h-4 w-4" />Adicionar foto</Button></div>}
           <DialogFooter><Button variant="outline" onClick={() => { setUploadOpen(false); setFiles([]); }}>Cancelar</Button><Button onClick={processFiles} disabled={!files.length || processing}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}Enviar para leitura</Button></DialogFooter>
@@ -518,7 +520,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
       </Dialog>
 
       <Dialog open={!!selected} onOpenChange={open => !open && requestCloseSelected()}>
-        <DialogContent className="flex max-h-[95dvh] max-w-7xl flex-col overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11">
+        <DialogContent className="warehouse-ui flex max-h-[95dvh] max-w-7xl flex-col overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11">
           {selected && <>
             <DialogHeader className="border-b p-4 pr-12"><div className="flex flex-wrap items-center gap-2"><DialogTitle>{isDraft ? 'Validar nota antes do lançamento' : 'Dados do lançamento'}</DialogTitle><StatusBadge note={selected} />{selected.extractionStatus === 'failed' && <Badge variant="destructive">Leitura incompleta</Badge>}</div><DialogDescription>{isDraft ? 'Confira e corrija os dados. O estoque ainda não foi alterado.' : `${selected.attachments?.length || (selected.attachment ? 1 : 0)} documento(s) original(is) preservado(s) para auditoria`}</DialogDescription></DialogHeader>
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 pb-24">
@@ -561,10 +563,10 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, canM
         </DialogContent>
       </Dialog>
 
-      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}><DialogContent><DialogHeader><DialogTitle>Cancelar lançamento definitivamente</DialogTitle><DialogDescription>A entrada original não será apagada. O sistema criará movimentos de estorno, preservará o documento e impedirá qualquer relançamento deste registro.</DialogDescription></DialogHeader>{cancelCheck && !cancelCheck.allowed && <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"><strong>Cancelamento bloqueado:</strong><ul className="mt-2 list-disc pl-5">{cancelCheck.blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul></div>}<div><label className="mb-1 block text-sm font-medium">Motivo obrigatório</label><Textarea value={cancelReason} onChange={event => setCancelReason(event.target.value)} placeholder="Explique por que o lançamento deve ser cancelado" /></div><DialogFooter><Button variant="outline" onClick={() => setCancelOpen(false)}>Voltar</Button><Button variant="destructive" disabled={!cancelCheck?.allowed || !cancelReason.trim()} onClick={confirmCancel}>Confirmar estorno definitivo</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}><DialogContent className="warehouse-ui"><DialogHeader><DialogTitle>Cancelar lançamento definitivamente</DialogTitle><DialogDescription>A entrada original não será apagada. O sistema criará movimentos de estorno, preservará o documento e impedirá qualquer relançamento deste registro.</DialogDescription></DialogHeader>{cancelCheck && !cancelCheck.allowed && <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"><strong>Cancelamento bloqueado:</strong><ul className="mt-2 list-disc pl-5">{cancelCheck.blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul></div>}<div><label className="mb-1 block text-sm font-medium">Motivo obrigatório</label><Textarea value={cancelReason} onChange={event => setCancelReason(event.target.value)} placeholder="Explique por que o lançamento deve ser cancelado" /></div><DialogFooter><Button variant="outline" onClick={() => setCancelOpen(false)}>Voltar</Button><Button variant="destructive" disabled={!cancelCheck?.allowed || !cancelReason.trim()} onClick={confirmCancel}>Confirmar estorno definitivo</Button></DialogFooter></DialogContent></Dialog>
 
       <Dialog open={reconciliationOpen} onOpenChange={setReconciliationOpen}>
-        <DialogContent className="max-h-[90dvh] max-w-4xl overflow-y-auto">
+        <DialogContent className="warehouse-ui max-h-[90dvh] max-w-4xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Revisar estoque de documentos arquivados</DialogTitle>
             <DialogDescription>Confira o impacto antes de gerar os estornos. Entradas originais e documentos permanecerão preservados para auditoria.</DialogDescription>
@@ -599,10 +601,10 @@ function Field({ label, value, readOnly, onChange, type = 'text' }: { label: str
 }
 
 function StatusBadge({ note }: { note: WarehouseFiscalNote }) {
-  if (note.status === 'aprovada') return <Badge variant="outline" className="border-success/30 bg-success/15 text-success">Lançada</Badge>;
-  if (note.status === 'cancelada') return <Badge variant="outline" className="border-destructive/30 bg-destructive/10 text-destructive">Cancelada</Badge>;
-  if (note.status === 'rejeitada') return <Badge variant="outline">Arquivada</Badge>;
-  return <Badge variant="outline" className="border-warning/30 bg-warning/10 text-warning">Aguardando confirmação</Badge>;
+  if (note.status === 'aprovada') return <WarehouseStatusBadge label="Lançada" tone="success" />;
+  if (note.status === 'cancelada') return <WarehouseStatusBadge label="Cancelada" tone="danger" />;
+  if (note.status === 'rejeitada') return <WarehouseStatusBadge label="Arquivada" tone="neutral" />;
+  return <WarehouseStatusBadge label="Aguardando confirmação" tone="warning" />;
 }
 
 function FiscalAttachmentViewer({ attachment, onClose }: { attachment: WarehouseAttachment | null; onClose: () => void }) {
@@ -646,7 +648,7 @@ function FiscalAttachmentViewer({ attachment, onClose }: { attachment: Warehouse
 
   return (
     <Dialog open={!!attachment} onOpenChange={open => !open && onClose()}>
-      <DialogContent className="flex max-h-[95dvh] max-w-6xl flex-col overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11">
+      <DialogContent className="warehouse-ui flex max-h-[95dvh] max-w-6xl flex-col overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11">
         {attachment && <>
           <DialogHeader className="border-b p-4 pr-14">
             <DialogTitle>Documento original</DialogTitle>

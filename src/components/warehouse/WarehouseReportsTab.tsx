@@ -2,7 +2,8 @@ import { useMemo } from 'react';
 import type { Project } from '@/types/project';
 import { computeWarehouseRows, computeWarehouseUsageByChapter, custodyTermEquipmentItems, ensureWarehouse, MOVEMENT_LABEL } from '@/lib/warehouse';
 import { Button } from '@/components/ui/button';
-import { Download } from 'lucide-react';
+import { Download, FileBarChart } from 'lucide-react';
+import { WarehouseSectionHeader } from './WarehouseVisual';
 
 interface Props { project: Project; }
 
@@ -143,12 +144,13 @@ export default function WarehouseReportsTab({ project }: Props) {
   };
 
   const ReportCard = ({ title, description, button, onExport }: { title: string; description: string; button: string; onExport: () => void }) => (
-    <div className="flex min-h-[132px] flex-col gap-3 rounded-md border bg-card p-3">
+    <div className="flex min-h-[150px] flex-col gap-3 rounded-xl border bg-gradient-to-br from-card to-muted/35 p-4 shadow-sm transition-shadow hover:shadow-md">
       <div className="flex-1">
-        <div className="text-sm font-semibold leading-tight">{title}</div>
-        <div className="mt-1 text-xs leading-snug text-muted-foreground">{description}</div>
+        <span className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary"><FileBarChart className="h-5 w-5" /></span>
+        <div className="text-base font-bold leading-tight">{title}</div>
+        <div className="mt-1 text-sm leading-snug text-muted-foreground">{description}</div>
       </div>
-      <Button size="sm" variant="outline" className="min-h-11 w-full justify-start text-xs sm:w-auto" onClick={onExport}>
+      <Button size="sm" variant="outline" className="min-h-11 w-full justify-start bg-background text-sm font-bold" onClick={onExport}>
         <Download className="mr-1.5 h-4 w-4" /> {button}
       </Button>
     </div>
@@ -156,10 +158,13 @@ export default function WarehouseReportsTab({ project }: Props) {
 
   return (
     <div className="space-y-4">
+      <section className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <WarehouseSectionHeader icon={FileBarChart} title="Relatórios do almoxarifado" description="Escolha um relatório para baixar." help="Os arquivos preservam os dados auditáveis de compras, estoque, retiradas, consumo, divergências e cautelas." />
+      </section>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-        <div className="rounded-md border bg-card p-3"><div className="text-xs font-semibold uppercase text-muted-foreground">Custo adquirido</div><div className="mt-1 text-lg font-bold tabular-nums">{moneyBR(acquiredCost)}</div><p className="text-xs text-muted-foreground">Somente notas lançadas.</p></div>
-        <div className="rounded-md border bg-card p-3"><div className="text-xs font-semibold uppercase text-muted-foreground">Custo consumido</div><div className="mt-1 text-lg font-bold tabular-nums">{moneyBR(usage.totalConsumedCost)}</div><p className="text-xs text-muted-foreground">Somente retiradas, sem duplicar compras.</p></div>
-        <div className="rounded-md border bg-card p-3"><div className="text-xs font-semibold uppercase text-muted-foreground">Valor atual em estoque</div><div className="mt-1 text-lg font-bold tabular-nums">{moneyBR(inventoryValue)}</div><p className="text-xs text-muted-foreground">{incompleteValuationCount ? `${incompleteValuationCount} material(is) com cálculo incompleto.` : 'Média ponderada calculada.'}</p></div>
+        <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 shadow-sm"><div className="text-sm font-bold text-muted-foreground">Custo adquirido</div><div className="mt-1 text-xl font-extrabold tabular-nums text-primary">{moneyBR(acquiredCost)}</div><p className="mt-1 text-sm text-muted-foreground">Notas lançadas.</p></div>
+        <div className="rounded-xl border border-info/25 bg-info/5 p-4 shadow-sm"><div className="text-sm font-bold text-muted-foreground">Custo consumido</div><div className="mt-1 text-xl font-extrabold tabular-nums text-info">{moneyBR(usage.totalConsumedCost)}</div><p className="mt-1 text-sm text-muted-foreground">Retiradas registradas.</p></div>
+        <div className="rounded-xl border border-success/25 bg-success/5 p-4 shadow-sm"><div className="text-sm font-bold text-muted-foreground">Valor em estoque</div><div className="mt-1 text-xl font-extrabold tabular-nums text-success">{moneyBR(inventoryValue)}</div><p className="mt-1 text-sm text-muted-foreground">{incompleteValuationCount ? `${incompleteValuationCount} cálculo(s) incompleto(s).` : 'Cálculo atualizado.'}</p></div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
