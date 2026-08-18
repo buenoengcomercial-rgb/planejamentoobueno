@@ -47,6 +47,21 @@ export type RemoteVersionAction = 'current' | 'reload' | 'conflict';
 
 export const projectDraftKey = (projectId: string) => `obraplanner:unsaved-cloud-draft:${projectId}`;
 
+function withoutEmbeddedBinary(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutEmbeddedBinary);
+  if (!value || typeof value !== 'object') return value;
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (key === 'dataUrl' && typeof entry === 'string' && entry.startsWith('data:')) continue;
+    sanitized[key] = withoutEmbeddedBinary(entry);
+  }
+  return sanitized;
+}
+
+export function sanitizeProjectDraft(project: Project): Project {
+  return withoutEmbeddedBinary(project) as Project;
+}
+
 export function serializeProject(project: Project): string {
   return JSON.stringify(project);
 }
@@ -96,15 +111,21 @@ export function writeProjectDraft(
 ): StoredProjectDraft | null {
   if (!storage) return null;
   const now = new Date().toISOString();
+  const safeProject = sanitizeProjectDraft(project);
   const draft: StoredProjectDraft = {
     version: PROJECT_DRAFT_VERSION,
     baseUpdatedAt,
     savedAt: now,
     localDraftUpdatedAt: now,
-    project,
+    project: safeProject,
   };
-  storage.setItem(projectDraftKey(project.id), JSON.stringify(draft));
-  return draft;
+  try {
+    storage.setItem(projectDraftKey(project.id), JSON.stringify(draft));
+    return draft;
+  } catch (error) {
+    console.warn('[cloudProjectDrafts] Não foi possível proteger o rascunho local.', error);
+    return null;
+  }
 }
 
 export function clearProjectDraft(projectId: string, storage: Storage | null = defaultStorage()): void {
@@ -207,7 +228,7 @@ function reconcileFiscalWarehouseSet(
     removedQuantityByItem.set(movement.itemKey, (removedQuantityByItem.get(movement.itemKey) ?? 0) + Number(movement.quantity || 0));
   }
 
-  const items = uniqueBy(itemsInput, item => item.key).map(item => ({
+  const items: WarehouseItemConfig[] = uniqueBy(itemsInput, item => item.key).map(item => ({
     ...item,
     purchasedQuantity: Math.max(0, Number(item.purchasedQuantity || 0) - (removedQuantityByItem.get(item.key) ?? 0)),
   }));

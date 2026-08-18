@@ -5,7 +5,6 @@ import { toast } from '@/hooks/use-toast';
 import {
   GENERAL_TASK_VALUE,
   PHOTO_BUCKET,
-  readFileAsDataURL,
   uid,
 } from '@/components/dailyReport/dailyReportFormat';
 import type { ProductionEntry } from '@/components/dailyReport/types';
@@ -94,17 +93,12 @@ export function useDailyReportPhotos({
       uploadedBy: currentReport.responsible || undefined,
       uploadedAt: new Date().toISOString(),
     };
-    try {
-      const { error } = await supabase.storage
-        .from(PHOTO_BUCKET)
-        .upload(path, file, { contentType: file.type || 'image/jpeg', upsert: false });
-      if (error) throw error;
-      // Bucket é privado: a URL é gerada sob demanda via signed URL (resolvePhotoUrl).
-      return { ...base, storagePath: path };
-    } catch {
-      const dataUrl = await readFileAsDataURL(file);
-      return { ...base, dataUrl };
-    }
+    const { error } = await supabase.storage
+      .from(PHOTO_BUCKET)
+      .upload(path, file, { contentType: file.type || 'image/jpeg', upsert: false });
+    if (error) throw new Error(`Não foi possível enviar ${file.name}: ${error.message}`);
+    // Bucket é privado: a URL é gerada sob demanda via signed URL (resolvePhotoUrl).
+    return { ...base, storagePath: path };
   }, [project.id, selectedDate, pendingTaskId, photoTaskOptions, currentReport.responsible]);
 
   const handleFiles = useCallback(async (files: FileList | File[]) => {
@@ -119,6 +113,11 @@ export function useDailyReportPhotos({
           uploaded.push(att);
         } catch (err) {
           console.error('Falha ao anexar foto', err);
+          toast({
+            variant: 'destructive',
+            title: 'Falha no envio da foto',
+            description: err instanceof Error ? err.message : 'Verifique a conexão e tente novamente.',
+          });
         }
       }
       if (uploaded.length > 0) {

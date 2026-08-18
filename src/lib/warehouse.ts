@@ -2416,9 +2416,8 @@ export function nowWarehouseISO() {
 
 /**
  * Cria um anexo do almoxarifado enviando o arquivo para o Storage (bucket
- * `daily-report-photos`, sob `${projectId}/warehouse/...`). Em caso de falha
- * de rede, faz fallback para dataURL embutido (legado/offline) para não
- * perder o arquivo, mas registra um aviso.
+ * `daily-report-photos`, sob `${projectId}/warehouse/...`). Falhas de upload
+ * são mantidas na tela para nova tentativa; binários nunca entram no projeto.
  *
  * CRÍTICO: novos anexos NÃO devem ser gravados como dataURL no JSON do
  * projeto — payloads grandes estouram o limite do PostgREST.
@@ -2428,7 +2427,6 @@ export async function makeAttachment(
   projectId: string,
   kind?: WarehouseAttachment['kind'],
   folder = 'documents',
-  options: { fallback?: 'data-url' | 'error' } = {},
 ): Promise<WarehouseAttachment> {
   const id = uid();
   const safeExt = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -2451,13 +2449,9 @@ export async function makeAttachment(
     if (error) throw error;
     return { ...base, storagePath: path };
   } catch (err) {
-    if (options.fallback === 'error') {
-      console.warn('Anexo: falha no upload obrigatório para o Storage.', err);
-      throw new Error('Não foi possível enviar o documento para a nuvem. Verifique a internet e tente novamente.');
-    }
-    console.warn('Anexo: falha no upload para Storage, gravando dataURL como fallback.', err);
-    const dataUrl = await readFileAsDataURL(file);
-    return { ...base, dataUrl };
+    console.warn('Anexo: falha no upload obrigatório para o Storage.', err);
+    const message = err instanceof Error ? err.message : '';
+    throw new Error(`Não foi possível enviar ${file.name} para a nuvem${message ? `: ${message}` : '. Verifique a internet e tente novamente.'}`);
   }
 }
 
