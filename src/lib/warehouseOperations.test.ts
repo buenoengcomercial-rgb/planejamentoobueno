@@ -9,8 +9,12 @@ import {
   computeWarehouseUsageByChapter,
   createAndDeliverRequisition,
   createInventorySession,
+  custodyTermEquipmentItems,
   emptyWarehouse,
+  issueCustodyTerm,
+  panelSummary,
   removeEquipment,
+  returnCustodyEquipment,
   setInventoryCount,
   upsertWarehouseProjectMaterialLink,
   warehouseValuationForItem,
@@ -79,6 +83,18 @@ describe('operação integrada do almoxarifado', () => {
     }, { actor })).toThrow(/assinatura/i);
   });
 
+  it('permite retirada de material sem fotografia e preserva assinatura e baixa', () => {
+    const result = createAndDeliverRequisition(withStock(), {
+      date: '2026-08-17', chapterId: 'chapter-1', chapterName: '1 Prédio 1', teamId: 'alpha', teamName: 'Alpha',
+      receiverName: 'Equipe Alpha', requesterName: 'Equipe Alpha', signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'sem-foto',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 2 }],
+    }, { actor });
+
+    expect(result.project.warehouse!.requisitions[0].deliveryAttachments).toBeUndefined();
+    expect(result.project.warehouse!.movements.find(movement => movement.type === 'retirada')).toMatchObject({ quantity: 2 });
+    expect(computeWarehouseRows(result.project, { includeManual: true })[0].balance).toBe(18);
+  });
+
   it('mantém vários insumos previstos no mesmo material canônico', () => {
     let current = withStock();
     current = upsertWarehouseProjectMaterialLink(current, {
@@ -115,5 +131,54 @@ describe('operação integrada do almoxarifado', () => {
     const archived = removeEquipment(first, first.warehouse!.equipments[0].id, actor);
     expect(archived.warehouse!.equipments).toHaveLength(1);
     expect(archived.warehouse!.equipments[0]).toMatchObject({ status: 'arquivado', updatedBy: actor });
+  });
+
+  it('emite cautela agrupada e controla devoluções parciais por equipamento', () => {
+    let current = addEquipment(project(), { name: 'Furadeira', description: 'Furadeira', serial: 'SER-001', photos: [photo] }, actor);
+    current = addEquipment(current, { name: 'Parafusadeira', description: 'Parafusadeira', serial: 'SER-002', photos: [photo] }, actor);
+    const [first, second] = current.warehouse!.equipments;
+
+    current = issueCustodyTerm(current, {
+      issuedAt: '2026-08-18', chapterId: 'chapter-1', chapterName: '1 Prédio 1', teamId: 'alpha', teamName: 'Alpha',
+      workerName: 'João', signatureReceiver: 'assinatura',
+      equipments: [
+        { equipmentId: first.id, stateOnDelivery: 'Bom estado', accessories: 'Maleta' },
+        { equipmentId: second.id, stateOnDelivery: 'Bom estado' },
+      ],
+    }, actor);
+
+    const term = current.warehouse!.custodyTerms[0];
+    expect(custodyTermEquipmentItems(term)).toHaveLength(2);
+    expect(current.warehouse!.equipments.map(equipment => equipment.status)).toEqual(['em_uso', 'em_uso']);
+    expect(panelSummary(current).openCustodyCount).toBe(1);
+
+    current = returnCustodyEquipment(current, term.id, first.id, { status: 'devolvido', stateOnReturn: 'Bom estado' }, actor);
+    expect(current.warehouse!.custodyTerms[0].status).toBe('parcial');
+    expect(current.warehouse!.equipments.map(equipment => equipment.status)).toEqual(['disponivel', 'em_uso']);
+    expect(panelSummary(current).openCustodyCount).toBe(1);
+
+    expect(() => returnCustodyEquipment(current, term.id, second.id, {
+      status: 'danificado', divergenceNotes: 'Mandril travado',
+    }, actor)).toThrow(/foto/i);
+
+    current = returnCustodyEquipment(current, term.id, second.id, {
+      status: 'danificado', divergenceNotes: 'Mandril travado', returnAttachments: [photo],
+    }, actor);
+    expect(current.warehouse!.custodyTerms[0].status).toBe('encerrado_com_ocorrencia');
+    expect(current.warehouse!.equipments.map(equipment => equipment.status)).toEqual(['disponivel', 'em_manutencao']);
+    expect(panelSummary(current).openCustodyCount).toBe(0);
+  });
+
+  it('lê cautela legada sem alterar o registro original', () => {
+    const legacy = {
+      id: 'legacy-term', number: 'TC-2025-0001', createdAt: '2025-01-01T10:00:00.000Z', issuedAt: '2025-01-01',
+      equipmentId: 'legacy-equipment', equipmentName: 'Furadeira antiga', equipmentInternalCode: 'EQ-LEGADO',
+      workerName: 'Operador antigo', status: 'em_uso' as const,
+    };
+
+    expect(custodyTermEquipmentItems(legacy)).toEqual([expect.objectContaining({
+      equipmentId: 'legacy-equipment', equipmentName: 'Furadeira antiga', status: 'em_uso',
+    })]);
+    expect(legacy).not.toHaveProperty('equipments');
   });
 });

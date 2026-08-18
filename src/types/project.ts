@@ -996,12 +996,35 @@ export interface Equipment {
   archivedAt?: string;
 }
 
-export type CustodyTermStatus =
+export type CustodyEquipmentStatus =
   | 'em_uso'
   | 'devolvido'
   | 'divergencia'
   | 'perdido'
   | 'danificado';
+
+export type CustodyTermStatus =
+  | CustodyEquipmentStatus
+  | 'parcial'
+  | 'encerrado_com_ocorrencia';
+
+export interface CustodyTermEquipmentItem {
+  equipmentId: string;
+  equipmentName: string;
+  equipmentPatrimony?: string;
+  equipmentInternalCode?: string;
+  equipmentBrand?: string;
+  equipmentModel?: string;
+  equipmentSerial?: string;
+  equipmentPhoto?: WarehouseAttachment;
+  accessories?: string;
+  stateOnDelivery?: string;
+  status: CustodyEquipmentStatus;
+  returnedAt?: string;
+  stateOnReturn?: string;
+  divergenceNotes?: string;
+  returnAttachments?: WarehouseAttachment[];
+}
 
 export interface CustodyTerm {
   id: string;
@@ -1014,10 +1037,15 @@ export interface CustodyTerm {
   equipmentModel?: string;
   equipmentSerial?: string;
   equipmentPhoto?: WarehouseAttachment;
+  /** Estrutura atual. Campos singulares permanecem para leitura de termos legados. */
+  equipments?: CustodyTermEquipmentItem[];
   issuedAt: string;
   dueDate?: string;
   workerName: string;
+  chapterId?: string;
+  chapterName?: string;
   teamId?: string;
+  teamName?: string;
   accessories?: string;
   stateOnDelivery?: string;
   signatureWarehouse?: string;
@@ -1029,6 +1057,9 @@ export interface CustodyTerm {
   attachments?: WarehouseAttachment[];
   returnAttachments?: WarehouseAttachment[];
   createdAt: string;
+  updatedAt?: string;
+  createdBy?: WarehouseAuditActor;
+  updatedBy?: WarehouseAuditActor;
 }
 
 export type WarehouseMaterialLinkSource = 'supplier_history' | 'exact_code' | 'description_unit' | 'similarity' | 'manual';

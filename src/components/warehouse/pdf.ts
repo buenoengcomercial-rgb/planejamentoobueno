@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { Project, WarehouseRequisition, CustodyTerm, WarehouseInventorySession } from '@/types/project';
+import { custodyTermAggregateStatus, custodyTermEquipmentItems } from '@/lib/warehouse';
 
 function header(doc: jsPDF, project: Project, title: string, subtitle: string) {
   doc.setFontSize(14);
@@ -38,7 +39,7 @@ export function generateRequisitionReceipt(project: Project, req: WarehouseRequi
   doc.text(`Prédio / capítulo: ${req.chapterName ?? req.taskName ?? '—'}`, 14, y); y += 5;
   doc.text(`Equipe: ${req.teamName ?? req.teamId ?? '—'}`, 14, y); y += 5;
   doc.text(`Almoxarife: ${req.warehouseOperator ?? '—'}`, 14, y); y += 5;
-  doc.text(`Fotos da entrega: ${req.deliveryAttachments?.length ?? 0}`, 14, y); y += 5;
+  if (req.deliveryAttachments?.length) { doc.text(`Fotos da entrega: ${req.deliveryAttachments.length}`, 14, y); y += 5; }
   if (req.notes) { doc.text(`Observação: ${req.notes}`, 14, y); y += 5; }
 
   autoTable(doc, {
@@ -85,30 +86,37 @@ export function generateCustodyTermPdf(project: Project, term: CustodyTerm) {
   header(doc, project, 'TERMO DE CAUTELA DE EQUIPAMENTO', `${term.number} · ${term.issuedAt}`);
   doc.setFontSize(10);
   let y = 40;
+  const items = custodyTermEquipmentItems(term);
+  const aggregateStatus = custodyTermAggregateStatus(items);
   const lines = [
-    `Código interno: ${term.equipmentInternalCode ?? '—'}`,
-    `Equipamento: ${term.equipmentName}`,
-    `Marca / modelo: ${[term.equipmentBrand, term.equipmentModel].filter(Boolean).join(' ') || '—'}`,
-    `Número de série: ${term.equipmentSerial ?? '—'}`,
-    `Patrimônio: ${term.equipmentPatrimony ?? '—'}`,
     `Recebedor: ${term.workerName}`,
+    `Prédio / capítulo: ${term.chapterName ?? 'Registro legado'}`,
+    `Equipe: ${term.teamName ?? term.teamId ?? '—'}`,
     `Devolver até: ${term.dueDate ?? '—'}`,
-    `Estado na entrega: ${term.stateOnDelivery ?? '—'}`,
-    `Acessórios: ${term.accessories ?? '—'}`,
-    `Status: ${term.status}`,
+    `Status: ${aggregateStatus}`,
   ];
   for (const l of lines) { doc.text(l, 14, y); y += 5; }
-  if (term.returnedAt) {
-    y += 3;
-    doc.setFont('helvetica', 'bold'); doc.text('DEVOLUÇÃO', 14, y); doc.setFont('helvetica', 'normal'); y += 5;
-    doc.text(`Devolvido em: ${term.returnedAt}`, 14, y); y += 5;
-    doc.text(`Estado na devolução: ${term.stateOnReturn ?? '—'}`, 14, y); y += 5;
-    if (term.divergenceNotes) { doc.text(`Divergência: ${term.divergenceNotes}`, 14, y); y += 5; }
-  }
-  y += 8;
+  if (term.attachments?.length) { doc.text(`Fotos da entrega: ${term.attachments.length}`, 14, y); y += 5; }
+
+  autoTable(doc, {
+    startY: y + 3,
+    head: [['Código / patrimônio', 'Equipamento', 'Identificação', 'Entrega', 'Situação / devolução']],
+    body: items.map(item => [
+      `${item.equipmentInternalCode ?? '—'}\nPatr.: ${item.equipmentPatrimony ?? '—'}`,
+      item.equipmentName,
+      `${[item.equipmentBrand, item.equipmentModel].filter(Boolean).join(' ') || '—'}\nSérie: ${item.equipmentSerial ?? '—'}`,
+      `${item.stateOnDelivery ?? '—'}\nAcessórios: ${item.accessories ?? '—'}`,
+      `${item.status}${item.returnedAt ? `\n${item.returnedAt} · ${item.stateOnReturn ?? '—'}` : ''}${item.divergenceNotes ? `\n${item.divergenceNotes}` : ''}`,
+    ]),
+    styles: { fontSize: 7.5, cellPadding: 2 },
+    headStyles: { fillColor: [60, 60, 60] },
+    columnStyles: { 0: { cellWidth: 31 }, 1: { cellWidth: 43 }, 2: { cellWidth: 40 }, 3: { cellWidth: 37 }, 4: { cellWidth: 31 } },
+  });
+  let finalY = (doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y + 35;
+  if (finalY > 225) { doc.addPage(); finalY = 20; }
   doc.setFontSize(9);
-  doc.text('Declaro ter recebido o equipamento descrito acima em perfeitas condições de uso, comprometendo-me a devolvê-lo nas mesmas condições.', 14, y, { maxWidth: 182 });
-  signatures(doc, y + 18, 'Almoxarife', term.signatureWarehouse, 'Recebedor', term.signatureReceiver);
+  doc.text('Declaro ter recebido os equipamentos descritos acima nas condições registradas, comprometendo-me a devolvê-los e comunicar imediatamente qualquer ocorrência.', 14, finalY + 8, { maxWidth: 182 });
+  signatures(doc, finalY + 24, 'Almoxarife', term.signatureWarehouse, 'Recebedor', term.signatureReceiver);
 
   doc.save(`termo-${term.number}.pdf`);
 }

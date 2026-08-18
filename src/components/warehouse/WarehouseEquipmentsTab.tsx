@@ -1,20 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CustodyTerm, CustodyTermStatus, Equipment, Project, WarehouseAttachment, WarehouseAuditActor } from '@/types/project';
+import type { Equipment, Project, WarehouseAttachment, WarehouseAuditActor } from '@/types/project';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Archive, Camera, FileDown, ImagePlus, Loader2, Plus, Printer, Sparkles, Undo2, X } from 'lucide-react';
+import { Archive, Camera, ImagePlus, Loader2, Plus, Printer, Sparkles, X } from 'lucide-react';
 import {
   addEquipment,
   ensureWarehouse,
-  issueCustodyTerm,
   makeAttachment,
   readFileAsDataURL,
   removeEquipment,
-  returnCustodyTerm,
 } from '@/lib/warehouse';
 import { loadWarehouseAttachmentBlob, openWarehouseAttachment, warehouseAttachmentErrorMessage } from '@/lib/warehouseAttachments';
-import SignaturePad from './SignaturePad';
-import { generateCustodyTermPdf } from './pdf';
 import { supabase } from '@/integrations/supabase/client';
 import QRCode from 'qrcode';
 import { toast } from 'sonner';
@@ -55,12 +51,6 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
   const equipments = wh.equipments.filter(equipment => showArchived || !equipment.archivedAt);
-
-  const [showTerm, setShowTerm] = useState(false);
-  const [term, setTerm] = useState({ equipmentId: '', workerName: '', dueDate: '', accessories: '', stateOnDelivery: '', sigRec: '' as string | undefined });
-  const [returnFor, setReturnFor] = useState<CustodyTerm | null>(null);
-  const [returnPhotos, setReturnPhotos] = useState<File[]>([]);
-  const [returnData, setReturnData] = useState({ stateOnReturn: '', divergenceNotes: '', status: 'devolvido' as CustodyTermStatus });
 
   const addPhotos = async (files: FileList | null) => {
     if (!files) return;
@@ -133,42 +123,6 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
     } catch (error) { toast.error((error as Error).message); } finally { setSaving(false); }
   };
 
-  const submitTerm = () => {
-    const equipment = wh.equipments.find(candidate => candidate.id === term.equipmentId);
-    if (!equipment || !term.workerName.trim() || !term.sigRec) return toast.error('Selecione o equipamento, informe o recebedor e colete sua assinatura.');
-    onProjectChange(issueCustodyTerm(project, {
-      equipmentId: equipment.id,
-      equipmentName: equipment.description || equipment.name,
-      equipmentPatrimony: equipment.patrimony,
-      equipmentInternalCode: equipment.internalCode,
-      equipmentBrand: equipment.brand,
-      equipmentModel: equipment.model,
-      equipmentSerial: equipment.serial,
-      equipmentPhoto: equipment.photos?.[0],
-      issuedAt: new Date().toISOString().slice(0, 10),
-      dueDate: term.dueDate || undefined,
-      workerName: term.workerName.trim(),
-      accessories: term.accessories || undefined,
-      stateOnDelivery: term.stateOnDelivery || undefined,
-      signatureReceiver: term.sigRec,
-    }));
-    setShowTerm(false);
-    setTerm({ equipmentId: '', workerName: '', dueDate: '', accessories: '', stateOnDelivery: '', sigRec: undefined });
-    toast.success('Termo emitido e equipamento marcado como Em uso.');
-  };
-
-  const submitReturn = async () => {
-    if (!returnFor) return;
-    try {
-      const returnAttachments = await Promise.all(returnPhotos.map(file => makeAttachment(file, project.id, 'foto', 'equipment-returns')));
-      onProjectChange(returnCustodyTerm(project, returnFor.id, { ...returnData, returnAttachments }));
-      setReturnFor(null);
-      setReturnPhotos([]);
-      setReturnData({ stateOnReturn: '', divergenceNotes: '', status: 'devolvido' });
-      toast.success('Devolução registrada.');
-    } catch (error) { toast.error((error as Error).message); }
-  };
-
   const printLabel = async (equipment: Equipment) => {
     const code = equipment.internalCode || equipment.id;
     const qr = await QRCode.toDataURL(code, { width: 220, margin: 1 });
@@ -198,14 +152,8 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-md border bg-card"><div className="flex items-center border-b bg-muted/40 p-3"><div><h3 className="font-semibold">Patrimônio identificado</h3><p className="text-xs text-muted-foreground">Cada equipamento tem código interno, foto e histórico.</p></div><Button className="ml-auto" variant="outline" onClick={() => setShowArchived(value => !value)}>{showArchived ? 'Ocultar arquivados' : 'Exibir arquivados'}</Button></div><div data-testid="equipment-gallery" className="grid grid-cols-1 gap-2 p-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{equipments.map(equipment => { const title = equipment.description || equipment.name; const identification = [equipment.brand, equipment.model, equipment.serial].filter(Boolean).join(' · ') || 'Identificação pendente'; return <article key={equipment.id} className="min-w-0 overflow-hidden rounded-md border"><EquipmentCardPhotos equipment={equipment} title={title} onOpen={attachment => void openPhoto(attachment)} /><div className="space-y-1.5 p-2"><div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-bold text-primary">{equipment.internalCode || 'Código legado'}</div><h4 className="line-clamp-2 text-sm font-semibold leading-5" title={title}>{title}</h4></div><span className="h-fit shrink-0 rounded-full bg-muted px-2 py-1 text-[11px]">{(equipment.status || 'disponivel').replace('_', ' ')}</span></div><div className="truncate text-xs text-muted-foreground" title={identification}>{identification}</div><div className="grid grid-cols-2 gap-1.5"><Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => void printLabel(equipment)}><Printer className="mr-1.5 h-4 w-4" />Etiqueta QR</Button>{!equipment.archivedAt && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))}><Archive className="mr-1.5 h-4 w-4" />Arquivar</Button>}</div></div></article>; })}{!equipments.length && <div className="col-span-full p-8 text-center text-sm text-muted-foreground">Nenhum equipamento cadastrado.</div>}</div></section>
+      <section className="overflow-hidden rounded-md border bg-card"><div className="flex items-center border-b bg-muted/40 p-3"><div><h3 className="font-semibold">Patrimônio identificado</h3><p className="text-xs text-muted-foreground">Cada equipamento tem código interno, fotos e situação patrimonial.</p></div><Button className="ml-auto" variant="outline" onClick={() => setShowArchived(value => !value)}>{showArchived ? 'Ocultar arquivados' : 'Exibir arquivados'}</Button></div><div data-testid="equipment-gallery" className="grid grid-cols-1 gap-2 p-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{equipments.map(equipment => { const title = equipment.description || equipment.name; const identification = [equipment.brand, equipment.model, equipment.serial].filter(Boolean).join(' · ') || 'Identificação pendente'; return <article key={equipment.id} className="min-w-0 overflow-hidden rounded-md border"><EquipmentCardPhotos equipment={equipment} title={title} onOpen={attachment => void openPhoto(attachment)} /><div className="space-y-1.5 p-2"><div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-bold text-primary">{equipment.internalCode || 'Código legado'}</div><h4 className="line-clamp-2 text-sm font-semibold leading-5" title={title}>{title}</h4></div><span className="h-fit shrink-0 rounded-full bg-muted px-2 py-1 text-[11px]">{(equipment.status || 'disponivel').replace('_', ' ')}</span></div><div className="truncate text-xs text-muted-foreground" title={identification}>{identification}</div><div className="grid grid-cols-2 gap-1.5"><Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => void printLabel(equipment)}><Printer className="mr-1.5 h-4 w-4" />Etiqueta QR</Button>{!equipment.archivedAt && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))}><Archive className="mr-1.5 h-4 w-4" />Arquivar</Button>}</div></div></article>; })}{!equipments.length && <div className="col-span-full p-8 text-center text-sm text-muted-foreground">Nenhum equipamento cadastrado.</div>}</div></section>
 
-      <section className="overflow-hidden rounded-md border bg-card"><div className="flex items-center border-b bg-muted/40 p-3"><div><h3 className="font-semibold">Termos de cautela</h3><p className="text-xs text-muted-foreground">Entrega e devolução dos equipamentos da empresa.</p></div><Button className="ml-auto min-h-11" onClick={() => setShowTerm(value => !value)}><Plus className="mr-2 h-4 w-4" />Novo termo</Button></div>{showTerm && <div className="grid gap-3 border-b p-3 md:grid-cols-2"><select aria-label="Equipamento disponível" className="min-h-11 rounded-md border bg-background px-3" value={term.equipmentId} onChange={event => setTerm({ ...term, equipmentId: event.target.value })}><option value="">Escolher equipamento disponível</option>{wh.equipments.filter(equipment => !equipment.archivedAt && (equipment.status ?? 'disponivel') === 'disponivel').map(equipment => <option key={equipment.id} value={equipment.id}>{equipment.internalCode} · {equipment.description || equipment.name}</option>)}</select><Input aria-label="Colaborador que recebeu" className="min-h-11" value={term.workerName} onChange={event => setTerm({ ...term, workerName: event.target.value })} placeholder="Colaborador que recebeu" /><Input aria-label="Data prevista para devolução" className="min-h-11" type="date" value={term.dueDate} onChange={event => setTerm({ ...term, dueDate: event.target.value })} /><Input aria-label="Estado na entrega" className="min-h-11" value={term.stateOnDelivery} onChange={event => setTerm({ ...term, stateOnDelivery: event.target.value })} placeholder="Estado na entrega" /><Input aria-label="Acessórios" className="min-h-11 md:col-span-2" value={term.accessories} onChange={event => setTerm({ ...term, accessories: event.target.value })} placeholder="Acessórios" /><div className="md:col-span-2"><SignaturePad label="Assinatura do recebedor" value={term.sigRec} onChange={sigRec => setTerm({ ...term, sigRec })} /></div><div className="flex justify-end gap-2 md:col-span-2"><Button variant="outline" onClick={() => setShowTerm(false)}>Cancelar</Button><Button onClick={submitTerm}>Emitir termo</Button></div></div>}
-        <div className="space-y-2 p-3 md:hidden">{wh.custodyTerms.slice().reverse().map(custody => <article key={custody.id} className="space-y-2 rounded-md border p-3"><div className="flex items-start justify-between gap-2"><div><div className="font-mono text-xs text-primary">{custody.number}</div><div className="font-semibold">{custody.equipmentInternalCode || ''} {custody.equipmentName}</div></div><span className="rounded-full bg-muted px-2 py-1 text-xs">{custody.status.replace('_', ' ')}</span></div><div className="text-sm text-muted-foreground">Recebedor: {custody.workerName}</div><div className="grid grid-cols-2 gap-2"><Button className="min-h-11" variant="outline" onClick={() => generateCustodyTermPdf(project, custody)}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{custody.status === 'em_uso' && <Button className="min-h-11" variant="outline" onClick={() => setReturnFor(custody)}><Undo2 className="mr-1 h-4 w-4" />Devolver</Button>}</div></article>)}{!wh.custodyTerms.length && <div className="p-5 text-center text-sm text-muted-foreground">Nenhum termo emitido.</div>}</div>
-        <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[760px] text-sm"><thead className="bg-muted"><tr><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Equipamento</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Status</th><th className="p-2 text-right">Ações</th></tr></thead><tbody>{wh.custodyTerms.slice().reverse().map(custody => <tr key={custody.id} className="border-t"><td className="p-2 font-mono">{custody.number}</td><td className="p-2">{custody.equipmentInternalCode || ''} {custody.equipmentName}</td><td className="p-2">{custody.workerName}</td><td className="p-2">{custody.status}</td><td className="p-2"><div className="flex justify-end gap-2"><Button size="sm" variant="outline" onClick={() => generateCustodyTermPdf(project, custody)}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{custody.status === 'em_uso' && <Button size="sm" variant="outline" onClick={() => setReturnFor(custody)}><Undo2 className="mr-1 h-4 w-4" />Devolver</Button>}</div></td></tr>)}{!wh.custodyTerms.length && <tr><td colSpan={5} className="p-6 text-center text-muted-foreground">Nenhum termo emitido.</td></tr>}</tbody></table></div>
-      </section>
-
-      {returnFor && <section className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><div className="w-full max-w-xl space-y-3 rounded-lg bg-background p-4"><h3 className="font-semibold">Devolução · {returnFor.number}</h3><Input className="min-h-11" value={returnData.stateOnReturn} onChange={event => setReturnData({ ...returnData, stateOnReturn: event.target.value })} placeholder="Estado na devolução" /><select className="min-h-11 w-full rounded-md border bg-background px-3" value={returnData.status} onChange={event => setReturnData({ ...returnData, status: event.target.value as CustodyTermStatus })}><option value="devolvido">Devolvido OK</option><option value="divergencia">Com divergência</option><option value="danificado">Danificado</option><option value="perdido">Perdido</option></select>{returnData.status !== 'devolvido' && <Input className="min-h-11" value={returnData.divergenceNotes} onChange={event => setReturnData({ ...returnData, divergenceNotes: event.target.value })} placeholder="Descreva a divergência" />}<div><label className="mb-1 block text-xs font-semibold">Foto na devolução</label><Input type="file" accept="image/*" capture="environment" onChange={event => setReturnPhotos(Array.from(event.target.files ?? []).slice(0, 3))} /></div><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setReturnFor(null)}>Cancelar</Button><Button onClick={() => void submitReturn()}>Confirmar devolução</Button></div></div></section>}
       {confirmDialog}
     </div>
   );

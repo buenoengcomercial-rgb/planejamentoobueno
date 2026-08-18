@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { Project } from '@/types/project';
-import { computeWarehouseRows, computeWarehouseUsageByChapter, ensureWarehouse, MOVEMENT_LABEL } from '@/lib/warehouse';
+import { computeWarehouseRows, computeWarehouseUsageByChapter, custodyTermEquipmentItems, ensureWarehouse, MOVEMENT_LABEL } from '@/lib/warehouse';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
 
@@ -113,8 +113,26 @@ export default function WarehouseReportsTab({ project }: Props) {
   };
 
   const exportOpenCustody = () => {
-    const data: (string | number)[][] = [['Nº', 'Código interno', 'Equipamento', 'Marca', 'Modelo', 'Série', 'Patrimônio', 'Recebedor', 'Emitido em', 'Devolver até', 'Status']];
-    for (const term of warehouse.custodyTerms) if (term.status !== 'devolvido') data.push([term.number, term.equipmentInternalCode ?? '', term.equipmentName, term.equipmentBrand ?? '', term.equipmentModel ?? '', term.equipmentSerial ?? '', term.equipmentPatrimony ?? '', term.workerName, term.issuedAt, term.dueDate ?? '', term.status]);
+    const data: (string | number)[][] = [['Nº', 'Código interno', 'Equipamento', 'Marca', 'Modelo', 'Série', 'Patrimônio', 'Recebedor', 'Prédio / capítulo', 'Equipe', 'Emitido em', 'Devolver até', 'Estado na entrega', 'Acessórios', 'Status']];
+    for (const term of warehouse.custodyTerms) {
+      for (const item of custodyTermEquipmentItems(term)) if (item.status === 'em_uso') data.push([
+        term.number,
+        item.equipmentInternalCode ?? '',
+        item.equipmentName,
+        item.equipmentBrand ?? '',
+        item.equipmentModel ?? '',
+        item.equipmentSerial ?? '',
+        item.equipmentPatrimony ?? '',
+        term.workerName,
+        term.chapterName ?? 'Registro legado',
+        term.teamName ?? term.teamId ?? '',
+        term.issuedAt,
+        term.dueDate ?? '',
+        item.stateOnDelivery ?? '',
+        item.accessories ?? '',
+        item.status,
+      ]);
+    }
     downloadCSV('termos-de-cautela-em-aberto.csv', data);
   };
 

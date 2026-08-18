@@ -7,6 +7,8 @@ import type {
   WarehouseRequisition,
   WarehouseRequisitionItem,
   CustodyTerm,
+  CustodyTermEquipmentItem,
+  CustodyEquipmentStatus,
   CustodyTermStatus,
   Equipment,
   WarehouseLocation,
@@ -444,7 +446,6 @@ export function deliverRequisition(
   if (!req.teamId) throw new Error('Selecione a equipe que receberá os materiais.');
   if (!(req.receiverName || req.requesterName)?.trim()) throw new Error('Informe quem recebeu os materiais.');
   if (!req.signatureReceiver) throw new Error('A assinatura de quem recebeu é obrigatória.');
-  if (!req.deliveryAttachments?.length) throw new Error('Adicione ao menos uma foto da entrega.');
   if (!req.items.length) throw new Error('Adicione ao menos um material à retirada.');
   for (const item of req.items) {
     if (!item.itemKey || !(Number(item.quantity) > 0)) throw new Error('Todos os materiais devem ter quantidade positiva.');
@@ -769,38 +770,170 @@ export function nextCustodyNumber(state: WarehouseState): string {
   return `TC-${year}-${String(count).padStart(4, '0')}`;
 }
 
+export interface CustodyTermIssueItemInput {
+  equipmentId: string;
+  accessories?: string;
+  stateOnDelivery?: string;
+}
+
+export interface CustodyTermIssueInput {
+  issuedAt: string;
+  dueDate?: string;
+  workerName: string;
+  chapterId?: string;
+  chapterName?: string;
+  teamId?: string;
+  teamName?: string;
+  signatureWarehouse?: string;
+  signatureReceiver?: string;
+  attachments?: WarehouseAttachment[];
+  equipments: CustodyTermIssueItemInput[];
+}
+
+/** Expõe termos novos e legados por uma única estrutura, sem regravar ao abrir. */
+export function custodyTermEquipmentItems(term: CustodyTerm): CustodyTermEquipmentItem[] {
+  if (term.equipments?.length) return term.equipments;
+  const legacyStatus: CustodyEquipmentStatus = term.status === 'parcial' || term.status === 'encerrado_com_ocorrencia'
+    ? (term.returnedAt ? 'devolvido' : 'em_uso')
+    : term.status;
+  return [{
+    equipmentId: term.equipmentId,
+    equipmentName: term.equipmentName,
+    equipmentPatrimony: term.equipmentPatrimony,
+    equipmentInternalCode: term.equipmentInternalCode,
+    equipmentBrand: term.equipmentBrand,
+    equipmentModel: term.equipmentModel,
+    equipmentSerial: term.equipmentSerial,
+    equipmentPhoto: term.equipmentPhoto,
+    accessories: term.accessories,
+    stateOnDelivery: term.stateOnDelivery,
+    status: legacyStatus,
+    returnedAt: term.returnedAt,
+    stateOnReturn: term.stateOnReturn,
+    divergenceNotes: term.divergenceNotes,
+    returnAttachments: term.returnAttachments,
+  }];
+}
+
+export function custodyTermAggregateStatus(termOrItems: CustodyTerm | CustodyTermEquipmentItem[]): CustodyTermStatus {
+  const items = Array.isArray(termOrItems) ? termOrItems : custodyTermEquipmentItems(termOrItems);
+  if (!items.length || items.every(item => item.status === 'em_uso')) return 'em_uso';
+  if (items.some(item => item.status === 'em_uso')) return 'parcial';
+  if (items.every(item => item.status === 'devolvido')) return 'devolvido';
+  return 'encerrado_com_ocorrencia';
+}
+
+export function isCustodyTermOpen(term: CustodyTerm): boolean {
+  return custodyTermEquipmentItems(term).some(item => item.status === 'em_uso');
+}
+
 export function issueCustodyTerm(
   project: Project,
-  input: Omit<CustodyTerm, 'id' | 'number' | 'createdAt' | 'status'> & { status?: CustodyTermStatus },
+  input: CustodyTermIssueInput,
+  actor?: WarehouseActorInput,
 ): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
+  if (!input.workerName.trim()) throw new Error('Informe quem recebeu os equipamentos.');
+  if (!input.chapterId) throw new Error('Selecione o prédio/capítulo do orçamento.');
+  if (!input.teamId) throw new Error('Selecione a equipe que receberá os equipamentos.');
+  if (!input.signatureReceiver) throw new Error('A assinatura de quem recebeu é obrigatória.');
+  if (!input.equipments.length) throw new Error('Adicione ao menos um equipamento à cautela.');
+  const selectedIds = input.equipments.map(item => item.equipmentId);
+  if (new Set(selectedIds).size !== selectedIds.length) throw new Error('Um equipamento não pode aparecer duas vezes na mesma cautela.');
+  const equipmentItems = input.equipments.map(item => {
+    const equipment = wh.equipments.find(candidate => candidate.id === item.equipmentId);
+    if (!equipment || equipment.archivedAt) throw new Error('Um dos equipamentos selecionados não está mais disponível.');
+    if ((equipment.status ?? 'disponivel') !== 'disponivel') {
+      throw new Error(`${equipment.description || equipment.name}: equipamento indisponível para cautela.`);
+    }
+    return {
+      equipmentId: equipment.id,
+      equipmentName: equipment.description || equipment.name,
+      equipmentPatrimony: equipment.patrimony,
+      equipmentInternalCode: equipment.internalCode,
+      equipmentBrand: equipment.brand,
+      equipmentModel: equipment.model,
+      equipmentSerial: equipment.serial,
+      equipmentPhoto: equipment.photos?.[0],
+      accessories: item.accessories?.trim() || undefined,
+      stateOnDelivery: item.stateOnDelivery?.trim() || undefined,
+      status: 'em_uso' as const,
+    } satisfies CustodyTermEquipmentItem;
+  });
+  const first = equipmentItems[0];
+  const createdAt = nowISO();
   const term: CustodyTerm = {
     id: uid(),
     number: nextCustodyNumber(wh),
-    createdAt: nowISO(),
-    status: input.status ?? 'em_uso',
+    createdAt,
+    status: 'em_uso',
     ...input,
+    workerName: input.workerName.trim(),
+    equipments: equipmentItems,
+    equipmentId: first.equipmentId,
+    equipmentName: first.equipmentName,
+    equipmentPatrimony: first.equipmentPatrimony,
+    equipmentInternalCode: first.equipmentInternalCode,
+    equipmentBrand: first.equipmentBrand,
+    equipmentModel: first.equipmentModel,
+    equipmentSerial: first.equipmentSerial,
+    equipmentPhoto: first.equipmentPhoto,
+    accessories: first.accessories,
+    stateOnDelivery: first.stateOnDelivery,
+    createdBy: normalizeWarehouseActor(actor),
   };
   return setWh(p, {
     custodyTerms: [...wh.custodyTerms, term],
-    equipments: wh.equipments.map(equipment => equipment.id === term.equipmentId
-      ? { ...equipment, status: 'em_uso' as const, updatedAt: nowISO() }
+    equipments: wh.equipments.map(equipment => selectedIds.includes(equipment.id)
+      ? { ...equipment, status: 'em_uso' as const, updatedAt: createdAt, updatedBy: normalizeWarehouseActor(actor) ?? equipment.updatedBy }
       : equipment),
   });
 }
 
-export function returnCustodyTerm(
+export interface CustodyEquipmentReturnInput {
+  stateOnReturn?: string;
+  status?: Exclude<CustodyEquipmentStatus, 'em_uso'>;
+  divergenceNotes?: string;
+  returnedAt?: string;
+  returnAttachments?: WarehouseAttachment[];
+}
+
+export function returnCustodyEquipment(
   project: Project,
   termId: string,
-  data: { stateOnReturn?: string; status?: CustodyTermStatus; divergenceNotes?: string; returnedAt?: string; returnAttachments?: WarehouseAttachment[] },
+  equipmentId: string,
+  data: CustodyEquipmentReturnInput,
+  actor?: WarehouseActorInput,
 ): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
   const term = wh.custodyTerms.find(current => current.id === termId);
-  const nextStatus = data.status === 'danificado' || data.status === 'divergencia'
+  if (!term) throw new Error('Termo de cautela não encontrado.');
+  const currentItems = custodyTermEquipmentItems(term);
+  const currentItem = currentItems.find(item => item.equipmentId === equipmentId);
+  if (!currentItem) throw new Error('Equipamento não encontrado nesta cautela.');
+  if (currentItem.status !== 'em_uso') throw new Error('Este equipamento já teve a devolução registrada.');
+  const returnStatus = data.status ?? 'devolvido';
+  const isException = returnStatus !== 'devolvido';
+  if (isException && !data.divergenceNotes?.trim()) throw new Error('Descreva a ocorrência da devolução.');
+  if (isException && !data.returnAttachments?.length) throw new Error('Adicione ao menos uma foto da ocorrência.');
+  const updatedAt = nowISO();
+  const returnedAt = data.returnedAt ?? todayISO();
+  const equipmentItems = currentItems.map(item => item.equipmentId === equipmentId
+    ? {
+        ...item,
+        returnedAt,
+        stateOnReturn: data.stateOnReturn?.trim() || undefined,
+        divergenceNotes: data.divergenceNotes?.trim() || undefined,
+        returnAttachments: data.returnAttachments,
+        status: returnStatus,
+      }
+    : item);
+  const aggregateStatus = custodyTermAggregateStatus(equipmentItems);
+  const nextStatus = returnStatus === 'danificado' || returnStatus === 'divergencia'
     ? 'em_manutencao' as const
-    : data.status === 'perdido'
+    : returnStatus === 'perdido'
       ? 'arquivado' as const
       : 'disponivel' as const;
   return setWh(p, {
@@ -808,18 +941,40 @@ export function returnCustodyTerm(
       t.id === termId
         ? {
             ...t,
-            returnedAt: data.returnedAt ?? todayISO(),
-            stateOnReturn: data.stateOnReturn,
-            divergenceNotes: data.divergenceNotes,
-            returnAttachments: data.returnAttachments,
-            status: data.status ?? 'devolvido',
+            equipments: equipmentItems,
+            status: aggregateStatus,
+            returnedAt: aggregateStatus === 'parcial' || aggregateStatus === 'em_uso' ? undefined : returnedAt,
+            stateOnReturn: equipmentItems.length === 1 ? data.stateOnReturn?.trim() || undefined : t.stateOnReturn,
+            divergenceNotes: equipmentItems.length === 1 ? data.divergenceNotes?.trim() || undefined : t.divergenceNotes,
+            returnAttachments: equipmentItems.length === 1 ? data.returnAttachments : t.returnAttachments,
+            updatedAt,
+            updatedBy: normalizeWarehouseActor(actor) ?? t.updatedBy,
           }
         : t,
     ),
-    equipments: wh.equipments.map(equipment => equipment.id === term?.equipmentId
-      ? { ...equipment, status: nextStatus, updatedAt: nowISO(), archivedAt: nextStatus === 'arquivado' ? nowISO() : equipment.archivedAt }
+    equipments: wh.equipments.map(equipment => equipment.id === equipmentId
+      ? {
+          ...equipment,
+          status: nextStatus,
+          updatedAt,
+          updatedBy: normalizeWarehouseActor(actor) ?? equipment.updatedBy,
+          archivedAt: nextStatus === 'arquivado' ? updatedAt : equipment.archivedAt,
+        }
       : equipment),
   });
+}
+
+/** Compatibilidade com chamadas antigas de devolução de termo unitário. */
+export function returnCustodyTerm(
+  project: Project,
+  termId: string,
+  data: CustodyEquipmentReturnInput,
+  actor?: WarehouseActorInput,
+): Project {
+  const term = ensureWarehouse(project).warehouse!.custodyTerms.find(current => current.id === termId);
+  if (!term) throw new Error('Termo de cautela não encontrado.');
+  const [item] = custodyTermEquipmentItems(term);
+  return returnCustodyEquipment(project, termId, item.equipmentId, data, actor);
 }
 
 export function updateCustodyTerm(project: Project, id: string, patch: Partial<CustodyTerm>): Project {
@@ -1230,8 +1385,8 @@ export function panelSummary(project: Project): WarehousePanelSummary {
     if (r.planned > 0 && Math.abs(r.planned - r.withdrawn) / r.planned > 0.1) divergence += 1;
   }
   const today = todayISO();
-  const open = wh.custodyTerms.filter(t => t.status === 'em_uso').length;
-  const overdue = wh.custodyTerms.filter(t => t.status === 'em_uso' && t.dueDate && t.dueDate < today).length;
+  const open = wh.custodyTerms.filter(isCustodyTermOpen).length;
+  const overdue = wh.custodyTerms.filter(t => isCustodyTermOpen(t) && t.dueDate && t.dueDate < today).length;
   let invoiceTotal = 0, invoiceOpen = 0, invoiceOverdue = 0, invoicePaid = 0, invoiceOpenCount = 0, invoiceOverdueCount = 0;
   for (const note of wh.fiscalNotes ?? []) {
     if (note.status !== 'aprovada') continue;

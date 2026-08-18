@@ -238,4 +238,12 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     await waitFor(() => expect(replaceMock).toHaveBeenCalledWith('blob:equipment'));
     expect(downloadMock).toHaveBeenLastCalledWith('project-equipment/warehouse/equipment/foto-3.jpg');
   });
+
+  it('mantém somente o cadastro patrimonial sem controles de cautela', () => {
+    render(<WarehouseEquipmentsTab project={project()} onProjectChange={vi.fn()} />);
+
+    expect(screen.getByText('Patrimônio identificado')).toBeInTheDocument();
+    expect(screen.queryByText('Termos de cautela')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Novo termo/i })).not.toBeInTheDocument();
+  });
 });
