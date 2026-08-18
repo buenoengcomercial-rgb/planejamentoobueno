@@ -10,6 +10,7 @@ import {
   restoreWarehouseFromDraft,
   summarizeWarehouseRecovery,
   writeProjectDraft,
+  sanitizeProjectDraft,
 } from './cloudProjectDrafts';
 
 function project(id = 'project-sync'): Project {
@@ -85,6 +86,7 @@ describe('rascunho local seguro', () => {
     const fullStorage = { setItem: () => { throw new DOMException('quota', 'QuotaExceededError'); } } as unknown as Storage;
     expect(() => writeProjectDraft(local, null, fullStorage)).not.toThrow();
     expect(writeProjectDraft(local, null, fullStorage)).toBeNull();
+    expect(JSON.stringify(sanitizeProjectDraft(local))).not.toContain('data:application/pdf');
   });
 
   it('separa atualização segura de conflito remoto', () => {

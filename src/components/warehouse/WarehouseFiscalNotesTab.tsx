@@ -206,6 +206,13 @@ async function uploadFiscalAttachmentsStrict(files: File[], projectId: string): 
   }
 }
 
+async function removeUploadedAttachments(attachments: WarehouseAttachment[] | null): Promise<void> {
+  const paths = attachments?.flatMap(attachment => attachment.storagePath ? [attachment.storagePath] : []) ?? [];
+  if (!paths.length) return;
+  const { error } = await supabase.storage.from('daily-report-photos').remove(paths);
+  if (error) console.warn('Não foi possível remover uploads provisórios.', error);
+}
+
 export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCommitProject, canManage = true, auditActor }: Props) {
   const [group, setGroup] = useState<ViewGroup>('posted');
   const [search, setSearch] = useState('');
@@ -256,6 +263,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
       const next = [...files, ...Array.from(incoming)];
       validateFiles(next);
       setFiles(next);
+      void removeUploadedAttachments(uploadedAttachments);
       setUploadedAttachments(null);
       setUploadOpen(true);
     } catch (error) {
@@ -471,6 +479,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
 
   const requestCloseSelected = () => {
     if (isDraft) {
+      void removeUploadedAttachments(uploadedAttachments);
       setSelected(null);
       setFiles([]);
       setUploadedAttachments(null);
@@ -481,6 +490,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
 
   const openDuplicate = () => {
     if (!duplicate) return;
+    void removeUploadedAttachments(uploadedAttachments);
     setFiles([]);
     setUploadedAttachments(null);
     setSelected(duplicate);
