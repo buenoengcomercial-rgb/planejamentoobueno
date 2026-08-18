@@ -8,6 +8,8 @@ interface Props {
   className?: string;
   confirmedAt?: string | null;
   projectId?: string;
+  live?: boolean;
+  remoteUpdateAt?: string | null;
 }
 
 function timeLabel(value?: string | null) {
@@ -17,7 +19,7 @@ function timeLabel(value?: string | null) {
   return parsed.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
-export default function SaveStatusIndicator({ status, className, confirmedAt, projectId }: Props) {
+export default function SaveStatusIndicator({ status, className, confirmedAt, projectId, live, remoteUpdateAt }: Props) {
   const map = {
     idle:   { icon: Cloud,   text: 'Pronto',          color: 'text-muted-foreground' },
     saving: { icon: Loader2, text: 'Salvando...',     color: 'text-muted-foreground', spin: true },
@@ -30,6 +32,7 @@ export default function SaveStatusIndicator({ status, className, confirmedAt, pr
   const cfg = map[status];
   const Icon = cfg.icon;
   const confirmed = timeLabel(confirmedAt);
+  const remoteUpdated = timeLabel(remoteUpdateAt);
   const shortProjectId = projectId?.slice(0, 8);
   return (
     <div className={cn('flex max-w-[65vw] flex-col items-end text-right text-[11px] leading-tight', cfg.color, className)}>
@@ -42,6 +45,11 @@ export default function SaveStatusIndicator({ status, className, confirmedAt, pr
           {confirmed ? `Confirmado ${confirmed}` : 'Ainda não confirmado'}{shortProjectId ? ` · Obra ${shortProjectId}` : ''}
         </span>
       )}
+      <span className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
+        <span className={cn('h-1.5 w-1.5 rounded-full', live ? 'bg-primary' : 'bg-muted-foreground/50')} />
+        {live ? 'Tempo real ativo' : 'Tempo real reconectando'}
+        {remoteUpdated ? ` · Atualizado por outro usuário ${remoteUpdated}` : ''}
+      </span>
     </div>
   );
 }
