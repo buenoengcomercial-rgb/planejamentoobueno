@@ -4,7 +4,7 @@ import type { Project } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
 import WarehouseEquipmentsTab from './WarehouseEquipmentsTab';
 
-const { invokeMock, uploadMock, downloadMock, openMock, replaceMock, closeMock, successMock, warningMock } = vi.hoisted(() => ({
+const { invokeMock, uploadMock, downloadMock, openMock, replaceMock, closeMock, successMock, warningMock, optimizePhotoMock } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
   uploadMock: vi.fn(),
   downloadMock: vi.fn(),
@@ -13,6 +13,7 @@ const { invokeMock, uploadMock, downloadMock, openMock, replaceMock, closeMock, 
   closeMock: vi.fn(),
   successMock: vi.fn(),
   warningMock: vi.fn(),
+  optimizePhotoMock: vi.fn(),
 }));
 
 vi.mock('@/integrations/supabase/client', () => ({
@@ -24,6 +25,10 @@ vi.mock('@/integrations/supabase/client', () => ({
 
 vi.mock('sonner', () => ({
   toast: { success: successMock, warning: warningMock, error: vi.fn() },
+}));
+
+vi.mock('@/lib/equipmentPhotoOptimization', () => ({
+  optimizeEquipmentPhoto: optimizePhotoMock,
 }));
 
 function project(): Project {
@@ -52,7 +57,9 @@ async function addPhotoAndRead(container: HTMLElement) {
   const file = new File(['foto da bateria'], 'makita.jpeg', { type: 'image/jpeg' });
   const cameraInput = container.querySelector<HTMLInputElement>('input[type="file"]')!;
   fireEvent.change(cameraInput, { target: { files: [file] } });
-  fireEvent.click(screen.getByRole('button', { name: /Ler etiqueta e equipamento com IA/i }));
+  const readButton = screen.getByRole('button', { name: /Ler etiqueta e equipamento com IA/i });
+  await waitFor(() => expect(readButton).toBeEnabled());
+  fireEvent.click(readButton);
 }
 
 describe('WarehouseEquipmentsTab - leitura por IA', () => {
@@ -62,6 +69,7 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     downloadMock.mockReset().mockResolvedValue({ data: new Blob(['foto'], { type: 'image/jpeg' }), error: null });
     successMock.mockReset();
     warningMock.mockReset();
+    optimizePhotoMock.mockReset().mockImplementation(async (file: File) => file);
     replaceMock.mockReset();
     closeMock.mockReset();
     openMock.mockReset().mockReturnValue({ opener: null, location: { replace: replaceMock }, close: closeMock });
@@ -144,11 +152,31 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     expect(await screen.findByText('Foto indisponível')).toBeInTheDocument();
   });
 
-  it('mantém a galeria responsiva em uma, duas e três colunas', () => {
+  it('mantém a galeria compacta e responsiva em até quatro colunas', () => {
     render(<WarehouseEquipmentsTab project={projectWithEquipment({ dataUrl: 'data:image/png;base64,Zm90bw==' })} onProjectChange={vi.fn()} />);
 
-    expect(screen.getByTestId('equipment-gallery')).toHaveClass('grid-cols-1', 'md:grid-cols-2', 'lg:grid-cols-3');
-    expect(screen.getByRole('button', { name: 'Abrir foto de Furadeira de impacto' })).toBeInTheDocument();
+    expect(screen.getByTestId('equipment-gallery')).toHaveClass('grid-cols-1', 'sm:grid-cols-2', 'lg:grid-cols-3', 'xl:grid-cols-4');
+    expect(screen.getByRole('button', { name: 'Abrir foto de Furadeira de impacto' })).toHaveClass('h-28', 'sm:h-32');
+    expect(screen.getByRole('img', { name: 'Furadeira de impacto' })).toHaveAttribute('loading', 'lazy');
+    expect(screen.getByRole('img', { name: 'Furadeira de impacto' })).toHaveAttribute('decoding', 'async');
+  });
+
+  it('usa a mesma foto otimizada na IA e no armazenamento', async () => {
+    const optimized = new File(['foto otimizada'], 'makita.jpg', { type: 'image/jpeg' });
+    optimizePhotoMock.mockResolvedValueOnce(optimized);
+    invokeMock.mockResolvedValue({
+      data: { ok: true, equipment: { description: 'Bateria Makita', serial: 'A00724' } },
+      error: null,
+    });
+    const view = render(<WarehouseEquipmentsTab project={project()} onProjectChange={vi.fn()} />);
+
+    await addPhotoAndRead(view.container);
+    await waitFor(() => expect(invokeMock).toHaveBeenCalled());
+    expect(invokeMock.mock.calls[0][1].body.imageDataUrls[0]).toBe(`data:image/jpeg;base64,${btoa('foto otimizada')}`);
+
+    fireEvent.click(screen.getByRole('button', { name: /Confirmar cadastro/i }));
+    await waitFor(() => expect(uploadMock).toHaveBeenCalled());
+    expect(uploadMock.mock.calls[0][1]).toBe(optimized);
   });
 
   it('abre a foto original ao tocar na miniatura', async () => {
