@@ -12,7 +12,7 @@ function projectWithMaterials(count = 15): Project {
     endDate: '2026-12-31',
     totalBudget: 0,
     phases: [{ id: 'chapter-1', name: 'Prédio 1', color: '#000', tasks: [] }],
-    teams: [{ code: 'alpha', label: 'Alpha', active: true }],
+    teams: [{ code: 'alpha', label: 'Alpha', active: true, composition: 'Ajudante', bgColor: '#eee', textColor: '#111', borderColor: '#999', barColor: '#555' }],
     warehouse: emptyWarehouse(),
   };
   for (let index = 0; index < count; index += 1) {
