@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from 'react';
-import type { CustodyTerm, CustodyTermStatus, Equipment, Project, WarehouseAuditActor } from '@/types/project';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CustodyTerm, CustodyTermStatus, Equipment, Project, WarehouseAttachment, WarehouseAuditActor } from '@/types/project';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Archive, Camera, FileDown, ImagePlus, Loader2, Plus, Printer, Sparkles, Undo2, X } from 'lucide-react';
@@ -12,7 +12,7 @@ import {
   removeEquipment,
   returnCustodyTerm,
 } from '@/lib/warehouse';
-import { openWarehouseAttachment, warehouseAttachmentErrorMessage } from '@/lib/warehouseAttachments';
+import { loadWarehouseAttachmentBlob, openWarehouseAttachment, warehouseAttachmentErrorMessage } from '@/lib/warehouseAttachments';
 import SignaturePad from './SignaturePad';
 import { generateCustodyTermPdf } from './pdf';
 import { supabase } from '@/integrations/supabase/client';
@@ -188,7 +188,7 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
         </div>
       </section>
 
-      <section className="overflow-hidden rounded-md border bg-card"><div className="flex items-center border-b bg-muted/40 p-3"><div><h3 className="font-semibold">Patrimônio identificado</h3><p className="text-xs text-muted-foreground">Cada equipamento tem código interno, foto e histórico.</p></div><Button className="ml-auto" variant="outline" onClick={() => setShowArchived(value => !value)}>{showArchived ? 'Ocultar arquivados' : 'Exibir arquivados'}</Button></div><div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-3">{equipments.map(equipment => <article key={equipment.id} className="overflow-hidden rounded-md border"><button type="button" className="block aspect-[16/8] w-full bg-muted" onClick={() => void openPhoto(equipment)}>{equipment.photos?.[0]?.dataUrl ? <img src={equipment.photos[0].dataUrl} alt={equipment.description || equipment.name} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Abrir foto cadastrada</div>}</button><div className="space-y-2 p-3"><div className="flex justify-between gap-2"><div><div className="text-xs font-bold text-primary">{equipment.internalCode || 'Código legado'}</div><h4 className="font-semibold">{equipment.description || equipment.name}</h4></div><span className="h-fit rounded-full bg-muted px-2 py-1 text-xs">{(equipment.status || 'disponivel').replace('_', ' ')}</span></div><div className="text-sm text-muted-foreground">{[equipment.brand, equipment.model, equipment.serial].filter(Boolean).join(' · ') || 'Identificação pendente'}</div><div className="grid grid-cols-2 gap-2"><Button variant="outline" className="min-h-11" onClick={() => void printLabel(equipment)}><Printer className="mr-2 h-4 w-4" />Etiqueta QR</Button>{!equipment.archivedAt && <Button variant="outline" className="min-h-11 text-destructive" onClick={() => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))}><Archive className="mr-2 h-4 w-4" />Arquivar</Button>}</div></div></article>)}{!equipments.length && <div className="col-span-full p-8 text-center text-sm text-muted-foreground">Nenhum equipamento cadastrado.</div>}</div></section>
+      <section className="overflow-hidden rounded-md border bg-card"><div className="flex items-center border-b bg-muted/40 p-3"><div><h3 className="font-semibold">Patrimônio identificado</h3><p className="text-xs text-muted-foreground">Cada equipamento tem código interno, foto e histórico.</p></div><Button className="ml-auto" variant="outline" onClick={() => setShowArchived(value => !value)}>{showArchived ? 'Ocultar arquivados' : 'Exibir arquivados'}</Button></div><div data-testid="equipment-gallery" className="grid grid-cols-1 gap-3 p-3 md:grid-cols-2 lg:grid-cols-3">{equipments.map(equipment => { const title = equipment.description || equipment.name; return <article key={equipment.id} className="min-w-0 overflow-hidden rounded-md border"><button type="button" className="block aspect-video w-full overflow-hidden bg-muted" aria-label={`Abrir foto de ${title}`} onClick={() => void openPhoto(equipment)}><EquipmentThumbnail attachment={equipment.photos?.[0]} alt={title} /></button><div className="space-y-2 p-3"><div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-bold text-primary">{equipment.internalCode || 'Código legado'}</div><h4 className="break-words font-semibold">{title}</h4></div><span className="h-fit shrink-0 rounded-full bg-muted px-2 py-1 text-xs">{(equipment.status || 'disponivel').replace('_', ' ')}</span></div><div className="break-words text-sm text-muted-foreground">{[equipment.brand, equipment.model, equipment.serial].filter(Boolean).join(' · ') || 'Identificação pendente'}</div><div className="grid grid-cols-2 gap-2"><Button variant="outline" className="min-h-11" onClick={() => void printLabel(equipment)}><Printer className="mr-2 h-4 w-4" />Etiqueta QR</Button>{!equipment.archivedAt && <Button variant="outline" className="min-h-11 text-destructive" onClick={() => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))}><Archive className="mr-2 h-4 w-4" />Arquivar</Button>}</div></div></article>; })}{!equipments.length && <div className="col-span-full p-8 text-center text-sm text-muted-foreground">Nenhum equipamento cadastrado.</div>}</div></section>
 
       <section className="overflow-hidden rounded-md border bg-card"><div className="flex items-center border-b bg-muted/40 p-3"><div><h3 className="font-semibold">Termos de cautela</h3><p className="text-xs text-muted-foreground">Entrega e devolução dos equipamentos da empresa.</p></div><Button className="ml-auto min-h-11" onClick={() => setShowTerm(value => !value)}><Plus className="mr-2 h-4 w-4" />Novo termo</Button></div>{showTerm && <div className="grid gap-3 border-b p-3 md:grid-cols-2"><select aria-label="Equipamento disponível" className="min-h-11 rounded-md border bg-background px-3" value={term.equipmentId} onChange={event => setTerm({ ...term, equipmentId: event.target.value })}><option value="">Escolher equipamento disponível</option>{wh.equipments.filter(equipment => !equipment.archivedAt && (equipment.status ?? 'disponivel') === 'disponivel').map(equipment => <option key={equipment.id} value={equipment.id}>{equipment.internalCode} · {equipment.description || equipment.name}</option>)}</select><Input aria-label="Colaborador que recebeu" className="min-h-11" value={term.workerName} onChange={event => setTerm({ ...term, workerName: event.target.value })} placeholder="Colaborador que recebeu" /><Input aria-label="Data prevista para devolução" className="min-h-11" type="date" value={term.dueDate} onChange={event => setTerm({ ...term, dueDate: event.target.value })} /><Input aria-label="Estado na entrega" className="min-h-11" value={term.stateOnDelivery} onChange={event => setTerm({ ...term, stateOnDelivery: event.target.value })} placeholder="Estado na entrega" /><Input aria-label="Acessórios" className="min-h-11 md:col-span-2" value={term.accessories} onChange={event => setTerm({ ...term, accessories: event.target.value })} placeholder="Acessórios" /><div className="md:col-span-2"><SignaturePad label="Assinatura do recebedor" value={term.sigRec} onChange={sigRec => setTerm({ ...term, sigRec })} /></div><div className="flex justify-end gap-2 md:col-span-2"><Button variant="outline" onClick={() => setShowTerm(false)}>Cancelar</Button><Button onClick={submitTerm}>Emitir termo</Button></div></div>}
         <div className="space-y-2 p-3 md:hidden">{wh.custodyTerms.slice().reverse().map(custody => <article key={custody.id} className="space-y-2 rounded-md border p-3"><div className="flex items-start justify-between gap-2"><div><div className="font-mono text-xs text-primary">{custody.number}</div><div className="font-semibold">{custody.equipmentInternalCode || ''} {custody.equipmentName}</div></div><span className="rounded-full bg-muted px-2 py-1 text-xs">{custody.status.replace('_', ' ')}</span></div><div className="text-sm text-muted-foreground">Recebedor: {custody.workerName}</div><div className="grid grid-cols-2 gap-2"><Button className="min-h-11" variant="outline" onClick={() => generateCustodyTermPdf(project, custody)}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{custody.status === 'em_uso' && <Button className="min-h-11" variant="outline" onClick={() => setReturnFor(custody)}><Undo2 className="mr-1 h-4 w-4" />Devolver</Button>}</div></article>)}{!wh.custodyTerms.length && <div className="p-5 text-center text-sm text-muted-foreground">Nenhum termo emitido.</div>}</div>
@@ -203,6 +203,48 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
 
 function EquipmentField({ label, value, confidence, onChange }: { label: string; value: string; confidence?: number; onChange: (value: string) => void }) {
   return <div><label className="mb-1 flex items-center justify-between text-xs font-semibold"><span>{label}</span>{confidence != null && <span className={confidence < 0.6 ? 'text-warning' : 'text-success'}>IA {Math.round(confidence * 100)}%</span>}</label><Input aria-label={label} className="min-h-11" value={value} onChange={event => onChange(event.target.value)} /></div>;
+}
+
+function EquipmentThumbnail({ attachment, alt }: { attachment?: WarehouseAttachment; alt: string }) {
+  const [source, setSource] = useState(attachment?.dataUrl);
+  const [status, setStatus] = useState<'empty' | 'loading' | 'ready' | 'error'>(
+    attachment?.dataUrl ? 'ready' : attachment ? 'loading' : 'empty',
+  );
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | undefined;
+    if (!attachment) {
+      setSource(undefined);
+      setStatus('empty');
+      return () => { active = false; };
+    }
+    if (attachment.dataUrl) {
+      setSource(attachment.dataUrl);
+      setStatus('ready');
+      return () => { active = false; };
+    }
+    setSource(undefined);
+    setStatus('loading');
+    void loadWarehouseAttachmentBlob(attachment)
+      .then(blob => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(blob);
+        setSource(objectUrl);
+        setStatus('ready');
+      })
+      .catch(() => {
+        if (active) setStatus('error');
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [attachment]);
+
+  if (status === 'ready' && source) return <img src={source} alt={alt} className="h-full w-full object-cover" loading="lazy" decoding="async" />;
+  if (status === 'loading') return <span className="flex h-full items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Carregando foto</span>;
+  return <span className="flex h-full items-center justify-center px-3 text-center text-sm text-muted-foreground">{status === 'error' ? 'Foto indisponível' : 'Equipamento sem foto'}</span>;
 }
 
 function EquipmentPhoto({ file, onRemove }: { file: File; onRemove: () => void }) {
