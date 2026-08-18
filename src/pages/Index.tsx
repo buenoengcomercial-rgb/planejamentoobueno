@@ -171,6 +171,7 @@ export default function Index() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [currentProjectUpdatedAt, setCurrentProjectUpdatedAt] = useState<string | null>(null);
   const [lastCloudConfirmedAt, setLastCloudConfirmedAt] = useState<string | null>(null);
+  const [remoteUpdateAt, setRemoteUpdateAt] = useState<string | null>(null);
   const [draftRecovery, setDraftRecovery] = useState<DraftRecoveryState | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
