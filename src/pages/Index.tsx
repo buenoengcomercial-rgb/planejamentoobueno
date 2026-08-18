@@ -60,6 +60,7 @@ import {
   type StoredProjectDraft,
 } from '@/lib/cloudProjectDrafts';
 import type { ProjectMeta } from '@/lib/projectStorage';
+import { supabase } from '@/integrations/supabase/client';
 
 const UNDO_LIMIT = 20;
 const SAVE_DEBOUNCE_MS = 4000;
@@ -203,6 +204,7 @@ export default function Index() {
   const skipNextAutoSaveRef = useRef(false);
   const conflictDetectedRef = useRef(false);
   const remoteCheckInFlightRef = useRef(false);
+  const realtimeRefreshTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const mainScrollRef = useRef<HTMLElement | null>(null);
   const restoredUiSessionRef = useRef<string | null>(null);
   const uiSessionSaverReadyRef = useRef<string | null>(null);
@@ -591,6 +593,68 @@ export default function Index() {
       remoteCheckInFlightRef.current = false;
     }
   }, [handleCloudConflict, replaceProjectWithoutAutoSave]);
+
+  const refreshProjectFromRealtime = useCallback(async () => {
+    const current = rawProjectRef.current;
+    if (!current || !initialLoadRef.current || remoteCheckInFlightRef.current) return;
+    if (saveTimerRef.current || inFlightSaveRef.current) {
+      realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(), 1200);
+      return;
+    }
+    remoteCheckInFlightRef.current = true;
+    try {
+      const latestLocal = rawProjectRef.current;
+      if (!latestLocal || latestLocal.id !== current.id) return;
+      if (projectHasLocalChanges(latestLocal, lastSavedProjectJsonRef.current)) {
+        await handleCloudConflict(latestLocal);
+        return;
+      }
+      const record = await loadCloudProjectRecord(current.id);
+      if (!record) return;
+      replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false);
+    } catch (error) {
+      console.warn('Falha ao aplicar atualização em tempo real.', error);
+      setSaveStatus(navigator.onLine ? 'error' : 'offline');
+    } finally {
+      remoteCheckInFlightRef.current = false;
+    }
+  }, [handleCloudConflict, replaceProjectWithoutAutoSave]);
+
+  useEffect(() => {
+    const projectId = rawProject?.id;
+    if (!projectId || bootLoading) return;
+    const queueRefresh = () => {
+      if (realtimeRefreshTimerRef.current) window.clearTimeout(realtimeRefreshTimerRef.current);
+      realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(), 1200);
+    };
+    const channel = supabase.channel(`project-live:${projectId}`);
+    channel.on('postgres_changes', {
+      event: '*', schema: 'public', table: 'projects', filter: `id=eq.${projectId}`,
+    }, queueRefresh);
+    const normalizedTables = [
+      'warehouse_movements', 'warehouse_requisitions', 'warehouse_custody',
+      'daily_reports', 'task_daily_logs', 'measurements', 'additives', 'audit_logs',
+      'stock_movements', 'material_price_history', 'budget_items', 'material_comparisons',
+      'analytic_compositions', 'eap_chapters', 'tasks',
+    ] as const;
+    normalizedTables.forEach(table => {
+      channel.on('postgres_changes', {
+        event: '*', schema: 'public', table, filter: `project_id=eq.${projectId}`,
+      }, queueRefresh);
+    });
+    channel.subscribe(status => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn(`[realtime] Canal da obra ${projectId} indisponível: ${status}`);
+      }
+    });
+    return () => {
+      if (realtimeRefreshTimerRef.current) {
+        window.clearTimeout(realtimeRefreshTimerRef.current);
+        realtimeRefreshTimerRef.current = null;
+      }
+      void supabase.removeChannel(channel);
+    };
+  }, [bootLoading, rawProject?.id, refreshProjectFromRealtime]);
 
   useEffect(() => {
     if (!rawProject?.id || bootLoading) return;
