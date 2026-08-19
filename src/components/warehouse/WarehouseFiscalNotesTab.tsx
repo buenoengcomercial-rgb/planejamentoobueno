@@ -249,10 +249,23 @@ async function renderPdfPreview(blob: Blob): Promise<string[]> {
 
 /** Compacta as fotos antes de enviar à IA, reduzindo tokens de imagem. */
 async function photoDataUrlsForAi(files: File[]): Promise<string[]> {
-  const optimized = await Promise.all(files.slice(0, MAX_IMAGES).map(file => optimizeEquipmentPhoto(file)));
+  const optimized = await Promise.all(files.slice(0, MAX_IMAGES).map(async file => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        optimizeEquipmentPhoto(file),
+        new Promise<File>(resolve => { timer = setTimeout(() => resolve(file), 4000); }),
+      ]);
+    } catch {
+      return file;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }));
   const urls = await Promise.all(optimized.map(readFileAsDataURL));
   return urls.filter(Boolean);
 }
+
 
 /** Evita chamadas duplicadas à IA para o mesmo documento (economia de créditos). */
 const aiReadInFlight = new Map<string, Promise<ParsedNote>>();
