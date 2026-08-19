@@ -102,7 +102,7 @@ export function classifyFiscalDocumentText(text?: string): WarehouseFiscalDocume
   return 'outro';
 }
 
-type FiscalGlobalCostNote = Pick<WarehouseFiscalNote, 'items' | 'freightAmount' | 'icmsAmount'>;
+type FiscalGlobalCostNote = Pick<WarehouseFiscalNote, 'items' | 'freightAmount' | 'icmsAmount'> & { totalAmount?: number };
 
 function moneyCents(value?: number): number {
   return Math.round((Number(value) || 0) * 100);
@@ -129,19 +129,29 @@ export function fiscalItemConversionFactor(item: Pick<WarehouseFiscalNoteItem, '
   return Number.isFinite(factor) && factor > 0 ? factor : 1;
 }
 
-/** Rateia os adicionais em centavos e entrega qualquer residuo aos maiores restos fracionarios. */
+/**
+ * Reconcilia o subtotal dos itens com o valor informado na NF e rateia frete e
+ * ICMS/DIFAL em centavos. O resultado faz a soma dos itens fechar exatamente
+ * em valor da NF + adicionais, inclusive quando a leitura dos itens divergir.
+ */
 export function fiscalNoteAllocatedExtras(note: FiscalGlobalCostNote): number[] {
   const weights = note.items.map(item => Math.max(0, moneyCents(item.totalPrice)));
   const baseCents = weights.reduce((sum, value) => sum + value, 0);
-  const extraCents = Math.max(0, moneyCents(note.freightAmount) + moneyCents(note.icmsAmount));
-  if (baseCents <= 0 || extraCents <= 0) return note.items.map(() => 0);
-  const raw = weights.map(weight => extraCents * weight / baseCents);
-  const allocated = raw.map(value => Math.floor(value));
-  let remainder = extraCents - allocated.reduce((sum, value) => sum + value, 0);
-  const order = raw.map((value, index) => ({ index, fraction: value - Math.floor(value) }))
-    .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
-  for (let cursor = 0; remainder > 0 && order.length; cursor += 1, remainder -= 1) {
-    allocated[order[cursor % order.length].index] += 1;
+  const informedCents = moneyCents(note.totalAmount);
+  const fiscalBaseCents = informedCents > 0 ? informedCents : baseCents;
+  const targetCents = fiscalBaseCents + Math.max(0, moneyCents(note.freightAmount)) + Math.max(0, moneyCents(note.icmsAmount));
+  const adjustmentCents = targetCents - baseCents;
+  if (baseCents <= 0 || adjustmentCents === 0) return note.items.map(() => 0);
+  const raw = weights.map(weight => adjustmentCents * weight / baseCents);
+  const allocated = raw.map(value => adjustmentCents > 0 ? Math.floor(value) : Math.ceil(value));
+  let remainder = adjustmentCents - allocated.reduce((sum, value) => sum + value, 0);
+  const order = raw.map((value, index) => ({
+    index,
+    fraction: adjustmentCents > 0 ? value - Math.floor(value) : Math.ceil(value) - value,
+  })).sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+  for (let cursor = 0; remainder !== 0 && order.length; cursor += 1) {
+    allocated[order[cursor % order.length].index] += remainder > 0 ? 1 : -1;
+    remainder += remainder > 0 ? -1 : 1;
   }
   return allocated.map(value => value / 100);
 }
@@ -164,7 +174,9 @@ export function fiscalItemGlobalUnitPrice(item: Pick<WarehouseFiscalNoteItem, 'q
 
 export function fiscalNoteCostReviewStatus(note: Pick<WarehouseFiscalNote, 'supplierState' | 'destinationState' | 'costReviewStatus' | 'costReviewedAt' | 'freightAmount' | 'icmsAmount'>) {
   const supplierState = note.supplierState?.trim().toUpperCase();
-  const destinationState = note.destinationState?.trim().toUpperCase();
+  // A operação do ObraPlanner atende obras em Rondônia. O fallback mantém notas
+  // antigas compatíveis mesmo antes de a fotografia da UF passar a ser gravada.
+  const destinationState = note.destinationState?.trim().toUpperCase() || 'RO';
   if (!supplierState || !destinationState) return 'unknown_origin' as const;
   if (supplierState === destinationState) return 'not_required' as const;
   if (note.costReviewStatus === 'confirmed' && note.costReviewedAt && note.freightAmount != null && note.icmsAmount != null) return 'confirmed' as const;

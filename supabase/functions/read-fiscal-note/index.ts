@@ -76,8 +76,9 @@ Retorne APENAS JSON valido neste formato:
 Regras:
 - Primeiro classifique o documento. Pedido de venda, pedido de compra, orcamento, proposta e recibo NAO sao nota fiscal e nunca devem ser classificados como NF-e.
 - Use "nfe", "nfce" ou "cupom_fiscal" apenas quando houver evidencia fiscal clara (DANFE, chave de acesso, NFC-e ou cupom fiscal de compra).
+- Avalie o cabecalho e o endereco do emitente para identificar a UF do fornecedor. Procure especialmente a linha do municipio/UF, o campo UF e o endereco ao lado do CNPJ.
 - Leia fornecedor, CNPJ, UF do endereco do emitente, numero da nota, data de emissao, valor total e itens.
-- supplierState deve conter apenas a sigla brasileira de duas letras quando estiver legivel; nunca deduza a UF apenas pelo CNPJ.
+- supplierState deve conter apenas a sigla brasileira de duas letras quando estiver legivel no endereco do emitente; nunca use a UF do destinatario e nunca deduza a UF apenas pelo CNPJ.
 - Para CADA item extraia o codigo da coluna "COD. PROD.", "Cod. Prod.", "Codigo", "Cod.", "Ref." ou similar como "productCode" — esse codigo e essencial.
 - Leia tambem a secao FATURA/DUPLICATAS/COBRANCA/PARCELAS quando existir e devolva no array "invoices" cada parcela com numero (ex.: 001, 002), data de vencimento e valor. Se houver apenas uma cobranca/boleto, devolva uma unica linha em "invoices". "paymentMethod" pode ser "Boleto", "PIX", "Cartao", "A vista", etc., quando explicitado.
 - Se a nota nao trouxer faturas, devolva "invoices": [].

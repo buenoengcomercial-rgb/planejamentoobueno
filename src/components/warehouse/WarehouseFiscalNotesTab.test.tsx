@@ -114,6 +114,7 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
         note: {
           supplierName: 'FREITAS & CIA LTDA',
           supplierCnpj: '02.179.328/0001-42',
+          supplierState: 'SP',
           invoiceNumber: '1.301.412',
           issueDate: '2026-08-14',
           totalAmount: 85.63,
@@ -164,9 +165,11 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.queryByText(/Documento não fiscal/i)).not.toBeInTheDocument();
     const dialog = screen.getByRole('dialog');
     const headers = within(dialog).getAllByRole('columnheader').map(header => header.textContent);
-    expect(headers).toEqual(expect.arrayContaining(['Cód. prod.', 'Descrição', 'Qtd. NF', 'Un. NF', 'V. unit. NF', 'Total NF', 'Qtd. estoque', 'Un. estoque', 'Fator', 'V. unit. global', 'V. total global', 'Grupo de compra']));
-    expect(within(dialog).getAllByRole('combobox')).not.toHaveLength(0);
-    within(dialog).getAllByRole('combobox').forEach(combobox => expect(combobox).toBeEnabled());
+    expect(headers).toEqual(expect.arrayContaining(['Cód. prod.', 'Descrição', 'Qtd. NF', 'Un. NF', 'V. unit. NF', 'Total NF', 'V. unit. global', 'V. total global', 'Grupo de compra']));
+    expect(headers).not.toEqual(expect.arrayContaining(['Qtd. estoque', 'Un. estoque', 'Fator']));
+    expect(within(dialog).getByRole('combobox', { name: 'UF do fornecedor' })).toBeEnabled();
+    expect(within(dialog).getByRole('combobox', { name: 'UF da obra' })).toBeDisabled();
+    expect(within(dialog).getByRole('combobox', { name: 'UF da obra' })).toHaveTextContent('RO');
   });
 
   it('lê a nota e permite lançar sem classificação orçamentária', async () => {
@@ -181,6 +184,9 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.queryByRole('combobox', { name: /Insumo do orçamento para/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Confirmação pendente')).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText('Por que não estava previsto?')).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'UF do fornecedor' })).toHaveTextContent('SP');
+    expect(screen.getByRole('combobox', { name: 'UF da obra' })).toHaveTextContent('RO');
+    expect(screen.getByRole('combobox', { name: 'UF da obra' })).toBeDisabled();
   });
 
   it('fecha pelo X e cancela o envio sem criar registro, material ou movimento', async () => {

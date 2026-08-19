@@ -14,6 +14,7 @@ import {
   ensureWarehouse,
   findFiscalNoteDuplicate,
   fiscalItemConversionFactor,
+  fiscalItemGlobalTotal,
   fiscalItemGlobalUnitPrice,
   fiscalItemStockQuantity,
   fiscalNoteAllocatedExtras,
@@ -299,10 +300,21 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(allocated.reduce((sum, value) => sum + value, 0)).toBe(0.01);
   });
 
+  it('soma frete e ICMS ao subtotal e dilui exatamente o custo entre os materiais', () => {
+    const totals = [1208, 945.12, 2090.2, 1024.8, 999.18];
+    const items = totals.map((totalPrice, index) => ({ ...note().items[0], id: `item-${index}`, totalPrice }));
+    const costNote = { items, totalAmount: 6567.3, freightAmount: 300, icmsAmount: 3000 };
+    const globalTotals = items.map(item => fiscalItemGlobalTotal(item, costNote));
+    expect(globalTotals.reduce((sum, value) => sum + value, 0)).toBeCloseTo(9867.3, 2);
+    expect(fiscalNoteAllocatedExtras(costNote).reduce((sum, value) => sum + value, 0)).toBe(3600);
+  });
+
   it('classifica pendência interestadual e aceita confirmação explícita em zero', () => {
     expect(fiscalNoteCostReviewStatus(note())).toBe('unknown_origin');
     expect(fiscalNoteCostReviewStatus(note({ supplierState: 'RO', destinationState: 'RO' }))).toBe('not_required');
     expect(fiscalNoteCostReviewStatus(note({ supplierState: 'SP', destinationState: 'RO' }))).toBe('pending');
+    expect(fiscalNoteCostReviewStatus(note({ supplierState: 'RO', destinationState: undefined }))).toBe('not_required');
+    expect(fiscalNoteCostReviewStatus(note({ supplierState: 'SP', destinationState: undefined }))).toBe('pending');
     expect(fiscalNoteCostReviewStatus(note({ supplierState: 'SP', destinationState: 'RO', freightAmount: 0, icmsAmount: 0, costReviewStatus: 'confirmed', costReviewedAt: '2026-08-18T10:00:00.000Z' }))).toBe('confirmed');
   });
 

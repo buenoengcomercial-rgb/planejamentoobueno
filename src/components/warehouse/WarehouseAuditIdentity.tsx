@@ -10,9 +10,9 @@ interface Props {
 
 export default function WarehouseAuditIdentity({ createdBy, updatedBy, legacyCreatedBy, className }: Props) {
   return (
-    <div className={className}>
-      <div><span className="text-muted-foreground">Incluído por:</span> {warehouseActorName(createdBy, legacyCreatedBy)}</div>
-      <div><span className="text-muted-foreground">Alterado por:</span> {updatedBy ? warehouseActorName(updatedBy) : '—'}</div>
+    <div className={`min-w-0 break-words leading-tight [overflow-wrap:anywhere] ${className || ''}`}>
+      <div className="min-w-0"><span className="text-muted-foreground">Incluído por:</span> {warehouseActorName(createdBy, legacyCreatedBy)}</div>
+      <div className="min-w-0"><span className="text-muted-foreground">Alterado por:</span> {updatedBy ? warehouseActorName(updatedBy) : '—'}</div>
     </div>
   );
 }

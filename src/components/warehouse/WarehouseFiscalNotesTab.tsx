@@ -66,7 +66,6 @@ import {
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { loadObraConfig } from '@/components/ConfiguracaoObra';
 import { ESTADOS_BRASIL } from '@/lib/feriados';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
@@ -88,6 +87,7 @@ type ParsedNote = Partial<Pick<WarehouseFiscalNote,
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_IMAGES = 4;
+const DESTINATION_STATE = 'RO';
 const ACCEPTED = ['pdf', 'png', 'jpg', 'jpeg', 'webp'];
 
 function money(value?: number) {
@@ -281,7 +281,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const archivedLegacyDraftIdsRef = useRef(new Set<string>());
-  const destinationState = useMemo(() => normalizeState(loadObraConfig().uf), []);
+  const destinationState = DESTINATION_STATE;
   const notes = useMemo(() => project.warehouse?.fiscalNotes ?? [], [project.warehouse?.fiscalNotes]);
   const purchaseGroups = useMemo(() => (project.materialComparisons ?? [])
     .map(comparison => ({ id: comparison.id, name: comparison.name }))
@@ -306,7 +306,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const isArchived = selected?.status === 'rejeitada' || selected?.status === 'cancelada';
   const canEditSelectedCosts = !!selected && (!!isDraft || (!!isPosted && canReviewCosts));
   const selectedItemsSubtotal = selected?.items.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0) ?? 0;
-  const selectedGlobalCost = selectedItemsSubtotal + Number(selected?.freightAmount || 0) + Number(selected?.icmsAmount || 0);
+  const selectedGlobalCost = Number(selected?.totalAmount || selectedItemsSubtotal) + Number(selected?.freightAmount || 0) + Number(selected?.icmsAmount || 0);
   const cancelCheck = isPosted && selected ? checkFiscalNoteCancellation(project, selected.id) : null;
   useEffect(() => {
     if (!canManage) return;
@@ -564,7 +564,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     setFiles([]);
     setUploadedAttachments(null);
     setUploadOpen(false);
-    setSelected(duplicate);
+    setSelected({ ...duplicate, destinationState: DESTINATION_STATE });
   };
 
   const savePostedCosts = async () => {
@@ -573,7 +573,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
       setProcessing(true);
       const next = reviewPostedFiscalNoteCosts(project, selected.id, {
         supplierState: selected.supplierState,
-        destinationState: selected.destinationState,
+        destinationState: DESTINATION_STATE,
         freightAmount: selected.freightAmount,
         icmsAmount: selected.icmsAmount,
         confirmCosts: true,
@@ -634,13 +634,13 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
       )}
 
       <div className="space-y-2 md:hidden">
-        {visible.map((note, index) => <NoteCard key={note.id} note={note} sequence={visible.length - index} onOpen={() => { setExpandedItemId(null); setSelected(note); }} onOpenAttachment={() => void openOriginalDocument(note)} />)}
+        {visible.map((note, index) => <NoteCard key={note.id} note={note} sequence={visible.length - index} onOpen={() => { setExpandedItemId(null); setSelected({ ...note, destinationState: DESTINATION_STATE }); }} onOpenAttachment={() => void openOriginalDocument(note)} />)}
       </div>
       <div className="hidden overflow-hidden rounded-lg border bg-card md:block">
         <table className="w-full table-fixed text-xs">
-          <colgroup><col className="w-[20%]" /><col className="w-[4%]" /><col className="w-[14%]" /><col className="w-[9%]" /><col className="w-[8%]" /><col className="w-[5%]" /><col className="w-[9%]" /><col className="w-[8%]" /><col className="w-[14%]" /><col className="w-[9%]" /></colgroup>
-          <thead className="bg-muted text-muted-foreground"><tr><th className="p-2 text-left">Fornecedor</th><th className="w-14 p-2 text-center">Nº</th><th className="p-2 text-left">CNPJ</th><th className="p-2 text-left">Nota</th><th className="p-2 text-left">Data</th><th className="p-2 text-center">Itens</th><th className="p-2 text-right">Valor</th><th className="p-2 text-left">Status</th><th className="min-w-44 p-2 text-left">Incluído / alterado por</th><th className="p-2 text-center">Ações</th></tr></thead>
-          <tbody>{visible.map((note, index) => <tr key={note.id} className="border-t hover:bg-muted/30"><td className="p-2 font-medium">{note.supplierName || '—'}</td><td className="p-2 text-center font-mono font-semibold text-primary">{visible.length - index}</td><td className="p-2 font-mono text-muted-foreground">{note.supplierCnpj || '—'}</td><td className="p-2">{note.invoiceNumber || '—'}</td><td className="p-2">{note.issueDate ? note.issueDate.split('-').reverse().join('/') : '—'}</td><td className="p-2 text-center tabular-nums">{note.items.length}</td><td className="p-2 text-right font-semibold">{money(note.totalAmount)}</td><td className="p-2"><div className="space-y-1"><StatusBadge note={note} /><CostReviewBadge note={note} /></div></td><td className="p-2"><WarehouseAuditIdentity createdBy={note.createdBy} updatedBy={note.updatedBy} legacyCreatedBy={note.stockPostedBy} className="space-y-0.5 text-[11px]" /></td><td className="p-2"><div className="flex items-center justify-center gap-1"><Button size="icon" variant="ghost" className="h-8 w-8" title="Abrir documento original" aria-label="Abrir documento original" onClick={() => void openOriginalDocument(note)}><Eye className="h-4 w-4" /></Button><Button size="icon" variant="ghost" className="h-8 w-8" title="Visualizar dados e grupos" aria-label="Visualizar dados e grupos" onClick={() => { setExpandedItemId(null); setSelected(note); }}><Pencil className="h-4 w-4" /></Button>{canManage && note.status === 'aprovada' && <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" title="Cancelar lançamento" aria-label="Cancelar lançamento" onClick={() => { setSelected(note); setCancelOpen(true); }}><Ban className="h-4 w-4" /></Button>}</div></td></tr>)}</tbody>
+          <colgroup><col className="w-[18%]" /><col className="w-[4%]" /><col className="w-[13%]" /><col className="w-[9%]" /><col className="w-[8%]" /><col className="w-[5%]" /><col className="w-[9%]" /><col className="w-[9%]" /><col className="w-[17%]" /><col className="w-[8%]" /></colgroup>
+          <thead className="bg-muted text-muted-foreground"><tr><th className="p-2 text-left">Fornecedor</th><th className="w-14 p-2 text-center">Nº</th><th className="p-2 text-left">CNPJ</th><th className="p-2 text-left">Nota</th><th className="p-2 text-left">Data</th><th className="p-2 text-center">Itens</th><th className="p-2 text-right">Valor</th><th className="p-2 text-left">Status</th><th className="whitespace-normal p-2 text-left leading-tight">Incluído / alterado por</th><th className="p-2 text-center">Ações</th></tr></thead>
+          <tbody>{visible.map((note, index) => <tr key={note.id} className="border-t hover:bg-muted/30"><td className="p-2 font-medium">{note.supplierName || '—'}</td><td className="p-2 text-center font-mono font-semibold text-primary">{visible.length - index}</td><td className="p-2 font-mono text-muted-foreground">{note.supplierCnpj || '—'}</td><td className="p-2">{note.invoiceNumber || '—'}</td><td className="p-2">{note.issueDate ? note.issueDate.split('-').reverse().join('/') : '—'}</td><td className="p-2 text-center tabular-nums">{note.items.length}</td><td className="p-2 text-right font-semibold">{money(note.totalAmount)}</td><td className="p-2"><div className="space-y-1"><StatusBadge note={note} /><CostReviewBadge note={note} /></div></td><td className="overflow-hidden p-2 align-top"><WarehouseAuditIdentity createdBy={note.createdBy} updatedBy={note.updatedBy} legacyCreatedBy={note.stockPostedBy} className="space-y-0.5 text-[11px]" /></td><td className="p-2"><div className="flex items-center justify-center gap-1"><Button size="icon" variant="ghost" className="h-8 w-8" title="Abrir documento original" aria-label="Abrir documento original" onClick={() => void openOriginalDocument(note)}><Eye className="h-4 w-4" /></Button><Button size="icon" variant="ghost" className="h-8 w-8" title="Visualizar dados e grupos" aria-label="Visualizar dados e grupos" onClick={() => { setExpandedItemId(null); setSelected({ ...note, destinationState: DESTINATION_STATE }); }}><Pencil className="h-4 w-4" /></Button>{canManage && note.status === 'aprovada' && <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" title="Cancelar lançamento" aria-label="Cancelar lançamento" onClick={() => { setSelected({ ...note, destinationState: DESTINATION_STATE }); setCancelOpen(true); }}><Ban className="h-4 w-4" /></Button>}</div></td></tr>)}</tbody>
         </table>
       </div>
       {!visible.length && <WarehouseEmptyState message="Nenhum documento nesta área" hint={group === 'posted' ? 'Envie um arquivo para começar.' : 'Documentos arquivados aparecerão aqui.'} icon={FileText} />}
@@ -673,15 +673,15 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
                 <Field label="Número da nota" value={selected.invoiceNumber} readOnly={!isDraft} onChange={value => setSelected({ ...selected, invoiceNumber: value })} />
                 <Field label="Data de emissão" type="date" value={selected.issueDate} readOnly={!isDraft} onChange={value => setSelected({ ...selected, issueDate: value })} />
                 <StateSelect label="UF do fornecedor" value={selected.supplierState} disabled={!canEditSelectedCosts} onChange={value => setSelected({ ...selected, supplierState: value })} />
-                <StateSelect label="UF da obra" value={selected.destinationState} disabled={!canEditSelectedCosts} onChange={value => setSelected({ ...selected, destinationState: value })} />
+                <StateSelect label="UF da obra" value={DESTINATION_STATE} disabled onChange={() => undefined} />
                 <div className="sm:col-span-2"><MoneyInput label="Valor informado na NF" value={selected.totalAmount} readOnly={!isDraft} onChange={value => setSelected({ ...selected, totalAmount: value ?? 0 })} /></div>
               </div>
 
               <section>
                 <div className="mb-2 flex items-center justify-between"><h3 className="font-semibold">Itens do documento ({selected.items.length})</h3>{isDraft && <Button size="sm" variant="outline" onClick={() => setSelected({ ...selected, items: [...selected.items, newItem()] })}><Plus className="mr-1 h-4 w-4" />Adicionar item</Button>}</div>
                 <div className="hidden overflow-x-auto rounded-md border md:block">
-                  <table className="min-w-[1480px] w-full text-xs">
-                    <thead className="bg-muted text-muted-foreground"><tr><th className="h-11 p-2 text-left align-middle">Cód. prod.</th><th className="h-11 min-w-64 p-2 text-left align-middle">Descrição</th><th className="h-11 p-2 text-center align-middle">Qtd. NF</th><th className="h-11 p-2 text-center align-middle">Un. NF</th><th className="h-11 p-2 text-center align-middle">V. unit. NF</th><th className="h-11 p-2 text-center align-middle">Total NF</th><th className="h-11 p-2 text-center align-middle">Qtd. estoque</th><th className="h-11 p-2 text-center align-middle">Un. estoque</th><th className="h-11 p-2 text-center align-middle">Fator</th><th className="h-11 p-2 text-center align-middle">V. unit. global</th><th className="h-11 p-2 text-center align-middle">V. total global</th><th className="h-11 min-w-52 p-2 text-left align-middle">Grupo de compra</th>{isDraft && <th className="h-11 p-2" />}</tr></thead>
+                  <table className={`${isDraft ? 'min-w-[1480px]' : 'min-w-[1080px]'} w-full text-xs`}>
+                    <thead className="bg-muted text-muted-foreground"><tr><th className="h-11 p-2 text-left align-middle">Cód. prod.</th><th className="h-11 min-w-64 p-2 text-left align-middle">Descrição</th><th className="h-11 p-2 text-center align-middle">Qtd. NF</th><th className="h-11 p-2 text-center align-middle">Un. NF</th><th className="h-11 p-2 text-center align-middle">V. unit. NF</th><th className="h-11 p-2 text-center align-middle">Total NF</th>{isDraft && <><th className="h-11 p-2 text-center align-middle">Qtd. estoque</th><th className="h-11 p-2 text-center align-middle">Un. estoque</th><th className="h-11 p-2 text-center align-middle">Fator</th></>}<th className="h-11 p-2 text-center align-middle">V. unit. global</th><th className="h-11 p-2 text-center align-middle">V. total global</th><th className="h-11 min-w-52 p-2 text-left align-middle">Grupo de compra</th>{isDraft && <th className="h-11 p-2" />}</tr></thead>
                     <tbody>{selected.items.map((item, index) => <ItemTableRow key={item.id} note={selected} item={item} index={index} editable={!!isDraft} groupEditable={canManage && !isArchived} purchaseGroups={purchaseGroups} onUpdate={updateItem} onGroupChange={value => updatePurchaseGroup(selected, item, value)} onRemove={() => setSelected({ ...selected, items: selected.items.filter((_, itemIndex) => itemIndex !== index) })} />)}</tbody>
                   </table>
                 </div>
@@ -690,7 +690,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
               </section>
 
               <section className="space-y-3 rounded-md border p-3">
-                <div><h3 className="font-semibold">Composição do custo global</h3><p className="text-xs text-muted-foreground">Informe somente frete e ICMS/DIFAL adicionais que ainda não estejam incorporados ao preço dos itens.</p></div>
+                <div><h3 className="font-semibold">Composição do custo global</h3><p className="text-xs text-muted-foreground">Custo global = valor informado na NF + frete adicional + ICMS/DIFAL adicional. O total é rateado proporcionalmente entre todos os materiais da nota.</p></div>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                   <MoneyValue label="Subtotal dos itens" value={selectedItemsSubtotal} />
                   <MoneyInput label="Frete adicional" value={selected.freightAmount} readOnly={!canEditSelectedCosts} onChange={value => setSelected({ ...selected, freightAmount: value })} />
@@ -767,7 +767,7 @@ function MoneyValue({ label, value, strong = false }: { label: string; value: nu
 }
 
 function StateSelect({ label, value, disabled, onChange }: { label: string; value?: string; disabled: boolean; onChange: (value?: string) => void }) {
-  return <div><label className="mb-1 block text-sm font-medium">{label}</label><Select value={value || '__unknown__'} disabled={disabled} onValueChange={next => onChange(next === '__unknown__' ? undefined : next)}><SelectTrigger className="min-h-11"><SelectValue placeholder="Selecione" /></SelectTrigger><SelectContent><SelectItem value="__unknown__">Não identificada</SelectItem>{ESTADOS_BRASIL.map(state => <SelectItem key={state.uf} value={state.uf}>{state.uf} — {state.nome}</SelectItem>)}</SelectContent></Select></div>;
+  return <div><label className="mb-1 block text-sm font-medium">{label}</label><Select value={value || '__unknown__'} disabled={disabled} onValueChange={next => onChange(next === '__unknown__' ? undefined : next)}><SelectTrigger aria-label={label} className="min-h-11"><SelectValue placeholder="Selecione" /></SelectTrigger><SelectContent><SelectItem value="__unknown__">Não identificada</SelectItem>{ESTADOS_BRASIL.map(state => <SelectItem key={state.uf} value={state.uf}>{state.uf} — {state.nome}</SelectItem>)}</SelectContent></Select></div>;
 }
 
 function StatusBadge({ note }: { note: WarehouseFiscalNote }) {
@@ -885,9 +885,9 @@ function ItemTableRow({ note, item, index, editable, groupEditable, purchaseGrou
     <td className="p-1 align-middle"><Input className="min-h-11 min-w-20 text-center text-base" value={item.unit || 'UN'} readOnly={!editable} onChange={event => onUpdate(index, { unit: event.target.value, stockUnit: fiscalItemStockUnit(item) === (item.unit || 'UN') ? event.target.value : item.stockUnit })} /></td>
     <td className="p-1 align-middle"><MoneyInput value={item.unitPrice} readOnly={!editable} onChange={unitPrice => onUpdate(index, { unitPrice: unitPrice ?? 0, totalPrice: Number(item.quantity || 0) * Number(unitPrice || 0) })} compact /></td>
     <td className="p-1 align-middle"><MoneyInput value={item.totalPrice} readOnly={!editable} onChange={totalPrice => onUpdate(index, { totalPrice: totalPrice ?? 0, unitPrice: Number(item.quantity || 0) > 0 ? Number(totalPrice || 0) / Number(item.quantity) : 0 })} compact /></td>
-    <td className="p-1 align-middle"><DecimalInput value={stockQuantity} readOnly={!editable} onChange={value => onUpdate(index, { stockQuantity: value, conversionFactor: Number(item.quantity || 0) > 0 ? value / Number(item.quantity) : 1 })} /></td>
-    <td className="p-1 align-middle"><Input className="min-h-11 min-w-24 text-center text-base" value={fiscalItemStockUnit(item)} readOnly={!editable} onChange={event => onUpdate(index, { stockUnit: event.target.value })} /></td>
-    <td className="p-1 align-middle"><DecimalInput value={factor} readOnly={!editable} onChange={value => onUpdate(index, { conversionFactor: value, stockQuantity: Number(item.quantity || 0) * value })} /></td>
+    {editable && <><td className="p-1 align-middle"><DecimalInput value={stockQuantity} readOnly={false} onChange={value => onUpdate(index, { stockQuantity: value, conversionFactor: Number(item.quantity || 0) > 0 ? value / Number(item.quantity) : 1 })} /></td>
+    <td className="p-1 align-middle"><Input className="min-h-11 min-w-24 text-center text-base" value={fiscalItemStockUnit(item)} onChange={event => onUpdate(index, { stockUnit: event.target.value })} /></td>
+    <td className="p-1 align-middle"><DecimalInput value={factor} readOnly={false} onChange={value => onUpdate(index, { conversionFactor: value, stockQuantity: Number(item.quantity || 0) * value })} /></td></>}
     <td className="h-11 p-2 text-center align-middle font-mono tabular-nums">{money(fiscalItemGlobalUnitPrice(item, note))}</td>
     <td className="h-11 p-2 text-center align-middle font-mono font-semibold tabular-nums">{money(fiscalItemGlobalTotal(item, note))}</td>
     <td className="p-1 align-middle"><PurchaseGroupSelect value={item.purchaseGroupId} disabled={!groupEditable} groups={purchaseGroups} onChange={onGroupChange} /></td>
@@ -900,14 +900,14 @@ function ItemMobileCard({ note, item, index, expanded = false, onToggle, editabl
   const stockQuantity = fiscalItemStockQuantity(item);
   return <article className="overflow-hidden rounded-md border bg-card">
     <button type="button" className="flex min-h-16 w-full items-center gap-3 p-3 text-left" aria-expanded={expanded} onClick={onToggle}>
-      <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{item.description || 'Item sem descrição'}</div><div className="mt-1 truncate text-xs text-muted-foreground">{item.productCode || 'Sem código'} · {stockQuantity.toLocaleString('pt-BR')} {fiscalItemStockUnit(item)}</div></div>
+      <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{item.description || 'Item sem descrição'}</div><div className="mt-1 truncate text-xs text-muted-foreground">{item.productCode || 'Sem código'} · {(editable ? stockQuantity : Number(item.quantity || 0)).toLocaleString('pt-BR')} {editable ? fiscalItemStockUnit(item) : (item.unit || 'UN')}</div></div>
       <div className="shrink-0 text-right"><div className="text-xs text-muted-foreground">Custo global</div><div className="font-mono text-sm font-semibold">{money(fiscalItemGlobalTotal(item, note))}</div></div>
       {expanded ? <ChevronUp className="h-5 w-5 shrink-0" /> : <ChevronDown className="h-5 w-5 shrink-0" />}
     </button>
     {expanded && <div className="space-y-3 border-t p-3">
       <div className="grid grid-cols-2 gap-2"><div className="col-span-2"><MobileField label="Descrição"><Input className="min-h-11 text-base" value={item.description} readOnly={!editable} onChange={event => onUpdate(index, { description: event.target.value })} /></MobileField></div><MobileField label="Cód. prod."><Input className="min-h-11 text-center text-base" value={item.productCode || ''} readOnly={!editable} onChange={event => onUpdate(index, { productCode: event.target.value })} /></MobileField><MobileField label="Grupo de compra"><PurchaseGroupSelect value={item.purchaseGroupId} disabled={!groupEditable} groups={purchaseGroups} onChange={onGroupChange} /></MobileField></div>
       <fieldset className="rounded-md border p-2"><legend className="px-1 text-xs font-semibold text-muted-foreground">Dados da nota</legend><div className="grid grid-cols-2 gap-2"><MobileField label="Quantidade NF"><DecimalInput value={item.quantity} readOnly={!editable} onChange={quantity => onUpdate(index, { quantity, totalPrice: quantity * Number(item.unitPrice || 0), stockQuantity: quantity * factor })} /></MobileField><MobileField label="Unidade NF"><Input className="min-h-11 text-center text-base" value={item.unit || 'UN'} readOnly={!editable} onChange={event => onUpdate(index, { unit: event.target.value, stockUnit: fiscalItemStockUnit(item) === (item.unit || 'UN') ? event.target.value : item.stockUnit })} /></MobileField><MoneyInput label="Valor unitário NF" value={item.unitPrice} readOnly={!editable} onChange={unitPrice => onUpdate(index, { unitPrice: unitPrice ?? 0, totalPrice: Number(item.quantity || 0) * Number(unitPrice || 0) })} /><MoneyInput label="Total do item NF" value={item.totalPrice} readOnly={!editable} onChange={totalPrice => onUpdate(index, { totalPrice: totalPrice ?? 0, unitPrice: Number(item.quantity || 0) > 0 ? Number(totalPrice || 0) / Number(item.quantity) : 0 })} /></div></fieldset>
-      <fieldset className="rounded-md border p-2"><legend className="px-1 text-xs font-semibold text-muted-foreground">Entrada no estoque</legend><div className="grid grid-cols-2 gap-2"><MobileField label="Quantidade estoque"><DecimalInput value={stockQuantity} readOnly={!editable} onChange={value => onUpdate(index, { stockQuantity: value, conversionFactor: Number(item.quantity || 0) > 0 ? value / Number(item.quantity) : 1 })} /></MobileField><MobileField label="Unidade estoque"><Input className="min-h-11 text-center text-base" value={fiscalItemStockUnit(item)} readOnly={!editable} onChange={event => onUpdate(index, { stockUnit: event.target.value })} /></MobileField><MobileField label="Fator de conversão"><DecimalInput value={factor} readOnly={!editable} onChange={value => onUpdate(index, { conversionFactor: value, stockQuantity: Number(item.quantity || 0) * value })} /></MobileField><MobileValue label="V. unit. global" value={money(fiscalItemGlobalUnitPrice(item, note))} /><div className="col-span-2"><MobileValue label="V. total global" value={money(fiscalItemGlobalTotal(item, note))} /></div></div></fieldset>
+      {editable ? <fieldset className="rounded-md border p-2"><legend className="px-1 text-xs font-semibold text-muted-foreground">Entrada no estoque</legend><div className="grid grid-cols-2 gap-2"><MobileField label="Quantidade estoque"><DecimalInput value={stockQuantity} readOnly={false} onChange={value => onUpdate(index, { stockQuantity: value, conversionFactor: Number(item.quantity || 0) > 0 ? value / Number(item.quantity) : 1 })} /></MobileField><MobileField label="Unidade estoque"><Input className="min-h-11 text-center text-base" value={fiscalItemStockUnit(item)} onChange={event => onUpdate(index, { stockUnit: event.target.value })} /></MobileField><MobileField label="Fator de conversão"><DecimalInput value={factor} readOnly={false} onChange={value => onUpdate(index, { conversionFactor: value, stockQuantity: Number(item.quantity || 0) * value })} /></MobileField><MobileValue label="V. unit. global" value={money(fiscalItemGlobalUnitPrice(item, note))} /><div className="col-span-2"><MobileValue label="V. total global" value={money(fiscalItemGlobalTotal(item, note))} /></div></div></fieldset> : <fieldset className="rounded-md border p-2"><legend className="px-1 text-xs font-semibold text-muted-foreground">Custo real rateado</legend><div className="grid grid-cols-2 gap-2"><MobileValue label="V. unit. global" value={money(fiscalItemGlobalUnitPrice(item, note))} /><MobileValue label="V. total global" value={money(fiscalItemGlobalTotal(item, note))} /></div></fieldset>}
       {editable && <Button variant="outline" className="min-h-11 w-full text-destructive" onClick={onRemove}><Trash2 className="mr-2 h-4 w-4" />Remover item</Button>}
     </div>}
   </article>;
