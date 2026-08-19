@@ -179,6 +179,10 @@ async function makeTransientAttachment(file: File): Promise<WarehouseAttachment>
   };
 }
 
+/**
+ * Extrai texto do PDF e, apenas quando o texto não é confiável, renderiza
+ * poucas páginas em resolução reduzida para economizar créditos de IA.
+ */
 async function extractPdf(file: File) {
   const pdfjs = await import('pdfjs-dist');
   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -189,20 +193,29 @@ async function extractPdf(file: File) {
     const page = await pdf.getPage(number);
     const content = await page.getTextContent();
     text.push(content.items.map(item => ('str' in item ? String(item.str) : '')).join(' '));
-    if (number <= MAX_IMAGES) {
-      const viewport = page.getViewport({ scale: 1.5 });
+  }
+  const joined = text.join('\n');
+  const textIsReliable = joined.replace(/\s+/g, '').length >= PDF_TEXT_ONLY_MIN_CHARS && /cnpj/i.test(joined);
+  if (!textIsReliable) {
+    const pages = Math.min(pdf.numPages, PDF_IMAGE_PAGES);
+    for (let number = 1; number <= pages; number += 1) {
+      const page = await pdf.getPage(number);
+      const natural = page.getViewport({ scale: 1 });
+      const scale = Math.min(1.5, Math.max(0.9, PDF_IMAGE_TARGET_WIDTH / natural.width));
+      const viewport = page.getViewport({ scale });
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d');
       if (context) {
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
         await page.render({ canvas, canvasContext: context, viewport } as Parameters<typeof page.render>[0]).promise;
-        images.push(canvas.toDataURL('image/jpeg', 0.82));
+        images.push(canvas.toDataURL('image/jpeg', 0.7));
       }
     }
   }
-  return { text: text.join('\n'), images };
+  return { text: joined, images };
 }
+
 
 async function renderPdfPreview(blob: Blob): Promise<string[]> {
   const pdfjs = await import('pdfjs-dist');
