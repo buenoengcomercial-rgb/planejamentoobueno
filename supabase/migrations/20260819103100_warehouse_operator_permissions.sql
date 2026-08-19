@@ -1,3 +1,7 @@
+-- Schema interno para as verificacoes de escopo do Almoxarife.
+CREATE SCHEMA IF NOT EXISTS app_private;
+REVOKE ALL ON SCHEMA app_private FROM PUBLIC;
+
 -- O Almoxarife pode operar somente o estado do Almoxarifado. As verificacoes
 -- abaixo protegem o escopo mesmo que a interface seja contornada.
 
