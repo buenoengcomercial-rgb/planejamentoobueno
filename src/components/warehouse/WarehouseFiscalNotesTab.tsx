@@ -39,6 +39,7 @@ import {
 } from '@/lib/warehouseAttachments';
 import { inferSupplierStateFromIssuerAddress, normalizeBrazilianState } from '@/lib/fiscalSupplierState';
 import { createSupplierHeaderImageDataUrl } from '@/lib/fiscalSupplierHeaderImage';
+import { optimizeEquipmentPhoto } from '@/lib/equipmentPhotoOptimization';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -96,6 +97,9 @@ type TransientFiscalReaderNote = ParsedNote & {
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_IMAGES = 4;
+const PDF_TEXT_ONLY_MIN_CHARS = 900;
+const PDF_IMAGE_PAGES = 2;
+const PDF_IMAGE_TARGET_WIDTH = 1100;
 const DESTINATION_STATE = 'RO';
 const FISCAL_READER_VERSION = 'issuer-address-v1';
 const ACCEPTED = ['pdf', 'png', 'jpg', 'jpeg', 'webp'];
@@ -179,6 +183,10 @@ async function makeTransientAttachment(file: File): Promise<WarehouseAttachment>
   };
 }
 
+/**
+ * Extrai texto do PDF e, apenas quando o texto não é confiável, renderiza
+ * poucas páginas em resolução reduzida para economizar créditos de IA.
+ */
 async function extractPdf(file: File) {
   const pdfjs = await import('pdfjs-dist');
   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -189,20 +197,29 @@ async function extractPdf(file: File) {
     const page = await pdf.getPage(number);
     const content = await page.getTextContent();
     text.push(content.items.map(item => ('str' in item ? String(item.str) : '')).join(' '));
-    if (number <= MAX_IMAGES) {
-      const viewport = page.getViewport({ scale: 1.5 });
+  }
+  const joined = text.join('\n');
+  const textIsReliable = joined.replace(/\s+/g, '').length >= PDF_TEXT_ONLY_MIN_CHARS && /cnpj/i.test(joined);
+  if (!textIsReliable) {
+    const pages = Math.min(pdf.numPages, PDF_IMAGE_PAGES);
+    for (let number = 1; number <= pages; number += 1) {
+      const page = await pdf.getPage(number);
+      const natural = page.getViewport({ scale: 1 });
+      const scale = Math.min(1.5, Math.max(0.9, PDF_IMAGE_TARGET_WIDTH / natural.width));
+      const viewport = page.getViewport({ scale });
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d');
       if (context) {
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
         await page.render({ canvas, canvasContext: context, viewport } as Parameters<typeof page.render>[0]).promise;
-        images.push(canvas.toDataURL('image/jpeg', 0.82));
+        images.push(canvas.toDataURL('image/jpeg', 0.7));
       }
     }
   }
-  return { text: text.join('\n'), images };
+  return { text: joined, images };
 }
+
 
 async function renderPdfPreview(blob: Blob): Promise<string[]> {
   const pdfjs = await import('pdfjs-dist');
@@ -230,16 +247,48 @@ async function renderPdfPreview(blob: Blob): Promise<string[]> {
   }
 }
 
+/** Compacta as fotos antes de enviar à IA, reduzindo tokens de imagem. */
+async function photoDataUrlsForAi(files: File[]): Promise<string[]> {
+  const canOptimize = typeof createImageBitmap === 'function';
+  const optimized = await Promise.all(files.slice(0, MAX_IMAGES).map(async file => {
+    if (!canOptimize) return file;
+    try {
+      return await optimizeEquipmentPhoto(file);
+    } catch {
+      return file;
+    }
+  }));
+  const urls = await Promise.all(optimized.map(readFileAsDataURL));
+  return urls.filter(Boolean);
+}
+
+
+
+/** Evita chamadas duplicadas à IA para o mesmo documento (economia de créditos). */
+const aiReadInFlight = new Map<string, Promise<ParsedNote>>();
+
 async function readWithAi(input: { name: string; type?: string; urls: string[]; text?: string }): Promise<ParsedNote> {
-  const supplierHeaderImageDataUrl = await createSupplierHeaderImageDataUrl(input.urls[0]);
+  const key = `${input.name}|${input.urls.length}|${(input.urls[0] || '').length}|${(input.text || '').length}`;
+  const running = aiReadInFlight.get(key);
+  if (running) return running;
+  const task = requestAiRead(input).finally(() => aiReadInFlight.delete(key));
+  aiReadInFlight.set(key, task);
+  return task;
+}
+
+async function requestAiRead(input: { name: string; type?: string; urls: string[]; text?: string }): Promise<ParsedNote> {
+  const extractedText = (input.text || '').slice(0, 8000);
+  const headerStateKnown = Boolean(inferSupplierStateFromIssuerAddress(extractedText || undefined));
+  const supplierHeaderImageDataUrl = headerStateKnown ? undefined : await createSupplierHeaderImageDataUrl(input.urls[0]);
   const { data, error } = await supabase.functions.invoke<{
     ok?: boolean;
     error?: string;
     readerVersion?: string;
     note?: TransientFiscalReaderNote;
   }>('read-fiscal-note', {
-    body: { fileName: input.name, fileType: input.type, fileDataUrl: input.urls[0], fileDataUrls: input.urls, supplierHeaderImageDataUrl, extractedText: input.text },
+    body: { fileName: input.name, fileType: input.type, fileDataUrl: input.urls[0], fileDataUrls: input.urls, supplierHeaderImageDataUrl, extractedText },
   });
+
   if (error) throw new Error(error.message || 'Falha ao executar a leitura automática.');
   if (!data?.ok || !data.note) throw new Error(data?.error || 'Não foi possível ler o documento.');
   if (data.readerVersion !== FISCAL_READER_VERSION) {
@@ -418,8 +467,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
           urls = extracted.images;
           extractedText = extracted.text;
         } else {
-          urls = attachments.map(attachment => attachment.dataUrl || '').filter(Boolean);
+          urls = await photoDataUrlsForAi(selectedFiles);
         }
+
         parsed = await readWithAi({ name: draft.sourceFileName, type: draft.sourceMimeType, urls, text: extractedText });
       } catch (error) {
         processingError = (error as Error).message;
@@ -468,8 +518,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
         urls = extracted.images;
         extractedText = extracted.text;
       } else {
-        urls = await Promise.all(localFiles.map(readFileAsDataURL));
+        urls = await photoDataUrlsForAi(localFiles);
       }
+
       const parsed = await readWithAi({ name: selected.sourceFileName, type: selected.sourceMimeType, urls, text: extractedText });
       const deterministicType = classifyFiscalDocumentText(`${extractedText}\n${selected.sourceFileName}`);
       const updated: WarehouseFiscalNote = {

@@ -46,65 +46,21 @@ type FiscalNotePayload = {
   documentTypeConfidence?: number | null;
 };
 
-const systemPrompt = `Voce e um assistente especialista em ler notas fiscais brasileiras (DANFE/NFe) de materiais de obra a partir de imagens, PDFs renderizados e texto extraido.
-Retorne APENAS JSON valido neste formato:
-{
-  "accessKey": string|null,
-  "supplierName": string|null,
-  "supplierCnpj": string|null,
-  "supplierState": "UF"|null,
-  "supplierCity": string|null,
-  "supplierHeaderText": string|null,
-  "supplierLocationText": string|null,
-  "invoiceNumber": string|null,
-  "issueDate": "YYYY-MM-DD"|null,
-  "totalAmount": number,
-  "confidence": number,
-  "documentType": "nfe"|"nfce"|"cupom_fiscal"|"pedido_venda"|"orcamento"|"recibo"|"outro",
-  "documentTypeConfidence": number,
-  "items": [
-    {
-      "productCode": string|null,
-      "description": string,
-      "quantity": number,
-      "unit": string|null,
-      "unitPrice": number,
-      "totalPrice": number,
-      "category": string|null,
-      "confidence": number
-    }
-  ],
-  "invoices": [
-    {
-      "number": string|null,
-      "dueDate": "YYYY-MM-DD"|null,
-      "amount": number,
-      "paymentMethod": string|null,
-      "notes": string|null
-    }
-  ],
-  "notes": string|null
-}
-Regras:
-- Primeiro classifique o documento. Pedido de venda, pedido de compra, orcamento, proposta e recibo NAO sao nota fiscal e nunca devem ser classificados como NF-e.
-- Use "nfe", "nfce" ou "cupom_fiscal" apenas quando houver evidencia fiscal clara (DANFE, chave de acesso, NFC-e ou cupom fiscal de compra).
-- Avalie obrigatoriamente o cabecalho e o endereco do EMITENTE para identificar a UF do fornecedor. O emitente fica antes do titulo DESTINATARIO/REMETENTE. Nunca use nenhum municipio ou UF que esteja depois desse titulo.
-- Transcreva em supplierHeaderText o bloco visivel do emitente contendo razao social, CNPJ, endereco, municipio e UF. Retorne em supplierCity somente o municipio do emitente.
-- Em supplierLocationText copie literalmente a linha do endereco do EMITENTE que contem cidade e UF, por exemplo "Jundiai/SP" ou "SAO PAULO - SP". Se municipio e UF estiverem em campos separados, transcreva os dois juntos.
-- supplierCnpj deve ser exclusivamente o numero que aparece logo abaixo ou ao lado do rotulo CNPJ/CPF no cabecalho do EMITENTE, antes de NATUREZA DA OPERACAO e antes de DESTINATARIO/REMETENTE.
-- Nunca use como supplierCnpj a inscricao estadual, a chave de acesso ou o CNPJ/CPF do destinatario/remetente. Inclua literalmente em supplierHeaderText o rotulo CNPJ/CPF do emitente e seu numero para validacao.
-- Quando houver uma localizacao como "Jundiai/SP", "JUNDIAI - SP", "UF: SP" ou o nome completo "Sao Paulo", supplierState deve ser "SP". Associe somente siglas oficiais: AC, AL, AP, AM, BA, CE, DF, ES, GO, MA, MT, MS, MG, PA, PB, PR, PE, PI, RJ, RN, RS, RO, RR, SC, SP, SE e TO.
-- Em accessKey transcreva exatamente os 44 digitos impressos abaixo do rotulo CHAVE DE ACESSO somente para conferencia do CNPJ. A chave nunca deve ser usada para escolher supplierState.
-- Leia fornecedor, CNPJ, UF do endereco do emitente, numero da nota, data de emissao, valor total e itens.
-- supplierState deve conter apenas a sigla brasileira de duas letras quando estiver legivel no endereco do emitente; nunca use a UF do destinatario e nunca deduza a UF apenas pelo CNPJ.
-- Para CADA item extraia o codigo da coluna "COD. PROD.", "Cod. Prod.", "Codigo", "Cod.", "Ref." ou similar como "productCode" — esse codigo e essencial.
-- Leia tambem a secao FATURA/DUPLICATAS/COBRANCA/PARCELAS quando existir e devolva no array "invoices" cada parcela com numero (ex.: 001, 002), data de vencimento e valor. Se houver apenas uma cobranca/boleto, devolva uma unica linha em "invoices". "paymentMethod" pode ser "Boleto", "PIX", "Cartao", "A vista", etc., quando explicitado.
-- Se a nota nao trouxer faturas, devolva "invoices": [].
-- Valores monetarios devem ser numeros em reais (ponto decimal).
-- Datas em YYYY-MM-DD.
-- Nao invente dados ilegiveis; use null ou 0.
-- "confidence" deve ser numero entre 0 e 1.
-- Se a imagem estiver ruim, retorne o que conseguir e explique em "notes".`;
+const systemPrompt = `Voce le notas fiscais brasileiras (DANFE/NFe) de materiais de obra a partir de imagens ou texto extraido.
+Responda APENAS JSON valido com as chaves: accessKey, supplierName, supplierCnpj, supplierState, supplierCity, supplierHeaderText, supplierLocationText, invoiceNumber, issueDate, totalAmount, confidence, documentType, documentTypeConfidence, items[], invoices[], notes.
+items[]: productCode, description, quantity, unit, unitPrice, totalPrice, category, confidence.
+invoices[]: number, dueDate, amount, paymentMethod, notes (parcelas de FATURA/DUPLICATAS/COBRANCA; [] se nao houver).
+Regras essenciais:
+- documentType: "nfe"|"nfce"|"cupom_fiscal" apenas com evidencia fiscal clara (DANFE, chave de acesso, cupom). Pedido de venda, orcamento, proposta e recibo usam "pedido_venda"|"orcamento"|"recibo"|"outro".
+- Emitente = bloco ANTES do titulo DESTINATARIO/REMETENTE. Nunca use cidade, UF ou CNPJ do destinatario, transportadora ou local de entrega.
+- supplierHeaderText: transcreva o bloco do emitente (razao social, rotulo CNPJ/CPF e numero, endereco, municipio, UF). supplierLocationText: copie literalmente a linha do emitente com cidade e UF (ex.: "Jundiai/SP"). supplierCity: municipio do emitente. supplierState: sigla oficial de 2 letras do emitente (Jundiai/SP -> "SP"); nunca deduza pelo CNPJ nem pela chave de acesso.
+- supplierCnpj: numero ao lado/abaixo do rotulo CNPJ/CPF do emitente; nunca inscricao estadual nem chave de acesso.
+- accessKey: os 44 digitos abaixo de CHAVE DE ACESSO, apenas para conferencia.
+- Extraia o codigo de cada item ("COD. PROD.", "Codigo", "Ref.") em productCode.
+- Valores em reais com ponto decimal; datas YYYY-MM-DD; confidence entre 0 e 1.
+- Nao invente dados ilegiveis: use null ou 0 e explique em notes.
+Nao escreva raciocinio: devolva direto o JSON.`;
+
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -191,7 +147,9 @@ async function callLovableAiGateway(input: {
     body: JSON.stringify({
       model: input.model,
       temperature: 0.1,
+      reasoning_effort: "low",
       response_format: { type: "json_object" },
+
       messages: [
         { role: "system", content: systemPrompt },
         {
@@ -235,7 +193,7 @@ Deno.serve(async (req) => {
     if (fileDataUrl.startsWith("data:image/") && fileDataUrls.length === 0) {
       fileDataUrls.push(fileDataUrl);
     }
-    const extractedText = String(body.extractedText ?? "").trim().slice(0, 20000);
+    const extractedText = String(body.extractedText ?? "").trim().slice(0, 8000);
     const supplierHeaderImageDataUrl = String(body.supplierHeaderImageDataUrl ?? "");
     const fileName = String(body.fileName ?? "nota-fiscal");
 
