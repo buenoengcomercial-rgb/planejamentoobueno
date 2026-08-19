@@ -4,7 +4,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useOrganization } from '@/hooks/useOrganization';
 import {
   listOrgMembers, inviteMemberByEmail, createMemberWithPassword, updateMemberRole, updateMemberStatus, removeMember,
-  OrgMember, OrgRole, MemberStatus, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLE_PERMISSIONS, STATUS_LABELS, canManageMembers,
+  OrgMember, OrgRole, MemberStatus, ORG_ROLE_OPTIONS, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLE_PERMISSIONS, STATUS_LABELS, canManageMembers,
 } from '@/lib/organizations';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,8 +18,6 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Loader2, ArrowLeft, UserPlus, Trash2, ShieldOff, ShieldCheck, KeyRound, Mail } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-
-const ROLE_OPTIONS: OrgRole[] = ['owner', 'admin', 'engineer', 'field_user', 'viewer'];
 
 export default function TeamManagement() {
   const { user, loading: authLoading } = useAuth();
@@ -285,7 +283,7 @@ export default function TeamManagement() {
                 <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as OrgRole)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {ROLE_OPTIONS.map(r => (
+                    {ORG_ROLE_OPTIONS.map(r => (
                       <SelectItem key={r} value={r}>{ROLE_LABELS[r]}</SelectItem>
                     ))}
                   </SelectContent>
@@ -305,7 +303,7 @@ export default function TeamManagement() {
             <CardDescription>Escolha a função pelo trabalho que a pessoa realmente executará na plataforma.</CardDescription>
           </CardHeader>
           <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {ROLE_OPTIONS.map(role => (
+            {ORG_ROLE_OPTIONS.map(role => (
               <div key={role} className="rounded-lg border border-border p-3">
                 <p className="text-sm font-semibold">{ROLE_LABELS[role]}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{ROLE_DESCRIPTIONS[role]}</p>
@@ -352,7 +350,7 @@ export default function TeamManagement() {
                           >
                             <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
                             <SelectContent>
-                              {ROLE_OPTIONS.map(r => (
+                              {ORG_ROLE_OPTIONS.map(r => (
                                 <SelectItem key={r} value={r}>{ROLE_LABELS[r]}</SelectItem>
                               ))}
                             </SelectContent>

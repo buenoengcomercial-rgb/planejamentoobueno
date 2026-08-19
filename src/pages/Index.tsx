@@ -31,7 +31,7 @@ const Materials = lazyWithReload(() => import('@/components/Materials'));
 const WarehouseView = lazyWithReload(() => import('@/components/warehouse/Warehouse'));
 import { useAuth } from '@/hooks/useAuth';
 import { useOrganization } from '@/hooks/useOrganization';
-import { canCreateProject, canDeleteProject, canEditDailyReport, canEditProject, ROLE_LABELS } from '@/lib/organizations';
+import { canAccessAppView, canCreateProject, canDeleteProject, canEditDailyReport, canEditProject, canEditWarehouse, ROLE_LABELS } from '@/lib/organizations';
 import { Button } from '@/components/ui/button';
 import {
   listCloudProjects,
@@ -218,16 +218,20 @@ export default function Index() {
   const role = membership?.role;
   const editor = role ? canEditProject(role) : false;
   const dailyReportEditor = role ? canEditDailyReport(role) : false;
-  const canPersistProject = editor || dailyReportEditor;
+  const warehouseEditor = role ? canEditWarehouse(role) : false;
+  const canPersistProject = editor || dailyReportEditor || warehouseEditor;
   const creator = role ? canCreateProject(role) : false;
   const remover = role ? canDeleteProject(role) : false;
+  const safeCurrentView: AppView = role && !canAccessAppView(role, currentView) ? 'warehouse' : currentView;
+  const allowedViews = role === 'warehouse_operator' ? (['warehouse'] satisfies AppView[]) : undefined;
 
   useEffect(() => {
     if (!authLoading && !user) navigate('/auth', { replace: true });
   }, [authLoading, user, navigate]);
 
   useEffect(() => {
-    const routedView = routeView ? ROUTE_VIEW[routeView] : undefined;
+    const requestedView = routeView ? ROUTE_VIEW[routeView] : undefined;
+    const routedView = role === 'warehouse_operator' ? 'warehouse' : requestedView;
     if (routedView) setCurrentView(previous => previous === routedView ? previous : routedView);
     if (routedView === 'dailyReport') {
       const date = new URLSearchParams(location.search).get('data') || undefined;
@@ -237,15 +241,19 @@ export default function Index() {
       }
       setProductionWorkspaceInitialTab('dailyReport');
     }
-  }, [routeView, location.search]);
+  }, [routeView, location.search, role]);
+
+  useEffect(() => {
+    if (role === 'warehouse_operator' && currentView !== 'warehouse') setCurrentView('warehouse');
+  }, [currentView, role]);
 
   useEffect(() => {
     if (!rawProject?.id) return;
-    const route = `/obras/${rawProject.id}/${VIEW_ROUTE[currentView]}`;
-    const keepSearch = currentView === 'management' || currentView === 'dailyReport';
+    const route = `/obras/${rawProject.id}/${VIEW_ROUTE[safeCurrentView]}`;
+    const keepSearch = safeCurrentView === 'management' || safeCurrentView === 'dailyReport';
     const target = `${route}${keepSearch ? location.search : ''}`;
     if (`${location.pathname}${location.search}` !== target) navigate(target, { replace: true });
-  }, [currentView, location.pathname, location.search, navigate, rawProject?.id]);
+  }, [safeCurrentView, location.pathname, location.search, navigate, rawProject?.id]);
 
   useEffect(() => {
     if (!rawProject?.id) return;
@@ -301,7 +309,7 @@ export default function Index() {
     const restoreKey = `${rawProject.id}:${session.view ?? 'none'}:${session.updatedAt}`;
     if (restoredUiSessionRef.current === restoreKey) return;
 
-    if (!routeView && session.view && session.view !== currentView) {
+    if (!routeView && session.view && session.view !== currentView && (!role || canAccessAppView(role, session.view))) {
       setCurrentView(session.view);
       return;
     }
@@ -320,7 +328,7 @@ export default function Index() {
         });
       }
     });
-  }, [bootLoading, currentView, rawProject, routeView]);
+  }, [bootLoading, currentView, rawProject, role, routeView]);
 
   const refreshCloudList = useCallback(async (): Promise<CloudProjectMeta[]> => {
     const list = await listCloudProjects();
@@ -794,7 +802,7 @@ export default function Index() {
   // só roda quando o usuário está nas abas que dependem dele (Cronograma/Dashboard).
   // Nas demais abas (Tarefas/Medição/Diário) usa-se o pipeline leve, evitando trabalho
   // pesado a cada digitação. CPM continua rodando porque é barato e fornece `isCritical`.
-  const needsDependencySettle = currentView === 'gantt' || currentView === 'dashboard' || currentView === 'realCost';
+  const needsDependencySettle = safeCurrentView === 'gantt' || safeCurrentView === 'dashboard' || safeCurrentView === 'realCost';
 
   const project = useMemo(() => {
     if (!deferredRawProject) return null;
@@ -813,7 +821,9 @@ export default function Index() {
 
   const makeViewSetter = useCallback((view: AppView) => {
     return (next: Project | ((prev: Project) => Project)) => {
-      const mayEditView = editor || (view === 'dailyReport' && dailyReportEditor);
+      const mayEditView = editor
+        || (view === 'dailyReport' && dailyReportEditor)
+        || (view === 'warehouse' && warehouseEditor);
       if (!mayEditView) {
         toast.error('Você não tem permissão para editar.');
         return;
@@ -825,8 +835,13 @@ export default function Index() {
       }
       setRawProject(prev => {
         if (!prev) return prev;
-        const resolved = typeof next === 'function' ? (next as (p: Project) => Project)(prev) : next;
-        const synchronized = synchronizeProjectScheduleToWorkStart(resolved);
+        const candidate = typeof next === 'function' ? (next as (p: Project) => Project)(prev) : next;
+        const resolved = role === 'warehouse_operator' && view === 'warehouse'
+          ? { ...prev, warehouse: candidate.warehouse }
+          : candidate;
+        const synchronized = role === 'warehouse_operator' && view === 'warehouse'
+          ? resolved
+          : synchronizeProjectScheduleToWorkStart(resolved);
         if (synchronized === prev) return prev;
         const stack = undoStacksRef.current[view];
         stack.push(prev);
@@ -841,7 +856,7 @@ export default function Index() {
         return synchronized;
       });
     };
-  }, [dailyReportEditor, editor]);
+  }, [dailyReportEditor, editor, role, warehouseEditor]);
 
   const ganttSetter = useMemo(() => makeViewSetter('gantt'), [makeViewSetter]);
   const managementSetter = useMemo(() => makeViewSetter('management'), [makeViewSetter]);
@@ -865,7 +880,13 @@ export default function Index() {
     }
     if (inFlightSaveRef.current) await inFlightSaveRef.current;
 
-    const synchronized = synchronizeProjectScheduleToWorkStart(next);
+    const current = rawProjectRef.current;
+    const scopedNext = role === 'warehouse_operator' && current
+      ? { ...current, warehouse: next.warehouse }
+      : next;
+    const synchronized = role === 'warehouse_operator'
+      ? scopedNext
+      : synchronizeProjectScheduleToWorkStart(scopedNext);
     writeProjectDraft(synchronized, currentProjectUpdatedAtRef.current);
     setSaveStatus('saving');
     try {
@@ -885,7 +906,7 @@ export default function Index() {
     rawProjectRef.current = synchronized;
     setRawProject(synchronized);
     setUndoVersion(value => value + 1);
-  }, [canPersistProject, handleCloudConflict, orgId, persistProject, user]);
+  }, [canPersistProject, handleCloudConflict, orgId, persistProject, role, user]);
 
   const handleOwnerClearWarehouse = useCallback(async (password: string) => {
     if (role !== 'owner' || !rawProject) {
@@ -1152,7 +1173,7 @@ export default function Index() {
   }
 
   const renderView = () => {
-    switch (currentView) {
+    switch (safeCurrentView) {
       case 'dashboard':
         return <Dashboard project={project} undoButton={<UndoButton canUndo={canUndo('dashboard')} onUndo={() => handleUndo('dashboard')} />} />;
       case 'management':
@@ -1216,9 +1237,10 @@ export default function Index() {
             project={project}
             onProjectChange={warehouseSetter}
             onCommitProject={commitProjectNow}
-            canManageFiscalNotes={role !== 'viewer'}
+            canManageFiscalNotes={warehouseEditor}
             canReviewFiscalCosts={role === 'owner' || role === 'admin' || role === 'engineer'}
             canApproveInventory={role === 'owner' || role === 'admin'}
+            canArchiveWarehouseRecords={editor}
             canClearWarehouse={role === 'owner'}
             onClearWarehouse={role === 'owner' ? handleOwnerClearWarehouse : undefined}
             auditActor={auditActor}
@@ -1243,8 +1265,9 @@ export default function Index() {
 
       <div className={`fixed lg:sticky lg:top-0 lg:h-svh lg:self-start z-40 transition-transform lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <AppSidebar
-          currentView={currentView}
+          currentView={safeCurrentView}
           onViewChange={(v) => {
+            if (role && !canAccessAppView(role, v)) return;
             if (v === 'tasks') setProductionWorkspaceInitialTab('production');
             if (v === 'dailyReport') setProductionWorkspaceInitialTab('dailyReport');
             setCurrentView(v);
@@ -1267,6 +1290,8 @@ export default function Index() {
           roleLabel={role ? ROLE_LABELS[role] : undefined}
           canManageTeam={role === 'owner' || role === 'admin'}
           onOpenTeam={() => navigate('/team')}
+          allowedViews={allowedViews}
+          canManageProjects={role !== 'warehouse_operator'}
         />
       </div>
 

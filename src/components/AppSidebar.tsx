@@ -59,6 +59,10 @@ interface AppSidebarProps {
   /** Quando true, mostra a opção "Gerenciar acessos". */
   canManageTeam?: boolean;
   onOpenTeam?: () => void;
+  /** Restringe os módulos exibidos para perfis com acesso dedicado. */
+  allowedViews?: AppView[];
+  /** Controla criação, importação, renomeação, exportação e exclusão de obras. */
+  canManageProjects?: boolean;
 }
 
 interface NavigationItem {
@@ -102,7 +106,7 @@ const navGroups: Array<{ label: string; items: NavigationItem[] }> = [
   },
 ];
 
-export default function AppSidebar({ currentView, onViewChange, projectName, collapsed, onToggleCollapse, onSwitchProject, onCreateProject, onRenameProject, onDuplicateProject, onDeleteProject, onImportedProject, activeProjectId, projectsList, userEmail, onLogout, orgName, roleLabel, canManageTeam, onOpenTeam }: AppSidebarProps) {
+export default function AppSidebar({ currentView, onViewChange, projectName, collapsed, onToggleCollapse, onSwitchProject, onCreateProject, onRenameProject, onDuplicateProject, onDeleteProject, onImportedProject, activeProjectId, projectsList, userEmail, onLogout, orgName, roleLabel, canManageTeam, onOpenTeam, allowedViews, canManageProjects = true }: AppSidebarProps) {
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
   const [showProjects, setShowProjects] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -115,6 +119,9 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
   const [pendingBackup, setPendingBackup] = useState<BackupFile | null>(null);
   const [pendingSummaries, setPendingSummaries] = useState<ProjectSummary[]>([]);
   const cloudMode = !!projectsList;
+  const visibleNavGroups = navGroups
+    .map(group => ({ ...group, items: group.items.filter(item => !allowedViews || allowedViews.includes(item.view)) }))
+    .filter(group => group.items.length > 0);
 
   useEffect(() => {
     if (projectsList) setProjects(projectsList);
@@ -313,7 +320,7 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
               </>
             )}
           </button>
-          {!collapsed && (
+          {!collapsed && canManageProjects && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
@@ -390,7 +397,7 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
                       >
                         {p.name}
                       </button>
-                      <div className="flex items-center gap-0.5 pr-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {canManageProjects && <div className="flex items-center gap-0.5 pr-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
                           onClick={(e) => { e.stopPropagation(); startEdit(p); }}
                           title="Renomear"
@@ -419,19 +426,21 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
                         >
                           <Trash2 className="w-3 h-3" />
                         </button>
-                      </div>
+                      </div>}
                     </div>
                   )}
                 </div>
               );
             })}
 
-            <button
-              onClick={handleNewProject}
-              className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded text-[11px] text-primary hover:bg-primary/10 transition-colors font-medium mt-1"
-            >
-              <Plus className="w-3 h-3" /> Nova obra
-            </button>
+            {canManageProjects && (
+              <button
+                onClick={handleNewProject}
+                className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded text-[11px] text-primary hover:bg-primary/10 transition-colors font-medium mt-1"
+              >
+                <Plus className="w-3 h-3" /> Nova obra
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -503,7 +512,7 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
 
       <nav className="flex-1 p-2 overflow-y-auto">
         <div className="space-y-4">
-          {navGroups.map(group => (
+          {visibleNavGroups.map(group => (
             <section key={group.label} aria-label={group.label}>
               {!collapsed && (
                 <p className="px-2 pb-1.5 text-xs font-semibold uppercase tracking-[0.08em] text-[hsl(var(--sidebar-fg))]/45">

@@ -6,7 +6,8 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-type Role = "owner" | "admin" | "engineer" | "field_user" | "viewer";
+type Role = "owner" | "admin" | "engineer" | "warehouse_operator" | "field_user" | "viewer";
+const ALLOWED_ROLES: Role[] = ["owner", "admin", "engineer", "warehouse_operator", "field_user", "viewer"];
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -39,6 +40,11 @@ Deno.serve(async (req) => {
 
     if (!email || !password || !organizationId) {
       return new Response(JSON.stringify({ error: "Dados obrigatórios faltando" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (!ALLOWED_ROLES.includes(role)) {
+      return new Response(JSON.stringify({ error: "Função de usuário inválida" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }

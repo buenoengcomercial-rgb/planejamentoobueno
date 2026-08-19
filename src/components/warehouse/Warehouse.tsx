@@ -34,12 +34,13 @@ interface Props {
   canManageFiscalNotes?: boolean;
   canReviewFiscalCosts?: boolean;
   canApproveInventory?: boolean;
+  canArchiveWarehouseRecords?: boolean;
   canClearWarehouse?: boolean;
   onClearWarehouse?: (password: string) => Promise<void>;
   auditActor?: WarehouseAuditActor;
 }
 
-export default function Warehouse({ project, onProjectChange, onCommitProject, canManageFiscalNotes = true, canReviewFiscalCosts = true, canApproveInventory = true, canClearWarehouse = false, onClearWarehouse, auditActor }: Props) {
+export default function Warehouse({ project, onProjectChange, onCommitProject, canManageFiscalNotes = true, canReviewFiscalCosts = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canClearWarehouse = false, onClearWarehouse, auditActor }: Props) {
   const [tab, setTab] = useState('painel');
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [clearPassword, setClearPassword] = useState('');
@@ -139,10 +140,10 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, c
           <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
         </TabsContent>
         <TabsContent value="equipamentos" className="mt-3">
-          <WarehouseEquipmentsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
+          <WarehouseEquipmentsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} />
         </TabsContent>
         <TabsContent value="estoque" className="mt-3">
-          <WarehouseStockTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
+          <WarehouseStockTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} />
         </TabsContent>
         <TabsContent value="movimentos" className="mt-3">
           <WarehouseMovementsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />

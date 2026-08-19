@@ -94,6 +94,13 @@ describe('WarehouseStockTab - documentos no histórico', () => {
     expect(downloadAttachmentMock).toHaveBeenCalledTimes(1);
   });
 
+  it('mantém consulta e histórico sem oferecer arquivamento ao Almoxarife', () => {
+    render(<WarehouseStockTab project={projectWithPurchaseHistory()} onProjectChange={vi.fn()} canArchive={false} />);
+
+    expect(screen.queryByTitle('Arquivar e ocultar material')).not.toBeInTheDocument();
+    expect(screen.getByTitle('Histórico de compras')).toBeInTheDocument();
+  });
+
   it('pesquisa insumos previstos pela descrição sem exibir o código', () => {
     render(<WarehouseStockTab project={projectWithPlannedMaterials()} onProjectChange={vi.fn()} />);
 

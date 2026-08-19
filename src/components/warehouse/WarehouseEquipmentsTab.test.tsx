@@ -173,6 +173,19 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     expect(screen.queryByLabelText('Fotos de Furadeira de impacto')).not.toBeInTheDocument();
   });
 
+  it('não oferece arquivamento de equipamento quando a função não pode apagar registros', () => {
+    render(
+      <WarehouseEquipmentsTab
+        project={projectWithEquipment({ dataUrl: 'data:image/png;base64,Zm90bw==' })}
+        onProjectChange={vi.fn()}
+        canArchive={false}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Arquivar' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Etiqueta QR' })).toBeInTheDocument();
+  });
+
   it('mostra até três miniaturas e troca a foto principal sem recortar', () => {
     render(<WarehouseEquipmentsTab project={projectWithEquipment([
       { dataUrl: 'data:image/png;base64,Zm90bzE=' },

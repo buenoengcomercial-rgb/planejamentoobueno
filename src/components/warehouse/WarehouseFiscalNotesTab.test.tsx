@@ -169,6 +169,14 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.getAllByText(/Bruno/i).length).toBeGreaterThan(0);
   });
 
+  it('mantém o cancelamento do lançamento disponível para o operador autorizado', () => {
+    const view = render(<WarehouseFiscalNotesTab project={projectWithPostedNote()} onProjectChange={vi.fn()} canManage />);
+    expect(screen.getByRole('button', { name: 'Cancelar lançamento' })).toBeInTheDocument();
+
+    view.rerender(<WarehouseFiscalNotesTab project={projectWithPostedNote()} onProjectChange={vi.fn()} canManage={false} />);
+    expect(screen.queryByRole('button', { name: 'Cancelar lançamento' })).not.toBeInTheDocument();
+  });
+
   it('não mostra classificação não fiscal e exibe cabeçalhos e grupo de compra', () => {
     render(<WarehouseFiscalNotesTab project={projectWithPostedNote()} onProjectChange={vi.fn()} canManage />);
     fireEvent.click(screen.getAllByRole('button', { name: 'Visualizar dados e grupos' })[0]);
