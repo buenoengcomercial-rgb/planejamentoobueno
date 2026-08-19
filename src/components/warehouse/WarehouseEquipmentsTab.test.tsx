@@ -62,9 +62,10 @@ function projectWithEquipment(photoInput: EquipmentPhotoInput | EquipmentPhotoIn
   return current;
 }
 
-async function addPhotoAndRead(container: HTMLElement) {
+async function addPhotoAndRead() {
+  fireEvent.click(screen.getByRole('button', { name: 'Adicionar equipamento' }));
   const file = new File(['foto da bateria'], 'makita.jpeg', { type: 'image/jpeg' });
-  const cameraInput = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+  const cameraInput = document.querySelector<HTMLInputElement>('input[type="file"]')!;
   fireEvent.change(cameraInput, { target: { files: [file] } });
   const readButton = screen.getByRole('button', { name: /Ler etiqueta e equipamento com IA/i });
   await waitFor(() => expect(readButton).toBeEnabled());
@@ -104,13 +105,13 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     const onProjectChange = vi.fn();
     const view = render(<WarehouseEquipmentsTab project={project()} onProjectChange={onProjectChange} />);
 
-    await addPhotoAndRead(view.container);
+    await addPhotoAndRead();
 
     expect(await screen.findByDisplayValue('Makita')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Bateria de íons de lítio XGT 40Vmax 4,0 Ah')).toBeInTheDocument();
     expect(screen.getByLabelText('Modelo')).toHaveValue('');
     fireEvent.change(screen.getByLabelText('Descrição'), { target: { value: 'Bateria Makita XGT 40Vmax 4,0 Ah' } });
-    fireEvent.click(screen.getByRole('button', { name: /Confirmar cadastro/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Cadastrar equipamento/i }));
 
     await waitFor(() => expect(onProjectChange).toHaveBeenCalledTimes(1));
     const saved = onProjectChange.mock.calls[0][0] as Project;
@@ -129,11 +130,11 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     });
     const view = render(<WarehouseEquipmentsTab project={project()} onProjectChange={vi.fn()} />);
 
-    await addPhotoAndRead(view.container);
+    await addPhotoAndRead();
 
     await waitFor(() => expect(warningMock).toHaveBeenCalledWith(expect.stringContaining('não foi implantado')));
     expect(screen.getByLabelText('Descrição')).toBeEnabled();
-    expect(screen.getByRole('button', { name: /Confirmar cadastro/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Cadastrar equipamento/i })).toBeEnabled();
   });
 
   it('carrega a primeira foto do Storage como miniatura e libera a URL temporária', async () => {
@@ -200,13 +201,14 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     });
     const view = render(<WarehouseEquipmentsTab project={project()} onProjectChange={vi.fn()} />);
 
-    await addPhotoAndRead(view.container);
+    await addPhotoAndRead();
     await waitFor(() => expect(invokeMock).toHaveBeenCalled());
     expect(invokeMock.mock.calls[0][1].body.imageDataUrls[0]).toBe(`data:image/jpeg;base64,${btoa('foto otimizada')}`);
 
-    fireEvent.click(screen.getByRole('button', { name: /Confirmar cadastro/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Cadastrar equipamento/i }));
     await waitFor(() => expect(uploadMock).toHaveBeenCalled());
     expect(uploadMock.mock.calls[0][1]).toBe(optimized);
+    expect(screen.queryByRole('dialog', { name: 'Cadastrar novo equipamento' })).not.toBeInTheDocument();
   });
 
   it('abre a foto original ao tocar na miniatura', async () => {
@@ -245,5 +247,39 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     expect(screen.getByText('Patrimônio identificado')).toBeInTheDocument();
     expect(screen.queryByText('Termos de cautela')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Novo termo/i })).not.toBeInTheDocument();
+  });
+
+  it('abre mostrando somente a galeria e revela o cadastro apenas por solicitação', () => {
+    render(<WarehouseEquipmentsTab project={projectWithEquipment({ dataUrl: 'data:image/png;base64,Zm90bw==' })} onProjectChange={vi.fn()} />);
+
+    expect(screen.getByTestId('equipment-gallery')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Descrição')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar equipamento' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Cadastrar novo equipamento' });
+    expect(dialog).toHaveClass('max-h-[95dvh]', 'w-[calc(100vw-1rem)]', 'overflow-hidden');
+    expect(dialog.querySelector('.overflow-y-auto')).not.toBeNull();
+    expect(screen.getByLabelText('Descrição')).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Cancelar' })).toHaveClass('min-h-11');
+    expect(screen.getByRole('button', { name: 'Cadastrar equipamento' })).toHaveClass('min-h-11');
+  });
+
+  it('fecha um cadastro vazio e confirma antes de descartar dados preenchidos', () => {
+    render(<WarehouseEquipmentsTab project={project()} onProjectChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar equipamento' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
+    expect(screen.queryByRole('dialog', { name: 'Cadastrar novo equipamento' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar equipamento' }));
+    fireEvent.change(screen.getByLabelText('Descrição'), { target: { value: 'Furadeira nova' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
+    expect(screen.getByText('Descartar cadastro do equipamento?')).toBeInTheDocument();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Descartar cadastro' }));
+    expect(screen.queryByRole('dialog', { name: 'Cadastrar novo equipamento' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar equipamento' }));
+    expect(screen.getByLabelText('Descrição')).toHaveValue('');
   });
 });
