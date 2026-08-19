@@ -33,6 +33,7 @@ interface Props {
   onCommitProject?: (next: Project) => Promise<void>;
   canManageFiscalNotes?: boolean;
   canReviewFiscalCosts?: boolean;
+  canViewPanel?: boolean;
   canApproveInventory?: boolean;
   canArchiveWarehouseRecords?: boolean;
   canClearWarehouse?: boolean;
@@ -40,8 +41,8 @@ interface Props {
   auditActor?: WarehouseAuditActor;
 }
 
-export default function Warehouse({ project, onProjectChange, onCommitProject, canManageFiscalNotes = true, canReviewFiscalCosts = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canClearWarehouse = false, onClearWarehouse, auditActor }: Props) {
-  const [tab, setTab] = useState('painel');
+export default function Warehouse({ project, onProjectChange, onCommitProject, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canClearWarehouse = false, onClearWarehouse, auditActor }: Props) {
+  const [tab, setTab] = useState(() => canViewPanel ? 'painel' : 'notas');
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [clearPassword, setClearPassword] = useState('');
   const [clearError, setClearError] = useState('');
@@ -50,7 +51,13 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, c
   useEffect(() => {
     if (ensured !== project) onProjectChange(ensured);
   }, [ensured, project, onProjectChange]);
+  useEffect(() => {
+    if (!canViewPanel && tab === 'painel') setTab('notas');
+  }, [canViewPanel, tab]);
   const summary = useMemo(() => panelSummary(ensured), [ensured]);
+  const visibleTabs = canViewPanel
+    ? WAREHOUSE_TABS
+    : WAREHOUSE_TABS.filter(item => item.value !== 'painel');
 
   const handleClearWarehouse = async () => {
     if (!onClearWarehouse || !clearPassword || clearing) return;
@@ -112,20 +119,22 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, c
             value={tab}
             onChange={event => setTab(event.target.value)}
           >
-            {WAREHOUSE_TABS.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+            {visibleTabs.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
         </div>
         <TabsList className="hidden h-auto min-h-12 w-full justify-start overflow-x-auto rounded-xl border bg-muted/70 p-1.5 shadow-sm lg:flex">
-          {WAREHOUSE_TABS.map(({ value, label, icon: Icon }) => (
+          {visibleTabs.map(({ value, label, icon: Icon }) => (
             <TabsTrigger key={value} value={value} className="min-h-11 rounded-lg px-3 text-xs font-bold data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <Icon className="mr-1 h-3.5 w-3.5" /> {label}
             </TabsTrigger>
           ))}
         </TabsList>
 
-        <TabsContent value="painel" className="mt-3">
-          <WarehousePanel project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
-        </TabsContent>
+        {canViewPanel && (
+          <TabsContent value="painel" className="mt-3">
+            <WarehousePanel project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
+          </TabsContent>
+        )}
         <TabsContent value="notas" className="mt-3">
           <WarehouseFiscalNotesTab
             project={ensured}

@@ -59,6 +59,35 @@ describe('controle de acesso à limpeza do almoxarifado', () => {
     }
   });
 
+  it('oculta o Painel para o Almoxarife e abre diretamente em Entrada', () => {
+    render(<Warehouse project={project} onProjectChange={vi.fn()} canViewPanel={false} />);
+
+    expect(screen.queryByText('Conteúdo do painel')).not.toBeInTheDocument();
+    expect(screen.getByText('Conteúdo de entrada')).toBeInTheDocument();
+
+    const expectedLabels = ['Entrada', 'Retiradas', 'Equipamentos', 'Materiais', 'Movimentações', 'Inventário'];
+    const desktopLabels = screen.getAllByRole('tab').map(tab => tab.textContent?.trim());
+    const mobileSelect = screen.getByLabelText('Área do almoxarifado') as HTMLSelectElement;
+    const mobileLabels = Array.from(mobileSelect.options).map(option => option.textContent);
+
+    expect(desktopLabels).toEqual(expectedLabels);
+    expect(mobileLabels).toEqual(expectedLabels);
+    expect(mobileSelect).toHaveValue('notas');
+  });
+
+  it('remove um Painel já aberto quando a permissão é retirada', async () => {
+    const onProjectChange = vi.fn();
+    const { rerender } = render(<Warehouse project={project} onProjectChange={onProjectChange} />);
+
+    expect(screen.getByText('Conteúdo do painel')).toBeInTheDocument();
+
+    rerender(<Warehouse project={project} onProjectChange={onProjectChange} canViewPanel={false} />);
+
+    await waitFor(() => expect(screen.queryByText('Conteúdo do painel')).not.toBeInTheDocument());
+    expect(screen.getByText('Conteúdo de entrada')).toBeInTheDocument();
+    expect(screen.getByLabelText('Área do almoxarifado')).toHaveValue('notas');
+  });
+
   it('não mostra Administração para usuários sem permissão de proprietário', () => {
     render(<Warehouse project={project} onProjectChange={vi.fn()} canClearWarehouse={false} />);
     expect(screen.queryByRole('button', { name: /Administração/i })).not.toBeInTheDocument();
