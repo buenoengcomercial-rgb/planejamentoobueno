@@ -8,8 +8,13 @@ describe('inferSupplierState', () => {
   });
 
   it('prioriza a UF do emitente na chave e não a UF do destinatário', () => {
-    const text = 'CHAVE DE ACESSO 3526 0612 3456 7800 0190 5500 1000 0001 2312 3456 7890 DESTINATARIO PORTO VELHO UF RO';
+    const text = 'CHAVE DE ACESSO 3526 0511 7702 1800 0141 5500 1000 0184 7613 1413 2783 DESTINATARIO PORTO VELHO UF RO';
     expect(inferSupplierState(text)).toBe('SP');
+  });
+
+  it('rejeita o cUF de uma chave com dígito verificador inválido', () => {
+    const text = 'CHAVE DE ACESSO 3526 0511 7702 1800 0141 5500 1000 0184 7613 1413 2784';
+    expect(inferSupplierState(text)).toBeUndefined();
   });
 
   it('usa cidade e sigla próximas ao fornecedor quando não há chave', () => {
@@ -40,5 +45,6 @@ describe('inferSupplierState', () => {
   it('não presume uma UF quando não há evidência', () => {
     expect(inferSupplierState('Documento sem endereço do fornecedor')).toBeUndefined();
     expect(inferSupplierState('GANCHO CURTO PARA PERFILADO')).toBeUndefined();
+    expect(inferSupplierState('EMITENTE SEM UF DESTINATÁRIO/REMETENTE Porto Velho UF RO')).toBeUndefined();
   });
 });

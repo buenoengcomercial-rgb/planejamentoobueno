@@ -32,7 +32,7 @@ describe('createSupplierHeaderImageDataUrl', () => {
       .resolves.toBe('data:image/jpeg;base64,Y2FiZWNhbGhv');
     const canvas = document.querySelector('canvas');
     expect(canvas).toBeNull();
-    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 1000, 992, 0, 0, 1500, 1488);
+    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 1000, 640, 0, 0, 1500, 960);
   });
 
   it('limita a largura do recorte de uma imagem horizontal', async () => {
@@ -42,7 +42,7 @@ describe('createSupplierHeaderImageDataUrl', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/jpeg;base64,Y2FiZWNhbGhv');
 
     await createSupplierHeaderImageDataUrl('data:image/png;base64,bm90YQ==');
-    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 2400, 744, 0, 0, 1800, 558);
+    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 2400, 480, 0, 0, 1800, 360);
   });
 
   it('mantém o fluxo com a imagem completa quando o recorte falha', async () => {

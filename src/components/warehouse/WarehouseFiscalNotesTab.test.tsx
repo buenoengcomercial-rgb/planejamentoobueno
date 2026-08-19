@@ -193,6 +193,7 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.getByRole('combobox', { name: 'UF do fornecedor' })).toHaveTextContent('SP');
     expect(screen.getByRole('combobox', { name: 'UF da obra' })).toHaveTextContent('RO');
     expect(screen.getByRole('combobox', { name: 'UF da obra' })).toBeDisabled();
+    expect(screen.getByText('Frete/ICMS pendentes')).toBeInTheDocument();
     expect(invokeMock).toHaveBeenCalledTimes(1);
     expect(invokeMock.mock.calls[0][1].body.supplierHeaderImageDataUrl).toBe('data:image/jpeg;base64,Y2FiZWNhbGhv');
   });

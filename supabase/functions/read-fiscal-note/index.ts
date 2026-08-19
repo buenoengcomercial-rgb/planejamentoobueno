@@ -1,3 +1,5 @@
+import { resolveSupplierIdentity } from "./fiscalIdentity.ts";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-api-version",
@@ -24,6 +26,7 @@ type FiscalInvoice = {
 };
 
 type FiscalNotePayload = {
+  accessKey?: string | null;
   supplierName?: string | null;
   supplierCnpj?: string | null;
   supplierState?: string | null;
@@ -43,6 +46,7 @@ type FiscalNotePayload = {
 const systemPrompt = `Voce e um assistente especialista em ler notas fiscais brasileiras (DANFE/NFe) de materiais de obra a partir de imagens, PDFs renderizados e texto extraido.
 Retorne APENAS JSON valido neste formato:
 {
+  "accessKey": string|null,
   "supplierName": string|null,
   "supplierCnpj": string|null,
   "supplierState": "UF"|null,
@@ -86,6 +90,7 @@ Regras:
 - Nunca use como supplierCnpj a inscricao estadual, a chave de acesso ou o CNPJ/CPF do destinatario/remetente. Inclua literalmente em supplierHeaderText o rotulo CNPJ/CPF do emitente e seu numero para validacao.
 - Quando houver uma localizacao como "Jundiai/SP", "JUNDIAI - SP", "UF: SP" ou o nome completo "Sao Paulo", supplierState deve ser "SP". Associe somente siglas oficiais: AC, AL, AP, AM, BA, CE, DF, ES, GO, MA, MT, MS, MG, PA, PB, PR, PE, PI, RJ, RN, RS, RO, RR, SC, SP, SE e TO.
 - Em uma NF-e, confira tambem os dois primeiros digitos da chave de acesso (codigo cUF). Exemplo: chave iniciada em 11 identifica emitente de RO; 35 identifica SP. Esse codigo pertence a UF que autorizou a NF-e e deve prevalecer sobre a UF do destinatario.
+- Em accessKey transcreva exatamente os 44 digitos impressos abaixo do rotulo CHAVE DE ACESSO. Nao recorte, complete ou invente digitos e nao use protocolo, CNPJ ou codigo de barras parcial nesse campo.
 - Leia fornecedor, CNPJ, UF do endereco do emitente, numero da nota, data de emissao, valor total e itens.
 - supplierState deve conter apenas a sigla brasileira de duas letras quando estiver legivel no endereco do emitente; nunca use a UF do destinatario e nunca deduza a UF apenas pelo CNPJ.
 - Para CADA item extraia o codigo da coluna "COD. PROD.", "Cod. Prod.", "Codigo", "Cod.", "Ref." ou similar como "productCode" — esse codigo e essencial.
@@ -104,120 +109,20 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-const stateByCuf: Record<string, string> = {
-  "11": "RO", "12": "AC", "13": "AM", "14": "RR", "15": "PA", "16": "AP", "17": "TO",
-  "21": "MA", "22": "PI", "23": "CE", "24": "RN", "25": "PB", "26": "PE", "27": "AL", "28": "SE", "29": "BA",
-  "31": "MG", "32": "ES", "33": "RJ", "35": "SP", "41": "PR", "42": "SC", "43": "RS",
-  "50": "MS", "51": "MT", "52": "GO", "53": "DF",
-};
-const validStates = new Set(Object.values(stateByCuf));
-const stateByName: Record<string, string> = {
-  "ACRE": "AC", "ALAGOAS": "AL", "AMAPA": "AP", "AMAZONAS": "AM", "BAHIA": "BA", "CEARA": "CE",
-  "DISTRITO FEDERAL": "DF", "ESPIRITO SANTO": "ES", "GOIAS": "GO", "MARANHAO": "MA",
-  "MATO GROSSO DO SUL": "MS", "MATO GROSSO": "MT", "MINAS GERAIS": "MG", "PARA": "PA",
-  "PARAIBA": "PB", "PARANA": "PR", "PERNAMBUCO": "PE", "PIAUI": "PI", "RIO DE JANEIRO": "RJ",
-  "RIO GRANDE DO NORTE": "RN", "RIO GRANDE DO SUL": "RS", "RONDONIA": "RO", "RORAIMA": "RR",
-  "SANTA CATARINA": "SC", "SAO PAULO": "SP", "SERGIPE": "SE", "TOCANTINS": "TO",
-};
-
-function normalizeText(value: string) {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/\s+/g, " ");
-}
-
-function normalizeBrazilianState(value?: string | null) {
-  const normalized = normalizeText(String(value ?? "")).trim();
-  if (validStates.has(normalized)) return normalized;
-  return stateByName[normalized] ?? null;
-}
-
-function cnpjDigits(value?: string | null) {
-  return String(value ?? "").replace(/\D/g, "");
-}
-
-function isValidCnpj(value?: string | null) {
-  const digits = cnpjDigits(value);
-  if (digits.length !== 14 || /^(\d)\1{13}$/.test(digits)) return false;
-  const calculate = (length: number) => {
-    let weight = length - 7;
-    let sum = 0;
-    for (let index = 0; index < length; index += 1) {
-      sum += Number(digits[index]) * weight--;
-      if (weight < 2) weight = 9;
-    }
-    const remainder = sum % 11;
-    return remainder < 2 ? 0 : 11 - remainder;
-  };
-  return calculate(12) === Number(digits[12]) && calculate(13) === Number(digits[13]);
-}
-
-function formatCnpj(value?: string | null) {
-  const digits = cnpjDigits(value);
-  if (!isValidCnpj(digits)) return null;
-  return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
-}
-
-function inferSupplierCnpjFromHeader(headerText?: string | null) {
-  const text = String(headerText ?? "");
-  const labels = [...text.matchAll(/CNPJ\s*\/?\s*CPF/gi)];
-  for (const label of labels) {
-    const start = (label.index ?? 0) + label[0].length;
-    const candidates = text.slice(start, start + 120).match(/(?<!\d)(?:\d[\s./-]*){14}(?!\d)/g) ?? [];
-    for (const candidate of candidates) {
-      const formatted = formatCnpj(candidate);
-      if (formatted) return formatted;
-    }
-  }
-  return null;
-}
-
-function resolveSupplierCnpj(headerText?: string | null, aiCnpj?: string | null) {
-  const inferred = inferSupplierCnpjFromHeader(headerText);
-  if (inferred) return inferred;
-  const formattedAi = formatCnpj(aiCnpj);
-  if (!formattedAi) return null;
-  if (headerText?.trim() && !cnpjDigits(headerText).includes(cnpjDigits(formattedAi))) return null;
-  return formattedAi;
-}
-
-function inferSupplierState(text: string, supplierName?: string | null, supplierCnpj?: string | null) {
-  const accessKeys = text.match(/(?<!\d)(?:\d[\s.]*){44}(?!\d)/g) ?? [];
-  for (const candidate of accessKeys) {
-    const digits = candidate.replace(/\D/g, "");
-    if (digits.length === 44 && stateByCuf[digits.slice(0, 2)]) return stateByCuf[digits.slice(0, 2)];
-  }
-
-  const normalized = normalizeText(text);
-  const cnpjDigits = String(supplierCnpj ?? "").replace(/\D/g, "");
-  let context = normalized.slice(0, 1400);
-  if (cnpjDigits.length === 14) {
-    const match = new RegExp(cnpjDigits.split("").join("\\D*")).exec(normalized);
-    if (match) context = normalized.slice(Math.max(0, match.index - 900), match.index + match[0].length);
-  } else {
-    const name = String(supplierName ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
-    const index = name.length >= 5 ? normalized.indexOf(name) : -1;
-    if (index >= 0) context = normalized.slice(index, index + 1200);
-  }
-  const labelled = [...context.matchAll(/(?:\bUF\b|\/)[\s:.-]*([A-Z]{2})\b/g)]
-    .map((match) => match[1]).filter((state) => validStates.has(state));
-  if (labelled.length) return labelled[0];
-  const stateName = Object.keys(stateByName).sort((left, right) => right.length - left.length)
-    .find((name) => name.includes(" ")
-      ? context.includes(name)
-      : new RegExp(`\\b(?:ESTADO(?:\\s+DE)?|UF)\\s*[:.-]?\\s*${name}\\b`).test(context));
-  if (stateName) return stateByName[stateName];
-  const standalone = [...context.matchAll(/\b[A-Z]{2}\b/g)]
-    .map((match) => match[0]).filter((state) => validStates.has(state));
-  return standalone.length ? standalone[0] : null;
-}
-
 function normalizePayload(raw: FiscalNotePayload, extractedText = ""): FiscalNotePayload {
   const documentTypes = new Set(["nfe", "nfce", "cupom_fiscal", "pedido_venda", "orcamento", "recibo", "outro"]);
-  const issuerEvidence = [raw.supplierHeaderText, raw.supplierCity, raw.supplierState].filter(Boolean).join("\n");
-  const inferredState = inferSupplierState(`${extractedText}\n${issuerEvidence}`, raw.supplierName, raw.supplierCnpj);
+  const supplierIdentity = resolveSupplierIdentity({
+    accessKey: raw.accessKey,
+    extractedText,
+    supplierHeaderText: raw.supplierHeaderText,
+    supplierCity: raw.supplierCity,
+    supplierName: raw.supplierName,
+    supplierCnpj: raw.supplierCnpj,
+  });
   return {
     supplierName: raw.supplierName ?? null,
-    supplierCnpj: resolveSupplierCnpj(raw.supplierHeaderText, raw.supplierCnpj),
-    supplierState: inferredState ?? normalizeBrazilianState(raw.supplierState),
+    supplierCnpj: supplierIdentity.supplierCnpj ?? null,
+    supplierState: supplierIdentity.supplierState ?? null,
     invoiceNumber: raw.invoiceNumber ?? null,
     issueDate: raw.issueDate ?? null,
     totalAmount: Number(raw.totalAmount ?? 0) || 0,
@@ -354,7 +259,7 @@ Deno.serve(async (req) => {
     if (supplierHeaderImageDataUrl.startsWith("data:image/")) {
       userContent.push({
         type: "text",
-        text: "RECORTE AMPLIADO DO CABECALHO DO EMITENTE. Leia o bloco da empresa fornecedora antes de NATUREZA DA OPERACAO e DESTINATARIO/REMETENTE. Transcreva em supplierHeaderText o municipio/UF e o rotulo CNPJ/CPF com o numero do emitente imediatamente associado a ele.",
+        text: "RECORTE AMPLIADO DO CABECALHO E DA CHAVE DA NF-e. Transcreva em accessKey exatamente os 44 digitos abaixo de CHAVE DE ACESSO. Leia tambem o bloco da empresa fornecedora antes de NATUREZA DA OPERACAO e DESTINATARIO/REMETENTE; transcreva em supplierHeaderText o municipio/UF e o rotulo CNPJ/CPF com o numero do emitente imediatamente associado a ele.",
       });
       userContent.push({
         type: "image_url",

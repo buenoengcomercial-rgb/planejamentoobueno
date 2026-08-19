@@ -22,17 +22,25 @@ function normalizeText(value: string) {
 }
 
 function stateFromAccessKey(text: string) {
-  const candidates = text.match(/(?<!\d)(?:\d[\s.]*){44}(?!\d)/g) ?? [];
+  const candidates = text.match(/(?<!\d)(?:\d[\s./-]*){44}(?!\d)/g) ?? [];
   for (const candidate of candidates) {
     const digits = candidate.replace(/\D/g, '');
     const state = STATE_BY_CUF[digits.slice(0, 2)];
-    if (digits.length === 44 && state) return state;
+    let weight = 2;
+    let sum = 0;
+    for (let index = 42; index >= 0; index -= 1) {
+      sum += Number(digits[index]) * weight;
+      weight = weight === 9 ? 2 : weight + 1;
+    }
+    const remainder = sum % 11;
+    const checkDigit = remainder === 0 || remainder === 1 ? 0 : 11 - remainder;
+    if (digits.length === 44 && state && checkDigit === Number(digits[43])) return state;
   }
   return undefined;
 }
 
 function supplierContext(text: string, supplierName?: string, supplierCnpj?: string) {
-  const normalized = normalizeText(text);
+  const normalized = normalizeText(text).split(/\bDESTINATARIO\s*\/?\s*REMETENTE\b/, 1)[0];
   const cnpjDigits = (supplierCnpj ?? '').replace(/\D/g, '');
   if (cnpjDigits.length === 14) {
     const flexibleCnpj = new RegExp(cnpjDigits.split('').join('\\D*'));
