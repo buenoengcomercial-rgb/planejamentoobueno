@@ -96,6 +96,9 @@ type TransientFiscalReaderNote = ParsedNote & {
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_IMAGES = 4;
+const PDF_TEXT_ONLY_MIN_CHARS = 900;
+const PDF_IMAGE_PAGES = 2;
+const PDF_IMAGE_TARGET_WIDTH = 1100;
 const DESTINATION_STATE = 'RO';
 const FISCAL_READER_VERSION = 'issuer-address-v1';
 const ACCEPTED = ['pdf', 'png', 'jpg', 'jpeg', 'webp'];
