@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Project, WarehouseAuditActor } from '@/types/project';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, FileBarChart, Warehouse as WarehouseIcon, RotateCcw, ReceiptText, Settings2, LockKeyhole, Loader2 } from 'lucide-react';
+import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, Warehouse as WarehouseIcon, RotateCcw, ReceiptText, Settings2, LockKeyhole, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -14,19 +14,17 @@ import WarehouseMovementsTab from './WarehouseMovementsTab';
 import WarehouseRequisitionsTab from './WarehouseRequisitionsTab';
 import WarehouseEquipmentsTab from './WarehouseEquipmentsTab';
 import WarehouseInventoryTab from './WarehouseInventoryTab';
-import WarehouseReportsTab from './WarehouseReportsTab';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
 import './warehouse-visual.css';
 
 const WAREHOUSE_TABS = [
+  { value: 'painel', label: 'Painel', icon: LayoutDashboard },
   { value: 'notas', label: 'ENTRADA', icon: ReceiptText },
-  { value: 'estoque', label: 'Materiais', icon: Boxes },
   { value: 'requisicoes', label: 'Retiradas', icon: ClipboardList },
+  { value: 'equipamentos', label: 'Equipamentos', icon: HardHat },
+  { value: 'estoque', label: 'Materiais', icon: Boxes },
   { value: 'movimentos', label: 'Movimentações', icon: ArrowLeftRight },
   { value: 'inventario', label: 'Inventário', icon: ListChecks },
-  { value: 'equipamentos', label: 'Equipamentos', icon: HardHat },
-  { value: 'painel', label: 'Painel', icon: LayoutDashboard },
-  { value: 'relatorios', label: 'Relatórios', icon: FileBarChart },
 ] as const;
 
 interface Props {
@@ -42,7 +40,7 @@ interface Props {
 }
 
 export default function Warehouse({ project, onProjectChange, onCommitProject, canManageFiscalNotes = true, canReviewFiscalCosts = true, canApproveInventory = true, canClearWarehouse = false, onClearWarehouse, auditActor }: Props) {
-  const [tab, setTab] = useState('notas');
+  const [tab, setTab] = useState('painel');
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [clearPassword, setClearPassword] = useState('');
   const [clearError, setClearError] = useState('');
@@ -127,9 +125,6 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, c
         <TabsContent value="painel" className="mt-3">
           <WarehousePanel project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
         </TabsContent>
-        <TabsContent value="estoque" className="mt-3">
-          <WarehouseStockTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
-        </TabsContent>
         <TabsContent value="notas" className="mt-3">
           <WarehouseFiscalNotesTab
             project={ensured}
@@ -140,20 +135,20 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, c
             auditActor={auditActor}
           />
         </TabsContent>
-        <TabsContent value="movimentos" className="mt-3">
-          <WarehouseMovementsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
-        </TabsContent>
         <TabsContent value="requisicoes" className="mt-3">
           <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
         </TabsContent>
         <TabsContent value="equipamentos" className="mt-3">
           <WarehouseEquipmentsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
         </TabsContent>
+        <TabsContent value="estoque" className="mt-3">
+          <WarehouseStockTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
+        </TabsContent>
+        <TabsContent value="movimentos" className="mt-3">
+          <WarehouseMovementsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
+        </TabsContent>
         <TabsContent value="inventario" className="mt-3">
           <WarehouseInventoryTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canApprove={canApproveInventory} />
-        </TabsContent>
-        <TabsContent value="relatorios" className="mt-3">
-          <WarehouseReportsTab project={ensured} />
         </TabsContent>
       </Tabs>
       <Dialog

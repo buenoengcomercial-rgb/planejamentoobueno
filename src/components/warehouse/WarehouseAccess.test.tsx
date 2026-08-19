@@ -4,14 +4,13 @@ import type { Project } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
 import Warehouse from './Warehouse';
 
-vi.mock('./WarehousePanel', () => ({ default: () => null }));
-vi.mock('./WarehouseStockTab', () => ({ default: () => null }));
-vi.mock('./WarehouseMovementsTab', () => ({ default: () => null }));
-vi.mock('./WarehouseRequisitionsTab', () => ({ default: () => null }));
-vi.mock('./WarehouseEquipmentsTab', () => ({ default: () => null }));
+vi.mock('./WarehousePanel', () => ({ default: () => <div>Conteúdo do painel</div> }));
+vi.mock('./WarehouseStockTab', () => ({ default: () => <div>Conteúdo de materiais</div> }));
+vi.mock('./WarehouseMovementsTab', () => ({ default: () => <div>Conteúdo de movimentações</div> }));
+vi.mock('./WarehouseRequisitionsTab', () => ({ default: () => <div>Conteúdo de retiradas</div> }));
+vi.mock('./WarehouseEquipmentsTab', () => ({ default: () => <div>Conteúdo de equipamentos</div> }));
 vi.mock('./WarehouseInventoryTab', () => ({ default: () => <div>Conteúdo do inventário</div> }));
-vi.mock('./WarehouseReportsTab', () => ({ default: () => null }));
-vi.mock('./WarehouseFiscalNotesTab', () => ({ default: () => null }));
+vi.mock('./WarehouseFiscalNotesTab', () => ({ default: () => <div>Conteúdo de entrada</div> }));
 
 const project: Project = {
   id: 'project-owner-test',
@@ -24,12 +23,40 @@ const project: Project = {
 };
 
 describe('controle de acesso à limpeza do almoxarifado', () => {
+  it('abre no Painel e mantém a mesma ordem no desktop e no seletor móvel', () => {
+    render(<Warehouse project={project} onProjectChange={vi.fn()} />);
+
+    expect(screen.getByText('Conteúdo do painel')).toBeInTheDocument();
+
+    const expectedLabels = ['Painel', 'ENTRADA', 'Retiradas', 'Equipamentos', 'Materiais', 'Movimentações', 'Inventário'];
+    const desktopLabels = screen.getAllByRole('tab').map(tab => tab.textContent?.trim());
+    const mobileSelect = screen.getByLabelText('Área do almoxarifado') as HTMLSelectElement;
+    const mobileLabels = Array.from(mobileSelect.options).map(option => option.textContent);
+
+    expect(desktopLabels).toEqual(expectedLabels);
+    expect(mobileLabels).toEqual(expectedLabels);
+    expect(mobileSelect).toHaveValue('painel');
+    expect(screen.queryByText('Relatórios')).not.toBeInTheDocument();
+  });
+
   it('permite acessar todas as áreas pelo seletor móvel', () => {
     render(<Warehouse project={project} onProjectChange={vi.fn()} />);
 
-    fireEvent.change(screen.getByLabelText('Área do almoxarifado'), { target: { value: 'inventario' } });
+    const select = screen.getByLabelText('Área do almoxarifado');
+    const areas = [
+      ['notas', 'Conteúdo de entrada'],
+      ['requisicoes', 'Conteúdo de retiradas'],
+      ['equipamentos', 'Conteúdo de equipamentos'],
+      ['estoque', 'Conteúdo de materiais'],
+      ['movimentos', 'Conteúdo de movimentações'],
+      ['inventario', 'Conteúdo do inventário'],
+      ['painel', 'Conteúdo do painel'],
+    ];
 
-    expect(screen.getByText('Conteúdo do inventário')).toBeInTheDocument();
+    for (const [value, content] of areas) {
+      fireEvent.change(select, { target: { value } });
+      expect(screen.getByText(content)).toBeInTheDocument();
+    }
   });
 
   it('não mostra Administração para usuários sem permissão de proprietário', () => {
