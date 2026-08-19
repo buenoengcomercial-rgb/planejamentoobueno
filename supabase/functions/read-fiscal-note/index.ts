@@ -82,6 +82,8 @@ Regras:
 - Use "nfe", "nfce" ou "cupom_fiscal" apenas quando houver evidencia fiscal clara (DANFE, chave de acesso, NFC-e ou cupom fiscal de compra).
 - Avalie obrigatoriamente o cabecalho e o endereco do EMITENTE para identificar a UF do fornecedor. O emitente fica antes do titulo DESTINATARIO/REMETENTE. Nunca use nenhum municipio ou UF que esteja depois desse titulo.
 - Transcreva em supplierHeaderText o bloco visivel do emitente contendo razao social, CNPJ, endereco, municipio e UF. Retorne em supplierCity somente o municipio do emitente.
+- supplierCnpj deve ser exclusivamente o numero que aparece logo abaixo ou ao lado do rotulo CNPJ/CPF no cabecalho do EMITENTE, antes de NATUREZA DA OPERACAO e antes de DESTINATARIO/REMETENTE.
+- Nunca use como supplierCnpj a inscricao estadual, a chave de acesso ou o CNPJ/CPF do destinatario/remetente. Inclua literalmente em supplierHeaderText o rotulo CNPJ/CPF do emitente e seu numero para validacao.
 - Quando houver uma localizacao como "Jundiai/SP", "JUNDIAI - SP", "UF: SP" ou o nome completo "Sao Paulo", supplierState deve ser "SP". Associe somente siglas oficiais: AC, AL, AP, AM, BA, CE, DF, ES, GO, MA, MT, MS, MG, PA, PB, PR, PE, PI, RJ, RN, RS, RO, RR, SC, SP, SE e TO.
 - Em uma NF-e, confira tambem os dois primeiros digitos da chave de acesso (codigo cUF). Exemplo: chave iniciada em 11 identifica emitente de RO; 35 identifica SP. Esse codigo pertence a UF que autorizou a NF-e e deve prevalecer sobre a UF do destinatario.
 - Leia fornecedor, CNPJ, UF do endereco do emitente, numero da nota, data de emissao, valor total e itens.
@@ -128,6 +130,55 @@ function normalizeBrazilianState(value?: string | null) {
   return stateByName[normalized] ?? null;
 }
 
+function cnpjDigits(value?: string | null) {
+  return String(value ?? "").replace(/\D/g, "");
+}
+
+function isValidCnpj(value?: string | null) {
+  const digits = cnpjDigits(value);
+  if (digits.length !== 14 || /^(\d)\1{13}$/.test(digits)) return false;
+  const calculate = (length: number) => {
+    let weight = length - 7;
+    let sum = 0;
+    for (let index = 0; index < length; index += 1) {
+      sum += Number(digits[index]) * weight--;
+      if (weight < 2) weight = 9;
+    }
+    const remainder = sum % 11;
+    return remainder < 2 ? 0 : 11 - remainder;
+  };
+  return calculate(12) === Number(digits[12]) && calculate(13) === Number(digits[13]);
+}
+
+function formatCnpj(value?: string | null) {
+  const digits = cnpjDigits(value);
+  if (!isValidCnpj(digits)) return null;
+  return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, "$1.$2.$3/$4-$5");
+}
+
+function inferSupplierCnpjFromHeader(headerText?: string | null) {
+  const text = String(headerText ?? "");
+  const labels = [...text.matchAll(/CNPJ\s*\/?\s*CPF/gi)];
+  for (const label of labels) {
+    const start = (label.index ?? 0) + label[0].length;
+    const candidates = text.slice(start, start + 120).match(/(?<!\d)(?:\d[\s./-]*){14}(?!\d)/g) ?? [];
+    for (const candidate of candidates) {
+      const formatted = formatCnpj(candidate);
+      if (formatted) return formatted;
+    }
+  }
+  return null;
+}
+
+function resolveSupplierCnpj(headerText?: string | null, aiCnpj?: string | null) {
+  const inferred = inferSupplierCnpjFromHeader(headerText);
+  if (inferred) return inferred;
+  const formattedAi = formatCnpj(aiCnpj);
+  if (!formattedAi) return null;
+  if (headerText?.trim() && !cnpjDigits(headerText).includes(cnpjDigits(formattedAi))) return null;
+  return formattedAi;
+}
+
 function inferSupplierState(text: string, supplierName?: string | null, supplierCnpj?: string | null) {
   const accessKeys = text.match(/(?<!\d)(?:\d[\s.]*){44}(?!\d)/g) ?? [];
   for (const candidate of accessKeys) {
@@ -165,7 +216,7 @@ function normalizePayload(raw: FiscalNotePayload, extractedText = ""): FiscalNot
   const inferredState = inferSupplierState(`${extractedText}\n${issuerEvidence}`, raw.supplierName, raw.supplierCnpj);
   return {
     supplierName: raw.supplierName ?? null,
-    supplierCnpj: raw.supplierCnpj ?? null,
+    supplierCnpj: resolveSupplierCnpj(raw.supplierHeaderText, raw.supplierCnpj),
     supplierState: inferredState ?? normalizeBrazilianState(raw.supplierState),
     invoiceNumber: raw.invoiceNumber ?? null,
     issueDate: raw.issueDate ?? null,
@@ -303,7 +354,7 @@ Deno.serve(async (req) => {
     if (supplierHeaderImageDataUrl.startsWith("data:image/")) {
       userContent.push({
         type: "text",
-        text: "RECORTE AMPLIADO DO CABECALHO DO EMITENTE. Leia o bloco da empresa fornecedora antes de DESTINATARIO/REMETENTE e transcreva municipio/UF em supplierHeaderText.",
+        text: "RECORTE AMPLIADO DO CABECALHO DO EMITENTE. Leia o bloco da empresa fornecedora antes de NATUREZA DA OPERACAO e DESTINATARIO/REMETENTE. Transcreva em supplierHeaderText o municipio/UF e o rotulo CNPJ/CPF com o numero do emitente imediatamente associado a ele.",
       });
       userContent.push({
         type: "image_url",
