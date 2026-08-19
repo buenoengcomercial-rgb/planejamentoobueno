@@ -28,7 +28,7 @@ describe('controle de acesso à limpeza do almoxarifado', () => {
 
     expect(screen.getByText('Conteúdo do painel')).toBeInTheDocument();
 
-    const expectedLabels = ['Painel', 'ENTRADA', 'Retiradas', 'Equipamentos', 'Materiais', 'Movimentações', 'Inventário'];
+    const expectedLabels = ['Painel', 'Entrada', 'Retiradas', 'Equipamentos', 'Materiais', 'Movimentações', 'Inventário'];
     const desktopLabels = screen.getAllByRole('tab').map(tab => tab.textContent?.trim());
     const mobileSelect = screen.getByLabelText('Área do almoxarifado') as HTMLSelectElement;
     const mobileLabels = Array.from(mobileSelect.options).map(option => option.textContent);
