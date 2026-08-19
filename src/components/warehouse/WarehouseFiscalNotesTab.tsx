@@ -39,6 +39,7 @@ import {
 } from '@/lib/warehouseAttachments';
 import { inferSupplierStateFromIssuerAddress, normalizeBrazilianState } from '@/lib/fiscalSupplierState';
 import { createSupplierHeaderImageDataUrl } from '@/lib/fiscalSupplierHeaderImage';
+import { optimizeEquipmentPhoto } from '@/lib/equipmentPhotoOptimization';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
