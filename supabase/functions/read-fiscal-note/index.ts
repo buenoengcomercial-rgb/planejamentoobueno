@@ -76,7 +76,8 @@ Retorne APENAS JSON valido neste formato:
 Regras:
 - Primeiro classifique o documento. Pedido de venda, pedido de compra, orcamento, proposta e recibo NAO sao nota fiscal e nunca devem ser classificados como NF-e.
 - Use "nfe", "nfce" ou "cupom_fiscal" apenas quando houver evidencia fiscal clara (DANFE, chave de acesso, NFC-e ou cupom fiscal de compra).
-- Avalie o cabecalho e o endereco do emitente para identificar a UF do fornecedor. Procure especialmente a linha do municipio/UF, o campo UF e o endereco ao lado do CNPJ.
+- Avalie o cabecalho e o endereco do EMITENTE para identificar a UF do fornecedor. Procure especialmente a linha do municipio/UF, o campo UF e o endereco ao lado do CNPJ do emitente.
+- Em uma NF-e, confira tambem os dois primeiros digitos da chave de acesso (codigo cUF). Exemplo: chave iniciada em 11 identifica emitente de RO; 35 identifica SP. Esse codigo pertence a UF que autorizou a NF-e e deve prevalecer sobre a UF do destinatario.
 - Leia fornecedor, CNPJ, UF do endereco do emitente, numero da nota, data de emissao, valor total e itens.
 - supplierState deve conter apenas a sigla brasileira de duas letras quando estiver legivel no endereco do emitente; nunca use a UF do destinatario e nunca deduza a UF apenas pelo CNPJ.
 - Para CADA item extraia o codigo da coluna "COD. PROD.", "Cod. Prod.", "Codigo", "Cod.", "Ref." ou similar como "productCode" — esse codigo e essencial.
@@ -95,14 +96,49 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-function normalizePayload(raw: FiscalNotePayload): FiscalNotePayload {
+const stateByCuf: Record<string, string> = {
+  "11": "RO", "12": "AC", "13": "AM", "14": "RR", "15": "PA", "16": "AP", "17": "TO",
+  "21": "MA", "22": "PI", "23": "CE", "24": "RN", "25": "PB", "26": "PE", "27": "AL", "28": "SE", "29": "BA",
+  "31": "MG", "32": "ES", "33": "RJ", "35": "SP", "41": "PR", "42": "SC", "43": "RS",
+  "50": "MS", "51": "MT", "52": "GO", "53": "DF",
+};
+const validStates = new Set(Object.values(stateByCuf));
+
+function inferSupplierState(text: string, supplierName?: string | null, supplierCnpj?: string | null) {
+  const accessKeys = text.match(/(?<!\d)(?:\d[\s.]*){44}(?!\d)/g) ?? [];
+  for (const candidate of accessKeys) {
+    const digits = candidate.replace(/\D/g, "");
+    if (digits.length === 44 && stateByCuf[digits.slice(0, 2)]) return stateByCuf[digits.slice(0, 2)];
+  }
+
+  const normalized = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/\s+/g, " ");
+  const cnpjDigits = String(supplierCnpj ?? "").replace(/\D/g, "");
+  let context = normalized.slice(0, 1400);
+  if (cnpjDigits.length === 14) {
+    const match = new RegExp(cnpjDigits.split("").join("\\D*")).exec(normalized);
+    if (match) context = normalized.slice(Math.max(0, match.index - 900), match.index + match[0].length);
+  } else {
+    const name = String(supplierName ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
+    const index = name.length >= 5 ? normalized.indexOf(name) : -1;
+    if (index >= 0) context = normalized.slice(index, index + 1200);
+  }
+  const labelled = [...context.matchAll(/(?:\bUF\b|\/)[\s:.-]*([A-Z]{2})\b/g)]
+    .map((match) => match[1]).filter((state) => validStates.has(state));
+  if (labelled.length) return labelled[0];
+  const standalone = [...context.matchAll(/\b[A-Z]{2}\b/g)]
+    .map((match) => match[0]).filter((state) => validStates.has(state));
+  return standalone.length ? standalone[0] : null;
+}
+
+function normalizePayload(raw: FiscalNotePayload, extractedText = ""): FiscalNotePayload {
   const documentTypes = new Set(["nfe", "nfce", "cupom_fiscal", "pedido_venda", "orcamento", "recibo", "outro"]);
+  const inferredState = inferSupplierState(extractedText, raw.supplierName, raw.supplierCnpj);
   return {
     supplierName: raw.supplierName ?? null,
     supplierCnpj: raw.supplierCnpj ?? null,
-    supplierState: raw.supplierState && /^[A-Za-z]{2}$/.test(String(raw.supplierState).trim())
+    supplierState: inferredState ?? (raw.supplierState && /^[A-Za-z]{2}$/.test(String(raw.supplierState).trim())
       ? String(raw.supplierState).trim().toUpperCase()
-      : null,
+      : null),
     invoiceNumber: raw.invoiceNumber ?? null,
     issueDate: raw.issueDate ?? null,
     totalAmount: Number(raw.totalAmount ?? 0) || 0,
@@ -248,7 +284,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "IA retornou JSON invalido.", raw: ai.content }, 502);
     }
 
-    return jsonResponse({ ok: true, note: normalizePayload(parsed) });
+    return jsonResponse({ ok: true, note: normalizePayload(parsed, extractedText) });
   } catch (error) {
     return jsonResponse({ error: (error as Error).message }, 500);
   }

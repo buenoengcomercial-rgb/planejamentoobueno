@@ -37,6 +37,7 @@ import {
   loadWarehouseAttachmentBlob,
   warehouseAttachmentErrorMessage,
 } from '@/lib/warehouseAttachments';
+import { inferSupplierState } from '@/lib/fiscalSupplierState';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -203,7 +204,8 @@ async function readWithAi(input: { name: string; type?: string; urls: string[]; 
   return {
     ...data.note,
     supplierCnpj: normalizeCnpj(data.note.supplierCnpj),
-    supplierState: normalizeState(data.note.supplierState),
+    supplierState: inferSupplierState(input.text, data.note.supplierName, data.note.supplierCnpj)
+      ?? normalizeState(data.note.supplierState),
     totalAmount: Number(data.note.totalAmount || 0),
     aiConfidence: data.note.confidence == null ? undefined : Number(data.note.confidence),
     documentTypeConfidence: data.note.documentTypeConfidence == null ? undefined : Number(data.note.documentTypeConfidence),
