@@ -343,10 +343,12 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     const dialog = screen.getByRole('dialog');
     const headers = within(dialog).getAllByRole('columnheader').map(header => header.textContent);
     expect(headers).not.toEqual(expect.arrayContaining(['Qtd. estoque', 'Un. estoque', 'Fator']));
+    expect(within(dialog).getByRole('table')).toHaveClass('min-w-[1160px]', 'table-fixed');
     const itemButton = screen.getByRole('button', { name: /FITA CREPE 24MM X 50M/i });
     expect(itemButton).toHaveAttribute('aria-expanded', 'false');
     expect(itemButton).toHaveTextContent('2,00 UN');
-    expect(within(itemButton).getByText('FITA CREPE 24MM X 50M')).toHaveClass('line-clamp-2');
+    expect(within(itemButton).getByText('FITA CREPE 24MM X 50M')).toHaveClass('truncate');
+    expect(within(itemButton).getByText('FITA CREPE 24MM X 50M')).not.toHaveClass('line-clamp-2');
     expect(screen.queryByText('Dados da nota')).not.toBeInTheDocument();
     fireEvent.click(itemButton);
     expect(itemButton).toHaveAttribute('aria-expanded', 'true');
@@ -384,24 +386,38 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     fireEvent.blur(unitPrice);
     expect(unitPrice).toHaveValue('50,00');
     expect(totalPrice).toHaveValue('100,00');
+
+    fireEvent.focus(quantity);
+    fireEvent.change(quantity, { target: { value: '1340' } });
+    fireEvent.blur(quantity);
+    expect(quantity).toHaveValue('1.340,00');
+
+    fireEvent.focus(totalPrice);
+    fireEvent.change(totalPrice, { target: { value: '5239,4' } });
+    fireEvent.blur(totalPrice);
+    expect(totalPrice).toHaveValue('5.239,40');
+    expect(totalPrice.parentElement).toHaveTextContent('R$');
   });
 
-  it('usa descrição de duas linhas com crescimento automático no desktop e no celular', async () => {
+  it('usa descrição de uma linha e cresce somente quando o conteúdo exigir', async () => {
     const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={vi.fn()} canManage />);
     await readDocument(view.container);
     const desktopDescription = screen.getByLabelText('Descrição do item 1 na tabela');
     expect(desktopDescription.tagName).toBe('TEXTAREA');
-    expect(desktopDescription).toHaveAttribute('rows', '2');
-    expect(desktopDescription).toHaveClass('resize-none', 'overflow-hidden');
+    expect(desktopDescription).toHaveAttribute('rows', '1');
+    expect(desktopDescription).toHaveClass('min-h-11', 'resize-none', 'overflow-hidden');
+    expect(desktopDescription).toHaveStyle({ height: '44px' });
 
+    Object.defineProperty(desktopDescription, 'scrollHeight', { configurable: true, value: 88 });
     fireEvent.change(desktopDescription, { target: { value: 'DESCRIÇÃO LONGA DO MATERIAL QUE PRECISA OCUPAR MAIS DE DUAS LINHAS PARA SER LIDA POR INTEIRO' } });
     expect(desktopDescription).toHaveValue('DESCRIÇÃO LONGA DO MATERIAL QUE PRECISA OCUPAR MAIS DE DUAS LINHAS PARA SER LIDA POR INTEIRO');
+    expect(desktopDescription).toHaveStyle({ height: '88px' });
 
     fireEvent.click(screen.getByRole('button', { name: /DESCRIÇÃO LONGA DO MATERIAL/i }));
     const mobileDescription = screen.getByLabelText('Descrição do item 1 no celular');
     expect(mobileDescription.tagName).toBe('TEXTAREA');
-    expect(mobileDescription).toHaveAttribute('rows', '2');
-    expect(mobileDescription).toHaveClass('text-base');
+    expect(mobileDescription).toHaveAttribute('rows', '1');
+    expect(mobileDescription).toHaveClass('min-h-11', 'text-base');
   });
 
   it('sinaliza compra interestadual sem bloquear e restringe a revisão tardia à engenharia', () => {

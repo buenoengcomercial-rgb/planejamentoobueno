@@ -739,8 +739,8 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
               <section>
                 <div className="mb-2 flex items-center justify-between"><h3 className="font-semibold">Itens do documento ({selected.items.length})</h3>{isDraft && <Button size="sm" variant="outline" onClick={() => setSelected({ ...selected, items: [...selected.items, newItem()] })}><Plus className="mr-1 h-4 w-4" />Adicionar item</Button>}</div>
                 <div className="hidden overflow-x-auto rounded-md border md:block">
-                  <table className="w-full min-w-[940px] table-fixed text-xs">
-                    <colgroup><col className="w-[78px]" /><col /><col className="w-[68px]" /><col className="w-[56px]" /><col className="w-[96px]" /><col className="w-[96px]" /><col className="w-[96px]" /><col className="w-[100px]" /><col className="w-[120px]" />{isDraft && <col className="w-11" />}</colgroup>
+                  <table className="w-full min-w-[1160px] table-fixed text-xs">
+                    <colgroup><col className="w-[80px]" /><col className="w-[300px]" /><col className="w-[96px]" /><col className="w-[64px]" /><col className="w-[110px]" /><col className="w-[122px]" /><col className="w-[100px]" /><col className="w-[110px]" /><col className="w-[140px]" />{isDraft && <col className="w-11" />}</colgroup>
                     <thead className="bg-muted text-muted-foreground"><tr><th className="h-11 p-2 text-left align-middle">Cód. prod.</th><th className="h-11 p-2 text-left align-middle">Descrição</th><th className="h-11 p-1 text-center align-middle">Qtd. NF</th><th className="h-11 p-1 text-center align-middle">Un. NF</th><th className="h-11 p-1 text-center align-middle">V. unit. NF</th><th className="h-11 p-1 text-center align-middle">Total NF</th><th className="h-11 p-1 text-center align-middle">V. unit. global</th><th className="h-11 p-1 text-center align-middle">V. total global</th><th className="h-11 p-1 text-left align-middle">Grupo de compra</th>{isDraft && <th className="h-11 p-1" />}</tr></thead>
                     <tbody>{selected.items.map((item, index) => <ItemTableRow key={item.id} note={selected} item={item} index={index} editable={!!isDraft} groupEditable={canManage && !isArchived} purchaseGroups={purchaseGroups} onUpdate={updateItem} onGroupChange={value => updatePurchaseGroup(selected, item, value)} onRemove={() => setSelected({ ...selected, items: selected.items.filter((_, itemIndex) => itemIndex !== index) })} />)}</tbody>
                   </table>
@@ -869,13 +869,13 @@ function AutoGrowDescription({ value, readOnly, onChange, ariaLabel, mobile = fa
     const control = ref.current;
     if (!control) return;
     control.style.height = 'auto';
-    control.style.height = `${Math.max(control.scrollHeight, 56)}px`;
+    control.style.height = `${Math.max(control.scrollHeight, 44)}px`;
   }, [value]);
   return <Textarea
     ref={ref}
     aria-label={ariaLabel}
-    rows={2}
-    className={`min-h-14 resize-none overflow-hidden py-2 leading-snug ${mobile ? 'text-base' : 'text-sm'}`}
+    rows={1}
+    className={`min-h-11 resize-none overflow-hidden py-2 leading-snug ${mobile ? 'text-base' : 'text-sm'}`}
     value={value}
     readOnly={readOnly}
     onChange={event => onChange(event.target.value)}
@@ -1013,7 +1013,7 @@ function ItemTableRow({ note, item, index, editable, groupEditable, purchaseGrou
 function ItemMobileCard({ note, item, index, expanded = false, onToggle, editable, groupEditable, purchaseGroups, onUpdate, onGroupChange, onRemove }: ItemEditorProps) {
   return <article className="overflow-hidden rounded-md border bg-card">
     <button type="button" className="flex min-h-16 w-full items-center gap-3 p-3 text-left" aria-expanded={expanded} onClick={onToggle}>
-      <div className="min-w-0 flex-1"><div className="line-clamp-2 text-sm font-semibold leading-snug">{item.description || 'Item sem descrição'}</div><div className="mt-1 truncate text-xs text-muted-foreground">{item.productCode || 'Sem código'} · {decimal(Number(item.quantity || 0))} {item.unit || 'UN'}</div></div>
+      <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{item.description || 'Item sem descrição'}</div><div className="mt-1 truncate text-xs text-muted-foreground">{item.productCode || 'Sem código'} · {decimal(Number(item.quantity || 0))} {item.unit || 'UN'}</div></div>
       <div className="shrink-0 text-right"><div className="text-xs text-muted-foreground">Custo global</div><div className="font-mono text-sm font-semibold">{money(fiscalItemGlobalTotal(item, note))}</div></div>
       {expanded ? <ChevronUp className="h-5 w-5 shrink-0" /> : <ChevronDown className="h-5 w-5 shrink-0" />}
     </button>
