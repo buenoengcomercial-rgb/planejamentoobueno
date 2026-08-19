@@ -101,7 +101,38 @@ const FISCAL_READER_VERSION = 'issuer-address-v1';
 const ACCEPTED = ['pdf', 'png', 'jpg', 'jpeg', 'webp'];
 
 function money(value?: number) {
-  return Number(value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  return Number(value || 0).toLocaleString('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function decimal(value?: number) {
+  return Number(value || 0).toLocaleString('pt-BR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function decimalDraft(value?: number) {
+  if (value == null || !Number.isFinite(Number(value))) return '';
+  return Number(value).toLocaleString('pt-BR', {
+    useGrouping: false,
+    maximumFractionDigits: 12,
+  });
+}
+
+function parseDecimal(value: string) {
+  const normalized = value.trim().replace(/\s/g, '');
+  if (!normalized) return undefined;
+  const decimalSeparator = normalized.lastIndexOf(',') > normalized.lastIndexOf('.') ? ',' : '.';
+  const sanitized = decimalSeparator === ','
+    ? normalized.replace(/\./g, '').replace(',', '.')
+    : normalized.replace(/,/g, '');
+  const parsed = Number(sanitized);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : undefined;
 }
 
 function normalizeCnpj(value?: string) {
@@ -708,8 +739,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
               <section>
                 <div className="mb-2 flex items-center justify-between"><h3 className="font-semibold">Itens do documento ({selected.items.length})</h3>{isDraft && <Button size="sm" variant="outline" onClick={() => setSelected({ ...selected, items: [...selected.items, newItem()] })}><Plus className="mr-1 h-4 w-4" />Adicionar item</Button>}</div>
                 <div className="hidden overflow-x-auto rounded-md border md:block">
-                  <table className={`${isDraft ? 'min-w-[1480px]' : 'min-w-[1080px]'} w-full text-xs`}>
-                    <thead className="bg-muted text-muted-foreground"><tr><th className="h-11 p-2 text-left align-middle">Cód. prod.</th><th className="h-11 min-w-64 p-2 text-left align-middle">Descrição</th><th className="h-11 p-2 text-center align-middle">Qtd. NF</th><th className="h-11 p-2 text-center align-middle">Un. NF</th><th className="h-11 p-2 text-center align-middle">V. unit. NF</th><th className="h-11 p-2 text-center align-middle">Total NF</th>{isDraft && <><th className="h-11 p-2 text-center align-middle">Qtd. estoque</th><th className="h-11 p-2 text-center align-middle">Un. estoque</th><th className="h-11 p-2 text-center align-middle">Fator</th></>}<th className="h-11 p-2 text-center align-middle">V. unit. global</th><th className="h-11 p-2 text-center align-middle">V. total global</th><th className="h-11 min-w-52 p-2 text-left align-middle">Grupo de compra</th>{isDraft && <th className="h-11 p-2" />}</tr></thead>
+                  <table className="w-full min-w-[940px] table-fixed text-xs">
+                    <colgroup><col className="w-[78px]" /><col /><col className="w-[68px]" /><col className="w-[56px]" /><col className="w-[96px]" /><col className="w-[96px]" /><col className="w-[96px]" /><col className="w-[100px]" /><col className="w-[120px]" />{isDraft && <col className="w-11" />}</colgroup>
+                    <thead className="bg-muted text-muted-foreground"><tr><th className="h-11 p-2 text-left align-middle">Cód. prod.</th><th className="h-11 p-2 text-left align-middle">Descrição</th><th className="h-11 p-1 text-center align-middle">Qtd. NF</th><th className="h-11 p-1 text-center align-middle">Un. NF</th><th className="h-11 p-1 text-center align-middle">V. unit. NF</th><th className="h-11 p-1 text-center align-middle">Total NF</th><th className="h-11 p-1 text-center align-middle">V. unit. global</th><th className="h-11 p-1 text-center align-middle">V. total global</th><th className="h-11 p-1 text-left align-middle">Grupo de compra</th>{isDraft && <th className="h-11 p-1" />}</tr></thead>
                     <tbody>{selected.items.map((item, index) => <ItemTableRow key={item.id} note={selected} item={item} index={index} editable={!!isDraft} groupEditable={canManage && !isArchived} purchaseGroups={purchaseGroups} onUpdate={updateItem} onGroupChange={value => updatePurchaseGroup(selected, item, value)} onRemove={() => setSelected({ ...selected, items: selected.items.filter((_, itemIndex) => itemIndex !== index) })} />)}</tbody>
                   </table>
                 </div>
@@ -781,13 +813,73 @@ function Field({ label, value, readOnly, onChange, type = 'text' }: { label: str
   return <div><label className="mb-1 block text-sm font-medium">{label}</label><Input className="min-h-11" type={type} value={value ?? ''} readOnly={readOnly} onChange={event => onChange(event.target.value)} /></div>;
 }
 
-function DecimalInput({ value, readOnly, onChange }: { value?: number; readOnly: boolean; onChange: (value: number) => void }) {
-  return <Input className="min-h-11 min-w-24 text-center text-base" type="number" inputMode="decimal" min="0" step="any" value={Number.isFinite(value) ? value : ''} readOnly={readOnly} onChange={event => onChange(Math.max(0, Number(event.target.value || 0)))} />;
+function LocalizedNumberInput({ value, readOnly, onChange, ariaLabel, compact = false, monetary = false }: { value?: number; readOnly: boolean; onChange: (value: number | undefined) => void; ariaLabel: string; compact?: boolean; monetary?: boolean }) {
+  const [focused, setFocused] = useState(false);
+  const [draft, setDraft] = useState('');
+  const display = focused ? draft : value == null ? '' : decimal(value);
+  const commit = (raw: string) => onChange(parseDecimal(raw));
+  return <Input
+    aria-label={ariaLabel}
+    className={`min-h-11 min-w-0 tabular-nums [appearance:textfield] ${monetary ? compact ? 'pl-7 pr-1 text-right text-sm' : 'pl-10 pr-3 text-right text-base' : compact ? 'px-1 text-center text-sm' : 'text-center text-base'}`}
+    type="text"
+    inputMode="decimal"
+    value={display}
+    readOnly={readOnly}
+    onFocus={event => {
+      if (readOnly) return;
+      const control = event.currentTarget;
+      const nextDraft = decimalDraft(value);
+      setDraft(nextDraft);
+      setFocused(true);
+      window.setTimeout(() => control.isConnected && control.select(), 0);
+    }}
+    onChange={event => {
+      const nextDraft = event.target.value;
+      if (nextDraft !== '' && !/^\d*[.,]?\d*$/.test(nextDraft)) return;
+      setDraft(nextDraft);
+      commit(nextDraft);
+    }}
+    onBlur={() => {
+      if (readOnly) return;
+      commit(draft);
+      setFocused(false);
+    }}
+    onKeyDown={event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        event.currentTarget.blur();
+      }
+    }}
+  />;
 }
 
-function MoneyInput({ label, value, readOnly, onChange, compact = false }: { label?: string; value?: number; readOnly: boolean; onChange: (value: number | undefined) => void; compact?: boolean }) {
-  const control = <div className="relative"><span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">R$</span><Input aria-label={label || 'Valor monetário'} className={`min-h-11 pl-10 text-right text-base tabular-nums ${compact ? 'min-w-32' : ''}`} type="number" inputMode="decimal" min="0" step="0.01" value={value == null ? '' : value} readOnly={readOnly} onChange={event => onChange(event.target.value === '' ? undefined : Math.max(0, Number(event.target.value)))} /></div>;
+function DecimalInput({ value, readOnly, onChange, ariaLabel, compact = false }: { value?: number; readOnly: boolean; onChange: (value: number) => void; ariaLabel: string; compact?: boolean }) {
+  return <LocalizedNumberInput value={value} readOnly={readOnly} ariaLabel={ariaLabel} compact={compact} onChange={next => onChange(next ?? 0)} />;
+}
+
+function MoneyInput({ label, ariaLabel, value, readOnly, onChange, compact = false }: { label?: string; ariaLabel?: string; value?: number; readOnly: boolean; onChange: (value: number | undefined) => void; compact?: boolean }) {
+  const accessibleLabel = ariaLabel || label || 'Valor monetário';
+  const control = <div className="relative min-w-0"><span className={`pointer-events-none absolute top-1/2 z-10 -translate-y-1/2 font-semibold text-muted-foreground ${compact ? 'left-2 text-xs' : 'left-3 text-sm'}`}>R$</span><LocalizedNumberInput ariaLabel={accessibleLabel} compact={compact} monetary value={value} readOnly={readOnly} onChange={onChange} /><span className="sr-only">Valor em reais</span></div>;
   return label ? <div><label className="mb-1 block text-sm font-medium">{label}</label>{control}</div> : control;
+}
+
+function AutoGrowDescription({ value, readOnly, onChange, ariaLabel, mobile = false }: { value: string; readOnly: boolean; onChange: (value: string) => void; ariaLabel: string; mobile?: boolean }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const control = ref.current;
+    if (!control) return;
+    control.style.height = 'auto';
+    control.style.height = `${Math.max(control.scrollHeight, 56)}px`;
+  }, [value]);
+  return <Textarea
+    ref={ref}
+    aria-label={ariaLabel}
+    rows={2}
+    className={`min-h-14 resize-none overflow-hidden py-2 leading-snug ${mobile ? 'text-base' : 'text-sm'}`}
+    value={value}
+    readOnly={readOnly}
+    onChange={event => onChange(event.target.value)}
+  />;
 }
 
 function MoneyValue({ label, value, strong = false }: { label: string; value: number; strong?: boolean }) {
@@ -904,38 +996,31 @@ function CostReviewBadge({ note }: { note: WarehouseFiscalNote }) {
 }
 
 function ItemTableRow({ note, item, index, editable, groupEditable, purchaseGroups, onUpdate, onGroupChange, onRemove }: ItemEditorProps) {
-  const factor = fiscalItemConversionFactor(item);
-  const stockQuantity = fiscalItemStockQuantity(item);
   return <tr className="border-t">
-    <td className="p-1 align-middle"><Input className="min-h-11 min-w-24 text-center" value={item.productCode || ''} readOnly={!editable} onChange={event => onUpdate(index, { productCode: event.target.value })} /></td>
-    <td className="p-1 align-middle"><Input className="min-h-11 min-w-64" value={item.description} readOnly={!editable} onChange={event => onUpdate(index, { description: event.target.value })} /></td>
-    <td className="p-1 align-middle"><DecimalInput value={item.quantity} readOnly={!editable} onChange={quantity => onUpdate(index, { quantity, totalPrice: quantity * Number(item.unitPrice || 0), stockQuantity: quantity * factor })} /></td>
-    <td className="p-1 align-middle"><Input className="min-h-11 min-w-20 text-center text-base" value={item.unit || 'UN'} readOnly={!editable} onChange={event => onUpdate(index, { unit: event.target.value, stockUnit: fiscalItemStockUnit(item) === (item.unit || 'UN') ? event.target.value : item.stockUnit })} /></td>
-    <td className="p-1 align-middle"><MoneyInput value={item.unitPrice} readOnly={!editable} onChange={unitPrice => onUpdate(index, { unitPrice: unitPrice ?? 0, totalPrice: Number(item.quantity || 0) * Number(unitPrice || 0) })} compact /></td>
-    <td className="p-1 align-middle"><MoneyInput value={item.totalPrice} readOnly={!editable} onChange={totalPrice => onUpdate(index, { totalPrice: totalPrice ?? 0, unitPrice: Number(item.quantity || 0) > 0 ? Number(totalPrice || 0) / Number(item.quantity) : 0 })} compact /></td>
-    {editable && <><td className="p-1 align-middle"><DecimalInput value={stockQuantity} readOnly={false} onChange={value => onUpdate(index, { stockQuantity: value, conversionFactor: Number(item.quantity || 0) > 0 ? value / Number(item.quantity) : 1 })} /></td>
-    <td className="p-1 align-middle"><Input className="min-h-11 min-w-24 text-center text-base" value={fiscalItemStockUnit(item)} onChange={event => onUpdate(index, { stockUnit: event.target.value })} /></td>
-    <td className="p-1 align-middle"><DecimalInput value={factor} readOnly={false} onChange={value => onUpdate(index, { conversionFactor: value, stockQuantity: Number(item.quantity || 0) * value })} /></td></>}
-    <td className="h-11 p-2 text-center align-middle font-mono tabular-nums">{money(fiscalItemGlobalUnitPrice(item, note))}</td>
-    <td className="h-11 p-2 text-center align-middle font-mono font-semibold tabular-nums">{money(fiscalItemGlobalTotal(item, note))}</td>
+    <td className="p-1 align-middle"><Input aria-label={`Código do item ${index + 1} na tabela`} className="min-h-11 min-w-0 px-1 text-center text-sm" value={item.productCode || ''} readOnly={!editable} onChange={event => onUpdate(index, { productCode: event.target.value })} /></td>
+    <td className="p-1 align-middle"><AutoGrowDescription ariaLabel={`Descrição do item ${index + 1} na tabela`} value={item.description} readOnly={!editable} onChange={description => onUpdate(index, { description })} /></td>
+    <td className="p-1 align-middle"><DecimalInput ariaLabel={`Quantidade NF do item ${index + 1} na tabela`} compact value={item.quantity} readOnly={!editable} onChange={quantity => onUpdate(index, { quantity, totalPrice: quantity * Number(item.unitPrice || 0), stockQuantity: quantity, conversionFactor: 1 })} /></td>
+    <td className="p-1 align-middle"><Input aria-label={`Unidade NF do item ${index + 1} na tabela`} className="min-h-11 min-w-0 px-1 text-center text-sm" value={item.unit || 'UN'} readOnly={!editable} onChange={event => onUpdate(index, { unit: event.target.value, stockUnit: event.target.value, conversionFactor: 1 })} /></td>
+    <td className="p-1 align-middle"><MoneyInput ariaLabel={`Valor unitário NF do item ${index + 1} na tabela`} value={item.unitPrice} readOnly={!editable} onChange={unitPrice => onUpdate(index, { unitPrice: unitPrice ?? 0, totalPrice: Number(item.quantity || 0) * Number(unitPrice || 0) })} compact /></td>
+    <td className="p-1 align-middle"><MoneyInput ariaLabel={`Total NF do item ${index + 1} na tabela`} value={item.totalPrice} readOnly={!editable} onChange={totalPrice => onUpdate(index, { totalPrice: totalPrice ?? 0, unitPrice: Number(item.quantity || 0) > 0 ? Number(totalPrice || 0) / Number(item.quantity) : 0 })} compact /></td>
+    <td className="h-11 whitespace-nowrap p-1 text-center align-middle font-mono text-xs tabular-nums">{money(fiscalItemGlobalUnitPrice(item, note))}</td>
+    <td className="h-11 whitespace-nowrap p-1 text-center align-middle font-mono text-xs font-semibold tabular-nums">{money(fiscalItemGlobalTotal(item, note))}</td>
     <td className="p-1 align-middle"><PurchaseGroupSelect value={item.purchaseGroupId} disabled={!groupEditable} groups={purchaseGroups} onChange={onGroupChange} /></td>
     {editable && <td className="p-1 text-center align-middle"><Button size="icon" variant="ghost" className="min-h-11 text-destructive" onClick={onRemove} aria-label="Remover item"><Trash2 className="h-4 w-4" /></Button></td>}
   </tr>;
 }
 
 function ItemMobileCard({ note, item, index, expanded = false, onToggle, editable, groupEditable, purchaseGroups, onUpdate, onGroupChange, onRemove }: ItemEditorProps) {
-  const factor = fiscalItemConversionFactor(item);
-  const stockQuantity = fiscalItemStockQuantity(item);
   return <article className="overflow-hidden rounded-md border bg-card">
     <button type="button" className="flex min-h-16 w-full items-center gap-3 p-3 text-left" aria-expanded={expanded} onClick={onToggle}>
-      <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{item.description || 'Item sem descrição'}</div><div className="mt-1 truncate text-xs text-muted-foreground">{item.productCode || 'Sem código'} · {(editable ? stockQuantity : Number(item.quantity || 0)).toLocaleString('pt-BR')} {editable ? fiscalItemStockUnit(item) : (item.unit || 'UN')}</div></div>
+      <div className="min-w-0 flex-1"><div className="line-clamp-2 text-sm font-semibold leading-snug">{item.description || 'Item sem descrição'}</div><div className="mt-1 truncate text-xs text-muted-foreground">{item.productCode || 'Sem código'} · {decimal(Number(item.quantity || 0))} {item.unit || 'UN'}</div></div>
       <div className="shrink-0 text-right"><div className="text-xs text-muted-foreground">Custo global</div><div className="font-mono text-sm font-semibold">{money(fiscalItemGlobalTotal(item, note))}</div></div>
       {expanded ? <ChevronUp className="h-5 w-5 shrink-0" /> : <ChevronDown className="h-5 w-5 shrink-0" />}
     </button>
     {expanded && <div className="space-y-3 border-t p-3">
-      <div className="grid grid-cols-2 gap-2"><div className="col-span-2"><MobileField label="Descrição"><Input className="min-h-11 text-base" value={item.description} readOnly={!editable} onChange={event => onUpdate(index, { description: event.target.value })} /></MobileField></div><MobileField label="Cód. prod."><Input className="min-h-11 text-center text-base" value={item.productCode || ''} readOnly={!editable} onChange={event => onUpdate(index, { productCode: event.target.value })} /></MobileField><MobileField label="Grupo de compra"><PurchaseGroupSelect value={item.purchaseGroupId} disabled={!groupEditable} groups={purchaseGroups} onChange={onGroupChange} /></MobileField></div>
-      <fieldset className="rounded-md border p-2"><legend className="px-1 text-xs font-semibold text-muted-foreground">Dados da nota</legend><div className="grid grid-cols-2 gap-2"><MobileField label="Quantidade NF"><DecimalInput value={item.quantity} readOnly={!editable} onChange={quantity => onUpdate(index, { quantity, totalPrice: quantity * Number(item.unitPrice || 0), stockQuantity: quantity * factor })} /></MobileField><MobileField label="Unidade NF"><Input className="min-h-11 text-center text-base" value={item.unit || 'UN'} readOnly={!editable} onChange={event => onUpdate(index, { unit: event.target.value, stockUnit: fiscalItemStockUnit(item) === (item.unit || 'UN') ? event.target.value : item.stockUnit })} /></MobileField><MoneyInput label="Valor unitário NF" value={item.unitPrice} readOnly={!editable} onChange={unitPrice => onUpdate(index, { unitPrice: unitPrice ?? 0, totalPrice: Number(item.quantity || 0) * Number(unitPrice || 0) })} /><MoneyInput label="Total do item NF" value={item.totalPrice} readOnly={!editable} onChange={totalPrice => onUpdate(index, { totalPrice: totalPrice ?? 0, unitPrice: Number(item.quantity || 0) > 0 ? Number(totalPrice || 0) / Number(item.quantity) : 0 })} /></div></fieldset>
-      {editable ? <fieldset className="rounded-md border p-2"><legend className="px-1 text-xs font-semibold text-muted-foreground">Entrada no estoque</legend><div className="grid grid-cols-2 gap-2"><MobileField label="Quantidade estoque"><DecimalInput value={stockQuantity} readOnly={false} onChange={value => onUpdate(index, { stockQuantity: value, conversionFactor: Number(item.quantity || 0) > 0 ? value / Number(item.quantity) : 1 })} /></MobileField><MobileField label="Unidade estoque"><Input className="min-h-11 text-center text-base" value={fiscalItemStockUnit(item)} onChange={event => onUpdate(index, { stockUnit: event.target.value })} /></MobileField><MobileField label="Fator de conversão"><DecimalInput value={factor} readOnly={false} onChange={value => onUpdate(index, { conversionFactor: value, stockQuantity: Number(item.quantity || 0) * value })} /></MobileField><MobileValue label="V. unit. global" value={money(fiscalItemGlobalUnitPrice(item, note))} /><div className="col-span-2"><MobileValue label="V. total global" value={money(fiscalItemGlobalTotal(item, note))} /></div></div></fieldset> : <fieldset className="rounded-md border p-2"><legend className="px-1 text-xs font-semibold text-muted-foreground">Custo real rateado</legend><div className="grid grid-cols-2 gap-2"><MobileValue label="V. unit. global" value={money(fiscalItemGlobalUnitPrice(item, note))} /><MobileValue label="V. total global" value={money(fiscalItemGlobalTotal(item, note))} /></div></fieldset>}
+      <div className="grid grid-cols-2 gap-2"><div className="col-span-2"><MobileField label="Descrição"><AutoGrowDescription ariaLabel={`Descrição do item ${index + 1} no celular`} mobile value={item.description} readOnly={!editable} onChange={description => onUpdate(index, { description })} /></MobileField></div><MobileField label="Cód. prod."><Input aria-label={`Código do item ${index + 1} no celular`} className="min-h-11 text-center text-base" value={item.productCode || ''} readOnly={!editable} onChange={event => onUpdate(index, { productCode: event.target.value })} /></MobileField><MobileField label="Grupo de compra"><PurchaseGroupSelect value={item.purchaseGroupId} disabled={!groupEditable} groups={purchaseGroups} onChange={onGroupChange} /></MobileField></div>
+      <fieldset className="rounded-md border p-2"><legend className="px-1 text-xs font-semibold text-muted-foreground">Dados da nota</legend><div className="grid grid-cols-2 gap-2"><MobileField label="Quantidade NF"><DecimalInput ariaLabel={`Quantidade NF do item ${index + 1} no celular`} value={item.quantity} readOnly={!editable} onChange={quantity => onUpdate(index, { quantity, totalPrice: quantity * Number(item.unitPrice || 0), stockQuantity: quantity, conversionFactor: 1 })} /></MobileField><MobileField label="Unidade NF"><Input aria-label={`Unidade NF do item ${index + 1} no celular`} className="min-h-11 text-center text-base" value={item.unit || 'UN'} readOnly={!editable} onChange={event => onUpdate(index, { unit: event.target.value, stockUnit: event.target.value, conversionFactor: 1 })} /></MobileField><MoneyInput label="Valor unitário NF" ariaLabel={`Valor unitário NF do item ${index + 1} no celular`} value={item.unitPrice} readOnly={!editable} onChange={unitPrice => onUpdate(index, { unitPrice: unitPrice ?? 0, totalPrice: Number(item.quantity || 0) * Number(unitPrice || 0) })} /><MoneyInput label="Total do item NF" ariaLabel={`Total NF do item ${index + 1} no celular`} value={item.totalPrice} readOnly={!editable} onChange={totalPrice => onUpdate(index, { totalPrice: totalPrice ?? 0, unitPrice: Number(item.quantity || 0) > 0 ? Number(totalPrice || 0) / Number(item.quantity) : 0 })} /></div></fieldset>
+      <fieldset className="rounded-md border p-2"><legend className="px-1 text-xs font-semibold text-muted-foreground">Custo real rateado</legend><div className="grid grid-cols-2 gap-2"><MobileValue label="V. unit. global" value={money(fiscalItemGlobalUnitPrice(item, note))} /><MobileValue label="V. total global" value={money(fiscalItemGlobalTotal(item, note))} /></div></fieldset>
       {editable && <Button variant="outline" className="min-h-11 w-full text-destructive" onClick={onRemove}><Trash2 className="mr-2 h-4 w-4" />Remover item</Button>}
     </div>}
   </article>;

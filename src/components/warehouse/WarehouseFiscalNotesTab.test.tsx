@@ -340,13 +340,68 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
   it('mantém itens móveis recolhidos e expande somente o item tocado', async () => {
     const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={vi.fn()} canManage />);
     await readDocument(view.container);
+    const dialog = screen.getByRole('dialog');
+    const headers = within(dialog).getAllByRole('columnheader').map(header => header.textContent);
+    expect(headers).not.toEqual(expect.arrayContaining(['Qtd. estoque', 'Un. estoque', 'Fator']));
     const itemButton = screen.getByRole('button', { name: /FITA CREPE 24MM X 50M/i });
     expect(itemButton).toHaveAttribute('aria-expanded', 'false');
+    expect(itemButton).toHaveTextContent('2,00 UN');
+    expect(within(itemButton).getByText('FITA CREPE 24MM X 50M')).toHaveClass('line-clamp-2');
     expect(screen.queryByText('Dados da nota')).not.toBeInTheDocument();
     fireEvent.click(itemButton);
     expect(itemButton).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('Dados da nota')).toBeInTheDocument();
-    expect(screen.getByText('Entrada no estoque')).toBeInTheDocument();
+    expect(screen.getByText('Custo real rateado')).toBeInTheDocument();
+    expect(screen.queryByText('Entrada no estoque')).not.toBeInTheDocument();
+    expect(screen.queryByText('Quantidade estoque')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unidade estoque')).not.toBeInTheDocument();
+    expect(screen.queryByText('Fator de conversão')).not.toBeInTheDocument();
+  });
+
+  it('formata quantidades e valores com duas casas após a edição', async () => {
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={vi.fn()} canManage />);
+    await readDocument(view.container);
+    const quantity = screen.getByLabelText('Quantidade NF do item 1 na tabela');
+    const unitPrice = screen.getByLabelText('Valor unitário NF do item 1 na tabela');
+    const totalPrice = screen.getByLabelText('Total NF do item 1 na tabela');
+
+    expect(quantity).toHaveValue('2,00');
+    expect(unitPrice).toHaveValue('42,82');
+    expect(totalPrice).toHaveValue('85,63');
+
+    for (const [typed, formatted] of [['1', '1,00'], ['1,5', '1,50'], ['1.5', '1,50'], ['0', '0,00']]) {
+      fireEvent.focus(quantity);
+      fireEvent.change(quantity, { target: { value: typed } });
+      fireEvent.blur(quantity);
+      expect(quantity).toHaveValue(formatted);
+    }
+
+    fireEvent.focus(quantity);
+    fireEvent.change(quantity, { target: { value: '2' } });
+    fireEvent.blur(quantity);
+    fireEvent.focus(unitPrice);
+    fireEvent.change(unitPrice, { target: { value: '50' } });
+    fireEvent.blur(unitPrice);
+    expect(unitPrice).toHaveValue('50,00');
+    expect(totalPrice).toHaveValue('100,00');
+  });
+
+  it('usa descrição de duas linhas com crescimento automático no desktop e no celular', async () => {
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={vi.fn()} canManage />);
+    await readDocument(view.container);
+    const desktopDescription = screen.getByLabelText('Descrição do item 1 na tabela');
+    expect(desktopDescription.tagName).toBe('TEXTAREA');
+    expect(desktopDescription).toHaveAttribute('rows', '2');
+    expect(desktopDescription).toHaveClass('resize-none', 'overflow-hidden');
+
+    fireEvent.change(desktopDescription, { target: { value: 'DESCRIÇÃO LONGA DO MATERIAL QUE PRECISA OCUPAR MAIS DE DUAS LINHAS PARA SER LIDA POR INTEIRO' } });
+    expect(desktopDescription).toHaveValue('DESCRIÇÃO LONGA DO MATERIAL QUE PRECISA OCUPAR MAIS DE DUAS LINHAS PARA SER LIDA POR INTEIRO');
+
+    fireEvent.click(screen.getByRole('button', { name: /DESCRIÇÃO LONGA DO MATERIAL/i }));
+    const mobileDescription = screen.getByLabelText('Descrição do item 1 no celular');
+    expect(mobileDescription.tagName).toBe('TEXTAREA');
+    expect(mobileDescription).toHaveAttribute('rows', '2');
+    expect(mobileDescription).toHaveClass('text-base');
   });
 
   it('sinaliza compra interestadual sem bloquear e restringe a revisão tardia à engenharia', () => {
