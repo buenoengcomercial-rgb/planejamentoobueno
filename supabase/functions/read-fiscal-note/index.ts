@@ -27,6 +27,8 @@ type FiscalNotePayload = {
   supplierName?: string | null;
   supplierCnpj?: string | null;
   supplierState?: string | null;
+  supplierCity?: string | null;
+  supplierHeaderText?: string | null;
   invoiceNumber?: string | null;
   issueDate?: string | null;
   totalAmount?: number | null;
@@ -44,6 +46,8 @@ Retorne APENAS JSON valido neste formato:
   "supplierName": string|null,
   "supplierCnpj": string|null,
   "supplierState": "UF"|null,
+  "supplierCity": string|null,
+  "supplierHeaderText": string|null,
   "invoiceNumber": string|null,
   "issueDate": "YYYY-MM-DD"|null,
   "totalAmount": number,
@@ -76,7 +80,9 @@ Retorne APENAS JSON valido neste formato:
 Regras:
 - Primeiro classifique o documento. Pedido de venda, pedido de compra, orcamento, proposta e recibo NAO sao nota fiscal e nunca devem ser classificados como NF-e.
 - Use "nfe", "nfce" ou "cupom_fiscal" apenas quando houver evidencia fiscal clara (DANFE, chave de acesso, NFC-e ou cupom fiscal de compra).
-- Avalie o cabecalho e o endereco do EMITENTE para identificar a UF do fornecedor. Procure especialmente a linha do municipio/UF, o campo UF e o endereco ao lado do CNPJ do emitente.
+- Avalie obrigatoriamente o cabecalho e o endereco do EMITENTE para identificar a UF do fornecedor. O emitente fica antes do titulo DESTINATARIO/REMETENTE. Nunca use nenhum municipio ou UF que esteja depois desse titulo.
+- Transcreva em supplierHeaderText o bloco visivel do emitente contendo razao social, CNPJ, endereco, municipio e UF. Retorne em supplierCity somente o municipio do emitente.
+- Quando houver uma localizacao como "Jundiai/SP", "JUNDIAI - SP", "UF: SP" ou o nome completo "Sao Paulo", supplierState deve ser "SP". Associe somente siglas oficiais: AC, AL, AP, AM, BA, CE, DF, ES, GO, MA, MT, MS, MG, PA, PB, PR, PE, PI, RJ, RN, RS, RO, RR, SC, SP, SE e TO.
 - Em uma NF-e, confira tambem os dois primeiros digitos da chave de acesso (codigo cUF). Exemplo: chave iniciada em 11 identifica emitente de RO; 35 identifica SP. Esse codigo pertence a UF que autorizou a NF-e e deve prevalecer sobre a UF do destinatario.
 - Leia fornecedor, CNPJ, UF do endereco do emitente, numero da nota, data de emissao, valor total e itens.
 - supplierState deve conter apenas a sigla brasileira de duas letras quando estiver legivel no endereco do emitente; nunca use a UF do destinatario e nunca deduza a UF apenas pelo CNPJ.
@@ -103,6 +109,24 @@ const stateByCuf: Record<string, string> = {
   "50": "MS", "51": "MT", "52": "GO", "53": "DF",
 };
 const validStates = new Set(Object.values(stateByCuf));
+const stateByName: Record<string, string> = {
+  "ACRE": "AC", "ALAGOAS": "AL", "AMAPA": "AP", "AMAZONAS": "AM", "BAHIA": "BA", "CEARA": "CE",
+  "DISTRITO FEDERAL": "DF", "ESPIRITO SANTO": "ES", "GOIAS": "GO", "MARANHAO": "MA",
+  "MATO GROSSO DO SUL": "MS", "MATO GROSSO": "MT", "MINAS GERAIS": "MG", "PARA": "PA",
+  "PARAIBA": "PB", "PARANA": "PR", "PERNAMBUCO": "PE", "PIAUI": "PI", "RIO DE JANEIRO": "RJ",
+  "RIO GRANDE DO NORTE": "RN", "RIO GRANDE DO SUL": "RS", "RONDONIA": "RO", "RORAIMA": "RR",
+  "SANTA CATARINA": "SC", "SAO PAULO": "SP", "SERGIPE": "SE", "TOCANTINS": "TO",
+};
+
+function normalizeText(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/\s+/g, " ");
+}
+
+function normalizeBrazilianState(value?: string | null) {
+  const normalized = normalizeText(String(value ?? "")).trim();
+  if (validStates.has(normalized)) return normalized;
+  return stateByName[normalized] ?? null;
+}
 
 function inferSupplierState(text: string, supplierName?: string | null, supplierCnpj?: string | null) {
   const accessKeys = text.match(/(?<!\d)(?:\d[\s.]*){44}(?!\d)/g) ?? [];
@@ -111,7 +135,7 @@ function inferSupplierState(text: string, supplierName?: string | null, supplier
     if (digits.length === 44 && stateByCuf[digits.slice(0, 2)]) return stateByCuf[digits.slice(0, 2)];
   }
 
-  const normalized = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/\s+/g, " ");
+  const normalized = normalizeText(text);
   const cnpjDigits = String(supplierCnpj ?? "").replace(/\D/g, "");
   let context = normalized.slice(0, 1400);
   if (cnpjDigits.length === 14) {
@@ -125,6 +149,11 @@ function inferSupplierState(text: string, supplierName?: string | null, supplier
   const labelled = [...context.matchAll(/(?:\bUF\b|\/)[\s:.-]*([A-Z]{2})\b/g)]
     .map((match) => match[1]).filter((state) => validStates.has(state));
   if (labelled.length) return labelled[0];
+  const stateName = Object.keys(stateByName).sort((left, right) => right.length - left.length)
+    .find((name) => name.includes(" ")
+      ? context.includes(name)
+      : new RegExp(`\\b(?:ESTADO(?:\\s+DE)?|UF)\\s*[:.-]?\\s*${name}\\b`).test(context));
+  if (stateName) return stateByName[stateName];
   const standalone = [...context.matchAll(/\b[A-Z]{2}\b/g)]
     .map((match) => match[0]).filter((state) => validStates.has(state));
   return standalone.length ? standalone[0] : null;
@@ -132,13 +161,12 @@ function inferSupplierState(text: string, supplierName?: string | null, supplier
 
 function normalizePayload(raw: FiscalNotePayload, extractedText = ""): FiscalNotePayload {
   const documentTypes = new Set(["nfe", "nfce", "cupom_fiscal", "pedido_venda", "orcamento", "recibo", "outro"]);
-  const inferredState = inferSupplierState(extractedText, raw.supplierName, raw.supplierCnpj);
+  const issuerEvidence = [raw.supplierHeaderText, raw.supplierCity, raw.supplierState].filter(Boolean).join("\n");
+  const inferredState = inferSupplierState(`${extractedText}\n${issuerEvidence}`, raw.supplierName, raw.supplierCnpj);
   return {
     supplierName: raw.supplierName ?? null,
     supplierCnpj: raw.supplierCnpj ?? null,
-    supplierState: inferredState ?? (raw.supplierState && /^[A-Za-z]{2}$/.test(String(raw.supplierState).trim())
-      ? String(raw.supplierState).trim().toUpperCase()
-      : null),
+    supplierState: inferredState ?? normalizeBrazilianState(raw.supplierState),
     invoiceNumber: raw.invoiceNumber ?? null,
     issueDate: raw.issueDate ?? null,
     totalAmount: Number(raw.totalAmount ?? 0) || 0,
@@ -243,6 +271,7 @@ Deno.serve(async (req) => {
       fileDataUrls.push(fileDataUrl);
     }
     const extractedText = String(body.extractedText ?? "").trim().slice(0, 20000);
+    const supplierHeaderImageDataUrl = String(body.supplierHeaderImageDataUrl ?? "");
     const fileName = String(body.fileName ?? "nota-fiscal");
 
     if (fileDataUrls.length === 0 && !extractedText) {
@@ -269,6 +298,16 @@ Deno.serve(async (req) => {
       userContent.push({
         type: "image_url",
         image_url: { url },
+      });
+    }
+    if (supplierHeaderImageDataUrl.startsWith("data:image/")) {
+      userContent.push({
+        type: "text",
+        text: "RECORTE AMPLIADO DO CABECALHO DO EMITENTE. Leia o bloco da empresa fornecedora antes de DESTINATARIO/REMETENTE e transcreva municipio/UF em supplierHeaderText.",
+      });
+      userContent.push({
+        type: "image_url",
+        image_url: { url: supplierHeaderImageDataUrl },
       });
     }
 

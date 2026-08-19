@@ -4,7 +4,8 @@ import type { Project, WarehouseFiscalNote } from '@/types/project';
 import { computeWarehouseRows, emptyWarehouse } from '@/lib/warehouse';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
 
-const { createObjectURLMock, destroyPdfMock, downloadMock, getDocumentMock, invokeMock, removeMock, renderPdfPageMock, revokeObjectURLMock, uploadMock } = vi.hoisted(() => ({
+const { createHeaderImageMock, createObjectURLMock, destroyPdfMock, downloadMock, getDocumentMock, invokeMock, removeMock, renderPdfPageMock, revokeObjectURLMock, uploadMock } = vi.hoisted(() => ({
+  createHeaderImageMock: vi.fn(),
   createObjectURLMock: vi.fn(),
   destroyPdfMock: vi.fn(),
   downloadMock: vi.fn(),
@@ -14,6 +15,10 @@ const { createObjectURLMock, destroyPdfMock, downloadMock, getDocumentMock, invo
   renderPdfPageMock: vi.fn(),
   revokeObjectURLMock: vi.fn(),
   uploadMock: vi.fn(),
+}));
+
+vi.mock('@/lib/fiscalSupplierHeaderImage', () => ({
+  createSupplierHeaderImageDataUrl: createHeaderImageMock,
 }));
 
 vi.mock('pdfjs-dist', () => ({
@@ -108,6 +113,7 @@ async function readDocument(container: HTMLElement, name = 'nota.jpg') {
 
 describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', () => {
   beforeEach(() => {
+    createHeaderImageMock.mockReset().mockResolvedValue('data:image/jpeg;base64,Y2FiZWNhbGhv');
     invokeMock.mockReset().mockResolvedValue({
       data: {
         ok: true,
@@ -187,6 +193,19 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.getByRole('combobox', { name: 'UF do fornecedor' })).toHaveTextContent('SP');
     expect(screen.getByRole('combobox', { name: 'UF da obra' })).toHaveTextContent('RO');
     expect(screen.getByRole('combobox', { name: 'UF da obra' })).toBeDisabled();
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock.mock.calls[0][1].body.supplierHeaderImageDataUrl).toBe('data:image/jpeg;base64,Y2FiZWNhbGhv');
+  });
+
+  it('continua com a imagem completa em uma única chamada quando o recorte do cabeçalho falha', async () => {
+    createHeaderImageMock.mockResolvedValueOnce(undefined);
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={vi.fn()} canManage />);
+
+    await readDocument(view.container, 'foto-horizontal.jpg');
+
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock.mock.calls[0][1].body.supplierHeaderImageDataUrl).toBeUndefined();
+    expect(screen.getByRole('combobox', { name: 'UF do fornecedor' })).toHaveTextContent('SP');
   });
 
   it('fecha pelo X e cancela o envio sem criar registro, material ou movimento', async () => {

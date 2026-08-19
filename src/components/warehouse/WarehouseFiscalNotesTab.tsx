@@ -37,7 +37,8 @@ import {
   loadWarehouseAttachmentBlob,
   warehouseAttachmentErrorMessage,
 } from '@/lib/warehouseAttachments';
-import { inferSupplierState } from '@/lib/fiscalSupplierState';
+import { inferSupplierState, normalizeBrazilianState } from '@/lib/fiscalSupplierState';
+import { createSupplierHeaderImageDataUrl } from '@/lib/fiscalSupplierHeaderImage';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -102,8 +103,7 @@ function normalizeCnpj(value?: string) {
 }
 
 function normalizeState(value?: string) {
-  const normalized = value?.trim().toUpperCase();
-  return normalized && /^[A-Z]{2}$/.test(normalized) ? normalized : undefined;
+  return normalizeBrazilianState(value);
 }
 
 function validItems(note: Pick<WarehouseFiscalNote, 'items'>) {
@@ -192,12 +192,13 @@ async function renderPdfPreview(blob: Blob): Promise<string[]> {
 }
 
 async function readWithAi(input: { name: string; type?: string; urls: string[]; text?: string }): Promise<ParsedNote> {
+  const supplierHeaderImageDataUrl = await createSupplierHeaderImageDataUrl(input.urls[0]);
   const { data, error } = await supabase.functions.invoke<{
     ok?: boolean;
     error?: string;
     note?: ParsedNote & { confidence?: number };
   }>('read-fiscal-note', {
-    body: { fileName: input.name, fileType: input.type, fileDataUrl: input.urls[0], fileDataUrls: input.urls, extractedText: input.text },
+    body: { fileName: input.name, fileType: input.type, fileDataUrl: input.urls[0], fileDataUrls: input.urls, supplierHeaderImageDataUrl, extractedText: input.text },
   });
   if (error) throw new Error(error.message || 'Falha ao executar a leitura automática.');
   if (!data?.ok || !data.note) throw new Error(data?.error || 'Não foi possível ler o documento.');

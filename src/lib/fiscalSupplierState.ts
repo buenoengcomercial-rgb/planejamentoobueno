@@ -8,6 +8,15 @@ const STATE_BY_CUF: Record<string, string> = {
 
 const VALID_STATES = new Set(Object.values(STATE_BY_CUF));
 
+const STATE_BY_NAME: Record<string, string> = {
+  'ACRE': 'AC', 'ALAGOAS': 'AL', 'AMAPA': 'AP', 'AMAZONAS': 'AM', 'BAHIA': 'BA', 'CEARA': 'CE',
+  'DISTRITO FEDERAL': 'DF', 'ESPIRITO SANTO': 'ES', 'GOIAS': 'GO', 'MARANHAO': 'MA',
+  'MATO GROSSO DO SUL': 'MS', 'MATO GROSSO': 'MT', 'MINAS GERAIS': 'MG', 'PARA': 'PA',
+  'PARAIBA': 'PB', 'PARANA': 'PR', 'PERNAMBUCO': 'PE', 'PIAUI': 'PI', 'RIO DE JANEIRO': 'RJ',
+  'RIO GRANDE DO NORTE': 'RN', 'RIO GRANDE DO SUL': 'RS', 'RONDONIA': 'RO', 'RORAIMA': 'RR',
+  'SANTA CATARINA': 'SC', 'SAO PAULO': 'SP', 'SERGIPE': 'SE', 'TOCANTINS': 'TO',
+};
+
 function normalizeText(value: string) {
   return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ');
 }
@@ -46,10 +55,23 @@ function stateFromSupplierAddress(text: string, supplierName?: string, supplierC
     .filter(state => VALID_STATES.has(state));
   if (labelled.length) return labelled[0];
 
+  const stateName = Object.keys(STATE_BY_NAME)
+    .sort((left, right) => right.length - left.length)
+    .find(name => name.includes(' ')
+      ? context.includes(name)
+      : new RegExp(`\\b(?:ESTADO(?:\\s+DE)?|UF)\\s*[:.-]?\\s*${name}\\b`).test(context));
+  if (stateName) return STATE_BY_NAME[stateName];
+
   const standalone = [...context.matchAll(/\b[A-Z]{2}\b/g)]
     .map(match => match[0])
     .filter(state => VALID_STATES.has(state));
   return standalone.length ? standalone[0] : undefined;
+}
+
+export function normalizeBrazilianState(value?: string | null) {
+  const normalized = normalizeText(value ?? '').trim();
+  if (VALID_STATES.has(normalized)) return normalized;
+  return STATE_BY_NAME[normalized];
 }
 
 /** Uses the NF-e cUF first, then the supplier address. It never uses the work/recipient UF as a fallback. */
