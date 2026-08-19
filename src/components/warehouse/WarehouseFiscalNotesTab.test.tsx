@@ -4,13 +4,21 @@ import type { Project, WarehouseFiscalNote } from '@/types/project';
 import { computeWarehouseRows, emptyWarehouse } from '@/lib/warehouse';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
 
-const { createObjectURLMock, downloadMock, invokeMock, removeMock, revokeObjectURLMock, uploadMock } = vi.hoisted(() => ({
+const { createObjectURLMock, destroyPdfMock, downloadMock, getDocumentMock, invokeMock, removeMock, renderPdfPageMock, revokeObjectURLMock, uploadMock } = vi.hoisted(() => ({
   createObjectURLMock: vi.fn(),
+  destroyPdfMock: vi.fn(),
   downloadMock: vi.fn(),
+  getDocumentMock: vi.fn(),
   invokeMock: vi.fn(),
   removeMock: vi.fn(),
+  renderPdfPageMock: vi.fn(),
   revokeObjectURLMock: vi.fn(),
   uploadMock: vi.fn(),
+}));
+
+vi.mock('pdfjs-dist', () => ({
+  GlobalWorkerOptions: { workerSrc: '' },
+  getDocument: getDocumentMock,
 }));
 
 vi.mock('@/integrations/supabase/client', () => ({
@@ -116,11 +124,25 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     });
     uploadMock.mockReset().mockResolvedValue({ error: null });
     removeMock.mockReset().mockResolvedValue({ error: null });
-    downloadMock.mockReset().mockResolvedValue({ data: new Blob(['nota'], { type: 'application/pdf' }), error: null });
+    const pdfBlob = new Blob(['nota'], { type: 'application/pdf' });
+    Object.defineProperty(pdfBlob, 'arrayBuffer', { configurable: true, value: vi.fn().mockResolvedValue(new ArrayBuffer(8)) });
+    downloadMock.mockReset().mockResolvedValue({ data: pdfBlob, error: null });
+    destroyPdfMock.mockReset().mockResolvedValue(undefined);
+    renderPdfPageMock.mockReset().mockReturnValue({ promise: Promise.resolve() });
+    getDocumentMock.mockReset().mockReturnValue({ promise: Promise.resolve({
+      numPages: 2,
+      getPage: vi.fn().mockResolvedValue({
+        getViewport: ({ scale }: { scale: number }) => ({ width: 600 * scale, height: 840 * scale }),
+        render: renderPdfPageMock,
+      }),
+      destroy: destroyPdfMock,
+    }) });
     createObjectURLMock.mockReset().mockReturnValue('blob:nota-fiscal');
     revokeObjectURLMock.mockReset();
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURLMock });
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURLMock });
+    Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true, value: vi.fn().mockReturnValue({}) });
+    Object.defineProperty(HTMLCanvasElement.prototype, 'toDataURL', { configurable: true, value: vi.fn().mockReturnValue('data:image/png;base64,cGFnZQ==') });
   });
 
   it('mostra somente lançadas/arquivadas e restaura as colunas sem Arquivo', () => {
@@ -341,19 +363,37 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(within(dialog).getByRole('button', { name: 'Baixar' })).toBeInTheDocument();
   });
 
-  it('abre o PDF em um visualizador interno sem criar aba em branco', async () => {
+  it('renderiza todas as páginas do PDF internamente sem depender de iframe ou aba em branco', async () => {
     const open = vi.spyOn(window, 'open');
     const view = render(<WarehouseFiscalNotesTab project={projectWithArchivedOrphan()} onProjectChange={vi.fn()} canManage />);
     fireEvent.mouseDown(screen.getByRole('tab', { name: /Arquivadas \(1\)/i }), { button: 0, ctrlKey: false });
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Abrir documento original' })[0]);
 
-    expect(await screen.findByTitle('Visualização de nota.pdf')).toHaveAttribute('src', 'blob:nota-fiscal');
+    const preview = await screen.findByLabelText('Visualização de nota.pdf');
+    expect(within(preview).getAllByRole('img')).toHaveLength(2);
+    expect(within(preview).getByRole('img', { name: 'Página 1 de nota.pdf' })).toHaveAttribute('src', 'data:image/png;base64,cGFnZQ==');
+    expect(screen.queryByTitle('Visualização de nota.pdf')).not.toBeInTheDocument();
     expect(downloadMock).toHaveBeenCalledWith('project-ui/warehouse/nota.pdf');
+    expect(getDocumentMock).toHaveBeenCalled();
+    expect(renderPdfPageMock).toHaveBeenCalledTimes(2);
+    expect(destroyPdfMock).toHaveBeenCalled();
+    expect(createObjectURLMock).not.toHaveBeenCalled();
     expect(open).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Fechar' }));
-    await waitFor(() => expect(revokeObjectURLMock).toHaveBeenCalledWith('blob:nota-fiscal'));
+    expect(revokeObjectURLMock).not.toHaveBeenCalled();
     view.unmount();
+  });
+
+  it('orienta baixar o arquivo quando o conteúdo não é um PDF válido', async () => {
+    getDocumentMock.mockImplementationOnce(() => ({ promise: Promise.reject(new Error('Invalid PDF structure')) }));
+    render(<WarehouseFiscalNotesTab project={projectWithArchivedOrphan()} onProjectChange={vi.fn()} canManage />);
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Arquivadas \(1\)/i }), { button: 0, ctrlKey: false });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Abrir documento original' })[0]);
+
+    expect(await screen.findByText(/Não foi possível renderizar este PDF/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Baixar' })).toBeInTheDocument();
   });
 
   it('mostra o erro do Storage dentro do visualizador sem abandonar a tela', async () => {

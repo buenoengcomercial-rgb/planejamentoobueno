@@ -164,6 +164,32 @@ async function extractPdf(file: File) {
   return { text: text.join('\n'), images };
 }
 
+async function renderPdfPreview(blob: Blob): Promise<string[]> {
+  const pdfjs = await import('pdfjs-dist');
+  pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+  const pdf = await pdfjs.getDocument({ data: await blob.arrayBuffer() }).promise;
+  const pages: string[] = [];
+  try {
+    for (let number = 1; number <= pdf.numPages; number += 1) {
+      const page = await pdf.getPage(number);
+      const naturalViewport = page.getViewport({ scale: 1 });
+      const scale = Math.min(2, Math.max(1.25, 1800 / naturalViewport.width));
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Canvas indisponível para renderizar o PDF.');
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      await page.render({ canvas, canvasContext: context, viewport } as Parameters<typeof page.render>[0]).promise;
+      pages.push(canvas.toDataURL('image/png'));
+    }
+    if (!pages.length) throw new Error('O PDF não possui páginas para visualizar.');
+    return pages;
+  } finally {
+    await pdf.destroy();
+  }
+}
+
 async function readWithAi(input: { name: string; type?: string; urls: string[]; text?: string }): Promise<ParsedNote> {
   const { data, error } = await supabase.functions.invoke<{
     ok?: boolean;
@@ -752,7 +778,7 @@ function StatusBadge({ note }: { note: WarehouseFiscalNote }) {
 }
 
 function FiscalAttachmentViewer({ attachment, onClose }: { attachment: WarehouseAttachment | null; onClose: () => void }) {
-  const [state, setState] = useState<{ status: 'idle' | 'loading' | 'ready' | 'error'; url?: string; mimeType?: string; error?: string }>({ status: 'idle' });
+  const [state, setState] = useState<{ status: 'idle' | 'loading' | 'ready' | 'error'; url?: string; pages?: string[]; mimeType?: string; error?: string }>({ status: 'idle' });
 
   useEffect(() => {
     let active = true;
@@ -763,13 +789,22 @@ function FiscalAttachmentViewer({ attachment, onClose }: { attachment: Warehouse
     }
     setState({ status: 'loading' });
     void loadWarehouseAttachmentBlob(attachment)
-      .then(blob => {
+      .then(async blob => {
         if (!active) return;
+        const mimeType = attachment.mimeType || blob.type;
+        const isPdfAttachment = mimeType.toLowerCase() === 'application/pdf' || attachment.name.toLowerCase().endsWith('.pdf');
+        if (isPdfAttachment) {
+          const pages = await renderPdfPreview(blob);
+          if (active) setState({ status: 'ready', pages, mimeType: 'application/pdf' });
+          return;
+        }
         objectUrl = URL.createObjectURL(blob);
-        setState({ status: 'ready', url: objectUrl, mimeType: attachment.mimeType || blob.type });
+        setState({ status: 'ready', url: objectUrl, mimeType });
       })
       .catch(error => {
-        if (active) setState({ status: 'error', error: warehouseAttachmentErrorMessage(error) });
+        if (active) setState({ status: 'error', error: error instanceof Error && /PDF|Canvas/i.test(error.message)
+          ? 'Não foi possível renderizar este PDF. Use Baixar para conferir o arquivo original.'
+          : warehouseAttachmentErrorMessage(error) });
       });
     return () => {
       active = false;
@@ -802,7 +837,10 @@ function FiscalAttachmentViewer({ attachment, onClose }: { attachment: Warehouse
             {state.status === 'loading' && <div className="flex items-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-5 w-5 animate-spin" />Carregando documento...</div>}
             {state.status === 'error' && <div className="max-w-md rounded-md border border-destructive/30 bg-background p-5 text-center text-sm text-destructive">{state.error}</div>}
             {state.status === 'ready' && state.url && isImage && <img src={state.url} alt={`Documento ${attachment.name}`} className="max-h-[72dvh] max-w-full object-contain" />}
-            {state.status === 'ready' && state.url && isPdf && <iframe src={state.url} title={`Visualização de ${attachment.name}`} className="h-[70dvh] w-full rounded-md border bg-background" />}
+            {state.status === 'ready' && isPdf && state.pages && <div aria-label={`Visualização de ${attachment.name}`} className="flex max-h-[72dvh] w-full flex-col gap-3 overflow-y-auto rounded-md border bg-muted/40 p-2">
+              <div className="sticky top-0 z-10 self-center rounded-full border bg-background/95 px-3 py-1 text-xs font-medium shadow-sm">{state.pages.length} {state.pages.length === 1 ? 'página' : 'páginas'}</div>
+              {state.pages.map((page, index) => <img key={index} src={page} alt={`Página ${index + 1} de ${attachment.name}`} className="mx-auto h-auto w-full max-w-5xl rounded-sm bg-white shadow-sm" />)}
+            </div>}
             {state.status === 'ready' && state.url && !isImage && !isPdf && <div className="max-w-md text-center text-sm text-muted-foreground"><FileText className="mx-auto mb-3 h-8 w-8" />Este tipo de arquivo não possui visualização interna. Use Baixar.</div>}
           </div>
           <DialogFooter className="border-t p-3">
