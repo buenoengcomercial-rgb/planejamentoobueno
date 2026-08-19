@@ -449,8 +449,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
           urls = extracted.images;
           extractedText = extracted.text;
         } else {
-          urls = attachments.map(attachment => attachment.dataUrl || '').filter(Boolean);
+          urls = await photoDataUrlsForAi(selectedFiles);
         }
+
         parsed = await readWithAi({ name: draft.sourceFileName, type: draft.sourceMimeType, urls, text: extractedText });
       } catch (error) {
         processingError = (error as Error).message;
