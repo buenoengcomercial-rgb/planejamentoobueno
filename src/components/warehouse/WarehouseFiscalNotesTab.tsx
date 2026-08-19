@@ -500,8 +500,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
         urls = extracted.images;
         extractedText = extracted.text;
       } else {
-        urls = await Promise.all(localFiles.map(readFileAsDataURL));
+        urls = await photoDataUrlsForAi(localFiles);
       }
+
       const parsed = await readWithAi({ name: selected.sourceFileName, type: selected.sourceMimeType, urls, text: extractedText });
       const deterministicType = classifyFiscalDocumentText(`${extractedText}\n${selected.sourceFileName}`);
       const updated: WarehouseFiscalNote = {
