@@ -246,16 +246,31 @@ async function renderPdfPreview(blob: Blob): Promise<string[]> {
   }
 }
 
+/** Evita chamadas duplicadas à IA para o mesmo documento (economia de créditos). */
+const aiReadInFlight = new Map<string, Promise<ParsedNote>>();
+
 async function readWithAi(input: { name: string; type?: string; urls: string[]; text?: string }): Promise<ParsedNote> {
-  const supplierHeaderImageDataUrl = await createSupplierHeaderImageDataUrl(input.urls[0]);
+  const key = `${input.name}|${input.urls.length}|${(input.urls[0] || '').length}|${(input.text || '').length}`;
+  const running = aiReadInFlight.get(key);
+  if (running) return running;
+  const task = requestAiRead(input).finally(() => aiReadInFlight.delete(key));
+  aiReadInFlight.set(key, task);
+  return task;
+}
+
+async function requestAiRead(input: { name: string; type?: string; urls: string[]; text?: string }): Promise<ParsedNote> {
+  const extractedText = (input.text || '').slice(0, 8000);
+  const headerStateKnown = Boolean(inferSupplierStateFromIssuerAddress(extractedText || undefined));
+  const supplierHeaderImageDataUrl = headerStateKnown ? undefined : await createSupplierHeaderImageDataUrl(input.urls[0]);
   const { data, error } = await supabase.functions.invoke<{
     ok?: boolean;
     error?: string;
     readerVersion?: string;
     note?: TransientFiscalReaderNote;
   }>('read-fiscal-note', {
-    body: { fileName: input.name, fileType: input.type, fileDataUrl: input.urls[0], fileDataUrls: input.urls, supplierHeaderImageDataUrl, extractedText: input.text },
+    body: { fileName: input.name, fileType: input.type, fileDataUrl: input.urls[0], fileDataUrls: input.urls, supplierHeaderImageDataUrl, extractedText },
   });
+
   if (error) throw new Error(error.message || 'Falha ao executar a leitura automática.');
   if (!data?.ok || !data.note) throw new Error(data?.error || 'Não foi possível ler o documento.');
   if (data.readerVersion !== FISCAL_READER_VERSION) {
