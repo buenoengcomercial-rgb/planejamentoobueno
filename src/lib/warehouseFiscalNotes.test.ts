@@ -8,12 +8,20 @@ import {
   checkFiscalNoteCancellation,
   classifyFiscalDocumentText,
   computeWarehouseRows,
+  createRequisition,
+  deliverRequisition,
   emptyWarehouse,
   ensureWarehouse,
   findFiscalNoteDuplicate,
+  fiscalItemConversionFactor,
+  fiscalItemGlobalUnitPrice,
+  fiscalItemStockQuantity,
+  fiscalNoteAllocatedExtras,
+  fiscalNoteCostReviewStatus,
   isStockFiscalDocument,
   reconcileArchivedFiscalNoteStock,
   reviewArchivedFiscalNoteStock,
+  reviewPostedFiscalNoteCosts,
   updateFiscalItemPurchaseGroup,
 } from './warehouse';
 
@@ -262,5 +270,69 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(grouped.warehouse!.movements).toEqual(movementsBefore);
     expect(computeWarehouseRows(grouped, { includeManual: true })[0].balance).toBe(balanceBefore);
     expect(grouped.warehouse!.items[0].unitPrice).toBe(priceBefore);
+  });
+
+  it('preserva os dados fiscais e lança a quantidade convertida no estoque', () => {
+    const converted = note({
+      items: [{ ...note().items[0], quantity: 10, unit: 'KG', unitPrice: 10, totalPrice: 100, stockQuantity: 25, stockUnit: 'M', conversionFactor: 2.5 }],
+    });
+    const posted = approveFiscalNote(withNote(converted), 'nf-1');
+    const stored = posted.warehouse!.fiscalNotes[0].items[0];
+    const movement = posted.warehouse!.movements[0];
+    expect(stored).toMatchObject({ quantity: 10, unit: 'KG', stockQuantity: 25, stockUnit: 'M', conversionFactor: 2.5 });
+    expect(movement).toMatchObject({ quantity: 25, itemUnit: 'M', unitPrice: 4, fiscalNoteItemId: stored.id });
+    expect(fiscalItemStockQuantity(stored)).toBe(25);
+    expect(fiscalItemConversionFactor(stored)).toBe(2.5);
+  });
+
+  it('mantém compatibilidade com item antigo sem campos de conversão', () => {
+    const legacy = note().items[0];
+    expect(fiscalItemStockQuantity(legacy)).toBe(2);
+    expect(fiscalItemConversionFactor(legacy)).toBe(1);
+    expect(fiscalItemGlobalUnitPrice(legacy)).toBe(50);
+  });
+
+  it('rateia adicionais em centavos sem perder o resíduo', () => {
+    const items = [1, 2, 3].map(index => ({ ...note().items[0], id: `item-${index}`, totalPrice: 10 }));
+    const allocated = fiscalNoteAllocatedExtras({ items, freightAmount: 0.01, icmsAmount: 0 });
+    expect(allocated).toEqual([0.01, 0, 0]);
+    expect(allocated.reduce((sum, value) => sum + value, 0)).toBe(0.01);
+  });
+
+  it('classifica pendência interestadual e aceita confirmação explícita em zero', () => {
+    expect(fiscalNoteCostReviewStatus(note())).toBe('unknown_origin');
+    expect(fiscalNoteCostReviewStatus(note({ supplierState: 'RO', destinationState: 'RO' }))).toBe('not_required');
+    expect(fiscalNoteCostReviewStatus(note({ supplierState: 'SP', destinationState: 'RO' }))).toBe('pending');
+    expect(fiscalNoteCostReviewStatus(note({ supplierState: 'SP', destinationState: 'RO', freightAmount: 0, icmsAmount: 0, costReviewStatus: 'confirmed', costReviewedAt: '2026-08-18T10:00:00.000Z' }))).toBe('confirmed');
+  });
+
+  it('reavalia duas compras e a retirada posterior sem alterar o saldo', () => {
+    const first = note({
+      supplierState: 'SP', destinationState: 'RO',
+      items: [{ ...note().items[0], quantity: 10, unit: 'KG', unitPrice: 10, totalPrice: 100, stockQuantity: 20, stockUnit: 'M', conversionFactor: 2 }],
+    });
+    let project = approveFiscalNote(withNote(first), first.id);
+    const second = note({ id: 'nf-2', invoiceNumber: '101', items: [{ ...note().items[0], id: 'item-2', quantity: 10, unit: 'M', unitPrice: 10, totalPrice: 100 }] });
+    project.warehouse!.fiscalNotes!.push(second);
+    project = approveFiscalNote(project, second.id);
+    project.warehouse!.movements = project.warehouse!.movements.map((movement, index) => ({ ...movement, createdAt: `2026-08-18T10:0${index}:00.000Z` }));
+    const itemKey = project.warehouse!.fiscalNotes![0].items[0].itemKey!;
+    const created = createRequisition(project, {
+      date: '2026-08-18', chapterId: 'cap-1', teamId: 'team-1', receiverName: 'Operador', signatureReceiver: 'data:image/png;base64,x',
+      items: [{ itemKey, description: 'Cimento CP II', unit: 'M', quantity: 10 }],
+    });
+    project = deliverRequisition(created.project, created.requisition.id);
+    const balanceBefore = computeWarehouseRows(project, { includeManual: true }).find(row => row.key === itemKey)!.balance;
+    const revalued = reviewPostedFiscalNoteCosts(project, first.id, {
+      supplierState: 'SP', destinationState: 'RO', freightAmount: 20, icmsAmount: 10, confirmCosts: true,
+      actor: { userName: 'Engenheira' },
+    });
+    const withdrawal = revalued.warehouse!.movements.find(movement => movement.type === 'retirada')!;
+    const requisition = revalued.warehouse!.requisitions.find(entry => entry.id === created.requisition.id)!;
+    expect(withdrawal.costSnapshot).toBe(7.66);
+    expect(requisition.items[0].unitCostSnapshot).toBe(7.66);
+    expect(computeWarehouseRows(revalued, { includeManual: true }).find(row => row.key === itemKey)!.balance).toBe(balanceBefore);
+    expect(revalued.warehouse!.fiscalNotes!.find(entry => entry.id === first.id)).toMatchObject({ costReviewStatus: 'confirmed', freightAmount: 20, icmsAmount: 10 });
+    expect(revalued.auditLogs?.at(-1)).toMatchObject({ entityType: 'warehouse_fiscal_note', action: 'updated', userName: 'Engenheira' });
   });
 });

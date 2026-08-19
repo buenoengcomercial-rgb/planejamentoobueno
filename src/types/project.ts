@@ -776,6 +776,8 @@ export interface WarehouseMovement {
   purchaseOrderId?: string;
   supplierId?: string;
   fiscalNoteId?: string;
+  /** Item da nota que originou a entrada, usado para reavaliacao de custos sem ambiguidade. */
+  fiscalNoteItemId?: string;
   invoiceNumber?: string;
   // destinos
   requisitionId?: string;
@@ -834,6 +836,12 @@ export type WarehouseFiscalArchiveReason = 'comprovante' | 'descartada' | 'lanca
 
 export type FiscalItemLinkStatus = 'vinculado' | 'pendente' | 'auto';
 
+export type WarehouseFiscalCostReviewStatus =
+  | 'not_required'
+  | 'unknown_origin'
+  | 'pending'
+  | 'confirmed';
+
 export interface WarehouseFiscalNoteItem {
   id: string;
   /** Codigo do produto na nota fiscal (coluna COD. PROD.). */
@@ -841,6 +849,12 @@ export interface WarehouseFiscalNoteItem {
   description: string;
   quantity: number;
   unit?: string;
+  /** Quantidade efetivamente recebida no estoque apos conversao da unidade fiscal. */
+  stockQuantity?: number;
+  /** Unidade usada no estoque/orcamento. Quando ausente, usa a unidade da nota. */
+  stockUnit?: string;
+  /** Quantidade de estoque gerada por uma unidade fiscal: stockQuantity / quantity. */
+  conversionFactor?: number;
   /** Valor unitario informado na nota fiscal, sem frete/ICMS extra. */
   unitPrice: number;
   /** Legado: frete extra alocado manualmente para este item. Novas notas usam WarehouseFiscalNote.freightAmount. */
@@ -886,6 +900,10 @@ export interface WarehouseFiscalNote {
   updatedBy?: WarehouseAuditActor;
   supplierName?: string;
   supplierCnpj?: string;
+  /** UF do emitente lida do documento ou confirmada manualmente. */
+  supplierState?: string;
+  /** Fotografia da UF da obra/destino no momento do lancamento. */
+  destinationState?: string;
   invoiceNumber?: string;
   issueDate?: string;
   totalAmount: number;
@@ -893,6 +911,10 @@ export interface WarehouseFiscalNote {
   freightAmount?: number;
   /** ICMS/diferencial total da compra, rateado proporcionalmente entre os itens. */
   icmsAmount?: number;
+  /** Situacao da conferencia de frete e ICMS/DIFAL para compra interestadual. */
+  costReviewStatus?: WarehouseFiscalCostReviewStatus;
+  costReviewedAt?: string;
+  costReviewedBy?: WarehouseAuditActor;
   status: WarehouseFiscalNoteStatus;
   origin: 'upload';
   sourceFileName: string;
@@ -1703,6 +1725,7 @@ export type AuditEntityType =
   | 'additive'
   | 'daily_report'
   | 'task'
+  | 'warehouse_fiscal_note'
   | 'project';
 
 export type AuditAction =

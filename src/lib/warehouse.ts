@@ -28,6 +28,7 @@ import type {
 import { linkKeyOf, suggestMaterialsFromProject } from '@/lib/materialComparisons';
 import { trunc2 } from '@/lib/financialEngine';
 import { getChapterNumbering } from '@/lib/chapters';
+import { logToProject } from '@/lib/audit';
 
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const nowISO = () => new Date().toISOString();
@@ -68,8 +69,8 @@ function normalizeLookup(value?: string) {
     .toLowerCase();
 }
 
-function fiscalItemLookup(item: Pick<WarehouseFiscalNoteItem, 'description' | 'unit'>) {
-  return `${normalizeLookup(item.description)}|${normalizeLookup(item.unit || 'UN')}`;
+function fiscalItemLookup(item: Pick<WarehouseFiscalNoteItem, 'description' | 'unit' | 'stockUnit'>) {
+  return `${normalizeLookup(item.description)}|${normalizeLookup(item.stockUnit || item.unit || 'UN')}`;
 }
 
 function normalizeProductCode(value?: string) {
@@ -103,26 +104,71 @@ export function classifyFiscalDocumentText(text?: string): WarehouseFiscalDocume
 
 type FiscalGlobalCostNote = Pick<WarehouseFiscalNote, 'items' | 'freightAmount' | 'icmsAmount'>;
 
-function fiscalItemsTotal(items: Pick<WarehouseFiscalNoteItem, 'totalPrice'>[]): number {
-  return items.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0);
+function moneyCents(value?: number): number {
+  return Math.round((Number(value) || 0) * 100);
+}
+
+export function fiscalItemStockQuantity(item: Pick<WarehouseFiscalNoteItem, 'quantity' | 'stockQuantity' | 'conversionFactor'>): number {
+  const explicit = Number(item.stockQuantity);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const fiscalQuantity = Number(item.quantity || 0);
+  const factor = Number(item.conversionFactor);
+  if (fiscalQuantity > 0 && Number.isFinite(factor) && factor > 0) return fiscalQuantity * factor;
+  return fiscalQuantity;
+}
+
+export function fiscalItemStockUnit(item: Pick<WarehouseFiscalNoteItem, 'unit' | 'stockUnit'>): string {
+  return item.stockUnit?.trim() || item.unit?.trim() || 'UN';
+}
+
+export function fiscalItemConversionFactor(item: Pick<WarehouseFiscalNoteItem, 'quantity' | 'stockQuantity' | 'conversionFactor'>): number {
+  const quantity = Number(item.quantity || 0);
+  const stockQuantity = fiscalItemStockQuantity(item);
+  if (quantity > 0 && stockQuantity > 0) return stockQuantity / quantity;
+  const factor = Number(item.conversionFactor);
+  return Number.isFinite(factor) && factor > 0 ? factor : 1;
+}
+
+/** Rateia os adicionais em centavos e entrega qualquer residuo aos maiores restos fracionarios. */
+export function fiscalNoteAllocatedExtras(note: FiscalGlobalCostNote): number[] {
+  const weights = note.items.map(item => Math.max(0, moneyCents(item.totalPrice)));
+  const baseCents = weights.reduce((sum, value) => sum + value, 0);
+  const extraCents = Math.max(0, moneyCents(note.freightAmount) + moneyCents(note.icmsAmount));
+  if (baseCents <= 0 || extraCents <= 0) return note.items.map(() => 0);
+  const raw = weights.map(weight => extraCents * weight / baseCents);
+  const allocated = raw.map(value => Math.floor(value));
+  let remainder = extraCents - allocated.reduce((sum, value) => sum + value, 0);
+  const order = raw.map((value, index) => ({ index, fraction: value - Math.floor(value) }))
+    .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+  for (let cursor = 0; remainder > 0 && order.length; cursor += 1, remainder -= 1) {
+    allocated[order[cursor % order.length].index] += 1;
+  }
+  return allocated.map(value => value / 100);
 }
 
 export function fiscalItemAllocatedExtra(item: Pick<WarehouseFiscalNoteItem, 'totalPrice' | 'freightAmount' | 'icmsAmount'>, note?: FiscalGlobalCostNote): number {
   if (!note) return trunc2(Number(item.freightAmount || 0) + Number(item.icmsAmount || 0));
-  const baseTotal = fiscalItemsTotal(note.items);
-  const extraTotal = Number(note.freightAmount || 0) + Number(note.icmsAmount || 0);
-  if (baseTotal <= 0 || extraTotal <= 0) return 0;
-  return trunc2(extraTotal * (Number(item.totalPrice || 0) / baseTotal));
+  const index = note.items.findIndex(candidate => candidate === item || ('id' in candidate && 'id' in item && candidate.id === item.id));
+  return index >= 0 ? fiscalNoteAllocatedExtras(note)[index] : 0;
 }
 
 export function fiscalItemGlobalTotal(item: Pick<WarehouseFiscalNoteItem, 'totalPrice' | 'freightAmount' | 'icmsAmount'>, note?: FiscalGlobalCostNote): number {
   return trunc2(Number(item.totalPrice || 0) + fiscalItemAllocatedExtra(item, note));
 }
 
-export function fiscalItemGlobalUnitPrice(item: Pick<WarehouseFiscalNoteItem, 'quantity' | 'totalPrice' | 'freightAmount' | 'icmsAmount' | 'unitPrice'>, note?: FiscalGlobalCostNote): number {
-  const quantity = Number(item.quantity || 0);
+export function fiscalItemGlobalUnitPrice(item: Pick<WarehouseFiscalNoteItem, 'quantity' | 'stockQuantity' | 'conversionFactor' | 'totalPrice' | 'freightAmount' | 'icmsAmount' | 'unitPrice'>, note?: FiscalGlobalCostNote): number {
+  const quantity = fiscalItemStockQuantity(item);
   if (quantity > 0) return trunc2(fiscalItemGlobalTotal(item, note) / quantity);
   return trunc2(Number(item.unitPrice || 0));
+}
+
+export function fiscalNoteCostReviewStatus(note: Pick<WarehouseFiscalNote, 'supplierState' | 'destinationState' | 'costReviewStatus' | 'costReviewedAt' | 'freightAmount' | 'icmsAmount'>) {
+  const supplierState = note.supplierState?.trim().toUpperCase();
+  const destinationState = note.destinationState?.trim().toUpperCase();
+  if (!supplierState || !destinationState) return 'unknown_origin' as const;
+  if (supplierState === destinationState) return 'not_required' as const;
+  if (note.costReviewStatus === 'confirmed' && note.costReviewedAt && note.freightAmount != null && note.icmsAmount != null) return 'confirmed' as const;
+  return 'pending' as const;
 }
 
 // ============== STATE / MIGRATION ==============
@@ -1125,7 +1171,7 @@ export function linkFiscalNoteItemsToMaterials(
 
   const linkedItems = items.map(item => {
     const description = item.description.trim();
-    const unit = (item.unit || 'UN').trim() || 'UN';
+    const unit = fiscalItemStockUnit(item);
     const productCode = item.productCode?.trim() || undefined;
     const productCodeKey = normalizeProductCode(productCode);
     const lookup = fiscalItemLookup({ description, unit });
@@ -1176,20 +1222,20 @@ export function linkFiscalNoteItemsToMaterials(
         ...item,
         productCode,
         itemKey: newItemKey,
-        unit,
+        stockUnit: unit,
         linkStatus: 'vinculado' as FiscalItemLinkStatus,
       };
     }
 
     if (!itemKey) {
-      return { ...item, productCode, unit, linkStatus: item.linkStatus ?? 'pendente' };
+      return { ...item, productCode, stockUnit: unit, linkStatus: item.linkStatus ?? 'pendente' };
     }
 
     return {
       ...item,
       productCode,
       itemKey,
-      unit,
+      stockUnit: unit,
       linkStatus: (item.linkStatus === 'vinculado' ? 'vinculado' : 'auto') as FiscalItemLinkStatus,
     };
   });
@@ -1815,8 +1861,14 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
   }
 
   const validItems = note.items
-    .filter(item => item.description.trim() && Number(item.quantity || 0) > 0)
-    .map(item => ({ ...item, unit: item.unit?.trim() || 'UN' }));
+    .filter(item => item.description.trim() && Number(item.quantity || 0) > 0 && fiscalItemStockQuantity(item) > 0)
+    .map(item => ({
+      ...item,
+      unit: item.unit?.trim() || 'UN',
+      stockUnit: fiscalItemStockUnit(item),
+      stockQuantity: fiscalItemStockQuantity(item),
+      conversionFactor: fiscalItemConversionFactor(item),
+    }));
   if (!validItems.length) throw new Error('Inclua ao menos um item com descrição e quantidade maior que zero.');
   const noteForPosting: WarehouseFiscalNote = { ...note, items: validItems };
   const auditActor = normalizeWarehouseActor(actor);
@@ -1830,13 +1882,14 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
   let itemsConfig = [...wh.items];
   const movements = [...wh.movements];
   const approvedItems = linked.items.map(item => {
-    const unit = (item.unit || 'UN').trim() || 'UN';
+    const unit = fiscalItemStockUnit(item);
+    const stockQuantity = fiscalItemStockQuantity(item);
     const allocationNote = { ...noteForPosting, items: linked.items };
     const globalUnitPrice = fiscalItemGlobalUnitPrice(item, allocationNote);
     const globalTotalPrice = fiscalItemGlobalTotal(item, allocationNote);
     const productCode = item.productCode?.trim() || undefined;
     const productCodeKey = normalizeProductCode(productCode);
-    const lookup = fiscalItemLookup({ description: item.description, unit });
+    const lookup = fiscalItemLookup({ description: item.description, unit: item.unit, stockUnit: unit });
     const candidates = [
       item.itemKey && rowsByKey.has(item.itemKey) ? item.itemKey : undefined,
       ...(productCodeKey ? itemKeyByCode.get(productCodeKey) ?? [] : []),
@@ -1855,7 +1908,7 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
         unit,
         manualItem: true,
         plannedQuantity: 0,
-        purchasedQuantity: Number(item.quantity || 0),
+        purchasedQuantity: stockQuantity,
         unitPrice: globalUnitPrice || undefined,
         purchaseGroupId: item.purchaseGroupId,
       });
@@ -1886,7 +1939,7 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
         updatedConfig = true;
         return {
           ...cfg,
-          purchasedQuantity: trunc2((cfg.purchasedQuantity ?? 0) + Number(item.quantity || 0)),
+          purchasedQuantity: trunc2((cfg.purchasedQuantity ?? 0) + stockQuantity),
           code: cfg.code || productCode,
           unitPrice: globalUnitPrice || cfg.unitPrice,
           purchaseGroupId: item.purchaseGroupId ?? cfg.purchaseGroupId,
@@ -1901,7 +1954,7 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
           description: row?.description || item.description.trim(),
           unit: row?.unit || unit,
           manualItem: row?.manualItem,
-          purchasedQuantity: Number(item.quantity || 0),
+          purchasedQuantity: stockQuantity,
           unitPrice: globalUnitPrice || row?.unitPrice,
           purchaseGroupId: item.purchaseGroupId,
         });
@@ -1918,9 +1971,10 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
       itemCode: productCode || rowsByKey.get(itemKey)?.code,
       itemDescription: item.description.trim(),
       itemUnit: unit,
-      quantity: Number(item.quantity || 0),
+      quantity: stockQuantity,
       unitPrice: globalUnitPrice || undefined,
       fiscalNoteId: noteForPosting.id,
+      fiscalNoteItemId: item.id,
       originType: 'fiscal_note',
       originId: noteForPosting.id,
       invoiceNumber: noteForPosting.invoiceNumber || undefined,
@@ -1929,7 +1983,16 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
       user: actorLabel,
     });
 
-    return { ...item, productCode, itemKey, unit, globalTotalPrice, linkStatus: 'vinculado' as const };
+    return {
+      ...item,
+      productCode,
+      itemKey,
+      stockUnit: unit,
+      stockQuantity,
+      conversionFactor: fiscalItemConversionFactor(item),
+      globalTotalPrice,
+      linkStatus: 'vinculado' as const,
+    };
   });
 
   const fiscalNotes = (wh.fiscalNotes ?? []).map(n =>
@@ -1942,12 +2005,208 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
           stockPostedAt: nowISO(),
           stockPostedBy: actorLabel,
           extractionStatus: 'ready' as const,
+          costReviewStatus: fiscalNoteCostReviewStatus(noteForPosting),
           items: approvedItems,
         }
       : n,
   );
 
   return setWh(p, { items: itemsConfig, movements, fiscalNotes });
+}
+
+export interface ReviewFiscalNoteCostsInput {
+  supplierState?: string;
+  destinationState?: string;
+  freightAmount?: number;
+  icmsAmount?: number;
+  confirmCosts?: boolean;
+  actor?: WarehouseActorInput;
+}
+
+function normalizedState(value?: string): string | undefined {
+  const normalized = value?.trim().toUpperCase();
+  return normalized && /^[A-Z]{2}$/.test(normalized) ? normalized : undefined;
+}
+
+function validOptionalMoney(value: number | undefined, label: string): number | undefined {
+  if (value == null) return undefined;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) throw new Error(`${label} deve ser um valor maior ou igual a zero.`);
+  return Math.round(number * 100) / 100;
+}
+
+/**
+ * Reavalia somente custos de uma nota aprovada. Quantidades e unidades dos movimentos
+ * permanecem imutaveis; o custo medio e os snapshots posteriores sao reproduzidos.
+ */
+export function reviewPostedFiscalNoteCosts(
+  project: Project,
+  noteId: string,
+  input: ReviewFiscalNoteCostsInput,
+): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const current = wh.fiscalNotes?.find(note => note.id === noteId);
+  if (!current) throw new Error('Entrada nao encontrada.');
+  if (current.status !== 'aprovada') throw new Error('Somente uma entrada lancada pode ter os custos reavaliados.');
+
+  const actor = normalizeWarehouseActor(input.actor);
+  const freightAmount = validOptionalMoney(input.freightAmount, 'Frete');
+  const icmsAmount = validOptionalMoney(input.icmsAmount, 'ICMS/DIFAL adicional');
+  const supplierState = normalizedState(input.supplierState);
+  const destinationState = normalizedState(input.destinationState);
+  const interstate = !!supplierState && !!destinationState && supplierState !== destinationState;
+  if (input.confirmCosts && interstate && (freightAmount == null || icmsAmount == null)) {
+    throw new Error('Informe frete e ICMS/DIFAL, inclusive R$ 0,00 quando nao houver valor.');
+  }
+  if (input.confirmCosts && (!supplierState || !destinationState)) {
+    throw new Error('Confirme a UF do fornecedor e a UF da obra antes de concluir a revisao.');
+  }
+  const itemsSubtotalCents = current.items.reduce((sum, item) => sum + Math.max(0, moneyCents(item.totalPrice)), 0);
+  if ((moneyCents(freightAmount) + moneyCents(icmsAmount)) > 0 && itemsSubtotalCents <= 0) {
+    throw new Error('Corrija os valores dos itens antes de ratear frete ou ICMS/DIFAL.');
+  }
+
+  const reviewTimestamp = input.confirmCosts ? nowISO() : current.costReviewedAt;
+  const revisedBase: WarehouseFiscalNote = {
+    ...current,
+    supplierState,
+    destinationState,
+    freightAmount,
+    icmsAmount,
+    costReviewStatus: input.confirmCosts ? 'confirmed' : current.costReviewStatus,
+    costReviewedAt: reviewTimestamp,
+    costReviewedBy: input.confirmCosts ? actor : current.costReviewedBy,
+    updatedAt: nowISO(),
+    updatedBy: actor ?? current.updatedBy,
+  };
+  const derivedStatus = fiscalNoteCostReviewStatus(revisedBase);
+  const revised: WarehouseFiscalNote = {
+    ...revisedBase,
+    costReviewStatus: derivedStatus,
+    costReviewedAt: derivedStatus === 'confirmed' ? revisedBase.costReviewedAt : undefined,
+    costReviewedBy: derivedStatus === 'confirmed' ? revisedBase.costReviewedBy : undefined,
+    items: revisedBase.items.map(item => ({
+      ...item,
+      globalTotalPrice: fiscalItemGlobalTotal(item, revisedBase),
+    })),
+  };
+
+  const itemById = new Map(revised.items.map(item => [item.id, item] as const));
+  const fallbackByKey = new Map<string, WarehouseFiscalNoteItem[]>();
+  for (const item of revised.items) {
+    if (!item.itemKey) continue;
+    fallbackByKey.set(item.itemKey, [...(fallbackByKey.get(item.itemKey) ?? []), item]);
+  }
+  const entryIds = new Set<string>();
+  const affectedKeys = new Set<string>();
+  let movements = wh.movements.map(movement => {
+    if (movement.fiscalNoteId !== noteId || movement.type !== 'entrada' || movement.reversedById) return movement;
+    const fallback = fallbackByKey.get(movement.itemKey)?.shift();
+    const item = (movement.fiscalNoteItemId && itemById.get(movement.fiscalNoteItemId)) || fallback;
+    if (!item) return movement;
+    entryIds.add(movement.id);
+    affectedKeys.add(movement.itemKey);
+    return {
+      ...movement,
+      unitPrice: fiscalItemGlobalUnitPrice(item, revised),
+      updatedAt: nowISO(),
+      updatedBy: actor,
+    };
+  });
+
+  const changedMovementIds = new Set(entryIds);
+  for (const itemKey of affectedKeys) {
+    let quantity = 0;
+    let inventoryValue = 0;
+    let revalueFollowing = false;
+    const ordered = movements
+      .filter(movement => movement.itemKey === itemKey)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    const replacements = new Map<string, WarehouseMovement>();
+    for (const movement of ordered) {
+      if (movement.reversedById || movement.type === 'estorno') continue;
+      const sign = movementSign(movement);
+      if (!sign) continue;
+      const movementQuantity = Math.max(0, Number(movement.quantity || 0));
+      const average = quantity > 0 ? inventoryValue / quantity : undefined;
+      if (sign > 0) {
+        const price = movement.unitPrice ?? movement.costSnapshot ?? average ?? 0;
+        inventoryValue += movementQuantity * price;
+        quantity += movementQuantity;
+        if (entryIds.has(movement.id)) revalueFollowing = true;
+        continue;
+      }
+      const price = revalueFollowing ? average : (movement.costSnapshot ?? movement.unitPrice ?? average);
+      if (revalueFollowing && price != null && Number.isFinite(price)) {
+        const nextCost = trunc2(price);
+        replacements.set(movement.id, {
+          ...movement,
+          unitPrice: nextCost,
+          costSnapshot: nextCost,
+          updatedAt: nowISO(),
+          updatedBy: actor,
+        });
+        changedMovementIds.add(movement.id);
+      }
+      const appliedQuantity = Math.min(quantity, movementQuantity);
+      inventoryValue -= appliedQuantity * (price ?? 0);
+      quantity -= movementQuantity;
+      if (quantity <= 0) {
+        quantity = Math.max(0, quantity);
+        inventoryValue = 0;
+      }
+    }
+    if (replacements.size) movements = movements.map(movement => replacements.get(movement.id) ?? movement);
+  }
+
+  const costsByMovementId = new Map(movements.map(movement => [movement.id, movement.costSnapshot ?? movement.unitPrice] as const));
+  const requisitions = wh.requisitions.map(requisition => ({
+    ...requisition,
+    items: requisition.items.map(item => item.movementId && changedMovementIds.has(item.movementId)
+      ? { ...item, unitCostSnapshot: costsByMovementId.get(item.movementId) }
+      : item),
+  }));
+  const inventorySessions = (wh.inventorySessions ?? []).map(session => ({
+    ...session,
+    lines: session.lines.map(line => line.movementId && changedMovementIds.has(line.movementId)
+      ? { ...line, unitCostSnapshot: costsByMovementId.get(line.movementId) }
+      : line),
+  }));
+  const items = wh.items.map(item => {
+    if (!affectedKeys.has(item.key)) return item;
+    const latestEntry = movements
+      .filter(movement => movement.itemKey === item.key && movementSign(movement) > 0 && movement.unitPrice != null)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))[0];
+    return latestEntry ? { ...item, unitPrice: latestEntry.unitPrice } : item;
+  });
+  const fiscalNotes = (wh.fiscalNotes ?? []).map(note => note.id === noteId ? revised : note);
+  const updated = setWh(p, { fiscalNotes, movements, requisitions, inventorySessions, items });
+  return logToProject(updated, {
+    entityType: 'warehouse_fiscal_note',
+    entityId: noteId,
+    action: 'updated',
+    title: `Custos da entrada ${current.invoiceNumber || noteId} reavaliados`,
+    description: `${changedMovementIds.size} movimento(s) tiveram o custo reproduzido sem alterar quantidades.`,
+    userId: actor?.userId,
+    userName: actor?.userName,
+    userEmail: actor?.userEmail,
+    before: {
+      supplierState: current.supplierState,
+      destinationState: current.destinationState,
+      freightAmount: current.freightAmount,
+      icmsAmount: current.icmsAmount,
+      costReviewStatus: fiscalNoteCostReviewStatus(current),
+    },
+    after: {
+      supplierState: revised.supplierState,
+      destinationState: revised.destinationState,
+      freightAmount: revised.freightAmount,
+      icmsAmount: revised.icmsAmount,
+      costReviewStatus: revised.costReviewStatus,
+    },
+    metadata: { affectedMovementIds: [...changedMovementIds], affectedItemKeys: [...affectedKeys] },
+  });
 }
 
 /**
@@ -2669,7 +2928,7 @@ export function suggestFiscalNoteItemLinks(
         if (!it.itemKey || !rowsByKey.has(it.itemKey)) continue;
         const c = normalizeProductCode(it.productCode);
         if (c) supplierHistory.set('c:' + c, it.itemKey);
-        supplierHistory.set('l:' + fiscalItemLookup({ description: it.description, unit: it.unit }), it.itemKey);
+        supplierHistory.set('l:' + fiscalItemLookup({ description: it.description, unit: it.unit, stockUnit: it.stockUnit }), it.itemKey);
       }
     }
   }
@@ -2680,7 +2939,7 @@ export function suggestFiscalNoteItemLinks(
     }
     const productCode = item.productCode?.trim() || undefined;
     const codeKey = normalizeProductCode(productCode);
-    const lookup = fiscalItemLookup({ description: item.description, unit: item.unit });
+    const lookup = fiscalItemLookup({ description: item.description, unit: item.unit, stockUnit: item.stockUnit });
     let suggested: string | undefined;
     let linkSource: WarehouseFiscalNoteItem['linkSource'];
     let linkConfidence = 0;
@@ -2701,7 +2960,7 @@ export function suggestFiscalNoteItemLinks(
       if (suggested) { linkSource = 'descricao'; linkConfidence = 0.95; }
     }
     if (!suggested) {
-      const match = findMaterialMatch(project, item.description, item.unit, productCode);
+      const match = findMaterialMatch(project, item.description, fiscalItemStockUnit(item), productCode);
       if (match && match.score >= 0.6) {
         suggested = match.key;
         linkSource = 'similaridade';

@@ -19,7 +19,7 @@ import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
 import './warehouse-visual.css';
 
 const WAREHOUSE_TABS = [
-  { value: 'notas', label: 'Notas fiscais', icon: ReceiptText },
+  { value: 'notas', label: 'ENTRADA', icon: ReceiptText },
   { value: 'estoque', label: 'Materiais', icon: Boxes },
   { value: 'requisicoes', label: 'Retiradas', icon: ClipboardList },
   { value: 'movimentos', label: 'Movimentações', icon: ArrowLeftRight },
@@ -34,13 +34,14 @@ interface Props {
   onProjectChange: (next: Project) => void;
   onCommitProject?: (next: Project) => Promise<void>;
   canManageFiscalNotes?: boolean;
+  canReviewFiscalCosts?: boolean;
   canApproveInventory?: boolean;
   canClearWarehouse?: boolean;
   onClearWarehouse?: (password: string) => Promise<void>;
   auditActor?: WarehouseAuditActor;
 }
 
-export default function Warehouse({ project, onProjectChange, onCommitProject, canManageFiscalNotes = true, canApproveInventory = true, canClearWarehouse = false, onClearWarehouse, auditActor }: Props) {
+export default function Warehouse({ project, onProjectChange, onCommitProject, canManageFiscalNotes = true, canReviewFiscalCosts = true, canApproveInventory = true, canClearWarehouse = false, onClearWarehouse, auditActor }: Props) {
   const [tab, setTab] = useState('notas');
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [clearPassword, setClearPassword] = useState('');
@@ -135,6 +136,7 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, c
             onProjectChange={onProjectChange}
             onCommitProject={onCommitProject}
             canManage={canManageFiscalNotes}
+            canReviewCosts={canReviewFiscalCosts}
             auditActor={auditActor}
           />
         </TabsContent>

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project, WarehouseFiscalNote } from '@/types/project';
 import { computeWarehouseRows, emptyWarehouse } from '@/lib/warehouse';
@@ -94,8 +94,8 @@ async function readDocument(container: HTMLElement, name = 'nota.jpg') {
   const inputs = container.querySelectorAll<HTMLInputElement>('input[type="file"]');
   const file = new File(['imagem da nota'], name, { type: 'application/octet-stream' });
   fireEvent.change(inputs[1], { target: { files: [file] } });
-  fireEvent.click(await screen.findByRole('button', { name: 'Enviar para leitura' }));
-  expect(await screen.findByText('Validar nota antes do lançamento')).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole('button', { name: 'Ler documento' }));
+  expect(await screen.findByText('Validar entrada antes do lançamento')).toBeInTheDocument();
 }
 
 describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', () => {
@@ -142,7 +142,7 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.queryByText(/Documento não fiscal/i)).not.toBeInTheDocument();
     const dialog = screen.getByRole('dialog');
     const headers = within(dialog).getAllByRole('columnheader').map(header => header.textContent);
-    expect(headers).toEqual(expect.arrayContaining(['Cód. prod.', 'Descrição', 'Qtd', 'Un', 'V. unit. NF', 'V. unit. global', 'V. total', 'Grupo de compra']));
+    expect(headers).toEqual(expect.arrayContaining(['Cód. prod.', 'Descrição', 'Qtd. NF', 'Un. NF', 'V. unit. NF', 'Total NF', 'Qtd. estoque', 'Un. estoque', 'Fator', 'V. unit. global', 'V. total global', 'Grupo de compra']));
     expect(within(dialog).getAllByRole('combobox')).not.toHaveLength(0);
     within(dialog).getAllByRole('combobox').forEach(combobox => expect(combobox).toBeEnabled());
   });
@@ -166,7 +166,7 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={onProjectChange} canManage />);
     await readDocument(view.container);
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    await waitFor(() => expect(screen.queryByText('Validar nota antes do lançamento')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Validar entrada antes do lançamento')).not.toBeInTheDocument());
     expect(onProjectChange).not.toHaveBeenCalled();
     expect(screen.getByRole('tab', { name: /Lançadas no estoque \(0\)/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /Arquivadas \(0\)/i })).toBeInTheDocument();
@@ -196,7 +196,7 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     await waitFor(() => expect(onCommitProject).toHaveBeenCalledTimes(1));
     expect(onProjectChange).not.toHaveBeenCalled();
     expect((onCommitProject.mock.calls[0][0] as Project).warehouse!.fiscalNotes[0].status).toBe('aprovada');
-    await waitFor(() => expect(screen.queryByText('Validar nota antes do lançamento')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Validar entrada antes do lançamento')).not.toBeInTheDocument());
   });
 
   it('não lança nem movimenta o estoque quando o anexo falha na nuvem', async () => {
@@ -210,7 +210,7 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     await waitFor(() => expect(screen.getByRole('button', { name: 'Confirmar lançamento' })).toBeEnabled());
     expect(onCommitProject).not.toHaveBeenCalled();
     expect(onProjectChange).not.toHaveBeenCalled();
-    expect(screen.getByText('Validar nota antes do lançamento')).toBeInTheDocument();
+    expect(screen.getByText('Validar entrada antes do lançamento')).toBeInTheDocument();
   });
 
   it('reutiliza o anexo já enviado quando a confirmação da obra precisa ser repetida', async () => {
@@ -236,7 +236,7 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(within(dialog).getByText(/Nota 1\.301\.412/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Confirmar lançamento' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Abrir lançamento existente' }));
-    expect(await screen.findByText('Dados do lançamento')).toBeInTheDocument();
+    expect(await screen.findByText('Dados da entrada')).toBeInTheDocument();
     expect(onProjectChange).not.toHaveBeenCalled();
   });
 
@@ -250,6 +250,60 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     fireEvent.click(screen.getByRole('button', { name: 'Adicionar item' }));
     expect(screen.getByText('Itens do documento (1)')).toBeInTheDocument();
     expect(onProjectChange).not.toHaveBeenCalled();
+  });
+
+  it('mantém a mesma janela aberta durante a leitura e troca para a conferência sem voltar à página', async () => {
+    let resolveRead!: (value: unknown) => void;
+    invokeMock.mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }));
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={vi.fn()} canManage />);
+    const file = new File(['imagem'], 'nota.jpg', { type: 'image/jpeg' });
+    fireEvent.change(view.container.querySelectorAll<HTMLInputElement>('input[type="file"]')[1], { target: { files: [file] } });
+    expect(await screen.findByRole('heading', { name: 'Registrar entrada' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Ler documento' }));
+    expect(screen.getByText('Lendo o documento. Permaneça nesta janela.')).toBeInTheDocument();
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    await act(async () => resolveRead({
+      data: { ok: true, note: { supplierName: 'Fornecedor', totalAmount: 10, items: [{ description: 'Tubo', quantity: 1, unit: 'UN', unitPrice: 10, totalPrice: 10 }] } },
+      error: null,
+    }));
+    expect(await screen.findByText('Validar entrada antes do lançamento')).toBeInTheDocument();
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+  });
+
+  it('mantém itens móveis recolhidos e expande somente o item tocado', async () => {
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={vi.fn()} canManage />);
+    await readDocument(view.container);
+    const itemButton = screen.getByRole('button', { name: /FITA CREPE 24MM X 50M/i });
+    expect(itemButton).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Dados da nota')).not.toBeInTheDocument();
+    fireEvent.click(itemButton);
+    expect(itemButton).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Dados da nota')).toBeInTheDocument();
+    expect(screen.getByText('Entrada no estoque')).toBeInTheDocument();
+  });
+
+  it('sinaliza compra interestadual sem bloquear e restringe a revisão tardia à engenharia', () => {
+    const project = projectWithPostedNote();
+    project.warehouse!.fiscalNotes![0] = { ...project.warehouse!.fiscalNotes![0], supplierState: 'SP', destinationState: 'RO' };
+    render(<WarehouseFiscalNotesTab project={project} onProjectChange={vi.fn()} canManage canReviewCosts={false} />);
+    expect(screen.getByRole('button', { name: /Pendências fiscais \(1\)/i })).toBeInTheDocument();
+    expect(screen.getAllByText('Frete/ICMS pendentes').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Visualizar dados e grupos' })[0]);
+    expect(screen.getByLabelText('Frete adicional')).toHaveAttribute('readonly');
+    expect(screen.queryByRole('button', { name: 'Confirmar custos' })).not.toBeInTheDocument();
+  });
+
+  it('permite à engenharia confirmar frete e ICMS explicitamente em zero', async () => {
+    const project = projectWithPostedNote();
+    project.warehouse!.fiscalNotes![0] = { ...project.warehouse!.fiscalNotes![0], supplierState: 'SP', destinationState: 'RO' };
+    const onProjectChange = vi.fn();
+    render(<WarehouseFiscalNotesTab project={project} onProjectChange={onProjectChange} canManage canReviewCosts />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Visualizar dados e grupos' })[0]);
+    fireEvent.change(screen.getByLabelText('Frete adicional'), { target: { value: '0' } });
+    fireEvent.change(screen.getByLabelText('ICMS/DIFAL adicional'), { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar custos' }));
+    await waitFor(() => expect(onProjectChange).toHaveBeenCalledTimes(1));
+    expect((onProjectChange.mock.calls[0][0] as Project).warehouse!.fiscalNotes![0]).toMatchObject({ costReviewStatus: 'confirmed', freightAmount: 0, icmsAmount: 0 });
   });
 
   it('arquiva rascunho técnico antigo uma única vez sem movimentar estoque', async () => {
