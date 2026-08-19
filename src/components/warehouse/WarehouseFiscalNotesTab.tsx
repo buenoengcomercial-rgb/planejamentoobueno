@@ -37,7 +37,7 @@ import {
   loadWarehouseAttachmentBlob,
   warehouseAttachmentErrorMessage,
 } from '@/lib/warehouseAttachments';
-import { inferSupplierState, normalizeBrazilianState } from '@/lib/fiscalSupplierState';
+import { inferSupplierStateFromIssuerAddress, normalizeBrazilianState } from '@/lib/fiscalSupplierState';
 import { createSupplierHeaderImageDataUrl } from '@/lib/fiscalSupplierHeaderImage';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
@@ -87,9 +87,17 @@ type ParsedNote = Partial<Pick<WarehouseFiscalNote,
   'supplierName' | 'supplierCnpj' | 'supplierState' | 'invoiceNumber' | 'issueDate' | 'totalAmount' | 'notes' |
   'items' | 'invoices' | 'aiConfidence' | 'documentType' | 'documentTypeConfidence'>>;
 
+type TransientFiscalReaderNote = ParsedNote & {
+  confidence?: number;
+  supplierCity?: string | null;
+  supplierHeaderText?: string | null;
+  supplierLocationText?: string | null;
+};
+
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_IMAGES = 4;
 const DESTINATION_STATE = 'RO';
+const FISCAL_READER_VERSION = 'issuer-address-v1';
 const ACCEPTED = ['pdf', 'png', 'jpg', 'jpeg', 'webp'];
 
 function money(value?: number) {
@@ -196,21 +204,38 @@ async function readWithAi(input: { name: string; type?: string; urls: string[]; 
   const { data, error } = await supabase.functions.invoke<{
     ok?: boolean;
     error?: string;
-    note?: ParsedNote & { confidence?: number };
+    readerVersion?: string;
+    note?: TransientFiscalReaderNote;
   }>('read-fiscal-note', {
     body: { fileName: input.name, fileType: input.type, fileDataUrl: input.urls[0], fileDataUrls: input.urls, supplierHeaderImageDataUrl, extractedText: input.text },
   });
   if (error) throw new Error(error.message || 'Falha ao executar a leitura automática.');
   if (!data?.ok || !data.note) throw new Error(data?.error || 'Não foi possível ler o documento.');
+  if (data.readerVersion !== FISCAL_READER_VERSION) {
+    throw new Error('Leitor de notas desatualizado. Implante a função read-fiscal-note pelo Lovable Cloud e tente novamente.');
+  }
+  const {
+    confidence,
+    supplierCity,
+    supplierHeaderText,
+    supplierLocationText,
+    ...note
+  } = data.note;
+  const supplierState = [
+    supplierHeaderText,
+    supplierLocationText,
+    supplierCity && note.supplierState ? `${supplierCity}/${note.supplierState}` : supplierCity,
+    input.text,
+  ].map(evidence => inferSupplierStateFromIssuerAddress(evidence || undefined, note.supplierName, note.supplierCnpj))
+    .find(Boolean) ?? normalizeState(note.supplierState);
   return {
-    ...data.note,
-    supplierCnpj: normalizeCnpj(data.note.supplierCnpj),
-    supplierState: inferSupplierState(input.text, data.note.supplierName, data.note.supplierCnpj)
-      ?? normalizeState(data.note.supplierState),
-    totalAmount: Number(data.note.totalAmount || 0),
-    aiConfidence: data.note.confidence == null ? undefined : Number(data.note.confidence),
-    documentTypeConfidence: data.note.documentTypeConfidence == null ? undefined : Number(data.note.documentTypeConfidence),
-    items: (data.note.items ?? []).map(item => {
+    ...note,
+    supplierCnpj: normalizeCnpj(note.supplierCnpj),
+    supplierState,
+    totalAmount: Number(note.totalAmount || 0),
+    aiConfidence: confidence == null ? undefined : Number(confidence),
+    documentTypeConfidence: note.documentTypeConfidence == null ? undefined : Number(note.documentTypeConfidence),
+    items: (note.items ?? []).map(item => {
       const quantity = Number(item.quantity || 0);
       const unit = item.unit?.trim() || 'UN';
       return ({

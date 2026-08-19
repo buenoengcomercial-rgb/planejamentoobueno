@@ -117,10 +117,14 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     invokeMock.mockReset().mockResolvedValue({
       data: {
         ok: true,
+        readerVersion: 'issuer-address-v1',
         note: {
           supplierName: 'FREITAS & CIA LTDA',
           supplierCnpj: '02.179.328/0001-42',
-          supplierState: 'SP',
+          supplierState: null,
+          supplierCity: 'São Paulo',
+          supplierHeaderText: 'B LUX MATERIAIS ELETRICOS LTDA SÃO PAULO - SP',
+          supplierLocationText: 'SÃO PAULO - SP',
           invoiceNumber: '1.301.412',
           issueDate: '2026-08-14',
           totalAmount: 85.63,
@@ -232,6 +236,9 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(posted.warehouse!.items).toHaveLength(1);
     expect(posted.warehouse!.movements.filter(movement => movement.type === 'entrada')).toHaveLength(1);
     expect(posted.warehouse!.materialLinks).toHaveLength(0);
+    expect(posted.warehouse!.fiscalNotes[0]).not.toHaveProperty('supplierCity');
+    expect(posted.warehouse!.fiscalNotes[0]).not.toHaveProperty('supplierHeaderText');
+    expect(posted.warehouse!.fiscalNotes[0]).not.toHaveProperty('supplierLocationText');
     expect(uploadMock).toHaveBeenCalledTimes(1);
   });
 
@@ -300,6 +307,18 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(onProjectChange).not.toHaveBeenCalled();
   });
 
+  it('informa quando a Edge Function publicada está desatualizada e mantém o modal aberto', async () => {
+    invokeMock.mockResolvedValueOnce({
+      data: { ok: true, note: { supplierName: 'B LUX MATERIAIS ELETRICOS LTDA', items: [] } },
+      error: null,
+    });
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={vi.fn()} canManage />);
+    await readDocument(view.container, 'b-lux.jpg');
+    expect(screen.getByText(/Leitor de notas desatualizado/i)).toBeInTheDocument();
+    expect(screen.getByText('Leitura incompleta')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tentar leitura novamente' })).toBeInTheDocument();
+  });
+
   it('mantém a mesma janela aberta durante a leitura e troca para a conferência sem voltar à página', async () => {
     let resolveRead!: (value: unknown) => void;
     invokeMock.mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }));
@@ -311,7 +330,7 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.getByText('Lendo o documento. Permaneça nesta janela.')).toBeInTheDocument();
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
     await act(async () => resolveRead({
-      data: { ok: true, note: { supplierName: 'Fornecedor', totalAmount: 10, items: [{ description: 'Tubo', quantity: 1, unit: 'UN', unitPrice: 10, totalPrice: 10 }] } },
+      data: { ok: true, readerVersion: 'issuer-address-v1', note: { supplierName: 'Fornecedor', totalAmount: 10, items: [{ description: 'Tubo', quantity: 1, unit: 'UN', unitPrice: 10, totalPrice: 10 }] } },
       error: null,
     }));
     expect(await screen.findByText('Validar entrada antes do lançamento')).toBeInTheDocument();

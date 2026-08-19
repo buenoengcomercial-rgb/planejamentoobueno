@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inferSupplierState, normalizeBrazilianState } from './fiscalSupplierState';
+import { inferSupplierState, inferSupplierStateFromIssuerAddress, normalizeBrazilianState } from './fiscalSupplierState';
 
 describe('inferSupplierState', () => {
   it('identifica Rondônia pelo cUF da chave de acesso da NF-e', () => {
@@ -24,11 +24,17 @@ describe('inferSupplierState', () => {
 
   it.each([
     ['Jundiaí/SP', 'SP'],
+    ['SÃO PAULO - SP', 'SP'],
     ['JUNDIAI - SP', 'SP'],
     ['Município Jundiaí UF: SP', 'SP'],
     ['Fornecedor localizado no Estado de São Paulo', 'SP'],
   ])('associa %s à UF oficial %s', (address, expected) => {
-    expect(inferSupplierState(`JUND DIAMOND FERRAMENTAS ${address}`)).toBe(expected);
+    expect(inferSupplierStateFromIssuerAddress(`FORNECEDOR ${address}`)).toBe(expected);
+  });
+
+  it('não usa a chave de acesso quando a regra solicitada é somente o endereço do emitente', () => {
+    const text = 'CHAVE DE ACESSO 3526 0511 7702 1800 0141 5500 1000 0184 7613 1413 2783';
+    expect(inferSupplierStateFromIssuerAddress(text)).toBeUndefined();
   });
 
   it('não usa Porto Velho/RO quando o cabeçalho transcrito do emitente informa Jundiaí/SP', () => {

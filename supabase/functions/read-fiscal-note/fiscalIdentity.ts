@@ -144,17 +144,26 @@ export function resolveSupplierIdentity(input: {
   accessKey?: string | null;
   extractedText?: string | null;
   supplierHeaderText?: string | null;
+  supplierLocationText?: string | null;
   supplierCity?: string | null;
+  supplierState?: string | null;
   supplierName?: string | null;
   supplierCnpj?: string | null;
 }) {
   const accessKey = findValidFiscalAccessKey(input.accessKey, input.extractedText, input.supplierHeaderText);
   const keyCnpj = accessKey ? formatCnpj(accessKey.slice(6, 20)) : undefined;
   const supplierCnpj = keyCnpj ?? resolveHeaderCnpj(input.supplierHeaderText, input.supplierCnpj);
-  const supplierEvidence = [issuerSection(input.extractedText), issuerSection(input.supplierHeaderText), input.supplierCity]
-    .filter(Boolean).join("\n");
-  const supplierState = accessKey
-    ? STATE_BY_CUF[accessKey.slice(0, 2)]
-    : inferSupplierStateFromHeader(supplierEvidence, input.supplierName, supplierCnpj);
+  const reportedLocation = input.supplierCity && input.supplierState
+    ? `${input.supplierCity}/${input.supplierState}`
+    : input.supplierCity;
+  const supplierEvidence = [
+    issuerSection(input.extractedText),
+    issuerSection(input.supplierHeaderText),
+    issuerSection(input.supplierLocationText),
+    reportedLocation,
+  ].filter(Boolean);
+  const supplierState = supplierEvidence
+    .map((evidence) => inferSupplierStateFromHeader(evidence, input.supplierName, supplierCnpj))
+    .find(Boolean);
   return { supplierCnpj, supplierState };
 }

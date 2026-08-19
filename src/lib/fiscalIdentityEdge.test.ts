@@ -7,6 +7,7 @@ import {
 } from '../../supabase/functions/read-fiscal-note/fiscalIdentity';
 
 const JUND_DIAMOND_KEY = '35260511770218000141550010000184761314132783';
+const B_LUX_KEY = '35260600425361000180550010000404751898637284';
 
 describe('identidade fiscal do emitente na leitura da Edge Function', () => {
   it('obtém SP e o CNPJ correto da chave real da nota Jund Diamond', () => {
@@ -17,6 +18,23 @@ describe('identidade fiscal do emitente na leitura da Edge Function', () => {
       supplierCnpj: '05.117.702/0001-41',
       supplierHeaderText: 'Jundiaí/SP CNPJ/CPF 11.770.218/0001-41 DESTINATÁRIO/REMETENTE Porto Velho UF RO',
     })).toEqual({ supplierState: 'SP', supplierCnpj: '11.770.218/0001-41' });
+  });
+
+  it('lê SÃO PAULO - SP no cabeçalho real da B Lux', () => {
+    expect(resolveSupplierIdentity({
+      accessKey: B_LUX_KEY,
+      supplierName: 'B LUX MATERIAIS ELETRICOS LTDA',
+      supplierCnpj: '00.425.361/0001-80',
+      supplierLocationText: 'SÃO PAULO - SP',
+      supplierHeaderText: 'B LUX MATERIAIS ELETRICOS LTDA RUA CURITIBA JD. DANTER SÃO PAULO - SP',
+    })).toEqual({ supplierState: 'SP', supplierCnpj: '00.425.361/0001-80' });
+  });
+
+  it('nunca usa o cUF da chave para substituir a UF escrita no endereço', () => {
+    expect(resolveSupplierIdentity({
+      accessKey: JUND_DIAMOND_KEY,
+      supplierLocationText: 'Curitiba/PR',
+    })).toEqual({ supplierState: 'PR', supplierCnpj: '11.770.218/0001-41' });
   });
 
   it('aceita a chave com espaços e rejeita chave com dígito verificador inválido', () => {

@@ -76,6 +76,12 @@ function stateFromSupplierAddress(text: string, supplierName?: string, supplierC
   return standalone.length ? standalone[0] : undefined;
 }
 
+/** Reads only the issuer address and never derives the state from the NF-e access key. */
+export function inferSupplierStateFromIssuerAddress(text?: string, supplierName?: string, supplierCnpj?: string) {
+  if (!text?.trim()) return undefined;
+  return stateFromSupplierAddress(text, supplierName, supplierCnpj);
+}
+
 export function normalizeBrazilianState(value?: string | null) {
   const normalized = normalizeText(value ?? '').trim();
   if (VALID_STATES.has(normalized)) return normalized;
@@ -85,5 +91,5 @@ export function normalizeBrazilianState(value?: string | null) {
 /** Uses the NF-e cUF first, then the supplier address. It never uses the work/recipient UF as a fallback. */
 export function inferSupplierState(text?: string, supplierName?: string, supplierCnpj?: string) {
   if (!text?.trim()) return undefined;
-  return stateFromAccessKey(text) ?? stateFromSupplierAddress(text, supplierName, supplierCnpj);
+  return stateFromAccessKey(text) ?? inferSupplierStateFromIssuerAddress(text, supplierName, supplierCnpj);
 }

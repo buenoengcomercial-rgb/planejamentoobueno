@@ -1,5 +1,7 @@
 import { resolveSupplierIdentity } from "./fiscalIdentity.ts";
 
+const READER_VERSION = "issuer-address-v1";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-api-version",
@@ -32,6 +34,7 @@ type FiscalNotePayload = {
   supplierState?: string | null;
   supplierCity?: string | null;
   supplierHeaderText?: string | null;
+  supplierLocationText?: string | null;
   invoiceNumber?: string | null;
   issueDate?: string | null;
   totalAmount?: number | null;
@@ -52,6 +55,7 @@ Retorne APENAS JSON valido neste formato:
   "supplierState": "UF"|null,
   "supplierCity": string|null,
   "supplierHeaderText": string|null,
+  "supplierLocationText": string|null,
   "invoiceNumber": string|null,
   "issueDate": "YYYY-MM-DD"|null,
   "totalAmount": number,
@@ -86,11 +90,11 @@ Regras:
 - Use "nfe", "nfce" ou "cupom_fiscal" apenas quando houver evidencia fiscal clara (DANFE, chave de acesso, NFC-e ou cupom fiscal de compra).
 - Avalie obrigatoriamente o cabecalho e o endereco do EMITENTE para identificar a UF do fornecedor. O emitente fica antes do titulo DESTINATARIO/REMETENTE. Nunca use nenhum municipio ou UF que esteja depois desse titulo.
 - Transcreva em supplierHeaderText o bloco visivel do emitente contendo razao social, CNPJ, endereco, municipio e UF. Retorne em supplierCity somente o municipio do emitente.
+- Em supplierLocationText copie literalmente a linha do endereco do EMITENTE que contem cidade e UF, por exemplo "Jundiai/SP" ou "SAO PAULO - SP". Se municipio e UF estiverem em campos separados, transcreva os dois juntos.
 - supplierCnpj deve ser exclusivamente o numero que aparece logo abaixo ou ao lado do rotulo CNPJ/CPF no cabecalho do EMITENTE, antes de NATUREZA DA OPERACAO e antes de DESTINATARIO/REMETENTE.
 - Nunca use como supplierCnpj a inscricao estadual, a chave de acesso ou o CNPJ/CPF do destinatario/remetente. Inclua literalmente em supplierHeaderText o rotulo CNPJ/CPF do emitente e seu numero para validacao.
 - Quando houver uma localizacao como "Jundiai/SP", "JUNDIAI - SP", "UF: SP" ou o nome completo "Sao Paulo", supplierState deve ser "SP". Associe somente siglas oficiais: AC, AL, AP, AM, BA, CE, DF, ES, GO, MA, MT, MS, MG, PA, PB, PR, PE, PI, RJ, RN, RS, RO, RR, SC, SP, SE e TO.
-- Em uma NF-e, confira tambem os dois primeiros digitos da chave de acesso (codigo cUF). Exemplo: chave iniciada em 11 identifica emitente de RO; 35 identifica SP. Esse codigo pertence a UF que autorizou a NF-e e deve prevalecer sobre a UF do destinatario.
-- Em accessKey transcreva exatamente os 44 digitos impressos abaixo do rotulo CHAVE DE ACESSO. Nao recorte, complete ou invente digitos e nao use protocolo, CNPJ ou codigo de barras parcial nesse campo.
+- Em accessKey transcreva exatamente os 44 digitos impressos abaixo do rotulo CHAVE DE ACESSO somente para conferencia do CNPJ. A chave nunca deve ser usada para escolher supplierState.
 - Leia fornecedor, CNPJ, UF do endereco do emitente, numero da nota, data de emissao, valor total e itens.
 - supplierState deve conter apenas a sigla brasileira de duas letras quando estiver legivel no endereco do emitente; nunca use a UF do destinatario e nunca deduza a UF apenas pelo CNPJ.
 - Para CADA item extraia o codigo da coluna "COD. PROD.", "Cod. Prod.", "Codigo", "Cod.", "Ref." ou similar como "productCode" — esse codigo e essencial.
@@ -115,7 +119,9 @@ function normalizePayload(raw: FiscalNotePayload, extractedText = ""): FiscalNot
     accessKey: raw.accessKey,
     extractedText,
     supplierHeaderText: raw.supplierHeaderText,
+    supplierLocationText: raw.supplierLocationText,
     supplierCity: raw.supplierCity,
+    supplierState: raw.supplierState,
     supplierName: raw.supplierName,
     supplierCnpj: raw.supplierCnpj,
   });
@@ -123,6 +129,9 @@ function normalizePayload(raw: FiscalNotePayload, extractedText = ""): FiscalNot
     supplierName: raw.supplierName ?? null,
     supplierCnpj: supplierIdentity.supplierCnpj ?? null,
     supplierState: supplierIdentity.supplierState ?? null,
+    supplierCity: raw.supplierCity ?? null,
+    supplierHeaderText: raw.supplierHeaderText ?? null,
+    supplierLocationText: raw.supplierLocationText ?? null,
     invoiceNumber: raw.invoiceNumber ?? null,
     issueDate: raw.issueDate ?? null,
     totalAmount: Number(raw.totalAmount ?? 0) || 0,
@@ -259,7 +268,7 @@ Deno.serve(async (req) => {
     if (supplierHeaderImageDataUrl.startsWith("data:image/")) {
       userContent.push({
         type: "text",
-        text: "RECORTE AMPLIADO DO CABECALHO E DA CHAVE DA NF-e. Transcreva em accessKey exatamente os 44 digitos abaixo de CHAVE DE ACESSO. Leia tambem o bloco da empresa fornecedora antes de NATUREZA DA OPERACAO e DESTINATARIO/REMETENTE; transcreva em supplierHeaderText o municipio/UF e o rotulo CNPJ/CPF com o numero do emitente imediatamente associado a ele.",
+        text: "RECORTE AMPLIADO DO CABECALHO DO EMITENTE. Antes de DESTINATARIO/REMETENTE, localize a cidade e a UF da empresa fornecedora. Copie a linha literalmente em supplierLocationText, devolva a cidade em supplierCity e a sigla em supplierState. Exemplos: Jundiai/SP deve resultar SP; SAO PAULO - SP deve resultar SP. Nao use destinatario, transportadora ou local de entrega.",
       });
       userContent.push({
         type: "image_url",
@@ -279,7 +288,7 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "IA retornou JSON invalido.", raw: ai.content }, 502);
     }
 
-    return jsonResponse({ ok: true, note: normalizePayload(parsed, extractedText) });
+    return jsonResponse({ ok: true, readerVersion: READER_VERSION, note: normalizePayload(parsed, extractedText) });
   } catch (error) {
     return jsonResponse({ error: (error as Error).message }, 500);
   }
