@@ -193,7 +193,7 @@ Deno.serve(async (req) => {
     if (fileDataUrl.startsWith("data:image/") && fileDataUrls.length === 0) {
       fileDataUrls.push(fileDataUrl);
     }
-    const extractedText = String(body.extractedText ?? "").trim().slice(0, 20000);
+    const extractedText = String(body.extractedText ?? "").trim().slice(0, 8000);
     const supplierHeaderImageDataUrl = String(body.supplierHeaderImageDataUrl ?? "");
     const fileName = String(body.fileName ?? "nota-fiscal");
 
