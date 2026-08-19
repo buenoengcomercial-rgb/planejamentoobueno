@@ -147,7 +147,9 @@ async function callLovableAiGateway(input: {
     body: JSON.stringify({
       model: input.model,
       temperature: 0.1,
+      reasoning_effort: "low",
       response_format: { type: "json_object" },
+
       messages: [
         { role: "system", content: systemPrompt },
         {
