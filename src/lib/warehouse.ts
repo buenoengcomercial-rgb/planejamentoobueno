@@ -253,6 +253,7 @@ export function ensureWarehouse(project: Project): Project {
       wh.movements !== cur.movements ||
       wh.requisitions !== cur.requisitions ||
       wh.equipments !== cur.equipments ||
+      wh.equipmentGroups !== cur.equipmentGroups ||
       wh.custodyTerms !== cur.custodyTerms ||
       wh.fiscalNotes !== cur.fiscalNotes ||
       wh.materialLinks !== cur.materialLinks ||
