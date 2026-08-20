@@ -228,7 +228,12 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     view.rerender(<WarehouseEquipmentsTab project={saved} onProjectChange={vi.fn()} />);
     expect(screen.getByText('Adaptadores de mandril')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Ver patrimônios' }));
-    expect(screen.getByTestId('equipment-group-items')).toBeInTheDocument();
+    const groupItems = screen.getByTestId('equipment-group-items');
+    expect(groupItems).toHaveClass('contents');
+    expect(within(groupItems).getAllByTestId('equipment-card')).toHaveLength(2);
+    expect(within(groupItems).getAllByRole('button', { name: 'Etiqueta QR' })).toHaveLength(2);
+    expect(within(groupItems).getAllByRole('button', { name: 'Editar' })).toHaveLength(2);
+    expect(within(groupItems).getAllByRole('button', { name: 'Arquivar' })).toHaveLength(2);
     expect(screen.getByText('EQ-2026-0001')).toBeInTheDocument();
     expect(screen.getByText('EQ-2026-0002')).toBeInTheDocument();
     expect(screen.getByTitle('SERIE-01')).toBeInTheDocument();
