@@ -42,6 +42,11 @@ describe('WarehouseRequisitionsTab', () => {
     const available = screen.getByLabelText('Materiais disponíveis');
     expect(within(available).getAllByRole('button')).toHaveLength(15);
 
+    fireEvent.click(within(available).getAllByRole('button')[0]);
+    expect(screen.getByText('Materiais selecionados')).toBeInTheDocument();
+    expect(screen.getByText('1 item(ns)')).toBeInTheDocument();
+    expect(within(available).getAllByRole('button')).toHaveLength(14);
+
     fireEvent.change(screen.getByPlaceholderText('Buscar por código, descrição ou unidade'), { target: { value: 'valvula aco' } });
     expect(within(available).getAllByRole('button')).toHaveLength(1);
     expect(within(available).getByText('Válvula de Aço Carbono')).toBeInTheDocument();
@@ -62,6 +67,10 @@ describe('WarehouseRequisitionsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0001/i }));
     expect(screen.getAllByRole('button', { name: 'PDF' })).toHaveLength(2);
     expect(screen.getAllByText('Material disponível 0').length).toBeGreaterThan(1);
+    expect(screen.getAllByRole('columnheader', { name: 'Retirado' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('columnheader', { name: 'Devolvido' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('columnheader', { name: 'Em campo' }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('columnheader', { name: 'Equipe' })).not.toBeInTheDocument();
   });
 
   it('move cautelas para a subaba Equipamentos / Cautelas', () => {

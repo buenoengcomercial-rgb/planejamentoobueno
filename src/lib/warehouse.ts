@@ -659,7 +659,6 @@ export function deliverRequisition(
   if (!req || req.status === 'entregue') return p;
   if (req.status === 'cancelada') throw new Error('Uma retirada cancelada não pode ser entregue.');
   if (!req.chapterId) throw new Error('Selecione o prédio/capítulo do orçamento.');
-  if (!req.teamId) throw new Error('Selecione a equipe que receberá os materiais.');
   if (!(req.receiverName || req.requesterName)?.trim()) throw new Error('Informe quem recebeu os materiais.');
   if (!req.signatureReceiver) throw new Error('A assinatura de quem recebeu é obrigatória.');
   if (!req.items.length) throw new Error('Adicione ao menos um material à retirada.');
@@ -766,7 +765,7 @@ export function publishRequisitionToDailyReport(project: Project, requisitionId:
 
 function requisitionDailyReportBlock(req: WarehouseRequisition): string {
   const summary = req.items.map(it => `  • ${it.description} — ${it.quantity} ${it.unit}`).join('\n');
-  const context = [req.chapterName, req.teamName, req.receiverName || req.requesterName].filter(Boolean).join(' — ');
+  const context = [req.chapterName, req.receiverName || req.requesterName].filter(Boolean).join(' — ');
   return `[Almoxarifado ${req.number}${context ? ` — ${context}` : ''}]\n${summary}`;
 }
 
@@ -1065,7 +1064,6 @@ export function issueCustodyTerm(
   const wh = p.warehouse!;
   if (!input.workerName.trim()) throw new Error('Informe quem recebeu os equipamentos.');
   if (!input.chapterId) throw new Error('Selecione o prédio/capítulo do orçamento.');
-  if (!input.teamId) throw new Error('Selecione a equipe que receberá os equipamentos.');
   if (!input.signatureReceiver) throw new Error('A assinatura de quem recebeu é obrigatória.');
   if (!input.equipments.length) throw new Error('Adicione ao menos um equipamento à cautela.');
   const selectedIds = input.equipments.map(item => item.equipmentId);

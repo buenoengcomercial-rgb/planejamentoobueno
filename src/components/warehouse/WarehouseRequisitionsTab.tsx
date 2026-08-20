@@ -19,7 +19,6 @@ import {
 import { deleteWarehouseAttachments } from '@/lib/warehouseAttachments';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { getChapterNumbering } from '@/lib/chapters';
-import { DEFAULT_TEAMS } from '@/lib/teams';
 import SignaturePad from './SignaturePad';
 import { generateRequisitionReceipt } from './pdf';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
@@ -38,7 +37,6 @@ interface Props { project: Project; onProjectChange: (next: Project) => void; au
 interface WithdrawalForm {
   date: string;
   chapterId: string;
-  teamId: string;
   receiverName: string;
   notes: string;
   items: WarehouseRequisitionItem[];
@@ -46,12 +44,11 @@ interface WithdrawalForm {
   deliveryIdempotencyKey: string;
 }
 
-type WithdrawalErrors = Partial<Record<'chapterId' | 'teamId' | 'receiverName' | 'items' | 'signatureReceiver', string>>;
+type WithdrawalErrors = Partial<Record<'chapterId' | 'receiverName' | 'items' | 'signatureReceiver', string>>;
 
 const initialForm = (): WithdrawalForm => ({
   date: new Date().toISOString().slice(0, 10),
   chapterId: '',
-  teamId: '',
   receiverName: '',
   notes: '',
   items: [],
@@ -88,10 +85,6 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
       name: `${numbering.get(phase.id) ?? phase.customNumber ?? ''} ${phase.name}`.trim(),
     })),
     [numbering, project.phases],
-  );
-  const teams = useMemo(
-    () => (project.teams?.length ? project.teams : DEFAULT_TEAMS).filter(team => team.active !== false),
-    [project.teams],
   );
   const [open, setOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -167,10 +160,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
 
   const submit = async () => {
     const chapter = chapters.find(candidate => candidate.id === form.chapterId);
-    const team = teams.find(candidate => candidate.code === form.teamId);
     const nextErrors: WithdrawalErrors = {};
     if (!chapter) nextErrors.chapterId = 'Selecione o destino.';
-    if (!team) nextErrors.teamId = 'Selecione a equipe.';
     if (!form.receiverName.trim()) nextErrors.receiverName = 'Informe quem recebeu.';
     if (!form.items.length) nextErrors.items = 'Adicione ao menos um material.';
     const invalid = form.items.find(item => !(item.quantity > 0));
@@ -180,8 +171,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
     if (!form.signatureReceiver) nextErrors.signatureReceiver = 'Colete a assinatura.';
     if (Object.keys(nextErrors).length) {
       setErrors(nextErrors);
-      const first = ['chapterId', 'teamId', 'receiverName', 'items', 'signatureReceiver'].find(key => nextErrors[key as keyof WithdrawalErrors]);
-      const targets: Record<string, string> = { chapterId: 'withdrawal-chapter', teamId: 'withdrawal-team', receiverName: 'withdrawal-receiver', items: 'withdrawal-material-search' };
+      const first = ['chapterId', 'receiverName', 'items', 'signatureReceiver'].find(key => nextErrors[key as keyof WithdrawalErrors]);
+      const targets: Record<string, string> = { chapterId: 'withdrawal-chapter', receiverName: 'withdrawal-receiver', items: 'withdrawal-material-search' };
       const target = first === 'signatureReceiver'
         ? document.querySelector<HTMLElement>('[aria-label="Assinatura de quem recebeu"]')
         : document.getElementById(targets[first ?? ''] ?? '');
@@ -198,8 +189,6 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
         date: form.date,
         chapterId: chapter.id,
         chapterName: chapter.name,
-        teamId: team.code,
-        teamName: team.label,
         receiverName: form.receiverName.trim(),
         requesterName: form.receiverName.trim(),
         notes: form.notes.trim() || undefined,
@@ -235,10 +224,9 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
 
       {open && (
         <section className="space-y-4 rounded-xl border bg-card p-3 shadow-sm">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <WarehouseField label="Data"><Input id="withdrawal-date" className="min-h-11 text-base" type="date" value={form.date} onChange={event => setForm({ ...form, date: event.target.value })} /></WarehouseField>
             <WarehouseField label="Prédio / capítulo" error={errors.chapterId}><select id="withdrawal-chapter" className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={form.chapterId} onChange={event => { setForm({ ...form, chapterId: event.target.value }); setErrors(current => ({ ...current, chapterId: undefined })); }}><option value="">Selecione</option>{chapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapter.name}</option>)}</select></WarehouseField>
-            <WarehouseField label="Equipe" error={errors.teamId}><select id="withdrawal-team" className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={form.teamId} onChange={event => { setForm({ ...form, teamId: event.target.value }); setErrors(current => ({ ...current, teamId: undefined })); }}><option value="">Selecione</option>{teams.map(team => <option key={team.code} value={team.code}>{team.label}</option>)}</select></WarehouseField>
             <WarehouseField label="Quem recebeu" error={errors.receiverName}><Input id="withdrawal-receiver" className="min-h-11 text-base" value={form.receiverName} onChange={event => { setForm({ ...form, receiverName: event.target.value }); setErrors(current => ({ ...current, receiverName: undefined })); }} placeholder="Nome do recebedor" /></WarehouseField>
           </div>
           <div className="text-xs text-muted-foreground">Almoxarife identificado pelo login: <strong className="text-foreground">{warehouseActorName(auditActor)}</strong></div>
@@ -246,18 +234,21 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
           <div className="overflow-hidden rounded-xl border">
             <WarehouseSectionHeader icon={PackageOpen} title="Escolha os materiais" description="Toque no material para adicionar." help="A busca encontra código, descrição e unidade. Somente materiais com saldo disponível aparecem nesta lista." />
             <div className="p-3">
+              <div className="mb-3 rounded-xl border border-primary/30 bg-primary/5 p-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><div className="text-sm font-bold text-primary">Materiais selecionados</div><WarehouseStatusBadge label={`${form.items.length} item(ns)`} tone={form.items.length ? 'info' : 'neutral'} /></div>
+                <div className="grid gap-2">
+                  {form.items.map((item, index) => {
+                    const row = rows.find(candidate => candidate.key === item.itemKey);
+                    const balance = row?.balance ?? 0;
+                    const after = balance - Number(item.quantity || 0);
+                    return <div key={item.itemKey} className="grid min-h-16 items-center gap-2 rounded-lg border border-primary/25 bg-background p-3 shadow-sm sm:grid-cols-[1fr_120px_180px_44px]"><div className="min-w-0"><div className="truncate text-sm font-bold">{item.description}</div><div className="text-xs text-muted-foreground">{item.code || 'Sem código'} · {item.unit}</div></div><Input className="min-h-11 text-center text-base" type="number" min="0" max={balance} step="any" value={item.quantity || ''} onChange={event => updateQuantity(index, Number(event.target.value))} aria-label={`Quantidade de ${item.description}`} /><div className="rounded-md bg-primary/5 p-2 text-center text-xs"><span>Saldo {balance.toLocaleString('pt-BR')}</span> − <strong>{Number(item.quantity || 0).toLocaleString('pt-BR')}</strong> = <span className={after < 0 ? 'text-destructive' : 'text-primary'}>{after.toLocaleString('pt-BR')} {item.unit}</span></div><Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => setForm(current => ({ ...current, items: current.items.filter((_, itemIndex) => itemIndex !== index) }))} aria-label={`Remover ${item.description}`}><Trash2 className="h-4 w-4" /></Button></div>;
+                  })}
+                  {!form.items.length && <div className="rounded-lg border border-dashed bg-background/60 p-3 text-sm text-muted-foreground">Nenhum material selecionado. Escolha abaixo os materiais da retirada.</div>}
+                </div>
+              </div>
               <label htmlFor="withdrawal-material-search" className="sr-only">Buscar material para adicionar</label><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input id="withdrawal-material-search" className="min-h-11 pl-9 text-base" value={materialSearch} onChange={event => setMaterialSearch(event.target.value)} placeholder="Buscar por código, descrição ou unidade" /></div>
               <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border bg-background" aria-label="Materiais disponíveis">{availableMaterials.map((row, index) => <button key={row.key} type="button" className={`flex min-h-16 w-full items-center gap-3 border-b px-3 text-left last:border-0 hover:bg-primary/10 ${index % 2 ? 'bg-muted/25' : ''}`} onClick={() => addMaterial(row.key)}><span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><PackageOpen className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-bold leading-snug">{row.description}</span><span className="mt-1 block text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</span></span><WarehouseStatusBadge label={`Saldo ${row.balance.toLocaleString('pt-BR')}`} tone="info" /><Plus className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" /></button>)}{!availableMaterials.length && <WarehouseEmptyState message="Nenhum material encontrado" hint="Tente outra palavra na busca." className="m-2" />}</div>
               {errors.items && <div role="alert" className="mt-2 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm font-semibold text-destructive">{errors.items}</div>}
-              <div className="mt-3 grid gap-2">
-                {form.items.map((item, index) => {
-                  const row = rows.find(candidate => candidate.key === item.itemKey);
-                  const balance = row?.balance ?? 0;
-                  const after = balance - Number(item.quantity || 0);
-                  return <div key={item.itemKey} className="grid min-h-16 items-center gap-2 rounded-md border p-2 sm:grid-cols-[1fr_120px_180px_44px]"><div className="min-w-0"><div className="truncate text-sm font-medium">{item.description}</div><div className="text-xs text-muted-foreground">{item.code || 'Sem código'} · {item.unit}</div></div><Input className="min-h-11 text-center" type="number" min="0" max={balance} step="any" value={item.quantity || ''} onChange={event => updateQuantity(index, Number(event.target.value))} aria-label={`Quantidade de ${item.description}`} /><div className="rounded-md bg-muted/50 p-2 text-center text-xs"><span>{balance.toLocaleString('pt-BR')}</span> − <strong>{Number(item.quantity || 0).toLocaleString('pt-BR')}</strong> = <span className={after < 0 ? 'text-destructive' : 'text-primary'}>{after.toLocaleString('pt-BR')} {item.unit}</span></div><Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => setForm(current => ({ ...current, items: current.items.filter((_, itemIndex) => itemIndex !== index) }))} aria-label={`Remover ${item.description}`}><Trash2 className="h-4 w-4" /></Button></div>;
-                })}
-                {!form.items.length && <WarehouseEmptyState message="Nenhum material escolhido" hint="Toque em um material acima para adicionar." />}
-              </div>
             </div>
           </div>
 
@@ -276,10 +267,10 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
             const expanded = activeId === requisition.id;
             return <article key={requisition.id} className={`rounded-md border ${expanded ? 'border-primary bg-primary/5' : ''}`}><button type="button" className="w-full p-3 text-left" onClick={() => setActiveId(current => current === requisition.id ? null : requisition.id)} aria-expanded={expanded}><div className="flex justify-between gap-2"><strong>{requisition.number}</strong><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></div><div className="mt-1 text-sm">{requisition.receiverName || requisition.requesterName || '—'}</div><div className="text-xs text-muted-foreground">{requisition.chapterName || requisition.taskName || 'Registro legado'} · {requisition.items.length} item(ns) · {requisition.date}</div></button>{expanded && <div className="border-t p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} /></div>}</article>;
           })}{!wh.requisitions.length && <WarehouseEmptyState message="Nenhuma retirada registrada" hint="Use Nova retirada para começar." />}</div>
-          <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[980px] text-xs"><thead className="bg-muted"><tr><th className="w-10 p-2"><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Prédio / capítulo</th><th className="p-2 text-left">Equipe</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead><tbody>{wh.requisitions.slice().sort((a, b) => b.date.localeCompare(a.date)).map(requisition => {
+          <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[860px] text-xs"><thead className="bg-muted"><tr><th className="w-10 p-2"><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Prédio / capítulo</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead><tbody>{wh.requisitions.slice().sort((a, b) => b.date.localeCompare(a.date)).map(requisition => {
             const expanded = activeId === requisition.id;
-            return <Fragment key={requisition.id}><tr className={`cursor-pointer border-t whitespace-nowrap hover:bg-muted/30 ${expanded ? 'bg-primary/10' : ''}`} onClick={() => setActiveId(current => current === requisition.id ? null : requisition.id)}><td className="p-2"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></td><td className="p-2 font-mono">{requisition.number}</td><td className="p-2">{requisition.date}</td><td className="p-2">{requisition.receiverName || requisition.requesterName || '—'}</td><td className="max-w-72 truncate p-2" title={requisition.chapterName || requisition.taskName}>{requisition.chapterName || requisition.taskName || 'Registro legado'}</td><td className="p-2">{requisition.teamName || requisition.teamId || '—'}</td><td className="p-2 text-center">{requisition.items.length}</td><td className="p-2"><WarehouseStatusBadge label={requisition.status === 'rascunho' ? 'Pendente legado' : 'Entregue'} tone={requisition.status === 'rascunho' ? 'warning' : 'success'} /></td><td className="p-2"><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} className="space-y-0.5" /></td></tr>{expanded && <tr className="border-t bg-muted/10"><td colSpan={9} className="p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} /></td></tr>}</Fragment>;
-          })}{!wh.requisitions.length && <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">Nenhuma retirada registrada.</td></tr>}</tbody></table></div>
+            return <Fragment key={requisition.id}><tr className={`cursor-pointer border-t whitespace-nowrap hover:bg-muted/30 ${expanded ? 'bg-primary/10' : ''}`} onClick={() => setActiveId(current => current === requisition.id ? null : requisition.id)}><td className="p-2"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></td><td className="p-2 font-mono">{requisition.number}</td><td className="p-2">{requisition.date}</td><td className="p-2">{requisition.receiverName || requisition.requesterName || '—'}</td><td className="max-w-72 truncate p-2" title={requisition.chapterName || requisition.taskName}>{requisition.chapterName || requisition.taskName || 'Registro legado'}</td><td className="p-2 text-center">{requisition.items.length}</td><td className="p-2"><WarehouseStatusBadge label={requisition.status === 'rascunho' ? 'Pendente legado' : 'Entregue'} tone={requisition.status === 'rascunho' ? 'warning' : 'success'} /></td><td className="p-2"><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} className="space-y-0.5" /></td></tr>{expanded && <tr className="border-t bg-muted/10"><td colSpan={8} className="p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} /></td></tr>}</Fragment>;
+          })}{!wh.requisitions.length && <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">Nenhuma retirada registrada.</td></tr>}</tbody></table></div>
       </section>
       <MaterialReturnDialog project={project} requisition={returnTarget} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setReturnTarget(null)} />
       {confirmDialog}
@@ -294,8 +285,10 @@ function PhotoPreview({ file, onRemove }: { file: File; onRemove: () => void }) 
 
 function WithdrawalDetails({ project, requisition, canDelete, onDelete, onReturn }: { project: Project; requisition: WarehouseRequisition; canDelete: boolean; onDelete: () => void; onReturn: () => void }) {
   const returns = ensureWarehouse(project).warehouse!.movements.filter(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.requisitionId === requisition.id && !movement.reversedById);
-  const hasReturnable = requisition.status === 'entregue' && getReturnableRequisitionItems(project, requisition.id).some(item => item.availableQuantity > 0);
-  return <div className="space-y-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="text-sm"><strong>{requisition.number}</strong> · {requisition.receiverName || requisition.requesterName || '—'} · {requisition.deliveryAttachments?.length || 0} foto(s)</div><div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" className="min-h-11" onClick={() => generateRequisitionReceipt(project, requisition)}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{hasReturnable && <Button size="sm" className="min-h-11" onClick={onReturn}><RotateCcw className="mr-1 h-4 w-4" />Registrar devolução</Button>}{canDelete && <Button size="sm" variant="destructive" className="min-h-11" onClick={onDelete}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>}</div></div><dl className="grid gap-2 text-sm sm:grid-cols-3"><div><dt className="text-xs text-muted-foreground">Prédio / capítulo</dt><dd>{requisition.chapterName || requisition.taskName || 'Registro legado'}</dd></div><div><dt className="text-xs text-muted-foreground">Equipe</dt><dd>{requisition.teamName || requisition.teamId || '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Observação</dt><dd>{requisition.notes || '—'}</dd></div></dl><div className="overflow-x-auto"><table className="w-full min-w-[520px] text-xs"><thead><tr><th className="p-2 text-left">Código</th><th className="p-2 text-left">Material</th><th className="p-2 text-left">Unidade</th><th className="p-2 text-right">Quantidade</th></tr></thead><tbody>{requisition.items.map(item => <tr key={item.itemKey} className="border-t"><td className="p-2">{item.code || '—'}</td><td className="p-2">{item.description}</td><td className="p-2">{item.unit}</td><td className="p-2 text-right">{item.quantity.toLocaleString('pt-BR')}</td></tr>)}</tbody></table></div>{returns.length > 0 && <div className="rounded-lg border border-success/30 bg-success/5 p-3"><div className="mb-2 text-sm font-bold text-success">Devoluções registradas</div><div className="space-y-1 text-sm">{Array.from(new Map(returns.map(movement => [movement.returnNumber || movement.id, movement])).values()).map(movement => <div key={movement.id}><strong>{movement.returnNumber || 'Devolução'}</strong> · {movement.date} · devolvido por {movement.returnerName || 'Não informado'}</div>)}</div></div>}<WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} className="rounded-md bg-muted/40 p-2 text-xs" /></div>;
+  const returnable = requisition.status === 'entregue' ? getReturnableRequisitionItems(project, requisition.id) : [];
+  const returnableByItem = new Map(returnable.map(item => [item.itemKey, item] as const));
+  const hasReturnable = requisition.status === 'entregue' && returnable.some(item => item.availableQuantity > 0);
+  return <div className="space-y-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="text-sm"><strong>{requisition.number}</strong> · {requisition.receiverName || requisition.requesterName || '—'} · {requisition.deliveryAttachments?.length || 0} foto(s)</div><div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" className="min-h-11" onClick={() => generateRequisitionReceipt(project, requisition)}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{hasReturnable && <Button size="sm" className="min-h-11" onClick={onReturn}><RotateCcw className="mr-1 h-4 w-4" />Registrar devolução</Button>}{canDelete && <Button size="sm" variant="destructive" className="min-h-11" onClick={onDelete}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>}</div></div><dl className="grid gap-2 text-sm sm:grid-cols-2"><div><dt className="text-xs text-muted-foreground">Prédio / capítulo</dt><dd>{requisition.chapterName || requisition.taskName || 'Registro legado'}</dd></div><div><dt className="text-xs text-muted-foreground">Observação</dt><dd>{requisition.notes || '—'}</dd></div></dl><div className="overflow-x-auto"><table className="w-full min-w-[700px] text-xs"><thead><tr><th className="p-2 text-left">Código</th><th className="p-2 text-left">Material</th><th className="p-2 text-left">Un.</th><th className="p-2 text-right">Retirado</th><th className="p-2 text-right text-success">Devolvido</th><th className="p-2 text-right text-primary">Em campo</th></tr></thead><tbody>{requisition.items.map(item => { const summary = returnableByItem.get(item.itemKey); return <tr key={item.itemKey} className="border-t"><td className="p-2">{item.code || '—'}</td><td className="p-2">{item.description}</td><td className="p-2">{item.unit}</td><td className="p-2 text-right font-mono">{item.quantity.toLocaleString('pt-BR')}</td><td className="p-2 text-right font-mono text-success">{(summary?.returnedQuantity ?? 0).toLocaleString('pt-BR')}</td><td className="p-2 text-right font-mono font-bold text-primary">{(summary?.availableQuantity ?? item.quantity).toLocaleString('pt-BR')}</td></tr>; })}</tbody></table></div>{returns.length > 0 && <div className="rounded-lg border border-success/30 bg-success/5 p-3"><div className="mb-2 text-sm font-bold text-success">Devoluções registradas</div><div className="space-y-2 text-sm">{returns.map(movement => <div key={movement.id} className="rounded-md border border-success/20 bg-background/70 p-2"><strong>{movement.returnNumber || 'Devolução'}</strong> · {movement.date} · devolvido por {movement.returnerName || 'Não informado'}<div className="mt-1 font-medium text-success">{movement.itemDescription}: {movement.quantity.toLocaleString('pt-BR')} {movement.itemUnit}</div></div>)}</div></div>}<WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} className="rounded-md bg-muted/40 p-2 text-xs" /></div>;
 }
 
 function MaterialReturnDialog({ project, requisition, auditActor, onProjectChange, onClose }: {

@@ -36,7 +36,6 @@ import {
 import { deleteWarehouseAttachments } from '@/lib/warehouseAttachments';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { getChapterNumbering } from '@/lib/chapters';
-import { DEFAULT_TEAMS } from '@/lib/teams';
 import SignaturePad from './SignaturePad';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
 import { generateCustodyTermPdf } from './pdf';
@@ -67,14 +66,13 @@ interface CustodyFormItem {
 interface CustodyForm {
   issuedAt: string;
   chapterId: string;
-  teamId: string;
   workerName: string;
   dueDate: string;
   signatureReceiver?: string;
   equipments: CustodyFormItem[];
 }
 
-type CustodyErrors = Partial<Record<'chapterId' | 'teamId' | 'workerName' | 'equipments' | 'signatureReceiver', string>>;
+type CustodyErrors = Partial<Record<'chapterId' | 'workerName' | 'equipments' | 'signatureReceiver', string>>;
 
 interface ReturnTarget {
   term: CustodyTerm;
@@ -86,7 +84,6 @@ type ReturnStatus = Exclude<CustodyEquipmentStatus, 'em_uso'>;
 const initialForm = (): CustodyForm => ({
   issuedAt: new Date().toISOString().slice(0, 10),
   chapterId: '',
-  teamId: '',
   workerName: '',
   dueDate: '',
   equipments: [],
@@ -126,10 +123,6 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
       name: `${numbering.get(phase.id) ?? phase.customNumber ?? ''} ${phase.name}`.trim(),
     })),
     [numbering, project.phases],
-  );
-  const teams = useMemo(
-    () => (project.teams?.length ? project.teams : DEFAULT_TEAMS).filter(team => team.active !== false),
-    [project.teams],
   );
   const [open, setOpen] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -203,17 +196,15 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
 
   const submit = async () => {
     const chapter = chapters.find(candidate => candidate.id === form.chapterId);
-    const team = teams.find(candidate => candidate.code === form.teamId);
     const nextErrors: CustodyErrors = {};
     if (!chapter) nextErrors.chapterId = 'Selecione o destino.';
-    if (!team) nextErrors.teamId = 'Selecione a equipe.';
     if (!form.workerName.trim()) nextErrors.workerName = 'Informe quem recebeu.';
     if (!form.equipments.length) nextErrors.equipments = 'Adicione ao menos um equipamento.';
     if (!form.signatureReceiver) nextErrors.signatureReceiver = 'Colete a assinatura.';
     if (Object.keys(nextErrors).length) {
       setErrors(nextErrors);
-      const first = ['chapterId', 'teamId', 'workerName', 'equipments', 'signatureReceiver'].find(key => nextErrors[key as keyof CustodyErrors]);
-      const targets: Record<string, string> = { chapterId: 'custody-chapter', teamId: 'custody-team', workerName: 'custody-worker', equipments: 'custody-equipment-search' };
+      const first = ['chapterId', 'workerName', 'equipments', 'signatureReceiver'].find(key => nextErrors[key as keyof CustodyErrors]);
+      const targets: Record<string, string> = { chapterId: 'custody-chapter', workerName: 'custody-worker', equipments: 'custody-equipment-search' };
       const target = first === 'signatureReceiver'
         ? document.querySelector<HTMLElement>('[aria-label="Assinatura de quem recebeu"]')
         : document.getElementById(targets[first ?? ''] ?? '');
@@ -230,8 +221,6 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
         dueDate: form.dueDate || undefined,
         chapterId: chapter.id,
         chapterName: chapter.name,
-        teamId: team.code,
-        teamName: team.label,
         workerName: form.workerName.trim(),
         signatureReceiver: form.signatureReceiver,
         attachments,
@@ -308,10 +297,9 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
 
       {open && (
         <section className="space-y-4 rounded-xl border bg-card p-3 shadow-sm">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <WarehouseField label="Data"><Input className="min-h-11 text-base" type="date" value={form.issuedAt} onChange={event => setForm({ ...form, issuedAt: event.target.value })} /></WarehouseField>
             <WarehouseField label="Prédio / capítulo" error={errors.chapterId}><select id="custody-chapter" className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={form.chapterId} onChange={event => { setForm({ ...form, chapterId: event.target.value }); setErrors(current => ({ ...current, chapterId: undefined })); }}><option value="">Selecione</option>{chapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapter.name}</option>)}</select></WarehouseField>
-            <WarehouseField label="Equipe" error={errors.teamId}><select id="custody-team" className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={form.teamId} onChange={event => { setForm({ ...form, teamId: event.target.value }); setErrors(current => ({ ...current, teamId: undefined })); }}><option value="">Selecione</option>{teams.map(team => <option key={team.code} value={team.code}>{team.label}</option>)}</select></WarehouseField>
             <WarehouseField label="Quem recebeu" error={errors.workerName}><Input id="custody-worker" className="min-h-11 text-base" value={form.workerName} onChange={event => { setForm({ ...form, workerName: event.target.value }); setErrors(current => ({ ...current, workerName: undefined })); }} placeholder="Nome do responsável" /></WarehouseField>
             <WarehouseField label="Devolução prevista" optional><Input className="min-h-11 text-base" type="date" value={form.dueDate} onChange={event => setForm({ ...form, dueDate: event.target.value })} /></WarehouseField>
           </div>
@@ -352,14 +340,14 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
           {!sortedTerms.length && <WarehouseEmptyState message="Nenhuma cautela emitida" hint="Use Nova cautela para começar." icon={Wrench} />}
         </div>
         <div className="hidden overflow-x-auto md:block">
-          <table className="w-full min-w-[960px] text-xs">
-            <thead className="bg-muted"><tr><th className="w-10 p-2"><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Prédio / capítulo</th><th className="p-2 text-left">Equipe</th><th className="p-2 text-center">Equipamentos</th><th className="p-2 text-left">Prazo</th><th className="p-2 text-left">Status</th></tr></thead>
+          <table className="w-full min-w-[840px] text-xs">
+            <thead className="bg-muted"><tr><th className="w-10 p-2"><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Prédio / capítulo</th><th className="p-2 text-center">Equipamentos</th><th className="p-2 text-left">Prazo</th><th className="p-2 text-left">Status</th></tr></thead>
             <tbody>{sortedTerms.map(term => {
               const items = custodyTermEquipmentItems(term);
               const expanded = expandedId === term.id;
               const aggregate = custodyTermAggregateStatus(items);
-              return <Fragment key={term.id}><tr className={`cursor-pointer border-t whitespace-nowrap hover:bg-muted/30 ${expanded ? 'bg-primary/10' : ''}`} onClick={() => setExpandedId(current => current === term.id ? null : term.id)}><td className="p-2"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></td><td className="p-2 font-mono">{term.number}</td><td className="p-2">{term.issuedAt}</td><td className="p-2">{term.workerName}</td><td className="max-w-64 truncate p-2" title={term.chapterName}>{term.chapterName || 'Registro legado'}</td><td className="p-2">{term.teamName || term.teamId || '—'}</td><td className="p-2 text-center">{items.length}</td><td className="p-2">{term.dueDate || 'Sem prazo'}</td><td className="p-2"><WarehouseStatusBadge label={statusLabel[aggregate] || aggregate} tone={statusTone(aggregate)} /></td></tr>{expanded && <tr className="border-t bg-muted/10"><td colSpan={9} className="p-3"><CustodyDetails term={term} project={project} onReturn={startReturn} canDelete={canDelete} onDelete={() => deleteTerm(term)} /></td></tr>}</Fragment>;
-            })}{!sortedTerms.length && <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">Nenhuma cautela emitida.</td></tr>}</tbody>
+              return <Fragment key={term.id}><tr className={`cursor-pointer border-t whitespace-nowrap hover:bg-muted/30 ${expanded ? 'bg-primary/10' : ''}`} onClick={() => setExpandedId(current => current === term.id ? null : term.id)}><td className="p-2"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></td><td className="p-2 font-mono">{term.number}</td><td className="p-2">{term.issuedAt}</td><td className="p-2">{term.workerName}</td><td className="max-w-64 truncate p-2" title={term.chapterName}>{term.chapterName || 'Registro legado'}</td><td className="p-2 text-center">{items.length}</td><td className="p-2">{term.dueDate || 'Sem prazo'}</td><td className="p-2"><WarehouseStatusBadge label={statusLabel[aggregate] || aggregate} tone={statusTone(aggregate)} /></td></tr>{expanded && <tr className="border-t bg-muted/10"><td colSpan={8} className="p-3"><CustodyDetails term={term} project={project} onReturn={startReturn} canDelete={canDelete} onDelete={() => deleteTerm(term)} /></td></tr>}</Fragment>;
+            })}{!sortedTerms.length && <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">Nenhuma cautela emitida.</td></tr>}</tbody>
           </table>
         </div>
       </section>

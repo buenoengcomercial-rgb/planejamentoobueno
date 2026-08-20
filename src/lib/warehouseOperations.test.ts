@@ -64,7 +64,7 @@ describe('operação integrada do almoxarifado', () => {
     expect(withdrawal).toMatchObject({ costSnapshot: 15, unitPrice: 15, originType: 'withdrawal', chapterId: 'chapter-1', teamId: 'alpha' });
     expect(warehouseValuationForItem(result.project.warehouse!, 'material-1')).toMatchObject({ quantity: 16, inventoryValue: 240, averageUnitCost: 15, consumedCost: 60 });
     expect(computeWarehouseUsageByChapter(result.project)).toMatchObject({ totalConsumedCost: 60, incompleteMovementCount: 0 });
-    expect(result.project.dailyReports?.[0].observations).toContain('1 Prédio 1 — Alpha — Equipe Alpha');
+    expect(result.project.dailyReports?.[0].observations).toContain('1 Prédio 1 — Equipe Alpha');
     const repeated = createAndDeliverRequisition(result.project, {
       date: '2026-08-17', chapterId: 'chapter-1', chapterName: '1 Prédio 1', teamId: 'alpha', teamName: 'Alpha',
       receiverName: 'Equipe Alpha', requesterName: 'Equipe Alpha', signatureReceiver: 'assinatura', deliveryAttachments: [photo], deliveryIdempotencyKey: 'delivery-1',
@@ -85,15 +85,15 @@ describe('operação integrada do almoxarifado', () => {
     }, { actor })).toThrow(/assinatura/i);
   });
 
-  it('permite retirada de material sem fotografia e preserva assinatura e baixa', () => {
+  it('permite retirada sem equipe, sem fotografia e preserva assinatura e baixa', () => {
     const result = createAndDeliverRequisition(withStock(), {
-      date: '2026-08-17', chapterId: 'chapter-1', chapterName: '1 Prédio 1', teamId: 'alpha', teamName: 'Alpha',
+      date: '2026-08-17', chapterId: 'chapter-1', chapterName: '1 Prédio 1',
       receiverName: 'Equipe Alpha', requesterName: 'Equipe Alpha', signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'sem-foto',
       items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 2 }],
     }, { actor });
 
     expect(result.project.warehouse!.requisitions[0].deliveryAttachments).toBeUndefined();
-    expect(result.project.warehouse!.movements.find(movement => movement.type === 'retirada')).toMatchObject({ quantity: 2 });
+    expect(result.project.warehouse!.movements.find(movement => movement.type === 'retirada')).toMatchObject({ quantity: 2, teamId: undefined });
     expect(computeWarehouseRows(result.project, { includeManual: true })[0].balance).toBe(18);
   });
 
@@ -178,7 +178,7 @@ describe('operação integrada do almoxarifado', () => {
     const [first, second] = current.warehouse!.equipments;
 
     current = issueCustodyTerm(current, {
-      issuedAt: '2026-08-18', chapterId: 'chapter-1', chapterName: '1 Prédio 1', teamId: 'alpha', teamName: 'Alpha',
+      issuedAt: '2026-08-18', chapterId: 'chapter-1', chapterName: '1 Prédio 1',
       workerName: 'João', signatureReceiver: 'assinatura',
       equipments: [
         { equipmentId: first.id, stateOnDelivery: 'Bom estado', accessories: 'Maleta' },
@@ -187,6 +187,7 @@ describe('operação integrada do almoxarifado', () => {
     }, actor);
 
     const term = current.warehouse!.custodyTerms[0];
+    expect(term.teamId).toBeUndefined();
     expect(custodyTermEquipmentItems(term)).toHaveLength(2);
     expect(current.warehouse!.equipments.map(equipment => equipment.status)).toEqual(['em_uso', 'em_uso']);
     expect(panelSummary(current).openCustodyCount).toBe(1);
