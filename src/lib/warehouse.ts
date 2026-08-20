@@ -1332,7 +1332,7 @@ export function hardDeleteRequisition(project: Project, requisitionId: string): 
   const requisition = wh.requisitions.find(entry => entry.id === requisitionId);
   if (!requisition) return p;
   const movementIds = new Set(requisition.items.map(item => item.movementId).filter((id): id is string => !!id));
-  const movements = wh.movements.filter(movement => !movementIds.has(movement.id) && movement.requisitionId !== requisitionId && !(movement.originType === 'requisition' && movement.originId === requisitionId));
+  const movements = wh.movements.filter(movement => !movementIds.has(movement.id) && movement.requisitionId !== requisitionId);
   let dailyReports = p.dailyReports;
   if (requisition.publishedToDailyReportId) {
     const block = requisitionDailyReportBlock(requisition);
