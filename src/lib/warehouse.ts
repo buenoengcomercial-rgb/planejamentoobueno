@@ -586,11 +586,7 @@ export function publishRequisitionToDailyReport(project: Project, requisitionId:
   const date = req.date.slice(0, 10);
   const dailyReports = [...(p.dailyReports ?? [])];
   let dr = dailyReports.find(d => d.date === date);
-  const summary = req.items
-    .map(it => `  • ${it.description} — ${it.quantity} ${it.unit}`)
-    .join('\n');
-  const context = [req.chapterName, req.teamName, req.receiverName || req.requesterName].filter(Boolean).join(' — ');
-  const block = `[Almoxarifado ${req.number}${context ? ` — ${context}` : ''}]\n${summary}`;
+  const block = requisitionDailyReportBlock(req);
   if (dr) {
     const observations = dr.observations ? `${dr.observations}\n${block}` : block;
     dr = { ...dr, observations, updatedAt: nowISO() };
@@ -608,6 +604,12 @@ export function publishRequisitionToDailyReport(project: Project, requisitionId:
     dr = newDr;
   }
   return updateRequisition({ ...p, dailyReports }, req.id, { publishedToDailyReportId: dr.id });
+}
+
+function requisitionDailyReportBlock(req: WarehouseRequisition): string {
+  const summary = req.items.map(it => `  • ${it.description} — ${it.quantity} ${it.unit}`).join('\n');
+  const context = [req.chapterName, req.teamName, req.receiverName || req.requesterName].filter(Boolean).join(' — ');
+  return `[Almoxarifado ${req.number}${context ? ` — ${context}` : ''}]\n${summary}`;
 }
 
 // ============== INVENTÁRIO MENSAL ==============
@@ -759,6 +761,17 @@ export function cancelInventorySession(project: Project, sessionId: string, acto
     return { ...session, status: 'cancelado' as const, canceledAt: nowISO(), updatedBy: normalizeWarehouseActor(actor) };
   });
   return setWh(p, { inventorySessions: sessions });
+}
+
+/** Remove o inventário e exclusivamente os ajustes derivados da própria sessão. */
+export function hardDeleteInventorySession(project: Project, sessionId: string): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  if (!(wh.inventorySessions ?? []).some(session => session.id === sessionId)) return p;
+  return setWh(p, {
+    inventorySessions: (wh.inventorySessions ?? []).filter(session => session.id !== sessionId),
+    movements: wh.movements.filter(movement => movement.inventorySessionId !== sessionId && !(movement.originType === 'inventory' && movement.originId === sessionId)),
+  });
 }
 
 // ============== EQUIPAMENTOS & TERMOS DE CAUTELA ==============
@@ -1095,6 +1108,53 @@ export function removeMovement(project: Project, movementId: string): Project {
   });
 
   return setWh(p, { movements, items });
+}
+
+/** Exclui uma retirada inteira e os movimentos/espelho no Diário de Obra que ela gerou. */
+export function hardDeleteRequisition(project: Project, requisitionId: string): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const requisition = wh.requisitions.find(entry => entry.id === requisitionId);
+  if (!requisition) return p;
+  const movementIds = new Set(requisition.items.map(item => item.movementId).filter((id): id is string => !!id));
+  const movements = wh.movements.filter(movement => !movementIds.has(movement.id) && movement.requisitionId !== requisitionId && !(movement.originType === 'requisition' && movement.originId === requisitionId));
+  let dailyReports = p.dailyReports;
+  if (requisition.publishedToDailyReportId) {
+    const block = requisitionDailyReportBlock(requisition);
+    dailyReports = (p.dailyReports ?? []).flatMap(report => {
+      if (report.id !== requisition.publishedToDailyReportId) return [report];
+      const observations = (report.observations ?? '').replace(block, '').replace(/^\n+|\n+$/g, '').replace(/\n{3,}/g, '\n\n');
+      return observations ? [{ ...report, observations, updatedAt: nowISO() }] : [];
+    });
+  }
+  return setWh({ ...p, dailyReports }, { requisitions: wh.requisitions.filter(entry => entry.id !== requisitionId), movements });
+}
+
+/** Exclui uma cautela e restaura o estado dos equipamentos ainda em uso por ela. */
+export function hardDeleteCustodyTerm(project: Project, termId: string): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const term = wh.custodyTerms.find(entry => entry.id === termId);
+  if (!term) return p;
+  const openIds = new Set(custodyTermEquipmentItems(term).filter(item => item.status === 'em_uso').map(item => item.equipmentId));
+  return setWh(p, {
+    custodyTerms: wh.custodyTerms.filter(entry => entry.id !== termId),
+    equipments: wh.equipments.map(equipment => openIds.has(equipment.id) && equipment.status === 'em_uso'
+      ? { ...equipment, status: 'disponivel' as const, updatedAt: nowISO() }
+      : equipment),
+  });
+}
+
+/** Materiais com movimentos ou vínculos permanecem rastreáveis: corrija a origem antes de excluí-los. */
+export function hardDeleteWarehouseItem(project: Project, itemKey: string): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const hasReferences = wh.movements.some(movement => movement.itemKey === itemKey)
+    || wh.requisitions.some(requisition => requisition.items.some(item => item.itemKey === itemKey))
+    || (wh.fiscalNotes ?? []).some(note => note.items?.some(item => item.itemKey === itemKey))
+    || (wh.inventorySessions ?? []).some(session => session.lines.some(line => line.itemKey === itemKey));
+  if (hasReferences) throw new Error('Este material possui histórico. Corrija ou exclua o registro de origem antes de removê-lo.');
+  return setWh(p, { items: wh.items.filter(item => item.key !== itemKey) });
 }
 
 // ============== CONSOLIDADO POR ITEM ==============
@@ -1857,6 +1917,80 @@ export function deleteFiscalNote(project: Project, noteId: string): Project {
   return setWh(p, { fiscalNotes: remainingNotes, movements: remainingMovements, items });
 }
 
+/** Exclusão física administrativa de um equipamento e de suas cautelas. */
+export function hardDeleteEquipment(project: Project, id: string): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  if (!wh.equipments.some(equipment => equipment.id === id)) return p;
+  const custodyTerms = wh.custodyTerms.flatMap(term => {
+    const remaining = custodyTermEquipmentItems(term).filter(item => item.equipmentId !== id);
+    if (!remaining.length) return [];
+    const aggregateStatus = custodyTermAggregateStatus(remaining);
+    return [{
+      ...term,
+      equipments: remaining,
+      status: aggregateStatus,
+      returnedAt: aggregateStatus === 'em_uso' || aggregateStatus === 'parcial' ? undefined : term.returnedAt,
+    }];
+  });
+  return setWh(p, {
+    equipments: wh.equipments.filter(equipment => equipment.id !== id),
+    custodyTerms,
+  });
+}
+
+/**
+ * Exclusão física é reservada para o proprietário. A interface chama esta
+ * função somente depois da confirmação; aqui preservamos a consistência do
+ * estoque e recusamos apagar uma entrada que já tenha sido consumida.
+ */
+export function hardDeleteFiscalNote(project: Project, noteId: string): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const note = wh.fiscalNotes?.find(entry => entry.id === noteId);
+  if (!note) return p;
+  const entries = activeFiscalNoteEntries(wh, noteId);
+  const blockers = fiscalEntryBlockers(wh, entries);
+  if (blockers.length) throw new Error(`Não é possível apagar esta entrada. ${blockers.join(' ')}`);
+  return deleteFiscalNote(p, noteId);
+}
+
+/** Regrava uma entrada já lançada e recria apenas os seus movimentos de entrada. */
+export function replacePostedFiscalNote(
+  project: Project,
+  noteId: string,
+  nextNote: WarehouseFiscalNote,
+  actor?: WarehouseActorInput,
+): Project {
+  const p = ensureWarehouse(project);
+  const current = p.warehouse!.fiscalNotes?.find(note => note.id === noteId);
+  if (!current) return p;
+  if (current.status !== 'aprovada') throw new Error('Somente entradas lançadas podem ser reeditadas por este fluxo.');
+  const entries = activeFiscalNoteEntries(p.warehouse!, noteId);
+  const blockers = fiscalEntryBlockers(p.warehouse!, entries);
+  if (blockers.length) throw new Error(`Não é possível alterar esta entrada enquanto existirem referências posteriores. ${blockers.join(' ')}`);
+
+  const withoutCurrent = deleteFiscalNote(p, noteId);
+  const editable: WarehouseFiscalNote = {
+    ...nextNote,
+    id: noteId,
+    status: 'a_conferir',
+    createdAt: current.createdAt,
+    createdBy: current.createdBy,
+    updatedAt: nowISO(),
+    updatedBy: normalizeWarehouseActor(actor) ?? current.updatedBy,
+    stockPostedAt: undefined,
+    stockPostedBy: undefined,
+    canceledAt: undefined,
+    canceledBy: undefined,
+    cancellationReason: undefined,
+    archiveReason: undefined,
+    archivedAt: undefined,
+    archivedBy: undefined,
+  };
+  return approveFiscalNote(upsertFiscalNote(withoutCurrent, editable, actor, true), noteId, actor);
+}
+
 export function approveFiscalNote(project: Project, noteId: string, actor?: WarehouseActorInput): Project {
   let p = ensureWarehouse(project);
   const note = p.warehouse?.fiscalNotes?.find(n => n.id === noteId);
@@ -2331,8 +2465,13 @@ const CANCELLATION_BLOCKING_TYPES = new Set<WarehouseMovementType>([
 ]);
 
 function activeFiscalNoteEntries(state: WarehouseState, noteId: string): WarehouseMovement[] {
+  const note = state.fiscalNotes?.find(entry => entry.id === noteId);
+  const invoiceNumber = note?.invoiceNumber?.trim();
   return state.movements.filter(movement =>
-    movement.fiscalNoteId === noteId && movement.type === 'entrada' && !movement.reversedById,
+    movement.type === 'entrada' && !movement.reversedById && (
+      movement.fiscalNoteId === noteId
+      || (!movement.fiscalNoteId && !!invoiceNumber && movement.invoiceNumber?.trim() === invoiceNumber)
+    ),
   );
 }
 

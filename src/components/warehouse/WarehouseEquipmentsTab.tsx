@@ -7,6 +7,7 @@ import { Archive, Camera, HardHat, ImagePlus, Loader2, Plus, Printer, Sparkles, 
 import {
   addEquipment,
   ensureWarehouse,
+  hardDeleteEquipment,
   makeAttachment,
   readFileAsDataURL,
   removeEquipment,
@@ -20,7 +21,7 @@ import { equipmentAiBackendError, equipmentAiErrorMessage } from '@/lib/equipmen
 import { optimizeEquipmentPhoto } from '@/lib/equipmentPhotoOptimization';
 import { WarehouseEmptyState, WarehouseField, WarehouseSectionHeader, WarehouseStatusBadge, type WarehouseTone } from './WarehouseVisual';
 
-interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canArchive?: boolean; }
+interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; }
 
 interface EquipmentForm {
   description: string;
@@ -50,7 +51,7 @@ function escapeLabelHtml(value: string) {
   }[character] || character));
 }
 
-export default function WarehouseEquipmentsTab({ project, onProjectChange, auditActor, canArchive = true }: Props) {
+export default function WarehouseEquipmentsTab({ project, onProjectChange, auditActor, canArchive = true, canDelete = false }: Props) {
   const wh = ensureWarehouse(project).warehouse!;
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [form, setForm] = useState<EquipmentForm>(emptyEquipment);
@@ -191,11 +192,26 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
     try { await openWarehouseAttachment(attachment); } catch (error) { toast.error(warehouseAttachmentErrorMessage(error)); }
   };
 
+  const deleteEquipment = async (equipment: Equipment) => {
+    try {
+      const next = hardDeleteEquipment(project, equipment.id);
+      onProjectChange(next);
+      const paths = (equipment.photos ?? []).map(photo => photo.storagePath).filter((path): path is string => !!path);
+      if (paths.length) {
+        const { error } = await supabase.storage.from('daily-report-photos').remove(paths);
+        if (error) throw error;
+      }
+      toast.success('Equipamento, fotos e cautelas associadas removidos definitivamente.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível excluir o equipamento.');
+    }
+  };
+
   return (
     <div className="space-y-4">
       <section className="overflow-hidden rounded-xl border bg-card">
         <WarehouseSectionHeader icon={HardHat} title="Patrimônio identificado" description={`${equipments.length} equipamento(s)`} tone="neutral" className="flex-wrap" actions={<div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row"><Button className="min-h-11" onClick={() => setRegistrationOpen(true)}><Plus className="mr-2 h-4 w-4" />Adicionar equipamento</Button><Button className="min-h-11 bg-background" variant="outline" onClick={() => setShowArchived(value => !value)}>{showArchived ? 'Ocultar arquivados' : 'Exibir arquivados'}</Button></div>} />
-        <div data-testid="equipment-gallery" className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{equipments.map(equipment => { const title = equipment.description || equipment.name; const identification = [equipment.brand, equipment.model, equipment.serial].filter(Boolean).join(' · ') || 'Identificação pendente'; const visualStatus = equipmentStatus(equipment.status); return <article key={equipment.id} className="min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm transition-shadow hover:shadow-md"><EquipmentCardPhotos equipment={equipment} title={title} onOpen={attachment => void openPhoto(attachment)} /><div className="space-y-2 p-3"><div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-extrabold text-primary">{equipment.internalCode || 'Código legado'}</div><h4 className="line-clamp-2 text-sm font-bold leading-5" title={title}>{title}</h4></div><WarehouseStatusBadge label={visualStatus.label} tone={visualStatus.tone} /></div><div className="truncate text-xs font-medium text-muted-foreground" title={identification}>{identification}</div><div className={`grid gap-1.5 ${canArchive ? 'grid-cols-2' : 'grid-cols-1'}`}><Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => void printLabel(equipment)}><Printer className="mr-1.5 h-4 w-4" />Etiqueta QR</Button>{canArchive && !equipment.archivedAt && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))}><Archive className="mr-1.5 h-4 w-4" />Arquivar</Button>}</div></div></article>; })}{!equipments.length && <div className="col-span-full"><WarehouseEmptyState message="Nenhum equipamento cadastrado" hint="Use Adicionar equipamento para começar." icon={HardHat} /></div>}</div>
+        <div data-testid="equipment-gallery" className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{equipments.map(equipment => { const title = equipment.description || equipment.name; const identification = [equipment.brand, equipment.model, equipment.serial].filter(Boolean).join(' · ') || 'Identificação pendente'; const visualStatus = equipmentStatus(equipment.status); return <article key={equipment.id} className="min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm transition-shadow hover:shadow-md"><EquipmentCardPhotos equipment={equipment} title={title} onOpen={attachment => void openPhoto(attachment)} /><div className="space-y-2 p-3"><div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-extrabold text-primary">{equipment.internalCode || 'Código legado'}</div><h4 className="line-clamp-2 text-sm font-bold leading-5" title={title}>{title}</h4></div><WarehouseStatusBadge label={visualStatus.label} tone={visualStatus.tone} /></div><div className="truncate text-xs font-medium text-muted-foreground" title={identification}>{identification}</div><div className={`grid gap-1.5 ${canArchive || canDelete ? 'grid-cols-2' : 'grid-cols-1'}`}><Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => void printLabel(equipment)}><Printer className="mr-1.5 h-4 w-4" />Etiqueta QR</Button>{canArchive && !equipment.archivedAt && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))}><Archive className="mr-1.5 h-4 w-4" />Arquivar</Button>}{canDelete && <Button variant="destructive" className="col-span-full min-h-11 px-2 text-xs" onClick={() => confirm({ title: 'Excluir equipamento definitivamente?', description: 'As fotos e cautelas relacionadas serão apagadas.', confirmLabel: 'Excluir definitivamente' }, () => void deleteEquipment(equipment))}>Excluir definitivamente</Button>}</div></div></article>; })}{!equipments.length && <div className="col-span-full"><WarehouseEmptyState message="Nenhum equipamento cadastrado" hint="Use Adicionar equipamento para começar." icon={HardHat} /></div>}</div>
       </section>
 
       <Dialog open={registrationOpen} onOpenChange={open => { if (open) setRegistrationOpen(true); else closeRegistration(); }}>

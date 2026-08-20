@@ -41,7 +41,6 @@ import {
   renameCloudProject,
   duplicateCloudProject,
   deleteCloudProject,
-  clearCloudWarehouseAsOwner,
   generateUniqueCloudName,
   getSampleSeed,
   CloudProjectConflictError,
@@ -908,25 +907,6 @@ export default function Index() {
     setUndoVersion(value => value + 1);
   }, [canPersistProject, handleCloudConflict, orgId, persistProject, role, user]);
 
-  const handleOwnerClearWarehouse = useCallback(async (password: string) => {
-    if (role !== 'owner' || !rawProject) {
-      throw new Error('Somente o proprietário da organização pode limpar o almoxarifado.');
-    }
-    if (!(await flushPendingSave())) {
-      throw new Error('Existem alterações que não puderam ser salvas. Tente novamente antes de limpar.');
-    }
-
-    await clearCloudWarehouseAsOwner(rawProject.id, password);
-    clearProjectDraft(rawProject.id);
-    const record = await loadCloudProjectRecord(rawProject.id);
-    if (!record) throw new Error('O almoxarifado foi limpo, mas não foi possível recarregar a obra. Atualize a página.');
-
-    replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false);
-    undoStacksRef.current.warehouse = [];
-    setUndoVersion(value => value + 1);
-    toast.success('Dados de teste removidos. Equipamentos foram preservados e liberados das cautelas apagadas.');
-  }, [flushPendingSave, rawProject, replaceProjectWithoutAutoSave, role]);
-
   const handleUndo = useCallback((view: AppView) => {
     const stack = undoStacksRef.current[view];
     if (stack.length === 0) { toast.message('Nada para desfazer'); return; }
@@ -1238,12 +1218,12 @@ export default function Index() {
             onProjectChange={warehouseSetter}
             onCommitProject={commitProjectNow}
             canManageFiscalNotes={warehouseEditor}
-            canReviewFiscalCosts={role === 'owner' || role === 'admin' || role === 'engineer'}
+            canReviewFiscalCosts={role === 'owner'}
             canViewPanel={role !== 'warehouse_operator'}
             canApproveInventory={role === 'owner' || role === 'admin'}
-            canArchiveWarehouseRecords={editor}
-            canClearWarehouse={role === 'owner'}
-            onClearWarehouse={role === 'owner' ? handleOwnerClearWarehouse : undefined}
+            canArchiveWarehouseRecords={warehouseEditor}
+            canEditPostedWarehouseRecords={role === 'owner'}
+            canDeleteWarehouseRecords={role === 'owner'}
             auditActor={auditActor}
           />
         );

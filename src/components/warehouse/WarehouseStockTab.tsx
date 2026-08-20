@@ -4,6 +4,7 @@ import {
   computeWarehouseRows,
   createManualWarehouseItem,
   getMaterialPurchaseHistory,
+  hardDeleteWarehouseItem,
   removeWarehouseItem,
   unlinkWarehouseProjectMaterial,
   upsertItemConfig,
@@ -23,9 +24,9 @@ import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { WarehouseSectionHeader, WarehouseStatusBadge } from './WarehouseVisual';
 
-interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canArchive?: boolean; }
+interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; }
 
-export default function WarehouseStockTab({ project, onProjectChange, auditActor, canArchive = true }: Props) {
+export default function WarehouseStockTab({ project, onProjectChange, auditActor, canArchive = true, canDelete = false }: Props) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
@@ -81,6 +82,13 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
       () => onProjectChange(removeWarehouseItem(project, key)),
     );
   };
+  const handleDeleteItem = (key: string, description: string) => confirm(
+    { title: 'Excluir material definitivamente?', description: `O material ${description} será removido. Materiais com histórico exigem primeiro a correção do registro de origem.`, confirmLabel: 'Excluir definitivamente' },
+    () => {
+      try { onProjectChange(hardDeleteWarehouseItem(project, key)); toast.success('Material excluído definitivamente.'); }
+      catch (error) { toast.error((error as Error).message); }
+    },
+  );
 
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
@@ -213,6 +221,11 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
                     onClick={() => handleArchiveItem(r.key, r.description)}
                   >
                     <Archive className="w-3.5 h-3.5" />
+                  </Button>
+                </td>}
+                {canDelete && <td className="p-1.5 text-center">
+                  <Button size="icon" variant="destructive" className="h-7 w-7" title="Excluir material definitivamente" onClick={() => handleDeleteItem(r.key, r.description)}>
+                    <X className="w-3.5 h-3.5" />
                   </Button>
                 </td>}
               </tr>

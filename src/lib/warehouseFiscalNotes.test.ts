@@ -19,10 +19,12 @@ import {
   fiscalItemStockQuantity,
   fiscalNoteAllocatedExtras,
   fiscalNoteCostReviewStatus,
+  hardDeleteFiscalNote,
   isStockFiscalDocument,
   reconcileArchivedFiscalNoteStock,
   reviewArchivedFiscalNoteStock,
   reviewPostedFiscalNoteCosts,
+  replacePostedFiscalNote,
   updateFiscalItemPurchaseGroup,
 } from './warehouse';
 
@@ -69,6 +71,25 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     const existing = note({ status: 'aprovada' });
     const candidate = note({ id: 'nf-candidate' });
     expect(findFiscalNoteDuplicate(withNote(existing), candidate)?.id).toBe(existing.id);
+  });
+
+  it('permite ao proprietário substituir uma entrada sem consumo posterior e recalcula o saldo', () => {
+    const original = note({ status: 'aprovada' });
+    const project = approveFiscalNote(withNote(original), original.id);
+    const updated = replacePostedFiscalNote(project, original.id, note({ status: 'aprovada', totalAmount: 150, items: [{ ...original.items[0], quantity: 3, unitPrice: 50, totalPrice: 150 }] }));
+    expect(updated.warehouse!.fiscalNotes[0]).toMatchObject({ status: 'aprovada', totalAmount: 150 });
+    expect(updated.warehouse!.movements.filter(movement => movement.type === 'entrada')).toHaveLength(1);
+    expect(computeWarehouseRows(updated, { includeManual: true })[0].balance).toBe(3);
+  });
+
+  it('impede excluir fisicamente uma entrada já vinculada a retirada posterior', () => {
+    const original = note({ status: 'aprovada' });
+    const project = approveFiscalNote(withNote(original), original.id);
+    const itemKey = project.warehouse!.fiscalNotes![0].items[0].itemKey ?? 'warehouse-nf|nf-1|cimento';
+    project.warehouse!.movements.push({ id: 'mov-entry-1', fiscalNoteId: original.id, createdAt: '2026-12-17T10:00:00.000Z', type: 'entrada', date: '2026-12-17', itemKey, itemDescription: 'Cimento CP II', itemUnit: 'SC', quantity: 2 });
+    project.warehouse!.requisitions.push({ id: 'ret-1', number: 'RET-001', date: '2026-12-18', status: 'entregue', createdAt: '2026-12-18T10:00:00.000Z', items: [{ itemKey, description: 'Cimento CP II', unit: 'SC', quantity: 1 }] });
+    project.warehouse!.movements.push({ id: 'mov-ret-1', createdAt: '2026-12-18T10:00:00.000Z', type: 'retirada', date: '2026-12-18', itemKey, itemDescription: 'Cimento CP II', itemUnit: 'SC', quantity: 1 });
+    expect(() => hardDeleteFiscalNote(project, original.id)).toThrow(/retirada|requisição/i);
   });
 
   it('bloqueia no domínio uma segunda entrada para nota já aprovada', () => {

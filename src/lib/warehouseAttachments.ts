@@ -86,3 +86,11 @@ export async function downloadWarehouseAttachment(attachment: WarehouseAttachmen
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
+
+/** Limpeza complementar de objetos do Storage após exclusão confirmada do registro de origem. */
+export async function deleteWarehouseAttachments(attachments?: WarehouseAttachment[]): Promise<void> {
+  const paths = attachments?.flatMap(attachment => attachment.storagePath ? [attachment.storagePath] : []) ?? [];
+  if (!paths.length) return;
+  const { error } = await supabase.storage.from(BUCKET).remove(paths);
+  if (error) throw classifyStorageError(error);
+}

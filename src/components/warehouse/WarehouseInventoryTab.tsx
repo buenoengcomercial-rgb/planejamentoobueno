@@ -7,6 +7,7 @@ import {
   createInventorySession,
   ensureWarehouse,
   setInventoryCount,
+  hardDeleteInventorySession,
   warehouseActorName,
 } from '@/lib/warehouse';
 import { Input } from '@/components/ui/input';
@@ -15,12 +16,14 @@ import { Check, ClipboardCheck, FileDown, Plus, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { generateInventoryReportPdf } from './pdf';
 import { WarehouseEmptyState, WarehouseField, WarehouseSectionHeader, WarehouseStatusBadge, type WarehouseTone } from './WarehouseVisual';
+import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
   auditActor?: WarehouseAuditActor;
   canApprove?: boolean;
+  canDelete?: boolean;
 }
 
 const inventoryTone = (status: WarehouseInventorySession['status']): WarehouseTone => {
@@ -31,7 +34,8 @@ const inventoryTone = (status: WarehouseInventorySession['status']): WarehouseTo
   return 'neutral';
 };
 
-export default function WarehouseInventoryTab({ project, onProjectChange, auditActor, canApprove = true }: Props) {
+export default function WarehouseInventoryTab({ project, onProjectChange, auditActor, canApprove = true, canDelete = false }: Props) {
+  const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const wh = ensureWarehouse(project).warehouse!;
   const sessions = useMemo(() => (wh.inventorySessions ?? []).slice().sort((a, b) => b.startedAt.localeCompare(a.startedAt)), [wh.inventorySessions]);
   const [selectedId, setSelectedId] = useState<string | null>(() => sessions.find(session => session.status === 'em_contagem' || session.status === 'em_revisao')?.id ?? null);
@@ -70,6 +74,14 @@ export default function WarehouseInventoryTab({ project, onProjectChange, auditA
     onProjectChange(cancelInventorySession(project, selected.id, auditActor));
     toast.message('Sessão de inventário cancelada sem alterar o estoque.');
   };
+  const remove = () => {
+    if (!selected) return;
+    confirm({ title: 'Excluir inventário definitivamente?', description: 'A sessão e seus ajustes derivados no extrato serão removidos.', confirmLabel: 'Excluir definitivamente' }, () => {
+      onProjectChange(hardDeleteInventorySession(project, selected.id));
+      setSelectedId(null);
+      toast.success('Inventário excluído e ajustes revertidos.');
+    });
+  };
 
   const exportCsv = (session: WarehouseInventorySession) => {
     const lines = [
@@ -101,11 +113,12 @@ export default function WarehouseInventoryTab({ project, onProjectChange, auditA
 
       <section className="overflow-hidden rounded-xl border bg-card">
         {!selected ? <WarehouseEmptyState message="Nenhum inventário selecionado" hint="Abra o inventário do mês para iniciar." icon={ClipboardCheck} className="m-3 min-h-52" /> : <>
-          <div className="flex flex-col gap-3 border-b bg-primary/5 p-3 sm:flex-row sm:flex-wrap sm:items-center"><div><h3 className="text-lg font-bold">{selected.number}</h3><div className="mt-2 flex flex-wrap items-center gap-2"><WarehouseStatusBadge label={selected.status.split('_').join(' ')} tone={inventoryTone(selected.status)} /><span className="text-sm text-muted-foreground">{selected.status === 'em_contagem' ? `${counted} de ${total} materiais contados` : `${total} material(is)`}</span></div></div><div className="grid grid-cols-1 gap-2 sm:ml-auto sm:flex sm:flex-wrap">{selected.status === 'em_contagem' && <><Button variant="outline" className="min-h-11 bg-background" onClick={cancel}><X className="mr-2 h-4 w-4" />Cancelar</Button><Button className="min-h-11 font-bold" onClick={close} disabled={counted !== total || total === 0}><ClipboardCheck className="mr-2 h-4 w-4" />Encerrar contagem</Button></>}{selected.status === 'em_revisao' && <Button className="min-h-11 font-bold" disabled={!canApprove} onClick={apply}><Check className="mr-2 h-4 w-4" />{canApprove ? 'Confirmar e aplicar ajustes' : 'Aguardando administrador'}</Button>}{selected.status === 'aplicado' && <><Button variant="outline" className="min-h-11 bg-background" onClick={() => exportCsv(selected)}><FileDown className="mr-2 h-4 w-4" />CSV</Button><Button variant="outline" className="min-h-11 bg-background" onClick={() => generateInventoryReportPdf(project, selected)}><FileDown className="mr-2 h-4 w-4" />PDF</Button></>}</div></div>
+          <div className="flex flex-col gap-3 border-b bg-primary/5 p-3 sm:flex-row sm:flex-wrap sm:items-center"><div><h3 className="text-lg font-bold">{selected.number}</h3><div className="mt-2 flex flex-wrap items-center gap-2"><WarehouseStatusBadge label={selected.status.split('_').join(' ')} tone={inventoryTone(selected.status)} /><span className="text-sm text-muted-foreground">{selected.status === 'em_contagem' ? `${counted} de ${total} materiais contados` : `${total} material(is)`}</span></div></div><div className="grid grid-cols-1 gap-2 sm:ml-auto sm:flex sm:flex-wrap">{selected.status === 'em_contagem' && <><Button variant="outline" className="min-h-11 bg-background" onClick={cancel}><X className="mr-2 h-4 w-4" />Cancelar</Button><Button className="min-h-11 font-bold" onClick={close} disabled={counted !== total || total === 0}><ClipboardCheck className="mr-2 h-4 w-4" />Encerrar contagem</Button></>}{selected.status === 'em_revisao' && <Button className="min-h-11 font-bold" disabled={!canApprove} onClick={apply}><Check className="mr-2 h-4 w-4" />{canApprove ? 'Confirmar e aplicar ajustes' : 'Aguardando administrador'}</Button>}{selected.status === 'aplicado' && <><Button variant="outline" className="min-h-11 bg-background" onClick={() => exportCsv(selected)}><FileDown className="mr-2 h-4 w-4" />CSV</Button><Button variant="outline" className="min-h-11 bg-background" onClick={() => generateInventoryReportPdf(project, selected)}><FileDown className="mr-2 h-4 w-4" />PDF</Button></>}{canDelete && <Button variant="destructive" className="min-h-11" onClick={remove}><X className="mr-2 h-4 w-4" />Excluir</Button>}</div></div>
           <div className="space-y-2 p-3 md:hidden">{selected.lines.map(line => { const impact = line.difference != null && line.unitCostSnapshot != null ? line.difference * line.unitCostSnapshot : undefined; return <article key={line.itemKey} className="rounded-md border p-3"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="font-medium leading-snug">{line.itemDescription}</div><div className="mt-0.5 text-xs text-muted-foreground">{line.itemCode || 'Sem código'} · {line.itemUnit}</div></div>{selected.status !== 'em_contagem' && <span className={`shrink-0 rounded-full bg-muted px-2 py-1 text-xs font-semibold ${(line.difference ?? 0) < 0 ? 'text-destructive' : (line.difference ?? 0) > 0 ? 'text-success' : ''}`}>Dif. {line.difference?.toLocaleString('pt-BR') ?? '—'}</span>}</div>{selected.status === 'em_contagem' ? <div className="mt-3"><label htmlFor={`inventory-count-${line.itemKey}`} className="mb-1 block text-xs font-semibold">Quantidade contada</label><Input id={`inventory-count-${line.itemKey}`} className="min-h-11 w-full text-right text-base" inputMode="decimal" type="number" min="0" step="any" value={line.countedQuantity ?? ''} onChange={event => { const value = event.target.value === '' ? undefined : Number(event.target.value); try { onProjectChange(setInventoryCount(project, selected.id, line.itemKey, value, auditActor)); } catch (error) { toast.error((error as Error).message); } }} /></div> : <dl className="mt-3 grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Esperado</dt><dd className="font-mono">{line.expectedQuantity?.toLocaleString('pt-BR') ?? '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Contado</dt><dd className="font-mono">{line.countedQuantity?.toLocaleString('pt-BR') ?? '—'}</dd></div><div className="col-span-2"><dt className="text-xs text-muted-foreground">Impacto</dt><dd className="font-mono">{impact == null ? 'Cálculo incompleto' : impact.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</dd></div></dl>}</article>; })}</div>
           <div className="hidden max-h-[calc(100dvh-330px)] overflow-auto md:block"><table className="w-full min-w-[720px] text-sm"><thead className="sticky top-0 bg-muted text-muted-foreground"><tr><th className="p-2 text-left">Material</th><th className="p-2 text-center">Un</th>{selected.status !== 'em_contagem' && <th className="p-2 text-right">Esperado</th>}<th className="p-2 text-right">Contado</th>{selected.status !== 'em_contagem' && <><th className="p-2 text-right">Diferença</th><th className="p-2 text-right">Impacto</th></>}</tr></thead><tbody>{selected.lines.map(line => { const impact = line.difference != null && line.unitCostSnapshot != null ? line.difference * line.unitCostSnapshot : undefined; return <tr key={line.itemKey} className="border-t"><td className="p-2"><div className="font-medium">{line.itemDescription}</div><div className="text-xs text-muted-foreground">{line.itemCode || 'Sem código'}</div></td><td className="p-2 text-center">{line.itemUnit}</td>{selected.status !== 'em_contagem' && <td className="p-2 text-right font-mono">{line.expectedQuantity?.toLocaleString('pt-BR') ?? '—'}</td>}<td className="p-2 text-right">{selected.status === 'em_contagem' ? <Input className="ml-auto min-h-11 w-32 text-right" type="number" min="0" step="any" value={line.countedQuantity ?? ''} onChange={event => { const value = event.target.value === '' ? undefined : Number(event.target.value); try { onProjectChange(setInventoryCount(project, selected.id, line.itemKey, value, auditActor)); } catch (error) { toast.error((error as Error).message); } }} aria-label={`Contagem de ${line.itemDescription}`} /> : <span className="font-mono">{line.countedQuantity?.toLocaleString('pt-BR') ?? '—'}</span>}</td>{selected.status !== 'em_contagem' && <><td className={`p-2 text-right font-mono ${(line.difference ?? 0) < 0 ? 'text-destructive' : (line.difference ?? 0) > 0 ? 'text-success' : ''}`}>{line.difference?.toLocaleString('pt-BR') ?? '—'}</td><td className="p-2 text-right font-mono">{impact == null ? 'Cálculo incompleto' : impact.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td></>}</tr>; })}</tbody></table></div>
         </>}
       </section>
+      {confirmDialog}
     </div>
   );
 }

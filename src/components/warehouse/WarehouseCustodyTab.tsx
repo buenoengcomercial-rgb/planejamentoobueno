@@ -27,11 +27,14 @@ import {
   custodyTermAggregateStatus,
   custodyTermEquipmentItems,
   ensureWarehouse,
+  hardDeleteCustodyTerm,
   issueCustodyTerm,
   makeAttachment,
   returnCustodyEquipment,
   warehouseActorName,
 } from '@/lib/warehouse';
+import { deleteWarehouseAttachments } from '@/lib/warehouseAttachments';
+import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { getChapterNumbering } from '@/lib/chapters';
 import { DEFAULT_TEAMS } from '@/lib/teams';
 import SignaturePad from './SignaturePad';
@@ -52,6 +55,7 @@ interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
   auditActor?: WarehouseAuditActor;
+  canDelete?: boolean;
 }
 
 interface CustodyFormItem {
@@ -112,7 +116,8 @@ const statusTone = (status: string): WarehouseTone => {
   return 'neutral';
 };
 
-export default function WarehouseCustodyTab({ project, onProjectChange, auditActor }: Props) {
+export default function WarehouseCustodyTab({ project, onProjectChange, auditActor, canDelete = false }: Props) {
+  const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const wh = ensureWarehouse(project).warehouse!;
   const numbering = useMemo(() => getChapterNumbering(project), [project]);
   const chapters = useMemo(
@@ -273,6 +278,19 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
   };
 
   const sortedTerms = wh.custodyTerms.slice().sort((a, b) => b.issuedAt.localeCompare(a.issuedAt) || b.createdAt.localeCompare(a.createdAt));
+  const deleteTerm = (term: CustodyTerm) => confirm(
+    { title: 'Excluir cautela definitivamente?', description: 'O termo, suas fotos e devoluções vinculadas serão removidos; equipamentos ainda em uso voltarão para disponível.', confirmLabel: 'Excluir definitivamente' },
+    async () => {
+      onProjectChange(hardDeleteCustodyTerm(project, term.id));
+      const attachments = [
+        ...(term.attachments ?? []), ...(term.returnAttachments ?? []),
+        ...custodyTermEquipmentItems(term).flatMap(item => item.returnAttachments ?? []),
+      ];
+      try { await deleteWarehouseAttachments(attachments); } catch { toast.warning('A cautela foi excluída, mas houve falha ao remover um anexo do Storage.'); }
+      setExpandedId(null);
+      toast.success('Cautela excluída e equipamentos restaurados.');
+    },
+  );
 
   return (
     <div className="space-y-3">
@@ -330,7 +348,7 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
       <section className="overflow-hidden rounded-xl border bg-card">
         <WarehouseSectionHeader icon={History} title="Histórico de cautelas" description={`${sortedTerms.length} registro(s)`} tone="neutral" />
         <div className="space-y-2 p-2 md:hidden">
-          {sortedTerms.map(term => <CustodyMobileCard key={term.id} term={term} expanded={expandedId === term.id} onToggle={() => setExpandedId(current => current === term.id ? null : term.id)} onReturn={startReturn} project={project} />)}
+          {sortedTerms.map(term => <CustodyMobileCard key={term.id} term={term} expanded={expandedId === term.id} onToggle={() => setExpandedId(current => current === term.id ? null : term.id)} onReturn={startReturn} project={project} canDelete={canDelete} onDelete={() => deleteTerm(term)} />)}
           {!sortedTerms.length && <WarehouseEmptyState message="Nenhuma cautela emitida" hint="Use Nova cautela para começar." icon={Wrench} />}
         </div>
         <div className="hidden overflow-x-auto md:block">
@@ -340,7 +358,7 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
               const items = custodyTermEquipmentItems(term);
               const expanded = expandedId === term.id;
               const aggregate = custodyTermAggregateStatus(items);
-              return <Fragment key={term.id}><tr className={`cursor-pointer border-t whitespace-nowrap hover:bg-muted/30 ${expanded ? 'bg-primary/10' : ''}`} onClick={() => setExpandedId(current => current === term.id ? null : term.id)}><td className="p-2"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></td><td className="p-2 font-mono">{term.number}</td><td className="p-2">{term.issuedAt}</td><td className="p-2">{term.workerName}</td><td className="max-w-64 truncate p-2" title={term.chapterName}>{term.chapterName || 'Registro legado'}</td><td className="p-2">{term.teamName || term.teamId || '—'}</td><td className="p-2 text-center">{items.length}</td><td className="p-2">{term.dueDate || 'Sem prazo'}</td><td className="p-2"><WarehouseStatusBadge label={statusLabel[aggregate] || aggregate} tone={statusTone(aggregate)} /></td></tr>{expanded && <tr className="border-t bg-muted/10"><td colSpan={9} className="p-3"><CustodyDetails term={term} project={project} onReturn={startReturn} /></td></tr>}</Fragment>;
+              return <Fragment key={term.id}><tr className={`cursor-pointer border-t whitespace-nowrap hover:bg-muted/30 ${expanded ? 'bg-primary/10' : ''}`} onClick={() => setExpandedId(current => current === term.id ? null : term.id)}><td className="p-2"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></td><td className="p-2 font-mono">{term.number}</td><td className="p-2">{term.issuedAt}</td><td className="p-2">{term.workerName}</td><td className="max-w-64 truncate p-2" title={term.chapterName}>{term.chapterName || 'Registro legado'}</td><td className="p-2">{term.teamName || term.teamId || '—'}</td><td className="p-2 text-center">{items.length}</td><td className="p-2">{term.dueDate || 'Sem prazo'}</td><td className="p-2"><WarehouseStatusBadge label={statusLabel[aggregate] || aggregate} tone={statusTone(aggregate)} /></td></tr>{expanded && <tr className="border-t bg-muted/10"><td colSpan={9} className="p-3"><CustodyDetails term={term} project={project} onReturn={startReturn} canDelete={canDelete} onDelete={() => deleteTerm(term)} /></td></tr>}</Fragment>;
             })}{!sortedTerms.length && <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">Nenhuma cautela emitida.</td></tr>}</tbody>
           </table>
         </div>
@@ -359,6 +377,7 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
           <DialogFooter><Button variant="outline" className="min-h-11" disabled={returning} onClick={() => setReturnTarget(null)}>Cancelar</Button><Button className="min-h-11" disabled={returning} onClick={() => void submitReturn()}><Undo2 className="mr-2 h-4 w-4" />{returning ? 'Registrando...' : 'Confirmar devolução'}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+      {confirmDialog}
     </div>
   );
 }
@@ -376,13 +395,13 @@ function PhotoPreview({ file, onRemove }: { file: File; onRemove: () => void }) 
   return <div className="relative aspect-square overflow-hidden rounded-md border"><img src={url} alt={file.name} className="h-full w-full object-cover" onLoad={() => URL.revokeObjectURL(url)} /><Button type="button" size="icon" variant="destructive" className="absolute right-1 top-1 h-8 w-8" onClick={onRemove} aria-label={`Remover ${file.name}`}><X className="h-4 w-4" /></Button></div>;
 }
 
-function CustodyDetails({ term, project, onReturn }: { term: CustodyTerm; project: Project; onReturn: (term: CustodyTerm, item: CustodyTermEquipmentItem) => void }) {
+function CustodyDetails({ term, project, onReturn, canDelete, onDelete }: { term: CustodyTerm; project: Project; onReturn: (term: CustodyTerm, item: CustodyTermEquipmentItem) => void; canDelete: boolean; onDelete: () => void }) {
   const items = custodyTermEquipmentItems(term);
-  return <div className="space-y-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="text-sm"><strong>{term.number}</strong> · {term.workerName} · {term.attachments?.length || 0} foto(s) na entrega</div><Button size="sm" variant="outline" className="min-h-11" onClick={() => generateCustodyTermPdf(project, term)}><FileDown className="mr-1 h-4 w-4" />PDF</Button></div><div className="overflow-x-auto"><table className="w-full min-w-[720px] text-xs"><thead><tr><th className="p-2 text-left">Equipamento</th><th className="p-2 text-left">Estado / acessórios</th><th className="p-2 text-left">Situação</th><th className="p-2 text-left">Devolução</th><th className="p-2 text-right">Ação</th></tr></thead><tbody>{items.map(item => <tr key={item.equipmentId} className="border-t"><td className="p-2"><div className="font-medium">{item.equipmentInternalCode || 'Código legado'} · {item.equipmentName}</div><div className="text-muted-foreground">Patrimônio {item.equipmentPatrimony || '—'} · Série {item.equipmentSerial || '—'}</div></td><td className="p-2">{item.stateOnDelivery || '—'}<div className="text-muted-foreground">{item.accessories || 'Sem acessórios'}</div></td><td className="p-2"><WarehouseStatusBadge label={statusLabel[item.status] || item.status} tone={statusTone(item.status)} /></td><td className="p-2">{item.returnedAt || '—'}<div className="text-muted-foreground">{item.stateOnReturn || item.divergenceNotes || ''}</div></td><td className="p-2 text-right">{item.status === 'em_uso' && <Button size="sm" variant="outline" className="min-h-11" onClick={() => onReturn(term, item)}><Undo2 className="mr-1 h-4 w-4" />Devolver</Button>}</td></tr>)}</tbody></table></div><WarehouseAuditIdentity createdBy={term.createdBy} updatedBy={term.updatedBy} className="rounded-md bg-muted/40 p-2 text-xs" /></div>;
+  return <div className="space-y-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="text-sm"><strong>{term.number}</strong> · {term.workerName} · {term.attachments?.length || 0} foto(s) na entrega</div><div className="flex gap-2"><Button size="sm" variant="outline" className="min-h-11" onClick={() => generateCustodyTermPdf(project, term)}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{canDelete && <Button size="sm" variant="destructive" className="min-h-11" onClick={onDelete}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>}</div></div><div className="overflow-x-auto"><table className="w-full min-w-[720px] text-xs"><thead><tr><th className="p-2 text-left">Equipamento</th><th className="p-2 text-left">Estado / acessórios</th><th className="p-2 text-left">Situação</th><th className="p-2 text-left">Devolução</th><th className="p-2 text-right">Ação</th></tr></thead><tbody>{items.map(item => <tr key={item.equipmentId} className="border-t"><td className="p-2"><div className="font-medium">{item.equipmentInternalCode || 'Código legado'} · {item.equipmentName}</div><div className="text-muted-foreground">Patrimônio {item.equipmentPatrimony || '—'} · Série {item.equipmentSerial || '—'}</div></td><td className="p-2">{item.stateOnDelivery || '—'}<div className="text-muted-foreground">{item.accessories || 'Sem acessórios'}</div></td><td className="p-2"><WarehouseStatusBadge label={statusLabel[item.status] || item.status} tone={statusTone(item.status)} /></td><td className="p-2">{item.returnedAt || '—'}<div className="text-muted-foreground">{item.stateOnReturn || item.divergenceNotes || ''}</div></td><td className="p-2 text-right">{item.status === 'em_uso' && <Button size="sm" variant="outline" className="min-h-11" onClick={() => onReturn(term, item)}><Undo2 className="mr-1 h-4 w-4" />Devolver</Button>}</td></tr>)}</tbody></table></div><WarehouseAuditIdentity createdBy={term.createdBy} updatedBy={term.updatedBy} className="rounded-md bg-muted/40 p-2 text-xs" /></div>;
 }
 
-function CustodyMobileCard({ term, expanded, onToggle, onReturn, project }: { term: CustodyTerm; expanded: boolean; onToggle: () => void; onReturn: (term: CustodyTerm, item: CustodyTermEquipmentItem) => void; project: Project }) {
+function CustodyMobileCard({ term, expanded, onToggle, onReturn, project, canDelete, onDelete }: { term: CustodyTerm; expanded: boolean; onToggle: () => void; onReturn: (term: CustodyTerm, item: CustodyTermEquipmentItem) => void; project: Project; canDelete: boolean; onDelete: () => void }) {
   const items = custodyTermEquipmentItems(term);
   const aggregate = custodyTermAggregateStatus(items);
-  return <article className={`rounded-lg border ${expanded ? 'border-primary bg-primary/5' : ''}`}><button type="button" className="w-full p-3 text-left" onClick={onToggle} aria-expanded={expanded}><div className="flex justify-between gap-2"><strong>{term.number}</strong><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></div><div className="mt-1 text-sm font-semibold">{term.workerName}</div><div className="text-xs text-muted-foreground">{term.chapterName || 'Registro legado'} · {items.length} equipamento(s)</div><div className="mt-2 flex flex-wrap items-center gap-2"><WarehouseStatusBadge label={statusLabel[aggregate] || aggregate} tone={statusTone(aggregate)} /><span className="text-xs text-muted-foreground">{term.dueDate || 'Sem prazo'}</span></div></button>{expanded && <div className="border-t p-3"><CustodyDetails term={term} project={project} onReturn={onReturn} /></div>}</article>;
+  return <article className={`rounded-lg border ${expanded ? 'border-primary bg-primary/5' : ''}`}><button type="button" className="w-full p-3 text-left" onClick={onToggle} aria-expanded={expanded}><div className="flex justify-between gap-2"><strong>{term.number}</strong><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></div><div className="mt-1 text-sm font-semibold">{term.workerName}</div><div className="text-xs text-muted-foreground">{term.chapterName || 'Registro legado'} · {items.length} equipamento(s)</div><div className="mt-2 flex flex-wrap items-center gap-2"><WarehouseStatusBadge label={statusLabel[aggregate] || aggregate} tone={statusTone(aggregate)} /><span className="text-xs text-muted-foreground">{term.dueDate || 'Sem prazo'}</span></div></button>{expanded && <div className="border-t p-3"><CustodyDetails term={term} project={project} onReturn={onReturn} canDelete={canDelete} onDelete={onDelete} /></div>}</article>;
 }

@@ -21,12 +21,14 @@ import {
   fiscalItemStockUnit,
   fiscalNoteCostReviewStatus,
   fiscalNoteViewGroup,
+  hardDeleteFiscalNote,
   makeAttachment,
   nowWarehouseISO,
   readFileAsDataURL,
   reconcileArchivedFiscalNoteStock,
   reviewArchivedFiscalNoteStock,
   reviewPostedFiscalNoteCosts,
+  replacePostedFiscalNote,
   suggestFiscalNoteItemLinks,
   uidWarehouse,
   updateFiscalItemPurchaseGroup,
@@ -80,6 +82,8 @@ interface Props {
   onCommitProject?: (next: Project) => Promise<void>;
   canManage?: boolean;
   canReviewCosts?: boolean;
+  canEditPosted?: boolean;
+  canDelete?: boolean;
   auditActor?: WarehouseAuditActor;
 }
 
@@ -372,7 +376,7 @@ async function removeUploadedAttachments(attachments: WarehouseAttachment[] | nu
   if (error) console.warn('Não foi possível remover uploads provisórios.', error);
 }
 
-export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCommitProject, canManage = true, canReviewCosts = true, auditActor }: Props) {
+export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCommitProject, canManage = true, canReviewCosts = true, canEditPosted = false, canDelete = false, auditActor }: Props) {
   const [group, setGroup] = useState<ViewGroup>('posted');
   const [search, setSearch] = useState('');
   const [pendingOnly, setPendingOnly] = useState(false);
@@ -383,6 +387,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const [uploadOpen, setUploadOpen] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [reconciliationOpen, setReconciliationOpen] = useState(false);
   const [previewAttachment, setPreviewAttachment] = useState<WarehouseAttachment | null>(null);
   const [cancelReason, setCancelReason] = useState('');
@@ -412,7 +417,8 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const isDraft = selected?.status === 'a_conferir' || selected?.status === 'em_processamento';
   const isPosted = selected?.status === 'aprovada';
   const isArchived = selected?.status === 'rejeitada' || selected?.status === 'cancelada';
-  const canEditSelectedCosts = !!selected && (!!isDraft || (!!isPosted && canReviewCosts));
+  const canEditPostedRecord = !!isPosted && canEditPosted;
+  const canEditSelectedCosts = !!selected && (!!isDraft || (!!isPosted && (canReviewCosts || canEditPosted)));
   const selectedItemsSubtotal = selected?.items.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0) ?? 0;
   const selectedGlobalCost = Number(selected?.totalAmount || selectedItemsSubtotal) + Number(selected?.freightAmount || 0) + Number(selected?.icmsAmount || 0);
   const cancelCheck = isPosted && selected ? checkFiscalNoteCancellation(project, selected.id) : null;
@@ -625,6 +631,44 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     toast.success('Lançamento cancelado definitivamente.');
   };
 
+  const commitOwnerChange = async (next: Project) => {
+    if (onCommitProject) await onCommitProject(next);
+    else onProjectChange(next);
+  };
+
+  const savePostedEdit = async () => {
+    if (!selected || !isPosted || !canEditPosted) return;
+    try {
+      setProcessing(true);
+      const next = replacePostedFiscalNote(project, selected.id, selected, auditActor);
+      await commitOwnerChange(next);
+      setSelected(next.warehouse?.fiscalNotes?.find(note => note.id === selected.id) ?? null);
+      toast.success('Entrada atualizada e estoque recalculado.');
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const confirmOwnerDelete = async () => {
+    if (!selected || !canDelete) return;
+    try {
+      setProcessing(true);
+      const attachments = selected.attachments?.length ? selected.attachments : selected.attachment ? [selected.attachment] : [];
+      const next = hardDeleteFiscalNote(project, selected.id);
+      await commitOwnerChange(next);
+      await removeUploadedAttachments(attachments);
+      setDeleteOpen(false);
+      setSelected(null);
+      toast.success('Entrada e documentos removidos definitivamente.');
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const openOriginalDocument = (note: WarehouseFiscalNote, attachmentIndex = 0) => {
     const attachments = note.attachments?.length ? note.attachments : (note.attachment ? [note.attachment] : []);
     const attachment = attachments[attachmentIndex];
@@ -778,25 +822,25 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
               {(selected.attachments?.length || selected.attachment) && <div className="flex flex-wrap items-center gap-2 rounded-md border p-3"><span className="mr-auto text-sm font-medium">Documento original</span>{(selected.attachments?.length ? selected.attachments : selected.attachment ? [selected.attachment] : []).map((attachment, index) => <div key={attachment.id} className="flex flex-wrap gap-2"><Button type="button" variant="outline" className="min-h-11" onClick={() => void openOriginalDocument(selected, index)}><Eye className="mr-2 h-4 w-4" />{index === 0 && (selected.attachments?.length || 0) <= 1 ? 'Visualizar documento' : `Visualizar anexo ${index + 1}`}</Button><Button type="button" variant="outline" className="min-h-11" onClick={() => void downloadOriginalDocument(selected, index)}><Download className="mr-2 h-4 w-4" />Baixar</Button></div>)}</div>}
 
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <Field label="Fornecedor" value={selected.supplierName} readOnly={!isDraft} onChange={value => setSelected({ ...selected, supplierName: value })} />
-                <Field label="CNPJ" value={selected.supplierCnpj} readOnly={!isDraft} onChange={value => setSelected({ ...selected, supplierCnpj: normalizeCnpj(value) })} />
-                <Field label="Número da nota" value={selected.invoiceNumber} readOnly={!isDraft} onChange={value => setSelected({ ...selected, invoiceNumber: value })} />
-                <Field label="Data de emissão" type="date" value={selected.issueDate} readOnly={!isDraft} onChange={value => setSelected({ ...selected, issueDate: value })} />
+                <Field label="Fornecedor" value={selected.supplierName} readOnly={!(isDraft || canEditPostedRecord)} onChange={value => setSelected({ ...selected, supplierName: value })} />
+                <Field label="CNPJ" value={selected.supplierCnpj} readOnly={!(isDraft || canEditPostedRecord)} onChange={value => setSelected({ ...selected, supplierCnpj: normalizeCnpj(value) })} />
+                <Field label="Número da nota" value={selected.invoiceNumber} readOnly={!(isDraft || canEditPostedRecord)} onChange={value => setSelected({ ...selected, invoiceNumber: value })} />
+                <Field label="Data de emissão" type="date" value={selected.issueDate} readOnly={!(isDraft || canEditPostedRecord)} onChange={value => setSelected({ ...selected, issueDate: value })} />
                 <StateSelect label="UF do fornecedor" value={selected.supplierState} disabled={!canEditSelectedCosts} onChange={value => setSelected({ ...selected, supplierState: value })} />
                 <StateSelect label="UF da obra" value={DESTINATION_STATE} disabled onChange={() => undefined} />
-                <div className="sm:col-span-2"><MoneyInput label="Valor informado na NF" value={selected.totalAmount} readOnly={!isDraft} onChange={value => setSelected({ ...selected, totalAmount: value ?? 0 })} /></div>
+                <div className="sm:col-span-2"><MoneyInput label="Valor informado na NF" value={selected.totalAmount} readOnly={!(isDraft || canEditPostedRecord)} onChange={value => setSelected({ ...selected, totalAmount: value ?? 0 })} /></div>
               </div>
 
               <section>
-                <div className="mb-2 flex items-center justify-between"><h3 className="font-semibold">Itens do documento ({selected.items.length})</h3>{isDraft && <Button size="sm" variant="outline" onClick={() => setSelected({ ...selected, items: [...selected.items, newItem()] })}><Plus className="mr-1 h-4 w-4" />Adicionar item</Button>}</div>
+                <div className="mb-2 flex items-center justify-between"><h3 className="font-semibold">Itens do documento ({selected.items.length})</h3>{(isDraft || canEditPostedRecord) && <Button size="sm" variant="outline" onClick={() => setSelected({ ...selected, items: [...selected.items, newItem()] })}><Plus className="mr-1 h-4 w-4" />Adicionar item</Button>}</div>
                 <div className="hidden overflow-x-auto rounded-md border md:block">
                   <table className="w-full min-w-[1160px] table-fixed text-xs">
-                    <colgroup><col className="w-[80px]" /><col className="w-[300px]" /><col className="w-[96px]" /><col className="w-[64px]" /><col className="w-[110px]" /><col className="w-[122px]" /><col className="w-[100px]" /><col className="w-[110px]" /><col className="w-[140px]" />{isDraft && <col className="w-11" />}</colgroup>
-                    <thead className="bg-muted text-muted-foreground"><tr><th className="h-11 p-2 text-left align-middle">Cód. prod.</th><th className="h-11 p-2 text-left align-middle">Descrição</th><th className="h-11 p-1 text-center align-middle">Qtd. NF</th><th className="h-11 p-1 text-center align-middle">Un. NF</th><th className="h-11 p-1 text-center align-middle">V. unit. NF</th><th className="h-11 p-1 text-center align-middle">Total NF</th><th className="h-11 p-1 text-center align-middle">V. unit. global</th><th className="h-11 p-1 text-center align-middle">V. total global</th><th className="h-11 p-1 text-left align-middle">Grupo de compra</th>{isDraft && <th className="h-11 p-1" />}</tr></thead>
-                    <tbody>{selected.items.map((item, index) => <ItemTableRow key={item.id} note={selected} item={item} index={index} editable={!!isDraft} groupEditable={canManage && !isArchived} purchaseGroups={purchaseGroups} onUpdate={updateItem} onGroupChange={value => updatePurchaseGroup(selected, item, value)} onRemove={() => setSelected({ ...selected, items: selected.items.filter((_, itemIndex) => itemIndex !== index) })} />)}</tbody>
+                    <colgroup><col className="w-[80px]" /><col className="w-[300px]" /><col className="w-[96px]" /><col className="w-[64px]" /><col className="w-[110px]" /><col className="w-[122px]" /><col className="w-[100px]" /><col className="w-[110px]" /><col className="w-[140px]" />{(isDraft || canEditPostedRecord) && <col className="w-11" />}</colgroup>
+                    <thead className="bg-muted text-muted-foreground"><tr><th className="h-11 p-2 text-left align-middle">Cód. prod.</th><th className="h-11 p-2 text-left align-middle">Descrição</th><th className="h-11 p-1 text-center align-middle">Qtd. NF</th><th className="h-11 p-1 text-center align-middle">Un. NF</th><th className="h-11 p-1 text-center align-middle">V. unit. NF</th><th className="h-11 p-1 text-center align-middle">Total NF</th><th className="h-11 p-1 text-center align-middle">V. unit. global</th><th className="h-11 p-1 text-center align-middle">V. total global</th><th className="h-11 p-1 text-left align-middle">Grupo de compra</th>{(isDraft || canEditPostedRecord) && <th className="h-11 p-1" />}</tr></thead>
+                    <tbody>{selected.items.map((item, index) => <ItemTableRow key={item.id} note={selected} item={item} index={index} editable={!!isDraft || canEditPostedRecord} groupEditable={(canManage || canEditPosted) && !isArchived} purchaseGroups={purchaseGroups} onUpdate={updateItem} onGroupChange={value => updatePurchaseGroup(selected, item, value)} onRemove={() => setSelected({ ...selected, items: selected.items.filter((_, itemIndex) => itemIndex !== index) })} />)}</tbody>
                   </table>
                 </div>
-                <div className="space-y-2 md:hidden">{selected.items.map((item, index) => <ItemMobileCard key={item.id} note={selected} item={item} index={index} expanded={expandedItemId === item.id} onToggle={() => setExpandedItemId(current => current === item.id ? null : item.id)} editable={!!isDraft} groupEditable={canManage && !isArchived} purchaseGroups={purchaseGroups} onUpdate={updateItem} onGroupChange={value => updatePurchaseGroup(selected, item, value)} onRemove={() => setSelected({ ...selected, items: selected.items.filter((_, itemIndex) => itemIndex !== index) })} />)}</div>
+                <div className="space-y-2 md:hidden">{selected.items.map((item, index) => <ItemMobileCard key={item.id} note={selected} item={item} index={index} expanded={expandedItemId === item.id} onToggle={() => setExpandedItemId(current => current === item.id ? null : item.id)} editable={!!isDraft || canEditPostedRecord} groupEditable={(canManage || canEditPosted) && !isArchived} purchaseGroups={purchaseGroups} onUpdate={updateItem} onGroupChange={value => updatePurchaseGroup(selected, item, value)} onRemove={() => setSelected({ ...selected, items: selected.items.filter((_, itemIndex) => itemIndex !== index) })} />)}</div>
                 {!selected.items.length && <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">Nenhum item identificado. Adicione um item para concluir o lançamento.</div>}
               </section>
 
@@ -812,7 +856,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
                 {fiscalNoteCostReviewStatus(selected) === 'pending' && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" />Compra interestadual: frete e ICMS/DIFAL aguardam conferência da engenharia. A entrada pode ser lançada normalmente.</div>}
                 {fiscalNoteCostReviewStatus(selected) === 'unknown_origin' && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" />Verifique a UF do fornecedor para identificar se a compra é interestadual.</div>}
               </section>
-              <details className="rounded-md border p-3"><summary className="cursor-pointer font-medium">Mais detalhes</summary><div className="mt-3"><label className="mb-1 block text-sm font-medium">Observações</label><Textarea value={selected.notes || ''} readOnly={!isDraft} onChange={event => setSelected({ ...selected, notes: event.target.value })} /><div className="mt-2 text-sm text-muted-foreground">Faturas: {selected.invoices?.length || 0}.</div></div></details>
+              <details className="rounded-md border p-3"><summary className="cursor-pointer font-medium">Mais detalhes</summary><div className="mt-3"><label className="mb-1 block text-sm font-medium">Observações</label><Textarea value={selected.notes || ''} readOnly={!(isDraft || canEditPostedRecord)} onChange={event => setSelected({ ...selected, notes: event.target.value })} /><div className="mt-2 text-sm text-muted-foreground">Faturas: {selected.invoices?.length || 0}.</div></div></details>
               {selected.status === 'cancelada' && <div className="rounded-md border p-3 text-sm"><strong>Cancelamento definitivo</strong><br /><strong>Responsável:</strong> {selected.canceledBy || '—'}<br /><strong>Motivo:</strong> {selected.cancellationReason}</div>}
             </div>
             <div className="sticky bottom-0 flex flex-wrap items-center justify-end gap-2 border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] shadow-[0_-4px_12px_rgba(0,0,0,0.08)] [&>button]:min-h-11">
@@ -821,13 +865,17 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
               {isDraft && duplicate && <Button onClick={openDuplicate}>Abrir lançamento existente</Button>}
               {isDraft && !duplicate && <Button onClick={() => void postSelectedDraft()} disabled={!validItems(selected).length || processing}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Confirmar lançamento</Button>}
               {canReviewCosts && isPosted && <Button onClick={() => void savePostedCosts()} disabled={processing}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Confirmar custos</Button>}
+              {canEditPostedRecord && <Button onClick={() => void savePostedEdit()} disabled={processing}>Salvar e recalcular</Button>}
               {canManage && isPosted && <Button variant="destructive" onClick={() => setCancelOpen(true)}>Cancelar lançamento</Button>}
+              {canDelete && isPosted && <Button variant="destructive" onClick={() => setDeleteOpen(true)}>Excluir definitivamente</Button>}
             </div>
           </>}
         </DialogContent>
       </Dialog>
 
       <Dialog open={cancelOpen} onOpenChange={setCancelOpen}><DialogContent className="warehouse-ui"><DialogHeader><DialogTitle>Cancelar lançamento definitivamente</DialogTitle><DialogDescription>A entrada original não será apagada. O sistema criará movimentos de estorno, preservará o documento e impedirá qualquer relançamento deste registro.</DialogDescription></DialogHeader>{cancelCheck && !cancelCheck.allowed && <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"><strong>Cancelamento bloqueado:</strong><ul className="mt-2 list-disc pl-5">{cancelCheck.blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul></div>}<div><label className="mb-1 block text-sm font-medium">Motivo obrigatório</label><Textarea value={cancelReason} onChange={event => setCancelReason(event.target.value)} placeholder="Explique por que o lançamento deve ser cancelado" /></div><DialogFooter><Button variant="outline" onClick={() => setCancelOpen(false)}>Voltar</Button><Button variant="destructive" disabled={!cancelCheck?.allowed || !cancelReason.trim()} onClick={confirmCancel}>Confirmar estorno definitivo</Button></DialogFooter></DialogContent></Dialog>
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}><DialogContent className="warehouse-ui"><DialogHeader><DialogTitle>Excluir entrada definitivamente?</DialogTitle><DialogDescription>Esta ação remove a nota e seus documentos. O estoque será recalculado somente se não houver retiradas ou ajustes posteriores vinculados.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" disabled={processing} onClick={() => setDeleteOpen(false)}>Voltar</Button><Button variant="destructive" disabled={processing} onClick={() => void confirmOwnerDelete()}>{processing ? 'Excluindo...' : 'Excluir definitivamente'}</Button></DialogFooter></DialogContent></Dialog>
 
       <Dialog open={reconciliationOpen} onOpenChange={setReconciliationOpen}>
         <DialogContent className="warehouse-ui max-h-[90dvh] max-w-4xl overflow-y-auto">

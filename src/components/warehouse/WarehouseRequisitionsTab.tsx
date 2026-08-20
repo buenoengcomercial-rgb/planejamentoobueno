@@ -8,10 +8,13 @@ import {
   computeWarehouseRows,
   createAndDeliverRequisition,
   ensureWarehouse,
+  hardDeleteRequisition,
   makeAttachment,
   uidWarehouse,
   warehouseActorName,
 } from '@/lib/warehouse';
+import { deleteWarehouseAttachments } from '@/lib/warehouseAttachments';
+import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { getChapterNumbering } from '@/lib/chapters';
 import { DEFAULT_TEAMS } from '@/lib/teams';
 import SignaturePad from './SignaturePad';
@@ -27,7 +30,7 @@ import {
 } from './WarehouseVisual';
 import { toast } from 'sonner';
 
-interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; }
+interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canDelete?: boolean; }
 
 interface WithdrawalForm {
   date: string;
@@ -71,7 +74,8 @@ export default function WarehouseRequisitionsTab(props: Props) {
   );
 }
 
-function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor }: Props) {
+function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor, canDelete = false }: Props) {
+  const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const wh = ensureWarehouse(project).warehouse!;
   const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
   const numbering = useMemo(() => getChapterNumbering(project), [project]);
@@ -112,6 +116,16 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor 
     setErrors({});
     setOpen(false);
   };
+
+  const deleteRequisition = (requisition: WarehouseRequisition) => confirm(
+    { title: 'Excluir retirada definitivamente?', description: 'A retirada, seus comprovantes, movimentos e o bloco gerado no Diário de Obra serão removidos.', confirmLabel: 'Excluir definitivamente' },
+    async () => {
+      onProjectChange(hardDeleteRequisition(project, requisition.id));
+      try { await deleteWarehouseAttachments(requisition.deliveryAttachments); } catch { toast.warning('A retirada foi excluída, mas houve falha ao remover um anexo do Storage.'); }
+      setActiveId(null);
+      toast.success('Retirada excluída e saldo recalculado.');
+    },
+  );
 
   const addMaterial = (key: string) => {
     const row = rows.find(candidate => candidate.key === key);
@@ -256,13 +270,14 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor 
           <WarehouseSectionHeader icon={History} title="Histórico de retiradas" description={`${wh.requisitions.length} registro(s)`} tone="neutral" />
           <div className="space-y-2 p-2 md:hidden">{wh.requisitions.slice().sort((a, b) => b.date.localeCompare(a.date)).map(requisition => {
             const expanded = activeId === requisition.id;
-            return <article key={requisition.id} className={`rounded-md border ${expanded ? 'border-primary bg-primary/5' : ''}`}><button type="button" className="w-full p-3 text-left" onClick={() => setActiveId(current => current === requisition.id ? null : requisition.id)} aria-expanded={expanded}><div className="flex justify-between gap-2"><strong>{requisition.number}</strong><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></div><div className="mt-1 text-sm">{requisition.receiverName || requisition.requesterName || '—'}</div><div className="text-xs text-muted-foreground">{requisition.chapterName || requisition.taskName || 'Registro legado'} · {requisition.items.length} item(ns) · {requisition.date}</div></button>{expanded && <div className="border-t p-3"><WithdrawalDetails project={project} requisition={requisition} /></div>}</article>;
+            return <article key={requisition.id} className={`rounded-md border ${expanded ? 'border-primary bg-primary/5' : ''}`}><button type="button" className="w-full p-3 text-left" onClick={() => setActiveId(current => current === requisition.id ? null : requisition.id)} aria-expanded={expanded}><div className="flex justify-between gap-2"><strong>{requisition.number}</strong><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></div><div className="mt-1 text-sm">{requisition.receiverName || requisition.requesterName || '—'}</div><div className="text-xs text-muted-foreground">{requisition.chapterName || requisition.taskName || 'Registro legado'} · {requisition.items.length} item(ns) · {requisition.date}</div></button>{expanded && <div className="border-t p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} onDelete={() => deleteRequisition(requisition)} /></div>}</article>;
           })}{!wh.requisitions.length && <WarehouseEmptyState message="Nenhuma retirada registrada" hint="Use Nova retirada para começar." />}</div>
           <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[980px] text-xs"><thead className="bg-muted"><tr><th className="w-10 p-2"><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Prédio / capítulo</th><th className="p-2 text-left">Equipe</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead><tbody>{wh.requisitions.slice().sort((a, b) => b.date.localeCompare(a.date)).map(requisition => {
             const expanded = activeId === requisition.id;
-            return <Fragment key={requisition.id}><tr className={`cursor-pointer border-t whitespace-nowrap hover:bg-muted/30 ${expanded ? 'bg-primary/10' : ''}`} onClick={() => setActiveId(current => current === requisition.id ? null : requisition.id)}><td className="p-2"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></td><td className="p-2 font-mono">{requisition.number}</td><td className="p-2">{requisition.date}</td><td className="p-2">{requisition.receiverName || requisition.requesterName || '—'}</td><td className="max-w-72 truncate p-2" title={requisition.chapterName || requisition.taskName}>{requisition.chapterName || requisition.taskName || 'Registro legado'}</td><td className="p-2">{requisition.teamName || requisition.teamId || '—'}</td><td className="p-2 text-center">{requisition.items.length}</td><td className="p-2"><WarehouseStatusBadge label={requisition.status === 'rascunho' ? 'Pendente legado' : 'Entregue'} tone={requisition.status === 'rascunho' ? 'warning' : 'success'} /></td><td className="p-2"><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} className="space-y-0.5" /></td></tr>{expanded && <tr className="border-t bg-muted/10"><td colSpan={9} className="p-3"><WithdrawalDetails project={project} requisition={requisition} /></td></tr>}</Fragment>;
+            return <Fragment key={requisition.id}><tr className={`cursor-pointer border-t whitespace-nowrap hover:bg-muted/30 ${expanded ? 'bg-primary/10' : ''}`} onClick={() => setActiveId(current => current === requisition.id ? null : requisition.id)}><td className="p-2"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></td><td className="p-2 font-mono">{requisition.number}</td><td className="p-2">{requisition.date}</td><td className="p-2">{requisition.receiverName || requisition.requesterName || '—'}</td><td className="max-w-72 truncate p-2" title={requisition.chapterName || requisition.taskName}>{requisition.chapterName || requisition.taskName || 'Registro legado'}</td><td className="p-2">{requisition.teamName || requisition.teamId || '—'}</td><td className="p-2 text-center">{requisition.items.length}</td><td className="p-2"><WarehouseStatusBadge label={requisition.status === 'rascunho' ? 'Pendente legado' : 'Entregue'} tone={requisition.status === 'rascunho' ? 'warning' : 'success'} /></td><td className="p-2"><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} className="space-y-0.5" /></td></tr>{expanded && <tr className="border-t bg-muted/10"><td colSpan={9} className="p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} onDelete={() => deleteRequisition(requisition)} /></td></tr>}</Fragment>;
           })}{!wh.requisitions.length && <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">Nenhuma retirada registrada.</td></tr>}</tbody></table></div>
       </section>
+      {confirmDialog}
     </div>
   );
 }
@@ -272,6 +287,6 @@ function PhotoPreview({ file, onRemove }: { file: File; onRemove: () => void }) 
   return <div className="relative aspect-square overflow-hidden rounded-md border"><img src={url} alt={file.name} className="h-full w-full object-cover" onLoad={() => URL.revokeObjectURL(url)} /><Button type="button" size="icon" variant="destructive" className="absolute right-1 top-1 h-8 w-8" onClick={onRemove} aria-label={`Remover ${file.name}`}><X className="h-4 w-4" /></Button></div>;
 }
 
-function WithdrawalDetails({ project, requisition }: { project: Project; requisition: WarehouseRequisition }) {
-  return <div className="space-y-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="text-sm"><strong>{requisition.number}</strong> · {requisition.receiverName || requisition.requesterName || '—'} · {requisition.deliveryAttachments?.length || 0} foto(s)</div><Button size="sm" variant="outline" className="min-h-11" onClick={() => generateRequisitionReceipt(project, requisition)}><FileDown className="mr-1 h-4 w-4" />PDF</Button></div><dl className="grid gap-2 text-sm sm:grid-cols-3"><div><dt className="text-xs text-muted-foreground">Prédio / capítulo</dt><dd>{requisition.chapterName || requisition.taskName || 'Registro legado'}</dd></div><div><dt className="text-xs text-muted-foreground">Equipe</dt><dd>{requisition.teamName || requisition.teamId || '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Observação</dt><dd>{requisition.notes || '—'}</dd></div></dl><div className="overflow-x-auto"><table className="w-full min-w-[520px] text-xs"><thead><tr><th className="p-2 text-left">Código</th><th className="p-2 text-left">Material</th><th className="p-2 text-left">Unidade</th><th className="p-2 text-right">Quantidade</th></tr></thead><tbody>{requisition.items.map(item => <tr key={item.itemKey} className="border-t"><td className="p-2">{item.code || '—'}</td><td className="p-2">{item.description}</td><td className="p-2">{item.unit}</td><td className="p-2 text-right">{item.quantity.toLocaleString('pt-BR')}</td></tr>)}</tbody></table></div><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} className="rounded-md bg-muted/40 p-2 text-xs" /></div>;
+function WithdrawalDetails({ project, requisition, canDelete, onDelete }: { project: Project; requisition: WarehouseRequisition; canDelete: boolean; onDelete: () => void }) {
+  return <div className="space-y-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="text-sm"><strong>{requisition.number}</strong> · {requisition.receiverName || requisition.requesterName || '—'} · {requisition.deliveryAttachments?.length || 0} foto(s)</div><div className="flex gap-2"><Button size="sm" variant="outline" className="min-h-11" onClick={() => generateRequisitionReceipt(project, requisition)}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{canDelete && <Button size="sm" variant="destructive" className="min-h-11" onClick={onDelete}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>}</div></div><dl className="grid gap-2 text-sm sm:grid-cols-3"><div><dt className="text-xs text-muted-foreground">Prédio / capítulo</dt><dd>{requisition.chapterName || requisition.taskName || 'Registro legado'}</dd></div><div><dt className="text-xs text-muted-foreground">Equipe</dt><dd>{requisition.teamName || requisition.teamId || '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Observação</dt><dd>{requisition.notes || '—'}</dd></div></dl><div className="overflow-x-auto"><table className="w-full min-w-[520px] text-xs"><thead><tr><th className="p-2 text-left">Código</th><th className="p-2 text-left">Material</th><th className="p-2 text-left">Unidade</th><th className="p-2 text-right">Quantidade</th></tr></thead><tbody>{requisition.items.map(item => <tr key={item.itemKey} className="border-t"><td className="p-2">{item.code || '—'}</td><td className="p-2">{item.description}</td><td className="p-2">{item.unit}</td><td className="p-2 text-right">{item.quantity.toLocaleString('pt-BR')}</td></tr>)}</tbody></table></div><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} className="rounded-md bg-muted/40 p-2 text-xs" /></div>;
 }

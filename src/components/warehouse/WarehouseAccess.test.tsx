@@ -22,7 +22,7 @@ const project: Project = {
   warehouse: emptyWarehouse(),
 };
 
-describe('controle de acesso à limpeza do almoxarifado', () => {
+describe('controle de acesso do almoxarifado', () => {
   it('abre no Painel e mantém a mesma ordem no desktop e no seletor móvel', () => {
     render(<Warehouse project={project} onProjectChange={vi.fn()} />);
 
@@ -88,36 +88,9 @@ describe('controle de acesso à limpeza do almoxarifado', () => {
     expect(screen.getByLabelText('Área do almoxarifado')).toHaveValue('notas');
   });
 
-  it('não mostra Administração para usuários sem permissão de proprietário', () => {
-    render(<Warehouse project={project} onProjectChange={vi.fn()} canClearWarehouse={false} />);
+  it('remove a Administração global inclusive para o proprietário', () => {
+    render(<Warehouse project={project} onProjectChange={vi.fn()} canDeleteWarehouseRecords canEditPostedWarehouseRecords />);
     expect(screen.queryByRole('button', { name: /Administração/i })).not.toBeInTheDocument();
-  });
-
-  it('exige senha do proprietário antes de solicitar a limpeza', async () => {
-    const onClearWarehouse = vi.fn().mockResolvedValue(undefined);
-    render(
-      <Warehouse
-        project={project}
-        onProjectChange={vi.fn()}
-        canClearWarehouse
-        onClearWarehouse={onClearWarehouse}
-      />,
-    );
-
-    const administration = screen.getByRole('button', { name: /Administração/i });
-    administration.focus();
-    fireEvent.keyDown(administration, { key: 'Enter', code: 'Enter' });
-    fireEvent.click(await screen.findByRole('menuitem', { name: /Limpar almoxarifado/i }));
-
-    expect(await screen.findByText('Equipamentos serão preservados')).toBeInTheDocument();
-    expect(screen.getByText(/Cadastro, código, patrimônio, fotos e identificação não serão apagados/i)).toBeInTheDocument();
-    expect(screen.getByText(/Equipamentos em cautelas de teste voltarão para Disponível/i)).toBeInTheDocument();
-
-    const password = await screen.findByLabelText('Confirme a senha da sua conta');
-    fireEvent.change(password, { target: { value: 'senha-segura' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Confirmar e limpar' }));
-
-    await waitFor(() => expect(onClearWarehouse).toHaveBeenCalledWith('senha-segura'));
-    await waitFor(() => expect(screen.queryByText('Limpeza dos dados de teste')).not.toBeInTheDocument());
+    expect(screen.queryByText('Limpeza dos dados de teste')).not.toBeInTheDocument();
   });
 });
