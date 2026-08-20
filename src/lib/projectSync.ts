@@ -243,7 +243,7 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
 
   if (movements !== null || requisitions !== null || custody !== null) {
     const existing = project.warehouse ?? {
-      locations: [], items: [], movements: [], requisitions: [], equipments: [], custodyTerms: [],
+      locations: [], items: [], movements: [], requisitions: [], equipments: [], equipmentGroups: [], custodyTerms: [],
     };
     next.warehouse = {
       ...existing,

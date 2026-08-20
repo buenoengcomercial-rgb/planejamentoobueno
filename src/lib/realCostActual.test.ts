@@ -89,6 +89,7 @@ describe('custo realizado por producao e almoxarifado', () => {
         items: [],
         requisitions: [],
         equipments: [],
+        equipmentGroups: [],
         custodyTerms: [],
         movements: [{
           id: 'movement-1',

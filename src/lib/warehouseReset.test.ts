@@ -16,6 +16,7 @@ describe('prepareWarehouseTestReset', () => {
       warehouse: {
         locations: [{ id: 'loc-1', name: 'Teste' }],
         items: [{ key: 'mat-1', description: 'Material teste', unit: 'UN' }],
+        equipmentGroups: [],
         movements: [{ id: 'mov-1', type: 'entrada', date: '2026-08-18', createdAt: '2026-08-18', itemKey: 'mat-1', itemDescription: 'Material teste', itemUnit: 'UN', quantity: 1 }],
         requisitions: [{ id: 'req-1', number: 'REQ-1', date: '2026-08-18', status: 'entregue', chapterId: 'cap-1', chapterName: 'Capítulo', teamId: 'alpha', teamName: 'Alpha', receiverName: 'João', requesterName: 'João', signatureReceiver: 'assinatura', createdAt: '2026-08-18', items: [] }],
         custodyTerms: [{ id: 'term-1', number: 'TC-1', equipmentId: 'eq-use', equipmentName: 'Furadeira', issuedAt: '2026-08-18', workerName: 'João', status: 'em_uso', createdAt: '2026-08-18' }],
