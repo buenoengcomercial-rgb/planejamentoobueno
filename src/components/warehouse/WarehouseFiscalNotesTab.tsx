@@ -867,7 +867,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
               {canReviewCosts && isPosted && <Button onClick={() => void savePostedCosts()} disabled={processing}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Confirmar custos</Button>}
               {canEditPostedRecord && <Button onClick={() => void savePostedEdit()} disabled={processing}>Salvar e recalcular</Button>}
               {canManage && isPosted && <Button variant="destructive" onClick={() => setCancelOpen(true)}>Cancelar lançamento</Button>}
-              {canDelete && isPosted && <Button variant="destructive" onClick={() => setDeleteOpen(true)}>Excluir definitivamente</Button>}
+              {canDelete && (isPosted || isArchived) && <Button variant="destructive" onClick={() => setDeleteOpen(true)}>Excluir definitivamente</Button>}
             </div>
           </>}
         </DialogContent>

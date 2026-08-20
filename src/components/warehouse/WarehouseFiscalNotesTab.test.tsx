@@ -177,6 +177,15 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.queryByRole('button', { name: 'Cancelar lançamento' })).not.toBeInTheDocument();
   });
 
+  it('permite ao proprietário excluir também uma entrada arquivada', () => {
+    const onProjectChange = vi.fn();
+    render(<WarehouseFiscalNotesTab project={projectWithArchivedOrphan()} onProjectChange={onProjectChange} canManage canDelete />);
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /Arquivadas \(1\)/i }), { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Visualizar dados e grupos' })[0]);
+    expect(screen.getByRole('button', { name: 'Excluir definitivamente' })).toBeInTheDocument();
+  });
+
   it('não mostra classificação não fiscal e exibe cabeçalhos e grupo de compra', () => {
     render(<WarehouseFiscalNotesTab project={projectWithPostedNote()} onProjectChange={vi.fn()} canManage />);
     fireEvent.click(screen.getAllByRole('button', { name: 'Visualizar dados e grupos' })[0]);
