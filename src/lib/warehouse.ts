@@ -1273,13 +1273,25 @@ export function removeMovement(project: Project, movementId: string): Project {
 function normalizeEquipmentGroups(groups: WarehouseEquipmentGroup[], equipments: Equipment[]): WarehouseEquipmentGroup[] {
   const validIds = new Set(equipments.map(equipment => equipment.id));
   const usedEquipmentIds = new Set<string>();
-  return groups.flatMap(group => {
+  let changed = false;
+  const normalized = groups.flatMap(group => {
     const equipmentIds = [...new Set(group.equipmentIds.filter(id => validIds.has(id) && !usedEquipmentIds.has(id)))];
     equipmentIds.forEach(id => usedEquipmentIds.add(id));
-    if (!group.id || !group.name.trim() || !equipmentIds.length) return [];
+    if (!group.id || !group.name.trim() || !equipmentIds.length) {
+      changed = true;
+      return [];
+    }
+    const sameIds = equipmentIds.length === group.equipmentIds.length
+      && equipmentIds.every((id, index) => id === group.equipmentIds[index]);
+    if (sameIds && group.name === group.name.trim()) return [group];
+    changed = true;
     return [{ ...group, name: group.name.trim(), equipmentIds }];
   });
+  // Preserva a identidade do array quando nada muda: `ensureWarehouse` depende
+  // disso para ser idempotente e não disparar atualizações de estado em laço.
+  return changed ? normalized : groups;
 }
+
 
 function validateEquipmentGroupMembers(wh: WarehouseState, equipmentIds: string[], ignoredGroupId?: string) {
   const uniqueIds = [...new Set(equipmentIds)];

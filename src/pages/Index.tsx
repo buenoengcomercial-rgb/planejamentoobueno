@@ -842,6 +842,9 @@ export default function Index() {
           ? resolved
           : synchronizeProjectScheduleToWorkStart(resolved);
         if (synchronized === prev) return prev;
+        // Trava contra laço de atualização: objeto novo com conteúdo idêntico
+        // não gera novo estado (evitava o autosave reiniciar para sempre).
+        if (serializeProject(synchronized) === serializeProject(prev)) return prev;
         const stack = undoStacksRef.current[view];
         stack.push(prev);
         if (stack.length > UNDO_LIMIT) stack.shift();
