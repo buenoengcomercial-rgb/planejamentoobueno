@@ -470,8 +470,8 @@ function EquipmentGroup({ group, equipments, canManage, expanded, onToggle, onEd
     <EquipmentCardPhotos equipment={representative} title={group.name} onOpen={cardProps.onOpenPhoto} />
     <div className="space-y-2 p-3">
       <div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-extrabold text-primary">GRUPO DE PATRIMÔNIOS</div><h4 className="line-clamp-2 text-sm font-bold leading-5" title={group.name}>{group.name}</h4></div><WarehouseStatusBadge label={statusSummary} tone="info" /></div>
-      <WarehouseStatusBadge label={`Quantidade existente: ${equipments.length} patrimônio(s)`} tone="info" className="w-full justify-center rounded-lg" />
-      <div className="grid grid-cols-1 gap-1.5"><Button variant="outline" className="min-h-11 px-2 text-xs" aria-expanded={expanded} onClick={onToggle}><ChevronDown className={`mr-1.5 h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />{expanded ? 'Ocultar patrimônios' : 'Ver patrimônios'}</Button>{canManage && <Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => onEdit(group)}><Pencil className="mr-1.5 h-4 w-4" />Editar grupo</Button>}{canManage && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => onDeleteGroup(group)}><X className="mr-1.5 h-4 w-4" />Desfazer grupo</Button>}</div>
+      <WarehouseStatusBadge label={`Quantidade existente: ${equipments.length} patrimônio(s)`} tone="success" className="w-full justify-center rounded-lg" />
+      <div className={`grid gap-1.5 ${canManage ? 'grid-cols-2' : 'grid-cols-1'}`}><Button variant="outline" className="min-h-11 px-2 text-xs" aria-expanded={expanded} onClick={onToggle}><ChevronDown className={`mr-1.5 h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />{expanded ? 'Ocultar patrimônios' : 'Ver patrimônios'}</Button>{canManage && <Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => onEdit(group)}><Pencil className="mr-1.5 h-4 w-4" />Editar grupo</Button>}{canManage && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => onDeleteGroup(group)}><X className="mr-1.5 h-4 w-4" />Desfazer grupo</Button>}</div>
     </div>
   </article>;
 }
@@ -541,7 +541,7 @@ function EquipmentCardPhotos({ equipment, title, onOpen }: { equipment: Equipmen
       <EquipmentPhotoContent state={selectedState} alt={title} />
       {attachments.length > 1 && <span className="absolute bottom-1.5 right-1.5 rounded-full bg-background/90 px-2 py-0.5 text-[11px] font-medium shadow-sm">{selectedIndex + 1} de {attachments.length}</span>}
     </button>
-    {attachments.length > 1 && <div className="flex min-h-14 items-center gap-1.5 border-t bg-background/70 px-2 py-1.5" aria-label={`Fotos de ${title}`}>
+    {attachments.length > 0 && <div className="flex min-h-14 items-center gap-1.5 border-t bg-background/70 px-2 py-1.5" aria-label={`Fotos de ${title}`}>
       {attachments.map((attachment, index) => <button key={attachment.id || `${attachment.name}-${index}`} type="button" className={`h-11 w-11 shrink-0 overflow-hidden rounded border bg-muted/30 p-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selectedIndex === index ? 'border-primary ring-2 ring-primary/30' : 'border-border'}`} aria-label={`Selecionar foto ${index + 1} de ${attachments.length} de ${title}`} aria-pressed={selectedIndex === index} onClick={() => setSelectedIndex(index)}><EquipmentPhotoContent state={photoStates[index] ?? { status: 'loading' }} alt={`Miniatura ${index + 1} de ${title}`} compact /></button>)}
     </div>}
   </div>;

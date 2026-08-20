@@ -180,7 +180,8 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     expect(screen.getByRole('img', { name: 'Furadeira de impacto' })).toHaveAttribute('loading', 'lazy');
     expect(screen.getByRole('img', { name: 'Furadeira de impacto' })).toHaveAttribute('decoding', 'async');
     expect(screen.getByRole('img', { name: 'Furadeira de impacto' })).toHaveClass('object-contain');
-    expect(screen.queryByLabelText('Fotos de Furadeira de impacto')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Fotos de Furadeira de impacto')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Selecionar foto 1 de 1 de Furadeira de impacto' })).toBeInTheDocument();
   });
 
   it('abre em ordem alfabética e permite alternar para o código do patrimônio', () => {
@@ -234,6 +235,7 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     expect(within(groupItems).getAllByRole('button', { name: 'Etiqueta QR' })).toHaveLength(2);
     expect(within(groupItems).getAllByRole('button', { name: 'Editar' })).toHaveLength(2);
     expect(within(groupItems).getAllByRole('button', { name: 'Arquivar' })).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Editar grupo' }).parentElement).toHaveClass('grid-cols-2');
     expect(screen.getByText('EQ-2026-0001')).toBeInTheDocument();
     expect(screen.getByText('EQ-2026-0002')).toBeInTheDocument();
     expect(screen.getByTitle('SERIE-01')).toBeInTheDocument();
