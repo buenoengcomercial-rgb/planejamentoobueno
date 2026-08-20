@@ -101,6 +101,20 @@ describe('WarehouseStockTab - documentos no histórico', () => {
     expect(screen.getByTitle('Histórico de compras')).toBeInTheDocument();
   });
 
+  it('reserva espaço para a descrição e mantém as ações alinhadas na tabela desktop', () => {
+    const { container } = render(
+      <WarehouseStockTab project={projectWithPurchaseHistory()} onProjectChange={vi.fn()} canDelete />,
+    );
+
+    const table = container.querySelector('table');
+    const columns = table?.querySelectorAll('col');
+
+    expect(table).toHaveClass('min-w-[1800px]');
+    expect(columns?.[1]).toHaveClass('w-80');
+    expect(columns).toHaveLength(17);
+    expect(screen.getByText('Excluir', { selector: 'span' })).toBeInTheDocument();
+  });
+
   it('pesquisa insumos previstos pela descrição sem exibir o código', () => {
     render(<WarehouseStockTab project={projectWithPlannedMaterials()} onProjectChange={vi.fn()} />);
 
