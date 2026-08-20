@@ -459,6 +459,164 @@ export function nextRequisitionNumber(state: WarehouseState): string {
   return `REQ-${year}-${String(count).padStart(4, '0')}`;
 }
 
+/** Item de uma retirada que ainda pode retornar ao almoxarifado. */
+export interface WarehouseReturnableRequisitionItem {
+  itemKey: string;
+  code?: string;
+  description: string;
+  unit: string;
+  withdrawnQuantity: number;
+  returnedQuantity: number;
+  availableQuantity: number;
+  unitCostSnapshot?: number;
+}
+
+export interface RegisterMaterialReturnInput {
+  requisitionId: string;
+  date: string;
+  returnerName: string;
+  returnSignature?: string;
+  notes?: string;
+  /** Confirmação operacional: material íntegro e apto a retornar ao saldo. */
+  conditionConfirmed: boolean;
+  /** Chave por tentativa de envio para impedir toque duplo/reenvio. */
+  idempotencyKey: string;
+  items: Array<{ itemKey: string; quantity: number }>;
+}
+
+export interface RegisterMaterialReturnResult {
+  project: Project;
+  returnNumber: string;
+  movementIds: string[];
+}
+
+export function nextMaterialReturnNumber(state: WarehouseState): string {
+  const year = new Date().getFullYear();
+  const prefix = `DEV-${year}-`;
+  const count = state.movements.filter(movement => movement.returnNumber?.startsWith(prefix)).length + 1;
+  return `${prefix}${String(count).padStart(4, '0')}`;
+}
+
+/**
+ * Consulta exclusivamente as sobras de uma retirada já entregue. A devolução é
+ * limitada ao que foi retirado menos as devoluções ativas já registradas.
+ */
+export function getReturnableRequisitionItems(project: Project, requisitionId: string): WarehouseReturnableRequisitionItem[] {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const requisition = wh.requisitions.find(entry => entry.id === requisitionId);
+  if (!requisition) throw new Error('Retirada não encontrada.');
+  if (requisition.status !== 'entregue') throw new Error('A devolução só pode ser registrada em uma retirada entregue.');
+
+  const returnedByItem = new Map<string, number>();
+  for (const movement of wh.movements) {
+    if (movement.reversedById || movement.type !== 'devolucao' || movement.originType !== 'return' || movement.requisitionId !== requisitionId) continue;
+    returnedByItem.set(movement.itemKey, trunc2((returnedByItem.get(movement.itemKey) ?? 0) + movement.quantity));
+  }
+
+  return requisition.items.map(item => {
+    const withdrawnQuantity = Number(item.quantity) || 0;
+    const returnedQuantity = returnedByItem.get(item.itemKey) ?? 0;
+    return {
+      itemKey: item.itemKey,
+      code: item.code,
+      description: item.description,
+      unit: item.unit,
+      withdrawnQuantity,
+      returnedQuantity,
+      availableQuantity: trunc2(Math.max(0, withdrawnQuantity - returnedQuantity)),
+      unitCostSnapshot: item.unitCostSnapshot,
+    };
+  });
+}
+
+/** Registra a devolução de sobra como movimento separado e positivo, sem alterar a retirada original. */
+export function registerMaterialReturn(
+  project: Project,
+  input: RegisterMaterialReturnInput,
+  actor?: WarehouseActorInput,
+): RegisterMaterialReturnResult {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const requisition = wh.requisitions.find(entry => entry.id === input.requisitionId);
+  if (!requisition) throw new Error('Retirada não encontrada.');
+  if (requisition.status !== 'entregue') throw new Error('A devolução só pode ser registrada em uma retirada entregue.');
+  if (!input.date?.trim()) throw new Error('Informe a data da devolução.');
+  const returnerName = input.returnerName?.trim();
+  if (!returnerName) throw new Error('Informe quem devolveu os materiais.');
+  if (!input.conditionConfirmed) throw new Error('Confirme que os materiais estão aptos para retornar ao almoxarifado.');
+  const idempotencyKey = input.idempotencyKey?.trim();
+  if (!idempotencyKey) throw new Error('Não foi possível identificar esta tentativa de devolução. Tente novamente.');
+
+  const existing = wh.movements.filter(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.originId === idempotencyKey);
+  if (existing.length) {
+    return {
+      project: p,
+      returnNumber: existing[0].returnNumber ?? 'DEV-registrada',
+      movementIds: existing.map(movement => movement.id),
+    };
+  }
+
+  if (!Array.isArray(input.items) || !input.items.length) throw new Error('Informe ao menos uma quantidade para devolver.');
+  const requested = new Map<string, number>();
+  for (const item of input.items) {
+    const quantity = Number(item.quantity);
+    if (!item.itemKey || !Number.isFinite(quantity) || quantity <= 0) throw new Error('Todas as quantidades devolvidas devem ser positivas.');
+    if (requested.has(item.itemKey)) throw new Error('Cada material deve ser informado somente uma vez na devolução.');
+    requested.set(item.itemKey, quantity);
+  }
+
+  const returnable = new Map(getReturnableRequisitionItems(p, requisition.id).map(item => [item.itemKey, item] as const));
+  for (const [itemKey, quantity] of requested) {
+    const source = returnable.get(itemKey);
+    if (!source) throw new Error('Um dos materiais informados não pertence à retirada original.');
+    if (quantity > source.availableQuantity) {
+      throw new Error(`${source.description}: a quantidade devolvida (${quantity}) é maior que o saldo devolvível (${source.availableQuantity}).`);
+    }
+  }
+
+  const returnNumber = nextMaterialReturnNumber(wh);
+  const createdAt = nowISO();
+  const auditActor = normalizeWarehouseActor(actor);
+  const movementIds: string[] = [];
+  const movements = [...wh.movements];
+  for (const [itemKey, quantity] of requested) {
+    const source = returnable.get(itemKey)!;
+    const movement: WarehouseMovement = {
+      id: uid(),
+      type: 'devolucao',
+      date: input.date,
+      createdAt,
+      createdBy: auditActor,
+      itemKey,
+      itemCode: source.code,
+      itemDescription: source.description,
+      itemUnit: source.unit,
+      quantity,
+      unitPrice: source.unitCostSnapshot,
+      costSnapshot: source.unitCostSnapshot,
+      requisitionId: requisition.id,
+      originType: 'return',
+      originId: idempotencyKey,
+      chapterId: requisition.chapterId,
+      taskId: requisition.taskId,
+      teamId: requisition.teamId,
+      workerName: requisition.receiverName || requisition.requesterName,
+      workFront: requisition.workFront,
+      responsible: warehouseActorLegacyValue(actor),
+      user: warehouseActorLegacyValue(actor),
+      returnNumber,
+      returnerName,
+      returnSignature: input.returnSignature?.trim() || undefined,
+      returnCondition: 'apto_estoque',
+      notes: input.notes?.trim() || `Sobra devolvida da retirada ${requisition.number}.`,
+    };
+    movements.push(movement);
+    movementIds.push(movement.id);
+  }
+  return { project: setWh(p, { movements }), returnNumber, movementIds };
+}
+
 export function createRequisition(
   project: Project,
   input: Omit<WarehouseRequisition, 'id' | 'number' | 'createdAt' | 'status'> & { status?: WarehouseRequisition['status'] },
@@ -1173,6 +1331,7 @@ export interface WarehouseRow {
   planned: number;
   purchased: number;
   received: number;
+  returned: number;
   withdrawn: number;
   losses: number;
   adjustments: number;
@@ -1277,6 +1436,7 @@ export function linkFiscalNoteItemsToMaterials(
         planned: 0,
         purchased: 0,
         received: 0,
+        returned: 0,
         withdrawn: 0,
         losses: 0,
         adjustments: 0,
@@ -1348,6 +1508,7 @@ export function computeWarehouseRows(project: Project, opts: WarehouseRowsOption
         planned: cfg.plannedQuantity ?? 0,
         purchased: cfg.purchasedQuantity ?? 0,
         received: 0,
+        returned: 0,
         withdrawn: 0,
         losses: 0,
         adjustments: 0,
@@ -1392,6 +1553,7 @@ export function computeWarehouseRows(project: Project, opts: WarehouseRowsOption
         planned: 0,
         purchased: 0,
         received: 0,
+        returned: 0,
         withdrawn: 0,
         losses: 0,
         adjustments: 0,
@@ -1409,7 +1571,8 @@ export function computeWarehouseRows(project: Project, opts: WarehouseRowsOption
     if (m.reversedById) continue;
     const sign = movementSign(m);
     const q = m.quantity * sign;
-    if (m.type === 'entrada' || m.type === 'devolucao' || m.type === 'transferencia_entrada') r.received = trunc2(r.received + m.quantity);
+    if (m.type === 'entrada' || m.type === 'transferencia_entrada') r.received = trunc2(r.received + m.quantity);
+    if (m.type === 'devolucao') r.returned = trunc2(r.returned + m.quantity);
     if (m.type === 'retirada') r.withdrawn = trunc2(r.withdrawn + m.quantity);
     if (m.type === 'perda' || m.type === 'transferencia_saida') r.losses = trunc2(r.losses + m.quantity);
     if (m.type === 'ajuste_positivo' || m.type === 'ajuste_negativo') r.adjustments = trunc2(r.adjustments + (m.type === 'ajuste_positivo' ? m.quantity : -m.quantity));
@@ -2068,6 +2231,7 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
         planned: 0,
         purchased: Number(item.quantity || 0),
         received: 0,
+        returned: 0,
         withdrawn: 0,
         losses: 0,
         adjustments: 0,

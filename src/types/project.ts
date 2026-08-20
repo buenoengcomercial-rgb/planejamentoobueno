@@ -798,6 +798,14 @@ export interface WarehouseMovement {
   reversedById?: string;
   /** ID do diário em que foi publicado (quando aplicável). */
   publishedToDailyReportId?: string;
+  /** Referência humana da devolução de sobra vinculada a uma retirada. */
+  returnNumber?: string;
+  /** Pessoa que entregou a sobra de volta ao almoxarifado. */
+  returnerName?: string;
+  /** Assinatura opcional de quem devolveu o material. */
+  returnSignature?: string;
+  /** Confirma que a sobra retornou apta para uso no almoxarifado. */
+  returnCondition?: 'apto_estoque';
   /** Origem imutável da operação que gerou o movimento. */
   originType?: WarehouseMovementOriginType;
   originId?: string;

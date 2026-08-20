@@ -15,7 +15,7 @@ import './warehouse-visual.css';
 const WAREHOUSE_TABS = [
   { value: 'painel', label: 'Painel', icon: LayoutDashboard },
   { value: 'notas', label: 'Entrada', icon: ReceiptText },
-  { value: 'requisicoes', label: 'Retiradas', icon: ClipboardList },
+  { value: 'requisicoes', label: 'Retiradas e devoluções', icon: ClipboardList },
   { value: 'equipamentos', label: 'Equipamentos', icon: HardHat },
   { value: 'estoque', label: 'Materiais', icon: Boxes },
   { value: 'movimentos', label: 'Movimentações', icon: ArrowLeftRight },

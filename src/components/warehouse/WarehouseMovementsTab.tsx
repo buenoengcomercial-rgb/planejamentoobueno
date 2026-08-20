@@ -59,7 +59,7 @@ export default function WarehouseMovementsTab({ project }: Props) {
       if (origin !== 'all' && source.type !== origin) return false;
       if (dateFrom && movement.date < dateFrom) return false;
       if (dateTo && movement.date > dateTo) return false;
-      if (query && ![movement.itemDescription, movement.itemCode, movement.invoiceNumber, movement.workerName, movement.notes, movement.createdBy?.userName, movement.createdBy?.userEmail].some(value => value?.toLocaleLowerCase('pt-BR').includes(query))) return false;
+      if (query && ![movement.itemDescription, movement.itemCode, movement.invoiceNumber, movement.workerName, movement.returnNumber, movement.returnerName, movement.notes, movement.createdBy?.userName, movement.createdBy?.userEmail].some(value => value?.toLocaleLowerCase('pt-BR').includes(query))) return false;
       return true;
     });
     const map = new Map<string, MovementGroup>();
@@ -75,7 +75,7 @@ export default function WarehouseMovementsTab({ project }: Props) {
           key,
           originType: source.type,
           originId: source.id,
-          label: note ? `Nota ${note.invoiceNumber || note.id}` : requisition?.number || inventory?.number || `${ORIGIN_LABEL[source.type]} ${source.id?.slice(0, 8) || ''}`,
+          label: note ? `Nota ${note.invoiceNumber || note.id}` : requisition?.number || inventory?.number || (source.type === 'return' ? movement.returnNumber : undefined) || `${ORIGIN_LABEL[source.type]} ${source.id?.slice(0, 8) || ''}`,
           date: movement.date,
           movements: [],
         };
@@ -127,7 +127,7 @@ export default function WarehouseMovementsTab({ project }: Props) {
               </summary>
               <div className="border-t p-3">
                 <div className="mb-3 grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:justify-end">{group.originType === 'withdrawal' && <Button size="sm" variant="outline" className="min-h-11" onClick={() => receipt(group)}><FileDown className="mr-2 h-4 w-4" />Ver comprovante</Button>}<Button size="sm" variant="outline" className="min-h-11" disabled={!hasAttachments} onClick={() => void openAttachments(group)}><Paperclip className="mr-2 h-4 w-4" />Ver anexos</Button></div>
-                <div className="space-y-2">{group.movements.map(movement => { const sign = movementSign(movement); return <div key={movement.id} className={`grid gap-2 rounded-md border p-3 md:grid-cols-[120px_1fr_140px_220px] ${movement.reversedById ? 'opacity-60' : ''}`}><div><div className="text-xs text-muted-foreground">Tipo</div><div className="text-sm font-medium">{MOVEMENT_LABEL[movement.type]}{movement.reversedById ? ' (estornado)' : ''}</div></div><div><div className="text-xs text-muted-foreground">Material</div><div className="text-sm">{movement.itemCode ? `${movement.itemCode} · ` : ''}{movement.itemDescription}</div></div><div><div className="text-xs text-muted-foreground">Quantidade / custo</div><div className="font-mono text-sm">{sign > 0 ? '+' : sign < 0 ? '−' : ''}{movement.quantity.toLocaleString('pt-BR')} {movement.itemUnit}</div><div className="text-xs text-muted-foreground">{movement.costSnapshot != null ? `${movement.costSnapshot.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/un` : 'Cálculo incompleto'}</div></div><WarehouseAuditIdentity createdBy={movement.createdBy} updatedBy={movement.updatedBy} className="space-y-0.5 text-xs" /></div>; })}</div>
+                <div className="space-y-2">{group.movements.map(movement => { const sign = movementSign(movement); return <div key={movement.id} className={`grid gap-2 rounded-md border p-3 md:grid-cols-[120px_1fr_140px_220px] ${movement.reversedById ? 'opacity-60' : ''}`}><div><div className="text-xs text-muted-foreground">Tipo</div><div className="text-sm font-medium">{MOVEMENT_LABEL[movement.type]}{movement.reversedById ? ' (estornado)' : ''}</div>{movement.returnNumber && <div className="mt-1 font-mono text-xs text-success">{movement.returnNumber}</div>}</div><div><div className="text-xs text-muted-foreground">Material</div><div className="text-sm">{movement.itemCode ? `${movement.itemCode} · ` : ''}{movement.itemDescription}</div>{movement.returnerName && <div className="mt-1 text-xs text-muted-foreground">Devolvido por: {movement.returnerName}</div>}</div><div><div className="text-xs text-muted-foreground">Quantidade / custo</div><div className="font-mono text-sm">{sign > 0 ? '+' : sign < 0 ? '−' : ''}{movement.quantity.toLocaleString('pt-BR')} {movement.itemUnit}</div><div className="text-xs text-muted-foreground">{movement.costSnapshot != null ? `${movement.costSnapshot.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/un` : 'Cálculo incompleto'}</div></div><WarehouseAuditIdentity createdBy={movement.createdBy} updatedBy={movement.updatedBy} className="space-y-0.5 text-xs" /></div>; })}</div>
               </div>
             </details>
           );

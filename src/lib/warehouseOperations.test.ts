@@ -13,6 +13,8 @@ import {
   emptyWarehouse,
   issueCustodyTerm,
   panelSummary,
+  getReturnableRequisitionItems,
+  registerMaterialReturn,
   removeEquipment,
   returnCustodyEquipment,
   setInventoryCount,
@@ -93,6 +95,43 @@ describe('operação integrada do almoxarifado', () => {
     expect(result.project.warehouse!.requisitions[0].deliveryAttachments).toBeUndefined();
     expect(result.project.warehouse!.movements.find(movement => movement.type === 'retirada')).toMatchObject({ quantity: 2 });
     expect(computeWarehouseRows(result.project, { includeManual: true })[0].balance).toBe(18);
+  });
+
+  it('registra devoluções parciais como eventos separados, recompõe o saldo e preserva o custo da retirada', () => {
+    const delivered = createAndDeliverRequisition(withStock(), {
+      date: '2026-08-17', chapterId: 'chapter-1', chapterName: '1 Prédio 1', teamId: 'alpha', teamName: 'Alpha',
+      receiverName: 'Equipe Alpha', requesterName: 'Equipe Alpha', signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'retorno-origem',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 4 }],
+    }, { actor });
+    const requisition = delivered.project.warehouse!.requisitions[0];
+    const result = registerMaterialReturn(delivered.project, {
+      requisitionId: requisition.id, date: '2026-08-18', returnerName: 'João da equipe', returnSignature: 'assinatura-opcional',
+      conditionConfirmed: true, idempotencyKey: 'dev-1', items: [{ itemKey: 'material-1', quantity: 1.5 }],
+    }, actor);
+
+    const returned = result.project.warehouse!.movements.find(movement => movement.originId === 'dev-1')!;
+    expect(result.returnNumber).toMatch(/^DEV-\d{4}-0001$/);
+    expect(returned).toMatchObject({ type: 'devolucao', originType: 'return', requisitionId: requisition.id, quantity: 1.5, costSnapshot: 15, chapterId: 'chapter-1', teamId: 'alpha', returnerName: 'João da equipe', createdBy: actor });
+    expect(computeWarehouseRows(result.project, { includeManual: true })[0]).toMatchObject({ received: 20, returned: 1.5, withdrawn: 4, balance: 17.5 });
+    expect(computeWarehouseUsageByChapter(result.project)).toMatchObject({ totalConsumedCost: 60 });
+    expect(getReturnableRequisitionItems(result.project, requisition.id)[0]).toMatchObject({ withdrawnQuantity: 4, returnedQuantity: 1.5, availableQuantity: 2.5 });
+
+    const repeated = registerMaterialReturn(result.project, {
+      requisitionId: requisition.id, date: '2026-08-18', returnerName: 'João da equipe', conditionConfirmed: true, idempotencyKey: 'dev-1', items: [{ itemKey: 'material-1', quantity: 1.5 }],
+    }, actor);
+    expect(repeated.project.warehouse!.movements.filter(movement => movement.originId === 'dev-1')).toHaveLength(1);
+  });
+
+  it('bloqueia devoluções fora da retirada, acima do saldo devolvível ou sem confirmação operacional', () => {
+    const delivered = createAndDeliverRequisition(withStock(), {
+      date: '2026-08-17', chapterId: 'chapter-1', teamId: 'alpha', receiverName: 'Equipe Alpha', requesterName: 'Equipe Alpha', signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'retorno-validacao',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 2 }],
+    }, { actor });
+    const requisition = delivered.project.warehouse!.requisitions[0];
+    const base = { requisitionId: requisition.id, date: '2026-08-18', returnerName: 'João', conditionConfirmed: true, idempotencyKey: 'dev-validacao' };
+    expect(() => registerMaterialReturn(delivered.project, { ...base, items: [{ itemKey: 'externo', quantity: 1 }] }, actor)).toThrow(/não pertence/i);
+    expect(() => registerMaterialReturn(delivered.project, { ...base, idempotencyKey: 'dev-acima', items: [{ itemKey: 'material-1', quantity: 3 }] }, actor)).toThrow(/maior que o saldo devolvível/i);
+    expect(() => registerMaterialReturn(delivered.project, { ...base, idempotencyKey: 'dev-sem-confirmacao', conditionConfirmed: false, items: [{ itemKey: 'material-1', quantity: 1 }] }, actor)).toThrow(/aptos/i);
   });
 
   it('mantém vários insumos previstos no mesmo material canônico', () => {

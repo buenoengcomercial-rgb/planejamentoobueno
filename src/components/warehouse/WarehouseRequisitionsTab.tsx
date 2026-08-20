@@ -1,15 +1,18 @@
-import { Fragment, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type { Project, WarehouseAuditActor, WarehouseRequisition, WarehouseRequisitionItem } from '@/types/project';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Camera, Check, ChevronDown, FileDown, HardHat, History, ImagePlus, PackageOpen, Plus, Search, Trash2, X } from 'lucide-react';
+import { Camera, Check, ChevronDown, FileDown, HardHat, History, ImagePlus, PackageOpen, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
 import {
   computeWarehouseRows,
   createAndDeliverRequisition,
   ensureWarehouse,
   hardDeleteRequisition,
+  getReturnableRequisitionItems,
   makeAttachment,
+  registerMaterialReturn,
   uidWarehouse,
   warehouseActorName,
 } from '@/lib/warehouse';
@@ -97,6 +100,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
   const [photos, setPhotos] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<WithdrawalErrors>({});
+  const [returnTarget, setReturnTarget] = useState<WarehouseRequisition | null>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
 
@@ -118,7 +122,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
   };
 
   const deleteRequisition = (requisition: WarehouseRequisition) => confirm(
-    { title: 'Excluir retirada definitivamente?', description: 'A retirada, seus comprovantes, movimentos e o bloco gerado no Diário de Obra serão removidos.', confirmLabel: 'Excluir definitivamente' },
+    { title: 'Excluir retirada definitivamente?', description: 'A retirada, as devoluções vinculadas, seus comprovantes, movimentos e o bloco gerado no Diário de Obra serão removidos.', confirmLabel: 'Excluir definitivamente' },
     async () => {
       onProjectChange(hardDeleteRequisition(project, requisition.id));
       try { await deleteWarehouseAttachments(requisition.deliveryAttachments); } catch { toast.warning('A retirada foi excluída, mas houve falha ao remover um anexo do Storage.'); }
@@ -267,16 +271,17 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
       )}
 
       <section className="overflow-hidden rounded-xl border bg-card">
-          <WarehouseSectionHeader icon={History} title="Histórico de retiradas" description={`${wh.requisitions.length} registro(s)`} tone="neutral" />
+          <WarehouseSectionHeader icon={History} title="Histórico de retiradas e devoluções" description={`${wh.requisitions.length} retirada(s)`} tone="neutral" />
           <div className="space-y-2 p-2 md:hidden">{wh.requisitions.slice().sort((a, b) => b.date.localeCompare(a.date)).map(requisition => {
             const expanded = activeId === requisition.id;
-            return <article key={requisition.id} className={`rounded-md border ${expanded ? 'border-primary bg-primary/5' : ''}`}><button type="button" className="w-full p-3 text-left" onClick={() => setActiveId(current => current === requisition.id ? null : requisition.id)} aria-expanded={expanded}><div className="flex justify-between gap-2"><strong>{requisition.number}</strong><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></div><div className="mt-1 text-sm">{requisition.receiverName || requisition.requesterName || '—'}</div><div className="text-xs text-muted-foreground">{requisition.chapterName || requisition.taskName || 'Registro legado'} · {requisition.items.length} item(ns) · {requisition.date}</div></button>{expanded && <div className="border-t p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} onDelete={() => deleteRequisition(requisition)} /></div>}</article>;
+            return <article key={requisition.id} className={`rounded-md border ${expanded ? 'border-primary bg-primary/5' : ''}`}><button type="button" className="w-full p-3 text-left" onClick={() => setActiveId(current => current === requisition.id ? null : requisition.id)} aria-expanded={expanded}><div className="flex justify-between gap-2"><strong>{requisition.number}</strong><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></div><div className="mt-1 text-sm">{requisition.receiverName || requisition.requesterName || '—'}</div><div className="text-xs text-muted-foreground">{requisition.chapterName || requisition.taskName || 'Registro legado'} · {requisition.items.length} item(ns) · {requisition.date}</div></button>{expanded && <div className="border-t p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} /></div>}</article>;
           })}{!wh.requisitions.length && <WarehouseEmptyState message="Nenhuma retirada registrada" hint="Use Nova retirada para começar." />}</div>
           <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[980px] text-xs"><thead className="bg-muted"><tr><th className="w-10 p-2"><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Prédio / capítulo</th><th className="p-2 text-left">Equipe</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead><tbody>{wh.requisitions.slice().sort((a, b) => b.date.localeCompare(a.date)).map(requisition => {
             const expanded = activeId === requisition.id;
-            return <Fragment key={requisition.id}><tr className={`cursor-pointer border-t whitespace-nowrap hover:bg-muted/30 ${expanded ? 'bg-primary/10' : ''}`} onClick={() => setActiveId(current => current === requisition.id ? null : requisition.id)}><td className="p-2"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></td><td className="p-2 font-mono">{requisition.number}</td><td className="p-2">{requisition.date}</td><td className="p-2">{requisition.receiverName || requisition.requesterName || '—'}</td><td className="max-w-72 truncate p-2" title={requisition.chapterName || requisition.taskName}>{requisition.chapterName || requisition.taskName || 'Registro legado'}</td><td className="p-2">{requisition.teamName || requisition.teamId || '—'}</td><td className="p-2 text-center">{requisition.items.length}</td><td className="p-2"><WarehouseStatusBadge label={requisition.status === 'rascunho' ? 'Pendente legado' : 'Entregue'} tone={requisition.status === 'rascunho' ? 'warning' : 'success'} /></td><td className="p-2"><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} className="space-y-0.5" /></td></tr>{expanded && <tr className="border-t bg-muted/10"><td colSpan={9} className="p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} onDelete={() => deleteRequisition(requisition)} /></td></tr>}</Fragment>;
+            return <Fragment key={requisition.id}><tr className={`cursor-pointer border-t whitespace-nowrap hover:bg-muted/30 ${expanded ? 'bg-primary/10' : ''}`} onClick={() => setActiveId(current => current === requisition.id ? null : requisition.id)}><td className="p-2"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></td><td className="p-2 font-mono">{requisition.number}</td><td className="p-2">{requisition.date}</td><td className="p-2">{requisition.receiverName || requisition.requesterName || '—'}</td><td className="max-w-72 truncate p-2" title={requisition.chapterName || requisition.taskName}>{requisition.chapterName || requisition.taskName || 'Registro legado'}</td><td className="p-2">{requisition.teamName || requisition.teamId || '—'}</td><td className="p-2 text-center">{requisition.items.length}</td><td className="p-2"><WarehouseStatusBadge label={requisition.status === 'rascunho' ? 'Pendente legado' : 'Entregue'} tone={requisition.status === 'rascunho' ? 'warning' : 'success'} /></td><td className="p-2"><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} className="space-y-0.5" /></td></tr>{expanded && <tr className="border-t bg-muted/10"><td colSpan={9} className="p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} /></td></tr>}</Fragment>;
           })}{!wh.requisitions.length && <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">Nenhuma retirada registrada.</td></tr>}</tbody></table></div>
       </section>
+      <MaterialReturnDialog project={project} requisition={returnTarget} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setReturnTarget(null)} />
       {confirmDialog}
     </div>
   );
@@ -287,6 +292,77 @@ function PhotoPreview({ file, onRemove }: { file: File; onRemove: () => void }) 
   return <div className="relative aspect-square overflow-hidden rounded-md border"><img src={url} alt={file.name} className="h-full w-full object-cover" onLoad={() => URL.revokeObjectURL(url)} /><Button type="button" size="icon" variant="destructive" className="absolute right-1 top-1 h-8 w-8" onClick={onRemove} aria-label={`Remover ${file.name}`}><X className="h-4 w-4" /></Button></div>;
 }
 
-function WithdrawalDetails({ project, requisition, canDelete, onDelete }: { project: Project; requisition: WarehouseRequisition; canDelete: boolean; onDelete: () => void }) {
-  return <div className="space-y-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="text-sm"><strong>{requisition.number}</strong> · {requisition.receiverName || requisition.requesterName || '—'} · {requisition.deliveryAttachments?.length || 0} foto(s)</div><div className="flex gap-2"><Button size="sm" variant="outline" className="min-h-11" onClick={() => generateRequisitionReceipt(project, requisition)}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{canDelete && <Button size="sm" variant="destructive" className="min-h-11" onClick={onDelete}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>}</div></div><dl className="grid gap-2 text-sm sm:grid-cols-3"><div><dt className="text-xs text-muted-foreground">Prédio / capítulo</dt><dd>{requisition.chapterName || requisition.taskName || 'Registro legado'}</dd></div><div><dt className="text-xs text-muted-foreground">Equipe</dt><dd>{requisition.teamName || requisition.teamId || '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Observação</dt><dd>{requisition.notes || '—'}</dd></div></dl><div className="overflow-x-auto"><table className="w-full min-w-[520px] text-xs"><thead><tr><th className="p-2 text-left">Código</th><th className="p-2 text-left">Material</th><th className="p-2 text-left">Unidade</th><th className="p-2 text-right">Quantidade</th></tr></thead><tbody>{requisition.items.map(item => <tr key={item.itemKey} className="border-t"><td className="p-2">{item.code || '—'}</td><td className="p-2">{item.description}</td><td className="p-2">{item.unit}</td><td className="p-2 text-right">{item.quantity.toLocaleString('pt-BR')}</td></tr>)}</tbody></table></div><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} className="rounded-md bg-muted/40 p-2 text-xs" /></div>;
+function WithdrawalDetails({ project, requisition, canDelete, onDelete, onReturn }: { project: Project; requisition: WarehouseRequisition; canDelete: boolean; onDelete: () => void; onReturn: () => void }) {
+  const returns = ensureWarehouse(project).warehouse!.movements.filter(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.requisitionId === requisition.id && !movement.reversedById);
+  const hasReturnable = requisition.status === 'entregue' && getReturnableRequisitionItems(project, requisition.id).some(item => item.availableQuantity > 0);
+  return <div className="space-y-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="text-sm"><strong>{requisition.number}</strong> · {requisition.receiverName || requisition.requesterName || '—'} · {requisition.deliveryAttachments?.length || 0} foto(s)</div><div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" className="min-h-11" onClick={() => generateRequisitionReceipt(project, requisition)}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{hasReturnable && <Button size="sm" className="min-h-11" onClick={onReturn}><RotateCcw className="mr-1 h-4 w-4" />Registrar devolução</Button>}{canDelete && <Button size="sm" variant="destructive" className="min-h-11" onClick={onDelete}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>}</div></div><dl className="grid gap-2 text-sm sm:grid-cols-3"><div><dt className="text-xs text-muted-foreground">Prédio / capítulo</dt><dd>{requisition.chapterName || requisition.taskName || 'Registro legado'}</dd></div><div><dt className="text-xs text-muted-foreground">Equipe</dt><dd>{requisition.teamName || requisition.teamId || '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Observação</dt><dd>{requisition.notes || '—'}</dd></div></dl><div className="overflow-x-auto"><table className="w-full min-w-[520px] text-xs"><thead><tr><th className="p-2 text-left">Código</th><th className="p-2 text-left">Material</th><th className="p-2 text-left">Unidade</th><th className="p-2 text-right">Quantidade</th></tr></thead><tbody>{requisition.items.map(item => <tr key={item.itemKey} className="border-t"><td className="p-2">{item.code || '—'}</td><td className="p-2">{item.description}</td><td className="p-2">{item.unit}</td><td className="p-2 text-right">{item.quantity.toLocaleString('pt-BR')}</td></tr>)}</tbody></table></div>{returns.length > 0 && <div className="rounded-lg border border-success/30 bg-success/5 p-3"><div className="mb-2 text-sm font-bold text-success">Devoluções registradas</div><div className="space-y-1 text-sm">{Array.from(new Map(returns.map(movement => [movement.returnNumber || movement.id, movement])).values()).map(movement => <div key={movement.id}><strong>{movement.returnNumber || 'Devolução'}</strong> · {movement.date} · devolvido por {movement.returnerName || 'Não informado'}</div>)}</div></div>}<WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} className="rounded-md bg-muted/40 p-2 text-xs" /></div>;
+}
+
+function MaterialReturnDialog({ project, requisition, auditActor, onProjectChange, onClose }: {
+  project: Project;
+  requisition: WarehouseRequisition | null;
+  auditActor?: WarehouseAuditActor;
+  onProjectChange: (project: Project) => void;
+  onClose: () => void;
+}) {
+  const returnable = useMemo(() => requisition ? getReturnableRequisitionItems(project, requisition.id) : [], [project, requisition]);
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [returnerName, setReturnerName] = useState('');
+  const [signature, setSignature] = useState<string | undefined>();
+  const [notes, setNotes] = useState('');
+  const [conditionConfirmed, setConditionConfirmed] = useState(false);
+  const [quantities, setQuantities] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [idempotencyKey, setIdempotencyKey] = useState(() => uidWarehouse());
+
+  const reset = () => {
+    setDate(new Date().toISOString().slice(0, 10));
+    setReturnerName(requisition?.receiverName || requisition?.requesterName || '');
+    setSignature(undefined);
+    setNotes('');
+    setConditionConfirmed(false);
+    setQuantities({});
+    setIdempotencyKey(uidWarehouse());
+  };
+
+  useEffect(() => {
+    if (requisition) reset();
+  // A abertura de outra retirada sempre inicia um novo formulário e chave de envio.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requisition?.id]);
+
+  const handleOpenChange = (open: boolean) => {
+    if (!open && !saving) { reset(); onClose(); }
+  };
+
+  const submit = () => {
+    if (!requisition) return;
+    const items = returnable.flatMap(item => {
+      const quantity = Number((quantities[item.itemKey] ?? '').replace(',', '.'));
+      return quantity > 0 ? [{ itemKey: item.itemKey, quantity }] : [];
+    });
+    try {
+      setSaving(true);
+      const result = registerMaterialReturn(project, {
+        requisitionId: requisition.id,
+        date,
+        returnerName,
+        returnSignature: signature,
+        notes,
+        conditionConfirmed,
+        idempotencyKey,
+        items,
+      }, auditActor);
+      onProjectChange(result.project);
+      toast.success(`Devolução ${result.returnNumber} registrada e saldo recomposto.`);
+      reset();
+      onClose();
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <Dialog open={!!requisition} onOpenChange={handleOpenChange}><DialogContent className="max-h-[90dvh] max-w-3xl overflow-y-auto p-4 sm:p-6"><DialogHeader><DialogTitle>Registrar devolução de sobra</DialogTitle><DialogDescription>Retorno vinculado à retirada {requisition?.number}. Apenas materiais daquela retirada podem voltar ao almoxarifado.</DialogDescription></DialogHeader>{requisition && <div className="space-y-4"><div className="grid gap-3 sm:grid-cols-2"><WarehouseField label="Data da devolução"><Input className="min-h-11 text-base" type="date" value={date} onChange={event => setDate(event.target.value)} /></WarehouseField><WarehouseField label="Quem devolveu"><Input className="min-h-11 text-base" value={returnerName} onChange={event => setReturnerName(event.target.value)} placeholder="Nome de quem devolveu" /></WarehouseField></div><div className="rounded-lg border bg-muted/30 p-3"><div className="mb-2 text-sm font-bold">Materiais devolvíveis</div><div className="space-y-2">{returnable.map(item => <div key={item.itemKey} className="grid gap-2 rounded-lg border bg-background p-3 sm:grid-cols-[1fr_140px]"><div className="min-w-0"><div className="font-medium">{item.description}</div><div className="text-xs text-muted-foreground">{item.code || 'Sem código'} · {item.unit}</div><div className="mt-2 grid grid-cols-3 gap-2 text-xs"><span>Retirado<br /><strong>{item.withdrawnQuantity.toLocaleString('pt-BR')}</strong></span><span>Já devolvido<br /><strong>{item.returnedQuantity.toLocaleString('pt-BR')}</strong></span><span>Máx. devolvível<br /><strong className="text-primary">{item.availableQuantity.toLocaleString('pt-BR')}</strong></span></div></div><WarehouseField label={`Devolver (${item.unit})`}><Input className="min-h-11 text-base" type="number" min="0" max={item.availableQuantity} step="any" value={quantities[item.itemKey] ?? ''} onChange={event => setQuantities(current => ({ ...current, [item.itemKey]: event.target.value }))} aria-label={`Quantidade devolvida de ${item.description}`} /></WarehouseField></div>)}{!returnable.some(item => item.availableQuantity > 0) && <WarehouseEmptyState message="Não há saldo disponível para devolução" />}</div></div><label className="flex min-h-11 items-start gap-3 rounded-lg border border-success/30 bg-success/5 p-3 text-sm"><input className="mt-1 h-5 w-5 accent-primary" type="checkbox" checked={conditionConfirmed} onChange={event => setConditionConfirmed(event.target.checked)} /><span><strong>Material apto a retornar ao estoque</strong><br /><span className="text-muted-foreground">Não use este fluxo para material avariado, perdido ou descartado.</span></span></label><div className="rounded-lg border bg-muted/30 p-3"><SignaturePad label="Assinatura de quem devolveu (opcional)" value={signature} onChange={setSignature} /></div><WarehouseField label="Observação" optional><Input className="min-h-11 text-base" value={notes} onChange={event => setNotes(event.target.value)} placeholder="Ex.: sobra da execução no prédio A" /></WarehouseField></div>}<DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" className="min-h-11" disabled={saving} onClick={() => handleOpenChange(false)}>Cancelar</Button><Button className="min-h-11" disabled={saving || !requisition || !returnable.some(item => item.availableQuantity > 0)} onClick={submit}><RotateCcw className="mr-2 h-4 w-4" />{saving ? 'Registrando...' : 'Confirmar devolução'}</Button></DialogFooter></DialogContent></Dialog>;
 }
