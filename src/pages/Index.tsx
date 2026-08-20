@@ -452,6 +452,7 @@ export default function Index() {
       if (!previous) return previous;
       const synchronized = synchronizeProjectScheduleToWorkStart(previous);
       if (synchronized === previous) return previous;
+      console.log('[DBG] workStart sync applied', previous.uiState?.ganttWorkStartDateApplied, '->', synchronized.uiState?.ganttWorkStartDateApplied);
       skipNextAutoSaveRef.current = false;
       rawProjectRef.current = synchronized;
       if (projectHasLocalChanges(synchronized, lastSavedProjectJsonRef.current)) {
@@ -544,7 +545,7 @@ export default function Index() {
       return;
     }
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-    console.log('[DBG] arm save timer');
+    console.log('[DBG] arm save timer', JSON.stringify(rawProject.uiState ?? {}).slice(0,200));
     setSaveStatus('saving');
     saveTimerRef.current = window.setTimeout(async () => {
       try {
