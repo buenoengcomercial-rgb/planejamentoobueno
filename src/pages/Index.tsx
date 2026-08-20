@@ -377,6 +377,7 @@ export default function Index() {
     options: { retainDraftUntilVerified?: boolean } = {},
   ) => {
     const nextJson = serializeProject(projectToSave);
+    console.log('[DBG] persistProject', nextJson.length, nextJson === lastSavedProjectJsonRef.current);
     if (nextJson === lastSavedProjectJsonRef.current) {
       if (!options.retainDraftUntilVerified) clearProjectDraft(projectToSave.id);
       setLastCloudConfirmedAt(new Date().toISOString());
@@ -543,10 +544,12 @@ export default function Index() {
       return;
     }
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    console.log('[DBG] arm save timer');
     setSaveStatus('saving');
     saveTimerRef.current = window.setTimeout(async () => {
       try {
         saveTimerRef.current = null;
+        console.log('[DBG] timer fired -> persist');
         await persistProject(rawProject, orgId);
       } catch (e) {
         console.warn(e);
