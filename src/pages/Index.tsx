@@ -545,7 +545,14 @@ export default function Index() {
       return;
     }
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-    console.log('[DBG] arm save timer', JSON.stringify(rawProject.uiState ?? {}).slice(0,200));
+    { const w = window as any; w.__dbg = w.__dbg || {}; const d = w.__dbg;
+      const changed = [
+        d.p !== rawProject && 'rawProject', d.u !== user && 'user', d.o !== orgId && 'orgId',
+        d.c !== canPersistProject && 'canPersist', d.pp !== persistProject && 'persistProject', d.h !== handleCloudConflict && 'conflict',
+      ].filter(Boolean);
+      const same = d.p ? JSON.stringify(d.p) === JSON.stringify(rawProject) : null;
+      d.p = rawProject; d.u = user; d.o = orgId; d.c = canPersistProject; d.pp = persistProject; d.h = handleCloudConflict;
+      console.log('[DBG] arm', changed.join(','), 'jsonEqual=', same); }
     setSaveStatus('saving');
     saveTimerRef.current = window.setTimeout(async () => {
       try {
