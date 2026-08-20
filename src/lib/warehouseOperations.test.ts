@@ -7,16 +7,20 @@ import {
   closeInventorySession,
   computeWarehouseRows,
   computeWarehouseUsageByChapter,
+  createEquipmentGroup,
+  deleteEquipmentGroup,
   createAndDeliverRequisition,
   createInventorySession,
   custodyTermEquipmentItems,
   emptyWarehouse,
+  hardDeleteEquipment,
   issueCustodyTerm,
   panelSummary,
   getReturnableRequisitionItems,
   registerMaterialReturn,
   removeEquipment,
   returnCustodyEquipment,
+  updateEquipmentGroup,
   setInventoryCount,
   upsertWarehouseProjectMaterialLink,
   warehouseValuationForItem,
@@ -170,6 +174,29 @@ describe('operação integrada do almoxarifado', () => {
     const archived = removeEquipment(first, first.warehouse!.equipments[0].id, actor);
     expect(archived.warehouse!.equipments).toHaveLength(1);
     expect(archived.warehouse!.equipments[0]).toMatchObject({ status: 'arquivado', updatedBy: actor });
+  });
+
+  it('mantém grupos manuais separados da descrição e limpa vínculos na exclusão definitiva', () => {
+    let current = addEquipment(project(), { name: 'Adaptador', description: 'Adaptador de mandril', serial: 'SER-001', photos: [photo] }, actor);
+    current = addEquipment(current, { name: 'Suporte', description: 'Suporte para serra copo', serial: 'SER-002', photos: [photo] }, actor);
+    const [first, second] = current.warehouse!.equipments;
+
+    current = createEquipmentGroup(current, { name: 'Adaptadores de mandril', equipmentIds: [first.id, second.id] }, actor);
+    const group = current.warehouse!.equipmentGroups[0];
+    expect(group).toMatchObject({ name: 'Adaptadores de mandril', equipmentIds: [first.id, second.id], createdBy: actor });
+
+    current = updateEquipmentGroup(current, group.id, { name: 'Adaptadores e suportes', equipmentIds: [first.id, second.id] }, actor);
+    expect(current.warehouse!.equipmentGroups[0]).toMatchObject({ name: 'Adaptadores e suportes', updatedBy: actor });
+
+    const archived = removeEquipment(current, first.id, actor);
+    expect(archived.warehouse!.equipmentGroups[0].equipmentIds).toContain(first.id);
+
+    const deleted = hardDeleteEquipment(archived, first.id);
+    expect(deleted.warehouse!.equipmentGroups[0].equipmentIds).toEqual([second.id]);
+    expect(() => createEquipmentGroup(deleted, { name: 'Inválido', equipmentIds: [second.id] }, actor)).toThrow(/ao menos dois patrimônios/i);
+
+    const ungrouped = deleteEquipmentGroup(current, group.id);
+    expect(ungrouped.warehouse!.equipmentGroups).toEqual([]);
   });
 
   it('emite cautela agrupada e controla devoluções parciais por equipamento', () => {

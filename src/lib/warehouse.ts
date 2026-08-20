@@ -8,6 +8,7 @@ import type {
   WarehouseRequisitionItem,
   CustodyTerm,
   CustodyTermEquipmentItem,
+  WarehouseEquipmentGroup,
   CustodyEquipmentStatus,
   CustodyTermStatus,
   Equipment,
@@ -192,6 +193,7 @@ export function emptyWarehouse(): WarehouseState {
     movements: [],
     requisitions: [],
     equipments: [],
+    equipmentGroups: [],
     custodyTerms: [],
     fiscalNotes: [],
     materialLinks: [],
@@ -228,6 +230,7 @@ function normalizeWarehouse(state?: Partial<WarehouseState>): WarehouseState {
     movements: state?.movements ?? [],
     requisitions: state?.requisitions ?? [],
     equipments: state?.equipments ?? [],
+    equipmentGroups: normalizeEquipmentGroups(state?.equipmentGroups ?? [], state?.equipments ?? []),
     custodyTerms: state?.custodyTerms ?? [],
     fiscalNotes: normalizeFiscalNotes(state?.fiscalNotes ?? []),
     materialLinks: state?.materialLinks ?? [],
@@ -1266,6 +1269,61 @@ export function removeMovement(project: Project, movementId: string): Project {
   return setWh(p, { movements, items });
 }
 
+function normalizeEquipmentGroups(groups: WarehouseEquipmentGroup[], equipments: Equipment[]): WarehouseEquipmentGroup[] {
+  const validIds = new Set(equipments.map(equipment => equipment.id));
+  const usedEquipmentIds = new Set<string>();
+  return groups.flatMap(group => {
+    const equipmentIds = [...new Set(group.equipmentIds.filter(id => validIds.has(id) && !usedEquipmentIds.has(id)))];
+    equipmentIds.forEach(id => usedEquipmentIds.add(id));
+    if (!group.id || !group.name.trim() || !equipmentIds.length) return [];
+    return [{ ...group, name: group.name.trim(), equipmentIds }];
+  });
+}
+
+function validateEquipmentGroupMembers(wh: WarehouseState, equipmentIds: string[], ignoredGroupId?: string) {
+  const uniqueIds = [...new Set(equipmentIds)];
+  if (uniqueIds.length < 2) throw new Error('Selecione ao menos dois patrimônios para formar um grupo.');
+  const knownIds = new Set(wh.equipments.map(equipment => equipment.id));
+  if (uniqueIds.some(id => !knownIds.has(id))) throw new Error('Um dos patrimônios selecionados não existe mais nesta obra.');
+  const assignedIds = new Set((wh.equipmentGroups ?? [])
+    .filter(group => group.id !== ignoredGroupId)
+    .flatMap(group => group.equipmentIds));
+  if (uniqueIds.some(id => assignedIds.has(id))) throw new Error('Um dos patrimônios selecionados já pertence a outro grupo.');
+  return uniqueIds;
+}
+
+export function createEquipmentGroup(project: Project, data: { name: string; equipmentIds: string[] }, actor?: WarehouseActorInput): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const name = data.name.trim();
+  if (!name) throw new Error('Informe o nome do grupo.');
+  const equipmentIds = validateEquipmentGroupMembers(wh, data.equipmentIds);
+  const createdAt = nowISO();
+  const group: WarehouseEquipmentGroup = { id: uid(), name, equipmentIds, createdAt, createdBy: normalizeWarehouseActor(actor) };
+  return setWh(p, { equipmentGroups: [...wh.equipmentGroups, group] });
+}
+
+export function updateEquipmentGroup(project: Project, groupId: string, data: { name: string; equipmentIds: string[] }, actor?: WarehouseActorInput): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const group = wh.equipmentGroups.find(entry => entry.id === groupId);
+  if (!group) throw new Error('Grupo de patrimônios não encontrado.');
+  const name = data.name.trim();
+  if (!name) throw new Error('Informe o nome do grupo.');
+  const equipmentIds = validateEquipmentGroupMembers(wh, data.equipmentIds, groupId);
+  return setWh(p, {
+    equipmentGroups: wh.equipmentGroups.map(entry => entry.id === groupId
+      ? { ...entry, name, equipmentIds, updatedAt: nowISO(), updatedBy: normalizeWarehouseActor(actor) ?? entry.updatedBy }
+      : entry),
+  });
+}
+
+export function deleteEquipmentGroup(project: Project, groupId: string): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  return setWh(p, { equipmentGroups: wh.equipmentGroups.filter(group => group.id !== groupId) });
+}
+
 /** Exclui uma retirada inteira e os movimentos/espelho no Diário de Obra que ela gerou. */
 export function hardDeleteRequisition(project: Project, requisitionId: string): Project {
   const p = ensureWarehouse(project);
@@ -2096,6 +2154,9 @@ export function hardDeleteEquipment(project: Project, id: string): Project {
   });
   return setWh(p, {
     equipments: wh.equipments.filter(equipment => equipment.id !== id),
+    equipmentGroups: wh.equipmentGroups
+      .map(group => ({ ...group, equipmentIds: group.equipmentIds.filter(equipmentId => equipmentId !== id) }))
+      .filter(group => group.equipmentIds.length > 0),
     custodyTerms,
   });
 }

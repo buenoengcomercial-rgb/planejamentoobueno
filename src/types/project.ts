@@ -1026,6 +1026,17 @@ export interface Equipment {
   archivedAt?: string;
 }
 
+/** Agrupamento visual persistente de patrimônios, sem alterar cada equipamento. */
+export interface WarehouseEquipmentGroup {
+  id: string;
+  name: string;
+  equipmentIds: string[];
+  createdAt: string;
+  updatedAt?: string;
+  createdBy?: WarehouseAuditActor;
+  updatedBy?: WarehouseAuditActor;
+}
+
 export type CustodyEquipmentStatus =
   | 'em_uso'
   | 'devolvido'
@@ -1148,6 +1159,7 @@ export interface WarehouseState {
   movements: WarehouseMovement[];
   requisitions: WarehouseRequisition[];
   equipments: Equipment[];
+  equipmentGroups: WarehouseEquipmentGroup[];
   custodyTerms: CustodyTerm[];
   fiscalNotes?: WarehouseFiscalNote[];
   materialLinks?: WarehouseProjectMaterialLink[];

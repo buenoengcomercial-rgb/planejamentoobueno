@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Equipment, Project } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
@@ -203,22 +203,36 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     ]);
   });
 
-  it('agrupa somente patrimônios com descrição, marca e modelo iguais sem ocultar séries', () => {
+  it('cria e mantém um grupo manual mesmo quando as descrições dos patrimônios divergem', () => {
     const projectWithDuplicates = projectWithEquipmentList([
-      { id: 'equipment-1', name: 'Bateria', description: 'Bateria Makita XGT 4.0Ah', internalCode: 'EQ-2026-0001', brand: 'Makita', model: 'BL4040', serial: 'SERIE-01' },
-      { id: 'equipment-2', name: 'Bateria', description: 'Bateria Makita XGT 4.0Ah', internalCode: 'EQ-2026-0002', brand: 'Makita', model: 'BL4040', serial: 'SERIE-02' },
-      { id: 'equipment-3', name: 'Bateria', description: 'Bateria Makita XGT 4.0Ah', internalCode: 'EQ-2026-0003', brand: 'Makita', model: 'BL4050', serial: 'SERIE-03' },
+      { id: 'equipment-1', name: 'Adaptador', description: 'Adaptador de mandril com haste SDS', internalCode: 'EQ-2026-0001', serial: 'SERIE-01' },
+      { id: 'equipment-2', name: 'Suporte', description: 'Suporte adaptador para serra copo', internalCode: 'EQ-2026-0002', serial: 'SERIE-02' },
+      { id: 'equipment-3', name: 'Bateria', description: 'Bateria Makita XGT 4.0Ah', internalCode: 'EQ-2026-0003', serial: 'SERIE-03' },
     ]);
-    render(<WarehouseEquipmentsTab project={projectWithDuplicates} onProjectChange={vi.fn()} />);
+    const onProjectChange = vi.fn();
+    const view = render(<WarehouseEquipmentsTab project={projectWithDuplicates} onProjectChange={onProjectChange} />);
 
-    fireEvent.click(screen.getByRole('switch', { name: 'Agrupar equipamentos iguais' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Organizar grupos' }));
+    expect(screen.getAllByTestId('equipment-card')).toHaveLength(3);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Selecionar Adaptador de mandril com haste SDS' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Selecionar Suporte adaptador para serra copo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Criar grupo' }));
 
-    expect(screen.getByText('2 patrimônios iguais')).toBeInTheDocument();
-    expect(screen.getAllByTestId('equipment-card')).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Ver 2 patrimônios' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Nome do grupo'), { target: { value: 'Adaptadores de mandril' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Criar grupo' }));
+
+    const saved = onProjectChange.mock.calls[0][0] as Project;
+    expect(saved.warehouse!.equipmentGroups).toMatchObject([{ name: 'Adaptadores de mandril', equipmentIds: ['equipment-1', 'equipment-2'] }]);
+
+    view.rerender(<WarehouseEquipmentsTab project={saved} onProjectChange={vi.fn()} />);
+    expect(screen.getByText('Adaptadores de mandril')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Ver patrimônios' }));
     expect(screen.getByTestId('equipment-group-items')).toBeInTheDocument();
-    expect(screen.getByText('Makita · BL4040 · SERIE-01')).toBeInTheDocument();
-    expect(screen.getByText('Makita · BL4040 · SERIE-02')).toBeInTheDocument();
+    expect(screen.getByText('EQ-2026-0001')).toBeInTheDocument();
+    expect(screen.getByText('EQ-2026-0002')).toBeInTheDocument();
+    expect(screen.getByTitle('SERIE-01')).toBeInTheDocument();
+    expect(screen.getByTitle('SERIE-02')).toBeInTheDocument();
   });
 
   it('não oferece arquivamento de equipamento quando a função não pode apagar registros', () => {
@@ -232,6 +246,12 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
 
     expect(screen.queryByRole('button', { name: 'Arquivar' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Etiqueta QR' })).toBeInTheDocument();
+  });
+
+  it('reserva a organização de grupos aos perfis autorizados', () => {
+    render(<WarehouseEquipmentsTab project={projectWithEquipment()} onProjectChange={vi.fn()} canManageGroups={false} />);
+
+    expect(screen.queryByRole('button', { name: 'Organizar grupos' })).not.toBeInTheDocument();
   });
 
   it('mostra até três miniaturas e troca a foto principal sem recortar', () => {
