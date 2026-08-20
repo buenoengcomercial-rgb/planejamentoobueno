@@ -254,6 +254,22 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     expect(screen.queryByRole('button', { name: 'Organizar grupos' })).not.toBeInTheDocument();
   });
 
+  it('edita os dados cadastrais sem alterar o código interno do equipamento', () => {
+    const onProjectChange = vi.fn();
+    render(<WarehouseEquipmentsTab project={projectWithEquipment()} onProjectChange={onProjectChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Editar' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Descrição'), { target: { value: 'Furadeira revisada' } });
+    fireEvent.change(within(dialog).getByLabelText('Patrimônio existente'), { target: { value: 'PAT-009' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Salvar alterações' }));
+
+    const saved = onProjectChange.mock.calls[0][0] as Project;
+    expect(saved.warehouse!.equipments[0]).toMatchObject({
+      internalCode: 'EQ-2026-0001', description: 'Furadeira revisada', patrimony: 'PAT-009', serial: '0029612 Y',
+    });
+  });
+
   it('mostra até três miniaturas e troca a foto principal sem recortar', () => {
     render(<WarehouseEquipmentsTab project={projectWithEquipment([
       { dataUrl: 'data:image/png;base64,Zm90bzE=' },

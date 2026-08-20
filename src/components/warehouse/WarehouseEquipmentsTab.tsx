@@ -13,6 +13,7 @@ import {
   makeAttachment,
   readFileAsDataURL,
   removeEquipment,
+  updateEquipment,
   updateEquipmentGroup,
 } from '@/lib/warehouse';
 import { loadWarehouseAttachmentBlob, openWarehouseAttachment, warehouseAttachmentErrorMessage } from '@/lib/warehouseAttachments';
@@ -26,7 +27,7 @@ import { WarehouseEmptyState, WarehouseField, WarehouseSectionHeader, WarehouseS
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
-interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; canManageGroups?: boolean; }
+interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; canManageGroups?: boolean; canEdit?: boolean; }
 
 interface EquipmentForm {
   description: string;
@@ -73,13 +74,15 @@ function compareEquipments(left: Equipment, right: Equipment, order: EquipmentSo
   return byDescription || byCode;
 }
 
+interface EquipmentEditForm extends Omit<EquipmentForm, 'confidence'> { name: string; }
+
 function escapeLabelHtml(value: string) {
   return value.replace(/[&<>"']/g, character => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;',
   }[character] || character));
 }
 
-export default function WarehouseEquipmentsTab({ project, onProjectChange, auditActor, canArchive = true, canDelete = false, canManageGroups = true }: Props) {
+export default function WarehouseEquipmentsTab({ project, onProjectChange, auditActor, canArchive = true, canDelete = false, canManageGroups = true, canEdit = true }: Props) {
   const wh = ensureWarehouse(project).warehouse!;
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [form, setForm] = useState<EquipmentForm>(emptyEquipment);
@@ -96,6 +99,8 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [groupEquipmentIds, setGroupEquipmentIds] = useState<string[]>([]);
+  const [editingEquipment, setEditingEquipment] = useState<Equipment | null>(null);
+  const [equipmentEditForm, setEquipmentEditForm] = useState<EquipmentEditForm>({ name: '', description: '', brand: '', model: '', serial: '', patrimony: '', category: '', notes: '' });
   const [registrationOpen, setRegistrationOpen] = useState(false);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
@@ -329,12 +334,47 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
     toast.success('Grupo desfeito. Os patrimônios permanecem individuais.');
   });
 
+  const openEditEquipment = (equipment: Equipment) => {
+    setEditingEquipment(equipment);
+    setEquipmentEditForm({
+      name: equipment.name,
+      description: equipment.description ?? '',
+      brand: equipment.brand ?? '',
+      model: equipment.model ?? '',
+      serial: equipment.serial ?? '',
+      patrimony: equipment.patrimony ?? '',
+      category: equipment.category ?? '',
+      notes: equipment.notes ?? '',
+    });
+  };
+
+  const saveEquipmentEdit = () => {
+    if (!editingEquipment) return;
+    if (!equipmentEditForm.description.trim()) return toast.error('Informe a descrição do equipamento.');
+    try {
+      onProjectChange(updateEquipment(project, editingEquipment.id, {
+        name: equipmentEditForm.name.trim() || equipmentEditForm.description.trim(),
+        description: equipmentEditForm.description.trim(),
+        brand: equipmentEditForm.brand.trim() || undefined,
+        model: equipmentEditForm.model.trim() || undefined,
+        serial: equipmentEditForm.serial.trim() || undefined,
+        patrimony: equipmentEditForm.patrimony.trim() || undefined,
+        category: equipmentEditForm.category.trim() || undefined,
+        notes: equipmentEditForm.notes.trim() || undefined,
+      }, auditActor));
+      setEditingEquipment(null);
+      toast.success('Cadastro do equipamento atualizado.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível atualizar o equipamento.');
+    }
+  };
+
   return (
     <div className="space-y-4">
       <section className="overflow-hidden rounded-xl border bg-card">
         <WarehouseSectionHeader icon={HardHat} title="Patrimônio identificado" description={`${equipments.length} equipamento(s)`} tone="neutral" className="flex-wrap" actions={<div className="flex w-full flex-col gap-2 xl:w-auto"><div className="flex flex-col gap-2 sm:flex-row"><Button className="min-h-11" onClick={() => setRegistrationOpen(true)}><Plus className="mr-2 h-4 w-4" />Adicionar equipamento</Button><Button className="min-h-11 bg-background" variant="outline" onClick={() => setShowArchived(value => !value)}>{showArchived ? 'Ocultar arquivados' : 'Exibir arquivados'}</Button>{canManageGroups && <Button className="min-h-11" variant={groupMode ? 'secondary' : 'outline'} onClick={() => { setGroupMode(value => !value); setSelectedEquipmentIds([]); }}><CheckSquare className="mr-2 h-4 w-4" />{groupMode ? 'Cancelar organização' : 'Organizar grupos'}</Button>}</div><Select value={sort} onValueChange={value => setSort(value as EquipmentSort)}><SelectTrigger aria-label="Ordenar equipamentos" className="min-h-11 bg-background text-sm"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="description">Descrição A–Z</SelectItem><SelectItem value="code">Código do patrimônio</SelectItem><SelectItem value="status">Status</SelectItem></SelectContent></Select></div>} />
         {groupMode && <div className="border-b bg-primary/5 px-3 py-2 text-sm font-medium text-primary">Selecione patrimônios sem grupo para criar uma classificação permanente.</div>}
-        <div data-testid="equipment-gallery" className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{displayEntries.map(entry => entry.kind === 'group' ? <EquipmentGroup key={entry.group.id} group={entry.group} equipments={entry.items} canArchive={canArchive} canDelete={canDelete} canManage={canManageGroups} onOpenPhoto={attachment => void openPhoto(attachment)} onPrintLabel={equipment => void printLabel(equipment)} onArchive={equipment => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))} onDelete={equipment => void deleteEquipment(equipment)} onEdit={openEditGroup} onDeleteGroup={removeGroup} /> : <EquipmentCard key={entry.equipment.id} equipment={entry.equipment} canArchive={canArchive} canDelete={canDelete} onOpenPhoto={attachment => void openPhoto(attachment)} onPrintLabel={equipment => void printLabel(equipment)} onArchive={equipment => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))} onDelete={equipment => void deleteEquipment(equipment)} selectable={groupMode && canManageGroups} selected={selectedEquipmentIds.includes(entry.equipment.id)} onToggleSelection={toggleEquipmentSelection} />)}{!equipments.length && <div className="col-span-full"><WarehouseEmptyState message="Nenhum equipamento cadastrado" hint="Use Adicionar equipamento para começar." icon={HardHat} /></div>}</div>
+        <div data-testid="equipment-gallery" className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{displayEntries.map(entry => entry.kind === 'group' ? <EquipmentGroup key={entry.group.id} group={entry.group} equipments={entry.items} canArchive={canArchive} canDelete={canDelete} canEdit={canEdit} canManage={canManageGroups} onOpenPhoto={attachment => void openPhoto(attachment)} onPrintLabel={equipment => void printLabel(equipment)} onArchive={equipment => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))} onDelete={equipment => void deleteEquipment(equipment)} onEditEquipment={openEditEquipment} onEdit={openEditGroup} onDeleteGroup={removeGroup} /> : <EquipmentCard key={entry.equipment.id} equipment={entry.equipment} canArchive={canArchive} canDelete={canDelete} canEdit={canEdit} onOpenPhoto={attachment => void openPhoto(attachment)} onPrintLabel={equipment => void printLabel(equipment)} onArchive={equipment => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))} onDelete={equipment => void deleteEquipment(equipment)} onEdit={openEditEquipment} selectable={groupMode && canManageGroups} selected={selectedEquipmentIds.includes(entry.equipment.id)} onToggleSelection={toggleEquipmentSelection} />)}{!equipments.length && <div className="col-span-full"><WarehouseEmptyState message="Nenhum equipamento cadastrado" hint="Use Adicionar equipamento para começar." icon={HardHat} /></div>}</div>
         {groupMode && <div className="sticky bottom-3 z-10 border-t bg-card/95 p-3 backdrop-blur"><div className="mx-auto flex max-w-xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><span className="text-sm font-semibold">{selectedEquipmentIds.length} patrimônio(s) selecionado(s)</span><div className="flex gap-2"><Button variant="outline" className="min-h-11 flex-1" onClick={() => setSelectedEquipmentIds([])}>Limpar</Button><Button className="min-h-11 flex-1" disabled={selectedEquipmentIds.length < 2} onClick={openCreateGroup}><FolderPlus className="mr-2 h-4 w-4" />Criar grupo</Button></div></div></div>}
       </section>
 
@@ -370,6 +410,14 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
         </DialogContent>
       </Dialog>
 
+      <Dialog open={!!editingEquipment} onOpenChange={open => { if (!open) setEditingEquipment(null); }}>
+        <DialogContent className="warehouse-ui flex max-h-[95dvh] w-[calc(100vw-1rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11">
+          <DialogHeader className="border-b p-4 pr-16"><DialogTitle>Editar cadastro do equipamento</DialogTitle><DialogDescription>Código interno, fotos, status e cautelas permanecem preservados. Atualize os dados de identificação abaixo.</DialogDescription></DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4"><div className="grid gap-3 sm:grid-cols-2"><WarehouseField label="Nome de referência"><Input aria-label="Nome de referência" className="min-h-11 text-base" value={equipmentEditForm.name} onChange={event => setEquipmentEditForm(current => ({ ...current, name: event.target.value }))} /></WarehouseField><WarehouseField label="Descrição"><Input aria-label="Descrição" className="min-h-11 text-base" value={equipmentEditForm.description} onChange={event => setEquipmentEditForm(current => ({ ...current, description: event.target.value }))} /></WarehouseField><WarehouseField label="Marca" optional><Input aria-label="Marca" className="min-h-11 text-base" value={equipmentEditForm.brand} onChange={event => setEquipmentEditForm(current => ({ ...current, brand: event.target.value }))} /></WarehouseField><WarehouseField label="Modelo" optional><Input aria-label="Modelo" className="min-h-11 text-base" value={equipmentEditForm.model} onChange={event => setEquipmentEditForm(current => ({ ...current, model: event.target.value }))} /></WarehouseField><WarehouseField label="Nº de série" optional><Input aria-label="Nº de série" className="min-h-11 text-base" value={equipmentEditForm.serial} onChange={event => setEquipmentEditForm(current => ({ ...current, serial: event.target.value }))} /></WarehouseField><WarehouseField label="Patrimônio existente" optional><Input aria-label="Patrimônio existente" className="min-h-11 text-base" value={equipmentEditForm.patrimony} onChange={event => setEquipmentEditForm(current => ({ ...current, patrimony: event.target.value }))} /></WarehouseField><WarehouseField label="Categoria" optional><Input aria-label="Categoria" className="min-h-11 text-base" value={equipmentEditForm.category} onChange={event => setEquipmentEditForm(current => ({ ...current, category: event.target.value }))} /></WarehouseField><div className="sm:col-span-2"><WarehouseField label="Observações" optional><Input aria-label="Observações" className="min-h-11 text-base" value={equipmentEditForm.notes} onChange={event => setEquipmentEditForm(current => ({ ...current, notes: event.target.value }))} /></WarehouseField></div></div></div>
+          <DialogFooter className="gap-2 border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:space-x-0"><Button variant="outline" className="min-h-11 sm:min-w-28" onClick={() => setEditingEquipment(null)}>Cancelar</Button><Button className="min-h-11 sm:min-w-44" disabled={!equipmentEditForm.description.trim()} onClick={saveEquipmentEdit}>Salvar alterações</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {confirmDialog}
     </div>
   );
@@ -379,16 +427,18 @@ interface EquipmentCardProps {
   equipment: Equipment;
   canArchive: boolean;
   canDelete: boolean;
+  canEdit: boolean;
   onOpenPhoto: (attachment?: WarehouseAttachment) => void;
   onPrintLabel: (equipment: Equipment) => void;
   onArchive: (equipment: Equipment) => void;
   onDelete: (equipment: Equipment) => void;
+  onEdit: (equipment: Equipment) => void;
   selectable?: boolean;
   selected?: boolean;
   onToggleSelection?: (equipmentId: string) => void;
 }
 
-function EquipmentCard({ equipment, canArchive, canDelete, onOpenPhoto, onPrintLabel, onArchive, onDelete, selectable = false, selected = false, onToggleSelection }: EquipmentCardProps) {
+function EquipmentCard({ equipment, canArchive, canDelete, canEdit, onOpenPhoto, onPrintLabel, onArchive, onDelete, onEdit, selectable = false, selected = false, onToggleSelection }: EquipmentCardProps) {
   const title = equipmentTitle(equipment);
   const identification = [equipment.brand, equipment.model, equipment.serial].filter(Boolean).join(' · ') || 'Identificação pendente';
   const visualStatus = equipmentStatus(equipment.status);
@@ -397,8 +447,9 @@ function EquipmentCard({ equipment, canArchive, canDelete, onOpenPhoto, onPrintL
     <div className="space-y-2 p-3">
       <div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-extrabold text-primary">{equipment.internalCode || 'Código legado'}</div><h4 className="line-clamp-2 text-sm font-bold leading-5" title={title}>{title}</h4></div>{selectable ? <label className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg border bg-background" title="Selecionar para grupo"><input type="checkbox" className="h-5 w-5 accent-primary" checked={selected} onChange={() => onToggleSelection?.(equipment.id)} aria-label={`Selecionar ${title}`} /></label> : <WarehouseStatusBadge label={visualStatus.label} tone={visualStatus.tone} />}</div>
       <div className="truncate text-xs font-medium text-muted-foreground" title={identification}>{identification}</div>
-      {!selectable && <div className={`grid gap-1.5 ${canArchive || canDelete ? 'grid-cols-2' : 'grid-cols-1'}`}>
+      {!selectable && <div className={`grid gap-1.5 ${canArchive || canEdit || canDelete ? 'grid-cols-2' : 'grid-cols-1'}`}>
         <Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => onPrintLabel(equipment)}><Printer className="mr-1.5 h-4 w-4" />Etiqueta QR</Button>
+        {canEdit && <Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => onEdit(equipment)}><Pencil className="mr-1.5 h-4 w-4" />Editar</Button>}
         {canArchive && !equipment.archivedAt && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => onArchive(equipment)}><Archive className="mr-1.5 h-4 w-4" />Arquivar</Button>}
         {canDelete && <Button variant="destructive" className="col-span-full min-h-11 px-2 text-xs" onClick={() => onDelete(equipment)}>Excluir definitivamente</Button>}
       </div>
@@ -407,21 +458,24 @@ function EquipmentCard({ equipment, canArchive, canDelete, onOpenPhoto, onPrintL
   </article>;
 }
 
-function EquipmentGroup({ group, equipments, canManage, onEdit, onDeleteGroup, ...cardProps }: Omit<EquipmentCardProps, 'equipment'> & { group: WarehouseEquipmentGroup; equipments: Equipment[]; canManage: boolean; onEdit: (group: WarehouseEquipmentGroup) => void; onDeleteGroup: (group: WarehouseEquipmentGroup) => void; }) {
+function EquipmentGroup({ group, equipments, canManage, onEdit, onDeleteGroup, onEditEquipment, ...cardProps }: Omit<EquipmentCardProps, 'equipment' | 'onEdit'> & { group: WarehouseEquipmentGroup; equipments: Equipment[]; canManage: boolean; onEdit: (group: WarehouseEquipmentGroup) => void; onDeleteGroup: (group: WarehouseEquipmentGroup) => void; onEditEquipment: (equipment: Equipment) => void; }) {
   const statusSummary = Object.entries(equipments.reduce<Record<string, number>>((summary, equipment) => {
     const label = equipmentStatus(equipment.status).label;
     summary[label] = (summary[label] ?? 0) + 1;
     return summary;
   }, {})).map(([label, quantity]) => `${quantity} ${quantity > 1 && label === 'Disponível' ? 'disponíveis' : label.toLocaleLowerCase('pt-BR')}`).join(' · ');
 
-  return <Collapsible className="col-span-full rounded-xl border bg-muted/20 p-3 shadow-sm">
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0"><div className="text-xs font-extrabold text-primary">{equipments.length} patrimônio(s) no grupo</div><h4 className="text-sm font-bold leading-5">{group.name}</h4><p className="mt-1 text-xs text-muted-foreground">{statusSummary}</p></div>
-      <div className="flex flex-wrap gap-2"><CollapsibleTrigger asChild><Button variant="outline" className="min-h-11 shrink-0"><ChevronDown className="mr-2 h-4 w-4" />Ver patrimônios</Button></CollapsibleTrigger>{canManage && <Button variant="outline" className="min-h-11" onClick={() => onEdit(group)}><Pencil className="mr-2 h-4 w-4" />Editar grupo</Button>}{canManage && <Button variant="outline" className="min-h-11 text-destructive" onClick={() => onDeleteGroup(group)}><X className="mr-2 h-4 w-4" />Desfazer</Button>}</div>
+  const representative = equipments[0];
+  return <Collapsible className="min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm transition-shadow hover:shadow-md">
+    <EquipmentCardPhotos equipment={representative} title={group.name} onOpen={cardProps.onOpenPhoto} />
+    <div className="space-y-2 p-3">
+      <div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-extrabold text-primary">GRUPO DE PATRIMÔNIOS</div><h4 className="line-clamp-2 text-sm font-bold leading-5" title={group.name}>{group.name}</h4></div><WarehouseStatusBadge label={statusSummary} tone="info" /></div>
+      <div className="rounded-lg bg-primary/5 px-2.5 py-2 text-xs font-semibold text-primary">Quantidade existente: {equipments.length} patrimônio(s)</div>
+      <div className="grid grid-cols-1 gap-1.5"><CollapsibleTrigger asChild><Button variant="outline" className="min-h-11 px-2 text-xs"><ChevronDown className="mr-1.5 h-4 w-4" />Ver patrimônios</Button></CollapsibleTrigger>{canManage && <Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => onEdit(group)}><Pencil className="mr-1.5 h-4 w-4" />Editar grupo</Button>}{canManage && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => onDeleteGroup(group)}><X className="mr-1.5 h-4 w-4" />Desfazer grupo</Button>}</div>
     </div>
     <CollapsibleContent className="pt-3">
-      <div data-testid="equipment-group-items" className="grid grid-cols-1 gap-3 border-t pt-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {equipments.map(equipment => <EquipmentCard key={equipment.id} equipment={equipment} {...cardProps} />)}
+      <div data-testid="equipment-group-items" className="grid grid-cols-1 gap-3 border-t p-3">
+        {equipments.map(equipment => <EquipmentCard key={equipment.id} equipment={equipment} {...cardProps} onEdit={onEditEquipment} />)}
       </div>
     </CollapsibleContent>
   </Collapsible>;
