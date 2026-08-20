@@ -253,6 +253,7 @@ export function ensureWarehouse(project: Project): Project {
       wh.movements !== cur.movements ||
       wh.requisitions !== cur.requisitions ||
       wh.equipments !== cur.equipments ||
+      wh.equipmentGroups !== cur.equipmentGroups ||
       wh.custodyTerms !== cur.custodyTerms ||
       wh.fiscalNotes !== cur.fiscalNotes ||
       wh.materialLinks !== cur.materialLinks ||
@@ -1331,7 +1332,7 @@ export function hardDeleteRequisition(project: Project, requisitionId: string): 
   const requisition = wh.requisitions.find(entry => entry.id === requisitionId);
   if (!requisition) return p;
   const movementIds = new Set(requisition.items.map(item => item.movementId).filter((id): id is string => !!id));
-  const movements = wh.movements.filter(movement => !movementIds.has(movement.id) && movement.requisitionId !== requisitionId && !(movement.originType === 'requisition' && movement.originId === requisitionId));
+  const movements = wh.movements.filter(movement => !movementIds.has(movement.id) && movement.requisitionId !== requisitionId);
   let dailyReports = p.dailyReports;
   if (requisition.publishedToDailyReportId) {
     const block = requisitionDailyReportBlock(requisition);

@@ -51,6 +51,7 @@ export function prepareWarehouseTestReset(
     movements: [],
     requisitions: [],
     equipments,
+    equipmentGroups: [],
     custodyTerms: [],
     fiscalNotes: [],
     materialLinks: [],
