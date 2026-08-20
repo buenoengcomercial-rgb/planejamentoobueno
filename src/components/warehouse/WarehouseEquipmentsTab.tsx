@@ -3,7 +3,7 @@ import type { Equipment, Project, WarehouseAttachment, WarehouseAuditActor } fro
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { Archive, Camera, HardHat, ImagePlus, Loader2, Plus, Printer, Sparkles, X } from 'lucide-react';
+import { Archive, Camera, ChevronDown, HardHat, ImagePlus, Loader2, Plus, Printer, Sparkles, X } from 'lucide-react';
 import {
   addEquipment,
   ensureWarehouse,
@@ -20,6 +20,9 @@ import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { equipmentAiBackendError, equipmentAiErrorMessage } from '@/lib/equipmentAi';
 import { optimizeEquipmentPhoto } from '@/lib/equipmentPhotoOptimization';
 import { WarehouseEmptyState, WarehouseField, WarehouseSectionHeader, WarehouseStatusBadge, type WarehouseTone } from './WarehouseVisual';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
 interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; }
 
@@ -35,6 +38,15 @@ interface EquipmentForm {
 }
 
 type EquipmentErrors = Partial<Record<'description' | 'photos' | 'serialNotes', string>>;
+type EquipmentSort = 'description' | 'code' | 'status';
+
+const equipmentCollator = new Intl.Collator('pt-BR', { sensitivity: 'base', numeric: true });
+const statusSortOrder: Record<NonNullable<Equipment['status']>, number> = {
+  em_uso: 0,
+  em_manutencao: 1,
+  disponivel: 2,
+  arquivado: 3,
+};
 
 const emptyEquipment = (): EquipmentForm => ({ description: '', brand: '', model: '', serial: '', patrimony: '', category: '', notes: '' });
 
@@ -44,6 +56,29 @@ const equipmentStatus = (status?: Equipment['status']): { label: string; tone: W
   if (status === 'arquivado') return { label: 'Arquivado', tone: 'danger' };
   return { label: 'Disponível', tone: 'success' };
 };
+
+const equipmentTitle = (equipment: Equipment) => equipment.description || equipment.name;
+const normalizeEquipmentGroupValue = (value?: string) => (value ?? '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLocaleLowerCase('pt-BR')
+  .trim()
+  .replace(/\s+/g, ' ');
+const equipmentGroupKey = (equipment: Equipment) => [equipmentTitle(equipment), equipment.brand, equipment.model]
+  .map(normalizeEquipmentGroupValue)
+  .join('|');
+const equipmentCode = (equipment: Equipment) => equipment.internalCode || equipment.id;
+
+function compareEquipments(left: Equipment, right: Equipment, order: EquipmentSort) {
+  const byDescription = equipmentCollator.compare(equipmentTitle(left), equipmentTitle(right));
+  const byCode = equipmentCollator.compare(equipmentCode(left), equipmentCode(right));
+  if (order === 'code') return byCode || byDescription;
+  if (order === 'status') {
+    const byStatus = statusSortOrder[left.status ?? 'disponivel'] - statusSortOrder[right.status ?? 'disponivel'];
+    return byStatus || byDescription || byCode;
+  }
+  return byDescription || byCode;
+}
 
 function escapeLabelHtml(value: string) {
   return value.replace(/[&<>"']/g, character => ({
@@ -61,10 +96,25 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<EquipmentErrors>({});
   const [showArchived, setShowArchived] = useState(false);
+  const [sort, setSort] = useState<EquipmentSort>('description');
+  const [groupSimilar, setGroupSimilar] = useState(false);
   const [registrationOpen, setRegistrationOpen] = useState(false);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
-  const equipments = wh.equipments.filter(equipment => showArchived || !equipment.archivedAt);
+  const equipments = useMemo(
+    () => wh.equipments
+      .filter(equipment => showArchived || !equipment.archivedAt)
+      .sort((left, right) => compareEquipments(left, right, sort)),
+    [showArchived, sort, wh.equipments],
+  );
+  const equipmentGroups = useMemo(() => {
+    const groups = new Map<string, Equipment[]>();
+    equipments.forEach(equipment => {
+      const key = equipmentGroupKey(equipment);
+      groups.set(key, [...(groups.get(key) ?? []), equipment]);
+    });
+    return [...groups.entries()].map(([key, items]) => ({ key, items }));
+  }, [equipments]);
   const registrationBusy = reading || saving || optimizingPhotos > 0;
   const hasRegistrationDraft = photos.length > 0 || [form.description, form.brand, form.model, form.serial, form.patrimony, form.category, form.notes]
     .some(value => value.trim().length > 0);
@@ -210,8 +260,8 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
   return (
     <div className="space-y-4">
       <section className="overflow-hidden rounded-xl border bg-card">
-        <WarehouseSectionHeader icon={HardHat} title="Patrimônio identificado" description={`${equipments.length} equipamento(s)`} tone="neutral" className="flex-wrap" actions={<div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row"><Button className="min-h-11" onClick={() => setRegistrationOpen(true)}><Plus className="mr-2 h-4 w-4" />Adicionar equipamento</Button><Button className="min-h-11 bg-background" variant="outline" onClick={() => setShowArchived(value => !value)}>{showArchived ? 'Ocultar arquivados' : 'Exibir arquivados'}</Button></div>} />
-        <div data-testid="equipment-gallery" className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{equipments.map(equipment => { const title = equipment.description || equipment.name; const identification = [equipment.brand, equipment.model, equipment.serial].filter(Boolean).join(' · ') || 'Identificação pendente'; const visualStatus = equipmentStatus(equipment.status); return <article key={equipment.id} className="min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm transition-shadow hover:shadow-md"><EquipmentCardPhotos equipment={equipment} title={title} onOpen={attachment => void openPhoto(attachment)} /><div className="space-y-2 p-3"><div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-extrabold text-primary">{equipment.internalCode || 'Código legado'}</div><h4 className="line-clamp-2 text-sm font-bold leading-5" title={title}>{title}</h4></div><WarehouseStatusBadge label={visualStatus.label} tone={visualStatus.tone} /></div><div className="truncate text-xs font-medium text-muted-foreground" title={identification}>{identification}</div><div className={`grid gap-1.5 ${canArchive || canDelete ? 'grid-cols-2' : 'grid-cols-1'}`}><Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => void printLabel(equipment)}><Printer className="mr-1.5 h-4 w-4" />Etiqueta QR</Button>{canArchive && !equipment.archivedAt && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))}><Archive className="mr-1.5 h-4 w-4" />Arquivar</Button>}{canDelete && <Button variant="destructive" className="col-span-full min-h-11 px-2 text-xs" onClick={() => confirm({ title: 'Excluir equipamento definitivamente?', description: 'As fotos e cautelas relacionadas serão apagadas.', confirmLabel: 'Excluir definitivamente' }, () => void deleteEquipment(equipment))}>Excluir definitivamente</Button>}</div></div></article>; })}{!equipments.length && <div className="col-span-full"><WarehouseEmptyState message="Nenhum equipamento cadastrado" hint="Use Adicionar equipamento para começar." icon={HardHat} /></div>}</div>
+        <WarehouseSectionHeader icon={HardHat} title="Patrimônio identificado" description={`${equipments.length} equipamento(s)`} tone="neutral" className="flex-wrap" actions={<div className="flex w-full flex-col gap-2 xl:w-auto"><div className="flex flex-col gap-2 sm:flex-row"><Button className="min-h-11" onClick={() => setRegistrationOpen(true)}><Plus className="mr-2 h-4 w-4" />Adicionar equipamento</Button><Button className="min-h-11 bg-background" variant="outline" onClick={() => setShowArchived(value => !value)}>{showArchived ? 'Ocultar arquivados' : 'Exibir arquivados'}</Button></div><div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,190px)_auto]"><Select value={sort} onValueChange={value => setSort(value as EquipmentSort)}><SelectTrigger aria-label="Ordenar equipamentos" className="min-h-11 bg-background text-sm"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="description">Descrição A–Z</SelectItem><SelectItem value="code">Código do patrimônio</SelectItem><SelectItem value="status">Status</SelectItem></SelectContent></Select><label className="flex min-h-11 items-center justify-between gap-3 rounded-md border bg-background px-3 text-sm font-medium"><span>Agrupar iguais</span><Switch checked={groupSimilar} onCheckedChange={setGroupSimilar} aria-label="Agrupar equipamentos iguais" /></label></div></div>} />
+        <div data-testid="equipment-gallery" className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">{groupSimilar ? equipmentGroups.map(group => group.items.length > 1 ? <EquipmentGroup key={group.key} equipments={group.items} canArchive={canArchive} canDelete={canDelete} onOpenPhoto={attachment => void openPhoto(attachment)} onPrintLabel={equipment => void printLabel(equipment)} onArchive={equipment => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))} onDelete={equipment => void deleteEquipment(equipment)} /> : <EquipmentCard key={group.items[0].id} equipment={group.items[0]} canArchive={canArchive} canDelete={canDelete} onOpenPhoto={attachment => void openPhoto(attachment)} onPrintLabel={equipment => void printLabel(equipment)} onArchive={equipment => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))} onDelete={equipment => void deleteEquipment(equipment)} />) : equipments.map(equipment => <EquipmentCard key={equipment.id} equipment={equipment} canArchive={canArchive} canDelete={canDelete} onOpenPhoto={attachment => void openPhoto(attachment)} onPrintLabel={equipment => void printLabel(equipment)} onArchive={equipment => confirm({ title: 'Arquivar equipamento?', description: 'O equipamento e seus termos continuarão no histórico.', confirmLabel: 'Arquivar' }, () => onProjectChange(removeEquipment(project, equipment.id, auditActor)))} onDelete={equipment => void deleteEquipment(equipment)} />)}{!equipments.length && <div className="col-span-full"><WarehouseEmptyState message="Nenhum equipamento cadastrado" hint="Use Adicionar equipamento para começar." icon={HardHat} /></div>}</div>
       </section>
 
       <Dialog open={registrationOpen} onOpenChange={open => { if (open) setRegistrationOpen(true); else closeRegistration(); }}>
@@ -238,6 +288,57 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
       {confirmDialog}
     </div>
   );
+}
+
+interface EquipmentCardProps {
+  equipment: Equipment;
+  canArchive: boolean;
+  canDelete: boolean;
+  onOpenPhoto: (attachment?: WarehouseAttachment) => void;
+  onPrintLabel: (equipment: Equipment) => void;
+  onArchive: (equipment: Equipment) => void;
+  onDelete: (equipment: Equipment) => void;
+}
+
+function EquipmentCard({ equipment, canArchive, canDelete, onOpenPhoto, onPrintLabel, onArchive, onDelete }: EquipmentCardProps) {
+  const title = equipmentTitle(equipment);
+  const identification = [equipment.brand, equipment.model, equipment.serial].filter(Boolean).join(' · ') || 'Identificação pendente';
+  const visualStatus = equipmentStatus(equipment.status);
+  return <article data-testid="equipment-card" className="min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm transition-shadow hover:shadow-md">
+    <EquipmentCardPhotos equipment={equipment} title={title} onOpen={onOpenPhoto} />
+    <div className="space-y-2 p-3">
+      <div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-extrabold text-primary">{equipment.internalCode || 'Código legado'}</div><h4 className="line-clamp-2 text-sm font-bold leading-5" title={title}>{title}</h4></div><WarehouseStatusBadge label={visualStatus.label} tone={visualStatus.tone} /></div>
+      <div className="truncate text-xs font-medium text-muted-foreground" title={identification}>{identification}</div>
+      <div className={`grid gap-1.5 ${canArchive || canDelete ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        <Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => onPrintLabel(equipment)}><Printer className="mr-1.5 h-4 w-4" />Etiqueta QR</Button>
+        {canArchive && !equipment.archivedAt && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => onArchive(equipment)}><Archive className="mr-1.5 h-4 w-4" />Arquivar</Button>}
+        {canDelete && <Button variant="destructive" className="col-span-full min-h-11 px-2 text-xs" onClick={() => onDelete(equipment)}>Excluir definitivamente</Button>}
+      </div>
+    </div>
+  </article>;
+}
+
+function EquipmentGroup({ equipments, ...cardProps }: Omit<EquipmentCardProps, 'equipment'> & { equipments: Equipment[] }) {
+  const first = equipments[0];
+  const title = equipmentTitle(first);
+  const model = [first.brand, first.model].filter(Boolean).join(' · ') || 'Marca ou modelo não informado';
+  const statusSummary = Object.entries(equipments.reduce<Record<string, number>>((summary, equipment) => {
+    const label = equipmentStatus(equipment.status).label;
+    summary[label] = (summary[label] ?? 0) + 1;
+    return summary;
+  }, {})).map(([label, quantity]) => `${quantity} ${quantity > 1 && label === 'Disponível' ? 'disponíveis' : label.toLocaleLowerCase('pt-BR')}`).join(' · ');
+
+  return <Collapsible className="col-span-full rounded-xl border bg-muted/20 p-3 shadow-sm">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0"><div className="text-xs font-extrabold text-primary">{equipments.length} patrimônios iguais</div><h4 className="text-sm font-bold leading-5">{title}</h4><p className="truncate text-xs font-medium text-muted-foreground" title={model}>{model}</p><p className="mt-1 text-xs text-muted-foreground">{statusSummary}</p></div>
+      <CollapsibleTrigger asChild><Button variant="outline" className="min-h-11 shrink-0"><ChevronDown className="mr-2 h-4 w-4" />Ver {equipments.length} patrimônios</Button></CollapsibleTrigger>
+    </div>
+    <CollapsibleContent className="pt-3">
+      <div data-testid="equipment-group-items" className="grid grid-cols-1 gap-3 border-t pt-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {equipments.map(equipment => <EquipmentCard key={equipment.id} equipment={equipment} {...cardProps} />)}
+      </div>
+    </CollapsibleContent>
+  </Collapsible>;
 }
 
 function EquipmentField({ id, label, value, confidence, optional, error, onChange }: { id?: string; label: string; value: string; confidence?: number; optional?: boolean; error?: string; onChange: (value: string) => void }) {

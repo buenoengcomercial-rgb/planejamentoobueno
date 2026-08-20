@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Project } from '@/types/project';
+import type { Equipment, Project } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
 import WarehouseEquipmentsTab from './WarehouseEquipmentsTab';
 
@@ -59,6 +59,16 @@ function projectWithEquipment(photoInput: EquipmentPhotoInput | EquipmentPhotoIn
     brand: 'Makita', model: 'HP002G', serial: '0029612 Y', status: 'disponivel', createdAt: '2026-08-18T10:00:00.000Z',
     photos,
   }];
+  return current;
+}
+
+function projectWithEquipmentList(equipments: Array<Omit<Equipment, 'createdAt' | 'status'> & { status?: Equipment['status'] }>) {
+  const current = project();
+  current.warehouse!.equipments = equipments.map(equipment => ({
+    ...equipment,
+    createdAt: '2026-08-18T10:00:00.000Z',
+    status: equipment.status ?? 'disponivel',
+  }));
   return current;
 }
 
@@ -171,6 +181,44 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     expect(screen.getByRole('img', { name: 'Furadeira de impacto' })).toHaveAttribute('decoding', 'async');
     expect(screen.getByRole('img', { name: 'Furadeira de impacto' })).toHaveClass('object-contain');
     expect(screen.queryByLabelText('Fotos de Furadeira de impacto')).not.toBeInTheDocument();
+  });
+
+  it('abre em ordem alfabética e permite alternar para o código do patrimônio', () => {
+    const projectWithOrder = projectWithEquipmentList([
+      { id: 'equipment-2', name: 'Zebra', description: 'Zebra industrial', internalCode: 'EQ-2026-0001' },
+      { id: 'equipment-1', name: 'Alicate', description: 'Alicate universal', internalCode: 'EQ-2026-0003' },
+      { id: 'equipment-3', name: 'Alicate', description: 'Alicate universal', internalCode: 'EQ-2026-0002' },
+    ]);
+    render(<WarehouseEquipmentsTab project={projectWithOrder} onProjectChange={vi.fn()} />);
+
+    expect(screen.getAllByTestId('equipment-card').map(card => card.querySelector('h4')?.textContent)).toEqual([
+      'Alicate universal', 'Alicate universal', 'Zebra industrial',
+    ]);
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Ordenar equipamentos' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Código do patrimônio' }));
+
+    expect(screen.getAllByTestId('equipment-card').map(card => card.querySelector('.text-primary')?.textContent)).toEqual([
+      'EQ-2026-0001', 'EQ-2026-0002', 'EQ-2026-0003',
+    ]);
+  });
+
+  it('agrupa somente patrimônios com descrição, marca e modelo iguais sem ocultar séries', () => {
+    const projectWithDuplicates = projectWithEquipmentList([
+      { id: 'equipment-1', name: 'Bateria', description: 'Bateria Makita XGT 4.0Ah', internalCode: 'EQ-2026-0001', brand: 'Makita', model: 'BL4040', serial: 'SERIE-01' },
+      { id: 'equipment-2', name: 'Bateria', description: 'Bateria Makita XGT 4.0Ah', internalCode: 'EQ-2026-0002', brand: 'Makita', model: 'BL4040', serial: 'SERIE-02' },
+      { id: 'equipment-3', name: 'Bateria', description: 'Bateria Makita XGT 4.0Ah', internalCode: 'EQ-2026-0003', brand: 'Makita', model: 'BL4050', serial: 'SERIE-03' },
+    ]);
+    render(<WarehouseEquipmentsTab project={projectWithDuplicates} onProjectChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Agrupar equipamentos iguais' }));
+
+    expect(screen.getByText('2 patrimônios iguais')).toBeInTheDocument();
+    expect(screen.getAllByTestId('equipment-card')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Ver 2 patrimônios' }));
+    expect(screen.getByTestId('equipment-group-items')).toBeInTheDocument();
+    expect(screen.getByText('Makita · BL4040 · SERIE-01')).toBeInTheDocument();
+    expect(screen.getByText('Makita · BL4040 · SERIE-02')).toBeInTheDocument();
   });
 
   it('não oferece arquivamento de equipamento quando a função não pode apagar registros', () => {
