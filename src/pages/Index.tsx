@@ -377,7 +377,6 @@ export default function Index() {
     options: { retainDraftUntilVerified?: boolean } = {},
   ) => {
     const nextJson = serializeProject(projectToSave);
-    console.log('[DBG] persistProject', nextJson.length, nextJson === lastSavedProjectJsonRef.current);
     if (nextJson === lastSavedProjectJsonRef.current) {
       if (!options.retainDraftUntilVerified) clearProjectDraft(projectToSave.id);
       setLastCloudConfirmedAt(new Date().toISOString());
@@ -452,7 +451,6 @@ export default function Index() {
       if (!previous) return previous;
       const synchronized = synchronizeProjectScheduleToWorkStart(previous);
       if (synchronized === previous) return previous;
-      console.log('[DBG] workStart sync applied', previous.uiState?.ganttWorkStartDateApplied, '->', synchronized.uiState?.ganttWorkStartDateApplied);
       skipNextAutoSaveRef.current = false;
       rawProjectRef.current = synchronized;
       if (projectHasLocalChanges(synchronized, lastSavedProjectJsonRef.current)) {
@@ -545,19 +543,10 @@ export default function Index() {
       return;
     }
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-    { const w = window as any; w.__dbg = w.__dbg || {}; const d = w.__dbg;
-      const changed = [
-        d.p !== rawProject && 'rawProject', d.u !== user && 'user', d.o !== orgId && 'orgId',
-        d.c !== canPersistProject && 'canPersist', d.pp !== persistProject && 'persistProject', d.h !== handleCloudConflict && 'conflict',
-      ].filter(Boolean);
-      const same = d.p ? JSON.stringify(d.p) === JSON.stringify(rawProject) : null;
-      d.p = rawProject; d.u = user; d.o = orgId; d.c = canPersistProject; d.pp = persistProject; d.h = handleCloudConflict;
-      console.log('[DBG] arm', changed.join(','), 'jsonEqual=', same); }
     setSaveStatus('saving');
     saveTimerRef.current = window.setTimeout(async () => {
       try {
         saveTimerRef.current = null;
-        console.log('[DBG] timer fired -> persist');
         await persistProject(rawProject, orgId);
       } catch (e) {
         console.warn(e);
@@ -853,6 +842,9 @@ export default function Index() {
           ? resolved
           : synchronizeProjectScheduleToWorkStart(resolved);
         if (synchronized === prev) return prev;
+        // Trava contra laço de atualização: objeto novo com conteúdo idêntico
+        // não gera novo estado (evitava o autosave reiniciar para sempre).
+        if (serializeProject(synchronized) === serializeProject(prev)) return prev;
         const stack = undoStacksRef.current[view];
         stack.push(prev);
         if (stack.length > UNDO_LIMIT) stack.shift();
