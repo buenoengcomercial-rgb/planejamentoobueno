@@ -228,6 +228,8 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
 
     view.rerender(<WarehouseEquipmentsTab project={saved} onProjectChange={vi.fn()} />);
     expect(screen.getByText('Adaptadores de mandril')).toBeInTheDocument();
+    expect(screen.getByText('2 disponíveis').closest('span')).toHaveClass('bg-success/10', 'text-success');
+    expect(screen.queryByText(/Quantidade existente/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Ver patrimônios' }));
     const groupItems = screen.getByTestId('equipment-group-items');
     expect(groupItems).toHaveClass('contents');
@@ -240,6 +242,18 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     expect(screen.getByText('EQ-2026-0002')).toBeInTheDocument();
     expect(screen.getByTitle('SERIE-01')).toBeInTheDocument();
     expect(screen.getByTitle('SERIE-02')).toBeInTheDocument();
+  });
+
+  it('não apresenta disponibilidade total em verde quando o grupo tem status mistos', () => {
+    const grouped = projectWithEquipmentList([
+      { id: 'equipment-1', name: 'Adaptador', description: 'Adaptador SDS', internalCode: 'EQ-2026-0001', serial: 'SERIE-01' },
+      { id: 'equipment-2', name: 'Suporte', description: 'Suporte de mandril', internalCode: 'EQ-2026-0002', serial: 'SERIE-02', status: 'em_uso' },
+    ]);
+    grouped.warehouse!.equipmentGroups = [{ id: 'group-1', name: 'Adaptadores', equipmentIds: ['equipment-1', 'equipment-2'], createdAt: '2026-08-20T10:00:00.000Z' }];
+
+    render(<WarehouseEquipmentsTab project={grouped} onProjectChange={vi.fn()} />);
+
+    expect(screen.getByText('1 disponível · 1 em uso').closest('span')).toHaveClass('bg-muted/60', 'text-foreground');
   });
 
   it('não oferece arquivamento de equipamento quando a função não pode apagar registros', () => {

@@ -459,18 +459,18 @@ function EquipmentCard({ equipment, canArchive, canDelete, canEdit, onOpenPhoto,
 }
 
 function EquipmentGroup({ group, equipments, canManage, expanded, onToggle, onEdit, onDeleteGroup, ...cardProps }: Omit<EquipmentCardProps, 'equipment' | 'onEdit'> & { group: WarehouseEquipmentGroup; equipments: Equipment[]; canManage: boolean; expanded: boolean; onToggle: () => void; onEdit: (group: WarehouseEquipmentGroup) => void; onDeleteGroup: (group: WarehouseEquipmentGroup) => void; onEditEquipment: (equipment: Equipment) => void; }) {
-  const statusSummary = Object.entries(equipments.reduce<Record<string, number>>((summary, equipment) => {
-    const label = equipmentStatus(equipment.status).label;
+  const statusLabels = equipments.map(equipment => equipmentStatus(equipment.status).label);
+  const statusSummary = Object.entries(statusLabels.reduce<Record<string, number>>((summary, label) => {
     summary[label] = (summary[label] ?? 0) + 1;
     return summary;
   }, {})).map(([label, quantity]) => `${quantity} ${quantity > 1 && label === 'Disponível' ? 'disponíveis' : label.toLocaleLowerCase('pt-BR')}`).join(' · ');
+  const groupTone: WarehouseTone = statusLabels.every(label => label === 'Disponível') ? 'success' : 'neutral';
 
   const representative = equipments[0];
   return <article className="min-w-0 overflow-hidden rounded-xl border bg-card shadow-sm transition-shadow hover:shadow-md">
     <EquipmentCardPhotos equipment={representative} title={group.name} onOpen={cardProps.onOpenPhoto} />
     <div className="space-y-2 p-3">
-      <div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-extrabold text-primary">GRUPO DE PATRIMÔNIOS</div><h4 className="line-clamp-2 text-sm font-bold leading-5" title={group.name}>{group.name}</h4></div><WarehouseStatusBadge label={statusSummary} tone="info" /></div>
-      <WarehouseStatusBadge label={`Quantidade existente: ${equipments.length} patrimônio(s)`} tone="success" className="w-full justify-center rounded-lg" />
+      <div className="flex justify-between gap-2"><div className="min-w-0"><div className="text-xs font-extrabold text-primary">GRUPO DE PATRIMÔNIOS</div><h4 className="line-clamp-2 text-sm font-bold leading-5" title={group.name}>{group.name}</h4></div><WarehouseStatusBadge label={statusSummary} tone={groupTone} /></div>
       <div className={`grid gap-1.5 ${canManage ? 'grid-cols-2' : 'grid-cols-1'}`}><Button variant="outline" className="min-h-11 px-2 text-xs" aria-expanded={expanded} onClick={onToggle}><ChevronDown className={`mr-1.5 h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} />{expanded ? 'Ocultar patrimônios' : 'Ver patrimônios'}</Button>{canManage && <Button variant="outline" className="min-h-11 px-2 text-xs" onClick={() => onEdit(group)}><Pencil className="mr-1.5 h-4 w-4" />Editar grupo</Button>}{canManage && <Button variant="outline" className="min-h-11 px-2 text-xs text-destructive" onClick={() => onDeleteGroup(group)}><X className="mr-1.5 h-4 w-4" />Desfazer grupo</Button>}</div>
     </div>
   </article>;
