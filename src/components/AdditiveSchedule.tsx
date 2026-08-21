@@ -87,12 +87,13 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
 
   useEffect(() => {
     if (!active || (active.isContracted && !active.editUnlocked)) return;
-    const synced = syncAdditiveScheduleDraft(project, active.id);
-    const next = settleAdditiveScheduleDraft(synced, active.id, obraConfig);
-    if (next !== project) {
-      onProjectChange(next);
+    try {
+      const synced = syncAdditiveScheduleDraft(project, active.id);
+      const next = settleAdditiveScheduleDraft(synced, active.id, obraConfig);
+      if (next !== project) onProjectChange(next);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível sincronizar o Cronograma do Aditivo.');
     }
-
   }, [active, obraConfig, onProjectChange, project]);
 
   const isArchived = !!active?.isContracted && !active.editUnlocked;
@@ -226,7 +227,13 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
       {active && preview && (
         <GanttChart
           project={preview}
-          onProjectChange={isArchived ? undefined : nextPreview => onProjectChange(mergeAdditiveSchedulePreviewChanges(project, active.id, preview, nextPreview))}
+          onProjectChange={isArchived ? undefined : nextPreview => {
+            try {
+              onProjectChange(mergeAdditiveSchedulePreviewChanges(project, active.id, preview, nextPreview));
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : 'Não foi possível salvar o planejamento do aditivo.');
+            }
+          }}
           context="additive-preview"
           title="Cronograma do Aditivo"
           subtitle={isArchived ? 'Versão histórica somente para leitura' : 'Planejamento preliminar físico-financeiro'}

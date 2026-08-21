@@ -16,6 +16,7 @@ import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
 import { userInfoFromSupabaseUser } from '@/lib/audit';
+import { buildOperationalProjectFromPendingAdditives, getPendingAdditiveScheduleControls } from '@/lib/additiveSchedule';
 
 // Lazy load: cada aba só baixa seu bundle quando aberta pela primeira vez.
 // Usa lazyWithReload para recuperar automaticamente de chunks obsoletos após deploy.
@@ -818,6 +819,17 @@ export default function Index() {
     return calculateCPM(enriched);
   }, [deferredRawProject, needsDependencySettle]);
 
+  // A prévia do aditivo é operacional: aparece no Cronograma e na Rotina sem
+  // antecipar nenhuma alteração no contrato salvo em `rawProject`.
+  const operationalProject = useMemo(
+    () => project ? buildOperationalProjectFromPendingAdditives(project) : null,
+    [project],
+  );
+  const pendingAdditiveScheduleControls = useMemo(
+    () => project ? getPendingAdditiveScheduleControls(project) : new Map(),
+    [project],
+  );
+
   const makeViewSetter = useCallback((view: AppView) => {
     return (next: Project | ((prev: Project) => Project)) => {
       const mayEditView = editor
@@ -869,6 +881,20 @@ export default function Index() {
   const additiveScheduleSetter = useMemo(() => makeViewSetter('additiveSchedule'), [makeViewSetter]);
   const materialsSetter = useMemo(() => makeViewSetter('materials'), [makeViewSetter]);
   const warehouseSetter = useMemo(() => makeViewSetter('warehouse'), [makeViewSetter]);
+  const operationalGanttSetter = useCallback((nextOperational: Project) => {
+    ganttSetter(previous => {
+      const controls = getPendingAdditiveScheduleControls(previous);
+      const nextTasks = new Map(nextOperational.phases.flatMap(phase => phase.tasks).map(task => [task.id, task]));
+      return {
+        ...previous,
+        uiState: nextOperational.uiState,
+        phases: previous.phases.map(phase => ({
+          ...phase,
+          tasks: phase.tasks.map(task => controls.has(task.id) ? task : (nextTasks.get(task.id) ?? task)),
+        })),
+      };
+    });
+  }, [ganttSetter]);
 
   const commitProjectNow = useCallback(async (next: Project) => {
     if (!user || !orgId || !canPersistProject) throw new Error('Você não tem permissão para salvar esta obra.');
@@ -1162,7 +1188,7 @@ export default function Index() {
       case 'management':
         return (
           <ManagementRoutine
-            project={project}
+            project={operationalProject ?? project}
             onProjectChange={managementSetter}
             onOpenDailyReport={handleOpenDailyReport}
             initialWeek={new URLSearchParams(location.search).get('semana') || undefined}
@@ -1171,7 +1197,13 @@ export default function Index() {
           />
         );
       case 'gantt':
-        return <GanttChart project={project} onProjectChange={ganttSetter} readOnly={!editor} undoButton={<UndoButton canUndo={canUndo('gantt')} onUndo={() => handleUndo('gantt')} size="xs" />} />;
+        return <GanttChart
+          project={operationalProject ?? project}
+          onProjectChange={operationalGanttSetter}
+          lockedTaskLabels={Object.fromEntries(Array.from(pendingAdditiveScheduleControls.entries()).map(([taskId, control]) => [taskId, control.additiveName]))}
+          readOnly={!editor}
+          undoButton={<UndoButton canUndo={canUndo('gantt')} onUndo={() => handleUndo('gantt')} size="xs" />}
+        />;
       case 'tasks':
         return (
           <DailyProductionWorkspace

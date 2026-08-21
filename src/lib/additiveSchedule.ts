@@ -85,6 +85,81 @@ export function isAdditiveSchedulePending(additive: Additive): boolean {
   return additive.status !== 'cancelado' && additive.status !== 'rejeitado' && additive.status !== 'reprovado';
 }
 
+/**
+ * Tarefas do contrato que estão sendo planejadas por um aditivo ainda não
+ * formalizado. A informação é derivada do rascunho: não altera o contrato.
+ */
+export interface PendingAdditiveScheduleControl {
+  additiveId: string;
+  additiveName: string;
+}
+
+export function getPendingAdditiveScheduleControls(project: Project): Map<string, PendingAdditiveScheduleControl> {
+  const existingTaskIds = new Set(allPhaseTasks(project).map(task => task.id));
+  const controls = new Map<string, PendingAdditiveScheduleControl>();
+  (project.additives ?? []).filter(isAdditiveSchedulePending).forEach(additive => {
+    (additive.scheduleDraft?.contractedTaskPlans ?? []).forEach(plan => {
+      if (!existingTaskIds.has(plan.taskId) || controls.has(plan.taskId)) return;
+      controls.set(plan.taskId, { additiveId: additive.id, additiveName: additive.name });
+    });
+  });
+  return controls;
+}
+
+/**
+ * Aplica, apenas para leitura operacional, as datas e vínculos planejados no
+ * Cronograma do Aditivo. Serviços novos permanecem fora até a contratação.
+ */
+export function buildOperationalProjectFromPendingAdditives(project: Project): Project {
+  const controls = getPendingAdditiveScheduleControls(project);
+  if (!controls.size) return project;
+  const plans = new Map<string, AdditiveScheduleContractedTaskPlan>();
+  (project.additives ?? []).filter(isAdditiveSchedulePending).forEach(additive => {
+    (additive.scheduleDraft?.contractedTaskPlans ?? []).forEach(plan => {
+      const control = controls.get(plan.taskId);
+      if (control?.additiveId === additive.id) plans.set(plan.taskId, plan);
+    });
+  });
+  return {
+    ...project,
+    phases: project.phases.map(phase => ({
+      ...phase,
+      tasks: phase.tasks.map(task => {
+        const plan = plans.get(task.id);
+        if (!plan) return task;
+        return {
+          ...task,
+          startDate: plan.startDate,
+          duration: plan.duration,
+          dependencies: plan.dependencies ?? [],
+          dependencyDetails: plan.dependencyDetails,
+          responsible: plan.responsible,
+          team: plan.team,
+          scheduleOrder: plan.scheduleOrder,
+          durationMode: plan.durationMode,
+          isManual: plan.isManual,
+          manualDuration: plan.manualDuration,
+        };
+      }),
+    })),
+  };
+}
+
+export function getPendingAdditiveScheduleConflicts(
+  project: Project,
+  additiveId: string,
+  plans: AdditiveScheduleContractedTaskPlan[],
+): string[] {
+  const controls = getPendingAdditiveScheduleControls({
+    ...project,
+    additives: (project.additives ?? []).filter(additive => additive.id !== additiveId),
+  });
+  return plans
+    .map(plan => controls.get(plan.taskId))
+    .filter((control): control is PendingAdditiveScheduleControl => !!control)
+    .map(control => control.additiveName);
+}
+
 export function isDirectlyChangedComposition(project: Project, composition: AdditiveComposition): boolean {
   if (composition.isNewService) return true;
   if ((composition.addedQuantity ?? 0) > 0 || (composition.suppressedQuantity ?? 0) > 0) return true;
@@ -382,10 +457,16 @@ export function syncAdditiveScheduleDraft(project: Project, additiveId: string, 
   ]));
   const previousPlans = new Map((previous?.contractedTaskPlans ?? []).map(plan => [plan.taskId, plan]));
   const validTaskIds = new Set(allPhaseTasks(project).map(task => task.id));
+  const taskIdsControlledByAnotherPendingAdditive = new Set(
+    getPendingAdditiveScheduleControls({
+      ...project,
+      additives: (project.additives ?? []).filter(item => item.id !== additiveId),
+    }).keys(),
+  );
   const requiredPlanIds = new Set([
     ...Array.from(previousPlans.keys()).filter(taskId => validTaskIds.has(taskId)),
     ...getQuantitativelyRestrictedTasks(project, additive).keys(),
-  ]);
+  ].filter(taskId => !taskIdsControlledByAnotherPendingAdditive.has(taskId)));
   const contractedTaskPlans = Array.from(requiredPlanIds).flatMap(taskId => {
     const task = findTask(project, taskId);
     if (!task) return [];
@@ -633,6 +714,10 @@ export function mergeAdditiveSchedulePreviewChanges(
   const unchanged = stableJson(draft.plannedTasks) === stableJson(plannedTasks)
     && sameTaskKeyedList(draft.contractedTaskPlans ?? [], contractedTaskPlans);
   if (unchanged) return project;
+  const conflicts = getPendingAdditiveScheduleConflicts(project, additiveId, contractedTaskPlans);
+  if (conflicts.length) {
+    throw new Error(`Esta tarefa já está planejada no Cronograma do Aditivo: ${Array.from(new Set(conflicts)).join(', ')}.`);
+  }
   const scheduleDraft = { ...draft, plannedTasks, contractedTaskPlans, updatedAt: now };
   return {
     ...project,

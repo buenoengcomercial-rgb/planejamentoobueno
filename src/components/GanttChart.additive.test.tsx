@@ -132,6 +132,24 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     expect(screen.getByTestId('gantt-bar-scheduled-new-long')).toBeInTheDocument();
   });
 
+  it('identifica e bloqueia no cronograma principal a tarefa planejada pelo aditivo', () => {
+    render(
+      <GanttChart
+        project={project}
+        context="official"
+        onProjectChange={vi.fn()}
+        lockedTaskLabels={{ 'partial-existing': '1º Aditivo' }}
+      />,
+    );
+
+    expect(screen.getByText('Planejada pelo aditivo: 1º Aditivo')).toBeInTheDocument();
+    expect(screen.getByTestId('gantt-bar-partial-existing')).toHaveAttribute(
+      'title',
+      'Planejada pelo aditivo: 1º Aditivo. Edite no Cronograma do Aditivo.',
+    );
+    expect(screen.getByDisplayValue('2')).toBeDisabled();
+  });
+
   it('mostra os valores da previsão financeira dentro das colunas mensais', () => {
     render(
       <GanttChart

@@ -54,6 +54,8 @@ interface GanttChartProps {
     contractedReleased: number;
     proposed: number;
   }>;
+  /** Tarefas exibidas a partir de uma prévia de aditivo e editáveis somente nela. */
+  lockedTaskLabels?: Record<string, string>;
   readOnly?: boolean;
   collapsedPhaseIds?: string[];
   onCollapsedPhaseIdsChange?: (phaseIds: string[]) => void;
@@ -71,10 +73,13 @@ export default function GanttChart({
   onEditSuspension,
   financialForecastNode,
   monthlyFinancialForecast,
+  lockedTaskLabels = {},
   readOnly = false,
   collapsedPhaseIds: controlledCollapsedPhaseIds,
   onCollapsedPhaseIdsChange,
 }: GanttChartProps) {
+  const isTaskScheduleLocked = useCallback((taskId: string) => !!lockedTaskLabels[taskId], [lockedTaskLabels]);
+  const scheduleLockLabel = useCallback((taskId: string) => lockedTaskLabels[taskId], [lockedTaskLabels]);
   // Lista de equipes do projeto (com fallback aos defaults).
   const projectTeams: TeamDefinition[] = project.teams ?? DEFAULT_TEAMS;
   // Helper local que sempre busca a definição na lista do projeto.
@@ -207,6 +212,7 @@ export default function GanttChart({
   const [reorderDropPos, setReorderDropPos] = useState<'before' | 'after' | null>(null);
 
   const handleRowDragStart = useCallback((e: React.DragEvent, phaseId: string, taskId: string) => {
+    if (isTaskScheduleLocked(taskId)) return;
     setReorderDragPhaseId(phaseId);
     setReorderDragTaskId(taskId);
     try {
@@ -215,20 +221,20 @@ export default function GanttChart({
     } catch {
       // O arraste ainda funciona pelo estado React quando o navegador bloqueia setData.
     }
-  }, []);
+  }, [isTaskScheduleLocked]);
 
   const handleRowDragOver = useCallback((e: React.DragEvent, targetTaskId: string) => {
-    if (!reorderDragTaskId) return;
+    if (!reorderDragTaskId || isTaskScheduleLocked(targetTaskId)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const pos: 'before' | 'after' = (e.clientY - rect.top) < rect.height / 2 ? 'before' : 'after';
     setReorderDropTargetId(targetTaskId);
     setReorderDropPos(pos);
-  }, [reorderDragTaskId]);
+  }, [isTaskScheduleLocked, reorderDragTaskId]);
 
   const handleRowDrop = useCallback((e: React.DragEvent, targetPhaseId: string, targetTaskId: string) => {
-    if (!reorderDragPhaseId || !reorderDragTaskId || !onProjectChange) {
+    if (!reorderDragPhaseId || !reorderDragTaskId || !onProjectChange || isTaskScheduleLocked(targetTaskId)) {
       setReorderDragPhaseId(null);
       setReorderDragTaskId(null);
       setReorderDropTargetId(null);
@@ -252,7 +258,7 @@ export default function GanttChart({
     setReorderDragTaskId(null);
     setReorderDropTargetId(null);
     setReorderDropPos(null);
-  }, [reorderDragPhaseId, reorderDragTaskId, reorderDropPos, project, onProjectChange]);
+  }, [isTaskScheduleLocked, reorderDragPhaseId, reorderDragTaskId, reorderDropPos, project, onProjectChange]);
 
   const handleRowDragEnd = useCallback(() => {
     setReorderDragPhaseId(null);
@@ -705,7 +711,7 @@ export default function GanttChart({
   }, [tasks, taskNumbering]);
 
   const handleDateChange = (taskId: string, field: 'start' | 'end', date: Date | undefined) => {
-    if (!date) return;
+    if (!date || isTaskScheduleLocked(taskId)) return;
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
 
@@ -736,6 +742,7 @@ export default function GanttChart({
   };
 
   const handleDurationChange = (taskId: string, value: string) => {
+    if (isTaskScheduleLocked(taskId)) return;
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
     const parsed = parseInt(value, 10);
@@ -1043,7 +1050,7 @@ export default function GanttChart({
   };
 
   const handleDepChange = (taskId: string, value: string) => {
-    if (!onProjectChange) return;
+    if (!onProjectChange || isTaskScheduleLocked(taskId)) return;
     const nums = value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
@@ -1113,7 +1120,7 @@ export default function GanttChart({
   };
 
   const handleDepTypeChange = (taskId: string, depIndex: number, newType: DependencyType) => {
-    if (!onProjectChange) return;
+    if (!onProjectChange || isTaskScheduleLocked(taskId)) return;
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
     const details = [...(task.dependencyDetails || [])];
@@ -1192,6 +1199,7 @@ export default function GanttChart({
 
   // Toggle duration mode and recalculate if switching to RUP
   const toggleDurationMode = (taskId: string) => {
+    if (isTaskScheduleLocked(taskId)) return;
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
     const currentMode = task.durationMode || 'manual';
@@ -1215,7 +1223,7 @@ export default function GanttChart({
   };
 
   const handleManualDurationChange = (taskId: string, value: number) => {
-    if (value < 1) return;
+    if (value < 1 || isTaskScheduleLocked(taskId)) return;
     const updatedProject = {
       ...project,
       phases: project.phases.map(phase => ({
@@ -1230,6 +1238,7 @@ export default function GanttChart({
 
   // Resize handlers
   const handleResizeMouseDown = (e: React.MouseEvent, taskId: string, side: 'left' | 'right') => {
+    if (isTaskScheduleLocked(taskId)) return;
     e.preventDefault();
     e.stopPropagation();
     setResizingTaskId(taskId);
@@ -2082,18 +2091,20 @@ export default function GanttChart({
                           );
                           const isLaborHighlighted = highlightedLaborTaskIds.has(task.id);
                           const rowTeamDef = statusOnly ? undefined : teamDef(task.team);
+                          const scheduleLocked = isTaskScheduleLocked(task.id);
+                          const scheduleLockSource = scheduleLockLabel(task.id);
                           const isReorderDragging = reorderDragTaskId === task.id;
                           const isReorderTarget = reorderDropTargetId === task.id && reorderDragTaskId && reorderDragTaskId !== task.id;
                           return (
                             <div
                               key={task.id}
-                              draggable={!readOnly && !statusOnly}
+                              draggable={!readOnly && !statusOnly && !scheduleLocked}
                               onDragStart={(e) => handleRowDragStart(e, phase.id, task.id)}
                               onDragOver={(e) => handleRowDragOver(e, task.id)}
                               onDrop={(e) => handleRowDrop(e, phase.id, task.id)}
                               onDragEnd={handleRowDragEnd}
-                              title={statusOnly ? suspension?.label : 'Arraste para reordenar a tarefa'}
-                              className={`grid items-center gap-0.5 px-1 border-b border-border hover:brightness-110 transition-colors ${readOnly || statusOnly ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'} ${
+                              title={statusOnly ? suspension?.label : scheduleLocked ? `Planejada pelo aditivo: ${scheduleLockSource}` : 'Arraste para reordenar a tarefa'}
+                              className={`grid items-center gap-0.5 px-1 border-b border-border hover:brightness-110 transition-colors ${readOnly || statusOnly || scheduleLocked ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'} ${
                                 !rowTeamDef ? (idx % 2 === 0 ? 'bg-card' : 'bg-muted/10') : ''
                               } ${task.isCritical && !rowTeamDef ? 'bg-destructive/5' : ''} ${noWorkDays && !rowTeamDef ? 'bg-warning/10' : ''} ${
                                 isLaborHighlighted ? 'ring-2 ring-inset ring-blue-500 bg-blue-50/80' : ''
@@ -2183,6 +2194,11 @@ export default function GanttChart({
                                       {task.name}
                                     </TooltipContent>
                                   </Tooltip>
+                                  {scheduleLocked && (
+                                    <p className="truncate text-[8px] font-semibold leading-tight text-sky-700" title={`Edite no Cronograma do Aditivo: ${scheduleLockSource}`}>
+                                      Planejada pelo aditivo: {scheduleLockSource}
+                                    </p>
+                                  )}
                                   {context === 'additive-preview' && suspension?.kind === 'quantity_limited' && (
                                     <p
                                       data-testid={`gantt-quantity-limited-${task.id}`}
@@ -2267,7 +2283,7 @@ export default function GanttChart({
                                   return (
                                     <Popover>
                                       <PopoverTrigger asChild>
-                                        <button disabled={readOnly} className={`text-center w-full leading-tight transition-colors ${readOnly ? 'cursor-default' : rowTeamDef ? 'hover:opacity-70' : 'hover:text-primary'}`}>
+                                        <button disabled={readOnly || scheduleLocked} className={`text-center w-full leading-tight transition-colors ${readOnly || scheduleLocked ? 'cursor-default' : rowTeamDef ? 'hover:opacity-70' : 'hover:text-primary'}`} title={scheduleLocked ? `Edite no Cronograma do Aditivo: ${scheduleLockSource}` : undefined}>
                                           {labelEl}
                                         </button>
                                       </PopoverTrigger>
@@ -2329,7 +2345,7 @@ export default function GanttChart({
                                   return (
                                     <Popover>
                                       <PopoverTrigger asChild>
-                                        <button disabled={readOnly} className={`text-center w-full leading-tight transition-colors ${readOnly ? 'cursor-default' : rowTeamDef ? 'hover:opacity-70' : 'hover:text-primary'}`}>
+                                        <button disabled={readOnly || scheduleLocked} className={`text-center w-full leading-tight transition-colors ${readOnly || scheduleLocked ? 'cursor-default' : rowTeamDef ? 'hover:opacity-70' : 'hover:text-primary'}`} title={scheduleLocked ? `Edite no Cronograma do Aditivo: ${scheduleLockSource}` : undefined}>
                                           {labelEl}
                                         </button>
                                       </PopoverTrigger>
@@ -2358,7 +2374,7 @@ export default function GanttChart({
                                   className={`w-full text-[10px] font-medium bg-transparent border-b border-border/50 text-center focus:outline-none focus:border-primary appearance-none ${rowTeamDef ? '' : 'text-foreground'}`}
                                   style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined}
                                   defaultValue={task.duration}
-                                  disabled={readOnly}
+                                  disabled={readOnly || scheduleLocked}
                                   key={`dur-${task.id}-${task.duration}`}
                                   onBlur={(e) => handleDurationChange(task.id, e.target.value)}
                                   onKeyDown={(e) => {
@@ -2378,7 +2394,7 @@ export default function GanttChart({
                                 {statusOnly ? <span className="text-[10px] text-muted-foreground">—</span> : <Tooltip>
                                   <TooltipTrigger asChild>
                                     <button
-                                      disabled={readOnly}
+                                      disabled={readOnly || scheduleLocked}
                                       onClick={() => toggleDurationMode(task.id)}
                                       className={`text-[8px] font-bold rounded px-0.5 py-0 transition-colors ${
                                         rowTeamDef
@@ -2486,6 +2502,7 @@ export default function GanttChart({
                                   placeholder="—"
                                   data-gantt-dependency-input="true"
                                   data-gantt-dependency-task-id={task.id}
+                                  disabled={readOnly || scheduleLocked}
                                   onBlur={(e) => handleDepChange(task.id, e.target.value)}
                                   onKeyDown={(e) => handleDependencyKeyDown(task.id, e)}
                                   title="Nº da tarefa predecessora (ex: 3, 7)"
@@ -2502,7 +2519,7 @@ export default function GanttChart({
                                       if (!dependencyType) return;
                                       handleDepTypeChange(task.id, Number(depIndex), dependencyType as DependencyType);
                                     }}
-                                    disabled={readOnly || !onProjectChange}
+                                    disabled={readOnly || scheduleLocked || !onProjectChange}
                                     className="h-5 w-full border-0 border-b border-border/50 bg-transparent px-0.5 text-center text-[9px] focus:outline-none focus:border-primary disabled:cursor-default"
                                     style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined}
                                     title={depTypes.map(dep => `#${dep.num} ${dep.type}`).join(', ')}
@@ -2529,6 +2546,7 @@ export default function GanttChart({
                               <div className="text-center">
                                 {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : <Select
                                   value={task.team || '_none'}
+                                  disabled={readOnly || scheduleLocked || !onProjectChange}
                                   onValueChange={(val) => {
                                     const newTeam = val === '_none' ? undefined : val as TeamCode;
                                     const updated = { ...project };
@@ -2817,6 +2835,8 @@ export default function GanttChart({
                               laborConflict.missingAvailability.length > 0
                             );
                             const isLaborHighlighted = highlightedLaborTaskIds.has(task.id);
+                            const scheduleLocked = isTaskScheduleLocked(task.id);
+                            const scheduleLockSource = scheduleLockLabel(task.id);
                             // Compute current bar position with drag/resize/propagation
                             let currentLeft = bar.left;
                             let currentWidth = bar.width;
@@ -2888,7 +2908,9 @@ export default function GanttChart({
                                   className={`absolute rounded-md ${hasViolation ? 'animate-pulse ring-2 ring-destructive' : ''} ${noWorkDays ? 'ring-2 ring-warning' : ''} ${hasLaborConflict ? 'ring-2 ring-orange-400' : ''} ${isLaborHighlighted ? 'ring-4 ring-blue-500' : ''} ${suspension ? 'ring-2 ring-amber-500' : ''}`}
                                   title={suspension
                                     ? `${suspension.label} | ${suspension.reason}`
-                                    : `${formatDateFull(task.startDate)} → ${formatDateFull(getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado))} | ${task.duration}d - Arraste para mover`}
+                                    : scheduleLocked
+                                      ? `Planejada pelo aditivo: ${scheduleLockSource}. Edite no Cronograma do Aditivo.`
+                                      : `${formatDateFull(task.startDate)} → ${formatDateFull(getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado))} | ${task.duration}d - Arraste para mover`}
                                   style={{
                                     left: barLeft,
                                     width: barWidth,
@@ -2910,10 +2932,10 @@ export default function GanttChart({
                                     opacity: isDragPropagated ? 0.85 : 0.95,
                                     transition: (isDragging || isResizing || isDragPropagated) ? 'none' : 'left 0.2s ease, width 0.2s ease',
                                     zIndex: 10,
-                                    cursor: readOnly ? 'default' : 'grab',
+                                    cursor: readOnly || scheduleLocked ? 'default' : 'grab',
                                   }}
                                   onMouseDown={(e) => {
-                                    if (readOnly) return;
+                                    if (readOnly || scheduleLocked) return;
                                     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                                     const relX = e.clientX - rect.left;
                                     const barW = rect.width;
@@ -2928,6 +2950,7 @@ export default function GanttChart({
                                     }
                                   }}
                                   onMouseMove={(e) => {
+                                    if (readOnly || scheduleLocked) return;
                                     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                                     const relX = e.clientX - rect.left;
                                     const barW = rect.width;

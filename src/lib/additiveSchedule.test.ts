@@ -5,6 +5,7 @@ import type { Additive, AdditiveComposition, Project } from '@/types/project';
 import {
   buildAdditiveSchedulePreviewProject,
   buildAdditiveScheduleAnalysisProject,
+  buildOperationalProjectFromPendingAdditives,
   buildAdditiveScheduleRows,
   buildPendingAdditiveSuspensionMap,
   buildProjectFromScheduleSnapshot,
@@ -13,6 +14,8 @@ import {
   createAdditiveScheduleSnapshot,
   getAutomaticSuspendedTaskIds,
   getEligibleBlockingCompositions,
+  getPendingAdditiveScheduleConflicts,
+  getPendingAdditiveScheduleControls,
   getQuantitativelyRestrictedTasks,
   mergeAdditiveSchedulePreviewChanges,
   setAdditiveScheduleCollapsedPhaseIds,
@@ -127,6 +130,55 @@ describe('Cronograma do Aditivo', () => {
     expect(releasedMerged.phases[0].tasks.find(task => task.id === 'task-2')?.startDate).toBe('2026-08-20');
     expect(releasedMerged.additives![0].scheduleDraft?.contractedTaskPlans?.find(plan => plan.taskId === 'task-2')?.startDate)
       .toBe('2026-09-01');
+  });
+
+  it('reflete o plano pendente somente na visão operacional e o remove ao cancelar', () => {
+    const withDraft = syncAdditiveScheduleDraft(project, additive.id, '2026-08-13T12:00:00.000Z');
+    const active = withDraft.additives![0];
+    const preview = buildAdditiveSchedulePreviewProject(withDraft, active, active.scheduleDraft!);
+    const changedPreview = {
+      ...preview,
+      phases: preview.phases.map(phase => ({
+        ...phase,
+        tasks: phase.tasks.map(task => task.id === 'task-1'
+          ? { ...task, startDate: '2026-09-15', duration: 7, responsible: 'Encarregado' }
+          : task),
+      })),
+    };
+    const savedDraft = mergeAdditiveSchedulePreviewChanges(withDraft, active.id, preview, changedPreview);
+    const operational = buildOperationalProjectFromPendingAdditives(savedDraft);
+
+    expect(savedDraft.phases[0].tasks.find(task => task.id === 'task-1')).toMatchObject({ startDate: '2026-08-10', duration: 5 });
+    expect(operational.phases[0].tasks.find(task => task.id === 'task-1')).toMatchObject({ startDate: '2026-09-15', duration: 7, responsible: 'Encarregado' });
+    expect(operational.phases[0].tasks.map(task => task.id)).not.toContain('add-add-1-new-comp');
+    expect(getPendingAdditiveScheduleControls(savedDraft).get('task-1')).toMatchObject({ additiveName: '1º Aditivo' });
+
+    const cancelled = {
+      ...savedDraft,
+      additives: savedDraft.additives?.map(item => item.id === active.id ? { ...item, status: 'cancelado' as const } : item),
+    };
+    expect(buildOperationalProjectFromPendingAdditives(cancelled).phases[0].tasks.find(task => task.id === 'task-1'))
+      .toMatchObject({ startDate: '2026-08-10', duration: 5 });
+  });
+
+  it('não permite que dois aditivos pendentes controlem a mesma tarefa', () => {
+    const first = syncAdditiveScheduleDraft(project, additive.id, '2026-08-13T12:00:00.000Z');
+    const withFirstPlan = {
+      ...first,
+      additives: first.additives?.map(item => item.id === additive.id ? {
+        ...item,
+        scheduleDraft: { ...item.scheduleDraft!, contractedTaskPlans: [{
+          taskId: 'task-1', startDate: '2026-09-01', duration: 3, dependencies: [], responsible: '', durationMode: 'manual', isManual: true, manualDuration: 3,
+        }] },
+      } : item),
+    };
+    const second: Additive = { ...additive, id: 'add-2', name: '2º Aditivo', scheduleDraft: undefined };
+    const withSecond = { ...withFirstPlan, additives: [...withFirstPlan.additives!, second] };
+    const conflictPlan = [{ taskId: 'task-1', startDate: '2026-10-01', duration: 2, dependencies: [], responsible: '', durationMode: 'manual' as const, isManual: true, manualDuration: 2 }];
+
+    expect(getPendingAdditiveScheduleConflicts(withSecond, second.id, conflictPlan)).toEqual(['1º Aditivo']);
+    const syncedSecond = syncAdditiveScheduleDraft(withSecond, second.id, '2026-08-14T12:00:00.000Z');
+    expect(syncedSecond.additives?.find(item => item.id === second.id)?.scheduleDraft?.contractedTaskPlans).not.toContainEqual(expect.objectContaining({ taskId: 'task-1' }));
   });
 
   it('classifica execução parcial, suspensão integral e novos serviços', () => {
