@@ -302,6 +302,35 @@ export function buildAdditiveScheduleAnalysisProject(
   };
 }
 
+/**
+ * Serialização estável: ignora ordem de chaves e valores indefinidos, para que a
+ * comparação do rascunho não acuse mudança apenas por ordem diferente (o que
+ * gerava gravações em laço no cronograma do aditivo).
+ */
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => [key, stableValue(item)] as const);
+    return Object.fromEntries(entries);
+  }
+  return value;
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(stableValue(value));
+}
+
+/** Compara listas por `taskId`, sem depender da ordem em que foram geradas. */
+function sameTaskKeyedList<T extends { taskId: string }>(a: T[], b: T[]): boolean {
+  if (a.length !== b.length) return false;
+  const sort = (list: T[]) => list.slice().sort((x, y) => x.taskId.localeCompare(y.taskId));
+  return stableJson(sort(a)) === stableJson(sort(b));
+}
+
+
 function initialPlannedTask(project: Project, additive: Additive, composition: AdditiveComposition): AdditiveSchedulePlannedTask {
   return {
     compositionId: composition.id,
@@ -364,10 +393,10 @@ export function syncAdditiveScheduleDraft(project: Project, additiveId: string, 
   });
   const changed = !previous
     || previous.version !== version
-    || JSON.stringify(previous.plannedTasks) !== JSON.stringify(plannedTasks)
-    || JSON.stringify(previous.dependentTaskIds) !== JSON.stringify(dependentTaskIds)
-    || JSON.stringify(previous.contractedTaskPlans ?? []) !== JSON.stringify(contractedTaskPlans)
-    || JSON.stringify(previous.dependencyBlocks ?? []) !== JSON.stringify(dependencyBlocks);
+    || stableJson(previous.plannedTasks) !== stableJson(plannedTasks)
+    || stableJson(previous.dependentTaskIds) !== stableJson(dependentTaskIds)
+    || !sameTaskKeyedList(previous.contractedTaskPlans ?? [], contractedTaskPlans)
+    || !sameTaskKeyedList(previous.dependencyBlocks ?? [], dependencyBlocks);
   if (!changed) return project;
   const scheduleDraft: AdditiveScheduleDraft = {
     version,
@@ -601,8 +630,8 @@ export function mergeAdditiveSchedulePreviewChanges(
     if (!restrictedIds.has(baseTask.id) && !changedFromOfficial) return [];
     return [nextPlan];
   });
-  const unchanged = JSON.stringify(draft.plannedTasks) === JSON.stringify(plannedTasks)
-    && JSON.stringify(draft.contractedTaskPlans ?? []) === JSON.stringify(contractedTaskPlans);
+  const unchanged = stableJson(draft.plannedTasks) === stableJson(plannedTasks)
+    && sameTaskKeyedList(draft.contractedTaskPlans ?? [], contractedTaskPlans);
   if (unchanged) return project;
   const scheduleDraft = { ...draft, plannedTasks, contractedTaskPlans, updatedAt: now };
   return {

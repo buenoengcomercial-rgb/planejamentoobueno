@@ -89,7 +89,13 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
     if (!active || (active.isContracted && !active.editUnlocked)) return;
     const synced = syncAdditiveScheduleDraft(project, active.id);
     const next = settleAdditiveScheduleDraft(synced, active.id, obraConfig);
-    if (next !== project) onProjectChange(next);
+    if (next !== project) {
+      const before = active.scheduleDraft; const after = (next.additives ?? []).find(a => a.id === active.id)?.scheduleDraft;
+      const bp = before?.contractedTaskPlans ?? []; const ap = after?.contractedTaskPlans ?? [];
+      const bkeys = new Set(bp.map(x => x.taskId));
+      console.log('[DBGAS]', { syncChanged: synced !== project, settleChanged: next !== synced, blen: bp.length, alen: ap.length, added: ap.filter(x => !bkeys.has(x.taskId)).map(x => x.taskId).slice(0,3) });
+      onProjectChange(next);
+    }
   }, [active, obraConfig, onProjectChange, project]);
 
   const isArchived = !!active?.isContracted && !active.editUnlocked;
