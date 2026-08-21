@@ -23,6 +23,7 @@ import {
 } from '@/lib/weeklyRoutine';
 import { buildPendingAdditiveSuspensionMap, isStatusOnlySuspension } from '@/lib/additiveSchedule';
 import { loadObraConfig } from '@/components/ConfiguracaoObra';
+import { applyDailyProductionLogs, upsertDailyProductionLog } from '@/lib/dailyProductionLogs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -53,6 +54,8 @@ interface Props {
   project: Project;
   onProjectChange: (next: Project | ((prev: Project) => Project)) => void;
   onOpenDailyReport: (dateISO: string) => void;
+  onOpenProduction: (taskId: string, dateISO: string) => void;
+  readOnly?: boolean;
   initialWeek?: string;
   onWeekChange?: (weekStartISO: string) => void;
   undoButton?: React.ReactNode;
@@ -158,23 +161,26 @@ const DIARY_META: Record<WeeklyRoutineDiaryStatus, { label: string; className: s
 
 function ActivityCard({
   activity,
-  onOpen,
+  onOpenProduction,
+  onRegister,
   teams,
+  readOnly = false,
   showChapter = true,
 }: {
   activity: WeeklyRoutineActivity;
-  onOpen: () => void;
+  onOpenProduction: (activity: WeeklyRoutineActivity) => void;
+  onRegister: (activity: WeeklyRoutineActivity, actualQuantity: number) => void;
   teams: Project['teams'];
+  readOnly?: boolean;
   showChapter?: boolean;
 }) {
   const team = getTeamDefinition(activity.teamCode, teams?.length ? teams : DEFAULT_TEAMS);
+  const [actualDraft, setActualDraft] = useState(() => String(activity.actualQuantity || ''));
+  useEffect(() => setActualDraft(activity.actualQuantity ? String(activity.actualQuantity) : ''), [activity.actualQuantity, activity.date, activity.taskId]);
+  const actualQuantity = Number(actualDraft);
+  const canRegister = actualDraft.trim() !== '' && Number.isFinite(actualQuantity) && actualQuantity >= 0;
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="group w-full rounded-lg border border-border bg-background p-3 text-left transition hover:border-primary/40 hover:bg-primary/[0.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      aria-label={`Abrir diário de ${formatDateBR(activity.date)} para ${activity.taskName}`}
-    >
+    <article className="group w-full rounded-lg border border-border bg-background p-3 text-left transition hover:border-primary/40 hover:bg-primary/[0.03]">
       <div className="flex items-start justify-between gap-2">
         {showChapter && <p className="line-clamp-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {activity.chapterNumber ? `${activity.chapterNumber} · ` : ''}{activity.chapterName}
@@ -211,18 +217,39 @@ function ActivityCard({
         </div>
         <Progress value={activity.progressPercent} className="mt-1.5 h-2" aria-label={`${activity.progressPercent}% concluído`} />
       </div>
-      <span className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-primary">
-        Abrir diário <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-      </span>
-    </button>
+      {!readOnly && (
+        <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+          <label className="min-w-0 text-[11px] font-medium text-muted-foreground">
+            Executado em {formatShortDate(activity.date)} ({activity.unit})
+            <Input
+              type="number"
+              min={0}
+              step="0.01"
+              value={actualDraft}
+              onChange={event => setActualDraft(event.target.value)}
+              className="mt-1 h-10 text-sm"
+              aria-label={`Quantidade executada em ${formatDateBR(activity.date)} para ${activity.taskName}`}
+            />
+          </label>
+          <Button type="button" size="sm" className="mt-[18px] min-h-10" disabled={!canRegister} onClick={() => onRegister(activity, actualQuantity)}>
+            Registrar
+          </Button>
+        </div>
+      )}
+      <Button type="button" variant="outline" size="sm" className="mt-2 min-h-10 w-full" onClick={() => onOpenProduction(activity)}>
+        Ir para produção <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+      </Button>
+    </article>
   );
 }
 
-function ActivityGroups({ groups, date, teams, onOpen, depth = 0 }: {
+function ActivityGroups({ groups, date, teams, onOpenProduction, onRegister, readOnly, depth = 0 }: {
   groups: WeeklyRoutineActivityGroup[];
   date: string;
   teams: Project['teams'];
-  onOpen: () => void;
+  onOpenProduction: (activity: WeeklyRoutineActivity) => void;
+  onRegister: (activity: WeeklyRoutineActivity, actualQuantity: number) => void;
+  readOnly: boolean;
   depth?: number;
 }) {
   return (
@@ -240,11 +267,13 @@ function ActivityGroups({ groups, date, teams, onOpen, depth = 0 }: {
               key={`${date}:${activity.taskId}`}
               activity={activity}
               teams={teams}
-              onOpen={onOpen}
+              onOpenProduction={onOpenProduction}
+              onRegister={onRegister}
+              readOnly={readOnly}
               showChapter={false}
             />
           ))}
-          {group.children.length > 0 && <ActivityGroups groups={group.children} date={date} teams={teams} onOpen={onOpen} depth={depth + 1} />}
+          {group.children.length > 0 && <ActivityGroups groups={group.children} date={date} teams={teams} onOpenProduction={onOpenProduction} onRegister={onRegister} readOnly={readOnly} depth={depth + 1} />}
         </section>
       ))}
     </div>
@@ -271,7 +300,7 @@ function MetricCard({ label, value, icon: Icon, tone = 'primary' }: {
   );
 }
 
-export default function ManagementRoutine({ project, onProjectChange, onOpenDailyReport, initialWeek, onWeekChange, undoButton }: Props) {
+export default function ManagementRoutine({ project, onProjectChange, onOpenDailyReport, onOpenProduction, readOnly = false, initialWeek, onWeekChange, undoButton }: Props) {
   const routine = useMemo(() => ensureRoutine(project), [project]);
   const [activeTab, setActiveTab] = useState('agenda');
   const [selectedWeekStart, setSelectedWeekStart] = useState(() => startOfWeekISO(initialWeek || todayISO()));
@@ -300,6 +329,19 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
     () => findNextScheduledActivity(project, addDaysISO(selectedWeekStart, 7), pendingAdditiveTaskIds, obraCalendar),
     [obraCalendar, pendingAdditiveTaskIds, project, selectedWeekStart],
   );
+  const registerActivityProduction = (activity: WeeklyRoutineActivity, actualQuantity: number) => {
+    onProjectChange(previous => ({
+      ...previous,
+      phases: previous.phases.map(phase => ({
+        ...phase,
+        tasks: phase.tasks.map(task => {
+          if (task.id !== activity.taskId) return task;
+          const logs = upsertDailyProductionLog(task, activity.date, actualQuantity);
+          return { ...task, ...applyDailyProductionLogs(task, logs) };
+        }),
+      })),
+    }));
+  };
 
   useEffect(() => {
     if (initialWeek) setSelectedWeekStart(startOfWeekISO(initialWeek));
@@ -437,7 +479,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
                         <p className="mt-2 text-xs text-muted-foreground">{day.activities.length} atividade(s)</p>
                       </div>
                       <div className="space-y-2 p-2.5">
-                        {day.activities.length ? <ActivityGroups groups={groupsByDay.get(day.date) ?? []} date={day.date} teams={project.teams} onOpen={() => onOpenDailyReport(day.date)} /> : <p className="py-8 text-center text-xs text-muted-foreground">Sem atividade</p>}
+                        {day.activities.length ? <ActivityGroups groups={groupsByDay.get(day.date) ?? []} date={day.date} teams={project.teams} onOpenProduction={onOpenProduction} onRegister={registerActivityProduction} readOnly={readOnly} /> : <p className="py-8 text-center text-xs text-muted-foreground">Sem atividade</p>}
                       </div>
                       <div className="border-t border-border p-2.5">
                         <Button variant="ghost" size="sm" className="min-h-10 w-full text-xs" onClick={() => onOpenDailyReport(day.date)}>
@@ -465,7 +507,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
                         </Button>
                       </CardHeader>
                       <CardContent className="space-y-2">
-                        {day.activities.length ? <ActivityGroups groups={groupsByDay.get(day.date) ?? []} date={day.date} teams={project.teams} onOpen={() => onOpenDailyReport(day.date)} /> : <p className="rounded-lg bg-muted/30 p-4 text-sm text-muted-foreground">Sem atividade programada.</p>}
+                        {day.activities.length ? <ActivityGroups groups={groupsByDay.get(day.date) ?? []} date={day.date} teams={project.teams} onOpenProduction={onOpenProduction} onRegister={registerActivityProduction} readOnly={readOnly} /> : <p className="rounded-lg bg-muted/30 p-4 text-sm text-muted-foreground">Sem atividade programada.</p>}
                       </CardContent>
                     </Card>
                   );

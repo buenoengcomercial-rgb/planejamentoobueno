@@ -193,6 +193,14 @@ export default function Index() {
     if (projectId) navigate(`/obras/${projectId}/diario?data=${dateISO}`);
   }, [navigate]);
 
+  const handleOpenProductionActivity = useCallback((taskId: string, dateISO: string) => {
+    setProductionWorkspaceInitialTab('production');
+    setCurrentView('tasks');
+    setSidebarOpen(false);
+    const projectId = rawProjectRef.current?.id;
+    if (projectId) navigate(`/obras/${projectId}/producao?atividade=${encodeURIComponent(taskId)}&data=${encodeURIComponent(dateISO)}`);
+  }, [navigate]);
+
   const undoStacksRef = useRef<UndoStacks>({ dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] });
   const [undoVersion, setUndoVersion] = useState(0);
   const rawProjectRef = useRef<Project | null>(null);
@@ -250,7 +258,9 @@ export default function Index() {
   useEffect(() => {
     if (!rawProject?.id) return;
     const route = `/obras/${rawProject.id}/${VIEW_ROUTE[safeCurrentView]}`;
-    const keepSearch = safeCurrentView === 'management' || safeCurrentView === 'dailyReport';
+    const keepSearch = safeCurrentView === 'management'
+      || safeCurrentView === 'dailyReport'
+      || (safeCurrentView === 'tasks' && new URLSearchParams(location.search).has('atividade'));
     const target = `${route}${keepSearch ? location.search : ''}`;
     if (`${location.pathname}${location.search}` !== target) navigate(target, { replace: true });
   }, [safeCurrentView, location.pathname, location.search, navigate, rawProject?.id]);
@@ -1191,6 +1201,8 @@ export default function Index() {
             project={operationalProject ?? project}
             onProjectChange={managementSetter}
             onOpenDailyReport={handleOpenDailyReport}
+            onOpenProduction={handleOpenProductionActivity}
+            readOnly={!editor}
             initialWeek={new URLSearchParams(location.search).get('semana') || undefined}
             onWeekChange={weekStart => navigate(`/obras/${project.id}/rotina?semana=${weekStart}`, { replace: true })}
             undoButton={<UndoButton canUndo={canUndo('management')} onUndo={() => handleUndo('management')} />}
@@ -1218,6 +1230,8 @@ export default function Index() {
             dailyReportInitialDate={dailyReportInitialDate}
             dailyReportInitialFilter={dailyReportInitialFilter}
             dailyReportNavKey={dailyReportNavKey}
+            productionFocusTaskId={new URLSearchParams(location.search).get('atividade') || undefined}
+            productionFocusDate={new URLSearchParams(location.search).get('data') || undefined}
           />
         );
       case 'measurement':

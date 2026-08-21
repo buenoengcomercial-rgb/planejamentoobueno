@@ -1,4 +1,4 @@
-import { Fragment } from 'react';
+import { Fragment, useEffect } from 'react';
 import { Task, DailyProductionLog, DailyLaborEntry } from '@/types/project';
 import { ClipboardList, Plus, Trash2, TrendingUp, TrendingDown, PlusCircle, Users } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -7,6 +7,7 @@ import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 interface DailyLogsPanelProps {
   task: Task;
   onChange: (logs: DailyProductionLog[]) => void;
+  focusDate?: string;
 }
 
 /** Status color por defasagem (planejado - realizado).
@@ -26,8 +27,10 @@ const STATUS_BG: Record<string, string> = {
   late: 'bg-destructive/10 text-destructive',
 };
 
-export default function DailyLogsPanel({ task, onChange }: DailyLogsPanelProps) {
-  const logs = task.dailyLogs || [];
+const EMPTY_DAILY_LOGS: DailyProductionLog[] = [];
+
+export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsPanelProps) {
+  const logs = task.dailyLogs ?? EMPTY_DAILY_LOGS;
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const baseDuration = task.originalDuration ?? task.duration;
   const plannedDailyProduction = task.quantity && baseDuration > 0
@@ -82,6 +85,35 @@ export default function DailyLogsPanel({ task, onChange }: DailyLogsPanelProps) 
   const removeLog = (id: string) => {
     onChange(logs.filter(l => l.id !== id));
   };
+
+  const addLogAtDate = (dateISO: string) => {
+    const existing = logs.find(log => log.date === dateISO);
+    if (existing) {
+      window.setTimeout(() => {
+        const el = document.querySelector<HTMLInputElement>(`[data-log-date="${dateISO}"]`);
+        el?.focus();
+        el?.select();
+      }, 50);
+      return;
+    }
+    const newLog = buildLog(dateISO);
+    onChange([...logs, newLog]);
+    window.setTimeout(() => {
+      const el = document.querySelector<HTMLInputElement>(`[data-actual-input="${newLog.id}"]`);
+      el?.focus();
+      el?.select();
+    }, 50);
+  };
+
+  useEffect(() => {
+    if (!focusDate || !logs.some(log => log.date === focusDate)) return;
+    const timer = window.setTimeout(() => {
+      const el = document.querySelector<HTMLInputElement>(`[data-log-date="${focusDate}"]`);
+      el?.focus();
+      el?.select();
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [focusDate, logs]);
 
   const addLaborEntry = (logId: string) => {
     const entry: DailyLaborEntry = {
@@ -206,6 +238,15 @@ export default function DailyLogsPanel({ task, onChange }: DailyLogsPanelProps) 
             >
               <Plus className="w-3 h-3" /> Novo
             </button>
+            {focusDate && !logs.some(log => log.date === focusDate) && (
+              <button
+                onClick={() => addLogAtDate(focusDate)}
+                className="text-[10px] px-2 py-1 rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                title={`Adicionar lançamento em ${formatBR(focusDate)}`}
+              >
+                Registrar {formatBR(focusDate)}
+              </button>
+            )}
           </div>
         </div>
 
@@ -306,6 +347,7 @@ export default function DailyLogsPanel({ task, onChange }: DailyLogsPanelProps) 
               step={0.1}
               value={row.actualQuantity}
               data-actual-input={row.id}
+              data-log-date={row.date}
               onChange={e => updateLog(row.id, { actualQuantity: Number(e.target.value) })}
               className="bg-transparent border border-current/30 rounded px-1 py-0.5 text-[11px] text-center font-bold focus:outline-none focus:border-current"
             />

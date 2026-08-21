@@ -19,6 +19,8 @@ interface DailyProductionWorkspaceProps {
   dailyReportInitialDate?: string;
   dailyReportInitialFilter?: string;
   dailyReportNavKey?: number;
+  productionFocusTaskId?: string;
+  productionFocusDate?: string;
 }
 
 export default function DailyProductionWorkspace({
@@ -33,6 +35,8 @@ export default function DailyProductionWorkspace({
   dailyReportInitialDate,
   dailyReportInitialFilter,
   dailyReportNavKey,
+  productionFocusTaskId,
+  productionFocusDate,
 }: DailyProductionWorkspaceProps) {
   const [activeTab, setActiveTab] = useState<ProductionWorkspaceTab>(initialTab);
 
@@ -81,6 +85,8 @@ export default function DailyProductionWorkspace({
               onProjectChange={onProductionChange}
               undoButton={productionUndoButton}
               readOnly={productionReadOnly}
+              focusTaskId={productionFocusTaskId}
+              focusDate={productionFocusDate}
             />
           </TabsContent>
 
