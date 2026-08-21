@@ -168,7 +168,7 @@ function ActivityCard({
   showChapter = true,
 }: {
   activity: WeeklyRoutineActivity;
-  onOpenProduction: (activity: WeeklyRoutineActivity) => void;
+  onOpenProduction: (taskId: string, dateISO: string) => void;
   onRegister: (activity: WeeklyRoutineActivity, actualQuantity: number) => void;
   teams: Project['teams'];
   readOnly?: boolean;
@@ -236,7 +236,7 @@ function ActivityCard({
           </Button>
         </div>
       )}
-      <Button type="button" variant="outline" size="sm" className="mt-2 min-h-10 w-full" onClick={() => onOpenProduction(activity)}>
+      <Button type="button" variant="outline" size="sm" className="mt-2 min-h-10 w-full" onClick={() => onOpenProduction(activity.taskId, activity.date)}>
         Ir para produção <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
       </Button>
     </article>
@@ -247,7 +247,7 @@ function ActivityGroups({ groups, date, teams, onOpenProduction, onRegister, rea
   groups: WeeklyRoutineActivityGroup[];
   date: string;
   teams: Project['teams'];
-  onOpenProduction: (activity: WeeklyRoutineActivity) => void;
+  onOpenProduction: (taskId: string, dateISO: string) => void;
   onRegister: (activity: WeeklyRoutineActivity, actualQuantity: number) => void;
   readOnly: boolean;
   depth?: number;
