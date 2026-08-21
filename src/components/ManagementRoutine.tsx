@@ -159,6 +159,22 @@ const DIARY_META: Record<WeeklyRoutineDiaryStatus, { label: string; className: s
   impediment: { label: 'Com impedimento', className: 'border-destructive/30 bg-destructive/10 text-destructive' },
 };
 
+/** Identificação visual estável por capítulo principal; não representa status operacional. */
+const CHAPTER_TONES = [
+  { card: 'border-l-sky-400 bg-sky-50/35 hover:border-sky-300 hover:bg-sky-50/60', header: 'border border-sky-200/80 bg-sky-50/75 text-sky-950', nested: 'border border-sky-100 bg-sky-50/45 text-sky-950', badge: 'border-sky-200 bg-white/70 text-sky-700' },
+  { card: 'border-l-emerald-400 bg-emerald-50/30 hover:border-emerald-300 hover:bg-emerald-50/55', header: 'border border-emerald-200/80 bg-emerald-50/75 text-emerald-950', nested: 'border border-emerald-100 bg-emerald-50/45 text-emerald-950', badge: 'border-emerald-200 bg-white/70 text-emerald-700' },
+  { card: 'border-l-violet-400 bg-violet-50/30 hover:border-violet-300 hover:bg-violet-50/55', header: 'border border-violet-200/80 bg-violet-50/75 text-violet-950', nested: 'border border-violet-100 bg-violet-50/45 text-violet-950', badge: 'border-violet-200 bg-white/70 text-violet-700' },
+  { card: 'border-l-amber-400 bg-amber-50/35 hover:border-amber-300 hover:bg-amber-50/60', header: 'border border-amber-200/80 bg-amber-50/75 text-amber-950', nested: 'border border-amber-100 bg-amber-50/45 text-amber-950', badge: 'border-amber-200 bg-white/70 text-amber-700' },
+  { card: 'border-l-rose-400 bg-rose-50/30 hover:border-rose-300 hover:bg-rose-50/55', header: 'border border-rose-200/80 bg-rose-50/75 text-rose-950', nested: 'border border-rose-100 bg-rose-50/45 text-rose-950', badge: 'border-rose-200 bg-white/70 text-rose-700' },
+  { card: 'border-l-cyan-400 bg-cyan-50/30 hover:border-cyan-300 hover:bg-cyan-50/55', header: 'border border-cyan-200/80 bg-cyan-50/75 text-cyan-950', nested: 'border border-cyan-100 bg-cyan-50/45 text-cyan-950', badge: 'border-cyan-200 bg-white/70 text-cyan-700' },
+] as const;
+
+function chapterTone(chapterId: string) {
+  let hash = 0;
+  for (let index = 0; index < chapterId.length; index += 1) hash = (hash * 31 + chapterId.charCodeAt(index)) | 0;
+  return CHAPTER_TONES[Math.abs(hash) % CHAPTER_TONES.length];
+}
+
 function ActivityCard({
   activity,
   onOpenProduction,
@@ -173,6 +189,7 @@ function ActivityCard({
   teams: Project['teams'];
   readOnly?: boolean;
   showChapter?: boolean;
+  tone: (typeof CHAPTER_TONES)[number];
 }) {
   const team = getTeamDefinition(activity.teamCode, teams?.length ? teams : DEFAULT_TEAMS);
   const [actualDraft, setActualDraft] = useState(() => String(activity.actualQuantity || ''));
@@ -180,7 +197,7 @@ function ActivityCard({
   const actualQuantity = Number(actualDraft);
   const canRegister = actualDraft.trim() !== '' && Number.isFinite(actualQuantity) && actualQuantity >= 0;
   return (
-    <article className="group w-full rounded-lg border border-border bg-background p-3 text-left transition hover:border-primary/40 hover:bg-primary/[0.03]">
+    <article className={`group w-full rounded-lg border border-border border-l-4 bg-background p-3 text-left transition ${tone.card}`}>
       <div className="flex items-start justify-between gap-2">
         {showChapter && <p className="line-clamp-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {activity.chapterNumber ? `${activity.chapterNumber} · ` : ''}{activity.chapterName}
@@ -243,7 +260,7 @@ function ActivityCard({
   );
 }
 
-function ActivityGroups({ groups, date, teams, onOpenProduction, onRegister, readOnly, depth = 0 }: {
+function ActivityGroups({ groups, date, teams, onOpenProduction, onRegister, readOnly, depth = 0, rootChapterId }: {
   groups: WeeklyRoutineActivityGroup[];
   date: string;
   teams: Project['teams'];
@@ -251,16 +268,20 @@ function ActivityGroups({ groups, date, teams, onOpenProduction, onRegister, rea
   onRegister: (activity: WeeklyRoutineActivity, actualQuantity: number) => void;
   readOnly: boolean;
   depth?: number;
+  rootChapterId?: string;
 }) {
   return (
     <div className={`space-y-2 ${depth ? 'border-l border-primary/20 pl-2' : ''}`}>
-      {groups.map(group => (
+      {groups.map(group => {
+        const chapterRootId = rootChapterId ?? group.chapter.id;
+        const tone = chapterTone(chapterRootId);
+        return (
         <section key={group.chapter.id} className="space-y-2">
-          <div className="flex items-center justify-between gap-2 rounded-md bg-muted/45 px-2 py-1.5">
+          <div className={`flex items-center justify-between gap-2 rounded-md px-2 py-1.5 ${depth ? tone.nested : tone.header}`}>
             <p className="min-w-0 truncate text-[11px] font-bold uppercase tracking-wide text-foreground">
               {group.chapter.number ? `${group.chapter.number} · ` : ''}{group.chapter.name}
             </p>
-            <Badge variant="outline" className="shrink-0 text-[10px]">{group.totalActivities}</Badge>
+            <Badge variant="outline" className={`shrink-0 text-[10px] ${tone.badge}`}>{group.totalActivities}</Badge>
           </div>
           {group.activities.map(activity => (
             <ActivityCard
@@ -271,11 +292,12 @@ function ActivityGroups({ groups, date, teams, onOpenProduction, onRegister, rea
               onRegister={onRegister}
               readOnly={readOnly}
               showChapter={false}
+              tone={tone}
             />
           ))}
-          {group.children.length > 0 && <ActivityGroups groups={group.children} date={date} teams={teams} onOpenProduction={onOpenProduction} onRegister={onRegister} readOnly={readOnly} depth={depth + 1} />}
+          {group.children.length > 0 && <ActivityGroups groups={group.children} date={date} teams={teams} onOpenProduction={onOpenProduction} onRegister={onRegister} readOnly={readOnly} depth={depth + 1} rootChapterId={chapterRootId} />}
         </section>
-      ))}
+      )})}
     </div>
   );
 }
