@@ -182,6 +182,7 @@ function ActivityCard({
   teams,
   readOnly = false,
   showChapter = true,
+  tone,
 }: {
   activity: WeeklyRoutineActivity;
   onOpenProduction: (taskId: string, dateISO: string) => void;
