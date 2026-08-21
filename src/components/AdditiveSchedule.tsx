@@ -89,24 +89,7 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
     if (!active || (active.isContracted && !active.editUnlocked)) return;
     const synced = syncAdditiveScheduleDraft(project, active.id);
     const next = settleAdditiveScheduleDraft(synced, active.id, obraConfig);
-    if (next !== project) {
-      const before = active.scheduleDraft;
-      const after = (next.additives ?? []).find(a => a.id === active.id)?.scheduleDraft;
-      const bp = JSON.parse(JSON.stringify(before?.contractedTaskPlans ?? []));
-      const ap = JSON.parse(JSON.stringify(after?.contractedTaskPlans ?? []));
-      const diffs = ap.filter((x, i) => JSON.stringify(x) !== JSON.stringify(bp[i]));
-      console.log('[DBGAS] plansdiff len', bp.length, ap.length, 'first', JSON.stringify(diffs[0]), 'was', JSON.stringify(bp.find(x => x.taskId === diffs[0]?.taskId)));
-      console.log('[DBGAS] change', {
-        syncChanged: synced !== project,
-        settleChanged: next !== synced,
-        versionBefore: before?.version, versionAfter: after?.version,
-        plannedEq: JSON.stringify(before?.plannedTasks) === JSON.stringify(after?.plannedTasks),
-        plansEq: JSON.stringify(before?.contractedTaskPlans ?? []) === JSON.stringify(after?.contractedTaskPlans ?? []),
-        depsEq: JSON.stringify(before?.dependentTaskIds) === JSON.stringify(after?.dependentTaskIds),
-        blocksEq: JSON.stringify(before?.dependencyBlocks ?? []) === JSON.stringify(after?.dependencyBlocks ?? []),
-      });
-      onProjectChange(next);
-    }
+    if (next !== project) onProjectChange(next);
   }, [active, obraConfig, onProjectChange, project]);
 
   const isArchived = !!active?.isContracted && !active.editUnlocked;
