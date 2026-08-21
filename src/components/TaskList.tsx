@@ -17,7 +17,7 @@ import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
 import { sortTasksForSchedule, withScheduleOrderForMove } from '@/lib/taskOrdering';
 import { normalizeLaborRole } from '@/lib/laborDimensioning';
-import { applyDailyProductionLogs } from '@/lib/dailyProductionLogs';
+import { applyDailyProductionLogs, upsertDailyProductionLog } from '@/lib/dailyProductionLogs';
 
 /** Encurta o nome da tarefa para no máximo `maxWords` palavras, adicionando "…" no final. */
 function truncateWords(text: string, maxWords = 4): string {
@@ -411,7 +411,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
     });
   };
 
-  const updateTask = (phaseId: string, taskId: string, updates: Partial<Task>) => {
+  const updateTask = useCallback((phaseId: string, taskId: string, updates: Partial<Task>) => {
     const updated = {
       ...project,
       phases: project.phases.map(p =>
@@ -421,7 +421,19 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
       ),
     };
     onProjectChange(updated);
-  };
+  }, [onProjectChange, project]);
+
+  // A navegação vinda da Rotina representa uma intenção explícita de apontar
+  // naquela data. Cria a linha uma única vez, sem alterar o avanço físico.
+  useEffect(() => {
+    if (!focusTaskId || !focusDate || readOnly) return;
+    const phase = project.phases.find(item => item.tasks.some(task => task.id === focusTaskId));
+    const task = phase?.tasks.find(item => item.id === focusTaskId);
+    if (!phase || !task || task.dailyLogs?.some(log => log.date === focusDate)) return;
+
+    const logs = upsertDailyProductionLog(task, focusDate, 0);
+    updateTask(phase.id, task.id, applyDailyProductionLogs(task, logs));
+  }, [focusTaskId, focusDate, project, readOnly, updateTask]);
 
   const updateLaborComp = (phaseId: string, taskId: string, compId: string, updates: Partial<LaborComposition>) => {
     const updated = {

@@ -86,25 +86,6 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
     onChange(logs.filter(l => l.id !== id));
   };
 
-  const addLogAtDate = (dateISO: string) => {
-    const existing = logs.find(log => log.date === dateISO);
-    if (existing) {
-      window.setTimeout(() => {
-        const el = document.querySelector<HTMLInputElement>(`[data-log-date="${dateISO}"]`);
-        el?.focus();
-        el?.select();
-      }, 50);
-      return;
-    }
-    const newLog = buildLog(dateISO);
-    onChange([...logs, newLog]);
-    window.setTimeout(() => {
-      const el = document.querySelector<HTMLInputElement>(`[data-actual-input="${newLog.id}"]`);
-      el?.focus();
-      el?.select();
-    }, 50);
-  };
-
   useEffect(() => {
     if (!focusDate || !logs.some(log => log.date === focusDate)) return;
     const timer = window.setTimeout(() => {
@@ -238,15 +219,6 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
             >
               <Plus className="w-3 h-3" /> Novo
             </button>
-            {focusDate && !logs.some(log => log.date === focusDate) && (
-              <button
-                onClick={() => addLogAtDate(focusDate)}
-                className="text-[10px] px-2 py-1 rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-                title={`Adicionar lançamento em ${formatBR(focusDate)}`}
-              >
-                Registrar {formatBR(focusDate)}
-              </button>
-            )}
           </div>
         </div>
 

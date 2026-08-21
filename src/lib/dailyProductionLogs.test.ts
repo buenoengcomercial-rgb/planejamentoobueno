@@ -47,6 +47,23 @@ describe('dailyProductionLogs', () => {
     expect(updates).toMatchObject({ executedQuantityTotal: 35, remainingQuantity: 65, percentComplete: 35 });
   });
 
+  it('cria uma linha inicial com zero sem alterar o avanço físico', () => {
+    const logs = upsertDailyProductionLog(task, '2026-09-03', 0);
+    const updates = applyDailyProductionLogs(task, logs);
+
+    expect(logs).toMatchObject([{
+      date: '2026-09-03', plannedQuantity: 20, actualQuantity: 0,
+    }]);
+    expect(updates).toMatchObject({
+      dailyLogs: logs,
+      executedQuantityTotal: 0,
+      remainingQuantity: 100,
+      physicalProgress: 0,
+      percentComplete: 0,
+      current: undefined,
+    });
+  });
+
   it('recalcula o progresso ao corrigir a produção do dia para zero', () => {
     const existingTask = {
       ...task,
