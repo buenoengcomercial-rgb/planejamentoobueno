@@ -617,6 +617,9 @@ export interface WeeklyRoutineActivity {
   endDate: string;
   plannedQuantity: number;
   actualQuantity: number;
+  totalQuantity: number;
+  executedQuantity: number;
+  progressPercent: number;
   unit: string;
   teamCode?: TeamCode;
   responsible?: string;

@@ -52,6 +52,9 @@ describe('weeklyRoutine', () => {
     expect(week.find(day => day.date === '2026-08-13')?.activities[0]).toMatchObject({
       plannedQuantity: 10,
       actualQuantity: 10,
+      totalQuantity: 30,
+      executedQuantity: 10,
+      progressPercent: 33.3,
       completed: true,
     });
     expect(week.find(day => day.date === '2026-08-15')).toBeUndefined();

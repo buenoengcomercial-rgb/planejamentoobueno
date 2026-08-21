@@ -144,6 +144,16 @@ function quantityForDay(task: Task, date: string, kind: 'planned' | 'actual', wo
   return duration > 0 ? Math.round(((quantity / duration) * workDayWeight) * 100) / 100 : 0;
 }
 
+function executionSummary(task: Task): { totalQuantity: number; executedQuantity: number; progressPercent: number } {
+  const totalQuantity = Math.max(0, Number(task.quantity) || 0);
+  const loggedQuantity = (task.dailyLogs ?? []).reduce((sum, log) => sum + (Number(log.actualQuantity) || 0), 0);
+  const executedQuantity = Math.max(0, Number(task.executedQuantityTotal) || 0, loggedQuantity);
+  const progressFromQuantity = totalQuantity > 0 ? (executedQuantity / totalQuantity) * 100 : null;
+  const fallbackProgress = Number(task.physicalProgress ?? task.percentComplete) || 0;
+  const progressPercent = Math.min(100, Math.max(0, Math.round((progressFromQuantity ?? fallbackProgress) * 10) / 10));
+  return { totalQuantity, executedQuantity, progressPercent };
+}
+
 function compareChapterNumbers(left?: string, right?: string): number {
   const leftParts = (left || '').split('.');
   const rightParts = (right || '').split('.');
@@ -216,6 +226,7 @@ export function buildWeeklyRoutine(
         if (scheduledWeight <= 0) return null;
         const plannedQuantity = quantityForDay(task, date, 'planned', scheduledWeight);
         const actualQuantity = quantityForDay(task, date, 'actual');
+        const execution = executionSummary(task);
         return {
           taskId: task.id,
           taskName: task.name,
@@ -227,6 +238,7 @@ export function buildWeeklyRoutine(
           endDate: schedule.endDate,
           plannedQuantity,
           actualQuantity,
+          ...execution,
           unit: task.unit || 'un',
           teamCode: task.team,
           responsible: task.responsible,
@@ -274,6 +286,7 @@ export function findNextScheduledActivity(
     endDate: first.schedule.endDate,
     plannedQuantity: quantityForDay(first.task, date, 'planned', first.schedule.workDays.get(date) ?? 0),
     actualQuantity: quantityForDay(first.task, date, 'actual'),
+    ...executionSummary(first.task),
     unit: first.task.unit || 'un',
     teamCode: first.task.team,
     responsible: first.task.responsible,

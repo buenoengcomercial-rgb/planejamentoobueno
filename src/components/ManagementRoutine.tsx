@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import {
@@ -199,6 +200,17 @@ function ActivityCard({
           <dd>{activity.responsible || 'Sem responsável'}</dd>
         </div>
       </dl>
+      <div className="mt-3 rounded-md bg-muted/35 p-2.5">
+        <div className="grid grid-cols-2 gap-x-2 text-xs text-muted-foreground">
+          <span>Total: <strong className="font-semibold text-foreground">{activity.totalQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {activity.unit}</strong></span>
+          <span className="text-right">Executado: <strong className="font-semibold text-foreground">{activity.executedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {activity.unit}</strong></span>
+        </div>
+        <div className="mt-2 flex items-center justify-between gap-2 text-[11px] font-medium text-muted-foreground">
+          <span>Conclusão da atividade</span>
+          <span className="text-foreground">{activity.progressPercent.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%</span>
+        </div>
+        <Progress value={activity.progressPercent} className="mt-1.5 h-2" aria-label={`${activity.progressPercent}% concluído`} />
+      </div>
       <span className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-primary">
         Abrir diário <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
       </span>
