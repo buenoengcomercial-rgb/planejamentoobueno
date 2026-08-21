@@ -302,6 +302,35 @@ export function buildAdditiveScheduleAnalysisProject(
   };
 }
 
+/**
+ * Serialização estável: ignora ordem de chaves e valores indefinidos, para que a
+ * comparação do rascunho não acuse mudança apenas por ordem diferente (o que
+ * gerava gravações em laço no cronograma do aditivo).
+ */
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => [key, stableValue(item)] as const);
+    return Object.fromEntries(entries);
+  }
+  return value;
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(stableValue(value));
+}
+
+/** Compara listas por `taskId`, sem depender da ordem em que foram geradas. */
+function sameTaskKeyedList<T extends { taskId: string }>(a: T[], b: T[]): boolean {
+  if (a.length !== b.length) return false;
+  const sort = (list: T[]) => list.slice().sort((x, y) => x.taskId.localeCompare(y.taskId));
+  return stableJson(sort(a)) === stableJson(sort(b));
+}
+
+
 function initialPlannedTask(project: Project, additive: Additive, composition: AdditiveComposition): AdditiveSchedulePlannedTask {
   return {
     compositionId: composition.id,
