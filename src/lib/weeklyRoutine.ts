@@ -2,6 +2,7 @@ import type {
   DailyReport,
   Project,
   Task,
+  WeeklyRoutineChapterPathItem,
   WeeklyRoutineActivity,
   WeeklyRoutineDay,
   WeeklyRoutineDiaryStatus,
@@ -39,9 +40,9 @@ export function addDaysISO(value: string, days: number): string {
 }
 
 export function taskSchedule(task: Task): { startDate: string; endDate: string } {
-  const startDate = task.current?.startDate ?? task.baseline?.startDate ?? task.startDate;
-  const explicitEnd = task.current?.endDate ?? task.baseline?.endDate;
-  if (explicitEnd) return { startDate, endDate: explicitEnd };
+  // A agenda reflete o planejamento operacional atual do Gantt. Baseline e
+  // current são referências histórica/real e não devem reposicionar cartões.
+  const startDate = task.startDate;
   return { startDate, endDate: addDaysISO(startDate, Math.max(0, (task.duration || 1) - 1)) };
 }
 
@@ -53,17 +54,30 @@ function activeTask(task: Task, excludedTaskIds: ReadonlySet<string>): boolean {
   return !fullySuppressed;
 }
 
-function buildChapterByTask(project: Project): Map<string, { name: string; number?: string }> {
+function buildChapterByTask(project: Project): Map<string, { name: string; number?: string; path: WeeklyRoutineChapterPathItem[] }> {
   const numbering = getChapterNumbering(project);
-  const result = new Map<string, { name: string; number?: string }>();
+  const phaseById = new Map(project.phases.map(phase => [phase.id, phase]));
+  const result = new Map<string, { name: string; number?: string; path: WeeklyRoutineChapterPathItem[] }>();
 
-  const visit = (task: Task, chapter: { name: string; number?: string }) => {
+  const pathForPhase = (phaseId: string): WeeklyRoutineChapterPathItem[] => {
+    const path: WeeklyRoutineChapterPathItem[] = [];
+    const visited = new Set<string>();
+    let current = phaseById.get(phaseId);
+    while (current && !visited.has(current.id)) {
+      visited.add(current.id);
+      path.unshift({ id: current.id, name: current.name, number: numbering.get(current.id) });
+      current = current.parentId ? phaseById.get(current.parentId) : undefined;
+    }
+    return path;
+  };
+
+  const visit = (task: Task, chapter: { name: string; number?: string; path: WeeklyRoutineChapterPathItem[] }) => {
     result.set(task.id, chapter);
     task.children?.forEach(child => visit(child, chapter));
   };
 
   project.phases.forEach(phase => {
-    const chapter = { name: phase.name, number: numbering.get(phase.id) };
+    const chapter = { name: phase.name, number: numbering.get(phase.id), path: pathForPhase(phase.id) };
     phase.tasks.forEach(task => visit(task, chapter));
   });
 
@@ -76,7 +90,7 @@ function quantityForDay(task: Task, date: string, kind: 'planned' | 'actual'): n
   if (logged > 0 || kind === 'actual') return Math.round(logged * 100) / 100;
 
   const quantity = Number(task.quantity) || 0;
-  const duration = task.originalDuration ?? task.baseline?.duration ?? task.duration ?? 0;
+  const duration = task.duration ?? 0;
   return duration > 0 ? Math.round((quantity / duration) * 100) / 100 : 0;
 }
 
@@ -119,6 +133,7 @@ export function buildWeeklyRoutine(
           taskName: task.name,
           chapterName: chapterByTask.get(task.id)?.name ?? 'Sem capítulo',
           chapterNumber: chapterByTask.get(task.id)?.number,
+          chapterPath: chapterByTask.get(task.id)?.path ?? [],
           date,
           startDate: schedule.startDate,
           endDate: schedule.endDate,
@@ -160,6 +175,7 @@ export function findNextScheduledActivity(
     taskName: first.task.name,
     chapterName: chapterByTask.get(first.task.id)?.name ?? 'Sem capítulo',
     chapterNumber: chapterByTask.get(first.task.id)?.number,
+    chapterPath: chapterByTask.get(first.task.id)?.path ?? [],
     date,
     startDate: first.schedule.startDate,
     endDate: first.schedule.endDate,
@@ -170,6 +186,42 @@ export function findNextScheduledActivity(
     responsible: first.task.responsible,
     completed: false,
   };
+}
+
+export interface WeeklyRoutineActivityGroup {
+  chapter: WeeklyRoutineChapterPathItem;
+  activities: WeeklyRoutineActivity[];
+  children: WeeklyRoutineActivityGroup[];
+  totalActivities: number;
+}
+
+/** Agrupa a agenda pelo caminho EAP, preservando a ordem recebida do Cronograma. */
+export function groupWeeklyRoutineActivities(activities: WeeklyRoutineActivity[]): WeeklyRoutineActivityGroup[] {
+  const roots: WeeklyRoutineActivityGroup[] = [];
+
+  activities.forEach(activity => {
+    let siblings = roots;
+    let group: WeeklyRoutineActivityGroup | undefined;
+    activity.chapterPath.forEach(chapter => {
+      group = siblings.find(item => item.chapter.id === chapter.id);
+      if (!group) {
+        group = { chapter, activities: [], children: [], totalActivities: 0 };
+        siblings.push(group);
+      }
+      siblings = group.children;
+    });
+    if (group) group.activities.push(activity);
+  });
+
+  const totalize = (group: WeeklyRoutineActivityGroup): WeeklyRoutineActivityGroup => {
+    const children = group.children.map(totalize);
+    return {
+      ...group,
+      children,
+      totalActivities: group.activities.length + children.reduce((sum, child) => sum + child.totalActivities, 0),
+    };
+  };
+  return roots.map(totalize);
 }
 
 export function inclusiveDays(startDate: string, endDate: string): number {

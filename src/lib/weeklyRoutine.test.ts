@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Project } from '@/types/project';
-import { buildWeeklyRoutine, diaryStatusForDate, findNextScheduledActivity, startOfWeekISO } from './weeklyRoutine';
+import { buildWeeklyRoutine, diaryStatusForDate, findNextScheduledActivity, groupWeeklyRoutineActivities, startOfWeekISO } from './weeklyRoutine';
 
 const project = {
   id: 'p1',
@@ -102,5 +102,43 @@ describe('weeklyRoutine', () => {
     expect(diaryStatusForDate(undefined)).toBe('notFilled');
     expect(diaryStatusForDate({ noProductionDeclared: true } as never)).toBe('noProduction');
     expect(diaryStatusForDate({ impediments: 'Chuva' } as never)).toBe('impediment');
+  });
+
+  it('usa a programação atual em vez da baseline e organiza o caminho de capítulos', () => {
+    const scheduledProject = {
+      ...project,
+      phases: [
+        { id: 'main', name: 'Incêndio', tasks: [], order: 0 },
+        {
+          ...project.phases[0],
+          id: 'sub',
+          parentId: 'main',
+          name: 'Hidrantes',
+          order: 0,
+          tasks: [{
+            ...project.phases[0].tasks[0],
+            id: 'esguicho',
+            name: 'Esguicho reprogramado',
+            phase: 'sub',
+            startDate: '2026-09-16',
+            duration: 2,
+            baseline: { startDate: '2026-08-24', endDate: '2026-08-25', duration: 2, capturedAt: '2026-08-01T00:00:00.000Z' },
+            current: { startDate: '2026-08-24', endDate: '2026-08-25', duration: 2, updatedAt: '2026-08-01T00:00:00.000Z' },
+          }],
+        },
+      ],
+    } as Project;
+
+    expect(buildWeeklyRoutine(scheduledProject, '2026-08-24').flatMap(day => day.activities)).toHaveLength(0);
+    const septemberWeek = buildWeeklyRoutine(scheduledProject, '2026-09-14');
+    expect(septemberWeek.find(day => day.date === '2026-09-16')?.activities[0]).toMatchObject({
+      taskId: 'esguicho', startDate: '2026-09-16', endDate: '2026-09-17',
+      chapterPath: [
+        { id: 'main', name: 'Incêndio', number: '1' },
+        { id: 'sub', name: 'Hidrantes', number: '1.1' },
+      ],
+    });
+    const groups = groupWeeklyRoutineActivities(septemberWeek.find(day => day.date === '2026-09-16')!.activities);
+    expect(groups).toMatchObject([{ chapter: { id: 'main' }, totalActivities: 1, children: [{ chapter: { id: 'sub' }, totalActivities: 1 }] }]);
   });
 });

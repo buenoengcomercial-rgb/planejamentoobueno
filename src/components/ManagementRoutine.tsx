@@ -16,8 +16,10 @@ import {
   addDaysISO,
   buildWeeklyRoutine,
   findNextScheduledActivity,
+  groupWeeklyRoutineActivities,
   startOfWeekISO,
   todayISO,
+  type WeeklyRoutineActivityGroup,
 } from '@/lib/weeklyRoutine';
 import { buildPendingAdditiveSuspensionMap, isStatusOnlySuspension } from '@/lib/additiveSchedule';
 import { Badge } from '@/components/ui/badge';
@@ -27,7 +29,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   ArrowRight,
   CalendarCheck2,
@@ -151,10 +152,12 @@ function ActivityCard({
   activity,
   onOpen,
   teams,
+  showChapter = true,
 }: {
   activity: WeeklyRoutineActivity;
   onOpen: () => void;
   teams: Project['teams'];
+  showChapter?: boolean;
 }) {
   const team = getTeamDefinition(activity.teamCode, teams?.length ? teams : DEFAULT_TEAMS);
   return (
@@ -165,10 +168,10 @@ function ActivityCard({
       aria-label={`Abrir diário de ${formatDateBR(activity.date)} para ${activity.taskName}`}
     >
       <div className="flex items-start justify-between gap-2">
-        <p className="line-clamp-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {showChapter && <p className="line-clamp-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {activity.chapterNumber ? `${activity.chapterNumber} · ` : ''}{activity.chapterName}
-        </p>
-        {activity.completed && <CheckCircle2 className="h-4 w-4 shrink-0 text-success" aria-label="Atividade concluída" />}
+        </p>}
+        {activity.completed && <CheckCircle2 className={`h-4 w-4 shrink-0 text-success ${showChapter ? '' : 'ml-auto'}`} aria-label="Atividade concluída" />}
       </div>
       <p className="mt-1 line-clamp-3 text-sm font-semibold leading-snug text-foreground">{activity.taskName}</p>
       <dl className="mt-3 grid grid-cols-2 gap-x-2 gap-y-1 text-xs text-muted-foreground">
@@ -196,6 +199,39 @@ function ActivityCard({
   );
 }
 
+function ActivityGroups({ groups, date, teams, onOpen, depth = 0 }: {
+  groups: WeeklyRoutineActivityGroup[];
+  date: string;
+  teams: Project['teams'];
+  onOpen: () => void;
+  depth?: number;
+}) {
+  return (
+    <div className={`space-y-2 ${depth ? 'border-l border-primary/20 pl-2' : ''}`}>
+      {groups.map(group => (
+        <section key={group.chapter.id} className="space-y-2">
+          <div className="flex items-center justify-between gap-2 rounded-md bg-muted/45 px-2 py-1.5">
+            <p className="min-w-0 truncate text-[11px] font-bold uppercase tracking-wide text-foreground">
+              {group.chapter.number ? `${group.chapter.number} · ` : ''}{group.chapter.name}
+            </p>
+            <Badge variant="outline" className="shrink-0 text-[10px]">{group.totalActivities}</Badge>
+          </div>
+          {group.activities.map(activity => (
+            <ActivityCard
+              key={`${date}:${activity.taskId}`}
+              activity={activity}
+              teams={teams}
+              onOpen={onOpen}
+              showChapter={false}
+            />
+          ))}
+          {group.children.length > 0 && <ActivityGroups groups={group.children} date={date} teams={teams} onOpen={onOpen} depth={depth + 1} />}
+        </section>
+      ))}
+    </div>
+  );
+}
+
 function MetricCard({ label, value, icon: Icon, tone = 'primary' }: {
   label: string;
   value: number;
@@ -219,7 +255,6 @@ function MetricCard({ label, value, icon: Icon, tone = 'primary' }: {
 export default function ManagementRoutine({ project, onProjectChange, onOpenDailyReport, initialWeek, onWeekChange, undoButton }: Props) {
   const routine = useMemo(() => ensureRoutine(project), [project]);
   const [activeTab, setActiveTab] = useState('agenda');
-  const [selectedDayDate, setSelectedDayDate] = useState<string | null>(null);
   const [selectedWeekStart, setSelectedWeekStart] = useState(() => startOfWeekISO(initialWeek || todayISO()));
   const selectedWeekEnd = addDaysISO(selectedWeekStart, 6);
   const pendingAdditiveTaskIds = useMemo(() => new Set(
@@ -231,6 +266,10 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
     () => buildWeeklyRoutine(project, selectedWeekStart, pendingAdditiveTaskIds),
     [pendingAdditiveTaskIds, project, selectedWeekStart],
   );
+  const groupsByDay = useMemo(
+    () => new Map(week.map(day => [day.date, groupWeeklyRoutineActivities(day.activities)])),
+    [week],
+  );
   const activities = week.flatMap(day => day.activities);
   const uniqueActivities = new Set(activities.map(activity => activity.taskId)).size;
   const completedActivities = new Set(activities.filter(activity => activity.completed).map(activity => activity.taskId)).size;
@@ -241,7 +280,6 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
     () => findNextScheduledActivity(project, addDaysISO(selectedWeekEnd, 1), pendingAdditiveTaskIds),
     [pendingAdditiveTaskIds, project, selectedWeekEnd],
   );
-  const selectedDay = selectedDayDate ? week.find(day => day.date === selectedDayDate) : undefined;
 
   useEffect(() => {
     if (initialWeek) setSelectedWeekStart(startOfWeekISO(initialWeek));
@@ -379,14 +417,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
                         <p className="mt-2 text-xs text-muted-foreground">{day.activities.length} atividade(s)</p>
                       </div>
                       <div className="space-y-2 p-2.5">
-                        {day.activities.length ? day.activities.slice(0, 4).map(activity => (
-                          <ActivityCard key={`${day.date}:${activity.taskId}`} activity={activity} teams={project.teams} onOpen={() => onOpenDailyReport(day.date)} />
-                        )) : <p className="py-8 text-center text-xs text-muted-foreground">Sem atividade</p>}
-                        {day.activities.length > 4 && (
-                          <Button variant="outline" size="sm" className="min-h-10 w-full text-xs" onClick={() => setSelectedDayDate(day.date)}>
-                            Ver mais {day.activities.length - 4} atividade(s)
-                          </Button>
-                        )}
+                        {day.activities.length ? <ActivityGroups groups={groupsByDay.get(day.date) ?? []} date={day.date} teams={project.teams} onOpen={() => onOpenDailyReport(day.date)} /> : <p className="py-8 text-center text-xs text-muted-foreground">Sem atividade</p>}
                       </div>
                       <div className="border-t border-border p-2.5">
                         <Button variant="ghost" size="sm" className="min-h-10 w-full text-xs" onClick={() => onOpenDailyReport(day.date)}>
@@ -414,14 +445,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
                         </Button>
                       </CardHeader>
                       <CardContent className="space-y-2">
-                        {day.activities.length ? day.activities.slice(0, 4).map(activity => (
-                          <ActivityCard key={`${day.date}:${activity.taskId}`} activity={activity} teams={project.teams} onOpen={() => onOpenDailyReport(day.date)} />
-                        )) : <p className="rounded-lg bg-muted/30 p-4 text-sm text-muted-foreground">Sem atividade programada.</p>}
-                        {day.activities.length > 4 && (
-                          <Button variant="outline" className="min-h-11 w-full" onClick={() => setSelectedDayDate(day.date)}>
-                            Ver todas as {day.activities.length} atividades
-                          </Button>
-                        )}
+                        {day.activities.length ? <ActivityGroups groups={groupsByDay.get(day.date) ?? []} date={day.date} teams={project.teams} onOpen={() => onOpenDailyReport(day.date)} /> : <p className="rounded-lg bg-muted/30 p-4 text-sm text-muted-foreground">Sem atividade programada.</p>}
                       </CardContent>
                     </Card>
                   );
@@ -430,26 +454,6 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
             </>
           )}
 
-          <Dialog open={Boolean(selectedDay)} onOpenChange={open => { if (!open) setSelectedDayDate(null); }}>
-            <DialogContent className="flex max-h-[90vh] max-w-3xl flex-col overflow-hidden">
-              <DialogHeader>
-                <DialogTitle>Atividades de {selectedDay ? formatDateBR(selectedDay.date) : ''}</DialogTitle>
-                <DialogDescription>
-                  {selectedDay?.activities.length ?? 0} atividade(s) derivadas do Cronograma. Selecione uma para abrir o Diário nesta data.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-2 overflow-y-auto pr-2">
-                {selectedDay?.activities.map(activity => (
-                  <ActivityCard
-                    key={`dialog:${selectedDay.date}:${activity.taskId}`}
-                    activity={activity}
-                    teams={project.teams}
-                    onOpen={() => onOpenDailyReport(selectedDay.date)}
-                  />
-                ))}
-              </div>
-            </DialogContent>
-          </Dialog>
         </TabsContent>
 
         <TabsContent value="configuracao" className="mt-5 space-y-5">

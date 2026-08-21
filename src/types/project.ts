@@ -599,12 +599,19 @@ export interface ManagementRoutine {
 
 export type WeeklyRoutineDiaryStatus = 'notFilled' | 'filled' | 'noProduction' | 'impediment';
 
+export interface WeeklyRoutineChapterPathItem {
+  id: string;
+  name: string;
+  number?: string;
+}
+
 /** Modelo somente de apresentação, derivado do Cronograma e dos Diários existentes. */
 export interface WeeklyRoutineActivity {
   taskId: string;
   taskName: string;
   chapterName: string;
   chapterNumber?: string;
+  chapterPath: WeeklyRoutineChapterPathItem[];
   date: string;
   startDate: string;
   endDate: string;
