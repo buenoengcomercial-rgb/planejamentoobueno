@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Project } from '@/types/project';
-import { buildWeeklyRoutine, diaryStatusForDate, startOfWeekISO } from './weeklyRoutine';
+import { buildWeeklyRoutine, diaryStatusForDate, findNextScheduledActivity, startOfWeekISO } from './weeklyRoutine';
 
 const project = {
   id: 'p1',
@@ -52,6 +52,50 @@ describe('weeklyRoutine', () => {
       completed: true,
     });
     expect(week.find(day => day.date === '2026-08-15')?.activities).toHaveLength(0);
+  });
+
+  it('remove da agenda os bloqueios operacionais pendentes, sem remover serviços com saldo contratual', () => {
+    const projectWithPendingAdditive = {
+      ...project,
+      phases: [{
+        ...project.phases[0],
+        tasks: [
+          ...project.phases[0].tasks,
+          {
+            ...project.phases[0].tasks[0],
+            id: 'suppressed-pending',
+            name: 'Item suprimido pendente',
+            startDate: '2026-08-12',
+          },
+          {
+            ...project.phases[0].tasks[0],
+            id: 'suspended-pending',
+            name: 'Aguarda contratação',
+            startDate: '2026-08-12',
+          },
+          {
+            ...project.phases[0].tasks[0],
+            id: 'dependency-pending',
+            name: 'Bloqueada por dependência',
+            startDate: '2026-08-12',
+          },
+          {
+            ...project.phases[0].tasks[0],
+            id: 'contracted-balance',
+            name: 'Saldo contratado executável',
+            startDate: '2026-08-12',
+          },
+        ],
+      }],
+    } as Project;
+    const blocked = new Set(['suppressed-pending', 'suspended-pending', 'dependency-pending']);
+
+    const week = buildWeeklyRoutine(projectWithPendingAdditive, '2026-08-10', blocked);
+    expect(week.find(day => day.date === '2026-08-12')?.activities.map(activity => activity.taskId)).toEqual([
+      'task-1',
+      'contracted-balance',
+    ]);
+    expect(findNextScheduledActivity(projectWithPendingAdditive, '2026-08-12', blocked)?.taskId).toBe('task-1');
   });
 
   it('deriva os estados do diário sem tratar ausência como sem produção', () => {

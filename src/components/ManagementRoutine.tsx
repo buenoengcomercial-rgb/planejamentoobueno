@@ -19,6 +19,7 @@ import {
   startOfWeekISO,
   todayISO,
 } from '@/lib/weeklyRoutine';
+import { buildPendingAdditiveSuspensionMap, isStatusOnlySuspension } from '@/lib/additiveSchedule';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -221,14 +222,25 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
   const [selectedDayDate, setSelectedDayDate] = useState<string | null>(null);
   const [selectedWeekStart, setSelectedWeekStart] = useState(() => startOfWeekISO(initialWeek || todayISO()));
   const selectedWeekEnd = addDaysISO(selectedWeekStart, 6);
-  const week = useMemo(() => buildWeeklyRoutine(project, selectedWeekStart), [project, selectedWeekStart]);
+  const pendingAdditiveTaskIds = useMemo(() => new Set(
+    Object.entries(buildPendingAdditiveSuspensionMap(project))
+      .filter(([, suspension]) => isStatusOnlySuspension(suspension))
+      .map(([taskId]) => taskId),
+  ), [project]);
+  const week = useMemo(
+    () => buildWeeklyRoutine(project, selectedWeekStart, pendingAdditiveTaskIds),
+    [pendingAdditiveTaskIds, project, selectedWeekStart],
+  );
   const activities = week.flatMap(day => day.activities);
   const uniqueActivities = new Set(activities.map(activity => activity.taskId)).size;
   const completedActivities = new Set(activities.filter(activity => activity.completed).map(activity => activity.taskId)).size;
   const activeDays = week.filter(day => day.activities.length > 0);
   const filledReports = activeDays.filter(day => day.diaryStatus === 'filled' || day.diaryStatus === 'impediment' || day.diaryStatus === 'noProduction').length;
   const pendingReports = activeDays.filter(day => day.date <= todayISO() && day.diaryStatus === 'notFilled').length;
-  const nextActivity = useMemo(() => findNextScheduledActivity(project, addDaysISO(selectedWeekEnd, 1)), [project, selectedWeekEnd]);
+  const nextActivity = useMemo(
+    () => findNextScheduledActivity(project, addDaysISO(selectedWeekEnd, 1), pendingAdditiveTaskIds),
+    [pendingAdditiveTaskIds, project, selectedWeekEnd],
+  );
   const selectedDay = selectedDayDate ? week.find(day => day.date === selectedDayDate) : undefined;
 
   useEffect(() => {

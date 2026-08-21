@@ -45,7 +45,8 @@ export function taskSchedule(task: Task): { startDate: string; endDate: string }
   return { startDate, endDate: addDaysISO(startDate, Math.max(0, (task.duration || 1) - 1)) };
 }
 
-function activeTask(task: Task): boolean {
+function activeTask(task: Task, excludedTaskIds: ReadonlySet<string>): boolean {
+  if (excludedTaskIds.has(task.id)) return false;
   if (task.suppressedByAdditive) return false;
   const fullySuppressed = (Number(task.quantity) || 0) <= 0
     && (task.additiveHistory ?? []).some(history => (history.suppressedQuantity || 0) > 0);
@@ -95,12 +96,16 @@ export function diaryStatusForDate(report?: DailyReport): WeeklyRoutineDiaryStat
   return 'notFilled';
 }
 
-export function buildWeeklyRoutine(project: Project, weekStart: string): WeeklyRoutineDay[] {
+export function buildWeeklyRoutine(
+  project: Project,
+  weekStart: string,
+  excludedTaskIds: ReadonlySet<string> = new Set(),
+): WeeklyRoutineDay[] {
   const normalizedStart = startOfWeekISO(weekStart);
   const dates = Array.from({ length: 7 }, (_, index) => addDaysISO(normalizedStart, index));
   const reports = latestReportByDate(project);
   const chapterByTask = buildChapterByTask(project);
-  const tasks = getAllTasks(project).filter(activeTask);
+  const tasks = getAllTasks(project).filter(task => activeTask(task, excludedTaskIds));
 
   return dates.map(date => {
     const activities = tasks
@@ -136,10 +141,14 @@ export function buildWeeklyRoutine(project: Project, weekStart: string): WeeklyR
   });
 }
 
-export function findNextScheduledActivity(project: Project, afterDate: string): WeeklyRoutineActivity | null {
+export function findNextScheduledActivity(
+  project: Project,
+  afterDate: string,
+  excludedTaskIds: ReadonlySet<string> = new Set(),
+): WeeklyRoutineActivity | null {
   const chapterByTask = buildChapterByTask(project);
   const candidates = getAllTasks(project)
-    .filter(activeTask)
+    .filter(task => activeTask(task, excludedTaskIds))
     .map(task => ({ task, schedule: taskSchedule(task) }))
     .filter(({ schedule }) => schedule.endDate >= afterDate)
     .sort((a, b) => a.schedule.startDate.localeCompare(b.schedule.startDate));
