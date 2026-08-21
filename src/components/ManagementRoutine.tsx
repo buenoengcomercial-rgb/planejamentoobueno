@@ -22,6 +22,7 @@ import {
   type WeeklyRoutineActivityGroup,
 } from '@/lib/weeklyRoutine';
 import { buildPendingAdditiveSuspensionMap, isStatusOnlySuspension } from '@/lib/additiveSchedule';
+import { loadObraConfig } from '@/components/ConfiguracaoObra';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -57,6 +58,12 @@ interface Props {
 }
 
 const DAY_NAMES = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+
+function dayName(date: string): string {
+  return DAY_NAMES[new Date(`${date}T12:00:00`).getDay() === 0
+    ? 6
+    : new Date(`${date}T12:00:00`).getDay() - 1];
+}
 
 const ROLE_LABEL: Record<ManagementRoleAssignment['role'], string> = {
   gestor_obra: 'Gestor da obra',
@@ -256,16 +263,17 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
   const routine = useMemo(() => ensureRoutine(project), [project]);
   const [activeTab, setActiveTab] = useState('agenda');
   const [selectedWeekStart, setSelectedWeekStart] = useState(() => startOfWeekISO(initialWeek || todayISO()));
-  const selectedWeekEnd = addDaysISO(selectedWeekStart, 6);
+  const obraCalendar = useMemo(() => loadObraConfig(), []);
   const pendingAdditiveTaskIds = useMemo(() => new Set(
     Object.entries(buildPendingAdditiveSuspensionMap(project))
       .filter(([, suspension]) => isStatusOnlySuspension(suspension))
       .map(([taskId]) => taskId),
   ), [project]);
   const week = useMemo(
-    () => buildWeeklyRoutine(project, selectedWeekStart, pendingAdditiveTaskIds),
-    [pendingAdditiveTaskIds, project, selectedWeekStart],
+    () => buildWeeklyRoutine(project, selectedWeekStart, pendingAdditiveTaskIds, obraCalendar),
+    [obraCalendar, pendingAdditiveTaskIds, project, selectedWeekStart],
   );
+  const selectedWeekEnd = week.at(-1)?.date ?? selectedWeekStart;
   const groupsByDay = useMemo(
     () => new Map(week.map(day => [day.date, groupWeeklyRoutineActivities(day.activities)])),
     [week],
@@ -277,8 +285,8 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
   const filledReports = activeDays.filter(day => day.diaryStatus === 'filled' || day.diaryStatus === 'impediment' || day.diaryStatus === 'noProduction').length;
   const pendingReports = activeDays.filter(day => day.date <= todayISO() && day.diaryStatus === 'notFilled').length;
   const nextActivity = useMemo(
-    () => findNextScheduledActivity(project, addDaysISO(selectedWeekEnd, 1), pendingAdditiveTaskIds),
-    [pendingAdditiveTaskIds, project, selectedWeekEnd],
+    () => findNextScheduledActivity(project, addDaysISO(selectedWeekStart, 7), pendingAdditiveTaskIds, obraCalendar),
+    [obraCalendar, pendingAdditiveTaskIds, project, selectedWeekStart],
   );
 
   useEffect(() => {
@@ -399,8 +407,8 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
             </Card>
           ) : (
             <>
-              <section className="hidden grid-cols-7 gap-3 lg:grid">
-                {week.map((day, index) => {
+              <section className={`hidden gap-3 lg:grid ${week.length === 6 ? 'grid-cols-6' : 'grid-cols-5'}`}>
+                {week.map(day => {
                   const diary = DIARY_META[day.diaryStatus];
                   const isToday = day.date === todayISO();
                   return (
@@ -408,7 +416,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
                       <div className="border-b border-border p-3">
                         <div className="flex items-center justify-between gap-2">
                           <div>
-                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{DAY_NAMES[index]}</p>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{dayName(day.date)}</p>
                             <p className="text-base font-bold">{formatShortDate(day.date)}</p>
                           </div>
                           {isToday && <Badge>Hoje</Badge>}
@@ -430,13 +438,13 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
               </section>
 
               <section className="space-y-3 lg:hidden">
-                {week.map((day, index) => {
+                {week.map(day => {
                   const diary = DIARY_META[day.diaryStatus];
                   return (
                     <Card key={day.date}>
                       <CardHeader className="flex flex-row items-center justify-between gap-3 pb-3">
                         <div>
-                          <CardTitle className="text-base">{DAY_NAMES[index]}, {formatDateBR(day.date)}</CardTitle>
+                          <CardTitle className="text-base">{dayName(day.date)}, {formatDateBR(day.date)}</CardTitle>
                           <Badge variant="outline" className={`mt-2 text-xs ${diary.className}`}>{diary.label}</Badge>
                           <p className="mt-2 text-xs text-muted-foreground">{day.activities.length} atividade(s)</p>
                         </div>

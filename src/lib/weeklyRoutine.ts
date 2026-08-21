@@ -10,8 +10,21 @@ import type {
 import { getAllTasks } from '@/data/sampleProject';
 import { isDailyReportEmpty, pickLatestDailyReport } from '@/lib/dailyReportSummary';
 import { getChapterNumbering } from '@/lib/chapters';
+import { isDiaUtil } from '@/lib/feriados';
 
 const DAY_MS = 86_400_000;
+
+export interface WeeklyRoutineCalendar {
+  uf: string;
+  municipio: string;
+  trabalhaSabado: boolean;
+}
+
+const DEFAULT_CALENDAR: WeeklyRoutineCalendar = {
+  uf: 'SP',
+  municipio: 'São Paulo',
+  trabalhaSabado: false,
+};
 
 export function parseISODate(value: string): Date {
   const [year, month, day] = value.slice(0, 10).split('-').map(Number);
@@ -39,11 +52,48 @@ export function addDaysISO(value: string, days: number): string {
   return toISODate(date);
 }
 
-export function taskSchedule(task: Task): { startDate: string; endDate: string } {
+function isWorkingDate(date: string, calendar: WeeklyRoutineCalendar): boolean {
+  return isDiaUtil(parseISODate(date), calendar.uf, calendar.municipio, calendar.trabalhaSabado);
+}
+
+function workDayWeight(date: string, calendar: WeeklyRoutineCalendar): number {
+  if (!isWorkingDate(date, calendar)) return 0;
+  return parseISODate(date).getDay() === 6 ? 0.5 : 1;
+}
+
+function workingSchedule(task: Task, calendar: WeeklyRoutineCalendar): Map<string, number> {
+  const schedule = new Map<string, number>();
+  let remaining = Math.max(0, Number(task.duration) || 0);
+  let date = task.startDate;
+  let safety = 0;
+
+  while (remaining > 0 && safety < 10_000) {
+    safety += 1;
+    const capacity = workDayWeight(date, calendar);
+    if (capacity > 0) {
+      const plannedWeight = Math.min(capacity, remaining);
+      schedule.set(date, plannedWeight);
+      remaining = Math.max(0, remaining - plannedWeight);
+    }
+    date = addDaysISO(date, 1);
+  }
+
+  return schedule;
+}
+
+export function taskSchedule(
+  task: Task,
+  calendar: WeeklyRoutineCalendar = DEFAULT_CALENDAR,
+): { startDate: string; endDate: string; workDays: Map<string, number> } {
   // A agenda reflete o planejamento operacional atual do Gantt. Baseline e
   // current são referências histórica/real e não devem reposicionar cartões.
-  const startDate = task.startDate;
-  return { startDate, endDate: addDaysISO(startDate, Math.max(0, (task.duration || 1) - 1)) };
+  const workDays = workingSchedule(task, calendar);
+  const dates = [...workDays.keys()];
+  return {
+    startDate: dates[0] ?? task.startDate,
+    endDate: dates.at(-1) ?? task.startDate,
+    workDays,
+  };
 }
 
 function activeTask(task: Task, excludedTaskIds: ReadonlySet<string>): boolean {
@@ -84,14 +134,14 @@ function buildChapterByTask(project: Project): Map<string, { name: string; numbe
   return result;
 }
 
-function quantityForDay(task: Task, date: string, kind: 'planned' | 'actual'): number {
+function quantityForDay(task: Task, date: string, kind: 'planned' | 'actual', workDayWeight = 0): number {
   const logs = (task.dailyLogs ?? []).filter(log => log.date === date);
   const logged = logs.reduce((sum, log) => sum + Number(kind === 'planned' ? log.plannedQuantity : log.actualQuantity || 0), 0);
   if (logged > 0 || kind === 'actual') return Math.round(logged * 100) / 100;
 
   const quantity = Number(task.quantity) || 0;
-  const duration = task.duration ?? 0;
-  return duration > 0 ? Math.round((quantity / duration) * 100) / 100 : 0;
+  const duration = Number(task.duration) || 0;
+  return duration > 0 ? Math.round(((quantity / duration) * workDayWeight) * 100) / 100 : 0;
 }
 
 function latestReportByDate(project: Project): Map<string, DailyReport> {
@@ -114,9 +164,11 @@ export function buildWeeklyRoutine(
   project: Project,
   weekStart: string,
   excludedTaskIds: ReadonlySet<string> = new Set(),
+  calendar: WeeklyRoutineCalendar = DEFAULT_CALENDAR,
 ): WeeklyRoutineDay[] {
   const normalizedStart = startOfWeekISO(weekStart);
-  const dates = Array.from({ length: 7 }, (_, index) => addDaysISO(normalizedStart, index));
+  const dates = Array.from({ length: 7 }, (_, index) => addDaysISO(normalizedStart, index))
+    .filter(date => isWorkingDate(date, calendar));
   const reports = latestReportByDate(project);
   const chapterByTask = buildChapterByTask(project);
   const tasks = getAllTasks(project).filter(task => activeTask(task, excludedTaskIds));
@@ -124,9 +176,10 @@ export function buildWeeklyRoutine(
   return dates.map(date => {
     const activities = tasks
       .map(task => {
-        const schedule = taskSchedule(task);
-        if (date < schedule.startDate || date > schedule.endDate) return null;
-        const plannedQuantity = quantityForDay(task, date, 'planned');
+        const schedule = taskSchedule(task, calendar);
+        const scheduledWeight = schedule.workDays.get(date) ?? 0;
+        if (scheduledWeight <= 0) return null;
+        const plannedQuantity = quantityForDay(task, date, 'planned', scheduledWeight);
         const actualQuantity = quantityForDay(task, date, 'actual');
         return {
           taskId: task.id,
@@ -160,16 +213,21 @@ export function findNextScheduledActivity(
   project: Project,
   afterDate: string,
   excludedTaskIds: ReadonlySet<string> = new Set(),
+  calendar: WeeklyRoutineCalendar = DEFAULT_CALENDAR,
 ): WeeklyRoutineActivity | null {
   const chapterByTask = buildChapterByTask(project);
   const candidates = getAllTasks(project)
     .filter(task => activeTask(task, excludedTaskIds))
-    .map(task => ({ task, schedule: taskSchedule(task) }))
-    .filter(({ schedule }) => schedule.endDate >= afterDate)
-    .sort((a, b) => a.schedule.startDate.localeCompare(b.schedule.startDate));
+    .map(task => {
+      const schedule = taskSchedule(task, calendar);
+      const date = [...schedule.workDays.keys()].find(workDate => workDate >= afterDate);
+      return { task, schedule, date };
+    })
+    .filter((candidate): candidate is typeof candidate & { date: string } => !!candidate.date)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.task.name.localeCompare(b.task.name));
   const first = candidates[0];
   if (!first) return null;
-  const date = first.schedule.startDate < afterDate ? afterDate : first.schedule.startDate;
+  const date = first.date;
   return {
     taskId: first.task.id,
     taskName: first.task.name,
@@ -179,7 +237,7 @@ export function findNextScheduledActivity(
     date,
     startDate: first.schedule.startDate,
     endDate: first.schedule.endDate,
-    plannedQuantity: quantityForDay(first.task, date, 'planned'),
+    plannedQuantity: quantityForDay(first.task, date, 'planned', first.schedule.workDays.get(date) ?? 0),
     actualQuantity: quantityForDay(first.task, date, 'actual'),
     unit: first.task.unit || 'un',
     teamCode: first.task.team,

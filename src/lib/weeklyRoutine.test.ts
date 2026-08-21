@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Project } from '@/types/project';
-import { buildWeeklyRoutine, diaryStatusForDate, findNextScheduledActivity, groupWeeklyRoutineActivities, startOfWeekISO } from './weeklyRoutine';
+import { buildWeeklyRoutine, diaryStatusForDate, findNextScheduledActivity, groupWeeklyRoutineActivities, startOfWeekISO, type WeeklyRoutineCalendar } from './weeklyRoutine';
+
+const weekdayCalendar: WeeklyRoutineCalendar = { uf: 'RO', municipio: 'Porto Velho', trabalhaSabado: false };
+const saturdayCalendar: WeeklyRoutineCalendar = { ...weekdayCalendar, trabalhaSabado: true };
 
 const project = {
   id: 'p1',
@@ -42,16 +45,16 @@ describe('weeklyRoutine', () => {
     expect(startOfWeekISO('2026-08-16')).toBe('2026-08-10');
   });
 
-  it('distribui a atividade nos dias em que cruza o cronograma', () => {
-    const week = buildWeeklyRoutine(project, '2026-08-10');
-    expect(week).toHaveLength(7);
+  it('distribui a atividade somente pelos dias úteis do cronograma', () => {
+    const week = buildWeeklyRoutine(project, '2026-08-10', new Set(), weekdayCalendar);
+    expect(week).toHaveLength(5);
     expect(week.find(day => day.date === '2026-08-12')?.activities).toHaveLength(1);
     expect(week.find(day => day.date === '2026-08-13')?.activities[0]).toMatchObject({
       plannedQuantity: 10,
       actualQuantity: 10,
       completed: true,
     });
-    expect(week.find(day => day.date === '2026-08-15')?.activities).toHaveLength(0);
+    expect(week.find(day => day.date === '2026-08-15')).toBeUndefined();
   });
 
   it('remove da agenda os bloqueios operacionais pendentes, sem remover serviços com saldo contratual', () => {
@@ -90,12 +93,12 @@ describe('weeklyRoutine', () => {
     } as Project;
     const blocked = new Set(['suppressed-pending', 'suspended-pending', 'dependency-pending']);
 
-    const week = buildWeeklyRoutine(projectWithPendingAdditive, '2026-08-10', blocked);
+    const week = buildWeeklyRoutine(projectWithPendingAdditive, '2026-08-10', blocked, weekdayCalendar);
     expect(week.find(day => day.date === '2026-08-12')?.activities.map(activity => activity.taskId)).toEqual([
       'task-1',
       'contracted-balance',
     ]);
-    expect(findNextScheduledActivity(projectWithPendingAdditive, '2026-08-12', blocked)?.taskId).toBe('task-1');
+    expect(findNextScheduledActivity(projectWithPendingAdditive, '2026-08-12', blocked, weekdayCalendar)?.taskId).toBe('task-1');
   });
 
   it('deriva os estados do diário sem tratar ausência como sem produção', () => {
@@ -129,8 +132,8 @@ describe('weeklyRoutine', () => {
       ],
     } as Project;
 
-    expect(buildWeeklyRoutine(scheduledProject, '2026-08-24').flatMap(day => day.activities)).toHaveLength(0);
-    const septemberWeek = buildWeeklyRoutine(scheduledProject, '2026-09-14');
+    expect(buildWeeklyRoutine(scheduledProject, '2026-08-24', new Set(), weekdayCalendar).flatMap(day => day.activities)).toHaveLength(0);
+    const septemberWeek = buildWeeklyRoutine(scheduledProject, '2026-09-14', new Set(), weekdayCalendar);
     expect(septemberWeek.find(day => day.date === '2026-09-16')?.activities[0]).toMatchObject({
       taskId: 'esguicho', startDate: '2026-09-16', endDate: '2026-09-17',
       chapterPath: [
@@ -140,5 +143,73 @@ describe('weeklyRoutine', () => {
     });
     const groups = groupWeeklyRoutineActivities(septemberWeek.find(day => day.date === '2026-09-16')!.activities);
     expect(groups).toMatchObject([{ chapter: { id: 'main' }, totalActivities: 1, children: [{ chapter: { id: 'sub' }, totalActivities: 1 }] }]);
+  });
+
+  it('oculta sábado e domingo quando a obra não trabalha sábado e não cria pendência de diário', () => {
+    const crossingWeekendProject = {
+      ...project,
+      phases: [{
+        ...project.phases[0],
+        tasks: [{
+          ...project.phases[0].tasks[0],
+          id: 'cruza-fim-de-semana',
+          startDate: '2026-08-28',
+          duration: 3,
+          quantity: 30,
+        }],
+      }],
+    } as Project;
+
+    const week = buildWeeklyRoutine(crossingWeekendProject, '2026-08-24', new Set(), weekdayCalendar);
+    expect(week.map(day => day.date)).toEqual(['2026-08-24', '2026-08-25', '2026-08-26', '2026-08-27', '2026-08-28']);
+    expect(week.find(day => day.date === '2026-08-28')?.activities[0]).toMatchObject({
+      startDate: '2026-08-28', endDate: '2026-09-01', plannedQuantity: 10,
+    });
+    expect(findNextScheduledActivity(crossingWeekendProject, '2026-08-29', new Set(), weekdayCalendar)).toMatchObject({
+      taskId: 'cruza-fim-de-semana', date: '2026-08-31', plannedQuantity: 10,
+    });
+  });
+
+  it('inclui sábado como meio período quando configurado, mas nunca domingo', () => {
+    const weekendProject = {
+      ...project,
+      phases: [{
+        ...project.phases[0],
+        tasks: [{
+          ...project.phases[0].tasks[0],
+          id: 'sábado-operacional',
+          startDate: '2026-08-28',
+          duration: 1.5,
+          quantity: 30,
+        }],
+      }],
+    } as Project;
+
+    const week = buildWeeklyRoutine(weekendProject, '2026-08-24', new Set(), saturdayCalendar);
+    expect(week.map(day => day.date)).toEqual(['2026-08-24', '2026-08-25', '2026-08-26', '2026-08-27', '2026-08-28', '2026-08-29']);
+    expect(week.find(day => day.date === '2026-08-29')?.activities[0]).toMatchObject({ plannedQuantity: 10 });
+    expect(week.find(day => day.date === '2026-08-30')).toBeUndefined();
+  });
+
+  it('não programa atividade no feriado e encontra a próxima data útil', () => {
+    const holidayProject = {
+      ...project,
+      phases: [{
+        ...project.phases[0],
+        tasks: [{
+          ...project.phases[0].tasks[0],
+          id: 'feriado',
+          startDate: '2026-09-04',
+          duration: 2,
+          quantity: 20,
+        }],
+      }],
+    } as Project;
+    const holidayCalendar: WeeklyRoutineCalendar = { uf: 'RO', municipio: 'Porto Velho', trabalhaSabado: false };
+    const week = buildWeeklyRoutine(holidayProject, '2026-09-07', new Set(), holidayCalendar);
+    expect(week.find(day => day.date === '2026-09-07')).toBeUndefined();
+    expect(findNextScheduledActivity(holidayProject, '2026-09-05', new Set(), holidayCalendar)).toMatchObject({
+      taskId: 'feriado', date: '2026-09-08',
+    });
   });
 });
