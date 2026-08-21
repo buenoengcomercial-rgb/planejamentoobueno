@@ -144,6 +144,41 @@ function quantityForDay(task: Task, date: string, kind: 'planned' | 'actual', wo
   return duration > 0 ? Math.round(((quantity / duration) * workDayWeight) * 100) / 100 : 0;
 }
 
+function compareChapterNumbers(left?: string, right?: string): number {
+  const leftParts = (left || '').split('.');
+  const rightParts = (right || '').split('.');
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = leftParts[index];
+    const rightPart = rightParts[index];
+    if (leftPart === undefined) return -1;
+    if (rightPart === undefined) return 1;
+    const leftNumber = Number(leftPart);
+    const rightNumber = Number(rightPart);
+    const bothNumeric = Number.isFinite(leftNumber) && Number.isFinite(rightNumber);
+    const comparison = bothNumeric
+      ? leftNumber - rightNumber
+      : leftPart.localeCompare(rightPart, 'pt-BR', { numeric: true, sensitivity: 'base' });
+    if (comparison !== 0) return comparison;
+  }
+  return 0;
+}
+
+function compareChapterPaths(left: WeeklyRoutineActivity, right: WeeklyRoutineActivity): number {
+  const length = Math.max(left.chapterPath.length, right.chapterPath.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftChapter = left.chapterPath[index];
+    const rightChapter = right.chapterPath[index];
+    if (!leftChapter) return -1;
+    if (!rightChapter) return 1;
+    const numberComparison = compareChapterNumbers(leftChapter.number, rightChapter.number);
+    if (numberComparison !== 0) return numberComparison;
+    const nameComparison = leftChapter.name.localeCompare(rightChapter.name, 'pt-BR', { sensitivity: 'base' });
+    if (nameComparison !== 0) return nameComparison;
+  }
+  return 0;
+}
+
 function latestReportByDate(project: Project): Map<string, DailyReport> {
   const reports = new Map<string, DailyReport>();
   (project.dailyReports ?? []).forEach(report => {
@@ -199,7 +234,7 @@ export function buildWeeklyRoutine(
         } satisfies WeeklyRoutineActivity;
       })
       .filter((activity): activity is NonNullable<typeof activity> => activity !== null)
-      .sort((a, b) => a.chapterName.localeCompare(b.chapterName) || a.taskName.localeCompare(b.taskName));
+      .sort((a, b) => compareChapterPaths(a, b) || a.taskName.localeCompare(b.taskName, 'pt-BR', { sensitivity: 'base' }));
 
     return {
       date,

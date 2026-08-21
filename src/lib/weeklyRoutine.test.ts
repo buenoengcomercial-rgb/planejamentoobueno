@@ -145,6 +145,28 @@ describe('weeklyRoutine', () => {
     expect(groups).toMatchObject([{ chapter: { id: 'main' }, totalActivities: 1, children: [{ chapter: { id: 'sub' }, totalActivities: 1 }] }]);
   });
 
+  it('mantém os grupos na ordem numérica da EAP, não em ordem alfabética', () => {
+    const hierarchyProject = {
+      ...project,
+      phases: [
+        {
+          id: 'chapter-10', name: 'Zeta', customNumber: '10', tasks: [{ ...project.phases[0].tasks[0], id: 'task-10', name: 'Atividade dez', phase: 'chapter-10', startDate: '2026-08-12' }],
+        },
+        {
+          id: 'chapter-2', name: 'Alfa', customNumber: '2', tasks: [{ ...project.phases[0].tasks[0], id: 'task-2', name: 'Atividade dois', phase: 'chapter-2', startDate: '2026-08-12' }],
+        },
+        {
+          id: 'chapter-1', name: 'Ômega', customNumber: '1', tasks: [{ ...project.phases[0].tasks[0], id: 'task-1-hierarchy', name: 'Atividade um', phase: 'chapter-1', startDate: '2026-08-12' }],
+        },
+      ],
+    } as Project;
+
+    const day = buildWeeklyRoutine(hierarchyProject, '2026-08-10', new Set(), weekdayCalendar)
+      .find(item => item.date === '2026-08-12')!;
+    expect(day.activities.map(activity => activity.chapterNumber)).toEqual(['1', '2', '10']);
+    expect(groupWeeklyRoutineActivities(day.activities).map(group => group.chapter.number)).toEqual(['1', '2', '10']);
+  });
+
   it('oculta sábado e domingo quando a obra não trabalha sábado e não cria pendência de diário', () => {
     const crossingWeekendProject = {
       ...project,
