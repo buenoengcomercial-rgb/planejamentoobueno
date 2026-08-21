@@ -211,8 +211,10 @@ function ActivityCard({
           <dd>{team?.label ?? 'Sem equipe'}</dd>
         </div>
         <div className="text-right tabular-nums">
-          <dt className="sr-only">Quantidade prevista</dt>
-          <dd>{activity.plannedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {activity.unit}</dd>
+          <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">Meta do dia</dt>
+          <dd className="font-medium text-foreground" aria-label={`Meta do dia: ${activity.plannedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} ${activity.unit}`}>
+            {activity.plannedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {activity.unit}
+          </dd>
         </div>
         <div>
           <dt className="sr-only">Período</dt>
