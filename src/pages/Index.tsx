@@ -42,6 +42,7 @@ import {
   renameCloudProject,
   duplicateCloudProject,
   deleteCloudProject,
+  deleteCloudProjectAsOwner,
   generateUniqueCloudName,
   getSampleSeed,
   CloudProjectConflictError,
@@ -1048,15 +1049,15 @@ export default function Index() {
     }
   };
 
-  const handleDeleteProject = async (id: string) => {
-    if (!remover) { toast.error('Sem permissão para excluir.'); return; }
+  const handleDeleteProject = async (id: string, password: string): Promise<boolean> => {
+    if (!remover) { toast.error('Somente o Proprietário pode excluir obras.'); return false; }
     if (cloudList.length <= 1) {
       toast.error('Não é possível excluir a única obra. Crie outra antes.');
-      return;
+      return false;
     }
     try {
-      if (rawProject?.id === id && !(await flushPendingSave())) return;
-      await deleteCloudProject(id);
+      if (rawProject?.id === id && !(await flushPendingSave())) return false;
+      await deleteCloudProjectAsOwner(id, password);
       const list = await refreshCloudList();
       if (rawProject && id === rawProject.id) {
         const next = list[0];
@@ -1070,8 +1071,10 @@ export default function Index() {
       }
       toast.success('Obra excluída');
       setUndoVersion(v => v + 1);
-    } catch {
-      toast.error('Erro ao excluir');
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao excluir a obra.');
+      return false;
     }
   };
 
@@ -1323,6 +1326,7 @@ export default function Index() {
           onOpenTeam={() => navigate('/team')}
           allowedViews={allowedViews}
           canManageProjects={role !== 'warehouse_operator'}
+          canDeleteProjects={remover}
         />
       </div>
 

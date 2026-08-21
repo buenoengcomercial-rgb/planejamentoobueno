@@ -31,4 +31,31 @@ describe('AppSidebar para Almoxarife', () => {
     expect(screen.queryByRole('button', { name: /Nova obra/i })).not.toBeInTheDocument();
     expect(screen.queryByTitle('Excluir obra')).not.toBeInTheDocument();
   });
+
+  it('mostra exclusão somente quando a permissão específica do Proprietário é concedida', () => {
+    const props = {
+      currentView: 'dashboard' as const,
+      onViewChange: vi.fn(),
+      projectName: 'Obra teste',
+      collapsed: false,
+      onToggleCollapse: vi.fn(),
+      onSwitchProject: vi.fn(),
+      onCreateProject: vi.fn(),
+      onRenameProject: vi.fn(),
+      onDuplicateProject: vi.fn(),
+      onDeleteProject: vi.fn().mockResolvedValue(false),
+      activeProjectId: 'project-1',
+      projectsList: [
+        { id: 'project-1', name: 'Obra teste', createdAt: '2026-08-19T10:00:00.000Z', updatedAt: '2026-08-19T10:00:00.000Z' },
+        { id: 'project-2', name: 'Outra obra', createdAt: '2026-08-19T10:00:00.000Z', updatedAt: '2026-08-19T10:00:00.000Z' },
+      ],
+      canManageProjects: true,
+    };
+
+    const { rerender } = render(<AppSidebar {...props} canDeleteProjects={false} />);
+    expect(screen.queryByTitle('Excluir obra')).not.toBeInTheDocument();
+
+    rerender(<AppSidebar {...props} canDeleteProjects />);
+    expect(screen.getAllByTitle('Excluir obra')).toHaveLength(2);
+  });
 });

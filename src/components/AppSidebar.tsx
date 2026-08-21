@@ -25,6 +25,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,7 +46,7 @@ interface AppSidebarProps {
   onCreateProject: () => void | Promise<void>;
   onRenameProject: (id: string, newName: string) => void;
   onDuplicateProject: (id: string) => void;
-  onDeleteProject: (id: string) => void;
+  onDeleteProject: (id: string, password: string) => boolean | Promise<boolean>;
   onImportedProject?: (id: string) => void;
   activeProjectId: string;
   /** Lista vinda da nuvem; se omitida, cai no localStorage. */
@@ -61,8 +62,10 @@ interface AppSidebarProps {
   onOpenTeam?: () => void;
   /** Restringe os módulos exibidos para perfis com acesso dedicado. */
   allowedViews?: AppView[];
-  /** Controla criação, importação, renomeação, exportação e exclusão de obras. */
+  /** Controla criação, importação, renomeação e exportação de obras. */
   canManageProjects?: boolean;
+  /** Exclusão é uma permissão independente, exclusiva do Proprietário. */
+  canDeleteProjects?: boolean;
 }
 
 interface NavigationItem {
@@ -106,12 +109,14 @@ const navGroups: Array<{ label: string; items: NavigationItem[] }> = [
   },
 ];
 
-export default function AppSidebar({ currentView, onViewChange, projectName, collapsed, onToggleCollapse, onSwitchProject, onCreateProject, onRenameProject, onDuplicateProject, onDeleteProject, onImportedProject, activeProjectId, projectsList, userEmail, onLogout, orgName, roleLabel, canManageTeam, onOpenTeam, allowedViews, canManageProjects = true }: AppSidebarProps) {
+export default function AppSidebar({ currentView, onViewChange, projectName, collapsed, onToggleCollapse, onSwitchProject, onCreateProject, onRenameProject, onDuplicateProject, onDeleteProject, onImportedProject, activeProjectId, projectsList, userEmail, onLogout, orgName, roleLabel, canManageTeam, onOpenTeam, allowedViews, canManageProjects = true, canDeleteProjects = false }: AppSidebarProps) {
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
   const [showProjects, setShowProjects] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deletingProject, setDeletingProject] = useState(false);
   const editInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
 
@@ -161,10 +166,20 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
     await onCreateProject();
   };
 
-  const confirmedDelete = () => {
-    if (confirmDeleteId) {
-      onDeleteProject(confirmDeleteId);
-      setConfirmDeleteId(null);
+  const closeDeleteDialog = (force = false) => {
+    if (deletingProject && !force) return;
+    setConfirmDeleteId(null);
+    setDeletePassword('');
+  };
+
+  const confirmedDelete = async () => {
+    if (!confirmDeleteId || !deletePassword.trim() || deletingProject) return;
+    setDeletingProject(true);
+    try {
+      const deleted = await onDeleteProject(confirmDeleteId, deletePassword);
+      if (deleted) closeDeleteDialog(true);
+    } finally {
+      setDeletingProject(false);
     }
   };
 
@@ -412,20 +427,21 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
                         >
                           <Download className="w-3 h-3" />
                         </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (projects.length <= 1) {
-                              toast.error('Não é possível excluir a única obra existente. Crie outra obra antes de excluir esta.');
-                              return;
-                            }
-                            setConfirmDeleteId(p.id);
-                          }}
-                          title="Excluir obra"
-                          className={`p-1 rounded ${isActive ? 'hover:bg-primary-foreground/20' : 'hover:bg-destructive/20 text-destructive'}`}
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
+                        {canDeleteProjects && <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (projects.length <= 1) {
+                                toast.error('Não é possível excluir a única obra existente. Crie outra obra antes de excluir esta.');
+                                return;
+                              }
+                              setDeletePassword('');
+                              setConfirmDeleteId(p.id);
+                            }}
+                            title="Excluir obra"
+                            className={`p-1 rounded ${isActive ? 'hover:bg-primary-foreground/20' : 'hover:bg-destructive/20 text-destructive'}`}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>}
                       </div>}
                     </div>
                   )}
@@ -445,21 +461,37 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
         )}
       </div>
 
-      <AlertDialog open={!!confirmDeleteId} onOpenChange={(o) => !o && setConfirmDeleteId(null)}>
+      <AlertDialog open={!!confirmDeleteId} onOpenChange={(o) => !o && closeDeleteDialog()}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Deseja realmente excluir esta obra?</AlertDialogTitle>
+            <AlertDialogTitle>Excluir obra definitivamente?</AlertDialogTitle>
             <AlertDialogDescription>
               Você está prestes a excluir a obra: <strong>{projectToDelete?.name}</strong>.
               <br /><br />
               Esta ação pode remover cronograma, tarefas, medições e demais dados vinculados a esta obra.
-              Não é possível desfazer.
+              Não é possível desfazer. Para confirmar, informe a senha da conta Proprietária.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="space-y-2">
+            <label htmlFor="delete-project-password" className="text-sm font-medium">Senha de acesso</label>
+            <Input
+              id="delete-project-password"
+              type="password"
+              value={deletePassword}
+              onChange={(event) => setDeletePassword(event.target.value)}
+              autoComplete="current-password"
+              disabled={deletingProject}
+              placeholder="Informe sua senha para confirmar"
+            />
+          </div>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmedDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Excluir obra
+            <AlertDialogCancel disabled={deletingProject}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => { event.preventDefault(); void confirmedDelete(); }}
+              disabled={!deletePassword.trim() || deletingProject}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deletingProject ? 'Excluindo...' : 'Excluir obra'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

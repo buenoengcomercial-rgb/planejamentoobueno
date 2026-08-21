@@ -234,6 +234,49 @@ export async function deleteCloudProject(id: string): Promise<void> {
   clearCloudSnapshot(id);
 }
 
+/**
+ * Exclusão deliberada de obra: exige reautenticação por senha e confirma que
+ * a conta atual é a Proprietária da organização antes de remover os dados.
+ */
+export async function deleteCloudProjectAsOwner(projectId: string, password: string): Promise<void> {
+  if (!password.trim()) throw new Error('Informe a senha da sua conta para excluir a obra.');
+
+  const { data: currentUserData, error: currentUserError } = await supabase.auth.getUser();
+  if (currentUserError || !currentUserData.user?.email) {
+    throw new Error('Não foi possível identificar a conta autenticada. Entre novamente e tente de novo.');
+  }
+
+  const expectedUserId = currentUserData.user.id;
+  const { data: reauthenticated, error: passwordError } = await supabase.auth.signInWithPassword({
+    email: currentUserData.user.email,
+    password,
+  });
+  if (passwordError || reauthenticated.user?.id !== expectedUserId) {
+    throw new Error('Senha incorreta. A obra não foi excluída.');
+  }
+
+  const projectAccess = await supabase
+    .from('projects')
+    .select('organization_id')
+    .eq('id', projectId)
+    .maybeSingle();
+  if (projectAccess.error || !projectAccess.data?.organization_id) {
+    throw new Error('Não foi possível localizar a obra no Lovable Cloud.');
+  }
+
+  const membership = await supabase
+    .from('organization_members')
+    .select('role, status')
+    .eq('organization_id', projectAccess.data.organization_id)
+    .eq('user_id', expectedUserId)
+    .maybeSingle();
+  if (membership.error || membership.data?.role !== 'owner' || membership.data.status !== 'active') {
+    throw new Error('Somente o Proprietário da organização pode excluir obras.');
+  }
+
+  await deleteCloudProject(projectId);
+}
+
 /** Limpa os dados de teste pelo fluxo normal de persistência do Lovable Cloud. */
 export async function clearCloudWarehouseAsOwner(projectId: string, password: string): Promise<void> {
   if (!password.trim()) throw new Error('Informe a senha da sua conta.');

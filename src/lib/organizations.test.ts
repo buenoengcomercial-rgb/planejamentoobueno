@@ -23,6 +23,12 @@ describe('função Almoxarife', () => {
     expect(canDeleteProject('warehouse_operator')).toBe(false);
   });
 
+  it('reserva a exclusão de obras ao Proprietário', () => {
+    expect(canDeleteProject('owner')).toBe(true);
+    expect(canDeleteProject('admin')).toBe(false);
+    expect(ROLE_PERMISSIONS.admin).not.toContain('Criar e excluir obras');
+  });
+
   it('recusa todas as áreas da aplicação exceto o Almoxarifado', () => {
     const views: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials'];
     views.forEach(view => expect(canAccessAppView('warehouse_operator', view)).toBe(false));

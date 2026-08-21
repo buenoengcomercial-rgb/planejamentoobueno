@@ -52,7 +52,7 @@ export const ROLE_DESCRIPTIONS: Record<OrgRole, string> = {
 
 export const ROLE_PERMISSIONS: Record<OrgRole, string[]> = {
   owner: ['Administrar usuários', 'Criar e excluir obras', 'Editar todos os módulos'],
-  admin: ['Administrar usuários', 'Criar e excluir obras', 'Editar todos os módulos'],
+  admin: ['Administrar usuários', 'Criar obras', 'Editar todos os módulos'],
   engineer: ['Editar planejamento e campo', 'Gerir medições, custos e suprimentos'],
   warehouse_operator: ['Acessar somente o Almoxarifado', 'Registrar entradas, retiradas e equipamentos', 'Cancelar lançamentos sem apagar o histórico'],
   field_user: ['Consultar atividades', 'Preencher Diário de Obra'],
@@ -84,7 +84,7 @@ export function canAccessAppView(role: OrgRole, view: AppView): boolean {
   return role !== 'warehouse_operator' || view === 'warehouse';
 }
 export function canDeleteProject(role: OrgRole): boolean {
-  return role === 'owner' || role === 'admin';
+  return role === 'owner';
 }
 
 /** Carrega a primeira organização ativa do usuário autenticado. */
