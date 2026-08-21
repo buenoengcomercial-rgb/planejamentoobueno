@@ -3,7 +3,7 @@ import { getTeamDefinition, DEFAULT_TEAMS, TeamCode, TeamDefinition } from '@/li
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Settings2 } from 'lucide-react';
 import GerenciarEquipes from '@/components/GerenciarEquipes';
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { ChevronDown, ChevronRight, Zap, Users, AlertTriangle, Plus, Trash2, Edit3, Check, X, Upload, FolderPlus, GripVertical, ClipboardList, FolderTree, Folder, ArrowUpFromLine } from 'lucide-react';
 import ImportSyntheticDialog from '@/components/ImportSyntheticDialog';
 import DailyLogsPanel from '@/components/DailyLogsPanel';
@@ -140,6 +140,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
   const [phaseNameDraft, setPhaseNameDraft] = useState('');
   const [editingNumberId, setEditingNumberId] = useState<string | null>(null);
   const [numberDraft, setNumberDraft] = useState('');
+  const handledProductionFocusRef = useRef<string | null>(null);
 
   // Drag-and-drop state
   const [dragPhaseId, setDragPhaseId] = useState<string | null>(null);
@@ -429,7 +430,12 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
     if (!focusTaskId || !focusDate || readOnly) return;
     const phase = project.phases.find(item => item.tasks.some(task => task.id === focusTaskId));
     const task = phase?.tasks.find(item => item.id === focusTaskId);
-    if (!phase || !task || task.dailyLogs?.some(log => log.date === focusDate)) return;
+    if (!phase || !task) return;
+
+    const focusKey = `${focusTaskId}:${focusDate}`;
+    if (handledProductionFocusRef.current === focusKey) return;
+    handledProductionFocusRef.current = focusKey;
+    if (task.dailyLogs?.some(log => log.date === focusDate)) return;
 
     const logs = upsertDailyProductionLog(task, focusDate, 0);
     updateTask(phase.id, task.id, applyDailyProductionLogs(task, logs));
