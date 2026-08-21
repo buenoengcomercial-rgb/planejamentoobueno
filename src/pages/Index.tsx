@@ -543,11 +543,14 @@ export default function Index() {
       return;
     }
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    console.log('[DBGSAVE] arm', { jsonEqual: serializeProject(rawProject) === lastSavedProjectJsonRef.current });
     setSaveStatus('saving');
     saveTimerRef.current = window.setTimeout(async () => {
       try {
         saveTimerRef.current = null;
+        console.log('[DBGSAVE] persist start');
         await persistProject(rawProject, orgId);
+        console.log('[DBGSAVE] persist done');
       } catch (e) {
         console.warn(e);
         if (e instanceof CloudProjectConflictError) {
