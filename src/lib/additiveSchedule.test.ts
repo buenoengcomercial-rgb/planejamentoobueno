@@ -168,7 +168,7 @@ describe('Cronograma do Aditivo', () => {
       additives: first.additives?.map(item => item.id === additive.id ? {
         ...item,
         scheduleDraft: { ...item.scheduleDraft!, contractedTaskPlans: [{
-          taskId: 'task-1', startDate: '2026-09-01', duration: 3, dependencies: [], responsible: '', durationMode: 'manual', isManual: true, manualDuration: 3,
+          taskId: 'task-1', startDate: '2026-09-01', duration: 3, dependencies: [], responsible: '', durationMode: 'manual' as const, isManual: true, manualDuration: 3,
         }] },
       } : item),
     };
