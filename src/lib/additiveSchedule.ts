@@ -26,9 +26,9 @@ export const ADDITIVE_SCHEDULE_REFERENCE = 'Termo de Retomada Parcial - SEI nº 
 export const ADDITIVE_SCHEDULE_WARNING = 'PLANEJAMENTO PRELIMINAR - NÃO AUTORIZA EXECUÇÃO';
 export const ADDITIVE_SCHEDULE_GUIDANCE = 'Os itens submetidos ao aditamento e os serviços deles dependentes permanecem suspensos até deliberação administrativa, formalização do termo aditivo e liberação formal da fiscalização.';
 export const PROPOSED_STATUS_LABEL = 'A CONTRATAR - EXECUÇÃO NÃO AUTORIZADA';
-export const SUSPENDED_STATUS_LABEL = 'SUSPENSO - AGUARDA FORMALIZAÇÃO DO ADITIVO';
+export const SUSPENDED_STATUS_LABEL = 'ATIVIDADE AGUARDANDO CONTRATAÇÃO DE ADITIVO';
 export const FULLY_SUPPRESSED_STATUS_LABEL = 'ITEM SUPRIMIDO - QUANTIDADE A EXECUTAR: 0';
-export const DEPENDENCY_SUSPENDED_STATUS_LABEL = 'SUSPENSO POR DEPENDÊNCIA';
+export const DEPENDENCY_SUSPENDED_STATUS_LABEL = 'ATIVIDADE AGUARDANDO CONTRATAÇÃO DE ADITIVO — depende de';
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const isValidDate = (value: string | undefined) => !!value && ISO_DATE.test(value) && !Number.isNaN(new Date(`${value}T12:00:00`).getTime());

@@ -21,6 +21,16 @@ const project: Project = {
         quantity: 1, unit: 'UN',
       },
       {
+        id: 'suppressed-1d', name: 'Tarefa suprimida', phase: 'phase-1', startDate: '2026-08-04', duration: 1,
+        dependencies: [], responsible: 'Encarregado', team: 'alpha', percentComplete: 30, materials: [], level: 0,
+        quantity: 1, unit: 'UN',
+      },
+      {
+        id: 'dependency-1d', name: 'Tarefa dependente de aditivo', phase: 'phase-1', startDate: '2026-08-05', duration: 1,
+        dependencies: ['suspended-1d'], responsible: 'Encarregado', team: 'alpha', percentComplete: 0, materials: [], level: 0,
+        quantity: 1, unit: 'UN',
+      },
+      {
         id: 'scheduled-new', name: 'Novo serviço programado', phase: 'phase-1', startDate: '2026-08-10', duration: 1,
         dependencies: [], responsible: 'Encarregado', team: 'alpha', percentComplete: 0, materials: [], level: 0,
         quantity: 1, unit: 'UN',
@@ -42,7 +52,7 @@ const project: Project = {
 const suspensionMap: Record<string, AdditiveScheduleSuspensionMeta> = {
   'suspended-1d': {
     kind: 'manual',
-    label: 'SUSPENSO - AGUARDA FORMALIZAÇÃO DO ADITIVO',
+    label: 'ATIVIDADE AGUARDANDO CONTRATAÇÃO DE ADITIVO',
     reason: 'A execução depende da formalização.',
     additiveId: 'add-1',
     additiveName: '1º Aditivo',
@@ -50,6 +60,29 @@ const suspensionMap: Record<string, AdditiveScheduleSuspensionMeta> = {
     disabled: false,
     scheduleState: 'suspended',
     financialTreatment: 'excluded',
+  },
+  'suppressed-1d': {
+    kind: 'automatic',
+    label: 'ITEM SUPRIMIDO - QUANTIDADE A EXECUTAR: 0',
+    reason: 'Quantidade suprimida pelo aditivo.',
+    additiveId: 'add-1',
+    additiveName: '1º Aditivo',
+    checked: true,
+    disabled: true,
+    scheduleState: 'fully_suppressed',
+    financialTreatment: 'excluded',
+  },
+  'dependency-1d': {
+    kind: 'dependency',
+    label: 'ATIVIDADE AGUARDANDO CONTRATAÇÃO DE ADITIVO — depende de Tarefa suspensa de um dia',
+    reason: 'A execução depende de tarefa submetida ao aditivo.',
+    additiveId: 'add-1',
+    additiveName: '1º Aditivo',
+    checked: true,
+    disabled: true,
+    scheduleState: 'suspended',
+    financialTreatment: 'excluded',
+    dependencyBlockingTaskIds: ['suspended-1d'],
   },
   'scheduled-new': {
     kind: 'proposed',
@@ -104,9 +137,13 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     );
 
     expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent(
-      'SUSPENSO - AGUARDA FORMALIZAÇÃO DO ADITIVO',
+      'ATIVIDADE AGUARDANDO CONTRATAÇÃO DE ADITIVO',
     );
     expect(screen.queryByTestId('gantt-bar-suspended-1d')).not.toBeInTheDocument();
+    expect(screen.getByTestId('gantt-status-only-suppressed-1d')).toHaveTextContent('ITEM SUPRIMIDO - QUANTIDADE A EXECUTAR: 0');
+    expect(screen.queryByTestId('gantt-bar-suppressed-1d')).not.toBeInTheDocument();
+    expect(screen.getByTestId('gantt-status-only-dependency-1d')).toHaveTextContent('depende de Tarefa suspensa de um dia');
+    expect(screen.queryByTestId('gantt-bar-dependency-1d')).not.toBeInTheDocument();
     expect(screen.getByTestId('gantt-proposed-label-scheduled-new')).toHaveTextContent('A CONTRATAR - EXECUÇÃO NÃO AUTORIZADA');
     expect(screen.getByTestId('gantt-proposed-label-scheduled-new-long')).toHaveTextContent('A CONTRATAR - EXECUÇÃO NÃO AUTORIZADA');
     expect(screen.queryByTestId('gantt-bar-scheduled-new')).not.toBeInTheDocument();
@@ -115,19 +152,26 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     expect(screen.getByTestId('gantt-quantity-limited-partial-existing')).toHaveTextContent('EXECUTAR: 10 UN CONTRATADAS');
 
     fireEvent.click(screen.getByRole('button', { name: 'Dias' }));
-    expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('SUSPENSO - AGUARDA FORMALIZAÇÃO DO ADITIVO');
+    expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('ATIVIDADE AGUARDANDO CONTRATAÇÃO DE ADITIVO');
     expect(screen.getByTestId('gantt-proposed-label-scheduled-new')).toBeInTheDocument();
     expect(screen.getByTestId('gantt-proposed-label-scheduled-new-long')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Meses' }));
-    expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('SUSPENSO - AGUARDA FORMALIZAÇÃO DO ADITIVO');
+    expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('ATIVIDADE AGUARDANDO CONTRATAÇÃO DE ADITIVO');
     expect(screen.getByTestId('gantt-proposed-label-scheduled-new')).toBeInTheDocument();
     expect(screen.getByTestId('gantt-proposed-label-scheduled-new-long')).toBeInTheDocument();
   });
 
-  it('preserva a barra no cronograma oficial', () => {
+  it('mantém as linhas, mas troca as barras por avisos no cronograma oficial', () => {
     render(<GanttChart project={project} context="official" suspensionMap={suspensionMap} readOnly />);
-    expect(screen.queryByTestId('gantt-status-only-suspended-1d')).not.toBeInTheDocument();
-    expect(screen.getByTestId('gantt-bar-suspended-1d')).toBeInTheDocument();
+    expect(screen.getByText('Tarefa suspensa de um dia')).toBeInTheDocument();
+    expect(screen.getByText('Tarefa suprimida')).toBeInTheDocument();
+    expect(screen.getByText('Tarefa dependente de aditivo')).toBeInTheDocument();
+    expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('ATIVIDADE AGUARDANDO CONTRATAÇÃO DE ADITIVO');
+    expect(screen.getByTestId('gantt-status-only-suppressed-1d')).toHaveTextContent('ITEM SUPRIMIDO - QUANTIDADE A EXECUTAR: 0');
+    expect(screen.getByTestId('gantt-status-only-dependency-1d')).toHaveTextContent('depende de Tarefa suspensa de um dia');
+    expect(screen.queryByTestId('gantt-bar-suspended-1d')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('gantt-bar-suppressed-1d')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('gantt-bar-dependency-1d')).not.toBeInTheDocument();
     expect(screen.getByTestId('gantt-bar-scheduled-new')).toBeInTheDocument();
     expect(screen.getByTestId('gantt-bar-scheduled-new-long')).toBeInTheDocument();
   });

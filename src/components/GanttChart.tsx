@@ -133,14 +133,16 @@ export default function GanttChart({
     [context, project, providedSuspensionMap],
   );
   const isStatusOnlyTask = useCallback(
-    (taskId: string) => context === 'additive-preview' && isStatusOnlySuspension(suspensionMap[taskId]),
-    [context, suspensionMap],
+    // Pending additive restrictions are operational states in both views: keep
+    // the row for traceability, but replace its planned bar with the status.
+    (taskId: string) => isStatusOnlySuspension(suspensionMap[taskId]),
+    [suspensionMap],
   );
   const analysisProject = useMemo(
-    () => context === 'additive-preview'
-      ? buildAdditiveScheduleAnalysisProject(project, suspensionMap)
-      : project,
-    [context, project, suspensionMap],
+    // Never persist this projection. It only prevents pending/suppressed work
+    // from contributing to the operational CPM, labor and financial analyses.
+    () => buildAdditiveScheduleAnalysisProject(project, suspensionMap),
+    [project, suspensionMap],
   );
 
   // Synchronize controlled state when switching projects/additives.
