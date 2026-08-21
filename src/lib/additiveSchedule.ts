@@ -393,10 +393,10 @@ export function syncAdditiveScheduleDraft(project: Project, additiveId: string, 
   });
   const changed = !previous
     || previous.version !== version
-    || JSON.stringify(previous.plannedTasks) !== JSON.stringify(plannedTasks)
-    || JSON.stringify(previous.dependentTaskIds) !== JSON.stringify(dependentTaskIds)
-    || JSON.stringify(previous.contractedTaskPlans ?? []) !== JSON.stringify(contractedTaskPlans)
-    || JSON.stringify(previous.dependencyBlocks ?? []) !== JSON.stringify(dependencyBlocks);
+    || stableJson(previous.plannedTasks) !== stableJson(plannedTasks)
+    || stableJson(previous.dependentTaskIds) !== stableJson(dependentTaskIds)
+    || !sameTaskKeyedList(previous.contractedTaskPlans ?? [], contractedTaskPlans)
+    || !sameTaskKeyedList(previous.dependencyBlocks ?? [], dependencyBlocks);
   if (!changed) return project;
   const scheduleDraft: AdditiveScheduleDraft = {
     version,
@@ -630,8 +630,8 @@ export function mergeAdditiveSchedulePreviewChanges(
     if (!restrictedIds.has(baseTask.id) && !changedFromOfficial) return [];
     return [nextPlan];
   });
-  const unchanged = JSON.stringify(draft.plannedTasks) === JSON.stringify(plannedTasks)
-    && JSON.stringify(draft.contractedTaskPlans ?? []) === JSON.stringify(contractedTaskPlans);
+  const unchanged = stableJson(draft.plannedTasks) === stableJson(plannedTasks)
+    && sameTaskKeyedList(draft.contractedTaskPlans ?? [], contractedTaskPlans);
   if (unchanged) return project;
   const scheduleDraft = { ...draft, plannedTasks, contractedTaskPlans, updatedAt: now };
   return {
