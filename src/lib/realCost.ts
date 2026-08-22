@@ -504,8 +504,6 @@ function buildCompositionSources(project: Project): CompositionSource[] {
     (additive.compositions ?? []).map(composition => ({ additive, composition })),
   );
   const additiveCompositions = additivePairs.map(pair => pair.composition);
-  const additiveReplacementKeys = new Set<string>();
-  const budgetRepresentationKeys = new Set<string>();
   const additiveAdjustmentByKey = new Map<string, { additive: Additive; composition: AdditiveComposition }>();
   const usedCompositionIds = new Set<string>();
   const sources: CompositionSource[] = [];
@@ -520,7 +518,6 @@ function buildCompositionSources(project: Project): CompositionSource[] {
   for (const pair of additivePairs) {
     if (!hasAdditiveReference(pair.composition)) continue;
     replacementKeysForComposition(pair.composition).forEach(key => {
-      additiveReplacementKeys.add(key);
       rememberAdditiveAdjustment(key, pair);
     });
   }
@@ -528,7 +525,6 @@ function buildCompositionSources(project: Project): CompositionSource[] {
   for (const budget of project.budgetItems ?? []) {
     if (budget.source !== 'sintetica' && budget.source !== 'aditivo') continue;
     const budgetKeys = replacementKeysForBudgetItem(budget);
-    budgetKeys.forEach(key => budgetRepresentationKeys.add(key));
     const additiveAdjustment = budget.source === 'sintetica'
       ? budgetKeys.map(key => additiveAdjustmentByKey.get(key)).find(Boolean)
       : undefined;
@@ -580,8 +576,6 @@ function buildCompositionSources(project: Project): CompositionSource[] {
 
   for (const pair of additivePairs) {
     if (usedCompositionIds.has(pair.composition.id)) continue;
-    const alreadyRepresentedByBudget = replacementKeysForComposition(pair.composition).some(key => budgetRepresentationKeys.has(key));
-    if (alreadyRepresentedByBudget) continue;
 
     const bdi = pair.additive.bdiPercent ?? project.syntheticBdiPercent ?? project.contractInfo?.bdiPercent ?? 0;
     const discount = pair.additive.globalDiscountPercent ?? 0;
@@ -617,8 +611,6 @@ function buildCompositionSources(project: Project): CompositionSource[] {
 
   for (const composition of baseCompositions) {
     if (usedCompositionIds.has(composition.id)) continue;
-    const representedByAdditive = replacementKeysForComposition(composition).some(key => additiveReplacementKeys.has(key));
-    if (representedByAdditive) continue;
 
     const quantity = compositionFinalQuantity(composition);
     const contractedValue = contractValueFromComposition(composition, quantity);
@@ -865,7 +857,9 @@ function buildRealCostGroupTree(project: Project, compositions: RealCostComposit
   const numbering = getChapterNumbering(project);
   const tree = getChapterTree(project);
 
+  const renderedPhaseIds = new Set<string>();
   const buildNode = (chapterNode: ChapterNode, depth: number): RealCostGroupNode | null => {
+    renderedPhaseIds.add(chapterNode.phase.id);
     const rows = (rowsByPhase.get(chapterNode.phase.id) ?? [])
       .slice()
       .sort((a, b) => a.item.localeCompare(b.item, 'pt-BR', { numeric: true }));
@@ -890,7 +884,12 @@ function buildRealCostGroupTree(project: Project, compositions: RealCostComposit
     .filter((node): node is RealCostGroupNode => node !== null)
     .sort((a, b) => a.number.localeCompare(b.number, 'pt-BR', { numeric: true }));
 
-  const orphanRows = (rowsByPhase.get('__unlinked__') ?? [])
+  // A Medição inclui fases órfãs da árvore para não ocultar serviço importado.
+  // Custos deve obedecer à mesma garantia: nenhuma composição pode desaparecer
+  // apenas porque o parentId da fase está ausente ou inconsistente.
+  const orphanRows = Array.from(rowsByPhase.entries())
+    .filter(([phaseId]) => !renderedPhaseIds.has(phaseId))
+    .flatMap(([, rows]) => rows)
     .slice()
     .sort((a, b) => a.item.localeCompare(b.item, 'pt-BR', { numeric: true }));
   if (orphanRows.length > 0) {
