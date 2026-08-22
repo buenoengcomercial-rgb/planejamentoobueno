@@ -20,6 +20,8 @@ export interface UseDailyReportStateResult {
   persist: (mutator: (r: DailyReportEntry) => DailyReportEntry) => void;
   updateField: <K extends keyof DailyReportEntry>(key: K, value: DailyReportEntry[K]) => void;
   clearDailyReport: () => void;
+  concludeDailyReport: () => void;
+  reopenDailyReport: () => void;
 }
 
 function createBlankDailyReport(date: string): DailyReportEntry {
@@ -93,6 +95,17 @@ export function useDailyReportState({
     }));
   }, [onProjectChange, selectedDate]);
 
+  const concludeDailyReport = useCallback(() => {
+    persist(report => ({ ...report, concludedAt: new Date().toISOString() }));
+  }, [persist]);
+
+  const reopenDailyReport = useCallback(() => {
+    persist(report => {
+      const { concludedAt: _concludedAt, concludedBy: _concludedBy, ...editable } = report;
+      return editable;
+    });
+  }, [persist]);
+
   return {
     selectedDate,
     setSelectedDate,
@@ -102,5 +115,7 @@ export function useDailyReportState({
     persist,
     updateField,
     clearDailyReport,
+    concludeDailyReport,
+    reopenDailyReport,
   };
 }

@@ -14,6 +14,7 @@ interface DailyProductionWorkspaceProps {
   dailyReportUndoButton?: React.ReactNode;
   productionReadOnly?: boolean;
   dailyReportReadOnly?: boolean;
+  dailyReportCanManageConclusion?: boolean;
   onProductionChange: (next: Project | ((prev: Project) => Project)) => void;
   onDailyReportChange: (next: Project | ((prev: Project) => Project)) => void;
   dailyReportInitialDate?: string;
@@ -30,6 +31,7 @@ export default function DailyProductionWorkspace({
   dailyReportUndoButton,
   productionReadOnly = false,
   dailyReportReadOnly = false,
+  dailyReportCanManageConclusion = false,
   onProductionChange,
   onDailyReportChange,
   dailyReportInitialDate,
@@ -96,6 +98,7 @@ export default function DailyProductionWorkspace({
               onProjectChange={onDailyReportChange}
               undoButton={dailyReportUndoButton}
               readOnly={dailyReportReadOnly}
+              canManageConclusion={dailyReportCanManageConclusion}
               initialDate={dailyReportInitialDate}
               initialMeasurementFilter={dailyReportInitialFilter}
               navKey={dailyReportNavKey}

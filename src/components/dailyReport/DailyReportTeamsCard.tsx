@@ -56,8 +56,8 @@ export function DailyReportTeamsCard({
           </p>
         )}
         {(currentReport.teamsPresent || []).map(t => (
-          <div key={t.id} className="grid grid-cols-[minmax(0,1.6fr)_70px_minmax(0,1.4fr)_auto] gap-2 items-center">
-            <Select
+          <div key={t.id} className="grid gap-2 rounded-lg border border-border p-3 sm:grid-cols-[minmax(0,1.6fr)_70px_minmax(0,1.4fr)_auto] sm:items-center sm:border-0 sm:p-0">
+            <div className="space-y-1"><span className="text-xs text-muted-foreground sm:hidden">Equipe</span><Select
               value={t.teamCode || ''}
               onValueChange={(v) => {
                 const def = teamByCode.get(v);
@@ -80,15 +80,15 @@ export function DailyReportTeamsCard({
                   </SelectItem>
                 ))}
               </SelectContent>
-            </Select>
-            <Input type="number" min={0} placeholder="Qtd" value={t.count ?? ''}
+            </Select></div>
+            <div className="space-y-1"><span className="text-xs text-muted-foreground sm:hidden">Quantidade</span><Input className="min-h-11 text-base sm:min-h-10 sm:text-sm" type="number" min={0} placeholder="Qtd" value={t.count ?? ''}
               onChange={e => {
                 const n = Number(e.target.value);
                 updateTeamRow(t.id, { count: Number.isFinite(n) && n >= 0 ? n : 0 });
-              }} />
-            <Input placeholder="Observação" value={t.notes || ''}
-              onChange={e => updateTeamRow(t.id, { notes: e.target.value })} />
-            <Button size="icon" variant="ghost" onClick={() => removeTeamRow(t.id)}>
+              }} /></div>
+            <div className="space-y-1"><span className="text-xs text-muted-foreground sm:hidden">Observação</span><Input className="min-h-11 text-base sm:min-h-10 sm:text-sm" placeholder="Observação" value={t.notes || ''}
+              onChange={e => updateTeamRow(t.id, { notes: e.target.value })} /></div>
+            <Button size="icon" variant="ghost" className="min-h-11 min-w-11 justify-self-end" onClick={() => removeTeamRow(t.id)}>
               <Trash2 className="w-4 h-4 text-destructive" />
             </Button>
           </div>

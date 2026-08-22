@@ -8,6 +8,7 @@ import {
   uid,
 } from '@/components/dailyReport/dailyReportFormat';
 import type { ProductionEntry } from '@/components/dailyReport/types';
+import { optimizeDailyReportPhoto } from '@/lib/dailyReportPhotoOptimization';
 
 interface UseDailyReportPhotosArgs {
   project: Project;
@@ -72,9 +73,10 @@ export function useDailyReportPhotos({
     return opts;
   }, [production]);
 
-  const uploadOne = useCallback(async (file: File): Promise<DailyReportAttachment> => {
+  const uploadOne = useCallback(async (file: File): Promise<{ attachment: DailyReportAttachment; originalBytes: number; storedBytes: number }> => {
+    const optimized = await optimizeDailyReportPhoto(file);
     const id = uid('att');
-    const safeExt = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const safeExt = 'jpg';
     const path = `${project.id || 'local'}/${selectedDate}/${id}.${safeExt}`;
     const taskMeta = pendingTaskId !== GENERAL_TASK_VALUE
       ? photoTaskOptions.find(o => o.value === pendingTaskId)
@@ -82,8 +84,8 @@ export function useDailyReportPhotos({
     const base: DailyReportAttachment = {
       id,
       type: 'image',
-      fileName: file.name,
-      mimeType: file.type || 'image/jpeg',
+      fileName: optimized.name,
+      mimeType: optimized.type,
       caption: '',
       taskId: taskMeta?.value,
       taskName: taskMeta?.taskName,
@@ -95,10 +97,10 @@ export function useDailyReportPhotos({
     };
     const { error } = await supabase.storage
       .from(PHOTO_BUCKET)
-      .upload(path, file, { contentType: file.type || 'image/jpeg', upsert: false });
+      .upload(path, optimized, { contentType: optimized.type, upsert: false });
     if (error) throw new Error(`Não foi possível enviar ${file.name}: ${error.message}`);
     // Bucket é privado: a URL é gerada sob demanda via signed URL (resolvePhotoUrl).
-    return { ...base, storagePath: path };
+    return { attachment: { ...base, storagePath: path }, originalBytes: file.size, storedBytes: optimized.size };
   }, [project.id, selectedDate, pendingTaskId, photoTaskOptions, currentReport.responsible]);
 
   const handleFiles = useCallback(async (files: FileList | File[]) => {
@@ -107,10 +109,14 @@ export function useDailyReportPhotos({
     setUploadingCount(c => c + arr.length);
     try {
       const uploaded: DailyReportAttachment[] = [];
+      let originalBytes = 0;
+      let storedBytes = 0;
       for (const f of arr) {
         try {
-          const att = await uploadOne(f);
-          uploaded.push(att);
+          const result = await uploadOne(f);
+          uploaded.push(result.attachment);
+          originalBytes += result.originalBytes;
+          storedBytes += result.storedBytes;
         } catch (err) {
           console.error('Falha ao anexar foto', err);
           toast({
@@ -122,7 +128,12 @@ export function useDailyReportPhotos({
       }
       if (uploaded.length > 0) {
         persist(r => ({ ...r, attachments: [...(r.attachments || []), ...uploaded] }));
-        toast({ title: `${uploaded.length} foto(s) anexada(s)`, description: 'A galeria do dia foi atualizada.' });
+        const savedBytes = Math.max(0, originalBytes - storedBytes);
+        const mb = (bytes: number) => `${(bytes / 1024 / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} MB`;
+        toast({
+          title: `${uploaded.length} foto(s) otimizada(s) e anexada(s)`,
+          description: savedBytes > 0 ? `Armazenamento reduzido de ${mb(originalBytes)} para ${mb(storedBytes)}.` : `Versão otimizada enviada (${mb(storedBytes)}).`,
+        });
       }
     } finally {
       setUploadingCount(c => Math.max(0, c - arr.length));

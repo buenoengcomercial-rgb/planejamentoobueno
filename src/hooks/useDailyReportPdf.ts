@@ -10,7 +10,6 @@ import { summarizeDailyReportsForPeriod } from '@/lib/dailyReportSummary';
 import { loadCompanyLogoForPdf } from '@/lib/companyBranding';
 import { resolvePhotoUrl } from '@/lib/photoUrl';
 import {
-  GENERAL_TASK_VALUE,
   WEATHER_OPTIONS,
   WORK_OPTIONS,
   formatBR,
@@ -515,130 +514,86 @@ export function useDailyReportPdf(args: UseDailyReportPdfArgs) {
       // ───── Fotos do dia ─────
       const dayPhotos = (report?.attachments || []).filter(a => (a.type ?? 'image') === 'image');
       if (dayPhotos.length > 0) {
-        ensureSpace(14);
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(20);
-        doc.text(`Fotos da Obra (${dayPhotos.length})`, margin, y); y += 3;
-
-        // Agrupar por tarefa mantendo numeração geral sequencial
-        const byTask = new Map<string, { taskShort: string; phaseChain?: string; photos: DailyReportAttachment[] }>();
-        const taskOrder: string[] = [];
-        dayPhotos.forEach(p => {
-          const k = p.taskId || GENERAL_TASK_VALUE;
-          if (!byTask.has(k)) {
-            taskOrder.push(k);
-            byTask.set(k, {
-              taskShort: k === GENERAL_TASK_VALUE ? 'Geral' : shortTaskName(p.taskName),
-              phaseChain: p.phaseChain,
-              photos: [],
-            });
-          }
-          byTask.get(k)!.photos.push(p);
-        });
-
+        // Fotos são sempre anexos em páginas próprias: não disputam espaço com texto/tabelas.
+        // Legendas curtas usam 6 por A4; observações extensas mantêm 4 para leitura confortável.
+        const useSixPerPage = dayPhotos.every(photo => (photo.caption?.trim().length || 0) <= 72);
         const cols = 2;
+        const rows = useSixPerPage ? 3 : 2;
+        const perPage = cols * rows;
         const gap = 4;
-        const cardW = (usable - gap * (cols - 1)) / cols;
-        const imgBoxH = 55;       // altura máxima da imagem (mm)
-        const headerH = 4.6;
-        const captionMaxH = 6.8;  // ~2 linhas
-        const metaH = 3.4;
+        const photoTop = margin + 18;
+        const photoBottom = pageH - footerReserved - 3;
+        const cardW = (usable - gap) / cols;
+        const cardH = (photoBottom - photoTop - gap * (rows - 1)) / rows;
         const cardPad = 2;
-        const cardH = headerH + imgBoxH + captionMaxH + metaH + cardPad * 2 + 1;
-
+        const titleH = 5;
+        const captionH = useSixPerPage ? 6 : 10;
+        const metaH = 4;
+        const imgAreaW = cardW - cardPad * 2;
+        const imgAreaH = cardH - titleH - captionH - metaH - cardPad * 2 - 2;
         const totalPad = dayPhotos.length.toString().length;
-        let photoIndex = 0;
 
-        for (const k of taskOrder) {
-          const group = byTask.get(k)!;
-          // Cabeçalho discreto da atividade (curto)
-          ensureSpace(6 + cardH);
-          doc.setFont('helvetica', 'bold'); doc.setFontSize(7.6); doc.setTextColor(55, 65, 81);
-          doc.text(`Atividade: ${group.taskShort}`, margin, y);
-          y += 3.2;
+        for (let start = 0; start < dayPhotos.length; start += perPage) {
+          doc.addPage();
+          doc.setFillColor(31, 41, 55);
+          doc.rect(margin, margin, usable, 9, 'F');
+          doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
+          doc.text('ANEXO FOTOGRÁFICO', margin + 2, margin + 5.8);
+          doc.setFontSize(7.5);
+          doc.text(`${formatBR(dateISO)} • Fotos ${start + 1}-${Math.min(start + perPage, dayPhotos.length)} de ${dayPhotos.length}`, pageW - margin - 2, margin + 5.8, { align: 'right' });
           doc.setTextColor(20);
 
-          for (let pIdx = 0; pIdx < group.photos.length; pIdx += cols) {
-            ensureSpace(cardH + 2);
-            const rowPhotos = group.photos.slice(pIdx, pIdx + cols);
-            const rowTopY = y;
+          const pagePhotos = dayPhotos.slice(start, start + perPage);
+          for (let slot = 0; slot < pagePhotos.length; slot++) {
+            const ph = pagePhotos[slot];
+            const row = Math.floor(slot / cols);
+            const col = slot % cols;
+            const x = margin + col * (cardW + gap);
+            const cardTop = photoTop + row * (cardH + gap);
+            const shortName = ph.taskId ? shortTaskName(ph.taskName) : 'Geral';
+            const number = String(start + slot + 1).padStart(Math.max(2, totalPad), '0');
 
-            for (let c = 0; c < rowPhotos.length; c++) {
-              const ph = rowPhotos[c];
-              photoIndex += 1;
-              const x = margin + c * (cardW + gap);
-              const cardTop = rowTopY;
+            doc.setDrawColor(220); doc.setLineWidth(0.2);
+            doc.rect(x, cardTop, cardW, cardH);
+            doc.setFont('helvetica', 'bold'); doc.setFontSize(7.2); doc.setTextColor(31, 41, 55);
+            doc.text(doc.splitTextToSize(`Foto ${number} — ${shortName}`, imgAreaW)[0], x + cardPad, cardTop + cardPad + 2.7);
 
-              // Card border
-              doc.setDrawColor(220); doc.setLineWidth(0.2);
-              doc.rect(x, cardTop, cardW, cardH);
-
-              // Header: "Foto NN — Nome curto"
-              const num = String(photoIndex).padStart(Math.max(2, totalPad), '0');
-              const shortName = group.taskShort;
-              const titleRaw = `Foto ${num} — ${shortName}`;
-              doc.setFont('helvetica', 'bold'); doc.setFontSize(7.4); doc.setTextColor(31, 41, 55);
-              const titleLines = doc.splitTextToSize(titleRaw, cardW - cardPad * 2);
-              doc.text(titleLines[0], x + cardPad, cardTop + cardPad + 2.6);
-
-              // Image area
-              const imgTop = cardTop + cardPad + headerH;
-              const imgAreaW = cardW - cardPad * 2;
-              const imgAreaH = imgBoxH;
-
-              let drew = false;
-              const srcUrl = await resolvePhotoUrl(ph);
-              if (srcUrl) {
-                const oriented = await loadOrientedImage(srcUrl, ph.mimeType);
-                if (oriented) {
-                  // Encaixa preservando proporção (sem distorcer)
-                  const ratio = oriented.width / oriented.height;
-                  let drawW = imgAreaW;
-                  let drawH = drawW / ratio;
-                  if (drawH > imgAreaH) {
-                    drawH = imgAreaH;
-                    drawW = drawH * ratio;
-                  }
-                  const dx = x + cardPad + (imgAreaW - drawW) / 2;
-                  const dy = imgTop + (imgAreaH - drawH) / 2;
-                  try {
-                    const fmt = oriented.dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-                    doc.addImage(oriented.dataUrl, fmt, dx, dy, drawW, drawH, undefined, 'FAST');
-                    drew = true;
-                  } catch { /* fallback below */ }
-                }
+            const imgTop = cardTop + cardPad + titleH;
+            let drew = false;
+            const srcUrl = await resolvePhotoUrl(ph);
+            if (srcUrl) {
+              const oriented = await loadOrientedImage(srcUrl, ph.mimeType);
+              if (oriented) {
+                const ratio = oriented.width / oriented.height;
+                let drawW = imgAreaW;
+                let drawH = drawW / ratio;
+                if (drawH > imgAreaH) { drawH = imgAreaH; drawW = drawH * ratio; }
+                try {
+                  const fmt = oriented.dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+                  doc.addImage(oriented.dataUrl, fmt, x + cardPad + (imgAreaW - drawW) / 2, imgTop + (imgAreaH - drawH) / 2, drawW, drawH, undefined, 'FAST');
+                  drew = true;
+                } catch { /* mostra quadro de indisponível abaixo */ }
               }
-              if (!drew) {
-                doc.setDrawColor(230); doc.rect(x + cardPad, imgTop, imgAreaW, imgAreaH);
-                doc.setFontSize(6.5); doc.setTextColor(150);
-                doc.text('Imagem indisponível', x + cardPad + imgAreaW / 2, imgTop + imgAreaH / 2, { align: 'center' });
-                doc.setTextColor(20);
-              }
-
-              // Observação
-              const capTop = imgTop + imgAreaH + 2;
-              doc.setFont('helvetica', 'normal'); doc.setFontSize(6.6); doc.setTextColor(60);
-              const capRaw = ph.caption?.trim() ? `Observação: ${ph.caption.trim()}` : 'Observação: —';
-              const capLines = doc.splitTextToSize(capRaw, imgAreaW).slice(0, 2);
-              doc.text(capLines, x + cardPad, capTop + 1.6);
-
-              // Meta: data, hora, atividade curta, qtd
-              const metaTop = capTop + captionMaxH;
-              doc.setFontSize(5.8); doc.setTextColor(130);
-              const when = ph.uploadedAt ? new Date(ph.uploadedAt) : null;
-              const dateStr = when ? when.toLocaleDateString('pt-BR') : '';
-              const timeStr = when ? when.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
-              const qtyStr = (ph.quantity != null && ph.unit) ? ` — ${ph.quantity} ${ph.unit}` : '';
-              const metaParts = [
-                [dateStr, timeStr].filter(Boolean).join(', '),
-                shortName,
-              ].filter(Boolean).join(' — ') + qtyStr;
-              const metaLines = doc.splitTextToSize(metaParts, imgAreaW).slice(0, 1);
-              doc.text(metaLines, x + cardPad, metaTop + 1.4);
-              doc.setTextColor(20);
             }
-            y = rowTopY + cardH + 2;
+            if (!drew) {
+              doc.setDrawColor(230); doc.rect(x + cardPad, imgTop, imgAreaW, imgAreaH);
+              doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5); doc.setTextColor(150);
+              doc.text('Imagem indisponível', x + cardPad + imgAreaW / 2, imgTop + imgAreaH / 2, { align: 'center' });
+            }
+
+            const captionTop = imgTop + imgAreaH + 1.8;
+            doc.setFont('helvetica', 'normal'); doc.setFontSize(6.3); doc.setTextColor(60);
+            const caption = ph.caption?.trim() ? `Observação: ${ph.caption.trim()}` : 'Observação: —';
+            doc.text(doc.splitTextToSize(caption, imgAreaW).slice(0, useSixPerPage ? 2 : 3), x + cardPad, captionTop + 1.5);
+
+            const when = ph.uploadedAt ? new Date(ph.uploadedAt) : null;
+            const dateStr = when ? when.toLocaleDateString('pt-BR') : '';
+            const timeStr = when ? when.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+            const qty = ph.quantity != null && ph.unit ? ` — ${ph.quantity} ${ph.unit}` : '';
+            doc.setFontSize(5.7); doc.setTextColor(130);
+            doc.text(doc.splitTextToSize(`${[dateStr, timeStr].filter(Boolean).join(', ')} — ${shortName}${qty}`, imgAreaW)[0], x + cardPad, cardTop + cardH - cardPad - 1.2);
+            doc.setTextColor(20);
           }
-          y += 1;
         }
       }
     }

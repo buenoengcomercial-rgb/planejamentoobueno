@@ -31,7 +31,7 @@ export function DailyReportHeader({
   handlePrintPeriod,
 }: DailyReportHeaderProps) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
       <div className="flex items-center gap-3">
         <div className="w-11 h-11 rounded-lg bg-primary/10 flex items-center justify-center">
           <NotebookPen className="w-5 h-5 text-primary" />
@@ -43,10 +43,10 @@ export function DailyReportHeader({
           </p>
         </div>
       </div>
-      <div className="flex items-center gap-2 flex-wrap">
+      <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
         {undoButton}
         <Select value={measurementFilter} onValueChange={setMeasurementFilter}>
-          <SelectTrigger className="h-10 w-[240px] text-sm">
+          <SelectTrigger className="col-span-2 h-11 w-full text-base sm:h-10 sm:w-[240px] sm:text-sm">
             <SelectValue placeholder="Filtrar por medição" />
           </SelectTrigger>
           <SelectContent>
@@ -58,7 +58,7 @@ export function DailyReportHeader({
         </Select>
         {activePeriod && periodDates.length > 0 ? (
           <Select value={selectedDate} onValueChange={setSelectedDate}>
-            <SelectTrigger className="h-10 w-[180px] text-sm">
+            <SelectTrigger className="h-11 w-full text-base sm:h-10 sm:w-[180px] sm:text-sm">
               <SelectValue placeholder="Data" />
             </SelectTrigger>
             <SelectContent className="max-h-[260px]">
@@ -68,21 +68,21 @@ export function DailyReportHeader({
             </SelectContent>
           </Select>
         ) : (
-          <div className="flex h-10 items-center gap-2 bg-card border border-border rounded-lg px-3">
+          <div className="flex h-11 min-w-0 items-center gap-2 rounded-lg border border-border bg-card px-3 sm:h-10">
             <CalendarDays className="w-4 h-4 text-muted-foreground" />
             <input
               type="date"
               value={selectedDate}
               onChange={e => setSelectedDate(e.target.value)}
-              className="bg-transparent text-sm focus:outline-none"
+              className="min-w-0 bg-transparent text-base focus:outline-none sm:text-sm"
             />
           </div>
         )}
-        <Button onClick={handlePrintDay} variant="outline" size="sm" className="h-10 text-sm" title="Exporta apenas a data selecionada">
+        <Button onClick={handlePrintDay} variant="outline" size="sm" className="h-11 text-sm sm:h-10" title="Exporta apenas a data selecionada">
           <Printer className="w-4 h-4 mr-1.5" /> PDF do dia
         </Button>
         {activePeriod && (
-          <Button onClick={handlePrintPeriod} variant="default" size="sm" className="h-10 text-sm" title="Exporta todos os dias do período da medição">
+          <Button onClick={handlePrintPeriod} variant="default" size="sm" className="h-11 text-sm sm:h-10" title="Exporta todos os dias do período da medição">
             <Printer className="w-4 h-4 mr-1.5" /> PDF da medição
           </Button>
         )}

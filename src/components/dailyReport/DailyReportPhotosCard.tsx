@@ -68,11 +68,11 @@ export function DailyReportPhotosCard({
         <CardTitle className="text-base flex items-center gap-2">
           <Camera className="w-4 h-4 text-primary" /> Fotos da Obra ({photos.length})
         </CardTitle>
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-1">
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:flex-wrap">
+          <div className="flex w-full flex-col gap-1 sm:w-auto sm:flex-row sm:items-center">
             <Label className="text-xs text-muted-foreground">Vincular à atividade:</Label>
             <Select value={pendingTaskId} onValueChange={setPendingTaskId}>
-              <SelectTrigger className="h-9 text-xs w-[280px]">
+              <SelectTrigger className="h-11 w-full text-base sm:h-9 sm:w-[280px] sm:text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -97,7 +97,7 @@ export function DailyReportPhotosCard({
               }
             }}
           />
-          <Button size="sm" variant="default" onClick={() => fileInputRef.current?.click()} disabled={uploadingCount > 0}>
+          <Button size="sm" variant="default" className="min-h-11 sm:min-h-9" onClick={() => fileInputRef.current?.click()} disabled={uploadingCount > 0}>
             {uploadingCount > 0 ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-1" />}
             Anexar fotos
           </Button>

@@ -9,7 +9,28 @@ interface ProductionTableProps {
 
 export function ProductionTable({ entries, photosByTask, onShowPhotos }: ProductionTableProps) {
   return (
-    <div className="border border-border rounded-md overflow-hidden">
+    <>
+    <div className="space-y-2 sm:hidden">
+      {entries.map(e => {
+        const count = photosByTask?.get(e.taskId) || 0;
+        return (
+          <article key={e.taskId + (e.notes || '')} className="rounded-lg border border-border bg-card p-3">
+            <p className="text-sm font-semibold leading-snug text-foreground">{e.taskName}</p>
+            <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+              <div><dt className="text-xs text-muted-foreground">Unidade</dt><dd>{e.unit}</dd></div>
+              <div><dt className="text-xs text-muted-foreground">Qtd. executada</dt><dd className="font-semibold">{e.actualQuantity.toFixed(2)}</dd></div>
+              <div className="col-span-2"><dt className="text-xs text-muted-foreground">Observação</dt><dd>{e.notes || '—'}</dd></div>
+            </dl>
+            {count > 0 && (
+              <button type="button" onClick={() => onShowPhotos?.(e.taskId)} className="mt-3 inline-flex min-h-11 items-center gap-2 text-sm font-medium text-primary">
+                <Camera className="h-4 w-4" /> Ver {count} foto(s) vinculada(s)
+              </button>
+            )}
+          </article>
+        );
+      })}
+    </div>
+    <div className="hidden overflow-hidden rounded-md border border-border sm:block">
       <table className="w-full text-sm">
         <thead className="bg-muted/40 text-muted-foreground">
           <tr>
@@ -49,5 +70,6 @@ export function ProductionTable({ entries, photosByTask, onShowPhotos }: Product
         </tbody>
       </table>
     </div>
+    </>
   );
 }

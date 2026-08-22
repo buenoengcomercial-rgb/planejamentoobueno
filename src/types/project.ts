@@ -514,8 +514,20 @@ export interface DailyReport {
   impediments?: string;
   observations?: string;
   attachments?: DailyReportAttachment[];
+  /** Diário finalizado: permanece em consulta até reabertura pelo Proprietário. */
+  concludedAt?: string;
+  /** Preenchido pelo banco a partir da sessão autenticada. */
+  concludedBy?: string;
+  /** Eventos imutáveis de conclusão/reabertura preenchidos pelo banco. */
+  conclusionHistory?: DailyReportConclusionEvent[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DailyReportConclusionEvent {
+  action: 'concluido' | 'reaberto';
+  at: string;
+  by?: string;
 }
 
 export type ManagementChecklistStatus = 'pendente' | 'feito' | 'nao_aplicavel';
