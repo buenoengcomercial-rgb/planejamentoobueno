@@ -82,6 +82,17 @@ function replaceAttachment(value: unknown, target: MigratableAttachment, replace
 export async function migrateAttachment(project: Project, attachment: MigratableAttachment): Promise<{ project: Project; originalBytes: number; storedBytes: number; oldPath?: string; newPath: string }> {
   const original = await attachmentFile(attachment);
   const optimized = await optimizeStorageAttachment(original, attachment.kind);
+  // Já está no menor tamanho possível: apenas marca a versão do perfil para não reprocessar.
+  if (optimized.size >= original.size) {
+    const marked: MigratableAttachment = {
+      ...attachment,
+      optimizedAt: attachment.optimizedAt || new Date().toISOString(),
+      optimizationVersion: ATTACHMENT_OPTIMIZATION_VERSION,
+      storedBytes: original.size,
+    };
+    const same = replaceAttachment(project, attachment, marked) as Project;
+    return { project: same, originalBytes: original.size, storedBytes: original.size, oldPath: undefined, newPath: attachment.storagePath || '' };
+  }
   const extension = (optimized.name.split('.').pop() || 'bin').replace(/[^a-z0-9]/gi, '').toLowerCase();
   const path = `${project.id}/optimized/${attachment.id}-${crypto.randomUUID()}.${extension}`;
   const { error } = await supabase.storage.from(BUCKET).upload(path, optimized, { contentType: optimized.type || 'application/octet-stream', upsert: false });
@@ -92,7 +103,9 @@ export async function migrateAttachment(project: Project, attachment: Migratable
     mimeType: optimized.type,
     storagePath: path,
     dataUrl: undefined,
+    storedBytes: optimized.size,
     optimizedAt: new Date().toISOString(),
+    optimizationVersion: ATTACHMENT_OPTIMIZATION_VERSION,
   };
   try {
     const next = replaceAttachment(project, attachment, replacement) as Project;
@@ -102,6 +115,7 @@ export async function migrateAttachment(project: Project, attachment: Migratable
     throw error;
   }
 }
+
 
 export async function deletePreviousAttachment(path?: string): Promise<void> {
   if (!path) return;
