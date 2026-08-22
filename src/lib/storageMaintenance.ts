@@ -16,7 +16,12 @@ export type StorageMaintenanceReport = { generatedAt: string; totalFiles: number
 
 async function invoke<T>(body: Record<string, unknown>): Promise<T> {
   const { data, error } = await supabase.functions.invoke<T>('storage-maintenance', { body });
-  if (error) throw new Error(error.message || 'Não foi possível executar a manutenção do Storage.');
+  if (error) {
+    const unavailable = /failed to send a request|functionsfetcherror|network/i.test(error.message || '');
+    throw new Error(unavailable
+      ? 'A função de manutenção ainda não está publicada no Lovable Cloud. Publique a Edge Function “storage-maintenance” e tente novamente.'
+      : error.message || 'Não foi possível executar a manutenção do Storage.');
+  }
   if (data && typeof data === 'object' && 'error' in data && typeof (data as { error?: unknown }).error === 'string') throw new Error((data as { error: string }).error);
   return data;
 }
