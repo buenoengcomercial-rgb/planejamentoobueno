@@ -44,12 +44,15 @@ async function audit(admin: ReturnType<typeof createClient>, organizationId: str
   }
   const referenceMap = new Map<string, AttachmentRef>();
   references.forEach(reference => referenceMap.set(reference.path, reference));
-  const { data: rows, error: storageError } = await admin.schema('storage').from('objects').select('name,metadata,owner_id').eq('bucket_id', BUCKET);
+  const { data: rows, error: storageError } = await admin.rpc('list_organization_storage_objects', { _organization_id: organizationId });
   if (storageError) throw storageError;
-  const visible = ((rows ?? []) as StoredObject[]).filter(object => {
-    const prefix = object.name.split('/')[0];
-    return projectMap.has(prefix) || (!!object.owner_id && memberIds.has(object.owner_id));
-  });
+  const visible = ((rows ?? []) as Array<{ name: string; size: number | string | null; owner_id: string | null }>)
+    .map(row => ({ name: row.name, metadata: { size: bytes(row.size) }, owner_id: row.owner_id }) as StoredObject)
+    .filter(object => {
+      const prefix = object.name.split('/')[0];
+      return projectMap.has(prefix) || (!!object.owner_id && memberIds.has(object.owner_id));
+    });
+
   const groups = new Map<string, { projectId: string; projectName: string; state: 'ativa' | 'obra_excluida'; files: number; bytes: number; referenced: number; pending: number; optimized: number; orphans: Array<{ path: string; bytes: number; reason: string }> }>();
   for (const object of visible) {
     const prefix = object.name.split('/')[0];
