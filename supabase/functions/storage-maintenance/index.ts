@@ -30,17 +30,20 @@ async function audit(admin: ReturnType<typeof createClient>, organizationId: str
   const references: AttachmentRef[] = [];
   activeProjects.forEach(project => collectReferences(project.data_json, references));
   if (projectIds.length) {
-    const [daily, requisitions, custody] = await Promise.all([
+    const [daily, requisitions, custody, movements] = await Promise.all([
       admin.from('daily_reports').select('data').in('project_id', projectIds),
       admin.from('warehouse_requisitions').select('data').in('project_id', projectIds),
       admin.from('warehouse_custody').select('data').in('project_id', projectIds),
+      admin.from('warehouse_movements').select('data').in('project_id', projectIds),
     ]);
     if (daily.error) throw daily.error;
     if (requisitions.error) throw requisitions.error;
     if (custody.error) throw custody.error;
+    if (movements.error) throw movements.error;
     (daily.data ?? []).forEach(row => collectReferences(row.data, references));
     (requisitions.data ?? []).forEach(row => collectReferences(row.data, references));
     (custody.data ?? []).forEach(row => collectReferences(row.data, references));
+    (movements.data ?? []).forEach(row => collectReferences(row.data, references));
   }
   const referenceMap = new Map<string, AttachmentRef>();
   references.forEach(reference => referenceMap.set(reference.path, reference));
