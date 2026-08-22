@@ -9,6 +9,7 @@ import {
 } from '@/components/dailyReport/dailyReportFormat';
 import type { ProductionEntry } from '@/components/dailyReport/types';
 import { optimizeDailyReportPhoto } from '@/lib/dailyReportPhotoOptimization';
+import { ATTACHMENT_OPTIMIZATION_VERSION } from '@/lib/attachmentOptimizationVersion';
 
 interface UseDailyReportPhotosArgs {
   project: Project;

@@ -1,3 +1,4 @@
+import { ATTACHMENT_OPTIMIZATION_VERSION } from './attachmentOptimizationVersion';
 import type {
   Project,
   Task,
