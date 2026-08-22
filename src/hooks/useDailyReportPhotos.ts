@@ -9,6 +9,7 @@ import {
 } from '@/components/dailyReport/dailyReportFormat';
 import type { ProductionEntry } from '@/components/dailyReport/types';
 import { optimizeDailyReportPhoto } from '@/lib/dailyReportPhotoOptimization';
+import { ATTACHMENT_OPTIMIZATION_VERSION } from '@/lib/attachmentOptimizationVersion';
 
 interface UseDailyReportPhotosArgs {
   project: Project;
@@ -97,6 +98,8 @@ export function useDailyReportPhotos({
       originalBytes: file.size,
       storedBytes: optimized.size,
       optimizedAt: new Date().toISOString(),
+      optimizationVersion: ATTACHMENT_OPTIMIZATION_VERSION,
+
     };
     const { error } = await supabase.storage
       .from(PHOTO_BUCKET)

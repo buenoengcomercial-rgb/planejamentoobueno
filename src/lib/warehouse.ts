@@ -1,3 +1,4 @@
+import { ATTACHMENT_OPTIMIZATION_VERSION } from './attachmentOptimizationVersion';
 import type {
   Project,
   Task,
@@ -3097,6 +3098,8 @@ export async function makeAttachment(
     originalBytes: file.size,
     storedBytes: optimized.size,
     optimizedAt: optimized === file ? undefined : nowISO(),
+    optimizationVersion: ATTACHMENT_OPTIMIZATION_VERSION,
+
     kind,
     uploadedAt: nowISO(),
   };

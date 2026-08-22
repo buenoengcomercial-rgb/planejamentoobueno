@@ -497,6 +497,9 @@ export interface DailyReportAttachment {
   originalBytes?: number;
   storedBytes?: number;
   optimizedAt?: string;
+  /** Versão do perfil de compactação usado ao gravar (ver ATTACHMENT_OPTIMIZATION_VERSION). */
+  optimizationVersion?: number;
+
   /** Compat: alguns diários antigos podem só guardar `name`. */
   name?: string;
 }
@@ -773,6 +776,9 @@ export interface WarehouseAttachment {
   originalBytes?: number;
   storedBytes?: number;
   optimizedAt?: string;
+  /** Versão do perfil de compactação usado ao gravar (ver ATTACHMENT_OPTIMIZATION_VERSION). */
+  optimizationVersion?: number;
+
   kind?: 'nf' | 'foto' | 'recibo' | 'termo' | 'outro';
   uploadedAt: string;
 }
