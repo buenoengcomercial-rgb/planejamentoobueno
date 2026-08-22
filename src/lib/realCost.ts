@@ -197,14 +197,24 @@ function additiveTimestamp(additive: Additive): number {
   return Number.isFinite(time) ? time : 0;
 }
 
-function getOfficialRealCostContractedValue(project: Project): number | null {
-  const additives = project.additives ?? [];
-  if (additives.length === 0) return null;
+const isValidRealCostAdditive = (additive: Additive) =>
+  additive.status !== 'rejeitado'
+  && additive.status !== 'reprovado'
+  && additive.status !== 'cancelado';
 
-  const contracted = additives
-    .filter(additive => additive.isContracted || additive.status === 'aditivo_contratado')
-    .sort((a, b) => additiveTimestamp(b) - additiveTimestamp(a));
-  const referenceAdditive = contracted[0] ?? additives[0];
+function getLatestValidRealCostAdditive(project: Project): Additive | undefined {
+  return (project.additives ?? [])
+    .map((additive, index) => ({ additive, index }))
+    .filter(({ additive }) => isValidRealCostAdditive(additive))
+    .sort((left, right) =>
+      additiveTimestamp(right.additive) - additiveTimestamp(left.additive)
+      || (right.additive.version ?? 0) - (left.additive.version ?? 0)
+      || right.index - left.index,
+    )[0]?.additive;
+}
+
+function getOfficialRealCostContractedValue(project: Project): number | null {
+  const referenceAdditive = getLatestValidRealCostAdditive(project);
   if (!referenceAdditive) return null;
 
   return money2(additiveTotals(referenceAdditive, project).valorFinal);
@@ -276,36 +286,6 @@ const additiveDetailLabel = (composition: AdditiveComposition) => {
   if (added > 0) return 'Acrescimo';
   if (suppressed > 0) return 'Supressao';
   return 'Sem alteração';
-};
-
-const hasAdditiveReference = (composition: AdditiveComposition) =>
-  !composition.isNewService && (
-    !!composition.taskId ||
-    !!composition.linkedTaskId ||
-    !!normalize(composition.item) ||
-    !!normalize(composition.code) ||
-    !!normalizeDesc(composition.description)
-  );
-
-const replacementKeysForComposition = (composition: AdditiveComposition) => {
-  const keys: string[] = [];
-  const taskId = composition.linkedTaskId || composition.taskId;
-  if (taskId) keys.push(`task:${taskId}`);
-  if (normalize(composition.item)) keys.push(`item:${normalize(composition.item)}`);
-  if (normalize(composition.code)) {
-    keys.push(`code:${normalize(composition.code)}|${normalize(composition.bank)}`);
-  }
-  if (normalizeDesc(composition.description)) keys.push(`desc:${normalizeDesc(composition.description)}`);
-  return keys;
-};
-
-const replacementKeysForBudgetItem = (budget: BudgetItem) => {
-  const keys: string[] = [];
-  if (budget.taskId) keys.push(`task:${budget.taskId}`);
-  if (normalize(budget.item)) keys.push(`item:${normalize(budget.item)}`);
-  if (normalize(budget.code)) keys.push(`code:${normalize(budget.code)}|${normalize(budget.bank)}`);
-  if (normalizeDesc(budget.description)) keys.push(`desc:${normalizeDesc(budget.description)}`);
-  return keys;
 };
 
 const signalFromMargin = (marginPct: number, complete: boolean): RealCostSignal => {
@@ -466,74 +446,114 @@ function matchTaskForSource(source: CompositionSource, taskIndexes: ReturnType<t
   return byDesc;
 }
 
-function matchCompositionForBudgetItem(
+const compositionItem = (composition: AdditiveComposition) =>
+  composition.itemNumber || composition.item;
+
+const naturalCompositionMatchesBudget = (composition: AdditiveComposition, budget: BudgetItem) =>
+  !!normalize(compositionItem(composition))
+  && normalize(compositionItem(composition)) === normalize(budget.item)
+  && !!normalize(composition.code)
+  && normalize(composition.code) === normalize(budget.code)
+  && normalize(composition.bank) === normalize(budget.bank);
+
+type UniqueCompositionMatch = {
+  composition?: AdditiveComposition;
+  ambiguous: boolean;
+};
+
+function uniqueCompositionMatch(
+  pool: AdditiveComposition[],
+  predicate: (composition: AdditiveComposition) => boolean,
+): UniqueCompositionMatch {
+  const matches = pool.filter(predicate);
+  if (matches.length === 1) return { composition: matches[0], ambiguous: false };
+  return { ambiguous: matches.length > 1 };
+}
+
+function matchBaseCompositionForBudgetItem(
   budget: BudgetItem,
   baseCompositions: AdditiveComposition[],
-  additiveCompositions: AdditiveComposition[],
-) {
-  const preferred = budget.source === 'aditivo' ? additiveCompositions : baseCompositions;
-  const fallback = budget.source === 'aditivo' ? baseCompositions : additiveCompositions;
-  const pools = [preferred, fallback];
-
-  for (const pool of pools) {
-    const byTask = budget.taskId
-      ? pool.find(comp => comp.taskId === budget.taskId || comp.linkedTaskId === budget.taskId)
-      : undefined;
-    if (byTask) return byTask;
-
-    const byItem = pool.find(comp => normalize(comp.item) && normalize(comp.item) === normalize(budget.item));
-    if (byItem) return byItem;
-
-    const byCode = pool.find(comp =>
-      normalize(comp.code) &&
-      normalize(comp.code) === normalize(budget.code) &&
-      (!budget.bank || !comp.bank || normalize(comp.bank) === normalize(budget.bank)),
+): UniqueCompositionMatch {
+  if (budget.taskId) {
+    const byTask = uniqueCompositionMatch(baseCompositions, composition =>
+      composition.taskId === budget.taskId || composition.linkedTaskId === budget.taskId,
     );
-    if (byCode) return byCode;
-
-    const byDesc = pool.find(comp => normalizeDesc(comp.description) === normalizeDesc(budget.description));
-    if (byDesc) return byDesc;
+    if (byTask.composition || byTask.ambiguous) return byTask;
   }
 
-  return undefined;
+  return uniqueCompositionMatch(baseCompositions, composition =>
+    naturalCompositionMatchesBudget(composition, budget),
+  );
+}
+
+function matchAdditiveCompositionForBudgetItem(
+  budget: BudgetItem,
+  additiveCompositions: AdditiveComposition[],
+  baseComposition?: AdditiveComposition,
+): UniqueCompositionMatch {
+  const byBudgetId = uniqueCompositionMatch(additiveCompositions, composition =>
+    composition.baseBudgetItemId === budget.id,
+  );
+  if (byBudgetId.composition || byBudgetId.ambiguous) return byBudgetId;
+
+  if (baseComposition) {
+    const byAnalyticId = uniqueCompositionMatch(additiveCompositions, composition =>
+      composition.baseAnalyticCompositionId === baseComposition.id,
+    );
+    if (byAnalyticId.composition || byAnalyticId.ambiguous) return byAnalyticId;
+  }
+
+  if (budget.taskId) {
+    const byTask = uniqueCompositionMatch(additiveCompositions, composition =>
+      composition.baseTaskId === budget.taskId
+      || composition.linkedTaskId === budget.taskId
+      || composition.taskId === budget.taskId,
+    );
+    if (byTask.composition || byTask.ambiguous) return byTask;
+  }
+
+  return uniqueCompositionMatch(additiveCompositions, composition =>
+    naturalCompositionMatchesBudget(composition, budget),
+  );
 }
 
 function buildCompositionSources(project: Project): CompositionSource[] {
   const baseCompositions = project.analyticCompositions ?? [];
-  const additivePairs = (project.additives ?? []).flatMap(additive =>
-    (additive.compositions ?? []).map(composition => ({ additive, composition })),
-  );
+  const latestAdditive = getLatestValidRealCostAdditive(project);
+  const additivePairs = latestAdditive
+    ? (latestAdditive.compositions ?? []).map(composition => ({ additive: latestAdditive, composition }))
+    : [];
   const additiveCompositions = additivePairs.map(pair => pair.composition);
-  const additiveAdjustmentByKey = new Map<string, { additive: Additive; composition: AdditiveComposition }>();
-  const usedCompositionIds = new Set<string>();
+  const usedAdditiveCompositionIds = new Set<string>();
+  const usedBaseCompositionIds = new Set<string>();
   const sources: CompositionSource[] = [];
-
-  const rememberAdditiveAdjustment = (key: string, pair: { additive: Additive; composition: AdditiveComposition }) => {
-    const current = additiveAdjustmentByKey.get(key);
-    if (!current || additiveTimestamp(pair.additive) >= additiveTimestamp(current.additive)) {
-      additiveAdjustmentByKey.set(key, pair);
-    }
-  };
-
-  for (const pair of additivePairs) {
-    if (!hasAdditiveReference(pair.composition)) continue;
-    replacementKeysForComposition(pair.composition).forEach(key => {
-      rememberAdditiveAdjustment(key, pair);
-    });
-  }
 
   for (const budget of project.budgetItems ?? []) {
     if (budget.source !== 'sintetica' && budget.source !== 'aditivo') continue;
-    const budgetKeys = replacementKeysForBudgetItem(budget);
-    const additiveAdjustment = budget.source === 'sintetica'
-      ? budgetKeys.map(key => additiveAdjustmentByKey.get(key)).find(Boolean)
+    const baseMatch = matchBaseCompositionForBudgetItem(budget, baseCompositions);
+    const additiveMatch = matchAdditiveCompositionForBudgetItem(
+      budget,
+      additiveCompositions.filter(composition => budget.source === 'aditivo' || !composition.isNewService),
+      baseMatch.composition,
+    );
+    const additiveAdjustment = budget.source === 'sintetica' && additiveMatch.composition && latestAdditive
+      ? { additive: latestAdditive, composition: additiveMatch.composition }
       : undefined;
+    const composition = additiveMatch.composition ?? baseMatch.composition;
+    const resolvedComposition = composition
+      ? compositionWithResolvedInputs(project, composition)
+      : undefined;
+    const effectiveComposition = resolvedComposition?.composition;
 
-    const composition = additiveAdjustment?.composition ?? matchCompositionForBudgetItem(budget, baseCompositions, additiveCompositions);
-    const effectiveComposition = composition
-      ? compositionWithResolvedInputs(project, composition).composition
-      : undefined;
-    if (composition) usedCompositionIds.add(composition.id);
+    if (additiveMatch.composition) usedAdditiveCompositionIds.add(additiveMatch.composition.id);
+    if (baseMatch.composition) usedBaseCompositionIds.add(baseMatch.composition.id);
+    if (resolvedComposition?.resolution.inherited && resolvedComposition.resolution.composition) {
+      usedBaseCompositionIds.add(resolvedComposition.resolution.composition.id);
+    }
+    if (additiveMatch.composition?.baseAnalyticCompositionId) {
+      usedBaseCompositionIds.add(additiveMatch.composition.baseAnalyticCompositionId);
+    }
+
     const additiveRow = additiveAdjustment
       ? computeAdditiveRow(
           additiveAdjustment.composition,
@@ -575,7 +595,7 @@ function buildCompositionSources(project: Project): CompositionSource[] {
   }
 
   for (const pair of additivePairs) {
-    if (usedCompositionIds.has(pair.composition.id)) continue;
+    if (usedAdditiveCompositionIds.has(pair.composition.id)) continue;
 
     const bdi = pair.additive.bdiPercent ?? project.syntheticBdiPercent ?? project.contractInfo?.bdiPercent ?? 0;
     const discount = pair.additive.globalDiscountPercent ?? 0;
@@ -601,7 +621,9 @@ function buildCompositionSources(project: Project): CompositionSource[] {
       source: 'additive',
       sourceName: pair.additive.name || 'Aditivo',
       sourceStatus: additiveStatusLabel(pair.additive),
-      sourceDetail: additiveDetailLabel(pair.composition),
+      sourceDetail: pair.composition.isNewService
+        ? additiveDetailLabel(pair.composition)
+        : `Pendente de conciliação com o contrato - ${additiveDetailLabel(pair.composition)}`,
       taskId: pair.composition.linkedTaskId || pair.composition.taskId,
       phaseId: pair.composition.phaseId,
       phaseChain: pair.composition.phaseChain,
@@ -610,7 +632,7 @@ function buildCompositionSources(project: Project): CompositionSource[] {
   }
 
   for (const composition of baseCompositions) {
-    if (usedCompositionIds.has(composition.id)) continue;
+    if (usedBaseCompositionIds.has(composition.id)) continue;
 
     const quantity = compositionFinalQuantity(composition);
     const contractedValue = contractValueFromComposition(composition, quantity);
