@@ -179,10 +179,33 @@
   body {
     @apply bg-background text-foreground font-sans antialiased;
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    min-width: 320px;
   }
 
   code, pre {
     font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+@layer base {
+  /* Conteúdo largo deve rolar no seu próprio painel, nunca expandir a página. */
+  #root {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  @media (max-width: 639px) {
+    /* Evita o zoom automático do Safari ao editar formulários. */
+    input:not([type='checkbox']):not([type='radio']),
+    select,
+    textarea {
+      font-size: 16px;
+    }
+
+    /* Diálogos Radix e barras de ação respeitam a área segura do telefone. */
+    [role='dialog'] {
+      max-width: calc(100vw - 1rem);
+    }
   }
 }
 

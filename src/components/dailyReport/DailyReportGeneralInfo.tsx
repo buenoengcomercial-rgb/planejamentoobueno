@@ -40,7 +40,7 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay,
       <Card>
         <CardHeader className="pb-3 flex flex-row items-center justify-between gap-2">
           <CardTitle className="text-base">Informações do dia</CardTitle>
-          <Button size="sm" variant="ghost" onClick={handleClearDay} className="h-9 text-sm">
+          <Button size="sm" variant="ghost" onClick={handleClearDay} className="min-h-11 text-sm sm:h-9 sm:min-h-9">
             <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Limpar diário do dia
           </Button>
         </CardHeader>
@@ -70,6 +70,7 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay,
             <div className="space-y-1">
               <Label className="text-sm">Responsável pelo lançamento</Label>
               <Input
+                className="min-h-11 text-base sm:min-h-10 sm:text-sm"
                 value={currentReport.responsible || ''}
                 onChange={e => updateField('responsible', e.target.value)}
                 placeholder="Nome / função"
@@ -88,7 +89,7 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay,
                   }
                 }}
               >
-                <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                <SelectTrigger className="min-h-11 text-base sm:min-h-10 sm:text-sm"><SelectValue placeholder="Selecionar..." /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__clear__">Sem seleção</SelectItem>
                   {WEATHER_OPTIONS.map(o => {
@@ -105,7 +106,7 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay,
               </Select>
               {currentReport.weather === 'outro' && (
                 <Input
-                  className="mt-1"
+                  className="mt-1 min-h-11 text-base sm:min-h-10 sm:text-sm"
                   placeholder="Descreva o clima"
                   value={currentReport.weatherOther || ''}
                   onChange={e => updateField('weatherOther', e.target.value)}
@@ -125,7 +126,7 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay,
                   }
                 }}
               >
-                <SelectTrigger className="h-10 text-sm"><SelectValue placeholder="Selecionar..." /></SelectTrigger>
+                <SelectTrigger className="min-h-11 text-base sm:min-h-10 sm:text-sm"><SelectValue placeholder="Selecionar..." /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__clear__">Sem seleção</SelectItem>
                   {WORK_OPTIONS.map(o => (
@@ -135,7 +136,7 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay,
               </Select>
               {currentReport.workCondition === 'outro' && (
                 <Input
-                  className="mt-1"
+                  className="mt-1 min-h-11 text-base sm:min-h-10 sm:text-sm"
                   placeholder="Descreva a condição"
                   value={currentReport.workConditionOther || ''}
                   onChange={e => updateField('workConditionOther', e.target.value)}

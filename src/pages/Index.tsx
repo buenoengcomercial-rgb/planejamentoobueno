@@ -1342,7 +1342,7 @@ export default function Index() {
         />
       </div>
 
-      <main ref={mainScrollRef} className="relative min-h-screen flex-1 overflow-y-auto pt-14 lg:pt-0">
+      <main ref={mainScrollRef} className="relative min-h-screen min-w-0 flex-1 overflow-x-clip overflow-y-auto pt-14 lg:pt-0">
         <div className="absolute top-3 right-4 z-20">
           <SaveStatusIndicator status={saveStatus} confirmedAt={lastCloudConfirmedAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} />
         </div>

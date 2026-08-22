@@ -190,9 +190,9 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
   }
 
   return (
-    <div className="space-y-3 p-4">
+    <div className="space-y-3 p-3 sm:p-4">
       <div className="flex flex-wrap items-end gap-3 rounded-lg border border-border bg-card p-3">
-        <label className="min-w-[300px] space-y-1 text-xs font-semibold text-muted-foreground">
+        <label className="w-full min-w-0 space-y-1 text-xs font-semibold text-muted-foreground sm:min-w-[300px] sm:flex-1">
           Aditivo
           <Select value={active?.id} onValueChange={setActiveId}>
             <SelectTrigger><SelectValue /></SelectTrigger>
@@ -204,7 +204,7 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
             <LockKeyhole className="h-4 w-4" /> Versão {latestSnapshot.version} arquivada em {new Date(latestSnapshot.archivedAt).toLocaleString('pt-BR')}
           </div>
         )}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
           {undoButton}
           {!isArchived && active && (
             <Button size="sm" variant="outline" onClick={() => onProjectChange(confirmAdditiveScheduleDates(project, active.id))}>

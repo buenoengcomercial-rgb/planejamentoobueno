@@ -211,7 +211,7 @@ export default function TeamManagement() {
   }
 
   return (
-    <div className="min-h-screen bg-background p-6">
+    <div className="min-h-screen bg-background p-3 pt-14 sm:p-6">
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -225,7 +225,7 @@ export default function TeamManagement() {
 
         <Card>
           <CardHeader>
-            <div className="flex items-start justify-between gap-4">
+            <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
               <div>
                 <CardTitle className="text-base">{createMode ? 'Criar novo acesso' : 'Liberar acesso'}</CardTitle>
                 <CardDescription>
@@ -234,13 +234,13 @@ export default function TeamManagement() {
                     : 'Adicione uma pessoa que já tem conta no sistema usando o e-mail dela.'}
                 </CardDescription>
               </div>
-              <Button type="button" variant="outline" size="sm" onClick={() => setCreateMode(v => !v)}>
+              <Button type="button" variant="outline" size="sm" className="min-h-11 w-full sm:w-auto sm:min-h-9" onClick={() => setCreateMode(v => !v)}>
                 {createMode ? 'Liberar existente' : 'Criar acesso novo'}
               </Button>
             </div>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleInvite} className="grid gap-3 md:grid-cols-[1fr_180px_auto] items-end">
+            <form onSubmit={handleInvite} className="grid items-end gap-3 md:grid-cols-[1fr_180px_auto]">
               {createMode && (
                 <div className="space-y-1 md:col-span-3">
                   <Label htmlFor="create-name">Nome</Label>
@@ -281,7 +281,7 @@ export default function TeamManagement() {
               <div className="space-y-1">
                 <Label>Função</Label>
                 <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as OrgRole)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="min-h-11 text-base sm:text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {ORG_ROLE_OPTIONS.map(r => (
                       <SelectItem key={r} value={r}>{ROLE_LABELS[r]}</SelectItem>
@@ -290,7 +290,7 @@ export default function TeamManagement() {
                 </Select>
                 <p className="text-xs text-muted-foreground">{ROLE_DESCRIPTIONS[inviteRole]}</p>
               </div>
-              <Button type="submit" disabled={submitting}>
+              <Button type="submit" className="min-h-11" disabled={submitting}>
                 {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <><UserPlus className="w-4 h-4 mr-1" /> {createMode ? 'Criar acesso' : 'Liberar'}</>}
               </Button>
             </form>
@@ -323,7 +323,44 @@ export default function TeamManagement() {
             ) : members.length === 0 ? (
               <p className="text-sm text-muted-foreground">Nenhum membro ainda.</p>
             ) : (
-              <div className="overflow-x-auto">
+              <>
+              <div className="space-y-3 md:hidden">
+                {members.map(m => {
+                  const isMe = m.userId === user?.id;
+                  return (
+                    <article key={m.id} className="rounded-xl border bg-card p-3 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="break-words font-semibold">{m.name || m.email || m.userId.slice(0, 8)}</p>
+                          <p className="break-all text-sm text-muted-foreground">{m.email}</p>
+                        </div>
+                        <Badge className="shrink-0" variant={m.status === 'active' ? 'default' : m.status === 'blocked' ? 'destructive' : 'secondary'}>{STATUS_LABELS[m.status]}</Badge>
+                      </div>
+                      <div className="mt-3 space-y-1">
+                        <Label className="text-xs">Função</Label>
+                        <Select value={m.role} onValueChange={(v) => handleRoleChange(m.id, v as OrgRole)} disabled={isMe}>
+                          <SelectTrigger className="min-h-11 w-full text-base"><SelectValue /></SelectTrigger>
+                          <SelectContent>{ORG_ROLE_OPTIONS.map(r => <SelectItem key={r} value={r}>{ROLE_LABELS[r]}</SelectItem>)}</SelectContent>
+                        </Select>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        {isMe ? (
+                          <Button variant="outline" className="col-span-2 min-h-11" onClick={() => { setPwdNew(''); setPwdConfirm(''); setPwdOpen(true); }}><KeyRound className="mr-2 h-4 w-4" />Alterar minha senha</Button>
+                        ) : (
+                          <Button variant="outline" className="min-h-11" onClick={() => handleSendReset(m)} disabled={!m.email || resetSubmittingId === m.id}>{resetSubmittingId === m.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}Redefinir senha</Button>
+                        )}
+                        {!isMe && (m.status === 'blocked' ? (
+                          <Button variant="outline" className="min-h-11" onClick={() => handleStatusChange(m.id, 'active')}><ShieldCheck className="mr-2 h-4 w-4" />Reativar</Button>
+                        ) : (
+                          <Button variant="outline" className="min-h-11" onClick={() => handleStatusChange(m.id, 'blocked')}><ShieldOff className="mr-2 h-4 w-4" />Bloquear</Button>
+                        ))}
+                        {!isMe && <Button variant="outline" className="col-span-2 min-h-11 text-destructive" onClick={() => handleRemove(m.id)}><Trash2 className="mr-2 h-4 w-4" />Remover da empresa</Button>}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+              <div className="hidden overflow-x-auto md:block">
               <Table className="min-w-[780px]">
                 <TableHeader>
                   <TableRow>
@@ -398,6 +435,7 @@ export default function TeamManagement() {
                 </TableBody>
               </Table>
               </div>
+              </>
             )}
           </CardContent>
         </Card>
