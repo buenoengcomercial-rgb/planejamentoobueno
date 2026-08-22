@@ -890,6 +890,7 @@ export default function Index() {
   const dailyReportSetter = useMemo(() => makeViewSetter('dailyReport'), [makeViewSetter]);
   const additiveSetter = useMemo(() => makeViewSetter('additive'), [makeViewSetter]);
   const additiveScheduleSetter = useMemo(() => makeViewSetter('additiveSchedule'), [makeViewSetter]);
+  const realCostSetter = useMemo(() => makeViewSetter('realCost'), [makeViewSetter]);
   const materialsSetter = useMemo(() => makeViewSetter('materials'), [makeViewSetter]);
   const warehouseSetter = useMemo(() => makeViewSetter('warehouse'), [makeViewSetter]);
   const operationalGanttSetter = useCallback((nextOperational: Project) => {
@@ -1269,7 +1270,7 @@ export default function Index() {
       case 'additiveSchedule':
         return <AdditiveSchedule project={project} onProjectChange={additiveScheduleSetter} undoButton={<UndoButton canUndo={canUndo('additiveSchedule')} onUndo={() => handleUndo('additiveSchedule')} />} />;
       case 'realCost':
-        return <RealCost project={project} />;
+        return <RealCost project={project} onProjectChange={realCostSetter} canManageSubcontracts={role === 'owner' || role === 'admin'} auditActor={auditActor} />;
       case 'materials':
         return <Materials project={project} onProjectChange={materialsSetter} auditActor={auditActor} />;
       case 'warehouse':

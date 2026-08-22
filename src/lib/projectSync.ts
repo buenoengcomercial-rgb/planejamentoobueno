@@ -30,6 +30,7 @@ import type {
   BudgetItem,
   MaterialComparison,
   AdditiveComposition,
+  Subcontract,
 } from '@/types/project';
 
 type Json = import('@/integrations/supabase/types').Json;
@@ -74,6 +75,7 @@ interface Snapshot {
   budgetItems: Map<string, BudgetItem>;
   materialComparisons: Map<string, MaterialComparison>;
   analyticCompositions: Map<string, AdditiveComposition>;
+  subcontracts: Map<string, Subcontract>;
   chapters: Map<string, ChapterRow>;
   tasks: Map<string, TaskRow>;
 }
@@ -95,6 +97,7 @@ function emptySnapshot(): Snapshot {
     budgetItems: new Map(),
     materialComparisons: new Map(),
     analyticCompositions: new Map(),
+    subcontracts: new Map(),
     chapters: new Map(),
     tasks: new Map(),
   };
@@ -140,6 +143,7 @@ function buildSnapshot(project: Project): Snapshot {
   for (const b of project.budgetItems ?? []) snap.budgetItems.set(b.id, b);
   for (const c of project.materialComparisons ?? []) snap.materialComparisons.set(c.id, c);
   for (const a of project.analyticCompositions ?? []) snap.analyticCompositions.set(a.id, a);
+  for (const subcontract of project.subcontracts ?? []) snap.subcontracts.set(subcontract.id, subcontract);
 
   const phases = project.phases ?? [];
   phases.forEach((phase, idx) => {
@@ -203,7 +207,7 @@ export function clearCloudSnapshot(projectId: string) {
 
 export async function hydrateProjectFromCloud(project: Project): Promise<Project> {
   const projectId = project.id;
-  const [movRes, reqRes, custRes, drRes, logsRes, measRes, addRes, audRes, stkRes, phRes, biRes, mcRes, acRes, chRes, tkRes] = await Promise.all([
+  const [movRes, reqRes, custRes, drRes, logsRes, measRes, addRes, audRes, stkRes, phRes, biRes, mcRes, acRes, subRes, chRes, tkRes] = await Promise.all([
     supabase.from('warehouse_movements').select('id, data').eq('project_id', projectId),
     supabase.from('warehouse_requisitions').select('id, data').eq('project_id', projectId),
     supabase.from('warehouse_custody').select('id, data').eq('project_id', projectId),
@@ -217,6 +221,7 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
     supabase.from('budget_items').select('id, data').eq('project_id', projectId),
     supabase.from('material_comparisons').select('id, data').eq('project_id', projectId),
     supabase.from('analytic_compositions').select('id, data').eq('project_id', projectId),
+    supabase.from('subcontracts').select('id, data').eq('project_id', projectId),
     supabase.from('eap_chapters').select('id, parent_id, order_index, data').eq('project_id', projectId).order('order_index'),
     supabase.from('tasks').select('id, chapter_id, parent_task_id, order_index, data').eq('project_id', projectId).order('order_index'),
   ]);
@@ -238,6 +243,7 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
   const budgetItems = biRes.error ? null : (biRes.data ?? []).map(r => r.data as unknown as BudgetItem);
   const materialComparisons = mcRes.error ? null : (mcRes.data ?? []).map(r => r.data as unknown as MaterialComparison);
   const analyticCompositions = acRes.error ? null : (acRes.data ?? []).map(r => r.data as unknown as AdditiveComposition);
+  const subcontracts = subRes.error ? null : (subRes.data ?? []).map(r => r.data as unknown as Subcontract);
 
   const next: Project = { ...project };
 
@@ -264,6 +270,7 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
   if (budgetItems !== null) next.budgetItems = budgetItems;
   if (materialComparisons !== null) next.materialComparisons = materialComparisons;
   if (analyticCompositions !== null) next.analyticCompositions = analyticCompositions;
+  if (subcontracts !== null) next.subcontracts = subcontracts;
 
   // ===== Reconstrói phases[] a partir de eap_chapters + tasks =====
   const chapterRows = chRes.error ? null : (chRes.data ?? []);
@@ -368,6 +375,7 @@ export function stripNormalizedCollections(project: Project): Project {
   next.budgetItems = [];
   next.materialComparisons = [];
   next.analyticCompositions = [];
+  next.subcontracts = [];
   // EAP normalizada em eap_chapters/tasks — não persistir mais em data_json.
   next.phases = [];
   return next;
@@ -451,6 +459,10 @@ export async function syncCollectionsToCloud(project: Project, userId?: string):
   ops.push(...diffAndSync('analytic_compositions', prev.analyticCompositions, next.analyticCompositions, projectId, userId, a => ({
     code: (a as AdditiveComposition).code ?? null,
   })));
+  ops.push(...diffAndSync('subcontracts', prev.subcontracts, next.subcontracts, projectId, userId, s => {
+    const subcontract = s as Subcontract;
+    return { name: subcontract.name, contractor_name: subcontract.contractorName, status: subcontract.status, contract_date: subcontract.contractDate, contracted_value: subcontract.contractedValue };
+  }));
   ops.push(...diffAndSyncTaskLogs(prev.taskLogs, next.taskLogs, projectId, userId));
   ops.push(...diffAndSyncEAP('eap_chapters', prev.chapters, next.chapters, projectId, userId));
   ops.push(...diffAndSyncEAP('tasks', prev.tasks, next.tasks, projectId, userId));
@@ -474,7 +486,7 @@ export async function syncCollectionsToCloud(project: Project, userId?: string):
 }
 
 function diffAndSync<T extends { id: string }>(
-  table: 'warehouse_movements' | 'warehouse_requisitions' | 'warehouse_custody' | 'daily_reports' | 'measurements' | 'additives' | 'audit_logs' | 'stock_movements' | 'material_price_history' | 'budget_items' | 'material_comparisons' | 'analytic_compositions',
+  table: 'warehouse_movements' | 'warehouse_requisitions' | 'warehouse_custody' | 'daily_reports' | 'measurements' | 'additives' | 'audit_logs' | 'stock_movements' | 'material_price_history' | 'budget_items' | 'material_comparisons' | 'analytic_compositions' | 'subcontracts',
   prev: Map<string, T>,
   next: Map<string, T>,
   projectId: string,

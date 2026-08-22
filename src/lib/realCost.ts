@@ -9,6 +9,8 @@ import type {
   MaterialComparison,
   MaterialCostClass,
   Project,
+  Subcontract,
+  SubcontractItemAllocation,
   Task,
 } from '@/types/project';
 import { buildOrderedTasks } from '@/components/measurement/measurementFormat';
@@ -18,6 +20,7 @@ import { getChapterNumbering, getChapterTree, type ChapterNode } from '@/lib/cha
 import { money2, trunc2 } from '@/lib/financialEngine';
 import { resolveMaterialCostClass } from '@/lib/materialComparisons';
 import { compositionWithResolvedInputs } from '@/lib/analyticLinks';
+import { allocatedPaymentValue } from '@/lib/subcontracts';
 
 export type RealCostSignal = 'healthy' | 'attention' | 'danger' | 'incomplete';
 
@@ -78,6 +81,16 @@ export interface RealCostCompositionRow {
   laborCost: number;
   equipmentCost: number;
   otherCost: number;
+  subcontract?: {
+    id: string;
+    name: string;
+    contractorName: string;
+    referenceLaborCost: number;
+    contractedAmount: number;
+    paidAmount: number;
+    balance: number;
+    reconciliationIssue?: string;
+  };
   committedCost: number;
   realCost: number;
   grossProfit: number;
@@ -716,6 +729,29 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
   const contractPhaseIndex = buildContractPhaseIndex(project);
   const sources = buildCompositionSources(project);
 
+  const activeSubcontracts = (project.subcontracts ?? []).filter(contract => contract.status === 'contracted');
+  const rowsForIdentity = sources.map(source => ({
+    id: source.id,
+    item: source.item,
+    code: source.code,
+    bank: source.bank,
+  }));
+  const findSubcontract = (source: CompositionSource): { contract: Subcontract; allocation: SubcontractItemAllocation; issue?: string } | undefined => {
+    for (const contract of activeSubcontracts) {
+      for (const allocation of contract.items) {
+        if (allocation.compositionId === source.id) return { contract, allocation };
+      }
+    }
+    // Legados/vínculos regenerados: só aceita a chave textual se ela for única.
+    const candidates = rowsForIdentity.filter(row => row.item === source.item && row.code === source.code && row.bank === source.bank);
+    if (candidates.length !== 1) return undefined;
+    for (const contract of activeSubcontracts) {
+      const allocation = contract.items.find(item => item.item === source.item && item.code === source.code && item.bank === source.bank);
+      if (allocation) return { contract, allocation, issue: 'Vínculo recuperado por identificação; confirme a reconciliação.' };
+    }
+    return undefined;
+  };
+
   return sources.map(source => {
     const matchedTask = matchTaskForSource(source, taskIndexes);
     const sourcePhase = source.phaseId ? contractPhaseIndex.byId.get(source.phaseId) : undefined;
@@ -724,11 +760,26 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
     const phaseId = contractPhase?.phaseId || matchedTask?.phaseId || '__unlinked__';
     const chapter = source.phaseChain || contractPhase?.chapter || matchedTask?.chapter || 'Sem vinculo com cronograma';
     const inputs = buildInputRows(project, source, priceIndex);
-    const committedCost = money2(inputs.reduce((sum, input) => sum + input.realTotal, 0));
     const materialCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'material' ? input.referenceTotal : 0), 0));
     const laborCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'labor' ? input.referenceTotal : 0), 0));
     const equipmentCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'equipment' ? input.referenceTotal : 0), 0));
     const otherCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'unclassified' ? input.referenceTotal : 0), 0));
+    const subcontractMatch = findSubcontract(source);
+    const subcontract = subcontractMatch ? {
+      id: subcontractMatch.contract.id,
+      name: subcontractMatch.contract.name,
+      contractorName: subcontractMatch.contract.contractorName,
+      referenceLaborCost: subcontractMatch.allocation.referenceLaborCost,
+      contractedAmount: money2(subcontractMatch.allocation.contractedAmount),
+      paidAmount: money2(allocatedPaymentValue(subcontractMatch.contract, subcontractMatch.allocation)),
+      balance: money2(subcontractMatch.allocation.contractedAmount - allocatedPaymentValue(subcontractMatch.contract, subcontractMatch.allocation)),
+      reconciliationIssue: subcontractMatch.issue || (money2(subcontractMatch.allocation.referenceLaborCost) !== laborCost
+        ? 'A mão de obra de referência mudou após a contratação; o rateio foi preservado.'
+        : undefined),
+    } : undefined;
+    const committedCost = money2(inputs.reduce((sum, input) => sum + (
+      subcontract && input.costClass === 'labor' ? 0 : input.realTotal
+    ), 0) + (subcontract?.contractedAmount ?? 0));
     const linkedTaskId = matchedTask?.task.id || source.taskId;
     const linkedBudgetId = source.id.startsWith('budget:') ? source.id.slice('budget:'.length) : undefined;
     const matchingActualEntries = (project.costLedger ?? [])
@@ -759,9 +810,10 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
     const realCost = money2(
       matchingActualEntries.reduce((sum, entry) => sum + (Number(entry.amount) || 0), 0)
       + dailyLaborActual
-      + warehouseMaterialActual,
+      + warehouseMaterialActual
+      + (subcontract?.paidAmount ?? 0),
     );
-    const missingQuoteCount = inputs.filter(input => input.status === 'missing').length;
+    const missingQuoteCount = inputs.filter(input => input.status === 'missing' && !(subcontract && input.costClass === 'labor')).length;
     const hasAnalytic = inputs.length > 0;
     const hasScheduleLink = !!(matchedTask || source.phaseId);
     const hasContractValue = source.contractedValue > 0;
@@ -798,6 +850,7 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
       laborCost,
       equipmentCost,
       otherCost,
+      subcontract,
       committedCost,
       realCost,
       grossProfit,

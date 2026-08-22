@@ -345,6 +345,58 @@ export interface CostLedgerEntry {
   notes?: string;
 }
 
+export type SubcontractStatus = 'draft' | 'contracted' | 'cancelled';
+
+/** Item de mão de obra pertencente a um pacote terceirizado. O rateio é congelado na contratação. */
+export interface SubcontractItemAllocation {
+  id: string;
+  compositionId: string;
+  budgetItemId?: string;
+  additiveCompositionId?: string;
+  analyticCompositionId?: string;
+  item: string;
+  code?: string;
+  bank?: string;
+  description: string;
+  unit: string;
+  referenceLaborCost: number;
+  allocationPercent: number;
+  contractedAmount: number;
+}
+
+export interface SubcontractPayment {
+  id: string;
+  date: string;
+  amount: number;
+  notes?: string;
+  createdAt: string;
+  createdBy?: string;
+  reversedAt?: string;
+  reversedBy?: string;
+  reversalReason?: string;
+}
+
+export interface Subcontract {
+  id: string;
+  name: string;
+  contractorName: string;
+  contractDate: string;
+  contractedValue: number;
+  notes?: string;
+  status: SubcontractStatus;
+  items: SubcontractItemAllocation[];
+  payments: SubcontractPayment[];
+  contractedAt?: string;
+  contractedBy?: string;
+  cancelledAt?: string;
+  cancelledBy?: string;
+  cancellationReason?: string;
+  createdAt: string;
+  createdBy?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
 export interface DailyLaborEntry {
   id: string;
   workerId?: string;
@@ -665,6 +717,8 @@ export interface Project {
   contractRevisions?: ContractRevision[];
   contractRectifications?: ContractRectification[];
   costLedger?: CostLedgerEntry[];
+  /** Contratos terceirizados de mão de obra; persistidos em coleção normalizada. */
+  subcontracts?: Subcontract[];
   /** Equipes do projeto. Quando undefined, usa-se DEFAULT_TEAMS. */
   teams?: TeamDefinition[];
   /** Cargos executivos usados para dimensionamento de equipes. Nao altera insumos originais. */
@@ -1781,6 +1835,7 @@ export type AuditEntityType =
   | 'daily_report'
   | 'task'
   | 'warehouse_fiscal_note'
+  | 'subcontract'
   | 'project';
 
 export type AuditAction =

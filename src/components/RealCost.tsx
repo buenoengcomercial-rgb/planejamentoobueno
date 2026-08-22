@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import type { Project } from '@/types/project';
+import type { Project, Subcontract } from '@/types/project';
 import {
   AlertTriangle,
   BarChart3,
@@ -11,6 +11,9 @@ import {
   Search,
   TrendingDown,
   TrendingUp,
+  Plus,
+  ReceiptText,
+  Undo2,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -23,9 +26,15 @@ import {
 } from '@/lib/realCost';
 import { fmtBRL, fmtPct } from '@/components/measurement/measurementFormat';
 import { loadObraConfig } from '@/components/ConfiguracaoObra';
+import { Button } from '@/components/ui/button';
+import { logToProject, type AuditUserInfo } from '@/lib/audit';
+import { allocateSubcontractValue, subcontractBalance, subcontractPaidValue } from '@/lib/subcontracts';
 
 interface Props {
   project: Project;
+  onProjectChange: (project: Project) => void;
+  canManageSubcontracts: boolean;
+  auditActor?: AuditUserInfo;
 }
 
 const SIGNAL_META: Record<RealCostSignal, { label: string; cls: string; dot: string }> = {
@@ -217,6 +226,15 @@ function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
   return (
     <tr className="border-b border-border bg-primary/5">
       <td colSpan={TABLE_COLSPAN} className="px-3 py-2">
+        {row.subcontract && (
+          <div className="mb-2 rounded-md border border-primary/30 bg-primary/5 p-2 text-xs">
+            <div className="font-semibold text-primary">Mão de obra terceirizada · {row.subcontract.name} ({row.subcontract.contractorName})</div>
+            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground">
+              <span>Referência: {fmtBRL(row.subcontract.referenceLaborCost)}</span><span>Contratado: {fmtBRL(row.subcontract.contractedAmount)}</span><span>Pago: {fmtBRL(row.subcontract.paidAmount)}</span><span>Saldo: {fmtBRL(row.subcontract.balance)}</span>
+            </div>
+            {row.subcontract.reconciliationIssue && <p className="mt-1 text-warning">{row.subcontract.reconciliationIssue}</p>}
+          </div>
+        )}
         <div className="overflow-hidden rounded-md border border-border/70 bg-background">
           {row.inputs.length === 0 ? (
             <div className="p-4 text-center text-[11px] text-muted-foreground">
@@ -373,6 +391,7 @@ function RealCostGroupRows({
                     <div className="mt-0.5 text-[10px] text-muted-foreground">
                       {row.sourceName}{row.sourceStatus ? ` - ${row.sourceStatus}` : ''}{row.sourceDetail ? ` - ${row.sourceDetail}` : ''}
                     </div>
+                    {row.subcontract && <span className="mt-1 inline-flex rounded-full border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold text-primary">Terceirizada</span>}
                   </td>
                   <td className="p-2 align-top text-center">{row.unit}</td>
                   <td className={`p-2 align-top text-right tabular-nums font-semibold ${BORDER_L}`}>{fmtQty(row.quantityFinal)}</td>
@@ -413,11 +432,41 @@ function RealCostGroupRows({
   );
 }
 
-export default function RealCost({ project }: Props) {
+function uid(prefix: string) { return `${prefix}_${crypto.randomUUID?.() ?? `${Date.now()}_${Math.random().toString(36).slice(2)}`}`; }
+function today() { return new Date().toISOString().slice(0, 10); }
+
+function SubcontractsTab({ project, analysis, canManage, auditActor, onProjectChange }: {
+  project: Project; analysis: ReturnType<typeof buildRealCostAnalysis>; canManage: boolean; auditActor?: AuditUserInfo; onProjectChange: (project: Project) => void;
+}) {
+  const [name, setName] = useState(''); const [contractor, setContractor] = useState(''); const [value, setValue] = useState(''); const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState<string[]>([]); const [showForm, setShowForm] = useState(false); const [paymentFor, setPaymentFor] = useState<string | null>(null); const [paymentValue, setPaymentValue] = useState('');
+  const blocked = useMemo(() => new Set((project.subcontracts ?? []).filter(c => c.status !== 'cancelled').flatMap(c => c.items.map(i => i.compositionId))), [project.subcontracts]);
+  const candidates = useMemo(() => analysis.compositions.filter(row => row.laborCost > 0 && !blocked.has(row.id) && `${row.item} ${row.code ?? ''} ${row.description} ${row.chapter}`.toLowerCase().includes(query.toLowerCase())), [analysis.compositions, blocked, query]);
+  const selectedRows = analysis.compositions.filter(row => selected.includes(row.id));
+  const preview = allocateSubcontractValue(Number(value.replace(',', '.')) || 0, selectedRows.map(row => ({ compositionId: row.id, referenceLaborCost: row.laborCost })));
+  const persist = (next: Project, action: 'created' | 'contracted' | 'updated' | 'deleted', contract: Subcontract, title: string) => onProjectChange(logToProject(next, { ...auditActor, entityType: 'subcontract', entityId: contract.id, action, title, description: contract.name }));
+  const create = (status: Subcontract['status']) => {
+    const total = Number(value.replace(',', '.')) || 0;
+    if (!name.trim() || !contractor.trim() || total <= 0 || selectedRows.length === 0) return;
+    const id = uid('subcontract'); const now = new Date().toISOString();
+    const contract: Subcontract = { id, name: name.trim(), contractorName: contractor.trim(), contractDate: today(), contractedValue: total, status, payments: [], createdAt: now, createdBy: auditActor?.userId, contractedAt: status === 'contracted' ? now : undefined, contractedBy: status === 'contracted' ? auditActor?.userId : undefined, items: preview.map((allocation, index) => { const row = selectedRows[index]; return { id: uid('subitem'), compositionId: row.id, budgetItemId: row.id.startsWith('budget:') ? row.id.slice(7) : undefined, additiveCompositionId: row.id.startsWith('additive:') ? row.id.split(':').at(-1) : undefined, analyticCompositionId: row.id.startsWith('analytic:') ? row.id.slice(9) : undefined, item: row.item, code: row.code, bank: row.bank, description: row.description, unit: row.unit, referenceLaborCost: row.laborCost, allocationPercent: allocation.allocationPercent, contractedAmount: allocation.allocatedAmount }; }) };
+    persist({ ...project, subcontracts: [...(project.subcontracts ?? []), contract] }, status === 'contracted' ? 'contracted' : 'created', contract, status === 'contracted' ? 'Contrato terceirizado formalizado' : 'Rascunho de terceirização criado');
+    setShowForm(false); setName(''); setContractor(''); setValue(''); setSelected([]);
+  };
+  const updateContract = (contract: Subcontract, next: Subcontract, action: 'updated' | 'deleted' | 'contracted', title: string) => persist({ ...project, subcontracts: (project.subcontracts ?? []).map(c => c.id === contract.id ? next : c) }, action, next, title);
+  return <div className="space-y-3">
+    <Card className="p-3"><div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-semibold">Mão de obra terceirizada</h2><p className="text-xs text-muted-foreground">Materiais e Almoxarifado permanecem sob controle da Bueno. Contratos substituem somente o custo comprometido de mão de obra.</p></div>{canManage && <Button size="sm" onClick={() => setShowForm(v => !v)}><Plus className="mr-1 h-4 w-4" />Novo pacote</Button>}</div>{!canManage && <p className="mt-2 text-xs text-muted-foreground">Somente Proprietário e Administrador podem cadastrar contratos e pagamentos.</p>}</Card>
+    {showForm && <Card className="p-3 space-y-3"><div className="grid gap-2 md:grid-cols-3"><Input placeholder="Nome do serviço/pacote" value={name} onChange={e => setName(e.target.value)} /><Input placeholder="Empresa ou prestador" value={contractor} onChange={e => setContractor(e.target.value)} /><Input inputMode="decimal" placeholder="Valor contratado (R$)" value={value} onChange={e => setValue(e.target.value)} /></div><Input placeholder="Buscar por item, código, capítulo ou descrição" value={query} onChange={e => setQuery(e.target.value)} /><div className="max-h-64 overflow-auto rounded border"><table className="w-full text-xs"><tbody>{candidates.map(row => <tr key={row.id} className="border-b"><td className="p-2"><input type="checkbox" checked={selected.includes(row.id)} onChange={() => setSelected(current => current.includes(row.id) ? current.filter(id => id !== row.id) : [...current, row.id])} /></td><td className="p-2 font-mono">{row.item}</td><td className="p-2">{row.description}</td><td className="p-2 text-right">{fmtBRL(row.laborCost)}</td></tr>)}</tbody></table></div>{preview.length > 0 && <p className="text-xs text-muted-foreground">Rateio: {preview.map((p, i) => `${selectedRows[i].item} ${fmtBRL(p.allocatedAmount)}`).join(' · ')}</p>}<div className="flex gap-2"><Button variant="outline" onClick={() => create('draft')}>Salvar rascunho</Button><Button onClick={() => create('contracted')}>Confirmar contratação</Button></div></Card>}
+    <div className="grid gap-3 lg:grid-cols-2">{(project.subcontracts ?? []).map(contract => { const paid = subcontractPaidValue(contract); const balance = subcontractBalance(contract); return <Card key={contract.id} className="p-3"><div className="flex justify-between gap-2"><div><p className="font-semibold">{contract.name}</p><p className="text-xs text-muted-foreground">{contract.contractorName} · {contract.items.length} composição(ões)</p></div><span className="rounded-full border px-2 py-0.5 text-[10px]">{contract.status === 'contracted' ? 'Contratado' : contract.status === 'cancelled' ? 'Cancelado' : 'Rascunho'}</span></div><div className="mt-3 grid grid-cols-3 gap-2 text-xs"><div>Contratado<br/><b>{fmtBRL(contract.contractedValue)}</b></div><div>Pago<br/><b>{fmtBRL(paid)}</b></div><div>Saldo<br/><b>{fmtBRL(balance)}</b></div></div>{canManage && contract.status === 'draft' && <Button size="sm" className="mt-3" onClick={() => updateContract(contract, { ...contract, status: 'contracted', contractedAt: new Date().toISOString(), contractedBy: auditActor?.userId, updatedAt: new Date().toISOString() }, 'contracted', 'Contrato terceirizado formalizado')}>Confirmar contratação</Button>}{canManage && contract.status === 'contracted' && <div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => setPaymentFor(paymentFor === contract.id ? null : contract.id)}><ReceiptText className="mr-1 h-3 w-3" />Lançar pagamento</Button><Button size="sm" variant="ghost" onClick={() => { const reason = window.prompt('Motivo do cancelamento:'); if (reason) updateContract(contract, { ...contract, status: 'cancelled', cancelledAt: new Date().toISOString(), cancelledBy: auditActor?.userId, cancellationReason: reason, updatedAt: new Date().toISOString() }, 'deleted', 'Contrato terceirizado cancelado'); }}>Cancelar</Button></div>}{paymentFor === contract.id && <div className="mt-2 flex gap-2"><Input inputMode="decimal" placeholder="Valor pago" value={paymentValue} onChange={e => setPaymentValue(e.target.value)} /><Button size="sm" onClick={() => { const amount = Number(paymentValue.replace(',', '.')) || 0; if (amount <= 0 || amount > balance) return; const next = { ...contract, payments: [...contract.payments, { id: uid('payment'), date: today(), amount, createdAt: new Date().toISOString(), createdBy: auditActor?.userId }], updatedAt: new Date().toISOString(), updatedBy: auditActor?.userId }; updateContract(contract, next, 'updated', 'Pagamento de terceirizada lançado'); setPaymentValue(''); setPaymentFor(null); }}>Confirmar</Button></div>}<div className="mt-2 space-y-1 text-[11px]">{contract.payments.map(payment => <div key={payment.id} className="flex items-center justify-between rounded bg-muted/50 px-2 py-1"><span>{payment.date} · {fmtBRL(payment.amount)}{payment.reversedAt ? ' · estornado' : ''}</span>{canManage && !payment.reversedAt && <button type="button" className="text-primary hover:underline" onClick={() => { const reason = window.prompt('Motivo do estorno:'); if (reason) updateContract(contract, { ...contract, payments: contract.payments.map(p => p.id === payment.id ? { ...p, reversedAt: new Date().toISOString(), reversedBy: auditActor?.userId, reversalReason: reason } : p), updatedAt: new Date().toISOString() }, 'updated', 'Pagamento de terceirizada estornado'); }}><Undo2 className="inline h-3 w-3" /> Estornar</button>}</div>)}</div></Card>; })}</div>
+  </div>;
+}
+
+export default function RealCost({ project, onProjectChange, canManageSubcontracts, auditActor }: Props) {
   const trabalhaSabado = useMemo(() => loadObraConfig().trabalhaSabado, []);
   const analysis = useMemo(() => buildRealCostAnalysis(project, trabalhaSabado), [project, trabalhaSabado]);
   const uiStorageKey = `obraPlanner:realCost:ui:${project.id || project.name || 'default'}`;
   const [search, setSearch] = useState('');
+  const [activeTab, setActiveTab] = useState<'general' | 'subcontracts'>('general');
   const [statusFilter, setStatusFilter] = useState<'all' | RealCostSignal>('all');
   const [chapterFilter, setChapterFilter] = useState('all');
   const [expandedId, setExpandedId] = useState<string | null>(() => {
@@ -549,6 +598,15 @@ export default function RealCost({ project }: Props) {
           <SignalBadge signal={analysis.totals.signal} />
         </div>
       </header>
+
+      <div className="flex gap-1 rounded-lg border border-border bg-muted/30 p-1 w-fit">
+        <button type="button" onClick={() => setActiveTab('general')} className={`rounded-md px-3 py-1.5 text-xs font-semibold ${activeTab === 'general' ? 'bg-background shadow-sm' : 'text-muted-foreground'}`}>Geral</button>
+        <button type="button" onClick={() => setActiveTab('subcontracts')} className={`rounded-md px-3 py-1.5 text-xs font-semibold ${activeTab === 'subcontracts' ? 'bg-background shadow-sm' : 'text-muted-foreground'}`}>Terceirizados</button>
+      </div>
+
+      {activeTab === 'subcontracts' ? (
+        <SubcontractsTab project={project} analysis={analysis} canManage={canManageSubcontracts} auditActor={auditActor} onProjectChange={onProjectChange} />
+      ) : <>
 
       {!costDataComplete && (
         <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm">
@@ -816,6 +874,7 @@ export default function RealCost({ project }: Props) {
           </div>
         )}
       </Card>
+      </>}
     </div>
   );
 }
