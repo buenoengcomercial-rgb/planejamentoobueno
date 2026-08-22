@@ -3,6 +3,7 @@ import type { Project } from '@/types/project';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
+import { Checkbox } from '@/components/ui/checkbox';
 import { AlertTriangle, DatabaseZap, Loader2, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { auditOrganizationStorage, deletePreviousAttachment, migrateAttachment } from '@/lib/attachmentMigration';
