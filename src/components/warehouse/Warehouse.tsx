@@ -38,10 +38,11 @@ interface Props {
   canManageEquipmentGroups?: boolean;
   canOptimizeStorage?: boolean;
   onSaveStorageMaintenanceProject?: (project: Project, expectedUpdatedAt: string) => Promise<string>;
+  storageMaintenanceOrganizationId?: string;
   auditActor?: WarehouseAuditActor;
 }
 
-export default function Warehouse({ project, onProjectChange, onCommitProject, onSaveStorageMaintenanceProject, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor }: Props) {
+export default function Warehouse({ project, onProjectChange, onCommitProject, onSaveStorageMaintenanceProject, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor }: Props) {
   const [tab, setTab] = useState(() => canViewPanel ? 'painel' : 'notas');
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
   useEffect(() => {
@@ -72,7 +73,7 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
           Termos abertos: <strong className="text-foreground">{summary.openCustodyCount}</strong>
         </span>
         {canOptimizeStorage && <AttachmentOptimizationPanel project={ensured} onProjectChange={onProjectChange} onCommitProject={onCommitProject} />}
-        {canOptimizeStorage && onSaveStorageMaintenanceProject && <GlobalStorageMaintenancePanel currentProject={ensured} onCurrentProjectChange={onProjectChange} saveProject={onSaveStorageMaintenanceProject} />}
+        {canOptimizeStorage && onSaveStorageMaintenanceProject && storageMaintenanceOrganizationId && <GlobalStorageMaintenancePanel currentProject={ensured} onCurrentProjectChange={onProjectChange} saveProject={onSaveStorageMaintenanceProject} organizationId={storageMaintenanceOrganizationId} />}
         </div>
       </div>
 

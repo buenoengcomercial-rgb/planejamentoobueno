@@ -1288,6 +1288,7 @@ export default function Index() {
             canManageEquipmentGroups={role === 'owner' || role === 'warehouse_operator'}
             canOptimizeStorage={role === 'owner'}
             onSaveStorageMaintenanceProject={saveStorageMaintenanceProject}
+            storageMaintenanceOrganizationId={orgId}
             auditActor={auditActor}
           />
         );
