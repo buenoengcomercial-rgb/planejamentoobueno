@@ -97,6 +97,8 @@ export function useDailyReportPhotos({
       originalBytes: file.size,
       storedBytes: optimized.size,
       optimizedAt: new Date().toISOString(),
+      optimizationVersion: ATTACHMENT_OPTIMIZATION_VERSION,
+
     };
     const { error } = await supabase.storage
       .from(PHOTO_BUCKET)
