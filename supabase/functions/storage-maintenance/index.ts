@@ -30,31 +30,32 @@ async function audit(admin: ReturnType<typeof createClient>, organizationId: str
   const references: AttachmentRef[] = [];
   activeProjects.forEach(project => collectReferences(project.data_json, references));
   if (projectIds.length) {
-    const [daily, movements, requisitions, custody] = await Promise.all([
+    const [daily, requisitions, custody, movements] = await Promise.all([
       admin.from('daily_reports').select('data').in('project_id', projectIds),
-      admin.from('warehouse_movements').select('data').in('project_id', projectIds),
       admin.from('warehouse_requisitions').select('data').in('project_id', projectIds),
       admin.from('warehouse_custody').select('data').in('project_id', projectIds),
+      admin.from('warehouse_movements').select('data').in('project_id', projectIds),
     ]);
     if (daily.error) throw daily.error;
-    if (movements.error) throw movements.error;
     if (requisitions.error) throw requisitions.error;
     if (custody.error) throw custody.error;
+    if (movements.error) throw movements.error;
     (daily.data ?? []).forEach(row => collectReferences(row.data, references));
-    (movements.data ?? []).forEach(row => collectReferences(row.data, references));
     (requisitions.data ?? []).forEach(row => collectReferences(row.data, references));
     (custody.data ?? []).forEach(row => collectReferences(row.data, references));
+    (movements.data ?? []).forEach(row => collectReferences(row.data, references));
   }
   const referenceMap = new Map<string, AttachmentRef>();
   references.forEach(reference => referenceMap.set(reference.path, reference));
-  // `storage.objects` is not exposed through PostgREST in Lovable Cloud. Use
-  // the narrowly scoped RPC instead of querying the Storage schema directly.
-  const { data: rows, error: storageError } = await admin.rpc('list_organization_storage_objects', { p_organization_id: organizationId });
+  const { data: rows, error: storageError } = await admin.rpc('list_organization_storage_objects', { _organization_id: organizationId });
   if (storageError) throw storageError;
-  const visible = ((rows ?? []) as StoredObject[]).filter(object => {
-    const prefix = object.name.split('/')[0];
-    return projectMap.has(prefix) || (!!object.owner_id && memberIds.has(object.owner_id));
-  });
+  const visible = ((rows ?? []) as Array<{ name: string; size: number | string | null; owner_id: string | null }>)
+    .map(row => ({ name: row.name, metadata: { size: bytes(row.size) }, owner_id: row.owner_id }) as StoredObject)
+    .filter(object => {
+      const prefix = object.name.split('/')[0];
+      return projectMap.has(prefix) || (!!object.owner_id && memberIds.has(object.owner_id));
+    });
+
   const groups = new Map<string, { projectId: string; projectName: string; state: 'ativa' | 'obra_excluida'; files: number; bytes: number; referenced: number; pending: number; optimized: number; orphans: Array<{ path: string; bytes: number; reason: string }> }>();
   for (const object of visible) {
     const prefix = object.name.split('/')[0];

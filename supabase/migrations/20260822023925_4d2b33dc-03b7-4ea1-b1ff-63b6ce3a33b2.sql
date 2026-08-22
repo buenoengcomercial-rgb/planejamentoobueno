@@ -1,5 +1,3 @@
--- Inventário de objetos do bucket de anexos para a manutenção global de armazenamento.
--- storage.objects não é exposto pelo PostgREST, então a Edge Function usa esta RPC.
 CREATE OR REPLACE FUNCTION public.list_organization_storage_objects(_organization_id uuid)
 RETURNS TABLE (name text, size bigint, owner_id text)
 LANGUAGE sql
