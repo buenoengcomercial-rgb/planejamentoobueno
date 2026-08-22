@@ -788,6 +788,14 @@ export type Database = {
         Args: { _org_id: string; _user_id: string }
         Returns: boolean
       }
+      list_organization_storage_objects: {
+        Args: { _organization_id: string }
+        Returns: {
+          name: string
+          owner_id: string
+          size: number
+        }[]
+      }
       strip_task_logs: { Args: { node: Json }; Returns: Json }
     }
     Enums: {
