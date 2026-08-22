@@ -1,6 +1,6 @@
 import type { Project } from '@/types/project';
 import { supabase } from '@/integrations/supabase/client';
-import { optimizeStorageAttachment } from './attachmentOptimization';
+import { ATTACHMENT_OPTIMIZATION_VERSION, optimizeStorageAttachment } from './attachmentOptimization';
 
 export type MigratableAttachment = {
   id: string;
@@ -10,6 +10,8 @@ export type MigratableAttachment = {
   dataUrl?: string;
   kind?: 'nf' | 'foto' | 'recibo' | 'termo' | 'outro';
   optimizedAt?: string;
+  optimizationVersion?: number;
+  storedBytes?: number;
   fileName?: string;
 };
 
@@ -23,13 +25,19 @@ function isAttachment(value: unknown): value is MigratableAttachment {
     && (typeof candidate.name === 'string' || typeof candidate.fileName === 'string');
 }
 
+/** Elegível quando nunca foi otimizado ou quando foi gravado com um perfil antigo. */
+function needsOptimization(attachment: MigratableAttachment): boolean {
+  if (!attachment.optimizedAt) return true;
+  return (attachment.optimizationVersion ?? 1) < ATTACHMENT_OPTIMIZATION_VERSION;
+}
+
 export function collectUnoptimizedAttachments(project: Project): MigratableAttachment[] {
   const found = new Map<string, MigratableAttachment>();
   const visit = (value: unknown) => {
     if (Array.isArray(value)) { value.forEach(visit); return; }
     if (!value || typeof value !== 'object') return;
     if (isAttachment(value)) {
-      if (!value.optimizedAt && (value.mimeType?.startsWith('image/') || value.kind === 'foto' || value.kind === 'nf' || /\.(jpe?g|png|webp|heic|pdf)$/i.test(value.name || value.fileName || ''))) {
+      if (needsOptimization(value) && (value.mimeType?.startsWith('image/') || value.kind === 'foto' || value.kind === 'nf' || /\.(jpe?g|png|webp|heic|pdf)$/i.test(value.name || value.fileName || ''))) {
         found.set(`${value.id}:${value.storagePath || value.dataUrl}`, value);
       }
       return;
@@ -40,6 +48,7 @@ export function collectUnoptimizedAttachments(project: Project): MigratableAttac
   visit(project.warehouse);
   return [...found.values()];
 }
+
 
 async function attachmentFile(attachment: MigratableAttachment): Promise<File> {
   let blob: Blob;

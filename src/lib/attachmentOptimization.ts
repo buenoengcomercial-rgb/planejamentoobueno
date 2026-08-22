@@ -3,12 +3,17 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 export type AttachmentOptimizationProfile = 'field-photo' | 'fiscal-document';
 
+/** Incrementar sempre que um perfil mudar: anexos gravados com versão menor
+ * voltam a ser elegíveis para reotimização retroativa. */
+export const ATTACHMENT_OPTIMIZATION_VERSION = 2;
+
 const PROFILES: Record<AttachmentOptimizationProfile, { maxSide: number; quality: number }> = {
   'field-photo': { maxSide: 1600, quality: 0.8 },
-  // NF precisa preservar CNPJ, chave, itens e valores. A largura corresponde
-  // aproximadamente a uma folha A4 a 200 dpi.
-  'fiscal-document': { maxSide: 2200, quality: 0.86 },
+  // NF precisa preservar CNPJ, chave, itens e valores. 1600 px (~A4 a 150 dpi)
+  // mantém esses campos legíveis com cerca de 1/4 do armazenamento anterior.
+  'fiscal-document': { maxSide: 1600, quality: 0.8 },
 };
+
 
 function jpegName(name: string) {
   return `${name.replace(/\.[^.]+$/, '') || 'anexo'}.jpg`;
