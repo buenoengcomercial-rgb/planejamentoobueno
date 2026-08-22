@@ -1,6 +1,7 @@
 import type { Project } from '@/types/project';
 import { supabase } from '@/integrations/supabase/client';
 import { ATTACHMENT_OPTIMIZATION_VERSION, optimizeStorageAttachment } from './attachmentOptimization';
+import { listCloudProjects, loadCloudProjectRecord, type CloudProjectMeta } from './cloudProjects';
 
 export type MigratableAttachment = {
   id: string;
@@ -47,6 +48,77 @@ export function collectUnoptimizedAttachments(project: Project): MigratableAttac
   visit(project.dailyReports);
   visit(project.warehouse);
   return [...found.values()];
+}
+
+/** Lista todos os anexos referenciados por uma obra, inclusive os já otimizados. */
+export function collectProjectAttachments(project: Project): MigratableAttachment[] {
+  const found = new Map<string, MigratableAttachment>();
+  const visit = (value: unknown) => {
+    if (Array.isArray(value)) { value.forEach(visit); return; }
+    if (!value || typeof value !== 'object') return;
+    if (isAttachment(value)) { found.set(`${value.id}:${value.storagePath || value.dataUrl}`, value); return; }
+    Object.values(value as Record<string, unknown>).forEach(visit);
+  };
+  visit(project.dailyReports);
+  visit(project.warehouse);
+  return [...found.values()];
+}
+
+export type StorageObjectAudit = { path: string; bytes: number };
+export type StorageProjectAudit = {
+  meta: CloudProjectMeta;
+  project: Project;
+  updatedAt: string;
+  attachments: MigratableAttachment[];
+  candidates: MigratableAttachment[];
+  objects: StorageObjectAudit[];
+  orphaned: StorageObjectAudit[];
+};
+
+function objectBytes(metadata: unknown): number {
+  const raw = (metadata as { size?: unknown } | null)?.size;
+  return typeof raw === 'number' ? raw : Number(raw || 0);
+}
+
+async function listStorageTree(prefix: string): Promise<StorageObjectAudit[]> {
+  const objects: StorageObjectAudit[] = [];
+  let offset = 0;
+  do {
+    const { data, error } = await supabase.storage.from(BUCKET).list(prefix, { limit: 100, offset, sortBy: { column: 'name', order: 'asc' } });
+    if (error) throw new Error(`Não foi possível listar o Storage de ${prefix}: ${error.message}`);
+    const batch = data ?? [];
+    for (const item of batch) {
+      const path = `${prefix}/${item.name}`;
+      if (item.id) objects.push({ path, bytes: objectBytes(item.metadata) });
+      else objects.push(...await listStorageTree(path));
+    }
+    if (batch.length < 100) break;
+    offset += batch.length;
+  } while (true);
+  return objects;
+}
+
+/** Auditoria somente-leitura de todas as obras visíveis da organização atual. */
+export async function auditOrganizationStorage(): Promise<StorageProjectAudit[]> {
+  const projects = await listCloudProjects();
+  const result: StorageProjectAudit[] = [];
+  for (const meta of projects) {
+    const record = await loadCloudProjectRecord(meta.id);
+    if (!record) continue;
+    const attachments = collectProjectAttachments(record.project);
+    const referenced = new Set(attachments.flatMap(attachment => attachment.storagePath ? [attachment.storagePath] : []));
+    const objects = await listStorageTree(meta.id);
+    result.push({
+      meta,
+      project: record.project,
+      updatedAt: record.updatedAt,
+      attachments,
+      candidates: attachments.filter(needsOptimization),
+      objects,
+      orphaned: objects.filter(object => !referenced.has(object.path)),
+    });
+  }
+  return result;
 }
 
 

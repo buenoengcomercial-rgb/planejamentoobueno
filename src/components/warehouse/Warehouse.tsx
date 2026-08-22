@@ -11,6 +11,7 @@ import WarehouseEquipmentsTab from './WarehouseEquipmentsTab';
 import WarehouseInventoryTab from './WarehouseInventoryTab';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
 import AttachmentOptimizationPanel from './AttachmentOptimizationPanel';
+import GlobalStorageMaintenancePanel from './GlobalStorageMaintenancePanel';
 import './warehouse-visual.css';
 
 const WAREHOUSE_TABS = [
@@ -36,10 +37,11 @@ interface Props {
   canDeleteWarehouseRecords?: boolean;
   canManageEquipmentGroups?: boolean;
   canOptimizeStorage?: boolean;
+  onSaveStorageMaintenanceProject?: (project: Project, expectedUpdatedAt: string) => Promise<string>;
   auditActor?: WarehouseAuditActor;
 }
 
-export default function Warehouse({ project, onProjectChange, onCommitProject, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor }: Props) {
+export default function Warehouse({ project, onProjectChange, onCommitProject, onSaveStorageMaintenanceProject, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor }: Props) {
   const [tab, setTab] = useState(() => canViewPanel ? 'painel' : 'notas');
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
   useEffect(() => {
@@ -70,6 +72,7 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, c
           Termos abertos: <strong className="text-foreground">{summary.openCustodyCount}</strong>
         </span>
         {canOptimizeStorage && <AttachmentOptimizationPanel project={ensured} onProjectChange={onProjectChange} onCommitProject={onCommitProject} />}
+        {canOptimizeStorage && onSaveStorageMaintenanceProject && <GlobalStorageMaintenancePanel currentProject={ensured} onCurrentProjectChange={onProjectChange} saveProject={onSaveStorageMaintenanceProject} />}
         </div>
       </div>
 

@@ -947,6 +947,13 @@ export default function Index() {
     setUndoVersion(value => value + 1);
   }, [canPersistProject, handleCloudConflict, orgId, persistProject, role, user]);
 
+  const saveStorageMaintenanceProject = useCallback(async (next: Project, expectedUpdatedAt: string) => {
+    if (!user || !orgId || !canPersistProject || role !== 'owner') {
+      throw new Error('Somente o Proprietário pode executar a manutenção global do Storage.');
+    }
+    return upsertCloudProject(next, orgId, expectedUpdatedAt);
+  }, [canPersistProject, orgId, role, user]);
+
   const handleUndo = useCallback((view: AppView) => {
     const stack = undoStacksRef.current[view];
     if (stack.length === 0) { toast.message('Nada para desfazer'); return; }
@@ -1280,6 +1287,7 @@ export default function Index() {
             canDeleteWarehouseRecords={role === 'owner'}
             canManageEquipmentGroups={role === 'owner' || role === 'warehouse_operator'}
             canOptimizeStorage={role === 'owner'}
+            onSaveStorageMaintenanceProject={saveStorageMaintenanceProject}
             auditActor={auditActor}
           />
         );
