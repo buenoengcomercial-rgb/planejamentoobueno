@@ -3,9 +3,8 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 export type AttachmentOptimizationProfile = 'field-photo' | 'fiscal-document';
 
-/** Incrementar sempre que um perfil mudar: anexos gravados com versão menor
- * voltam a ser elegíveis para reotimização retroativa. */
-export const ATTACHMENT_OPTIMIZATION_VERSION = 2;
+export { ATTACHMENT_OPTIMIZATION_VERSION } from './attachmentOptimizationVersion';
+
 
 const PROFILES: Record<AttachmentOptimizationProfile, { maxSide: number; quality: number }> = {
   'field-photo': { maxSide: 1600, quality: 0.8 },
