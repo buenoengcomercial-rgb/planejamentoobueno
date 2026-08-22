@@ -494,6 +494,9 @@ export interface DailyReportAttachment {
   uploadedBy?: string;
   /** ISO timestamp. */
   uploadedAt?: string;
+  originalBytes?: number;
+  storedBytes?: number;
+  optimizedAt?: string;
   /** Compat: alguns diários antigos podem só guardar `name`. */
   name?: string;
 }
@@ -766,6 +769,10 @@ export interface WarehouseAttachment {
   storagePath?: string;
   /** MIME do arquivo, usado para abrir/baixar. */
   mimeType?: string;
+  /** Tamanho recebido e tamanho efetivamente guardado, para auditoria de economia de Storage. */
+  originalBytes?: number;
+  storedBytes?: number;
+  optimizedAt?: string;
   kind?: 'nf' | 'foto' | 'recibo' | 'termo' | 'outro';
   uploadedAt: string;
 }

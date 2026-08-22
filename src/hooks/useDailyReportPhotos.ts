@@ -94,6 +94,9 @@ export function useDailyReportPhotos({
       unit: taskMeta?.unit,
       uploadedBy: currentReport.responsible || undefined,
       uploadedAt: new Date().toISOString(),
+      originalBytes: file.size,
+      storedBytes: optimized.size,
+      optimizedAt: new Date().toISOString(),
     };
     const { error } = await supabase.storage
       .from(PHOTO_BUCKET)

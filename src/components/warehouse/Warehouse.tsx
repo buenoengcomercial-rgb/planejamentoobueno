@@ -10,6 +10,7 @@ import WarehouseRequisitionsTab from './WarehouseRequisitionsTab';
 import WarehouseEquipmentsTab from './WarehouseEquipmentsTab';
 import WarehouseInventoryTab from './WarehouseInventoryTab';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
+import AttachmentOptimizationPanel from './AttachmentOptimizationPanel';
 import './warehouse-visual.css';
 
 const WAREHOUSE_TABS = [
@@ -34,10 +35,11 @@ interface Props {
   canEditPostedWarehouseRecords?: boolean;
   canDeleteWarehouseRecords?: boolean;
   canManageEquipmentGroups?: boolean;
+  canOptimizeStorage?: boolean;
   auditActor?: WarehouseAuditActor;
 }
 
-export default function Warehouse({ project, onProjectChange, onCommitProject, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, auditActor }: Props) {
+export default function Warehouse({ project, onProjectChange, onCommitProject, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor }: Props) {
   const [tab, setTab] = useState(() => canViewPanel ? 'painel' : 'notas');
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
   useEffect(() => {
@@ -61,11 +63,14 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, c
           <p className="mt-1 text-sm font-medium text-muted-foreground">Escolha uma área para consultar ou registrar uma operação.</p>
           </div>
         </div>
-        <span className="w-full text-xs text-muted-foreground sm:ml-auto sm:w-auto">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
+        <span className="text-xs text-muted-foreground">
           Abaixo do mínimo: <strong className="text-destructive">{summary.underMinCount}</strong>
           <span className="mx-1.5">·</span>
           Termos abertos: <strong className="text-foreground">{summary.openCustodyCount}</strong>
         </span>
+        {canOptimizeStorage && <AttachmentOptimizationPanel project={ensured} onProjectChange={onProjectChange} onCommitProject={onCommitProject} />}
+        </div>
       </div>
 
       <Tabs value={tab} onValueChange={setTab} className="w-full">

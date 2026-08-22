@@ -170,6 +170,8 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
       const optimized = await Promise.all(accepted.map(optimizeEquipmentPhoto));
       setPhotos(current => [...current, ...optimized].slice(0, 3));
       setErrors(current => ({ ...current, photos: undefined }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível otimizar as fotos.');
     } finally {
       setOptimizingPhotos(current => Math.max(0, current - 1));
     }
@@ -219,7 +221,7 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
     setErrors({});
     try {
       setSaving(true);
-      const attachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'equipment')));
+      const attachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'equipment', true)));
       onProjectChange(addEquipment(project, {
         name: [form.brand, form.model].filter(Boolean).join(' ') || form.description,
         description: form.description.trim(),

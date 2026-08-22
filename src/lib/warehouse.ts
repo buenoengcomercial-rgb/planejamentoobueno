@@ -3073,16 +3073,30 @@ export async function makeAttachment(
   projectId: string,
   kind?: WarehouseAttachment['kind'],
   folder = 'documents',
+  alreadyOptimized = false,
 ): Promise<WarehouseAttachment> {
+  let optimized = file;
+  if (!alreadyOptimized) {
+    try {
+      const { optimizeStorageAttachment } = await import('@/lib/attachmentOptimization');
+      optimized = await optimizeStorageAttachment(file, kind);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Não foi possível otimizar o anexo.';
+      throw new Error(`O arquivo ${file.name} não foi enviado: ${message}`);
+    }
+  }
   const id = uid();
-  const safeExt = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const safeExt = (optimized.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
   const safeFolder = folder.replace(/[^a-zA-Z0-9_-]/g, '') || 'documents';
   const path = `${projectId || 'local'}/warehouse/${safeFolder}/${id}.${safeExt}`;
-  const mimeType = file.type || 'application/octet-stream';
+  const mimeType = optimized.type || 'application/octet-stream';
   const base: WarehouseAttachment = {
     id,
-    name: file.name,
+    name: optimized.name,
     mimeType,
+    originalBytes: file.size,
+    storedBytes: optimized.size,
+    optimizedAt: optimized === file ? undefined : nowISO(),
     kind,
     uploadedAt: nowISO(),
   };
@@ -3091,7 +3105,7 @@ export async function makeAttachment(
     const { supabase } = await import('@/integrations/supabase/client');
     const { error } = await supabase.storage
       .from('daily-report-photos')
-      .upload(path, file, { contentType: mimeType, upsert: false });
+      .upload(path, optimized, { contentType: mimeType, upsert: false });
     if (error) throw error;
     return { ...base, storagePath: path };
   } catch (err) {

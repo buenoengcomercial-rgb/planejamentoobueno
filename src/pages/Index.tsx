@@ -1279,6 +1279,7 @@ export default function Index() {
             canEditPostedWarehouseRecords={role === 'owner'}
             canDeleteWarehouseRecords={role === 'owner'}
             canManageEquipmentGroups={role === 'owner' || role === 'warehouse_operator'}
+            canOptimizeStorage={role === 'owner'}
             auditActor={auditActor}
           />
         );

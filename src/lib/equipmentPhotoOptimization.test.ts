@@ -65,7 +65,7 @@ describe('optimizeEquipmentPhoto', () => {
     expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 640, 480);
   });
 
-  it('preserva o original quando a conversão fica maior ou falha', async () => {
+  it('preserva o original quando a conversão fica maior e recusa falha de conversão', async () => {
     mockBitmap(640, 480);
     mockJpeg(3_000);
     const original = new File([new Uint8Array(2_000)], 'etiqueta.jpeg', { type: 'image/jpeg' });
@@ -73,6 +73,6 @@ describe('optimizeEquipmentPhoto', () => {
     expect(await optimizeEquipmentPhoto(original)).toBe(original);
 
     globalThis.createImageBitmap = vi.fn().mockRejectedValue(new Error('imagem inválida')) as typeof createImageBitmap;
-    expect(await optimizeEquipmentPhoto(original)).toBe(original);
+    await expect(optimizeEquipmentPhoto(original)).rejects.toThrow('imagem inválida');
   });
 });

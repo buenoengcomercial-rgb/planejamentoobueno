@@ -56,7 +56,8 @@ function jpegName(name: string) {
 
 /**
  * Corrige a orientação, limita o maior lado e gera um JPEG leve. Qualquer
- * falha ou resultado maior preserva o arquivo recebido, sem bloquear cadastro.
+ * resultado maior preserva o arquivo recebido (ele já ocupa menos espaço).
+ * Falha de conversão bloqueia o envio para nunca subir um original pesado por exceção.
  */
 export async function optimizeEquipmentPhoto(file: File): Promise<File> {
   if (!file.type.startsWith('image/')) return file;
@@ -82,8 +83,8 @@ export async function optimizeEquipmentPhoto(file: File): Promise<File> {
       type: 'image/jpeg',
       lastModified: file.lastModified,
     });
-  } catch {
-    return file;
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : 'Não foi possível otimizar a foto.');
   } finally {
     decoded?.release();
   }
