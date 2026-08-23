@@ -148,6 +148,9 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     expect(screen.getByTestId('gantt-proposed-label-scheduled-new-long')).toHaveTextContent('Aguardando contratação');
     expect(screen.queryByTestId('gantt-bar-scheduled-new')).not.toBeInTheDocument();
     expect(screen.queryByTestId('gantt-bar-scheduled-new-long')).not.toBeInTheDocument();
+    expect(screen.getByTestId('gantt-phase-schedule-summary-phase-1')).toHaveTextContent('P 1');
+    expect(screen.getByTestId('gantt-phase-schedule-summary-phase-1')).toHaveTextContent('A 4');
+    expect(screen.getByTestId('gantt-phase-schedule-summary-phase-1')).toHaveTextContent('S 1');
     expect(screen.getByTestId('gantt-bar-partial-existing')).toBeInTheDocument();
     expect(screen.getByTestId('gantt-quantity-limited-partial-existing')).toHaveTextContent('EXECUTAR: 10 UN CONTRATADAS');
 

@@ -2009,6 +2009,15 @@ export default function GanttChart({
                 const phaseRange = getPhaseRange(phase);
                 const diasUteis = getChapterDiasUteis(phase);
                 const visiblePhaseTasks = getVisiblePhaseTasks(phase);
+                const additivePhaseSummary = context === 'additive-preview'
+                  ? visiblePhaseTasks.reduce((summary, task) => {
+                      const state = suspensionMap[task.id];
+                      if (state?.scheduleState === 'fully_suppressed') summary.suppressed += 1;
+                      else if (isStatusOnlyTask(task.id) || state?.kind === 'proposed') summary.pending += 1;
+                      else summary.scheduled += 1;
+                      return summary;
+                    }, { scheduled: 0, pending: 0, suppressed: 0 })
+                  : null;
 
                 return (
                   <div key={phase.id}>
@@ -2046,10 +2055,28 @@ export default function GanttChart({
                         >
                           {phase.name}
                         </span>
-                        <span className="text-[9px] ml-auto text-muted-foreground">{visiblePhaseTasks.length}</span>
+                        <span className="ml-auto flex items-center gap-1 text-[9px] text-muted-foreground">
+                          {additivePhaseSummary && (
+                            <span
+                              data-testid={`gantt-phase-schedule-summary-${phase.id}`}
+                              className="flex items-center gap-1 tabular-nums"
+                              title="Resumo das tarefas deste capítulo ou subcapítulo. A projeção considera apenas as tarefas programadas."
+                            >
+                              <span className="text-sky-700">P {additivePhaseSummary.scheduled}</span>
+                              {additivePhaseSummary.pending > 0 && <span className="text-amber-700">A {additivePhaseSummary.pending}</span>}
+                              {additivePhaseSummary.suppressed > 0 && <span className="text-destructive">S {additivePhaseSummary.suppressed}</span>}
+                            </span>
+                          )}
+                          <span>{visiblePhaseTasks.length}</span>
+                        </span>
                       </button>
                       {/* Chapter dates row */}
                       <div className="flex items-center gap-2 px-2 text-[9px] overflow-hidden" style={{ height: phaseHeaderHeight - taskRowHeight }}>
+                        {additivePhaseSummary && (additivePhaseSummary.pending > 0 || additivePhaseSummary.suppressed > 0) && (
+                          <span className="shrink-0 rounded bg-amber-50 px-1 py-0.5 font-medium text-amber-800" title="A linha de projeção considera apenas tarefas programadas e liberadas.">
+                            Projeção: programadas
+                          </span>
+                        )}
                         <Popover>
                           <PopoverTrigger asChild>
                             <button className="text-muted-foreground hover:text-primary transition-colors">
