@@ -194,6 +194,40 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     expect(screen.getByDisplayValue('2')).toBeDisabled();
   });
 
+  it('mantém alinhadas a tabela e a barra quando a tarefa exibe dados adicionais', () => {
+    const projectWithProgress = {
+      ...project,
+      phases: [{
+        ...project.phases[0],
+        tasks: project.phases[0].tasks.map(task => task.id === 'partial-existing' ? {
+          ...task,
+          dailyLogs: [{ id: 'log-1', date: '2026-08-17', plannedQuantity: 5, actualQuantity: 5 }],
+          current: {
+            startDate: '2026-08-17',
+            duration: 2,
+            endDate: '2026-08-18',
+            forecastEndDate: '2026-08-18',
+          },
+        } : task),
+      }],
+    } satisfies Project;
+
+    render(
+      <GanttChart
+        project={projectWithProgress}
+        context="official"
+        lockedTaskLabels={{ 'partial-existing': '1º Aditivo' }}
+        readOnly
+      />,
+    );
+
+    expect(screen.getByTestId('gantt-sidebar-row-partial-existing')).toHaveStyle({ height: '56px' });
+    expect(screen.getByTestId('gantt-chart-row-partial-existing')).toHaveStyle({ height: '56px' });
+    expect(screen.getByTestId('gantt-bar-partial-existing')).toHaveStyle({ top: '18px' });
+    expect(screen.getByTestId('gantt-sidebar-row-scheduled-new')).toHaveStyle({ height: '32px' });
+    expect(screen.getByTestId('gantt-chart-row-scheduled-new')).toHaveStyle({ height: '32px' });
+  });
+
   it('mostra os valores da previsão financeira dentro das colunas mensais', () => {
     render(
       <GanttChart

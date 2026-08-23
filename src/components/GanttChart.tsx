@@ -398,6 +398,17 @@ export default function GanttChart({
     : density === 'compact' ? 24 : ROW_HEIGHT;
   const phaseHeaderHeight = taskRowHeight + (density === 'compact' ? 16 : 20);
   const taskSubHeaderHeight = density === 'compact' ? 16 : 18;
+  const getTaskRowHeight = useCallback((task: Task) => {
+    const hasActualProgress = (task.dailyLogs || []).some(log => (log.actualQuantity ?? 0) > 0);
+    const hasActualDates = hasActualProgress && !!task.current?.startDate;
+    const hasTwoLineProduction = hasActualProgress && !!task.quantity;
+    const hasScheduleLabel = isTaskScheduleLocked(task.id);
+
+    // Datas real/prevista, produção real e a origem no aditivo ocupam linhas
+    // adicionais. A altura precisa ser a mesma na tabela e na área das barras.
+    if (!hasActualDates && !hasTwoLineProduction && !hasScheduleLabel) return taskRowHeight;
+    return Math.max(taskRowHeight, density === 'compact' ? 52 : 56);
+  }, [density, isTaskScheduleLocked, taskRowHeight]);
   const chartWidth = useMemo(() => totalDays * dayWidth, [totalDays, dayWidth]);
 
   const todayOffset = diffDays(projectStart, today);
@@ -537,13 +548,14 @@ export default function GanttChart({
         const visibleTasks = getVisiblePhaseTasks(phase);
         if (visibleTasks.length > 0) y += SUBHEADER_HEIGHT;
         visibleTasks.forEach(task => {
-            map.set(task.id, y + taskRowHeight / 2);
-            y += taskRowHeight;
+            const rowHeight = getTaskRowHeight(task);
+            map.set(task.id, y + rowHeight / 2);
+            y += rowHeight;
           });
       }
     });
     return map;
-  }, [displayPhases, collapsedPhases, getVisiblePhaseTasks, phaseHeaderHeight, taskRowHeight, taskSubHeaderHeight]);
+  }, [displayPhases, collapsedPhases, getTaskRowHeight, getVisiblePhaseTasks, phaseHeaderHeight, taskSubHeaderHeight]);
   const violationMap = useMemo(() => {
     const map = new Map<string, Set<string>>();
     tasks.forEach(task => {
@@ -2095,11 +2107,13 @@ export default function GanttChart({
                           const rowTeamDef = statusOnly ? undefined : teamDef(task.team);
                           const scheduleLocked = isTaskScheduleLocked(task.id);
                           const scheduleLockSource = scheduleLockLabel(task.id);
+                          const rowHeight = getTaskRowHeight(task);
                           const isReorderDragging = reorderDragTaskId === task.id;
                           const isReorderTarget = reorderDropTargetId === task.id && reorderDragTaskId && reorderDragTaskId !== task.id;
                           return (
                             <div
                               key={task.id}
+                              data-testid={`gantt-sidebar-row-${task.id}`}
                               draggable={!readOnly && !statusOnly && !scheduleLocked}
                               onDragStart={(e) => handleRowDragStart(e, phase.id, task.id)}
                               onDragOver={(e) => handleRowDragOver(e, task.id)}
@@ -2119,7 +2133,7 @@ export default function GanttChart({
                               } ${suspension ? 'bg-amber-50/80 ring-1 ring-inset ring-amber-300' : ''
                               }`}
                               style={{
-                                height: taskRowHeight,
+                                height: rowHeight,
                                 gridTemplateColumns: sidebarCols,
                                 ...(rowTeamDef ? {
                                   backgroundColor: rowTeamDef.bgColor,
@@ -2839,6 +2853,7 @@ export default function GanttChart({
                             const isLaborHighlighted = highlightedLaborTaskIds.has(task.id);
                             const scheduleLocked = isTaskScheduleLocked(task.id);
                             const scheduleLockSource = scheduleLockLabel(task.id);
+                            const rowHeight = getTaskRowHeight(task);
                             // Compute current bar position with drag/resize/propagation
                             let currentLeft = bar.left;
                             let currentWidth = bar.width;
@@ -2879,8 +2894,9 @@ export default function GanttChart({
                             return (
                               <div
                                 key={task.id}
+                                data-testid={`gantt-chart-row-${task.id}`}
                                 className={`border-b border-border relative ${idx % 2 === 0 ? 'bg-card' : 'bg-muted/10'}`}
-                                style={{ height: taskRowHeight }}
+                                style={{ height: rowHeight }}
                               >
                                 {/* Barra planejada = task.startDate + task.duration (Manual ou RUP) */}
                                 {statusOnly || proposedLabelOnly ? (
@@ -2916,7 +2932,7 @@ export default function GanttChart({
                                   style={{
                                     left: barLeft,
                                     width: barWidth,
-                                    top: density === 'compact' ? 6 : 9,
+                                    top: (rowHeight - (density === 'compact' ? 12 : 20)) / 2,
                                     height: density === 'compact' ? 12 : 20,
                                     borderRadius: 6,
                                     background: (() => {
