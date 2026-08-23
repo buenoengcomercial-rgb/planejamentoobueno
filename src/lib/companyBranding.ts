@@ -7,6 +7,7 @@ import logoIcon from '@/assets/logo-bueno-icon.png';
 
 export const company = {
   name: 'BUENO Prevenção a Incêndio',
+  productName: 'BUENO Gestor de Obras',
   legalName: 'K. C. BUENO DE GODOY OLIVEIRA LTDA',
   cnpj: '39.973.085/0001-20',
   address: 'Rua Getúlio Vargas, 2533, São Cristóvão',

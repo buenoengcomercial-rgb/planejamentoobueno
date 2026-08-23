@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { supabase } from '@/integrations/supabase/client';
+import { company } from '@/lib/companyBranding';
 
 export default function Auth() {
   const { user, loading, signIn, signUp } = useAuth();
@@ -81,7 +82,12 @@ export default function Auth() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">ObraPlanner</CardTitle>
+          <img
+            src={company.logoFullUrl}
+            alt={company.name}
+            className="mx-auto h-20 w-auto object-contain"
+          />
+          <CardTitle className="text-2xl">{company.productName}</CardTitle>
           <CardDescription>Acesse suas obras na nuvem</CardDescription>
         </CardHeader>
         <CardContent>

@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import logoFull from '@/assets/logo-bueno.png';
 import logoIcon from '@/assets/logo-bueno-icon.png';
+import { company } from '@/lib/companyBranding';
 
 interface AppSidebarProps {
   currentView: AppView;
@@ -288,7 +289,7 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
           )}
           {!collapsed && (
             <div className="min-w-0">
-              <h1 className="text-sm font-bold text-[hsl(var(--sidebar-fg))] leading-tight">ObraPlanner</h1>
+              <h1 className="text-sm font-bold text-[hsl(var(--sidebar-fg))] leading-tight">{company.productName}</h1>
               <p className="text-[10px] opacity-60 truncate max-w-[140px]">{projectName}</p>
             </div>
           )}

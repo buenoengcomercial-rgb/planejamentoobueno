@@ -1,5 +1,6 @@
 import { Project } from '@/types/project';
 import { listProjects, loadProject, saveProject, setActiveProjectId } from './projectStorage';
+import { company } from './companyBranding';
 
 const SIGNATURE = 'obraplanner-backup';
 const BACKUP_VERSION = 1;
@@ -9,7 +10,7 @@ export interface SingleProjectBackup {
   kind: 'single';
   version: number;
   exportedAt: string;
-  appName: 'ObraPlanner';
+  appName: typeof company.productName;
   project: Project;
 }
 
@@ -18,7 +19,7 @@ export interface MultiProjectBackup {
   kind: 'multi';
   version: number;
   exportedAt: string;
-  appName: 'ObraPlanner';
+  appName: typeof company.productName;
   projects: Project[];
 }
 
@@ -57,7 +58,7 @@ export function exportProjectToFile(projectId: string): boolean {
     kind: 'single',
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
-    appName: 'ObraPlanner',
+    appName: company.productName,
     project,
   };
   downloadJson(`backup_obra_${sanitizeFilename(project.name)}_${todayStamp()}.json`, backup);
@@ -77,10 +78,10 @@ export function exportAllProjectsToFile(): boolean {
     kind: 'multi',
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
-    appName: 'ObraPlanner',
+    appName: company.productName,
     projects,
   };
-  downloadJson(`backup_obraplanner_${todayStamp()}.json`, backup);
+  downloadJson(`backup_bueno_gestor_de_obras_${todayStamp()}.json`, backup);
   return true;
 }
 
