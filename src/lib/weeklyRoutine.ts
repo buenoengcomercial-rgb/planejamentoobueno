@@ -139,7 +139,8 @@ function quantityForDay(task: Task, date: string, kind: 'planned' | 'actual', wo
   const logged = logs.reduce((sum, log) => sum + Number(kind === 'planned' ? log.plannedQuantity : log.actualQuantity || 0), 0);
   if (logged > 0 || kind === 'actual') return Math.round(logged * 100) / 100;
 
-  const quantity = Number(task.quantity) || 0;
+  // Após reprogramação parcial, a agenda representa apenas o saldo a executar.
+  const quantity = Number(task.operationalReschedule?.quantity ?? task.quantity) || 0;
   const duration = Number(task.duration) || 0;
   return duration > 0 ? Math.round(((quantity / duration) * workDayWeight) * 100) / 100 : 0;
 }

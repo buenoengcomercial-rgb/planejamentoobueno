@@ -11,6 +11,7 @@ import type {
   WeeklyRoutineActivity,
   WeeklyRoutineDiaryStatus,
 } from '@/types/project';
+import type { AuditUserInfo } from '@/lib/audit';
 import { DEFAULT_TEAMS, getTeamDefinition } from '@/lib/teams';
 import {
   addDaysISO,
@@ -22,8 +23,11 @@ import {
   type WeeklyRoutineActivityGroup,
 } from '@/lib/weeklyRoutine';
 import { buildPendingAdditiveSuspensionMap, isStatusOnlySuspension } from '@/lib/additiveSchedule';
+import { getAllTasks } from '@/data/sampleProject';
 import { loadObraConfig } from '@/components/ConfiguracaoObra';
 import { applyDailyProductionLogs, upsertDailyProductionLog } from '@/lib/dailyProductionLogs';
+import TaskRescheduleDialog from '@/components/TaskRescheduleDialog';
+import { approveRescheduleRequest, rejectRescheduleRequest, submitRescheduleRequest } from '@/lib/taskRescheduling';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -48,6 +52,7 @@ import {
   Save,
   Settings2,
   Users,
+  CalendarClock,
 } from 'lucide-react';
 
 interface Props {
@@ -56,6 +61,9 @@ interface Props {
   onOpenDailyReport: (dateISO: string) => void;
   onOpenProduction: (taskId: string, dateISO: string) => void;
   readOnly?: boolean;
+  canRequestReschedule?: boolean;
+  canApproveReschedule?: boolean;
+  auditActor?: AuditUserInfo;
   initialWeek?: string;
   onWeekChange?: (weekStartISO: string) => void;
   undoButton?: React.ReactNode;
@@ -183,6 +191,7 @@ function ActivityCard({
   readOnly = false,
   showChapter = true,
   tone,
+  onReschedule,
 }: {
   activity: WeeklyRoutineActivity;
   onOpenProduction: (taskId: string, dateISO: string) => void;
@@ -191,6 +200,7 @@ function ActivityCard({
   readOnly?: boolean;
   showChapter?: boolean;
   tone: (typeof CHAPTER_TONES)[number];
+  onReschedule?: (taskId: string) => void;
 }) {
   const team = getTeamDefinition(activity.teamCode, teams?.length ? teams : DEFAULT_TEAMS);
   const [actualDraft, setActualDraft] = useState(() => String(activity.actualQuantity || ''));
@@ -259,17 +269,21 @@ function ActivityCard({
       <Button type="button" variant="outline" size="sm" className="mt-2 min-h-10 w-full" onClick={() => onOpenProduction(activity.taskId, activity.date)}>
         Ir para produção <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
       </Button>
+      {onReschedule && <Button type="button" variant="ghost" size="sm" className="mt-1 min-h-9 w-full text-violet-700" onClick={() => onReschedule(activity.taskId)}>
+        <CalendarClock className="mr-1.5 h-3.5 w-3.5" /> Reprogramar atividade
+      </Button>}
     </article>
   );
 }
 
-function ActivityGroups({ groups, date, teams, onOpenProduction, onRegister, readOnly, depth = 0, rootChapterId }: {
+function ActivityGroups({ groups, date, teams, onOpenProduction, onRegister, readOnly, onReschedule, depth = 0, rootChapterId }: {
   groups: WeeklyRoutineActivityGroup[];
   date: string;
   teams: Project['teams'];
   onOpenProduction: (taskId: string, dateISO: string) => void;
   onRegister: (activity: WeeklyRoutineActivity, actualQuantity: number) => void;
   readOnly: boolean;
+  onReschedule?: (taskId: string) => void;
   depth?: number;
   rootChapterId?: string;
 }) {
@@ -296,9 +310,10 @@ function ActivityGroups({ groups, date, teams, onOpenProduction, onRegister, rea
               readOnly={readOnly}
               showChapter={false}
               tone={tone}
+              onReschedule={onReschedule}
             />
           ))}
-          {group.children.length > 0 && <ActivityGroups groups={group.children} date={date} teams={teams} onOpenProduction={onOpenProduction} onRegister={onRegister} readOnly={readOnly} depth={depth + 1} rootChapterId={chapterRootId} />}
+          {group.children.length > 0 && <ActivityGroups groups={group.children} date={date} teams={teams} onOpenProduction={onOpenProduction} onRegister={onRegister} readOnly={readOnly} onReschedule={onReschedule} depth={depth + 1} rootChapterId={chapterRootId} />}
         </section>
       )})}
     </div>
@@ -325,9 +340,10 @@ function MetricCard({ label, value, icon: Icon, tone = 'primary' }: {
   );
 }
 
-export default function ManagementRoutine({ project, onProjectChange, onOpenDailyReport, onOpenProduction, readOnly = false, initialWeek, onWeekChange, undoButton }: Props) {
+export default function ManagementRoutine({ project, onProjectChange, onOpenDailyReport, onOpenProduction, readOnly = false, canRequestReschedule = false, canApproveReschedule = false, auditActor = {}, initialWeek, onWeekChange, undoButton }: Props) {
   const routine = useMemo(() => ensureRoutine(project), [project]);
   const [activeTab, setActiveTab] = useState('agenda');
+  const [rescheduleTaskId, setRescheduleTaskId] = useState<string | null>(null);
   const [selectedWeekStart, setSelectedWeekStart] = useState(() => startOfWeekISO(initialWeek || todayISO()));
   const obraCalendar = useMemo(() => loadObraConfig(), []);
   const pendingAdditiveTaskIds = useMemo(() => new Set(
@@ -367,6 +383,13 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
       })),
     }));
   };
+
+  const submitTaskReschedule = (request: Parameters<typeof submitRescheduleRequest>[1], approveNow: boolean) => {
+    const requested = submitRescheduleRequest(project, request, auditActor);
+    onProjectChange(approveNow ? approveRescheduleRequest(requested, request.id, obraCalendar, auditActor) : requested);
+  };
+  const approveTaskReschedule = (requestId: string) => onProjectChange(approveRescheduleRequest(project, requestId, obraCalendar, auditActor));
+  const rejectTaskReschedule = (requestId: string, reason: string) => onProjectChange(rejectRescheduleRequest(project, requestId, reason, auditActor));
 
   useEffect(() => {
     if (initialWeek) setSelectedWeekStart(startOfWeekISO(initialWeek));
@@ -504,7 +527,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
                         <p className="mt-2 text-xs text-muted-foreground">{day.activities.length} atividade(s)</p>
                       </div>
                       <div className="space-y-2 p-2.5">
-                        {day.activities.length ? <ActivityGroups groups={groupsByDay.get(day.date) ?? []} date={day.date} teams={project.teams} onOpenProduction={onOpenProduction} onRegister={registerActivityProduction} readOnly={readOnly} /> : <p className="py-8 text-center text-xs text-muted-foreground">Sem atividade</p>}
+                        {day.activities.length ? <ActivityGroups groups={groupsByDay.get(day.date) ?? []} date={day.date} teams={project.teams} onOpenProduction={onOpenProduction} onRegister={registerActivityProduction} readOnly={readOnly} onReschedule={canRequestReschedule || canApproveReschedule ? setRescheduleTaskId : undefined} /> : <p className="py-8 text-center text-xs text-muted-foreground">Sem atividade</p>}
                       </div>
                       <div className="border-t border-border p-2.5">
                         <Button variant="ghost" size="sm" className="min-h-10 w-full text-xs" onClick={() => onOpenDailyReport(day.date)}>
@@ -532,7 +555,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
                         </Button>
                       </CardHeader>
                       <CardContent className="space-y-2">
-                        {day.activities.length ? <ActivityGroups groups={groupsByDay.get(day.date) ?? []} date={day.date} teams={project.teams} onOpenProduction={onOpenProduction} onRegister={registerActivityProduction} readOnly={readOnly} /> : <p className="rounded-lg bg-muted/30 p-4 text-sm text-muted-foreground">Sem atividade programada.</p>}
+                        {day.activities.length ? <ActivityGroups groups={groupsByDay.get(day.date) ?? []} date={day.date} teams={project.teams} onOpenProduction={onOpenProduction} onRegister={registerActivityProduction} readOnly={readOnly} onReschedule={canRequestReschedule || canApproveReschedule ? setRescheduleTaskId : undefined} /> : <p className="rounded-lg bg-muted/30 p-4 text-sm text-muted-foreground">Sem atividade programada.</p>}
                       </CardContent>
                     </Card>
                   );
@@ -663,6 +686,19 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
           </section>
         </TabsContent>
       </Tabs>
+      <TaskRescheduleDialog
+        open={!!rescheduleTaskId}
+        onOpenChange={open => { if (!open) setRescheduleTaskId(null); }}
+        project={project}
+        task={getAllTasks(project).find(task => task.id === rescheduleTaskId)}
+        config={obraCalendar}
+        actor={auditActor}
+        canRequest={canRequestReschedule}
+        canApprove={canApproveReschedule}
+        onSubmit={submitTaskReschedule}
+        onApprove={approveTaskReschedule}
+        onReject={rejectTaskReschedule}
+      />
     </div>
   );
 }

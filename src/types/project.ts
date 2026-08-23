@@ -166,6 +166,8 @@ export interface Task {
   // Baseline (linha de base fixa) e Current (cronograma variável)
   baseline?: TaskBaseline;
   current?: TaskCurrent;
+  /** Reprogramação operacional aprovada. Não altera a linha de base contratual. */
+  operationalReschedule?: TaskOperationalReschedule;
   // ----- Origem em Aditivo (quando criada por integração de aditivo contratado) -----
   /** Aditivo de origem (quando a tarefa foi criada por integração de aditivo). */
   originAdditiveId?: string;
@@ -230,6 +232,37 @@ export interface DailyProductionLog {
   laborEntries?: DailyLaborEntry[];
   /** Produção física da terceirizada, sempre por composição contratada. */
   subcontractExecutions?: DailySubcontractExecution[];
+}
+
+export interface TaskOperationalReschedule {
+  requestId: string;
+  /** `whole_task` antes de iniciar; `remaining_work` após haver produção real. */
+  scope: 'whole_task' | 'remaining_work';
+  startDate: string;
+  duration: number;
+  quantity: number;
+  endDate: string;
+  reason: string;
+  approvedAt: string;
+  approvedBy?: string;
+}
+
+export interface TaskRescheduleRequest {
+  id: string;
+  taskId: string;
+  scope: 'whole_task' | 'remaining_work';
+  proposedStartDate: string;
+  proposedDuration: number;
+  proposedQuantity: number;
+  proposedEndDate: string;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected';
+  requestedAt: string;
+  requestedBy?: string;
+  requestedByEmail?: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  decisionReason?: string;
 }
 
 export interface DailySubcontractExecution {
@@ -780,6 +813,8 @@ export interface Project {
   syntheticImportedAt?: string;
   /** Trilha de auditoria (Aditivo, Medição, Diário etc.). */
   auditLogs?: AuditLog[];
+  /** Solicitações de reprogramação operacional, preservadas para aprovação e auditoria. */
+  rescheduleRequests?: TaskRescheduleRequest[];
   /** Comparativos de preços de materiais (Lista de Material). Isolado das demais áreas. */
   materialComparisons?: MaterialComparison[];
   /** Histórico consolidado de preços de materiais (todas as cotações fechadas). */

@@ -1,10 +1,11 @@
 import { Project, Task, ViewMode, DependencyType, TaskDependency } from '@/types/project';
+import type { AuditUserInfo } from '@/lib/audit';
 import { getTeamDefinition, DEFAULT_TEAMS, TeamCode, TeamDefinition } from '@/lib/teams';
 import GerenciarEquipes from './GerenciarEquipes';
 import { Settings2 } from 'lucide-react';
 import { getAllTasks } from '@/data/sampleProject';
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
-import { ChevronDown, ChevronRight, AlertTriangle, Flag, Pencil } from 'lucide-react';
+import { ChevronDown, ChevronRight, AlertTriangle, Flag, Pencil, CalendarClock } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { GanttDatePickerCalendar } from './gantt/GanttDatePickerCalendar';
@@ -37,6 +38,8 @@ import {
   type AdditiveScheduleSuspensionMeta,
 } from '@/lib/additiveSchedule';
 import { getWorkStartDate } from '@/lib/workStartDate';
+import TaskRescheduleDialog from '@/components/TaskRescheduleDialog';
+import { approveRescheduleRequest, rejectRescheduleRequest, submitRescheduleRequest } from '@/lib/taskRescheduling';
 
 interface GanttChartProps {
   project: Project;
@@ -59,6 +62,9 @@ interface GanttChartProps {
   readOnly?: boolean;
   collapsedPhaseIds?: string[];
   onCollapsedPhaseIdsChange?: (phaseIds: string[]) => void;
+  canRequestReschedule?: boolean;
+  canApproveReschedule?: boolean;
+  auditActor?: AuditUserInfo;
 }
 
 export default function GanttChart({
@@ -77,6 +83,9 @@ export default function GanttChart({
   readOnly = false,
   collapsedPhaseIds: controlledCollapsedPhaseIds,
   onCollapsedPhaseIdsChange,
+  canRequestReschedule = false,
+  canApproveReschedule = false,
+  auditActor = {},
 }: GanttChartProps) {
   const isTaskScheduleLocked = useCallback((taskId: string) => !!lockedTaskLabels[taskId], [lockedTaskLabels]);
   const scheduleLockLabel = useCallback((taskId: string) => lockedTaskLabels[taskId], [lockedTaskLabels]);
@@ -128,6 +137,7 @@ export default function GanttChart({
   const [laborIssueMode, setLaborIssueMode] = useState<'deficit' | 'availability' | 'data'>('deficit');
   const [highlightedLaborTaskIds, setHighlightedLaborTaskIds] = useState<Set<string>>(() => new Set());
   const [obraConfig, setObraConfig] = useState<ObraConfig>(loadObraConfig);
+  const [rescheduleTaskId, setRescheduleTaskId] = useState<string | null>(null);
   const suspensionMap = useMemo(
     () => providedSuspensionMap ?? (context === 'official' ? buildPendingAdditiveSuspensionMap(project) : {}),
     [context, project, providedSuspensionMap],
@@ -905,6 +915,25 @@ export default function GanttChart({
       toast.info(`Datas ajustadas automaticamente por depend\u00eancia${types ? ` [${types}]` : ''}`);
     }
   }, [obraConfig, onProjectChange]);
+
+  const submitTaskReschedule = useCallback((request: Parameters<typeof submitRescheduleRequest>[1], approveNow: boolean) => {
+    if (!onProjectChange) return;
+    const requested = submitRescheduleRequest(project, request, auditActor);
+    onProjectChange(approveNow ? approveRescheduleRequest(requested, request.id, obraConfig, auditActor) : requested);
+    toast.success(approveNow ? 'Atividade reprogramada e dependências atualizadas.' : 'Solicitação de reprogramação enviada para aprovação.');
+  }, [auditActor, obraConfig, onProjectChange, project]);
+
+  const approveTaskReschedule = useCallback((requestId: string) => {
+    if (!onProjectChange) return;
+    onProjectChange(approveRescheduleRequest(project, requestId, obraConfig, auditActor));
+    toast.success('Reprogramação aprovada e aplicada ao cronograma.');
+  }, [auditActor, obraConfig, onProjectChange, project]);
+
+  const rejectTaskReschedule = useCallback((requestId: string, reason: string) => {
+    if (!onProjectChange) return;
+    onProjectChange(rejectRescheduleRequest(project, requestId, reason, auditActor));
+    toast.info('Reprogramação rejeitada.');
+  }, [auditActor, onProjectChange, project]);
 
 
   // Compute temporary propagation for real-time drag preview
@@ -2212,12 +2241,12 @@ export default function GanttChart({
                                     </TooltipContent>
                                   </Tooltip>
                                 )}
-                                <div className="min-w-0 flex-1">
+                                <div className="relative min-w-0 flex-1">
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <p
                                         data-testid={`gantt-task-description-${task.id}`}
-                                        className={`line-clamp-2 break-words text-[11px] font-medium leading-tight ${rowTeamDef ? '' : 'text-foreground'}`}
+                                        className={`line-clamp-2 break-words pr-4 text-[11px] font-medium leading-tight ${rowTeamDef ? '' : 'text-foreground'}`}
                                       >
                                         {task.name}
                                       </p>
@@ -2230,6 +2259,22 @@ export default function GanttChart({
                                     <p className="truncate text-[8px] font-semibold leading-tight text-sky-700" title={`Edite no Cronograma do Aditivo: ${scheduleLockSource}`}>
                                       Planejada pelo aditivo: {scheduleLockSource}
                                     </p>
+                                  )}
+                                  {task.operationalReschedule && (
+                                    <p className="truncate text-[8px] font-semibold leading-tight text-violet-700" title={task.operationalReschedule.reason}>
+                                      Reprogramada: {task.operationalReschedule.startDate} → {task.operationalReschedule.endDate}
+                                    </p>
+                                  )}
+                                  {(canRequestReschedule || canApproveReschedule) && !scheduleLocked && (
+                                    <button
+                                      type="button"
+                                      className="absolute right-0 top-0 rounded p-0.5 text-violet-700 hover:bg-violet-100"
+                                      onClick={() => setRescheduleTaskId(task.id)}
+                                      aria-label={`Reprogramar ${task.name}`}
+                                      title="Reprogramar atividade"
+                                    >
+                                      <CalendarClock className="h-3 w-3" />
+                                    </button>
                                   )}
                                   {context === 'additive-preview' && suspension?.kind === 'quantity_limited' && (
                                     <p
@@ -3155,6 +3200,19 @@ export default function GanttChart({
           </div>
         </div>
       </div>
+      <TaskRescheduleDialog
+        open={!!rescheduleTaskId}
+        onOpenChange={open => { if (!open) setRescheduleTaskId(null); }}
+        project={project}
+        task={tasks.find(task => task.id === rescheduleTaskId)}
+        config={obraConfig}
+        actor={auditActor}
+        canRequest={canRequestReschedule}
+        canApprove={canApproveReschedule}
+        onSubmit={submitTaskReschedule}
+        onApprove={approveTaskReschedule}
+        onReject={rejectTaskReschedule}
+      />
     </TooltipProvider>
   );
 }

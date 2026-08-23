@@ -1230,6 +1230,9 @@ export default function Index() {
             onOpenDailyReport={handleOpenDailyReport}
             onOpenProduction={handleOpenProductionActivity}
             readOnly={!editor}
+            canRequestReschedule={role === 'owner' || role === 'admin' || role === 'engineer'}
+            canApproveReschedule={role === 'owner' || role === 'admin'}
+            auditActor={auditActor}
             initialWeek={new URLSearchParams(location.search).get('semana') || undefined}
             onWeekChange={weekStart => navigate(`/obras/${project.id}/rotina?semana=${weekStart}`, { replace: true })}
             undoButton={<UndoButton canUndo={canUndo('management')} onUndo={() => handleUndo('management')} />}
@@ -1241,6 +1244,9 @@ export default function Index() {
           onProjectChange={operationalGanttSetter}
           lockedTaskLabels={Object.fromEntries(Array.from(pendingAdditiveScheduleControls.entries()).map(([taskId, control]) => [taskId, control.additiveName]))}
           readOnly={!editor}
+          canRequestReschedule={role === 'owner' || role === 'admin' || role === 'engineer'}
+          canApproveReschedule={role === 'owner' || role === 'admin'}
+          auditActor={auditActor}
           undoButton={<UndoButton canUndo={canUndo('gantt')} onUndo={() => handleUndo('gantt')} size="xs" />}
         />;
       case 'tasks':
