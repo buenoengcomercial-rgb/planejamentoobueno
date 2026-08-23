@@ -46,6 +46,7 @@ import {
   generateUniqueCloudName,
   getSampleSeed,
   CloudProjectConflictError,
+  CloudProjectPartialSyncError,
   CloudProjectMeta,
   getCloudProjectVersion,
 } from '@/lib/cloudProjects';
@@ -398,16 +399,27 @@ export default function Index() {
 
     const seq = ++saveRequestSeqRef.current;
     const request = saveQueueRef.current.catch(() => undefined).then(async () => {
-      const updatedAt = await upsertCloudProject(projectToSave, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined);
+      let updatedAt: string;
+      let partialSync = false;
+      try {
+        updatedAt = await upsertCloudProject(projectToSave, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined);
+      } catch (error) {
+        if (!(error instanceof CloudProjectPartialSyncError)) throw error;
+        updatedAt = error.updatedAt;
+        partialSync = true;
+        toast.error('O pacote terceirizado foi preservado na obra, mas a sincronização detalhada com a nuvem falhou. Tente salvar novamente mais tarde.');
+      }
       conflictDetectedRef.current = false;
       lastLocalSaveAtRef.current = Date.now();
       currentProjectUpdatedAtRef.current = updatedAt;
       lastSavedProjectJsonRef.current = nextJson;
       setCurrentProjectUpdatedAt(updatedAt);
       setLastCloudConfirmedAt(new Date().toISOString());
-      if (seq === saveRequestSeqRef.current && !saveTimerRef.current) {
+      if (seq === saveRequestSeqRef.current && !saveTimerRef.current && !partialSync) {
         if (!options.retainDraftUntilVerified) clearProjectDraft(projectToSave.id);
         setSaveStatus('saved');
+      } else if (partialSync) {
+        setSaveStatus('error');
       }
       setCloudList(prev => {
         const idx = prev.findIndex(p => p.id === projectToSave.id);

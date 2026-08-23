@@ -168,6 +168,26 @@ export function setCloudSnapshot(projectId: string, project: Project) {
 }
 
 /**
+ * Contratos terceirizados possuem uma cópia de segurança no projeto principal.
+ * A tabela normalizada é usada para consulta e RLS, mas nunca pode apagar um
+ * contrato recém-criado caso a sincronização dela falhe depois do PATCH pai.
+ */
+export function reconcileSubcontracts(
+  backup: Subcontract[] | undefined,
+  normalized: Subcontract[] | null,
+): Subcontract[] | undefined {
+  if (normalized === null) return backup;
+  if (!backup?.length) return normalized;
+  if (normalized.length === 0) return backup;
+
+  const merged = new Map(normalized.map(contract => [contract.id, contract]));
+  // O data_json é gravado no mesmo PATCH que alterou a obra e, por isso,
+  // prevalece quando a tabela normalizada estiver atrasada.
+  backup.forEach(contract => merged.set(contract.id, contract));
+  return [...merged.values()];
+}
+
+/**
  * Serializa a estrutura contratual V2 no mesmo formato das tabelas normalizadas.
  * O payload é consumido pela RPC transacional de criação de obra.
  */
@@ -270,7 +290,7 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
   if (budgetItems !== null) next.budgetItems = budgetItems;
   if (materialComparisons !== null) next.materialComparisons = materialComparisons;
   if (analyticCompositions !== null) next.analyticCompositions = analyticCompositions;
-  if (subcontracts !== null) next.subcontracts = subcontracts;
+  next.subcontracts = reconcileSubcontracts(project.subcontracts, subcontracts);
 
   // ===== Reconstrói phases[] a partir de eap_chapters + tasks =====
   const chapterRows = chRes.error ? null : (chRes.data ?? []);
@@ -375,7 +395,9 @@ export function stripNormalizedCollections(project: Project): Project {
   next.budgetItems = [];
   next.materialComparisons = [];
   next.analyticCompositions = [];
-  next.subcontracts = [];
+  // Contratos terceirizados também ficam no data_json como cópia de segurança.
+  // O volume é pequeno e evita perder um pacote se a tabela normalizada falhar.
+  next.subcontracts = project.subcontracts ?? [];
   // EAP normalizada em eap_chapters/tasks — não persistir mais em data_json.
   next.phases = [];
   return next;

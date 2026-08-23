@@ -56,31 +56,12 @@ export async function loadCloudProject(id: string): Promise<Project | null> {
   return record?.project ?? null;
 }
 
-/**
- * Falha explícita quando o frontend foi publicado antes da migração exigida.
- * Ela deve impedir o PATCH do projeto: salvar primeiro o data_json e falhar
- * depois na coleção normalizada foi a origem de falsos conflitos entre telas.
- */
-export class CloudProjectSchemaError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'CloudProjectSchemaError';
+/** O projeto principal foi salvo, mas uma coleção normalizada ficou pendente. */
+export class CloudProjectPartialSyncError extends Error {
+  constructor(public readonly updatedAt: string, cause: unknown) {
+    super(`A cópia de segurança da obra foi salva, mas a sincronização detalhada falhou: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = 'CloudProjectPartialSyncError';
   }
-}
-
-async function assertSubcontractsSchemaAvailable(project: Project): Promise<void> {
-  // Projetos antigos sem a propriedade continuam compatíveis durante a leitura.
-  if (!Object.prototype.hasOwnProperty.call(project, 'subcontracts')) return;
-  const { error } = await supabase.from('subcontracts').select('id').limit(1);
-  if (!error) return;
-  const missingTable = error.code === 'PGRST205'
-    || /could not find the table|schema cache/i.test(error.message);
-  if (missingTable) {
-    throw new CloudProjectSchemaError(
-      'A atualização de Terceirizados ainda não foi aplicada na nuvem. Nenhuma alteração da obra foi salva.',
-    );
-  }
-  throw error;
 }
 
 /** Consulta leve usada para detectar alterações feitas em outro aparelho. */
@@ -126,10 +107,8 @@ async function getCurrentUserId(): Promise<string | undefined> {
 
 export async function upsertCloudProject(project: Project, organizationId: string, expectedUpdatedAt?: string): Promise<string> {
   const userId = await getCurrentUserId();
-  // Pré-verificação antes do PATCH do pai: evita uma atualização parcial que
-  // incrementa updated_at e é confundida com alteração de outro aparelho.
-  await assertSubcontractsSchemaAvailable(project);
-  // Sincroniza coleções normalizadas em paralelo e remove do payload do JSON.
+  // A cópia dos terceirizados permanece no payload do pai; assim uma falha
+  // posterior da tabela normalizada não consegue apagar o pacote criado.
   const slim = stripNormalizedCollections(project);
 
   if (expectedUpdatedAt) {
@@ -146,7 +125,12 @@ export async function upsertCloudProject(project: Project, organizationId: strin
       .maybeSingle();
     if (error) throw error;
     if (!data) throw new CloudProjectConflictError();
-    await syncCollectionsToCloud(project, userId);
+    try {
+      await syncCollectionsToCloud(project, userId);
+    } catch (syncError) {
+      clearCloudSnapshot(project.id);
+      throw new CloudProjectPartialSyncError(data.updated_at, syncError);
+    }
     return data.updated_at;
   }
 
@@ -205,8 +189,12 @@ export async function upsertCloudProject(project: Project, organizationId: strin
       if (rollback.error) {
         throw new Error(`A importacao falhou e a obra incompleta nao pode ser removida automaticamente: ${rollback.error.message}`);
       }
+      // Em uma criação inicial, o rollback também removeu a cópia de segurança
+      // do projeto. Portanto, essa falha ainda é integral e deve ser reportada
+      // como tal, sem induzir a interface a afirmar que há recuperação.
+      throw syncError;
     }
-    throw syncError;
+    throw new CloudProjectPartialSyncError(data.updated_at, syncError);
   }
 }
 
