@@ -556,6 +556,56 @@ export type Database = {
         }
         Relationships: []
       }
+      subcontracts: {
+        Row: {
+          contract_date: string | null
+          contracted_value: number | null
+          contractor_name: string | null
+          created_at: string
+          created_by: string | null
+          data: Json
+          id: string
+          name: string | null
+          project_id: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          contract_date?: string | null
+          contracted_value?: number | null
+          contractor_name?: string | null
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id: string
+          name?: string | null
+          project_id: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          contract_date?: string | null
+          contracted_value?: number | null
+          contractor_name?: string | null
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id?: string
+          name?: string | null
+          project_id?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "subcontracts_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       task_daily_logs: {
         Row: {
           created_at: string
