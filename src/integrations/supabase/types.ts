@@ -83,12 +83,6 @@ export type Database = {
         }
         Relationships: []
       }
-      subcontracts: {
-        Row: { id: string; project_id: string; name: string | null; contractor_name: string | null; status: string | null; contract_date: string | null; contracted_value: number | null; data: Json; created_by: string | null; created_at: string; updated_at: string }
-        Insert: { id: string; project_id: string; name?: string | null; contractor_name?: string | null; status?: string | null; contract_date?: string | null; contracted_value?: number | null; data?: Json; created_by?: string | null; created_at?: string; updated_at?: string }
-        Update: { id?: string; project_id?: string; name?: string | null; contractor_name?: string | null; status?: string | null; contract_date?: string | null; contracted_value?: number | null; data?: Json; created_by?: string | null; created_at?: string; updated_at?: string }
-        Relationships: []
-      }
       audit_logs: {
         Row: {
           action: string | null
@@ -561,6 +555,56 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      subcontracts: {
+        Row: {
+          contract_date: string | null
+          contracted_value: number | null
+          contractor_name: string | null
+          created_at: string
+          created_by: string | null
+          data: Json
+          id: string
+          name: string | null
+          project_id: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          contract_date?: string | null
+          contracted_value?: number | null
+          contractor_name?: string | null
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id: string
+          name?: string | null
+          project_id: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          contract_date?: string | null
+          contracted_value?: number | null
+          contractor_name?: string | null
+          created_at?: string
+          created_by?: string | null
+          data?: Json
+          id?: string
+          name?: string | null
+          project_id?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "subcontracts_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       task_daily_logs: {
         Row: {
