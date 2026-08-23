@@ -111,4 +111,20 @@ describe('SubcontractsTab', () => {
     expect(screen.getByLabelText('Valor do pagamento')).toBeInTheDocument();
     expect(screen.getByLabelText('Observação do pagamento')).toHaveAttribute('placeholder', expect.stringMatching(/descreva o serviço/i));
   });
+
+  it('altera atividades, recalcula o rateio atual e registra o motivo da revisão', () => {
+    const onProjectChange = vi.fn();
+    render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={onProjectChange} />);
+    fireEvent.click(screen.getByRole('button', { name: /alterar atividades/i }));
+    fireEvent.click(screen.getByLabelText('Selecionar item 3.3.1'));
+    fireEvent.click(screen.getByLabelText('Selecionar item 3.3.2'));
+    fireEvent.change(screen.getByLabelText('Motivo da alteração do contrato'), { target: { value: 'Troca de frente de serviço' } });
+    fireEvent.click(screen.getByRole('button', { name: /aplicar alteração/i }));
+
+    const nextProject = onProjectChange.mock.calls[0][0] as Project;
+    const nextContract = nextProject.subcontracts?.[0];
+    expect(nextContract?.items.map(item => item.compositionId)).toEqual(['b']);
+    expect(nextContract?.amendments?.[0].reason).toBe('Troca de frente de serviço');
+    expect(nextContract?.amendments?.[0].previousItems.map(item => item.compositionId)).toEqual(['a']);
+  });
 });

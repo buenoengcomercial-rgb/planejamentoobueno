@@ -381,11 +381,25 @@ export interface SubcontractPayment {
   date: string;
   amount: number;
   notes?: string;
+  /** Rateio congelado no momento do pagamento; revisões posteriores do pacote não o redistribuem. */
+  allocations?: Array<{ allocationId: string; amount: number }>;
   createdAt: string;
   createdBy?: string;
   reversedAt?: string;
   reversedBy?: string;
   reversalReason?: string;
+}
+
+export interface SubcontractAmendment {
+  id: string;
+  date: string;
+  reason: string;
+  previousContractedValue: number;
+  nextContractedValue: number;
+  previousItems: SubcontractItemAllocation[];
+  nextItems: SubcontractItemAllocation[];
+  createdAt: string;
+  createdBy?: string;
 }
 
 export interface Subcontract {
@@ -398,6 +412,7 @@ export interface Subcontract {
   status: SubcontractStatus;
   items: SubcontractItemAllocation[];
   payments: SubcontractPayment[];
+  amendments?: SubcontractAmendment[];
   contractedAt?: string;
   contractedBy?: string;
   cancelledAt?: string;

@@ -39,10 +39,24 @@ export function subcontractBalance(subcontract: Subcontract) {
 
 export function allocatedPaymentValue(subcontract: Subcontract, allocation: SubcontractItemAllocation) {
   return activePayments(subcontract.payments).reduce((sum, payment) => {
+    const frozen = payment.allocations?.find(item => item.allocationId === allocation.id);
+    if (frozen) return sum + (Number(frozen.amount) || 0);
     const allocations = allocateSubcontractValue(Number(payment.amount) || 0, subcontract.items);
     const current = allocations.find(item => item.id === allocation.id);
     return sum + (current?.allocatedAmount ?? 0);
   }, 0);
+}
+
+/** Congela os pagamentos legados antes de uma revisão para que o rateio histórico não mude. */
+export function freezeSubcontractPayments(subcontract: Subcontract): Subcontract['payments'] {
+  return subcontract.payments.map(payment => {
+    if (payment.allocations) return payment;
+    return {
+      ...payment,
+      allocations: allocateSubcontractValue(Number(payment.amount) || 0, subcontract.items)
+        .map(item => ({ allocationId: item.id, amount: item.allocatedAmount })),
+    };
+  });
 }
 
 /** Total físico já apontado para uma composição terceirizada em todos os diários.
