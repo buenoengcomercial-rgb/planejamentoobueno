@@ -52,6 +52,8 @@ describe('SubcontractsTab', () => {
     expect(card).not.toBeNull();
     expect(card).toHaveTextContent('Prestador');
     expect(card).toHaveTextContent('Serviço já terceirizado');
+    expect(card).toHaveTextContent('M.O. SINAPI');
+    expect(card).toHaveTextContent('Economia');
     expect(container.querySelectorAll('table')).toHaveLength(1);
     expect(screen.getByRole('columnheader', { name: 'M.O. unit. SINAPI' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Contrato unit.' })).toBeInTheDocument();
