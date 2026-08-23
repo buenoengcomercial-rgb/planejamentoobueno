@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import GanttChart from './GanttChart';
@@ -137,26 +137,26 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     );
 
     expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent(
-      'ATIVIDADE AGUARDANDO CONTRATAÇÃO DE ADITIVO',
+      'Aguardando aditivo',
     );
     expect(screen.queryByTestId('gantt-bar-suspended-1d')).not.toBeInTheDocument();
-    expect(screen.getByTestId('gantt-status-only-suppressed-1d')).toHaveTextContent('ITEM SUPRIMIDO - QUANTIDADE A EXECUTAR: 0');
+    expect(screen.getByTestId('gantt-status-only-suppressed-1d')).toHaveTextContent('Item suprimido');
     expect(screen.queryByTestId('gantt-bar-suppressed-1d')).not.toBeInTheDocument();
-    expect(screen.getByTestId('gantt-status-only-dependency-1d')).toHaveTextContent('depende de Tarefa suspensa de um dia');
+    expect(screen.getByTestId('gantt-status-only-dependency-1d')).toHaveTextContent('Aguardando aditivo');
     expect(screen.queryByTestId('gantt-bar-dependency-1d')).not.toBeInTheDocument();
-    expect(screen.getByTestId('gantt-proposed-label-scheduled-new')).toHaveTextContent('A CONTRATAR - EXECUÇÃO NÃO AUTORIZADA');
-    expect(screen.getByTestId('gantt-proposed-label-scheduled-new-long')).toHaveTextContent('A CONTRATAR - EXECUÇÃO NÃO AUTORIZADA');
+    expect(screen.getByTestId('gantt-proposed-label-scheduled-new')).toHaveTextContent('Aguardando contratação');
+    expect(screen.getByTestId('gantt-proposed-label-scheduled-new-long')).toHaveTextContent('Aguardando contratação');
     expect(screen.queryByTestId('gantt-bar-scheduled-new')).not.toBeInTheDocument();
     expect(screen.queryByTestId('gantt-bar-scheduled-new-long')).not.toBeInTheDocument();
     expect(screen.getByTestId('gantt-bar-partial-existing')).toBeInTheDocument();
     expect(screen.getByTestId('gantt-quantity-limited-partial-existing')).toHaveTextContent('EXECUTAR: 10 UN CONTRATADAS');
 
     fireEvent.click(screen.getByRole('button', { name: 'Dias' }));
-    expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('ATIVIDADE AGUARDANDO CONTRATAÇÃO DE ADITIVO');
+    expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('Aguardando aditivo');
     expect(screen.getByTestId('gantt-proposed-label-scheduled-new')).toBeInTheDocument();
     expect(screen.getByTestId('gantt-proposed-label-scheduled-new-long')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Meses' }));
-    expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('ATIVIDADE AGUARDANDO CONTRATAÇÃO DE ADITIVO');
+    expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('Aguardando aditivo');
     expect(screen.getByTestId('gantt-proposed-label-scheduled-new')).toBeInTheDocument();
     expect(screen.getByTestId('gantt-proposed-label-scheduled-new-long')).toBeInTheDocument();
   });
@@ -166,9 +166,9 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     expect(screen.getByText('Tarefa suspensa de um dia')).toBeInTheDocument();
     expect(screen.getByText('Tarefa suprimida')).toBeInTheDocument();
     expect(screen.getByText('Tarefa dependente de aditivo')).toBeInTheDocument();
-    expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('ATIVIDADE AGUARDANDO CONTRATAÇÃO DE ADITIVO');
-    expect(screen.getByTestId('gantt-status-only-suppressed-1d')).toHaveTextContent('ITEM SUPRIMIDO - QUANTIDADE A EXECUTAR: 0');
-    expect(screen.getByTestId('gantt-status-only-dependency-1d')).toHaveTextContent('depende de Tarefa suspensa de um dia');
+    expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('Aguardando aditivo');
+    expect(screen.getByTestId('gantt-status-only-suppressed-1d')).toHaveTextContent('Item suprimido');
+    expect(screen.getByTestId('gantt-status-only-dependency-1d')).toHaveTextContent('Aguardando aditivo');
     expect(screen.queryByTestId('gantt-bar-suspended-1d')).not.toBeInTheDocument();
     expect(screen.queryByTestId('gantt-bar-suppressed-1d')).not.toBeInTheDocument();
     expect(screen.queryByTestId('gantt-bar-dependency-1d')).not.toBeInTheDocument();
@@ -379,7 +379,8 @@ describe('GanttChart no Cronograma do Aditivo', () => {
       const onProjectChange = vi.fn();
       render(<GanttChart project={dependencyProject} context={context} onProjectChange={onProjectChange} />);
 
-      const successorDependencyInput = screen.getAllByTitle('Nº da tarefa predecessora (ex: 3, 7)')[1];
+      fireEvent.click(screen.getByRole('button', { name: 'Detalhes da tarefa #2' }));
+      const successorDependencyInput = screen.getByTitle('Nº da tarefa predecessora (ex: 3, 7)');
       fireEvent.change(successorDependencyInput, { target: { value: '1' } });
       fireEvent.blur(successorDependencyInput);
 
@@ -419,6 +420,7 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     const onProjectChange = vi.fn();
     render(<GanttChart project={dependencyProject} context="additive-preview" onProjectChange={onProjectChange} />);
 
+    fireEvent.click(screen.getByRole('button', { name: 'Detalhes da tarefa #3' }));
     const editor = screen.getByTestId('gantt-dependency-types-successor') as HTMLSelectElement;
     expect(editor).toHaveValue('__multiple__');
     expect(editor.querySelectorAll('optgroup')).toHaveLength(2);
@@ -436,7 +438,7 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     });
   });
 
-  it('confirma a dependência com as setas e move o foco para o campo vertical seguinte', async () => {
+  it('confirma a dependência no detalhe operacional', async () => {
     const keyboardProject: Project = {
       ...project,
       id: 'gantt-dependency-keyboard',
@@ -456,11 +458,12 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     };
     const onProjectChange = vi.fn();
     render(<GanttChart project={keyboardProject} context="additive-preview" onProjectChange={onProjectChange} />);
-    const inputs = screen.getAllByTitle('Nº da tarefa predecessora (ex: 3, 7)') as HTMLInputElement[];
+    fireEvent.click(screen.getByRole('button', { name: 'Detalhes da tarefa #2' }));
+    const input = screen.getByTitle('Nº da tarefa predecessora (ex: 3, 7)') as HTMLInputElement;
 
-    inputs[1].focus();
-    fireEvent.change(inputs[1], { target: { value: '1' } });
-    fireEvent.keyDown(inputs[1], { key: 'ArrowDown' });
+    input.focus();
+    fireEvent.change(input, { target: { value: '1' } });
+    fireEvent.blur(input);
 
     expect(onProjectChange).toHaveBeenCalledTimes(1);
     expect((onProjectChange.mock.calls[0][0] as Project).phases[0].tasks[1]).toMatchObject({
@@ -468,10 +471,6 @@ describe('GanttChart no Cronograma do Aditivo', () => {
       dependencies: ['keyboard-a'],
       dependencyDetails: [{ taskId: 'keyboard-a', type: 'TI' }],
     });
-    await waitFor(() => expect(inputs[2]).toHaveFocus());
-
-    fireEvent.keyDown(inputs[2], { key: 'ArrowUp' });
-    await waitFor(() => expect(inputs[1]).toHaveFocus());
     expect(onProjectChange).toHaveBeenCalledTimes(1);
   });
 });
