@@ -46,14 +46,19 @@ describe('SubcontractsTab', () => {
     expect(chapter.indeterminate).toBe(true);
   });
 
-  it('mostra o cabeçalho do contrato antes dos seus itens, sem tabela global separada', () => {
+  it('mantém os itens recolhidos e mostra o cabeçalho do contrato antes deles', () => {
     const { container } = render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
     const card = screen.getByText('Pacote A').closest('[class*=overflow-hidden]');
     expect(card).not.toBeNull();
     expect(card).toHaveTextContent('Prestador');
-    expect(card).toHaveTextContent('Serviço já terceirizado');
     expect(card).toHaveTextContent('M.O. SINAPI');
     expect(card).toHaveTextContent('Economia');
+    expect(screen.getByRole('button', { name: /visualizar itens contratados/i })).toHaveAttribute('aria-expanded', 'false');
+    expect(container.querySelectorAll('table')).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /visualizar itens contratados/i }));
+    expect(card).toHaveTextContent('Serviço já terceirizado');
+    expect(screen.getByRole('button', { name: /ocultar itens contratados/i })).toHaveAttribute('aria-expanded', 'true');
     expect(container.querySelectorAll('table')).toHaveLength(1);
     expect(screen.getByRole('columnheader', { name: 'Referência SINAPI' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Contrato terceirizado' })).toBeInTheDocument();
@@ -65,6 +70,7 @@ describe('SubcontractsTab', () => {
 
   it('separa visualmente referência SINAPI, execução e contrato', () => {
     render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /visualizar itens contratados/i }));
     expect(screen.getByText('Referência SINAPI')).toHaveClass('bg-sky-100/70');
     expect(screen.getByText('Execução')).toHaveClass('bg-muted/70');
     expect(screen.getByText('Contrato terceirizado')).toHaveClass('bg-emerald-100/70');
@@ -81,6 +87,7 @@ describe('SubcontractsTab', () => {
     };
     rows[2].quantityFinal = 0;
     render(<SubcontractsTab project={project} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /visualizar itens contratados/i }));
     expect(screen.getAllByText('Sem base física para pagamento unitário.')).toHaveLength(2);
     rows[2].quantityFinal = 30;
   });
