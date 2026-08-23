@@ -693,7 +693,7 @@ export default function Index() {
       'warehouse_movements', 'warehouse_requisitions', 'warehouse_custody',
       'daily_reports', 'task_daily_logs', 'measurements', 'additives', 'audit_logs',
       'stock_movements', 'material_price_history', 'budget_items', 'material_comparisons',
-      'analytic_compositions', 'eap_chapters', 'tasks',
+      'analytic_compositions', 'subcontracts', 'eap_chapters', 'tasks',
     ] as const;
     normalizedTables.forEach(table => {
       channel.on('postgres_changes', {

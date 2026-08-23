@@ -56,6 +56,33 @@ export async function loadCloudProject(id: string): Promise<Project | null> {
   return record?.project ?? null;
 }
 
+/**
+ * Falha explícita quando o frontend foi publicado antes da migração exigida.
+ * Ela deve impedir o PATCH do projeto: salvar primeiro o data_json e falhar
+ * depois na coleção normalizada foi a origem de falsos conflitos entre telas.
+ */
+export class CloudProjectSchemaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CloudProjectSchemaError';
+  }
+}
+
+async function assertSubcontractsSchemaAvailable(project: Project): Promise<void> {
+  // Projetos antigos sem a propriedade continuam compatíveis durante a leitura.
+  if (!Object.prototype.hasOwnProperty.call(project, 'subcontracts')) return;
+  const { error } = await supabase.from('subcontracts').select('id').limit(1);
+  if (!error) return;
+  const missingTable = error.code === 'PGRST205'
+    || /could not find the table|schema cache/i.test(error.message);
+  if (missingTable) {
+    throw new CloudProjectSchemaError(
+      'A atualização de Terceirizados ainda não foi aplicada na nuvem. Nenhuma alteração da obra foi salva.',
+    );
+  }
+  throw error;
+}
+
 /** Consulta leve usada para detectar alterações feitas em outro aparelho. */
 export async function getCloudProjectVersion(id: string): Promise<CloudProjectVersion | null> {
   const { data, error } = await supabase
@@ -99,6 +126,9 @@ async function getCurrentUserId(): Promise<string | undefined> {
 
 export async function upsertCloudProject(project: Project, organizationId: string, expectedUpdatedAt?: string): Promise<string> {
   const userId = await getCurrentUserId();
+  // Pré-verificação antes do PATCH do pai: evita uma atualização parcial que
+  // incrementa updated_at e é confundida com alteração de outro aparelho.
+  await assertSubcontractsSchemaAvailable(project);
   // Sincroniza coleções normalizadas em paralelo e remove do payload do JSON.
   const slim = stripNormalizedCollections(project);
 
