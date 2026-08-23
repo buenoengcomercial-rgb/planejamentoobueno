@@ -397,7 +397,12 @@ export default function GanttChart({
     ? (density === 'compact' ? 34 : 40)
     : density === 'compact' ? 24 : ROW_HEIGHT;
   const phaseHeaderHeight = taskRowHeight + (density === 'compact' ? 16 : 20);
-  const taskSubHeaderHeight = density === 'compact' ? 16 : 18;
+  // O subtítulo repete as colunas da tabela. Uma altura um pouco maior evita
+  // que "Descrição", "Início" e "Fim" pareçam sobrepostos em telas densas.
+  const taskSubHeaderHeight = density === 'compact' ? 22 : 24;
+  // A descrição pode ocupar duas linhas. Esta base é usada também do lado das
+  // barras para que a régua do Gantt continue na mesma linha visual.
+  const descriptionRowHeight = density === 'compact' ? 40 : 44;
   const getTaskRowHeight = useCallback((task: Task) => {
     const hasActualProgress = (task.dailyLogs || []).some(log => (log.actualQuantity ?? 0) > 0);
     const hasActualDates = hasActualProgress && !!task.current?.startDate;
@@ -406,9 +411,9 @@ export default function GanttChart({
 
     // Datas real/prevista, produção real e a origem no aditivo ocupam linhas
     // adicionais. A altura precisa ser a mesma na tabela e na área das barras.
-    if (!hasActualDates && !hasTwoLineProduction && !hasScheduleLabel) return taskRowHeight;
-    return Math.max(taskRowHeight, density === 'compact' ? 52 : 56);
-  }, [density, isTaskScheduleLocked, taskRowHeight]);
+    if (!hasActualDates && !hasTwoLineProduction && !hasScheduleLabel) return descriptionRowHeight;
+    return Math.max(descriptionRowHeight, density === 'compact' ? 56 : 60);
+  }, [density, descriptionRowHeight, isTaskScheduleLocked]);
   const chartWidth = useMemo(() => totalDays * dayWidth, [totalDays, dayWidth]);
 
   const todayOffset = diffDays(projectStart, today);
@@ -1208,7 +1213,9 @@ export default function GanttChart({
   }, [obraConfig]);
 
   const showSuspensionColumn = context === 'additive-preview';
-  const sidebarCols = `${showSuspensionColumn ? '46px ' : ''}24px 1fr 88px 88px 44px 22px 60px 60px 52px 48px 56px`;
+  // Datas continuam legíveis, mas a descrição recebe o espaço predominante.
+  // A mesma grade é aplicada ao cabeçalho, às linhas e aos dois cronogramas.
+  const sidebarCols = `${showSuspensionColumn ? '42px ' : ''}22px minmax(210px, 1fr) 76px 76px 38px 22px 52px 56px 42px 40px 52px`;
   const sidebarWidth = showSuspensionColumn ? 806 : 760;
 
   // Toggle duration mode and recalculate if switching to RUP
@@ -1951,7 +1958,7 @@ export default function GanttChart({
               >
                 {showSuspensionColumn && <span className="text-[8px] font-semibold text-muted-foreground uppercase text-center" title="Serviço suspenso por aditivo">Susp.</span>}
                 <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-center">#</span>
-                <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider pl-1">Tarefa</span>
+                <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider pl-1">Descrição</span>
                 <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-center">Início</span>
                 <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-center">Fim</span>
                 <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-center" title="Duração em dias">Dur.</span>
@@ -2073,7 +2080,7 @@ export default function GanttChart({
                       >
                         {showSuspensionColumn && <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase text-center">Susp.</span>}
                         <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center">#</span>
-                        <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider pl-1">Descrição</span>
+                        <span className="text-[9px] font-semibold text-muted-foreground/80 uppercase tracking-wider pl-1">Descrição</span>
                         <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center">Início</span>
                         <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center">Fim</span>
                         <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center" title="Duração em dias">Dur.</span>
@@ -2204,7 +2211,12 @@ export default function GanttChart({
                                 <div className="min-w-0 flex-1">
                                   <Tooltip>
                                     <TooltipTrigger asChild>
-                                      <p className={`truncate text-[11px] font-medium leading-tight ${rowTeamDef ? '' : 'text-foreground'}`}>{task.name}</p>
+                                      <p
+                                        data-testid={`gantt-task-description-${task.id}`}
+                                        className={`line-clamp-2 break-words text-[11px] font-medium leading-tight ${rowTeamDef ? '' : 'text-foreground'}`}
+                                      >
+                                        {task.name}
+                                      </p>
                                     </TooltipTrigger>
                                     <TooltipContent side="top" className="max-w-md whitespace-normal break-words text-xs">
                                       {task.name}

@@ -221,11 +221,20 @@ describe('GanttChart no Cronograma do Aditivo', () => {
       />,
     );
 
-    expect(screen.getByTestId('gantt-sidebar-row-partial-existing')).toHaveStyle({ height: '56px' });
-    expect(screen.getByTestId('gantt-chart-row-partial-existing')).toHaveStyle({ height: '56px' });
-    expect(screen.getByTestId('gantt-bar-partial-existing')).toHaveStyle({ top: '18px' });
-    expect(screen.getByTestId('gantt-sidebar-row-scheduled-new')).toHaveStyle({ height: '32px' });
-    expect(screen.getByTestId('gantt-chart-row-scheduled-new')).toHaveStyle({ height: '32px' });
+    expect(screen.getByTestId('gantt-sidebar-row-partial-existing')).toHaveStyle({ height: '60px' });
+    expect(screen.getByTestId('gantt-chart-row-partial-existing')).toHaveStyle({ height: '60px' });
+    expect(screen.getByTestId('gantt-bar-partial-existing')).toHaveStyle({ top: '20px' });
+    expect(screen.getByTestId('gantt-sidebar-row-scheduled-new')).toHaveStyle({ height: '44px' });
+    expect(screen.getByTestId('gantt-chart-row-scheduled-new')).toHaveStyle({ height: '44px' });
+  });
+
+  it('alinha os cabeçalhos e limita a descrição a duas linhas', () => {
+    render(<GanttChart project={project} context="official" readOnly />);
+
+    expect(screen.getAllByText('Descrição').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Início').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Fim').length).toBeGreaterThan(0);
+    expect(screen.getByTestId('gantt-task-description-scheduled-new-long')).toHaveClass('line-clamp-2');
   });
 
   it('mostra os valores da previsão financeira dentro das colunas mensais', () => {
