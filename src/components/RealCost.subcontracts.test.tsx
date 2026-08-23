@@ -4,9 +4,9 @@ import { SubcontractsTab } from './RealCost';
 import type { Project } from '@/types/project';
 
 const rows = [
-  { id: 'a', item: '3.3.1', description: 'Serviço já terceirizado', chapter: '3 Incêndio', laborCost: 100 },
-  { id: 'b', item: '3.3.2', description: 'Serviço disponível', chapter: '3 Incêndio', laborCost: 200 },
-  { id: 'c', item: '3.3.3', description: 'Outro serviço disponível', chapter: '3 Incêndio', laborCost: 300 },
+  { id: 'a', item: '3.3.1', description: 'Serviço já terceirizado', chapter: '3 Incêndio', laborCost: 100, quantityFinal: 10, unit: 'm' },
+  { id: 'b', item: '3.3.2', description: 'Serviço disponível', chapter: '3 Incêndio', laborCost: 200, quantityFinal: 20, unit: 'm' },
+  { id: 'c', item: '3.3.3', description: 'Outro serviço disponível', chapter: '3 Incêndio', laborCost: 300, quantityFinal: 30, unit: 'm' },
 ] as any[];
 
 const analysis = {
@@ -53,5 +53,22 @@ describe('SubcontractsTab', () => {
     expect(card).toHaveTextContent('Prestador');
     expect(card).toHaveTextContent('Serviço já terceirizado');
     expect(container.querySelectorAll('table')).toHaveLength(1);
+    expect(screen.getByRole('columnheader', { name: 'M.O. unit. SINAPI' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Contrato unit.' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Capítulo' })).not.toBeInTheDocument();
+    expect(card).toHaveTextContent(/R\$\s*10,00/);
+  });
+
+  it('não inventa valor unitário quando a quantidade final é zero', () => {
+    const project = projectWithContract();
+    project.subcontracts![0] = {
+      ...project.subcontracts![0],
+      contractedValue: 50,
+      items: [{ id: 'zero', compositionId: 'c', item: '3.3.3', description: 'Outro serviço disponível', unit: 'm', referenceLaborCost: 300, allocationPercent: 100, contractedAmount: 50 }],
+    };
+    rows[2].quantityFinal = 0;
+    render(<SubcontractsTab project={project} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
+    expect(screen.getAllByText('Sem base física para pagamento unitário.')).toHaveLength(2);
+    rows[2].quantityFinal = 30;
   });
 });
