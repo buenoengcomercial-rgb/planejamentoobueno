@@ -83,12 +83,6 @@ export type Database = {
         }
         Relationships: []
       }
-      subcontracts: {
-        Row: { id: string; project_id: string; name: string | null; contractor_name: string | null; status: string | null; contract_date: string | null; contracted_value: number | null; data: Json; created_by: string | null; created_at: string; updated_at: string }
-        Insert: { id: string; project_id: string; name?: string | null; contractor_name?: string | null; status?: string | null; contract_date?: string | null; contracted_value?: number | null; data?: Json; created_by?: string | null; created_at?: string; updated_at?: string }
-        Update: { id?: string; project_id?: string; name?: string | null; contractor_name?: string | null; status?: string | null; contract_date?: string | null; contracted_value?: number | null; data?: Json; created_by?: string | null; created_at?: string; updated_at?: string }
-        Relationships: []
-      }
       audit_logs: {
         Row: {
           action: string | null
