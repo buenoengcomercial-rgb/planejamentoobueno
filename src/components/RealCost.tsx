@@ -469,31 +469,17 @@ export function SubcontractsTab({ project, analysis, canManage, auditActor, onPr
       .filter(contract => contract.status !== 'cancelled')
       .flatMap(contract => contract.items.map(item => [item.compositionId, contract.name] as const)),
   ), [project.subcontracts]);
-  const blockedTaskBy = useMemo(() => new Map(
-    (project.subcontracts ?? [])
-      .filter(contract => contract.status !== 'cancelled')
-      .flatMap(contract => contract.items.flatMap(item => {
-        const taskId = item.taskId ?? compositionById.get(item.compositionId)?.taskId;
-        return taskId ? [[taskId, contract.name] as const] : [];
-      })),
-  ), [project.subcontracts, compositionById]);
-  const activeAllocationCountByTask = useMemo(() => {
-    const counts = new Map<string, number>();
-    (project.subcontracts ?? []).filter(contract => contract.status === 'contracted').forEach(contract => contract.items.forEach(item => {
-      const taskId = item.taskId ?? compositionById.get(item.compositionId)?.taskId;
-      if (taskId) counts.set(taskId, (counts.get(taskId) ?? 0) + 1);
-    }));
-    return counts;
-  }, [project.subcontracts, compositionById]);
   const executionForAllocation = (allocation: Subcontract['items'][number], quantity: number) => {
-    const taskId = allocation.taskId ?? compositionById.get(allocation.compositionId)?.taskId;
-    return taskId && activeAllocationCountByTask.get(taskId) === 1
+    // O taskId salvo é histórico; a hierarquia atual da composição é a fonte
+    // de verdade e impede que código/descrição repetidos misturem produções.
+    const taskId = compositionById.get(allocation.compositionId)?.taskId;
+    return taskId
       ? Math.min(Math.max(0, quantity), subcontractExecutedQuantity(project, allocation.id, taskId))
       : 0;
   };
   const selectableRows = useMemo(
-    () => analysis.compositions.filter(row => row.laborCost > 0 && !blockedBy.has(row.id) && (!row.taskId || !blockedTaskBy.has(row.taskId))),
-    [analysis.compositions, blockedBy, blockedTaskBy],
+    () => analysis.compositions.filter(row => row.laborCost > 0 && !blockedBy.has(row.id)),
+    [analysis.compositions, blockedBy],
   );
   const selectableIds = useMemo(() => new Set(selectableRows.map(row => row.id)), [selectableRows]);
   const selectedRows = analysis.compositions.filter(row => selected.includes(row.id));
@@ -505,16 +491,7 @@ export function SubcontractsTab({ project, analysis, canManage, auditActor, onPr
     if (ids.length === 0) return;
     setSelected(current => {
       if (ids.every(id => current.includes(id))) return current.filter(id => !ids.includes(id));
-      const occupiedTaskIds = new Set(analysis.compositions.filter(row => current.includes(row.id)).map(row => row.taskId).filter(Boolean));
-      const additions = ids.filter(id => {
-        const taskId = compositionById.get(id)?.taskId;
-        if (!taskId || !occupiedTaskIds.has(taskId)) {
-          if (taskId) occupiedTaskIds.add(taskId);
-          return true;
-        }
-        return false;
-      });
-      return [...new Set([...current, ...additions])];
+      return [...new Set([...current, ...ids])];
     });
   };
   const groupRows = (group: RealCostGroupNode): RealCostCompositionRow[] => [
@@ -557,11 +534,11 @@ export function SubcontractsTab({ project, analysis, canManage, auditActor, onPr
       </div>
       {!collapsed && <>
         {displayedRows.map(row => {
-          const blockedName = blockedBy.get(row.id) ?? (row.taskId ? blockedTaskBy.get(row.taskId) : undefined);
+          const blockedName = blockedBy.get(row.id);
           const isSelected = selected.includes(row.id);
           return <label key={row.id} className="flex cursor-pointer items-start gap-2 border-t px-3 py-2 text-xs hover:bg-muted/30" style={{ paddingLeft: `${44 + group.depth * 12}px` }}>
             <Checkbox checked={isSelected} disabled={Boolean(blockedName)} onChange={() => setRowsSelected([row])} label={`Selecionar item ${row.item}`} />
-            <span className="min-w-0 flex-1"><span className="font-mono font-semibold">{row.item}</span><span className="ml-2">{row.description}</span>{blockedName && <span className="mt-1 block text-[10px] text-muted-foreground">Tarefa já vinculada ao pacote: {blockedName}</span>}</span>
+            <span className="min-w-0 flex-1"><span className="font-mono font-semibold">{row.item}</span><span className="ml-2">{row.description}</span>{blockedName && <span className="mt-1 block text-[10px] text-muted-foreground">Composição já vinculada ao pacote: {blockedName}</span>}{!blockedName && !row.taskId && <span className="mt-1 block text-[10px] text-warning">Sem tarefa individual com esta hierarquia.</span>}</span>
             <span className="shrink-0 text-right tabular-nums">{fmtBRL(row.laborCost)}</span>
           </label>;
         })}
@@ -584,8 +561,8 @@ export function SubcontractsTab({ project, analysis, canManage, auditActor, onPr
       const producedValue = roundMoney(contract.items.reduce((sum, allocation) => {
         const row = compositionById.get(allocation.compositionId);
         const quantity = allocation.contractedQuantity ?? row?.quantityFinal ?? 0;
-        const taskId = allocation.taskId ?? row?.taskId;
-        const executed = taskId && activeAllocationCountByTask.get(taskId) === 1
+        const taskId = row?.taskId;
+        const executed = taskId
           ? Math.min(Math.max(0, quantity), subcontractExecutedQuantity(project, allocation.id, taskId))
           : 0;
         return sum + (quantity > 0 ? allocation.contractedAmount * executed / quantity : 0);
@@ -616,14 +593,14 @@ export function SubcontractsTab({ project, analysis, canManage, auditActor, onPr
               </tr>
             </thead>
             <tbody>{contract.items.map(allocation => {
-              const row = compositionById.get(allocation.compositionId); const reference = row?.laborCost ?? allocation.referenceLaborCost; const quantity = allocation.contractedQuantity ?? row?.quantityFinal; const hasQuantity = Number.isFinite(quantity) && (quantity ?? 0) > 0; const taskId = allocation.taskId ?? row?.taskId; const linkedUniquely = !!taskId && activeAllocationCountByTask.get(taskId) === 1; const executed = hasQuantity && linkedUniquely ? Math.min(quantity ?? 0, subcontractExecutedQuantity(project, allocation.id, taskId)) : 0; const laborUnit = hasQuantity ? reference / (quantity ?? 1) : null; const contractUnit = hasQuantity ? allocation.contractedAmount / (quantity ?? 1) : null; const produced = contractUnit === null ? 0 : roundMoney(executed * contractUnit);
-              return <tr key={allocation.id} className="border-t"><td className="p-2 align-top font-mono">{allocation.item}<br/><span className="text-muted-foreground">{allocation.code || '-'}</span></td><td className="p-2 align-top">{allocation.description}{!hasQuantity && <p className="mt-1 text-[10px] text-warning">Sem base física para pagamento unitário.</p>}{!linkedUniquely && <p className="mt-1 text-[10px] text-warning">Pendência de reconciliação: vínculo de tarefa ausente ou duplicado.</p>}{row?.subcontract?.reconciliationIssue && <p className="mt-1 text-[10px] text-warning">Revisar vínculo/Analítica</p>}</td><td className="p-2 text-center">{row?.unit || allocation.unit}</td><td className="p-2 text-right tabular-nums">{hasQuantity ? fmtQty(quantity ?? 0) : '—'}</td><td className="bg-sky-50/50 p-2 text-right tabular-nums dark:bg-sky-950/10">{laborUnit === null ? '—' : fmtBRL(laborUnit)}</td><td className="bg-sky-50/50 p-2 text-right tabular-nums dark:bg-sky-950/10">{fmtBRL(reference)}</td><td className="bg-muted/25 p-2 text-right tabular-nums">{hasQuantity ? fmtQty(executed) : '—'}</td><td className="bg-muted/25 p-2 text-right tabular-nums text-primary">{fmtBRL(produced)}</td><td className="bg-emerald-50/50 p-2 text-right tabular-nums dark:bg-emerald-950/10">{contractUnit === null ? '—' : fmtBRL(contractUnit)}</td><td className="bg-emerald-50/50 p-2 text-right font-semibold tabular-nums dark:bg-emerald-950/10">{fmtBRL(allocation.contractedAmount)}</td></tr>;
+              const row = compositionById.get(allocation.compositionId); const reference = row?.laborCost ?? allocation.referenceLaborCost; const quantity = allocation.contractedQuantity ?? row?.quantityFinal; const hasQuantity = Number.isFinite(quantity) && (quantity ?? 0) > 0; const taskId = row?.taskId; const executed = hasQuantity && taskId ? Math.min(quantity ?? 0, subcontractExecutedQuantity(project, allocation.id, taskId)) : 0; const laborUnit = hasQuantity ? reference / (quantity ?? 1) : null; const contractUnit = hasQuantity ? allocation.contractedAmount / (quantity ?? 1) : null; const produced = contractUnit === null ? 0 : roundMoney(executed * contractUnit);
+              return <tr key={allocation.id} className="border-t"><td className="p-2 align-top font-mono">{allocation.item}<br/><span className="text-muted-foreground">{allocation.code || '-'}</span></td><td className="p-2 align-top">{allocation.description}{!hasQuantity && <p className="mt-1 text-[10px] text-warning">Sem base física para pagamento unitário.</p>}{!taskId && <p className="mt-1 text-[10px] text-warning">Sem tarefa individual com esta hierarquia para produção automática.</p>}{row?.subcontract?.reconciliationIssue && <p className="mt-1 text-[10px] text-warning">Revisar vínculo/Analítica</p>}</td><td className="p-2 text-center">{row?.unit || allocation.unit}</td><td className="p-2 text-right tabular-nums">{hasQuantity ? fmtQty(quantity ?? 0) : '—'}</td><td className="bg-sky-50/50 p-2 text-right tabular-nums dark:bg-sky-950/10">{laborUnit === null ? '—' : fmtBRL(laborUnit)}</td><td className="bg-sky-50/50 p-2 text-right tabular-nums dark:bg-sky-950/10">{fmtBRL(reference)}</td><td className="bg-muted/25 p-2 text-right tabular-nums">{hasQuantity ? fmtQty(executed) : '—'}</td><td className="bg-muted/25 p-2 text-right tabular-nums text-primary">{fmtBRL(produced)}</td><td className="bg-emerald-50/50 p-2 text-right tabular-nums dark:bg-emerald-950/10">{contractUnit === null ? '—' : fmtBRL(contractUnit)}</td><td className="bg-emerald-50/50 p-2 text-right font-semibold tabular-nums dark:bg-emerald-950/10">{fmtBRL(allocation.contractedAmount)}</td></tr>;
             })}</tbody>
           </table>
         </div>
         <div className="space-y-2 p-3 md:hidden">{contract.items.map(allocation => {
-          const row = compositionById.get(allocation.compositionId); const reference = row?.laborCost ?? allocation.referenceLaborCost; const quantity = allocation.contractedQuantity ?? row?.quantityFinal; const hasQuantity = Number.isFinite(quantity) && (quantity ?? 0) > 0; const taskId = allocation.taskId ?? row?.taskId; const linkedUniquely = !!taskId && activeAllocationCountByTask.get(taskId) === 1; const executed = hasQuantity ? executionForAllocation(allocation, quantity ?? 0) : 0; const laborUnit = hasQuantity ? reference / (quantity ?? 1) : null; const contractUnit = hasQuantity ? allocation.contractedAmount / (quantity ?? 1) : null; const produced = contractUnit === null ? 0 : roundMoney(executed * contractUnit);
-          return <div key={allocation.id} className="rounded-md border p-3 text-xs"><p className="font-mono font-semibold">{allocation.item}</p><p className="mt-1 font-medium leading-snug">{allocation.description}</p>{!hasQuantity && <p className="mt-1 text-[10px] text-warning">Sem base física para pagamento unitário.</p>}{!linkedUniquely && <p className="mt-1 text-[10px] text-warning">Pendência de reconciliação: vínculo de tarefa ausente ou duplicado.</p>}<div className="mt-3 grid grid-cols-2 gap-2"><span>Un. <b className="float-right">{row?.unit || allocation.unit}</b></span><span>Quantidade <b className="float-right tabular-nums">{hasQuantity ? fmtQty(quantity ?? 0) : '—'}</b></span><span className="rounded bg-sky-50 p-2 dark:bg-sky-950/20">M.O. unit. SINAPI <b className="float-right tabular-nums">{laborUnit === null ? '—' : fmtBRL(laborUnit)}</b></span><span className="rounded bg-sky-50 p-2 dark:bg-sky-950/20">M.O. total SINAPI <b className="float-right tabular-nums">{fmtBRL(reference)}</b></span><span className="rounded bg-muted/50 p-2">Executado <b className="float-right tabular-nums">{hasQuantity ? fmtQty(executed) : '—'}</b></span><span className="rounded bg-muted/50 p-2">Produzido <b className="float-right tabular-nums text-primary">{fmtBRL(produced)}</b></span><span className="rounded bg-emerald-50 p-2 dark:bg-emerald-950/20">Contrato unit. <b className="float-right tabular-nums">{contractUnit === null ? '—' : fmtBRL(contractUnit)}</b></span><span className="rounded bg-emerald-50 p-2 dark:bg-emerald-950/20">Contrato total <b className="float-right tabular-nums">{fmtBRL(allocation.contractedAmount)}</b></span></div></div>;
+          const row = compositionById.get(allocation.compositionId); const reference = row?.laborCost ?? allocation.referenceLaborCost; const quantity = allocation.contractedQuantity ?? row?.quantityFinal; const hasQuantity = Number.isFinite(quantity) && (quantity ?? 0) > 0; const taskId = row?.taskId; const executed = hasQuantity ? executionForAllocation(allocation, quantity ?? 0) : 0; const laborUnit = hasQuantity ? reference / (quantity ?? 1) : null; const contractUnit = hasQuantity ? allocation.contractedAmount / (quantity ?? 1) : null; const produced = contractUnit === null ? 0 : roundMoney(executed * contractUnit);
+          return <div key={allocation.id} className="rounded-md border p-3 text-xs"><p className="font-mono font-semibold">{allocation.item}</p><p className="mt-1 font-medium leading-snug">{allocation.description}</p>{!hasQuantity && <p className="mt-1 text-[10px] text-warning">Sem base física para pagamento unitário.</p>}{!taskId && <p className="mt-1 text-[10px] text-warning">Sem tarefa individual com esta hierarquia para produção automática.</p>}<div className="mt-3 grid grid-cols-2 gap-2"><span>Un. <b className="float-right">{row?.unit || allocation.unit}</b></span><span>Quantidade <b className="float-right tabular-nums">{hasQuantity ? fmtQty(quantity ?? 0) : '—'}</b></span><span className="rounded bg-sky-50 p-2 dark:bg-sky-950/20">M.O. unit. SINAPI <b className="float-right tabular-nums">{laborUnit === null ? '—' : fmtBRL(laborUnit)}</b></span><span className="rounded bg-sky-50 p-2 dark:bg-sky-950/20">M.O. total SINAPI <b className="float-right tabular-nums">{fmtBRL(reference)}</b></span><span className="rounded bg-muted/50 p-2">Executado <b className="float-right tabular-nums">{hasQuantity ? fmtQty(executed) : '—'}</b></span><span className="rounded bg-muted/50 p-2">Produzido <b className="float-right tabular-nums text-primary">{fmtBRL(produced)}</b></span><span className="rounded bg-emerald-50 p-2 dark:bg-emerald-950/20">Contrato unit. <b className="float-right tabular-nums">{contractUnit === null ? '—' : fmtBRL(contractUnit)}</b></span><span className="rounded bg-emerald-50 p-2 dark:bg-emerald-950/20">Contrato total <b className="float-right tabular-nums">{fmtBRL(allocation.contractedAmount)}</b></span></div></div>;
         })}</div>
       </Card>;
     })}

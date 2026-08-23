@@ -390,20 +390,17 @@ function resolveInputPrice(
 
 function buildTaskIndexes(project: Project) {
   const ordered = buildOrderedTasks(project);
-  const byId = new Map<string, { task: Task; phaseId: string; chapter: string }>();
-  const byCode = new Map<string, { task: Task; phaseId: string; chapter: string }[]>();
-  const byDesc = new Map<string, { task: Task; phaseId: string; chapter: string }[]>();
+  const byId = new Map<string, { task: Task; phaseId: string; chapter: string; itemNumber: string }>();
+  const byItemNumber = new Map<string, { task: Task; phaseId: string; chapter: string; itemNumber: string }[]>();
 
   for (const entry of ordered) {
-    const info = { task: entry.task, phaseId: entry.phase.id, chapter: entry.chain };
+    const info = { task: entry.task, phaseId: entry.phase.id, chapter: entry.chain, itemNumber: entry.itemNumber };
     byId.set(entry.task.id, info);
-    const code = normalize(entry.task.itemCode);
-    if (code) byCode.set(code, [...(byCode.get(code) ?? []), info]);
-    const desc = normalizeDesc(entry.task.name);
-    if (desc) byDesc.set(desc, [...(byDesc.get(desc) ?? []), info]);
+    const hierarchy = normalize(entry.itemNumber);
+    if (hierarchy) byItemNumber.set(hierarchy, [...(byItemNumber.get(hierarchy) ?? []), info]);
   }
 
-  return { ordered, byId, byCode, byDesc };
+  return { ordered, byId, byItemNumber };
 }
 
 function buildContractPhaseIndex(project: Project) {
@@ -449,14 +446,22 @@ function matchContractPhaseByItem(
 }
 
 function matchTaskForSource(source: CompositionSource, taskIndexes: ReturnType<typeof buildTaskIndexes>) {
+  const hierarchy = normalize(source.item);
+  if (!hierarchy) return undefined;
+
+  // A hierarquia contratual identifica a composição. Código e descrição são
+  // deliberadamente ignorados porque podem se repetir em outros sistemas.
+  const exactMatches = taskIndexes.byItemNumber.get(hierarchy) ?? [];
+  if (exactMatches.length !== 1) return undefined;
+  const exact = exactMatches[0];
+
+  // Um taskId gravado em importações antigas só continua válido se apontar
+  // para a mesma posição hierárquica. Caso contrário, usa-se a tarefa exata.
   if (source.taskId) {
     const direct = taskIndexes.byId.get(source.taskId);
-    if (direct) return direct;
+    if (direct && normalize(direct.itemNumber) === hierarchy) return direct;
   }
-  const byCode = source.code ? taskIndexes.byCode.get(normalize(source.code))?.[0] : undefined;
-  if (byCode) return byCode;
-  const byDesc = taskIndexes.byDesc.get(normalizeDesc(source.description))?.[0];
-  return byDesc;
+  return exact;
 }
 
 const compositionItem = (composition: AdditiveComposition) =>
@@ -780,7 +785,7 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
     const committedCost = money2(inputs.reduce((sum, input) => sum + (
       subcontract && input.costClass === 'labor' ? 0 : input.realTotal
     ), 0) + (subcontract?.contractedAmount ?? 0));
-    const linkedTaskId = matchedTask?.task.id || source.taskId;
+    const linkedTaskId = matchedTask?.task.id;
     const linkedBudgetId = source.id.startsWith('budget:') ? source.id.slice('budget:'.length) : undefined;
     const matchingActualEntries = (project.costLedger ?? [])
       .filter(entry =>
@@ -839,7 +844,7 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
       valueAdded: source.valueAdded,
       chapterId: phaseId,
       chapter,
-      taskId: matchedTask?.task.id || source.taskId,
+      taskId: matchedTask?.task.id,
       taskName: matchedTask?.task.name,
       source: source.source,
       sourceName: source.sourceName,

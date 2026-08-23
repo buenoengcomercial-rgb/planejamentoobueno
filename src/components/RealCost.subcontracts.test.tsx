@@ -85,13 +85,14 @@ describe('SubcontractsTab', () => {
     rows[2].quantityFinal = 30;
   });
 
-  it('bloqueia uma segunda composição que aponta para a mesma tarefa terceirizada', () => {
+  it('não bloqueia composições distintas só porque uma importação antiga lhes deu a mesma tarefa', () => {
     rows[0].taskId = 'task-compartilhada';
     rows[1].taskId = 'task-compartilhada';
     render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: /novo pacote/i }));
-    expect(screen.getByLabelText('Selecionar item 3.3.2')).toBeDisabled();
-    expect(screen.getAllByText(/Tarefa já vinculada ao pacote: Pacote A/)).toHaveLength(2);
+    expect(screen.getByLabelText('Selecionar item 3.3.1')).toBeDisabled();
+    expect(screen.getByLabelText('Selecionar item 3.3.2')).toBeEnabled();
+    expect(screen.getByText(/Composição já vinculada ao pacote: Pacote A/)).toBeInTheDocument();
     delete rows[0].taskId;
     delete rows[1].taskId;
   });

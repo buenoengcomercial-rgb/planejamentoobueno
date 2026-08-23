@@ -130,6 +130,24 @@ const additiveVersion = (
 ): Additive => ({ id, name: id, importedAt, status, compositions });
 
 describe('paridade entre Aditivo e Custo Real', () => {
+  it('vincula cada composição pela hierarquia, mesmo quando código e descrição se repetem', () => {
+    const sharedTask = (id: string, phase: string): Task => ({
+      ...task(id, 'repetido', phase), name: 'Eletroduto galvanizado', itemCode: 'C0060',
+    });
+    const phase23: Phase = { id: 'phase-2-3', name: 'Alarme', color: '#000', customNumber: '2.3', tasks: [sharedTask('task-2-3-1', 'phase-2-3')] };
+    const phase24: Phase = { id: 'phase-2-4', name: 'Iluminação', color: '#000', customNumber: '2.4', tasks: [sharedTask('task-2-4-1', 'phase-2-4')] };
+    const items = [
+      { ...budget('budget-2-3-1', '2.3.1', 'task-2-4-1'), description: 'Eletroduto galvanizado', code: 'C0060' },
+      { ...budget('budget-2-4-1', '2.4.1', 'task-2-3-1'), description: 'Eletroduto galvanizado', code: 'C0060' },
+      { ...budget('budget-sem-tarefa', '2.5.1', 'task-2-3-1'), description: 'Eletroduto galvanizado', code: 'C0060' },
+    ];
+
+    const rows = buildRealCostAnalysis(projectWith([phase23, phase24], items, [])).compositions;
+    expect(rows.find(row => row.item === '2.3.1')?.taskId).toBe('task-2-3-1');
+    expect(rows.find(row => row.item === '2.4.1')?.taskId).toBe('task-2-4-1');
+    expect(rows.find(row => row.item === '2.5.1')?.taskId).toBeUndefined();
+  });
+
   it('não elimina 4.9.22 e 4.9.23 quando o código se repete em outra composição', () => {
     const phase: Phase = {
       id: 'phase-4-9', name: 'Subcapítulo 4.9', color: '#000', customNumber: '4.9',
