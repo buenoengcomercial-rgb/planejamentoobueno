@@ -186,7 +186,8 @@ describe('GanttChart no Cronograma do Aditivo', () => {
       />,
     );
 
-    expect(screen.getByText('Planejada pelo aditivo: 1º Aditivo')).toBeInTheDocument();
+    expect(screen.getByLabelText('Planejada pelo aditivo')).toBeInTheDocument();
+    expect(screen.queryByText('Planejada pelo aditivo: 1º Aditivo')).not.toBeInTheDocument();
     expect(screen.getByTestId('gantt-bar-partial-existing')).toHaveAttribute(
       'title',
       'Planejada pelo aditivo: 1º Aditivo. Edite no Cronograma do Aditivo.',
@@ -379,8 +380,7 @@ describe('GanttChart no Cronograma do Aditivo', () => {
       const onProjectChange = vi.fn();
       render(<GanttChart project={dependencyProject} context={context} onProjectChange={onProjectChange} />);
 
-      fireEvent.click(screen.getByRole('button', { name: 'Detalhes da tarefa #2' }));
-      const successorDependencyInput = screen.getByTitle('Nº da tarefa predecessora (ex: 3, 7)');
+      const successorDependencyInput = document.querySelector('[data-gantt-dependency-task-id="successor"]') as HTMLInputElement;
       fireEvent.change(successorDependencyInput, { target: { value: '1' } });
       fireEvent.blur(successorDependencyInput);
 
@@ -420,7 +420,6 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     const onProjectChange = vi.fn();
     render(<GanttChart project={dependencyProject} context="additive-preview" onProjectChange={onProjectChange} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Detalhes da tarefa #3' }));
     const editor = screen.getByTestId('gantt-dependency-types-successor') as HTMLSelectElement;
     expect(editor).toHaveValue('__multiple__');
     expect(editor.querySelectorAll('optgroup')).toHaveLength(2);
@@ -438,7 +437,7 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     });
   });
 
-  it('confirma a dependência no detalhe operacional', async () => {
+  it('confirma a dependência diretamente na linha operacional', async () => {
     const keyboardProject: Project = {
       ...project,
       id: 'gantt-dependency-keyboard',
@@ -458,8 +457,7 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     };
     const onProjectChange = vi.fn();
     render(<GanttChart project={keyboardProject} context="additive-preview" onProjectChange={onProjectChange} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Detalhes da tarefa #2' }));
-    const input = screen.getByTitle('Nº da tarefa predecessora (ex: 3, 7)') as HTMLInputElement;
+    const input = document.querySelector('[data-gantt-dependency-task-id="keyboard-b"]') as HTMLInputElement;
 
     input.focus();
     fireEvent.change(input, { target: { value: '1' } });

@@ -5,7 +5,7 @@ import GerenciarEquipes from './GerenciarEquipes';
 import { Settings2 } from 'lucide-react';
 import { getAllTasks } from '@/data/sampleProject';
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
-import { ChevronDown, ChevronRight, AlertTriangle, Flag, Pencil, CalendarClock, SlidersHorizontal } from 'lucide-react';
+import { ChevronDown, ChevronRight, AlertTriangle, Flag, Pencil, CalendarClock } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
 import { GanttDatePickerCalendar } from './gantt/GanttDatePickerCalendar';
@@ -1246,10 +1246,11 @@ export default function GanttChart({
   }, [obraConfig]);
 
   const showSuspensionColumn = context === 'additive-preview';
-  // Datas continuam legíveis, mas a descrição recebe o espaço predominante.
   // A mesma grade é aplicada ao cabeçalho, às linhas e aos dois cronogramas.
-  const sidebarCols = `${showSuspensionColumn ? '34px ' : ''}22px minmax(285px, 1fr) 74px 74px 44px 56px 62px`;
-  const sidebarWidth = showSuspensionColumn ? 710 : 676;
+  // Atenção é uma coluna exclusiva: a descrição permanece limpa e todos os
+  // alertas ficam alinhados, inclusive no contexto do aditivo.
+  const sidebarCols = `${showSuspensionColumn ? '34px ' : ''}22px 26px minmax(240px, 1fr) 72px 72px 38px 22px 46px 56px 52px 42px 52px`;
+  const sidebarWidth = showSuspensionColumn ? 806 : 772;
 
   // Toggle duration mode and recalculate if switching to RUP
   const toggleDurationMode = (taskId: string) => {
@@ -1991,12 +1992,17 @@ export default function GanttChart({
               >
                 {showSuspensionColumn && <span className="text-[8px] font-semibold text-muted-foreground uppercase text-center" title="Serviço suspenso por aditivo">Susp.</span>}
                 <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-center">#</span>
+                <span className="text-[9px] font-bold text-muted-foreground text-center" title="Atenção: alertas e vínculos da atividade">!</span>
                 <span className="text-[10px] font-semibold text-foreground uppercase tracking-wide pl-1">Descrição</span>
                 <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-center">Início</span>
                 <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-center">Fim</span>
                 <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-center" title="Duração em dias">Dur.</span>
-                <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-center">Progresso</span>
-                <span className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider text-center">Detalhes</span>
+                <span className="text-[8px] font-semibold text-muted-foreground uppercase tracking-wider text-center" title="Modo: RUP ou Manual">M</span>
+                <span className="text-[8px] font-semibold text-muted-foreground uppercase tracking-wider text-center" title="Percentual concluído">% concl.</span>
+                <span className="text-[8px] font-semibold text-muted-foreground uppercase tracking-wider text-center" title="Produção diária planejada e realizada">Prod/dia</span>
+                <span className="text-[8px] font-semibold text-muted-foreground uppercase tracking-wider text-center">Pred.</span>
+                <span className="text-[8px] font-semibold text-muted-foreground uppercase tracking-wider text-center">Tipo</span>
+                <span className="text-[8px] font-semibold text-muted-foreground uppercase tracking-wider text-center">Equipe</span>
               </div>
 
               {/* Rows */}
@@ -2109,12 +2115,17 @@ export default function GanttChart({
                       >
                         {showSuspensionColumn && <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase text-center">Susp.</span>}
                         <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center">#</span>
+                        <span className="text-[9px] font-bold text-muted-foreground/80 text-center" title="Atenção: alertas e vínculos da atividade">!</span>
                         <span className="text-[9px] font-semibold text-foreground/80 uppercase tracking-wider pl-1">Descrição</span>
                         <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center">Início</span>
                         <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center">Fim</span>
                         <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center" title="Duração em dias">Dur.</span>
-                        <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center">Progresso</span>
-                        <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center">Detalhes</span>
+                        <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center" title="Modo: RUP ou Manual">M</span>
+                        <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center" title="Percentual concluído">% concl.</span>
+                        <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center" title="Produção diária planejada e realizada">Prod/dia</span>
+                        <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center">Pred.</span>
+                        <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center">Tipo</span>
+                        <span className="text-[8px] font-semibold text-muted-foreground/80 uppercase tracking-wider text-center">Equipe</span>
                       </div>
                     )}
                     {!collapsedPhases.has(phase.id) &&
@@ -2215,14 +2226,20 @@ export default function GanttChart({
                               <div className="text-center">
                                 <span className={`text-[9px] font-mono ${rowTeamDef ? 'opacity-70' : 'text-muted-foreground'}`}>{taskNum}</span>
                               </div>
-                              <div className="min-w-0 flex items-center gap-1 pl-1">
-                                {task.isCritical && <div className="w-1.5 h-1.5 rounded-full bg-destructive flex-shrink-0" />}
-                                {hasViolation && <AlertTriangle className="w-3 h-3 flex-shrink-0" style={{ color: 'hsl(0, 75%, 38%)', filter: 'drop-shadow(0 0 1px white)' }} />}
-                                {noWorkDays && <AlertTriangle className="w-3 h-3 flex-shrink-0" style={{ color: '#b45309', filter: 'drop-shadow(0 0 1px white)' }} />}
+                              <div className="flex flex-wrap content-center items-center justify-center gap-0.5 px-0.5">
+                                {task.isCritical && (
+                                  <Tooltip><TooltipTrigger asChild><Flag className="h-3 w-3 flex-shrink-0 text-destructive" aria-label="Tarefa crítica" /></TooltipTrigger><TooltipContent side="top" className="text-xs">Tarefa crítica no caminho crítico.</TooltipContent></Tooltip>
+                                )}
+                                {hasViolation && (
+                                  <Tooltip><TooltipTrigger asChild><AlertTriangle className="h-3 w-3 flex-shrink-0" style={{ color: 'hsl(0, 75%, 38%)' }} aria-label="Inconsistência de programação" /></TooltipTrigger><TooltipContent side="top" className="max-w-md text-xs">{violations.join(' ')}</TooltipContent></Tooltip>
+                                )}
+                                {noWorkDays && (
+                                  <Tooltip><TooltipTrigger asChild><AlertTriangle className="h-3 w-3 flex-shrink-0" style={{ color: '#b45309' }} aria-label="Sem dias úteis" /></TooltipTrigger><TooltipContent side="top" className="text-xs">A atividade não possui dias úteis no calendário configurado.</TooltipContent></Tooltip>
+                                )}
                                 {hasLaborConflict && (
                                   <Tooltip>
                                     <TooltipTrigger asChild>
-                                      <AlertTriangle className="w-3 h-3 flex-shrink-0" style={{ color: '#c2410c', filter: 'drop-shadow(0 0 1px white)' }} />
+                                      <AlertTriangle className="h-3 w-3 flex-shrink-0" style={{ color: '#c2410c' }} aria-label="Conflito de equipe" />
                                     </TooltipTrigger>
                                     <TooltipContent side="top" className="max-w-md whitespace-normal text-xs">
                                       <div className="space-y-1">
@@ -2233,7 +2250,42 @@ export default function GanttChart({
                                     </TooltipContent>
                                   </Tooltip>
                                 )}
-                                <div className="relative min-w-0 flex-1">
+                                {(scheduleLocked || task.originAdditiveId || (task.additiveHistory?.length ?? 0) > 0 || task.suppressedByAdditive) && (
+                                  <AdditiveBadge
+                                    originAdditiveId={task.originAdditiveId}
+                                    originAdditiveName={task.originAdditiveName}
+                                    originAdditiveVersion={task.originAdditiveVersion}
+                                    additiveHistory={task.additiveHistory}
+                                    suppressedByAdditive={task.suppressedByAdditive}
+                                    compact
+                                  />
+                                )}
+                                {scheduleLocked && (
+                                  <Tooltip><TooltipTrigger asChild><CalendarClock className="h-3 w-3 flex-shrink-0 text-sky-700" aria-label="Planejada pelo aditivo" /></TooltipTrigger><TooltipContent side="top" className="max-w-sm text-xs">Planejada pelo aditivo: {scheduleLockSource}. Edite no Cronograma do Aditivo.</TooltipContent></Tooltip>
+                                )}
+                                {suspension && (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <AlertTriangle className="h-3 w-3 flex-shrink-0 text-amber-700" aria-label={suspension.label} />
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="max-w-md whitespace-normal text-xs">
+                                      <div className="font-semibold">{suspension.label}</div>
+                                      <div>{suspension.reason}</div>
+                                      {!!suspension.blockingCompositions?.length && (
+                                        <div className="mt-2 border-t border-border pt-2">
+                                          <div className="font-semibold">Composições bloqueadoras:</div>
+                                          {suspension.blockingCompositions.map(item => (
+                                            <div key={item.compositionId}>{[item.item, item.code].filter(Boolean).join(' - ')} {item.description}</div>
+                                          ))}
+                                          {suspension.blockingNote && <div className="mt-1 italic">{suspension.blockingNote}</div>}
+                                        </div>
+                                      )}
+                                      <div className="mt-1 text-muted-foreground">{suspension.additiveName}</div>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                )}
+                              </div>
+                              <div className="relative min-w-0 pl-1">
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <p
@@ -2247,11 +2299,6 @@ export default function GanttChart({
                                       {task.name}
                                     </TooltipContent>
                                   </Tooltip>
-                                  {scheduleLocked && (
-                                    <p className="truncate text-[8px] font-semibold leading-tight text-sky-700" title={`Edite no Cronograma do Aditivo: ${scheduleLockSource}`}>
-                                      Planejada pelo aditivo: {scheduleLockSource}
-                                    </p>
-                                  )}
                                   {task.operationalReschedule && (
                                     <p className="truncate text-[8px] font-semibold leading-tight text-violet-700" title={task.operationalReschedule.reason}>
                                       Reprogramada: {task.operationalReschedule.startDate} → {task.operationalReschedule.endDate}
@@ -2282,37 +2329,6 @@ export default function GanttChart({
                                       Bloqueado por {suspension.blockingCompositions.length} composição(ões) do aditivo
                                     </p>
                                   )}
-                                </div>
-                                <AdditiveBadge
-                                  originAdditiveId={task.originAdditiveId}
-                                  originAdditiveName={task.originAdditiveName}
-                                  originAdditiveVersion={task.originAdditiveVersion}
-                                  additiveHistory={task.additiveHistory}
-                                  suppressedByAdditive={task.suppressedByAdditive}
-                                  compact
-                                  className="ml-1 flex-shrink-0"
-                                />
-                                {suspension && (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <AlertTriangle className="h-3 w-3 flex-shrink-0 text-amber-700" aria-label={suspension.label} />
-                                    </TooltipTrigger>
-                                    <TooltipContent side="top" className="max-w-md whitespace-normal text-xs">
-                                      <div className="font-semibold">{suspension.label}</div>
-                                      <div>{suspension.reason}</div>
-                                      {!!suspension.blockingCompositions?.length && (
-                                        <div className="mt-2 border-t border-border pt-2">
-                                          <div className="font-semibold">Composições bloqueadoras:</div>
-                                          {suspension.blockingCompositions.map(item => (
-                                            <div key={item.compositionId}>{[item.item, item.code].filter(Boolean).join(' - ')} {item.description}</div>
-                                          ))}
-                                          {suspension.blockingNote && <div className="mt-1 italic">{suspension.blockingNote}</div>}
-                                        </div>
-                                      )}
-                                      <div className="mt-1 text-muted-foreground">{suspension.additiveName}</div>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                )}
                               </div>
                               
                               <div className="flex flex-col gap-0.5">
@@ -2458,6 +2474,28 @@ export default function GanttChart({
                                     : 'Duração em dias (modo Manual)'}
                                 />}
                               </div>
+                              {/* Modo: RUP / Manual */}
+                              <div className="text-center">
+                                {statusOnly ? <span className="text-[10px] text-muted-foreground">—</span> : <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <button
+                                      disabled={readOnly || scheduleLocked}
+                                      onClick={() => toggleDurationMode(task.id)}
+                                      className={`text-[8px] font-bold rounded px-0.5 py-0 transition-colors ${
+                                        rowTeamDef
+                                          ? 'bg-white/20'
+                                          : ((task.durationMode || 'manual') === 'rup'
+                                            ? 'bg-primary/20 text-primary'
+                                            : 'bg-muted text-muted-foreground hover:text-foreground')
+                                      }`}
+                                      title={(task.durationMode || 'manual') === 'rup' ? 'Modo RUP (clique para manual)' : 'Modo Manual (clique para RUP)'}
+                                    >
+                                      {(task.durationMode || 'manual') === 'rup' ? 'R' : 'M'}
+                                    </button>
+                                  </TooltipTrigger>
+                                  <TooltipContent><p className="text-xs">{(task.durationMode || 'manual') === 'rup' ? 'Duração via RUP — clique para editar manualmente' : 'Duração manual — clique para calcular via RUP'}</p></TooltipContent>
+                                </Tooltip>}
+                              </div>
                               {/* % Concluído */}
                               <div className="text-center">
                                 {(() => {
@@ -2500,27 +2538,26 @@ export default function GanttChart({
                                   );
                                 })()}
                               </div>
-                              <div className="flex justify-center">
-                                {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : <Popover>
-                                  <PopoverTrigger asChild>
-                                    <button type="button" aria-label={`Detalhes da tarefa #${taskNum}`} className="inline-flex h-6 items-center gap-1 rounded border border-border bg-background px-1.5 text-[9px] font-medium text-muted-foreground hover:border-primary hover:text-primary" title="Produção, dependências, equipe e modo de duração">
-                                      <SlidersHorizontal className="h-3 w-3" /> Ver
-                                    </button>
-                                  </PopoverTrigger>
-                                  <PopoverContent className="w-72 space-y-3 p-3" align="end">
-                                    <div className="text-xs font-semibold">Detalhes operacionais</div>
-                                    <div className="grid grid-cols-2 gap-2 rounded bg-muted/50 p-2 text-[10px]">
-                                      <span>Planejado/dia</span><strong className="text-right">{task.quantity && task.duration ? `${(task.quantity / task.duration).toFixed(1)} ${task.unit || 'un'}` : '—'}</strong>
-                                      <span>Dependências</span><strong className="text-right">{depDisplay || '—'}</strong>
-                                    </div>
-                                    <div className="space-y-1"><span className="text-[10px] font-medium text-muted-foreground">Predecessoras</span><input title="Nº da tarefa predecessora (ex: 3, 7)" className="h-8 w-full rounded border border-input bg-background px-2 text-xs" defaultValue={depDisplay} key={depDisplay} placeholder="Ex.: 3, 7" disabled={readOnly || scheduleLocked} onBlur={(e) => handleDepChange(task.id, e.target.value)} onKeyDown={(e) => handleDependencyKeyDown(task.id, e)} /></div>
-                                    {depTypes.length > 0 && <div className="space-y-1"><span className="text-[10px] font-medium text-muted-foreground">Tipo de dependência</span><select data-testid={`gantt-dependency-types-${task.id}`} aria-label={`Tipo de dependência da tarefa #${taskNum}`} value={depTypes.length === 1 ? `${depTypes[0].index}:${depTypes[0].type}` : '__multiple__'} onChange={(event) => { const [depIndex, dependencyType] = event.target.value.split(':'); if (dependencyType) handleDepTypeChange(task.id, Number(depIndex), dependencyType as DependencyType); }} disabled={readOnly || scheduleLocked || !onProjectChange} className="h-8 w-full rounded border border-input bg-background px-2 text-xs">{depTypes.length > 1 && <option value="__multiple__" disabled>{depTypes.map(dep => dep.type).join('/')}</option>}{depTypes.map(dep => <optgroup key={dep.taskId} label={`Tarefa #${dep.num}`}>{(['TI', 'II', 'TT', 'IT'] as DependencyType[]).map(type => <option key={type} value={`${dep.index}:${type}`}>{type}</option>)}</optgroup>)}</select></div>}
-                                    <div className="grid grid-cols-2 gap-2">
-                                      <button disabled={readOnly || scheduleLocked} onClick={() => toggleDurationMode(task.id)} className="h-8 rounded border border-input text-xs hover:border-primary disabled:opacity-50">Modo: {(task.durationMode || 'manual') === 'rup' ? 'RUP' : 'Manual'}</button>
-                                      <Select value={task.team || '_none'} disabled={readOnly || scheduleLocked || !onProjectChange} onValueChange={(val) => { const newTeam = val === '_none' ? undefined : val as TeamCode; onProjectChange?.({ ...project, phases: project.phases.map(p => ({ ...p, tasks: p.tasks.map(t => t.id === task.id ? { ...t, team: newTeam } : t) })) }); }}><SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Equipe" /></SelectTrigger><SelectContent><SelectItem value="_none">Sem equipe</SelectItem>{projectTeams.map(def => <SelectItem key={def.code} value={def.code}>{def.label}</SelectItem>)}</SelectContent></Select>
-                                    </div>
-                                  </PopoverContent>
-                                </Popover>}
+                              {/* Produção diária planejada e realizada */}
+                              <div className="text-center">
+                                {(() => {
+                                  if (statusOnly) return <span className="text-[9px] text-muted-foreground">—</span>;
+                                  const plannedDaily = task.quantity && task.duration > 0 ? task.quantity / task.duration : null;
+                                  const logs = (task.dailyLogs || []).filter(log => (log.actualQuantity ?? 0) > 0);
+                                  const realDaily = logs.length > 0 ? logs.reduce((sum, log) => sum + (log.actualQuantity || 0), 0) / logs.length : null;
+                                  if (!plannedDaily) return <span className="text-[9px] text-muted-foreground">—</span>;
+                                  const realColor = realDaily === null ? 'text-muted-foreground' : realDaily >= plannedDaily ? 'text-success' : 'text-destructive';
+                                  return <div className="flex flex-col items-center gap-0 leading-none"><span className="text-[9px] text-muted-foreground leading-none">{plannedDaily.toFixed(1)}{task.unit || 'un'}/d</span>{realDaily !== null && <span className={`text-[9px] font-bold leading-none ${realColor}`}>{realDaily.toFixed(1)}{task.unit || 'un'}/d</span>}</div>;
+                                })()}
+                              </div>
+                              <div className="text-center">
+                                {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : <input className={`w-full text-[9px] bg-transparent border-b border-border/50 text-center focus:outline-none focus:border-primary ${rowTeamDef ? 'opacity-80' : 'text-muted-foreground'}`} style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined} defaultValue={depDisplay} key={depDisplay} placeholder="—" data-gantt-dependency-input="true" data-gantt-dependency-task-id={task.id} disabled={readOnly || scheduleLocked} onBlur={(e) => handleDepChange(task.id, e.target.value)} onKeyDown={(e) => handleDependencyKeyDown(task.id, e)} title="Nº da tarefa predecessora (ex: 3, 7)" />}
+                              </div>
+                              <div className="text-center">
+                                {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : depTypes.length > 0 ? <select aria-label={`Tipo de dependência da tarefa #${taskNum}`} data-testid={`gantt-dependency-types-${task.id}`} value={depTypes.length === 1 ? `${depTypes[0].index}:${depTypes[0].type}` : '__multiple__'} onChange={(event) => { const [depIndex, dependencyType] = event.target.value.split(':'); if (dependencyType) handleDepTypeChange(task.id, Number(depIndex), dependencyType as DependencyType); }} disabled={readOnly || scheduleLocked || !onProjectChange} className="h-5 w-full border-0 border-b border-border/50 bg-transparent px-0.5 text-center text-[9px] focus:outline-none focus:border-primary disabled:cursor-default" style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined} title={depTypes.map(dep => `#${dep.num} ${dep.type}`).join(', ')}>{depTypes.length > 1 && <option value="__multiple__" disabled>{depTypes.map(dep => dep.type).join('/')}</option>}{depTypes.map(dep => depTypes.length === 1 ? (['TI', 'II', 'TT', 'IT'] as DependencyType[]).map(type => <option key={type} value={`${dep.index}:${type}`}>{type}</option>) : <optgroup key={dep.taskId} label={`Tarefa #${dep.num}`}>{(['TI', 'II', 'TT', 'IT'] as DependencyType[]).map(type => <option key={type} value={`${dep.index}:${type}`}>{type}</option>)}</optgroup>)}</select> : <span className={`text-[9px] ${rowTeamDef ? 'opacity-60' : 'text-muted-foreground'}`}>—</span>}
+                              </div>
+                              <div className="text-center">
+                                {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : <Select value={task.team || '_none'} disabled={readOnly || scheduleLocked || !onProjectChange} onValueChange={(val) => { const newTeam = val === '_none' ? undefined : val as TeamCode; onProjectChange?.({ ...project, phases: project.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(item => item.id === task.id ? { ...item, team: newTeam } : item) })) }); }}><SelectTrigger className="h-5 min-h-0 px-1 py-0 text-[9px] border-border/50 bg-transparent" style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="_none" className="text-[10px]">—</SelectItem>{projectTeams.map(def => <SelectItem key={def.code} value={def.code} className="text-[10px]"><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block flex-shrink-0" style={{ background: def.bgColor, border: `1px solid ${def.borderColor}` }} />{def.label}</span></SelectItem>)}</SelectContent></Select>}
                               </div>
                             </div>
                           );
