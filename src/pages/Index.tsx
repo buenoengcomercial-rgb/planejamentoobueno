@@ -1283,7 +1283,7 @@ export default function Index() {
       case 'additiveSchedule':
         return <AdditiveSchedule project={project} onProjectChange={additiveScheduleSetter} undoButton={<UndoButton canUndo={canUndo('additiveSchedule')} onUndo={() => handleUndo('additiveSchedule')} />} />;
       case 'realCost':
-        return <RealCost project={project} onProjectChange={realCostSetter} canManageSubcontracts={role === 'owner' || role === 'admin'} auditActor={auditActor} />;
+        return <RealCost project={project} onProjectChange={realCostSetter} canManageSubcontracts={role === 'owner' || role === 'admin'} canDeleteSubcontractHistory={role === 'owner'} auditActor={auditActor} />;
       case 'materials':
         return <Materials project={project} onProjectChange={materialsSetter} auditActor={auditActor} />;
       case 'warehouse':

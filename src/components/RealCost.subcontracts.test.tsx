@@ -143,10 +143,32 @@ describe('SubcontractsTab', () => {
     expect(screen.getByText('Itens com produção')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /histórico de alterações/i }));
     expect(screen.getByText(/Ajuste de escopo/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /excluir registro do histórico/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /alterar atividades/i }));
     expect(screen.getByRole('button', { name: 'Já contratadas' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Com produção' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sem tarefa' })).toBeInTheDocument();
+  });
+
+  it('permite excluir um registro do histórico apenas quando a permissão de proprietário é concedida', () => {
+    const project = projectWithContract();
+    project.subcontracts![0] = {
+      ...project.subcontracts![0],
+      amendments: [{
+        id: 'amendment-owner', date: '2026-08-23', reason: 'Registro removível',
+        previousContractedValue: 100, nextContractedValue: 100,
+        previousItems: [], nextItems: project.subcontracts![0].items,
+        createdAt: '2026-08-23T00:00:00Z',
+      }],
+    };
+    const onProjectChange = vi.fn();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<SubcontractsTab project={project} analysis={analysis} canManage canDeleteHistory auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={onProjectChange} />);
+    fireEvent.click(screen.getByRole('button', { name: /histórico de alterações/i }));
+    fireEvent.click(screen.getByRole('button', { name: /excluir registro do histórico: registro removível/i }));
+    expect(confirm).toHaveBeenCalled();
+    expect((onProjectChange.mock.calls[0][0] as Project).subcontracts?.[0].amendments).toEqual([]);
+    confirm.mockRestore();
   });
 });
