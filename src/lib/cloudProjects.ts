@@ -58,9 +58,13 @@ export async function loadCloudProject(id: string): Promise<Project | null> {
 
 /** O projeto principal foi salvo, mas uma coleção normalizada ficou pendente. */
 export class CloudProjectPartialSyncError extends Error {
+  public readonly detail: string;
+
   constructor(public readonly updatedAt: string, cause: unknown) {
-    super(`A cópia de segurança da obra foi salva, mas a sincronização detalhada falhou: ${cause instanceof Error ? cause.message : String(cause)}`);
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`A cópia de segurança da obra foi salva, mas a sincronização detalhada falhou: ${detail}`);
     this.name = 'CloudProjectPartialSyncError';
+    this.detail = detail;
   }
 }
 

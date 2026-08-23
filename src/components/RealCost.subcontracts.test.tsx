@@ -55,10 +55,21 @@ describe('SubcontractsTab', () => {
     expect(card).toHaveTextContent('M.O. SINAPI');
     expect(card).toHaveTextContent('Economia');
     expect(container.querySelectorAll('table')).toHaveLength(1);
-    expect(screen.getByRole('columnheader', { name: 'M.O. unit. SINAPI' })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Contrato unit.' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Referência SINAPI' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Contrato terceirizado' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Capítulo' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Pago' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Saldo' })).not.toBeInTheDocument();
     expect(card).toHaveTextContent(/R\$\s*10,00/);
+  });
+
+  it('separa visualmente referência SINAPI, execução e contrato', () => {
+    render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
+    expect(screen.getByText('Referência SINAPI')).toHaveClass('bg-sky-100/70');
+    expect(screen.getByText('Execução')).toHaveClass('bg-muted/70');
+    expect(screen.getByText('Contrato terceirizado')).toHaveClass('bg-emerald-100/70');
+    expect(screen.getByRole('columnheader', { name: 'Quantidade' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Produzido' })).toBeInTheDocument();
   });
 
   it('não inventa valor unitário quando a quantidade final é zero', () => {

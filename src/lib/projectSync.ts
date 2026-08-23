@@ -493,7 +493,6 @@ export async function syncCollectionsToCloud(project: Project, userId?: string):
   const results = await Promise.allSettled(ops);
   const failed = results.filter(r => r.status === 'rejected');
   if (failed.length > 0) {
-    console.warn(`[projectSync] ${failed.length}/${results.length} ops falharam`, failed.slice(0, 3));
     const reasons = failed
       .slice(0, 3)
       .map(result => result.status === 'rejected'
@@ -501,6 +500,7 @@ export async function syncCollectionsToCloud(project: Project, userId?: string):
         : '')
       .filter(Boolean)
       .join('; ');
+    console.warn(`[projectSync] ${failed.length}/${results.length} operações normalizadas falharam: ${reasons || 'motivo não informado'}`);
     throw new Error(`Falha ao persistir a estrutura normalizada da obra${reasons ? `: ${reasons}` : '.'}`);
   }
 

@@ -407,7 +407,8 @@ export default function Index() {
         if (!(error instanceof CloudProjectPartialSyncError)) throw error;
         updatedAt = error.updatedAt;
         partialSync = true;
-        toast.error('O pacote terceirizado foi preservado na obra, mas a sincronização detalhada com a nuvem falhou. Tente salvar novamente mais tarde.');
+        console.warn('[cloudProjects] Sincronização detalhada pendente; cópia de segurança preservada.', error.detail);
+        toast.warning('O pacote terceirizado foi salvo na obra. A sincronização detalhada com a nuvem está pendente e será tentada novamente no próximo salvamento.');
       }
       conflictDetectedRef.current = false;
       lastLocalSaveAtRef.current = Date.now();
