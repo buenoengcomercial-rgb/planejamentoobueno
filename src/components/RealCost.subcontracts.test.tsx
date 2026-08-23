@@ -1,0 +1,57 @@
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { SubcontractsTab } from './RealCost';
+import type { Project } from '@/types/project';
+
+const rows = [
+  { id: 'a', item: '3.3.1', description: 'Serviço já terceirizado', chapter: '3 Incêndio', laborCost: 100 },
+  { id: 'b', item: '3.3.2', description: 'Serviço disponível', chapter: '3 Incêndio', laborCost: 200 },
+  { id: 'c', item: '3.3.3', description: 'Outro serviço disponível', chapter: '3 Incêndio', laborCost: 300 },
+] as any[];
+
+const analysis = {
+  compositions: rows,
+  groupTree: [{ phaseId: 'chapter-3', number: '3', name: 'INCÊNDIO', depth: 0, rows, children: [] }],
+} as any;
+
+function projectWithContract(): Project {
+  return {
+    id: 'p1',
+    name: 'CPA',
+    subcontracts: [{
+      id: 'package-a', name: 'Pacote A', contractorName: 'Prestador', contractDate: '2026-08-22', contractedValue: 100,
+      status: 'contracted', createdAt: '2026-08-22T00:00:00Z', payments: [],
+      items: [{ id: 'allocation-a', compositionId: 'a', item: '3.3.1', description: 'Serviço já terceirizado', unit: 'un', referenceLaborCost: 100, allocationPercent: 100, contractedAmount: 100 }],
+    }],
+  } as Project;
+}
+
+describe('SubcontractsTab', () => {
+  it('seleciona os itens elegíveis do capítulo e mantém bloqueado o item de outro pacote', () => {
+    render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /novo pacote/i }));
+
+    const chapter = screen.getByLabelText('Selecionar 3 INCÊNDIO') as HTMLInputElement;
+    const blocked = screen.getByLabelText('Selecionar item 3.3.1') as HTMLInputElement;
+    const available = screen.getByLabelText('Selecionar item 3.3.2') as HTMLInputElement;
+    const otherAvailable = screen.getByLabelText('Selecionar item 3.3.3') as HTMLInputElement;
+    expect(blocked.disabled).toBe(true);
+    fireEvent.click(chapter);
+    expect(available.checked).toBe(true);
+    expect(otherAvailable.checked).toBe(true);
+    expect(screen.getByText('2')).toBeInTheDocument();
+
+    fireEvent.click(available);
+    expect(chapter.checked).toBe(false);
+    expect(chapter.indeterminate).toBe(true);
+  });
+
+  it('mostra o cabeçalho do contrato antes dos seus itens, sem tabela global separada', () => {
+    const { container } = render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
+    const card = screen.getByText('Pacote A').closest('[class*=overflow-hidden]');
+    expect(card).not.toBeNull();
+    expect(card).toHaveTextContent('Prestador');
+    expect(card).toHaveTextContent('Serviço já terceirizado');
+    expect(container.querySelectorAll('table')).toHaveLength(1);
+  });
+});
