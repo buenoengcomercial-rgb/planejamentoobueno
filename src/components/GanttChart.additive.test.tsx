@@ -228,6 +228,27 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     expect(screen.getByTestId('gantt-chart-row-scheduled-new')).toHaveStyle({ height: '44px' });
   });
 
+  it('amplia a linha bloqueada por composição sem desalinhar a barra do aditivo', () => {
+    const manualBlockingMap: Record<string, AdditiveScheduleSuspensionMeta> = {
+      ...suspensionMap,
+      'suspended-1d': {
+        ...suspensionMap['suspended-1d'],
+        blockingCompositions: [{
+          compositionId: 'composition-1',
+          item: '2.1.1',
+          description: 'Composição que bloqueia a tarefa',
+          quantity: 1,
+        }],
+      },
+    };
+
+    render(<GanttChart project={project} context="additive-preview" suspensionMap={manualBlockingMap} readOnly />);
+
+    expect(screen.getByText('Bloqueado por 1 composição(ões) do aditivo')).toBeInTheDocument();
+    expect(screen.getByTestId('gantt-sidebar-row-suspended-1d')).toHaveStyle({ height: '60px' });
+    expect(screen.getByTestId('gantt-chart-row-suspended-1d')).toHaveStyle({ height: '60px' });
+  });
+
   it('alinha os cabeçalhos e limita a descrição a duas linhas', () => {
     render(<GanttChart project={project} context="official" readOnly />);
 

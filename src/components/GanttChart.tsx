@@ -408,12 +408,16 @@ export default function GanttChart({
     const hasActualDates = hasActualProgress && !!task.current?.startDate;
     const hasTwoLineProduction = hasActualProgress && !!task.quantity;
     const hasScheduleLabel = isTaskScheduleLocked(task.id);
+    const hasManualBlockingNotice = context === 'additive-preview'
+      && suspensionMap[task.id]?.kind === 'manual'
+      && !!suspensionMap[task.id]?.blockingCompositions?.length;
 
     // Datas real/prevista, produção real e a origem no aditivo ocupam linhas
-    // adicionais. A altura precisa ser a mesma na tabela e na área das barras.
-    if (!hasActualDates && !hasTwoLineProduction && !hasScheduleLabel) return descriptionRowHeight;
+    // adicionais. O bloqueio manual também acrescenta uma linha explicativa.
+    // A altura precisa ser a mesma na tabela e na área das barras.
+    if (!hasActualDates && !hasTwoLineProduction && !hasScheduleLabel && !hasManualBlockingNotice) return descriptionRowHeight;
     return Math.max(descriptionRowHeight, density === 'compact' ? 56 : 60);
-  }, [density, descriptionRowHeight, isTaskScheduleLocked]);
+  }, [context, density, descriptionRowHeight, isTaskScheduleLocked, suspensionMap]);
   const chartWidth = useMemo(() => totalDays * dayWidth, [totalDays, dayWidth]);
 
   const todayOffset = diffDays(projectStart, today);
