@@ -3,6 +3,9 @@ project_id = "apydrmoggxiftayycnua"
 [functions.admin-create-member]
 verify_jwt = true
 
+[functions.admin-update-member-name]
+verify_jwt = true
+
 [functions.read-fiscal-note]
 verify_jwt = true
 
