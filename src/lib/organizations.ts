@@ -44,7 +44,7 @@ export const ROLE_LABELS: Record<OrgRole, string> = {
 export const ROLE_DESCRIPTIONS: Record<OrgRole, string> = {
   owner: 'Controle total da empresa, usuários, obras e dados contratuais.',
   admin: 'Gerencia usuários e obras, sem transferir a propriedade da empresa.',
-  engineer: 'Edita planejamento, produção, medições, custos e suprimentos.',
+  engineer: 'Edita planejamento, produção, medições e suprimentos.',
   warehouse_operator: 'Opera somente o Almoxarifado, sem acesso aos demais módulos.',
   field_user: 'Consulta a programação e preenche os Diários de Obra.',
   viewer: 'Acesso somente para consulta, sem alterações nos dados.',
@@ -53,7 +53,7 @@ export const ROLE_DESCRIPTIONS: Record<OrgRole, string> = {
 export const ROLE_PERMISSIONS: Record<OrgRole, string[]> = {
   owner: ['Administrar usuários', 'Criar e excluir obras', 'Editar todos os módulos'],
   admin: ['Administrar usuários', 'Criar obras', 'Editar todos os módulos'],
-  engineer: ['Editar planejamento e campo', 'Gerir medições, custos e suprimentos'],
+  engineer: ['Editar planejamento e campo', 'Gerir medições e suprimentos'],
   warehouse_operator: ['Acessar somente o Almoxarifado', 'Registrar entradas, retiradas e equipamentos', 'Cancelar lançamentos sem apagar o histórico'],
   field_user: ['Consultar atividades', 'Preencher Diário de Obra'],
   viewer: ['Consultar todos os módulos'],
@@ -81,7 +81,9 @@ export function canEditWarehouse(role: OrgRole): boolean {
   return canEditProject(role) || role === 'warehouse_operator';
 }
 export function canAccessAppView(role: OrgRole, view: AppView): boolean {
-  return role !== 'warehouse_operator' || view === 'warehouse';
+  if (role === 'warehouse_operator') return view === 'warehouse';
+  if (role === 'engineer') return view !== 'dashboard' && view !== 'realCost';
+  return true;
 }
 export function canDeleteProject(role: OrgRole): boolean {
   return role === 'owner';

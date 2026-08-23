@@ -232,8 +232,9 @@ export default function Index() {
   const canPersistProject = editor || dailyReportEditor || warehouseEditor;
   const creator = role ? canCreateProject(role) : false;
   const remover = role ? canDeleteProject(role) : false;
-  const safeCurrentView: AppView = role && !canAccessAppView(role, currentView) ? 'warehouse' : currentView;
-  const allowedViews = role === 'warehouse_operator' ? (['warehouse'] satisfies AppView[]) : undefined;
+  const restrictedFallbackView: AppView = role === 'warehouse_operator' ? 'warehouse' : 'gantt';
+  const safeCurrentView: AppView = role && !canAccessAppView(role, currentView) ? restrictedFallbackView : currentView;
+  const allowedViews = role ? APP_VIEWS.filter(view => canAccessAppView(role, view)) : undefined;
 
   useEffect(() => {
     if (!authLoading && !user) navigate('/auth', { replace: true });
@@ -241,7 +242,9 @@ export default function Index() {
 
   useEffect(() => {
     const requestedView = routeView ? ROUTE_VIEW[routeView] : undefined;
-    const routedView = role === 'warehouse_operator' ? 'warehouse' : requestedView;
+    const routedView = requestedView && role && !canAccessAppView(role, requestedView)
+      ? restrictedFallbackView
+      : requestedView;
     if (routedView) setCurrentView(previous => previous === routedView ? previous : routedView);
     if (routedView === 'dailyReport') {
       const date = new URLSearchParams(location.search).get('data') || undefined;
@@ -251,11 +254,11 @@ export default function Index() {
       }
       setProductionWorkspaceInitialTab('dailyReport');
     }
-  }, [routeView, location.search, role]);
+  }, [routeView, location.search, role, restrictedFallbackView]);
 
   useEffect(() => {
-    if (role === 'warehouse_operator' && currentView !== 'warehouse') setCurrentView('warehouse');
-  }, [currentView, role]);
+    if (role && !canAccessAppView(role, currentView)) setCurrentView(restrictedFallbackView);
+  }, [currentView, restrictedFallbackView, role]);
 
   useEffect(() => {
     if (!rawProject?.id) return;
@@ -1294,7 +1297,7 @@ export default function Index() {
             onCommitProject={commitProjectNow}
             canManageFiscalNotes={warehouseEditor}
             canReviewFiscalCosts={role === 'owner'}
-            canViewPanel={role !== 'warehouse_operator'}
+            canViewPanel={role !== 'warehouse_operator' && role !== 'engineer'}
             canApproveInventory={role === 'owner' || role === 'admin'}
             canArchiveWarehouseRecords={warehouseEditor}
             canEditPostedWarehouseRecords={role === 'owner'}

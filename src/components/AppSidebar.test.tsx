@@ -58,4 +58,30 @@ describe('AppSidebar para Almoxarife', () => {
     rerender(<AppSidebar {...props} canDeleteProjects />);
     expect(screen.getAllByTitle('Excluir obra')).toHaveLength(2);
   });
+
+  it('oculta Dashboard e Custos para o Engenheiro sem remover as demais áreas permitidas', () => {
+    render(
+      <AppSidebar
+        currentView="gantt"
+        onViewChange={vi.fn()}
+        projectName="Obra teste"
+        collapsed={false}
+        onToggleCollapse={vi.fn()}
+        onSwitchProject={vi.fn()}
+        onCreateProject={vi.fn()}
+        onRenameProject={vi.fn()}
+        onDuplicateProject={vi.fn()}
+        onDeleteProject={vi.fn()}
+        activeProjectId="project-1"
+        projectsList={[{ id: 'project-1', name: 'Obra teste', createdAt: '2026-08-19T10:00:00.000Z', updatedAt: '2026-08-19T10:00:00.000Z' }]}
+        roleLabel="Engenheiro"
+        allowedViews={['management', 'gantt', 'tasks', 'dailyReport', 'measurement', 'additive', 'additiveSchedule', 'materials', 'warehouse']}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Dashboard' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Custos' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cronograma' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Almoxarifado' })).toBeInTheDocument();
+  });
 });

@@ -33,6 +33,8 @@ describe('função Almoxarife', () => {
     const views: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials'];
     views.forEach(view => expect(canAccessAppView('warehouse_operator', view)).toBe(false));
     expect(canAccessAppView('warehouse_operator', 'warehouse')).toBe(true);
-    expect(canAccessAppView('engineer', 'dashboard')).toBe(true);
+    expect(canAccessAppView('engineer', 'dashboard')).toBe(false);
+    expect(canAccessAppView('engineer', 'realCost')).toBe(false);
+    expect(canAccessAppView('engineer', 'gantt')).toBe(true);
   });
 });
