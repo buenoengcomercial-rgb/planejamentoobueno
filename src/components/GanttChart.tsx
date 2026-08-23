@@ -27,7 +27,6 @@ import {
 import { flattenPhasesByChapter, getChapterNumbering, getChapterTasks } from '@/lib/chapters';
 import { beginBarMutation, endBarMutation, endAllBarMutations, setTransform, setTransition, setOpacity, setLeftPx, setWidthPx, type BarMutationSession } from './gantt/barTransform';
 import { toast } from 'sonner';
-import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
 import GanttFinancialForecast from './gantt/GanttFinancialForecast';
 import { sortTasksForSchedule, withScheduleOrderForMove } from '@/lib/taskOrdering';
 import { buildLaborPlanningAnalysis, type LaborPlanningGranularity } from '@/lib/laborDimensioning';
@@ -2150,6 +2149,15 @@ export default function GanttChart({
                           const rowTeamDef = statusOnly ? undefined : teamDef(task.team);
                           const scheduleLocked = isTaskScheduleLocked(task.id);
                           const scheduleLockSource = scheduleLockLabel(task.id);
+                          const additiveHistory = task.additiveHistory ?? [];
+                          const hasAdditiveAttention = scheduleLocked || !!task.originAdditiveId || additiveHistory.length > 0 || !!task.suppressedByAdditive;
+                          const hasAttention = task.isCritical || hasViolation || noWorkDays || hasLaborConflict || hasAdditiveAttention || !!suspension;
+                          const attentionCount = [task.isCritical, hasViolation, noWorkDays, hasLaborConflict, hasAdditiveAttention, !!suspension].filter(Boolean).length;
+                          const attentionTone = (task.isCritical || hasViolation || task.suppressedByAdditive || suspension?.scheduleState === 'fully_suppressed')
+                            ? 'text-destructive hover:bg-destructive/10'
+                            : (suspension || hasLaborConflict || noWorkDays)
+                              ? 'text-amber-700 hover:bg-amber-100'
+                              : 'text-sky-700 hover:bg-sky-100';
                           const rowHeight = getTaskRowHeight(task);
                           const isReorderDragging = reorderDragTaskId === task.id;
                           const isReorderTarget = reorderDropTargetId === task.id && reorderDragTaskId && reorderDragTaskId !== task.id;
@@ -2226,63 +2234,40 @@ export default function GanttChart({
                               <div className="text-center">
                                 <span className={`text-[9px] font-mono ${rowTeamDef ? 'opacity-70' : 'text-muted-foreground'}`}>{taskNum}</span>
                               </div>
-                              <div className="flex flex-wrap content-center items-center justify-center gap-0.5 px-0.5">
-                                {task.isCritical && (
-                                  <Tooltip><TooltipTrigger asChild><Flag className="h-3 w-3 flex-shrink-0 text-destructive" aria-label="Tarefa crítica" /></TooltipTrigger><TooltipContent side="top" className="text-xs">Tarefa crítica no caminho crítico.</TooltipContent></Tooltip>
-                                )}
-                                {hasViolation && (
-                                  <Tooltip><TooltipTrigger asChild><AlertTriangle className="h-3 w-3 flex-shrink-0" style={{ color: 'hsl(0, 75%, 38%)' }} aria-label="Inconsistência de programação" /></TooltipTrigger><TooltipContent side="top" className="max-w-md text-xs">{violations.join(' ')}</TooltipContent></Tooltip>
-                                )}
-                                {noWorkDays && (
-                                  <Tooltip><TooltipTrigger asChild><AlertTriangle className="h-3 w-3 flex-shrink-0" style={{ color: '#b45309' }} aria-label="Sem dias úteis" /></TooltipTrigger><TooltipContent side="top" className="text-xs">A atividade não possui dias úteis no calendário configurado.</TooltipContent></Tooltip>
-                                )}
-                                {hasLaborConflict && (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <AlertTriangle className="h-3 w-3 flex-shrink-0" style={{ color: '#c2410c' }} aria-label="Conflito de equipe" />
-                                    </TooltipTrigger>
-                                    <TooltipContent side="top" className="max-w-md whitespace-normal text-xs">
-                                      <div className="space-y-1">
-                                        {laborConflict.roleDeficits.map(item => <div key={item}>{item}</div>)}
-                                        {laborConflict.teamConflicts.map(item => <div key={item}>Equipe sobreposta: {item}</div>)}
-                                        {laborConflict.missingAvailability.map(item => <div key={item}>{item}</div>)}
+                              <div className="flex items-center justify-center px-0.5">
+                                {hasAttention && (
+                                  <Popover>
+                                    <PopoverTrigger asChild>
+                                      <button
+                                        type="button"
+                                        aria-label={`Ver ${attentionCount} apontamento${attentionCount === 1 ? '' : 's'} da tarefa #${taskNum}`}
+                                        className={`inline-flex h-5 w-5 items-center justify-center rounded transition-colors ${attentionTone}`}
+                                        title={`${attentionCount} apontamento${attentionCount === 1 ? '' : 's'}: clique para ver`}
+                                      >
+                                        <AlertTriangle className="h-3.5 w-3.5" />
+                                      </button>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="w-80 space-y-3 p-3" align="start">
+                                      <div>
+                                        <div className="text-xs font-semibold">Apontamentos da atividade</div>
+                                        <p className="mt-0.5 text-[10px] text-muted-foreground">{task.name}</p>
                                       </div>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                )}
-                                {(scheduleLocked || task.originAdditiveId || (task.additiveHistory?.length ?? 0) > 0 || task.suppressedByAdditive) && (
-                                  <AdditiveBadge
-                                    originAdditiveId={task.originAdditiveId}
-                                    originAdditiveName={task.originAdditiveName}
-                                    originAdditiveVersion={task.originAdditiveVersion}
-                                    additiveHistory={task.additiveHistory}
-                                    suppressedByAdditive={task.suppressedByAdditive}
-                                    compact
-                                  />
-                                )}
-                                {scheduleLocked && (
-                                  <Tooltip><TooltipTrigger asChild><CalendarClock className="h-3 w-3 flex-shrink-0 text-sky-700" aria-label="Planejada pelo aditivo" /></TooltipTrigger><TooltipContent side="top" className="max-w-sm text-xs">Planejada pelo aditivo: {scheduleLockSource}. Edite no Cronograma do Aditivo.</TooltipContent></Tooltip>
-                                )}
-                                {suspension && (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <AlertTriangle className="h-3 w-3 flex-shrink-0 text-amber-700" aria-label={suspension.label} />
-                                    </TooltipTrigger>
-                                    <TooltipContent side="top" className="max-w-md whitespace-normal text-xs">
-                                      <div className="font-semibold">{suspension.label}</div>
-                                      <div>{suspension.reason}</div>
-                                      {!!suspension.blockingCompositions?.length && (
-                                        <div className="mt-2 border-t border-border pt-2">
-                                          <div className="font-semibold">Composições bloqueadoras:</div>
-                                          {suspension.blockingCompositions.map(item => (
-                                            <div key={item.compositionId}>{[item.item, item.code].filter(Boolean).join(' - ')} {item.description}</div>
-                                          ))}
-                                          {suspension.blockingNote && <div className="mt-1 italic">{suspension.blockingNote}</div>}
-                                        </div>
-                                      )}
-                                      <div className="mt-1 text-muted-foreground">{suspension.additiveName}</div>
-                                    </TooltipContent>
-                                  </Tooltip>
+                                      <div className="space-y-2 text-xs">
+                                        {task.isCritical && <div><strong className="text-destructive">Crítica.</strong> Faz parte do caminho crítico.</div>}
+                                        {hasViolation && <div><strong className="text-destructive">Inconsistência de programação.</strong><div className="mt-0.5 text-muted-foreground">{violations.join(' ')}</div></div>}
+                                        {noWorkDays && <div><strong className="text-amber-700">Calendário.</strong> A atividade não possui dias úteis no calendário configurado.</div>}
+                                        {hasLaborConflict && (
+                                          <div><strong className="text-amber-700">Equipe.</strong><div className="mt-0.5 space-y-0.5 text-muted-foreground">{laborConflict.roleDeficits.map(item => <div key={item}>{item}</div>)}{laborConflict.teamConflicts.map(item => <div key={item}>Equipe sobreposta: {item}</div>)}{laborConflict.missingAvailability.map(item => <div key={item}>{item}</div>)}</div></div>
+                                        )}
+                                        {hasAdditiveAttention && (
+                                          <div><strong className="text-sky-700">Aditivo.</strong>{scheduleLocked && <div className="mt-0.5 text-muted-foreground">Planejada pelo aditivo: {scheduleLockSource}. Edite no Cronograma do Aditivo.</div>}{task.originAdditiveName && <div className="mt-0.5 text-muted-foreground">Origem: {task.originAdditiveName}{task.originAdditiveVersion !== undefined ? ` · v${task.originAdditiveVersion}` : ''}.</div>}{task.suppressedByAdditive && <div className="mt-0.5 text-destructive">Item suprimido pelo Aditivo.</div>}{additiveHistory.length > 0 && <div className="mt-1 space-y-0.5 border-t border-border pt-1 text-[10px] text-muted-foreground">{additiveHistory.map((entry, index) => <div key={`${entry.additiveName}-${entry.version}-${index}`}>{entry.additiveName} v{entry.version}: {entry.previousQuantity ?? 0} → {entry.newQuantity ?? 0}</div>)}</div>}</div>
+                                        )}
+                                        {suspension && (
+                                          <div><strong className="text-amber-700">Bloqueio do Aditivo.</strong><div className="mt-0.5 text-muted-foreground">{suspension.label}. {suspension.reason}</div>{!!suspension.blockingCompositions?.length && <div className="mt-1 space-y-0.5 border-t border-border pt-1 text-[10px] text-muted-foreground"><div className="font-medium text-foreground">Composições bloqueadoras:</div>{suspension.blockingCompositions.map(item => <div key={item.compositionId}>{[item.item, item.code].filter(Boolean).join(' - ')} {item.description}</div>)}{suspension.blockingNote && <div className="italic">{suspension.blockingNote}</div>}</div>}</div>
+                                        )}
+                                      </div>
+                                    </PopoverContent>
+                                  </Popover>
                                 )}
                               </div>
                               <div className="relative min-w-0 pl-1">

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import GanttChart from './GanttChart';
@@ -186,8 +186,11 @@ describe('GanttChart no Cronograma do Aditivo', () => {
       />,
     );
 
-    expect(screen.getByLabelText('Planejada pelo aditivo')).toBeInTheDocument();
+    const attentionButton = within(screen.getByTestId('gantt-sidebar-row-partial-existing')).getByRole('button', { name: /Ver .*apontamento/i });
+    expect(attentionButton).toBeInTheDocument();
     expect(screen.queryByText('Planejada pelo aditivo: 1º Aditivo')).not.toBeInTheDocument();
+    fireEvent.click(attentionButton);
+    expect(screen.getByText('Planejada pelo aditivo: 1º Aditivo. Edite no Cronograma do Aditivo.')).toBeInTheDocument();
     expect(screen.getByTestId('gantt-bar-partial-existing')).toHaveAttribute(
       'title',
       'Planejada pelo aditivo: 1º Aditivo. Edite no Cronograma do Aditivo.',
