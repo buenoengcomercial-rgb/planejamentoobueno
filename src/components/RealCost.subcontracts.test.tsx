@@ -127,4 +127,26 @@ describe('SubcontractsTab', () => {
     expect(nextContract?.amendments?.[0].reason).toBe('Troca de frente de serviço');
     expect(nextContract?.amendments?.[0].previousItems.map(item => item.compositionId)).toEqual(['a']);
   });
+
+  it('mostra histórico do pacote, indicador físico e filtros durante uma alteração', () => {
+    const project = projectWithContract();
+    project.subcontracts![0] = {
+      ...project.subcontracts![0],
+      amendments: [{
+        id: 'amendment-1', date: '2026-08-23', reason: 'Ajuste de escopo',
+        previousContractedValue: 120, nextContractedValue: 100,
+        previousItems: [], nextItems: project.subcontracts![0].items,
+        createdAt: '2026-08-23T00:00:00Z',
+      }],
+    };
+    render(<SubcontractsTab project={project} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
+    expect(screen.getByText('Itens com produção')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /histórico de alterações/i }));
+    expect(screen.getByText(/Ajuste de escopo/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /alterar atividades/i }));
+    expect(screen.getByRole('button', { name: 'Já contratadas' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Com produção' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sem tarefa' })).toBeInTheDocument();
+  });
 });
