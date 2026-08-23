@@ -58,18 +58,21 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
 
   const subcontractProduction = useMemo<DailySubcontractProductionEntry[]>(() => {
     const compositionById = new Map(buildRealCostAnalysis(project).compositions.map(composition => [composition.id, composition]));
-    const activeAllocations = new Map((project.subcontracts ?? [])
-      .filter(contract => contract.status === 'contracted')
-      .flatMap(contract => contract.items.map(item => [item.id, { contract, item }] as const)));
-    return project.phases.flatMap(phase => phase.tasks).flatMap(task => (task.dailyLogs ?? [])
-      .filter(log => log.date === selectedDate)
-      .flatMap(log => (log.subcontractExecutions ?? []).flatMap(execution => {
-        const target = activeAllocations.get(execution.allocationId);
-        if (!target || execution.quantity <= 0) return [];
-        const quantity = target.item.contractedQuantity ?? compositionById.get(target.item.compositionId)?.quantityFinal;
-        const unitValue = quantity && quantity > 0 ? target.item.contractedAmount / quantity : 0;
-        return [{ allocationId: target.item.id, contractName: target.contract.name, item: target.item.item, description: target.item.description, unit: target.item.unit, quantity: execution.quantity, unitValue }];
-      })));
+    const activeAllocations = (project.subcontracts ?? []).filter(contract => contract.status === 'contracted')
+      .flatMap(contract => contract.items.map(item => ({ contract, item, taskId: item.taskId ?? compositionById.get(item.compositionId)?.taskId })));
+    const allocationCountByTask = activeAllocations.reduce((counts, allocation) => {
+      if (allocation.taskId) counts.set(allocation.taskId, (counts.get(allocation.taskId) ?? 0) + 1);
+      return counts;
+    }, new Map<string, number>());
+    return activeAllocations.flatMap(allocation => {
+      if (!allocation.taskId || allocationCountByTask.get(allocation.taskId) !== 1) return [];
+      const task = project.phases.flatMap(phase => phase.tasks).find(candidate => candidate.id === allocation.taskId);
+      const executed = (task?.dailyLogs ?? []).filter(log => log.date === selectedDate)
+        .reduce((sum, log) => sum + Math.max(0, Number(log.actualQuantity) || 0), 0);
+      const quantity = allocation.item.contractedQuantity ?? compositionById.get(allocation.item.compositionId)?.quantityFinal;
+      const unitValue = quantity && quantity > 0 ? allocation.item.contractedAmount / quantity : 0;
+      return executed > 0 ? [{ allocationId: allocation.item.id, contractName: allocation.contract.name, item: allocation.item.item, description: allocation.item.description, unit: allocation.item.unit, quantity: executed, unitValue }] : [];
+    });
   }, [project, selectedDate]);
 
   const {

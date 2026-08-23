@@ -73,4 +73,15 @@ describe('SubcontractsTab', () => {
     expect(screen.getAllByText('Sem base física para pagamento unitário.')).toHaveLength(2);
     rows[2].quantityFinal = 30;
   });
+
+  it('bloqueia uma segunda composição que aponta para a mesma tarefa terceirizada', () => {
+    rows[0].taskId = 'task-compartilhada';
+    rows[1].taskId = 'task-compartilhada';
+    render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /novo pacote/i }));
+    expect(screen.getByLabelText('Selecionar item 3.3.2')).toBeDisabled();
+    expect(screen.getAllByText(/Tarefa já vinculada ao pacote: Pacote A/)).toHaveLength(2);
+    delete rows[0].taskId;
+    delete rows[1].taskId;
+  });
 });

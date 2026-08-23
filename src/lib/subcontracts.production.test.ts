@@ -3,6 +3,17 @@ import { subcontractExecutedQuantity } from '@/lib/subcontracts';
 import type { Project } from '@/types/project';
 
 describe('subcontractExecutedQuantity', () => {
+  it('usa o realizado diário da tarefa vinculada como fonte de verdade', () => {
+    const project = {
+      phases: [{ tasks: [{ id: 'task-a', dailyLogs: [
+        { id: 'd1', date: '2026-08-22', plannedQuantity: 0, actualQuantity: 80 },
+        { id: 'd2', date: '2026-08-23', plannedQuantity: 0, actualQuantity: 88 },
+      ] }] }],
+    } as Project;
+
+    expect(subcontractExecutedQuantity(project, 'allocation-a', 'task-a')).toBe(168);
+  });
+
   it('soma apenas os apontamentos físicos da composição terceirizada', () => {
     const project = {
       phases: [{ tasks: [{ dailyLogs: [

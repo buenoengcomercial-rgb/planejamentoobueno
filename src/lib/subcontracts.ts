@@ -45,8 +45,16 @@ export function allocatedPaymentValue(subcontract: Subcontract, allocation: Subc
   }, 0);
 }
 
-/** Total físico já apontado para uma composição terceirizada em todos os diários. */
-export function subcontractExecutedQuantity(project: Project, allocationId: string) {
+/** Total físico já apontado para uma composição terceirizada em todos os diários.
+ * Para os vínculos atuais, a fonte é sempre o campo `actualQuantity` da tarefa.
+ * O fallback mantém visíveis dados legados gravados antes desta regra. */
+export function subcontractExecutedQuantity(project: Project, allocationId: string, taskId?: string) {
+  if (taskId) {
+    return (project.phases ?? []).reduce((sum, phase) => sum + phase.tasks
+      .filter(task => task.id === taskId)
+      .reduce((taskSum, task) => taskSum + (task.dailyLogs ?? [])
+        .reduce((logsSum, log) => logsSum + Math.max(0, Number(log.actualQuantity) || 0), 0), 0), 0);
+  }
   return (project.phases ?? []).reduce((phaseTotal, phase) => phaseTotal + phase.tasks.reduce((taskTotal, task) => taskTotal +
     (task.dailyLogs ?? []).reduce((logsTotal, log) => logsTotal +
       (log.subcontractExecutions ?? [])

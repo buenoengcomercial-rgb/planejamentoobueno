@@ -8,17 +8,6 @@ interface DailyLogsPanelProps {
   task: Task;
   onChange: (logs: DailyProductionLog[]) => void;
   focusDate?: string;
-  subcontractItems?: SubcontractProductionItem[];
-}
-
-export interface SubcontractProductionItem {
-  allocationId: string;
-  compositionId: string;
-  item: string;
-  description: string;
-  unit: string;
-  contractedQuantity: number;
-  contractedAmount: number;
 }
 
 /** Status color por defasagem (planejado - realizado).
@@ -40,7 +29,7 @@ const STATUS_BG: Record<string, string> = {
 
 const EMPTY_DAILY_LOGS: DailyProductionLog[] = [];
 
-export default function DailyLogsPanel({ task, onChange, focusDate, subcontractItems = [] }: DailyLogsPanelProps) {
+export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsPanelProps) {
   const logs = task.dailyLogs ?? EMPTY_DAILY_LOGS;
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const baseDuration = task.originalDuration ?? task.duration;
@@ -135,26 +124,6 @@ export default function DailyLogsPanel({ task, onChange, focusDate, subcontractI
     });
   };
 
-  const subcontractExecutedBefore = (allocationId: string, currentLogId: string) => logs.reduce((sum, log) => {
-    if (log.id === currentLogId) return sum;
-    return sum + (log.subcontractExecutions ?? [])
-      .filter(execution => execution.allocationId === allocationId)
-      .reduce((entrySum, execution) => entrySum + Math.max(0, Number(execution.quantity) || 0), 0);
-  }, 0);
-
-  const updateSubcontractExecution = (logId: string, item: SubcontractProductionItem, rawQuantity: number) => {
-    const maximum = Math.max(0, item.contractedQuantity - subcontractExecutedBefore(item.allocationId, logId));
-    const quantity = Math.min(maximum, Math.max(0, Number(rawQuantity) || 0));
-    const target = logs.find(log => log.id === logId);
-    const previous = target?.subcontractExecutions ?? [];
-    const exists = previous.some(execution => execution.allocationId === item.allocationId);
-    const subcontractExecutions = quantity <= 0
-      ? previous.filter(execution => execution.allocationId !== item.allocationId)
-      : exists
-        ? previous.map(execution => execution.allocationId === item.allocationId ? { ...execution, quantity } : execution)
-        : [...previous, { allocationId: item.allocationId, compositionId: item.compositionId, quantity }];
-    updateLog(logId, { subcontractExecutions });
-  };
 
   // Linhas: saldo dia, saldo acumulado, executado acumulado, falta executar
   let acc = 0;
@@ -469,32 +438,6 @@ export default function DailyLogsPanel({ task, onChange, focusDate, subcontractI
                       >
                         <Trash2 className="w-3 h-3" />
                       </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-            {subcontractItems.length > 0 && (
-              <div className="ml-8 mr-2 rounded-md border border-primary/25 bg-primary/5 p-2 space-y-2">
-                <div>
-                  <p className="text-[10px] font-semibold text-primary">Produção terceirizada por composição</p>
-                  <p className="text-[10px] text-muted-foreground">Este apontamento controla a medição física da terceirizada. Não lança pagamento automaticamente e não altera o realizado geral da tarefa.</p>
-                </div>
-                {subcontractItems.map(item => {
-                  const current = (row.subcontractExecutions ?? []).find(execution => execution.allocationId === item.allocationId)?.quantity ?? 0;
-                  const previous = subcontractExecutedBefore(item.allocationId, row.id);
-                  const remaining = Math.max(0, item.contractedQuantity - previous);
-                  const unitValue = item.contractedQuantity > 0 ? item.contractedAmount / item.contractedQuantity : 0;
-                  return (
-                    <div key={item.allocationId} className="grid gap-2 rounded border border-border/70 bg-card/80 p-2 sm:grid-cols-[minmax(0,1fr)_auto_auto_auto] sm:items-center">
-                      <div className="min-w-0">
-                        <p className="text-[10px] font-semibold">{item.item} — {item.description}</p>
-                        <p className="text-[10px] text-muted-foreground">Saldo físico antes deste dia: {remaining.toLocaleString('pt-BR', { maximumFractionDigits: 3 })} {item.unit} · R$ {unitValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}/{item.unit}</p>
-                      </div>
-                      <label className="text-[10px] text-muted-foreground">Executado hoje
-                        <input type="number" min={0} max={remaining} step="any" value={current} onChange={event => updateSubcontractExecution(row.id, item, Number(event.target.value))} className="mt-1 h-8 w-full min-w-28 rounded border border-border bg-background px-2 text-right text-sm" />
-                      </label>
-                      <span className="text-[10px] text-muted-foreground sm:text-right">Valor produzido<br /><strong className="text-foreground">{(current * unitValue).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong></span>
                     </div>
                   );
                 })}

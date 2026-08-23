@@ -18,8 +18,6 @@ import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
 import { sortTasksForSchedule, withScheduleOrderForMove } from '@/lib/taskOrdering';
 import { normalizeLaborRole } from '@/lib/laborDimensioning';
 import { applyDailyProductionLogs, upsertDailyProductionLog } from '@/lib/dailyProductionLogs';
-import { buildRealCostAnalysis } from '@/lib/realCost';
-import type { SubcontractProductionItem } from '@/components/DailyLogsPanel';
 
 /** Encurta o nome da tarefa para no máximo `maxWords` palavras, adicionando "…" no final. */
 function truncateWords(text: string, maxWords = 4): string {
@@ -106,29 +104,6 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
   const projectTeams: TeamDefinition[] = project.teams ?? DEFAULT_TEAMS;
   const teamDef = useCallback((code?: TeamCode) => getTeamDefinition(code, projectTeams), [projectTeams]);
   const { confirm: confirmDelete, dialog: confirmDialog } = useConfirmDelete();
-  const subcontractItemsByTask = useMemo(() => {
-    const compositionById = new Map(buildRealCostAnalysis(project).compositions.map(row => [row.id, row]));
-    const byTask = new Map<string, SubcontractProductionItem[]>();
-    (project.subcontracts ?? []).filter(contract => contract.status === 'contracted').forEach(contract => {
-      contract.items.forEach(allocation => {
-        const composition = compositionById.get(allocation.compositionId);
-        const taskId = allocation.taskId ?? composition?.taskId;
-        const contractedQuantity = allocation.contractedQuantity ?? composition?.quantityFinal ?? 0;
-        if (!taskId || contractedQuantity <= 0) return;
-        const item: SubcontractProductionItem = {
-          allocationId: allocation.id,
-          compositionId: allocation.compositionId,
-          item: allocation.item,
-          description: allocation.description,
-          unit: allocation.unit,
-          contractedQuantity,
-          contractedAmount: allocation.contractedAmount,
-        };
-        byTask.set(taskId, [...(byTask.get(taskId) ?? []), item]);
-      });
-    });
-    return byTask;
-  }, [project]);
   // Estado inicial respeita a persistência (uiState.collapsedPhaseIds).
   // Se não houver registro, todos os capítulos começam expandidos.
   const [expandedPhases, setExpandedPhases] = useState<Set<string>>(() => {
@@ -1346,7 +1321,6 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                                   task={task}
                                   onChange={(logs: DailyProductionLog[]) => updateTask(phase.id, task.id, applyDailyProductionLogs(task, logs))}
                                   focusDate={focusTaskId === task.id ? focusDate : undefined}
-                                  subcontractItems={subcontractItemsByTask.get(task.id)}
                                 />
                             )}
                           </div>
