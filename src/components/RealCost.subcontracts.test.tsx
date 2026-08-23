@@ -104,4 +104,11 @@ describe('SubcontractsTab', () => {
     delete rows[0].taskId;
     delete rows[1].taskId;
   });
+
+  it('oferece observação ao lançar pagamento e não altera o pacote enquanto o pagamento não for confirmado', () => {
+    render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /lançar pagamento/i }));
+    expect(screen.getByLabelText('Valor do pagamento')).toBeInTheDocument();
+    expect(screen.getByLabelText('Observação do pagamento')).toHaveAttribute('placeholder', expect.stringMatching(/descreva o serviço/i));
+  });
 });
