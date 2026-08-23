@@ -228,6 +228,14 @@ export interface DailyProductionLog {
   notes?: string;
   /** Horas efetivamente apontadas por funcao ou trabalhador. */
   laborEntries?: DailyLaborEntry[];
+  /** Produção física da terceirizada, sempre por composição contratada. */
+  subcontractExecutions?: DailySubcontractExecution[];
+}
+
+export interface DailySubcontractExecution {
+  allocationId: string;
+  compositionId: string;
+  quantity: number;
 }
 
 export interface Material {
@@ -362,6 +370,10 @@ export interface SubcontractItemAllocation {
   referenceLaborCost: number;
   allocationPercent: number;
   contractedAmount: number;
+  /** Vínculo congelado na contratação para permitir o apontamento diário por composição. */
+  taskId?: string;
+  /** Base física congelada do contrato; evita alterar o unitário após novo aditivo. */
+  contractedQuantity?: number;
 }
 
 export interface SubcontractPayment {

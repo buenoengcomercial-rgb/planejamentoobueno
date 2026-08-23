@@ -1,4 +1,4 @@
-import type { Subcontract, SubcontractItemAllocation, SubcontractPayment } from '@/types/project';
+import type { Project, Subcontract, SubcontractItemAllocation, SubcontractPayment } from '@/types/project';
 import { money2 } from '@/lib/financialEngine';
 
 export interface SubcontractAllocationCandidate {
@@ -43,4 +43,13 @@ export function allocatedPaymentValue(subcontract: Subcontract, allocation: Subc
     const current = allocations.find(item => item.id === allocation.id);
     return sum + (current?.allocatedAmount ?? 0);
   }, 0);
+}
+
+/** Total físico já apontado para uma composição terceirizada em todos os diários. */
+export function subcontractExecutedQuantity(project: Project, allocationId: string) {
+  return (project.phases ?? []).reduce((phaseTotal, phase) => phaseTotal + phase.tasks.reduce((taskTotal, task) => taskTotal +
+    (task.dailyLogs ?? []).reduce((logsTotal, log) => logsTotal +
+      (log.subcontractExecutions ?? [])
+        .filter(execution => execution.allocationId === allocationId)
+        .reduce((sum, execution) => sum + Math.max(0, Number(execution.quantity) || 0), 0), 0), 0), 0);
 }
