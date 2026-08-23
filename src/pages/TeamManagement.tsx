@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useOrganization } from '@/hooks/useOrganization';
 import {
-  listOrgMembers, inviteMemberByEmail, createMemberWithPassword, updateMemberRole, updateMemberStatus, removeMember,
+  listOrgMembers, inviteMemberByEmail, createMemberWithPassword, updateMemberRole, updateMemberStatus, updateMemberName, removeMember,
   OrgMember, OrgRole, MemberStatus, ORG_ROLE_OPTIONS, ROLE_DESCRIPTIONS, ROLE_LABELS, ROLE_PERMISSIONS, STATUS_LABELS, canManageMembers,
 } from '@/lib/organizations';
 import { Button } from '@/components/ui/button';
@@ -15,7 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Loader2, ArrowLeft, UserPlus, Trash2, ShieldOff, ShieldCheck, KeyRound, Mail } from 'lucide-react';
+import { Loader2, ArrowLeft, UserPlus, Trash2, ShieldOff, ShieldCheck, KeyRound, Mail, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -39,6 +39,8 @@ export default function TeamManagement() {
   const [pwdConfirm, setPwdConfirm] = useState('');
   const [pwdSubmitting, setPwdSubmitting] = useState(false);
   const [resetSubmittingId, setResetSubmittingId] = useState<string | null>(null);
+  const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
+  const [nameSavingId, setNameSavingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!authLoading && !user) navigate('/auth', { replace: true });
@@ -117,6 +119,24 @@ export default function TeamManagement() {
       toast.success('Status atualizado');
       void reload();
     } catch { toast.error('Erro ao atualizar status'); }
+  };
+
+  const handleNameSave = async (member: OrgMember) => {
+    if (!orgId) return;
+    const name = (nameDrafts[member.id] ?? member.name ?? '').trim();
+    if (!name) { toast.error('Informe o nome do usuário'); return; }
+    if (name === (member.name ?? '').trim()) return;
+    setNameSavingId(member.id);
+    try {
+      await updateMemberName(orgId, member.userId, name);
+      setMembers(current => current.map(item => item.id === member.id ? { ...item, name } : item));
+      setNameDrafts(current => { const next = { ...current }; delete next[member.id]; return next; });
+      toast.success('Nome atualizado. Os próximos registros usarão essa identificação.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao atualizar nome');
+    } finally {
+      setNameSavingId(null);
+    }
   };
 
   const handleRemove = async (memberId: string) => {
@@ -331,10 +351,13 @@ export default function TeamManagement() {
                     <article key={m.id} className="rounded-xl border bg-card p-3 shadow-sm">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <p className="break-words font-semibold">{m.name || m.email || m.userId.slice(0, 8)}</p>
                           <p className="break-all text-sm text-muted-foreground">{m.email}</p>
                         </div>
                         <Badge className="shrink-0" variant={m.status === 'active' ? 'default' : m.status === 'blocked' ? 'destructive' : 'secondary'}>{STATUS_LABELS[m.status]}</Badge>
+                      </div>
+                      <div className="mt-3 space-y-1">
+                        <Label className="text-xs">Nome</Label>
+                        <div className="flex gap-2"><Input aria-label={`Nome de ${m.email || m.userId}`} className="min-h-11 text-base" value={nameDrafts[m.id] ?? m.name ?? ''} onChange={event => setNameDrafts(current => ({ ...current, [m.id]: event.target.value }))} placeholder="Nome completo" /><Button size="icon" variant="outline" className="min-h-11 shrink-0" aria-label={`Salvar nome de ${m.email || m.userId}`} onClick={() => handleNameSave(m)} disabled={nameSavingId === m.id}>{nameSavingId === m.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}</Button></div>
                       </div>
                       <div className="mt-3 space-y-1">
                         <Label className="text-xs">Função</Label>
@@ -361,9 +384,10 @@ export default function TeamManagement() {
                 })}
               </div>
               <div className="hidden overflow-x-auto md:block">
-              <Table className="min-w-[780px]">
+              <Table className="min-w-[920px]">
                 <TableHeader>
                   <TableRow>
+                    <TableHead>Nome</TableHead>
                     <TableHead>Usuário</TableHead>
                     <TableHead>Função</TableHead>
                     <TableHead>Status</TableHead>
@@ -376,8 +400,10 @@ export default function TeamManagement() {
                     return (
                       <TableRow key={m.id}>
                         <TableCell>
-                          <div className="font-medium">{m.name || m.email || m.userId.slice(0, 8)}</div>
-                          <div className="text-xs text-muted-foreground">{m.email}</div>
+                          <div className="flex w-[240px] gap-2"><Input aria-label={`Nome de ${m.email || m.userId}`} value={nameDrafts[m.id] ?? m.name ?? ''} onChange={event => setNameDrafts(current => ({ ...current, [m.id]: event.target.value }))} placeholder="Nome completo" /><Button size="icon" variant="outline" aria-label={`Salvar nome de ${m.email || m.userId}`} onClick={() => handleNameSave(m)} disabled={nameSavingId === m.id}>{nameSavingId === m.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}</Button></div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="font-medium">{m.email || m.userId.slice(0, 8)}</div>
                         </TableCell>
                         <TableCell>
                           <Select

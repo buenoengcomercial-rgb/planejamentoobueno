@@ -228,6 +228,18 @@ export async function updateMemberStatus(memberId: string, status: MemberStatus)
   if (error) throw error;
 }
 
+/** Atualiza o nome operacional do membro e a identidade usada nos próximos registros de auditoria. */
+export async function updateMemberName(organizationId: string, userId: string, name: string): Promise<void> {
+  const cleanName = name.trim();
+  if (!cleanName) throw new Error('Informe o nome do usuário');
+  const { data, error } = await supabase.functions.invoke('admin-update-member-name', {
+    body: { organization_id: organizationId, user_id: userId, name: cleanName },
+  });
+  if (error || !(data as { ok?: boolean } | null)?.ok) {
+    throw new Error((data as { error?: string } | null)?.error || error?.message || 'Não foi possível atualizar o nome');
+  }
+}
+
 export async function removeMember(memberId: string): Promise<void> {
   const { error } = await supabase
     .from('organization_members')
