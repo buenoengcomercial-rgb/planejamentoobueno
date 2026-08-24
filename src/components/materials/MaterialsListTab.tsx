@@ -5,6 +5,7 @@ import * as MC from '@/lib/materialComparisons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { AlertTriangle, Link2, Loader2, Check, Search, Plus, BrickWall, HardHat, Truck, CircleSlash, ArrowDown, ArrowUp, ArrowUpDown, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { parseBR, trunc2, formatBRL, formatQty } from './numberInput';
@@ -86,6 +87,8 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
 
   const [showManual, setShowManual] = useState(false);
   const [manual, setManual] = useState({ description: '', unit: 'un', quantity: '1', referencePrice: '', code: '' });
+  const [bulkLinkOpen, setBulkLinkOpen] = useState(false);
+  const [bulkLinkTargetId, setBulkLinkTargetId] = useState('');
 
   const allComparisons = useMemo(
     () => project.materialComparisons ?? [],
@@ -292,18 +295,50 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
     }));
   };
 
-  const linkSelectedToActive = () => {
-    if (!comparison) {
-      toast.error('Selecione ou crie um comparativo antes de vincular insumos.');
-      return;
-    }
-    const picked = realSuggestions.filter(s => selectedKeys[s.key] && s.purchasableQuantity > 0);
-    if (picked.length === 0) return;
-    onProjectChange(prev => picked.reduce(
-      (next, s) => MC.setSuggestionLink(next, suggestionToPayload(s), comparison.id),
+  const selectedSuggestions = useMemo(
+    () => realSuggestions.filter(s => selectedKeys[s.key] && s.purchasableQuantity > 0),
+    [realSuggestions, selectedKeys],
+  );
+  const openComparisons = useMemo(
+    () => allComparisons.filter(c => c.status === 'rascunho' || c.status === 'em_cotacao'),
+    [allComparisons],
+  );
+  const bulkLinkSummary = useMemo(() => {
+    const locked = selectedSuggestions.filter(s => {
+      const linkedId = linkedByKey.get(MC.linkKeyOf(s));
+      const linked = allComparisons.find(c => c.id === linkedId);
+      return linked?.status === 'fechado' || linked?.status === 'comprado';
+    });
+    const movable = selectedSuggestions.filter(s => !locked.includes(s));
+    const transfers = new Map<string, number>();
+    movable.forEach(s => {
+      const sourceId = linkedByKey.get(MC.linkKeyOf(s));
+      if (sourceId && sourceId !== bulkLinkTargetId) {
+        transfers.set(sourceId, (transfers.get(sourceId) ?? 0) + 1);
+      }
+    });
+    return { movable, locked, transfers };
+  }, [allComparisons, bulkLinkTargetId, linkedByKey, selectedSuggestions]);
+
+  const openBulkLink = () => {
+    if (selectedSuggestions.length === 0) return;
+    setBulkLinkTargetId('');
+    setBulkLinkOpen(true);
+  };
+
+  const confirmBulkLink = () => {
+    if (!bulkLinkTargetId || bulkLinkSummary.movable.length === 0) return;
+    onProjectChange(prev => bulkLinkSummary.movable.reduce(
+      (next, s) => MC.setSuggestionLink(next, suggestionToPayload(s), bulkLinkTargetId),
       prev,
     ));
-    setSelectedKeys({});
+    setSelectedKeys(prev => {
+      const next = { ...prev };
+      bulkLinkSummary.movable.forEach(s => { delete next[s.key]; });
+      return next;
+    });
+    setBulkLinkOpen(false);
+    toast.success(`${bulkLinkSummary.movable.length} insumo${bulkLinkSummary.movable.length === 1 ? '' : 's'} vinculado${bulkLinkSummary.movable.length === 1 ? '' : 's'} ao grupo escolhido.`);
   };
 
   const addManual = () => {
@@ -437,7 +472,7 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
             {showFullySuppressed ? 'Ocultar' : 'Exibir'} suprimidos ({fullySuppressedSuggestions.length})
           </Button>
         )}
-        <Button size="sm" className="h-8 text-xs" onClick={linkSelectedToActive} disabled={selectedCount === 0}>
+        <Button size="sm" className="h-8 text-xs" onClick={openBulkLink} disabled={selectedCount === 0}>
           <Link2 className="w-3.5 h-3.5 mr-1" /> Vincular selecionados {selectedCount > 0 && `(${selectedCount})`}
         </Button>
         <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setShowManual(s => !s)}>
@@ -588,12 +623,71 @@ export default function MaterialsListTab({ project, comparison, onApply, onProje
           </table>
         </div>
         <div className="px-2 py-1.5 border-t border-border bg-muted/30 flex items-center justify-between text-[11px] text-muted-foreground">
-          <span>{selectedCount} selecionado{selectedCount === 1 ? '' : 's'}{comparison ? ` · vincular ao comparativo "${comparison.name}"` : ''}</span>
-          <Button size="sm" className="h-7 text-[11px]" onClick={linkSelectedToActive} disabled={selectedCount === 0}>
+          <span>{selectedCount} selecionado{selectedCount === 1 ? '' : 's'}</span>
+          <Button size="sm" className="h-7 text-[11px]" onClick={openBulkLink} disabled={selectedCount === 0}>
             <Link2 className="w-3 h-3 mr-1" /> Vincular selecionados
           </Button>
         </div>
       </div>
+
+      <Dialog open={bulkLinkOpen} onOpenChange={setBulkLinkOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Vincular insumos ao grupo de compra</DialogTitle>
+            <DialogDescription>
+              Escolha o grupo que receberá os {selectedSuggestions.length} insumo{selectedSuggestions.length === 1 ? '' : 's'} selecionado{selectedSuggestions.length === 1 ? '' : 's'}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <label className="space-y-1.5 text-sm font-medium">
+            Grupo de compra
+            <select
+              aria-label="Grupo de compra de destino"
+              value={bulkLinkTargetId}
+              onChange={event => setBulkLinkTargetId(event.target.value)}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="">Selecione um grupo</option>
+              {openComparisons.map(group => (
+                <option key={group.id} value={group.id}>
+                  {group.name} ({MC.getActiveComparisonItems(group).length} itens)
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {openComparisons.length === 0 && (
+            <p className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-warning">
+              Não há grupo aberto disponível. Crie ou reabra um grupo de compra antes de vincular os insumos.
+            </p>
+          )}
+
+          {bulkLinkTargetId && bulkLinkSummary.transfers.size > 0 && (
+            <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
+              <p className="font-medium">Transferência confirmada</p>
+              <p className="mt-1 text-muted-foreground">Os itens abaixo sairão dos grupos abertos atuais e irão para o grupo escolhido:</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+                {Array.from(bulkLinkSummary.transfers.entries()).map(([sourceId, count]) => (
+                  <li key={sourceId}>{allComparisons.find(group => group.id === sourceId)?.name ?? 'Grupo sem nome'}: {count} {count === 1 ? 'item' : 'itens'}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {bulkLinkSummary.locked.length > 0 && (
+            <p className="rounded-md border border-muted-foreground/30 bg-muted p-3 text-sm text-muted-foreground">
+              {bulkLinkSummary.locked.length} {bulkLinkSummary.locked.length === 1 ? 'item' : 'itens'} já {bulkLinkSummary.locked.length === 1 ? 'está' : 'estão'} em grupo fechado ou comprado e permanecerá{bulkLinkSummary.locked.length === 1 ? '' : 'ão'} sem alteração.
+            </p>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkLinkOpen(false)}>Cancelar</Button>
+            <Button onClick={confirmBulkLink} disabled={!bulkLinkTargetId || bulkLinkSummary.movable.length === 0}>
+              Vincular {bulkLinkSummary.movable.length} {bulkLinkSummary.movable.length === 1 ? 'item' : 'itens'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

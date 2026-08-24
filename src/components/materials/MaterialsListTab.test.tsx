@@ -39,7 +39,130 @@ const comparison: MaterialComparison = {
   updatedAt: '2026-08-14',
 };
 
+const targetComparison: MaterialComparison = {
+  ...comparison,
+  id: 'comparison-target',
+  name: 'Elétrica',
+};
+
 describe('MaterialsListTab', () => {
+  it('pede o grupo de destino antes de vincular os itens selecionados', () => {
+    const project = {
+      id: 'project',
+      name: 'Obra',
+      startDate: '2026-01-01',
+      endDate: '2026-12-31',
+      totalBudget: 0,
+      phases: [],
+      additives: [{
+        id: 'additive',
+        name: 'Aditivo',
+        importedAt: '2026-08-14',
+        status: 'aditivo_contratado',
+        isContracted: true,
+        compositions: [newService],
+      }],
+      materialComparisons: [{
+        ...comparison,
+        items: [{
+          id: 'already-linked',
+          code: 'MAT-PENDING',
+          description: 'Material ainda não contratado',
+          unit: 'UN',
+          quantity: 6,
+          contractedQuantity: 0,
+          additiveQuantity: 6,
+          totalQuantity: 6,
+          purchasableQuantity: 6,
+          prices: [],
+          sourceType: 'additive_input',
+          sourceId: 'pending-input',
+        }],
+      }, targetComparison],
+    } as Project;
+    const onProjectChange = vi.fn();
+
+    render(
+      <MaterialsListTab
+        project={project}
+        comparison={comparison}
+        onApply={vi.fn()}
+        onProjectChange={onProjectChange}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole('checkbox').at(-1)!);
+    fireEvent.click(screen.getAllByRole('button', { name: /vincular selecionados/i })[0]);
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Vincular 1 item' })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Grupo de compra de destino'), {
+      target: { value: targetComparison.id },
+    });
+    expect(screen.getByText('Compra: 1 item')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Vincular 1 item' }));
+
+    expect(onProjectChange).toHaveBeenCalledOnce();
+    const updater = onProjectChange.mock.calls[0][0] as (previous: Project) => Project;
+    const updated = updater(project);
+    expect(updated.materialComparisons?.find(group => group.id === targetComparison.id)?.items).toHaveLength(1);
+    expect(updated.materialComparisons?.find(group => group.id === comparison.id)?.items).toHaveLength(0);
+  });
+
+  it('informa e preserva o item vinculado a grupo fechado', () => {
+    const project = {
+      id: 'project',
+      name: 'Obra',
+      startDate: '2026-01-01',
+      endDate: '2026-12-31',
+      totalBudget: 0,
+      phases: [],
+      additives: [{
+        id: 'additive',
+        name: 'Aditivo',
+        importedAt: '2026-08-14',
+        status: 'aditivo_contratado',
+        isContracted: true,
+        compositions: [newService],
+      }],
+      materialComparisons: [{
+        ...comparison,
+        id: 'comparison-closed',
+        name: 'Compra fechada',
+        status: 'fechado',
+        items: [{
+          id: 'locked-item',
+          code: 'MAT-PENDING',
+          description: 'Material ainda não contratado',
+          unit: 'UN',
+          quantity: 6,
+          prices: [],
+          sourceType: 'additive_input',
+          sourceId: 'pending-input',
+        }],
+      }, targetComparison],
+    } as Project;
+
+    render(
+      <MaterialsListTab
+        project={project}
+        comparison={targetComparison}
+        onApply={vi.fn()}
+        onProjectChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole('checkbox').at(-1)!);
+    fireEvent.click(screen.getAllByRole('button', { name: /vincular selecionados/i })[0]);
+    fireEvent.change(screen.getByLabelText('Grupo de compra de destino'), {
+      target: { value: targetComparison.id },
+    });
+
+    expect(screen.getByText(/já está em grupo fechado ou comprado/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Vincular 0 itens' })).toBeDisabled();
+  });
+
   it('mostra as três quantidades e bloqueia compra de item exclusivamente proposto', () => {
     const project = {
       id: 'project',
