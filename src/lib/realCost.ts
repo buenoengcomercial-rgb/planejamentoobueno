@@ -91,6 +91,8 @@ export interface RealCostCompositionRow {
     balance: number;
     reconciliationIssue?: string;
   };
+  /** Só composições com todos os custos cobertos podem alimentar lucro e margem. */
+  isCertified: boolean;
   committedCost: number;
   realCost: number;
   grossProfit: number;
@@ -117,6 +119,7 @@ export interface RealCostChapterRow {
 
 export interface RealCostGroupTotals {
   contractedValue: number;
+  certifiedContractedValue: number;
   materialCost: number;
   laborCost: number;
   equipmentCost: number;
@@ -146,6 +149,7 @@ export interface RealCostMonthRow {
   startDate: string;
   endDate: string;
   contractedValue: number;
+  certifiedContractedValue: number;
   committedCost: number;
   realCost: number;
   grossProfit: number;
@@ -170,6 +174,7 @@ export interface RealCostAnalysis {
   pending: RealCostPendingSummary;
   totals: {
     contractedValue: number;
+    certifiedContractedValue: number;
     committedCost: number;
     realCost: number;
     grossProfit: number;
@@ -869,6 +874,7 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
       equipmentCost,
       otherCost,
       subcontract,
+      isCertified: complete,
       committedCost,
       realCost,
       grossProfit,
@@ -899,6 +905,10 @@ function totalsFromRowsAndChildren(
     rows.reduce((sum, row) => sum + row.laborCost, 0) +
     children.reduce((sum, child) => sum + child.totals.laborCost, 0),
   );
+  const certifiedContractedValue = money2(
+    rows.filter(row => row.isCertified).reduce((sum, row) => sum + row.contractedValue, 0) +
+    children.reduce((sum, child) => sum + child.totals.certifiedContractedValue, 0),
+  );
   const equipmentCost = money2(
     rows.reduce((sum, row) => sum + row.equipmentCost, 0) +
     children.reduce((sum, child) => sum + child.totals.equipmentCost, 0),
@@ -908,15 +918,15 @@ function totalsFromRowsAndChildren(
     children.reduce((sum, child) => sum + child.totals.otherCost, 0),
   );
   const committedCost = money2(
-    rows.reduce((sum, row) => sum + row.committedCost, 0) +
+    rows.filter(row => row.isCertified).reduce((sum, row) => sum + row.committedCost, 0) +
     children.reduce((sum, child) => sum + child.totals.committedCost, 0),
   );
   const realCost = money2(
     rows.reduce((sum, row) => sum + row.realCost, 0) +
     children.reduce((sum, child) => sum + child.totals.realCost, 0),
   );
-  const grossProfit = money2(contractedValue - committedCost);
-  const marginPct = contractedValue > 0 ? trunc2((grossProfit / contractedValue) * 100) : 0;
+  const grossProfit = money2(certifiedContractedValue - committedCost);
+  const marginPct = certifiedContractedValue > 0 ? trunc2((grossProfit / certifiedContractedValue) * 100) : 0;
   const compositionCount =
     rows.length + children.reduce((sum, child) => sum + child.totals.compositionCount, 0);
   const pendingCompositionCount =
@@ -925,6 +935,7 @@ function totalsFromRowsAndChildren(
 
   return {
     contractedValue,
+    certifiedContractedValue,
     materialCost,
     laborCost,
     equipmentCost,
@@ -1068,6 +1079,7 @@ function buildMonthSkeleton(startISO: string, endISO: string): RealCostMonthRow[
       startDate: bounds.startDate,
       endDate: bounds.endDate,
       contractedValue: 0,
+      certifiedContractedValue: 0,
       committedCost: 0,
       realCost: 0,
       grossProfit: 0,
@@ -1125,7 +1137,10 @@ function buildMonthlyRows(
       const target = monthMap.get(month.key);
       if (!target) continue;
       target.contractedValue = money2(target.contractedValue + composition.contractedValue * ratio);
-      target.committedCost = money2(target.committedCost + composition.committedCost * ratio);
+      if (composition.isCertified) {
+        target.certifiedContractedValue = money2(target.certifiedContractedValue + composition.contractedValue * ratio);
+        target.committedCost = money2(target.committedCost + composition.committedCost * ratio);
+      }
       target.realCost = money2(target.realCost + composition.realCost * ratio);
       touchedMonths.add(month.key);
     }
@@ -1140,15 +1155,15 @@ function buildMonthlyRows(
   }
 
   return months.map(month => {
-    const grossProfit = money2(month.contractedValue - month.committedCost);
-    const marginPct = month.contractedValue > 0 ? trunc2((grossProfit / month.contractedValue) * 100) : 0;
+    const grossProfit = money2(month.certifiedContractedValue - month.committedCost);
+    const marginPct = month.certifiedContractedValue > 0 ? trunc2((grossProfit / month.certifiedContractedValue) * 100) : 0;
     return {
       ...month,
       grossProfit,
       marginPct,
       signal: signalFromMargin(
         marginPct,
-        month.contractedValue > 0 && month.taskCount > 0 && !incompleteMonthKeys.has(month.key),
+        month.certifiedContractedValue > 0 && month.taskCount > 0 && !incompleteMonthKeys.has(month.key),
       ),
     };
   });
@@ -1169,10 +1184,11 @@ export function buildRealCostAnalysis(project: Project, trabalhaSabado = false):
 
   const reconstructedContractedValue = money2(compositions.reduce((sum, row) => sum + row.contractedValue, 0));
   const contractedValue = getOfficialRealCostContractedValue(project) ?? reconstructedContractedValue;
-  const committedCost = money2(compositions.reduce((sum, row) => sum + row.committedCost, 0));
+  const certifiedContractedValue = money2(compositions.filter(row => row.isCertified).reduce((sum, row) => sum + row.contractedValue, 0));
+  const committedCost = money2(compositions.filter(row => row.isCertified).reduce((sum, row) => sum + row.committedCost, 0));
   const realCost = money2(compositions.reduce((sum, row) => sum + row.realCost, 0));
-  const grossProfit = money2(contractedValue - committedCost);
-  const marginPct = contractedValue > 0 ? trunc2((grossProfit / contractedValue) * 100) : 0;
+  const grossProfit = money2(certifiedContractedValue - committedCost);
+  const marginPct = certifiedContractedValue > 0 ? trunc2((grossProfit / certifiedContractedValue) * 100) : 0;
 
   return {
     compositions,
@@ -1182,6 +1198,7 @@ export function buildRealCostAnalysis(project: Project, trabalhaSabado = false):
     pending,
     totals: {
       contractedValue,
+      certifiedContractedValue,
       committedCost,
       realCost,
       grossProfit,

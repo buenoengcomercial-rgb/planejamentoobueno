@@ -158,15 +158,32 @@ describe('custo realizado por producao e almoxarifado', () => {
     expect(analysis.compositions[0].realCost).toBe(230);
     expect(analysis.compositions[0].committedCost).toBe(360);
     expect(analysis.compositions[0].grossProfit).toBe(640);
+    expect(analysis.compositions[0].isCertified).toBe(false);
     expect(analysis.compositions[0].missingQuoteCount).toBe(1);
     expect(analysis.compositions[0].signal).toBe('incomplete');
     expect(analysis.totals.realCost).toBe(230);
-    expect(analysis.totals.committedCost).toBe(360);
-    expect(analysis.totals.grossProfit).toBe(640);
+    expect(analysis.totals.certifiedContractedValue).toBe(0);
+    expect(analysis.totals.committedCost).toBe(0);
+    expect(analysis.totals.grossProfit).toBe(0);
     expect(analysis.totals.contractedValue).toBe(1_000);
     expect(analysis.totals.signal).toBe('incomplete');
-    expect(analysis.months[0]?.committedCost).toBe(360);
-    expect(analysis.months[0]?.grossProfit).toBe(640);
+    expect(analysis.months[0]?.certifiedContractedValue).toBe(0);
+    expect(analysis.months[0]?.committedCost).toBe(0);
+    expect(analysis.months[0]?.grossProfit).toBe(0);
     expect(analysis.months[0]?.signal).toBe('incomplete');
+
+    const certifiedAnalysis = buildRealCostAnalysis({
+      ...project,
+      analyticCompositions: project.analyticCompositions?.map(composition => ({
+        ...composition,
+        inputs: composition.inputs?.filter(input => input.id !== 'material-2'),
+      })),
+    });
+    expect(certifiedAnalysis.compositions[0].isCertified).toBe(true);
+    expect(certifiedAnalysis.totals.certifiedContractedValue).toBe(1_000);
+    expect(certifiedAnalysis.totals.committedCost).toBe(360);
+    expect(certifiedAnalysis.totals.grossProfit).toBe(640);
+    expect(certifiedAnalysis.months[0]?.certifiedContractedValue).toBe(1_000);
+    expect(certifiedAnalysis.months[0]?.grossProfit).toBe(640);
   });
 });
