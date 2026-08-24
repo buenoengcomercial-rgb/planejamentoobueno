@@ -146,6 +146,7 @@ export interface RealCostMonthRow {
   startDate: string;
   endDate: string;
   contractedValue: number;
+  committedCost: number;
   realCost: number;
   grossProfit: number;
   marginPct: number;
@@ -782,9 +783,16 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
         ? 'A mão de obra de referência mudou após a contratação; o rateio foi preservado.'
         : undefined),
     } : undefined;
-    const committedCost = money2(inputs.reduce((sum, input) => sum + (
-      subcontract && input.costClass === 'labor' ? 0 : input.realTotal
-    ), 0) + (subcontract?.contractedAmount ?? 0));
+    // O custo estimado usa a menor cotação válida dos insumos. Para a mão de
+    // obra própria sem cotação, a referência SINAPI é a provisão aprovada.
+    // Um contrato terceirizado sempre substitui essa provisão, sem duplicá-la.
+    const committedCost = money2(inputs.reduce((sum, input) => {
+      if (input.costClass === 'labor') {
+        if (subcontract) return sum;
+        return sum + (input.status === 'quoted' ? input.realTotal : input.referenceTotal);
+      }
+      return sum + input.realTotal;
+    }, 0) + (subcontract?.contractedAmount ?? 0));
     const linkedTaskId = matchedTask?.task.id;
     const linkedBudgetId = source.id.startsWith('budget:') ? source.id.slice('budget:'.length) : undefined;
     const matchingActualEntries = (project.costLedger ?? [])
@@ -818,12 +826,17 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
       + warehouseMaterialActual
       + (subcontract?.paidAmount ?? 0),
     );
-    const missingQuoteCount = inputs.filter(input => input.status === 'missing' && !(subcontract && input.costClass === 'labor')).length;
+    // Mão de obra própria sem cotação não torna a estimativa inválida: a
+    // referência SINAPI entra como provisão. Os demais insumos continuam
+    // sinalizados para preservar a cobertura real das cotações.
+    const missingQuoteCount = inputs.filter(input => input.status === 'missing' && input.costClass !== 'labor').length;
     const hasAnalytic = inputs.length > 0;
     const hasScheduleLink = !!(matchedTask || source.phaseId);
     const hasContractValue = source.contractedValue > 0;
     const complete = hasAnalytic && hasScheduleLink && hasContractValue && missingQuoteCount === 0;
-    const grossProfit = money2(source.contractedValue - realCost);
+    // Lucro bruto estimado usa as cotações/contratações já comprometidas.
+    // O custo realizado é mantido separadamente para acompanhamento da execução.
+    const grossProfit = money2(source.contractedValue - committedCost);
     const marginPct = source.contractedValue > 0 ? trunc2((grossProfit / source.contractedValue) * 100) : 0;
 
     return {
@@ -902,7 +915,7 @@ function totalsFromRowsAndChildren(
     rows.reduce((sum, row) => sum + row.realCost, 0) +
     children.reduce((sum, child) => sum + child.totals.realCost, 0),
   );
-  const grossProfit = money2(contractedValue - realCost);
+  const grossProfit = money2(contractedValue - committedCost);
   const marginPct = contractedValue > 0 ? trunc2((grossProfit / contractedValue) * 100) : 0;
   const compositionCount =
     rows.length + children.reduce((sum, child) => sum + child.totals.compositionCount, 0);
@@ -1055,6 +1068,7 @@ function buildMonthSkeleton(startISO: string, endISO: string): RealCostMonthRow[
       startDate: bounds.startDate,
       endDate: bounds.endDate,
       contractedValue: 0,
+      committedCost: 0,
       realCost: 0,
       grossProfit: 0,
       marginPct: 0,
@@ -1111,6 +1125,7 @@ function buildMonthlyRows(
       const target = monthMap.get(month.key);
       if (!target) continue;
       target.contractedValue = money2(target.contractedValue + composition.contractedValue * ratio);
+      target.committedCost = money2(target.committedCost + composition.committedCost * ratio);
       target.realCost = money2(target.realCost + composition.realCost * ratio);
       touchedMonths.add(month.key);
     }
@@ -1125,7 +1140,7 @@ function buildMonthlyRows(
   }
 
   return months.map(month => {
-    const grossProfit = money2(month.contractedValue - month.realCost);
+    const grossProfit = money2(month.contractedValue - month.committedCost);
     const marginPct = month.contractedValue > 0 ? trunc2((grossProfit / month.contractedValue) * 100) : 0;
     return {
       ...month,
@@ -1156,7 +1171,7 @@ export function buildRealCostAnalysis(project: Project, trabalhaSabado = false):
   const contractedValue = getOfficialRealCostContractedValue(project) ?? reconstructedContractedValue;
   const committedCost = money2(compositions.reduce((sum, row) => sum + row.committedCost, 0));
   const realCost = money2(compositions.reduce((sum, row) => sum + row.realCost, 0));
-  const grossProfit = money2(contractedValue - realCost);
+  const grossProfit = money2(contractedValue - committedCost);
   const marginPct = contractedValue > 0 ? trunc2((grossProfit / contractedValue) * 100) : 0;
 
   return {

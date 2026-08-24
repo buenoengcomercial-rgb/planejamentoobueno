@@ -182,7 +182,7 @@ function computeVisibleTotals(rows: RealCostCompositionRow[], children: RealCost
     rows.reduce((sum, row) => sum + row.committedCost, 0) +
     children.reduce((sum, child) => sum + child.totals.committedCost, 0),
   );
-  const grossProfit = roundMoney(contractedValue - realCost);
+  const grossProfit = roundMoney(contractedValue - committedCost);
   const marginPct = contractedValue > 0 ? Math.round((grossProfit / contractedValue) * 10000) / 100 : 0;
   const compositionCount = rows.length + children.reduce((sum, child) => sum + child.totals.compositionCount, 0);
   const pendingCompositionCount =
@@ -361,11 +361,17 @@ function RealCostGroupRows({
         <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(group.totals.laborCost)}</td>
         <td className={`px-2 py-1.5 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(group.totals.committedCost)}</td>
         <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(group.totals.realCost)}</td>
-        <td className={`px-2 py-1.5 text-right tabular-nums ${group.totals.signal === 'incomplete' ? 'text-muted-foreground' : group.totals.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
-          {group.totals.signal === 'incomplete' ? '—' : fmtBRL(group.totals.grossProfit)}
+        <td
+          className={`px-2 py-1.5 text-right tabular-nums ${group.totals.signal === 'incomplete' ? 'text-warning' : group.totals.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}
+          title={group.totals.signal === 'incomplete' ? `Estimativa parcial: ${group.totals.pendingCompositionCount} composição(ões) ainda têm pendências de custo.` : undefined}
+        >
+          {fmtBRL(group.totals.grossProfit)}
         </td>
-        <td className={`px-2 py-1.5 text-right tabular-nums ${group.totals.signal === 'incomplete' ? 'text-muted-foreground' : marginTone(group.totals.marginPct)}`}>
-          {group.totals.signal === 'incomplete' ? '—' : fmtPct(group.totals.marginPct)}
+        <td
+          className={`px-2 py-1.5 text-right tabular-nums ${group.totals.signal === 'incomplete' ? 'text-warning' : marginTone(group.totals.marginPct)}`}
+          title={group.totals.signal === 'incomplete' ? 'Margem parcial, recalculada à medida que novas cotações forem incluídas.' : undefined}
+        >
+          {fmtPct(group.totals.marginPct)}
         </td>
         <td className="px-2 py-1.5 text-center tabular-nums">{group.totals.pendingCompositionCount}</td>
         <td className="px-2 py-1.5 text-center"><SignalBadge signal={group.totals.signal} /></td>
@@ -405,11 +411,17 @@ function RealCostGroupRows({
                   <td className="p-2 align-top text-right tabular-nums">{fmtBRL(row.laborCost)}</td>
                   <td className={`p-2 align-top text-right tabular-nums ${BORDER_L}`}>{fmtBRL(row.committedCost)}</td>
                   <td className="p-2 align-top text-right tabular-nums font-semibold">{fmtBRL(row.realCost)}</td>
-                  <td className={`p-2 align-top text-right tabular-nums font-semibold ${row.signal === 'incomplete' ? 'text-muted-foreground' : row.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
-                    {row.signal === 'incomplete' ? '—' : fmtBRL(row.grossProfit)}
+                  <td
+                    className={`p-2 align-top text-right tabular-nums font-semibold ${row.signal === 'incomplete' ? 'text-warning' : row.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}
+                    title={row.signal === 'incomplete' ? `Estimativa parcial: ${pendingCount(row)} pendência(s) nesta composição.` : undefined}
+                  >
+                    {fmtBRL(row.grossProfit)}
                   </td>
-                  <td className={`p-2 align-top text-right tabular-nums font-semibold ${row.signal === 'incomplete' ? 'text-muted-foreground' : marginTone(row.marginPct)}`}>
-                    {row.signal === 'incomplete' ? '—' : fmtPct(row.marginPct)}
+                  <td
+                    className={`p-2 align-top text-right tabular-nums font-semibold ${row.signal === 'incomplete' ? 'text-warning' : marginTone(row.marginPct)}`}
+                    title={row.signal === 'incomplete' ? 'Margem parcial, recalculada à medida que novas cotações forem incluídas.' : undefined}
+                  >
+                    {fmtPct(row.marginPct)}
                   </td>
                   <td className="p-2 align-top text-center">{pendingCount(row)}</td>
                   <td className="p-2 align-top text-center"><SignalBadge signal={row.signal} /></td>
@@ -776,7 +788,7 @@ export default function RealCost({ project, onProjectChange, canManageSubcontrac
   const displayTotals = useMemo<RealCostGroupTotals>(() => {
     if (hasActiveFilters) return visibleTotals;
     const contractedValue = analysis.totals.contractedValue;
-    const grossProfit = roundMoney(contractedValue - visibleTotals.realCost);
+    const grossProfit = roundMoney(contractedValue - visibleTotals.committedCost);
     const marginPct = contractedValue > 0 ? Math.round((grossProfit / contractedValue) * 10000) / 100 : 0;
     return {
       ...visibleTotals,
@@ -803,7 +815,7 @@ export default function RealCost({ project, onProjectChange, canManageSubcontrac
 
   const visibleCompositionCount = visibleTotals.compositionCount;
 
-  const maxMonthValue = Math.max(1, ...analysis.months.map(month => Math.max(month.contractedValue, month.realCost)));
+  const maxMonthValue = Math.max(1, ...analysis.months.map(month => Math.max(month.contractedValue, month.committedCost)));
   const costDataComplete = analysis.totals.signal !== 'incomplete';
   const costCoverage = analysis.compositions.length > 0
     ? Math.max(0, Math.round(((analysis.compositions.length - analysis.pending.incompleteCompositions) / analysis.compositions.length) * 100))
@@ -861,9 +873,9 @@ export default function RealCost({ project, onProjectChange, canManageSubcontrac
           tone={costDataComplete ? 'success' : 'warning'}
         />
         <StatCard
-          label="Custo comprometido"
+          label="Custo estimado Bueno"
           value={fmtBRL(analysis.totals.committedCost)}
-          hint="Cotacoes e compras vinculadas"
+          hint="Menor cotação válida + M.O. SINAPI ou terceirizada"
           icon={BarChart3}
           tone="warning"
         />
@@ -876,15 +888,15 @@ export default function RealCost({ project, onProjectChange, canManageSubcontrac
         />
         <StatCard
           label="Lucro bruto estimado"
-          value={costDataComplete ? fmtBRL(analysis.totals.grossProfit) : '—'}
-          hint={costDataComplete ? 'Contrato - comprometido' : 'Aguardando custos completos'}
+          value={fmtBRL(analysis.totals.grossProfit)}
+          hint={costDataComplete ? 'Contrato - comprometido' : `Estimativa parcial · ${analysis.pending.incompleteCompositions} composição(ões) pendentes`}
           icon={analysis.totals.grossProfit >= 0 ? TrendingUp : TrendingDown}
           tone={costDataComplete ? (analysis.totals.grossProfit >= 0 ? 'success' : 'danger') : 'warning'}
         />
         <StatCard
           label="Margem estimada"
-          value={costDataComplete ? fmtPct(analysis.totals.marginPct) : '—'}
-          hint={costDataComplete ? 'Semáforo por composição' : 'Cálculo incompleto'}
+          value={fmtPct(analysis.totals.marginPct)}
+          hint={costDataComplete ? 'Semáforo por composição' : 'Margem parcial; pendências preservadas no semáforo'}
           icon={analysis.totals.marginPct >= 15 ? CheckCircle2 : AlertTriangle}
           tone={costDataComplete ? (analysis.totals.marginPct >= 15 ? 'success' : analysis.totals.marginPct >= 5 ? 'warning' : 'danger') : 'warning'}
         />
@@ -982,8 +994,8 @@ export default function RealCost({ project, onProjectChange, canManageSubcontrac
                 <th className="p-2 text-right w-32">V. Unit. Contratado</th>
                 <th className="p-2 text-right w-36">Valor Contratado Final</th>
                 <th className={`p-2 text-right w-32 ${BORDER_L}`}>Material ref.</th>
-                <th className="p-2 text-right w-32">Mão de obra ref.</th>
-                <th className={`p-2 text-right w-36 ${BORDER_L}`}>Comprometido</th>
+                <th className="p-2 text-right w-32">M.O. SINAPI</th>
+                <th className={`p-2 text-right w-36 ${BORDER_L}`}>Custo estimado</th>
                 <th className="p-2 text-right w-36">Realizado</th>
                 <th className="p-2 text-right w-32">Lucro Bruto</th>
                 <th className="p-2 text-right w-24">Margem</th>
@@ -1021,11 +1033,17 @@ export default function RealCost({ project, onProjectChange, canManageSubcontrac
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(displayTotals.laborCost)}</td>
                   <td className={`px-2 py-2 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(displayTotals.committedCost)}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(displayTotals.realCost)}</td>
-                  <td className={`px-2 py-2 text-right tabular-nums ${displayTotals.signal === 'incomplete' ? 'text-slate-300' : displayTotals.grossProfit >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
-                    {displayTotals.signal === 'incomplete' ? '—' : fmtBRL(displayTotals.grossProfit)}
+                  <td
+                    className={`px-2 py-2 text-right tabular-nums ${displayTotals.signal === 'incomplete' ? 'text-amber-300' : displayTotals.grossProfit >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}
+                    title={displayTotals.signal === 'incomplete' ? `Estimativa parcial: ${displayTotals.pendingCompositionCount} composição(ões) ainda têm pendências de custo.` : undefined}
+                  >
+                    {fmtBRL(displayTotals.grossProfit)}
                   </td>
-                  <td className={`px-2 py-2 text-right tabular-nums ${displayTotals.signal === 'incomplete' ? 'text-slate-300' : displayTotals.marginPct >= 15 ? 'text-emerald-300' : displayTotals.marginPct >= 5 ? 'text-amber-300' : 'text-rose-300'}`}>
-                    {displayTotals.signal === 'incomplete' ? '—' : fmtPct(displayTotals.marginPct)}
+                  <td
+                    className={`px-2 py-2 text-right tabular-nums ${displayTotals.signal === 'incomplete' ? 'text-amber-300' : displayTotals.marginPct >= 15 ? 'text-emerald-300' : displayTotals.marginPct >= 5 ? 'text-amber-300' : 'text-rose-300'}`}
+                    title={displayTotals.signal === 'incomplete' ? 'Margem parcial, recalculada à medida que novas cotações forem incluídas.' : undefined}
+                  >
+                    {fmtPct(displayTotals.marginPct)}
                   </td>
                   <td className="px-2 py-2 text-center tabular-nums">{displayTotals.pendingCompositionCount}</td>
                   <td className="px-2 py-2 text-center"><SignalBadge signal={displayTotals.signal} /></td>
@@ -1043,7 +1061,7 @@ export default function RealCost({ project, onProjectChange, canManageSubcontrac
               <Layers3 className="h-4 w-4 text-primary" />
               <h2 className="text-sm font-semibold">Distribuição mensal pelo Cronograma</h2>
             </div>
-            <p className="text-[11px] text-muted-foreground">Receita, custo real cotado, lucro e margem previstos conforme as datas do Gantt.</p>
+            <p className="text-[11px] text-muted-foreground">Receita, custo estimado, lucro e margem previstos conforme as datas do Gantt.</p>
           </div>
         </div>
         {analysis.months.length === 0 ? (
@@ -1057,7 +1075,7 @@ export default function RealCost({ project, onProjectChange, canManageSubcontrac
                 <tr>
                   <th className="p-2 text-left">Mes</th>
                   <th className="p-2 text-right">Receita prevista</th>
-                  <th className="p-2 text-right">Custo real previsto</th>
+                  <th className="p-2 text-right">Custo estimado</th>
                   <th className="p-2 text-right">Lucro previsto</th>
                   <th className="p-2 text-right">Margem</th>
                   <th className="p-2 text-center">Tarefas</th>
@@ -1070,12 +1088,12 @@ export default function RealCost({ project, onProjectChange, canManageSubcontrac
                   <tr key={month.key} className="border-b border-border">
                     <td className="p-2 font-medium">{month.label}</td>
                     <td className="p-2 text-right tabular-nums">{fmtBRL(month.contractedValue)}</td>
-                    <td className="p-2 text-right tabular-nums">{fmtBRL(month.realCost)}</td>
-                    <td className={`p-2 text-right tabular-nums font-semibold ${month.signal === 'incomplete' ? 'text-muted-foreground' : month.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
-                      {month.signal === 'incomplete' ? '—' : fmtBRL(month.grossProfit)}
+                    <td className="p-2 text-right tabular-nums">{fmtBRL(month.committedCost)}</td>
+                    <td className={`p-2 text-right tabular-nums font-semibold ${month.signal === 'incomplete' ? 'text-warning' : month.grossProfit >= 0 ? 'text-success' : 'text-destructive'}`}>
+                      {fmtBRL(month.grossProfit)}
                     </td>
-                    <td className={`p-2 text-right tabular-nums font-semibold ${month.signal === 'incomplete' ? 'text-muted-foreground' : marginTone(month.marginPct)}`}>
-                      {month.signal === 'incomplete' ? '—' : fmtPct(month.marginPct)}
+                    <td className={`p-2 text-right tabular-nums font-semibold ${month.signal === 'incomplete' ? 'text-warning' : marginTone(month.marginPct)}`}>
+                      {fmtPct(month.marginPct)}
                     </td>
                     <td className="p-2 text-center tabular-nums">{month.taskCount}</td>
                     <td className="p-2">
@@ -1086,10 +1104,10 @@ export default function RealCost({ project, onProjectChange, canManageSubcontrac
                             style={{ width: `${Math.max(2, (month.contractedValue / maxMonthValue) * 100)}%` }}
                           />
                         </div>
-                        <div className="h-2 w-full rounded-full bg-muted overflow-hidden" title="Custo real previsto">
+                        <div className="h-2 w-full rounded-full bg-muted overflow-hidden" title="Custo estimado">
                           <div
                             className="h-2 rounded-full bg-warning/80"
-                            style={{ width: `${Math.max(2, (month.realCost / maxMonthValue) * 100)}%` }}
+                            style={{ width: `${Math.max(2, (month.committedCost / maxMonthValue) * 100)}%` }}
                           />
                         </div>
                       </div>

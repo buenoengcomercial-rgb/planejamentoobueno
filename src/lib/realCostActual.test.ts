@@ -82,7 +82,45 @@ describe('custo realizado por producao e almoxarifado', () => {
           coefficient: 2,
           unitPrice: 10,
           total: 20,
+        }, {
+          id: 'material-2',
+          code: 'MAT2',
+          bank: 'PROPRIO',
+          description: 'Material sem cotação',
+          type: 'material',
+          unit: 'un',
+          coefficient: 1,
+          unitPrice: 5,
+          total: 5,
+        }, {
+          id: 'labor-1',
+          code: 'LAB1',
+          bank: 'SINAPI',
+          description: 'Mão de obra própria sem cotação',
+          type: 'mao_obra',
+          unit: 'h',
+          coefficient: 1,
+          unitPrice: 20,
+          total: 20,
         }],
+      }],
+      materialComparisons: [{
+        id: 'comparison-1',
+        name: 'Cotação de material',
+        status: 'em_cotacao',
+        suppliers: [],
+        items: [{
+          id: 'comparison-item-1',
+          code: 'MAT1',
+          description: 'Material',
+          unit: 'un',
+          quantity: 20,
+          prices: [{ supplierId: 'supplier-1', price: 8, total: 160 }],
+          sourceType: 'analytic_input',
+          sourceId: 'material-1',
+        }],
+        createdAt: '2026-07-30T00:00:00.000Z',
+        updatedAt: '2026-07-30T00:00:00.000Z',
       }],
       warehouse: {
         locations: [],
@@ -118,11 +156,17 @@ describe('custo realizado por producao e almoxarifado', () => {
     const analysis = buildRealCostAnalysis(project);
     expect(analysis.compositions).toHaveLength(1);
     expect(analysis.compositions[0].realCost).toBe(230);
+    expect(analysis.compositions[0].committedCost).toBe(360);
+    expect(analysis.compositions[0].grossProfit).toBe(640);
     expect(analysis.compositions[0].missingQuoteCount).toBe(1);
     expect(analysis.compositions[0].signal).toBe('incomplete');
     expect(analysis.totals.realCost).toBe(230);
+    expect(analysis.totals.committedCost).toBe(360);
+    expect(analysis.totals.grossProfit).toBe(640);
     expect(analysis.totals.contractedValue).toBe(1_000);
     expect(analysis.totals.signal).toBe('incomplete');
+    expect(analysis.months[0]?.committedCost).toBe(360);
+    expect(analysis.months[0]?.grossProfit).toBe(640);
     expect(analysis.months[0]?.signal).toBe('incomplete');
   });
 });
