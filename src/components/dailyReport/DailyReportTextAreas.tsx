@@ -3,7 +3,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-const TEXT_FIELD_DEBOUNCE_MS = 700;
 type DailyTextField = 'occurrences' | 'impediments' | 'observations';
 
 interface DailyReportTextAreasProps {
@@ -57,8 +56,6 @@ function DeferredTextarea({ field, value, placeholder, updateField }: DeferredTe
         const next = event.target.value;
         draftRef.current = next;
         setDraft(next);
-        if (timerRef.current) window.clearTimeout(timerRef.current);
-        timerRef.current = window.setTimeout(flush, TEXT_FIELD_DEBOUNCE_MS);
       }}
       onBlur={flush}
     />
