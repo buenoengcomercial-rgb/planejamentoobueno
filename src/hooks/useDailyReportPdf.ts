@@ -264,38 +264,6 @@ export function useDailyReportPdf(args: UseDailyReportPdfArgs) {
     }
     y += Math.ceil(cards.length / perRow) * cardH + 3;
 
-    // ───── Pendências do Período ─────
-    const pendingDates = periodSum.entries.filter(e => e.status === 'pending').map(e => e.date);
-    const prodNoReport = periodSum.productionWithoutReportDates;
-    const impedimentDates = periodSum.entries.filter(e => e.hasImpediment).map(e => e.date);
-    const hasAnyPending = pendingDates.length || prodNoReport.length || impedimentDates.length;
-
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); doc.setTextColor(20);
-    if (y + 12 > pageH - footerReserved) { doc.addPage(); y = margin; }
-    doc.text('Pendências do Período', margin, y); y += 4;
-
-    if (!hasAnyPending) {
-      doc.setFont('helvetica', 'italic'); doc.setFontSize(8.5); doc.setTextColor(90);
-      doc.text('Não há pendências no período.', margin, y); y += 6;
-    } else {
-      const pendRows: [string, string][] = [];
-      if (pendingDates.length) pendRows.push(['Sem diário', pendingDates.map(formatBR).join(', ')]);
-      if (prodNoReport.length) pendRows.push(['Produção sem diário', prodNoReport.map(formatBR).join(', ')]);
-      if (impedimentDates.length) pendRows.push(['Com impedimento', impedimentDates.map(formatBR).join(', ')]);
-      autoTable(doc, {
-        startY: y,
-        body: pendRows,
-        theme: 'grid',
-        styles: { font: 'helvetica', fontSize: 7.5, cellPadding: 1.3, overflow: 'linebreak', lineColor: [200, 200, 200], lineWidth: 0.12 },
-        columnStyles: {
-          0: { cellWidth: usable * 0.22, fontStyle: 'bold', fillColor: [254, 243, 199] },
-          1: { cellWidth: usable * 0.78 },
-        },
-        margin: { left: margin, right: margin },
-      });
-      y = ((doc as any).lastAutoTable?.finalY ?? y) + 4;
-    }
-
     // ───── Conteúdo de cada dia ─────
     const STATUS_LABEL: Record<string, string> = {
       filled: 'Preenchido',
