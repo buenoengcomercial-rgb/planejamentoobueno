@@ -26,6 +26,7 @@ export function collectProductionForDate(project: Project, dateISO: string): Pro
           subChapterName: isSub ? phase.name : undefined,
           subChapterNumber: isSub ? (numbering.get(phase.id) || '') : undefined,
           taskId: task.id,
+          taskCode: task.contractItem,
           taskName: task.name,
           unit: task.unit || 'un',
           actualQuantity: log.actualQuantity || 0,

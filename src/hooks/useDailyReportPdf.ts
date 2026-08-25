@@ -452,10 +452,9 @@ export function useDailyReportPdf(args: UseDailyReportPdfArgs) {
       } else {
         autoTable(doc, {
           startY: y,
-          head: [['Capítulo', 'Subcapítulo', 'Tarefa', 'Und.', 'Qtd. exec.', 'Observação']],
+          head: [['Código', 'Tarefa', 'Und.', 'Qtd. exec.', 'Observação']],
           body: dayProduction.map(p => [
-            `${p.chapterNumber} ${p.chapterName}`,
-            p.subChapterName ? `${p.subChapterNumber} ${p.subChapterName}` : '',
+            p.taskCode || '—',
             p.taskName,
             p.unit || 'un',
             p.actualQuantity.toFixed(2),
@@ -465,12 +464,11 @@ export function useDailyReportPdf(args: UseDailyReportPdfArgs) {
           headStyles: { fillColor: [55, 65, 81], textColor: 255, fontSize: 7.3 },
           styles: { font: 'helvetica', fontSize: 7.3, cellPadding: 1.2, lineColor: [220, 220, 220], lineWidth: 0.12, overflow: 'linebreak' },
           columnStyles: {
-            0: { cellWidth: usable * 0.18 },
-            1: { cellWidth: usable * 0.18 },
-            2: { cellWidth: usable * 0.28 },
-            3: { cellWidth: usable * 0.07, halign: 'center' },
-            4: { cellWidth: usable * 0.10, halign: 'right' },
-            5: { cellWidth: usable * 0.19 },
+            0: { cellWidth: usable * 0.10, halign: 'center' },
+            1: { cellWidth: usable * 0.49 },
+            2: { cellWidth: usable * 0.07, halign: 'center' },
+            3: { cellWidth: usable * 0.11, halign: 'right' },
+            4: { cellWidth: usable * 0.23 },
           },
           margin: { left: margin, right: margin },
           // Repetir cabeçalho ao quebrar página

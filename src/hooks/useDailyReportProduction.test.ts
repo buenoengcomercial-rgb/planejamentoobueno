@@ -9,7 +9,7 @@ describe('collectProductionForDate', () => {
         {
           id: 'chapter-1', name: 'Serviços preliminares', order: 0,
           tasks: [
-            { id: 'task-executed', name: 'Administração', unit: 'mês', dailyLogs: [{ date: '2026-08-24', actualQuantity: 0.03 }] },
+            { id: 'task-executed', contractItem: '1.1.1', name: 'Administração', unit: 'mês', dailyLogs: [{ date: '2026-08-24', actualQuantity: 0.03 }] },
             { id: 'task-zero', name: 'Placa da obra', unit: 'm²', dailyLogs: [{ date: '2026-08-24', actualQuantity: 0, plannedQuantity: 3, notes: 'Aguardando material' }] },
           ],
         },
@@ -23,6 +23,6 @@ describe('collectProductionForDate', () => {
     const production = collectProductionForDate(project, '2026-08-24');
 
     expect(production).toHaveLength(1);
-    expect(production[0]).toMatchObject({ taskId: 'task-executed', actualQuantity: 0.03 });
+    expect(production[0]).toMatchObject({ taskId: 'task-executed', taskCode: '1.1.1', actualQuantity: 0.03 });
   });
 });

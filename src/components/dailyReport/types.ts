@@ -9,6 +9,8 @@ export interface ProductionEntry {
   subChapterName?: string;
   subChapterNumber?: string;
   taskId: string;
+  /** Código hierárquico da tarefa na planilha contratual (ex.: "1.2.3"). */
+  taskCode?: string;
   taskName: string;
   unit: string;
   actualQuantity: number;
