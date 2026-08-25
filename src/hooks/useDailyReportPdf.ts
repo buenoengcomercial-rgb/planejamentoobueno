@@ -230,28 +230,20 @@ export function useDailyReportPdf(args: UseDailyReportPdfArgs) {
       dates[dates.length - 1],
     );
 
-    // Totaliza equipes / ocorrências / impedimentos no período
-    let totalTeams = 0;
+    // Totaliza as ocorrências do período para o resumo executivo.
     let totalOccurrences = 0;
-    let totalImpediments = 0;
     const reportsByDate = new Map<string, DailyReportEntry>();
     (project.dailyReports || []).forEach(r => reportsByDate.set(r.date, r));
     dates.forEach(d => {
       const r = reportsByDate.get(d);
       if (!r) return;
-      totalTeams += (r.teamsPresent || []).reduce((a, t) => a + (t.count || 0), 0);
       if (r.occurrences?.trim()) totalOccurrences++;
-      if (r.impediments?.trim()) totalImpediments++;
     });
 
     const cards: [string, string][] = [
       ['Total de dias', String(periodSum.totalDays)],
-      ['Diários preench.', String(periodSum.filledReports)],
-      ['Diários pendentes', String(periodSum.missingReports)],
-      ['Dias c/ produção', String(periodSum.productionDays)],
       ['Dias s/ produção', String(periodSum.noProductionDays)],
       ['Dias c/ impedim.', String(periodSum.impedimentDays)],
-      ['Equipes (qtd)', String(totalTeams)],
       ['Ocorrências', String(totalOccurrences)],
     ];
     const cardH = 9;
