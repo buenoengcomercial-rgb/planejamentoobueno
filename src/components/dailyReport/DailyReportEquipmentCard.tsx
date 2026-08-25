@@ -1,6 +1,6 @@
 import { Wrench, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { CommitOnBlurInput } from '@/components/dailyReport/CommitOnBlurField';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import type { DailyReport as DailyReportEntry, DailyReportEquipmentRow } from '@/types/project';
 
@@ -33,12 +33,12 @@ export function DailyReportEquipmentCard({
         )}
         {(currentReport.equipment || []).map(e => (
           <div key={e.id} className="grid gap-2 rounded-lg border border-border p-3 sm:grid-cols-[1fr_70px_1fr_auto] sm:items-center sm:border-0 sm:p-0">
-            <div className="space-y-1"><span className="text-xs text-muted-foreground sm:hidden">Equipamento</span><Input className="min-h-11 text-base sm:min-h-10 sm:text-sm" placeholder="Equipamento" value={e.name}
-              onChange={ev => updateEqRow(e.id, { name: ev.target.value })} /></div>
-            <div className="space-y-1"><span className="text-xs text-muted-foreground sm:hidden">Quantidade</span><Input className="min-h-11 text-base sm:min-h-10 sm:text-sm" type="number" min={0} placeholder="Qtd" value={e.count ?? ''}
-              onChange={ev => updateEqRow(e.id, { count: Number(ev.target.value) })} /></div>
-            <div className="space-y-1"><span className="text-xs text-muted-foreground sm:hidden">Observação</span><Input className="min-h-11 text-base sm:min-h-10 sm:text-sm" placeholder="Observação" value={e.notes || ''}
-              onChange={ev => updateEqRow(e.id, { notes: ev.target.value })} /></div>
+            <div className="space-y-1"><span className="text-xs text-muted-foreground sm:hidden">Equipamento</span><CommitOnBlurInput key={`equipment-name:${e.id}`} className="min-h-11 text-base sm:min-h-10 sm:text-sm" placeholder="Equipamento" value={e.name}
+              onCommit={name => updateEqRow(e.id, { name })} /></div>
+            <div className="space-y-1"><span className="text-xs text-muted-foreground sm:hidden">Quantidade</span><CommitOnBlurInput key={`equipment-count:${e.id}`} className="min-h-11 text-base sm:min-h-10 sm:text-sm" type="number" min={0} placeholder="Qtd" value={String(e.count ?? '')}
+              onCommit={value => updateEqRow(e.id, { count: Number(value) })} /></div>
+            <div className="space-y-1"><span className="text-xs text-muted-foreground sm:hidden">Observação</span><CommitOnBlurInput key={`equipment-notes:${e.id}`} className="min-h-11 text-base sm:min-h-10 sm:text-sm" placeholder="Observação" value={e.notes || ''}
+              onCommit={notes => updateEqRow(e.id, { notes })} /></div>
             <Button size="icon" variant="ghost" className="min-h-11 min-w-11 justify-self-end" onClick={() => removeEqRow(e.id)}>
               <Trash2 className="w-4 h-4 text-destructive" />
             </Button>

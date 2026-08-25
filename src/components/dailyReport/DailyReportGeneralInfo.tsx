@@ -3,7 +3,7 @@ import { Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
-import { Input } from '@/components/ui/input';
+import { CommitOnBlurInput } from '@/components/dailyReport/CommitOnBlurField';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { WEATHER_OPTIONS, WORK_OPTIONS } from '@/components/dailyReport/dailyReportFormat';
@@ -69,10 +69,11 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay,
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="space-y-1">
               <Label className="text-sm">Responsável pelo lançamento</Label>
-              <Input
+              <CommitOnBlurInput
+                key={`responsible:${currentReport.id}`}
                 className="min-h-11 text-base sm:min-h-10 sm:text-sm"
                 value={currentReport.responsible || ''}
-                onChange={e => updateField('responsible', e.target.value)}
+                onCommit={value => updateField('responsible', value)}
                 placeholder="Nome / função"
               />
             </div>
@@ -105,11 +106,12 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay,
                 </SelectContent>
               </Select>
               {currentReport.weather === 'outro' && (
-                <Input
+                <CommitOnBlurInput
+                  key={`weather-other:${currentReport.id}`}
                   className="mt-1 min-h-11 text-base sm:min-h-10 sm:text-sm"
                   placeholder="Descreva o clima"
                   value={currentReport.weatherOther || ''}
-                  onChange={e => updateField('weatherOther', e.target.value)}
+                  onCommit={value => updateField('weatherOther', value)}
                 />
               )}
             </div>
@@ -135,11 +137,12 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay,
                 </SelectContent>
               </Select>
               {currentReport.workCondition === 'outro' && (
-                <Input
+                <CommitOnBlurInput
+                  key={`work-condition-other:${currentReport.id}`}
                   className="mt-1 min-h-11 text-base sm:min-h-10 sm:text-sm"
                   placeholder="Descreva a condição"
                   value={currentReport.workConditionOther || ''}
-                  onChange={e => updateField('workConditionOther', e.target.value)}
+                  onCommit={value => updateField('workConditionOther', value)}
                 />
               )}
             </div>

@@ -1,7 +1,6 @@
 import type { DailyReport as DailyReportEntry } from '@/types/project';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Textarea } from '@/components/ui/textarea';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { CommitOnBlurTextarea } from '@/components/dailyReport/CommitOnBlurField';
 
 type DailyTextField = 'occurrences' | 'impediments' | 'observations';
 
@@ -18,48 +17,7 @@ interface DeferredTextareaProps {
 }
 
 function DeferredTextarea({ field, value, placeholder, updateField }: DeferredTextareaProps) {
-  const [draft, setDraft] = useState(value);
-  const draftRef = useRef(value);
-  const committedValueRef = useRef(value);
-  const updateFieldRef = useRef(updateField);
-  const timerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    updateFieldRef.current = updateField;
-  }, [updateField]);
-
-  const flush = useCallback(() => {
-    if (timerRef.current) window.clearTimeout(timerRef.current);
-    timerRef.current = null;
-    const next = draftRef.current;
-    if (next === committedValueRef.current) return;
-    committedValueRef.current = next;
-    updateFieldRef.current(field, next);
-  }, [field]);
-
-  useEffect(() => {
-    if (draftRef.current === committedValueRef.current && value !== draftRef.current) {
-      draftRef.current = value;
-      committedValueRef.current = value;
-      setDraft(value);
-    }
-  }, [value]);
-
-  useEffect(() => () => flush(), [flush]);
-
-  return (
-    <Textarea
-      rows={4}
-      value={draft}
-      placeholder={placeholder}
-      onChange={event => {
-        const next = event.target.value;
-        draftRef.current = next;
-        setDraft(next);
-      }}
-      onBlur={flush}
-    />
-  );
+  return <CommitOnBlurTextarea rows={4} value={value} placeholder={placeholder} onCommit={next => updateField(field, next)} />;
 }
 
 export function DailyReportTextAreas({ currentReport, updateField }: DailyReportTextAreasProps) {

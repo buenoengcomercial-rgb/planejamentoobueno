@@ -1,6 +1,6 @@
 import { Camera, Plus, Trash2, Image as ImageIcon, Loader2, Filter } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { CommitOnBlurInput } from '@/components/dailyReport/CommitOnBlurField';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -158,11 +158,12 @@ export function DailyReportPhotosCard({
                     </button>
                   </div>
                   <div className="p-2 space-y-1.5">
-                    <Input
+                    <CommitOnBlurInput
+                      key={`caption:${p.id}`}
                       className="h-8 text-xs"
                       placeholder="Legenda"
                       value={p.caption || ''}
-                      onChange={(e) => updatePhoto(p.id, { caption: e.target.value })}
+                      onCommit={caption => updatePhoto(p.id, { caption })}
                     />
                     <Select
                       value={p.taskId || GENERAL_TASK_VALUE}

@@ -1,6 +1,6 @@
 import { Users, Plus, Trash2, Activity } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { CommitOnBlurInput } from '@/components/dailyReport/CommitOnBlurField';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { DailyReport as DailyReportEntry, DailyReportTeamRow } from '@/types/project';
@@ -81,13 +81,13 @@ export function DailyReportTeamsCard({
                 ))}
               </SelectContent>
             </Select></div>
-            <div className="space-y-1"><span className="text-xs text-muted-foreground sm:hidden">Quantidade</span><Input className="min-h-11 text-base sm:min-h-10 sm:text-sm" type="number" min={0} placeholder="Qtd" value={t.count ?? ''}
-              onChange={e => {
-                const n = Number(e.target.value);
+            <div className="space-y-1"><span className="text-xs text-muted-foreground sm:hidden">Quantidade</span><CommitOnBlurInput key={`team-count:${t.id}`} className="min-h-11 text-base sm:min-h-10 sm:text-sm" type="number" min={0} placeholder="Qtd" value={String(t.count ?? '')}
+              onCommit={value => {
+                const n = Number(value);
                 updateTeamRow(t.id, { count: Number.isFinite(n) && n >= 0 ? n : 0 });
               }} /></div>
-            <div className="space-y-1"><span className="text-xs text-muted-foreground sm:hidden">Observação</span><Input className="min-h-11 text-base sm:min-h-10 sm:text-sm" placeholder="Observação" value={t.notes || ''}
-              onChange={e => updateTeamRow(t.id, { notes: e.target.value })} /></div>
+            <div className="space-y-1"><span className="text-xs text-muted-foreground sm:hidden">Observação</span><CommitOnBlurInput key={`team-notes:${t.id}`} className="min-h-11 text-base sm:min-h-10 sm:text-sm" placeholder="Observação" value={t.notes || ''}
+              onCommit={notes => updateTeamRow(t.id, { notes })} /></div>
             <Button size="icon" variant="ghost" className="min-h-11 min-w-11 justify-self-end" onClick={() => removeTeamRow(t.id)}>
               <Trash2 className="w-4 h-4 text-destructive" />
             </Button>
