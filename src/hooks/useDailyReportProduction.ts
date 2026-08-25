@@ -14,7 +14,9 @@ export function collectProductionForDate(project: Project, dateISO: string): Pro
     (phase.tasks || []).forEach(task => {
       (task.dailyLogs || []).forEach(log => {
         if (log.date !== dateISO) return;
-        if ((log.actualQuantity ?? 0) <= 0 && (log.plannedQuantity ?? 0) <= 0 && !log.notes) return;
+        // O Diário é o registro do que foi efetivamente executado. Planejamento
+        // ou observação sem produção não devem gerar uma linha no relatório do dia.
+        if ((log.actualQuantity ?? 0) <= 0) return;
         const isSub = !!parent;
         out.push({
           chapterId: parent?.phase.id ?? phase.id,
