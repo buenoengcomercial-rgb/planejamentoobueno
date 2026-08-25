@@ -79,7 +79,7 @@ const suspensionMap: Record<string, AdditiveScheduleSuspensionMeta> = {
     additiveId: 'add-1',
     additiveName: '1º Aditivo',
     checked: true,
-    disabled: true,
+    disabled: false,
     scheduleState: 'suspended',
     financialTreatment: 'excluded',
     dependencyBlockingTaskIds: ['suspended-1d'],
@@ -177,6 +177,20 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     expect(screen.queryByTestId('gantt-bar-dependency-1d')).not.toBeInTheDocument();
     expect(screen.getByTestId('gantt-bar-scheduled-new')).toBeInTheDocument();
     expect(screen.getByTestId('gantt-bar-scheduled-new-long')).toBeInTheDocument();
+  });
+
+  it('permite desbloquear uma sucessora dependente e mantém bloqueios automáticos desabilitados', () => {
+    const onToggleSuspension = vi.fn();
+    render(<GanttChart project={project} context="additive-preview" suspensionMap={suspensionMap} onToggleSuspension={onToggleSuspension} />);
+
+    const dependencyCheckbox = screen.getByRole('checkbox', { name: 'Desbloquear Tarefa dependente de aditivo' });
+    const automaticCheckbox = screen.getByRole('checkbox', { name: 'Suspender Tarefa suprimida' });
+    expect(dependencyCheckbox).toBeEnabled();
+    expect(automaticCheckbox).toBeDisabled();
+
+    fireEvent.click(dependencyCheckbox);
+
+    expect(onToggleSuspension).toHaveBeenCalledWith('dependency-1d', false);
   });
 
   it('identifica e bloqueia no cronograma principal a tarefa planejada pelo aditivo', () => {

@@ -753,6 +753,51 @@ export function setAdditiveScheduleDependentTask(project: Project, additiveId: s
   return { ...project, additives: (project.additives ?? []).map(item => item.id === additiveId ? { ...item, scheduleDraft } : item) };
 }
 
+/**
+ * Libera somente a tarefa escolhida da predecessora que a mantém suspensa.
+ * Os demais sucessores e todos os outros vínculos do cronograma são preservados.
+ */
+export function releaseAdditiveScheduleDependencyForTask(
+  project: Project,
+  additiveId: string,
+  taskId: string,
+  jornadaConfig?: AdditiveScheduleCalendar,
+): Project {
+  const additive = (project.additives ?? []).find(item => item.id === additiveId);
+  if (!additive?.scheduleDraft || (additive.isContracted && !additive.editUnlocked)) return project;
+
+  const preview = buildAdditiveSchedulePreviewProject(project, additive, additive.scheduleDraft, jornadaConfig);
+  const suspensions = buildPreviewSuspensionMap(project, additive, preview);
+  const task = findTask(preview, taskId);
+  if (!task || suspensions[taskId]?.kind !== 'dependency') return project;
+
+  const details = task.dependencyDetails?.length
+    ? task.dependencyDetails
+    : (task.dependencies ?? []).map(predecessorId => ({ taskId: predecessorId, type: 'TI' as const }));
+  const blockingPredecessorIds = new Set(details
+    .filter(dependency => {
+      const predecessorSuspension = suspensions[dependency.taskId];
+      return predecessorSuspension?.checked && (
+        isStatusOnlySuspension(predecessorSuspension) || predecessorSuspension.kind === 'proposed'
+      );
+    })
+    .map(dependency => dependency.taskId));
+  if (!blockingPredecessorIds.size) return project;
+
+  const nextPreview: Project = {
+    ...preview,
+    phases: preview.phases.map(phase => ({
+      ...phase,
+      tasks: phase.tasks.map(item => item.id !== taskId ? item : (() => {
+        const nextDetails = details.filter(dependency => !blockingPredecessorIds.has(dependency.taskId));
+        return { ...item, dependencies: nextDetails.map(dependency => dependency.taskId), dependencyDetails: nextDetails };
+      })()),
+    })),
+  };
+  const settledPreview = settleAllDependencies(nextPreview, dependencyCalendar(jornadaConfig));
+  return mergeAdditiveSchedulePreviewChanges(project, additiveId, preview, settledPreview);
+}
+
 export function setAdditiveScheduleDependencyBlock(
   project: Project,
   additiveId: string,
@@ -901,7 +946,7 @@ export function buildPreviewSuspensionMap(
         additiveId: additive.id,
         additiveName: additive.name,
         checked: true,
-        disabled: true,
+        disabled: false,
         scheduleState: 'suspended',
         financialTreatment: 'excluded',
         quantityRestriction: previousMeta?.quantityRestriction,

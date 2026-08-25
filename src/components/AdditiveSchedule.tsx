@@ -25,6 +25,7 @@ import {
   mergeAdditiveSchedulePreviewChanges,
   resolveAdditiveScheduleFinancialTreatment,
   resolveAdditiveScheduleState,
+  releaseAdditiveScheduleDependencyForTask,
   setAdditiveScheduleDependencyBlock,
   setAdditiveScheduleCollapsedPhaseIds,
   setAdditiveScheduleDependentTask,
@@ -244,7 +245,15 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
           ))}
           onToggleSuspension={isArchived ? undefined : (taskId, checked) => {
             if (checked) openBlockDialog(taskId);
-            else onProjectChange(setAdditiveScheduleDependentTask(project, active.id, taskId, false));
+            else if (suspensions[taskId]?.kind === 'dependency') {
+              const released = releaseAdditiveScheduleDependencyForTask(project, active.id, taskId, obraConfig);
+              if (released !== project) {
+                onProjectChange(released);
+                toast.success('Tarefa desbloqueada. Apenas o vínculo com a predecessora bloqueada foi removido.');
+              }
+            } else {
+              onProjectChange(setAdditiveScheduleDependentTask(project, active.id, taskId, false));
+            }
           }}
           onEditSuspension={isArchived ? undefined : openBlockDialog}
           readOnly={isArchived}

@@ -2186,6 +2186,14 @@ export default function GanttChart({
                               ? 'text-amber-700 hover:bg-amber-100'
                               : 'text-sky-700 hover:bg-sky-100';
                           const rowHeight = getTaskRowHeight(task);
+                          const suspensionToggleLabel = suspension?.kind === 'dependency'
+                            ? `Desbloquear ${task.name}`
+                            : `Suspender ${task.name}`;
+                          const suspensionTooltip = suspension?.kind === 'dependency'
+                            ? 'Desbloquear esta tarefa removendo somente o vínculo com sua predecessora bloqueada.'
+                            : suspension?.disabled
+                              ? `${suspension.label}. Marcação automática e obrigatória.`
+                              : suspension?.label || 'Marcar como serviço contratado dependente do aditivo.';
                           const isReorderDragging = reorderDragTaskId === task.id;
                           const isReorderTarget = reorderDropTargetId === task.id && reorderDragTaskId && reorderDragTaskId !== task.id;
                           return (
@@ -2225,7 +2233,7 @@ export default function GanttChart({
                                     <TooltipTrigger asChild>
                                       <input
                                         type="checkbox"
-                                        aria-label={`Suspender ${task.name}`}
+                                        aria-label={suspensionToggleLabel}
                                         checked={!!suspension?.checked}
                                         disabled={readOnly || suspension?.disabled}
                                         onChange={event => onToggleSuspension?.(task.id, event.target.checked)}
@@ -2233,9 +2241,7 @@ export default function GanttChart({
                                       />
                                     </TooltipTrigger>
                                     <TooltipContent side="top" className="max-w-sm text-xs">
-                                      {suspension?.disabled
-                                        ? `${suspension.label}. Marcação automática e obrigatória.`
-                                        : suspension?.label || 'Marcar como serviço contratado dependente do aditivo.'}
+                                      {suspensionTooltip}
                                       {!!suspension?.blockingCompositions?.length && (
                                         <div className="mt-2 space-y-1 border-t border-border pt-2">
                                           {suspension.blockingCompositions.map(item => (

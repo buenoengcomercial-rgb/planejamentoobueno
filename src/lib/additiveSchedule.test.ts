@@ -18,6 +18,7 @@ import {
   getPendingAdditiveScheduleControls,
   getQuantitativelyRestrictedTasks,
   mergeAdditiveSchedulePreviewChanges,
+  releaseAdditiveScheduleDependencyForTask,
   setAdditiveScheduleCollapsedPhaseIds,
   setAdditiveScheduleDependencyBlock,
   setAdditiveScheduleDependentTask,
@@ -412,6 +413,61 @@ describe('Cronograma do Aditivo', () => {
     const released = setAdditiveScheduleDependentTask(blocked, additive.id, 'task-2', false);
     expect(released.additives![0].scheduleDraft?.dependencyBlocks).toEqual([]);
     expect(buildPreviewSuspensionMap(released, released.additives![0])['task-2']).toBeUndefined();
+  });
+
+  it('desbloqueia somente a sucessora selecionada e preserva os demais vínculos', () => {
+    const normalPredecessor = {
+      ...project.phases[0].tasks[1], id: 'normal-predecessor', name: 'Predecessora normal', startDate: '2026-08-12', dependencies: [], dependencyDetails: [],
+    };
+    const peer = {
+      ...project.phases[0].tasks[1], id: 'peer-successor', name: 'Outra sucessora', startDate: '2026-08-25', dependencies: [], dependencyDetails: [],
+    };
+    const child = {
+      ...project.phases[0].tasks[1], id: 'child-successor', name: 'Sucessora em cadeia', startDate: '2026-08-30', dependencies: [], dependencyDetails: [],
+    };
+    const dependencyProject: Project = {
+      ...project,
+      phases: [{
+        ...project.phases[0],
+        tasks: [...project.phases[0].tasks, normalPredecessor, peer, child],
+      }],
+    };
+    let prepared = syncAdditiveScheduleDraft(dependencyProject, additive.id);
+    prepared = setAdditiveScheduleDependencyBlock(prepared, additive.id, 'task-1', ['existing-comp'], 'Aguardando regularização');
+    let active = prepared.additives![0];
+    const preview = buildAdditiveSchedulePreviewProject(prepared, active, active.scheduleDraft!);
+    const linkedPreview: Project = {
+      ...preview,
+      phases: preview.phases.map(phase => ({
+        ...phase,
+        tasks: phase.tasks.map(task => task.id === 'task-2'
+          ? { ...task, dependencies: ['task-1', 'normal-predecessor'], dependencyDetails: [{ taskId: 'task-1', type: 'TI' as const }, { taskId: 'normal-predecessor', type: 'TI' as const }] }
+          : task.id === 'peer-successor'
+            ? { ...task, dependencies: ['task-1'], dependencyDetails: [{ taskId: 'task-1', type: 'TI' as const }] }
+            : task.id === 'child-successor'
+              ? { ...task, dependencies: ['task-2'], dependencyDetails: [{ taskId: 'task-2', type: 'TI' as const }] }
+              : task),
+      })),
+    };
+    prepared = mergeAdditiveSchedulePreviewChanges(prepared, additive.id, preview, linkedPreview);
+    active = prepared.additives![0];
+
+    const releasedTask = releaseAdditiveScheduleDependencyForTask(prepared, additive.id, 'task-2');
+    const releasedTaskActive = releasedTask.additives![0];
+    const releasedTaskPreview = buildAdditiveSchedulePreviewProject(releasedTask, releasedTaskActive, releasedTaskActive.scheduleDraft!);
+    const releasedTaskMap = new Map(releasedTaskPreview.phases.flatMap(phase => phase.tasks).map(task => [task.id, task]));
+    expect(releasedTaskMap.get('task-2')).toMatchObject({ dependencies: ['normal-predecessor'] });
+    expect(releasedTaskMap.get('peer-successor')).toMatchObject({ dependencies: ['task-1'] });
+    expect(buildPreviewSuspensionMap(releasedTask, releasedTaskActive, releasedTaskPreview)['task-2']).toBeUndefined();
+    expect(buildPreviewSuspensionMap(releasedTask, releasedTaskActive, releasedTaskPreview)['peer-successor']).toMatchObject({ kind: 'dependency' });
+
+    const releasedChild = releaseAdditiveScheduleDependencyForTask(prepared, additive.id, 'child-successor');
+    const releasedChildActive = releasedChild.additives![0];
+    const releasedChildPreview = buildAdditiveSchedulePreviewProject(releasedChild, releasedChildActive, releasedChildActive.scheduleDraft!);
+    const releasedChildMap = new Map(releasedChildPreview.phases.flatMap(phase => phase.tasks).map(task => [task.id, task]));
+    expect(releasedChildMap.get('task-2')).toMatchObject({ dependencies: ['task-1', 'normal-predecessor'] });
+    expect(releasedChildMap.get('child-successor')).toMatchObject({ dependencies: [] });
+    expect(buildPreviewSuspensionMap(releasedChild, releasedChildActive, releasedChildPreview)['task-2']).toMatchObject({ kind: 'dependency' });
   });
 
   it('congela os bloqueadores e os inclui nos documentos', async () => {
