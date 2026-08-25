@@ -1,5 +1,5 @@
-const DAILY_REPORT_PHOTO_MAX_SIDE = 1600;
-const DAILY_REPORT_PHOTO_JPEG_QUALITY = 0.8;
+const DAILY_REPORT_PHOTO_MAX_SIDE = 1280;
+const DAILY_REPORT_PHOTO_JPEG_QUALITY = 0.76;
 
 type DecodedImage = {
   source: CanvasImageSource;
@@ -39,7 +39,8 @@ function toJpeg(canvas: HTMLCanvasElement): Promise<Blob> {
 
 /**
  * Gera a única cópia persistida para o Diário: JPEG orientado, leve e adequado
- * para visualização de campo e impressão em até seis fotos por folha A4.
+ * para visualização de campo e impressão em até seis fotos por folha A4,
+ * sem carregar pixels desnecessários nas miniaturas do Diário.
  */
 export async function optimizeDailyReportPhoto(file: File): Promise<File> {
   if (!file.type.startsWith('image/')) throw new Error('Selecione uma imagem válida.');

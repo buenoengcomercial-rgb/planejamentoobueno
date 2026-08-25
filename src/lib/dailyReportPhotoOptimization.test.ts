@@ -21,16 +21,16 @@ describe('optimizeDailyReportPhoto', () => {
     else Reflect.deleteProperty(globalThis, 'createImageBitmap');
   });
 
-  it('corrige orientação e limita o maior lado a 1600px antes do upload', async () => {
+  it('corrige orientação e limita o maior lado a 1280px antes do upload', async () => {
     const close = vi.fn();
     globalThis.createImageBitmap = vi.fn().mockResolvedValue({ width: 4000, height: 3000, close }) as typeof createImageBitmap;
     const source = new File([new Uint8Array(5_000)], 'campo.png', { type: 'image/png' });
 
     const optimized = await optimizeDailyReportPhoto(source);
 
-    expect(canvas.width).toBe(1600);
-    expect(canvas.height).toBe(1200);
-    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 1600, 1200);
+    expect(canvas.width).toBe(1280);
+    expect(canvas.height).toBe(960);
+    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 1280, 960);
     expect(optimized).toMatchObject({ name: 'campo.jpg', type: 'image/jpeg', size: 900 });
     expect(close).toHaveBeenCalled();
   });
@@ -42,6 +42,6 @@ describe('optimizeDailyReportPhoto', () => {
   });
 
   it('declara a política de armazenamento do Diário', () => {
-    expect(dailyReportPhotoOptimization).toEqual({ maxSide: 1600, jpegQuality: 0.8 });
+    expect(dailyReportPhotoOptimization).toEqual({ maxSide: 1280, jpegQuality: 0.76 });
   });
 });

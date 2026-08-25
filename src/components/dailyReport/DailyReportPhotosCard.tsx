@@ -20,6 +20,24 @@ function PhotoThumb({ att }: { att: DailyReportAttachment }) {
   );
 }
 
+function formatPhotoSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / 1024 / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} MB`;
+}
+
+function PhotoStorageInfo({ photo }: { photo: DailyReportAttachment }) {
+  if (!photo.originalBytes || !photo.storedBytes) return null;
+  const savedBytes = Math.max(0, photo.originalBytes - photo.storedBytes);
+  const savedPercent = Math.round((savedBytes / photo.originalBytes) * 100);
+
+  return (
+    <div className="text-[10px] leading-tight text-muted-foreground" title={`Original: ${formatPhotoSize(photo.originalBytes)}. Armazenada: ${formatPhotoSize(photo.storedBytes)}.`}>
+      {formatPhotoSize(photo.originalBytes)} → {formatPhotoSize(photo.storedBytes)}
+      {savedBytes > 0 && ` (-${savedPercent}%)`}
+    </div>
+  );
+}
+
 export interface PhotoTaskOption {
   value: string;
   label: string;
@@ -189,6 +207,7 @@ export function DailyReportPhotosCard({
                         {new Date(p.uploadedAt).toLocaleString('pt-BR')}
                       </div>
                     )}
+                    <PhotoStorageInfo photo={p} />
                   </div>
                 </div>
               );
