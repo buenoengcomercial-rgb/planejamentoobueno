@@ -5,7 +5,6 @@ import { useDailyReportTeams } from '@/hooks/useDailyReportTeams';
 import { useDailyReportEquipment } from '@/hooks/useDailyReportEquipment';
 import { useDailyReportPhotos } from '@/hooks/useDailyReportPhotos';
 import { useDailyReportPdf } from '@/hooks/useDailyReportPdf';
-import { buildRealCostAnalysis } from '@/lib/realCost';
 
 import type { DailyReportProps } from '@/components/dailyReport/types';
 import { DailyReportHeader } from '@/components/dailyReport/DailyReportHeader';
@@ -19,13 +18,12 @@ import { DailyReportPhotosCard } from '@/components/dailyReport/DailyReportPhoto
 import { DailyReportPhotoLightbox } from '@/components/dailyReport/DailyReportPhotoLightbox';
 import { DailyReportPhotoDeleteDialog } from '@/components/dailyReport/DailyReportPhotoDeleteDialog';
 import { DailyReportProductionSection } from '@/components/dailyReport/DailyReportProductionSection';
-import { DailyReportSubcontractProductionSection, type DailySubcontractProductionEntry } from '@/components/dailyReport/DailyReportSubcontractProductionSection';
 import { PeriodReportsSection } from '@/components/dailyReport/PeriodReportsSection';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { CalendarDays, CheckCircle2, History, LockKeyhole, LockKeyholeOpen } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 
 
 export default function DailyReport({ project, onProjectChange, undoButton, readOnly = false, canManageConclusion = false, initialDate, initialMeasurementFilter, navKey }: DailyReportProps) {
@@ -55,25 +53,6 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
     selectedDate,
     currentReport,
   });
-
-  const subcontractProduction = useMemo<DailySubcontractProductionEntry[]>(() => {
-    const compositionById = new Map(buildRealCostAnalysis(project).compositions.map(composition => [composition.id, composition]));
-    const activeAllocations = (project.subcontracts ?? []).filter(contract => contract.status === 'contracted')
-      .flatMap(contract => contract.items.map(item => ({ contract, item, taskId: item.taskId ?? compositionById.get(item.compositionId)?.taskId })));
-    const allocationCountByTask = activeAllocations.reduce((counts, allocation) => {
-      if (allocation.taskId) counts.set(allocation.taskId, (counts.get(allocation.taskId) ?? 0) + 1);
-      return counts;
-    }, new Map<string, number>());
-    return activeAllocations.flatMap(allocation => {
-      if (!allocation.taskId || allocationCountByTask.get(allocation.taskId) !== 1) return [];
-      const task = project.phases.flatMap(phase => phase.tasks).find(candidate => candidate.id === allocation.taskId);
-      const executed = (task?.dailyLogs ?? []).filter(log => log.date === selectedDate)
-        .reduce((sum, log) => sum + Math.max(0, Number(log.actualQuantity) || 0), 0);
-      const quantity = allocation.item.contractedQuantity ?? compositionById.get(allocation.item.compositionId)?.quantityFinal;
-      const unitValue = quantity && quantity > 0 ? allocation.item.contractedAmount / quantity : 0;
-      return executed > 0 ? [{ allocationId: allocation.item.id, contractName: allocation.contract.name, item: allocation.item.item, description: allocation.item.description, unit: allocation.item.unit, quantity: executed, unitValue }] : [];
-    });
-  }, [project, selectedDate]);
 
   const {
     projectTeams,
@@ -255,7 +234,6 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
         photosByTask={photosByTask}
         setPhotoFilter={setPhotoFilter}
           />
-          <DailyReportSubcontractProductionSection entries={subcontractProduction} />
           </fieldset>
         </TabsContent>
       </Tabs>
