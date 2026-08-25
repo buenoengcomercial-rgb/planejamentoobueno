@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { CommitOnBlurInput } from '@/components/dailyReport/CommitOnBlurField';
 import { Building2, ChevronDown } from 'lucide-react';
 import type { Project, ContractInfo } from '@/types/project';
 import { fmtDateBR } from '@/components/measurement/measurementFormat';
@@ -24,6 +25,7 @@ interface MeasurementContractInfoProps {
   bdiPercent: number;
   measurementNumber: string; setMeasurementNumber: (v: string) => void;
   persistContractInfo: (patch: Partial<ContractInfo>) => void;
+  onProjectNameChange: (name: string) => void;
 }
 
 export default function MeasurementContractInfo({
@@ -41,6 +43,7 @@ export default function MeasurementContractInfo({
   bdiPercent,
   measurementNumber, setMeasurementNumber,
   persistContractInfo,
+  onProjectNameChange,
 }: MeasurementContractInfoProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const compactBdi = Number.isFinite(effBdi) ? effBdi.toLocaleString('pt-BR') : '0';
@@ -116,7 +119,13 @@ export default function MeasurementContractInfo({
             />
           </FormField>
           <FormField label="Obra" colSpan={8}>
-            <p className="text-xs font-semibold text-foreground py-1">{project.name}</p>
+            <CommitOnBlurInput
+              className="h-7 text-xs border-0 px-0 font-semibold focus-visible:ring-0 bg-transparent"
+              value={project.name || ''}
+              disabled={isSnapshotMode}
+              onCommit={onProjectNameChange}
+              placeholder="Nome da obra"
+            />
           </FormField>
           <FormField label="Local / Municipio" colSpan={4}>
             <Input

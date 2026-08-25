@@ -499,6 +499,7 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
         bdiPercent={bdiPercent}
         measurementNumber={measurementNumber} setMeasurementNumber={setMeasurementNumber}
         persistContractInfo={persistContractInfo}
+        onProjectNameChange={name => onProjectChange({ ...project, name })}
       />
 
       {/* Filtros (live e snapshot) */}
