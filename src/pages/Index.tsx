@@ -66,6 +66,7 @@ import { supabase } from '@/integrations/supabase/client';
 
 const UNDO_LIMIT = 20;
 const SAVE_DEBOUNCE_MS = 4000;
+const LOCAL_DRAFT_DEBOUNCE_MS = 900;
 const REMOTE_VERSION_POLL_MS = 15000;
 const REALTIME_FALLBACK_POLL_MS = 15000;
 const UI_SESSION_VERSION = 1;
@@ -207,6 +208,8 @@ export default function Index() {
   const [undoVersion, setUndoVersion] = useState(0);
   const rawProjectRef = useRef<Project | null>(null);
   const saveTimerRef = useRef<number | null>(null);
+  const draftWriteTimerRef = useRef<number | null>(null);
+  const pendingDraftRef = useRef<{ project: Project; baseUpdatedAt: string | null } | null>(null);
   const initialLoadRef = useRef(false);
   const inFlightSaveRef = useRef<Promise<void> | null>(null);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -233,6 +236,37 @@ export default function Index() {
   const creator = role ? canCreateProject(role) : false;
   const remover = role ? canDeleteProject(role) : false;
   const restrictedFallbackView: AppView = role === 'warehouse_operator' ? 'warehouse' : 'gantt';
+
+  const cancelScheduledDraft = useCallback((projectId?: string) => {
+    const pending = pendingDraftRef.current;
+    if (!pending || (projectId && pending.project.id !== projectId)) return;
+    if (draftWriteTimerRef.current) window.clearTimeout(draftWriteTimerRef.current);
+    draftWriteTimerRef.current = null;
+    pendingDraftRef.current = null;
+  }, []);
+
+  const scheduleProjectDraft = useCallback((nextProject: Project, baseUpdatedAt: string | null) => {
+    const pending = pendingDraftRef.current;
+    if (pending && pending.project.id !== nextProject.id) {
+      if (draftWriteTimerRef.current) window.clearTimeout(draftWriteTimerRef.current);
+      writeProjectDraft(pending.project, pending.baseUpdatedAt);
+    }
+    if (draftWriteTimerRef.current) window.clearTimeout(draftWriteTimerRef.current);
+    pendingDraftRef.current = { project: nextProject, baseUpdatedAt };
+    draftWriteTimerRef.current = window.setTimeout(() => {
+      const draft = pendingDraftRef.current;
+      draftWriteTimerRef.current = null;
+      pendingDraftRef.current = null;
+      if (draft) writeProjectDraft(draft.project, draft.baseUpdatedAt);
+    }, LOCAL_DRAFT_DEBOUNCE_MS);
+  }, []);
+
+  const discardProjectDraft = useCallback((projectId: string) => {
+    cancelScheduledDraft(projectId);
+    clearProjectDraft(projectId);
+  }, [cancelScheduledDraft]);
+
+  useEffect(() => () => cancelScheduledDraft(), [cancelScheduledDraft]);
   const safeCurrentView: AppView = role && !canAccessAppView(role, currentView) ? restrictedFallbackView : currentView;
   const allowedViews = role ? APP_VIEWS.filter(view => canAccessAppView(role, view)) : undefined;
 
@@ -367,7 +401,7 @@ export default function Index() {
       projectForState = recoveredDraft.project;
       toast.info('Recuperei um rascunho recente deste aparelho. Ele ainda será conferido na nuvem.');
     } else if (draftInspection.kind === 'identical' && projectToLoad) {
-      clearProjectDraft(projectToLoad.id);
+      discardProjectDraft(projectToLoad.id);
     } else if (draftInspection.kind === 'candidate' && projectToLoad) {
       setDraftRecovery({ cloudProject: projectToLoad, cloudUpdatedAt: updatedAt, draft: draftInspection.draft, open: true });
     }
@@ -385,7 +419,7 @@ export default function Index() {
     if (draftInspection.kind === 'candidate') setSaveStatus('conflict');
     else if (recoveredDraft || repairApplied) setSaveStatus('saving');
     else setSaveStatus('saved');
-  }, []);
+  }, [discardProjectDraft]);
 
   const persistProject = useCallback(async (
     projectToSave: Project,
@@ -394,7 +428,7 @@ export default function Index() {
   ) => {
     const nextJson = serializeProject(projectToSave);
     if (nextJson === lastSavedProjectJsonRef.current) {
-      if (!options.retainDraftUntilVerified) clearProjectDraft(projectToSave.id);
+      if (!options.retainDraftUntilVerified) discardProjectDraft(projectToSave.id);
       setLastCloudConfirmedAt(new Date().toISOString());
       setSaveStatus('saved');
       return;
@@ -420,7 +454,7 @@ export default function Index() {
       setCurrentProjectUpdatedAt(updatedAt);
       setLastCloudConfirmedAt(new Date().toISOString());
       if (seq === saveRequestSeqRef.current && !saveTimerRef.current && !partialSync) {
-        if (!options.retainDraftUntilVerified) clearProjectDraft(projectToSave.id);
+        if (!options.retainDraftUntilVerified) discardProjectDraft(projectToSave.id);
         setSaveStatus('saved');
       } else if (partialSync) {
         setSaveStatus('error');
@@ -445,7 +479,7 @@ export default function Index() {
     } finally {
       if (inFlightSaveRef.current === request) inFlightSaveRef.current = null;
     }
-  }, []);
+  }, [discardProjectDraft]);
 
   const handleCloudConflict = useCallback(async (localProject: Project) => {
     conflictDetectedRef.current = true;
@@ -482,12 +516,12 @@ export default function Index() {
       skipNextAutoSaveRef.current = false;
       rawProjectRef.current = synchronized;
       if (projectHasLocalChanges(synchronized, lastSavedProjectJsonRef.current)) {
-        writeProjectDraft(synchronized, currentProjectUpdatedAtRef.current);
+        scheduleProjectDraft(synchronized, currentProjectUpdatedAtRef.current);
       }
       setSaveStatus('saving');
       return synchronized;
     });
-  }, [appliedWorkStart, editor, measurementWorkStart, rawProject?.id]);
+  }, [appliedWorkStart, editor, measurementWorkStart, rawProject?.id, scheduleProjectDraft]);
 
   const flushPendingSave = useCallback(async () => {
     if (!user || !orgId || !rawProject || !initialLoadRef.current || !canPersistProject) return true;
@@ -795,11 +829,12 @@ export default function Index() {
     if (!current) return;
     const hasPendingSave = !!saveTimerRef.current || !!inFlightSaveRef.current;
     if (projectHasLocalChanges(current, lastSavedProjectJsonRef.current, hasPendingSave)) {
+      cancelScheduledDraft(current.id);
       writeProjectDraft(current, currentProjectUpdatedAtRef.current);
     } else {
-      clearProjectDraft(current.id);
+      discardProjectDraft(current.id);
     }
-  }, [canPersistProject]);
+  }, [canPersistProject, cancelScheduledDraft, discardProjectDraft]);
 
   useEffect(() => {
     const handlePageMaySleep = () => {
@@ -883,21 +918,22 @@ export default function Index() {
         if (synchronized === prev) return prev;
         // Trava contra laço de atualização: objeto novo com conteúdo idêntico
         // não gera novo estado (evitava o autosave reiniciar para sempre).
-        if (serializeProject(synchronized) === serializeProject(prev)) return prev;
+        const synchronizedJson = serializeProject(synchronized);
+        if (synchronizedJson === serializeProject(prev)) return prev;
         const stack = undoStacksRef.current[view];
         stack.push(prev);
         if (stack.length > UNDO_LIMIT) stack.shift();
         rawProjectRef.current = synchronized;
-        if (projectHasLocalChanges(synchronized, lastSavedProjectJsonRef.current)) {
-          writeProjectDraft(synchronized, currentProjectUpdatedAtRef.current);
+        if (synchronizedJson !== lastSavedProjectJsonRef.current) {
+          scheduleProjectDraft(synchronized, currentProjectUpdatedAtRef.current);
         } else {
-          clearProjectDraft(synchronized.id);
+          discardProjectDraft(synchronized.id);
         }
         setUndoVersion(v => v + 1);
         return synchronized;
       });
     };
-  }, [dailyReportEditor, editor, role, warehouseEditor]);
+  }, [dailyReportEditor, discardProjectDraft, editor, role, scheduleProjectDraft, warehouseEditor]);
 
   const ganttSetter = useMemo(() => makeViewSetter('gantt'), [makeViewSetter]);
   const managementSetter = useMemo(() => makeViewSetter('management'), [makeViewSetter]);
@@ -1114,11 +1150,11 @@ export default function Index() {
     const record = await loadCloudProjectRecord(recovery.cloudProject.id);
     if (!record) throw new Error('Não foi possível reler esta obra na nuvem. Tente novamente.');
     replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false);
-    clearProjectDraft(record.project.id);
+    discardProjectDraft(record.project.id);
     setDraftRecovery(null);
     conflictDetectedRef.current = false;
     toast.success('Dados da nuvem confirmados. A cópia antiga deste aparelho foi descartada.');
-  }, [draftRecovery, replaceProjectWithoutAutoSave]);
+  }, [discardProjectDraft, draftRecovery, replaceProjectWithoutAutoSave]);
 
   const handleRestoreDraftWarehouse = useCallback(async () => {
     const recovery = draftRecovery;
@@ -1171,11 +1207,11 @@ export default function Index() {
     }
 
     replaceProjectWithoutAutoSave(verified.project, verified.updatedAt, verified.repairApplied, false);
-    clearProjectDraft(verified.project.id);
+    discardProjectDraft(verified.project.id);
     setDraftRecovery(null);
     conflictDetectedRef.current = false;
     toast.success('Almoxarifado restaurado, equipamentos preservados e nuvem conferida.');
-  }, [auditActor, draftRecovery, handleCloudConflict, orgId, persistProject, replaceProjectWithoutAutoSave]);
+  }, [auditActor, discardProjectDraft, draftRecovery, handleCloudConflict, orgId, persistProject, replaceProjectWithoutAutoSave]);
 
   const sidebarProjects: ProjectMeta[] = useMemo(
     () => cloudList.map(p => ({ id: p.id, name: p.name, createdAt: p.createdAt, updatedAt: p.updatedAt })),

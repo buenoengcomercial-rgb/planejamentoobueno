@@ -47,6 +47,11 @@ export type RemoteVersionAction = 'current' | 'reload' | 'conflict';
 
 export const projectDraftKey = (projectId: string) => `obraplanner:unsaved-cloud-draft:${projectId}`;
 
+// Depois de uma QuotaExceededError, insistir em novas gravações no mesmo
+// armazenamento só repete uma operação síncrona cara durante a digitação.
+// A cópia local é complementar: a nuvem permanece sendo a fonte confirmada.
+const storageWithUnavailableDraftQuota = new WeakSet<Storage>();
+
 function withoutEmbeddedBinary(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(withoutEmbeddedBinary);
   if (!value || typeof value !== 'object') return value;
@@ -110,6 +115,7 @@ export function writeProjectDraft(
   storage: Storage | null = defaultStorage(),
 ): StoredProjectDraft | null {
   if (!storage) return null;
+  if (storageWithUnavailableDraftQuota.has(storage)) return null;
   const now = new Date().toISOString();
   const safeProject = sanitizeProjectDraft(project);
   const draft: StoredProjectDraft = {
@@ -123,6 +129,9 @@ export function writeProjectDraft(
     storage.setItem(projectDraftKey(project.id), JSON.stringify(draft));
     return draft;
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+      storageWithUnavailableDraftQuota.add(storage);
+    }
     console.warn('[cloudProjectDrafts] Não foi possível proteger o rascunho local.', error);
     return null;
   }

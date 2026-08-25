@@ -83,9 +83,16 @@ describe('rascunho local seguro', () => {
     const draft = writeProjectDraft(local, '2026-08-18T12:00:00.000Z');
     expect(draft?.project.warehouse?.fiscalNotes[0].attachment?.dataUrl).toBeUndefined();
 
-    const fullStorage = { setItem: () => { throw new DOMException('quota', 'QuotaExceededError'); } } as unknown as Storage;
+    let failedWrites = 0;
+    const fullStorage = {
+      setItem: () => {
+        failedWrites += 1;
+        throw new DOMException('quota', 'QuotaExceededError');
+      },
+    } as unknown as Storage;
     expect(() => writeProjectDraft(local, null, fullStorage)).not.toThrow();
     expect(writeProjectDraft(local, null, fullStorage)).toBeNull();
+    expect(failedWrites).toBe(1);
     expect(JSON.stringify(sanitizeProjectDraft(local))).not.toContain('data:application/pdf');
   });
 
