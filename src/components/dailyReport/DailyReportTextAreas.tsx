@@ -1,10 +1,68 @@
 import type { DailyReport as DailyReportEntry } from '@/types/project';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+const TEXT_FIELD_DEBOUNCE_MS = 700;
+type DailyTextField = 'occurrences' | 'impediments' | 'observations';
 
 interface DailyReportTextAreasProps {
   currentReport: DailyReportEntry;
   updateField: <K extends keyof DailyReportEntry>(key: K, value: DailyReportEntry[K]) => void;
+}
+
+interface DeferredTextareaProps {
+  field: DailyTextField;
+  value: string;
+  placeholder: string;
+  updateField: DailyReportTextAreasProps['updateField'];
+}
+
+function DeferredTextarea({ field, value, placeholder, updateField }: DeferredTextareaProps) {
+  const [draft, setDraft] = useState(value);
+  const draftRef = useRef(value);
+  const committedValueRef = useRef(value);
+  const updateFieldRef = useRef(updateField);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    updateFieldRef.current = updateField;
+  }, [updateField]);
+
+  const flush = useCallback(() => {
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+    timerRef.current = null;
+    const next = draftRef.current;
+    if (next === committedValueRef.current) return;
+    committedValueRef.current = next;
+    updateFieldRef.current(field, next);
+  }, [field]);
+
+  useEffect(() => {
+    if (draftRef.current === committedValueRef.current && value !== draftRef.current) {
+      draftRef.current = value;
+      committedValueRef.current = value;
+      setDraft(value);
+    }
+  }, [value]);
+
+  useEffect(() => () => flush(), [flush]);
+
+  return (
+    <Textarea
+      rows={4}
+      value={draft}
+      placeholder={placeholder}
+      onChange={event => {
+        const next = event.target.value;
+        draftRef.current = next;
+        setDraft(next);
+        if (timerRef.current) window.clearTimeout(timerRef.current);
+        timerRef.current = window.setTimeout(flush, TEXT_FIELD_DEBOUNCE_MS);
+      }}
+      onBlur={flush}
+    />
+  );
 }
 
 export function DailyReportTextAreas({ currentReport, updateField }: DailyReportTextAreasProps) {
@@ -13,25 +71,22 @@ export function DailyReportTextAreas({ currentReport, updateField }: DailyReport
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">Ocorrências</CardTitle></CardHeader>
         <CardContent>
-          <Textarea rows={4} value={currentReport.occurrences || ''}
-            onChange={e => updateField('occurrences', e.target.value)}
-            placeholder="Fatos importantes do dia..." />
+          <DeferredTextarea key={`occurrences:${currentReport.id}`} field="occurrences" value={currentReport.occurrences || ''}
+            updateField={updateField} placeholder="Fatos importantes do dia..." />
         </CardContent>
       </Card>
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">Impedimentos</CardTitle></CardHeader>
         <CardContent>
-          <Textarea rows={4} value={currentReport.impediments || ''}
-            onChange={e => updateField('impediments', e.target.value)}
-            placeholder="Problemas que afetaram a produção..." />
+          <DeferredTextarea key={`impediments:${currentReport.id}`} field="impediments" value={currentReport.impediments || ''}
+            updateField={updateField} placeholder="Problemas que afetaram a produção..." />
         </CardContent>
       </Card>
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-base">Observações gerais</CardTitle></CardHeader>
         <CardContent>
-          <Textarea rows={4} value={currentReport.observations || ''}
-            onChange={e => updateField('observations', e.target.value)}
-            placeholder="Notas adicionais..." />
+          <DeferredTextarea key={`observations:${currentReport.id}`} field="observations" value={currentReport.observations || ''}
+            updateField={updateField} placeholder="Notas adicionais..." />
         </CardContent>
       </Card>
     </div>
