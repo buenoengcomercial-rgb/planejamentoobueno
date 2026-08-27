@@ -1,4 +1,5 @@
-import { Camera, Plus, Trash2, Image as ImageIcon, Loader2, Filter } from 'lucide-react';
+import { Camera, Trash2, Image as ImageIcon, Loader2, Filter } from 'lucide-react';
+import { useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { CommitOnBlurInput } from '@/components/dailyReport/CommitOnBlurField';
 import { Label } from '@/components/ui/label';
@@ -80,6 +81,8 @@ export function DailyReportPhotosCard({
   setLightbox,
   setConfirmDelete,
 }: DailyReportPhotosCardProps) {
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+
   return (
     <Card>
       <CardHeader className="pb-3 flex flex-row items-center justify-between gap-2 flex-wrap">
@@ -102,10 +105,9 @@ export function DailyReportPhotosCard({
             </Select>
           </div>
           <input
-            ref={fileInputRef}
+            ref={cameraInputRef}
             type="file"
             accept="image/*"
-            multiple
             capture="environment"
             className="hidden"
             onChange={(e) => {
@@ -115,10 +117,29 @@ export function DailyReportPhotosCard({
               }
             }}
           />
-          <Button size="sm" variant="default" className="min-h-11 sm:min-h-9" onClick={() => fileInputRef.current?.click()} disabled={uploadingCount > 0}>
-            {uploadingCount > 0 ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-1" />}
-            Anexar fotos
-          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files && e.target.files.length > 0) {
+                handleFiles(e.target.files);
+                e.target.value = '';
+              }
+            }}
+          />
+          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
+            <Button size="sm" variant="outline" className="min-h-11 sm:min-h-9" onClick={() => cameraInputRef.current?.click()} disabled={uploadingCount > 0}>
+              {uploadingCount > 0 ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Camera className="mr-1 h-3.5 w-3.5" />}
+              Câmera
+            </Button>
+            <Button size="sm" variant="default" className="min-h-11 sm:min-h-9" onClick={() => fileInputRef.current?.click()} disabled={uploadingCount > 0}>
+              {uploadingCount > 0 ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="mr-1 h-3.5 w-3.5" />}
+              Galeria
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent
@@ -155,7 +176,7 @@ export function DailyReportPhotosCard({
           <div className="border border-dashed border-border rounded-md py-8 text-center text-xs text-muted-foreground">
             <ImageIcon className="w-6 h-6 mx-auto mb-1 opacity-50" />
             {photos.length === 0
-              ? 'Nenhuma foto anexada. Arraste imagens aqui ou clique em "Anexar fotos".'
+              ? 'Nenhuma foto anexada. Arraste imagens aqui ou use Câmera ou Galeria.'
               : 'Nenhuma foto neste filtro.'}
           </div>
         ) : (
