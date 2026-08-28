@@ -42,11 +42,16 @@ function delta(composition: AdditiveComposition) {
 
 function chapterResolver(project: Project) {
   const phases = new Map((project.phases ?? []).map(phase => [phase.id, phase]));
+  const chapterId = (number: string, fallback: string) => {
+    const principalNumber = number.trim().split('.')[0];
+    return principalNumber ? `chapter:${principalNumber}` : fallback;
+  };
   const root = (phaseId?: string) => {
     let phase = phaseId ? phases.get(phaseId) : undefined;
     while (phase?.parentId) phase = phases.get(phase.parentId) ?? phase;
     if (!phase) return undefined;
-    return { id: phase.id, number: phase.customNumber || '', name: phase.name };
+    const number = phase.customNumber || '';
+    return { id: chapterId(number, phase.id), number, name: phase.name };
   };
   const fromBudget = (composition: AdditiveComposition) => {
     const budgets = project.budgetItems ?? [];
@@ -58,7 +63,11 @@ function chapterResolver(project: Project) {
     );
     if (candidates.length !== 1) return undefined;
     const budget = candidates[0];
-    return budget.chapterCode ? { id: `budget:${budget.chapterCode}`, number: budget.chapterCode, name: budget.chapterName || `Capítulo ${budget.chapterCode}` } : undefined;
+    return budget.chapterCode ? {
+      id: chapterId(budget.chapterCode, `budget:${budget.chapterCode}`),
+      number: budget.chapterCode,
+      name: budget.chapterName || `Capítulo ${budget.chapterCode}`,
+    } : undefined;
   };
   return (composition: AdditiveComposition) => root(composition.phaseId) || fromBudget(composition) || { id: '__unlinked__', number: '', name: 'Sem capítulo vinculado' };
 }

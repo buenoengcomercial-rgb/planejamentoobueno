@@ -31,4 +31,17 @@ describe('warehouseBudgetMaterialsByChapter', () => {
 
     expect(warehouseBudgetMaterialsByChapter(project)).toEqual([]);
   });
+
+  it('unifica contrato e aditivo quando o capítulo tem identificadores internos diferentes', () => {
+    const project = {
+      phases: [{ id: 'phase-2', customNumber: '2', name: 'Incêndio', color: '#000', tasks: [] }],
+      budgetItems: [{ id: 'budget-1', item: '2.1.1', code: '999', chapterCode: '2', chapterName: 'Incêndio', unit: 'm', quantity: 10 }],
+      analyticCompositions: [{ ...composition('base', 10, undefined), baseBudgetItemId: 'budget-1' }],
+      additives: [{ id: 'a1', name: 'Aditivo 1', importedAt: '', status: 'aprovado', compositions: [{ ...composition('add', 3, 'phase-2'), addedQuantity: 3, originalQuantity: 0, isNewService: true }] }],
+    } as unknown as Project;
+
+    const [chapter] = warehouseBudgetMaterialsByChapter(project);
+    expect(chapter).toMatchObject({ id: 'chapter:2', number: '2', name: 'Incêndio' });
+    expect(chapter.rows[0]).toMatchObject({ contractedQuantity: 20, additiveQuantity: 6, totalQuantity: 26 });
+  });
 });
