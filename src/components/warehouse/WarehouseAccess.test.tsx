@@ -6,6 +6,7 @@ import Warehouse from './Warehouse';
 
 vi.mock('./WarehousePanel', () => ({ default: () => <div>Conteúdo do painel</div> }));
 vi.mock('./WarehouseStockTab', () => ({ default: () => <div>Conteúdo de materiais</div> }));
+vi.mock('./WarehouseBudgetMaterialsTab', () => ({ default: () => <div>Conteúdo de materiais do orçamento</div> }));
 vi.mock('./WarehouseMovementsTab', () => ({ default: () => <div>Conteúdo de movimentações</div> }));
 vi.mock('./WarehouseRequisitionsTab', () => ({ default: () => <div>Conteúdo de retiradas</div> }));
 vi.mock('./WarehouseEquipmentsTab', () => ({ default: () => <div>Conteúdo de equipamentos</div> }));
@@ -28,7 +29,7 @@ describe('controle de acesso do almoxarifado', () => {
 
     expect(screen.getByText('Conteúdo do painel')).toBeInTheDocument();
 
-    const expectedLabels = ['Painel', 'Entrada', 'Retiradas e devoluções', 'Equipamentos', 'Materiais', 'Movimentações', 'Inventário'];
+    const expectedLabels = ['Painel', 'Entrada', 'Retiradas e devoluções', 'Equipamentos', 'Materiais', 'Materiais do orçamento', 'Movimentações', 'Inventário'];
     const desktopLabels = screen.getAllByRole('tab').map(tab => tab.textContent?.trim());
     const mobileSelect = screen.getByLabelText('Área do almoxarifado') as HTMLSelectElement;
     const mobileLabels = Array.from(mobileSelect.options).map(option => option.textContent);
@@ -48,6 +49,7 @@ describe('controle de acesso do almoxarifado', () => {
       ['requisicoes', 'Conteúdo de retiradas'],
       ['equipamentos', 'Conteúdo de equipamentos'],
       ['estoque', 'Conteúdo de materiais'],
+      ['materiais-orcamento', 'Conteúdo de materiais do orçamento'],
       ['movimentos', 'Conteúdo de movimentações'],
       ['inventario', 'Conteúdo do inventário'],
       ['painel', 'Conteúdo do painel'],
@@ -65,7 +67,7 @@ describe('controle de acesso do almoxarifado', () => {
     expect(screen.queryByText('Conteúdo do painel')).not.toBeInTheDocument();
     expect(screen.getByText('Conteúdo de entrada')).toBeInTheDocument();
 
-    const expectedLabels = ['Entrada', 'Retiradas e devoluções', 'Equipamentos', 'Materiais', 'Movimentações', 'Inventário'];
+    const expectedLabels = ['Entrada', 'Retiradas e devoluções', 'Equipamentos', 'Materiais', 'Materiais do orçamento', 'Movimentações', 'Inventário'];
     const desktopLabels = screen.getAllByRole('tab').map(tab => tab.textContent?.trim());
     const mobileSelect = screen.getByLabelText('Área do almoxarifado') as HTMLSelectElement;
     const mobileLabels = Array.from(mobileSelect.options).map(option => option.textContent);

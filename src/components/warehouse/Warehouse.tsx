@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Project, WarehouseAuditActor } from '@/types/project';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, Warehouse as WarehouseIcon, ReceiptText } from 'lucide-react';
+import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, Warehouse as WarehouseIcon, ReceiptText, ClipboardCheck } from 'lucide-react';
 import { ensureWarehouse, panelSummary } from '@/lib/warehouse';
 import WarehousePanel from './WarehousePanel';
 import WarehouseStockTab from './WarehouseStockTab';
@@ -10,6 +10,7 @@ import WarehouseRequisitionsTab from './WarehouseRequisitionsTab';
 import WarehouseEquipmentsTab from './WarehouseEquipmentsTab';
 import WarehouseInventoryTab from './WarehouseInventoryTab';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
+import WarehouseBudgetMaterialsTab from './WarehouseBudgetMaterialsTab';
 import AttachmentOptimizationPanel from './AttachmentOptimizationPanel';
 import GlobalStorageMaintenancePanel from './GlobalStorageMaintenancePanel';
 import './warehouse-visual.css';
@@ -20,6 +21,7 @@ const WAREHOUSE_TABS = [
   { value: 'requisicoes', label: 'Retiradas e devoluções', icon: ClipboardList },
   { value: 'equipamentos', label: 'Equipamentos', icon: HardHat },
   { value: 'estoque', label: 'Materiais', icon: Boxes },
+  { value: 'materiais-orcamento', label: 'Materiais do orçamento', icon: ClipboardCheck },
   { value: 'movimentos', label: 'Movimentações', icon: ArrowLeftRight },
   { value: 'inventario', label: 'Inventário', icon: ListChecks },
 ] as const;
@@ -122,6 +124,9 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
         </TabsContent>
         <TabsContent value="estoque" className="mt-3">
           <WarehouseStockTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} canDelete={canDeleteWarehouseRecords} />
+        </TabsContent>
+        <TabsContent value="materiais-orcamento" className="mt-3">
+          <WarehouseBudgetMaterialsTab project={ensured} />
         </TabsContent>
         <TabsContent value="movimentos" className="mt-3">
           <WarehouseMovementsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
