@@ -87,7 +87,11 @@ describe('SubcontractsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /alternar itens contratados do pacote pacote a/i }));
 
     expect(screen.getByRole('columnheader', { name: 'Simulação' })).toBeInTheDocument();
-    fireEvent.change(screen.getAllByLabelText('Simulação de Serviço já terceirizado')[0], { target: { value: '7' } });
+    const simulationInput = screen.getAllByLabelText('Simulação de Serviço já terceirizado')[0];
+    fireEvent.change(simulationInput, { target: { value: '7' } });
+    expect(onProjectChange).not.toHaveBeenCalled();
+    expect(screen.getByText('Simulado').parentElement).toHaveTextContent(/R\$\s*70,00/);
+    fireEvent.blur(simulationInput);
 
     const nextProject = onProjectChange.mock.calls[0][0] as Project;
     const nextContract = nextProject.subcontracts?.[0];
@@ -95,7 +99,10 @@ describe('SubcontractsTab', () => {
     view.rerender(<SubcontractsTab project={nextProject} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={onProjectChange} />);
     expect(screen.getByText('Simulado').parentElement).toHaveTextContent(/R\$\s*70,00/);
 
-    fireEvent.change(screen.getAllByLabelText('Simulação de Serviço já terceirizado')[0], { target: { value: '12' } });
+    const limitedInput = screen.getAllByLabelText('Simulação de Serviço já terceirizado')[0];
+    fireEvent.change(limitedInput, { target: { value: '12' } });
+    expect(onProjectChange).toHaveBeenCalledTimes(1);
+    fireEvent.blur(limitedInput);
     const limitedProject = onProjectChange.mock.calls[1][0] as Project;
     const limitedContract = limitedProject.subcontracts?.[0];
     expect(limitedContract?.items[0].simulatedExecutedQuantity).toBe(10);
