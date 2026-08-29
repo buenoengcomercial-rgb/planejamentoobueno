@@ -3,16 +3,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { SubcontractsTab } from './RealCost';
 import type { Project } from '@/types/project';
 
-const rows = [
+type TestRow = { id: string; item: string; description: string; chapter: string; laborCost: number; quantityFinal: number; unit: string; taskId?: string };
+
+const rows: TestRow[] = [
   { id: 'a', item: '3.3.1', description: 'Serviço já terceirizado', chapter: '3 Incêndio', laborCost: 100, quantityFinal: 10, unit: 'm' },
   { id: 'b', item: '3.3.2', description: 'Serviço disponível', chapter: '3 Incêndio', laborCost: 200, quantityFinal: 20, unit: 'm' },
   { id: 'c', item: '3.3.3', description: 'Outro serviço disponível', chapter: '3 Incêndio', laborCost: 300, quantityFinal: 30, unit: 'm' },
-] as any[];
+];
 
 const analysis = {
   compositions: rows,
   groupTree: [{ phaseId: 'chapter-3', number: '3', name: 'INCÊNDIO', depth: 0, rows, children: [] }],
-} as any;
+} as unknown as Parameters<typeof SubcontractsTab>[0]['analysis'];
 
 function projectWithContract(): Project {
   return {
@@ -77,6 +79,35 @@ describe('SubcontractsTab', () => {
     expect(screen.getByText('Contrato terceirizado')).toHaveClass('bg-emerald-100/70');
     expect(screen.getByRole('columnheader', { name: 'Quantidade' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Produzido' })).toBeInTheDocument();
+  });
+
+  it('salva a simulação limitada ao contratado sem alterar a produção real ou pagamentos', () => {
+    const onProjectChange = vi.fn();
+    const view = render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={onProjectChange} />);
+    fireEvent.click(screen.getByRole('button', { name: /alternar itens contratados do pacote pacote a/i }));
+
+    expect(screen.getByRole('columnheader', { name: 'Simulação' })).toBeInTheDocument();
+    fireEvent.change(screen.getAllByLabelText('Simulação de Serviço já terceirizado')[0], { target: { value: '7' } });
+
+    const nextProject = onProjectChange.mock.calls[0][0] as Project;
+    const nextContract = nextProject.subcontracts?.[0];
+    expect(nextContract?.items[0].simulatedExecutedQuantity).toBe(7);
+    view.rerender(<SubcontractsTab project={nextProject} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={onProjectChange} />);
+    expect(screen.getByText('Simulado').parentElement).toHaveTextContent(/R\$\s*70,00/);
+
+    fireEvent.change(screen.getAllByLabelText('Simulação de Serviço já terceirizado')[0], { target: { value: '12' } });
+    const limitedProject = onProjectChange.mock.calls[1][0] as Project;
+    const limitedContract = limitedProject.subcontracts?.[0];
+    expect(limitedContract?.items[0].simulatedExecutedQuantity).toBe(10);
+    expect(limitedContract?.payments).toEqual([]);
+    expect(limitedContract?.items[0].contractedAmount).toBe(100);
+  });
+
+  it('deixa a simulação somente para leitura sem permissão de gestão', () => {
+    render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage={false} auditActor={{ userId: 'viewer', userName: 'Viewer' }} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /alternar itens contratados do pacote pacote a/i }));
+
+    expect(screen.getAllByLabelText('Simulação de Serviço já terceirizado')[0]).toBeDisabled();
   });
 
   it('não inventa valor unitário quando a quantidade final é zero', () => {

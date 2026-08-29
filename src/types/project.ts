@@ -407,6 +407,8 @@ export interface SubcontractItemAllocation {
   taskId?: string;
   /** Base física congelada do contrato; evita alterar o unitário após novo aditivo. */
   contractedQuantity?: number;
+  /** Previsão compartilhada, sem efeito em Diário, Medição, pagamentos ou custo real. */
+  simulatedExecutedQuantity?: number;
 }
 
 export interface SubcontractPayment {
