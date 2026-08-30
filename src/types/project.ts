@@ -388,6 +388,14 @@ export interface CostLedgerEntry {
 
 export type SubcontractStatus = 'draft' | 'contracted' | 'cancelled';
 
+export interface SubcontractLaborRate {
+  chapterId: string;
+  chapterName: string;
+  roleKey: string;
+  roleName: string;
+  hourlyRate: number;
+}
+
 /** Item de mão de obra pertencente a um pacote terceirizado. O rateio é congelado na contratação. */
 export interface SubcontractItemAllocation {
   id: string;
@@ -446,6 +454,8 @@ export interface Subcontract {
   notes?: string;
   status: SubcontractStatus;
   items: SubcontractItemAllocation[];
+  /** Valores-hora aplicáveis somente ao cálculo de Custos. */
+  laborRates?: SubcontractLaborRate[];
   payments: SubcontractPayment[];
   amendments?: SubcontractAmendment[];
   contractedAt?: string;

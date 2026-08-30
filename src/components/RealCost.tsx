@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
-import type { Project, Subcontract } from '@/types/project';
+import type { Project, Subcontract, SubcontractLaborRate } from '@/types/project';
 import {
   AlertTriangle,
   BarChart3,
@@ -62,6 +62,15 @@ const SIGNAL_META: Record<RealCostSignal, { label: string; cls: string; dot: str
     dot: 'bg-muted-foreground',
   },
 };
+
+const laborRoleKey = (value: string) => value.trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ');
+
+function principalChapter(project: Project, phaseId: string) {
+  const phases = new Map((project.phases ?? []).map(phase => [phase.id, phase]));
+  let phase = phases.get(phaseId);
+  while (phase?.parentId && phases.has(phase.parentId)) phase = phases.get(phase.parentId);
+  return phase;
+}
 
 function SignalBadge({ signal }: { signal: RealCostSignal }) {
   const meta = SIGNAL_META[signal];
@@ -170,6 +179,10 @@ function computeVisibleTotals(rows: RealCostCompositionRow[], children: RealCost
     rows.reduce((sum, row) => sum + row.laborCost, 0) +
     children.reduce((sum, child) => sum + child.totals.laborCost, 0),
   );
+  const contractedLaborCost = roundMoney(
+    rows.reduce((sum, row) => sum + row.contractedLaborCost, 0) +
+    children.reduce((sum, child) => sum + child.totals.contractedLaborCost, 0),
+  );
   const certifiedContractedValue = roundMoney(
     rows.filter(row => row.isCertified).reduce((sum, row) => sum + row.contractedValue, 0) +
     children.reduce((sum, child) => sum + child.totals.certifiedContractedValue, 0),
@@ -197,6 +210,7 @@ function computeVisibleTotals(rows: RealCostCompositionRow[], children: RealCost
     certifiedContractedValue,
     materialCost,
     laborCost,
+    contractedLaborCost,
     equipmentCost,
     otherCost,
     committedCost,
@@ -227,7 +241,7 @@ function collectGroupIds(groups: RealCostGroupNode[]) {
   return ids;
 }
 
-const TABLE_COLSPAN = 17;
+const TABLE_COLSPAN = 18;
 const BORDER_L = 'border-l-2 border-border';
 
 function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
@@ -258,7 +272,7 @@ function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
                   <col className="w-[54px]" />
                   <col className="w-[76px]" />
                   <col className="w-[88px]" />
-                  <col className="w-[98px]" />
+                  <col className="w-[98px]" /><col className="w-[98px]" />
                   <col className="w-[98px]" />
                   <col className="w-[104px]" />
                   <col className="w-[76px]" />
@@ -276,7 +290,7 @@ function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
                     <th className="px-2 py-1.5 text-right">Coef.</th>
                     <th className="px-2 py-1.5 text-right">Qtd. total</th>
                     <th className="px-2 py-1.5 text-right">V. unit ref.</th>
-                    <th className="px-2 py-1.5 text-right">Preco real</th>
+                    <th className="px-2 py-1.5 text-right">Preço contratado</th>
                     <th className="px-2 py-1.5 text-right">Custo</th>
                     <th className="px-2 py-1.5 text-right">Margem</th>
                     <th className="px-2 py-1.5 text-left">Fornecedor</th>
@@ -300,8 +314,8 @@ function RealCostCompositionDetail({ row }: { row: RealCostCompositionRow }) {
                       <td className="px-2 py-1.5 align-top text-right tabular-nums">{input.coefficient.toLocaleString('pt-BR', { minimumFractionDigits: 7, maximumFractionDigits: 7 })}</td>
                       <td className="px-2 py-1.5 align-top text-right tabular-nums">{fmtQty(input.totalQuantity)}</td>
                       <td className="px-2 py-1.5 align-top text-right tabular-nums">{fmtBRL(input.referenceUnitPrice)}</td>
-                      <td className="px-2 py-1.5 align-top text-right tabular-nums">{input.priceSource ? fmtBRL(input.priceSource.unitPrice) : '-'}</td>
-                      <td className="px-2 py-1.5 align-top text-right tabular-nums font-semibold">{input.priceSource ? fmtBRL(input.realTotal) : '-'}</td>
+                      <td className="px-2 py-1.5 align-top text-right tabular-nums">{input.contractedLaborUnitPrice != null ? fmtBRL(input.contractedLaborUnitPrice) : input.priceSource ? fmtBRL(input.priceSource.unitPrice) : '-'}</td>
+                      <td className="px-2 py-1.5 align-top text-right tabular-nums font-semibold">{input.contractedLaborTotal != null ? fmtBRL(input.contractedLaborTotal) : input.priceSource ? fmtBRL(input.realTotal) : '-'}</td>
                       <td className={`px-2 py-1.5 align-top text-right tabular-nums font-semibold ${input.priceSource ? marginTone(input.marginPct) : 'text-muted-foreground'}`}>
                         {input.priceSource ? fmtPct(input.marginPct) : '-'}
                       </td>
@@ -364,6 +378,7 @@ function RealCostGroupRows({
         <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(group.totals.contractedValue)}</td>
         <td className={`px-2 py-1.5 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(group.totals.materialCost)}</td>
         <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(group.totals.laborCost)}</td>
+        <td className="px-2 py-1.5 text-right tabular-nums text-primary">{fmtBRL(group.totals.contractedLaborCost)}</td>
         <td className={`px-2 py-1.5 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(group.totals.committedCost)}</td>
         <td className="px-2 py-1.5 text-right tabular-nums">{fmtBRL(group.totals.realCost)}</td>
         <td
@@ -412,6 +427,7 @@ function RealCostGroupRows({
                   <td className="p-2 align-top text-right tabular-nums font-semibold">{fmtBRL(row.contractedValue)}</td>
                   <td className={`p-2 align-top text-right tabular-nums ${BORDER_L}`}>{fmtBRL(row.materialCost)}</td>
                   <td className="p-2 align-top text-right tabular-nums">{fmtBRL(row.laborCost)}</td>
+                  <td className="p-2 align-top text-right tabular-nums text-primary">{fmtBRL(row.contractedLaborCost)}</td>
                   <td className={`p-2 align-top text-right tabular-nums ${BORDER_L}`}>{row.isCertified ? fmtBRL(row.committedCost) : '—'}</td>
                   <td className="p-2 align-top text-right tabular-nums font-semibold">{fmtBRL(row.realCost)}</td>
                   <td
@@ -616,6 +632,15 @@ export function SubcontractsTab({ project, analysis, canManage, canDeleteHistory
     };
     updateContract(contract, next, 'updated', 'Simulação de produção terceirizada atualizada');
   };
+  const updateLaborRate = (contract: Subcontract, rate: SubcontractLaborRate, hourlyRate: number) => {
+    const nextRate = { ...rate, hourlyRate: Math.max(0, Number.isFinite(hourlyRate) ? hourlyRate : 0) };
+    const next = {
+      ...contract,
+      laborRates: [...(contract.laborRates ?? []).filter(item => !(item.chapterId === rate.chapterId && item.roleKey === rate.roleKey)), nextRate],
+      updatedAt: new Date().toISOString(), updatedBy: auditActor?.userId,
+    };
+    updateContract(contract, next, 'updated', 'Valor-hora terceirizado atualizado');
+  };
   const matchesActivityFilter = (row: RealCostCompositionRow) =>
     activityFilter === 'all' ||
     (activityFilter === 'selected' && selected.includes(row.id)) ||
@@ -691,12 +716,24 @@ export function SubcontractsTab({ project, analysis, canManage, canDeleteHistory
         return sum + (quantity > 0 ? allocation.contractedAmount * simulated / quantity : 0);
       }, 0));
       const payableByProduction = roundMoney(Math.max(0, Math.min(balance, producedValue - paid)));
+      const laborRates = [...new Map(contract.items.flatMap(allocation => {
+        const row = compositionById.get(allocation.compositionId);
+        const chapter = row ? principalChapter(project, row.chapterId) : undefined;
+        if (!row || !chapter) return [];
+        return row.inputs.filter(input => input.costClass === 'labor').map(input => {
+          const roleKey = laborRoleKey(input.description);
+          const saved = contract.laborRates?.find(rate => rate.chapterId === chapter.id && rate.roleKey === roleKey);
+          const rate: SubcontractLaborRate = saved ?? { chapterId: chapter.id, chapterName: chapter.name, roleKey, roleName: input.description, hourlyRate: 0 };
+          return [`${rate.chapterId}|${rate.roleKey}`, rate] as const;
+        });
+      })).values()];
       return <Card key={contract.id} className="overflow-hidden">
         <div className="cursor-pointer border-b bg-muted/30 p-3 transition-colors hover:bg-muted/50" role="button" tabIndex={0} aria-label={`Alternar itens contratados do pacote ${contract.name}`} aria-expanded={itemsExpanded} aria-controls={`subcontract-items-${contract.id}`} onClick={event => { if (!(event.target as HTMLElement).closest('button, input, select, textarea, a')) toggleContractItems(contract.id); }} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleContractItems(contract.id); } }}>
           <div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><h3 className="font-semibold">{contract.name}<span className="mx-2 text-muted-foreground" aria-hidden="true">·</span><span className="font-medium text-muted-foreground">{contract.contractorName}</span></h3><p className="text-xs text-muted-foreground">{contract.items.length} composição(ões) contratada(s)</p></div><span className="rounded-full border bg-background px-2 py-0.5 text-[10px]">{contract.status === 'contracted' ? 'Contratado' : contract.status === 'cancelled' ? 'Cancelado' : 'Rascunho'}</span></div>
           <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-9"><div>M.O. SINAPI<br/><b className="tabular-nums">{fmtBRL(sinapiLaborTotal)}</b></div><div>Contratado<br/><b className="tabular-nums">{fmtBRL(contract.contractedValue)}</b></div><div>Economia<br/><b className={`tabular-nums ${contractSavings >= 0 ? 'text-success' : 'text-destructive'}`}>{contractSavings >= 0 ? '' : '-'}{fmtBRL(Math.abs(contractSavings))}</b></div><div>Itens com produção<br/><b className="tabular-nums text-primary">{contract.items.filter(allocation => executionForAllocation(allocation, allocation.contractedQuantity ?? compositionById.get(allocation.compositionId)?.quantityFinal ?? 0) > 0).length}/{contract.items.length}</b><span className="ml-1 text-[10px] text-muted-foreground">executados</span></div><div>Produzido<br/><b className="tabular-nums text-primary">{fmtBRL(producedValue)}</b></div><div>Simulado<br/><b className="tabular-nums text-violet-700">{fmtBRL(simulatedValue)}</b></div><div>Disponível p/ pagar<br/><b className="tabular-nums text-primary">{fmtBRL(payableByProduction)}</b></div><div>Pago<br/><b className="tabular-nums">{fmtBRL(paid)}</b></div><div>Saldo<br/><b className="tabular-nums">{fmtBRL(balance)}</b></div></div>
           {canManage && contract.status === 'draft' && <Button size="sm" className="mt-3" onClick={() => updateContract(contract, { ...contract, status: 'contracted', contractedAt: new Date().toISOString(), contractedBy: auditActor?.userId, updatedAt: new Date().toISOString() }, 'contracted', 'Contrato terceirizado formalizado')}>Confirmar contratação</Button>}
           {canManage && contract.status === 'contracted' && <div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => { setPaymentFor(paymentFor === contract.id ? null : contract.id); setPaymentNotes(''); }}><ReceiptText className="mr-1 h-3 w-3" />Lançar pagamento</Button><Button size="sm" variant="outline" onClick={() => beginAmendment(contract)}>Alterar atividades</Button><Button size="sm" variant="ghost" onClick={() => { const reason = window.prompt('Motivo do cancelamento:'); if (reason) updateContract(contract, { ...contract, status: 'cancelled', cancelledAt: new Date().toISOString(), cancelledBy: auditActor?.userId, cancellationReason: reason, updatedAt: new Date().toISOString() }, 'deleted', 'Contrato terceirizado cancelado'); }}>Cancelar</Button></div>}
+          {laborRates.length > 0 && <div className="mt-3 rounded-md border bg-violet-50/40 p-3 text-xs dark:bg-violet-950/10"><div className="font-semibold text-violet-900 dark:text-violet-100">Valores de mão de obra por capítulo</div><p className="mt-1 text-muted-foreground">Usados somente em Custos; os códigos dos insumos não são considerados.</p><div className="mt-2 grid gap-2 sm:grid-cols-2">{laborRates.map(rate => <label key={`${rate.chapterId}|${rate.roleKey}`} className="rounded border bg-background p-2"><span className="block font-medium">{rate.chapterName} · {rate.roleName}</span><span className="mt-1 flex items-center gap-2 text-muted-foreground">R$/h <Input className="h-9 text-base" type="number" min="0" step="any" inputMode="decimal" disabled={!canManage || contract.status !== 'contracted'} defaultValue={rate.hourlyRate || ''} onBlur={event => updateLaborRate(contract, rate, Number(event.target.value))} /></span></label>)}</div></div>}
           {(contract.amendments?.length ?? 0) > 0 && <div className="mt-3"><Button size="sm" variant="ghost" onClick={event => { event.stopPropagation(); toggleAmendmentHistory(contract.id); }} aria-expanded={expandedAmendmentHistory.has(contract.id)}><History className="mr-1 h-3 w-3" />Histórico de alterações ({contract.amendments?.length})</Button>{expandedAmendmentHistory.has(contract.id) && <div className="mt-2 space-y-2 rounded-md border bg-background/70 p-2 text-xs">{[...(contract.amendments ?? [])].reverse().map(amendment => <div key={amendment.id} className="flex items-start justify-between gap-3 border-b pb-2 last:border-b-0 last:pb-0"><div><p className="font-medium">{amendment.date} · {amendment.reason}</p><p className="text-muted-foreground">Itens: {amendment.previousItems.length} → {amendment.nextItems.length} · Contratado: {fmtBRL(amendment.previousContractedValue)} → {fmtBRL(amendment.nextContractedValue)}</p></div>{canDeleteHistory && <Button size="sm" variant="ghost" className="shrink-0 text-destructive hover:text-destructive" aria-label={`Excluir registro do histórico: ${amendment.reason}`} onClick={event => { event.stopPropagation(); if (window.confirm(`Excluir do histórico a alteração “${amendment.reason}”? Esta ação não desfaz o contrato atual nem pagamentos já lançados.`)) updateContract(contract, { ...contract, amendments: contract.amendments?.filter(entry => entry.id !== amendment.id), updatedAt: new Date().toISOString(), updatedBy: auditActor?.userId }, 'updated', `Registro de histórico removido pelo Proprietário: ${amendment.reason}`); }}>Excluir</Button>}</div>)}</div>}</div>}
           {paymentFor === contract.id && <div className="mt-2 space-y-2 rounded-md border bg-background/70 p-2"><div className="flex flex-col gap-2 sm:flex-row"><Input inputMode="decimal" aria-label="Valor do pagamento" placeholder={`Valor pago (máx. ${fmtBRL(payableByProduction)})`} value={paymentValue} onChange={e => setPaymentValue(e.target.value)} /><Button size="sm" disabled={payableByProduction <= 0} onClick={() => { const amount = Number(paymentValue.replace(',', '.')) || 0; if (amount <= 0 || amount > payableByProduction) return; const next = { ...contract, payments: [...contract.payments, { id: uid('payment'), date: today(), amount, notes: paymentNotes.trim() || undefined, allocations: allocateSubcontractValue(amount, contract.items).map(item => ({ allocationId: item.id, amount: item.allocatedAmount })), createdAt: new Date().toISOString(), createdBy: auditActor?.userId }], updatedAt: new Date().toISOString(), updatedBy: auditActor?.userId }; updateContract(contract, next, 'updated', 'Pagamento de terceirizada lançado'); setPaymentValue(''); setPaymentNotes(''); setPaymentFor(null); }}>Confirmar</Button></div><Textarea aria-label="Observação do pagamento" rows={2} placeholder="Observação do pagamento: descreva o serviço ou a etapa quitada" value={paymentNotes} onChange={event => setPaymentNotes(event.target.value)} /></div>}
           <div className="mt-2 space-y-1 text-[11px]">{contract.payments.map(payment => <div key={payment.id} className="flex items-start justify-between gap-2 rounded bg-background/70 px-2 py-1"><span>{payment.date} · {fmtBRL(payment.amount)}{payment.reversedAt ? ' · estornado' : ''}{payment.notes && <span className="block text-muted-foreground">{payment.notes}</span>}</span>{canManage && !payment.reversedAt && <button type="button" className="shrink-0 text-primary hover:underline" onClick={() => { const reason = window.prompt('Motivo do estorno:'); if (reason) updateContract(contract, { ...contract, payments: contract.payments.map(p => p.id === payment.id ? { ...p, reversedAt: new Date().toISOString(), reversedBy: auditActor?.userId, reversalReason: reason } : p), updatedAt: new Date().toISOString() }, 'updated', 'Pagamento de terceirizada estornado'); }}><Undo2 className="inline h-3 w-3" /> Estornar</button>}</div>)}</div>
@@ -1016,7 +1053,7 @@ export default function RealCost({ project, onProjectChange, canManageSubcontrac
                 <th colSpan={3} className={`border-b border-border bg-blue-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-blue-950 ${BORDER_L}`}>
                   Contrato / referencia
                 </th>
-                <th colSpan={8} className={`border-b border-border bg-emerald-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-emerald-950 ${BORDER_L}`}>
+                <th colSpan={9} className={`border-b border-border bg-emerald-100 px-2 py-1 text-center text-[10px] font-bold uppercase tracking-wider text-emerald-950 ${BORDER_L}`}>
                   Custo certificado e margem
                 </th>
               </tr>
@@ -1032,6 +1069,7 @@ export default function RealCost({ project, onProjectChange, canManageSubcontrac
                 <th className="p-2 text-right w-36">Valor Contratado Final</th>
                 <th className={`p-2 text-right w-32 ${BORDER_L}`}>Material ref.</th>
                 <th className="p-2 text-right w-32">M.O. SINAPI</th>
+                <th className="p-2 text-right w-32">M.O. terceirizada</th>
                 <th className={`p-2 text-right w-36 ${BORDER_L}`}>Custo certificado</th>
                 <th className="p-2 text-right w-36">Realizado</th>
                 <th className="p-2 text-right w-32">Lucro certificado</th>
@@ -1068,6 +1106,7 @@ export default function RealCost({ project, onProjectChange, canManageSubcontrac
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(displayTotals.contractedValue)}</td>
                   <td className={`px-2 py-2 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(displayTotals.materialCost)}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(displayTotals.laborCost)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(displayTotals.contractedLaborCost)}</td>
                   <td className={`px-2 py-2 text-right tabular-nums ${BORDER_L}`}>{fmtBRL(displayTotals.committedCost)}</td>
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(displayTotals.realCost)}</td>
                   <td

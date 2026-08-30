@@ -11,6 +11,7 @@ import type {
   Project,
   Subcontract,
   SubcontractItemAllocation,
+  SubcontractLaborRate,
   Task,
 } from '@/types/project';
 import { buildOrderedTasks } from '@/components/measurement/measurementFormat';
@@ -45,6 +46,8 @@ export interface RealCostInputRow {
   referenceTotal: number;
   realUnitPrice?: number;
   realTotal: number;
+  contractedLaborUnitPrice?: number;
+  contractedLaborTotal?: number;
   costClass: MaterialCostClass;
   grossProfit: number;
   marginPct: number;
@@ -79,6 +82,7 @@ export interface RealCostCompositionRow {
   contractedValue: number;
   materialCost: number;
   laborCost: number;
+  contractedLaborCost: number;
   equipmentCost: number;
   otherCost: number;
   subcontract?: {
@@ -122,6 +126,7 @@ export interface RealCostGroupTotals {
   certifiedContractedValue: number;
   materialCost: number;
   laborCost: number;
+  contractedLaborCost: number;
   equipmentCost: number;
   otherCost: number;
   committedCost: number;
@@ -249,6 +254,23 @@ const normalize = (value: string | undefined | null): string =>
 
 const normalizeDesc = (value: string | undefined | null): string =>
   normalize(value).replace(/[^a-z0-9 ]/g, '');
+
+const laborRoleKey = (value: string | undefined | null) => normalizeDesc(value);
+
+function mainChapterIds(project: Project) {
+  const phases = new Map(project.phases.map(phase => [phase.id, phase]));
+  const ids = new Map<string, string>();
+  for (const phase of project.phases) {
+    let root = phase;
+    while (root.parentId && phases.has(root.parentId)) root = phases.get(root.parentId)!;
+    ids.set(phase.id, root.id);
+  }
+  return ids;
+}
+
+function subcontractLaborRate(rates: SubcontractLaborRate[] | undefined, chapterId: string, description: string) {
+  return rates?.find(rate => rate.chapterId === chapterId && rate.roleKey === laborRoleKey(description));
+}
 
 const looseItemKey = (item: { code?: string; description: string; unit: string }) =>
   `${normalize(item.code)}|${normalizeDesc(item.description)}|${normalize(item.unit)}`;
@@ -738,6 +760,7 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
   const priceIndex = buildPriceIndex(project);
   const taskIndexes = buildTaskIndexes(project);
   const contractPhaseIndex = buildContractPhaseIndex(project);
+  const principalChapterById = mainChapterIds(project);
   const sources = buildCompositionSources(project);
 
   const activeSubcontracts = (project.subcontracts ?? []).filter(contract => contract.status === 'contracted');
@@ -769,13 +792,20 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
     const itemPhase = matchContractPhaseByItem(source.item, contractPhaseIndex);
     const contractPhase = sourcePhase || itemPhase;
     const phaseId = contractPhase?.phaseId || matchedTask?.phaseId || '__unlinked__';
+    const mainChapterId = principalChapterById.get(phaseId) ?? phaseId;
     const chapter = source.phaseChain || contractPhase?.chapter || matchedTask?.chapter || 'Sem vinculo com cronograma';
     const inputs = buildInputRows(project, source, priceIndex);
-    const materialCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'material' ? input.referenceTotal : 0), 0));
-    const laborCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'labor' ? input.referenceTotal : 0), 0));
-    const equipmentCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'equipment' ? input.referenceTotal : 0), 0));
-    const otherCost = money2(inputs.reduce((sum, input) => sum + (input.costClass === 'unclassified' ? input.referenceTotal : 0), 0));
     const subcontractMatch = findSubcontract(source);
+    const inputsWithLaborRates = inputs.map(input => {
+      if (input.costClass !== 'labor' || !subcontractMatch) return input;
+      const rate = subcontractLaborRate(subcontractMatch.contract.laborRates, mainChapterId, input.description);
+      return rate ? { ...input, contractedLaborUnitPrice: rate.hourlyRate, contractedLaborTotal: money2(input.totalQuantity * rate.hourlyRate) } : input;
+    });
+    const materialCost = money2(inputsWithLaborRates.reduce((sum, input) => sum + (input.costClass === 'material' ? input.referenceTotal : 0), 0));
+    const laborCost = money2(inputsWithLaborRates.reduce((sum, input) => sum + (input.costClass === 'labor' ? input.referenceTotal : 0), 0));
+    const contractedLaborCost = money2(inputsWithLaborRates.reduce((sum, input) => sum + (input.costClass === 'labor' ? input.contractedLaborTotal ?? input.referenceTotal : 0), 0));
+    const equipmentCost = money2(inputsWithLaborRates.reduce((sum, input) => sum + (input.costClass === 'equipment' ? input.referenceTotal : 0), 0));
+    const otherCost = money2(inputsWithLaborRates.reduce((sum, input) => sum + (input.costClass === 'unclassified' ? input.referenceTotal : 0), 0));
     const subcontract = subcontractMatch ? {
       id: subcontractMatch.contract.id,
       name: subcontractMatch.contract.name,
@@ -791,13 +821,13 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
     // O custo estimado usa a menor cotação válida dos insumos. Para a mão de
     // obra própria sem cotação, a referência SINAPI é a provisão aprovada.
     // Um contrato terceirizado sempre substitui essa provisão, sem duplicá-la.
-    const committedCost = money2(inputs.reduce((sum, input) => {
+    const committedCost = money2(inputsWithLaborRates.reduce((sum, input) => {
       if (input.costClass === 'labor') {
-        if (subcontract) return sum;
+        if (subcontract) return sum + (input.contractedLaborTotal ?? input.referenceTotal);
         return sum + (input.status === 'quoted' ? input.realTotal : input.referenceTotal);
       }
       return sum + input.realTotal;
-    }, 0) + (subcontract?.contractedAmount ?? 0));
+    }, 0));
     const linkedTaskId = matchedTask?.task.id;
     const linkedBudgetId = source.id.startsWith('budget:') ? source.id.slice('budget:'.length) : undefined;
     const matchingActualEntries = (project.costLedger ?? [])
@@ -871,6 +901,7 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
       contractedValue: money2(source.contractedValue),
       materialCost,
       laborCost,
+      contractedLaborCost,
       equipmentCost,
       otherCost,
       subcontract,
@@ -884,7 +915,7 @@ function buildCompositionRows(project: Project): RealCostCompositionRow[] {
       hasAnalytic,
       hasScheduleLink,
       hasContractValue,
-      inputs,
+      inputs: inputsWithLaborRates,
     };
   }).sort((a, b) => a.item.localeCompare(b.item, 'pt-BR', { numeric: true }));
 }
@@ -904,6 +935,10 @@ function totalsFromRowsAndChildren(
   const laborCost = money2(
     rows.reduce((sum, row) => sum + row.laborCost, 0) +
     children.reduce((sum, child) => sum + child.totals.laborCost, 0),
+  );
+  const contractedLaborCost = money2(
+    rows.reduce((sum, row) => sum + row.contractedLaborCost, 0) +
+    children.reduce((sum, child) => sum + child.totals.contractedLaborCost, 0),
   );
   const certifiedContractedValue = money2(
     rows.filter(row => row.isCertified).reduce((sum, row) => sum + row.contractedValue, 0) +
@@ -938,6 +973,7 @@ function totalsFromRowsAndChildren(
     certifiedContractedValue,
     materialCost,
     laborCost,
+    contractedLaborCost,
     equipmentCost,
     otherCost,
     committedCost,
