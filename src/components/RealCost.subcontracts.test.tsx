@@ -69,6 +69,8 @@ describe('SubcontractsTab', () => {
     expect(screen.queryByRole('columnheader', { name: 'Pago' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Saldo' })).not.toBeInTheDocument();
     expect(card).toHaveTextContent(/R\$\s*10,00/);
+    expect(screen.queryByText('Valores de mão de obra por capítulo')).not.toBeInTheDocument();
+    expect(screen.queryByText('R$/h')).not.toBeInTheDocument();
   });
 
   it('separa visualmente referência SINAPI, execução e contrato', () => {
