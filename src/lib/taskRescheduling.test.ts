@@ -8,7 +8,7 @@ const baseTask: Task = {
   id: 'task-1', name: 'Instalar hidrante', phase: 'phase-1', startDate: '2026-09-10', duration: 3,
   dependencies: [], responsible: '', percentComplete: 0, materials: [], level: 0, quantity: 30, unit: 'm',
 };
-const project = (): Project => ({ id: 'project-1', name: 'Obra', startDate: '2026-09-01', endDate: '2026-10-01', totalBudget: 0, phases: [{ id: 'phase-1', name: 'Capítulo', tasks: [baseTask] }] });
+const project = (): Project => ({ id: 'project-1', name: 'Obra', startDate: '2026-09-01', endDate: '2026-10-01', totalBudget: 0, phases: [{ id: 'phase-1', name: 'Capítulo', color: '#3b82f6', tasks: [baseTask] }] });
 
 describe('taskRescheduling', () => {
   it('preserva duração, move a atividade e reposiciona o cartão semanal', () => {
