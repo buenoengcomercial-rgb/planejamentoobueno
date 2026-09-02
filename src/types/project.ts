@@ -1899,6 +1899,7 @@ export type AuditEntityType =
   | 'daily_report'
   | 'task'
   | 'warehouse_fiscal_note'
+  | 'warehouse_requisition'
   | 'subcontract'
   | 'project';
 

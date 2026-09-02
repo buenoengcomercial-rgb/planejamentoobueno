@@ -7,6 +7,7 @@ import {
   closeInventorySession,
   computeWarehouseRows,
   computeWarehouseUsageByChapter,
+  correctDeliveredRequisition,
   createEquipmentGroup,
   deleteEquipmentGroup,
   createAndDeliverRequisition,
@@ -99,6 +100,33 @@ describe('operação integrada do almoxarifado', () => {
     expect(result.project.warehouse!.requisitions[0].deliveryAttachments).toBeUndefined();
     expect(result.project.warehouse!.movements.find(movement => movement.type === 'retirada')).toMatchObject({ quantity: 2, teamId: undefined });
     expect(computeWarehouseRows(result.project, { includeManual: true })[0].balance).toBe(18);
+  });
+
+  it('corrige retirada sem devolução, recalcula saldo, Diário e auditoria', () => {
+    const delivered = createAndDeliverRequisition(withStock(), {
+      date: '2026-08-17', chapterId: 'chapter-1', chapterName: '1 Prédio 1', receiverName: 'Equipe Alpha', requesterName: 'Equipe Alpha', signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'corrigir-1',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 4 }],
+    }, { actor, publishToDailyReport: true });
+    const requisition = delivered.project.warehouse!.requisitions[0];
+    const corrected = correctDeliveredRequisition(delivered.project, requisition.id, {
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 2 }],
+    }, { userId: 'owner-1', userName: 'Proprietário' });
+
+    expect(computeWarehouseRows(corrected, { includeManual: true })[0].balance).toBe(18);
+    expect(corrected.warehouse!.requisitions[0].items[0]).toMatchObject({ quantity: 2, movementId: expect.any(String) });
+    expect(corrected.warehouse!.movements.filter(movement => movement.type === 'retirada')).toHaveLength(1);
+    expect(corrected.dailyReports?.[0].observations).toContain('Cimento — 2 SC');
+    expect(corrected.auditLogs?.at(-1)).toMatchObject({ entityType: 'warehouse_requisition', action: 'updated', userName: 'Proprietário', before: expect.any(Object), after: expect.any(Object) });
+  });
+
+  it('bloqueia correção quando a retirada possui devolução vinculada', () => {
+    const delivered = createAndDeliverRequisition(withStock(), {
+      date: '2026-08-17', chapterId: 'chapter-1', receiverName: 'Equipe Alpha', requesterName: 'Equipe Alpha', signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'corrigir-bloqueado',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 4 }],
+    }, { actor });
+    const requisition = delivered.project.warehouse!.requisitions[0];
+    const returned = registerMaterialReturn(delivered.project, { requisitionId: requisition.id, date: '2026-08-18', returnerName: 'João', conditionConfirmed: true, idempotencyKey: 'corrigir-dev', items: [{ itemKey: 'material-1', quantity: 1 }] }, actor);
+    expect(() => correctDeliveredRequisition(returned.project, requisition.id, { items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 2 }] }, { userId: 'owner-1' })).toThrow(/devolução/i);
   });
 
   it('registra devoluções parciais como eventos separados, recompõe o saldo e preserva o custo da retirada', () => {

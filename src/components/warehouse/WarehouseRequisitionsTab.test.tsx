@@ -73,6 +73,22 @@ describe('WarehouseRequisitionsTab', () => {
     expect(screen.queryByRole('columnheader', { name: 'Equipe' })).not.toBeInTheDocument();
   });
 
+  it('mostra a correção de retirada somente quando recebe permissão de Proprietário', () => {
+    const project = projectWithMaterials(1);
+    project.warehouse!.requisitions = [{
+      id: 'req-owner', number: 'REQ-2026-0009', date: '2026-08-18', status: 'entregue', chapterId: 'chapter-1', receiverName: 'João', requesterName: 'João', signatureReceiver: 'assinatura', createdAt: '2026-08-18T10:00:00.000Z',
+      items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
+    }];
+    const first = render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0009/i }));
+    expect(screen.queryByRole('button', { name: /Corrigir retirada/i })).not.toBeInTheDocument();
+    first.unmount();
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit />);
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0009/i }));
+    expect(screen.getAllByRole('button', { name: /Corrigir retirada/i }).length).toBeGreaterThan(0);
+  });
+
   it('prioriza a devolução registrada mais recentemente e mostra data e hora do registro', () => {
     const project = projectWithMaterials(1);
     project.warehouse!.requisitions = [
