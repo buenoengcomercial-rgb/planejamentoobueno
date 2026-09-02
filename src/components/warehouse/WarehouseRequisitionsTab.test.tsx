@@ -73,6 +73,58 @@ describe('WarehouseRequisitionsTab', () => {
     expect(screen.queryByRole('columnheader', { name: 'Equipe' })).not.toBeInTheDocument();
   });
 
+  it('prioriza a devolução registrada mais recentemente e mostra data e hora do registro', () => {
+    const project = projectWithMaterials(1);
+    project.warehouse!.requisitions = [
+      {
+        id: 'req-older', number: 'REQ-2026-0001', date: '2026-08-20', status: 'entregue', chapterId: 'chapter-1', chapterName: 'Prédio 1',
+        receiverName: 'João', requesterName: 'João', signatureReceiver: 'assinatura', createdAt: '2026-08-20T14:00:00.000Z',
+        items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
+      },
+      {
+        id: 'req-returned', number: 'REQ-2026-0002', date: '2026-08-19', status: 'entregue', chapterId: 'chapter-1', chapterName: 'Prédio 1',
+        receiverName: 'Maria', requesterName: 'Maria', signatureReceiver: 'assinatura', createdAt: '2026-08-19T08:00:00.000Z',
+        items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
+      },
+    ];
+    project.warehouse!.movements.push({
+      id: 'return-latest', type: 'devolucao', originType: 'return', requisitionId: 'req-returned', date: '2026-08-19', createdAt: '2026-08-20T16:30:00.000Z',
+      itemKey: 'material-0', itemDescription: 'Material disponível 0', itemUnit: 'UN', quantity: 1,
+    });
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+
+    const rows = screen.getAllByTestId('withdrawal-history-row');
+    expect(rows[0]).toHaveTextContent('REQ-2026-0002');
+    expect(screen.getByRole('columnheader', { name: 'Último registro' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0002/i }));
+    expect(screen.getAllByText(/registro:/i).length).toBeGreaterThan(0);
+  });
+
+  it('usa a hierarquia completa da EAP no destino e preserva o fallback legado', () => {
+    const project = projectWithMaterials(0);
+    project.phases = [
+      { id: 'root', name: 'Prédio', color: '#000', tasks: [], order: 0 },
+      { id: 'system', name: 'Incêndio', color: '#000', tasks: [], parentId: 'root', order: 0 },
+      { id: 'service', name: 'Hidrantes', color: '#000', tasks: [], parentId: 'system', order: 0 },
+    ];
+    project.warehouse!.requisitions = [
+      {
+        id: 'req-hierarchy', number: 'REQ-2026-0003', date: '2026-08-18', status: 'entregue', chapterId: 'service',
+        receiverName: 'Ana', requesterName: 'Ana', signatureReceiver: 'assinatura', createdAt: '2026-08-18T10:00:00.000Z', items: [],
+      },
+      {
+        id: 'req-legacy', number: 'REQ-2026-0004', date: '2026-08-17', status: 'entregue', chapterName: 'Destino legado',
+        receiverName: 'Bia', requesterName: 'Bia', signatureReceiver: 'assinatura', createdAt: '2026-08-17', items: [],
+      },
+    ];
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+
+    expect(screen.getAllByText('1.1.1 · Prédio > Incêndio > Hidrantes').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Registro legado: 17\/08\/2026/).length).toBeGreaterThan(0);
+  });
+
   it('move cautelas para a subaba Equipamentos / Cautelas', () => {
     const project = projectWithMaterials(0);
     project.warehouse!.custodyTerms = [{
