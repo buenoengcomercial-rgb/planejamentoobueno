@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Project, Task } from '@/types/project';
 import { approveRescheduleRequest, createRescheduleRequest, reschedulePreview, submitRescheduleRequest } from './taskRescheduling';
 import { buildWeeklyRoutine } from './weeklyRoutine';
+import { buildOperationalProjectFromPendingAdditives } from './additiveSchedule';
 
 const config = { uf: 'SP', municipio: 'São Paulo', jornadaDiaria: 8, trabalhaSabado: false };
 const baseTask: Task = {
@@ -30,5 +31,26 @@ describe('taskRescheduling', () => {
     const preview = reschedulePreview(started, '2026-09-15', config);
 
     expect(preview).toMatchObject({ scope: 'remaining_work', quantity: 20, duration: 2, endDate: '2026-09-16' });
+  });
+
+  it('atualiza o plano pendente do aditivo para a rotina não restaurar as datas antigas', () => {
+    const raw = {
+      ...project(),
+      additives: [{
+        id: 'add-1', name: 'Aditivo pendente', importedAt: '2026-09-01T00:00:00.000Z', status: 'aprovado', compositions: [],
+        scheduleDraft: {
+          version: 1, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z', dependentTaskIds: [], plannedTasks: [],
+          contractedTaskPlans: [{ taskId: 'task-1', startDate: '2026-09-12', duration: 3, dependencies: [], responsible: '', durationMode: 'manual', isManual: true, manualDuration: 3 }],
+        },
+      }],
+    } as Project;
+    const operational = buildOperationalProjectFromPendingAdditives(raw);
+    const task = operational.phases[0].tasks[0];
+    const request = createRescheduleRequest(task, '2026-09-15', 'Frente liberada posteriormente', config, { userName: 'Engenheiro' });
+    const approved = approveRescheduleRequest(submitRescheduleRequest(operational, request, { userName: 'Engenheiro' }), request.id, config, { userName: 'Administrador' });
+
+    expect(approved.phases[0].tasks[0]).toMatchObject({ startDate: '2026-09-15', duration: 3 });
+    expect(approved.additives?.[0].scheduleDraft?.contractedTaskPlans?.[0]).toMatchObject({ startDate: '2026-09-15', duration: 3 });
+    expect(buildOperationalProjectFromPendingAdditives(approved).phases[0].tasks[0]).toMatchObject({ startDate: '2026-09-15', duration: 3 });
   });
 });

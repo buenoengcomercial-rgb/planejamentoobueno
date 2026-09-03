@@ -5,6 +5,7 @@ import { getAllTasks } from '@/data/sampleProject';
 import { propagateAllDependencies } from '@/lib/calculations';
 import type { ObraConfig } from '@/components/ConfiguracaoObra';
 import { isDiaUtil } from '@/lib/feriados';
+import { syncPendingAdditiveSchedulePlans } from '@/lib/additiveSchedule';
 
 function id(prefix: string): string {
   return `${prefix}-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
@@ -139,10 +140,21 @@ export function approveRescheduleRequest(project: Project, requestId: string, co
     },
   }));
   const propagated = propagateAllDependencies(getAllTasks(next), request.taskId, config);
+  const taskIdsToSync = new Set([request.taskId]);
   if (propagated.changed) {
     const byId = new Map(propagated.tasks.map(task => [task.id, task]));
+    const previousById = new Map(getAllTasks(project).map(task => [task.id, task]));
+    propagated.tasks.forEach(task => {
+      const previous = previousById.get(task.id);
+      if (!previous || previous.startDate !== task.startDate || previous.duration !== task.duration
+        || JSON.stringify(previous.dependencies ?? []) !== JSON.stringify(task.dependencies ?? [])
+        || JSON.stringify(previous.dependencyDetails ?? []) !== JSON.stringify(task.dependencyDetails ?? [])) {
+        taskIdsToSync.add(task.id);
+      }
+    });
     next = { ...next, phases: next.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => byId.get(task.id) ?? task) })) };
   }
+  next = syncPendingAdditiveSchedulePlans(next, taskIdsToSync);
   next = { ...next, rescheduleRequests: (next.rescheduleRequests ?? []).map(item => item.id === requestId ? { ...item, status: 'approved', decidedAt: approvedAt, decidedBy: actor.userName || actor.userEmail } : item) };
   return logToProject(next, {
     ...actor,

@@ -145,6 +145,34 @@ export function buildOperationalProjectFromPendingAdditives(project: Project): P
   };
 }
 
+/**
+ * Mantém o rascunho do aditivo alinhado quando uma tarefa controlada é
+ * reprogramada pela operação. Sem isso, a prévia operacional voltaria a
+ * sobrepor as datas antigas ao reabrir a Rotina ou o Gantt.
+ */
+export function syncPendingAdditiveSchedulePlans(project: Project, taskIds: ReadonlySet<string>, now = new Date().toISOString()): Project {
+  if (!taskIds.size) return project;
+  const tasksById = new Map(allPhaseTasks(project).map(task => [task.id, task]));
+  let changed = false;
+  const additives = (project.additives ?? []).map(additive => {
+    if (!isAdditiveSchedulePending(additive) || !additive.scheduleDraft?.contractedTaskPlans?.length) return additive;
+    let plansChanged = false;
+    const contractedTaskPlans = additive.scheduleDraft.contractedTaskPlans.map(plan => {
+      if (!taskIds.has(plan.taskId)) return plan;
+      const task = tasksById.get(plan.taskId);
+      if (!task) return plan;
+      const nextPlan = taskToContractedPlan(task);
+      if (stableJson(plan) === stableJson(nextPlan)) return plan;
+      plansChanged = true;
+      return nextPlan;
+    });
+    if (!plansChanged) return additive;
+    changed = true;
+    return { ...additive, scheduleDraft: { ...additive.scheduleDraft, contractedTaskPlans, updatedAt: now } };
+  });
+  return changed ? { ...project, additives } : project;
+}
+
 export function getPendingAdditiveScheduleConflicts(
   project: Project,
   additiveId: string,
