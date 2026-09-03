@@ -184,9 +184,9 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
   const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
   const numbering = useMemo(() => getChapterNumbering(project), [project]);
   const chapters = useMemo(
-    () => flattenPhasesByChapter(project).map(phase => ({
+    () => flattenPhasesByChapter(project).filter(phase => !phase.parentId).map(phase => ({
       id: phase.id,
-      name: chapterPathLabel(project, phase.id, `${numbering.get(phase.id) ?? phase.customNumber ?? ''} ${phase.name}`.trim()),
+      name: `${numbering.get(phase.id) ?? phase.customNumber ?? ''} · ${phase.name}`.replace(/^\s*·\s*/, ''),
     })),
     [numbering, project],
   );

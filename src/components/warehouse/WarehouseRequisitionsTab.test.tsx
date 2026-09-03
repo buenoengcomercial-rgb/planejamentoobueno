@@ -132,6 +132,21 @@ describe('WarehouseRequisitionsTab', () => {
     expect(destinations).toEqual(['Selecione', '1 · Prédio A', '2 · Prédio B']);
   });
 
+  it('lista somente capítulos principais ao abrir uma nova retirada', () => {
+    const project = projectWithMaterials(1);
+    project.phases = [
+      { id: 'building-a', name: 'Prédio A', color: '#000', tasks: [], order: 0 },
+      { id: 'front-a', name: 'Frente A', color: '#000', tasks: [], parentId: 'building-a', order: 0 },
+      { id: 'building-b', name: 'Prédio B', color: '#000', tasks: [], order: 1 },
+    ];
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Nova retirada/i }));
+
+    const destinations = within(screen.getByLabelText('Prédio / capítulo')).getAllByRole('option').map(option => option.textContent);
+    expect(destinations).toEqual(['Selecione', '1 · Prédio A', '2 · Prédio B']);
+  });
+
   it('prioriza a devolução registrada mais recentemente e mostra data e hora do registro', () => {
     const project = projectWithMaterials(1);
     project.warehouse!.requisitions = [
