@@ -113,6 +113,46 @@ const statusTone = (status: string): WarehouseTone => {
   return 'neutral';
 };
 
+type CustodyBuildingGroup = {
+  key: string;
+  label: string;
+  terms: CustodyTerm[];
+  equipmentCount: number;
+  isMissingBuilding: boolean;
+};
+
+function custodyBuildingLabel(project: Project, chapterId?: string) {
+  if (!chapterId) return { key: 'missing-building', label: 'Prédio não informado', isMissingBuilding: true };
+  const phaseById = new Map(project.phases.map(phase => [phase.id, phase]));
+  const visited = new Set<string>();
+  let building = phaseById.get(chapterId);
+  while (building?.parentId && !visited.has(building.id)) {
+    visited.add(building.id);
+    building = phaseById.get(building.parentId);
+  }
+  if (!building) return { key: 'missing-building', label: 'Prédio não informado', isMissingBuilding: true };
+  const number = getChapterNumbering(project).get(building.id);
+  return { key: building.id, label: `${number ? `${number} · ` : ''}${building.name}`, isMissingBuilding: false };
+}
+
+function groupCustodyTermsByBuilding(project: Project, terms: CustodyTerm[]): CustodyBuildingGroup[] {
+  const byBuilding = new Map<string, CustodyTerm[]>();
+  for (const term of terms) {
+    const building = custodyBuildingLabel(project, term.chapterId);
+    byBuilding.set(building.key, [...(byBuilding.get(building.key) ?? []), term]);
+  }
+  return Array.from(byBuilding.entries()).map(([key, buildingTerms]) => {
+    const building = custodyBuildingLabel(project, buildingTerms[0].chapterId);
+    return {
+      key,
+      label: building.label,
+      isMissingBuilding: building.isMissingBuilding,
+      terms: buildingTerms,
+      equipmentCount: buildingTerms.reduce((total, term) => total + custodyTermEquipmentItems(term).length, 0),
+    };
+  }).sort((left, right) => Number(left.isMissingBuilding) - Number(right.isMissingBuilding) || left.label.localeCompare(right.label, 'pt-BR', { numeric: true }));
+}
+
 export default function WarehouseCustodyTab({ project, onProjectChange, auditActor, canDelete = false }: Props) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const wh = ensureWarehouse(project).warehouse!;
@@ -267,6 +307,7 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
   };
 
   const sortedTerms = wh.custodyTerms.slice().sort((a, b) => b.issuedAt.localeCompare(a.issuedAt) || b.createdAt.localeCompare(a.createdAt));
+  const custodyBuildingGroups = useMemo(() => groupCustodyTermsByBuilding(project, sortedTerms), [project, sortedTerms]);
   const deleteTerm = (term: CustodyTerm) => confirm(
     { title: 'Excluir cautela definitivamente?', description: 'O termo, suas fotos e devoluções vinculadas serão removidos; equipamentos ainda em uso voltarão para disponível.', confirmLabel: 'Excluir definitivamente' },
     async () => {
@@ -335,19 +376,19 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
 
       <section className="overflow-hidden rounded-xl border bg-card">
         <WarehouseSectionHeader icon={History} title="Histórico de cautelas" description={`${sortedTerms.length} registro(s)`} tone="neutral" />
-        <div className="space-y-2 p-2 md:hidden">
-          {sortedTerms.map(term => <CustodyMobileCard key={term.id} term={term} expanded={expandedId === term.id} onToggle={() => setExpandedId(current => current === term.id ? null : term.id)} onReturn={startReturn} project={project} canDelete={canDelete} onDelete={() => deleteTerm(term)} />)}
+        <div className="space-y-4 p-2 md:hidden">
+          {custodyBuildingGroups.map(building => <section key={building.key} data-testid="custody-building-group" className="space-y-2"><CustodyBuildingHeader label={building.label} termCount={building.terms.length} equipmentCount={building.equipmentCount} />{building.terms.map(term => <CustodyMobileCard key={term.id} term={term} expanded={expandedId === term.id} onToggle={() => setExpandedId(current => current === term.id ? null : term.id)} onReturn={startReturn} project={project} canDelete={canDelete} onDelete={() => deleteTerm(term)} />)}</section>)}
           {!sortedTerms.length && <WarehouseEmptyState message="Nenhuma cautela emitida" hint="Use Nova cautela para começar." icon={Wrench} />}
         </div>
         <div className="hidden overflow-x-auto md:block">
           <table className="w-full min-w-[840px] text-xs">
             <thead className="bg-muted"><tr><th className="w-10 p-2"><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Prédio / capítulo</th><th className="p-2 text-center">Equipamentos</th><th className="p-2 text-left">Prazo</th><th className="p-2 text-left">Status</th></tr></thead>
-            <tbody>{sortedTerms.map(term => {
+            <tbody>{custodyBuildingGroups.map(building => <Fragment key={building.key}><tr data-testid="custody-building-group"><td colSpan={8} className="border-t bg-primary/10 px-3 py-2"><CustodyBuildingHeader label={building.label} termCount={building.terms.length} equipmentCount={building.equipmentCount} /></td></tr>{building.terms.map(term => {
               const items = custodyTermEquipmentItems(term);
               const expanded = expandedId === term.id;
               const aggregate = custodyTermAggregateStatus(items);
               return <Fragment key={term.id}><tr className={`cursor-pointer border-t whitespace-nowrap hover:bg-muted/30 ${expanded ? 'bg-primary/10' : ''}`} onClick={() => setExpandedId(current => current === term.id ? null : term.id)}><td className="p-2"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180' : ''}`} /></td><td className="p-2 font-mono">{term.number}</td><td className="p-2">{term.issuedAt}</td><td className="p-2">{term.workerName}</td><td className="max-w-64 truncate p-2" title={term.chapterName}>{term.chapterName || 'Registro legado'}</td><td className="p-2 text-center">{items.length}</td><td className="p-2">{term.dueDate || 'Sem prazo'}</td><td className="p-2"><WarehouseStatusBadge label={statusLabel[aggregate] || aggregate} tone={statusTone(aggregate)} /></td></tr>{expanded && <tr className="border-t bg-muted/10"><td colSpan={8} className="p-3"><CustodyDetails term={term} project={project} onReturn={startReturn} canDelete={canDelete} onDelete={() => deleteTerm(term)} /></td></tr>}</Fragment>;
-            })}{!sortedTerms.length && <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">Nenhuma cautela emitida.</td></tr>}</tbody>
+            })}</Fragment>)}{!sortedTerms.length && <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">Nenhuma cautela emitida.</td></tr>}</tbody>
           </table>
         </div>
       </section>
@@ -372,6 +413,10 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <WarehouseField label={label}>{children}</WarehouseField>;
+}
+
+function CustodyBuildingHeader({ label, termCount, equipmentCount }: { label: string; termCount: number; equipmentCount: number }) {
+  return <div className="flex flex-wrap items-center justify-between gap-2 text-sm"><strong className="min-w-0 break-words">{label}</strong><span className="text-muted-foreground">{termCount} cautela(s) · {equipmentCount} equipamento(s)</span></div>;
 }
 
 function OptionalPhotos({ photos, onCamera, onGallery, onRemove }: { photos: File[]; onCamera: () => void; onGallery: () => void; onRemove: (index: number) => void }) {

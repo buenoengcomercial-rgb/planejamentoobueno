@@ -108,22 +108,49 @@ function latestRequisitionActivity(requisition: WarehouseRequisition, movements:
     }, recordTimestamp(requisition, requisition.date));
 }
 
-type RequisitionWorkGroup = {
+type RequisitionBuildingGroup = {
+  key: string;
   label: string;
   requisitions: WarehouseRequisition[];
   itemCount: number;
+  isMissingBuilding: boolean;
 };
 
-function groupRequisitionsByWork(project: Project, requisitions: WarehouseRequisition[], movements: WarehouseMovement[]): RequisitionWorkGroup {
-  return {
-    label: project.name || 'Obra não informada',
-    requisitions: requisitions.slice().sort((left, right) => {
+function buildingLabel(project: Project, chapterId?: string) {
+  if (!chapterId) return { key: 'missing-building', label: 'Prédio não informado', isMissingBuilding: true };
+  const phaseById = new Map(project.phases.map(phase => [phase.id, phase]));
+  const visited = new Set<string>();
+  let building = phaseById.get(chapterId);
+  while (building?.parentId && !visited.has(building.id)) {
+    visited.add(building.id);
+    building = phaseById.get(building.parentId);
+  }
+  if (!building) return { key: 'missing-building', label: 'Prédio não informado', isMissingBuilding: true };
+  const number = getChapterNumbering(project).get(building.id);
+  return { key: building.id, label: `${number ? `${number} · ` : ''}${building.name}`, isMissingBuilding: false };
+}
+
+function groupRequisitionsByBuilding(project: Project, requisitions: WarehouseRequisition[], movements: WarehouseMovement[]): RequisitionBuildingGroup[] {
+  const byBuilding = new Map<string, WarehouseRequisition[]>();
+  for (const requisition of requisitions) {
+    const building = buildingLabel(project, requisition.chapterId);
+    byBuilding.set(building.key, [...(byBuilding.get(building.key) ?? []), requisition]);
+  }
+
+  return Array.from(byBuilding.entries()).map(([key, buildingRequisitions]) => {
+    const building = buildingLabel(project, buildingRequisitions[0].chapterId);
+    return {
+      key,
+      label: building.label,
+      isMissingBuilding: building.isMissingBuilding,
+      requisitions: buildingRequisitions.slice().sort((left, right) => {
       const rightTimestamp = latestRequisitionActivity(right, movements);
       const leftTimestamp = latestRequisitionActivity(left, movements);
       return rightTimestamp.localeCompare(leftTimestamp) || right.number.localeCompare(left.number, 'pt-BR', { numeric: true });
-    }),
-    itemCount: requisitions.reduce((total, requisition) => total + requisition.items.length, 0),
-  };
+      }),
+      itemCount: buildingRequisitions.reduce((total, requisition) => total + requisition.items.length, 0),
+    };
+  }).sort((left, right) => Number(left.isMissingBuilding) - Number(right.isMissingBuilding) || left.label.localeCompare(right.label, 'pt-BR', { numeric: true }));
 }
 
 export default function WarehouseRequisitionsTab(props: Props) {
@@ -162,8 +189,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
   const [correctionTarget, setCorrectionTarget] = useState<WarehouseRequisition | null>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
-  const workGroup = useMemo(
-    () => groupRequisitionsByWork(project, wh.requisitions, wh.movements),
+  const buildingGroups = useMemo(
+    () => groupRequisitionsByBuilding(project, wh.requisitions, wh.movements),
     [project, wh.movements, wh.requisitions],
   );
 
@@ -333,8 +360,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
 
       <section className="overflow-hidden rounded-xl border bg-card">
           <WarehouseSectionHeader icon={History} title="Histórico de retiradas e devoluções" description={`${wh.requisitions.length} retirada(s)`} tone="neutral" />
-          <div className="space-y-4 p-2 md:hidden"><section data-testid="withdrawal-work-group" className="space-y-3"><HistoryGroupHeader title={workGroup.label} requisitionCount={workGroup.requisitions.length} itemCount={workGroup.itemCount} />{workGroup.requisitions.map(requisition => <WithdrawalHistoryCard key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={activeId === requisition.id} canDelete={canDelete} canEdit={canEdit} onToggle={() => setActiveId(current => current === requisition.id ? null : requisition.id)} onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onCorrect={() => setCorrectionTarget(requisition)} />)}</section>{!wh.requisitions.length && <WarehouseEmptyState message="Nenhuma retirada registrada" hint="Use Nova retirada para começar." />}</div>
-          <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[1040px] text-xs"><thead className="bg-muted"><tr><th className="w-10 p-2"><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data da operação</th><th className="p-2 text-left">Último registro</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Hierarquia / destino</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead><tbody>{wh.requisitions.length > 0 && <tr data-testid="withdrawal-work-group"><td colSpan={9} className="border-t bg-primary/10 px-3 py-2"><HistoryGroupHeader title={workGroup.label} requisitionCount={workGroup.requisitions.length} itemCount={workGroup.itemCount} /></td></tr>}{workGroup.requisitions.map(requisition => <WithdrawalHistoryRow key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={activeId === requisition.id} canDelete={canDelete} canEdit={canEdit} onToggle={() => setActiveId(current => current === requisition.id ? null : requisition.id)} onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onCorrect={() => setCorrectionTarget(requisition)} />)}{!wh.requisitions.length && <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">Nenhuma retirada registrada.</td></tr>}</tbody></table></div>
+          <div className="space-y-4 p-2 md:hidden">{buildingGroups.map(building => <section key={building.key} data-testid="withdrawal-building-group" className="space-y-3"><HistoryGroupHeader title={building.label} requisitionCount={building.requisitions.length} itemCount={building.itemCount} />{building.requisitions.map(requisition => <WithdrawalHistoryCard key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={activeId === requisition.id} canDelete={canDelete} canEdit={canEdit} onToggle={() => setActiveId(current => current === requisition.id ? null : requisition.id)} onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onCorrect={() => setCorrectionTarget(requisition)} />)}</section>)}{!wh.requisitions.length && <WarehouseEmptyState message="Nenhuma retirada registrada" hint="Use Nova retirada para começar." />}</div>
+          <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[1040px] text-xs"><thead className="bg-muted"><tr><th className="w-10 p-2"><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data da operação</th><th className="p-2 text-left">Último registro</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Hierarquia / destino</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead><tbody>{buildingGroups.map(building => <Fragment key={building.key}><tr data-testid="withdrawal-building-group"><td colSpan={9} className="border-t bg-primary/10 px-3 py-2"><HistoryGroupHeader title={building.label} requisitionCount={building.requisitions.length} itemCount={building.itemCount} /></td></tr>{building.requisitions.map(requisition => <WithdrawalHistoryRow key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={activeId === requisition.id} canDelete={canDelete} canEdit={canEdit} onToggle={() => setActiveId(current => current === requisition.id ? null : requisition.id)} onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onCorrect={() => setCorrectionTarget(requisition)} />)}</Fragment>)}{!wh.requisitions.length && <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">Nenhuma retirada registrada.</td></tr>}</tbody></table></div>
       </section>
       <MaterialReturnDialog project={project} requisition={returnTarget} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setReturnTarget(null)} />
       <CorrectionDialog project={project} requisition={correctionTarget} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setCorrectionTarget(null)} />

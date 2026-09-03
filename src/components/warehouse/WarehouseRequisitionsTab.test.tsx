@@ -137,35 +137,44 @@ describe('WarehouseRequisitionsTab', () => {
     expect(screen.getAllByText(/registro:/i).length).toBeGreaterThan(0);
   });
 
-  it('agrupa o histórico somente pela obra, mantendo destino e recebedor em cada retirada', () => {
+  it('agrupa o histórico somente pelo prédio, sem separar os recebedores', () => {
     const project = projectWithMaterials(0);
     project.phases = [
       { id: 'building-a', name: 'Prédio A', color: '#000', tasks: [], order: 0 },
+      { id: 'front-a', name: 'Frente A', color: '#000', tasks: [], parentId: 'building-a', order: 0 },
+      { id: 'front-b', name: 'Frente B', color: '#000', tasks: [], parentId: 'building-a', order: 1 },
       { id: 'building-b', name: 'Prédio B', color: '#000', tasks: [], order: 1 },
     ];
     project.warehouse!.requisitions = [
-      { id: 'req-a', number: 'REQ-2026-0001', date: '2026-08-21', status: 'entregue', chapterId: 'building-a', receiverName: 'Ana', createdAt: '2026-08-21T08:00:00.000Z', items: [{ itemKey: 'a', description: 'Item A', unit: 'UN', quantity: 1 }] },
-      { id: 'req-b', number: 'REQ-2026-0002', date: '2026-08-21', status: 'entregue', chapterId: 'building-b', receiverName: 'Bia', createdAt: '2026-08-21T09:00:00.000Z', items: [{ itemKey: 'b', description: 'Item B', unit: 'UN', quantity: 2 }] },
+      { id: 'req-a', number: 'REQ-2026-0001', date: '2026-08-21', status: 'entregue', chapterId: 'front-a', receiverName: 'Ana', createdAt: '2026-08-21T08:00:00.000Z', items: [{ itemKey: 'a', description: 'Item A', unit: 'UN', quantity: 1 }] },
+      { id: 'req-b', number: 'REQ-2026-0002', date: '2026-08-21', status: 'entregue', chapterId: 'front-b', receiverName: 'Bia', createdAt: '2026-08-21T09:00:00.000Z', items: [{ itemKey: 'b', description: 'Item B', unit: 'UN', quantity: 2 }] },
       { id: 'req-legacy', number: 'REQ-2026-0003', date: '2026-08-21', status: 'entregue', receiverName: 'Caio', createdAt: '2026-08-21T10:00:00.000Z', items: [] },
       { id: 'req-old', number: 'REQ-2026-0004', date: '2026-08-20', status: 'entregue', chapterId: 'building-a', receiverName: 'Dani', createdAt: '2026-08-20T10:00:00.000Z', items: [] },
+      { id: 'req-building-b', number: 'REQ-2026-0005', date: '2026-08-20', status: 'entregue', chapterId: 'building-b', receiverName: 'Elisa', createdAt: '2026-08-20T11:00:00.000Z', items: [] },
     ];
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
 
-    const workRows = screen.getAllByTestId('withdrawal-work-group').filter(element => element.tagName === 'TR');
-    expect(workRows).toHaveLength(1);
-    expect(workRows[0]).toHaveTextContent('Obra teste');
-    expect(workRows[0]).toHaveTextContent('4 requisição(ões) · 2 item(ns)');
+    const buildingRows = screen.getAllByTestId('withdrawal-building-group').filter(element => element.tagName === 'TR');
+    expect(buildingRows).toHaveLength(3);
+    expect(buildingRows[0]).toHaveTextContent('Prédio A');
+    expect(buildingRows[0]).toHaveTextContent('3 requisição(ões) · 2 item(ns)');
+    expect(buildingRows[1]).toHaveTextContent('Prédio B');
+    expect(buildingRows[2]).toHaveTextContent('Prédio não informado');
     expect(screen.queryByTestId('withdrawal-date-group')).not.toBeInTheDocument();
     expect(screen.queryByTestId('withdrawal-destination-group')).not.toBeInTheDocument();
 
     const rows = screen.getAllByTestId('withdrawal-history-row');
-    expect(rows[0]).toHaveTextContent('REQ-2026-0003');
-    expect(rows[0]).toHaveTextContent('Caio');
-    expect(rows[0]).toHaveTextContent('Registro legado');
-    expect(rows[1]).toHaveTextContent('REQ-2026-0002');
-    expect(rows[1]).toHaveTextContent('Bia');
-    expect(rows[1]).toHaveTextContent('Prédio B');
+    expect(rows[0]).toHaveTextContent('REQ-2026-0002');
+    expect(rows[0]).toHaveTextContent('Bia');
+    expect(rows[1]).toHaveTextContent('REQ-2026-0001');
+    expect(rows[1]).toHaveTextContent('Ana');
+    expect(rows[2]).toHaveTextContent('REQ-2026-0004');
+    expect(rows[2]).toHaveTextContent('Dani');
+    expect(rows[3]).toHaveTextContent('REQ-2026-0005');
+    expect(rows[3]).toHaveTextContent('Elisa');
+    expect(rows[4]).toHaveTextContent('REQ-2026-0003');
+    expect(rows[4]).toHaveTextContent('Caio');
   });
 
   it('usa a hierarquia completa da EAP no destino e preserva o fallback legado', () => {
@@ -206,6 +215,34 @@ describe('WarehouseRequisitionsTab', () => {
 
     expect(screen.getByRole('button', { name: /Nova cautela/i })).toBeInTheDocument();
     expect(screen.getAllByText('TC-2025-0001').length).toBeGreaterThan(0);
+  });
+
+  it('agrupa cautelas somente pelo prédio, mesmo com recebedores diferentes', () => {
+    const project = projectWithMaterials(0);
+    project.phases = [
+      { id: 'building-a', name: 'Prédio A', color: '#000', tasks: [], order: 0 },
+      { id: 'front-a', name: 'Frente A', color: '#000', tasks: [], parentId: 'building-a', order: 0 },
+      { id: 'front-b', name: 'Frente B', color: '#000', tasks: [], parentId: 'building-a', order: 1 },
+      { id: 'building-b', name: 'Prédio B', color: '#000', tasks: [], order: 1 },
+    ];
+    project.warehouse!.custodyTerms = [
+      { id: 'term-a', number: 'TC-2026-0001', createdAt: '2026-08-20T10:00:00.000Z', issuedAt: '2026-08-20', equipmentId: 'eq-a', equipmentName: 'Furadeira', workerName: 'Ana', chapterId: 'front-a', chapterName: 'Frente A', status: 'em_uso' },
+      { id: 'term-b', number: 'TC-2026-0002', createdAt: '2026-08-20T11:00:00.000Z', issuedAt: '2026-08-20', equipmentId: 'eq-b', equipmentName: 'Parafusadeira', workerName: 'Bia', chapterId: 'front-b', chapterName: 'Frente B', status: 'em_uso' },
+      { id: 'term-c', number: 'TC-2026-0003', createdAt: '2026-08-20T12:00:00.000Z', issuedAt: '2026-08-20', equipmentId: 'eq-c', equipmentName: 'Esmerilhadeira', workerName: 'Caio', chapterId: 'building-b', chapterName: 'Prédio B', status: 'em_uso' },
+    ];
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+    const equipmentTab = screen.getByRole('tab', { name: /Equipamentos \/ Cautelas/i });
+    fireEvent.mouseDown(equipmentTab, { button: 0, ctrlKey: false });
+    fireEvent.click(equipmentTab);
+
+    const buildingRows = screen.getAllByTestId('custody-building-group').filter(element => element.tagName === 'TR');
+    expect(buildingRows).toHaveLength(2);
+    expect(buildingRows[0]).toHaveTextContent('Prédio A');
+    expect(buildingRows[0]).toHaveTextContent('2 cautela(s) · 2 equipamento(s)');
+    expect(buildingRows[1]).toHaveTextContent('Prédio B');
+    expect(screen.getAllByText('Ana').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Bia').length).toBeGreaterThan(0);
   });
 
   it('permite selecionar vários equipamentos disponíveis na mesma cautela', () => {
