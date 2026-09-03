@@ -30,6 +30,13 @@ function projectWithMaterials(count = 15): Project {
   return current;
 }
 
+function expandAllWithdrawalDateGroups() {
+  screen.getAllByTestId('withdrawal-date-group').filter(element => element.tagName === 'TR').forEach(element => {
+    const button = within(element).getByRole('button', { name: /expandir requisições/i });
+    fireEvent.click(button);
+  });
+}
+
 describe('WarehouseRequisitionsTab', () => {
   beforeEach(() => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
@@ -64,6 +71,7 @@ describe('WarehouseRequisitionsTab', () => {
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
 
     expect(screen.queryByText('Comprovante')).not.toBeInTheDocument();
+    expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0001/i }));
     expect(screen.getAllByRole('button', { name: 'PDF' })).toHaveLength(2);
     expect(screen.getAllByText('Material disponível 0').length).toBeGreaterThan(1);
@@ -82,6 +90,7 @@ describe('WarehouseRequisitionsTab', () => {
     }];
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+    expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0010/i }));
 
     expect(screen.getByTestId('withdrawal-history-row')).toHaveClass('bg-primary/30');
@@ -101,12 +110,30 @@ describe('WarehouseRequisitionsTab', () => {
     ];
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+    expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0001/i }));
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0002/i }));
 
     expect(screen.getAllByTestId('withdrawal-history-row')).toHaveLength(2);
     expect(screen.getAllByTestId('withdrawal-history-row').every(row => row.classList.contains('bg-primary/30'))).toBe(true);
     expect(screen.getAllByTestId('withdrawal-history-details')).toHaveLength(4);
+  });
+
+  it('deixa aberta somente a data operacional atual até que o usuário a altere', () => {
+    const project = projectWithMaterials(1);
+    const today = new Date().toISOString().slice(0, 10);
+    project.warehouse!.requisitions = [
+      { id: 'req-today', number: 'REQ-2026-0020', date: today, status: 'entregue', chapterId: 'chapter-1', receiverName: 'Ana', createdAt: `${today}T10:00:00.000Z`, items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 1 }] },
+      { id: 'req-before', number: 'REQ-2026-0019', date: '2026-08-18', status: 'entregue', chapterId: 'chapter-1', receiverName: 'Bia', createdAt: '2026-08-18T10:00:00.000Z', items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 1 }] },
+    ];
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+
+    expect(screen.getByTestId('withdrawal-history-row')).toHaveTextContent('REQ-2026-0020');
+    expect(screen.queryByText('REQ-2026-0019')).not.toBeInTheDocument();
+    const olderDate = screen.getAllByTestId('withdrawal-date-group').filter(element => element.tagName === 'TR').find(element => element.textContent?.includes('18/08/2026'))!;
+    fireEvent.click(within(olderDate).getByRole('button', { name: /expandir requisições/i }));
+    expect(screen.getAllByText('REQ-2026-0019')).toHaveLength(2);
   });
 
   it('mostra a correção de retirada somente quando recebe permissão de Proprietário', () => {
@@ -116,11 +143,13 @@ describe('WarehouseRequisitionsTab', () => {
       items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
     }];
     const first = render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+    expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0009/i }));
     expect(screen.queryByRole('button', { name: /Corrigir retirada/i })).not.toBeInTheDocument();
     first.unmount();
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit />);
+    expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0009/i }));
     const correctionButtons = screen.getAllByRole('button', { name: /Corrigir retirada/i });
     expect(correctionButtons.length).toBeGreaterThan(0);
@@ -141,6 +170,7 @@ describe('WarehouseRequisitionsTab', () => {
     }];
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit />);
+    expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0011/i }));
     fireEvent.click(screen.getAllByRole('button', { name: /Corrigir retirada/i })[0]);
 
@@ -184,6 +214,7 @@ describe('WarehouseRequisitionsTab', () => {
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
 
+    expandAllWithdrawalDateGroups();
     const rows = screen.getAllByTestId('withdrawal-history-row');
     expect(rows[0]).toHaveTextContent('REQ-2026-0002');
     expect(screen.getByRole('columnheader', { name: 'Último registro' })).toBeInTheDocument();
@@ -215,9 +246,14 @@ describe('WarehouseRequisitionsTab', () => {
     expect(buildingRows[0]).toHaveTextContent('3 requisição(ões) · 2 item(ns)');
     expect(buildingRows[1]).toHaveTextContent('Prédio B');
     expect(buildingRows[2]).toHaveTextContent('Prédio não informado');
-    expect(screen.queryByTestId('withdrawal-date-group')).not.toBeInTheDocument();
+    const dateRows = screen.getAllByTestId('withdrawal-date-group').filter(element => element.tagName === 'TR');
+    expect(dateRows).toHaveLength(4);
+    expect(dateRows[0]).toHaveTextContent('21/08/2026');
+    expect(dateRows[0]).toHaveTextContent('2 requisição(ões) · 2 item(ns)');
+    expect(screen.queryByTestId('withdrawal-history-row')).not.toBeInTheDocument();
     expect(screen.queryByTestId('withdrawal-destination-group')).not.toBeInTheDocument();
 
+    expandAllWithdrawalDateGroups();
     const rows = screen.getAllByTestId('withdrawal-history-row');
     expect(rows[0]).toHaveTextContent('REQ-2026-0002');
     expect(rows[0]).toHaveTextContent('Bia');
@@ -251,6 +287,7 @@ describe('WarehouseRequisitionsTab', () => {
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
 
+    expandAllWithdrawalDateGroups();
     expect(screen.getAllByText('1.1.1 · Prédio > Incêndio > Hidrantes').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Registro legado: 17\/08\/2026/).length).toBeGreaterThan(0);
   });

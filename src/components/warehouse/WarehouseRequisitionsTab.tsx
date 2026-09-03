@@ -21,7 +21,7 @@ import { deleteWarehouseAttachments } from '@/lib/warehouseAttachments';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { flattenPhasesByChapter, getChapterNumbering } from '@/lib/chapters';
 import SignaturePad from './SignaturePad';
-import { generateRequisitionReceipt } from './pdf';
+import { generateDailyWithdrawalConfirmationPdfs, generateRequisitionReceipt } from './pdf';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
 import WarehouseCustodyTab from './WarehouseCustodyTab';
 import {
@@ -114,6 +114,14 @@ type RequisitionBuildingGroup = {
   requisitions: WarehouseRequisition[];
   itemCount: number;
   isMissingBuilding: boolean;
+  dateGroups: RequisitionDateGroup[];
+};
+
+type RequisitionDateGroup = {
+  key: string;
+  date: string;
+  requisitions: WarehouseRequisition[];
+  itemCount: number;
 };
 
 function buildingLabel(project: Project, chapterId?: string) {
@@ -151,16 +159,28 @@ function groupRequisitionsByBuilding(project: Project, requisitions: WarehouseRe
 
   return Array.from(byBuilding.entries()).map(([key, buildingRequisitions]) => {
     const building = buildingLabel(project, buildingRequisitions[0].chapterId);
+    const sortedRequisitions = buildingRequisitions.slice().sort((left, right) => {
+      const rightTimestamp = latestRequisitionActivity(right, movements);
+      const leftTimestamp = latestRequisitionActivity(left, movements);
+      return rightTimestamp.localeCompare(leftTimestamp) || right.number.localeCompare(left.number, 'pt-BR', { numeric: true });
+    });
+    const byDate = new Map<string, WarehouseRequisition[]>();
+    for (const requisition of sortedRequisitions) {
+      const date = requisition.date || 'data-nao-informada';
+      byDate.set(date, [...(byDate.get(date) ?? []), requisition]);
+    }
     return {
       key,
       label: building.label,
       isMissingBuilding: building.isMissingBuilding,
-      requisitions: buildingRequisitions.slice().sort((left, right) => {
-      const rightTimestamp = latestRequisitionActivity(right, movements);
-      const leftTimestamp = latestRequisitionActivity(left, movements);
-      return rightTimestamp.localeCompare(leftTimestamp) || right.number.localeCompare(left.number, 'pt-BR', { numeric: true });
-      }),
+      requisitions: sortedRequisitions,
       itemCount: buildingRequisitions.reduce((total, requisition) => total + requisition.items.length, 0),
+      dateGroups: Array.from(byDate.entries()).map(([date, dateRequisitions]) => ({
+        key: `${key}:${date}`,
+        date,
+        requisitions: dateRequisitions,
+        itemCount: dateRequisitions.reduce((total, requisition) => total + requisition.items.length, 0),
+      })).sort((left, right) => right.date.localeCompare(left.date)),
     };
   }).sort((left, right) => Number(left.isMissingBuilding) - Number(right.isMissingBuilding) || left.label.localeCompare(right.label, 'pt-BR', { numeric: true }));
 }
@@ -192,6 +212,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
   );
   const [open, setOpen] = useState(false);
   const [expandedRequisitionIds, setExpandedRequisitionIds] = useState<Set<string>>(() => new Set());
+  const [dateExpansionOverrides, setDateExpansionOverrides] = useState<Map<string, boolean>>(() => new Map());
   const [form, setForm] = useState<WithdrawalForm>(initialForm);
   const [materialSearch, setMaterialSearch] = useState('');
   const [photos, setPhotos] = useState<File[]>([]);
@@ -205,6 +226,22 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
     () => groupRequisitionsByBuilding(project, wh.requisitions, wh.movements),
     [project, wh.movements, wh.requisitions],
   );
+  const currentOperationalDate = new Date().toISOString().slice(0, 10);
+  const isDateGroupExpanded = (dateGroup: RequisitionDateGroup) => dateExpansionOverrides.get(dateGroup.key) ?? dateGroup.date === currentOperationalDate;
+  const toggleDateGroup = (dateGroup: RequisitionDateGroup) => setDateExpansionOverrides(current => {
+    const next = new Map(current);
+    next.set(dateGroup.key, !isDateGroupExpanded(dateGroup));
+    return next;
+  });
+  const generateDailyConfirmations = (building: RequisitionBuildingGroup, dateGroup: RequisitionDateGroup) => {
+    const generated = generateDailyWithdrawalConfirmationPdfs(project, {
+      date: dateGroup.date,
+      buildingLabel: building.label,
+      requisitions: dateGroup.requisitions,
+    });
+    if (generated) toast.success(`${generated} PDF(s) de confirmação gerado(s).`);
+    else toast.error('Não há retiradas entregues nesta data para gerar a confirmação.');
+  };
 
   const availableMaterials = useMemo(() => {
     const tokens = normalizeSearch(materialSearch).split(/\s+/).filter(Boolean);
@@ -376,8 +413,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
 
       <section className="overflow-hidden rounded-xl border bg-card">
           <WarehouseSectionHeader icon={History} title="Histórico de retiradas e devoluções" description={`${wh.requisitions.length} retirada(s)`} tone="neutral" />
-          <div className="space-y-4 p-2 md:hidden">{buildingGroups.map(building => <section key={building.key} data-testid="withdrawal-building-group" className="space-y-3"><HistoryGroupHeader title={building.label} requisitionCount={building.requisitions.length} itemCount={building.itemCount} />{building.requisitions.map(requisition => <WithdrawalHistoryCard key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })} onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onCorrect={() => setCorrectionTarget(requisition)} />)}</section>)}{!wh.requisitions.length && <WarehouseEmptyState message="Nenhuma retirada registrada" hint="Use Nova retirada para começar." />}</div>
-          <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[1040px] text-xs"><thead className="bg-muted"><tr><th className="w-10 p-2"><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data da operação</th><th className="p-2 text-left">Último registro</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Hierarquia / destino</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead><tbody>{buildingGroups.map(building => <Fragment key={building.key}><tr data-testid="withdrawal-building-group"><td colSpan={9} className="border-t bg-primary/10 px-3 py-2"><HistoryGroupHeader title={building.label} requisitionCount={building.requisitions.length} itemCount={building.itemCount} /></td></tr>{building.requisitions.map(requisition => <WithdrawalHistoryRow key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })} onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onCorrect={() => setCorrectionTarget(requisition)} />)}</Fragment>)}{!wh.requisitions.length && <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">Nenhuma retirada registrada.</td></tr>}</tbody></table></div>
+          <div className="space-y-4 p-2 md:hidden">{buildingGroups.map(building => <section key={building.key} data-testid="withdrawal-building-group" className="space-y-3"><HistoryGroupHeader title={building.label} requisitionCount={building.requisitions.length} itemCount={building.itemCount} />{building.dateGroups.map(dateGroup => <section key={dateGroup.key} data-testid="withdrawal-date-group" className="overflow-hidden rounded-lg border bg-muted/20"><WithdrawalDateGroupHeader dateGroup={dateGroup} expanded={isDateGroupExpanded(dateGroup)} onToggle={() => toggleDateGroup(dateGroup)} onGenerate={() => generateDailyConfirmations(building, dateGroup)} />{isDateGroupExpanded(dateGroup) && <div className="space-y-3 p-2">{dateGroup.requisitions.map(requisition => <WithdrawalHistoryCard key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })} onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onCorrect={() => setCorrectionTarget(requisition)} />)}</div>}</section>)}</section>)}{!wh.requisitions.length && <WarehouseEmptyState message="Nenhuma retirada registrada" hint="Use Nova retirada para começar." />}</div>
+          <div className="hidden overflow-x-auto md:block"><table className="w-full min-w-[1040px] text-xs"><thead className="bg-muted"><tr><th className="w-10 p-2"><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data da operação</th><th className="p-2 text-left">Último registro</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Hierarquia / destino</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead><tbody>{buildingGroups.map(building => <Fragment key={building.key}><tr data-testid="withdrawal-building-group"><td colSpan={9} className="border-t bg-primary/10 px-3 py-2"><HistoryGroupHeader title={building.label} requisitionCount={building.requisitions.length} itemCount={building.itemCount} /></td></tr>{building.dateGroups.map(dateGroup => <Fragment key={dateGroup.key}><tr data-testid="withdrawal-date-group"><td colSpan={9} className="border-t bg-muted/70 px-3 py-2"><WithdrawalDateGroupHeader dateGroup={dateGroup} expanded={isDateGroupExpanded(dateGroup)} onToggle={() => toggleDateGroup(dateGroup)} onGenerate={() => generateDailyConfirmations(building, dateGroup)} /></td></tr>{isDateGroupExpanded(dateGroup) && dateGroup.requisitions.map(requisition => <WithdrawalHistoryRow key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })} onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onCorrect={() => setCorrectionTarget(requisition)} />)}</Fragment>)}</Fragment>)}{!wh.requisitions.length && <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">Nenhuma retirada registrada.</td></tr>}</tbody></table></div>
       </section>
       <MaterialReturnDialog project={project} requisition={returnTarget} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setReturnTarget(null)} />
       <CorrectionDialog project={project} requisition={correctionTarget} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setCorrectionTarget(null)} />
@@ -388,6 +425,11 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
 
 function HistoryGroupHeader({ title, requisitionCount, itemCount, compact = false }: { title: string; requisitionCount: number; itemCount: number; compact?: boolean }) {
   return <div className={`flex flex-wrap items-center justify-between gap-2 ${compact ? 'text-xs' : 'text-sm'}`}><strong className="min-w-0 break-words">{title}</strong><span className="text-muted-foreground">{requisitionCount} requisição(ões) · {itemCount} item(ns)</span></div>;
+}
+
+function WithdrawalDateGroupHeader({ dateGroup, expanded, onToggle, onGenerate }: { dateGroup: RequisitionDateGroup; expanded: boolean; onToggle: () => void; onGenerate: () => void }) {
+  const deliveredCount = dateGroup.requisitions.filter(requisition => requisition.status === 'entregue').length;
+  return <div className="flex flex-wrap items-center justify-between gap-2"><button type="button" className="flex min-h-11 min-w-0 flex-1 items-center gap-2 text-left" onClick={onToggle} aria-expanded={expanded} aria-label={`${formatOperationalDate(dateGroup.date)}: ${expanded ? 'recolher' : 'expandir'} requisições`}><ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${expanded ? 'rotate-180 text-primary' : ''}`} /><span className="min-w-0"><strong className="block">{formatOperationalDate(dateGroup.date)}</strong><span className="text-xs text-muted-foreground">{dateGroup.requisitions.length} requisição(ões) · {dateGroup.itemCount} item(ns)</span></span></button><Button type="button" size="sm" variant="outline" className="min-h-11" disabled={!deliveredCount} onClick={onGenerate} title={deliveredCount ? 'Gera um PDF por recebedor para esta data e prédio.' : 'Não há retiradas entregues nesta data.'}><FileDown className="mr-1 h-4 w-4" />Gerar PDFs</Button></div>;
 }
 
 interface WithdrawalHistoryEntryProps {

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CustodyTerm, Project } from '@/types/project';
-import { generateCustodyTermPdf } from './pdf';
+import type { CustodyTerm, Project, WarehouseRequisition } from '@/types/project';
+import { generateCustodyTermPdf, generateDailyWithdrawalConfirmationPdfs } from './pdf';
 
 const { saveMock, tableMock } = vi.hoisted(() => ({
   saveMock: vi.fn(),
@@ -80,6 +80,41 @@ describe('PDF de cautela', () => {
       expect.arrayContaining([expect.stringContaining('EQ-0001'), 'Furadeira']),
       expect.arrayContaining([expect.stringContaining('EQ-0002'), 'Parafusadeira']),
     ]) }));
+    expect((tableMock.mock.calls[0][0] as { body: unknown[] }).body).toHaveLength(2);
+  });
+});
+
+function requisition(id: string, receiverName: string, status: WarehouseRequisition['status'] = 'entregue'): WarehouseRequisition {
+  return {
+    id,
+    number: `REQ-${id}`,
+    date: '2026-09-03',
+    status,
+    receiverName,
+    warehouseOperator: 'Almoxarife',
+    notes: 'Aplicar no pavimento térreo',
+    createdAt: '2026-09-03T09:00:00.000Z',
+    items: [{ itemKey: id, code: 'MAT-01', description: 'Material teste', unit: 'UN', quantity: 2 }],
+  };
+}
+
+describe('PDF diário de confirmação de retirada', () => {
+  beforeEach(() => {
+    saveMock.mockClear();
+    tableMock.mockClear();
+  });
+
+  it('gera um arquivo por recebedor e ignora requisições não entregues', () => {
+    const generated = generateDailyWithdrawalConfirmationPdfs(project, {
+      date: '2026-09-03',
+      buildingLabel: '3 · Incêndio - Curvo 02',
+      requisitions: [requisition('1', 'Ana'), requisition('2', 'Ana'), requisition('3', 'Bia'), requisition('4', 'Rascunho', 'rascunho')],
+    });
+
+    expect(generated).toBe(2);
+    expect(saveMock).toHaveBeenCalledTimes(2);
+    expect(saveMock.mock.calls.every(([fileName]) => String(fileName).startsWith('confirmacao-retirada-2026-09-03-'))).toBe(true);
+    expect(tableMock).toHaveBeenCalledTimes(2);
     expect((tableMock.mock.calls[0][0] as { body: unknown[] }).body).toHaveLength(2);
   });
 });

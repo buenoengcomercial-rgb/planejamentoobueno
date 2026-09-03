@@ -55,6 +55,75 @@ export function generateRequisitionReceipt(project: Project, req: WarehouseRequi
   doc.save(`recibo-${req.number}.pdf`);
 }
 
+export interface DailyWithdrawalConfirmationPdfOptions {
+  date: string;
+  buildingLabel: string;
+  requisitions: WarehouseRequisition[];
+}
+
+function formatOperationalDate(value: string) {
+  const [year, month, day] = value.slice(0, 10).split('-');
+  return year && month && day ? `${day}/${month}/${year}` : value;
+}
+
+function pdfFilePart(value: string) {
+  return value.normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase() || 'nao-informado';
+}
+
+/** Gera um comprovante separado para cada recebedor de um prédio e data operacional. */
+export function generateDailyWithdrawalConfirmationPdfs(project: Project, { date, buildingLabel, requisitions }: DailyWithdrawalConfirmationPdfOptions) {
+  const delivered = requisitions.filter(requisition => requisition.status === 'entregue');
+  const byReceiver = new Map<string, WarehouseRequisition[]>();
+  for (const requisition of delivered) {
+    const receiver = requisition.receiverName || requisition.requesterName || 'Recebedor não informado';
+    byReceiver.set(receiver, [...(byReceiver.get(receiver) ?? []), requisition]);
+  }
+
+  for (const [receiver, receiverRequisitions] of byReceiver) {
+    const doc = new jsPDF();
+    header(doc, project, 'CONFIRMAÇÃO DE RETIRADA DE MATERIAL', `${formatOperationalDate(date)} · ${buildingLabel}`);
+    const operators = Array.from(new Set(receiverRequisitions.map(requisition => requisition.warehouseOperator).filter(Boolean))).join(', ') || '—';
+    doc.setFontSize(10);
+    let y = 40;
+    doc.text(`Recebedor: ${receiver}`, 14, y); y += 5;
+    doc.text(`Prédio: ${buildingLabel}`, 14, y); y += 5;
+    doc.text(`Data operacional: ${formatOperationalDate(date)}`, 14, y); y += 5;
+    doc.text(`Almoxarife(s): ${operators}`, 14, y); y += 5;
+    doc.text(`Requisições: ${receiverRequisitions.map(requisition => requisition.number).join(', ')}`, 14, y);
+
+    autoTable(doc, {
+      startY: y + 4,
+      head: [['Requisição', 'Código', 'Material', 'Un.', 'Qtd.', 'Observação']],
+      body: receiverRequisitions.flatMap(requisition => (requisition.items.length ? requisition.items : [{ code: '—', description: 'Sem itens registrados', unit: '—', quantity: 0 }]).map(item => [
+        requisition.number,
+        item.code ?? '—',
+        item.description,
+        item.unit,
+        String(item.quantity),
+        requisition.notes ?? '—',
+      ])),
+      styles: { fontSize: 8, cellWidth: 'wrap' },
+      headStyles: { fillColor: [60, 60, 60] },
+      columnStyles: { 0: { cellWidth: 25 }, 1: { cellWidth: 22 }, 2: { cellWidth: 55 }, 3: { cellWidth: 13 }, 4: { cellWidth: 14 }, 5: { cellWidth: 45 } },
+    });
+
+    doc.addPage();
+    header(doc, project, 'CONFIRMAÇÃO DE RECEBIMENTO', `${formatOperationalDate(date)} · ${buildingLabel}`);
+    doc.setFontSize(10);
+    doc.text(`Declaro que conferi os materiais relacionados neste documento e confirmo o recebimento.`, 14, 43, { maxWidth: 180 });
+    signatures(doc, 58, 'Almoxarife / responsável pela entrega', undefined, 'Recebedor - confirmação', undefined);
+    doc.setFontSize(9);
+    doc.text('Data da confirmação: ____/____/________    Horário: ____:____', 110, 100);
+    doc.save(`confirmacao-retirada-${date}-${pdfFilePart(buildingLabel)}-${pdfFilePart(receiver)}.pdf`);
+  }
+
+  return byReceiver.size;
+}
+
 export function generateInventoryReportPdf(project: Project, session: WarehouseInventorySession) {
   const doc = new jsPDF();
   header(doc, project, 'RELATÓRIO MENSAL DE INVENTÁRIO', `${session.number} · ${session.month}`);
