@@ -98,13 +98,13 @@ describe('WarehouseRequisitionsTab', () => {
         items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
       },
       {
-        id: 'req-returned', number: 'REQ-2026-0002', date: '2026-08-19', status: 'entregue', chapterId: 'chapter-1', chapterName: 'Prédio 1',
-        receiverName: 'Maria', requesterName: 'Maria', signatureReceiver: 'assinatura', createdAt: '2026-08-19T08:00:00.000Z',
+        id: 'req-returned', number: 'REQ-2026-0002', date: '2026-08-20', status: 'entregue', chapterId: 'chapter-1', chapterName: 'Prédio 1',
+        receiverName: 'Maria', requesterName: 'Maria', signatureReceiver: 'assinatura', createdAt: '2026-08-20T08:00:00.000Z',
         items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
       },
     ];
     project.warehouse!.movements.push({
-      id: 'return-latest', type: 'devolucao', originType: 'return', requisitionId: 'req-returned', date: '2026-08-19', createdAt: '2026-08-20T16:30:00.000Z',
+      id: 'return-latest', type: 'devolucao', originType: 'return', requisitionId: 'req-returned', date: '2026-08-20', createdAt: '2026-08-20T16:30:00.000Z',
       itemKey: 'material-0', itemDescription: 'Material disponível 0', itemUnit: 'UN', quantity: 1,
     });
 
@@ -115,6 +115,32 @@ describe('WarehouseRequisitionsTab', () => {
     expect(screen.getByRole('columnheader', { name: 'Último registro' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0002/i }));
     expect(screen.getAllByText(/registro:/i).length).toBeGreaterThan(0);
+  });
+
+  it('agrupa o fechamento por data e prédio, deixando o destino ausente no final', () => {
+    const project = projectWithMaterials(0);
+    project.phases = [
+      { id: 'building-a', name: 'Prédio A', color: '#000', tasks: [], order: 0 },
+      { id: 'building-b', name: 'Prédio B', color: '#000', tasks: [], order: 1 },
+    ];
+    project.warehouse!.requisitions = [
+      { id: 'req-a', number: 'REQ-2026-0001', date: '2026-08-21', status: 'entregue', chapterId: 'building-a', receiverName: 'Ana', createdAt: '2026-08-21T08:00:00.000Z', items: [{ itemKey: 'a', description: 'Item A', unit: 'UN', quantity: 1 }] },
+      { id: 'req-b', number: 'REQ-2026-0002', date: '2026-08-21', status: 'entregue', chapterId: 'building-b', receiverName: 'Bia', createdAt: '2026-08-21T09:00:00.000Z', items: [{ itemKey: 'b', description: 'Item B', unit: 'UN', quantity: 2 }] },
+      { id: 'req-legacy', number: 'REQ-2026-0003', date: '2026-08-21', status: 'entregue', receiverName: 'Caio', createdAt: '2026-08-21T10:00:00.000Z', items: [] },
+      { id: 'req-old', number: 'REQ-2026-0004', date: '2026-08-20', status: 'entregue', chapterId: 'building-a', receiverName: 'Dani', createdAt: '2026-08-20T10:00:00.000Z', items: [] },
+    ];
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+
+    const dateRows = screen.getAllByTestId('withdrawal-date-group').filter(element => element.tagName === 'TR');
+    expect(dateRows[0]).toHaveTextContent('21/08/2026');
+    expect(dateRows[1]).toHaveTextContent('20/08/2026');
+
+    const destinationRows = screen.getAllByTestId('withdrawal-destination-group').filter(element => element.tagName === 'TR');
+    expect(destinationRows[0]).toHaveTextContent('Prédio A');
+    expect(destinationRows[1]).toHaveTextContent('Prédio B');
+    expect(destinationRows[2]).toHaveTextContent('Destino não informado');
+    expect(destinationRows[0]).toHaveTextContent('1 requisição(ões) · 1 item(ns)');
   });
 
   it('usa a hierarquia completa da EAP no destino e preserva o fallback legado', () => {
