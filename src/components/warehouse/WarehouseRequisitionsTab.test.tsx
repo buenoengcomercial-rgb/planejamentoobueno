@@ -128,6 +128,44 @@ describe('WarehouseRequisitionsTab', () => {
     expect(rows[1].previousElementSibling).toBe(desktopDetail);
   });
 
+  it('mantém no detalhe somente materiais, ações e observação preenchida', () => {
+    const project = projectWithMaterials(1);
+    project.warehouse!.requisitions = [{
+      id: 'req-clean-detail', number: 'REQ-2026-0040', date: '2026-08-18', status: 'entregue', chapterId: 'chapter-1',
+      receiverName: 'Ana', createdAt: '2026-08-18T10:00:00.000Z', notes: 'Aplicar no térreo',
+      items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
+    }];
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+    expandAllWithdrawalDateGroups();
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0040/i }));
+
+    const desktopDetail = screen.getAllByTestId('withdrawal-history-details').find(element => element.tagName === 'TR')!;
+    expect(within(desktopDetail).getByRole('button', { name: 'PDF' })).toBeInTheDocument();
+    expect(within(desktopDetail).getByText('Aplicar no térreo')).toBeInTheDocument();
+    expect(within(desktopDetail).getByText('Material disponível 0')).toBeInTheDocument();
+    expect(within(desktopDetail).queryByText('REQ-2026-0040')).not.toBeInTheDocument();
+    expect(within(desktopDetail).queryByText('Hierarquia / destino')).not.toBeInTheDocument();
+    expect(within(desktopDetail).queryByText('Data da operação')).not.toBeInTheDocument();
+    expect(within(desktopDetail).queryByText('Registro / atualização')).not.toBeInTheDocument();
+    expect(within(desktopDetail).queryByText(/Incluído por:/)).not.toBeInTheDocument();
+  });
+
+  it('não reserva espaço para observação vazia no detalhe', () => {
+    const project = projectWithMaterials(1);
+    project.warehouse!.requisitions = [{
+      id: 'req-no-notes', number: 'REQ-2026-0041', date: '2026-08-18', status: 'entregue', chapterId: 'chapter-1',
+      receiverName: 'Ana', createdAt: '2026-08-18T10:00:00.000Z', items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
+    }];
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+    expandAllWithdrawalDateGroups();
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0041/i }));
+
+    const desktopDetail = screen.getAllByTestId('withdrawal-history-details').find(element => element.tagName === 'TR')!;
+    expect(within(desktopDetail).queryByText(/Observação:/)).not.toBeInTheDocument();
+  });
+
   it('mantém destacadas todas as requisições abertas', () => {
     const project = projectWithMaterials(1);
     project.warehouse!.requisitions = [
