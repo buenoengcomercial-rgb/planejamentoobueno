@@ -112,6 +112,26 @@ describe('WarehouseRequisitionsTab', () => {
     expect(screen.getByLabelText('Prédio ou destino corrigido')).toHaveValue('chapter-1');
   });
 
+  it('lista somente capítulos principais ao corrigir o prédio ou destino', () => {
+    const project = projectWithMaterials(1);
+    project.phases = [
+      { id: 'building-a', name: 'Prédio A', color: '#000', tasks: [], order: 0 },
+      { id: 'front-a', name: 'Frente A', color: '#000', tasks: [], parentId: 'building-a', order: 0 },
+      { id: 'building-b', name: 'Prédio B', color: '#000', tasks: [], order: 1 },
+    ];
+    project.warehouse!.requisitions = [{
+      id: 'req-destination', number: 'REQ-2026-0011', date: '2026-08-18', status: 'entregue', chapterId: 'building-a', receiverName: 'João', requesterName: 'João', signatureReceiver: 'assinatura', createdAt: '2026-08-18T10:00:00.000Z',
+      items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
+    }];
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit />);
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0011/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /Corrigir retirada/i })[0]);
+
+    const destinations = within(screen.getByLabelText('Prédio ou destino corrigido')).getAllByRole('option').map(option => option.textContent);
+    expect(destinations).toEqual(['Selecione', '1 · Prédio A', '2 · Prédio B']);
+  });
+
   it('prioriza a devolução registrada mais recentemente e mostra data e hora do registro', () => {
     const project = projectWithMaterials(1);
     project.warehouse!.requisitions = [
