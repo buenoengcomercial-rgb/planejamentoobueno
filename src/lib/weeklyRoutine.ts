@@ -243,6 +243,7 @@ export function buildWeeklyRoutine(
           unit: task.unit || 'un',
           teamCode: task.team,
           responsible: task.responsible,
+          reprogrammed: !!task.operationalReschedule,
           completed: plannedQuantity > 0 ? actualQuantity >= plannedQuantity : task.percentComplete >= 100,
         } satisfies WeeklyRoutineActivity;
       })
@@ -291,6 +292,7 @@ export function findNextScheduledActivity(
     unit: first.task.unit || 'un',
     teamCode: first.task.team,
     responsible: first.task.responsible,
+    reprogrammed: !!first.task.operationalReschedule,
     completed: false,
   };
 }

@@ -12,25 +12,28 @@ const baseTask: Task = {
 const project = (): Project => ({ id: 'project-1', name: 'Obra', startDate: '2026-09-01', endDate: '2026-10-01', totalBudget: 0, phases: [{ id: 'phase-1', name: 'Capítulo', color: '#3b82f6', tasks: [baseTask] }] });
 
 describe('taskRescheduling', () => {
-  it('preserva duração, move a atividade e reposiciona o cartão semanal', () => {
+  it('acrescenta os dias úteis até a data escolhida e reposiciona o cartão semanal', () => {
     const request = createRescheduleRequest(baseTask, '2026-09-15', 'Frente liberada posteriormente', config, { userName: 'Engenheiro' });
     const requested = submitRescheduleRequest(project(), request, { userName: 'Engenheiro' });
     const approved = approveRescheduleRequest(requested, request.id, config, { userName: 'Administrador' });
     const task = approved.phases[0].tasks[0];
 
     expect(task.startDate).toBe('2026-09-15');
-    expect(task.duration).toBe(3);
+    expect(task.duration).toBe(6);
     expect(task.baseline?.startDate).toBe('2026-09-10');
-    expect(task.operationalReschedule?.endDate).toBe('2026-09-17');
+    expect(task.operationalReschedule?.endDate).toBe('2026-09-22');
     expect(buildWeeklyRoutine(approved, '2026-09-07', new Set(), config).flatMap(day => day.activities)).toHaveLength(0);
-    expect(buildWeeklyRoutine(approved, '2026-09-14', new Set(), config).flatMap(day => day.activities).map(activity => activity.date)).toEqual(['2026-09-15', '2026-09-16', '2026-09-17']);
+    const activities = buildWeeklyRoutine(approved, '2026-09-14', new Set(), config).flatMap(day => day.activities);
+    expect(activities.map(activity => activity.date)).toEqual(['2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18']);
+    expect(buildWeeklyRoutine(approved, '2026-09-21', new Set(), config).flatMap(day => day.activities).map(activity => activity.date)).toEqual(['2026-09-21', '2026-09-22']);
+    expect(activities.every(activity => activity.reprogrammed)).toBe(true);
   });
 
   it('reprograma somente o saldo após produção real', () => {
     const started: Task = { ...baseTask, dailyLogs: [{ id: 'log', date: '2026-09-10', plannedQuantity: 10, actualQuantity: 10 }] };
     const preview = reschedulePreview(started, '2026-09-15', config);
 
-    expect(preview).toMatchObject({ scope: 'remaining_work', quantity: 20, duration: 2, endDate: '2026-09-16' });
+    expect(preview).toMatchObject({ scope: 'remaining_work', quantity: 20, delayDuration: 3, duration: 5, endDate: '2026-09-21' });
   });
 
   it('atualiza o plano pendente do aditivo para a rotina não restaurar as datas antigas', () => {
@@ -49,8 +52,8 @@ describe('taskRescheduling', () => {
     const request = createRescheduleRequest(task, '2026-09-15', 'Frente liberada posteriormente', config, { userName: 'Engenheiro' });
     const approved = approveRescheduleRequest(submitRescheduleRequest(operational, request, { userName: 'Engenheiro' }), request.id, config, { userName: 'Administrador' });
 
-    expect(approved.phases[0].tasks[0]).toMatchObject({ startDate: '2026-09-15', duration: 3 });
-    expect(approved.additives?.[0].scheduleDraft?.contractedTaskPlans?.[0]).toMatchObject({ startDate: '2026-09-15', duration: 3 });
-    expect(buildOperationalProjectFromPendingAdditives(approved).phases[0].tasks[0]).toMatchObject({ startDate: '2026-09-15', duration: 3 });
+    expect(approved.phases[0].tasks[0]).toMatchObject({ startDate: '2026-09-15', duration: 5 });
+    expect(approved.additives?.[0].scheduleDraft?.contractedTaskPlans?.[0]).toMatchObject({ startDate: '2026-09-15', duration: 5 });
+    expect(buildOperationalProjectFromPendingAdditives(approved).phases[0].tasks[0]).toMatchObject({ startDate: '2026-09-15', duration: 5 });
   });
 });

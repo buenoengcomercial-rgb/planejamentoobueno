@@ -755,6 +755,8 @@ export interface WeeklyRoutineActivity {
   unit: string;
   teamCode?: TeamCode;
   responsible?: string;
+  /** Indica que a programação exibida decorre de uma reprogramação operacional aprovada. */
+  reprogrammed?: boolean;
   completed: boolean;
 }
 

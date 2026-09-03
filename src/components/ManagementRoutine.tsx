@@ -216,6 +216,7 @@ function ActivityCard({
         {activity.completed && <CheckCircle2 className={`h-4 w-4 shrink-0 text-success ${showChapter ? '' : 'ml-auto'}`} aria-label="Atividade concluída" />}
       </div>
       <p className="mt-1 line-clamp-3 text-sm font-semibold leading-snug text-foreground">{activity.taskName}</p>
+      {activity.reprogrammed && <Badge variant="outline" className="mt-2 border-violet-300 bg-violet-50 text-[10px] font-semibold text-violet-800">Atividade reprogramada</Badge>}
       <dl className="mt-3 grid grid-cols-2 gap-x-2 gap-y-1 text-xs text-muted-foreground">
         <div>
           <dt className="sr-only">Equipe</dt>

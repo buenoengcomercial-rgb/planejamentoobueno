@@ -41,6 +41,23 @@ function positiveExecuted(task: Task): number {
   return (task.dailyLogs ?? []).reduce((total, log) => total + Math.max(0, Number(log.actualQuantity) || 0), 0);
 }
 
+/** Dias úteis perdidos entre a programação atual e a data escolhida para retomada. */
+function rescheduleDelayDuration(currentStartDate: string, proposedStartDate: string, config: ObraConfig): number {
+  if (proposedStartDate <= currentStartDate) return 0;
+  const date = parseDate(currentStartDate);
+  let delay = 0;
+  let safety = 0;
+  while (safety++ < 10_000) {
+    date.setDate(date.getDate() + 1);
+    const key = iso(date);
+    if (key > proposedStartDate) return delay;
+    if (isDiaUtil(date, config.uf, config.municipio, config.trabalhaSabado)) {
+      delay += date.getDay() === 6 ? 0.5 : 1;
+    }
+  }
+  return delay;
+}
+
 export function reschedulePreview(task: Task, proposedStartDate: string, config: ObraConfig) {
   const executed = positiveExecuted(task);
   const totalQuantity = Math.max(0, Number(task.quantity) || 0);
@@ -49,14 +66,19 @@ export function reschedulePreview(task: Task, proposedStartDate: string, config:
     ?? (totalQuantity > 0 && baselineDuration > 0 ? totalQuantity / baselineDuration : 0);
   const remainingQuantity = Math.max(0, totalQuantity - executed);
   const scope = executed > 0 ? 'remaining_work' as const : 'whole_task' as const;
-  const duration = scope === 'whole_task'
+  const baseDuration = scope === 'whole_task'
     ? Math.max(1, task.duration)
     : Math.max(1, Math.ceil(remainingQuantity / Math.max(plannedDaily, 0.0001)));
+  const delayDuration = rescheduleDelayDuration(task.startDate, proposedStartDate, config);
+  // A nova programação conserva o escopo pendente e incorpora todos os dias
+  // úteis perdidos até a data escolhida pelo usuário.
+  const duration = baseDuration + delayDuration;
   return {
     scope,
     executed,
     quantity: scope === 'whole_task' ? totalQuantity : remainingQuantity,
     duration,
+    delayDuration,
     endDate: rescheduleEndDate(proposedStartDate, duration, config),
   };
 }

@@ -72,7 +72,7 @@ export default function TaskRescheduleDialog({ open, onOpenChange, project, task
           <Input id="reschedule-date" type="date" value={date} onChange={event => setDate(event.target.value)} disabled={!canRequest} />
         </div>
         {preview && <div className="rounded-md border border-primary/20 bg-primary/5 p-3 text-sm">
-          <strong>Prévia:</strong> {preview.scope === 'remaining_work' ? 'saldo restante' : 'atividade completa'} de {preview.quantity} {task.unit ?? ''}, {preview.duration} dia(s) úteis, término em <strong>{preview.endDate}</strong>.
+          <strong>Prévia:</strong> {preview.scope === 'remaining_work' ? 'saldo restante' : 'atividade completa'} de {preview.quantity} {task.unit ?? ''}, {preview.duration} dia(s) úteis, término em <strong>{preview.endDate}</strong>. Acréscimo de {preview.delayDuration.toLocaleString('pt-BR')} dia(s) útil(eis) conforme a nova data escolhida.
         </div>}
         <div className="space-y-2">
           <Label htmlFor="reschedule-reason">Motivo</Label>
