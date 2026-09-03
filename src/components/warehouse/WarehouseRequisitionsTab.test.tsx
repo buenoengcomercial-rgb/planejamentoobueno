@@ -117,7 +117,7 @@ describe('WarehouseRequisitionsTab', () => {
     expect(screen.getAllByText(/registro:/i).length).toBeGreaterThan(0);
   });
 
-  it('agrupa o fechamento por data e prédio, deixando o destino ausente no final', () => {
+  it('agrupa o histórico somente pela obra, mantendo destino e recebedor em cada retirada', () => {
     const project = projectWithMaterials(0);
     project.phases = [
       { id: 'building-a', name: 'Prédio A', color: '#000', tasks: [], order: 0 },
@@ -132,15 +132,20 @@ describe('WarehouseRequisitionsTab', () => {
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
 
-    const dateRows = screen.getAllByTestId('withdrawal-date-group').filter(element => element.tagName === 'TR');
-    expect(dateRows[0]).toHaveTextContent('21/08/2026');
-    expect(dateRows[1]).toHaveTextContent('20/08/2026');
+    const workRows = screen.getAllByTestId('withdrawal-work-group').filter(element => element.tagName === 'TR');
+    expect(workRows).toHaveLength(1);
+    expect(workRows[0]).toHaveTextContent('Obra teste');
+    expect(workRows[0]).toHaveTextContent('4 requisição(ões) · 2 item(ns)');
+    expect(screen.queryByTestId('withdrawal-date-group')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('withdrawal-destination-group')).not.toBeInTheDocument();
 
-    const destinationRows = screen.getAllByTestId('withdrawal-destination-group').filter(element => element.tagName === 'TR');
-    expect(destinationRows[0]).toHaveTextContent('Prédio A');
-    expect(destinationRows[1]).toHaveTextContent('Prédio B');
-    expect(destinationRows[2]).toHaveTextContent('Destino não informado');
-    expect(destinationRows[0]).toHaveTextContent('1 requisição(ões) · 1 item(ns)');
+    const rows = screen.getAllByTestId('withdrawal-history-row');
+    expect(rows[0]).toHaveTextContent('REQ-2026-0003');
+    expect(rows[0]).toHaveTextContent('Caio');
+    expect(rows[0]).toHaveTextContent('Registro legado');
+    expect(rows[1]).toHaveTextContent('REQ-2026-0002');
+    expect(rows[1]).toHaveTextContent('Bia');
+    expect(rows[1]).toHaveTextContent('Prédio B');
   });
 
   it('usa a hierarquia completa da EAP no destino e preserva o fallback legado', () => {
