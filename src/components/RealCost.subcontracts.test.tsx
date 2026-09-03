@@ -152,6 +152,34 @@ describe('SubcontractsTab', () => {
     expect(screen.getByLabelText('Observação do pagamento')).toHaveAttribute('placeholder', expect.stringMatching(/descreva o serviço/i));
   });
 
+  it('confirma adiantamento pelo saldo contratual sem exigir produção e preserva o rateio', () => {
+    const onProjectChange = vi.fn();
+    render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={onProjectChange} />);
+    fireEvent.click(screen.getByRole('button', { name: /lançar pagamento/i }));
+
+    const amount = screen.getByLabelText('Valor do pagamento');
+    expect(amount).toHaveAttribute('placeholder', expect.stringMatching(/saldo contratual.*R\$\s*100,00/i));
+    expect(screen.getByRole('button', { name: 'Confirmar' })).toBeDisabled();
+    fireEvent.change(amount, { target: { value: '40' } });
+    fireEvent.change(screen.getByLabelText('Observação do pagamento'), { target: { value: 'Adiantamento da etapa' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }));
+
+    const nextContract = (onProjectChange.mock.calls[0][0] as Project).subcontracts?.[0];
+    expect(nextContract?.payments).toMatchObject([{ amount: 40, notes: 'Adiantamento da etapa', allocations: [{ allocationId: 'allocation-a', amount: 40 }] }]);
+    expect(nextContract?.contractedValue).toBe(100);
+  });
+
+  it('bloqueia pagamentos com valor zero, negativo ou acima do saldo contratual', () => {
+    render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /lançar pagamento/i }));
+
+    const amount = screen.getByLabelText('Valor do pagamento');
+    for (const value of ['0', '-1', '100,01']) {
+      fireEvent.change(amount, { target: { value } });
+      expect(screen.getByRole('button', { name: 'Confirmar' })).toBeDisabled();
+    }
+  });
+
   it('mantém a observação aberta ao digitar espaço e preserva o atalho no cabeçalho', () => {
     render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
     const toggle = screen.getByRole('button', { name: /alternar itens contratados do pacote pacote a/i });
