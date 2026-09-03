@@ -4,6 +4,7 @@ import { getTeamDefinition, DEFAULT_TEAMS, TeamCode, TeamDefinition } from '@/li
 import GerenciarEquipes from './GerenciarEquipes';
 import { Settings2 } from 'lucide-react';
 import { getAllTasks } from '@/data/sampleProject';
+import { flattenTaskTree, mapTaskTree, replaceProjectTasksById, updateProjectTask } from '@/lib/taskTree';
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { ChevronDown, ChevronRight, AlertTriangle, Flag, Pencil, CalendarClock } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -17,6 +18,7 @@ import ConfiguracaoObra, { ObraConfig, loadObraConfig } from './ConfiguracaoObra
 import { DAY_WIDTH, ROW_HEIGHT, FlatTask } from './gantt/types';
 import { addDays, diffDays, formatDateFull, formatDateShort, getEndDate, getWorkEndDate, MONTH_NAMES_PT, dateToISO, toISODateLocal, parseISODateLocal, countWorkDays } from './gantt/utils';
 import { getFeriadosMap, FeriadoInfo, calcularDiasUteis, isDiaUtil } from '@/lib/feriados';
+import { operationalEndDate } from '@/lib/scheduleCalendar';
 import {
   calculateRupDuration,
   propagateAllDependencies,
@@ -369,7 +371,7 @@ export default function GanttChart({
     teamFilter,
   ]);
   const getVisiblePhaseTasks = useCallback((phase: typeof project.phases[0]) => (
-    sortTasksForSchedule(phase.tasks).filter(task => visibleTaskIds.has(task.id))
+    sortTasksForSchedule(flattenTaskTree(phase.tasks)).filter(task => visibleTaskIds.has(task.id))
   ), [visibleTaskIds]);
   const criticalCount = useMemo(
     () => tasks.filter(task => task.isCritical && visibleTaskIds.has(task.id) && !isStatusOnlyTask(task.id)).length,
@@ -452,23 +454,26 @@ export default function GanttChart({
   const getEffectiveChapterTasks = useCallback((phase: typeof project.phases[0]) => {
     return getChapterTasks(project, phase.id).filter(task => visibleTaskIds.has(task.id) && !isStatusOnlyTask(task.id));
   }, [isStatusOnlyTask, project, visibleTaskIds]);
+  const operationalTaskEnd = useCallback((task: Task) => parseISODateLocal(
+    operationalEndDate(task.startDate, task.duration, obraConfig),
+  ), [obraConfig]);
 
   // Chapter business days
   const getChapterDiasUteis = useCallback((phase: typeof project.phases[0]) => {
     const items = getEffectiveChapterTasks(phase);
     if (items.length === 0) return { dias: 0, horas: 0 };
     const starts = items.map(t => parseISODateLocal(t.startDate).getTime());
-    const ends = items.map(t => addDays(parseISODateLocal(t.startDate), Math.max(0, t.duration - 1)).getTime());
+    const ends = items.map(t => operationalTaskEnd(t).getTime());
     const inicio = new Date(Math.min(...starts));
     const fim = new Date(Math.max(...ends));
     return calcularDiasUteis(inicio, fim, obraConfig.uf, obraConfig.municipio, obraConfig.trabalhaSabado, obraConfig.jornadaDiaria);
-  }, [obraConfig, getEffectiveChapterTasks]);
+  }, [obraConfig, getEffectiveChapterTasks, operationalTaskEnd]);
 
   const getPhaseRange = (phase: typeof project.phases[0]) => {
     const items = getEffectiveChapterTasks(phase);
     if (items.length === 0) return { start: '', end: '' };
     const starts = items.map(t => parseISODateLocal(t.startDate).getTime());
-    const ends = items.map(t => addDays(parseISODateLocal(t.startDate), Math.max(0, t.duration - 1)).getTime());
+    const ends = items.map(t => operationalTaskEnd(t).getTime());
     return {
       start: dateToISO(new Date(Math.min(...starts))),
       end: dateToISO(new Date(Math.max(...ends))),
@@ -491,7 +496,7 @@ export default function GanttChart({
     const map = new Map<string, number>();
     let num = 0;
     project.phases.forEach(phase => {
-      sortTasksForSchedule(phase.tasks).forEach(task => {
+      sortTasksForSchedule(flattenTaskTree(phase.tasks)).forEach(task => {
         if (!visibleTaskIds.has(task.id)) return;
         num++;
         map.set(task.id, num);
@@ -672,7 +677,7 @@ export default function GanttChart({
 
   const getBarStyle = (task: Task) => {
     const start = diffDays(projectStart, parseISODateLocal(task.startDate));
-    const endISO = getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado);
+    const endISO = getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado, obraConfig);
     const endOffset = diffDays(projectStart, parseISODateLocal(endISO));
     const width = (endOffset - start + 1) * dayWidth;
     const isDelayed = addDays(parseISODateLocal(task.startDate), Math.max(0, task.duration - 1)) < today && task.percentComplete < 100;
@@ -702,13 +707,7 @@ export default function GanttChart({
 
   const updateTask = useCallback((taskId: string, updates: Partial<Task>) => {
     if (!onProjectChange) return;
-    const newProject = {
-      ...project,
-      phases: project.phases.map(phase => ({
-        ...phase,
-        tasks: phase.tasks.map(t => t.id === taskId ? { ...t, ...updates } : t),
-      })),
-    };
+    const newProject = updateProjectTask(project, taskId, task => ({ ...task, ...updates }));
     onProjectChange(newProject);
   }, [project, onProjectChange]);
 
@@ -763,13 +762,7 @@ export default function GanttChart({
     }
 
     if (!onProjectChange) return;
-    const updatedProject: Project = {
-      ...project,
-      phases: project.phases.map(phase => ({
-        ...phase,
-        tasks: phase.tasks.map(t => t.id === taskId ? { ...t, ...updates } : t),
-      })),
-    };
+    const updatedProject = updateProjectTask(project, taskId, task => ({ ...task, ...updates }));
     commitWithDependencyPropagation(updatedProject, taskId);
   };
 
@@ -782,21 +775,9 @@ export default function GanttChart({
     const newDuration = Math.max(1, parsed);
     if (newDuration === task.duration) return;
     // Sempre força modo manual ao editar a duração diretamente
-    const updatedProject: Project = {
-      ...project,
-      phases: project.phases.map(phase => ({
-        ...phase,
-        tasks: phase.tasks.map(item => item.id === taskId
-          ? {
-              ...item,
-              duration: newDuration,
-              durationMode: 'manual',
-              isManual: true,
-              manualDuration: newDuration,
-            }
-          : item),
-      })),
-    };
+    const updatedProject = updateProjectTask(project, taskId, item => ({
+      ...item, duration: newDuration, durationMode: 'manual', isManual: true, manualDuration: newDuration,
+    }));
     commitWithDependencyPropagation(updatedProject, taskId);
   };
   const handleBaselineDateChange = (taskId: string, field: 'start' | 'end', date: Date | undefined) => {
@@ -874,7 +855,7 @@ export default function GanttChart({
         if (p.id !== phaseId) return p;
         return {
           ...p,
-          tasks: p.tasks.map(t => {
+          tasks: mapTaskTree(p.tasks, t => {
             const tStart = parseISODateLocal(t.startDate);
             const offsetFromOldStart = diffDays(oldStart, tStart);
             const newTaskStart = addDays(newStart, Math.round(offsetFromOldStart * ratio));
@@ -898,15 +879,7 @@ export default function GanttChart({
       ? recalculateTaskAndSuccessors(allTasks, taskId, obraConfig)
       : propagateAllDependencies(allTasks, taskId, obraConfig);
     const updatedById = new Map(result.tasks.map(task => [task.id, task]));
-    const nextProject = result.changed
-      ? {
-          ...projectToCommit,
-          phases: projectToCommit.phases.map(phase => ({
-            ...phase,
-            tasks: phase.tasks.map(task => updatedById.get(task.id) ?? task),
-          })),
-        }
-      : projectToCommit;
+    const nextProject = result.changed ? replaceProjectTasksById(projectToCommit, updatedById) : projectToCommit;
 
     onProjectChange(nextProject);
     if (result.changed) {
@@ -1046,28 +1019,16 @@ export default function GanttChart({
                 onClick: () => {
                   const newDetails = (task.dependencyDetails || []).filter(d => d.taskId !== violation.predId);
                   const newDeps = newDetails.map(d => d.taskId);
-                  const updatedProject = {
-                    ...project,
-                    phases: project.phases.map(phase => ({
-                      ...phase,
-                      tasks: phase.tasks.map(t => t.id === taskId
-                        ? { ...t, startDate: newStartISO, dependencies: newDeps, dependencyDetails: newDetails }
-                        : t),
-                    })),
-                  };
+                  const updatedProject = updateProjectTask(project, taskId, task => ({
+                    ...task, startDate: newStartISO, dependencies: newDeps, dependencyDetails: newDetails,
+                  }));
                   onProjectChange?.(updatedProject);
                   toast.info('Dependência removida e tarefa movida');
                 },
               },
             });
           } else {
-            const updatedProject = {
-              ...project,
-              phases: project.phases.map(phase => ({
-                ...phase,
-                tasks: phase.tasks.map(t => t.id === taskId ? { ...t, startDate: newStartISO } : t),
-              })),
-            };
+            const updatedProject = updateProjectTask(project, taskId, task => ({ ...task, startDate: newStartISO }));
             commitWithDependencyPropagation(updatedProject, taskId);
           }
         }
@@ -1136,15 +1097,9 @@ export default function GanttChart({
       if (ignored > 0) toast.warning('Depend\u00eancias inv\u00e1lidas, duplicadas ou c\u00edclicas foram ignoradas.');
       return;
     }
-    const updatedProject = {
-      ...project,
-      phases: project.phases.map(phase => ({
-        ...phase,
-        tasks: phase.tasks.map(t => t.id === taskId
-          ? { ...t, dependencies: deps.map(d => d.taskId), dependencyDetails: deps }
-          : t),
-        })),
-    };
+    const updatedProject = updateProjectTask(project, taskId, task => ({
+      ...task, dependencies: deps.map(d => d.taskId), dependencyDetails: deps,
+    }));
     commitWithDependencyPropagation(updatedProject, taskId, true);
     if (ignored > 0) toast.warning('Depend\u00eancias inv\u00e1lidas, duplicadas ou c\u00edclicas foram ignoradas.');
   };
@@ -1177,15 +1132,9 @@ export default function GanttChart({
     const details = [...(task.dependencyDetails || [])];
     if (depIndex < details.length) {
       details[depIndex] = { ...details[depIndex], type: newType };
-      const updatedProject = {
-        ...project,
-        phases: project.phases.map(phase => ({
-          ...phase,
-          tasks: phase.tasks.map(t => t.id === taskId
-            ? { ...t, dependencies: details.map(d => d.taskId), dependencyDetails: details }
-            : t),
-        })),
-      };
+      const updatedProject = updateProjectTask(project, taskId, task => ({
+        ...task, dependencies: details.map(d => d.taskId), dependencyDetails: details,
+      }));
       commitWithDependencyPropagation(updatedProject, taskId, true);
     }
   };
@@ -1266,27 +1215,15 @@ export default function GanttChart({
       updates.bottleneckRole = bottleneckRole;
       updates.calculatedDuration = duration;
     }
-    const updatedProject: Project = {
-      ...project,
-      phases: project.phases.map(phase => ({
-        ...phase,
-        tasks: phase.tasks.map(item => item.id === taskId ? { ...item, ...updates } : item),
-      })),
-    };
+    const updatedProject = updateProjectTask(project, taskId, item => ({ ...item, ...updates }));
     commitWithDependencyPropagation(updatedProject, taskId);
   };
 
   const handleManualDurationChange = (taskId: string, value: number) => {
     if (value < 1 || isTaskScheduleLocked(taskId)) return;
-    const updatedProject = {
-      ...project,
-      phases: project.phases.map(phase => ({
-        ...phase,
-        tasks: phase.tasks.map(t => t.id === taskId
-          ? { ...t, duration: value, durationMode: 'manual' as const, isManual: true, manualDuration: value }
-          : t),
-      })),
-    };
+    const updatedProject = updateProjectTask(project, taskId, task => ({
+      ...task, duration: value, durationMode: 'manual' as const, isManual: true, manualDuration: value,
+    }));
     commitWithDependencyPropagation(updatedProject, taskId);
   };
 
@@ -1350,13 +1287,7 @@ export default function GanttChart({
             const newStart = addDays(parseISODateLocal(task.startDate), daysDelta);
             updates = { startDate: dateToISO(newStart), duration: newDuration, durationMode: 'manual', isManual: true, manualDuration: newDuration };
           }
-          const updatedProject = {
-            ...project,
-            phases: project.phases.map(phase => ({
-              ...phase,
-              tasks: phase.tasks.map(t => t.id === taskId ? { ...t, ...updates } : t),
-            })),
-          };
+          const updatedProject = updateProjectTask(project, taskId, task => ({ ...task, ...updates }));
           commitWithDependencyPropagation(updatedProject, taskId);
         }
       }
@@ -1390,7 +1321,7 @@ export default function GanttChart({
     const items = getVisiblePhaseTasks(phase).filter(task => !isStatusOnlyTask(task.id));
     if (items.length === 0) return null;
     const starts = items.map(t => parseISODateLocal(t.startDate).getTime());
-    const ends = items.map(t => addDays(parseISODateLocal(t.startDate), t.duration).getTime());
+    const ends = items.map(t => operationalTaskEnd(t).getTime());
     const minStart = new Date(Math.min(...starts));
     const maxEnd = new Date(Math.max(...ends));
     const left = diffDays(projectStart, minStart) * dayWidth;
@@ -2159,7 +2090,7 @@ export default function GanttChart({
                         .map((task, idx) => {
                           const suspension = suspensionMap[task.id];
                           const statusOnly = isStatusOnlyTask(task.id);
-                          const endDate = getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado);
+                          const endDate = getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado, obraConfig);
                           const taskNum = taskNumbering.get(task.id) || 0;
                           const violations = statusOnly ? [] : getViolations(task);
                           const hasViolation = violations.length > 0;
@@ -2575,7 +2506,7 @@ export default function GanttChart({
                                 {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : depTypes.length > 0 ? <select aria-label={`Tipo de dependência da tarefa #${taskNum}`} data-testid={`gantt-dependency-types-${task.id}`} value={depTypes.length === 1 ? `${depTypes[0].index}:${depTypes[0].type}` : '__multiple__'} onChange={(event) => { const [depIndex, dependencyType] = event.target.value.split(':'); if (dependencyType) handleDepTypeChange(task.id, Number(depIndex), dependencyType as DependencyType); }} disabled={readOnly || scheduleLocked || !onProjectChange} className="h-5 w-full border-0 border-b border-border/50 bg-transparent px-0.5 text-center text-[9px] focus:outline-none focus:border-primary disabled:cursor-default" style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined} title={depTypes.map(dep => `#${dep.num} ${dep.type}`).join(', ')}>{depTypes.length > 1 && <option value="__multiple__" disabled>{depTypes.map(dep => dep.type).join('/')}</option>}{depTypes.map(dep => depTypes.length === 1 ? (['TI', 'II', 'TT', 'IT'] as DependencyType[]).map(type => <option key={type} value={`${dep.index}:${type}`}>{type}</option>) : <optgroup key={dep.taskId} label={`Tarefa #${dep.num}`}>{(['TI', 'II', 'TT', 'IT'] as DependencyType[]).map(type => <option key={type} value={`${dep.index}:${type}`}>{type}</option>)}</optgroup>)}</select> : <span className={`text-[9px] ${rowTeamDef ? 'opacity-60' : 'text-muted-foreground'}`}>—</span>}
                               </div>
                               <div className="text-center">
-                                {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : <Select value={task.team || '_none'} disabled={readOnly || scheduleLocked || !onProjectChange} onValueChange={(val) => { const newTeam = val === '_none' ? undefined : val as TeamCode; onProjectChange?.({ ...project, phases: project.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(item => item.id === task.id ? { ...item, team: newTeam } : item) })) }); }}><SelectTrigger className="h-5 min-h-0 px-1 py-0 text-[9px] border-border/50 bg-transparent" style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="_none" className="text-[10px]">—</SelectItem>{projectTeams.map(def => <SelectItem key={def.code} value={def.code} className="text-[10px]"><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block flex-shrink-0" style={{ background: def.bgColor, border: `1px solid ${def.borderColor}` }} />{def.label}</span></SelectItem>)}</SelectContent></Select>}
+                                {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : <Select value={task.team || '_none'} disabled={readOnly || scheduleLocked || !onProjectChange} onValueChange={(val) => { const newTeam = val === '_none' ? undefined : val as TeamCode; onProjectChange?.(updateProjectTask(project, task.id, item => ({ ...item, team: newTeam }))); }}><SelectTrigger className="h-5 min-h-0 px-1 py-0 text-[9px] border-border/50 bg-transparent" style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="_none" className="text-[10px]">—</SelectItem>{projectTeams.map(def => <SelectItem key={def.code} value={def.code} className="text-[10px]"><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block flex-shrink-0" style={{ background: def.bgColor, border: `1px solid ${def.borderColor}` }} />{def.label}</span></SelectItem>)}</SelectContent></Select>}
                               </div>
                             </div>
                           );
@@ -2920,7 +2851,7 @@ export default function GanttChart({
                                     ? `${suspension.label} | ${suspension.reason}`
                                     : scheduleLocked
                                       ? `Planejada pelo aditivo: ${scheduleLockSource}. Edite no Cronograma do Aditivo.`
-                                      : `${formatDateFull(task.startDate)} → ${formatDateFull(getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado))} | ${task.duration}d - Arraste para mover`}
+                                      : `${formatDateFull(task.startDate)} → ${formatDateFull(getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado, obraConfig))} | ${task.duration}d - Arraste para mover`}
                                   style={{
                                     left: barLeft,
                                     width: barWidth,

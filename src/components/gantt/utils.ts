@@ -77,8 +77,10 @@ export function formatDateShort(d: string) {
 export function getWorkEndDate(
   startDateISO: string,
   duration: number,
-  trabalhaSabado: boolean = false
+  trabalhaSabado: boolean = false,
+  calendar?: Pick<ScheduleCalendar, 'uf' | 'municipio'>,
 ): string {
+  if (calendar) return operationalEndDate(startDateISO, duration, { ...calendar, trabalhaSabado });
   const start = parseISODateLocal(startDateISO);
   if (duration <= 1) return toISODateLocal(start);
   let end = addWorkDays(start, duration - 1, trabalhaSabado);
@@ -132,3 +134,4 @@ export const MONTH_NAMES_PT: Record<number, string> = {
   4: 'Maio', 5: 'Junho', 6: 'Julho', 7: 'Agosto',
   8: 'Setembro', 9: 'Outubro', 10: 'Novembro', 11: 'Dezembro',
 };
+import { operationalEndDate, type ScheduleCalendar } from '@/lib/scheduleCalendar';

@@ -4,37 +4,17 @@ import { logToProject } from '@/lib/audit';
 import { getAllTasks } from '@/data/sampleProject';
 import { propagateAllDependencies } from '@/lib/calculations';
 import type { ObraConfig } from '@/components/ConfiguracaoObra';
-import { isDiaUtil } from '@/lib/feriados';
 import { syncPendingAdditiveSchedulePlans } from '@/lib/additiveSchedule';
+import { operationalDelayDuration, operationalEndDate, nextOperationalDate } from '@/lib/scheduleCalendar';
+import { replaceProjectTasksById } from '@/lib/taskTree';
 
 function id(prefix: string): string {
   return `${prefix}-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 }
 
-function parseDate(value: string): Date {
-  const [year, month, day] = value.slice(0, 10).split('-').map(Number);
-  return new Date(year, month - 1, day);
-}
-
-function iso(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
 /** Calcula o fim usando o mesmo calendário operacional da obra, inclusive sábado meio período. */
 export function rescheduleEndDate(startDate: string, duration: number, config: ObraConfig): string {
-  let date = parseDate(startDate);
-  let remaining = Math.max(0.5, Number(duration) || 1);
-  let safety = 0;
-  while (safety++ < 10_000) {
-    const key = iso(date);
-    if (isDiaUtil(date, config.uf, config.municipio, config.trabalhaSabado)) {
-      const capacity = date.getDay() === 6 ? 0.5 : 1;
-      remaining -= capacity;
-      if (remaining <= 0) return key;
-    }
-    date.setDate(date.getDate() + 1);
-  }
-  return startDate;
+  return operationalEndDate(startDate, duration, config);
 }
 
 function positiveExecuted(task: Task): number {
@@ -42,23 +22,8 @@ function positiveExecuted(task: Task): number {
 }
 
 /** Dias úteis perdidos entre a programação atual e a data escolhida para retomada. */
-function rescheduleDelayDuration(currentStartDate: string, proposedStartDate: string, config: ObraConfig): number {
-  if (proposedStartDate <= currentStartDate) return 0;
-  const date = parseDate(currentStartDate);
-  let delay = 0;
-  let safety = 0;
-  while (safety++ < 10_000) {
-    date.setDate(date.getDate() + 1);
-    const key = iso(date);
-    if (key > proposedStartDate) return delay;
-    if (isDiaUtil(date, config.uf, config.municipio, config.trabalhaSabado)) {
-      delay += date.getDay() === 6 ? 0.5 : 1;
-    }
-  }
-  return delay;
-}
-
 export function reschedulePreview(task: Task, proposedStartDate: string, config: ObraConfig) {
+  const effectiveStartDate = nextOperationalDate(proposedStartDate, config);
   const executed = positiveExecuted(task);
   const totalQuantity = Math.max(0, Number(task.quantity) || 0);
   const baselineDuration = task.baseline?.duration ?? task.originalDuration ?? task.duration;
@@ -69,7 +34,7 @@ export function reschedulePreview(task: Task, proposedStartDate: string, config:
   const baseDuration = scope === 'whole_task'
     ? Math.max(1, task.duration)
     : Math.max(1, Math.ceil(remainingQuantity / Math.max(plannedDaily, 0.0001)));
-  const delayDuration = rescheduleDelayDuration(task.startDate, proposedStartDate, config);
+  const delayDuration = operationalDelayDuration(task.startDate, effectiveStartDate, config);
   // A nova programação conserva o escopo pendente e incorpora todos os dias
   // úteis perdidos até a data escolhida pelo usuário.
   const duration = baseDuration + delayDuration;
@@ -79,7 +44,8 @@ export function reschedulePreview(task: Task, proposedStartDate: string, config:
     quantity: scope === 'whole_task' ? totalQuantity : remainingQuantity,
     duration,
     delayDuration,
-    endDate: rescheduleEndDate(proposedStartDate, duration, config),
+    startDate: effectiveStartDate,
+    endDate: rescheduleEndDate(effectiveStartDate, duration, config),
   };
 }
 
@@ -95,7 +61,7 @@ export function createRescheduleRequest(
     id: id('reschedule'),
     taskId: task.id,
     scope: preview.scope,
-    proposedStartDate,
+    proposedStartDate: preview.startDate,
     proposedDuration: preview.duration,
     proposedQuantity: preview.quantity,
     proposedEndDate: preview.endDate,
@@ -108,13 +74,8 @@ export function createRescheduleRequest(
 }
 
 function withTask(project: Project, taskId: string, update: (task: Task) => Task): Project {
-  return {
-    ...project,
-    phases: project.phases.map(phase => ({
-      ...phase,
-      tasks: phase.tasks.map(task => task.id === taskId ? update(task) : task),
-    })),
-  };
+  const task = getAllTasks(project).find(item => item.id === taskId);
+  return task ? replaceProjectTasksById(project, new Map([[taskId, update(task)]])) : project;
 }
 
 export function submitRescheduleRequest(project: Project, request: TaskRescheduleRequest, actor: AuditUserInfo): Project {
@@ -174,7 +135,7 @@ export function approveRescheduleRequest(project: Project, requestId: string, co
         taskIdsToSync.add(task.id);
       }
     });
-    next = { ...next, phases: next.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => byId.get(task.id) ?? task) })) };
+    next = replaceProjectTasksById(next, byId);
   }
   next = syncPendingAdditiveSchedulePlans(next, taskIdsToSync);
   next = { ...next, rescheduleRequests: (next.rescheduleRequests ?? []).map(item => item.id === requestId ? { ...item, status: 'approved', decidedAt: approvedAt, decidedBy: actor.userName || actor.userEmail } : item) };

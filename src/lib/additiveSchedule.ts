@@ -21,6 +21,7 @@ import {
   type JornadaConfig,
   type WorkCalendar,
 } from '@/lib/calculations';
+import { flattenTaskTree, mapTaskTree, replaceProjectTasksById } from '@/lib/taskTree';
 
 export const ADDITIVE_SCHEDULE_REFERENCE = 'Termo de Retomada Parcial - SEI nº 74863858';
 export const ADDITIVE_SCHEDULE_WARNING = 'PLANEJAMENTO PRELIMINAR - NÃO AUTORIZA EXECUÇÃO';
@@ -70,7 +71,7 @@ export interface AdditiveScheduleQuantityTaskMeta {
 
 const taskIdForComposition = (additiveId: string, compositionId: string) => `add-${additiveId}-${compositionId}`;
 
-const allPhaseTasks = (project: Project) => project.phases.flatMap(phase => phase.tasks);
+const allPhaseTasks = (project: Project) => project.phases.flatMap(phase => flattenTaskTree(phase.tasks));
 
 const findTask = (project: Project, taskId: string | undefined) => (
   taskId ? allPhaseTasks(project).find(task => task.id === taskId) : undefined
@@ -124,7 +125,7 @@ export function buildOperationalProjectFromPendingAdditives(project: Project): P
     ...project,
     phases: project.phases.map(phase => ({
       ...phase,
-      tasks: phase.tasks.map(task => {
+      tasks: mapTaskTree(phase.tasks, task => {
         const plan = plans.get(task.id);
         if (!plan) return task;
         return {
@@ -728,7 +729,7 @@ export function mergeAdditiveSchedulePreviewChanges(
     };
   });
   const existingPlans = new Map((draft.contractedTaskPlans ?? []).map(plan => [plan.taskId, plan]));
-  const contractedTaskPlans = project.phases.flatMap(phase => phase.tasks).flatMap(baseTask => {
+  const contractedTaskPlans = allPhaseTasks(project).flatMap(baseTask => {
     if (plannedIds.has(baseTask.id)) return [];
     const next = nextTasks.get(baseTask.id);
     if (!next) return [];
@@ -812,16 +813,10 @@ export function releaseAdditiveScheduleDependencyForTask(
     .map(dependency => dependency.taskId));
   if (!blockingPredecessorIds.size) return project;
 
-  const nextPreview: Project = {
-    ...preview,
-    phases: preview.phases.map(phase => ({
-      ...phase,
-      tasks: phase.tasks.map(item => item.id !== taskId ? item : (() => {
-        const nextDetails = details.filter(dependency => !blockingPredecessorIds.has(dependency.taskId));
-        return { ...item, dependencies: nextDetails.map(dependency => dependency.taskId), dependencyDetails: nextDetails };
-      })()),
-    })),
-  };
+  const nextDetails = details.filter(dependency => !blockingPredecessorIds.has(dependency.taskId));
+  const nextPreview = replaceProjectTasksById(preview, new Map([[taskId, {
+    ...task, dependencies: nextDetails.map(dependency => dependency.taskId), dependencyDetails: nextDetails,
+  }]]));
   const settledPreview = settleAllDependencies(nextPreview, dependencyCalendar(jornadaConfig));
   return mergeAdditiveSchedulePreviewChanges(project, additiveId, preview, settledPreview);
 }

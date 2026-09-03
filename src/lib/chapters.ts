@@ -1,5 +1,6 @@
 import { Phase, Project, Task, DependencyType } from '@/types/project';
 import { checkDependencyViolation } from '@/lib/calculations';
+import { flattenTaskTree } from '@/lib/taskTree';
 
 /**
  * Hierarquia de capítulos
@@ -276,10 +277,18 @@ function isDescendant(project: Project, candidateId: string, ancestorId: string)
 
 /** Coleta todas as tarefas de um capítulo (incluindo seus subcapítulos). */
 export function getChapterTasks(project: Project, chapterId: string): Task[] {
-  const direct = project.phases.find(p => p.id === chapterId)?.tasks ?? [];
-  const subs = project.phases.filter(p => p.parentId === chapterId);
-  const subTasks = subs.flatMap(s => s.tasks);
-  return [...direct, ...subTasks];
+  const phaseById = new Map(project.phases.map(phase => [phase.id, phase]));
+  const descendants = new Set<string>([chapterId]);
+  const queue = [chapterId];
+  while (queue.length) {
+    const current = queue.shift()!;
+    project.phases.filter(phase => phase.parentId === current).forEach(phase => {
+      if (descendants.has(phase.id)) return;
+      descendants.add(phase.id);
+      queue.push(phase.id);
+    });
+  }
+  return Array.from(descendants).flatMap(id => flattenTaskTree(phaseById.get(id)?.tasks ?? []));
 }
 
 /** Numeração hierárquica recursiva: "1", "1.1", "1.1.1", "2", ... */

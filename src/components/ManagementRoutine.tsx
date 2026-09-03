@@ -24,6 +24,7 @@ import {
 } from '@/lib/weeklyRoutine';
 import { buildPendingAdditiveSuspensionMap, isStatusOnlySuspension } from '@/lib/additiveSchedule';
 import { getAllTasks } from '@/data/sampleProject';
+import { updateProjectTask } from '@/lib/taskTree';
 import { loadObraConfig } from '@/components/ConfiguracaoObra';
 import { applyDailyProductionLogs, upsertDailyProductionLog } from '@/lib/dailyProductionLogs';
 import TaskRescheduleDialog from '@/components/TaskRescheduleDialog';
@@ -372,16 +373,9 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
     [obraCalendar, pendingAdditiveTaskIds, project, selectedWeekStart],
   );
   const registerActivityProduction = (activity: WeeklyRoutineActivity, actualQuantity: number) => {
-    onProjectChange(previous => ({
-      ...previous,
-      phases: previous.phases.map(phase => ({
-        ...phase,
-        tasks: phase.tasks.map(task => {
-          if (task.id !== activity.taskId) return task;
-          const logs = upsertDailyProductionLog(task, activity.date, actualQuantity);
-          return { ...task, ...applyDailyProductionLogs(task, logs) };
-        }),
-      })),
+    onProjectChange(previous => updateProjectTask(previous, activity.taskId, task => {
+      const logs = upsertDailyProductionLog(task, activity.date, actualQuantity);
+      return { ...task, ...applyDailyProductionLogs(task, logs) };
     }));
   };
 

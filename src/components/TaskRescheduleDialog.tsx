@@ -70,9 +70,10 @@ export default function TaskRescheduleDialog({ open, onOpenChange, project, task
         <div className="space-y-2">
           <Label htmlFor="reschedule-date">{preview?.scope === 'remaining_work' ? 'Retomada do saldo' : 'Novo início'}</Label>
           <Input id="reschedule-date" type="date" value={date} onChange={event => setDate(event.target.value)} disabled={!canRequest} />
+          {preview && preview.startDate !== date && <p className="text-xs text-muted-foreground">Sem expediente nesta data: a atividade será iniciada em {preview.startDate.split('-').reverse().join('/')}.</p>}
         </div>
         {preview && <div className="rounded-md border border-primary/20 bg-primary/5 p-3 text-sm">
-          <strong>Prévia:</strong> {preview.scope === 'remaining_work' ? 'saldo restante' : 'atividade completa'} de {preview.quantity} {task.unit ?? ''}, {preview.duration} dia(s) úteis, término em <strong>{preview.endDate}</strong>. Acréscimo de {preview.delayDuration.toLocaleString('pt-BR')} dia(s) útil(eis) conforme a nova data escolhida.
+          <strong>Prévia:</strong> início em {preview.startDate.split('-').reverse().join('/')}, {preview.scope === 'remaining_work' ? 'saldo restante' : 'atividade completa'} de {preview.quantity} {task.unit ?? ''}, {preview.duration} dia(s) úteis, término em <strong>{preview.endDate}</strong>. Acréscimo de {preview.delayDuration.toLocaleString('pt-BR')} dia(s) útil(eis) conforme a nova data escolhida.
         </div>}
         <div className="space-y-2">
           <Label htmlFor="reschedule-reason">Motivo</Label>

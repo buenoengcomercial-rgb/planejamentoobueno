@@ -17,6 +17,7 @@ import { lazyWithReload } from '@/lib/lazyWithReload';
 import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
 import { userInfoFromSupabaseUser } from '@/lib/audit';
 import { buildOperationalProjectFromPendingAdditives, getPendingAdditiveScheduleControls } from '@/lib/additiveSchedule';
+import { mergeOperationalProjectIntoRaw } from '@/lib/operationalProject';
 
 // Lazy load: cada aba só baixa seu bundle quando aberta pela primeira vez.
 // Usa lazyWithReload para recuperar automaticamente de chunks obsoletos após deploy.
@@ -945,20 +946,19 @@ export default function Index() {
   const realCostSetter = useMemo(() => makeViewSetter('realCost'), [makeViewSetter]);
   const materialsSetter = useMemo(() => makeViewSetter('materials'), [makeViewSetter]);
   const warehouseSetter = useMemo(() => makeViewSetter('warehouse'), [makeViewSetter]);
-  const operationalGanttSetter = useCallback((nextOperational: Project) => {
-    ganttSetter(previous => {
-      const controls = getPendingAdditiveScheduleControls(previous);
-      const nextTasks = new Map(nextOperational.phases.flatMap(phase => phase.tasks).map(task => [task.id, task]));
-      return {
-        ...previous,
-        uiState: nextOperational.uiState,
-        phases: previous.phases.map(phase => ({
-          ...phase,
-          tasks: phase.tasks.map(task => controls.has(task.id) ? task : (nextTasks.get(task.id) ?? task)),
-        })),
-      };
+  const makeOperationalSetter = useCallback((baseSetter: (next: Project | ((previous: Project) => Project)) => void) => (
+    next: Project | ((previous: Project) => Project),
+  ) => {
+    baseSetter(previous => {
+      const operational = buildOperationalProjectFromPendingAdditives(previous);
+      const nextOperational = typeof next === 'function'
+        ? (next as (project: Project) => Project)(operational)
+        : next;
+      return mergeOperationalProjectIntoRaw(previous, nextOperational);
     });
-  }, [ganttSetter]);
+  }, []);
+  const operationalGanttSetter = useMemo(() => makeOperationalSetter(ganttSetter), [ganttSetter, makeOperationalSetter]);
+  const operationalManagementSetter = useMemo(() => makeOperationalSetter(managementSetter), [makeOperationalSetter, managementSetter]);
 
   const commitProjectNow = useCallback(async (next: Project) => {
     if (!user || !orgId || !canPersistProject) throw new Error('Você não tem permissão para salvar esta obra.');
@@ -1262,7 +1262,7 @@ export default function Index() {
         return (
           <ManagementRoutine
             project={operationalProject ?? project}
-            onProjectChange={managementSetter}
+            onProjectChange={operationalManagementSetter}
             onOpenDailyReport={handleOpenDailyReport}
             onOpenProduction={handleOpenProductionActivity}
             readOnly={!editor}

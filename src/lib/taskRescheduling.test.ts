@@ -3,6 +3,8 @@ import type { Project, Task } from '@/types/project';
 import { approveRescheduleRequest, createRescheduleRequest, reschedulePreview, submitRescheduleRequest } from './taskRescheduling';
 import { buildWeeklyRoutine } from './weeklyRoutine';
 import { buildOperationalProjectFromPendingAdditives } from './additiveSchedule';
+import { getWorkEndDate } from '@/components/gantt/utils';
+import { mergeOperationalProjectIntoRaw } from './operationalProject';
 
 const config = { uf: 'SP', municipio: 'São Paulo', jornadaDiaria: 8, trabalhaSabado: false };
 const baseTask: Task = {
@@ -36,6 +38,44 @@ describe('taskRescheduling', () => {
     expect(preview).toMatchObject({ scope: 'remaining_work', quantity: 20, delayDuration: 3, duration: 5, endDate: '2026-09-21' });
   });
 
+  it('normaliza feriado, domingo e sábado sem expediente para o próximo dia útil', () => {
+    const holiday = reschedulePreview(baseTask, '2026-09-07', config); // Independência do Brasil em 2026
+    const sunday = reschedulePreview(baseTask, '2026-09-13', config);
+    const saturday = reschedulePreview(baseTask, '2026-09-12', config);
+
+    expect(holiday).toMatchObject({ startDate: '2026-09-08', endDate: '2026-09-10' });
+    expect(sunday).toMatchObject({ startDate: '2026-09-14', duration: 5, endDate: '2026-09-18' });
+    expect(saturday.startDate).toBe('2026-09-14');
+    expect(getWorkEndDate('2026-09-04', 2, false, config)).toBe('2026-09-08');
+  });
+
+  it('permite antecipação sem acrescentar dias de atraso', () => {
+    const preview = reschedulePreview(baseTask, '2026-09-08', config);
+
+    expect(preview).toMatchObject({ startDate: '2026-09-08', delayDuration: 0, duration: 3, endDate: '2026-09-10' });
+  });
+
+  it('reprograma tarefa filha e persiste a data na hierarquia', () => {
+    const child: Task = { ...baseTask, id: 'child-task', name: 'Subatividade', startDate: '2026-09-10' };
+    const hierarchical: Project = {
+      ...project(),
+      phases: [{
+        ...project().phases[0],
+        tasks: [{ ...baseTask, id: 'parent-task', name: 'Resumo', children: [child] }, {
+          ...baseTask, id: 'successor', startDate: '2026-09-14', dependencies: ['child-task'], name: 'Sucessora',
+        }],
+      }],
+    };
+    const request = createRescheduleRequest(child, '2026-09-15', 'Frente liberada posteriormente', config, { userName: 'Engenheiro' });
+    const approved = approveRescheduleRequest(submitRescheduleRequest(hierarchical, request, { userName: 'Engenheiro' }), request.id, config, { userName: 'Administrador' });
+    const persistedChild = approved.phases[0].tasks[0].children?.[0];
+
+    expect(persistedChild).toMatchObject({ startDate: '2026-09-15', operationalReschedule: { requestId: request.id } });
+    expect(approved.phases[0].tasks[1].startDate).not.toBe('2026-09-14');
+    expect(buildWeeklyRoutine(approved, '2026-09-14', new Set(), config).flatMap(day => day.activities)
+      .some(activity => activity.taskId === 'child-task')).toBe(true);
+  });
+
   it('atualiza o plano pendente do aditivo para a rotina não restaurar as datas antigas', () => {
     const raw = {
       ...project(),
@@ -51,9 +91,12 @@ describe('taskRescheduling', () => {
     const task = operational.phases[0].tasks[0];
     const request = createRescheduleRequest(task, '2026-09-15', 'Frente liberada posteriormente', config, { userName: 'Engenheiro' });
     const approved = approveRescheduleRequest(submitRescheduleRequest(operational, request, { userName: 'Engenheiro' }), request.id, config, { userName: 'Administrador' });
+    const persisted = mergeOperationalProjectIntoRaw(raw, approved);
 
     expect(approved.phases[0].tasks[0]).toMatchObject({ startDate: '2026-09-15', duration: 5 });
     expect(approved.additives?.[0].scheduleDraft?.contractedTaskPlans?.[0]).toMatchObject({ startDate: '2026-09-15', duration: 5 });
-    expect(buildOperationalProjectFromPendingAdditives(approved).phases[0].tasks[0]).toMatchObject({ startDate: '2026-09-15', duration: 5 });
+    expect(persisted.phases[0].tasks[0]).toMatchObject({ startDate: '2026-09-10', duration: 3 });
+    expect(persisted.rescheduleRequests?.find(item => item.id === request.id)?.status).toBe('approved');
+    expect(buildOperationalProjectFromPendingAdditives(persisted).phases[0].tasks[0]).toMatchObject({ startDate: '2026-09-15', duration: 5 });
   });
 });

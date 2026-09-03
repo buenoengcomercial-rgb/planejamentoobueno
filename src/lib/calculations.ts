@@ -1,5 +1,6 @@
 import { Task, Project, DependencyType, TaskBaseline } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
+import { mapTaskTree, replaceProjectTasksById } from '@/lib/taskTree';
 import { parseISODateLocal, toISODateLocal } from '@/components/gantt/utils';
 import { isDiaUtil, getFeriadosMap } from '@/lib/feriados';
 
@@ -13,7 +14,7 @@ export interface WorkCalendar {
 
 /** Próximo dia útil ≥ `date` respeitando feriados, domingos e sábados conforme config. */
 export function nextWorkDay(date: Date, cal?: WorkCalendar): Date {
-  let d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   if (!cal) {
     // Legado: pula apenas domingo.
     while (d.getDay() === 0) d.setDate(d.getDate() + 1);
@@ -30,7 +31,7 @@ export function nextWorkDay(date: Date, cal?: WorkCalendar): Date {
 /** Soma N dias úteis a partir de `start` (inclusivo). N=1 retorna o próprio start (após ajuste). */
 function addWorkDaysCal(start: Date, days: number, cal?: WorkCalendar): Date {
   // Posiciona no primeiro dia útil ≥ start
-  let current = nextWorkDay(start, cal);
+  const current = nextWorkDay(start, cal);
   let remaining = days - 1;
   // Sábado conta como meio dia quando habilitado
   let safety = 0;
@@ -127,7 +128,7 @@ export function applyRupToProject(project: Project): Project {
     ...project,
     phases: project.phases.map(p => ({
       ...p,
-      tasks: p.tasks.map(t => {
+      tasks: mapTaskTree(p.tasks, t => {
         // Respect manual override — don't overwrite duration
         if (t.isManual) {
           return t;
@@ -148,7 +149,7 @@ export function captureBaseline(project: Project): Project {
     ...project,
     phases: project.phases.map(p => ({
       ...p,
-      tasks: p.tasks.map(t => {
+      tasks: mapTaskTree(p.tasks, t => {
         if (t.baseline) return t;
         const isRup = (t.durationMode || 'manual') === 'rup';
         const baseDuration = isRup
@@ -180,7 +181,7 @@ export function syncBaselineWithRup(project: Project): Project {
     ...project,
     phases: project.phases.map(p => ({
       ...p,
-      tasks: p.tasks.map(t => {
+      tasks: mapTaskTree(p.tasks, t => {
         if (!t.baseline) return t;
         const isRup = (t.durationMode || 'manual') === 'rup';
         if (!isRup) return t;
@@ -214,7 +215,7 @@ export function applyDailyLogsToProject(project: Project): Project {
     ...project,
     phases: project.phases.map(p => ({
       ...p,
-      tasks: p.tasks.map(t => {
+      tasks: mapTaskTree(p.tasks, t => {
         const logs = t.dailyLogs || [];
 
         // Build "current" mirror of baseline by default
@@ -391,13 +392,7 @@ export function calculateCPM(project: Project): Project {
   allTasks.forEach(t => backwardPass(t.id));
 
   // Write back
-  return {
-    ...project,
-    phases: project.phases.map(p => ({
-      ...p,
-      tasks: p.tasks.map(t => taskMap.get(t.id)!),
-    })),
-  };
+  return replaceProjectTasksById(project, taskMap);
 }
 
 /** Generate real Curva S data based on task weights and progress */
@@ -500,7 +495,7 @@ function dependencyDetailsFor(task: Task) {
 }
 
 function previousWorkStartForEnd(endDate: Date, duration: number, cal?: WorkCalendar): Date {
-  let current = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+  const current = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
   let remaining = Math.max(1, Math.ceil(duration)) - 1;
   let safety = 0;
 
@@ -717,13 +712,7 @@ export function settleAllDependencies(project: Project, cal?: WorkCalendar): Pro
   }
 
   const byId = new Map(allTasks.map(t => [t.id, t]));
-  return {
-    ...project,
-    phases: project.phases.map(p => ({
-      ...p,
-      tasks: p.tasks.map(t => byId.get(t.id) || t),
-    })),
-  };
+  return replaceProjectTasksById(project, byId);
 }
 
 /**

@@ -10,7 +10,7 @@ import type {
 import { getAllTasks } from '@/data/sampleProject';
 import { isDailyReportEmpty, pickLatestDailyReport } from '@/lib/dailyReportSummary';
 import { getChapterNumbering } from '@/lib/chapters';
-import { isDiaUtil } from '@/lib/feriados';
+import { operationalEndDate, parseScheduleDate, scheduleDateISO, scheduleWorkdayWeight } from '@/lib/scheduleCalendar';
 
 const DAY_MS = 86_400_000;
 
@@ -27,12 +27,11 @@ const DEFAULT_CALENDAR: WeeklyRoutineCalendar = {
 };
 
 export function parseISODate(value: string): Date {
-  const [year, month, day] = value.slice(0, 10).split('-').map(Number);
-  return new Date(year, (month || 1) - 1, day || 1);
+  return parseScheduleDate(value);
 }
 
 export function toISODate(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  return scheduleDateISO(date);
 }
 
 export function todayISO(): string {
@@ -53,12 +52,11 @@ export function addDaysISO(value: string, days: number): string {
 }
 
 function isWorkingDate(date: string, calendar: WeeklyRoutineCalendar): boolean {
-  return isDiaUtil(parseISODate(date), calendar.uf, calendar.municipio, calendar.trabalhaSabado);
+  return scheduleWorkdayWeight(parseISODate(date), calendar) > 0;
 }
 
 function workDayWeight(date: string, calendar: WeeklyRoutineCalendar): number {
-  if (!isWorkingDate(date, calendar)) return 0;
-  return parseISODate(date).getDay() === 6 ? 0.5 : 1;
+  return scheduleWorkdayWeight(parseISODate(date), calendar);
 }
 
 function workingSchedule(task: Task, calendar: WeeklyRoutineCalendar): Map<string, number> {
@@ -91,7 +89,7 @@ export function taskSchedule(
   const dates = [...workDays.keys()];
   return {
     startDate: dates[0] ?? task.startDate,
-    endDate: dates.at(-1) ?? task.startDate,
+    endDate: dates.at(-1) ?? operationalEndDate(task.startDate, task.duration, calendar),
     workDays,
   };
 }

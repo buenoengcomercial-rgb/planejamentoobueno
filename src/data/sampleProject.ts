@@ -1,4 +1,5 @@
 import { Project } from '@/types/project';
+import { flattenTaskTree } from '@/lib/taskTree';
 
 export const sampleProject: Project = {
   id: 'proj-001',
@@ -159,7 +160,7 @@ export const sampleProject: Project = {
 };
 
 export const getAllTasks = (project: Project) => {
-  return project.phases.flatMap(p => p.tasks);
+  return flattenTaskTree(project.phases.flatMap(p => p.tasks));
 };
 
 export const getTaskById = (project: Project, id: string) => {
