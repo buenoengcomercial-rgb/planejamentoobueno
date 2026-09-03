@@ -73,6 +73,26 @@ describe('WarehouseRequisitionsTab', () => {
     expect(screen.queryByRole('columnheader', { name: 'Equipe' })).not.toBeInTheDocument();
   });
 
+  it('destaca em azul a requisição aberta e seu detalhe associado', () => {
+    const project = projectWithMaterials(1);
+    project.warehouse!.requisitions = [{
+      id: 'req-highlight', number: 'REQ-2026-0010', date: '2026-08-18', status: 'entregue', chapterId: 'chapter-1',
+      receiverName: 'João', requesterName: 'João', signatureReceiver: 'assinatura', createdAt: '2026-08-18T10:00:00.000Z',
+      items: [{ itemKey: 'material-0', code: 'MAT-000', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
+    }];
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0010/i }));
+
+    expect(screen.getByTestId('withdrawal-history-row')).toHaveClass('bg-primary/20');
+    expect(screen.getAllByTestId('withdrawal-history-details')[0]).toHaveClass('bg-primary/5');
+    expect(screen.getAllByTestId('withdrawal-history-details')[1]).toHaveClass('bg-primary/10');
+    expect(screen.getByTestId('withdrawal-history-row').querySelector('svg')).toHaveClass('text-primary');
+
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0010/i }));
+    expect(screen.queryByTestId('withdrawal-history-details')).not.toBeInTheDocument();
+  });
+
   it('mostra a correção de retirada somente quando recebe permissão de Proprietário', () => {
     const project = projectWithMaterials(1);
     project.warehouse!.requisitions = [{
