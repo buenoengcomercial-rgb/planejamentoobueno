@@ -93,10 +93,10 @@ describe('WarehouseRequisitionsTab', () => {
     expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0010/i }));
 
-    expect(screen.getByTestId('withdrawal-history-row')).toHaveClass('bg-primary/30');
-    expect(screen.getAllByTestId('withdrawal-history-details')[0]).toHaveClass('bg-primary/10');
-    expect(screen.getAllByTestId('withdrawal-history-details')[1]).toHaveClass('bg-primary/10');
-    expect(screen.getByTestId('withdrawal-history-row').querySelector('svg')).toHaveClass('text-primary');
+    expect(screen.getByTestId('withdrawal-history-row')).toHaveClass('bg-success/20');
+    expect(screen.getAllByTestId('withdrawal-history-details')[0]).toHaveClass('bg-success/5');
+    expect(screen.getAllByTestId('withdrawal-history-details')[1]).toHaveClass('bg-success/5');
+    expect(screen.getByTestId('withdrawal-history-row').querySelector('svg')).toHaveClass('text-success');
 
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0010/i }));
     expect(screen.queryByTestId('withdrawal-history-details')).not.toBeInTheDocument();
@@ -124,7 +124,9 @@ describe('WarehouseRequisitionsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0001/i }));
     const desktopDetail = screen.getAllByTestId('withdrawal-history-details').find(element => element.tagName === 'TR')!;
     expect(rows[0].nextElementSibling).toBe(desktopDetail);
-    expect(desktopDetail).toHaveClass('bg-primary/10');
+    expect(desktopDetail).toHaveClass('bg-success/5');
+    expect(desktopDetail.querySelector('td')).toHaveClass('pl-8');
+    expect(desktopDetail.querySelector('td > div')).toHaveClass('border-l-success/70');
     expect(rows[1].previousElementSibling).toBe(desktopDetail);
   });
 
@@ -179,7 +181,7 @@ describe('WarehouseRequisitionsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0002/i }));
 
     expect(screen.getAllByTestId('withdrawal-history-row')).toHaveLength(2);
-    expect(screen.getAllByTestId('withdrawal-history-row').every(row => row.classList.contains('bg-primary/30'))).toBe(true);
+    expect(screen.getAllByTestId('withdrawal-history-row').every(row => row.classList.contains('bg-success/20'))).toBe(true);
     expect(screen.getAllByTestId('withdrawal-history-details')).toHaveLength(4);
   });
 
