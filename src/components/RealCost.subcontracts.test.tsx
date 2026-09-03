@@ -152,6 +152,24 @@ describe('SubcontractsTab', () => {
     expect(screen.getByLabelText('Observação do pagamento')).toHaveAttribute('placeholder', expect.stringMatching(/descreva o serviço/i));
   });
 
+  it('mantém a observação aberta ao digitar espaço e preserva o atalho no cabeçalho', () => {
+    render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
+    const toggle = screen.getByRole('button', { name: /alternar itens contratados do pacote pacote a/i });
+
+    fireEvent.click(screen.getByRole('button', { name: /lançar pagamento/i }));
+    const notes = screen.getByLabelText('Observação do pagamento');
+    fireEvent.change(notes, { target: { value: 'Etapa de serviço' } });
+    fireEvent.keyDown(notes, { key: ' ', code: 'Space' });
+
+    expect(notes).toHaveValue('Etapa de serviço');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.keyDown(toggle, { key: ' ', code: 'Space' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(toggle, { key: 'Enter', code: 'Enter' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
   it('altera atividades, recalcula o rateio atual e registra o motivo da revisão', () => {
     const onProjectChange = vi.fn();
     render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={onProjectChange} />);
