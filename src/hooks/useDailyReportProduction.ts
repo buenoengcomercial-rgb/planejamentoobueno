@@ -11,7 +11,7 @@ export function collectProductionForDate(project: Project, dateISO: string): Pro
 
   const visit = (node: ChapterNode, parent?: ChapterNode) => {
     const phase = node.phase;
-    (phase.tasks || []).forEach(task => {
+    const visitTask = (task: Project['phases'][number]['tasks'][number]) => {
       (task.dailyLogs || []).forEach(log => {
         if (log.date !== dateISO) return;
         // O Diário é o registro do que foi efetivamente executado. Planejamento
@@ -35,7 +35,9 @@ export function collectProductionForDate(project: Project, dateISO: string): Pro
           teamCode: task.team,
         });
       });
-    });
+      task.children?.forEach(visitTask);
+    };
+    (phase.tasks || []).forEach(visitTask);
     node.children.forEach(child => visit(child, node));
   };
 

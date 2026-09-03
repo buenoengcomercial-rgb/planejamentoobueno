@@ -25,4 +25,22 @@ describe('collectProductionForDate', () => {
     expect(production).toHaveLength(1);
     expect(production[0]).toMatchObject({ taskId: 'task-executed', taskCode: '1.1.1', actualQuantity: 0.03 });
   });
+
+  it('inclui tarefas-filhas apontadas pela Rotina no Diário de Obra', () => {
+    const project = {
+      phases: [{
+        id: 'chapter-1', name: 'Incêndio', order: 0,
+        tasks: [{
+          id: 'summary-task', name: 'Resumo', children: [{
+            id: 'detector', contractItem: '2.3.1', name: 'Detector de fumaça', unit: 'un',
+            dailyLogs: [{ date: '2026-09-02', actualQuantity: 4 }],
+          }],
+        }],
+      }],
+    } as unknown as Project;
+
+    expect(collectProductionForDate(project, '2026-09-02')).toMatchObject([
+      { taskId: 'detector', taskCode: '2.3.1', taskName: 'Detector de fumaça', actualQuantity: 4 },
+    ]);
+  });
 });

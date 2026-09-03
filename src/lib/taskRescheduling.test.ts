@@ -5,6 +5,7 @@ import { buildWeeklyRoutine } from './weeklyRoutine';
 import { buildOperationalProjectFromPendingAdditives } from './additiveSchedule';
 import { getWorkEndDate } from '@/components/gantt/utils';
 import { mergeOperationalProjectIntoRaw } from './operationalProject';
+import { applyDailyProductionLogs, upsertDailyProductionLog } from './dailyProductionLogs';
 
 const config = { uf: 'SP', municipio: 'São Paulo', jornadaDiaria: 8, trabalhaSabado: false };
 const baseTask: Task = {
@@ -98,5 +99,35 @@ describe('taskRescheduling', () => {
     expect(persisted.phases[0].tasks[0]).toMatchObject({ startDate: '2026-09-10', duration: 3 });
     expect(persisted.rescheduleRequests?.find(item => item.id === request.id)?.status).toBe('approved');
     expect(buildOperationalProjectFromPendingAdditives(persisted).phases[0].tasks[0]).toMatchObject({ startDate: '2026-09-15', duration: 5 });
+  });
+
+  it('preserva a produção de tarefa controlada por aditivo pendente ao voltar da Rotina', () => {
+    const raw = {
+      ...project(),
+      additives: [{
+        id: 'add-1', name: 'Aditivo pendente', importedAt: '2026-09-01T00:00:00.000Z', status: 'aprovado', compositions: [],
+        scheduleDraft: {
+          version: 1, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z', dependentTaskIds: [], plannedTasks: [],
+          contractedTaskPlans: [{ taskId: 'task-1', startDate: '2026-09-15', duration: 3, dependencies: [], responsible: '', durationMode: 'manual', isManual: true, manualDuration: 3 }],
+        },
+      }],
+    } as Project;
+    const operational = buildOperationalProjectFromPendingAdditives(raw);
+    const recorded = {
+      ...operational,
+      phases: [{
+        ...operational.phases[0],
+        tasks: operational.phases[0].tasks.map(task => task.id === 'task-1' ? {
+          ...task,
+          ...applyDailyProductionLogs(task, upsertDailyProductionLog(task, '2026-09-15', 4)),
+        } : task),
+      }],
+    };
+
+    const persisted = mergeOperationalProjectIntoRaw(raw, recorded);
+    const saved = persisted.phases[0].tasks[0];
+    expect(saved).toMatchObject({ startDate: '2026-09-10', duration: 3, executedQuantityTotal: 4, physicalProgress: 13.333333333333334, percentComplete: 13 });
+    expect(saved.dailyLogs).toMatchObject([{ date: '2026-09-15', actualQuantity: 4 }]);
+    expect(buildOperationalProjectFromPendingAdditives(persisted).phases[0].tasks[0]).toMatchObject({ startDate: '2026-09-15', duration: 3, executedQuantityTotal: 4, percentComplete: 13 });
   });
 });
