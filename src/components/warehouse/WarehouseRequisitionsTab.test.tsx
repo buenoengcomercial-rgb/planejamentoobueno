@@ -106,7 +106,10 @@ describe('WarehouseRequisitionsTab', () => {
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit />);
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0009/i }));
-    expect(screen.getAllByRole('button', { name: /Corrigir retirada/i }).length).toBeGreaterThan(0);
+    const correctionButtons = screen.getAllByRole('button', { name: /Corrigir retirada/i });
+    expect(correctionButtons.length).toBeGreaterThan(0);
+    fireEvent.click(correctionButtons[0]);
+    expect(screen.getByLabelText('Prédio ou destino corrigido')).toHaveValue('chapter-1');
   });
 
   it('prioriza a devolução registrada mais recentemente e mostra data e hora do registro', () => {

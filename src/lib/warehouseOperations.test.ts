@@ -103,19 +103,26 @@ describe('operação integrada do almoxarifado', () => {
   });
 
   it('corrige retirada sem devolução, recalcula saldo, Diário e auditoria', () => {
-    const delivered = createAndDeliverRequisition(withStock(), {
+    const stocked = withStock();
+    stocked.phases.push({ id: 'chapter-2', name: 'Prédio 2', color: '#000', tasks: [] });
+    const delivered = createAndDeliverRequisition(stocked, {
       date: '2026-08-17', chapterId: 'chapter-1', chapterName: '1 Prédio 1', receiverName: 'Equipe Alpha', requesterName: 'Equipe Alpha', signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'corrigir-1',
       items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 4 }],
     }, { actor, publishToDailyReport: true });
     const requisition = delivered.project.warehouse!.requisitions[0];
     const corrected = correctDeliveredRequisition(delivered.project, requisition.id, {
       items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 2 }],
+      chapterId: 'chapter-2',
+      chapterName: '2 Prédio 2',
     }, { userId: 'owner-1', userName: 'Proprietário' });
 
     expect(computeWarehouseRows(corrected, { includeManual: true })[0].balance).toBe(18);
+    expect(corrected.warehouse!.requisitions[0]).toMatchObject({ chapterId: 'chapter-2', chapterName: '2 Prédio 2' });
     expect(corrected.warehouse!.requisitions[0].items[0]).toMatchObject({ quantity: 2, movementId: expect.any(String) });
+    expect(corrected.warehouse!.movements.find(movement => movement.type === 'retirada')).toMatchObject({ chapterId: 'chapter-2' });
     expect(corrected.warehouse!.movements.filter(movement => movement.type === 'retirada')).toHaveLength(1);
     expect(corrected.dailyReports?.[0].observations).toContain('Cimento — 2 SC');
+    expect(corrected.dailyReports?.[0].observations).toContain('2 Prédio 2');
     expect(corrected.auditLogs?.at(-1)).toMatchObject({ entityType: 'warehouse_requisition', action: 'updated', userName: 'Proprietário', before: expect.any(Object), after: expect.any(Object) });
   });
 

@@ -651,6 +651,8 @@ export function updateRequisition(project: Project, id: string, patch: Partial<W
 
 export interface CorrectWarehouseRequisitionInput {
   items: Array<Pick<WarehouseRequisitionItem, 'itemKey' | 'code' | 'description' | 'unit' | 'quantity'>>;
+  chapterId?: string;
+  chapterName?: string;
 }
 
 /** Corrige uma retirada entregue sem devoluções, preservando uma trilha de auditoria do Proprietário. */
@@ -668,6 +670,12 @@ export function correctDeliveredRequisition(
   const returns = wh.movements.filter(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.requisitionId === requisitionId && !movement.reversedById);
   if (returns.length) throw new Error('Esta retirada possui devolução registrada e não pode ser corrigida.');
   if (!input.items.length) throw new Error('Informe ao menos um material para a retirada.');
+
+  const correctedChapterId = input.chapterId ?? requisition.chapterId;
+  const correctedChapter = correctedChapterId ? p.phases.find(phase => phase.id === correctedChapterId) : undefined;
+  if (!correctedChapter) throw new Error('Selecione um destino válido para a retirada.');
+  const correctedChapterName = input.chapterName?.trim() || correctedChapter.name;
+  const destinationChanged = correctedChapterId !== requisition.chapterId;
 
   const requested = new Map<string, CorrectWarehouseRequisitionInput['items'][number]>();
   for (const item of input.items) {
@@ -706,7 +714,7 @@ export function correctDeliveredRequisition(
       updatedBy: auditActor,
       type: 'retirada', date: requisition.date, itemKey: item.itemKey, itemCode: item.code, itemDescription: item.description, itemUnit: item.unit,
       quantity: item.quantity, unitPrice: unitCostSnapshot, costSnapshot: unitCostSnapshot,
-      requisitionId, originType: 'withdrawal', originId: requisitionId, chapterId: requisition.chapterId, taskId: requisition.taskId,
+      requisitionId, originType: 'withdrawal', originId: requisitionId, chapterId: correctedChapterId, taskId: destinationChanged ? undefined : requisition.taskId,
       teamId: requisition.teamId, workerName: requisition.receiverName || requisition.requesterName, workFront: requisition.workFront,
       responsible: existing?.responsible ?? warehouseActorLegacyValue(actor), user: existing?.user ?? warehouseActorLegacyValue(actor), notes: requisition.notes, attachments: requisition.deliveryAttachments,
     };
@@ -717,7 +725,16 @@ export function correctDeliveredRequisition(
   }
 
   const movements = correctedMovements.filter(movement => movement.requisitionId !== requisitionId || movement.type !== 'retirada' || correctedMovementIds.has(movement.id));
-  const correctedRequisition: WarehouseRequisition = { ...requisition, items: correctedItems, updatedAt: timestamp, updatedBy: auditActor ?? requisition.updatedBy };
+  const correctedRequisition: WarehouseRequisition = {
+    ...requisition,
+    chapterId: correctedChapterId,
+    chapterName: correctedChapterName,
+    taskId: destinationChanged ? undefined : requisition.taskId,
+    taskName: destinationChanged ? undefined : requisition.taskName,
+    items: correctedItems,
+    updatedAt: timestamp,
+    updatedBy: auditActor ?? requisition.updatedBy,
+  };
   const requisitions = wh.requisitions.map(entry => entry.id === requisitionId ? correctedRequisition : entry);
   let next = setWh(p, { requisitions, movements });
   if (requisition.publishedToDailyReportId) {
@@ -736,7 +753,7 @@ export function correctDeliveredRequisition(
   }
   return logToProject(next, {
     entityType: 'warehouse_requisition', entityId: requisitionId, action: 'updated',
-    title: `Retirada ${requisition.number} corrigida`, description: 'Materiais e quantidades corrigidos pelo Proprietário.',
+    title: `Retirada ${requisition.number} corrigida`, description: 'Materiais, quantidades e destino corrigidos pelo Proprietário.',
     before: { requisition, movements: originalMovements }, after: { requisition: correctedRequisition, movements: movements.filter(movement => movement.requisitionId === requisitionId && movement.type === 'retirada') },
     userId: auditActor?.userId, userName: auditActor?.userName, userEmail: auditActor?.userEmail,
   });

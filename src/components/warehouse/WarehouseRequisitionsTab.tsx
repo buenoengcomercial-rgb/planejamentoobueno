@@ -417,9 +417,15 @@ function WithdrawalDetails({ project, requisition, canDelete, canEdit, onDelete,
 
 function CorrectionDialog({ project, requisition, auditActor, onProjectChange, onClose }: { project: Project; requisition: WarehouseRequisition | null; auditActor?: WarehouseAuditActor; onProjectChange: (project: Project) => void; onClose: () => void }) {
   const [items, setItems] = useState<WarehouseRequisitionItem[]>([]);
+  const [chapterId, setChapterId] = useState('');
   const [saving, setSaving] = useState(false);
   const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
-  useEffect(() => { setItems(requisition?.items.map(item => ({ ...item })) ?? []); }, [requisition]);
+  const numbering = useMemo(() => getChapterNumbering(project), [project]);
+  const chapters = useMemo(() => flattenPhasesByChapter(project).map(phase => ({
+    id: phase.id,
+    name: chapterPathLabel(project, phase.id, `${numbering.get(phase.id) ?? phase.customNumber ?? ''} ${phase.name}`.trim()),
+  })), [numbering, project]);
+  useEffect(() => { setItems(requisition?.items.map(item => ({ ...item })) ?? []); setChapterId(requisition?.chapterId ?? ''); }, [requisition]);
   const update = (index: number, itemKey: string) => {
     const row = rows.find(candidate => candidate.key === itemKey);
     if (!row) return;
@@ -427,14 +433,16 @@ function CorrectionDialog({ project, requisition, auditActor, onProjectChange, o
   };
   const save = () => {
     if (!requisition) return;
+    const chapter = chapters.find(candidate => candidate.id === chapterId);
+    if (!chapter) return toast.error('Selecione o prédio / destino da retirada.');
     try {
       setSaving(true);
-      onProjectChange(correctDeliveredRequisition(project, requisition.id, { items }, auditActor));
+      onProjectChange(correctDeliveredRequisition(project, requisition.id, { items, chapterId: chapter.id, chapterName: chapter.name }, auditActor));
       toast.success('Retirada corrigida, estoque recalculado e histórico auditado.');
       onClose();
     } catch (error) { toast.error((error as Error).message); } finally { setSaving(false); }
   };
-  return <Dialog open={!!requisition} onOpenChange={open => !open && !saving && onClose()}><DialogContent className="max-h-[90dvh] max-w-3xl overflow-y-auto p-4 sm:p-6"><DialogHeader><DialogTitle>Corrigir retirada</DialogTitle><DialogDescription>Somente o Proprietário pode alterar materiais e quantidades. A correção atualiza estoque, Diário de Obra e trilha de auditoria.</DialogDescription></DialogHeader><div className="space-y-3">{items.map((item, index) => <div key={`${item.itemKey}-${index}`} className="grid gap-2 rounded-lg border p-3 sm:grid-cols-[1fr_130px_44px]"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={item.itemKey} onChange={event => update(index, event.target.value)} aria-label={`Material corrigido ${index + 1}`}><option value="">Selecione o material</option>{rows.map(row => <option key={row.key} value={row.key}>{row.code ? `${row.code} · ` : ''}{row.description} · saldo {row.balance.toLocaleString('pt-BR')} {row.unit}</option>)}</select><Input className="min-h-11 text-base" type="number" min="0" step="any" value={item.quantity} onChange={event => setItems(current => current.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry))} aria-label={`Quantidade corrigida de ${item.description}`} /><Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" disabled={items.length === 1} onClick={() => setItems(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover ${item.description}`}><Trash2 className="h-4 w-4" /></Button></div>)}<Button type="button" variant="outline" className="min-h-11" onClick={() => setItems(current => [...current, { itemKey: '', description: '', unit: '', quantity: 1 }])}><Plus className="mr-2 h-4 w-4" />Adicionar material</Button></div><DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" className="min-h-11" disabled={saving} onClick={onClose}>Cancelar</Button><Button className="min-h-11" disabled={saving} onClick={save}><Check className="mr-2 h-4 w-4" />{saving ? 'Corrigindo...' : 'Salvar correção'}</Button></DialogFooter></DialogContent></Dialog>;
+  return <Dialog open={!!requisition} onOpenChange={open => !open && !saving && onClose()}><DialogContent className="max-h-[90dvh] max-w-3xl overflow-y-auto p-4 sm:p-6"><DialogHeader><DialogTitle>Corrigir retirada</DialogTitle><DialogDescription>Somente o Proprietário pode alterar destino, materiais e quantidades. A correção atualiza estoque, Diário de Obra e trilha de auditoria.</DialogDescription></DialogHeader><div className="space-y-3"><WarehouseField label="Prédio / destino"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={chapterId} onChange={event => setChapterId(event.target.value)} aria-label="Prédio ou destino corrigido"><option value="">Selecione</option>{chapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapter.name}</option>)}</select></WarehouseField>{items.map((item, index) => <div key={`${item.itemKey}-${index}`} className="grid gap-2 rounded-lg border p-3 sm:grid-cols-[1fr_130px_44px]"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={item.itemKey} onChange={event => update(index, event.target.value)} aria-label={`Material corrigido ${index + 1}`}><option value="">Selecione o material</option>{rows.map(row => <option key={row.key} value={row.key}>{row.code ? `${row.code} · ` : ''}{row.description} · saldo {row.balance.toLocaleString('pt-BR')} {row.unit}</option>)}</select><Input className="min-h-11 text-base" type="number" min="0" step="any" value={item.quantity} onChange={event => setItems(current => current.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry))} aria-label={`Quantidade corrigida de ${item.description}`} /><Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" disabled={items.length === 1} onClick={() => setItems(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover ${item.description}`}><Trash2 className="h-4 w-4" /></Button></div>)}<Button type="button" variant="outline" className="min-h-11" onClick={() => setItems(current => [...current, { itemKey: '', description: '', unit: '', quantity: 1 }])}><Plus className="mr-2 h-4 w-4" />Adicionar material</Button></div><DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" className="min-h-11" disabled={saving} onClick={onClose}>Cancelar</Button><Button className="min-h-11" disabled={saving} onClick={save}><Check className="mr-2 h-4 w-4" />{saving ? 'Corrigindo...' : 'Salvar correção'}</Button></DialogFooter></DialogContent></Dialog>;
 }
 
 function MaterialReturnDialog({ project, requisition, auditActor, onProjectChange, onClose }: {
