@@ -169,6 +169,44 @@ describe('SubcontractsTab', () => {
     expect(nextContract?.contractedValue).toBe(100);
   });
 
+  it('edita data, observação e valor do pagamento sem alterar o rateio congelado', () => {
+    const project = projectWithContract();
+    project.subcontracts![0] = {
+      ...project.subcontracts![0],
+      payments: [{
+        id: 'payment-a', date: '2026-08-22', amount: 40, notes: 'Adiantamento inicial', createdAt: '2026-08-22T10:00:00Z',
+        allocations: [{ allocationId: 'allocation-a', amount: 40 }],
+      }],
+    };
+    const onProjectChange = vi.fn();
+    render(<SubcontractsTab project={project} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={onProjectChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /editar/i }));
+    fireEvent.change(screen.getByLabelText('Data do pagamento'), { target: { value: '2026-08-25' } });
+    fireEvent.change(screen.getByLabelText('Valor editado do pagamento'), { target: { value: '55' } });
+    fireEvent.change(screen.getByLabelText('Observação editada do pagamento'), { target: { value: 'Etapa revisada' } });
+    fireEvent.click(screen.getByRole('button', { name: /salvar alteração/i }));
+
+    const payment = (onProjectChange.mock.calls[0][0] as Project).subcontracts?.[0].payments[0];
+    expect(payment).toMatchObject({ date: '2026-08-25', amount: 55, notes: 'Etapa revisada', allocations: [{ allocationId: 'allocation-a', amount: 55 }] });
+  });
+
+  it('bloqueia a edição de pagamento acima do saldo contratual disponível', () => {
+    const project = projectWithContract();
+    project.subcontracts![0] = {
+      ...project.subcontracts![0],
+      payments: [
+        { id: 'payment-a', date: '2026-08-22', amount: 40, createdAt: '2026-08-22T10:00:00Z' },
+        { id: 'payment-b', date: '2026-08-23', amount: 30, createdAt: '2026-08-23T10:00:00Z' },
+      ],
+    };
+    render(<SubcontractsTab project={project} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
+
+    fireEvent.click(screen.getAllByRole('button', { name: /editar/i })[0]);
+    fireEvent.change(screen.getByLabelText('Valor editado do pagamento'), { target: { value: '71' } });
+    expect(screen.getByRole('button', { name: /salvar alteração/i })).toBeDisabled();
+  });
+
   it('bloqueia pagamentos com valor zero, negativo ou acima do saldo contratual', () => {
     render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: /lançar pagamento/i }));

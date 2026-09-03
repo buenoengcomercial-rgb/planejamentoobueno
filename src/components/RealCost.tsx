@@ -14,6 +14,7 @@ import {
   Plus,
   ReceiptText,
   History,
+  Pencil,
   Undo2,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
@@ -151,6 +152,24 @@ function fmtQty(value: number) {
 
 function roundMoney(value: number) {
   return Math.round(((Number(value) || 0) + Number.EPSILON) * 100) / 100;
+}
+
+function reallocateEditedPayment(payment: Subcontract['payments'][number], contract: Subcontract, amount: number) {
+  const originalAllocations = payment.allocations?.length
+    ? payment.allocations
+    : allocateSubcontractValue(payment.amount, contract.items).map(item => ({ allocationId: item.id, amount: item.allocatedAmount }));
+  const originalTotal = originalAllocations.reduce((sum, allocation) => sum + allocation.amount, 0);
+  if (originalTotal <= 0) {
+    return allocateSubcontractValue(amount, contract.items).map(item => ({ allocationId: item.id, amount: item.allocatedAmount }));
+  }
+  let allocated = 0;
+  return originalAllocations.map((allocation, index) => {
+    const nextAmount = index === originalAllocations.length - 1
+      ? roundMoney(amount - allocated)
+      : roundMoney(amount * allocation.amount / originalTotal);
+    allocated = roundMoney(allocated + nextAmount);
+    return { allocationId: allocation.allocationId, amount: nextAmount };
+  });
 }
 
 function computeVisibleTotals(rows: RealCostCompositionRow[], children: RealCostGroupNode[]): RealCostGroupTotals {
@@ -492,6 +511,10 @@ export function SubcontractsTab({ project, analysis, canManage, canDeleteHistory
   const [paymentFor, setPaymentFor] = useState<string | null>(null);
   const [paymentValue, setPaymentValue] = useState('');
   const [paymentNotes, setPaymentNotes] = useState('');
+  const [editingPayment, setEditingPayment] = useState<{ contractId: string; paymentId: string } | null>(null);
+  const [editingPaymentDate, setEditingPaymentDate] = useState('');
+  const [editingPaymentValue, setEditingPaymentValue] = useState('');
+  const [editingPaymentNotes, setEditingPaymentNotes] = useState('');
   const [simulationDrafts, setSimulationDrafts] = useState<Record<string, string>>({});
   const editingContract = (project.subcontracts ?? []).find(contract => contract.id === editingContractId);
   const compositionById = useMemo(() => new Map(analysis.compositions.map(row => [row.id, row])), [analysis.compositions]);
@@ -602,6 +625,12 @@ export function SubcontractsTab({ project, analysis, canManage, canDeleteHistory
     setShowForm(false); setEditingContractId(null); setAmendmentReason(''); setName(''); setContractor(''); setValue(''); setSelected([]);
   };
   const updateContract = (contract: Subcontract, next: Subcontract, action: 'updated' | 'deleted' | 'contracted', title: string) => persist({ ...project, subcontracts: (project.subcontracts ?? []).map(c => c.id === contract.id ? next : c) }, action, next, title);
+  const beginPaymentEdit = (contract: Subcontract, payment: Subcontract['payments'][number]) => {
+    setEditingPayment({ contractId: contract.id, paymentId: payment.id });
+    setEditingPaymentDate(payment.date);
+    setEditingPaymentValue(String(payment.amount));
+    setEditingPaymentNotes(payment.notes ?? '');
+  };
   const simulationQuantity = (allocation: Subcontract['items'][number], maximum: number) => {
     const draft = simulationDrafts[allocation.id];
     const quantity = draft === undefined ? allocation.simulatedExecutedQuantity ?? 0 : Number(draft);
@@ -700,6 +729,15 @@ export function SubcontractsTab({ project, analysis, canManage, canDeleteHistory
       const payableByProduction = roundMoney(Math.max(0, Math.min(balance, producedValue - paid)));
       const paymentAmount = Number(paymentValue.replace(',', '.')) || 0;
       const isPaymentAmountValid = paymentAmount > 0 && paymentAmount <= balance;
+      const paymentBeingEdited = editingPayment?.contractId === contract.id
+        ? contract.payments.find(payment => payment.id === editingPayment.paymentId)
+        : undefined;
+      const otherPaidAmount = paymentBeingEdited
+        ? roundMoney(contract.payments.filter(payment => payment.id !== paymentBeingEdited.id && !payment.reversedAt).reduce((sum, payment) => sum + payment.amount, 0))
+        : 0;
+      const editPaymentAmount = Number(editingPaymentValue.replace(',', '.')) || 0;
+      const editPaymentLimit = roundMoney(contract.contractedValue - otherPaidAmount);
+      const isEditedPaymentValid = Boolean(paymentBeingEdited && editingPaymentDate && editPaymentAmount > 0 && editPaymentAmount <= editPaymentLimit);
       return <Card key={contract.id} className="overflow-hidden">
         <div className="cursor-pointer border-b bg-muted/30 p-3 transition-colors hover:bg-muted/50" role="button" tabIndex={0} aria-label={`Alternar itens contratados do pacote ${contract.name}`} aria-expanded={itemsExpanded} aria-controls={`subcontract-items-${contract.id}`} onClick={event => { if (!(event.target as HTMLElement).closest('button, input, select, textarea, a')) toggleContractItems(contract.id); }} onKeyDown={event => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleContractItems(contract.id); } }}>
           <div className="flex flex-wrap items-start justify-between gap-2"><div className="min-w-0"><h3 className="font-semibold">{contract.name}<span className="mx-2 text-muted-foreground" aria-hidden="true">·</span><span className="font-medium text-muted-foreground">{contract.contractorName}</span></h3><p className="text-xs text-muted-foreground">{contract.items.length} composição(ões) contratada(s)</p></div><span className="rounded-full border bg-background px-2 py-0.5 text-[10px]">{contract.status === 'contracted' ? 'Contratado' : contract.status === 'cancelled' ? 'Cancelado' : 'Rascunho'}</span></div>
@@ -708,7 +746,12 @@ export function SubcontractsTab({ project, analysis, canManage, canDeleteHistory
           {canManage && contract.status === 'contracted' && <div className="mt-3 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => { setPaymentFor(paymentFor === contract.id ? null : contract.id); setPaymentNotes(''); }}><ReceiptText className="mr-1 h-3 w-3" />Lançar pagamento</Button><Button size="sm" variant="outline" onClick={() => beginAmendment(contract)}>Alterar atividades</Button><Button size="sm" variant="ghost" onClick={() => { const reason = window.prompt('Motivo do cancelamento:'); if (reason) updateContract(contract, { ...contract, status: 'cancelled', cancelledAt: new Date().toISOString(), cancelledBy: auditActor?.userId, cancellationReason: reason, updatedAt: new Date().toISOString() }, 'deleted', 'Contrato terceirizado cancelado'); }}>Cancelar</Button></div>}
           {(contract.amendments?.length ?? 0) > 0 && <div className="mt-3"><Button size="sm" variant="ghost" onClick={event => { event.stopPropagation(); toggleAmendmentHistory(contract.id); }} aria-expanded={expandedAmendmentHistory.has(contract.id)}><History className="mr-1 h-3 w-3" />Histórico de alterações ({contract.amendments?.length})</Button>{expandedAmendmentHistory.has(contract.id) && <div className="mt-2 space-y-2 rounded-md border bg-background/70 p-2 text-xs">{[...(contract.amendments ?? [])].reverse().map(amendment => <div key={amendment.id} className="flex items-start justify-between gap-3 border-b pb-2 last:border-b-0 last:pb-0"><div><p className="font-medium">{amendment.date} · {amendment.reason}</p><p className="text-muted-foreground">Itens: {amendment.previousItems.length} → {amendment.nextItems.length} · Contratado: {fmtBRL(amendment.previousContractedValue)} → {fmtBRL(amendment.nextContractedValue)}</p></div>{canDeleteHistory && <Button size="sm" variant="ghost" className="shrink-0 text-destructive hover:text-destructive" aria-label={`Excluir registro do histórico: ${amendment.reason}`} onClick={event => { event.stopPropagation(); if (window.confirm(`Excluir do histórico a alteração “${amendment.reason}”? Esta ação não desfaz o contrato atual nem pagamentos já lançados.`)) updateContract(contract, { ...contract, amendments: contract.amendments?.filter(entry => entry.id !== amendment.id), updatedAt: new Date().toISOString(), updatedBy: auditActor?.userId }, 'updated', `Registro de histórico removido pelo Proprietário: ${amendment.reason}`); }}>Excluir</Button>}</div>)}</div>}</div>}
           {paymentFor === contract.id && <div className="mt-2 space-y-2 rounded-md border bg-background/70 p-2"><div className="flex flex-col gap-2 sm:flex-row"><Input inputMode="decimal" aria-label="Valor do pagamento" placeholder={`Valor pago (máx. saldo contratual ${fmtBRL(balance)})`} value={paymentValue} onChange={e => setPaymentValue(e.target.value)} /><Button size="sm" disabled={!isPaymentAmountValid} onClick={() => { if (!isPaymentAmountValid) return; const next = { ...contract, payments: [...contract.payments, { id: uid('payment'), date: today(), amount: paymentAmount, notes: paymentNotes.trim() || undefined, allocations: allocateSubcontractValue(paymentAmount, contract.items).map(item => ({ allocationId: item.id, amount: item.allocatedAmount })), createdAt: new Date().toISOString(), createdBy: auditActor?.userId }], updatedAt: new Date().toISOString(), updatedBy: auditActor?.userId }; updateContract(contract, next, 'updated', 'Pagamento de terceirizada lançado'); setPaymentValue(''); setPaymentNotes(''); setPaymentFor(null); }}>Confirmar</Button></div><p className="text-[11px] text-muted-foreground">O pagamento pode ser lançado por adiantamento ou etapa, até o saldo contratual.</p><Textarea aria-label="Observação do pagamento" rows={2} placeholder="Observação do pagamento: descreva o serviço ou a etapa quitada" value={paymentNotes} onChange={event => setPaymentNotes(event.target.value)} /></div>}
-          <div className="mt-2 space-y-1 text-[11px]">{contract.payments.map(payment => <div key={payment.id} className="flex items-start justify-between gap-2 rounded bg-background/70 px-2 py-1"><span>{payment.date} · {fmtBRL(payment.amount)}{payment.reversedAt ? ' · estornado' : ''}{payment.notes && <span className="block text-muted-foreground">{payment.notes}</span>}</span>{canManage && !payment.reversedAt && <button type="button" className="shrink-0 text-primary hover:underline" onClick={() => { const reason = window.prompt('Motivo do estorno:'); if (reason) updateContract(contract, { ...contract, payments: contract.payments.map(p => p.id === payment.id ? { ...p, reversedAt: new Date().toISOString(), reversedBy: auditActor?.userId, reversalReason: reason } : p), updatedAt: new Date().toISOString() }, 'updated', 'Pagamento de terceirizada estornado'); }}><Undo2 className="inline h-3 w-3" /> Estornar</button>}</div>)}</div>
+          <div className="mt-2 space-y-1 text-[11px]">{contract.payments.map(payment => {
+            const isEditing = paymentBeingEdited?.id === payment.id;
+            return <div key={payment.id} className="rounded bg-background/70 px-2 py-1">
+              {isEditing ? <div className="space-y-2"><div className="grid gap-2 sm:grid-cols-3"><Input aria-label="Data do pagamento" type="date" value={editingPaymentDate} onChange={event => setEditingPaymentDate(event.target.value)} /><Input aria-label="Valor editado do pagamento" inputMode="decimal" value={editingPaymentValue} onChange={event => setEditingPaymentValue(event.target.value)} /><Textarea aria-label="Observação editada do pagamento" rows={2} value={editingPaymentNotes} onChange={event => setEditingPaymentNotes(event.target.value)} /></div><div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={() => setEditingPayment(null)}>Cancelar</Button><Button size="sm" disabled={!isEditedPaymentValid} onClick={() => { if (!paymentBeingEdited || !isEditedPaymentValid) return; const amount = editPaymentAmount; updateContract(contract, { ...contract, payments: contract.payments.map(current => current.id === payment.id ? { ...current, date: editingPaymentDate, amount, notes: editingPaymentNotes.trim() || undefined, allocations: reallocateEditedPayment(current, contract, amount) } : current), updatedAt: new Date().toISOString(), updatedBy: auditActor?.userId }, 'updated', 'Pagamento de terceirizada atualizado'); setEditingPayment(null); }}>Salvar alteração</Button><span className="text-muted-foreground">Máx. pelo contrato: {fmtBRL(editPaymentLimit)}</span></div></div> : <div className="flex items-start justify-between gap-2"><span>{payment.date} · {fmtBRL(payment.amount)}{payment.reversedAt ? ' · estornado' : ''}{payment.notes && <span className="block text-muted-foreground">{payment.notes}</span>}</span>{canManage && !payment.reversedAt && <div className="flex shrink-0 gap-2"><button type="button" className="text-primary hover:underline" onClick={() => beginPaymentEdit(contract, payment)}><Pencil className="inline h-3 w-3" /> Editar</button><button type="button" className="text-primary hover:underline" onClick={() => { const reason = window.prompt('Motivo do estorno:'); if (reason) updateContract(contract, { ...contract, payments: contract.payments.map(p => p.id === payment.id ? { ...p, reversedAt: new Date().toISOString(), reversedBy: auditActor?.userId, reversalReason: reason } : p), updatedAt: new Date().toISOString() }, 'updated', 'Pagamento de terceirizada estornado'); }}><Undo2 className="inline h-3 w-3" /> Estornar</button></div>}</div>}
+            </div>;
+          })}</div>
         </div>
           {editingContractId === contract.id && <div className="space-y-3 border-b bg-muted/10 p-3"><div><h4 className="font-semibold">Alterar atividades e rateio</h4><p className="text-xs text-muted-foreground">Este ajuste pertence ao pacote {contract.name}. Os pagamentos já lançados conservam o rateio histórico.</p></div><div className="grid gap-2 md:grid-cols-3"><Input aria-label="Nome do serviço ou pacote" value={name} disabled /><Input aria-label="Empresa ou prestador" value={contractor} disabled /><Input aria-label="Valor contratado" inputMode="decimal" value={value} onChange={e => setValue(e.target.value)} /></div><Textarea aria-label="Motivo da alteração do contrato" rows={2} placeholder="Motivo da alteração: inclusão ou exclusão de atividades, revisão do escopo ou do valor" value={amendmentReason} onChange={event => setAmendmentReason(event.target.value)} />{activityFilterControls}<Input aria-label="Buscar composições" placeholder="Buscar por item, código, capítulo ou descrição" value={query} onChange={e => setQuery(e.target.value)} /><div className="max-h-[26rem] overflow-auto rounded-md border bg-background">{analysis.groupTree.map(renderGroup)}</div><div className="grid gap-2 rounded-md border bg-background/70 p-3 text-xs sm:grid-cols-3"><div><span className="text-muted-foreground">Itens selecionados</span><p className="font-semibold tabular-nums">{selectedRows.length}</p></div><div><span className="text-muted-foreground">M.O. ref. SINAPI</span><p className="font-semibold tabular-nums">{fmtBRL(selectedRows.reduce((sum, row) => sum + row.laborCost, 0))}</p></div><div><span className="text-muted-foreground">Valor para rateio</span><p className="font-semibold tabular-nums">{fmtBRL(Number(value.replace(',', '.')) || 0)}</p></div></div>{preview.length > 0 && <p className="text-xs text-muted-foreground">Prévia do rateio: {preview.map((item, index) => `${selectedRows[index].item} ${fmtBRL(item.allocatedAmount)}`).join(' · ')}</p>}{paid > 0 && <p className="text-xs text-muted-foreground">Já pago: {fmtBRL(paid)}. O novo valor contratado não pode ser menor que esse total.</p>}<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => { setEditingContractId(null); setAmendmentReason(''); }}>Cancelar alteração</Button><Button disabled={!amendmentReason.trim() || selectedRows.length === 0 || Number(value.replace(',', '.')) < paid} onClick={() => applyAmendment(contract)}>Aplicar alteração</Button></div></div>}
         {itemsExpanded && <div id={`subcontract-items-${contract.id}`}>

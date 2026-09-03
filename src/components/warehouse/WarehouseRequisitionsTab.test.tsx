@@ -84,13 +84,29 @@ describe('WarehouseRequisitionsTab', () => {
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0010/i }));
 
-    expect(screen.getByTestId('withdrawal-history-row')).toHaveClass('bg-primary/20');
-    expect(screen.getAllByTestId('withdrawal-history-details')[0]).toHaveClass('bg-primary/5');
-    expect(screen.getAllByTestId('withdrawal-history-details')[1]).toHaveClass('bg-primary/10');
+    expect(screen.getByTestId('withdrawal-history-row')).toHaveClass('bg-primary/30');
+    expect(screen.getAllByTestId('withdrawal-history-details')[0]).toHaveClass('bg-primary/15');
+    expect(screen.getAllByTestId('withdrawal-history-details')[1]).toHaveClass('bg-primary/15');
     expect(screen.getByTestId('withdrawal-history-row').querySelector('svg')).toHaveClass('text-primary');
 
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0010/i }));
     expect(screen.queryByTestId('withdrawal-history-details')).not.toBeInTheDocument();
+  });
+
+  it('mantém destacadas todas as requisições abertas', () => {
+    const project = projectWithMaterials(1);
+    project.warehouse!.requisitions = [
+      { id: 'req-first', number: 'REQ-2026-0001', date: '2026-08-18', status: 'entregue', chapterId: 'chapter-1', receiverName: 'Ana', createdAt: '2026-08-18T10:00:00.000Z', items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }] },
+      { id: 'req-second', number: 'REQ-2026-0002', date: '2026-08-19', status: 'entregue', chapterId: 'chapter-1', receiverName: 'Bia', createdAt: '2026-08-19T10:00:00.000Z', items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 1 }] },
+    ];
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0001/i }));
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0002/i }));
+
+    expect(screen.getAllByTestId('withdrawal-history-row')).toHaveLength(2);
+    expect(screen.getAllByTestId('withdrawal-history-row').every(row => row.classList.contains('bg-primary/30'))).toBe(true);
+    expect(screen.getAllByTestId('withdrawal-history-details')).toHaveLength(4);
   });
 
   it('mostra a correção de retirada somente quando recebe permissão de Proprietário', () => {
