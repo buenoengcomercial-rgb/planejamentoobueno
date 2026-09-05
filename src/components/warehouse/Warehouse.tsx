@@ -11,6 +11,7 @@ import WarehouseEquipmentsTab from './WarehouseEquipmentsTab';
 import WarehouseInventoryTab from './WarehouseInventoryTab';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
 import WarehouseBudgetMaterialsTab from './WarehouseBudgetMaterialsTab';
+import WarehouseWithdrawnMaterialsTab from './WarehouseWithdrawnMaterialsTab';
 import AttachmentOptimizationPanel from './AttachmentOptimizationPanel';
 import GlobalStorageMaintenancePanel from './GlobalStorageMaintenancePanel';
 import './warehouse-visual.css';
@@ -19,6 +20,7 @@ const WAREHOUSE_TABS = [
   { value: 'painel', label: 'Painel', icon: LayoutDashboard },
   { value: 'notas', label: 'Entrada', icon: ReceiptText },
   { value: 'requisicoes', label: 'Retiradas e devoluções', icon: ClipboardList },
+  { value: 'materiais-retirados', label: 'Materiais retirados', icon: ClipboardList },
   { value: 'materiais-orcamento', label: 'Materiais do orçamento', icon: ClipboardCheck },
   { value: 'estoque', label: 'Materiais', icon: Boxes },
   { value: 'equipamentos', label: 'Equipamentos', icon: HardHat },
@@ -118,6 +120,9 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
         </TabsContent>
         <TabsContent value="requisicoes" className="mt-3">
           <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canDelete={canDeleteWarehouseRecords} canEdit={canEditPostedWarehouseRecords} />
+        </TabsContent>
+        <TabsContent value="materiais-retirados" className="mt-3">
+          <WarehouseWithdrawnMaterialsTab project={ensured} />
         </TabsContent>
         <TabsContent value="equipamentos" className="mt-3">
           <WarehouseEquipmentsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} canDelete={canDeleteWarehouseRecords} canManageGroups={canManageEquipmentGroups} canEdit={canArchiveWarehouseRecords} />
