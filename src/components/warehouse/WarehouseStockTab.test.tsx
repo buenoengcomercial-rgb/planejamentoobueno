@@ -59,6 +59,23 @@ function projectWithPlannedMaterials(): Project {
   return project;
 }
 
+function projectWithWithdrawals(): Project {
+  const project = projectWithPurchaseHistory();
+  project.warehouse!.items = [
+    { key: 'material-sem-retirada', description: 'Material sem retirada', unit: 'UN', manualItem: true },
+    { key: 'material-retirado-menor', description: 'Material retirado menor', unit: 'UN', manualItem: true },
+    { key: 'material-retirado-maior', description: 'Material retirado maior', unit: 'UN', manualItem: true },
+  ];
+  project.warehouse!.movements = [
+    { id: 'entrada-a', createdAt: '2026-09-01T10:00:00.000Z', type: 'entrada', date: '2026-09-01', itemKey: 'material-sem-retirada', itemDescription: 'Material sem retirada', itemUnit: 'UN', quantity: 10 },
+    { id: 'entrada-b', createdAt: '2026-09-01T10:00:00.000Z', type: 'entrada', date: '2026-09-01', itemKey: 'material-retirado-menor', itemDescription: 'Material retirado menor', itemUnit: 'UN', quantity: 10 },
+    { id: 'retirada-b', createdAt: '2026-09-02T10:00:00.000Z', type: 'retirada', date: '2026-09-02', itemKey: 'material-retirado-menor', itemDescription: 'Material retirado menor', itemUnit: 'UN', quantity: 2 },
+    { id: 'entrada-c', createdAt: '2026-09-01T10:00:00.000Z', type: 'entrada', date: '2026-09-01', itemKey: 'material-retirado-maior', itemDescription: 'Material retirado maior', itemUnit: 'UN', quantity: 10 },
+    { id: 'retirada-c', createdAt: '2026-09-03T10:00:00.000Z', type: 'retirada', date: '2026-09-03', itemKey: 'material-retirado-maior', itemDescription: 'Material retirado maior', itemUnit: 'UN', quantity: 5 },
+  ];
+  return project;
+}
+
 describe('WarehouseStockTab - documentos no histórico', () => {
   beforeAll(() => {
     vi.stubGlobal('ResizeObserver', class {
@@ -113,6 +130,18 @@ describe('WarehouseStockTab - documentos no histórico', () => {
     expect(columns?.[1]).toHaveClass('w-80');
     expect(columns).toHaveLength(17);
     expect(screen.getByText('Excluir', { selector: 'span' })).toBeInTheDocument();
+  });
+
+  it('prioriza materiais já retirados, pela maior quantidade retirada', () => {
+    const { container } = render(<WarehouseStockTab project={projectWithWithdrawals()} onProjectChange={vi.fn()} />);
+
+    expect(screen.getByText('Retirados primeiro · 3 item(ns)')).toBeInTheDocument();
+    const rows = Array.from(container.querySelectorAll('[data-testid="stock-material-row"]'));
+    expect(rows.map(row => row.textContent)).toEqual([
+      expect.stringContaining('Material retirado maior'),
+      expect.stringContaining('Material retirado menor'),
+      expect.stringContaining('Material sem retirada'),
+    ]);
   });
 
   it('pesquisa insumos previstos pela descrição sem exibir o código', () => {
