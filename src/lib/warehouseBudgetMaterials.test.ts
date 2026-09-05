@@ -19,7 +19,7 @@ describe('warehouseBudgetMaterialsByChapter', () => {
     expect(chapter.rows[0]).toMatchObject({ contractedQuantity: 20, additiveQuantity: 6, totalQuantity: 26, additiveStatuses: ['Em análise'] });
   });
 
-  it('não mostra material totalmente suprimido nem aditivo cancelado', () => {
+  it('mantém a subtração total do material 100% suprimido, sem tratá-lo como planejado', () => {
     const project = {
       phases: [{ id: 'chapter-2', name: 'Hidrantes', color: '#000', tasks: [] }],
       analyticCompositions: [composition('base', 5, 'chapter-2')],
@@ -29,7 +29,9 @@ describe('warehouseBudgetMaterialsByChapter', () => {
       ],
     } as unknown as Project;
 
-    expect(warehouseBudgetMaterialsByChapter(project)).toEqual([]);
+    const [chapter] = warehouseBudgetMaterialsByChapter(project);
+    expect(chapter.rows).toHaveLength(1);
+    expect(chapter.rows[0]).toMatchObject({ totalQuantity: 0, suppressedQuantity: 10, withdrawnQuantity: 0 });
   });
 
   it('unifica contrato e aditivo quando o capítulo tem identificadores internos diferentes', () => {
@@ -43,5 +45,20 @@ describe('warehouseBudgetMaterialsByChapter', () => {
     const [chapter] = warehouseBudgetMaterialsByChapter(project);
     expect(chapter).toMatchObject({ id: 'chapter:2', number: '2', name: 'Incêndio' });
     expect(chapter.rows[0]).toMatchObject({ contractedQuantity: 20, additiveQuantity: 6, totalQuantity: 26 });
+  });
+
+  it('soma retiradas pela requisição entregue vinculada ao capítulo', () => {
+    const project = {
+      phases: [{ id: 'chapter-2', customNumber: '2', name: 'Incêndio', color: '#000', tasks: [] }],
+      analyticCompositions: [composition('base', 10, 'chapter-2')],
+      warehouse: {
+        materialLinks: [{ id: 'link-1', warehouseItemKey: 'fisico-tubo', projectMaterialCode: '123', projectMaterialDescription: 'Tubo de aço', projectMaterialUnit: 'm', conversionFactor: 1 }],
+        requisitions: [{ id: 'req-1', number: 'REQ-1', date: '2026-09-05', status: 'entregue', chapterId: 'chapter-2', items: [], createdAt: '2026-09-05T10:00:00.000Z' }],
+        movements: [{ id: 'mov-1', type: 'retirada', date: '2026-09-05', createdAt: '2026-09-05T10:00:00.000Z', requisitionId: 'req-1', itemKey: 'fisico-tubo', itemDescription: 'Tubo físico', itemUnit: 'm', quantity: 7 }],
+      },
+    } as unknown as Project;
+
+    const [chapter] = warehouseBudgetMaterialsByChapter(project);
+    expect(chapter.rows[0]).toMatchObject({ totalQuantity: 20, withdrawnQuantity: 7 });
   });
 });

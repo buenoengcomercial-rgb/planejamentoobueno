@@ -11,6 +11,8 @@ export interface WarehouseBudgetMaterialRow {
   contractedQuantity: number;
   additiveQuantity: number;
   totalQuantity: number;
+  withdrawnQuantity: number;
+  suppressedQuantity: number;
   additiveStatuses: string[];
 }
 
@@ -31,13 +33,31 @@ function active(additive: Additive) {
   return !['rejeitado', 'reprovado', 'cancelado'].includes(additive.status ?? 'rascunho');
 }
 
-function delta(composition: AdditiveComposition) {
+function quantityChanges(composition: AdditiveComposition) {
   const suppressed = Math.max(0, composition.suppressedQuantity ?? 0);
-  if (composition.isNewService) return Math.max(0, composition.addedQuantity ?? composition.quantity ?? 0) - suppressed;
-  if (composition.addedQuantity != null || composition.suppressedQuantity != null) return Math.max(0, composition.addedQuantity ?? 0) - suppressed;
-  if (composition.changeKind === 'acrescido') return Math.max(0, composition.quantity ?? 0);
-  if (composition.changeKind === 'suprimido') return -Math.max(0, composition.quantity ?? 0);
-  return 0;
+  if (composition.isNewService) {
+    const added = Math.max(0, composition.addedQuantity ?? composition.quantity ?? 0);
+    return { added, suppressed, net: added - suppressed };
+  }
+  if (composition.addedQuantity != null || composition.suppressedQuantity != null) {
+    const added = Math.max(0, composition.addedQuantity ?? 0);
+    return { added, suppressed, net: added - suppressed };
+  }
+  if (composition.changeKind === 'acrescido') {
+    const added = Math.max(0, composition.quantity ?? 0);
+    return { added, suppressed: 0, net: added };
+  }
+  if (composition.changeKind === 'suprimido') {
+    const removed = Math.max(0, composition.quantity ?? 0);
+    return { added: 0, suppressed: removed, net: -removed };
+  }
+  return { added: 0, suppressed: 0, net: 0 };
+}
+
+function materialIdentity(code: string | undefined, description: string, unit: string) {
+  const normalizedCode = normalizeAnalyticCode(code);
+  if (normalizedCode) return `code:${normalizedCode}|unit:${unit.trim().toLocaleUpperCase('pt-BR')}`;
+  return `description:${description.trim().replace(/\s+/g, ' ').toLocaleUpperCase('pt-BR')}|unit:${unit.trim().toLocaleUpperCase('pt-BR')}`;
 }
 
 function chapterResolver(project: Project) {
@@ -75,7 +95,7 @@ function chapterResolver(project: Project) {
 export function warehouseBudgetMaterialsByChapter(project: Project): WarehouseBudgetMaterialChapter[] {
   const chapterOf = chapterResolver(project);
   const chapters = new Map<string, WarehouseBudgetMaterialChapter>();
-  const add = (composition: AdditiveComposition, quantity: number, kind: 'contracted' | 'additive', status?: string) => {
+  const add = (composition: AdditiveComposition, quantity: number, kind: 'contracted' | 'additive' | 'suppressed', status?: string) => {
     if (!quantity) return;
     const chapter = chapterOf(composition);
     const bucket = chapters.get(chapter.id) ?? { ...chapter, rows: [] };
@@ -88,26 +108,68 @@ export function warehouseBudgetMaterialsByChapter(project: Project): WarehouseBu
       const key = `${input.bank || ''}|${input.code || ''}|${input.description.trim().toLocaleUpperCase('pt-BR')}|${input.unit}`;
       let row = bucket.rows.find(item => item.key === key);
       if (!row) {
-        row = { key, code: input.code || undefined, bank: input.bank || undefined, description: input.description, unit: input.unit, contractedQuantity: 0, additiveQuantity: 0, totalQuantity: 0, additiveStatuses: [] };
+        row = { key, code: input.code || undefined, bank: input.bank || undefined, description: input.description, unit: input.unit, contractedQuantity: 0, additiveQuantity: 0, totalQuantity: 0, withdrawnQuantity: 0, suppressedQuantity: 0, additiveStatuses: [] };
         bucket.rows.push(row);
       }
       if (kind === 'contracted') row.contractedQuantity = round(row.contractedQuantity + amount);
-      else {
+      if (kind === 'additive') {
         row.additiveQuantity = round(row.additiveQuantity + amount);
         if (amount > 0 && status && !row.additiveStatuses.includes(status)) row.additiveStatuses.push(status);
       }
+      if (kind === 'suppressed') row.suppressedQuantity = round(row.suppressedQuantity + amount);
     }
   };
 
-  for (const composition of project.analyticCompositions ?? []) add(composition, Math.max(0, composition.quantity || 0), 'contracted');
+  for (const composition of project.analyticCompositions ?? []) {
+    const contractedQuantity = Math.max(0, composition.quantity || 0);
+    add(composition, contractedQuantity, 'contracted');
+  }
   for (const additive of (project.additives ?? []).filter(active)) {
     const status = additiveStatusLabel[additive.status ?? 'rascunho'] ?? 'Com aditivo';
-    for (const composition of additive.compositions ?? []) add(composition, delta(composition), 'additive', status);
+    for (const composition of additive.compositions ?? []) {
+      const changes = quantityChanges(composition);
+      add(composition, changes.net, 'additive', status);
+      add(composition, changes.suppressed, 'suppressed');
+    }
   }
-  return [...chapters.values()]
+  const normalizedChapters = [...chapters.values()].map(chapter => ({ ...chapter, rows: chapter.rows
+    .map(row => ({ ...row, totalQuantity: round(row.contractedQuantity + row.additiveQuantity) }))
+    .filter(row => row.totalQuantity > 0 || row.suppressedQuantity > 0) }));
+
+  const phaseById = new Map((project.phases ?? []).map(phase => [phase.id, phase] as const));
+  const rootChapterId = (phaseId: string) => {
+    let phase = phaseById.get(phaseId);
+    while (phase?.parentId) phase = phaseById.get(phase.parentId) ?? phase;
+    if (!phase) return phaseId;
+    const number = phase.customNumber?.trim() || '';
+    return number ? `chapter:${number.split('.')[0]}` : phase.id;
+  };
+  const rowsByChapterAndIdentity = new Map<string, WarehouseBudgetMaterialRow>();
+  for (const chapter of normalizedChapters) {
+    for (const row of chapter.rows) rowsByChapterAndIdentity.set(`${chapter.id}|${materialIdentity(row.code, row.description, row.unit)}`, row);
+  }
+  const linksByWarehouseItem = new Map<string, Array<{ code?: string; description: string; unit: string; factor: number }>>();
+  for (const link of project.warehouse?.materialLinks ?? []) {
+    const links = linksByWarehouseItem.get(link.warehouseItemKey) ?? [];
+    links.push({ code: link.projectMaterialCode, description: link.projectMaterialDescription, unit: link.projectMaterialUnit, factor: Number(link.conversionFactor) || 1 });
+    linksByWarehouseItem.set(link.warehouseItemKey, links);
+  }
+  const requisitionsById = new Map((project.warehouse?.requisitions ?? []).map(requisition => [requisition.id, requisition] as const));
+  for (const movement of project.warehouse?.movements ?? []) {
+    if (movement.type !== 'retirada' || movement.reversedById || !movement.requisitionId) continue;
+    const requisition = requisitionsById.get(movement.requisitionId);
+    if (requisition?.status !== 'entregue' || !requisition.chapterId) continue;
+    const chapterId = rootChapterId(requisition.chapterId);
+    const linked = linksByWarehouseItem.get(movement.itemKey) ?? [{ code: movement.itemCode, description: movement.itemDescription, unit: movement.itemUnit, factor: 1 }];
+    for (const material of linked) {
+      const row = rowsByChapterAndIdentity.get(`${chapterId}|${materialIdentity(material.code, material.description, material.unit)}`);
+      if (!row || row.totalQuantity <= 0) continue;
+      row.withdrawnQuantity = round(row.withdrawnQuantity + (Number(movement.quantity) || 0) * material.factor);
+    }
+  }
+
+  return normalizedChapters
     .map(chapter => ({ ...chapter, rows: chapter.rows
-      .map(row => ({ ...row, totalQuantity: round(row.contractedQuantity + row.additiveQuantity) }))
-      .filter(row => row.totalQuantity > 0)
       .sort((a, b) => a.description.localeCompare(b.description, 'pt-BR')) }))
     .filter(chapter => chapter.rows.length > 0)
     .sort((a, b) => a.id === '__unlinked__' ? 1 : b.id === '__unlinked__' ? -1 : a.number.localeCompare(b.number, 'pt-BR', { numeric: true }));
