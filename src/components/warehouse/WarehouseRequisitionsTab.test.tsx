@@ -40,6 +40,28 @@ function expandAllWithdrawalDateGroups() {
 describe('WarehouseRequisitionsTab', () => {
   beforeEach(() => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+  });
+
+  it('seleciona um recebedor cadastrado e permite criar outro já em maiúsculas', () => {
+    const project = projectWithMaterials(1);
+    project.warehouse!.receivers = [{ name: 'JOÃO DA SILVA' }];
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Nova retirada/i }));
+    fireEvent.click(screen.getByRole('combobox', { name: 'Quem recebeu' }));
+    fireEvent.click(screen.getByText('JOÃO DA SILVA'));
+    expect(screen.getByRole('combobox', { name: 'Quem recebeu' })).toHaveTextContent('JOÃO DA SILVA');
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Quem recebeu' }));
+    fireEvent.change(screen.getByPlaceholderText('Buscar ou criar recebedor...'), { target: { value: 'feilpe' } });
+    fireEvent.click(screen.getByText('Criar “FELIPE”'));
+    expect(screen.getByRole('combobox', { name: 'Quem recebeu' })).toHaveTextContent('FELIPE');
   });
 
   it('mostra todos os materiais antes da busca e filtra palavras ignorando acentos', () => {
@@ -322,15 +344,15 @@ describe('WarehouseRequisitionsTab', () => {
     expandAllWithdrawalDateGroups();
     const rows = screen.getAllByTestId('withdrawal-history-row');
     expect(rows[0]).toHaveTextContent('REQ-2026-0002');
-    expect(rows[0]).toHaveTextContent('Bia');
+    expect(rows[0]).toHaveTextContent('BIA');
     expect(rows[1]).toHaveTextContent('REQ-2026-0001');
-    expect(rows[1]).toHaveTextContent('Ana');
+    expect(rows[1]).toHaveTextContent('ANA');
     expect(rows[2]).toHaveTextContent('REQ-2026-0004');
-    expect(rows[2]).toHaveTextContent('Dani');
+    expect(rows[2]).toHaveTextContent('DANI');
     expect(rows[3]).toHaveTextContent('REQ-2026-0005');
-    expect(rows[3]).toHaveTextContent('Elisa');
+    expect(rows[3]).toHaveTextContent('ELISA');
     expect(rows[4]).toHaveTextContent('REQ-2026-0003');
-    expect(rows[4]).toHaveTextContent('Caio');
+    expect(rows[4]).toHaveTextContent('CAIO');
   });
 
   it('usa a hierarquia completa da EAP no destino e preserva o fallback legado', () => {

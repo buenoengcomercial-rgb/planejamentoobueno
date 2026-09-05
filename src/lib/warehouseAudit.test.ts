@@ -49,7 +49,7 @@ describe('identidade de auditoria do almoxarifado', () => {
       items: [{ itemKey: 'material-1', description: 'Material teste', unit: 'UN', quantity: 1 }],
     }, alice);
     const delivered = deliverRequisition(created.project, created.requisition.id, { warehouseOperator: 'Almoxarife físico', actor: bruno });
-    expect(delivered.warehouse!.requisitions[0]).toMatchObject({ createdBy: alice, updatedBy: bruno, requesterName: 'Solicitante da obra', warehouseOperator: 'Bruno' });
+    expect(delivered.warehouse!.requisitions[0]).toMatchObject({ createdBy: alice, updatedBy: bruno, requesterName: 'SOLICITANTE DA OBRA', warehouseOperator: 'Bruno' });
     expect(delivered.warehouse!.movements.find(movement => movement.type === 'retirada')).toMatchObject({ createdBy: bruno, responsible: 'Bruno' });
   });
 

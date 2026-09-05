@@ -2,9 +2,11 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type { Project, WarehouseAuditActor, WarehouseMovement, WarehouseRequisition, WarehouseRequisitionItem } from '@/types/project';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Camera, Check, ChevronDown, FileDown, HardHat, History, ImagePlus, PackageOpen, Pencil, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
+import { Camera, Check, ChevronDown, ChevronsUpDown, FileDown, HardHat, History, ImagePlus, PackageOpen, Pencil, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
 import {
   computeWarehouseRows,
   correctDeliveredRequisition,
@@ -13,6 +15,7 @@ import {
   hardDeleteRequisition,
   getReturnableRequisitionItems,
   makeAttachment,
+  normalizeWarehouseReceiverName,
   registerMaterialReturn,
   uidWarehouse,
   warehouseActorName,
@@ -214,6 +217,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
   const [expandedRequisitionIds, setExpandedRequisitionIds] = useState<Set<string>>(() => new Set());
   const [dateExpansionOverrides, setDateExpansionOverrides] = useState<Map<string, boolean>>(() => new Map());
   const [form, setForm] = useState<WithdrawalForm>(initialForm);
+  const [receiverOpen, setReceiverOpen] = useState(false);
+  const [receiverSearch, setReceiverSearch] = useState('');
   const [materialSearch, setMaterialSearch] = useState('');
   const [photos, setPhotos] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
@@ -251,10 +256,21 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
         return tokens.every(token => haystack.includes(token));
       });
   }, [form.items, materialSearch, rows]);
+  const receiverNames = useMemo(() => (wh.receivers ?? []).map(receiver => receiver.name), [wh.receivers]);
+  const normalizedReceiverSearch = normalizeWarehouseReceiverName(receiverSearch);
+  const receiverExists = receiverNames.some(receiver => normalizeSearch(receiver) === normalizeSearch(normalizedReceiverSearch));
+  const selectReceiver = (receiverName: string) => {
+    setForm(current => ({ ...current, receiverName: normalizeWarehouseReceiverName(receiverName) }));
+    setErrors(current => ({ ...current, receiverName: undefined }));
+    setReceiverSearch('');
+    setReceiverOpen(false);
+  };
 
   const reset = () => {
     setForm(initialForm());
     setPhotos([]);
+    setReceiverOpen(false);
+    setReceiverSearch('');
     setMaterialSearch('');
     setErrors({});
     setOpen(false);
@@ -311,8 +327,9 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
   const submit = async () => {
     const chapter = chapters.find(candidate => candidate.id === form.chapterId);
     const nextErrors: WithdrawalErrors = {};
+    const receiverName = normalizeWarehouseReceiverName(form.receiverName);
     if (!chapter) nextErrors.chapterId = 'Selecione o destino.';
-    if (!form.receiverName.trim()) nextErrors.receiverName = 'Informe quem recebeu.';
+    if (!receiverName) nextErrors.receiverName = 'Informe quem recebeu.';
     if (!form.items.length) nextErrors.items = 'Adicione ao menos um material.';
     const invalid = form.items.find(item => !(item.quantity > 0));
     if (invalid) nextErrors.items = `Revise a quantidade de ${invalid.description}.`;
@@ -339,8 +356,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
         date: form.date,
         chapterId: chapter.id,
         chapterName: chapter.name,
-        receiverName: form.receiverName.trim(),
-        requesterName: form.receiverName.trim(),
+        receiverName,
+        requesterName: receiverName,
         notes: form.notes.trim() || undefined,
         items: form.items,
         signatureReceiver: form.signatureReceiver,
@@ -374,10 +391,49 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
 
       {open && (
         <section className="space-y-4 rounded-xl border bg-card p-3 shadow-sm">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            <WarehouseField label="Data"><Input id="withdrawal-date" className="min-h-11 text-base" type="date" value={form.date} onChange={event => setForm({ ...form, date: event.target.value })} /></WarehouseField>
-            <WarehouseField label="Prédio / capítulo" error={errors.chapterId}><select id="withdrawal-chapter" className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={form.chapterId} onChange={event => { setForm({ ...form, chapterId: event.target.value }); setErrors(current => ({ ...current, chapterId: undefined })); }}><option value="">Selecione</option>{chapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapter.name}</option>)}</select></WarehouseField>
-            <WarehouseField label="Quem recebeu" error={errors.receiverName}><Input id="withdrawal-receiver" className="min-h-11 text-base" value={form.receiverName} onChange={event => { setForm({ ...form, receiverName: event.target.value }); setErrors(current => ({ ...current, receiverName: undefined })); }} placeholder="Nome do recebedor" /></WarehouseField>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <WarehouseField label="Data">
+              <Input id="withdrawal-date" className="min-h-11 text-base" type="date" value={form.date} onChange={event => setForm({ ...form, date: event.target.value })} />
+            </WarehouseField>
+            <WarehouseField label="Prédio / capítulo" error={errors.chapterId}>
+              <select id="withdrawal-chapter" className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={form.chapterId} onChange={event => { setForm({ ...form, chapterId: event.target.value }); setErrors(current => ({ ...current, chapterId: undefined })); }}>
+                <option value="">Selecione</option>
+                {chapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapter.name}</option>)}
+              </select>
+            </WarehouseField>
+            <WarehouseField label="Quem recebeu" error={errors.receiverName}>
+              <Popover open={receiverOpen} onOpenChange={setReceiverOpen}>
+                <PopoverTrigger asChild>
+                  <Button id="withdrawal-receiver" type="button" variant="outline" role="combobox" aria-expanded={receiverOpen} aria-label="Quem recebeu" className="min-h-11 w-full justify-between px-3 text-base font-normal">
+                    <span className={form.receiverName ? '' : 'text-muted-foreground'}>{form.receiverName || 'Selecione ou crie o recebedor'}</span>
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] p-0">
+                  <Command shouldFilter>
+                    <CommandInput value={receiverSearch} onValueChange={setReceiverSearch} placeholder="Buscar ou criar recebedor..." />
+                    <CommandList>
+                      <CommandEmpty>Nenhum recebedor cadastrado.</CommandEmpty>
+                      {normalizedReceiverSearch && !receiverExists && (
+                        <CommandGroup heading="Novo recebedor">
+                          <CommandItem value={`criar ${normalizedReceiverSearch}`} onSelect={() => selectReceiver(normalizedReceiverSearch)} className="min-h-11">
+                            <Plus className="mr-2 h-4 w-4" />Criar “{normalizedReceiverSearch}”
+                          </CommandItem>
+                        </CommandGroup>
+                      )}
+                      <CommandGroup heading="Recebedores cadastrados">
+                        {receiverNames.map(receiver => (
+                          <CommandItem key={receiver} value={receiver} onSelect={() => selectReceiver(receiver)} className="min-h-11">
+                            <Check className={`mr-2 h-4 w-4 ${form.receiverName === receiver ? 'opacity-100' : 'opacity-0'}`} />
+                            {receiver}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            </WarehouseField>
           </div>
           <div className="text-xs text-muted-foreground">Almoxarife identificado pelo login: <strong className="text-foreground">{warehouseActorName(auditActor)}</strong></div>
 

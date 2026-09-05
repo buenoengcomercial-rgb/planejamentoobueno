@@ -14,6 +14,7 @@ import type {
   CustodyTermStatus,
   Equipment,
   WarehouseLocation,
+  WarehouseReceiver,
   WarehouseItemConfig,
   WarehouseAttachment,
   WarehouseAuditActor,
@@ -69,6 +70,20 @@ function normalizeLookup(value?: string) {
     .replace(/[^a-zA-Z0-9]+/g, ' ')
     .trim()
     .toLowerCase();
+}
+
+function receiverKey(value?: string) {
+  return (value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleUpperCase('pt-BR');
+}
+
+export function normalizeWarehouseReceiverName(value?: string) {
+  const normalized = (value ?? '').replace(/\s+/g, ' ').trim().toLocaleUpperCase('pt-BR');
+  return ['FELIPE', 'FEILPE'].includes(receiverKey(normalized)) ? 'FELIPE' : normalized;
 }
 
 function fiscalItemLookup(item: Pick<WarehouseFiscalNoteItem, 'description' | 'unit' | 'stockUnit'>) {
@@ -190,6 +205,7 @@ export function fiscalNoteCostReviewStatus(note: Pick<WarehouseFiscalNote, 'supp
 export function emptyWarehouse(): WarehouseState {
   return {
     locations: [],
+    receivers: [],
     items: [],
     movements: [],
     requisitions: [],
@@ -224,12 +240,52 @@ function normalizeFiscalNotes(notes: WarehouseFiscalNote[] = []): WarehouseFisca
   });
 }
 
+function normalizeReceivers(receivers: WarehouseReceiver[] = [], requisitions: WarehouseRequisition[] = []) {
+  const byKey = new Map<string, WarehouseReceiver>();
+  for (const receiver of receivers) {
+    const name = normalizeWarehouseReceiverName(receiver.name);
+    if (name) byKey.set(receiverKey(name), { name });
+  }
+  for (const requisition of requisitions) {
+    const name = normalizeWarehouseReceiverName(requisition.receiverName || requisition.requesterName);
+    if (name) byKey.set(receiverKey(name), { name });
+  }
+  const normalized = Array.from(byKey.values()).sort((left, right) => left.name.localeCompare(right.name, 'pt-BR'));
+  return normalized.length === receivers.length && normalized.every((receiver, index) => receiver.name === receivers[index]?.name) ? receivers : normalized;
+}
+
+function normalizeRequisitionReceivers(requisitions: WarehouseRequisition[]) {
+  let changed = false;
+  const normalized = requisitions.map(requisition => {
+    const name = normalizeWarehouseReceiverName(requisition.receiverName || requisition.requesterName);
+    if (!name || (requisition.receiverName === name && requisition.requesterName === name)) return requisition;
+    changed = true;
+    return { ...requisition, receiverName: name, requesterName: name };
+  });
+  return changed ? normalized : requisitions;
+}
+
+function normalizeWithdrawalWorkers(movements: WarehouseMovement[], requisitions: WarehouseRequisition[]) {
+  const receiverByRequisition = new Map(requisitions.map(requisition => [requisition.id, requisition.receiverName || requisition.requesterName] as const));
+  let changed = false;
+  const normalized = movements.map(movement => {
+    if (movement.type !== 'retirada' || !movement.requisitionId) return movement;
+    const receiverName = receiverByRequisition.get(movement.requisitionId);
+    if (!receiverName || movement.workerName === receiverName) return movement;
+    changed = true;
+    return { ...movement, workerName: receiverName };
+  });
+  return changed ? normalized : movements;
+}
+
 function normalizeWarehouse(state?: Partial<WarehouseState>): WarehouseState {
+  const requisitions = normalizeRequisitionReceivers(state?.requisitions ?? []);
   return {
     locations: state?.locations ?? [],
+    receivers: normalizeReceivers(state?.receivers ?? [], requisitions),
     items: state?.items ?? [],
-    movements: state?.movements ?? [],
-    requisitions: state?.requisitions ?? [],
+    movements: normalizeWithdrawalWorkers(state?.movements ?? [], requisitions),
+    requisitions,
     equipments: state?.equipments ?? [],
     equipmentGroups: normalizeEquipmentGroups(state?.equipmentGroups ?? [], state?.equipments ?? []),
     custodyTerms: state?.custodyTerms ?? [],
@@ -250,6 +306,7 @@ export function ensureWarehouse(project: Project): Project {
   const wh = normalizeWarehouse(cur);
   const isPartial = cur
     ? wh.locations !== cur.locations ||
+      wh.receivers !== cur.receivers ||
       wh.items !== cur.items ||
       wh.movements !== cur.movements ||
       wh.requisitions !== cur.requisitions ||
@@ -630,15 +687,22 @@ export function createRequisition(
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
   const createdAt = nowISO();
+  const receiverName = normalizeWarehouseReceiverName(input.receiverName || input.requesterName);
+  const projectWithReceiver = receiverName
+    ? setWh(p, { receivers: normalizeReceivers([...(wh.receivers ?? []), { name: receiverName }], wh.requisitions) })
+    : p;
+  const warehouse = projectWithReceiver.warehouse!;
   const req: WarehouseRequisition = {
     id: uid(),
-    number: nextRequisitionNumber(wh),
+    number: nextRequisitionNumber(warehouse),
     createdAt,
     status: input.status ?? 'rascunho',
     ...input,
+    receiverName: receiverName || undefined,
+    requesterName: receiverName || undefined,
     createdBy: input.createdBy ?? normalizeWarehouseActor(actor),
   };
-  return { project: setWh(p, { requisitions: [...wh.requisitions, req] }), requisition: req };
+  return { project: setWh(projectWithReceiver, { requisitions: [...warehouse.requisitions, req] }), requisition: req };
 }
 
 export function updateRequisition(project: Project, id: string, patch: Partial<WarehouseRequisition>, actor?: WarehouseActorInput): Project {
@@ -840,7 +904,9 @@ export function createAndDeliverRequisition(
     ? normalized.warehouse!.requisitions.find(r => r.deliveryIdempotencyKey === idempotencyKey)
     : undefined;
   if (existing) return { project: normalized, requisitionId: existing.id };
-  const created = createRequisition(normalized, { ...input, status: 'rascunho' }, opts?.actor);
+  const receiverName = normalizeWarehouseReceiverName(input.receiverName || input.requesterName);
+  if (!receiverName) throw new Error('Informe quem recebeu os materiais.');
+  const created = createRequisition(normalized, { ...input, receiverName, requesterName: receiverName, status: 'rascunho' }, opts?.actor);
   return {
     project: deliverRequisition(created.project, created.requisition.id, {
       publishToDailyReport: opts?.publishToDailyReport,

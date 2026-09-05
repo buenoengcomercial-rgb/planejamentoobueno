@@ -861,6 +861,11 @@ export interface WarehouseLocation {
   notes?: string;
 }
 
+/** Recebedores padronizados para evitar variações de nomes nas retiradas. */
+export interface WarehouseReceiver {
+  name: string;
+}
+
 export interface WarehouseItemConfig {
   /** linkKey (igual ao usado em materialComparisons). */
   key: string;
@@ -1310,6 +1315,7 @@ export interface WarehouseInventorySession {
 
 export interface WarehouseState {
   locations: WarehouseLocation[];
+  receivers?: WarehouseReceiver[];
   items: WarehouseItemConfig[];
   movements: WarehouseMovement[];
   requisitions: WarehouseRequisition[];

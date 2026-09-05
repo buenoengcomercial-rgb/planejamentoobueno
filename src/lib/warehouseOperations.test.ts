@@ -14,6 +14,7 @@ import {
   createInventorySession,
   custodyTermEquipmentItems,
   emptyWarehouse,
+  ensureWarehouse,
   hardDeleteEquipment,
   issueCustodyTerm,
   panelSummary,
@@ -21,6 +22,7 @@ import {
   registerMaterialReturn,
   removeEquipment,
   returnCustodyEquipment,
+  normalizeWarehouseReceiverName,
   updateEquipmentGroup,
   setInventoryCount,
   upsertWarehouseProjectMaterialLink,
@@ -56,6 +58,44 @@ function withStock() {
 }
 
 describe('operação integrada do almoxarifado', () => {
+  it('padroniza recebedores históricos, corrige FEILPE e atualiza retiradas derivadas', () => {
+    const legacy = project();
+    legacy.warehouse = {
+      ...emptyWarehouse(),
+      receivers: [{ name: '  feilpe ' }, { name: 'FELIPE' }, { name: 'joão   da silva' }],
+      requisitions: [
+        { id: 'req-felipe', number: 'REQ-2026-0001', date: '2026-08-17', status: 'entregue', receiverName: 'Felipe', requesterName: 'feilpe', items: [], createdAt: '2026-08-17T08:00:00.000Z' },
+        { id: 'req-joao', number: 'REQ-2026-0002', date: '2026-08-18', status: 'entregue', receiverName: ' joão  da  silva ', items: [], createdAt: '2026-08-18T08:00:00.000Z' },
+      ],
+      movements: [
+        { id: 'mov-felipe', type: 'retirada', date: '2026-08-17', createdAt: '2026-08-17T08:00:00.000Z', requisitionId: 'req-felipe', itemKey: 'material-1', itemDescription: 'Cimento', itemUnit: 'SC', quantity: 1, workerName: 'feilpe' },
+        { id: 'mov-entrada', type: 'entrada', date: '2026-08-17', createdAt: '2026-08-17T08:00:00.000Z', itemKey: 'material-1', itemDescription: 'Cimento', itemUnit: 'SC', quantity: 1, workerName: 'feilpe' },
+      ],
+    };
+
+    const normalized = ensureWarehouse(legacy).warehouse!;
+
+    expect(normalized.receivers).toEqual([{ name: 'FELIPE' }, { name: 'JOÃO DA SILVA' }]);
+    expect(normalized.requisitions.map(requisition => [requisition.receiverName, requisition.requesterName])).toEqual([
+      ['FELIPE', 'FELIPE'],
+      ['JOÃO DA SILVA', 'JOÃO DA SILVA'],
+    ]);
+    expect(normalized.movements.find(movement => movement.id === 'mov-felipe')?.workerName).toBe('FELIPE');
+    expect(normalized.movements.find(movement => movement.id === 'mov-entrada')?.workerName).toBe('feilpe');
+    expect(normalizeWarehouseReceiverName('  FEILPE  ')).toBe('FELIPE');
+  });
+
+  it('cadastra o recebedor normalizado e o replica na requisição e retirada', () => {
+    const result = createAndDeliverRequisition(withStock(), {
+      date: '2026-08-17', chapterId: 'chapter-1', chapterName: 'Prédio 1', receiverName: '  felipe ', requesterName: 'Outro nome', signatureReceiver: 'assinatura',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 1 }],
+    }, { actor });
+
+    expect(result.project.warehouse!.receivers).toEqual([{ name: 'FELIPE' }]);
+    expect(result.project.warehouse!.requisitions[0]).toMatchObject({ receiverName: 'FELIPE', requesterName: 'FELIPE' });
+    expect(result.project.warehouse!.movements.find(movement => movement.type === 'retirada')?.workerName).toBe('FELIPE');
+  });
+
   it('calcula média ponderada e congela o custo da retirada', () => {
     const stocked = withStock();
     expect(warehouseValuationForItem(stocked.warehouse!, 'material-1')).toMatchObject({ quantity: 20, inventoryValue: 300, averageUnitCost: 15 });
@@ -69,7 +109,7 @@ describe('operação integrada do almoxarifado', () => {
     expect(withdrawal).toMatchObject({ costSnapshot: 15, unitPrice: 15, originType: 'withdrawal', chapterId: 'chapter-1', teamId: 'alpha' });
     expect(warehouseValuationForItem(result.project.warehouse!, 'material-1')).toMatchObject({ quantity: 16, inventoryValue: 240, averageUnitCost: 15, consumedCost: 60 });
     expect(computeWarehouseUsageByChapter(result.project)).toMatchObject({ totalConsumedCost: 60, incompleteMovementCount: 0 });
-    expect(result.project.dailyReports?.[0].observations).toContain('1 Prédio 1 — Equipe Alpha');
+    expect(result.project.dailyReports?.[0].observations).toContain('1 Prédio 1 — EQUIPE ALPHA');
     const repeated = createAndDeliverRequisition(result.project, {
       date: '2026-08-17', chapterId: 'chapter-1', chapterName: '1 Prédio 1', teamId: 'alpha', teamName: 'Alpha',
       receiverName: 'Equipe Alpha', requesterName: 'Equipe Alpha', signatureReceiver: 'assinatura', deliveryAttachments: [photo], deliveryIdempotencyKey: 'delivery-1',
