@@ -26,7 +26,7 @@ describe('WarehouseWithdrawnMaterialsTab', () => {
   it('filtra os materiais retirados por recebedor e busca', () => {
     render(<WarehouseWithdrawnMaterialsTab project={project} />);
 
-    expect(screen.getByRole('button', { name: 'Retirado líquido (hierarquia)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retirado líquido' })).toBeInTheDocument();
     expect(screen.getByText(/maior quantidade líquida retirada primeiro/i)).toBeInTheDocument();
     expect(screen.getAllByText('Sirene audiovisual')).not.toHaveLength(0);
 
