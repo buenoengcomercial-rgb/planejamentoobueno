@@ -68,11 +68,14 @@
   letter-spacing: 0.025em;
 }
 
-.warehouse-ui :where(table) tbody > tr:nth-child(even) {
+/* Zebra and hover are defaults only. Explicit chapter, date, selection and
+   expanded-detail backgrounds must win regardless of the row's DOM position.
+   Keep the entire selector in :where(), not just the table element. */
+:where(.warehouse-ui table tbody > tr:nth-child(even)) {
   background: hsl(var(--muted) / 0.24);
 }
 
-.warehouse-ui :where(table) tbody > tr:hover {
+:where(.warehouse-ui table tbody > tr:hover) {
   background: hsl(var(--primary) / 0.07);
 }
 
