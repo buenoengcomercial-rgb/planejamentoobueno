@@ -17,6 +17,10 @@ describe('WarehouseBudgetMaterialsTab', () => {
     const view = render(<WarehouseBudgetMaterialsTab project={project} />);
     const materialHeader = screen.getByRole('button', { name: 'Material' });
 
+    expect(screen.getByRole('button', { name: 'Contratado' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retirado' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Aditivo' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Total planejado' })).not.toBeInTheDocument();
     expect(materialHeader.closest('th')).toHaveAttribute('aria-sort', 'ascending');
     expect(view.container.querySelector('tbody tr')?.textContent).toContain('Alumínio');
 
