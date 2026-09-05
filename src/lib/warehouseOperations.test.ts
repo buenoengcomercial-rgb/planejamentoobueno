@@ -83,6 +83,7 @@ describe('operação integrada do almoxarifado', () => {
     expect(normalized.movements.find(movement => movement.id === 'mov-felipe')?.workerName).toBe('FELIPE');
     expect(normalized.movements.find(movement => movement.id === 'mov-entrada')?.workerName).toBe('feilpe');
     expect(normalizeWarehouseReceiverName('  FEILPE  ')).toBe('FELIPE');
+    expect(normalizeWarehouseReceiverName('Rafael')).toBe('RAFAEL PEREIRA');
   });
 
   it('cadastra o recebedor normalizado e o replica na requisição e retirada', () => {

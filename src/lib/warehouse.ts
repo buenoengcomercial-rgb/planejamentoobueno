@@ -83,7 +83,13 @@ function receiverKey(value?: string) {
 
 export function normalizeWarehouseReceiverName(value?: string) {
   const normalized = (value ?? '').replace(/\s+/g, ' ').trim().toLocaleUpperCase('pt-BR');
-  return ['FELIPE', 'FEILPE'].includes(receiverKey(normalized)) ? 'FELIPE' : normalized;
+  const aliases: Record<string, string> = {
+    FELIPE: 'FELIPE',
+    FEILPE: 'FELIPE',
+    RAFAEL: 'RAFAEL PEREIRA',
+    'RAFAEL PEREIRA': 'RAFAEL PEREIRA',
+  };
+  return aliases[receiverKey(normalized)] ?? normalized;
 }
 
 function fiscalItemLookup(item: Pick<WarehouseFiscalNoteItem, 'description' | 'unit' | 'stockUnit'>) {

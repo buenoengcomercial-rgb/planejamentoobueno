@@ -429,13 +429,15 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
                     <CommandInput value={receiverSearch} onValueChange={setReceiverSearch} placeholder="Buscar ou criar recebedor..." />
                     <CommandList>
                       <CommandEmpty>Nenhum recebedor cadastrado.</CommandEmpty>
-                      {normalizedReceiverSearch && !receiverExists && (
-                        <CommandGroup heading="Novo recebedor">
+                      <CommandGroup heading="Cadastrar novo recebedor">
+                        {normalizedReceiverSearch && !receiverExists ? (
                           <CommandItem value={`criar ${normalizedReceiverSearch}`} onSelect={() => selectReceiver(normalizedReceiverSearch)} className="min-h-11">
                             <Plus className="mr-2 h-4 w-4" />Criar “{normalizedReceiverSearch}”
                           </CommandItem>
-                        </CommandGroup>
-                      )}
+                        ) : (
+                          <div className="px-2 py-2 text-xs text-muted-foreground">Digite o nome acima para cadastrar um novo recebedor.</div>
+                        )}
+                      </CommandGroup>
                       <CommandGroup heading="Recebedores cadastrados">
                         {receiverNames.map(receiver => (
                           <CommandItem key={receiver} value={receiver} onSelect={() => selectReceiver(receiver)} className="min-h-11">
