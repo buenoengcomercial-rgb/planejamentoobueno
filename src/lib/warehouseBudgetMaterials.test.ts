@@ -125,6 +125,29 @@ describe('warehouseBudgetMaterialsByChapter', () => {
     expect(chapter.rows[0]).toMatchObject({ withdrawnQuantity: 7 });
   });
 
+  it('só contabiliza a sirene retirada após o vínculo do material físico ao insumo analítico', () => {
+    const project = {
+      phases: [{ id: 'chapter-3', customNumber: '3', name: 'INCÊNDIO - CURVO 02', color: '#000', tasks: [] }],
+      analyticCompositions: [{
+        ...composition('sirene', 9, 'chapter-3'),
+        inputs: [{ id: 'input-sirene', code: 'ORSE-123', bank: 'ORSE', description: 'Sirene audiovisual endereçável sobrepor SAVQ-E', unit: 'UN', coefficient: 1, unitPrice: 10, total: 10, type: 'material' as const }],
+      }],
+      warehouse: {
+        materialLinks: [],
+        requisitions: [{ id: 'req-1', number: 'REQ-2026-0055', date: '2026-09-04', status: 'entregue', chapterId: 'chapter-3', items: [], createdAt: '2026-09-04T08:15:00.000Z' }],
+        movements: [{ id: 'mov-sirene', type: 'retirada', date: '2026-09-04', createdAt: '2026-09-04T08:15:00.000Z', requisitionId: 'req-1', itemKey: 'fisico-sirene', itemCode: '0020011', itemDescription: 'SIRENE AUDIOVISUAL ENDERECAVEL SOBREPOR SAVQ-E', itemUnit: 'UN', quantity: 9 }],
+      },
+    } as unknown as Project;
+
+    expect(warehouseBudgetMaterialsByChapter(project)[0].rows[0]).toMatchObject({ withdrawnQuantity: 0 });
+
+    project.warehouse!.materialLinks = [{
+      id: 'link-sirene', warehouseItemKey: 'fisico-sirene', projectMaterialKey: 'input-sirene', projectMaterialCode: 'ORSE-123', projectMaterialDescription: 'Sirene audiovisual endereçável sobrepor SAVQ-E', projectMaterialUnit: 'UN', conversionFactor: 1, source: 'manual', createdAt: '2026-09-04T08:15:00.000Z', updatedAt: '2026-09-04T08:15:00.000Z',
+    }];
+
+    expect(warehouseBudgetMaterialsByChapter(project)[0].rows[0]).toMatchObject({ withdrawnQuantity: 9 });
+  });
+
   it('não soma retirada de requisição sem capítulo ou vinculada a outro capítulo', () => {
     const project = {
       phases: [
