@@ -18,26 +18,24 @@ function project(movements: WarehouseMovement[]): Project {
       { id: 'chapter-3', customNumber: '3', name: 'INCÊNDIO - CURVO 02', color: '#000', tasks: [] },
       { id: 'chapter-4', customNumber: '4', name: 'INCÊNDIO - RETO 01', color: '#000', tasks: [] },
     ],
-    materialSuppliers: [{ id: 'supplier-config', name: 'Fornecedor configurado' }],
     warehouse: {
-      items: [{ key: 'fisico-sirene', code: '0020011', description: 'SIRENE AUDIOVISUAL ENDERECAVEL SOBREPOR SAVQ-E', unit: 'UN', supplierId: 'supplier-config' }],
+      items: [{ key: 'fisico-sirene', code: '0020011', description: 'SIRENE AUDIOVISUAL ENDERECAVEL SOBREPOR SAVQ-E', unit: 'UN' }],
       requisitions: [
-        { id: 'req-curvo', number: 'REQ-1', date: '2026-09-04', status: 'entregue', chapterId: 'chapter-3', items: [], createdAt: '2026-09-04T08:15:00.000Z' },
-        { id: 'req-reto', number: 'REQ-2', date: '2026-09-04', status: 'entregue', chapterId: 'chapter-4', items: [], createdAt: '2026-09-04T08:15:00.000Z' },
+        { id: 'req-curvo', number: 'REQ-1', date: '2026-09-04', status: 'entregue', chapterId: 'chapter-3', receiverName: 'Felipe', items: [], createdAt: '2026-09-04T08:15:00.000Z' },
+        { id: 'req-reto', number: 'REQ-2', date: '2026-09-04', status: 'entregue', chapterId: 'chapter-4', receiverName: 'Gabriel', items: [], createdAt: '2026-09-04T08:15:00.000Z' },
       ],
-      fiscalNotes: [{ id: 'nf-1', createdAt: '2026-09-03T08:00:00.000Z', updatedAt: '2026-09-03T08:00:00.000Z', supplierName: 'Fornecedor da última entrada', status: 'aprovada', origin: 'upload', sourceFileName: 'nf.pdf', totalAmount: 0, items: [] }],
-      movements: [{ id: 'entry-1', type: 'entrada', originType: 'fiscal_note', date: '2026-09-03', createdAt: '2026-09-03T08:00:00.000Z', fiscalNoteId: 'nf-1', itemKey: 'fisico-sirene', itemCode: '0020011', itemDescription: 'SIRENE AUDIOVISUAL ENDERECAVEL SOBREPOR SAVQ-E', itemUnit: 'UN', quantity: 20 }, ...movements],
+      movements,
       locations: [], equipments: [], equipmentGroups: [], custodyTerms: [],
     },
   } as unknown as Project;
 }
 
 describe('warehouseWithdrawnMaterialsByChapter', () => {
-  it('mostra material físico retirado, mesmo sem vínculo ao orçamento, no capítulo e fornecedor da última entrada', () => {
+  it('mostra material físico retirado, mesmo sem vínculo ao orçamento, no capítulo e recebedor', () => {
     const [chapter] = warehouseWithdrawnMaterialsByChapter(project([withdrawal('ret-1', 'req-curvo', 9)]));
 
     expect(chapter).toMatchObject({ id: 'chapter:3', number: '3', name: 'INCÊNDIO - CURVO 02' });
-    expect(chapter.rows).toEqual([expect.objectContaining({ code: '0020011', supplierName: 'Fornecedor da última entrada', withdrawnQuantity: 9 })]);
+    expect(chapter.rows).toEqual([expect.objectContaining({ code: '0020011', receiverName: 'Felipe', withdrawnQuantity: 9 })]);
   });
 
   it('desconta devolução parcial e oculta o material com devolução integral', () => {

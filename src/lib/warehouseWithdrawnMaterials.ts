@@ -1,12 +1,11 @@
 import type { Project, WarehouseMovement } from '@/types/project';
-import { getProjectSuppliers } from '@/lib/materialComparisons';
 
 export interface WarehouseWithdrawnMaterialRow {
   key: string;
   code?: string;
   description: string;
   unit: string;
-  supplierName: string;
+  receiverName: string;
   withdrawnQuantity: number;
 }
 
@@ -18,7 +17,6 @@ export interface WarehouseWithdrawnMaterialChapter {
 }
 
 const round = (value: number) => Math.round(value * 100) / 100;
-const supplierFallback = 'Não informado';
 
 function chapterResolver(project: Project) {
   const phaseById = new Map((project.phases ?? []).map(phase => [phase.id, phase] as const));
@@ -31,29 +29,6 @@ function chapterResolver(project: Project) {
       number,
       name: phase?.name ?? 'Capítulo não informado',
     };
-  };
-}
-
-function recordTimestamp(movement: WarehouseMovement) {
-  return movement.createdAt || movement.date;
-}
-
-function supplierByItem(project: Project) {
-  const supplierNameById = new Map(getProjectSuppliers(project).map(supplier => [supplier.id, supplier.name] as const));
-  const noteById = new Map((project.warehouse?.fiscalNotes ?? []).map(note => [note.id, note] as const));
-  const configByItem = new Map((project.warehouse?.items ?? []).map(item => [item.key, item] as const));
-  const sourceByItem = new Map<string, WarehouseMovement>();
-  for (const movement of project.warehouse?.movements ?? []) {
-    if (movement.reversedById || (movement.type !== 'entrada' && movement.type !== 'transferencia_entrada')) continue;
-    const current = sourceByItem.get(movement.itemKey);
-    if (!current || recordTimestamp(movement) > recordTimestamp(current)) sourceByItem.set(movement.itemKey, movement);
-  }
-  return (itemKey: string, withdrawal: WarehouseMovement) => {
-    const source = sourceByItem.get(itemKey);
-    const note = source?.fiscalNoteId ? noteById.get(source.fiscalNoteId) : undefined;
-    if (note && !['rejeitada', 'cancelada'].includes(note.status) && note.supplierName?.trim()) return note.supplierName.trim();
-    const supplierId = source?.supplierId ?? configByItem.get(itemKey)?.supplierId ?? withdrawal.supplierId;
-    return supplierId ? supplierNameById.get(supplierId) ?? supplierFallback : supplierFallback;
   };
 }
 
@@ -76,7 +51,6 @@ export function warehouseWithdrawnMaterialsByChapter(project: Project): Warehous
   }
 
   const chapterOf = chapterResolver(project);
-  const supplierNameFor = supplierByItem(project);
   const chapters = new Map<string, WarehouseWithdrawnMaterialChapter>();
   for (const [movementKey, movement] of withdrawalsByRequisitionItem) {
     const requisition = requisitionsById.get(movement.requisitionId);
@@ -84,13 +58,13 @@ export function warehouseWithdrawnMaterialsByChapter(project: Project): Warehous
     const quantity = Math.max(0, (Number(movement.quantity) || 0) - (returnedByRequisitionItem.get(movementKey) ?? 0));
     if (!quantity) continue;
     const chapter = chapterOf(requisition.chapterId);
-    const supplierName = supplierNameFor(movement.itemKey, movement);
+    const receiverName = requisition.receiverName?.trim() || requisition.requesterName?.trim() || 'Não informado';
     const bucket = chapters.get(chapter.id) ?? { ...chapter, rows: [] };
     chapters.set(chapter.id, bucket);
-    const key = `${movement.itemKey}|${supplierName}`;
+    const key = `${movement.itemKey}|${receiverName}`;
     let row = bucket.rows.find(candidate => candidate.key === key);
     if (!row) {
-      row = { key, code: movement.itemCode, description: movement.itemDescription, unit: movement.itemUnit, supplierName, withdrawnQuantity: 0 };
+      row = { key, code: movement.itemCode, description: movement.itemDescription, unit: movement.itemUnit, receiverName, withdrawnQuantity: 0 };
       bucket.rows.push(row);
     }
     row.withdrawnQuantity = round(row.withdrawnQuantity + quantity);
