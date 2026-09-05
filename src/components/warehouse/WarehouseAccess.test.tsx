@@ -29,7 +29,7 @@ describe('controle de acesso do almoxarifado', () => {
 
     expect(screen.getByText('Conteúdo do painel')).toBeInTheDocument();
 
-    const expectedLabels = ['Painel', 'Entrada', 'Retiradas e devoluções', 'Equipamentos', 'Materiais', 'Materiais do orçamento', 'Movimentações', 'Inventário'];
+    const expectedLabels = ['Painel', 'Entrada', 'Retiradas e devoluções', 'Materiais do orçamento', 'Materiais', 'Equipamentos', 'Movimentações', 'Inventário'];
     const desktopLabels = screen.getAllByRole('tab').map(tab => tab.textContent?.trim());
     const mobileSelect = screen.getByLabelText('Área do almoxarifado') as HTMLSelectElement;
     const mobileLabels = Array.from(mobileSelect.options).map(option => option.textContent);
@@ -67,7 +67,7 @@ describe('controle de acesso do almoxarifado', () => {
     expect(screen.queryByText('Conteúdo do painel')).not.toBeInTheDocument();
     expect(screen.getByText('Conteúdo de entrada')).toBeInTheDocument();
 
-    const expectedLabels = ['Entrada', 'Retiradas e devoluções', 'Equipamentos', 'Materiais', 'Materiais do orçamento', 'Movimentações', 'Inventário'];
+    const expectedLabels = ['Entrada', 'Retiradas e devoluções', 'Materiais do orçamento', 'Materiais', 'Equipamentos', 'Movimentações', 'Inventário'];
     const desktopLabels = screen.getAllByRole('tab').map(tab => tab.textContent?.trim());
     const mobileSelect = screen.getByLabelText('Área do almoxarifado') as HTMLSelectElement;
     const mobileLabels = Array.from(mobileSelect.options).map(option => option.textContent);

@@ -19,9 +19,9 @@ const WAREHOUSE_TABS = [
   { value: 'painel', label: 'Painel', icon: LayoutDashboard },
   { value: 'notas', label: 'Entrada', icon: ReceiptText },
   { value: 'requisicoes', label: 'Retiradas e devoluções', icon: ClipboardList },
-  { value: 'equipamentos', label: 'Equipamentos', icon: HardHat },
-  { value: 'estoque', label: 'Materiais', icon: Boxes },
   { value: 'materiais-orcamento', label: 'Materiais do orçamento', icon: ClipboardCheck },
+  { value: 'estoque', label: 'Materiais', icon: Boxes },
+  { value: 'equipamentos', label: 'Equipamentos', icon: HardHat },
   { value: 'movimentos', label: 'Movimentações', icon: ArrowLeftRight },
   { value: 'inventario', label: 'Inventário', icon: ListChecks },
 ] as const;
