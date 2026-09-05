@@ -8,11 +8,29 @@ export interface ValidationIssue {
   message: string;
   /** taskIds afetados (quando aplicável). */
   affectedTaskIds?: string[];
+  /** Dados das tarefas afetadas, para apontamento direto no painel. */
+  affectedTasks?: ValidationAffectedTask[];
+}
+
+export interface ValidationAffectedTask {
+  taskId: string;
+  description: string;
+  itemCode: string;
+  unit: string;
+  qtyContracted: number;
+  qtyPeriod: number;
+  qtyPriorAccum: number;
+  qtyCurrentAccum: number;
+  /** Saldo disponível antes da quantidade informada nesta medição. */
+  qtyBalanceBeforePeriod: number;
+  /** Quantidade que excede o contratado, quando aplicável. */
+  qtyExcess: number;
 }
 
 export interface MinimalRow {
   taskId: string;
   description: string;
+  unit: string;
   itemCode: string;
   priceBank: string;
   unitPriceNoBDI: number;
@@ -21,6 +39,24 @@ export interface MinimalRow {
   qtyPriorAccum: number;
   qtyCurrentAccum: number;
   qtyBalance: number;
+}
+
+function toAffectedTask(row: MinimalRow): ValidationAffectedTask {
+  const qtyContracted = Number(row.qtyContracted) || 0;
+  const qtyPriorAccum = Number(row.qtyPriorAccum) || 0;
+  const qtyCurrentAccum = Number(row.qtyCurrentAccum) || 0;
+  return {
+    taskId: row.taskId,
+    description: row.description,
+    itemCode: row.itemCode,
+    unit: row.unit,
+    qtyContracted,
+    qtyPeriod: Number(row.qtyPeriod) || 0,
+    qtyPriorAccum,
+    qtyCurrentAccum,
+    qtyBalanceBeforePeriod: Math.max(0, qtyContracted - qtyPriorAccum),
+    qtyExcess: Math.max(0, qtyCurrentAccum - qtyContracted),
+  };
 }
 
 export type ValidationMode = 'generation' | 'fiscal-review';
@@ -152,6 +188,7 @@ export function validateMeasurement(
       code: 'qty-over-balance',
       message: `Existem ${overBalance.length} item(ns) com quantidade medida maior que o saldo a executar.`,
       affectedTaskIds: overBalance.map(r => r.taskId),
+      affectedTasks: overBalance.map(toAffectedTask),
     });
   }
 
@@ -163,6 +200,7 @@ export function validateMeasurement(
       code: 'accum-over-contracted',
       message: `Existem ${overContracted.length} item(ns) com acumulado maior que a quantidade contratada.`,
       affectedTaskIds: overContracted.map(r => r.taskId),
+      affectedTasks: overContracted.map(toAffectedTask),
     });
   }
 

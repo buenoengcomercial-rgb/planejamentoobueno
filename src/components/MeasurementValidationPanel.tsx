@@ -35,6 +35,9 @@ const DAILY_CODES = new Set([
   'impediments-in-period',
 ]);
 
+const formatQuantity = (value: number, unit: string) =>
+  `${new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 3 }).format(value)}${unit ? ` ${unit}` : ''}`;
+
 export default function MeasurementValidationPanel({ issues, onOpenDailyReport }: Props) {
   const errors = issues.filter(i => i.level === 'error');
   const warnings = issues.filter(i => i.level === 'warning');
@@ -76,7 +79,29 @@ export default function MeasurementValidationPanel({ issues, onOpenDailyReport }
                 className={`flex items-start gap-2 rounded border px-2 py-1.5 ${meta.bg}`}
               >
                 <Icon className={`w-3.5 h-3.5 mt-0.5 flex-shrink-0 ${meta.cls}`} />
-                <span className="text-foreground flex-1">{iss.message}</span>
+                <div className="min-w-0 flex-1">
+                  <span className="text-foreground">{iss.message}</span>
+                  {iss.affectedTasks && iss.affectedTasks.length > 0 && (
+                    <ul className="mt-1.5 space-y-1 border-l-2 border-destructive/40 pl-2 text-[11px] text-foreground">
+                      {iss.affectedTasks.map(task => (
+                        <li key={task.taskId} className="rounded bg-background/55 px-2 py-1">
+                          <div className="font-medium">
+                            {task.itemCode ? `${task.itemCode} · ` : ''}{task.description}
+                          </div>
+                          {iss.code === 'qty-over-balance' ? (
+                            <div className="mt-0.5 text-muted-foreground">
+                              Contratado: {formatQuantity(task.qtyContracted, task.unit)} · Acum. anterior: {formatQuantity(task.qtyPriorAccum, task.unit)} · Medido agora: {formatQuantity(task.qtyPeriod, task.unit)} · Saldo antes: {formatQuantity(task.qtyBalanceBeforePeriod, task.unit)}
+                            </div>
+                          ) : iss.code === 'accum-over-contracted' ? (
+                            <div className="mt-0.5 text-muted-foreground">
+                              Contratado: {formatQuantity(task.qtyContracted, task.unit)} · Acumulado: {formatQuantity(task.qtyCurrentAccum, task.unit)} · Excedente: {formatQuantity(task.qtyExcess, task.unit)}
+                            </div>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
                 {DAILY_CODES.has(iss.code) && onOpenDailyReport && (
                   <Button
                     size="sm"
