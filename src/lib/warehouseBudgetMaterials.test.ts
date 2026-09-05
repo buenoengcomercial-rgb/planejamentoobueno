@@ -65,6 +65,66 @@ describe('warehouseBudgetMaterialsByChapter', () => {
     expect(chapter.rows[0]).toMatchObject({ contractedQuantity: 20, withdrawnQuantity: 7 });
   });
 
+  it('desconta devolução parcial vinculada à mesma requisição e material', () => {
+    const project = {
+      phases: [{ id: 'chapter-2', customNumber: '2', name: 'Incêndio', color: '#000', tasks: [] }],
+      analyticCompositions: [composition('base', 10, 'chapter-2')],
+      warehouse: {
+        materialLinks: [{ id: 'link-1', warehouseItemKey: 'fisico-tubo', projectMaterialCode: '123', projectMaterialDescription: 'Tubo de aço', projectMaterialUnit: 'm', conversionFactor: 1 }],
+        requisitions: [{ id: 'req-1', number: 'REQ-1', date: '2026-09-05', status: 'entregue', chapterId: 'chapter-2', items: [], createdAt: '2026-09-05T10:00:00.000Z' }],
+        movements: [
+          { id: 'mov-1', type: 'retirada', date: '2026-09-05', createdAt: '2026-09-05T10:00:00.000Z', requisitionId: 'req-1', itemKey: 'fisico-tubo', itemDescription: 'Tubo físico', itemUnit: 'm', quantity: 7 },
+          { id: 'dev-1', type: 'devolucao', originType: 'return', date: '2026-09-05', createdAt: '2026-09-05T12:00:00.000Z', requisitionId: 'req-1', itemKey: 'fisico-tubo', itemDescription: 'Tubo físico', itemUnit: 'm', quantity: 2 },
+        ],
+      },
+    } as unknown as Project;
+
+    const [chapter] = warehouseBudgetMaterialsByChapter(project);
+    expect(chapter.rows[0]).toMatchObject({ contractedQuantity: 20, withdrawnQuantity: 5 });
+  });
+
+  it('limita o retirado líquido a zero quando a devolução vinculada é integral', () => {
+    const project = {
+      phases: [{ id: 'chapter-2', customNumber: '2', name: 'Incêndio', color: '#000', tasks: [] }],
+      analyticCompositions: [composition('base', 10, 'chapter-2')],
+      warehouse: {
+        materialLinks: [{ id: 'link-1', warehouseItemKey: 'fisico-tubo', projectMaterialCode: '123', projectMaterialDescription: 'Tubo de aço', projectMaterialUnit: 'm', conversionFactor: 1 }],
+        requisitions: [{ id: 'req-1', number: 'REQ-1', date: '2026-09-05', status: 'entregue', chapterId: 'chapter-2', items: [], createdAt: '2026-09-05T10:00:00.000Z' }],
+        movements: [
+          { id: 'mov-1', type: 'retirada', date: '2026-09-05', createdAt: '2026-09-05T10:00:00.000Z', requisitionId: 'req-1', itemKey: 'fisico-tubo', itemDescription: 'Tubo físico', itemUnit: 'm', quantity: 7 },
+          { id: 'dev-1', type: 'devolucao', originType: 'return', date: '2026-09-05', createdAt: '2026-09-05T12:00:00.000Z', requisitionId: 'req-1', itemKey: 'fisico-tubo', itemDescription: 'Tubo físico', itemUnit: 'm', quantity: 7 },
+        ],
+      },
+    } as unknown as Project;
+
+    const [chapter] = warehouseBudgetMaterialsByChapter(project);
+    expect(chapter.rows[0]).toMatchObject({ withdrawnQuantity: 0 });
+  });
+
+  it('não desconta devolução registrada em outra requisição ou capítulo', () => {
+    const project = {
+      phases: [
+        { id: 'chapter-2', customNumber: '2', name: 'Incêndio', color: '#000', tasks: [] },
+        { id: 'chapter-3', customNumber: '3', name: 'Elétrica', color: '#000', tasks: [] },
+      ],
+      analyticCompositions: [composition('base', 10, 'chapter-2')],
+      warehouse: {
+        materialLinks: [{ id: 'link-1', warehouseItemKey: 'fisico-tubo', projectMaterialCode: '123', projectMaterialDescription: 'Tubo de aço', projectMaterialUnit: 'm', conversionFactor: 1 }],
+        requisitions: [
+          { id: 'req-1', number: 'REQ-1', date: '2026-09-05', status: 'entregue', chapterId: 'chapter-2', items: [], createdAt: '2026-09-05T10:00:00.000Z' },
+          { id: 'req-2', number: 'REQ-2', date: '2026-09-05', status: 'entregue', chapterId: 'chapter-3', items: [], createdAt: '2026-09-05T10:00:00.000Z' },
+        ],
+        movements: [
+          { id: 'mov-1', type: 'retirada', date: '2026-09-05', createdAt: '2026-09-05T10:00:00.000Z', requisitionId: 'req-1', itemKey: 'fisico-tubo', itemDescription: 'Tubo físico', itemUnit: 'm', quantity: 7 },
+          { id: 'dev-1', type: 'devolucao', originType: 'return', date: '2026-09-05', createdAt: '2026-09-05T12:00:00.000Z', requisitionId: 'req-2', itemKey: 'fisico-tubo', itemDescription: 'Tubo físico', itemUnit: 'm', quantity: 7 },
+        ],
+      },
+    } as unknown as Project;
+
+    const [chapter] = warehouseBudgetMaterialsByChapter(project);
+    expect(chapter.rows[0]).toMatchObject({ withdrawnQuantity: 7 });
+  });
+
   it('não soma retirada de requisição sem capítulo ou vinculada a outro capítulo', () => {
     const project = {
       phases: [

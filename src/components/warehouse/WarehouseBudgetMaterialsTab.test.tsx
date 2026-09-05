@@ -9,7 +9,7 @@ const composition = (id: string, description: string, quantity: number) => ({
 });
 
 describe('WarehouseBudgetMaterialsTab', () => {
-  it('usa retirado como ordem hierárquica padrão e mantém os cabeçalhos ordenáveis', () => {
+  it('usa retirado líquido como ordem hierárquica padrão e mantém os cabeçalhos ordenáveis', () => {
     const project = {
       phases: [{ id: 'chapter-2', customNumber: '2', name: 'Incêndio', color: '#000', tasks: [] }],
       analyticCompositions: [composition('2', 'Zinco', 3), composition('1', 'Alumínio', 5)],
@@ -27,13 +27,13 @@ describe('WarehouseBudgetMaterialsTab', () => {
     } as unknown as Project;
     const view = render(<WarehouseBudgetMaterialsTab project={project} />);
     const materialHeader = screen.getByRole('button', { name: 'Material' });
-    const withdrawnHeader = screen.getByRole('button', { name: 'Retirado (hierarquia)' });
+    const withdrawnHeader = screen.getByRole('button', { name: 'Retirado líquido (hierarquia)' });
 
     expect(screen.getByRole('button', { name: 'Contratado' })).toBeInTheDocument();
     expect(withdrawnHeader).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Aditivo' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Total planejado' })).not.toBeInTheDocument();
-    expect(screen.getByText(/Ordem hierárquica: maior quantidade retirada primeiro/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ordem hierárquica: maior quantidade líquida retirada primeiro/i)).toBeInTheDocument();
     expect(withdrawnHeader.closest('th')).toHaveAttribute('aria-sort', 'descending');
     expect(view.container.querySelector('tbody tr')?.textContent).toContain('Zinco');
 

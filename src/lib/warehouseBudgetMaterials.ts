@@ -1,4 +1,4 @@
-import type { Additive, AdditiveComposition, Project } from '@/types/project';
+import type { Additive, AdditiveComposition, Project, WarehouseMovement } from '@/types/project';
 import { compositionWithResolvedInputs, normalizeAnalyticCode, normalizeAnalyticItem } from '@/lib/analyticLinks';
 import { resolveMaterialCostClass } from '@/lib/materialComparisons';
 
@@ -144,16 +144,31 @@ export function warehouseBudgetMaterialsByChapter(project: Project): WarehouseBu
     linksByWarehouseItem.set(link.warehouseItemKey, links);
   }
   const requisitionsById = new Map((project.warehouse?.requisitions ?? []).map(requisition => [requisition.id, requisition] as const));
+  const returnedByRequisitionItem = new Map<string, number>();
+  const withdrawalsByRequisitionItem = new Map<string, WarehouseMovement>();
   for (const movement of project.warehouse?.movements ?? []) {
-    if (movement.type !== 'retirada' || movement.reversedById || !movement.requisitionId) continue;
+    if (movement.reversedById || !movement.requisitionId) continue;
+    const movementKey = `${movement.requisitionId}|${movement.itemKey}`;
+    if (movement.type === 'devolucao' && movement.originType === 'return') {
+      returnedByRequisitionItem.set(movementKey, round((returnedByRequisitionItem.get(movementKey) ?? 0) + Math.max(0, Number(movement.quantity) || 0)));
+      continue;
+    }
+    if (movement.type !== 'retirada') continue;
+    const current = withdrawalsByRequisitionItem.get(movementKey);
+    withdrawalsByRequisitionItem.set(movementKey, current
+      ? { ...current, quantity: round((Number(current.quantity) || 0) + Math.max(0, Number(movement.quantity) || 0)) }
+      : movement);
+  }
+  for (const [movementKey, movement] of withdrawalsByRequisitionItem) {
     const requisition = requisitionsById.get(movement.requisitionId);
     if (requisition?.status !== 'entregue' || !requisition.chapterId) continue;
     const chapterId = rootChapterId(requisition.chapterId);
     const linked = linksByWarehouseItem.get(movement.itemKey) ?? [{ code: movement.itemCode, description: movement.itemDescription, unit: movement.itemUnit, factor: 1 }];
+    const netQuantity = Math.max(0, (Number(movement.quantity) || 0) - (returnedByRequisitionItem.get(movementKey) ?? 0));
     for (const material of linked) {
       const row = rowsByChapterAndIdentity.get(`${chapterId}|${materialIdentity(material.code, material.description, material.unit)}`);
       if (!row) continue;
-      row.withdrawnQuantity = round(row.withdrawnQuantity + (Number(movement.quantity) || 0) * material.factor);
+      row.withdrawnQuantity = round(row.withdrawnQuantity + netQuantity * material.factor);
     }
   }
 
