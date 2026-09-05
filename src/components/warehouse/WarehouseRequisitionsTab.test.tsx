@@ -48,6 +48,30 @@ describe('WarehouseRequisitionsTab', () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
   });
 
+  it('abre retirada e cautela em janelas separadas do histórico', () => {
+    const project = projectWithMaterials(1);
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Nova retirada/i }));
+    expect(screen.getByRole('dialog', { name: 'Nova retirada de materiais' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
+    expect(screen.queryByRole('dialog', { name: 'Nova retirada de materiais' })).not.toBeInTheDocument();
+
+    const equipmentTab = screen.getByRole('tab', { name: /Equipamentos \/ Cautelas/i });
+    fireEvent.mouseDown(equipmentTab, { button: 0, ctrlKey: false });
+    fireEvent.click(equipmentTab);
+    fireEvent.click(screen.getByRole('button', { name: /Nova cautela/i }));
+    expect(screen.getByRole('dialog', { name: 'Nova cautela de equipamentos' })).toBeInTheDocument();
+  });
+
+  it('confirma antes de descartar uma retirada em preenchimento', () => {
+    render(<WarehouseRequisitionsTab project={projectWithMaterials(1)} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Nova retirada/i }));
+    fireEvent.change(document.getElementById('withdrawal-chapter')!, { target: { value: 'chapter-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
+    expect(screen.getByText('Descartar retirada em preenchimento?')).toBeInTheDocument();
+  });
+
   it('seleciona um recebedor cadastrado e permite criar outro já em maiúsculas', () => {
     const project = projectWithMaterials(1);
     project.warehouse!.receivers = [{ name: 'JOÃO DA SILVA' }];

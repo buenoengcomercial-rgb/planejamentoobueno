@@ -28,7 +28,6 @@ import { generateDailyWithdrawalConfirmationPdfs, generateRequisitionReceipt } f
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
 import WarehouseCustodyTab from './WarehouseCustodyTab';
 import {
-  WarehouseActionBar,
   WarehouseEmptyState,
   WarehouseField,
   WarehouseSectionHeader,
@@ -275,6 +274,17 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
     setErrors({});
     setOpen(false);
   };
+  const hasWithdrawalDraft = Boolean(
+    form.chapterId || form.receiverName.trim() || form.notes.trim() || form.items.length || form.signatureReceiver || photos.length,
+  );
+  const requestCloseWithdrawal = () => {
+    if (saving) return;
+    if (!hasWithdrawalDraft) return reset();
+    confirm(
+      { title: 'Descartar retirada em preenchimento?', description: 'Os materiais, assinatura, fotos e demais dados ainda não foram registrados.', confirmLabel: 'Descartar preenchimento' },
+      reset,
+    );
+  };
 
   const deleteRequisition = (requisition: WarehouseRequisition) => confirm(
     { title: 'Excluir retirada definitivamente?', description: 'A retirada, as devoluções vinculadas, seus comprovantes, movimentos e o bloco gerado no Diário de Obra serão removidos.', confirmLabel: 'Excluir definitivamente' },
@@ -381,16 +391,21 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
       <input ref={galleryRef} className="hidden" type="file" accept="image/*" multiple onChange={event => addPhotos(event.target.files)} />
 
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 p-3 shadow-sm">
-        <Button className="min-h-11" onClick={() => setOpen(value => !value)}>
-          {open ? <X className="mr-2 h-4 w-4" /> : <Plus className="mr-2 h-4 w-4" />}
-          {open ? 'Fechar retirada' : 'Nova retirada'}
+        <Button className="min-h-11" onClick={() => setOpen(true)}>
+          <Plus className="mr-2 h-4 w-4" />Nova retirada
         </Button>
         <span className="text-sm font-medium text-muted-foreground">Preencha os dados e escolha os materiais.</span>
         <span className="ml-auto text-xs text-muted-foreground">{wh.requisitions.length} registro(s)</span>
       </div>
 
-      {open && (
-        <section className="space-y-4 rounded-xl border bg-card p-3 shadow-sm">
+      <Dialog open={open} onOpenChange={nextOpen => { if (!nextOpen) requestCloseWithdrawal(); }}>
+        <DialogContent className="warehouse-ui flex max-h-[95dvh] w-[calc(100vw-1rem)] max-w-6xl flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11">
+          <DialogHeader className="border-b p-4 pr-16">
+            <DialogTitle>Nova retirada de materiais</DialogTitle>
+            <DialogDescription>Preencha os dados, escolha os materiais e registre a assinatura antes de entregar.</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            <section className="space-y-4">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <WarehouseField label="Data">
               <Input id="withdrawal-date" className="min-h-11 text-base" type="date" value={form.date} onChange={event => setForm({ ...form, date: event.target.value })} />
@@ -463,9 +478,14 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
             <div className="space-y-3 rounded-lg border bg-muted/30 p-3"><div className="flex items-center gap-2 text-sm font-bold">Fotos da entrega <span className="rounded-full border bg-background px-2 py-0.5 text-xs text-muted-foreground">Opcional · até 3</span></div><div className="grid grid-cols-3 gap-2">{photos.map((photo, index) => <PhotoPreview key={`${photo.name}-${index}`} file={photo} onRemove={() => setPhotos(current => current.filter((_, photoIndex) => photoIndex !== index))} />)}</div><div className="grid grid-cols-2 gap-2"><Button type="button" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3} onClick={() => cameraRef.current?.click()}><Camera className="mr-2 h-4 w-4" />Tirar foto</Button><Button type="button" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3} onClick={() => galleryRef.current?.click()}><ImagePlus className="mr-2 h-4 w-4" />Galeria</Button></div></div>
           </div>
           <WarehouseField label="Observação" optional><Input id="withdrawal-notes" className="min-h-11" value={form.notes} onChange={event => setForm({ ...form, notes: event.target.value })} placeholder="Ex.: local de aplicação" /></WarehouseField>
-          <WarehouseActionBar><Button variant="outline" className="min-h-11 bg-background" disabled={saving} onClick={reset}>Cancelar</Button><Button className="min-h-11 font-bold" disabled={saving} onClick={() => void submit()}><Check className="mr-2 h-4 w-4" />{saving ? 'Registrando...' : 'Entregar e baixar estoque'}</Button></WarehouseActionBar>
-        </section>
-      )}
+            </section>
+          </div>
+          <DialogFooter className="gap-2 border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:space-x-0">
+            <Button variant="outline" className="min-h-11 sm:min-w-28" disabled={saving} onClick={requestCloseWithdrawal}>Cancelar</Button>
+            <Button className="min-h-11 font-bold sm:min-w-52" disabled={saving} onClick={() => void submit()}><Check className="mr-2 h-4 w-4" />{saving ? 'Registrando...' : 'Entregar e baixar estoque'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <section className="overflow-hidden rounded-xl border bg-card">
           <WarehouseSectionHeader icon={History} title="Histórico de retiradas e devoluções" description={`${wh.requisitions.length} retirada(s)`} tone="neutral" />

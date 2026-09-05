@@ -41,7 +41,6 @@ import WarehouseAuditIdentity from './WarehouseAuditIdentity';
 import { generateCustodyTermPdf } from './pdf';
 import { toast } from 'sonner';
 import {
-  WarehouseActionBar,
   WarehouseEmptyState,
   WarehouseEquipmentThumbnail,
   WarehouseField,
@@ -209,6 +208,17 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
     setErrors({});
     setOpen(false);
   };
+  const hasCustodyDraft = Boolean(
+    form.chapterId || form.workerName.trim() || form.dueDate || form.equipments.length || form.signatureReceiver || photos.length,
+  );
+  const requestCloseCustody = () => {
+    if (saving) return;
+    if (!hasCustodyDraft) return reset();
+    confirm(
+      { title: 'Descartar cautela em preenchimento?', description: 'Os equipamentos, assinatura, fotos e demais dados ainda não foram registrados.', confirmLabel: 'Descartar preenchimento' },
+      reset,
+    );
+  };
 
   const addPhotos = (files: FileList | null, current: File[], setter: (files: File[]) => void) => {
     if (!files) return;
@@ -328,16 +338,21 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
       <input ref={galleryRef} className="hidden" type="file" accept="image/*" multiple onChange={event => { addPhotos(event.target.files, photos, setPhotos); event.target.value = ''; }} />
 
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 p-3 shadow-sm">
-        <Button className="min-h-11" onClick={() => setOpen(value => !value)}>
-          {open ? <X className="mr-2 h-4 w-4" /> : <Plus className="mr-2 h-4 w-4" />}
-          {open ? 'Fechar cautela' : 'Nova cautela'}
+        <Button className="min-h-11" onClick={() => setOpen(true)}>
+          <Plus className="mr-2 h-4 w-4" />Nova cautela
         </Button>
         <span className="text-sm font-medium text-muted-foreground">Preencha os dados e escolha os equipamentos.</span>
         <span className="ml-auto text-xs text-muted-foreground">{wh.custodyTerms.length} registro(s)</span>
       </div>
 
-      {open && (
-        <section className="space-y-4 rounded-xl border bg-card p-3 shadow-sm">
+      <Dialog open={open} onOpenChange={nextOpen => { if (!nextOpen) requestCloseCustody(); }}>
+        <DialogContent className="warehouse-ui flex max-h-[95dvh] w-[calc(100vw-1rem)] max-w-6xl flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11">
+          <DialogHeader className="border-b p-4 pr-16">
+            <DialogTitle>Nova cautela de equipamentos</DialogTitle>
+            <DialogDescription>Informe o responsável, escolha os equipamentos e registre a assinatura antes de emitir.</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            <section className="space-y-4">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <WarehouseField label="Data"><Input className="min-h-11 text-base" type="date" value={form.issuedAt} onChange={event => setForm({ ...form, issuedAt: event.target.value })} /></WarehouseField>
             <WarehouseField label="Prédio / capítulo" error={errors.chapterId}><select id="custody-chapter" className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={form.chapterId} onChange={event => { setForm({ ...form, chapterId: event.target.value }); setErrors(current => ({ ...current, chapterId: undefined })); }}><option value="">Selecione</option>{chapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapter.name}</option>)}</select></WarehouseField>
@@ -370,9 +385,14 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
             <div className={`rounded-lg border bg-muted/30 p-3 ${errors.signatureReceiver ? 'border-destructive bg-destructive/5' : ''}`}><SignaturePad label="Assinatura de quem recebeu" value={form.signatureReceiver} onChange={signatureReceiver => { setForm(current => ({ ...current, signatureReceiver })); setErrors(current => ({ ...current, signatureReceiver: undefined })); }} />{errors.signatureReceiver && <div role="alert" className="mt-2 text-sm font-semibold text-destructive">{errors.signatureReceiver}</div>}</div>
             <div className="rounded-lg border bg-muted/30 p-3"><OptionalPhotos photos={photos} onCamera={() => cameraRef.current?.click()} onGallery={() => galleryRef.current?.click()} onRemove={index => setPhotos(current => current.filter((_, photoIndex) => photoIndex !== index))} /></div>
           </div>
-          <WarehouseActionBar><Button variant="outline" className="min-h-11 bg-background" disabled={saving} onClick={reset}>Cancelar</Button><Button className="min-h-11 font-bold" disabled={saving} onClick={() => void submit()}><Check className="mr-2 h-4 w-4" />{saving ? 'Emitindo...' : 'Emitir cautela'}</Button></WarehouseActionBar>
-        </section>
-      )}
+            </section>
+          </div>
+          <DialogFooter className="gap-2 border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:space-x-0">
+            <Button variant="outline" className="min-h-11 sm:min-w-28" disabled={saving} onClick={requestCloseCustody}>Cancelar</Button>
+            <Button className="min-h-11 font-bold sm:min-w-44" disabled={saving} onClick={() => void submit()}><Check className="mr-2 h-4 w-4" />{saving ? 'Emitindo...' : 'Emitir cautela'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <section className="overflow-hidden rounded-xl border bg-card">
         <WarehouseSectionHeader icon={History} title="Histórico de cautelas" description={`${sortedTerms.length} registro(s)`} tone="neutral" />
