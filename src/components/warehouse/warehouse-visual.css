@@ -214,8 +214,8 @@
 .warehouse-stock-summary :is(th, td):nth-child(11),
 .warehouse-stock-summary :is(th, td):nth-child(14),
 .warehouse-stock-summary :is(th, td):nth-child(15) { display: none; }
-.warehouse-stock-summary :is(th, td):nth-child(2) { width: 23%; }
-.warehouse-stock-summary :is(th, td):nth-child(3) { width: 13%; }
+.warehouse-stock-summary :is(th, td):nth-child(2) { width: 25%; }
+.warehouse-stock-summary :is(th, td):nth-child(3) { width: 112px; }
 .warehouse-stock-summary :is(th, td):nth-child(4) { width: 4%; }
 .warehouse-stock-summary :is(th, td):nth-child(5),
 .warehouse-stock-summary :is(th, td):nth-child(6),
@@ -224,10 +224,19 @@
 .warehouse-stock-summary :is(th, td):nth-child(10),
 .warehouse-stock-summary :is(th, td):nth-child(12),
 .warehouse-stock-summary :is(th, td):nth-child(13) { width: 6%; }
-.warehouse-stock-summary :is(th, td):nth-child(16) { width: 10%; }
-.warehouse-stock-summary :is(th, td):nth-child(n+17) { width: 5%; }
+.warehouse-stock-summary :is(th, td):nth-child(13) { width: 90px; }
+.warehouse-stock-summary :is(th, td):nth-child(16) { width: 108px; }
+.warehouse-stock-summary :is(th, td):nth-child(n+17) { width: 42px; }
 .warehouse-stock-table tbody td { padding: 0.75rem 0.5rem; }
-.warehouse-stock-summary th { overflow-wrap: anywhere; }
+.warehouse-stock-summary th { overflow-wrap: normal; word-break: normal; }
+.warehouse-stock-table :is(th, td):not([colspan]):nth-child(n+4) { text-align: center; }
+.warehouse-stock-table th:nth-child(n+4) button { justify-content: center; }
+.warehouse-stock-table th { letter-spacing: 0; }
+.warehouse-stock-table td:nth-child(3) select { min-height: 30px; height: 30px; font-size: 11px; }
+.warehouse-stock-table td:nth-child(13) input { min-height: 32px; height: 32px; font-size: 12px; }
+@media (min-width: 768px) {
+  .warehouse-stock-summary { min-width: 1100px; }
+}
 .warehouse-stock-table tbody tr:nth-child(even) { background-color: hsl(var(--muted) / 0.35); }
 .warehouse-stock-table tbody tr:hover { background-color: hsl(var(--primary) / 0.08); }
 @media (prefers-reduced-motion: reduce) {

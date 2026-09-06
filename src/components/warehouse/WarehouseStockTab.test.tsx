@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
+import { setMaterialCostClass } from '@/lib/materialComparisons';
 import WarehouseStockTab from './WarehouseStockTab';
 
 const { downloadAttachmentMock, openAttachmentMock } = vi.hoisted(() => ({
@@ -77,6 +78,22 @@ function projectWithWithdrawals(): Project {
 }
 
 describe('WarehouseStockTab - documentos no histórico', () => {
+  it('exibe o mínimo no campo e só salva quando o usuário altera o valor', () => {
+    const original = projectWithPurchaseHistory();
+    original.warehouse!.items[0].minStock = 1701;
+    const item = original.warehouse!.items[0];
+    const project = setMaterialCostClass(original, item, 'material');
+    const onProjectChange = vi.fn();
+    render(<WarehouseStockTab project={project} onProjectChange={onProjectChange} />);
+    const input = screen.getByRole('spinbutton', { name: 'Estoque mínimo de Material de teste' });
+    expect(input).toHaveValue(1701);
+    fireEvent.blur(input);
+    expect(onProjectChange).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '1800' } });
+    fireEvent.blur(input);
+    expect(onProjectChange.mock.calls[0][0].warehouse.items.find((row: { key: string }) => row.key === item.key).minStock).toBe(1800);
+  });
+
   beforeAll(() => {
     vi.stubGlobal('ResizeObserver', class {
       observe() {}

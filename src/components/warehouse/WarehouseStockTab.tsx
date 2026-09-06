@@ -67,7 +67,29 @@ function StockLinkButton({ row, onClick, mobile = false }: { row: WarehouseStock
   const linked = row.linkStatus === 'linked';
   const label = linked ? `Revisar vínculos (${row.projectLinks.length})` : row.linkStatus === 'unplanned' ? 'Revisar vínculo' : 'Vincular material';
   const tone = linked ? 'border-success/35 bg-success/5 text-success hover:bg-success/10' : row.linkStatus === 'unplanned' ? 'border-warning/35 bg-warning/5 text-warning hover:bg-warning/10' : 'border-primary/35 bg-primary/5 text-primary hover:bg-primary/10';
-  return <Button size="sm" variant="outline" className={`${mobile ? 'min-h-11 w-full text-sm' : 'h-8 min-h-8 w-full px-2 text-xs'} justify-center gap-1.5 ${tone}`} onClick={onClick} aria-label={label}><Link2 className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{label}</span></Button>;
+  return <Button size="sm" variant="outline" title={label} className={`${mobile ? 'min-h-11 w-full text-sm' : 'h-8 min-h-8 w-full px-2 text-xs'} justify-center gap-1.5 ${tone}`} onClick={onClick} aria-label={label}><Link2 className="h-3.5 w-3.5 shrink-0" /><span>{linked ? `Vínculos (${row.projectLinks.length})` : 'Vincular'}</span></Button>;
+}
+
+function StockMinimumInput({ row, onCommit }: { row: WarehouseStockOverviewRow; onCommit: (value: number) => void }) {
+  const effective = row.effectiveMinStock ?? 0;
+  const automatic = row.automaticMinStock ?? 0;
+  const manualWins = row.minStock != null && row.minStock >= automatic;
+  return <div className="space-y-1 text-center">
+    <input key={`${effective}:${row.minStock}`} type="number" min="0" step="any" defaultValue={effective}
+      aria-label={`Estoque mínimo de ${row.description}`}
+      title="Limite do alerta. Usa o maior entre 30% do planejado e o mínimo manual. Apague para voltar ao automático."
+      className="h-8 w-full rounded border border-border bg-background px-1 text-center text-xs tabular-nums"
+      onBlur={event => {
+        const raw = event.currentTarget.value;
+        if (raw !== '' && Number(raw) === effective) return;
+        const value = raw === '' ? NaN : Number(raw);
+        if (Number.isFinite(value) && value < 0) { event.currentTarget.value = String(effective); return; }
+        onCommit(value);
+        event.currentTarget.value = String(Math.max(Number.isFinite(value) ? value : 0, automatic));
+        if (Number.isFinite(value) && value < automatic) toast.info('O alerta mantém o mínimo automático de 30% do planejado.');
+      }} />
+    <span className="block whitespace-nowrap text-[10px] text-muted-foreground">{manualWins ? 'Manual' : automatic > 0 ? 'Auto · 30%' : 'Sem mínimo'}</span>
+  </div>;
 }
 
 export default function WarehouseStockTab({ project, onProjectChange, auditActor, canArchive = true, canDelete = false }: Props) {
@@ -162,7 +184,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
     <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
       <WarehouseSectionHeader icon={Boxes} title="Materiais em estoque" description="Busque, filtre e confira os saldos." help="A posição reúne materiais recebidos, retirados, perdas, custo médio, estoque mínimo e vínculos com o orçamento." />
       <div className="border-b border-border bg-muted/40 p-3">
-        <div className="grid gap-2 lg:grid-cols-[minmax(260px,1.25fr)_150px_minmax(180px,1fr)_180px_auto_auto]">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(200px,1fr)_165px_minmax(180px,1fr)_190px]">
         <div className="relative min-w-0">
           <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar insumo por descrição ou código..." className="min-h-11 pl-8 text-sm" />
@@ -170,10 +192,10 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
         <select className="min-h-11 min-w-0 rounded border bg-background px-2 text-sm" value={linkFilter} onChange={event => setLinkFilter(event.target.value as typeof linkFilter)} aria-label="Filtrar por vínculo"><option value="all">Todos os vínculos</option><option value="linked">Vinculados</option><option value="pending">Vínculo pendente</option><option value="unplanned">Não previstos</option></select>
         <select className="min-h-11 min-w-0 rounded border bg-background px-2 text-sm" value={purchaseGroupFilter} onChange={event => setPurchaseGroupFilter(event.target.value)} aria-label="Filtrar por grupo de compra"><option value="all">Todos os grupos</option>{purchaseGroups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
         <select className="min-h-11 min-w-0 rounded border bg-background px-2 text-sm" value={classFilter} onChange={event => setClassFilter(event.target.value as typeof classFilter)} aria-label="Filtrar por classificação"><option value="all">Todas as classificações</option>{stockClassOrder.map(costClass => <option key={costClass} value={costClass}>{stockClassLabel[costClass]}</option>)}</select>
-        <Button size="sm" variant={lowOnly ? 'secondary' : 'outline'} className="min-h-11 text-xs" onClick={() => setLowOnly(value => !value)}>Estoque baixo</Button>
-        <Button size="sm" variant={zeroOnly ? 'secondary' : 'outline'} className="min-h-11 text-xs" onClick={() => setZeroOnly(value => !value)}>Saldo zerado</Button>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/70 pt-3">
+        <Button size="sm" variant={lowOnly ? 'secondary' : 'outline'} aria-pressed={lowOnly} className="min-h-11 text-xs" onClick={() => setLowOnly(value => !value)}>Estoque baixo</Button>
+        <Button size="sm" variant={zeroOnly ? 'secondary' : 'outline'} aria-pressed={zeroOnly} className="min-h-11 text-xs" onClick={() => setZeroOnly(value => !value)}>Saldo zerado</Button>
           <span className="mr-auto text-xs text-muted-foreground">Ordenado por <strong className="font-semibold text-foreground">{stockSortLabel[sort.key]}</strong> · {filtered.length} item(ns)</span>
         <Button size="sm" variant={showAllColumns ? 'secondary' : 'outline'} className="hidden min-h-11 text-xs md:inline-flex" aria-pressed={showAllColumns} onClick={() => setShowAllColumns(value => !value)}>{showAllColumns ? 'Visão resumida' : 'Todas as colunas'}</Button>
         <Button size="sm" variant="outline" className="min-h-11 text-xs" onClick={() => setShowManualForm(value => !value)}>
@@ -257,7 +279,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
               <StockSortableHeader label="Devolvido" sortKey="returned" sort={sort} onSort={sortBy} align="right" className="text-success" />
               <StockSortableHeader label="Perdas" sortKey="losses" sort={sort} onSort={sortBy} align="right" />
               <StockSortableHeader label="Saldo" sortKey="balance" sort={sort} onSort={sortBy} align="right" className="bg-primary/5" />
-              <StockSortableHeader label="Estoque baixo" sortKey="effectiveMinStock" sort={sort} onSort={sortBy} align="right" className="bg-warning/5" />
+              <StockSortableHeader label="Mínimo" sortKey="effectiveMinStock" sort={sort} onSort={sortBy} align="center" className="bg-warning/5" />
               <StockSortableHeader label="Último mov." sortKey="lastMovementDate" sort={sort} onSort={sortBy} />
               <StockSortableHeader label="Custo médio" sortKey="averageUnitCost" sort={sort} onSort={sortBy} align="right" />
               <StockSortableHeader label="Vínculo" sortKey="linkStatus" sort={sort} onSort={sortBy} />
@@ -272,7 +294,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
               return <Fragment key={costClass}>{classRows.length > 0 && <tr data-testid="stock-class-group" className="border-t bg-muted/70"><td colSpan={17 + Number(canArchive) + Number(canDelete)} className="p-2"><div className="flex items-center gap-2"><StockClassBadge costClass={costClass} /><span className="text-xs font-semibold text-muted-foreground">{classRows.length} item(ns)</span></div></td></tr>}{classRows.map(r => (
               <tr key={r.key} data-testid="stock-material-row" className={`border-t border-border hover:bg-muted/30 ${r.withdrawn > 0 ? 'bg-primary/5' : ''} ${r.underMin ? 'bg-destructive/5' : ''} ${!r.isPhysicalStock ? 'bg-muted/20' : ''}`}>
                 <td className="p-1.5 font-mono text-[10px] text-muted-foreground truncate">{r.code || '—'}</td>
-                <td className="p-1.5 leading-snug break-words" title={r.description}><span className="block font-semibold">{r.description}</span>{!showAllColumns && <span className="mt-1 block text-xs font-normal text-muted-foreground">{r.code || 'Sem código'}</span>}</td>
+                <td className="p-1.5 leading-snug break-words" title={r.description}><span className="block font-semibold">{r.description}</span></td>
                 <td className="p-1.5"><StockClassSelect row={r} onChange={setClassification} /></td>
                 <td className="p-1.5 text-center text-muted-foreground">{r.unit}</td>
                 <td className="p-1.5 text-right font-mono tabular-nums">{r.planned.toLocaleString('pt-BR')}</td>
@@ -284,14 +306,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
                 <td className="p-1.5 text-right font-mono tabular-nums text-destructive">{r.losses.toLocaleString('pt-BR')}</td>
                 <td className={`p-1.5 text-right font-mono tabular-nums font-bold bg-primary/5 ${r.balance < 0 ? 'text-destructive' : r.underMin ? 'text-warning' : 'text-primary'}`}>{r.balance.toLocaleString('pt-BR')}</td>
                 <td className="p-1.5 bg-warning/5">
-                  {r.isPhysicalStock && r.costClass === 'material' ? <><div className={`mb-1 text-right font-mono text-[10px] ${r.underMin ? 'font-bold text-destructive' : 'text-muted-foreground'}`}>{r.effectiveMinStock?.toLocaleString('pt-BR') ?? '—'}</div><input
-                    type="number"
-                    step="any"
-                    defaultValue={r.minStock ?? ''}
-                    placeholder="—"
-                    className="w-full h-7 text-xs border border-border rounded px-1 text-right bg-background font-mono"
-                    onBlur={e => setMin(r.key, r.code, r.description, r.unit, parseFloat(e.target.value))}
-                  /></> : <span className="text-[10px] text-muted-foreground">Sem estoque físico</span>}
+                  {r.isPhysicalStock && r.costClass === 'material' ? <StockMinimumInput row={r} onCommit={value => setMin(r.key, r.code, r.description, r.unit, value)} /> : <span className="text-[10px] text-muted-foreground">Não se aplica</span>}
                 </td>
                 <td className="p-1.5 text-[10px] text-muted-foreground">{r.lastMovementDate ?? '—'}</td>
                 <td className="p-1.5 text-right font-mono text-[11px]">{r.valuationIncomplete || r.averageUnitCost == null ? 'Cálculo incompleto' : r.averageUnitCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
