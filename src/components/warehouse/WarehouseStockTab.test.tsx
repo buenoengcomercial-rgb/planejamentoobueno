@@ -139,7 +139,7 @@ describe('WarehouseStockTab - documentos no histórico', () => {
   it('prioriza materiais já retirados, pela maior quantidade retirada', () => {
     const { container } = render(<WarehouseStockTab project={projectWithWithdrawals()} onProjectChange={vi.fn()} />);
 
-    expect(screen.getByText('Ordenado por retirado · 3 item(ns)')).toBeInTheDocument();
+    expect(screen.getByText((_, element) => element?.textContent === 'Ordenado por retirado · 3 item(ns)')).toBeInTheDocument();
     const rows = Array.from(container.querySelectorAll('[data-testid="stock-material-row"]'));
     expect(rows.map(row => row.textContent)).toEqual([
       expect.stringContaining('Material retirado maior'),
@@ -182,7 +182,7 @@ describe('WarehouseStockTab - documentos no histórico', () => {
   it('pesquisa insumos previstos pela descrição sem exibir o código', () => {
     render(<WarehouseStockTab project={projectWithPlannedMaterials()} onProjectChange={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Revisar vínculos' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Vincular material' }).at(-1)!);
     fireEvent.click(screen.getByRole('combobox', { name: 'Selecionar insumo previsto' }));
 
     const search = screen.getByPlaceholderText('Digite uma palavra-chave...');
