@@ -120,7 +120,7 @@
 .warehouse-stock-summary :is(th, td):nth-child(2) { width: 32%; }
 .warehouse-stock-summary :is(th, td):nth-child(3) { width: 5%; }
 .warehouse-stock-summary :is(th, td):nth-child(14) { width: 13%; }
-.warehouse-stock-summary :is(th, td):nth-child(n+15) { width: 5%; }
+.warehouse-stock-summary :is(th, td):nth-child(n+15) { width: 8%; }
 .warehouse-stock-table tbody td { padding: 0.75rem 0.5rem; }
 .warehouse-stock-summary th { overflow-wrap: anywhere; }
 .warehouse-stock-table tbody tr:nth-child(even) { background-color: hsl(var(--muted) / 0.35); }
