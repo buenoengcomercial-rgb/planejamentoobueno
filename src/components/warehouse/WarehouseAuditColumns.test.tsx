@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
@@ -36,6 +36,7 @@ describe('colunas de auditoria do almoxarifado', () => {
 
   it('exibe criador e último alterador em Requisições', () => {
     render(<WarehouseRequisitionsTab project={auditProject()} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /expandir requisições/i }));
     expect(screen.getByRole('columnheader', { name: 'Incluído / alterado por' })).toBeInTheDocument();
     expect(screen.getAllByText(/Carla/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Diego/).length).toBeGreaterThan(0);

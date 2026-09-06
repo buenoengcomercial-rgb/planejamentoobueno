@@ -31,7 +31,7 @@ function projectWithMaterials(count = 15): Project {
 }
 
 function expandAllWithdrawalDateGroups() {
-  screen.getAllByTestId('withdrawal-date-group').filter(element => element.tagName === 'TR').forEach(element => {
+  screen.getAllByTestId('withdrawal-date-group').filter(element => element.tagName === 'SECTION').forEach(element => {
     const button = within(element).getByRole('button', { name: /expandir requisições/i });
     fireEvent.click(button);
   });
@@ -127,7 +127,7 @@ describe('WarehouseRequisitionsTab', () => {
     expect(screen.queryByRole('columnheader', { name: 'Equipe' })).not.toBeInTheDocument();
   });
 
-  it('destaca em azul a requisição aberta e seu detalhe associado', () => {
+  it('destaca a borda da requisição aberta e recua seu detalhe', () => {
     const project = projectWithMaterials(1);
     project.warehouse!.requisitions = [{
       id: 'req-highlight', number: 'REQ-2026-0010', date: '2026-08-18', status: 'entregue', chapterId: 'chapter-1',
@@ -139,9 +139,9 @@ describe('WarehouseRequisitionsTab', () => {
     expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0010/i }));
 
-    expect(screen.getByTestId('withdrawal-history-row')).toHaveClass('bg-primary/30');
-    expect(screen.getAllByTestId('withdrawal-history-details')[0]).toHaveClass('bg-primary/15');
-    expect(screen.getAllByTestId('withdrawal-history-details')[1]).toHaveClass('bg-primary/15');
+    expect(screen.getByTestId('withdrawal-history-row')).toHaveClass('border-primary/60');
+    expect(screen.getAllByTestId('withdrawal-history-details')[0]).toHaveClass('withdrawal-detail');
+    expect(screen.getAllByTestId('withdrawal-history-details')[1]).toHaveClass('withdrawal-detail-row');
     expect(screen.getByTestId('withdrawal-history-row').querySelector('svg')).toHaveClass('text-primary');
 
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0010/i }));
@@ -157,22 +157,22 @@ describe('WarehouseRequisitionsTab', () => {
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
 
-    const building = screen.getAllByTestId('withdrawal-building-group').find(element => element.tagName === 'TR')!;
-    const date = screen.getAllByTestId('withdrawal-date-group').find(element => element.tagName === 'TR')!;
-    expect(building).toHaveClass('bg-primary/15');
-    expect(date).toHaveClass('bg-muted/80');
+    const building = screen.getByTestId('withdrawal-building-group');
+    const date = screen.getByTestId('withdrawal-date-group');
+    expect(building).toContainElement(date);
+    expect(date.parentElement).toHaveClass('withdrawal-branch');
 
     fireEvent.click(within(date).getByRole('button', { name: /expandir requisições/i }));
     const rows = screen.getAllByTestId('withdrawal-history-row');
-    expect(rows[0].previousElementSibling).toBe(date);
-    expect(rows[1]).toHaveClass('bg-primary/15');
+    expect(date).toContainElement(rows[0]);
+    expect(rows[1]).toHaveClass('bg-card');
 
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0001/i }));
     const desktopDetail = screen.getAllByTestId('withdrawal-history-details').find(element => element.tagName === 'TR')!;
     expect(rows[0].nextElementSibling).toBe(desktopDetail);
-    expect(desktopDetail).toHaveClass('bg-primary/15');
-    expect(desktopDetail.querySelector('td')).toHaveClass('pl-12');
-    expect(desktopDetail.querySelector('td > div')).toHaveClass('border-l-primary');
+    expect(desktopDetail).toHaveClass('withdrawal-detail-row');
+    expect(desktopDetail.querySelector('td > div')).toHaveClass('withdrawal-branch');
+    expect(desktopDetail.querySelector('td > div')).toHaveClass('bg-muted/40');
     expect(rows[1].previousElementSibling).toBe(desktopDetail);
   });
 
@@ -227,7 +227,7 @@ describe('WarehouseRequisitionsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0002/i }));
 
     expect(screen.getAllByTestId('withdrawal-history-row')).toHaveLength(2);
-    expect(screen.getAllByTestId('withdrawal-history-row').every(row => row.classList.contains('bg-primary/30'))).toBe(true);
+    expect(screen.getAllByTestId('withdrawal-history-row').every(row => row.classList.contains('border-primary/60'))).toBe(true);
     expect(screen.getAllByTestId('withdrawal-history-details')).toHaveLength(4);
   });
 
@@ -243,7 +243,7 @@ describe('WarehouseRequisitionsTab', () => {
 
     expect(screen.getByTestId('withdrawal-history-row')).toHaveTextContent('REQ-2026-0020');
     expect(screen.queryByText('REQ-2026-0019')).not.toBeInTheDocument();
-    const olderDate = screen.getAllByTestId('withdrawal-date-group').filter(element => element.tagName === 'TR').find(element => element.textContent?.includes('18/08/2026'))!;
+    const olderDate = screen.getAllByTestId('withdrawal-date-group').filter(element => element.tagName === 'SECTION').find(element => element.textContent?.includes('18/08/2026'))!;
     fireEvent.click(within(olderDate).getByRole('button', { name: /expandir requisições/i }));
     expect(screen.getAllByText('REQ-2026-0019')).toHaveLength(2);
   });
@@ -329,7 +329,7 @@ describe('WarehouseRequisitionsTab', () => {
     expandAllWithdrawalDateGroups();
     const rows = screen.getAllByTestId('withdrawal-history-row');
     expect(rows[0]).toHaveTextContent('REQ-2026-0002');
-    expect(screen.getByRole('columnheader', { name: 'Último registro' })).toBeInTheDocument();
+    expect(screen.getAllByRole('columnheader', { name: 'Último registro' }).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0002/i }));
     expect(screen.getAllByText(/registro:/i).length).toBeGreaterThan(0);
   });
@@ -352,13 +352,13 @@ describe('WarehouseRequisitionsTab', () => {
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
 
-    const buildingRows = screen.getAllByTestId('withdrawal-building-group').filter(element => element.tagName === 'TR');
+    const buildingRows = screen.getAllByTestId('withdrawal-building-group').filter(element => element.tagName === 'SECTION');
     expect(buildingRows).toHaveLength(3);
     expect(buildingRows[0]).toHaveTextContent('Prédio A');
     expect(buildingRows[0]).toHaveTextContent('3 requisição(ões) · 2 item(ns)');
     expect(buildingRows[1]).toHaveTextContent('Prédio B');
     expect(buildingRows[2]).toHaveTextContent('Prédio não informado');
-    const dateRows = screen.getAllByTestId('withdrawal-date-group').filter(element => element.tagName === 'TR');
+    const dateRows = screen.getAllByTestId('withdrawal-date-group').filter(element => element.tagName === 'SECTION');
     expect(dateRows).toHaveLength(4);
     expect(dateRows[0]).toHaveTextContent('21/08/2026');
     expect(dateRows[0]).toHaveTextContent('2 requisição(ões) · 2 item(ns)');
@@ -400,6 +400,7 @@ describe('WarehouseRequisitionsTab', () => {
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
 
     expandAllWithdrawalDateGroups();
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0003/i }));
     expect(screen.getAllByText('1.1.1 · Prédio > Incêndio > Hidrantes').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Registro legado: 17\/08\/2026/).length).toBeGreaterThan(0);
   });
@@ -439,7 +440,7 @@ describe('WarehouseRequisitionsTab', () => {
     fireEvent.mouseDown(equipmentTab, { button: 0, ctrlKey: false });
     fireEvent.click(equipmentTab);
 
-    const buildingRows = screen.getAllByTestId('custody-building-group').filter(element => element.tagName === 'TR');
+    const buildingRows = screen.getAllByTestId('custody-building-group').filter(element => element.tagName === 'SECTION');
     expect(buildingRows).toHaveLength(2);
     expect(buildingRows[0]).toHaveTextContent('Prédio A');
     expect(buildingRows[0]).toHaveTextContent('2 cautela(s) · 2 equipamento(s)');
