@@ -1,10 +1,9 @@
 import { isDiaUtil } from '@/lib/feriados';
+import type { ProjectScheduleCalendar, WorkdayException } from '@/types/project';
 
 /** Calendário operacional compartilhado por Cronograma, Rotina e reprogramação. */
-export interface ScheduleCalendar {
-  uf: string;
-  municipio: string;
-  trabalhaSabado: boolean;
+export interface ScheduleCalendar extends Pick<ProjectScheduleCalendar, 'uf' | 'municipio' | 'trabalhaSabado'> {
+  exceptions?: WorkdayException[];
 }
 
 export function parseScheduleDate(value: string): Date {
@@ -16,7 +15,14 @@ export function scheduleDateISO(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+export function getWorkdayException(date: Date, calendar: ScheduleCalendar): WorkdayException | undefined {
+  const key = scheduleDateISO(date);
+  return calendar.exceptions?.find(exception => exception.date === key);
+}
+
 export function scheduleWorkdayWeight(date: Date, calendar: ScheduleCalendar): number {
+  // A exceção aprovada vale jornada integral, inclusive em sábado ou feriado.
+  if (getWorkdayException(date, calendar)) return 1;
   if (!isDiaUtil(date, calendar.uf, calendar.municipio, calendar.trabalhaSabado)) return 0;
   return date.getDay() === 6 ? 0.5 : 1;
 }

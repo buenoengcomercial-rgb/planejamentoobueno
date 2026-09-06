@@ -70,6 +70,25 @@ export interface LaborDimensioningSettings {
   mode: 'duration_by_team' | 'team_by_deadline';
 }
 
+/** Liberação pontual de sábado ou feriado como jornada integral. */
+export interface WorkdayException {
+  id: string;
+  date: string;
+  reason: string;
+  createdAt: string;
+  createdBy?: string;
+  createdByEmail?: string;
+}
+
+/** Calendário operacional persistido e compartilhado por toda a obra. */
+export interface ProjectScheduleCalendar {
+  uf: string;
+  municipio: string;
+  jornadaDiaria: number;
+  trabalhaSabado: boolean;
+  exceptions?: WorkdayException[];
+}
+
 export interface TeamMemberDefinition {
   operationalRoleId: string;
   quantity: number;
@@ -795,6 +814,8 @@ export interface Project {
   laborAvailability?: LaborAvailability[];
   /** Parametros de jornada e arredondamento do dimensionamento de equipes. */
   laborDimensioningSettings?: LaborDimensioningSettings;
+  /** Calendário operacional persistido e sincronizado da obra. */
+  scheduleCalendar?: ProjectScheduleCalendar;
   /** Estado visual persistido da UI (ex.: capítulos minimizados na EAP). */
   uiState?: ProjectUiState;
   /** Dados contratuais usados no boletim de medição. */

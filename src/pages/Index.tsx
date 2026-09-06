@@ -11,11 +11,11 @@ import ImportSyntheticDialog from '@/components/ImportSyntheticDialog';
 import { Menu, X, Loader2, Building2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { applyRupToProject, applyDailyLogsToProject, calculateCPM, captureBaseline, syncBaselineWithRup, settleAllDependencies } from '@/lib/calculations';
-import { loadObraConfig } from '@/components/ConfiguracaoObra';
+import { resolveObraConfig } from '@/components/ConfiguracaoObra';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
-import { userInfoFromSupabaseUser } from '@/lib/audit';
+import { logToProject, userInfoFromSupabaseUser } from '@/lib/audit';
 import { buildOperationalProjectFromPendingAdditives, getPendingAdditiveScheduleControls } from '@/lib/additiveSchedule';
 import { mergeOperationalProjectIntoRaw } from '@/lib/operationalProject';
 
@@ -875,8 +875,8 @@ export default function Index() {
       )
     );
     if (needsDependencySettle) {
-      const cfg = loadObraConfig();
-      const cal = { uf: cfg.uf, municipio: cfg.municipio, trabalhaSabado: cfg.trabalhaSabado, jornadaDiaria: cfg.jornadaDiaria };
+      const cfg = resolveObraConfig(enriched);
+      const cal = { uf: cfg.uf, municipio: cfg.municipio, trabalhaSabado: cfg.trabalhaSabado, jornadaDiaria: cfg.jornadaDiaria, exceptions: cfg.exceptions };
       return calculateCPM(settleAllDependencies(enriched, cal));
     }
     return calculateCPM(enriched);
@@ -1283,6 +1283,14 @@ export default function Index() {
           canRequestReschedule={role === 'owner' || role === 'admin' || role === 'engineer'}
           canApproveReschedule={role === 'owner' || role === 'admin'}
           auditActor={auditActor}
+          calendarConfig={resolveObraConfig(project)}
+          canManageCalendar={role === 'owner' || role === 'admin'}
+          onCalendarConfigChange={config => ganttSetter(previous => logToProject({ ...previous, scheduleCalendar: config }, {
+            ...auditActor, entityType: 'project', entityId: previous.id, action: 'updated',
+            title: 'Calendário da obra atualizado',
+            description: `Calendário operacional atualizado; ${config.exceptions?.length ?? 0} exceção(ões) de expediente ativa(s).`,
+            before: previous.scheduleCalendar, after: config,
+          }))}
           undoButton={<UndoButton canUndo={canUndo('gantt')} onUndo={() => handleUndo('gantt')} size="xs" />}
         />;
       case 'tasks':
@@ -1326,7 +1334,7 @@ export default function Index() {
       case 'additive':
         return <Additive project={project} onProjectChange={additiveSetter} canFormalize={role === 'owner' || role === 'admin'} undoButton={<UndoButton canUndo={canUndo('additive')} onUndo={() => handleUndo('additive')} />} />;
       case 'additiveSchedule':
-        return <AdditiveSchedule project={project} onProjectChange={additiveScheduleSetter} undoButton={<UndoButton canUndo={canUndo('additiveSchedule')} onUndo={() => handleUndo('additiveSchedule')} />} />;
+        return <AdditiveSchedule project={project} onProjectChange={additiveScheduleSetter} canManageCalendar={role === 'owner' || role === 'admin'} auditActor={auditActor} undoButton={<UndoButton canUndo={canUndo('additiveSchedule')} onUndo={() => handleUndo('additiveSchedule')} />} />;
       case 'realCost':
         return <RealCost project={project} onProjectChange={realCostSetter} canManageSubcontracts={role === 'owner' || role === 'admin'} canDeleteSubcontractHistory={role === 'owner'} auditActor={auditActor} />;
       case 'materials':

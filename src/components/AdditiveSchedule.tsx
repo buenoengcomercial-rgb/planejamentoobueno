@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Download, FileSpreadsheet, LockKeyhole } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Additive, AdditiveScheduleSnapshotRow, Project } from '@/types/project';
+import { logToProject, type AuditUserInfo } from '@/lib/audit';
 import GanttChart from '@/components/GanttChart';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { loadObraConfig } from '@/components/ConfiguracaoObra';
+import { resolveObraConfig } from '@/components/ConfiguracaoObra';
 import AdditiveScheduleFinancialForecast from '@/components/additiveSchedule/AdditiveScheduleFinancialForecast';
 import { buildAdditiveScheduleForecast } from '@/lib/additiveScheduleForecast';
 import {
@@ -39,6 +40,8 @@ interface Props {
   project: Project;
   onProjectChange: (next: Project | ((previous: Project) => Project)) => void;
   undoButton?: React.ReactNode;
+  canManageCalendar?: boolean;
+  auditActor?: AuditUserInfo;
 }
 
 function snapshotSuspensionMap(rows: AdditiveScheduleSnapshotRow[], additive: Additive): Record<string, AdditiveScheduleSuspensionMeta> {
@@ -72,7 +75,7 @@ function snapshotSuspensionMap(rows: AdditiveScheduleSnapshotRow[], additive: Ad
   return result;
 }
 
-export default function AdditiveSchedule({ project, onProjectChange, undoButton }: Props) {
+export default function AdditiveSchedule({ project, onProjectChange, undoButton, canManageCalendar = false, auditActor = {} }: Props) {
   const additives = project.additives ?? [];
   const preferred = additives.find(additive => !additive.isContracted || additive.editUnlocked) ?? additives[0];
   const [activeId, setActiveId] = useState(preferred?.id ?? '');
@@ -80,7 +83,7 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
   const [blockerIds, setBlockerIds] = useState<string[]>([]);
   const [blockerNote, setBlockerNote] = useState('');
   const active = additives.find(additive => additive.id === activeId) ?? preferred;
-  const obraConfig = useMemo(loadObraConfig, []);
+  const obraConfig = useMemo(() => resolveObraConfig(project), [project]);
 
   useEffect(() => {
     if (!active && preferred) setActiveId(preferred.id);
@@ -257,6 +260,15 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton 
           }}
           onEditSuspension={isArchived ? undefined : openBlockDialog}
           readOnly={isArchived}
+          calendarConfig={obraConfig}
+          canManageCalendar={canManageCalendar}
+          auditActor={auditActor}
+          onCalendarConfigChange={config => onProjectChange(previous => logToProject({ ...previous, scheduleCalendar: config }, {
+            ...auditActor, entityType: 'project', entityId: previous.id, action: 'updated',
+            title: 'Calendário da obra atualizado',
+            description: `Calendário operacional atualizado; ${config.exceptions?.length ?? 0} exceção(ões) de expediente ativa(s).`,
+            before: previous.scheduleCalendar, after: config,
+          }))}
           monthlyFinancialForecast={financialForecast.months}
           financialForecastNode={<AdditiveScheduleFinancialForecast rows={rows} trabalhaSabado={obraConfig.trabalhaSabado} />}
         />

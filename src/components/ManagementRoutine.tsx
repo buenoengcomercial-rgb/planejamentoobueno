@@ -25,7 +25,7 @@ import {
 import { buildPendingAdditiveSuspensionMap, isStatusOnlySuspension } from '@/lib/additiveSchedule';
 import { getAllTasks } from '@/data/sampleProject';
 import { updateProjectTask } from '@/lib/taskTree';
-import { loadObraConfig } from '@/components/ConfiguracaoObra';
+import { resolveObraConfig } from '@/components/ConfiguracaoObra';
 import { applyDailyProductionLogs, upsertDailyProductionLog } from '@/lib/dailyProductionLogs';
 import TaskRescheduleDialog from '@/components/TaskRescheduleDialog';
 import { approveRescheduleRequest, rejectRescheduleRequest, submitRescheduleRequest } from '@/lib/taskRescheduling';
@@ -347,7 +347,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
   const [activeTab, setActiveTab] = useState('agenda');
   const [rescheduleTaskId, setRescheduleTaskId] = useState<string | null>(null);
   const [selectedWeekStart, setSelectedWeekStart] = useState(() => startOfWeekISO(initialWeek || todayISO()));
-  const obraCalendar = useMemo(() => loadObraConfig(), []);
+  const obraCalendar = useMemo(() => resolveObraConfig(project), [project]);
   const pendingAdditiveTaskIds = useMemo(() => new Set(
     Object.entries(buildPendingAdditiveSuspensionMap(project))
       .filter(([, suspension]) => isStatusOnlySuspension(suspension))

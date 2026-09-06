@@ -50,7 +50,7 @@ import {
   settleAdditiveScheduleDraft,
   validateAdditiveSchedule,
 } from '@/lib/additiveSchedule';
-import { loadObraConfig } from '@/components/ConfiguracaoObra';
+import { resolveObraConfig } from '@/components/ConfiguracaoObra';
 
 interface Params {
   project: Project;
@@ -74,7 +74,7 @@ const createPhaseId = () => {
 export function useAdditiveActions({ project, onProjectChange, state, canFormalize = false }: Params) {
   const { user } = useAuth();
   const auditUser = useMemo(() => userInfoFromSupabaseUser(user), [user]);
-  const obraConfig = useMemo(loadObraConfig, []);
+  const obraConfig = useMemo(() => resolveObraConfig(project), [project]);
   const {
     active, isLocked,
     setActiveId,

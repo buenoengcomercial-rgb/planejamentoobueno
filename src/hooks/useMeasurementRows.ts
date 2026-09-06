@@ -14,7 +14,7 @@ import {
   estimateTaskValue,
   buildOrderedTasks,
 } from '@/components/measurement/measurementFormat';
-import { loadObraConfig } from '@/components/ConfiguracaoObra';
+import { resolveObraConfig } from '@/components/ConfiguracaoObra';
 import { calculateLineTotal } from '@/lib/financialEngine';
 
 export interface UseMeasurementRowsParams {
@@ -109,7 +109,7 @@ export function useMeasurementRows({
   }, [project.phases]);
 
   // Calendário de trabalho (sábado conta meio dia ou não) — mesma fonte do Gantt
-  const trabalhaSabado = useMemo(() => loadObraConfig().trabalhaSabado, []);
+  const trabalhaSabado = useMemo(() => resolveObraConfig(project).trabalhaSabado, [project]);
 
   // ───────── Cálculo das linhas ─────────
   const rows: Row[] = useMemo(() => {

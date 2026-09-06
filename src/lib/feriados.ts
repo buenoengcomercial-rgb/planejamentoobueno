@@ -1,4 +1,5 @@
 // Brazilian holidays library with Easter calculation (Butcher's algorithm)
+import type { WorkdayException } from '@/types/project';
 
 // Easter calculation using Butcher's algorithm
 function calcularPascoa(ano: number): Date {
@@ -171,7 +172,8 @@ export function calcularDiasUteis(
   uf: string,
   municipio: string,
   trabalhaSabado: boolean,
-  jornadaDiaria: number = 8
+  jornadaDiaria: number = 8,
+  exceptions: WorkdayException[] = [],
 ): { dias: number; horas: number } {
   const feriadoMap = getFeriadosMap(inicio, fim, uf, municipio);
   let dias = 0;
@@ -184,8 +186,11 @@ export function calcularDiasUteis(
     const dow = current.getDay();
     const key = dateKey(current);
     const isFeriado = feriadoMap.has(key);
+    const isException = exceptions.some(item => item.date === key);
 
-    if (dow === 0 || isFeriado) {
+    if (isException) {
+      dias += 1;
+    } else if (dow === 0 || isFeriado) {
       // skip
     } else if (dow === 6) {
       if (trabalhaSabado) dias += 0.5;
@@ -204,7 +209,10 @@ export function calcularDiasUteis(
     const dow = cur2.getDay();
     const key = dateKey(cur2);
     const isFeriado = feriadoMap.has(key);
-    if (dow === 0 || isFeriado) {
+    const isException = exceptions.some(item => item.date === key);
+    if (isException) {
+      horas += jornadaDiaria;
+    } else if (dow === 0 || isFeriado) {
       // skip
     } else if (dow === 6) {
       if (trabalhaSabado) horas += jornadaDiaria / 2;

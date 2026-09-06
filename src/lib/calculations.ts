@@ -2,7 +2,7 @@ import { Task, Project, DependencyType, TaskBaseline } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
 import { mapTaskTree, replaceProjectTasksById } from '@/lib/taskTree';
 import { parseISODateLocal, toISODateLocal } from '@/components/gantt/utils';
-import { isDiaUtil, getFeriadosMap } from '@/lib/feriados';
+import { scheduleWorkdayWeight } from '@/lib/scheduleCalendar';
 
 /** Calendário de trabalho usado pelo motor de dependências. */
 export interface WorkCalendar {
@@ -10,6 +10,7 @@ export interface WorkCalendar {
   municipio: string;
   trabalhaSabado: boolean;
   jornadaDiaria?: number;
+  exceptions?: import('@/types/project').WorkdayException[];
 }
 
 /** Próximo dia útil ≥ `date` respeitando feriados, domingos e sábados conforme config. */
@@ -21,7 +22,7 @@ export function nextWorkDay(date: Date, cal?: WorkCalendar): Date {
     return d;
   }
   let safety = 0;
-  while (!isDiaUtil(d, cal.uf, cal.municipio, cal.trabalhaSabado) && safety < 400) {
+  while (scheduleWorkdayWeight(d, cal) <= 0 && safety < 400) {
     d.setDate(d.getDate() + 1);
     safety++;
   }
@@ -39,12 +40,9 @@ function addWorkDaysCal(start: Date, days: number, cal?: WorkCalendar): Date {
     safety++;
     current.setDate(current.getDate() + 1);
     if (cal) {
-      if (!isDiaUtil(current, cal.uf, cal.municipio, cal.trabalhaSabado)) continue;
-      if (current.getDay() === 6 && cal.trabalhaSabado) {
-        remaining -= 0.5;
-      } else {
-        remaining -= 1;
-      }
+      const capacity = scheduleWorkdayWeight(current, cal);
+      if (capacity <= 0) continue;
+      remaining -= capacity;
     } else {
       const dow = current.getDay();
       if (dow === 0) continue;
@@ -503,8 +501,9 @@ function previousWorkStartForEnd(endDate: Date, duration: number, cal?: WorkCale
     safety++;
     current.setDate(current.getDate() - 1);
     if (cal) {
-      if (!isDiaUtil(current, cal.uf, cal.municipio, cal.trabalhaSabado)) continue;
-      remaining -= current.getDay() === 6 && cal.trabalhaSabado ? 0.5 : 1;
+      const capacity = scheduleWorkdayWeight(current, cal);
+      if (capacity <= 0) continue;
+      remaining -= capacity;
     } else {
       if (current.getDay() === 0) continue;
       remaining -= 1;

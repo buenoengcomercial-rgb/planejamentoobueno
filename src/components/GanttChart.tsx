@@ -17,8 +17,8 @@ import DependencyArrows from './gantt/DependencyArrows';
 import ConfiguracaoObra, { ObraConfig, loadObraConfig } from './ConfiguracaoObra';
 import { DAY_WIDTH, ROW_HEIGHT, FlatTask } from './gantt/types';
 import { addDays, diffDays, formatDateFull, formatDateShort, getEndDate, getWorkEndDate, MONTH_NAMES_PT, dateToISO, toISODateLocal, parseISODateLocal, countWorkDays } from './gantt/utils';
-import { getFeriadosMap, FeriadoInfo, calcularDiasUteis, isDiaUtil } from '@/lib/feriados';
-import { operationalEndDate } from '@/lib/scheduleCalendar';
+import { getFeriadosMap, FeriadoInfo, calcularDiasUteis } from '@/lib/feriados';
+import { getWorkdayException, operationalEndDate, scheduleDateISO, scheduleWorkdayWeight } from '@/lib/scheduleCalendar';
 import {
   calculateRupDuration,
   propagateAllDependencies,
@@ -66,6 +66,9 @@ interface GanttChartProps {
   canRequestReschedule?: boolean;
   canApproveReschedule?: boolean;
   auditActor?: AuditUserInfo;
+  calendarConfig?: ObraConfig;
+  onCalendarConfigChange?: (config: ObraConfig) => void;
+  canManageCalendar?: boolean;
 }
 
 export default function GanttChart({
@@ -87,6 +90,9 @@ export default function GanttChart({
   canRequestReschedule = false,
   canApproveReschedule = false,
   auditActor = {},
+  calendarConfig,
+  onCalendarConfigChange,
+  canManageCalendar = false,
 }: GanttChartProps) {
   const isTaskScheduleLocked = useCallback((taskId: string) => !!lockedTaskLabels[taskId], [lockedTaskLabels]);
   const scheduleLockLabel = useCallback((taskId: string) => lockedTaskLabels[taskId], [lockedTaskLabels]);
@@ -137,7 +143,8 @@ export default function GanttChart({
   const [laborPanelExpanded, setLaborPanelExpanded] = useState(false);
   const [laborIssueMode, setLaborIssueMode] = useState<'deficit' | 'availability' | 'data'>('deficit');
   const [highlightedLaborTaskIds, setHighlightedLaborTaskIds] = useState<Set<string>>(() => new Set());
-  const [obraConfig, setObraConfig] = useState<ObraConfig>(loadObraConfig);
+  const [obraConfig, setObraConfig] = useState<ObraConfig>(() => calendarConfig ?? loadObraConfig());
+  useEffect(() => { if (calendarConfig) setObraConfig(calendarConfig); }, [calendarConfig]);
   const [rescheduleTaskId, setRescheduleTaskId] = useState<string | null>(null);
   const suspensionMap = useMemo(
     () => providedSuspensionMap ?? (context === 'official' ? buildPendingAdditiveSuspensionMap(project) : {}),
@@ -441,14 +448,14 @@ export default function GanttChart({
 
   // Day info for visual highlighting
   const dayInfos = useMemo(() => {
-    const infos: { date: Date; dow: number; feriado?: FeriadoInfo }[] = [];
+    const infos: { date: Date; dow: number; feriado?: FeriadoInfo; exception?: ReturnType<typeof getWorkdayException> }[] = [];
     for (let i = 0; i < totalDays; i++) {
       const d = addDays(projectStart, i);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      infos.push({ date: d, dow: d.getDay(), feriado: feriadoMap.get(key) });
+      const key = scheduleDateISO(d);
+      infos.push({ date: d, dow: d.getDay(), feriado: feriadoMap.get(key), exception: getWorkdayException(d, obraConfig) });
     }
     return infos;
-  }, [projectStart, totalDays, feriadoMap]);
+  }, [projectStart, totalDays, feriadoMap, obraConfig]);
 
   // Coleta tarefas do capítulo: se for capítulo principal, inclui as dos subcapítulos.
   const getEffectiveChapterTasks = useCallback((phase: typeof project.phases[0]) => {
@@ -466,7 +473,7 @@ export default function GanttChart({
     const ends = items.map(t => operationalTaskEnd(t).getTime());
     const inicio = new Date(Math.min(...starts));
     const fim = new Date(Math.max(...ends));
-    return calcularDiasUteis(inicio, fim, obraConfig.uf, obraConfig.municipio, obraConfig.trabalhaSabado, obraConfig.jornadaDiaria);
+    return calcularDiasUteis(inicio, fim, obraConfig.uf, obraConfig.municipio, obraConfig.trabalhaSabado, obraConfig.jornadaDiaria, obraConfig.exceptions);
   }, [obraConfig, getEffectiveChapterTasks, operationalTaskEnd]);
 
   const getPhaseRange = (phase: typeof project.phases[0]) => {
@@ -757,7 +764,7 @@ export default function GanttChart({
       }
     } else {
       const start = parseISODateLocal(task.startDate);
-      const newDuration = Math.max(1, countWorkDays(start, date, obraConfig.trabalhaSabado));
+      const newDuration = Math.max(1, countWorkDays(start, date, obraConfig.trabalhaSabado, obraConfig));
       updates = { duration: newDuration, durationMode: 'manual' };
     }
 
@@ -1189,7 +1196,7 @@ export default function GanttChart({
   const hasNoWorkingDays = useCallback((task: Task) => {
     const start = parseISODateLocal(task.startDate);
     const end = addDays(start, task.duration);
-    const result = calcularDiasUteis(start, end, obraConfig.uf, obraConfig.municipio, obraConfig.trabalhaSabado, obraConfig.jornadaDiaria);
+    const result = calcularDiasUteis(start, end, obraConfig.uf, obraConfig.municipio, obraConfig.trabalhaSabado, obraConfig.jornadaDiaria, obraConfig.exceptions);
     return result.dias === 0;
   }, [obraConfig]);
 
@@ -1333,6 +1340,7 @@ export default function GanttChart({
   const getDayBg = (dayIndex: number): string | undefined => {
     if (dayIndex < 0 || dayIndex >= dayInfos.length) return undefined;
     const info = dayInfos[dayIndex];
+    if (info.exception) return 'hsl(var(--gantt-workday-exception))';
     if (info.feriado) {
       return info.feriado.tipo === 'nacional'
         ? 'hsl(var(--gantt-holiday-national))'
@@ -1354,7 +1362,7 @@ export default function GanttChart({
           </div>
           <div className="flex items-center gap-2">
             {undoButton}
-            <ConfiguracaoObra config={obraConfig} onConfigChange={setObraConfig} />
+            <ConfiguracaoObra config={obraConfig} canManage={canManageCalendar} auditActor={auditActor} onConfigChange={next => { setObraConfig(next); onCalendarConfigChange?.(next); }} />
             <button
               onClick={() => setShowCriticalOnly(!showCriticalOnly)}
               className={`flex items-center gap-1 px-2.5 py-1 text-[10px] font-medium rounded-md border transition-colors ${
@@ -1885,6 +1893,7 @@ export default function GanttChart({
             <div className="w-3 h-3 rounded" style={{ background: 'hsl(var(--gantt-saturday))' }} /><span>Sáb</span>
             <div className="w-3 h-3 rounded" style={{ background: 'hsl(var(--gantt-holiday-national))' }} /><span>Feriado Nac.</span>
             <div className="w-3 h-3 rounded" style={{ background: 'hsl(var(--gantt-holiday-local))' }} /><span>Feriado Local</span>
+            <div className="w-3 h-3 rounded" style={{ background: 'hsl(var(--gantt-workday-exception))' }} /><span>Expediente excepcional</span>
           </div>
           <div className="flex items-center gap-3 text-[9px] text-muted-foreground flex-wrap">
             <span className="font-medium">Equipes:</span>
@@ -2284,7 +2293,7 @@ export default function GanttChart({
                                 {statusOnly ? <span className="text-center text-[10px] text-muted-foreground">—</span> : (() => {
                                   const hasLogs = (task.dailyLogs?.length ?? 0) > 0;
                                   const hasRealData = (task.dailyLogs || []).some(l => (l.actualQuantity ?? 0) > 0) && !!task.current?.startDate;
-                                  const startNonUtil = !isDiaUtil(parseISODateLocal(task.startDate), obraConfig.uf, obraConfig.municipio, obraConfig.trabalhaSabado);
+                                  const startNonUtil = scheduleWorkdayWeight(parseISODateLocal(task.startDate), obraConfig) <= 0;
                                   const labelEl = (
                                     <span className={`text-[9px] ${rowTeamDef ? '' : 'text-foreground'} font-medium inline-flex items-center justify-center gap-0.5`}>
                                       {startNonUtil && <AlertTriangle className="w-2.5 h-2.5 flex-shrink-0" style={{ color: '#b45309', filter: 'drop-shadow(0 0 1px white)' }} aria-label="Início em dia não útil" />}
@@ -2341,7 +2350,7 @@ export default function GanttChart({
                                 {statusOnly ? <span className="text-center text-[10px] text-muted-foreground">—</span> : (() => {
                                   const hasLogs = (task.dailyLogs?.length ?? 0) > 0;
                                   const hasRealData = (task.dailyLogs || []).some(l => (l.actualQuantity ?? 0) > 0) && !!task.current?.startDate;
-                                  const endNonUtil = !isDiaUtil(parseISODateLocal(endDate), obraConfig.uf, obraConfig.municipio, obraConfig.trabalhaSabado);
+                                  const endNonUtil = scheduleWorkdayWeight(parseISODateLocal(endDate), obraConfig) <= 0;
                                   const labelEl = (
                                     <span className={`text-[9px] ${rowTeamDef ? '' : 'text-foreground'} font-medium inline-flex items-center justify-center gap-0.5`}>
                                       {endNonUtil && <AlertTriangle className="w-2.5 h-2.5 flex-shrink-0" style={{ color: '#b45309', filter: 'drop-shadow(0 0 1px white)' }} aria-label="Fim em dia não útil" />}
@@ -2591,12 +2600,9 @@ export default function GanttChart({
                             style={{ left: i * dayWidth, width: dayWidth, background: bg, zIndex: 1 }}
                           />
                         </TooltipTrigger>
-                        {info.feriado && (
+                        {(info.feriado || info.exception) && (
                           <TooltipContent>
-                            <p className="text-xs font-medium">{info.feriado.nome}</p>
-                            <p className="text-[10px] text-muted-foreground">
-                              {info.feriado.tipo === 'nacional' ? 'Feriado Nacional' : info.feriado.tipo === 'estadual' ? 'Feriado Estadual' : 'Feriado Municipal'}
-                            </p>
+                            {info.exception ? <><p className="text-xs font-medium">Expediente excepcional</p><p className="text-[10px] text-muted-foreground">{info.exception.reason}</p></> : <><p className="text-xs font-medium">{info.feriado!.nome}</p><p className="text-[10px] text-muted-foreground">{info.feriado!.tipo === 'nacional' ? 'Feriado Nacional' : info.feriado!.tipo === 'estadual' ? 'Feriado Estadual' : 'Feriado Municipal'}</p></>}
                           </TooltipContent>
                         )}
                       </Tooltip>
@@ -2605,14 +2611,14 @@ export default function GanttChart({
 
                   {/* Holiday indicators in header (days view) */}
                   {viewMode === 'days' && dayInfos.map((info, i) => {
-                    if (!info.feriado) return null;
+                    if (!info.feriado && !info.exception) return null;
                     return (
                       <div
                         key={`flag-${i}`}
                         className="absolute flex items-center justify-center z-10"
                         style={{ left: i * dayWidth, width: dayWidth, top: -headerHeightPx + 4, height: 16 }}
                       >
-                        <Flag className="w-2.5 h-2.5" style={{ color: info.feriado.tipo === 'nacional' ? 'hsl(var(--accent))' : 'hsl(280, 50%, 60%)' }} />
+                        <Flag className="w-2.5 h-2.5" style={{ color: info.exception ? 'hsl(var(--primary))' : info.feriado!.tipo === 'nacional' ? 'hsl(var(--accent))' : 'hsl(280, 50%, 60%)' }} />
                       </div>
                     );
                   })}

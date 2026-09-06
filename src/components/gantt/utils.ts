@@ -78,7 +78,7 @@ export function getWorkEndDate(
   startDateISO: string,
   duration: number,
   trabalhaSabado: boolean = false,
-  calendar?: Pick<ScheduleCalendar, 'uf' | 'municipio'>,
+  calendar?: ScheduleCalendar,
 ): string {
   if (calendar) return operationalEndDate(startDateISO, duration, { ...calendar, trabalhaSabado });
   const start = parseISODateLocal(startDateISO);
@@ -95,12 +95,18 @@ export function getWorkEndDate(
 export function countWorkDays(
   startDate: Date,
   endDate: Date,
-  trabalhaSabado: boolean = false
+  trabalhaSabado: boolean = false,
+  calendar?: ScheduleCalendar,
 ): number {
   let count = 0;
   let current = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
   const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
   while (current <= end) {
+    if (calendar) {
+      count += scheduleWorkdayWeight(current, { ...calendar, trabalhaSabado });
+      current = new Date(current.getFullYear(), current.getMonth(), current.getDate() + 1);
+      continue;
+    }
     const dow = current.getDay();
     if (dow === 6) {
       if (trabalhaSabado) count += 0.5;

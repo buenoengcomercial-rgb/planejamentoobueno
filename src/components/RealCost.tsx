@@ -31,7 +31,7 @@ import {
   type RealCostSignal,
 } from '@/lib/realCost';
 import { fmtBRL, fmtPct } from '@/components/measurement/measurementFormat';
-import { loadObraConfig } from '@/components/ConfiguracaoObra';
+import { resolveObraConfig } from '@/components/ConfiguracaoObra';
 import { Button } from '@/components/ui/button';
 import { logToProject, type AuditUserInfo } from '@/lib/audit';
 import { allocateSubcontractValue, freezeSubcontractPayments, subcontractBalance, subcontractExecutedQuantity, subcontractPaidValue } from '@/lib/subcontracts';
@@ -866,7 +866,7 @@ export function SubcontractsTab({ project, analysis, canManage, canDeleteHistory
 }
 
 export default function RealCost({ project, onProjectChange, canManageSubcontracts, canDeleteSubcontractHistory = false, auditActor }: Props) {
-  const trabalhaSabado = useMemo(() => loadObraConfig().trabalhaSabado, []);
+  const trabalhaSabado = useMemo(() => resolveObraConfig(project).trabalhaSabado, [project]);
   const analysis = useMemo(() => buildRealCostAnalysis(project, trabalhaSabado), [project, trabalhaSabado]);
   const uiStorageKey = `obraPlanner:realCost:ui:${project.id || project.name || 'default'}`;
   const [search, setSearch] = useState('');

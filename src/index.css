@@ -79,6 +79,7 @@
     --gantt-saturday: 45 80% 93%;
     --gantt-holiday-national: 25 80% 93%;
     --gantt-holiday-local: 280 50% 94%;
+    --gantt-workday-exception: 145 55% 91%;
 
     --status-done: 142 71% 45%;
     --status-progress: 217 91% 60%;
