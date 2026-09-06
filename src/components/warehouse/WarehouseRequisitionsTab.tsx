@@ -483,7 +483,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
                 </div>
                 <div className="withdrawal-branch space-y-3 pt-3">
                   {building.dateGroups.map(dateGroup => (
-                    <section key={dateGroup.key} data-testid="withdrawal-date-group" className="withdrawal-date min-w-0">
+                    <section key={dateGroup.key} data-testid="withdrawal-date-group" data-expanded={isDateGroupExpanded(dateGroup)} className="withdrawal-date min-w-0">
                       <div className="rounded-lg border border-border bg-muted px-3 py-2">
                         <WithdrawalDateGroupHeader dateGroup={dateGroup} expanded={isDateGroupExpanded(dateGroup)} onToggle={() => toggleDateGroup(dateGroup)} onGenerate={() => generateDailyConfirmations(building, dateGroup)} />
                       </div>
@@ -544,7 +544,7 @@ interface WithdrawalHistoryEntryProps {
 
 function WithdrawalHistoryCard({ project, requisition, movements, active, canDelete, canEdit, onToggle, onDelete, onReturn, onCorrect }: WithdrawalHistoryEntryProps) {
   const latest = latestRequisitionActivity(requisition, movements);
-  return <article className={`withdrawal-record overflow-hidden rounded-lg border bg-card ${active ? 'border-primary/60' : 'border-border'}`}>
+  return <article data-expanded={active} className={`withdrawal-record overflow-hidden rounded-lg border bg-card ${active ? 'border-primary/60' : 'border-border'}`}>
     <button type="button" className="min-h-11 w-full p-3 text-left hover:bg-muted/30" onClick={onToggle} aria-expanded={active}>
       <div className="flex items-center justify-between gap-2"><strong>{requisition.number}</strong><ChevronDown className={`h-4 w-4 shrink-0 ${active ? 'rotate-180 text-primary' : ''}`} /></div>
       <div className="mt-1 break-words font-semibold">{requisition.receiverName || requisition.requesterName || '—'}</div>

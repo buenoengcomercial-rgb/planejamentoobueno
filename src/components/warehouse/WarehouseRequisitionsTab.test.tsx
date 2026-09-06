@@ -168,8 +168,10 @@ describe('WarehouseRequisitionsTab', () => {
     const date = screen.getByTestId('withdrawal-date-group');
     expect(building).toContainElement(date);
     expect(date.parentElement).toHaveClass('withdrawal-branch');
+    expect(date).toHaveAttribute('data-expanded', 'false');
 
     fireEvent.click(within(date).getByRole('button', { name: /expandir requisições/i }));
+    expect(date).toHaveAttribute('data-expanded', 'true');
     const rows = screen.getAllByTestId('withdrawal-history-row');
     expect(date).toContainElement(rows[0]);
     expect(rows[1]).toHaveClass('bg-card');

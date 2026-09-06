@@ -15,7 +15,66 @@
 .withdrawal-tree .withdrawal-records .withdrawal-record:hover { background: hsl(var(--muted) / 0.25); }
 .withdrawal-tree .withdrawal-detail-row,
 .withdrawal-tree .withdrawal-detail-row:hover { background: transparent; }
-.withdrawal-tree .withdrawal-detail { border-left-width: 2px; }
+.withdrawal-tree {
+  --withdrawal-date-surface: #e2e8f0;
+  --withdrawal-date-border: #94a3b8;
+  --withdrawal-active-surface: #fff0cc;
+  --withdrawal-active-border: #b7791f;
+  --withdrawal-detail-surface: #e0f2eb;
+  --withdrawal-detail-border: #348369;
+}
+.dark .withdrawal-tree {
+  --withdrawal-date-surface: #253347;
+  --withdrawal-date-border: #64748b;
+  --withdrawal-active-surface: #473719;
+  --withdrawal-active-border: #d4a54d;
+  --withdrawal-detail-surface: #173b32;
+  --withdrawal-detail-border: #52a88a;
+}
+.withdrawal-tree .withdrawal-date[data-expanded="true"] {
+  background: var(--withdrawal-date-surface);
+  border: 1px solid var(--withdrawal-date-border);
+  border-radius: 10px;
+  padding-bottom: 12px;
+}
+.withdrawal-tree .withdrawal-date[data-expanded="true"] > div:first-child {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--withdrawal-date-border);
+  border-radius: 10px 10px 0 0;
+}
+.withdrawal-tree .withdrawal-date[data-expanded="true"] > .withdrawal-branch {
+  margin-right: 8px;
+  border-left-color: var(--withdrawal-date-border);
+}
+.withdrawal-tree .withdrawal-records > thead {
+  background: var(--withdrawal-date-surface);
+}
+.withdrawal-tree .withdrawal-records .withdrawal-record[aria-expanded="true"],
+.withdrawal-tree .withdrawal-records .withdrawal-record[aria-expanded="true"]:hover,
+.withdrawal-tree .withdrawal-record[data-expanded="true"] {
+  background: var(--withdrawal-active-surface);
+  border-color: var(--withdrawal-active-border);
+  box-shadow: inset 4px 0 var(--withdrawal-active-border);
+}
+.withdrawal-tree .withdrawal-detail-row > td {
+  background: var(--withdrawal-active-surface);
+  padding-top: 8px;
+  padding-bottom: 16px;
+}
+.withdrawal-tree .withdrawal-detail {
+  background: var(--withdrawal-detail-surface);
+  border: 1px solid var(--withdrawal-detail-border);
+  border-left-width: 4px;
+  margin-right: 8px;
+  border-radius: 8px;
+}
+.withdrawal-tree .withdrawal-detail thead {
+  background: transparent;
+}
+.withdrawal-tree .withdrawal-detail tbody tr {
+  background: hsl(var(--card) / 0.75);
+}
 .withdrawal-tree .withdrawal-records > thead th:nth-child(7),
 .withdrawal-tree .withdrawal-records > tbody > .withdrawal-record > td:nth-child(7) { overflow-wrap: normal; }
 @media (max-width: 767px) {
