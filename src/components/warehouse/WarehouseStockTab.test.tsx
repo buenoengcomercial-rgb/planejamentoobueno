@@ -128,11 +128,11 @@ describe('WarehouseStockTab - documentos no histórico', () => {
 
     expect(table).toHaveClass('warehouse-stock-summary');
     fireEvent.click(screen.getByRole('button', { name: 'Todas as colunas' }));
-    expect(table).toHaveClass('min-w-[1800px]');
+    expect(table).toHaveClass('min-w-[1900px]');
     fireEvent.click(screen.getByRole('button', { name: 'Visão resumida' }));
     expect(table).toHaveClass('warehouse-stock-summary');
     expect(columns?.[1]).toHaveClass('w-80');
-    expect(columns).toHaveLength(17);
+    expect(columns).toHaveLength(19);
     expect(screen.getByText('Excluir', { selector: 'span' })).toBeInTheDocument();
   });
 
@@ -148,6 +148,17 @@ describe('WarehouseStockTab - documentos no histórico', () => {
     ]);
   });
 
+  it('mostra classificação, aditivo e o filtro de classes na consulta', () => {
+    const onProjectChange = vi.fn();
+    render(<WarehouseStockTab project={projectWithPlannedMaterials()} onProjectChange={onProjectChange} />);
+
+    expect(screen.getAllByText('Classificação').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Aditivo').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Material').length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filtrar por classificação' }), { target: { value: 'labor' } });
+    expect(screen.queryByText('Argamassa colante AC II')).not.toBeInTheDocument();
+  });
+
   it('pesquisa insumos previstos pela descrição sem exibir o código', () => {
     render(<WarehouseStockTab project={projectWithPlannedMaterials()} onProjectChange={vi.fn()} />);
 
@@ -157,8 +168,7 @@ describe('WarehouseStockTab - documentos no histórico', () => {
     const search = screen.getByPlaceholderText('Digite uma palavra-chave...');
     fireEvent.change(search, { target: { value: 'argamassa' } });
 
-    expect(screen.getByText('Argamassa colante AC II')).toBeInTheDocument();
-    expect(screen.queryByText('Tinta acrílica premium')).not.toBeInTheDocument();
-    expect(screen.queryByText(/ORC-ARG|ORC-TINTA/)).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Argamassa colante AC II/i })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Tinta acrílica premium/i })).not.toBeInTheDocument();
   });
 });

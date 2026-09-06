@@ -210,16 +210,22 @@
 /* Daily consultation keeps the identity and stock position together. */
 .warehouse-stock-summary colgroup { display: none; }
 .warehouse-stock-summary :is(th, td):not([colspan]):nth-child(1),
-.warehouse-stock-summary :is(th, td):nth-child(4),
-.warehouse-stock-summary :is(th, td):nth-child(5),
-.warehouse-stock-summary :is(th, td):nth-child(9),
+.warehouse-stock-summary :is(th, td):nth-child(7),
 .warehouse-stock-summary :is(th, td):nth-child(11),
+.warehouse-stock-summary :is(th, td):nth-child(14),
+.warehouse-stock-summary :is(th, td):nth-child(15) { display: none; }
+.warehouse-stock-summary :is(th, td):nth-child(2) { width: 23%; }
+.warehouse-stock-summary :is(th, td):nth-child(3) { width: 13%; }
+.warehouse-stock-summary :is(th, td):nth-child(4) { width: 4%; }
+.warehouse-stock-summary :is(th, td):nth-child(5),
+.warehouse-stock-summary :is(th, td):nth-child(6),
+.warehouse-stock-summary :is(th, td):nth-child(8),
+.warehouse-stock-summary :is(th, td):nth-child(9),
+.warehouse-stock-summary :is(th, td):nth-child(10),
 .warehouse-stock-summary :is(th, td):nth-child(12),
-.warehouse-stock-summary :is(th, td):nth-child(13) { display: none; }
-.warehouse-stock-summary :is(th, td):nth-child(2) { width: 32%; }
-.warehouse-stock-summary :is(th, td):nth-child(3) { width: 5%; }
-.warehouse-stock-summary :is(th, td):nth-child(14) { width: 13%; }
-.warehouse-stock-summary :is(th, td):nth-child(n+15) { width: 8%; }
+.warehouse-stock-summary :is(th, td):nth-child(13) { width: 6%; }
+.warehouse-stock-summary :is(th, td):nth-child(16) { width: 10%; }
+.warehouse-stock-summary :is(th, td):nth-child(n+17) { width: 5%; }
 .warehouse-stock-table tbody td { padding: 0.75rem 0.5rem; }
 .warehouse-stock-summary th { overflow-wrap: anywhere; }
 .warehouse-stock-table tbody tr:nth-child(even) { background-color: hsl(var(--muted) / 0.35); }

@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
-import type { Project, WarehouseAuditActor } from '@/types/project';
+import { Fragment, useMemo, useState } from 'react';
+import type { ElementType } from 'react';
+import type { MaterialCostClass, Project, WarehouseAuditActor } from '@/types/project';
 import {
   computeWarehouseRows,
   createManualWarehouseItem,
@@ -10,7 +11,8 @@ import {
   upsertItemConfig,
   upsertWarehouseProjectMaterialLink,
 } from '@/lib/warehouse';
-import { suggestMaterialsFromProject } from '@/lib/materialComparisons';
+import { MATERIAL_COST_CLASS_LABEL, setMaterialCostClass, suggestMaterialsFromProject } from '@/lib/materialComparisons';
+import { computeWarehouseStockOverviewRows, type WarehouseStockOverviewRow } from '@/lib/warehouseStockOverview';
 import { downloadWarehouseAttachment, openWarehouseAttachment, warehouseAttachmentErrorMessage } from '@/lib/warehouseAttachments';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -18,13 +20,28 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Archive, Boxes, Check, ChevronsUpDown, Download, Eye, History, Link2, Plus, Search, Unlink, X } from 'lucide-react';
+import { Archive, Boxes, BrickWall, Check, ChevronsUpDown, CircleSlash, Download, Eye, HardHat, History, Link2, Plus, Search, Truck, Unlink, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { WarehouseSectionHeader, WarehouseStatusBadge } from './WarehouseVisual';
 
 interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; }
+
+const stockClassLabel: Record<MaterialCostClass, string> = { ...MATERIAL_COST_CLASS_LABEL, unclassified: 'Diversos' };
+const stockClassIcon: Record<MaterialCostClass, ElementType> = { material: BrickWall, labor: HardHat, equipment: Truck, unclassified: CircleSlash };
+const stockClassStyle: Record<MaterialCostClass, string> = {
+  material: 'border-orange-300 bg-orange-50 text-orange-700',
+  labor: 'border-red-300 bg-red-50 text-red-700',
+  equipment: 'border-blue-300 bg-blue-50 text-blue-700',
+  unclassified: 'border-slate-300 bg-slate-50 text-slate-600',
+};
+const stockClassOrder: MaterialCostClass[] = ['material', 'labor', 'equipment', 'unclassified'];
+
+function StockClassBadge({ costClass }: { costClass: MaterialCostClass }) {
+  const Icon = stockClassIcon[costClass];
+  return <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-semibold ${stockClassStyle[costClass]}`}><Icon className="h-3.5 w-3.5" />{stockClassLabel[costClass]}</span>;
+}
 
 export default function WarehouseStockTab({ project, onProjectChange, auditActor, canArchive = true, canDelete = false }: Props) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
@@ -33,6 +50,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
   const [showAllColumns, setShowAllColumns] = useState(false);
   const [showManualForm, setShowManualForm] = useState(false);
   const [linkFilter, setLinkFilter] = useState<'all' | 'linked' | 'pending' | 'unplanned'>('all');
+  const [classFilter, setClassFilter] = useState<'all' | MaterialCostClass>('all');
   const [purchaseGroupFilter, setPurchaseGroupFilter] = useState('all');
   const [lowOnly, setLowOnly] = useState(false);
   const [zeroOnly, setZeroOnly] = useState(false);
@@ -40,7 +58,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
   const [historyFor, setHistoryFor] = useState<{ key: string; description: string } | null>(null);
   const [linkFor, setLinkFor] = useState<string | null>(null);
   const rows = useMemo(
-    () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true, includeArchived: showArchived }),
+    () => computeWarehouseStockOverviewRows(project, showArchived),
     [project, showArchived],
   );
   const archivedCount = project.warehouse?.items.filter(item => !!item.archivedAt).length ?? 0;
@@ -52,17 +70,20 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
     const q = search.trim().toLowerCase();
     const matchingRows = rows.filter(r => (!q || r.description.toLowerCase().includes(q) || (r.code ?? '').toLowerCase().includes(q))
       && (linkFilter === 'all' || r.linkStatus === linkFilter)
+      && (classFilter === 'all' || r.costClass === classFilter)
       && (purchaseGroupFilter === 'all' || r.purchaseGroupId === purchaseGroupFilter)
       && (!lowOnly || r.underMin)
       && (!zeroOnly || r.balance === 0));
     return matchingRows.sort((a, b) => {
+      const classOrder = stockClassOrder.indexOf(a.costClass) - stockClassOrder.indexOf(b.costClass);
+      if (classOrder) return classOrder;
       const aHasWithdrawal = a.withdrawn > 0 ? 0 : 1;
       const bHasWithdrawal = b.withdrawn > 0 ? 0 : 1;
       return aHasWithdrawal - bHasWithdrawal
         || b.withdrawn - a.withdrawn
         || a.description.localeCompare(b.description, 'pt-BR');
     });
-  }, [linkFilter, lowOnly, purchaseGroupFilter, rows, search, zeroOnly]);
+  }, [classFilter, linkFilter, lowOnly, purchaseGroupFilter, rows, search, zeroOnly]);
 
   const setMin = (key: string, code: string | undefined, description: string, unit: string, min: number) => {
     onProjectChange(upsertItemConfig(project, { key, code, description, unit, minStock: Number.isFinite(min) ? min : undefined }));
@@ -90,6 +111,9 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
       () => onProjectChange(removeWarehouseItem(project, key)),
     );
   };
+  const setClassification = (row: WarehouseStockOverviewRow, costClass: MaterialCostClass) => {
+    onProjectChange(setMaterialCostClass(project, row.classificationSubject, costClass));
+  };
   const handleDeleteItem = (key: string, description: string) => confirm(
     { title: 'Excluir material definitivamente?', description: `O material ${description} será removido. Materiais com histórico exigem primeiro a correção do registro de origem.`, confirmLabel: 'Excluir definitivamente' },
     () => {
@@ -108,6 +132,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
         </div>
         <select className="min-h-11 rounded border bg-background px-2 text-sm" value={linkFilter} onChange={event => setLinkFilter(event.target.value as typeof linkFilter)} aria-label="Filtrar por vínculo"><option value="all">Todos os vínculos</option><option value="linked">Vinculados</option><option value="pending">Vínculo pendente</option><option value="unplanned">Não previstos</option></select>
         <select className="min-h-11 max-w-full rounded border bg-background px-2 text-sm" value={purchaseGroupFilter} onChange={event => setPurchaseGroupFilter(event.target.value)} aria-label="Filtrar por grupo de compra"><option value="all">Todos os grupos</option>{purchaseGroups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
+        <select className="min-h-11 max-w-full rounded border bg-background px-2 text-sm" value={classFilter} onChange={event => setClassFilter(event.target.value as typeof classFilter)} aria-label="Filtrar por classificação"><option value="all">Todas as classificações</option>{stockClassOrder.map(costClass => <option key={costClass} value={costClass}>{stockClassLabel[costClass]}</option>)}</select>
         <Button size="sm" variant={lowOnly ? 'secondary' : 'outline'} className="min-h-11 text-xs" onClick={() => setLowOnly(value => !value)}>Estoque baixo</Button>
         <Button size="sm" variant={zeroOnly ? 'secondary' : 'outline'} className="min-h-11 text-xs" onClick={() => setZeroOnly(value => !value)}>Saldo zerado</Button>
         <Button size="sm" variant={showAllColumns ? 'secondary' : 'outline'} className="hidden min-h-11 text-xs md:inline-flex" aria-pressed={showAllColumns} onClick={() => setShowAllColumns(value => !value)}>{showAllColumns ? 'Visão resumida' : 'Todas as colunas'}</Button>
@@ -152,12 +177,18 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
         </div>
       )}
       <div className="max-h-[calc(100dvh-300px)] overflow-auto">
-        <div className="space-y-2 p-2 md:hidden">{filtered.map(row => <article key={row.key} className={`space-y-3 rounded-xl border p-3 shadow-sm ${row.withdrawn > 0 ? 'border-primary/30 bg-primary/5' : ''} ${row.underMin ? 'border-warning/50 bg-warning/5' : ''}`}><div className="flex items-start justify-between gap-2"><div><div className="text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</div><div className="font-bold">{row.description}</div></div><WarehouseStatusBadge label={row.withdrawn > 0 ? 'Já retirado' : row.linkStatus === 'linked' ? 'Vinculado' : row.linkStatus === 'unplanned' ? 'Não previsto' : 'Vínculo pendente'} tone={row.withdrawn > 0 || row.linkStatus === 'linked' ? 'success' : 'warning'} /></div><dl className="grid grid-cols-2 gap-2 text-sm"><div className="rounded-lg bg-primary/5 p-2"><dt className="text-xs font-medium text-muted-foreground">Saldo disponível</dt><dd className="font-bold text-primary">{row.balance.toLocaleString('pt-BR')} {row.unit}</dd></div><div className="rounded-lg bg-muted/50 p-2"><dt className="text-xs font-medium text-muted-foreground">Já retirado</dt><dd className="font-semibold">{row.withdrawn.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Devolvido</dt><dd>{row.returned.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Último movimento</dt><dd>{row.lastMovementDate || '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Estoque mínimo</dt><dd>{row.minStock?.toLocaleString('pt-BR') ?? '—'}</dd></div><div className="col-span-2"><dt className="text-xs text-muted-foreground">Custo médio</dt><dd>{row.valuationIncomplete || row.averageUnitCost == null ? 'Cálculo incompleto' : row.averageUnitCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</dd></div></dl><div className={`grid gap-2 ${canArchive ? 'grid-cols-3' : 'grid-cols-2'}`}><Button variant="outline" className="min-h-11" onClick={() => setLinkFor(row.key)}><Link2 className="h-4 w-4" /><span className="sr-only">Revisar vínculos</span></Button><Button variant="outline" className="min-h-11" onClick={() => setHistoryFor({ key: row.key, description: row.description })}><History className="h-4 w-4" /><span className="sr-only">Histórico</span></Button>{canArchive && <Button variant="outline" className="min-h-11 text-destructive" onClick={() => handleArchiveItem(row.key, row.description)}><Archive className="h-4 w-4" /><span className="sr-only">Arquivar</span></Button>}</div></article>)}</div>
-        <table className={`warehouse-stock-table hidden w-full table-fixed text-sm md:table ${showAllColumns ? 'min-w-[1800px]' : 'warehouse-stock-summary'}`}>
+        <div className="space-y-4 p-2 md:hidden">{stockClassOrder.map(costClass => {
+          const classRows = filtered.filter(row => row.costClass === costClass);
+          return classRows.length > 0 && <section key={costClass} className="space-y-2"><div className="flex items-center gap-2 px-1 text-sm font-bold"><StockClassBadge costClass={costClass} /><span>{classRows.length} item(ns)</span></div>{classRows.map(row => <StockMobileCard key={row.key} row={row} canArchive={canArchive} onClassChange={setClassification} onLink={() => setLinkFor(row.key)} onHistory={() => setHistoryFor({ key: row.key, description: row.description })} onArchive={() => handleArchiveItem(row.key, row.description)} />)}</section>;
+        })}</div>
+        <table className={`warehouse-stock-table hidden w-full table-fixed text-sm md:table ${showAllColumns ? 'min-w-[1900px]' : 'warehouse-stock-summary'}`}>
           <colgroup>
             <col className="w-24" />
             <col className="w-80" />
+            <col className="w-36" />
             <col className="w-12" />
+            <col className="w-20" />
+            <col className="w-20" />
             <col className="w-20" />
             <col className="w-20" />
             <col className="w-20" />
@@ -170,22 +201,23 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
             <col className="w-28" />
             <col className="w-36" />
             {canArchive && <col className="w-12" />}
-            <col className="w-12" />
             {canDelete && <col className="w-12" />}
           </colgroup>
-          <thead className="bg-muted sticky top-0 z-10">
+            <thead className="bg-muted sticky top-0 z-10">
             <tr className="text-muted-foreground">
               <th className="p-2 text-left font-semibold">Código</th>
               <th className="p-2 text-left font-semibold">Descrição</th>
+              <th className="p-2 text-left font-semibold"><span className="inline-flex items-center gap-1"><Boxes className="h-3.5 w-3.5" />Classificação</span></th>
               <th className="p-2 text-center font-semibold">Un</th>
               <th className="p-2 text-right font-semibold">Planej.</th>
+              <th className="p-2 text-right font-semibold text-primary">Aditivo</th>
               <th className="p-2 text-right font-semibold">Comprado</th>
               <th className="p-2 text-right font-semibold">Receb.</th>
               <th className="bg-primary/10 p-2 text-right font-semibold text-primary">Já retirado</th>
               <th className="p-2 text-right font-semibold text-success">Devolvido</th>
               <th className="p-2 text-right font-semibold">Perdas</th>
               <th className="p-2 text-right font-semibold bg-primary/5">Saldo</th>
-              <th className="p-2 text-right font-semibold bg-warning/5">Mínimo</th>
+              <th className="p-2 text-right font-semibold bg-warning/5">Estoque baixo</th>
               <th className="p-2 text-left font-semibold">Último mov.</th>
               <th className="p-2 text-right font-semibold">Custo médio</th>
               <th className="p-2 text-left font-semibold">Vínculo</th>
@@ -195,12 +227,16 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
             </tr>
           </thead>
           <tbody>
-            {filtered.map(r => (
-              <tr key={r.key} data-testid="stock-material-row" className={`border-t border-border hover:bg-muted/30 ${r.withdrawn > 0 ? 'bg-primary/5' : ''} ${r.underMin ? 'bg-destructive/5' : ''}`}>
+            {stockClassOrder.map(costClass => {
+              const classRows = filtered.filter(row => row.costClass === costClass);
+              return <Fragment key={costClass}>{classRows.length > 0 && <tr data-testid="stock-class-group" className="border-t bg-muted/70"><td colSpan={17 + Number(canArchive) + Number(canDelete)} className="p-2"><div className="flex items-center gap-2"><StockClassBadge costClass={costClass} /><span className="text-xs font-semibold text-muted-foreground">{classRows.length} item(ns)</span></div></td></tr>}{classRows.map(r => (
+              <tr key={r.key} data-testid="stock-material-row" className={`border-t border-border hover:bg-muted/30 ${r.withdrawn > 0 ? 'bg-primary/5' : ''} ${r.underMin ? 'bg-destructive/5' : ''} ${!r.isPhysicalStock ? 'bg-muted/20' : ''}`}>
                 <td className="p-1.5 font-mono text-[10px] text-muted-foreground truncate">{r.code || '—'}</td>
                 <td className="p-1.5 leading-snug break-words" title={r.description}><span className="block font-semibold">{r.description}</span>{!showAllColumns && <span className="mt-1 block text-xs font-normal text-muted-foreground">{r.code || 'Sem código'}</span>}</td>
+                <td className="p-1.5"><div className="flex min-w-0 items-center gap-1"><StockClassBadge costClass={r.costClass} /><select aria-label={`Classificação de ${r.description}`} className="h-7 min-w-0 flex-1 rounded border bg-background px-1 text-[10px]" value={r.costClass} onChange={event => setClassification(r, event.target.value as MaterialCostClass)}>{stockClassOrder.map(costClass => <option key={costClass} value={costClass}>{stockClassLabel[costClass]}</option>)}</select></div></td>
                 <td className="p-1.5 text-center text-muted-foreground">{r.unit}</td>
                 <td className="p-1.5 text-right font-mono tabular-nums">{r.planned.toLocaleString('pt-BR')}</td>
+                <td className="p-1.5 text-right font-mono tabular-nums text-primary">{r.additive.toLocaleString('pt-BR')}</td>
                 <td className="p-1.5 text-right font-mono tabular-nums">{r.purchased.toLocaleString('pt-BR')}</td>
                 <td className="p-1.5 text-right font-mono tabular-nums text-success">{r.received.toLocaleString('pt-BR')}</td>
                 <td className="bg-primary/5 p-1.5 text-right font-mono font-semibold tabular-nums text-primary">{r.withdrawn.toLocaleString('pt-BR')}</td>
@@ -208,25 +244,25 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
                 <td className="p-1.5 text-right font-mono tabular-nums text-destructive">{r.losses.toLocaleString('pt-BR')}</td>
                 <td className={`p-1.5 text-right font-mono tabular-nums font-bold bg-primary/5 ${r.balance < 0 ? 'text-destructive' : r.underMin ? 'text-warning' : 'text-primary'}`}>{r.balance.toLocaleString('pt-BR')}</td>
                 <td className="p-1.5 bg-warning/5">
-                  <input
+                  {r.isPhysicalStock && r.costClass === 'material' ? <><div className={`mb-1 text-right font-mono text-[10px] ${r.underMin ? 'font-bold text-destructive' : 'text-muted-foreground'}`}>{r.effectiveMinStock?.toLocaleString('pt-BR') ?? '—'}</div><input
                     type="number"
                     step="any"
                     defaultValue={r.minStock ?? ''}
                     placeholder="—"
                     className="w-full h-7 text-xs border border-border rounded px-1 text-right bg-background font-mono"
                     onBlur={e => setMin(r.key, r.code, r.description, r.unit, parseFloat(e.target.value))}
-                  />
+                  /></> : <span className="text-[10px] text-muted-foreground">Sem estoque físico</span>}
                 </td>
                 <td className="p-1.5 text-[10px] text-muted-foreground">{r.lastMovementDate ?? '—'}</td>
                 <td className="p-1.5 text-right font-mono text-[11px]">{r.valuationIncomplete || r.averageUnitCost == null ? 'Cálculo incompleto' : r.averageUnitCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
-                <td className="p-1.5"><Button size="sm" variant="ghost" className="h-auto min-h-8 justify-start gap-1 px-1" onClick={() => setLinkFor(r.key)}><Link2 className="h-3.5 w-3.5" /><Badge variant="outline" className={r.linkStatus === 'linked' ? 'border-success/30 text-success' : r.linkStatus === 'unplanned' ? 'border-warning/30 text-warning' : ''}>{r.linkStatus === 'linked' ? `${r.projectLinks.length} vinculado(s)` : r.linkStatus === 'unplanned' ? 'Não previsto' : 'Pendente'}</Badge></Button></td>
+                <td className="p-1.5">{r.isPhysicalStock ? <Button size="sm" variant="ghost" className="h-auto min-h-8 justify-start gap-1 px-1" onClick={() => setLinkFor(r.key)}><Link2 className="h-3.5 w-3.5" /><Badge variant="outline" className={r.linkStatus === 'linked' ? 'border-success/30 text-success' : r.linkStatus === 'unplanned' ? 'border-warning/30 text-warning' : ''}>{r.linkStatus === 'linked' ? `${r.projectLinks.length} vinculado(s)` : r.linkStatus === 'unplanned' ? 'Não previsto' : 'Pendente'}</Badge></Button> : <Badge variant="outline">Planejamento</Badge>}</td>
                 <td className="p-1.5 text-center">
-                  <Button size="icon" variant="ghost" className="h-7 w-7" title="Histórico de compras"
+                  {r.isPhysicalStock && <Button size="icon" variant="ghost" className="h-7 w-7" title="Histórico de compras"
                     onClick={() => setHistoryFor({ key: r.key, description: r.description })}>
                     <History className="w-3.5 h-3.5" />
-                  </Button>
+                  </Button>}
                 </td>
-                {canArchive && <td className="p-1.5 text-center">
+                {canArchive && <td className="p-1.5 text-center">{r.isPhysicalStock &&
                   <Button
                     size="icon"
                     variant="ghost"
@@ -236,16 +272,17 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
                   >
                     <Archive className="w-3.5 h-3.5" />
                   </Button>
-                </td>}
-                {canDelete && <td className="p-1.5 text-center">
+                }</td>}
+                {canDelete && <td className="p-1.5 text-center">{r.isPhysicalStock &&
                   <Button size="icon" variant="destructive" className="h-7 w-7" title="Excluir material definitivamente" onClick={() => handleDeleteItem(r.key, r.description)}>
                     <X className="w-3.5 h-3.5" />
                   </Button>
-                </td>}
+                }</td>}
               </tr>
-            ))}
+            ))}</Fragment>;
+            })}
             {filtered.length === 0 && (
-              <tr><td colSpan={15 + Number(canArchive) + Number(canDelete)} className="p-8 text-center text-muted-foreground italic">Nenhum item encontrado.</td></tr>
+              <tr><td colSpan={17 + Number(canArchive) + Number(canDelete)} className="p-8 text-center text-muted-foreground italic">Nenhum item encontrado.</td></tr>
             )}
           </tbody>
         </table>
@@ -265,6 +302,17 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
       {confirmDialog}
     </div>
   );
+}
+
+function StockMobileCard({ row, canArchive, onClassChange, onLink, onHistory, onArchive }: {
+  row: WarehouseStockOverviewRow;
+  canArchive: boolean;
+  onClassChange: (row: WarehouseStockOverviewRow, costClass: MaterialCostClass) => void;
+  onLink: () => void;
+  onHistory: () => void;
+  onArchive: () => void;
+}) {
+  return <article className={`space-y-3 rounded-xl border p-3 shadow-sm ${row.underMin ? 'border-destructive/50 bg-destructive/5' : row.isPhysicalStock ? 'border-primary/25 bg-primary/5' : 'bg-muted/25'}`}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</div><div className="font-bold leading-snug">{row.description}</div></div><WarehouseStatusBadge label={row.isPhysicalStock ? (row.underMin ? 'Estoque baixo' : 'Estoque físico') : 'Planejamento'} tone={row.underMin ? 'danger' : row.isPhysicalStock ? 'success' : 'neutral'} /></div><label className="block"><span className="mb-1 block text-xs font-semibold text-muted-foreground">Classificação</span><select aria-label={`Classificação de ${row.description}`} className="min-h-11 w-full rounded border bg-background px-3 text-base" value={row.costClass} onChange={event => onClassChange(row, event.target.value as MaterialCostClass)}>{stockClassOrder.map(costClass => <option key={costClass} value={costClass}>{stockClassLabel[costClass]}</option>)}</select></label><div><StockClassBadge costClass={row.costClass} /></div><dl className="grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Contratado</dt><dd className="font-semibold">{row.contracted.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Aditivo</dt><dd className="font-semibold text-primary">{row.additive.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Planejado</dt><dd className="font-semibold">{row.planned.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.isPhysicalStock ? <><div><dt className="text-xs text-muted-foreground">Saldo disponível</dt><dd className={`font-bold ${row.underMin ? 'text-destructive' : 'text-primary'}`}>{row.balance.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Já retirado</dt><dd>{row.withdrawn.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.costClass === 'material' && <div><dt className="text-xs text-muted-foreground">Estoque baixo</dt><dd className={row.underMin ? 'font-bold text-destructive' : ''}>{row.effectiveMinStock?.toLocaleString('pt-BR') ?? '—'} {row.unit}</dd></div>}</> : <div className="col-span-2 rounded-lg bg-muted/60 p-2 text-xs text-muted-foreground">Sem estoque físico: aguarda compra, nota fiscal ou cadastro no almoxarifado.</div>}</dl>{row.isPhysicalStock && <div className={`grid gap-2 ${canArchive ? 'grid-cols-3' : 'grid-cols-2'}`}><Button variant="outline" className="min-h-11" onClick={onLink}><Link2 className="h-4 w-4" /><span className="sr-only">Revisar vínculos</span></Button><Button variant="outline" className="min-h-11" onClick={onHistory}><History className="h-4 w-4" /><span className="sr-only">Histórico</span></Button>{canArchive && <Button variant="outline" className="min-h-11 text-destructive" onClick={onArchive}><Archive className="h-4 w-4" /><span className="sr-only">Arquivar</span></Button>}</div>}</article>;
 }
 
 function MaterialLinkDialog({ project, itemKey, projectMaterials, auditActor, canUnlink, onProjectChange, onClose }: {
