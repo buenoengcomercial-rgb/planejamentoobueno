@@ -9,7 +9,11 @@ export interface WarehouseBudgetMaterialRow {
   description: string;
   unit: string;
   contractedQuantity: number;
+  additiveQuantity: number;
+  totalQuantity: number;
   withdrawnQuantity: number;
+  suppressedQuantity: number;
+  additiveStatuses: string[];
 }
 
 export interface WarehouseBudgetMaterialChapter {
@@ -20,12 +24,12 @@ export interface WarehouseBudgetMaterialChapter {
 }
 
 const round = (value: number) => Math.round(value * 100) / 100;
+const additiveStatusLabel: Record<string, string> = {
+  rascunho: 'Rascunho', em_analise: 'Em análise', aprovado: 'Aprovado',
+  contratado: 'Contratado', aditivo_contratado: 'Contratado',
+};
 function active(additive: Additive) {
   return !['rejeitado', 'reprovado', 'cancelado'].includes(additive.status ?? 'rascunho');
-}
-
-function contracted(additive: Additive) {
-  return additive.isContracted === true || additive.status === 'contratado' || additive.status === 'aditivo_contratado';
 }
 
 function quantityChanges(composition: AdditiveComposition) {
@@ -90,23 +94,28 @@ function chapterResolver(project: Project) {
 export function warehouseBudgetMaterialsByChapter(project: Project): WarehouseBudgetMaterialChapter[] {
   const chapterOf = chapterResolver(project);
   const chapters = new Map<string, WarehouseBudgetMaterialChapter>();
-  const add = (composition: AdditiveComposition, quantity: number, source: 'contracted' | 'additive') => {
+  const add = (composition: AdditiveComposition, quantity: number, kind: 'contracted' | 'additive' | 'suppressed', status?: string) => {
     if (!quantity) return;
     const chapter = chapterOf(composition);
     const bucket = chapters.get(chapter.id) ?? { ...chapter, rows: [] };
     chapters.set(chapter.id, bucket);
     const resolved = compositionWithResolvedInputs(project, composition).composition;
     for (const input of resolved.inputs ?? []) {
-      if (resolveMaterialCostClass(project, { code: input.code, description: input.description, unit: input.unit, sourceId: input.id, sourceType: source === 'additive' ? 'additive_input' : 'analytic_input', legacyInputType: input.type }) !== 'material') continue;
+      if (resolveMaterialCostClass(project, { code: input.code, description: input.description, unit: input.unit, sourceId: input.id, sourceType: kind === 'additive' ? 'additive_input' : 'analytic_input', legacyInputType: input.type }) !== 'material') continue;
       const amount = round((Number(input.coefficient) || 0) * quantity);
       if (!amount) continue;
       const key = `${input.bank || ''}|${input.code || ''}|${input.description.trim().toLocaleUpperCase('pt-BR')}|${input.unit}`;
       let row = bucket.rows.find(item => item.key === key);
       if (!row) {
-        row = { key, code: input.code || undefined, bank: input.bank || undefined, description: input.description, unit: input.unit, contractedQuantity: 0, withdrawnQuantity: 0 };
+        row = { key, code: input.code || undefined, bank: input.bank || undefined, description: input.description, unit: input.unit, contractedQuantity: 0, additiveQuantity: 0, totalQuantity: 0, withdrawnQuantity: 0, suppressedQuantity: 0, additiveStatuses: [] };
         bucket.rows.push(row);
       }
-      row.contractedQuantity = round(row.contractedQuantity + amount);
+      if (kind === 'contracted') row.contractedQuantity = round(row.contractedQuantity + amount);
+      if (kind === 'additive') {
+        row.additiveQuantity = round(row.additiveQuantity + amount);
+        if (amount > 0 && status && !row.additiveStatuses.includes(status)) row.additiveStatuses.push(status);
+      }
+      if (kind === 'suppressed') row.suppressedQuantity = round(row.suppressedQuantity + amount);
     }
   };
 
@@ -115,15 +124,16 @@ export function warehouseBudgetMaterialsByChapter(project: Project): WarehouseBu
     add(composition, contractedQuantity, 'contracted');
   }
   for (const additive of (project.additives ?? []).filter(active)) {
+    const status = additiveStatusLabel[additive.status ?? 'rascunho'] ?? 'Com aditivo';
     for (const composition of additive.compositions ?? []) {
       const changes = quantityChanges(composition);
-      // Supressões ajustam imediatamente o contratado vigente. Acréscimos só
-      // passam a integrá-lo após a contratação formal do aditivo.
-      add(composition, -changes.suppressed + (contracted(additive) ? changes.added : 0), 'additive');
+      add(composition, changes.net, 'additive', status);
+      add(composition, changes.suppressed, 'suppressed');
     }
   }
   const normalizedChapters = [...chapters.values()].map(chapter => ({ ...chapter, rows: chapter.rows
-    .filter(row => row.contractedQuantity > 0) }));
+    .map(row => ({ ...row, totalQuantity: round(row.contractedQuantity + row.additiveQuantity) }))
+    .filter(row => row.totalQuantity > 0 || row.suppressedQuantity > 0) }));
 
   const phaseById = new Map((project.phases ?? []).map(phase => [phase.id, phase] as const));
   const rootChapterId = (phaseId: string) => {
@@ -167,7 +177,7 @@ export function warehouseBudgetMaterialsByChapter(project: Project): WarehouseBu
     const netQuantity = Math.max(0, (Number(movement.quantity) || 0) - (returnedByRequisitionItem.get(movementKey) ?? 0));
     for (const material of linked) {
       const row = rowsByChapterAndIdentity.get(`${chapterId}|${materialIdentity(material.code, material.description, material.unit)}`);
-      if (!row) continue;
+      if (!row || row.totalQuantity <= 0) continue;
       row.withdrawnQuantity = round(row.withdrawnQuantity + netQuantity * material.factor);
     }
   }

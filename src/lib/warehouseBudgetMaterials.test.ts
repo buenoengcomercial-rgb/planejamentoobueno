@@ -6,7 +6,7 @@ const input = (id: string, coefficient: number) => ({ id, code: '123', bank: 'SI
 const composition = (id: string, quantity: number, phaseId = 'sub-2') => ({ id, item: '2.1.1', code: '999', bank: 'SINAPI', description: 'Rede', quantity, unit: 'm', unitPriceNoBDI: 1, unitPriceWithBDI: 1, total: 1, inputs: [input(`input-${id}`, 2)], phaseId });
 
 describe('warehouseBudgetMaterialsByChapter', () => {
-  it('consolida subcapítulos no capítulo principal e não inclui acréscimo ainda não contratado', () => {
+  it('consolida subcapítulos no capítulo principal e mostra acréscimo ainda em análise', () => {
     const project = {
       phases: [{ id: 'chapter-2', name: 'Hidrantes', color: '#000', tasks: [] }, { id: 'sub-2', name: 'Tubulação', color: '#000', tasks: [], parentId: 'chapter-2' }],
       analyticCompositions: [composition('base', 10)],
@@ -16,10 +16,10 @@ describe('warehouseBudgetMaterialsByChapter', () => {
     const [chapter] = warehouseBudgetMaterialsByChapter(project);
     expect(chapter).toMatchObject({ id: 'chapter-2', name: 'Hidrantes' });
     expect(chapter.rows).toHaveLength(1);
-    expect(chapter.rows[0]).toMatchObject({ contractedQuantity: 20, withdrawnQuantity: 0 });
+    expect(chapter.rows[0]).toMatchObject({ contractedQuantity: 20, additiveQuantity: 6, totalQuantity: 26, additiveStatuses: ['Em análise'], withdrawnQuantity: 0 });
   });
 
-  it('reduz o contratado por supressão ativa e oculta o material 100% suprimido, mesmo se houve retirada', () => {
+  it('mantém separada a supressão integral e não a inclui no retirado líquido', () => {
     const project = {
       phases: [{ id: 'chapter-2', name: 'Hidrantes', color: '#000', tasks: [] }],
       analyticCompositions: [composition('base', 5, 'chapter-2')],
@@ -34,10 +34,12 @@ describe('warehouseBudgetMaterialsByChapter', () => {
       },
     } as unknown as Project;
 
-    expect(warehouseBudgetMaterialsByChapter(project)).toEqual([]);
+    const [chapter] = warehouseBudgetMaterialsByChapter(project);
+    expect(chapter.rows).toHaveLength(1);
+    expect(chapter.rows[0]).toMatchObject({ contractedQuantity: 10, additiveQuantity: -10, totalQuantity: 0, suppressedQuantity: 10, withdrawnQuantity: 0 });
   });
 
-  it('inclui acréscimo no contratado somente após a contratação formal do aditivo', () => {
+  it('mantém contratado e acréscimo contratual em colunas separadas', () => {
     const project = {
       phases: [{ id: 'phase-2', customNumber: '2', name: 'Incêndio', color: '#000', tasks: [] }],
       budgetItems: [{ id: 'budget-1', item: '2.1.1', code: '999', chapterCode: '2', chapterName: 'Incêndio', unit: 'm', quantity: 10 }],
@@ -47,7 +49,7 @@ describe('warehouseBudgetMaterialsByChapter', () => {
 
     const [chapter] = warehouseBudgetMaterialsByChapter(project);
     expect(chapter).toMatchObject({ id: 'chapter:2', number: '2', name: 'Incêndio' });
-    expect(chapter.rows[0]).toMatchObject({ contractedQuantity: 26, withdrawnQuantity: 0 });
+    expect(chapter.rows[0]).toMatchObject({ contractedQuantity: 20, additiveQuantity: 6, totalQuantity: 26, additiveStatuses: ['Contratado'], withdrawnQuantity: 0 });
   });
 
   it('soma retiradas pela requisição entregue vinculada ao capítulo', () => {
