@@ -3,6 +3,7 @@ import { validateMeasurement, type MinimalRow } from './measurementValidation';
 
 const baseRow: MinimalRow = {
   taskId: 'task-1',
+  itemNumber: '2.3.1',
   itemCode: 'SINAPI 123',
   description: 'TAREFA DE TESTE',
   unit: 'UN',
@@ -37,7 +38,7 @@ describe('validateMeasurement — apontamento de divergências por tarefa', () =
 
     expect(issue?.affectedTaskIds).toEqual(['task-1']);
     expect(issue?.affectedTasks).toEqual([expect.objectContaining({
-      taskId: 'task-1', itemCode: 'SINAPI 123', description: 'TAREFA DE TESTE', unit: 'UN',
+      taskId: 'task-1', itemNumber: '2.3.1', itemCode: 'SINAPI 123', description: 'TAREFA DE TESTE', unit: 'UN',
       qtyContracted: 10, qtyPriorAccum: 8, qtyPeriod: 3, qtyBalanceBeforePeriod: 2,
     })]);
   });

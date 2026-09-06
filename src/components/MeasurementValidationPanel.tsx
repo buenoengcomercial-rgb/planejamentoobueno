@@ -86,6 +86,7 @@ export default function MeasurementValidationPanel({ issues, onOpenDailyReport }
                       {iss.affectedTasks.map(task => (
                         <li key={task.taskId} className="rounded bg-background/55 px-2 py-1">
                           <div className="font-medium">
+                            {task.itemNumber ? `Item ${task.itemNumber} · ` : ''}
                             {task.itemCode ? `${task.itemCode} · ` : ''}{task.description}
                           </div>
                           {iss.code === 'qty-over-balance' ? (

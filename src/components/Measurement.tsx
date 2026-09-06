@@ -132,6 +132,7 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
       measurementNumber,
       rows: rows.map(r => ({
         taskId: r.taskId,
+        itemNumber: r.item,
         description: r.description,
         unit: r.unit,
         itemCode: r.itemCode,
@@ -168,6 +169,7 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
         measurementNumber: activeMeasurement.number,
         rows: rows.map(r => ({
           taskId: r.taskId,
+          itemNumber: r.item,
           description: r.description,
           unit: r.unit,
           itemCode: r.itemCode,

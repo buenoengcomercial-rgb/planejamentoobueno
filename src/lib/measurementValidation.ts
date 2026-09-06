@@ -14,6 +14,8 @@ export interface ValidationIssue {
 
 export interface ValidationAffectedTask {
   taskId: string;
+  /** Numeração hierárquica exibida na planilha, por exemplo 2.3.1. */
+  itemNumber?: string;
   description: string;
   itemCode: string;
   unit: string;
@@ -29,6 +31,8 @@ export interface ValidationAffectedTask {
 
 export interface MinimalRow {
   taskId: string;
+  /** Numeração hierárquica exibida na planilha, por exemplo 2.3.1. */
+  itemNumber?: string;
   description: string;
   unit: string;
   itemCode: string;
@@ -47,6 +51,7 @@ function toAffectedTask(row: MinimalRow): ValidationAffectedTask {
   const qtyCurrentAccum = Number(row.qtyCurrentAccum) || 0;
   return {
     taskId: row.taskId,
+    itemNumber: row.itemNumber,
     description: row.description,
     itemCode: row.itemCode,
     unit: row.unit,

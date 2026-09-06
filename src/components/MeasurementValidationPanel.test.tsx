@@ -11,7 +11,7 @@ describe('MeasurementValidationPanel', () => {
       message: 'Existem 1 item(ns) com quantidade medida maior que o saldo a executar.',
       affectedTaskIds: ['task-1'],
       affectedTasks: [{
-        taskId: 'task-1', itemCode: 'SINAPI 123', description: 'INSTALAÇÃO DE TESTE', unit: 'UN',
+        taskId: 'task-1', itemNumber: '2.3.1', itemCode: 'SINAPI 123', description: 'INSTALAÇÃO DE TESTE', unit: 'UN',
         qtyContracted: 10, qtyPriorAccum: 8, qtyPeriod: 3, qtyCurrentAccum: 11,
         qtyBalanceBeforePeriod: 2, qtyExcess: 1,
       }],
@@ -19,7 +19,7 @@ describe('MeasurementValidationPanel', () => {
 
     render(<MeasurementValidationPanel issues={issues} />);
 
-    expect(screen.getByText('SINAPI 123 · INSTALAÇÃO DE TESTE')).toBeInTheDocument();
+    expect(screen.getByText('Item 2.3.1 · SINAPI 123 · INSTALAÇÃO DE TESTE')).toBeInTheDocument();
     expect(screen.getByText(/Contratado: 10 UN/)).toBeInTheDocument();
     expect(screen.getByText(/Acum\. anterior: 8 UN/)).toBeInTheDocument();
     expect(screen.getByText(/Medido agora: 3 UN/)).toBeInTheDocument();
