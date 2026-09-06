@@ -31,14 +31,21 @@ export function ProductionTable({ entries, photosByTask, onShowPhotos }: Product
       })}
     </div>
     <div className="hidden overflow-hidden rounded-md border border-border sm:block">
-      <table className="w-full text-sm">
+      <table className="w-full table-fixed text-sm">
+        <colgroup>
+          <col className="w-[54%]" />
+          <col className="w-[10%]" />
+          <col className="w-[12%]" />
+          <col className="w-[16%]" />
+          <col className="w-[8%]" />
+        </colgroup>
         <thead className="bg-muted/40 text-muted-foreground">
           <tr>
             <th className="text-left px-3 py-2 font-semibold">Tarefa</th>
-            <th className="text-center px-3 py-2 font-semibold w-24">Unid.</th>
-            <th className="text-right px-3 py-2 font-semibold w-32">Qtd. executada</th>
+            <th className="text-center px-3 py-2 font-semibold">Unid.</th>
+            <th className="text-right px-3 py-2 font-semibold">Qtd. executada</th>
             <th className="text-left px-3 py-2 font-semibold">Observação</th>
-            <th className="text-center px-3 py-2 font-semibold w-24">Fotos</th>
+            <th className="text-center px-3 py-2 font-semibold">Fotos</th>
           </tr>
         </thead>
         <tbody>
@@ -46,10 +53,10 @@ export function ProductionTable({ entries, photosByTask, onShowPhotos }: Product
             const count = photosByTask?.get(e.taskId) || 0;
             return (
               <tr key={e.taskId + (e.notes || '')} className="border-t border-border">
-                <td className="px-3 py-2">{e.taskName}</td>
-                <td className="px-3 py-2 text-center text-muted-foreground">{e.unit}</td>
-                <td className="px-3 py-2 text-right font-semibold">{e.actualQuantity.toFixed(2)}</td>
-                <td className="px-3 py-2 text-muted-foreground">{e.notes || '—'}</td>
+                <td className="px-3 py-2 align-top">{e.taskName}</td>
+                <td className="px-3 py-2 text-center align-top text-muted-foreground">{e.unit}</td>
+                <td className="px-3 py-2 text-right align-top font-semibold tabular-nums">{e.actualQuantity.toFixed(2)}</td>
+                <td className="px-3 py-2 align-top text-muted-foreground">{e.notes || '—'}</td>
                 <td className="px-3 py-2 text-center">
                   {count > 0 ? (
                     <button
