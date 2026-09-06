@@ -184,7 +184,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
     <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
       <WarehouseSectionHeader icon={Boxes} title="Materiais em estoque" description="Busque, filtre e confira os saldos." help="A posição reúne materiais recebidos, retirados, perdas, custo médio, estoque mínimo e vínculos com o orçamento." />
       <div className="border-b border-border bg-muted/40 p-3">
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(200px,1fr)_165px_minmax(180px,1fr)_190px]">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(200px,1fr)_205px_minmax(180px,1fr)_235px]">
         <div className="relative min-w-0">
           <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar insumo por descrição ou código..." className="min-h-11 pl-8 text-sm" />
@@ -269,7 +269,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
             <tr className="text-muted-foreground">
               <StockSortableHeader label="Código" sortKey="code" sort={sort} onSort={sortBy} />
               <StockSortableHeader label="Descrição" sortKey="description" sort={sort} onSort={sortBy} />
-              <StockSortableHeader label="Classificação" sortKey="costClass" sort={sort} onSort={sortBy} icon={Boxes} />
+              <StockSortableHeader label="Classe" sortKey="costClass" sort={sort} onSort={sortBy} icon={Boxes} />
               <StockSortableHeader label="Un" sortKey="unit" sort={sort} onSort={sortBy} align="center" />
               <StockSortableHeader label="Planej." sortKey="planned" sort={sort} onSort={sortBy} align="right" />
               <StockSortableHeader label="Aditivo" sortKey="additive" sort={sort} onSort={sortBy} align="right" className="text-primary" />
