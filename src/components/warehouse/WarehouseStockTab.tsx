@@ -36,10 +36,10 @@ const stockClassStyle: Record<MaterialCostClass, string> = {
   unclassified: 'border-slate-300 bg-slate-50 text-slate-600',
 };
 const stockClassOrder: MaterialCostClass[] = ['material', 'labor', 'equipment', 'unclassified'];
-type StockSortKey = 'code' | 'description' | 'costClass' | 'unit' | 'planned' | 'additive' | 'purchased' | 'received' | 'withdrawn' | 'returned' | 'losses' | 'balance' | 'effectiveMinStock' | 'lastMovementDate' | 'averageUnitCost' | 'linkStatus';
+type StockSortKey = 'code' | 'description' | 'costClass' | 'unit' | 'contracted' | 'planned' | 'additive' | 'purchased' | 'received' | 'withdrawn' | 'returned' | 'losses' | 'balance' | 'effectiveMinStock' | 'lastMovementDate' | 'averageUnitCost' | 'linkStatus';
 type StockSort = { key: StockSortKey; direction: 'asc' | 'desc' };
-const stockSortLabel: Record<StockSortKey, string> = { code: 'código', description: 'descrição', costClass: 'classificação', unit: 'unidade', planned: 'planejado', additive: 'aditivo', purchased: 'comprado', received: 'recebido', withdrawn: 'retirado', returned: 'devolvido', losses: 'perdas', balance: 'saldo', effectiveMinStock: 'estoque baixo', lastMovementDate: 'último movimento', averageUnitCost: 'custo médio', linkStatus: 'vínculo' };
-const numericStockSortKeys: StockSortKey[] = ['planned', 'additive', 'purchased', 'received', 'withdrawn', 'returned', 'losses', 'balance', 'effectiveMinStock', 'averageUnitCost'];
+const stockSortLabel: Record<StockSortKey, string> = { code: 'código', description: 'descrição', costClass: 'classificação', unit: 'unidade', contracted: 'contratado', planned: 'planejado total', additive: 'acréscimo do aditivo', purchased: 'comprado', received: 'recebido', withdrawn: 'retirado', returned: 'devolvido', losses: 'perdas', balance: 'saldo', effectiveMinStock: 'estoque baixo', lastMovementDate: 'último movimento', averageUnitCost: 'custo médio', linkStatus: 'vínculo' };
+const numericStockSortKeys: StockSortKey[] = ['contracted', 'planned', 'additive', 'purchased', 'received', 'withdrawn', 'returned', 'losses', 'balance', 'effectiveMinStock', 'averageUnitCost'];
 
 function StockClassBadge({ costClass }: { costClass: MaterialCostClass }) {
   const Icon = stockClassIcon[costClass];
@@ -217,6 +217,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
             <col className="w-20" />
             <col className="w-20" />
             <col className="w-20" />
+            <col className="w-20" />
             <col className="w-24" />
             <col className="w-24" />
             <col className="w-24" />
@@ -231,8 +232,9 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
               <StockSortableHeader label="Descrição" sortKey="description" sort={sort} onSort={sortBy} />
               <StockSortableHeader label="Classe" sortKey="costClass" sort={sort} onSort={sortBy} icon={Boxes} />
               <StockSortableHeader label="Un" sortKey="unit" sort={sort} onSort={sortBy} align="center" />
-              <StockSortableHeader label="Planej." sortKey="planned" sort={sort} onSort={sortBy} align="right" />
-              <StockSortableHeader label="Aditivo" sortKey="additive" sort={sort} onSort={sortBy} align="right" className="text-primary" />
+              <StockSortableHeader label="Contratado" sortKey="contracted" sort={sort} onSort={sortBy} align="right" />
+              <StockSortableHeader label="+ Aditivo" sortKey="additive" sort={sort} onSort={sortBy} align="right" className="text-primary" />
+              <StockSortableHeader label="Total planej." sortKey="planned" sort={sort} onSort={sortBy} align="right" className="bg-primary/5" />
               <StockSortableHeader label="Comprado" sortKey="purchased" sort={sort} onSort={sortBy} align="right" />
               <StockSortableHeader label="Receb." sortKey="received" sort={sort} onSort={sortBy} align="right" />
               <StockSortableHeader label="Já retirado" sortKey="withdrawn" sort={sort} onSort={sortBy} align="right" className="bg-primary/10 text-primary" />
@@ -251,14 +253,15 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
           <tbody>
             {orderedClasses.map(costClass => {
               const classRows = filtered.filter(row => row.costClass === costClass);
-              return <Fragment key={costClass}>{classRows.length > 0 && <tr data-testid="stock-class-group" className="border-t bg-muted/70"><td colSpan={17 + Number(canArchive) + Number(canDelete)} className="p-2"><div className="flex items-center gap-2"><StockClassBadge costClass={costClass} /><span className="text-xs font-semibold text-muted-foreground">{classRows.length} item(ns)</span></div></td></tr>}{classRows.map(r => (
+              return <Fragment key={costClass}>{classRows.length > 0 && <tr data-testid="stock-class-group" className="border-t bg-muted/70"><td colSpan={18 + Number(canArchive) + Number(canDelete)} className="p-2"><div className="flex items-center gap-2"><StockClassBadge costClass={costClass} /><span className="text-xs font-semibold text-muted-foreground">{classRows.length} item(ns)</span></div></td></tr>}{classRows.map(r => (
               <tr key={r.key} data-testid="stock-material-row" className={`border-t border-border hover:bg-muted/30 ${r.withdrawn > 0 ? 'bg-primary/5' : ''} ${r.underMin ? 'bg-destructive/5' : ''} ${!r.isPhysicalStock ? 'bg-muted/20' : ''}`}>
                 <td className="p-1.5 font-mono text-[10px] text-muted-foreground truncate">{r.code || '—'}</td>
                 <td className="p-1.5 leading-snug break-words" title={r.description}><span className="block font-semibold">{r.description}</span></td>
                 <td className="p-1.5"><StockClassSelect row={r} onChange={setClassification} /></td>
                 <td className="p-1.5 text-center text-muted-foreground">{r.unit}</td>
-                <td className="p-1.5 text-right font-mono tabular-nums">{r.planned.toLocaleString('pt-BR')}</td>
+                <td className="p-1.5 text-right font-mono tabular-nums">{r.contracted.toLocaleString('pt-BR')}</td>
                 <td className="p-1.5 text-right font-mono tabular-nums text-primary">{r.additive.toLocaleString('pt-BR')}</td>
+                <td className="bg-primary/5 p-1.5 text-right font-mono font-semibold tabular-nums">{r.planned.toLocaleString('pt-BR')}</td>
                 <td className="p-1.5 text-right font-mono tabular-nums">{r.purchased.toLocaleString('pt-BR')}</td>
                 <td className="p-1.5 text-right font-mono tabular-nums text-success">{r.received.toLocaleString('pt-BR')}</td>
                 <td className="bg-primary/5 p-1.5 text-right font-mono font-semibold tabular-nums text-primary">{r.withdrawn.toLocaleString('pt-BR')}</td>
@@ -297,7 +300,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
             ))}</Fragment>;
             })}
             {filtered.length === 0 && (
-              <tr><td colSpan={17 + Number(canArchive) + Number(canDelete)} className="p-8 text-center text-muted-foreground italic">Nenhum item encontrado.</td></tr>
+              <tr><td colSpan={18 + Number(canArchive) + Number(canDelete)} className="p-8 text-center text-muted-foreground italic">Nenhum item encontrado.</td></tr>
             )}
           </tbody>
         </table>
@@ -327,7 +330,7 @@ function StockMobileCard({ row, canArchive, onClassChange, onLink, onHistory, on
   onHistory: () => void;
   onArchive: () => void;
 }) {
-  return <article className={`space-y-3 rounded-xl border p-3 shadow-sm ${row.underMin ? 'border-destructive/50 bg-destructive/5' : row.isPhysicalStock ? 'border-primary/25 bg-primary/5' : 'bg-muted/25'}`}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</div><div className="font-bold leading-snug">{row.description}</div></div><WarehouseStatusBadge label={row.isPhysicalStock ? (row.underMin ? 'Estoque baixo' : 'Estoque físico') : 'Planejamento'} tone={row.underMin ? 'danger' : row.isPhysicalStock ? 'success' : 'neutral'} /></div><label className="block"><span className="mb-1 block text-xs font-semibold text-muted-foreground">Classificação</span><StockClassSelect row={row} onChange={onClassChange} mobile /></label><dl className="grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Contratado</dt><dd className="font-semibold">{row.contracted.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Aditivo</dt><dd className="font-semibold text-primary">{row.additive.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Planejado</dt><dd className="font-semibold">{row.planned.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.isPhysicalStock ? <><div><dt className="text-xs text-muted-foreground">Saldo disponível</dt><dd className={`font-bold ${row.underMin ? 'text-destructive' : 'text-primary'}`}>{row.balance.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Já retirado</dt><dd>{row.withdrawn.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.costClass === 'material' && <div><dt className="text-xs text-muted-foreground">Estoque baixo</dt><dd className={row.underMin ? 'font-bold text-destructive' : ''}>{row.effectiveMinStock?.toLocaleString('pt-BR') ?? '—'} {row.unit}</dd></div>}</> : <div className="col-span-2 rounded-lg bg-muted/60 p-2 text-xs text-muted-foreground">Sem estoque físico: aguarda compra, nota fiscal ou cadastro no almoxarifado.</div>}</dl>{row.isPhysicalStock && <div className={`grid gap-2 ${canArchive ? 'grid-cols-3' : 'grid-cols-2'}`}><StockLinkButton row={row} onClick={onLink} mobile /><Button variant="outline" className="min-h-11" onClick={onHistory}><History className="h-4 w-4" /><span>Histórico</span></Button>{canArchive && <Button variant="outline" className="min-h-11 text-destructive" onClick={onArchive}><Archive className="h-4 w-4" /><span>Arquivar</span></Button>}</div>}</article>;
+  return <article className={`space-y-3 rounded-xl border p-3 shadow-sm ${row.underMin ? 'border-destructive/50 bg-destructive/5' : row.isPhysicalStock ? 'border-primary/25 bg-primary/5' : 'bg-muted/25'}`}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</div><div className="font-bold leading-snug">{row.description}</div></div><WarehouseStatusBadge label={row.isPhysicalStock ? (row.underMin ? 'Estoque baixo' : 'Estoque físico') : 'Planejamento'} tone={row.underMin ? 'danger' : row.isPhysicalStock ? 'success' : 'neutral'} /></div><label className="block"><span className="mb-1 block text-xs font-semibold text-muted-foreground">Classificação</span><StockClassSelect row={row} onChange={onClassChange} mobile /></label><dl className="grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Contratado</dt><dd className="font-semibold">{row.contracted.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Acréscimo do aditivo</dt><dd className="font-semibold text-primary">+{row.additive.toLocaleString('pt-BR')} {row.unit}</dd></div><div className="rounded bg-primary/5 p-2"><dt className="text-xs text-muted-foreground">Planejado total</dt><dd className="font-semibold">{row.planned.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.isPhysicalStock ? <><div><dt className="text-xs text-muted-foreground">Saldo disponível</dt><dd className={`font-bold ${row.underMin ? 'text-destructive' : 'text-primary'}`}>{row.balance.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Já retirado</dt><dd>{row.withdrawn.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.costClass === 'material' && <div><dt className="text-xs text-muted-foreground">Estoque baixo</dt><dd className={row.underMin ? 'font-bold text-destructive' : ''}>{row.effectiveMinStock?.toLocaleString('pt-BR') ?? '—'} {row.unit}</dd></div>}</> : <div className="col-span-2 rounded-lg bg-muted/60 p-2 text-xs text-muted-foreground">Sem estoque físico: aguarda compra, nota fiscal ou cadastro no almoxarifado.</div>}</dl>{row.isPhysicalStock && <div className={`grid gap-2 ${canArchive ? 'grid-cols-3' : 'grid-cols-2'}`}><StockLinkButton row={row} onClick={onLink} mobile /><Button variant="outline" className="min-h-11" onClick={onHistory}><History className="h-4 w-4" /><span>Histórico</span></Button>{canArchive && <Button variant="outline" className="min-h-11 text-destructive" onClick={onArchive}><Archive className="h-4 w-4" /><span>Arquivar</span></Button>}</div>}</article>;
 }
 
 function MaterialLinkDialog({ project, itemKey, projectMaterials, auditActor, canUnlink, onProjectChange, onClose }: {

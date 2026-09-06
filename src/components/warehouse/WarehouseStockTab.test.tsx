@@ -159,7 +159,7 @@ describe('WarehouseStockTab - documentos no histórico', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Visão resumida' }));
     expect(table).toHaveClass('warehouse-stock-summary');
     expect(columns?.[1]).toHaveClass('w-80');
-    expect(columns).toHaveLength(19);
+    expect(columns).toHaveLength(20);
     expect(screen.getByText('Excluir', { selector: 'span' })).toBeInTheDocument();
   });
 
@@ -195,12 +195,13 @@ describe('WarehouseStockTab - documentos no histórico', () => {
     ]);
   });
 
-  it('mostra classificação, aditivo e o filtro de classes na consulta', () => {
+  it('mostra contratado, acréscimo do aditivo e o filtro de classes na consulta', () => {
     const onProjectChange = vi.fn();
     render(<WarehouseStockTab project={projectWithPlannedMaterials()} onProjectChange={onProjectChange} />);
 
     expect(screen.getAllByText('Classificação').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Aditivo').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('+ Aditivo').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Contratado').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Material').length).toBeGreaterThan(0);
     fireEvent.change(screen.getByRole('combobox', { name: 'Filtrar por classificação' }), { target: { value: 'labor' } });
     expect(screen.queryByText('Argamassa colante AC II')).not.toBeInTheDocument();
