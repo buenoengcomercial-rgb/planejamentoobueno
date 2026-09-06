@@ -20,7 +20,16 @@
 .withdrawal-tree .withdrawal-records > tbody > .withdrawal-record > td:nth-child(7) { overflow-wrap: normal; }
 @media (max-width: 767px) {
   .withdrawal-tree .withdrawal-detail table { min-width: 0; }
-  .withdrawal-tree .withdrawal-detail thead { display: none; }
+  .withdrawal-tree .withdrawal-detail thead,
+  .withdrawal-tree .withdrawal-detail thead tr { display: block; }
+  .withdrawal-tree .withdrawal-detail thead th { display: none; }
+  .withdrawal-tree .withdrawal-detail thead th:last-child {
+    display: block;
+    min-height: 0;
+    padding: 0 0 0.5rem;
+    text-align: left;
+  }
+  .withdrawal-tree .withdrawal-detail .withdrawal-detail-actions { justify-content: flex-start; }
   .withdrawal-tree .withdrawal-detail tbody { display: block; }
   .withdrawal-tree .withdrawal-detail tbody tr {
     display: grid;
@@ -39,6 +48,7 @@
   .withdrawal-tree .withdrawal-detail td:nth-child(4)::before { content: 'Retirado'; }
   .withdrawal-tree .withdrawal-detail td:nth-child(5)::before { content: 'Devolvido'; }
   .withdrawal-tree .withdrawal-detail td:nth-child(6)::before { content: 'Em campo'; }
+  .withdrawal-tree .withdrawal-detail td:nth-child(7) { display: none; }
 }
 @media (min-width: 768px) {
   .withdrawal-tree { --withdrawal-indent: 20px; }

@@ -249,6 +249,26 @@ describe('WarehouseRequisitionsTab', () => {
     expect(screen.getAllByText('REQ-2026-0019')).toHaveLength(2);
   });
 
+  it('mantém as ações na mesma faixa dos cabeçalhos dos materiais', () => {
+    const project = projectWithMaterials(1);
+    project.warehouse!.requisitions = [{
+      id: 'req-actions', number: 'REQ-2026-0041', date: '2026-08-18', status: 'entregue', chapterId: 'chapter-1',
+      receiverName: 'Ana', createdAt: '2026-08-18T10:00:00.000Z',
+      items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
+    }];
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit canDelete />);
+    expandAllWithdrawalDateGroups();
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0041/i }));
+
+    const desktopDetail = screen.getAllByTestId('withdrawal-history-details').find(element => element.tagName === 'TR')!;
+    const headerRow = within(desktopDetail).getByRole('columnheader', { name: 'Código' }).parentElement!;
+    expect(within(headerRow).getByRole('button', { name: 'PDF' })).toBeInTheDocument();
+    expect(within(headerRow).getByRole('button', { name: 'Corrigir retirada' })).toBeInTheDocument();
+    expect(within(headerRow).getByRole('button', { name: 'Registrar devolução' })).toBeInTheDocument();
+    expect(within(headerRow).getByRole('button', { name: 'Excluir' })).toBeInTheDocument();
+  });
+
   it('mostra a correção de retirada somente quando recebe permissão de Proprietário', () => {
     const project = projectWithMaterials(1);
     project.warehouse!.requisitions = [{
@@ -380,7 +400,7 @@ describe('WarehouseRequisitionsTab', () => {
     expect(rows[4]).toHaveTextContent('CAIO');
   });
 
-  it('usa a hierarquia completa da EAP no destino e preserva o fallback legado', () => {
+  it('não repete o destino no detalhe e preserva o aviso de registro legado', () => {
     const project = projectWithMaterials(0);
     project.phases = [
       { id: 'root', name: 'Prédio', color: '#000', tasks: [], order: 0 },
@@ -402,7 +422,8 @@ describe('WarehouseRequisitionsTab', () => {
 
     expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0003/i }));
-    expect(screen.getAllByText('1.1.1 · Prédio > Incêndio > Hidrantes').length).toBeGreaterThan(0);
+    expect(screen.queryByText('1.1.1 · Prédio > Incêndio > Hidrantes')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Destino:/)).not.toBeInTheDocument();
     expect(screen.getAllByText(/Registro legado: 17\/08\/2026/).length).toBeGreaterThan(0);
   });
 
