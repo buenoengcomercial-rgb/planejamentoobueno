@@ -37,6 +37,13 @@ function expandAllWithdrawalDateGroups() {
   });
 }
 
+function expandAllCustodyDateGroups() {
+  screen.getAllByTestId('custody-date-group').filter(element => element.tagName === 'SECTION').forEach(element => {
+    const button = within(element).getByRole('button', { name: /expandir cautelas/i });
+    fireEvent.click(button);
+  });
+}
+
 describe('WarehouseRequisitionsTab', () => {
   beforeEach(() => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
@@ -440,6 +447,7 @@ describe('WarehouseRequisitionsTab', () => {
     fireEvent.click(equipmentTab);
 
     expect(screen.getByRole('button', { name: /Nova cautela/i })).toBeInTheDocument();
+    expandAllCustodyDateGroups();
     expect(screen.getAllByText('TC-2025-0001').length).toBeGreaterThan(0);
   });
 
@@ -467,8 +475,37 @@ describe('WarehouseRequisitionsTab', () => {
     expect(buildingRows[0]).toHaveTextContent('Prédio A');
     expect(buildingRows[0]).toHaveTextContent('2 cautela(s) · 2 equipamento(s)');
     expect(buildingRows[1]).toHaveTextContent('Prédio B');
+    expandAllCustodyDateGroups();
     expect(screen.getAllByText('Ana').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Bia').length).toBeGreaterThan(0);
+  });
+
+  it('organiza cautelas por data de emissão e preserva abertura independente e último registro', () => {
+    const project = projectWithMaterials(0);
+    project.warehouse!.custodyTerms = [
+      { id: 'term-current', number: 'TC-2026-0010', createdAt: '2026-09-06T19:10:00.000Z', updatedAt: '2026-09-06T20:30:00.000Z', issuedAt: '2026-09-06', equipmentId: 'eq-1', equipmentName: 'Furadeira', workerName: 'Ana', chapterId: 'chapter-1', chapterName: 'Prédio 1', status: 'em_uso' },
+      { id: 'term-older', number: 'TC-2026-0009', createdAt: '2026-09-05', issuedAt: '2026-09-05', equipmentId: 'eq-2', equipmentName: 'Esmerilhadeira', workerName: 'Bia', chapterId: 'chapter-1', chapterName: 'Prédio 1', status: 'parcial' },
+    ];
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+    const equipmentTab = screen.getByRole('tab', { name: /Equipamentos \/ Cautelas/i });
+    fireEvent.mouseDown(equipmentTab, { button: 0, ctrlKey: false });
+    fireEvent.click(equipmentTab);
+
+    expect(screen.getAllByText('06/09/2026').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('05/09/2026').length).toBeGreaterThan(0);
+    expect(screen.getByTestId('custody-history-row')).toHaveTextContent('TC-2026-0010');
+    expect(screen.getByTestId('custody-history-row')).toHaveTextContent('06/09/2026');
+    expect(screen.getByTestId('custody-history-row')).toHaveTextContent('06/09/2026, 16:30');
+    expect(screen.queryByText('TC-2026-0009')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /expandir cautelas de 05\/09\/2026/i }));
+    expect(screen.getAllByTestId('custody-history-row')).toHaveLength(2);
+    fireEvent.click(screen.getAllByTestId('custody-history-row')[0]);
+    fireEvent.click(screen.getAllByTestId('custody-history-row')[1]);
+    expect(screen.getAllByTestId('custody-history-details')).toHaveLength(2);
+    expect(screen.getAllByText(/Registro legado: 05\/09\/2026/).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Prédio 1', { selector: 'td' })).not.toBeInTheDocument();
   });
 
   it('permite selecionar vários equipamentos disponíveis na mesma cautela', () => {

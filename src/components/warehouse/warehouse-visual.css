@@ -54,6 +54,54 @@
   .withdrawal-tree { --withdrawal-indent: 20px; }
 }
 
+.custody-tree { --custody-indent: 8px; }
+.custody-tree .custody-branch {
+  margin-left: var(--custody-indent);
+  border-left: 1px solid hsl(var(--foreground) / 0.18);
+  min-width: 0;
+}
+.custody-tree .custody-records th,
+.custody-tree .custody-records td { overflow-wrap: anywhere; }
+.custody-tree .custody-records .custody-record { background: hsl(var(--card)); }
+.custody-tree .custody-records .custody-record:hover { background: hsl(var(--muted) / 0.25); }
+.custody-tree .custody-detail-row,
+.custody-tree .custody-detail-row:hover { background: transparent; }
+.custody-tree .custody-detail { border-left-width: 2px; }
+@media (max-width: 767px) {
+  .custody-tree .custody-detail table { min-width: 0; }
+  .custody-tree .custody-detail thead,
+  .custody-tree .custody-detail thead tr { display: block; }
+  .custody-tree .custody-detail thead th { display: none; }
+  .custody-tree .custody-detail thead th:last-child {
+    display: block;
+    min-height: 0;
+    padding: 0 0 0.5rem;
+    text-align: left;
+  }
+  .custody-tree .custody-detail .custody-detail-actions { justify-content: flex-start; }
+  .custody-tree .custody-detail tbody { display: block; }
+  .custody-tree .custody-detail tbody tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin-bottom: 12px;
+    border: 1px solid hsl(var(--border));
+    border-radius: 8px;
+    background: hsl(var(--card));
+  }
+  .custody-tree .custody-detail td { min-width: 0; overflow-wrap: anywhere; }
+  .custody-tree .custody-detail td:nth-child(-n+2) { grid-column: 1 / -1; }
+  .custody-tree .custody-detail td::before { display: block; font-size: 10px; font-weight: 400; color: hsl(var(--muted-foreground)); }
+  .custody-tree .custody-detail td:nth-child(1)::before { content: 'Equipamento'; }
+  .custody-tree .custody-detail td:nth-child(2)::before { content: 'Estado e acessórios'; }
+  .custody-tree .custody-detail td:nth-child(3)::before { content: 'Situação'; }
+  .custody-tree .custody-detail td:nth-child(4)::before { content: 'Devolução'; }
+  .custody-tree .custody-detail td:nth-child(5)::before { content: 'Ação'; }
+  .custody-tree .custody-detail td:nth-child(5) { text-align: left; }
+}
+@media (min-width: 768px) {
+  .custody-tree { --custody-indent: 20px; }
+}
+
 .warehouse-ui .warehouse-field {
   background: var(--warehouse-soft-surface);
   border-color: hsl(var(--border));

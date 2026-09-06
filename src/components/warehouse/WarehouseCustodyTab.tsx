@@ -119,6 +119,29 @@ type CustodyBuildingGroup = {
   terms: CustodyTerm[];
   equipmentCount: number;
   isMissingBuilding: boolean;
+  dateGroups: CustodyDateGroup[];
+};
+
+type CustodyDateGroup = {
+  key: string;
+  date: string;
+  terms: CustodyTerm[];
+  equipmentCount: number;
+};
+
+type TimestampedCustodyRecord = { createdAt?: string; updatedAt?: string };
+
+const hasRecordedTime = (value?: string) => !!value && /^\d{4}-\d{2}-\d{2}T/.test(value);
+const formatOperationalDate = (value?: string) => {
+  if (!value) return 'Data operacional não informada';
+  const [year, month, day] = value.slice(0, 10).split('-');
+  return year && month && day ? `${day}/${month}/${year}` : value;
+};
+const custodyRecordTimestamp = (term: TimestampedCustodyRecord & { issuedAt?: string }) => term.updatedAt || term.createdAt || term.issuedAt || '';
+const formatCustodyRecordedAt = (term: TimestampedCustodyRecord & { issuedAt?: string }) => {
+  const timestamp = custodyRecordTimestamp(term);
+  if (!hasRecordedTime(timestamp)) return `Registro legado: ${formatOperationalDate(timestamp || term.issuedAt)} (horário não informado)`;
+  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(timestamp));
 };
 
 function custodyBuildingLabel(project: Project, chapterId?: string) {
@@ -143,12 +166,24 @@ function groupCustodyTermsByBuilding(project: Project, terms: CustodyTerm[]): Cu
   }
   return Array.from(byBuilding.entries()).map(([key, buildingTerms]) => {
     const building = custodyBuildingLabel(project, buildingTerms[0].chapterId);
+    const sortedTerms = buildingTerms.slice().sort((left, right) => custodyRecordTimestamp(right).localeCompare(custodyRecordTimestamp(left)));
+    const byDate = new Map<string, CustodyTerm[]>();
+    for (const term of sortedTerms) {
+      const date = term.issuedAt || 'data-nao-informada';
+      byDate.set(date, [...(byDate.get(date) ?? []), term]);
+    }
     return {
       key,
       label: building.label,
       isMissingBuilding: building.isMissingBuilding,
-      terms: buildingTerms,
-      equipmentCount: buildingTerms.reduce((total, term) => total + custodyTermEquipmentItems(term).length, 0),
+      terms: sortedTerms,
+      equipmentCount: sortedTerms.reduce((total, term) => total + custodyTermEquipmentItems(term).length, 0),
+      dateGroups: Array.from(byDate.entries()).map(([date, dateTerms]) => ({
+        key: `${key}|${date}`,
+        date,
+        terms: dateTerms,
+        equipmentCount: dateTerms.reduce((total, term) => total + custodyTermEquipmentItems(term).length, 0),
+      })).sort((left, right) => right.date.localeCompare(left.date)),
     };
   }).sort((left, right) => Number(left.isMissingBuilding) - Number(right.isMissingBuilding) || left.label.localeCompare(right.label, 'pt-BR', { numeric: true }));
 }
@@ -165,7 +200,8 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
     [numbering, project.phases],
   );
   const [open, setOpen] = useState(false);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedTermIds, setExpandedTermIds] = useState<Set<string>>(() => new Set());
+  const [dateExpansionOverrides, setDateExpansionOverrides] = useState<Map<string, boolean>>(() => new Map());
   const [form, setForm] = useState<CustodyForm>(initialForm);
   const [equipmentSearch, setEquipmentSearch] = useState('');
   const [photos, setPhotos] = useState<File[]>([]);
@@ -279,7 +315,7 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
       }, auditActor);
       const createdId = next.warehouse!.custodyTerms.at(-1)?.id ?? null;
       onProjectChange(next);
-      setExpandedId(createdId);
+      if (createdId) setExpandedTermIds(current => new Set([...current, createdId]));
       reset();
       toast.success('Cautela emitida e equipamentos marcados como Em uso.');
     } catch (error) {
@@ -319,6 +355,18 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
 
   const sortedTerms = wh.custodyTerms.slice().sort((a, b) => b.issuedAt.localeCompare(a.issuedAt) || b.createdAt.localeCompare(a.createdAt));
   const custodyBuildingGroups = useMemo(() => groupCustodyTermsByBuilding(project, sortedTerms), [project, sortedTerms]);
+  const currentOperationalDate = warehouseOperationalDate();
+  const isDateGroupExpanded = (dateGroup: CustodyDateGroup) => dateExpansionOverrides.get(dateGroup.key) ?? dateGroup.date === currentOperationalDate;
+  const toggleDateGroup = (dateGroup: CustodyDateGroup) => setDateExpansionOverrides(current => {
+    const next = new Map(current);
+    next.set(dateGroup.key, !(current.get(dateGroup.key) ?? dateGroup.date === currentOperationalDate));
+    return next;
+  });
+  const toggleTerm = (termId: string) => setExpandedTermIds(current => {
+    const next = new Set(current);
+    if (next.has(termId)) next.delete(termId); else next.add(termId);
+    return next;
+  });
   const deleteTerm = (term: CustodyTerm) => confirm(
     { title: 'Excluir cautela definitivamente?', description: 'O termo, suas fotos e devoluções vinculadas serão removidos; equipamentos ainda em uso voltarão para disponível.', confirmLabel: 'Excluir definitivamente' },
     async () => {
@@ -328,7 +376,11 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
         ...custodyTermEquipmentItems(term).flatMap(item => item.returnAttachments ?? []),
       ];
       try { await deleteWarehouseAttachments(attachments); } catch { toast.warning('A cautela foi excluída, mas houve falha ao remover um anexo do Storage.'); }
-      setExpandedId(null);
+      setExpandedTermIds(current => {
+        const next = new Set(current);
+        next.delete(term.id);
+        return next;
+      });
       toast.success('Cautela excluída e equipamentos restaurados.');
     },
   );
@@ -397,20 +449,30 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
 
       <section className="overflow-hidden rounded-xl border bg-card">
         <WarehouseSectionHeader icon={History} title="Histórico de cautelas" description={`${sortedTerms.length} registro(s)`} tone="neutral" />
-        <div className="space-y-4 p-2 md:hidden">
-          {custodyBuildingGroups.map(building => <section key={building.key} data-testid="custody-building-group" className="space-y-2"><CustodyBuildingHeader label={building.label} termCount={building.terms.length} equipmentCount={building.equipmentCount} />{building.terms.map(term => <CustodyMobileCard key={term.id} term={term} expanded={expandedId === term.id} onToggle={() => setExpandedId(current => current === term.id ? null : term.id)} onReturn={startReturn} project={project} canDelete={canDelete} onDelete={() => deleteTerm(term)} />)}</section>)}
+        <div className="custody-tree space-y-4 p-2 sm:p-3">
+          {custodyBuildingGroups.map(building => <section key={building.key} data-testid="custody-building-group" className="min-w-0 space-y-3">
+            <div className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2.5"><CustodyBuildingHeader label={building.label} termCount={building.terms.length} equipmentCount={building.equipmentCount} /></div>
+            <div className="custody-branch min-w-0 space-y-3 pt-1">
+              {building.dateGroups.map(dateGroup => {
+                const dateExpanded = isDateGroupExpanded(dateGroup);
+                return <section key={dateGroup.key} data-testid="custody-date-group" className="min-w-0">
+                  <div className="rounded-lg border bg-muted/65"><CustodyDateGroupHeader dateGroup={dateGroup} expanded={dateExpanded} onToggle={() => toggleDateGroup(dateGroup)} /></div>
+                  {dateExpanded && <div className="custody-branch min-w-0 pt-3">
+                    <div className="space-y-3 md:hidden">
+                      {dateGroup.terms.map(term => <CustodyMobileCard key={term.id} term={term} expanded={expandedTermIds.has(term.id)} onToggle={() => toggleTerm(term.id)} onReturn={startReturn} project={project} canDelete={canDelete} onDelete={() => deleteTerm(term)} />)}
+                    </div>
+                    <div className="hidden min-w-0 overflow-x-auto md:block">
+                      <table className="custody-records w-full min-w-[940px] text-xs">
+                        <thead><tr><th className="w-10 p-2"><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data da operação</th><th className="p-2 text-left">Último registro</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-center">Equipamentos</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead>
+                        <tbody>{dateGroup.terms.map(term => <CustodyHistoryRow key={term.id} term={term} expanded={expandedTermIds.has(term.id)} onToggle={() => toggleTerm(term.id)} project={project} onReturn={startReturn} canDelete={canDelete} onDelete={() => deleteTerm(term)} />)}</tbody>
+                      </table>
+                    </div>
+                  </div>}
+                </section>;
+              })}
+            </div>
+          </section>)}
           {!sortedTerms.length && <WarehouseEmptyState message="Nenhuma cautela emitida" hint="Use Nova cautela para começar." icon={Wrench} />}
-        </div>
-        <div className="hidden overflow-x-auto md:block">
-          <table className="w-full min-w-[840px] text-xs">
-            <thead className="bg-muted"><tr><th className="w-10 p-2"><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Prédio / capítulo</th><th className="p-2 text-center">Equipamentos</th><th className="p-2 text-left">Prazo</th><th className="p-2 text-left">Status</th></tr></thead>
-            <tbody>{custodyBuildingGroups.map(building => <Fragment key={building.key}><tr data-testid="custody-building-group"><td colSpan={8} className="border-t bg-primary/10 px-3 py-2"><CustodyBuildingHeader label={building.label} termCount={building.terms.length} equipmentCount={building.equipmentCount} /></td></tr>{building.terms.map(term => {
-              const items = custodyTermEquipmentItems(term);
-              const expanded = expandedId === term.id;
-              const aggregate = custodyTermAggregateStatus(items);
-              return <Fragment key={term.id}><tr className={`cursor-pointer border-t border-primary/30 whitespace-nowrap hover:bg-primary/20 ${expanded ? 'bg-primary/25' : 'bg-primary/10'}`} onClick={() => setExpandedId(current => current === term.id ? null : term.id)}><td className="border-l-4 border-l-primary bg-primary/20 py-2 pl-10 pr-2"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180 text-primary' : ''}`} /></td><td className="p-2 font-mono">{term.number}</td><td className="p-2">{term.issuedAt}</td><td className="p-2">{term.workerName}</td><td className="max-w-64 truncate p-2" title={term.chapterName}>{term.chapterName || 'Registro legado'}</td><td className="p-2 text-center">{items.length}</td><td className="p-2">{term.dueDate || 'Sem prazo'}</td><td className="p-2"><WarehouseStatusBadge label={statusLabel[aggregate] || aggregate} tone={statusTone(aggregate)} /></td></tr>{expanded && <tr className="border-t bg-primary/15"><td colSpan={8} className="py-3 pl-12 pr-4"><div className="border-l-4 border-primary bg-primary/20 p-3"><CustodyDetails term={term} project={project} onReturn={startReturn} canDelete={canDelete} onDelete={() => deleteTerm(term)} /></div></td></tr>}</Fragment>;
-            })}</Fragment>)}{!sortedTerms.length && <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">Nenhuma cautela emitida.</td></tr>}</tbody>
-          </table>
         </div>
       </section>
 
@@ -440,6 +502,10 @@ function CustodyBuildingHeader({ label, termCount, equipmentCount }: { label: st
   return <div className="flex flex-wrap items-center justify-between gap-2 text-sm"><strong className="min-w-0 break-words">{label}</strong><span className="text-muted-foreground">{termCount} cautela(s) · {equipmentCount} equipamento(s)</span></div>;
 }
 
+function CustodyDateGroupHeader({ dateGroup, expanded, onToggle }: { dateGroup: CustodyDateGroup; expanded: boolean; onToggle: () => void }) {
+  return <button type="button" className="flex min-h-12 w-full items-center gap-2 px-3 py-2 text-left" onClick={onToggle} aria-expanded={expanded} aria-label={`${expanded ? 'Recolher' : 'Expandir'} cautelas de ${formatOperationalDate(dateGroup.date)}`}><ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${expanded ? 'rotate-180 text-primary' : ''}`} /><span className="min-w-0"><strong className="block text-sm">{formatOperationalDate(dateGroup.date)}</strong><span className="block text-xs text-muted-foreground">{dateGroup.terms.length} cautela(s) · {dateGroup.equipmentCount} equipamento(s)</span></span></button>;
+}
+
 function OptionalPhotos({ photos, onCamera, onGallery, onRemove }: { photos: File[]; onCamera: () => void; onGallery: () => void; onRemove: (index: number) => void }) {
   return <div className="space-y-3"><div className="flex items-center gap-2 text-sm font-bold">Fotos da entrega <span className="rounded-full border bg-background px-2 py-0.5 text-xs text-muted-foreground">Opcional · até 3</span></div><div className="grid grid-cols-3 gap-2">{photos.map((photo, index) => <PhotoPreview key={`${photo.name}-${index}`} file={photo} onRemove={() => onRemove(index)} />)}</div><div className="grid grid-cols-2 gap-2"><Button type="button" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3} onClick={onCamera}><Camera className="mr-2 h-4 w-4" />Tirar foto</Button><Button type="button" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3} onClick={onGallery}><ImagePlus className="mr-2 h-4 w-4" />Galeria</Button></div></div>;
 }
@@ -451,11 +517,18 @@ function PhotoPreview({ file, onRemove }: { file: File; onRemove: () => void }) 
 
 function CustodyDetails({ term, project, onReturn, canDelete, onDelete }: { term: CustodyTerm; project: Project; onReturn: (term: CustodyTerm, item: CustodyTermEquipmentItem) => void; canDelete: boolean; onDelete: () => void }) {
   const items = custodyTermEquipmentItems(term);
-  return <div className="space-y-3"><div className="flex flex-wrap items-center justify-between gap-2"><div className="text-sm"><strong>{term.number}</strong> · {term.workerName} · {term.attachments?.length || 0} foto(s) na entrega</div><div className="flex gap-2"><Button size="sm" variant="outline" className="min-h-11" onClick={() => generateCustodyTermPdf(project, term)}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{canDelete && <Button size="sm" variant="destructive" className="min-h-11" onClick={onDelete}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>}</div></div><div className="overflow-x-auto"><table className="w-full min-w-[720px] text-xs"><thead><tr><th className="p-2 text-left">Equipamento</th><th className="p-2 text-left">Estado / acessórios</th><th className="p-2 text-left">Situação</th><th className="p-2 text-left">Devolução</th><th className="p-2 text-right">Ação</th></tr></thead><tbody>{items.map(item => <tr key={item.equipmentId} className="border-t"><td className="p-2"><div className="font-medium">{item.equipmentInternalCode || 'Código legado'} · {item.equipmentName}</div><div className="text-muted-foreground">Patrimônio {item.equipmentPatrimony || '—'} · Série {item.equipmentSerial || '—'}</div></td><td className="p-2">{item.stateOnDelivery || '—'}<div className="text-muted-foreground">{item.accessories || 'Sem acessórios'}</div></td><td className="p-2"><WarehouseStatusBadge label={statusLabel[item.status] || item.status} tone={statusTone(item.status)} /></td><td className="p-2">{item.returnedAt || '—'}<div className="text-muted-foreground">{item.stateOnReturn || item.divergenceNotes || ''}</div></td><td className="p-2 text-right">{item.status === 'em_uso' && <Button size="sm" variant="outline" className="min-h-11" onClick={() => onReturn(term, item)}><Undo2 className="mr-1 h-4 w-4" />Devolver</Button>}</td></tr>)}</tbody></table></div><WarehouseAuditIdentity createdBy={term.createdBy} updatedBy={term.updatedBy} createdAt={term.createdAt} updatedAt={term.updatedAt} className="rounded-md bg-muted/40 p-2 text-xs" /></div>;
+  const actions = <div className="custody-detail-actions flex flex-wrap justify-end gap-1"><Button size="sm" variant="outline" className="min-h-9" onClick={() => generateCustodyTermPdf(project, term)}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{canDelete && <Button size="sm" variant="destructive" className="min-h-9" onClick={onDelete}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>}</div>;
+  return <div className="space-y-3">{(term.attachments?.length ?? 0) > 0 && <div className="text-xs text-muted-foreground">{term.attachments!.length} foto(s) registrada(s) na entrega.</div>}<div className="overflow-x-auto"><table className="w-full min-w-[760px] text-xs"><thead><tr><th className="p-2 text-left">Equipamento</th><th className="p-2 text-left">Estado / acessórios</th><th className="p-2 text-left">Situação</th><th className="p-2 text-left">Devolução</th><th className="p-2 text-right">{actions}</th></tr></thead><tbody>{items.map(item => <tr key={item.equipmentId} className="border-t"><td className="p-2"><div className="font-medium">{item.equipmentInternalCode || 'Código legado'} · {item.equipmentName}</div><div className="text-muted-foreground">Patrimônio {item.equipmentPatrimony || '—'} · Série {item.equipmentSerial || '—'}</div></td><td className="p-2">{item.stateOnDelivery || '—'}<div className="text-muted-foreground">{item.accessories || 'Sem acessórios'}</div></td><td className="p-2"><WarehouseStatusBadge label={statusLabel[item.status] || item.status} tone={statusTone(item.status)} /></td><td className="p-2">{item.returnedAt || '—'}<div className="text-muted-foreground">{item.stateOnReturn || item.divergenceNotes || ''}</div></td><td className="p-2 text-right">{item.status === 'em_uso' && <Button size="sm" variant="outline" className="min-h-10" onClick={() => onReturn(term, item)}><Undo2 className="mr-1 h-4 w-4" />Devolver</Button>}</td></tr>)}</tbody></table></div><WarehouseAuditIdentity createdBy={term.createdBy} updatedBy={term.updatedBy} createdAt={term.createdAt} updatedAt={term.updatedAt} className="rounded-md bg-muted/40 p-2 text-xs" /></div>;
 }
 
 function CustodyMobileCard({ term, expanded, onToggle, onReturn, project, canDelete, onDelete }: { term: CustodyTerm; expanded: boolean; onToggle: () => void; onReturn: (term: CustodyTerm, item: CustodyTermEquipmentItem) => void; project: Project; canDelete: boolean; onDelete: () => void }) {
   const items = custodyTermEquipmentItems(term);
   const aggregate = custodyTermAggregateStatus(items);
-  return <article className={`rounded-lg border ${expanded ? 'border-primary/70 bg-primary/25' : 'border-primary/35 bg-primary/10'}`}><button type="button" className="w-full p-3 text-left" onClick={onToggle} aria-expanded={expanded}><div className="flex justify-between gap-2"><strong>{term.number}</strong><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180 text-primary' : ''}`} /></div><div className="mt-1 text-sm font-semibold">{term.workerName}</div><div className="text-xs text-muted-foreground">{term.chapterName || 'Registro legado'} · {items.length} equipamento(s)</div><div className="mt-2 flex flex-wrap items-center gap-2"><WarehouseStatusBadge label={statusLabel[aggregate] || aggregate} tone={statusTone(aggregate)} /><span className="text-xs text-muted-foreground">{term.dueDate || 'Sem prazo'}</span></div></button>{expanded && <div className="ml-4 border-l-4 border-primary bg-primary/15 p-3"><CustodyDetails term={term} project={project} onReturn={onReturn} canDelete={canDelete} onDelete={onDelete} /></div>}</article>;
+  return <article className={`overflow-hidden rounded-lg border bg-card ${expanded ? 'border-primary/70' : 'border-border'}`}><button type="button" className="w-full p-3 text-left" onClick={onToggle} aria-expanded={expanded}><div className="flex justify-between gap-2"><strong className="font-mono">{term.number}</strong><ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${expanded ? 'rotate-180 text-primary' : ''}`} /></div><div className="mt-1 text-sm font-semibold">{term.workerName}</div><div className="mt-1 text-xs text-muted-foreground">{items.length} equipamento(s) · Operação: {formatOperationalDate(term.issuedAt)}</div><div className="mt-1 text-xs text-muted-foreground">Último registro: {formatCustodyRecordedAt(term)}</div><div className="mt-2 flex flex-wrap items-center gap-2"><WarehouseStatusBadge label={statusLabel[aggregate] || aggregate} tone={statusTone(aggregate)} /><span className="text-xs text-muted-foreground">{term.dueDate || 'Sem prazo'}</span></div></button>{expanded && <div className="custody-detail custody-branch bg-muted/40 p-3"><CustodyDetails term={term} project={project} onReturn={onReturn} canDelete={canDelete} onDelete={onDelete} /></div>}</article>;
+}
+
+function CustodyHistoryRow({ term, expanded, onToggle, project, onReturn, canDelete, onDelete }: { term: CustodyTerm; expanded: boolean; onToggle: () => void; project: Project; onReturn: (term: CustodyTerm, item: CustodyTermEquipmentItem) => void; canDelete: boolean; onDelete: () => void }) {
+  const items = custodyTermEquipmentItems(term);
+  const aggregate = custodyTermAggregateStatus(items);
+  return <Fragment><tr data-testid="custody-history-row" className={`custody-record cursor-pointer border-t ${expanded ? 'border-l-2 border-l-primary' : ''}`} onClick={onToggle} aria-expanded={expanded}><td className="p-2 text-center"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180 text-primary' : ''}`} /></td><td className="p-2 font-mono font-semibold">{term.number}</td><td className="p-2">{formatOperationalDate(term.issuedAt)}</td><td className="p-2">{formatCustodyRecordedAt(term)}</td><td className="p-2 font-semibold">{term.workerName}</td><td className="p-2 text-center">{items.length}</td><td className="p-2"><WarehouseStatusBadge label={statusLabel[aggregate] || aggregate} tone={statusTone(aggregate)} /></td><td className="p-2"><WarehouseAuditIdentity createdBy={term.createdBy} updatedBy={term.updatedBy} createdAt={term.createdAt} updatedAt={term.updatedAt} /></td></tr>{expanded && <tr data-testid="custody-history-details" className="custody-detail-row"><td colSpan={8} className="px-0 py-3"><div className="custody-detail custody-branch rounded-r-lg border-l-primary bg-muted/40 p-3"><CustodyDetails term={term} project={project} onReturn={onReturn} canDelete={canDelete} onDelete={onDelete} /></div></td></tr>}</Fragment>;
 }
