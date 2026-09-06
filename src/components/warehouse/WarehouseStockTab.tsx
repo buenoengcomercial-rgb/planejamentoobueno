@@ -20,7 +20,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Archive, Boxes, BrickWall, Check, ChevronDown, ChevronsUpDown, CircleSlash, Download, Eye, HardHat, History, Link2, Plus, Search, Truck, Unlink, X } from 'lucide-react';
+import { Archive, ArrowDown, ArrowDownUp, ArrowUp, Boxes, BrickWall, Check, ChevronDown, ChevronsUpDown, CircleSlash, Download, Eye, HardHat, History, Link2, Plus, Search, Truck, Unlink, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
@@ -37,6 +37,10 @@ const stockClassStyle: Record<MaterialCostClass, string> = {
   unclassified: 'border-slate-300 bg-slate-50 text-slate-600',
 };
 const stockClassOrder: MaterialCostClass[] = ['material', 'labor', 'equipment', 'unclassified'];
+type StockSortKey = 'code' | 'description' | 'costClass' | 'unit' | 'planned' | 'additive' | 'purchased' | 'received' | 'withdrawn' | 'returned' | 'losses' | 'balance' | 'effectiveMinStock' | 'lastMovementDate' | 'averageUnitCost' | 'linkStatus';
+type StockSort = { key: StockSortKey; direction: 'asc' | 'desc' };
+const stockSortLabel: Record<StockSortKey, string> = { code: 'código', description: 'descrição', costClass: 'classificação', unit: 'unidade', planned: 'planejado', additive: 'aditivo', purchased: 'comprado', received: 'recebido', withdrawn: 'retirado', returned: 'devolvido', losses: 'perdas', balance: 'saldo', effectiveMinStock: 'estoque baixo', lastMovementDate: 'último movimento', averageUnitCost: 'custo médio', linkStatus: 'vínculo' };
+const numericStockSortKeys: StockSortKey[] = ['planned', 'additive', 'purchased', 'received', 'withdrawn', 'returned', 'losses', 'balance', 'effectiveMinStock', 'averageUnitCost'];
 
 function StockClassBadge({ costClass }: { costClass: MaterialCostClass }) {
   const Icon = stockClassIcon[costClass];
@@ -52,6 +56,13 @@ function StockClassSelect({ row, onChange, mobile = false }: { row: WarehouseSto
   return <span className="relative block min-w-0"><Icon aria-hidden="true" className={`pointer-events-none absolute top-1/2 z-10 -translate-y-1/2 ${iconPosition}`} /><select aria-label={`Classificação de ${row.description}`} className={`w-full appearance-none rounded border py-0 font-semibold ${size} ${stockClassStyle[row.costClass]}`} value={row.costClass} onChange={event => onChange(row, event.target.value as MaterialCostClass)}>{stockClassOrder.map(costClass => <option key={costClass} value={costClass}>{stockClassLabel[costClass]}</option>)}</select><ChevronDown aria-hidden="true" className={`pointer-events-none absolute top-1/2 -translate-y-1/2 ${arrowPosition}`} /></span>;
 }
 
+function StockSortableHeader({ label, sortKey, sort, onSort, align = 'left', className = '', icon: Icon }: { label: string; sortKey: StockSortKey; sort: StockSort; onSort: (key: StockSortKey) => void; align?: 'left' | 'center' | 'right'; className?: string; icon?: ElementType }) {
+  const active = sort.key === sortKey;
+  const SortIcon = active ? (sort.direction === 'asc' ? ArrowUp : ArrowDown) : ArrowDownUp;
+  const justification = align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : 'justify-start';
+  return <th aria-sort={active ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'} className={`p-2 font-semibold ${className}`}><button type="button" className={`inline-flex w-full items-center gap-1 rounded text-inherit hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${justification}`} onClick={() => onSort(sortKey)} aria-label={`Ordenar por ${label}${active ? `, ${sort.direction === 'asc' ? 'crescente' : 'decrescente'}` : ''}`}><>{Icon && <Icon className="h-3.5 w-3.5 shrink-0" />}{label}</><SortIcon aria-hidden="true" className={`h-3 w-3 shrink-0 ${active ? 'text-foreground' : 'opacity-50'}`} /></button></th>;
+}
+
 export default function WarehouseStockTab({ project, onProjectChange, auditActor, canArchive = true, canDelete = false }: Props) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [search, setSearch] = useState('');
@@ -63,6 +74,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
   const [purchaseGroupFilter, setPurchaseGroupFilter] = useState('all');
   const [lowOnly, setLowOnly] = useState(false);
   const [zeroOnly, setZeroOnly] = useState(false);
+  const [sort, setSort] = useState<StockSort>({ key: 'withdrawn', direction: 'desc' });
   const [manualForm, setManualForm] = useState({ code: '', description: '', unit: '' });
   const [historyFor, setHistoryFor] = useState<{ key: string; description: string } | null>(null);
   const [linkFor, setLinkFor] = useState<string | null>(null);
@@ -85,14 +97,22 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
       && (!zeroOnly || r.balance === 0));
     return matchingRows.sort((a, b) => {
       const classOrder = stockClassOrder.indexOf(a.costClass) - stockClassOrder.indexOf(b.costClass);
-      if (classOrder) return classOrder;
-      const aHasWithdrawal = a.withdrawn > 0 ? 0 : 1;
-      const bHasWithdrawal = b.withdrawn > 0 ? 0 : 1;
-      return aHasWithdrawal - bHasWithdrawal
-        || b.withdrawn - a.withdrawn
+      if (sort.key === 'costClass' && classOrder) return sort.direction === 'asc' ? classOrder : -classOrder;
+      if (sort.key !== 'costClass' && classOrder) return classOrder;
+      const aValue = a[sort.key];
+      const bValue = b[sort.key];
+      const comparison = typeof aValue === 'number' && typeof bValue === 'number'
+        ? aValue - bValue
+        : String(aValue ?? '').localeCompare(String(bValue ?? ''), 'pt-BR', { numeric: true });
+      return (sort.direction === 'asc' ? comparison : -comparison)
         || a.description.localeCompare(b.description, 'pt-BR');
     });
-  }, [classFilter, linkFilter, lowOnly, purchaseGroupFilter, rows, search, zeroOnly]);
+  }, [classFilter, linkFilter, lowOnly, purchaseGroupFilter, rows, search, sort, zeroOnly]);
+
+  const sortBy = (key: StockSortKey) => setSort(current => current.key === key
+    ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' }
+    : { key, direction: numericStockSortKeys.includes(key) ? 'desc' : 'asc' });
+  const orderedClasses = sort.key === 'costClass' && sort.direction === 'desc' ? [...stockClassOrder].reverse() : stockClassOrder;
 
   const setMin = (key: string, code: string | undefined, description: string, unit: string, min: number) => {
     onProjectChange(upsertItemConfig(project, { key, code, description, unit, minStock: Number.isFinite(min) ? min : undefined }));
@@ -155,7 +175,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
             {showArchived ? 'Ocultar arquivados' : `Exibir arquivados (${archivedCount})`}
           </Button>
         )}
-        <span className="text-[11px] text-muted-foreground ml-auto">Retirados primeiro · {filtered.length} item(ns)</span>
+        <span className="text-[11px] text-muted-foreground ml-auto">Ordenado por {stockSortLabel[sort.key]} · {filtered.length} item(ns)</span>
       </div>
       {showManualForm && (
         <div className="grid grid-cols-1 gap-3 border-b border-primary/20 bg-primary/5 p-3 md:grid-cols-12">
@@ -186,7 +206,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
         </div>
       )}
       <div className="max-h-[calc(100dvh-300px)] overflow-auto">
-        <div className="space-y-4 p-2 md:hidden">{stockClassOrder.map(costClass => {
+        <div className="space-y-4 p-2 md:hidden">{orderedClasses.map(costClass => {
           const classRows = filtered.filter(row => row.costClass === costClass);
           return classRows.length > 0 && <section key={costClass} className="space-y-2"><div className="flex items-center gap-2 px-1 text-sm font-bold"><StockClassBadge costClass={costClass} /><span>{classRows.length} item(ns)</span></div>{classRows.map(row => <StockMobileCard key={row.key} row={row} canArchive={canArchive} onClassChange={setClassification} onLink={() => setLinkFor(row.key)} onHistory={() => setHistoryFor({ key: row.key, description: row.description })} onArchive={() => handleArchiveItem(row.key, row.description)} />)}</section>;
         })}</div>
@@ -214,29 +234,29 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
           </colgroup>
             <thead className="bg-muted sticky top-0 z-10">
             <tr className="text-muted-foreground">
-              <th className="p-2 text-left font-semibold">Código</th>
-              <th className="p-2 text-left font-semibold">Descrição</th>
-              <th className="p-2 text-left font-semibold"><span className="inline-flex items-center gap-1"><Boxes className="h-3.5 w-3.5" />Classificação</span></th>
-              <th className="p-2 text-center font-semibold">Un</th>
-              <th className="p-2 text-right font-semibold">Planej.</th>
-              <th className="p-2 text-right font-semibold text-primary">Aditivo</th>
-              <th className="p-2 text-right font-semibold">Comprado</th>
-              <th className="p-2 text-right font-semibold">Receb.</th>
-              <th className="bg-primary/10 p-2 text-right font-semibold text-primary">Já retirado</th>
-              <th className="p-2 text-right font-semibold text-success">Devolvido</th>
-              <th className="p-2 text-right font-semibold">Perdas</th>
-              <th className="p-2 text-right font-semibold bg-primary/5">Saldo</th>
-              <th className="p-2 text-right font-semibold bg-warning/5">Estoque baixo</th>
-              <th className="p-2 text-left font-semibold">Último mov.</th>
-              <th className="p-2 text-right font-semibold">Custo médio</th>
-              <th className="p-2 text-left font-semibold">Vínculo</th>
+              <StockSortableHeader label="Código" sortKey="code" sort={sort} onSort={sortBy} />
+              <StockSortableHeader label="Descrição" sortKey="description" sort={sort} onSort={sortBy} />
+              <StockSortableHeader label="Classificação" sortKey="costClass" sort={sort} onSort={sortBy} icon={Boxes} />
+              <StockSortableHeader label="Un" sortKey="unit" sort={sort} onSort={sortBy} align="center" />
+              <StockSortableHeader label="Planej." sortKey="planned" sort={sort} onSort={sortBy} align="right" />
+              <StockSortableHeader label="Aditivo" sortKey="additive" sort={sort} onSort={sortBy} align="right" className="text-primary" />
+              <StockSortableHeader label="Comprado" sortKey="purchased" sort={sort} onSort={sortBy} align="right" />
+              <StockSortableHeader label="Receb." sortKey="received" sort={sort} onSort={sortBy} align="right" />
+              <StockSortableHeader label="Já retirado" sortKey="withdrawn" sort={sort} onSort={sortBy} align="right" className="bg-primary/10 text-primary" />
+              <StockSortableHeader label="Devolvido" sortKey="returned" sort={sort} onSort={sortBy} align="right" className="text-success" />
+              <StockSortableHeader label="Perdas" sortKey="losses" sort={sort} onSort={sortBy} align="right" />
+              <StockSortableHeader label="Saldo" sortKey="balance" sort={sort} onSort={sortBy} align="right" className="bg-primary/5" />
+              <StockSortableHeader label="Estoque baixo" sortKey="effectiveMinStock" sort={sort} onSort={sortBy} align="right" className="bg-warning/5" />
+              <StockSortableHeader label="Último mov." sortKey="lastMovementDate" sort={sort} onSort={sortBy} />
+              <StockSortableHeader label="Custo médio" sortKey="averageUnitCost" sort={sort} onSort={sortBy} align="right" />
+              <StockSortableHeader label="Vínculo" sortKey="linkStatus" sort={sort} onSort={sortBy} />
               <th className="p-2 text-center font-semibold">Hist.</th>
               {canArchive && <th className="p-2 text-center font-semibold">Arquivar</th>}
               {canDelete && <th className="p-2 text-center font-semibold"><span className="sr-only">Excluir</span></th>}
             </tr>
           </thead>
           <tbody>
-            {stockClassOrder.map(costClass => {
+            {orderedClasses.map(costClass => {
               const classRows = filtered.filter(row => row.costClass === costClass);
               return <Fragment key={costClass}>{classRows.length > 0 && <tr data-testid="stock-class-group" className="border-t bg-muted/70"><td colSpan={17 + Number(canArchive) + Number(canDelete)} className="p-2"><div className="flex items-center gap-2"><StockClassBadge costClass={costClass} /><span className="text-xs font-semibold text-muted-foreground">{classRows.length} item(ns)</span></div></td></tr>}{classRows.map(r => (
               <tr key={r.key} data-testid="stock-material-row" className={`border-t border-border hover:bg-muted/30 ${r.withdrawn > 0 ? 'bg-primary/5' : ''} ${r.underMin ? 'bg-destructive/5' : ''} ${!r.isPhysicalStock ? 'bg-muted/20' : ''}`}>

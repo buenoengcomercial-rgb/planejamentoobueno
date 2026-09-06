@@ -139,12 +139,32 @@ describe('WarehouseStockTab - documentos no histórico', () => {
   it('prioriza materiais já retirados, pela maior quantidade retirada', () => {
     const { container } = render(<WarehouseStockTab project={projectWithWithdrawals()} onProjectChange={vi.fn()} />);
 
-    expect(screen.getByText('Retirados primeiro · 3 item(ns)')).toBeInTheDocument();
+    expect(screen.getByText('Ordenado por retirado · 3 item(ns)')).toBeInTheDocument();
     const rows = Array.from(container.querySelectorAll('[data-testid="stock-material-row"]'));
     expect(rows.map(row => row.textContent)).toEqual([
       expect.stringContaining('Material retirado maior'),
       expect.stringContaining('Material retirado menor'),
       expect.stringContaining('Material sem retirada'),
+    ]);
+  });
+
+  it('permite ordenar as linhas pelos cabeçalhos da tabela', () => {
+    const { container } = render(<WarehouseStockTab project={projectWithWithdrawals()} onProjectChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ordenar por Descrição' }));
+    const ascendingRows = Array.from(container.querySelectorAll('[data-testid="stock-material-row"]'));
+    expect(ascendingRows.map(row => row.textContent)).toEqual([
+      expect.stringContaining('Material retirado maior'),
+      expect.stringContaining('Material retirado menor'),
+      expect.stringContaining('Material sem retirada'),
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: /Ordenar por Descrição, crescente/i }));
+    const descendingRows = Array.from(container.querySelectorAll('[data-testid="stock-material-row"]'));
+    expect(descendingRows.map(row => row.textContent)).toEqual([
+      expect.stringContaining('Material sem retirada'),
+      expect.stringContaining('Material retirado menor'),
+      expect.stringContaining('Material retirado maior'),
     ]);
   });
 
