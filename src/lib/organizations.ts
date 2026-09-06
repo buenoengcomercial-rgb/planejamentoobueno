@@ -43,8 +43,8 @@ export const ROLE_LABELS: Record<OrgRole, string> = {
 
 export const ROLE_DESCRIPTIONS: Record<OrgRole, string> = {
   owner: 'Controle total da empresa, usuários, obras e dados contratuais.',
-  admin: 'Gerencia usuários e obras, sem transferir a propriedade da empresa.',
-  engineer: 'Edita planejamento, produção, medições e suprimentos; confere frete e ICMS/DIFAL das entradas fiscais.',
+  admin: 'Gerencia usuários e obras, sem transferir a propriedade da empresa; confere frete e ICMS/DIFAL das entradas fiscais.',
+  engineer: 'Edita planejamento, produção, medições e suprimentos.',
   warehouse_operator: 'Opera somente o Almoxarifado, sem acesso aos demais módulos.',
   field_user: 'Consulta a programação e preenche os Diários de Obra.',
   viewer: 'Acesso somente para consulta, sem alterações nos dados.',
@@ -52,8 +52,8 @@ export const ROLE_DESCRIPTIONS: Record<OrgRole, string> = {
 
 export const ROLE_PERMISSIONS: Record<OrgRole, string[]> = {
   owner: ['Administrar usuários', 'Criar e excluir obras', 'Editar todos os módulos'],
-  admin: ['Administrar usuários', 'Criar obras', 'Editar todos os módulos'],
-  engineer: ['Editar planejamento e campo', 'Gerir medições e suprimentos', 'Conferir frete e ICMS/DIFAL das entradas fiscais'],
+  admin: ['Administrar usuários', 'Criar obras', 'Editar todos os módulos', 'Conferir frete e ICMS/DIFAL das entradas fiscais'],
+  engineer: ['Editar planejamento e campo', 'Gerir medições e suprimentos'],
   warehouse_operator: ['Acessar somente o Almoxarifado', 'Registrar entradas, retiradas e equipamentos', 'Cancelar lançamentos sem apagar o histórico'],
   field_user: ['Consultar atividades', 'Preencher Diário de Obra'],
   viewer: ['Consultar todos os módulos'],
