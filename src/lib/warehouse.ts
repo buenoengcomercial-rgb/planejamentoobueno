@@ -215,7 +215,7 @@ export function fiscalNoteCostReviewStatus(note: Pick<WarehouseFiscalNote, 'supp
   const destinationState = note.destinationState?.trim().toUpperCase() || 'RO';
   if (!supplierState || !destinationState) return 'unknown_origin' as const;
   if (supplierState === destinationState) return 'not_required' as const;
-  if (note.costReviewStatus === 'confirmed' && note.costReviewedAt && note.freightAmount != null && note.icmsAmount != null) return 'confirmed' as const;
+  if (note.costReviewStatus === 'confirmed' && note.costReviewedAt) return 'confirmed' as const;
   return 'pending' as const;
 }
 
@@ -2635,10 +2635,6 @@ export function reviewPostedFiscalNoteCosts(
   const icmsAmount = validOptionalMoney(input.icmsAmount, 'ICMS/DIFAL adicional');
   const supplierState = normalizedState(input.supplierState);
   const destinationState = normalizedState(input.destinationState);
-  const interstate = !!supplierState && !!destinationState && supplierState !== destinationState;
-  if (input.confirmCosts && interstate && (freightAmount == null || icmsAmount == null)) {
-    throw new Error('Informe frete e ICMS/DIFAL, inclusive R$ 0,00 quando nao houver valor.');
-  }
   if (input.confirmCosts && (!supplierState || !destinationState)) {
     throw new Error('Confirme a UF do fornecedor e a UF da obra antes de concluir a revisao.');
   }

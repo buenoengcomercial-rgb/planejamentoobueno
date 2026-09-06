@@ -471,17 +471,18 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.queryByRole('button', { name: 'Confirmar custos' })).not.toBeInTheDocument();
   });
 
-  it('permite à engenharia confirmar frete e ICMS explicitamente em zero', async () => {
+  it('permite ao administrador confirmar apenas o ICMS/DIFAL sem preencher frete', async () => {
     const project = projectWithPostedNote();
     project.warehouse!.fiscalNotes![0] = { ...project.warehouse!.fiscalNotes![0], supplierState: 'SP', destinationState: 'RO' };
     const onProjectChange = vi.fn();
     render(<WarehouseFiscalNotesTab project={project} onProjectChange={onProjectChange} canManage canReviewCosts />);
     fireEvent.click(screen.getAllByRole('button', { name: 'Visualizar dados e grupos' })[0]);
-    fireEvent.change(screen.getByLabelText('Frete adicional'), { target: { value: '0' } });
-    fireEvent.change(screen.getByLabelText('ICMS/DIFAL adicional'), { target: { value: '0' } });
+    fireEvent.change(screen.getByLabelText('ICMS/DIFAL adicional'), { target: { value: '12,50' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirmar custos' }));
     await waitFor(() => expect(onProjectChange).toHaveBeenCalledTimes(1));
-    expect((onProjectChange.mock.calls[0][0] as Project).warehouse!.fiscalNotes![0]).toMatchObject({ costReviewStatus: 'confirmed', freightAmount: 0, icmsAmount: 0 });
+    const saved = (onProjectChange.mock.calls[0][0] as Project).warehouse!.fiscalNotes![0];
+    expect(saved).toMatchObject({ costReviewStatus: 'confirmed', icmsAmount: 12.5 });
+    expect(saved.freightAmount).toBeUndefined();
   });
 
   it('arquiva rascunho técnico antigo uma única vez sem movimentar estoque', async () => {

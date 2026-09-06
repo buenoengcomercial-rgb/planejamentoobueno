@@ -330,13 +330,24 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(fiscalNoteAllocatedExtras(costNote).reduce((sum, value) => sum + value, 0)).toBe(3600);
   });
 
-  it('classifica pendência interestadual e aceita confirmação explícita em zero', () => {
+  it('classifica pendência interestadual e aceita confirmação sem custos adicionais', () => {
     expect(fiscalNoteCostReviewStatus(note())).toBe('unknown_origin');
     expect(fiscalNoteCostReviewStatus(note({ supplierState: 'RO', destinationState: 'RO' }))).toBe('not_required');
     expect(fiscalNoteCostReviewStatus(note({ supplierState: 'SP', destinationState: 'RO' }))).toBe('pending');
     expect(fiscalNoteCostReviewStatus(note({ supplierState: 'RO', destinationState: undefined }))).toBe('not_required');
     expect(fiscalNoteCostReviewStatus(note({ supplierState: 'SP', destinationState: undefined }))).toBe('pending');
     expect(fiscalNoteCostReviewStatus(note({ supplierState: 'SP', destinationState: 'RO', freightAmount: 0, icmsAmount: 0, costReviewStatus: 'confirmed', costReviewedAt: '2026-08-18T10:00:00.000Z' }))).toBe('confirmed');
+    expect(fiscalNoteCostReviewStatus(note({ supplierState: 'SP', destinationState: 'RO', costReviewStatus: 'confirmed', costReviewedAt: '2026-08-18T10:00:00.000Z' }))).toBe('confirmed');
+  });
+
+  it('confirma somente o ICMS/DIFAL sem exigir frete em zero', () => {
+    const original = note({ supplierState: 'SP', destinationState: 'RO' });
+    const project = approveFiscalNote(withNote(original), original.id);
+    const revised = reviewPostedFiscalNoteCosts(project, original.id, {
+      supplierState: 'SP', destinationState: 'RO', icmsAmount: 12.5, confirmCosts: true,
+    });
+    expect(revised.warehouse!.fiscalNotes![0]).toMatchObject({ costReviewStatus: 'confirmed', icmsAmount: 12.5 });
+    expect(revised.warehouse!.fiscalNotes![0].freightAmount).toBeUndefined();
   });
 
   it('reavalia duas compras e a retirada posterior sem alterar o saldo', () => {
