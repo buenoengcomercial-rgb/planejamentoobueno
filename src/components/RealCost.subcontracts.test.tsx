@@ -223,7 +223,7 @@ describe('SubcontractsTab', () => {
     }
   });
 
-  it('mantém a observação aberta ao digitar espaço e preserva o atalho no cabeçalho', () => {
+  it('mantém a observação aberta ao digitar espaço e abre os serviços somente pelo controle explícito', () => {
     render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
     const toggle = screen.getByRole('button', { name: /alternar itens contratados do pacote pacote a/i });
 
@@ -235,10 +235,18 @@ describe('SubcontractsTab', () => {
     expect(notes).toHaveValue('Etapa de serviço');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
 
-    fireEvent.keyDown(toggle, { key: ' ', code: 'Space' });
+    fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.keyDown(toggle, { key: 'Enter', code: 'Enter' });
+    fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('cancela o lançamento sem exigir novo clique no botão de pagamento', () => {
+    render(<SubcontractsTab project={projectWithContract()} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /lançar pagamento/i }));
+    fireEvent.change(screen.getByLabelText('Valor do pagamento'), { target: { value: '40' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar lançamento' }));
+    expect(screen.queryByLabelText('Valor do pagamento')).not.toBeInTheDocument();
   });
 
   it('altera atividades, recalcula o rateio atual e registra o motivo da revisão', () => {
@@ -270,8 +278,10 @@ describe('SubcontractsTab', () => {
     };
     render(<SubcontractsTab project={project} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={vi.fn()} />);
     expect(screen.getByText('Itens com produção')).toBeInTheDocument();
+    const services = screen.getByRole('button', { name: /alternar itens contratados do pacote pacote a/i });
     fireEvent.click(screen.getByRole('button', { name: /histórico de alterações/i }));
     expect(screen.getByText(/Ajuste de escopo/i)).toBeInTheDocument();
+    expect(services).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('button', { name: /excluir registro do histórico/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /alterar atividades/i }));
