@@ -233,7 +233,8 @@ describe('WarehouseRequisitionsTab', () => {
 
   it('deixa aberta somente a data operacional atual até que o usuário a altere', () => {
     const project = projectWithMaterials(1);
-    const today = new Date().toISOString().slice(0, 10);
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     project.warehouse!.requisitions = [
       { id: 'req-today', number: 'REQ-2026-0020', date: today, status: 'entregue', chapterId: 'chapter-1', receiverName: 'Ana', createdAt: `${today}T10:00:00.000Z`, items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 1 }] },
       { id: 'req-before', number: 'REQ-2026-0019', date: '2026-08-18', status: 'entregue', chapterId: 'chapter-1', receiverName: 'Bia', createdAt: '2026-08-18T10:00:00.000Z', items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 1 }] },

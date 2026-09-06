@@ -9,6 +9,7 @@ import {
   setInventoryCount,
   hardDeleteInventorySession,
   warehouseActorName,
+  warehouseOperationalDate,
 } from '@/lib/warehouse';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -39,7 +40,7 @@ export default function WarehouseInventoryTab({ project, onProjectChange, auditA
   const wh = ensureWarehouse(project).warehouse!;
   const sessions = useMemo(() => (wh.inventorySessions ?? []).slice().sort((a, b) => b.startedAt.localeCompare(a.startedAt)), [wh.inventorySessions]);
   const [selectedId, setSelectedId] = useState<string | null>(() => sessions.find(session => session.status === 'em_contagem' || session.status === 'em_revisao')?.id ?? null);
-  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [month, setMonth] = useState(() => warehouseOperationalDate().slice(0, 7));
   const [justification, setJustification] = useState('');
   const selected = sessions.find(session => session.id === selectedId) ?? sessions[0];
 

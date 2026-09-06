@@ -32,6 +32,7 @@ import {
   makeAttachment,
   returnCustodyEquipment,
   warehouseActorName,
+  warehouseOperationalDate,
 } from '@/lib/warehouse';
 import { deleteWarehouseAttachments } from '@/lib/warehouseAttachments';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
@@ -81,7 +82,7 @@ interface ReturnTarget {
 type ReturnStatus = Exclude<CustodyEquipmentStatus, 'em_uso'>;
 
 const initialForm = (): CustodyForm => ({
-  issuedAt: new Date().toISOString().slice(0, 10),
+  issuedAt: warehouseOperationalDate(),
   chapterId: '',
   workerName: '',
   dueDate: '',
@@ -174,7 +175,7 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
   const galleryRef = useRef<HTMLInputElement>(null);
   const [returnTarget, setReturnTarget] = useState<ReturnTarget | null>(null);
   const [returnData, setReturnData] = useState({
-    returnedAt: new Date().toISOString().slice(0, 10),
+    returnedAt: warehouseOperationalDate(),
     stateOnReturn: '',
     divergenceNotes: '',
     status: 'devolvido' as ReturnStatus,
@@ -290,7 +291,7 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
 
   const startReturn = (term: CustodyTerm, item: CustodyTermEquipmentItem) => {
     setReturnTarget({ term, item });
-    setReturnData({ returnedAt: new Date().toISOString().slice(0, 10), stateOnReturn: '', divergenceNotes: '', status: 'devolvido' });
+    setReturnData({ returnedAt: warehouseOperationalDate(), stateOnReturn: '', divergenceNotes: '', status: 'devolvido' });
     setReturnPhotos([]);
   };
 

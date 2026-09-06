@@ -18,6 +18,7 @@ import {
   normalizeWarehouseReceiverName,
   registerMaterialReturn,
   uidWarehouse,
+  warehouseOperationalDate,
   warehouseActorName,
 } from '@/lib/warehouse';
 import { deleteWarehouseAttachments } from '@/lib/warehouseAttachments';
@@ -50,7 +51,7 @@ interface WithdrawalForm {
 type WithdrawalErrors = Partial<Record<'chapterId' | 'receiverName' | 'items' | 'signatureReceiver', string>>;
 
 const initialForm = (): WithdrawalForm => ({
-  date: new Date().toISOString().slice(0, 10),
+  date: warehouseOperationalDate(),
   chapterId: '',
   receiverName: '',
   notes: '',
@@ -230,7 +231,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
     () => groupRequisitionsByBuilding(project, wh.requisitions, wh.movements),
     [project, wh.movements, wh.requisitions],
   );
-  const currentOperationalDate = new Date().toISOString().slice(0, 10);
+  const currentOperationalDate = warehouseOperationalDate();
   const isDateGroupExpanded = (dateGroup: RequisitionDateGroup) => dateExpansionOverrides.get(dateGroup.key) ?? dateGroup.date === currentOperationalDate;
   const toggleDateGroup = (dateGroup: RequisitionDateGroup) => setDateExpansionOverrides(current => {
     const next = new Map(current);
@@ -650,7 +651,7 @@ function MaterialReturnDialog({ project, requisition, auditActor, onProjectChang
   onClose: () => void;
 }) {
   const returnable = useMemo(() => requisition ? getReturnableRequisitionItems(project, requisition.id) : [], [project, requisition]);
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => warehouseOperationalDate());
   const [returnerName, setReturnerName] = useState('');
   const [signature, setSignature] = useState<string | undefined>();
   const [notes, setNotes] = useState('');
@@ -660,7 +661,7 @@ function MaterialReturnDialog({ project, requisition, auditActor, onProjectChang
   const [idempotencyKey, setIdempotencyKey] = useState(() => uidWarehouse());
 
   const reset = () => {
-    setDate(new Date().toISOString().slice(0, 10));
+    setDate(warehouseOperationalDate());
     setReturnerName(requisition?.receiverName || requisition?.requesterName || '');
     setSignature(undefined);
     setNotes('');

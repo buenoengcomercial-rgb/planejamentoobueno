@@ -27,6 +27,7 @@ import {
   setInventoryCount,
   upsertWarehouseProjectMaterialLink,
   warehouseValuationForItem,
+  warehouseOperationalDate,
 } from './warehouse';
 
 const actor = { userId: 'user-1', userName: 'Almoxarife', userEmail: 'almoxarife@teste.com' };
@@ -58,6 +59,11 @@ function withStock() {
 }
 
 describe('operação integrada do almoxarifado', () => {
+  it('usa o calendário local para a data operacional depois que UTC já virou o dia', () => {
+    const localEvening = new Date(2026, 8, 4, 20, 8, 0);
+    expect(warehouseOperationalDate(localEvening)).toBe('2026-09-04');
+  });
+
   it('preserva a ordem do lançamento quando entrada e retirada têm o mesmo horário', () => {
     const state = emptyWarehouse();
     const base = { createdAt: '2026-09-05T12:00:00.000Z', date: '2026-09-05', itemKey: 'material-1', itemDescription: 'Cimento', itemUnit: 'SC' };

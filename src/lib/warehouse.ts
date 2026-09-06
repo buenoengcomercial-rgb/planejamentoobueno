@@ -35,7 +35,20 @@ import { logToProject } from '@/lib/audit';
 
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const nowISO = () => new Date().toISOString();
-const todayISO = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * Data operacional usa o calendário do dispositivo. Instantes de auditoria
+ * continuam em UTC via `nowISO`, mas não devem mudar de dia no fim da tarde
+ * para quem trabalha a oeste de Greenwich.
+ */
+export function warehouseOperationalDate(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+const todayISO = () => warehouseOperationalDate();
 
 export type WarehouseActorInput = WarehouseAuditActor | string | null | undefined;
 
