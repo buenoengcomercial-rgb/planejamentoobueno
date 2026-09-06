@@ -68,16 +68,26 @@ function projectWithWithdrawals(): Project {
     { key: 'material-retirado-maior', description: 'Material retirado maior', unit: 'UN', manualItem: true },
   ];
   project.warehouse!.movements = [
-    { id: 'entrada-a', createdAt: '2026-09-01T10:00:00.000Z', type: 'entrada', date: '2026-09-01', itemKey: 'material-sem-retirada', itemDescription: 'Material sem retirada', itemUnit: 'UN', quantity: 10 },
-    { id: 'entrada-b', createdAt: '2026-09-01T10:00:00.000Z', type: 'entrada', date: '2026-09-01', itemKey: 'material-retirado-menor', itemDescription: 'Material retirado menor', itemUnit: 'UN', quantity: 10 },
+    { id: 'entrada-a', createdAt: '2026-09-01T10:00:00.000Z', type: 'entrada', fiscalNoteId: 'note-1', date: '2026-09-01', itemKey: 'material-sem-retirada', itemDescription: 'Material sem retirada', itemUnit: 'UN', quantity: 10 },
+    { id: 'entrada-b', createdAt: '2026-09-01T10:00:00.000Z', type: 'entrada', fiscalNoteId: 'note-1', date: '2026-09-01', itemKey: 'material-retirado-menor', itemDescription: 'Material retirado menor', itemUnit: 'UN', quantity: 10 },
     { id: 'retirada-b', createdAt: '2026-09-02T10:00:00.000Z', type: 'retirada', date: '2026-09-02', itemKey: 'material-retirado-menor', itemDescription: 'Material retirado menor', itemUnit: 'UN', quantity: 2 },
-    { id: 'entrada-c', createdAt: '2026-09-01T10:00:00.000Z', type: 'entrada', date: '2026-09-01', itemKey: 'material-retirado-maior', itemDescription: 'Material retirado maior', itemUnit: 'UN', quantity: 10 },
+    { id: 'entrada-c', createdAt: '2026-09-01T10:00:00.000Z', type: 'entrada', fiscalNoteId: 'note-1', date: '2026-09-01', itemKey: 'material-retirado-maior', itemDescription: 'Material retirado maior', itemUnit: 'UN', quantity: 10 },
     { id: 'retirada-c', createdAt: '2026-09-03T10:00:00.000Z', type: 'retirada', date: '2026-09-03', itemKey: 'material-retirado-maior', itemDescription: 'Material retirado maior', itemUnit: 'UN', quantity: 5 },
   ];
   return project;
 }
 
 describe('WarehouseStockTab - documentos no histórico', () => {
+  it('encaminha novos materiais à entrada fiscal em vez de criar item avulso', () => {
+    const onNewEntry = vi.fn();
+    const onProjectChange = vi.fn();
+    render(<WarehouseStockTab project={projectWithPurchaseHistory()} onProjectChange={onProjectChange} onNewEntry={onNewEntry} />);
+    expect(screen.queryByRole('button', { name: 'Novo item avulso' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Nova entrada' }));
+    expect(onNewEntry).toHaveBeenCalledOnce();
+    expect(onProjectChange).not.toHaveBeenCalled();
+  });
+
   it('exibe o mínimo no campo e só salva quando o usuário altera o valor', () => {
     const original = projectWithPurchaseHistory();
     original.warehouse!.items[0].minStock = 1701;
@@ -199,6 +209,7 @@ describe('WarehouseStockTab - documentos no histórico', () => {
   it('pesquisa insumos previstos pela descrição sem exibir o código', () => {
     render(<WarehouseStockTab project={projectWithPlannedMaterials()} onProjectChange={vi.fn()} />);
 
+    expect(screen.queryByText('Argamassa colante AC II')).not.toBeInTheDocument();
     fireEvent.click(screen.getAllByRole('button', { name: 'Vincular material' }).at(-1)!);
     fireEvent.click(screen.getByRole('combobox', { name: 'Selecionar insumo previsto' }));
 

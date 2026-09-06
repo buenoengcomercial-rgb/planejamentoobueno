@@ -1,7 +1,6 @@
 import type { MaterialCostClass, Project } from '@/types/project';
 import { trunc2 } from '@/lib/financialEngine';
 import {
-  isFullySuppressedSuggestion,
   resolveMaterialCostClass,
   suggestMaterialsFromProject,
   type MaterialSuggestion,
@@ -56,9 +55,8 @@ function withStockRule(project: Project, row: WarehouseRow, input: {
 }
 
 /**
- * Junta a posição física do almoxarifado com o planejamento do contrato e do
- * aditivo. Esta é uma visão de consulta: não altera os totais físicos usados
- * pelo painel nem cria movimentos para mão de obra ou equipamentos.
+ * Exibe somente itens com entrada fiscal. O orçamento enriquece os itens
+ * vinculados, sem criar linhas de estoque ou alterar movimentos/painel.
  */
 export function computeWarehouseStockOverviewRows(project: Project, includeArchived = false): WarehouseStockOverviewRow[] {
   const physicalRows = computeWarehouseRows(project, {
@@ -69,16 +67,18 @@ export function computeWarehouseStockOverviewRows(project: Project, includeArchi
   });
   const suggestions = suggestMaterialsFromProject(project).filter(suggestion => !suggestion.warning);
   const suggestionsByKey = new Map(suggestions.map(suggestion => [suggestion.key, suggestion] as const));
-  const linkedSuggestionKeys = new Set<string>();
+  const fiscalKeys = new Set((project.warehouse?.movements ?? [])
+    .filter(movement => movement.type === 'entrada' && (movement.fiscalNoteId || movement.invoiceNumber?.trim()))
+    .map(movement => movement.itemKey));
 
-  const physical = physicalRows.map(row => {
+  const physical = physicalRows.filter(row => fiscalKeys.has(row.key)).map(row => {
     const linked = row.projectLinks
       .map(link => ({ link, suggestion: suggestionsByKey.get(link.projectMaterialKey) }))
       .filter((entry): entry is { link: typeof row.projectLinks[number]; suggestion: MaterialSuggestion } => !!entry.suggestion);
-    linked.forEach(entry => linkedSuggestionKeys.add(entry.suggestion.key));
     const additive = trunc2(linked.reduce((total, entry) => total + entry.suggestion.additiveQuantity * (Number(entry.link.conversionFactor) || 1), 0));
-    const contracted = trunc2(Math.max(0, row.planned - additive));
-    return withStockRule(project, row, {
+    const planned = trunc2(linked.reduce((total, entry) => total + entry.suggestion.quantity * (Number(entry.link.conversionFactor) || 1), 0));
+    const contracted = trunc2(Math.max(0, planned - additive));
+    return withStockRule(project, { ...row, planned }, {
       isPhysicalStock: true,
       contracted,
       additive,
@@ -86,35 +86,8 @@ export function computeWarehouseStockOverviewRows(project: Project, includeArchi
     });
   });
 
-  const planningOnly = suggestions
-    .filter(suggestion => !linkedSuggestionKeys.has(suggestion.key) && !isFullySuppressedSuggestion(suggestion))
-    .map(suggestion => withStockRule(project, {
-      key: `planning|${suggestion.key}`,
-      code: suggestion.code,
-      description: suggestion.description,
-      unit: suggestion.unit,
-      planned: suggestion.quantity,
-      purchased: 0,
-      received: 0,
-      returned: 0,
-      withdrawn: 0,
-      losses: 0,
-      adjustments: 0,
-      balance: 0,
-      underMin: false,
-      projectLinks: [],
-      linkStatus: 'pending',
-      consumedCost: 0,
-      valuationIncomplete: false,
-    }, {
-      isPhysicalStock: false,
-      contracted: suggestion.contractedQuantity,
-      additive: suggestion.additiveQuantity,
-      classificationSubject: suggestion,
-    }));
-
   const order: MaterialCostClass[] = ['material', 'labor', 'equipment', 'unclassified'];
-  return [...physical, ...planningOnly].sort((left, right) => order.indexOf(left.costClass) - order.indexOf(right.costClass)
+  return physical.sort((left, right) => order.indexOf(left.costClass) - order.indexOf(right.costClass)
     || Number(right.isPhysicalStock) - Number(left.isPhysicalStock)
     || right.withdrawn - left.withdrawn
     || left.description.localeCompare(right.description, 'pt-BR'));

@@ -128,7 +128,7 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
           <WarehouseEquipmentsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} canDelete={canDeleteWarehouseRecords} canManageGroups={canManageEquipmentGroups} canEdit={canArchiveWarehouseRecords} />
         </TabsContent>
         <TabsContent value="estoque" className="mt-3">
-          <WarehouseStockTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} canDelete={canDeleteWarehouseRecords} />
+          <WarehouseStockTab onNewEntry={() => setTab('notas')} project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} canDelete={canDeleteWarehouseRecords} />
         </TabsContent>
         <TabsContent value="materiais-orcamento" className="mt-3">
           <WarehouseBudgetMaterialsTab project={ensured} />

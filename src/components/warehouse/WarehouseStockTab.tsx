@@ -3,7 +3,6 @@ import type { ElementType } from 'react';
 import type { MaterialCostClass, Project, WarehouseAuditActor } from '@/types/project';
 import {
   computeWarehouseRows,
-  createManualWarehouseItem,
   getMaterialPurchaseHistory,
   hardDeleteWarehouseItem,
   removeWarehouseItem,
@@ -26,7 +25,7 @@ import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { WarehouseSectionHeader, WarehouseStatusBadge } from './WarehouseVisual';
 
-interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; }
+interface Props { onNewEntry?: () => void; project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; }
 
 const stockClassLabel: Record<MaterialCostClass, string> = { ...MATERIAL_COST_CLASS_LABEL, unclassified: 'Diversos' };
 const stockClassIcon: Record<MaterialCostClass, ElementType> = { material: BrickWall, labor: HardHat, equipment: Truck, unclassified: CircleSlash };
@@ -92,19 +91,17 @@ function StockMinimumInput({ row, onCommit }: { row: WarehouseStockOverviewRow; 
   </div>;
 }
 
-export default function WarehouseStockTab({ project, onProjectChange, auditActor, canArchive = true, canDelete = false }: Props) {
+export default function WarehouseStockTab({ onNewEntry, project, onProjectChange, auditActor, canArchive = true, canDelete = false }: Props) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [showAllColumns, setShowAllColumns] = useState(false);
-  const [showManualForm, setShowManualForm] = useState(false);
   const [linkFilter, setLinkFilter] = useState<'all' | 'linked' | 'pending' | 'unplanned'>('all');
   const [classFilter, setClassFilter] = useState<'all' | MaterialCostClass>('all');
   const [purchaseGroupFilter, setPurchaseGroupFilter] = useState('all');
   const [lowOnly, setLowOnly] = useState(false);
   const [zeroOnly, setZeroOnly] = useState(false);
   const [sort, setSort] = useState<StockSort>({ key: 'withdrawn', direction: 'desc' });
-  const [manualForm, setManualForm] = useState({ code: '', description: '', unit: '' });
   const [historyFor, setHistoryFor] = useState<{ key: string; description: string } | null>(null);
   const [linkFor, setLinkFor] = useState<string | null>(null);
   const rows = useMemo(
@@ -147,12 +144,6 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
     onProjectChange(upsertItemConfig(project, { key, code, description, unit, minStock: Number.isFinite(min) ? min : undefined }));
   };
 
-  const createManual = () => {
-    if (!manualForm.description.trim() || !manualForm.unit.trim()) return;
-    onProjectChange(createManualWarehouseItem(project, manualForm));
-    setManualForm({ code: '', description: '', unit: '' });
-    setShowManualForm(false);
-  };
 
   const handleArchiveItem = (key: string, description: string) => {
     confirm(
@@ -182,7 +173,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
 
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-      <WarehouseSectionHeader icon={Boxes} title="Materiais em estoque" description="Busque, filtre e confira os saldos." help="A posição reúne materiais recebidos, retirados, perdas, custo médio, estoque mínimo e vínculos com o orçamento." />
+      <WarehouseSectionHeader icon={Boxes} title="Materiais em estoque" description="Materiais recebidos por nota fiscal. Vincule ao orçamento para comparar o planejado e os saldos." help="A posição reúne materiais recebidos, retirados, perdas, custo médio, estoque mínimo e vínculos com o orçamento." />
       <div className="border-b border-border bg-muted/40 p-3">
         <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(200px,1fr)_205px_minmax(180px,1fr)_235px]">
         <div className="relative min-w-0">
@@ -198,10 +189,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
         <Button size="sm" variant={zeroOnly ? 'secondary' : 'outline'} aria-pressed={zeroOnly} className="min-h-11 text-xs" onClick={() => setZeroOnly(value => !value)}>Saldo zerado</Button>
           <span className="mr-auto text-xs text-muted-foreground">Ordenado por <strong className="font-semibold text-foreground">{stockSortLabel[sort.key]}</strong> · {filtered.length} item(ns)</span>
         <Button size="sm" variant={showAllColumns ? 'secondary' : 'outline'} className="hidden min-h-11 text-xs md:inline-flex" aria-pressed={showAllColumns} onClick={() => setShowAllColumns(value => !value)}>{showAllColumns ? 'Visão resumida' : 'Todas as colunas'}</Button>
-        <Button size="sm" variant="outline" className="min-h-11 text-xs" onClick={() => setShowManualForm(value => !value)}>
-          {showManualForm ? <X className="w-3.5 h-3.5 mr-1" /> : <Plus className="w-3.5 h-3.5 mr-1" />}
-          Novo item avulso
-        </Button>
+        {onNewEntry && <Button size="sm" variant="outline" className="min-h-11 text-xs" onClick={onNewEntry}><Plus className="w-3.5 h-3.5 mr-1" />Nova entrada</Button>}
         {archivedCount > 0 && (
           <Button size="sm" variant={showArchived ? 'secondary' : 'outline'} className="min-h-11 text-xs" onClick={() => setShowArchived(value => !value)}>
             <Archive className="mr-1 h-3.5 w-3.5" />
@@ -210,34 +198,6 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
         )}
         </div>
       </div>
-      {showManualForm && (
-        <div className="grid grid-cols-1 gap-3 border-b border-primary/20 bg-primary/5 p-3 md:grid-cols-12">
-          <Input
-            value={manualForm.code}
-            onChange={e => setManualForm({ ...manualForm, code: e.target.value })}
-            placeholder="Código opcional"
-            className="min-h-11 text-base md:col-span-2 md:h-8 md:min-h-8 md:text-xs"
-          />
-          <Input
-            value={manualForm.description}
-            onChange={e => setManualForm({ ...manualForm, description: e.target.value })}
-            placeholder="Descrição do material avulso"
-            className="min-h-11 text-base md:col-span-7 md:h-8 md:min-h-8 md:text-xs"
-          />
-          <Input
-            value={manualForm.unit}
-            onChange={e => setManualForm({ ...manualForm, unit: e.target.value })}
-            placeholder="Un."
-            className="min-h-11 text-base md:col-span-1 md:h-8 md:min-h-8 md:text-xs"
-            onKeyDown={e => {
-              if (e.key === 'Enter') createManual();
-            }}
-          />
-          <Button className="min-h-11 text-sm md:col-span-2 md:h-8 md:min-h-8 md:text-xs" onClick={createManual} disabled={!manualForm.description.trim() || !manualForm.unit.trim()}>
-            Criar material
-          </Button>
-        </div>
-      )}
       <div className="max-h-[calc(100dvh-300px)] overflow-auto">
         <div className="space-y-4 p-2 md:hidden">{orderedClasses.map(costClass => {
           const classRows = filtered.filter(row => row.costClass === costClass);
