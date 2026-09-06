@@ -37,4 +37,8 @@ describe('função Almoxarife', () => {
     expect(canAccessAppView('engineer', 'realCost')).toBe(false);
     expect(canAccessAppView('engineer', 'gantt')).toBe(true);
   });
+
+  it('informa a conferência de custos fiscais entre as atribuições da engenharia', () => {
+    expect(ROLE_PERMISSIONS.engineer).toContain('Conferir frete e ICMS/DIFAL das entradas fiscais');
+  });
 });

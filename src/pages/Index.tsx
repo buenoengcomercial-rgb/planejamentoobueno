@@ -1338,7 +1338,7 @@ export default function Index() {
             onProjectChange={warehouseSetter}
             onCommitProject={commitProjectNow}
             canManageFiscalNotes={warehouseEditor}
-            canReviewFiscalCosts={role === 'owner'}
+            canReviewFiscalCosts={role === 'owner' || role === 'engineer'}
             canViewPanel={role !== 'warehouse_operator' && role !== 'engineer'}
             canApproveInventory={role === 'owner' || role === 'admin'}
             canArchiveWarehouseRecords={warehouseEditor}
