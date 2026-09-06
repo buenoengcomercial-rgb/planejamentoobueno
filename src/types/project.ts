@@ -416,6 +416,8 @@ export interface SubcontractPayment {
   date: string;
   amount: number;
   notes?: string;
+  /** Comprovantes de pagamento preservados no Storage para consulta e auditoria. */
+  attachments?: WarehouseAttachment[];
   /** Rateio congelado no momento do pagamento; revisões posteriores do pacote não o redistribuem. */
   allocations?: Array<{ allocationId: string; amount: number }>;
   createdAt: string;

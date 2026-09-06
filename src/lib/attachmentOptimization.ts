@@ -104,6 +104,8 @@ export async function optimizeFiscalPdf(file: File): Promise<File> {
 
 export async function optimizeStorageAttachment(file: File, kind?: 'nf' | 'foto' | 'recibo' | 'termo' | 'outro'): Promise<File> {
   if (file.type.startsWith('image/')) return optimizeImageAttachment(file, kind === 'nf' ? 'fiscal-document' : 'field-photo');
-  if (kind === 'nf' && (file.type === 'application/pdf' || /\.pdf$/i.test(file.name))) return optimizeFiscalPdf(file);
+  // Comprovantes em PDF também são documentos de auditoria: reduzimos o arquivo
+  // preservando leitura de data, favorecido, valor e identificação bancária.
+  if ((kind === 'nf' || kind === 'recibo') && (file.type === 'application/pdf' || /\.pdf$/i.test(file.name))) return optimizeFiscalPdf(file);
   return file;
 }

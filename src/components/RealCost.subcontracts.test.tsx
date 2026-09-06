@@ -150,6 +150,9 @@ describe('SubcontractsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /lançar pagamento/i }));
     expect(screen.getByLabelText('Valor do pagamento')).toBeInTheDocument();
     expect(screen.getByLabelText('Observação do pagamento')).toHaveAttribute('placeholder', expect.stringMatching(/descreva o serviço/i));
+    const attachment = screen.getByLabelText('Anexar comprovante de pagamento') as HTMLInputElement;
+    expect(attachment).toHaveAttribute('accept', 'image/*,application/pdf');
+    expect(attachment).toHaveAttribute('multiple');
   });
 
   it('confirma adiantamento pelo saldo contratual sem exigir produção e preserva o rateio', () => {
