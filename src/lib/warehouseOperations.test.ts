@@ -58,6 +58,17 @@ function withStock() {
 }
 
 describe('operação integrada do almoxarifado', () => {
+  it('preserva a ordem do lançamento quando entrada e retirada têm o mesmo horário', () => {
+    const state = emptyWarehouse();
+    const base = { createdAt: '2026-09-05T12:00:00.000Z', date: '2026-09-05', itemKey: 'material-1', itemDescription: 'Cimento', itemUnit: 'SC' };
+    state.movements = [
+      { ...base, id: 'z-entrada', type: 'entrada', quantity: 20, unitPrice: 15 },
+      { ...base, id: 'a-retirada', type: 'retirada', quantity: 4, costSnapshot: 15 },
+      { ...base, id: 'b-devolucao', type: 'devolucao', quantity: 1, costSnapshot: 15 },
+    ];
+    expect(warehouseValuationForItem(state, 'material-1')).toMatchObject({ quantity: 17, inventoryValue: 255, averageUnitCost: 15, consumedCost: 60 });
+    expect(state.movements.map(m => m.id)).toEqual(['z-entrada', 'a-retirada', 'b-devolucao']);
+  });
   it('padroniza recebedores históricos, corrige FEILPE e atualiza retiradas derivadas', () => {
     const legacy = project();
     legacy.warehouse = {

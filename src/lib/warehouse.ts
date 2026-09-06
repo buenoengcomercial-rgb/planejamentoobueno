@@ -435,7 +435,9 @@ export function warehouseValuationForItem(
   const movements = state.movements
     .filter(m => m.itemKey === itemKey && !m.reversedById && m.type !== 'estorno')
     .filter(m => !beforeCreatedAt || m.createdAt < beforeCreatedAt)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    // Stable sort preserves the ledger's append order for events in the same
+    // millisecond. UUID order can otherwise move a withdrawal before its entry.
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
   for (const movement of movements) {
     const sign = movementSign(movement);

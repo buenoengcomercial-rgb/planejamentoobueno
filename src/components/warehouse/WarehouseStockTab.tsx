@@ -30,6 +30,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
+  const [showAllColumns, setShowAllColumns] = useState(false);
   const [showManualForm, setShowManualForm] = useState(false);
   const [linkFilter, setLinkFilter] = useState<'all' | 'linked' | 'pending' | 'unplanned'>('all');
   const [purchaseGroupFilter, setPurchaseGroupFilter] = useState('all');
@@ -101,7 +102,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
     <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
       <WarehouseSectionHeader icon={Boxes} title="Materiais em estoque" description="Busque, filtre e confira os saldos." help="A posição reúne materiais recebidos, retirados, perdas, custo médio, estoque mínimo e vínculos com o orçamento." />
       <div className="relative flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 p-3">
-        <div className="relative w-full sm:max-w-sm sm:flex-1">
+        <div className="relative w-full sm:min-w-64 sm:max-w-sm sm:flex-1">
           <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar insumo por descrição ou código..." className="min-h-11 pl-8 text-sm" />
         </div>
@@ -109,6 +110,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
         <select className="min-h-11 max-w-full rounded border bg-background px-2 text-sm" value={purchaseGroupFilter} onChange={event => setPurchaseGroupFilter(event.target.value)} aria-label="Filtrar por grupo de compra"><option value="all">Todos os grupos</option>{purchaseGroups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>
         <Button size="sm" variant={lowOnly ? 'secondary' : 'outline'} className="min-h-11 text-xs" onClick={() => setLowOnly(value => !value)}>Estoque baixo</Button>
         <Button size="sm" variant={zeroOnly ? 'secondary' : 'outline'} className="min-h-11 text-xs" onClick={() => setZeroOnly(value => !value)}>Saldo zerado</Button>
+        <Button size="sm" variant={showAllColumns ? 'secondary' : 'outline'} className="hidden min-h-11 text-xs md:inline-flex" aria-pressed={showAllColumns} onClick={() => setShowAllColumns(value => !value)}>{showAllColumns ? 'Visão resumida' : 'Todas as colunas'}</Button>
         <Button size="sm" variant="outline" className="min-h-11 text-xs" onClick={() => setShowManualForm(value => !value)}>
           {showManualForm ? <X className="w-3.5 h-3.5 mr-1" /> : <Plus className="w-3.5 h-3.5 mr-1" />}
           Novo item avulso
@@ -151,7 +153,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
       )}
       <div className="max-h-[calc(100dvh-300px)] overflow-auto">
         <div className="space-y-2 p-2 md:hidden">{filtered.map(row => <article key={row.key} className={`space-y-3 rounded-xl border p-3 shadow-sm ${row.withdrawn > 0 ? 'border-primary/30 bg-primary/5' : ''} ${row.underMin ? 'border-warning/50 bg-warning/5' : ''}`}><div className="flex items-start justify-between gap-2"><div><div className="text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</div><div className="font-bold">{row.description}</div></div><WarehouseStatusBadge label={row.withdrawn > 0 ? 'Já retirado' : row.linkStatus === 'linked' ? 'Vinculado' : row.linkStatus === 'unplanned' ? 'Não previsto' : 'Vínculo pendente'} tone={row.withdrawn > 0 || row.linkStatus === 'linked' ? 'success' : 'warning'} /></div><dl className="grid grid-cols-2 gap-2 text-sm"><div className="rounded-lg bg-primary/5 p-2"><dt className="text-xs font-medium text-muted-foreground">Saldo disponível</dt><dd className="font-bold text-primary">{row.balance.toLocaleString('pt-BR')} {row.unit}</dd></div><div className="rounded-lg bg-muted/50 p-2"><dt className="text-xs font-medium text-muted-foreground">Já retirado</dt><dd className="font-semibold">{row.withdrawn.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Devolvido</dt><dd>{row.returned.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Último movimento</dt><dd>{row.lastMovementDate || '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Estoque mínimo</dt><dd>{row.minStock?.toLocaleString('pt-BR') ?? '—'}</dd></div><div className="col-span-2"><dt className="text-xs text-muted-foreground">Custo médio</dt><dd>{row.valuationIncomplete || row.averageUnitCost == null ? 'Cálculo incompleto' : row.averageUnitCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</dd></div></dl><div className={`grid gap-2 ${canArchive ? 'grid-cols-3' : 'grid-cols-2'}`}><Button variant="outline" className="min-h-11" onClick={() => setLinkFor(row.key)}><Link2 className="h-4 w-4" /><span className="sr-only">Revisar vínculos</span></Button><Button variant="outline" className="min-h-11" onClick={() => setHistoryFor({ key: row.key, description: row.description })}><History className="h-4 w-4" /><span className="sr-only">Histórico</span></Button>{canArchive && <Button variant="outline" className="min-h-11 text-destructive" onClick={() => handleArchiveItem(row.key, row.description)}><Archive className="h-4 w-4" /><span className="sr-only">Arquivar</span></Button>}</div></article>)}</div>
-        <table className="hidden min-w-[1800px] w-full table-fixed text-xs md:table">
+        <table className={`warehouse-stock-table hidden w-full table-fixed text-sm md:table ${showAllColumns ? 'min-w-[1800px]' : 'warehouse-stock-summary'}`}>
           <colgroup>
             <col className="w-24" />
             <col className="w-80" />
@@ -196,7 +198,7 @@ export default function WarehouseStockTab({ project, onProjectChange, auditActor
             {filtered.map(r => (
               <tr key={r.key} data-testid="stock-material-row" className={`border-t border-border hover:bg-muted/30 ${r.withdrawn > 0 ? 'bg-primary/5' : ''} ${r.underMin ? 'bg-destructive/5' : ''}`}>
                 <td className="p-1.5 font-mono text-[10px] text-muted-foreground truncate">{r.code || '—'}</td>
-                <td className="p-1.5 leading-snug break-words" title={r.description}>{r.description}</td>
+                <td className="p-1.5 leading-snug break-words" title={r.description}><span className="block font-semibold">{r.description}</span>{!showAllColumns && <span className="mt-1 block text-xs font-normal text-muted-foreground">{r.code || 'Sem código'}</span>}</td>
                 <td className="p-1.5 text-center text-muted-foreground">{r.unit}</td>
                 <td className="p-1.5 text-right font-mono tabular-nums">{r.planned.toLocaleString('pt-BR')}</td>
                 <td className="p-1.5 text-right font-mono tabular-nums">{r.purchased.toLocaleString('pt-BR')}</td>

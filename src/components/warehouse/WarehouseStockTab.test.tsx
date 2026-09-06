@@ -126,7 +126,11 @@ describe('WarehouseStockTab - documentos no histórico', () => {
     const table = container.querySelector('table');
     const columns = table?.querySelectorAll('col');
 
+    expect(table).toHaveClass('warehouse-stock-summary');
+    fireEvent.click(screen.getByRole('button', { name: 'Todas as colunas' }));
     expect(table).toHaveClass('min-w-[1800px]');
+    fireEvent.click(screen.getByRole('button', { name: 'Visão resumida' }));
+    expect(table).toHaveClass('warehouse-stock-summary');
     expect(columns?.[1]).toHaveClass('w-80');
     expect(columns).toHaveLength(17);
     expect(screen.getByText('Excluir', { selector: 'span' })).toBeInTheDocument();
