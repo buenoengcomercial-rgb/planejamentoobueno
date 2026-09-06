@@ -27,7 +27,8 @@ describe('WarehouseWithdrawnMaterialsTab', () => {
     render(<WarehouseWithdrawnMaterialsTab project={project} />);
 
     expect(screen.getByRole('button', { name: 'Retirado líquido' })).toBeInTheDocument();
-    expect(screen.getByText(/maior quantidade líquida retirada primeiro/i)).toBeInTheDocument();
+    expect(screen.queryByText(/maior quantidade líquida retirada primeiro/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Código: 001')).not.toBeInTheDocument();
     expect(screen.getAllByText('Sirene audiovisual')).not.toHaveLength(0);
 
     fireEvent.change(screen.getByLabelText('Recebedor'), { target: { value: 'Gabriel' } });
