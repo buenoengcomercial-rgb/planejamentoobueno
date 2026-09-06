@@ -78,7 +78,9 @@
 .withdrawal-tree .withdrawal-records > thead th:nth-child(7),
 .withdrawal-tree .withdrawal-records > tbody > .withdrawal-record > td:nth-child(7) { overflow-wrap: normal; }
 @media (max-width: 767px) {
-  .withdrawal-tree .withdrawal-detail table { min-width: 0; }
+  .withdrawal-tree .withdrawal-detail table { display: block; width: 100%; min-width: 0; }
+  .withdrawal-tree .withdrawal-detail colgroup { display: none; }
+  .withdrawal-tree .withdrawal-detail tbody { width: 100%; }
   .withdrawal-tree .withdrawal-detail thead,
   .withdrawal-tree .withdrawal-detail thead tr { display: block; }
   .withdrawal-tree .withdrawal-detail thead th { display: none; }
