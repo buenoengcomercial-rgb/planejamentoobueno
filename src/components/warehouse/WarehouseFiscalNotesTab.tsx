@@ -52,6 +52,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import {
   AlertTriangle,
+  ArrowDownUp,
   Ban,
   Camera,
   ChevronDown,
@@ -88,6 +89,8 @@ interface Props {
 }
 
 type ViewGroup = 'posted' | 'archived';
+type FiscalNoteSortKey = 'sequence' | 'supplier' | 'cnpj' | 'invoice' | 'issueDate' | 'items' | 'value' | 'status' | 'activity';
+type SortDirection = 'asc' | 'desc';
 type ParsedNote = Partial<Pick<WarehouseFiscalNote,
   'supplierName' | 'supplierCnpj' | 'supplierState' | 'invoiceNumber' | 'issueDate' | 'totalAmount' | 'notes' |
   'items' | 'invoices' | 'aiConfidence' | 'documentType' | 'documentTypeConfidence'>>;
@@ -107,6 +110,34 @@ const PDF_IMAGE_TARGET_WIDTH = 1100;
 const DESTINATION_STATE = 'RO';
 const FISCAL_READER_VERSION = 'issuer-address-v1';
 const ACCEPTED = ['pdf', 'png', 'jpg', 'jpeg', 'webp'];
+
+function fiscalNoteSortValue(note: WarehouseFiscalNote, key: FiscalNoteSortKey, sequence: number) {
+  switch (key) {
+    case 'sequence': return sequence;
+    case 'supplier': return note.supplierName || '';
+    case 'cnpj': return note.supplierCnpj || '';
+    case 'invoice': return note.invoiceNumber || '';
+    case 'issueDate': return note.issueDate || '';
+    case 'items': return note.items.length;
+    case 'value': return Number(note.totalAmount || 0);
+    case 'status': return `${note.status}|${fiscalNoteCostReviewStatus(note)}`;
+    case 'activity': return note.updatedAt || note.createdAt || '';
+  }
+}
+
+function FiscalNoteSortHeader({ label, sortKey, sort, onSort, align = 'left' }: {
+  label: string;
+  sortKey: FiscalNoteSortKey;
+  sort: { key: FiscalNoteSortKey; direction: SortDirection };
+  onSort: (key: FiscalNoteSortKey) => void;
+  align?: 'left' | 'center' | 'right';
+}) {
+  const active = sort.key === sortKey;
+  const directionLabel = sort.direction === 'asc' ? 'crescente' : 'decrescente';
+  return <button type="button" className={`flex w-full items-center gap-1 font-semibold hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${align === 'center' ? 'justify-center' : align === 'right' ? 'justify-end' : 'justify-start'}`} onClick={() => onSort(sortKey)} aria-label={`Ordenar por ${label}${active ? `, ${directionLabel}` : ''}`}>
+    <span>{label}</span>{active ? (sort.direction === 'asc' ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />) : <ArrowDownUp className="h-3 w-3 shrink-0 text-muted-foreground" />}
+  </button>;
+}
 
 function money(value?: number) {
   return Number(value || 0).toLocaleString('pt-BR', {
@@ -380,6 +411,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const [group, setGroup] = useState<ViewGroup>('posted');
   const [search, setSearch] = useState('');
   const [pendingOnly, setPendingOnly] = useState(false);
+  const [sort, setSort] = useState<{ key: FiscalNoteSortKey; direction: SortDirection }>({ key: 'sequence', direction: 'desc' });
   const [selected, setSelected] = useState<WarehouseFiscalNote | null>(null);
   const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
   const [files, setFiles] = useState<File[]>([]);
@@ -405,12 +437,30 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     posted: notes.filter(note => fiscalNoteViewGroup(note) === 'posted').length,
     archived: notes.filter(note => fiscalNoteViewGroup(note) === 'archived').length,
   }), [notes]);
+  const sequenceByNoteId = useMemo(() => {
+    const groupedNotes = notes.filter(note => fiscalNoteViewGroup(note) === group);
+    return new Map(groupedNotes.map((note, index) => [note.id, groupedNotes.length - index]));
+  }, [group, notes]);
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return notes.filter(note => fiscalNoteViewGroup(note) === group)
+    const filtered = notes.filter(note => fiscalNoteViewGroup(note) === group)
       .filter(note => !pendingOnly || ['pending', 'unknown_origin'].includes(fiscalNoteCostReviewStatus(note)))
       .filter(note => !q || [note.supplierName, note.supplierCnpj, note.invoiceNumber].some(value => value?.toLowerCase().includes(q)));
-  }, [group, notes, pendingOnly, search]);
+    return filtered
+      .map((note, index) => ({ note, sequence: sequenceByNoteId.get(note.id) ?? 0, index }))
+      .sort((left, right) => {
+        const leftValue = fiscalNoteSortValue(left.note, sort.key, left.sequence);
+        const rightValue = fiscalNoteSortValue(right.note, sort.key, right.sequence);
+        const comparison = typeof leftValue === 'number' && typeof rightValue === 'number'
+          ? leftValue - rightValue
+          : String(leftValue).localeCompare(String(rightValue), 'pt-BR', { numeric: true, sensitivity: 'base' });
+        return comparison ? comparison * (sort.direction === 'asc' ? 1 : -1) : left.index - right.index;
+      })
+      .map(entry => entry.note);
+  }, [group, notes, pendingOnly, search, sequenceByNoteId, sort]);
+  const changeSort = (key: FiscalNoteSortKey) => setSort(current => current.key === key
+    ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' }
+    : { key, direction: key === 'sequence' || key === 'issueDate' || key === 'items' || key === 'value' || key === 'activity' ? 'desc' : 'asc' });
   const pendingCostCount = useMemo(() => notes.filter(note => note.status === 'aprovada' &&
     ['pending', 'unknown_origin'].includes(fiscalNoteCostReviewStatus(note))).length, [notes]);
   const duplicate = selected?.status === 'a_conferir' ? findFiscalNoteDuplicate(project, selected) : undefined;
@@ -788,13 +838,13 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
       )}
 
       <div className="space-y-2 md:hidden">
-        {visible.map((note, index) => <NoteCard key={note.id} note={note} sequence={visible.length - index} onOpen={() => { setExpandedItemId(null); setSelected({ ...note, destinationState: DESTINATION_STATE }); }} onOpenAttachment={() => void openOriginalDocument(note)} />)}
+        {visible.map(note => <NoteCard key={note.id} note={note} sequence={sequenceByNoteId.get(note.id) ?? 0} onOpen={() => { setExpandedItemId(null); setSelected({ ...note, destinationState: DESTINATION_STATE }); }} onOpenAttachment={() => void openOriginalDocument(note)} />)}
       </div>
       <div className="hidden overflow-hidden rounded-lg border bg-card md:block">
         <table className="w-full table-fixed text-xs">
           <colgroup><col className="w-[18%]" /><col className="w-[4%]" /><col className="w-[13%]" /><col className="w-[9%]" /><col className="w-[8%]" /><col className="w-[5%]" /><col className="w-[9%]" /><col className="w-[9%]" /><col className="w-[17%]" /><col className="w-[8%]" /></colgroup>
-          <thead className="bg-muted text-muted-foreground"><tr><th className="p-2 text-left">Fornecedor</th><th className="w-14 p-2 text-center">Nº</th><th className="p-2 text-left">CNPJ</th><th className="p-2 text-left">Nota</th><th className="p-2 text-left">Data</th><th className="p-2 text-center">Itens</th><th className="p-2 text-right">Valor</th><th className="p-2 text-left">Status</th><th className="whitespace-normal p-2 text-left leading-tight">Incluído / alterado por</th><th className="p-2 text-center">Ações</th></tr></thead>
-          <tbody>{visible.map((note, index) => <tr key={note.id} className="border-t hover:bg-muted/30"><td className="p-2 font-medium">{note.supplierName || '—'}</td><td className="p-2 text-center font-mono font-semibold text-primary">{visible.length - index}</td><td className="p-2 font-mono text-muted-foreground">{note.supplierCnpj || '—'}</td><td className="p-2">{note.invoiceNumber || '—'}</td><td className="p-2">{note.issueDate ? note.issueDate.split('-').reverse().join('/') : '—'}</td><td className="p-2 text-center tabular-nums">{note.items.length}</td><td className="p-2 text-right font-semibold">{money(note.totalAmount)}</td><td className="p-2"><div className="space-y-1"><StatusBadge note={note} /><CostReviewBadge note={note} /></div></td><td className="overflow-hidden p-2 align-top"><WarehouseAuditIdentity createdBy={note.createdBy} updatedBy={note.updatedBy} createdAt={note.createdAt} updatedAt={note.updatedAt} legacyCreatedBy={note.stockPostedBy} className="space-y-0.5 text-[11px]" /></td><td className="p-2"><div className="flex items-center justify-center gap-1"><Button size="icon" variant="ghost" className="h-8 w-8" title="Abrir documento original" aria-label="Abrir documento original" onClick={() => void openOriginalDocument(note)}><Eye className="h-4 w-4" /></Button><Button size="icon" variant="ghost" className="h-8 w-8" title="Visualizar dados e grupos" aria-label="Visualizar dados e grupos" onClick={() => { setExpandedItemId(null); setSelected({ ...note, destinationState: DESTINATION_STATE }); }}><Pencil className="h-4 w-4" /></Button>{canManage && note.status === 'aprovada' && <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" title="Cancelar lançamento" aria-label="Cancelar lançamento" onClick={() => { setSelected({ ...note, destinationState: DESTINATION_STATE }); setCancelOpen(true); }}><Ban className="h-4 w-4" /></Button>}</div></td></tr>)}</tbody>
+          <thead className="bg-muted text-muted-foreground"><tr><th className="p-2 text-left"><FiscalNoteSortHeader label="Fornecedor" sortKey="supplier" sort={sort} onSort={changeSort} /></th><th className="w-14 p-2 text-center"><FiscalNoteSortHeader label="Nº" sortKey="sequence" sort={sort} onSort={changeSort} align="center" /></th><th className="p-2 text-left"><FiscalNoteSortHeader label="CNPJ" sortKey="cnpj" sort={sort} onSort={changeSort} /></th><th className="p-2 text-left"><FiscalNoteSortHeader label="Nota" sortKey="invoice" sort={sort} onSort={changeSort} /></th><th className="p-2 text-left"><FiscalNoteSortHeader label="Data" sortKey="issueDate" sort={sort} onSort={changeSort} /></th><th className="p-2 text-center"><FiscalNoteSortHeader label="Itens" sortKey="items" sort={sort} onSort={changeSort} align="center" /></th><th className="p-2 text-right"><FiscalNoteSortHeader label="Valor" sortKey="value" sort={sort} onSort={changeSort} align="right" /></th><th className="p-2 text-left"><FiscalNoteSortHeader label="Status" sortKey="status" sort={sort} onSort={changeSort} /></th><th className="whitespace-normal p-2 text-left leading-tight"><FiscalNoteSortHeader label="Incluído / alterado por" sortKey="activity" sort={sort} onSort={changeSort} /></th><th className="p-2 text-center">Ações</th></tr></thead>
+          <tbody>{visible.map(note => <tr key={note.id} className="border-t hover:bg-muted/30"><td className="p-2 font-medium">{note.supplierName || '—'}</td><td className="p-2 text-center font-mono font-semibold text-primary">{sequenceByNoteId.get(note.id) ?? 0}</td><td className="p-2 font-mono text-muted-foreground">{note.supplierCnpj || '—'}</td><td className="p-2">{note.invoiceNumber || '—'}</td><td className="p-2">{note.issueDate ? note.issueDate.split('-').reverse().join('/') : '—'}</td><td className="p-2 text-center tabular-nums">{note.items.length}</td><td className="p-2 text-right font-semibold">{money(note.totalAmount)}</td><td className="p-2"><div className="space-y-1"><StatusBadge note={note} /><CostReviewBadge note={note} /></div></td><td className="overflow-hidden p-2 align-top"><WarehouseAuditIdentity createdBy={note.createdBy} updatedBy={note.updatedBy} createdAt={note.createdAt} updatedAt={note.updatedAt} legacyCreatedBy={note.stockPostedBy} className="space-y-0.5 text-[11px]" /></td><td className="p-2"><div className="flex items-center justify-center gap-1"><Button size="icon" variant="ghost" className="h-8 w-8" title="Abrir documento original" aria-label="Abrir documento original" onClick={() => void openOriginalDocument(note)}><Eye className="h-4 w-4" /></Button><Button size="icon" variant="ghost" className="h-8 w-8" title="Visualizar dados e grupos" aria-label="Visualizar dados e grupos" onClick={() => { setExpandedItemId(null); setSelected({ ...note, destinationState: DESTINATION_STATE }); }}><Pencil className="h-4 w-4" /></Button>{canManage && note.status === 'aprovada' && <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive" title="Cancelar lançamento" aria-label="Cancelar lançamento" onClick={() => { setSelected({ ...note, destinationState: DESTINATION_STATE }); setCancelOpen(true); }}><Ban className="h-4 w-4" /></Button>}</div></td></tr>)}</tbody>
         </table>
       </div>
       {!visible.length && <WarehouseEmptyState message="Nenhum documento nesta área" hint={group === 'posted' ? 'Envie um arquivo para começar.' : 'Documentos arquivados aparecerão aqui.'} icon={FileText} />}

@@ -169,6 +169,29 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.getAllByText(/Bruno/i).length).toBeGreaterThan(0);
   });
 
+  it('ordena as entradas pelos cabeçalhos e mantém o número estável', () => {
+    const project = projectWithPostedNote();
+    project.warehouse!.fiscalNotes.push({
+      ...project.warehouse!.fiscalNotes[0],
+      id: 'second-posted-note',
+      supplierName: 'ALFA MATERIAIS LTDA',
+      supplierCnpj: '99.999.999/0001-99',
+      invoiceNumber: '2.000',
+      totalAmount: 200,
+      createdAt: '2026-08-16T10:00:00.000Z',
+      updatedAt: '2026-08-16T10:00:00.000Z',
+    });
+    const { container } = render(<WarehouseFiscalNotesTab project={project} onProjectChange={vi.fn()} canManage />);
+    const suppliers = () => Array.from(container.querySelectorAll('tbody tr')).map(row => row.querySelector('td')?.textContent);
+
+    expect(suppliers()).toEqual(['FREITAS & CIA LTDA', 'ALFA MATERIAIS LTDA']);
+    fireEvent.click(screen.getByRole('button', { name: 'Ordenar por Fornecedor' }));
+    expect(suppliers()).toEqual(['ALFA MATERIAIS LTDA', 'FREITAS & CIA LTDA']);
+    expect(screen.getByRole('button', { name: 'Ordenar por Fornecedor, crescente' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Ordenar por Valor' }));
+    expect(suppliers()).toEqual(['ALFA MATERIAIS LTDA', 'FREITAS & CIA LTDA']);
+  });
+
   it('mantém o cancelamento do lançamento disponível para o operador autorizado', () => {
     const view = render(<WarehouseFiscalNotesTab project={projectWithPostedNote()} onProjectChange={vi.fn()} canManage />);
     expect(screen.getByRole('button', { name: 'Cancelar lançamento' })).toBeInTheDocument();
