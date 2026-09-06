@@ -523,6 +523,8 @@ export function SubcontractsTab({ project, analysis, canManage, canDeleteHistory
   const [editingPaymentDate, setEditingPaymentDate] = useState('');
   const [editingPaymentValue, setEditingPaymentValue] = useState('');
   const [editingPaymentNotes, setEditingPaymentNotes] = useState('');
+  const [editingPaymentFiles, setEditingPaymentFiles] = useState<File[]>([]);
+  const [savingEditedPayment, setSavingEditedPayment] = useState(false);
   const [simulationDrafts, setSimulationDrafts] = useState<Record<string, string>>({});
   const editingContract = (project.subcontracts ?? []).find(contract => contract.id === editingContractId);
   const compositionById = useMemo(() => new Map(analysis.compositions.map(row => [row.id, row])), [analysis.compositions]);
@@ -664,6 +666,35 @@ export function SubcontractsTab({ project, analysis, canManage, canDeleteHistory
     setEditingPaymentDate(payment.date);
     setEditingPaymentValue(String(payment.amount));
     setEditingPaymentNotes(payment.notes ?? '');
+    setEditingPaymentFiles([]);
+  };
+  const persistEditedPayment = (contract: Subcontract, payment: Subcontract['payments'][number], amount: number, attachments: NonNullable<Subcontract['payments'][number]['attachments']> = []) => {
+    const next = {
+      ...contract,
+      payments: contract.payments.map(current => current.id === payment.id ? {
+        ...current,
+        date: editingPaymentDate,
+        amount,
+        notes: editingPaymentNotes.trim() || undefined,
+        attachments: [...(current.attachments ?? []), ...attachments].length ? [...(current.attachments ?? []), ...attachments] : undefined,
+        allocations: reallocateEditedPayment(current, contract, amount),
+      } : current),
+      updatedAt: new Date().toISOString(), updatedBy: auditActor?.userId,
+    };
+    updateContract(contract, next, 'updated', attachments.length ? 'Pagamento atualizado com comprovante' : 'Pagamento de terceirizada atualizado');
+    setEditingPaymentFiles([]); setEditingPayment(null);
+  };
+  const saveEditedPayment = (contract: Subcontract, payment: Subcontract['payments'][number], amount: number, valid: boolean) => {
+    if (!valid || savingEditedPayment) return;
+    if (!editingPaymentFiles.length) {
+      persistEditedPayment(contract, payment, amount);
+      return;
+    }
+    setSavingEditedPayment(true);
+    void Promise.all(editingPaymentFiles.map(file => makeAttachment(file, project.id, 'recibo', 'subcontract-payments')))
+      .then(attachments => persistEditedPayment(contract, payment, amount, attachments))
+      .catch(error => toast.error(error instanceof Error ? error.message : 'Não foi possível enviar o comprovante. A alteração não foi gravada.'))
+      .finally(() => setSavingEditedPayment(false));
   };
   const simulationQuantity = (allocation: Subcontract['items'][number], maximum: number) => {
     const draft = simulationDrafts[allocation.id];
@@ -788,7 +819,7 @@ export function SubcontractsTab({ project, analysis, canManage, canDeleteHistory
           <div className="mt-2 space-y-1 text-[11px]">{contract.payments.map(payment => {
             const isEditing = paymentBeingEdited?.id === payment.id;
             return <div key={payment.id} className="rounded bg-background/70 px-2 py-1">
-              {isEditing ? <div className="space-y-2"><div className="grid gap-2 sm:grid-cols-3"><Input aria-label="Data do pagamento" type="date" value={editingPaymentDate} onChange={event => setEditingPaymentDate(event.target.value)} /><Input aria-label="Valor editado do pagamento" inputMode="decimal" value={editingPaymentValue} onChange={event => setEditingPaymentValue(event.target.value)} /><Textarea aria-label="Observação editada do pagamento" rows={2} value={editingPaymentNotes} onChange={event => setEditingPaymentNotes(event.target.value)} /></div><div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={() => setEditingPayment(null)}>Cancelar</Button><Button size="sm" disabled={!isEditedPaymentValid} onClick={() => { if (!paymentBeingEdited || !isEditedPaymentValid) return; const amount = editPaymentAmount; updateContract(contract, { ...contract, payments: contract.payments.map(current => current.id === payment.id ? { ...current, date: editingPaymentDate, amount, notes: editingPaymentNotes.trim() || undefined, allocations: reallocateEditedPayment(current, contract, amount) } : current), updatedAt: new Date().toISOString(), updatedBy: auditActor?.userId }, 'updated', 'Pagamento de terceirizada atualizado'); setEditingPayment(null); }}>Salvar alteração</Button><span className="text-muted-foreground">Máx. pelo contrato: {fmtBRL(editPaymentLimit)}</span></div></div> : <div className="flex items-start justify-between gap-2"><span>{payment.date} · {fmtBRL(payment.amount)}{payment.reversedAt ? ' · estornado' : ''}{payment.notes && <span className="block text-muted-foreground">{payment.notes}</span>}{payment.attachments?.length ? <span className="mt-1 flex flex-wrap gap-1"><span className="text-muted-foreground">Comprovante:</span>{payment.attachments.map(attachment => <span key={attachment.id} className="inline-flex items-center gap-1"><button type="button" className="text-primary hover:underline" onClick={() => void openWarehouseAttachment(attachment).catch(error => toast.error(warehouseAttachmentErrorMessage(error)))}><Paperclip className="inline h-3 w-3" /> {attachment.name}</button><button type="button" aria-label={`Baixar comprovante ${attachment.name}`} className="text-primary hover:underline" onClick={() => void downloadWarehouseAttachment(attachment).catch(error => toast.error(warehouseAttachmentErrorMessage(error)))}><Download className="inline h-3 w-3" /></button></span>)}</span> : null}</span>{canManage && !payment.reversedAt && <div className="flex shrink-0 gap-2"><button type="button" className="text-primary hover:underline" onClick={() => beginPaymentEdit(contract, payment)}><Pencil className="inline h-3 w-3" /> Editar</button><button type="button" className="text-primary hover:underline" onClick={() => { const reason = window.prompt('Motivo do estorno:'); if (reason) updateContract(contract, { ...contract, payments: contract.payments.map(p => p.id === payment.id ? { ...p, reversedAt: new Date().toISOString(), reversedBy: auditActor?.userId, reversalReason: reason } : p), updatedAt: new Date().toISOString() }, 'updated', 'Pagamento de terceirizada estornado'); }}><Undo2 className="inline h-3 w-3" /> Estornar</button></div>}</div>}
+              {isEditing ? <div className="space-y-2"><div className="grid gap-2 sm:grid-cols-3"><Input aria-label="Data do pagamento" type="date" value={editingPaymentDate} onChange={event => setEditingPaymentDate(event.target.value)} /><Input aria-label="Valor editado do pagamento" inputMode="decimal" value={editingPaymentValue} onChange={event => setEditingPaymentValue(event.target.value)} /><Textarea aria-label="Observação editada do pagamento" rows={2} value={editingPaymentNotes} onChange={event => setEditingPaymentNotes(event.target.value)} /></div><div className="rounded-md border border-dashed bg-muted/25 p-2"><div className="flex flex-wrap items-center gap-2"><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border bg-background px-2 py-1.5 text-xs font-medium hover:bg-muted"><Upload className="h-3.5 w-3.5" />Adicionar comprovante<input className="sr-only" aria-label="Adicionar comprovante ao pagamento" type="file" accept="image/*,application/pdf" multiple onChange={event => setEditingPaymentFiles(files => [...files, ...Array.from(event.target.files ?? [])])} /></label><span className="text-[11px] text-muted-foreground">Os comprovantes já anexados são preservados.</span></div>{editingPaymentFiles.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{editingPaymentFiles.map((file, index) => <span key={`${file.name}-${index}`} className="inline-flex max-w-full items-center gap-1 rounded border bg-background px-2 py-1 text-[11px]"><Paperclip className="h-3 w-3 shrink-0" /><span className="truncate">{file.name}</span><button type="button" aria-label={`Remover comprovante ${file.name}`} className="ml-1 text-muted-foreground hover:text-destructive" onClick={() => setEditingPaymentFiles(files => files.filter((_, fileIndex) => fileIndex !== index))}>×</button></span>)}</div>}</div><div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={() => { setEditingPaymentFiles([]); setEditingPayment(null); }}>Cancelar</Button><Button size="sm" disabled={!isEditedPaymentValid || savingEditedPayment} onClick={() => saveEditedPayment(contract, payment, editPaymentAmount, isEditedPaymentValid)}>{savingEditedPayment ? 'Enviando comprovante…' : 'Salvar alteração'}</Button><span className="text-muted-foreground">Máx. pelo contrato: {fmtBRL(editPaymentLimit)}</span></div></div> : <div className="flex items-start justify-between gap-2"><span>{payment.date} · {fmtBRL(payment.amount)}{payment.reversedAt ? ' · estornado' : ''}{payment.notes && <span className="block text-muted-foreground">{payment.notes}</span>}{payment.attachments?.length ? <span className="mt-1 flex flex-wrap gap-1"><span className="text-muted-foreground">Comprovante:</span>{payment.attachments.map(attachment => <span key={attachment.id} className="inline-flex items-center gap-1"><button type="button" className="text-primary hover:underline" onClick={() => void openWarehouseAttachment(attachment).catch(error => toast.error(warehouseAttachmentErrorMessage(error)))}><Paperclip className="inline h-3 w-3" /> {attachment.name}</button><button type="button" aria-label={`Baixar comprovante ${attachment.name}`} className="text-primary hover:underline" onClick={() => void downloadWarehouseAttachment(attachment).catch(error => toast.error(warehouseAttachmentErrorMessage(error)))}><Download className="inline h-3 w-3" /></button></span>)}</span> : null}</span>{canManage && !payment.reversedAt && <div className="flex shrink-0 gap-2"><button type="button" className="text-primary hover:underline" onClick={() => beginPaymentEdit(contract, payment)}><Pencil className="inline h-3 w-3" /> Editar</button><button type="button" className="text-primary hover:underline" onClick={() => { const reason = window.prompt('Motivo do estorno:'); if (reason) updateContract(contract, { ...contract, payments: contract.payments.map(p => p.id === payment.id ? { ...p, reversedAt: new Date().toISOString(), reversedBy: auditActor?.userId, reversalReason: reason } : p), updatedAt: new Date().toISOString() }, 'updated', 'Pagamento de terceirizada estornado'); }}><Undo2 className="inline h-3 w-3" /> Estornar</button></div>}</div>}
             </div>;
           })}</div>
         </div>

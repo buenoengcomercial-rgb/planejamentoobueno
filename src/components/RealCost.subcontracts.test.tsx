@@ -185,6 +185,8 @@ describe('SubcontractsTab', () => {
     render(<SubcontractsTab project={project} analysis={analysis} canManage auditActor={{ userId: 'owner', userName: 'Owner' }} onProjectChange={onProjectChange} />);
 
     fireEvent.click(screen.getByRole('button', { name: /editar/i }));
+    const attachment = screen.getByLabelText('Adicionar comprovante ao pagamento') as HTMLInputElement;
+    expect(attachment).toHaveAttribute('accept', 'image/*,application/pdf');
     fireEvent.change(screen.getByLabelText('Data do pagamento'), { target: { value: '2026-08-25' } });
     fireEvent.change(screen.getByLabelText('Valor editado do pagamento'), { target: { value: '55' } });
     fireEvent.change(screen.getByLabelText('Observação editada do pagamento'), { target: { value: 'Etapa revisada' } });
