@@ -17,6 +17,7 @@ function renderPhotosCard(handleFiles = vi.fn()) {
       uploadingCount={0}
       fileInputRef={createRef<HTMLInputElement>()}
       handleFiles={handleFiles}
+      handleCameraFiles={handleFiles}
       updatePhoto={vi.fn()}
       setLightbox={vi.fn()}
       setConfirmDelete={vi.fn()}
@@ -38,9 +39,28 @@ describe('DailyReportPhotosCard', () => {
     expect(screen.getByRole('button', { name: 'Galeria' })).toBeEnabled();
   });
 
-  it('envia fotos da câmera e da galeria pelo mesmo fluxo', () => {
+  it('envia fotos da câmera pelo fluxo registrado e fotos da galeria pelo fluxo comum', () => {
     const handleFiles = vi.fn();
-    const { container } = renderPhotosCard(handleFiles);
+    const handleCameraFiles = vi.fn();
+    const { container } = render(
+      <DailyReportPhotosCard
+        photos={[]}
+        visiblePhotos={[]}
+        photosByTask={new Map()}
+        photoTaskOptions={[]}
+        pendingTaskId="__general__"
+        setPendingTaskId={vi.fn()}
+        photoFilter="all"
+        setPhotoFilter={vi.fn()}
+        uploadingCount={0}
+        fileInputRef={createRef<HTMLInputElement>()}
+        handleFiles={handleFiles}
+        handleCameraFiles={handleCameraFiles}
+        updatePhoto={vi.fn()}
+        setLightbox={vi.fn()}
+        setConfirmDelete={vi.fn()}
+      />,
+    );
     const [cameraInput, galleryInput] = container.querySelectorAll<HTMLInputElement>('input[type="file"]');
     const cameraPhoto = new File(['camera'], 'camera.jpg', { type: 'image/jpeg' });
     const galleryPhoto = new File(['gallery'], 'galeria.jpg', { type: 'image/jpeg' });
@@ -48,8 +68,7 @@ describe('DailyReportPhotosCard', () => {
     fireEvent.change(cameraInput, { target: { files: [cameraPhoto] } });
     fireEvent.change(galleryInput, { target: { files: [galleryPhoto] } });
 
-    expect(handleFiles).toHaveBeenCalledTimes(2);
-    expect(handleFiles.mock.calls[0][0]).toHaveLength(1);
-    expect(handleFiles.mock.calls[1][0]).toHaveLength(1);
+    expect(handleCameraFiles).toHaveBeenCalledWith(expect.objectContaining({ length: 1 }));
+    expect(handleFiles).toHaveBeenCalledWith(expect.objectContaining({ length: 1 }));
   });
 });

@@ -60,6 +60,7 @@ interface DailyReportPhotosCardProps {
   uploadingCount: number;
   fileInputRef: React.RefObject<HTMLInputElement>;
   handleFiles: (files: FileList) => void;
+  handleCameraFiles: (files: FileList) => void;
   updatePhoto: (id: string, patch: Partial<DailyReportAttachment>) => void;
   setLightbox: (p: DailyReportAttachment | null) => void;
   setConfirmDelete: (p: DailyReportAttachment | null) => void;
@@ -77,6 +78,7 @@ export function DailyReportPhotosCard({
   uploadingCount,
   fileInputRef,
   handleFiles,
+  handleCameraFiles,
   updatePhoto,
   setLightbox,
   setConfirmDelete,
@@ -125,7 +127,7 @@ export function DailyReportPhotosCard({
             className="hidden"
             onChange={(e) => {
               if (e.target.files && e.target.files.length > 0) {
-                handleFiles(e.target.files);
+                handleCameraFiles(e.target.files);
                 e.target.value = '';
               }
             }}
@@ -140,6 +142,7 @@ export function DailyReportPhotosCard({
               Galeria
             </Button>
           </div>
+          <p className="text-[11px] leading-tight text-muted-foreground sm:max-w-[280px]">Fotos pela câmera recebem data, hora e localização autorizada pelo aparelho.</p>
         </div>
       </CardHeader>
       <CardContent

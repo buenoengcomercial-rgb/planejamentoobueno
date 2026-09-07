@@ -84,6 +84,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
     visiblePhotos,
     photoTaskOptions,
     handleFiles,
+    handleCameraFiles,
     updatePhoto,
     removePhoto,
   } = useDailyReportPhotos({ project, currentReport, persist, production, selectedDate });
@@ -223,6 +224,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
         uploadingCount={uploadingCount}
         fileInputRef={fileInputRef}
         handleFiles={handleFiles}
+        handleCameraFiles={handleCameraFiles}
         updatePhoto={updatePhoto}
         setLightbox={setLightbox}
         setConfirmDelete={setConfirmDelete}

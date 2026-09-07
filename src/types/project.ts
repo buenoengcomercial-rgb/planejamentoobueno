@@ -629,6 +629,16 @@ export interface DailyReportAttachment {
   uploadedBy?: string;
   /** ISO timestamp. */
   uploadedAt?: string;
+  /** Data/hora registrada pelo dispositivo ao tirar a foto pelo botão Câmera. */
+  capturedAt?: string;
+  /** Origem da imagem para manter a rastreabilidade do carimbo. */
+  captureSource?: 'camera' | 'gallery' | 'upload';
+  /** Coordenadas usadas no carimbo da cópia anexada ao Diário. */
+  latitude?: number;
+  longitude?: number;
+  locationAccuracy?: number;
+  /** Local configurado na obra, exibido no carimbo quando disponível. */
+  capturePlaceLabel?: string;
   originalBytes?: number;
   storedBytes?: number;
   optimizedAt?: string;

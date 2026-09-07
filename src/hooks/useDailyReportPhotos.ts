@@ -10,6 +10,7 @@ import {
 import type { ProductionEntry } from '@/components/dailyReport/types';
 import { optimizeDailyReportPhoto } from '@/lib/dailyReportPhotoOptimization';
 import { ATTACHMENT_OPTIMIZATION_VERSION } from '@/lib/attachmentOptimizationVersion';
+import { requestCameraPhotoStamp, type DailyReportPhotoStamp } from '@/lib/dailyReportPhotoStamp';
 
 interface UseDailyReportPhotosArgs {
   project: Project;
@@ -74,8 +75,8 @@ export function useDailyReportPhotos({
     return opts;
   }, [production]);
 
-  const uploadOne = useCallback(async (file: File): Promise<{ attachment: DailyReportAttachment; originalBytes: number; storedBytes: number }> => {
-    const optimized = await optimizeDailyReportPhoto(file);
+  const uploadOne = useCallback(async (file: File, stamp?: DailyReportPhotoStamp): Promise<{ attachment: DailyReportAttachment; originalBytes: number; storedBytes: number }> => {
+    const optimized = await optimizeDailyReportPhoto(file, stamp);
     const id = uid('att');
     const safeExt = 'jpg';
     const path = `${project.id || 'local'}/${selectedDate}/${id}.${safeExt}`;
@@ -95,6 +96,12 @@ export function useDailyReportPhotos({
       unit: taskMeta?.unit,
       uploadedBy: currentReport.responsible || undefined,
       uploadedAt: new Date().toISOString(),
+      capturedAt: stamp?.capturedAt,
+      captureSource: stamp ? 'camera' : undefined,
+      latitude: stamp?.location?.latitude,
+      longitude: stamp?.location?.longitude,
+      locationAccuracy: stamp?.location?.accuracy,
+      capturePlaceLabel: stamp?.placeLabel,
       originalBytes: file.size,
       storedBytes: optimized.size,
       optimizedAt: new Date().toISOString(),
@@ -109,7 +116,7 @@ export function useDailyReportPhotos({
     return { attachment: { ...base, storagePath: path }, originalBytes: file.size, storedBytes: optimized.size };
   }, [project.id, selectedDate, pendingTaskId, photoTaskOptions, currentReport.responsible]);
 
-  const handleFiles = useCallback(async (files: FileList | File[]) => {
+  const uploadFiles = useCallback(async (files: FileList | File[], stamp?: DailyReportPhotoStamp) => {
     const arr = Array.from(files).filter(f => f.type.startsWith('image/') || /\.(jpe?g|png|webp|heic)$/i.test(f.name));
     if (arr.length === 0) return;
     setUploadingCount(c => c + arr.length);
@@ -119,7 +126,7 @@ export function useDailyReportPhotos({
       let storedBytes = 0;
       for (const f of arr) {
         try {
-          const result = await uploadOne(f);
+          const result = await uploadOne(f, stamp);
           uploaded.push(result.attachment);
           originalBytes += result.originalBytes;
           storedBytes += result.storedBytes;
@@ -145,6 +152,17 @@ export function useDailyReportPhotos({
       setUploadingCount(c => Math.max(0, c - arr.length));
     }
   }, [uploadOne, persist]);
+
+  const handleFiles = useCallback((files: FileList | File[]) => uploadFiles(files), [uploadFiles]);
+
+  const handleCameraFiles = useCallback(async (files: FileList | File[]) => {
+    const calendar = project.scheduleCalendar;
+    const placeLabel = calendar?.municipio
+      ? `${calendar.municipio}${calendar.uf ? ` · ${calendar.uf}` : ''}`
+      : undefined;
+    const stamp = await requestCameraPhotoStamp(placeLabel);
+    await uploadFiles(files, stamp);
+  }, [project.scheduleCalendar, uploadFiles]);
 
   const updatePhoto = useCallback((id: string, patch: Partial<DailyReportAttachment>) => persist(r => ({
     ...r,
@@ -175,6 +193,7 @@ export function useDailyReportPhotos({
     visiblePhotos,
     photoTaskOptions,
     handleFiles,
+    handleCameraFiles,
     updatePhoto,
     removePhoto,
   };

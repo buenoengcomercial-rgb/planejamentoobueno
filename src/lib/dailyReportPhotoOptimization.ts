@@ -1,3 +1,5 @@
+import { photoStampLines, type DailyReportPhotoStamp } from '@/lib/dailyReportPhotoStamp';
+
 const DAILY_REPORT_PHOTO_MAX_SIDE = 1280;
 const DAILY_REPORT_PHOTO_JPEG_QUALITY = 0.76;
 
@@ -37,12 +39,38 @@ function toJpeg(canvas: HTMLCanvasElement): Promise<Blob> {
   });
 }
 
+function drawPhotoStamp(context: CanvasRenderingContext2D, width: number, height: number, stamp?: DailyReportPhotoStamp) {
+  if (!stamp) return;
+  const lines = photoStampLines(stamp);
+  if (lines.length === 0) return;
+
+  const fontSize = Math.max(18, Math.round(width * 0.032));
+  const lineHeight = Math.round(fontSize * 1.18);
+  const padding = Math.max(14, Math.round(width * 0.02));
+  const blockHeight = padding * 2 + lines.length * lineHeight;
+  const blockWidth = Math.min(width, Math.round(width * 0.88));
+  const x = width - padding;
+  const top = height - blockHeight;
+
+  context.save();
+  context.fillStyle = 'rgba(0, 0, 0, 0.58)';
+  context.fillRect(width - blockWidth, top, blockWidth, blockHeight);
+  context.fillStyle = '#ffffff';
+  context.font = `600 ${fontSize}px sans-serif`;
+  context.textAlign = 'right';
+  context.textBaseline = 'middle';
+  lines.forEach((line, index) => {
+    context.fillText(line, x, top + padding + lineHeight * index + lineHeight / 2, blockWidth - padding * 2);
+  });
+  context.restore();
+}
+
 /**
  * Gera a única cópia persistida para o Diário: JPEG orientado, leve e adequado
  * para visualização de campo e impressão em até seis fotos por folha A4,
  * sem carregar pixels desnecessários nas miniaturas do Diário.
  */
-export async function optimizeDailyReportPhoto(file: File): Promise<File> {
+export async function optimizeDailyReportPhoto(file: File, stamp?: DailyReportPhotoStamp): Promise<File> {
   if (!file.type.startsWith('image/')) throw new Error('Selecione uma imagem válida.');
 
   let decoded: DecodedImage | undefined;
@@ -58,6 +86,7 @@ export async function optimizeDailyReportPhoto(file: File): Promise<File> {
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Canvas indisponível para compactar a imagem.');
     context.drawImage(decoded.source, 0, 0, width, height);
+    drawPhotoStamp(context, width, height, stamp);
     const blob = await toJpeg(canvas);
     if (!blob.size) throw new Error('A compactação não gerou uma imagem válida.');
     const base = file.name.replace(/\.[^.]+$/, '') || 'foto-diario';
