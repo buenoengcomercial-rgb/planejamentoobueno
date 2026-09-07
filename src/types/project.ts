@@ -1043,6 +1043,9 @@ export type WarehouseFiscalCostReviewStatus =
   | 'pending'
   | 'confirmed';
 
+/** Situação da conversão entre a embalagem discriminada na NF e o estoque físico. */
+export type WarehouseFiscalStockConversionStatus = 'not_required' | 'suggested' | 'confirmed';
+
 export interface WarehouseFiscalNoteItem {
   id: string;
   /** Codigo do produto na nota fiscal (coluna COD. PROD.). */
@@ -1056,6 +1059,12 @@ export interface WarehouseFiscalNoteItem {
   stockUnit?: string;
   /** Quantidade de estoque gerada por uma unidade fiscal: stockQuantity / quantity. */
   conversionFactor?: number;
+  /** Sugestões por descrição precisam ser conferidas antes de gerar estoque. */
+  stockConversionStatus?: WarehouseFiscalStockConversionStatus;
+  /** Embalagem identificada na descrição, preservada para conferência e auditoria. */
+  stockConversionPackaging?: 'balde' | 'caixa' | 'saco';
+  stockConversionConfirmedAt?: string;
+  stockConversionConfirmedBy?: WarehouseAuditActor;
   /** Valor unitario informado na nota fiscal, sem frete/ICMS extra. */
   unitPrice: number;
   /** Legado: frete extra alocado manualmente para este item. Novas notas usam WarehouseFiscalNote.freightAmount. */

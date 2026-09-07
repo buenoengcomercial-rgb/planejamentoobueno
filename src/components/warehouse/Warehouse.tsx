@@ -115,6 +115,7 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
             canReviewCosts={canReviewFiscalCosts}
             canEditPosted={canEditPostedWarehouseRecords}
             canDelete={canDeleteWarehouseRecords}
+            canReviewPackagingConversions={canEditPostedWarehouseRecords}
             auditActor={auditActor}
           />
         </TabsContent>

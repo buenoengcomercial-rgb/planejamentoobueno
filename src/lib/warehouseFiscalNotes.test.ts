@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Project, WarehouseFiscalNote } from '@/types/project';
 import {
   approveFiscalNote,
+  applyFiscalItemStockConversionSuggestion,
   archiveFiscalNote,
   archiveLegacyFiscalNoteDrafts,
   cancelFiscalNote,
@@ -19,15 +20,19 @@ import {
   fiscalItemGlobalTotal,
   fiscalItemGlobalUnitPrice,
   fiscalItemStockQuantity,
+  fiscalItemStockConversionStatus,
   fiscalNoteAllocatedExtras,
   fiscalNoteCostReviewStatus,
   hardDeleteFiscalNote,
   isStockFiscalDocument,
   reconcileArchivedFiscalNoteStock,
+  confirmFiscalNotePackagingConversion,
+  reviewFiscalNotePackagingConversions,
   reviewArchivedFiscalNoteStock,
   reviewPostedFiscalNoteCosts,
   replacePostedFiscalNote,
   updateFiscalItemPurchaseGroup,
+  suggestFiscalItemStockConversion,
 } from './warehouse';
 
 function baseProject(): Project {
@@ -352,6 +357,60 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(movement).toMatchObject({ quantity: 25, itemUnit: 'M', unitPrice: 4, fiscalNoteItemId: stored.id });
     expect(fiscalItemStockQuantity(stored)).toBe(25);
     expect(fiscalItemConversionFactor(stored)).toBe(2.5);
+  });
+
+  it('sugere balde, caixa e saco com conteúdo em peças, mas ignora medidas e códigos', () => {
+    expect(suggestFiscalItemStockConversion('BUCHA UX10A BALDE VERMELHO 600')).toMatchObject({ packaging: 'balde', contentPerPackage: 600, stockUnit: 'PC' });
+    expect(suggestFiscalItemStockConversion('PARAFUSO CAIXA 100 UN')).toMatchObject({ packaging: 'caixa', contentPerPackage: 100 });
+    expect(suggestFiscalItemStockConversion('FIXADOR SACO 500')).toMatchObject({ packaging: 'saco', contentPerPackage: 500 });
+    expect(suggestFiscalItemStockConversion('CIMENTO SACO 50 KG')).toBeUndefined();
+    expect(suggestFiscalItemStockConversion('BROCA 6X110 SC30')).toBeUndefined();
+  });
+
+  it('exige confirmação da embalagem e lança duas embalagens como peças', () => {
+    const item = applyFiscalItemStockConversionSuggestion({
+      ...note().items[0], description: 'BUCHA UX10A BALDE VERMELHO 600', quantity: 2, unit: 'BD', unitPrice: 100, totalPrice: 200,
+    });
+    expect(item).toMatchObject({ stockQuantity: 1200, stockUnit: 'PC', conversionFactor: 600, stockConversionStatus: 'suggested' });
+    const pending = note({ items: [item] });
+    expect(() => approveFiscalNote(withNote(pending), pending.id)).toThrow(/confirme a conversão/i);
+    const confirmed = { ...item, stockConversionStatus: 'confirmed' as const };
+    const posted = approveFiscalNote(withNote(note({ items: [confirmed] })), 'nf-1');
+    expect(posted.warehouse!.movements[0]).toMatchObject({ quantity: 1200, itemUnit: 'PC', unitPrice: 0.08 });
+  });
+
+  it('preserva a conversão confirmada quando a quantidade fiscal é alterada', () => {
+    const suggested = applyFiscalItemStockConversionSuggestion({ ...note().items[0], description: 'BUCHA BALDE 600', quantity: 1, unit: 'BD' });
+    const confirmed = { ...suggested, stockConversionStatus: 'confirmed' as const };
+    const adjusted = { ...confirmed, quantity: 2, stockQuantity: 2 * fiscalItemConversionFactor(confirmed) };
+    expect(adjusted).toMatchObject({ quantity: 2, stockQuantity: 1200, conversionFactor: 600, stockConversionStatus: 'confirmed' });
+  });
+
+  it('revisa e corrige embalagem histórica apenas sem movimentação posterior', () => {
+    const legacy = note({ status: 'a_conferir', items: [{ ...note().items[0], description: 'BUCHA BALDE 600', quantity: 1, unit: 'BD', itemKey: 'warehouse-nf|legacy' }] });
+    const posted = approveFiscalNote(withNote(legacy), legacy.id);
+    const reviews = reviewFiscalNotePackagingConversions(posted);
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0].blockers).toEqual([]);
+    expect(reviews[0]).toMatchObject({ suggestedStockQuantity: 600, suggestedStockUnit: 'PC', canCorrect: true });
+    const corrected = confirmFiscalNotePackagingConversion(posted, legacy.id, legacy.items[0].id, { userName: 'Proprietário' });
+    expect(corrected.warehouse!.fiscalNotes[0].items[0]).toMatchObject({ stockQuantity: 600, stockUnit: 'PC', stockConversionStatus: 'confirmed' });
+    expect(corrected.warehouse!.movements[0]).toMatchObject({ quantity: 600, itemUnit: 'PC' });
+    expect(fiscalItemStockConversionStatus(corrected.warehouse!.fiscalNotes[0].items[0])).toBe('confirmed');
+  });
+
+  it('bloqueia correção histórica de embalagem quando já houve consumo posterior', () => {
+    const legacy = note({ status: 'a_conferir', items: [{ ...note().items[0], description: 'BUCHA CAIXA 100', quantity: 1, unit: 'CX' }] });
+    const posted = approveFiscalNote(withNote(legacy), legacy.id);
+    const entry = posted.warehouse!.movements[0];
+    posted.warehouse!.movements.push({
+      id: 'withdrawal-after-entry', type: 'retirada', date: '2026-09-08', createdAt: new Date(Date.parse(entry.createdAt) + 1000).toISOString(),
+      itemKey: entry.itemKey, itemDescription: entry.itemDescription, itemUnit: entry.itemUnit, quantity: 1,
+    });
+    const review = reviewFiscalNotePackagingConversions(posted)[0];
+    expect(review.canCorrect).toBe(false);
+    expect(review.blockers.join(' ')).toMatch(/movimentações posteriores/i);
+    expect(() => confirmFiscalNotePackagingConversion(posted, legacy.id, legacy.items[0].id)).toThrow(/movimentações posteriores/i);
   });
 
   it('mantém compatibilidade com item antigo sem campos de conversão', () => {

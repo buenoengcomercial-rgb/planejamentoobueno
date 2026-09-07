@@ -400,6 +400,20 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.queryByText('Fator de conversão')).not.toBeInTheDocument();
   });
 
+  it('mostra a conversão sugerida de embalagem e exige confirmação na conferência', async () => {
+    invokeMock.mockResolvedValueOnce({
+      data: { ok: true, readerVersion: 'issuer-address-v1', note: {
+        supplierName: 'Fornecedor', supplierCnpj: '12.345.678/0001-95', invoiceNumber: '200', issueDate: '2026-08-15', totalAmount: 200,
+        items: [{ id: 'bucket', description: 'BUCHA UX10A BALDE VERMELHO 600', quantity: 2, unit: 'BD', unitPrice: 100, totalPrice: 200 }],
+      } }, error: null,
+    });
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={vi.fn()} canManage />);
+    await readDocument(view.container, 'balde.jpg');
+    expect(screen.getByText('Conversão para estoque')).toBeInTheDocument();
+    expect(screen.getByText(/Entrará no estoque:/).parentElement).toHaveTextContent('1.200,00 PC');
+    expect(screen.getByRole('button', { name: 'Confirmar conversão' })).toBeInTheDocument();
+  });
+
   it('formata quantidades e valores com duas casas após a edição', async () => {
     const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={vi.fn()} canManage />);
     await readDocument(view.container);

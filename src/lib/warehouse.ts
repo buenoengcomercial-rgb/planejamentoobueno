@@ -144,6 +144,65 @@ function moneyCents(value?: number): number {
   return Math.round((Number(value) || 0) * 100);
 }
 
+export interface FiscalStockConversionSuggestion {
+  packaging: 'balde' | 'caixa' | 'saco';
+  contentPerPackage: number;
+  stockUnit: 'PC';
+}
+
+/**
+ * Identifica somente uma contagem isolada após uma embalagem explícita. Medidas
+ * (ex.: saco 50 KG) e códigos/dimensões (ex.: 6X110, SC30) ficam de fora para
+ * que a sugestão nunca substitua a conferência humana.
+ */
+export function suggestFiscalItemStockConversion(description?: string): FiscalStockConversionSuggestion | undefined {
+  const tokens = normalizeLookup(description).split(' ').filter(Boolean);
+  const packagingIndex = tokens.findIndex(token => token === 'balde' || token === 'caixa' || token === 'saco');
+  if (packagingIndex < 0) return undefined;
+  const packaging = tokens[packagingIndex] as FiscalStockConversionSuggestion['packaging'];
+  for (let index = packagingIndex + 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (!/^\d{2,5}$/.test(token)) continue;
+    // Peso, medida e tensão são grandezas, não conteúdo em peças.
+    if (['kg', 'g', 'mg', 'l', 'ml', 'm', 'cm', 'mm', 'v', 'w'].includes(tokens[index + 1] || '')) return undefined;
+    const contentPerPackage = Number(token);
+    if (contentPerPackage > 0) return { packaging, contentPerPackage, stockUnit: 'PC' };
+  }
+  return undefined;
+}
+
+export function fiscalItemStockConversionStatus(item: Pick<WarehouseFiscalNoteItem, 'stockConversionStatus'>): 'not_required' | 'suggested' | 'confirmed' {
+  return item.stockConversionStatus ?? 'not_required';
+}
+
+/** Aplica uma sugestão somente enquanto ela não tiver sido confirmada manualmente. */
+export function applyFiscalItemStockConversionSuggestion(item: WarehouseFiscalNoteItem): WarehouseFiscalNoteItem {
+  if (fiscalItemStockConversionStatus(item) === 'confirmed') return item;
+  const suggestion = suggestFiscalItemStockConversion(item.description);
+  if (!suggestion) {
+    if (fiscalItemStockConversionStatus(item) !== 'suggested') return item;
+    return {
+      ...item,
+      stockQuantity: Number(item.quantity || 0),
+      stockUnit: item.unit?.trim() || 'UN',
+      conversionFactor: 1,
+      stockConversionStatus: 'not_required',
+      stockConversionPackaging: undefined,
+    };
+  }
+  const quantity = Number(item.quantity || 0);
+  return {
+    ...item,
+    stockQuantity: quantity > 0 ? quantity * suggestion.contentPerPackage : 0,
+    stockUnit: suggestion.stockUnit,
+    conversionFactor: suggestion.contentPerPackage,
+    stockConversionStatus: 'suggested',
+    stockConversionPackaging: suggestion.packaging,
+    stockConversionConfirmedAt: undefined,
+    stockConversionConfirmedBy: undefined,
+  };
+}
+
 export function fiscalItemStockQuantity(item: Pick<WarehouseFiscalNoteItem, 'quantity' | 'stockQuantity' | 'conversionFactor'>): number {
   const explicit = Number(item.stockQuantity);
   if (Number.isFinite(explicit) && explicit > 0) return explicit;
@@ -2441,6 +2500,10 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
   if (p.warehouse?.movements.some(m => m.fiscalNoteId === noteId && m.type === 'entrada' && !m.reversedById)) {
     return p;
   }
+  const pendingConversion = note.items.find(item => fiscalItemStockConversionStatus(item) === 'suggested');
+  if (pendingConversion) {
+    throw new Error(`Confirme a conversão de embalagem do item ${pendingConversion.description || pendingConversion.id} antes de lançar no estoque.`);
+  }
 
   const validItems = note.items
     .filter(item => item.description.trim() && Number(item.quantity || 0) > 0 && fiscalItemStockQuantity(item) > 0)
@@ -3342,6 +3405,126 @@ export function normalizeFiscalNoteNumber(value?: string): string {
   const digits = (value ?? '').replace(/\D/g, '');
   if (!digits) return '';
   return digits.replace(/^0+(?=\d)/, '');
+}
+
+export interface FiscalNotePackagingConversionReviewItem {
+  noteId: string;
+  itemId: string;
+  invoiceNumber?: string;
+  supplierName?: string;
+  description: string;
+  fiscalQuantity: number;
+  fiscalUnit: string;
+  currentStockQuantity: number;
+  suggestedStockQuantity: number;
+  suggestedStockUnit: string;
+  packaging: FiscalStockConversionSuggestion['packaging'];
+  blockers: string[];
+  canCorrect: boolean;
+}
+
+/**
+ * Lista somente lançamentos históricos claramente identificáveis e ainda
+ * seguros para correção. Retiradas posteriores bloqueiam a ação para não
+ * inventar saldo físico nem reescrever consumo já registrado.
+ */
+export function reviewFiscalNotePackagingConversions(project: Project): FiscalNotePackagingConversionReviewItem[] {
+  const wh = ensureWarehouse(project).warehouse!;
+  const reviews: FiscalNotePackagingConversionReviewItem[] = [];
+  for (const note of wh.fiscalNotes ?? []) {
+    if (note.status !== 'aprovada') continue;
+    for (const item of note.items) {
+      const suggestion = suggestFiscalItemStockConversion(item.description);
+      if (!suggestion || fiscalItemStockConversionStatus(item) === 'confirmed' || fiscalItemConversionFactor(item) !== 1) continue;
+      const entry = wh.movements.find(movement => movement.fiscalNoteId === note.id && movement.fiscalNoteItemId === item.id && movement.type === 'entrada' && !movement.reversedById);
+      const blockers: string[] = [];
+      if (!entry) blockers.push('A entrada original não possui vínculo técnico suficiente para correção automática.');
+      if (entry) {
+        const laterUse = wh.movements.some(movement =>
+          movement.itemKey === entry.itemKey &&
+          movement.id !== entry.id &&
+          !movement.reversedById &&
+          movement.type !== 'estorno' &&
+          movement.createdAt > entry.createdAt,
+        );
+        if (laterUse) blockers.push('Há movimentações posteriores deste material; faça a conferência física antes de ajustar o saldo.');
+      }
+      reviews.push({
+        noteId: note.id,
+        itemId: item.id,
+        invoiceNumber: note.invoiceNumber,
+        supplierName: note.supplierName,
+        description: item.description,
+        fiscalQuantity: Number(item.quantity || 0),
+        fiscalUnit: item.unit?.trim() || 'UN',
+        currentStockQuantity: fiscalItemStockQuantity(item),
+        suggestedStockQuantity: Number(item.quantity || 0) * suggestion.contentPerPackage,
+        suggestedStockUnit: suggestion.stockUnit,
+        packaging: suggestion.packaging,
+        blockers,
+        canCorrect: blockers.length === 0,
+      });
+    }
+  }
+  return reviews;
+}
+
+/** Confirma, com auditoria, a correção de uma embalagem histórica sem consumo posterior. */
+export function confirmFiscalNotePackagingConversion(
+  project: Project,
+  noteId: string,
+  itemId: string,
+  actor?: WarehouseActorInput,
+  stockUnit = 'PC',
+): Project {
+  const review = reviewFiscalNotePackagingConversions(project).find(item => item.noteId === noteId && item.itemId === itemId);
+  if (!review) throw new Error('Esta entrada não possui uma conversão histórica pendente.');
+  if (!review.canCorrect) throw new Error(review.blockers[0] || 'A correção desta entrada exige conferência manual.');
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const note = wh.fiscalNotes.find(candidate => candidate.id === noteId)!;
+  const originalItem = note.items.find(candidate => candidate.id === itemId)!;
+  const itemKey = originalItem.itemKey ?? wh.movements.find(movement => movement.fiscalNoteId === noteId && movement.fiscalNoteItemId === itemId && movement.type === 'entrada' && !movement.reversedById)?.itemKey;
+  if (!itemKey) throw new Error('A entrada original não possui material vinculado para correção.');
+  const factor = review.suggestedStockQuantity / Number(originalItem.quantity || 1);
+  const confirmedAt = nowISO();
+  const auditActor = normalizeWarehouseActor(actor);
+  const convertedItem: WarehouseFiscalNoteItem = {
+    ...originalItem,
+    stockQuantity: review.suggestedStockQuantity,
+    stockUnit: stockUnit.trim() || 'PC',
+    conversionFactor: factor,
+    stockConversionStatus: 'confirmed',
+    stockConversionPackaging: review.packaging,
+    stockConversionConfirmedAt: confirmedAt,
+    stockConversionConfirmedBy: auditActor,
+  };
+  const items = note.items.map(item => item.id === itemId ? convertedItem : item);
+  const updatedNote = { ...note, items, updatedAt: confirmedAt, updatedBy: auditActor ?? note.updatedBy };
+  const newUnitPrice = fiscalItemGlobalUnitPrice(convertedItem, updatedNote);
+  const difference = review.suggestedStockQuantity - review.currentStockQuantity;
+  const movements = wh.movements.map(movement => movement.fiscalNoteId === noteId && movement.fiscalNoteItemId === itemId && movement.type === 'entrada' && !movement.reversedById
+    ? {
+        ...movement,
+        quantity: review.suggestedStockQuantity,
+        itemUnit: convertedItem.stockUnit!,
+        unitPrice: newUnitPrice,
+        updatedAt: confirmedAt,
+        updatedBy: auditActor,
+        notes: `${movement.notes || ''} Correção auditada de ${review.packaging}: ${review.currentStockQuantity} ${movement.itemUnit} para ${review.suggestedStockQuantity} ${convertedItem.stockUnit}.`.trim(),
+      }
+    : movement);
+  const warehouseItems = wh.items.map(item => item.key !== itemKey ? item : {
+    ...item,
+    unit: convertedItem.stockUnit!,
+    purchasedQuantity: trunc2(Number(item.purchasedQuantity || 0) + difference),
+    unitPrice: newUnitPrice || item.unitPrice,
+  });
+  return setWh(p, {
+    fiscalNotes: wh.fiscalNotes.map(candidate => candidate.id === noteId ? updatedNote : candidate),
+    movements,
+    items: warehouseItems,
+  });
 }
 
 export function fiscalNoteDuplicateKey(note: Pick<WarehouseFiscalNote, 'supplierCnpj' | 'invoiceNumber' | 'totalAmount'>): string | undefined {
