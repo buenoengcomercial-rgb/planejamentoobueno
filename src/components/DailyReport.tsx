@@ -9,7 +9,6 @@ import { useDailyReportPdf } from '@/hooks/useDailyReportPdf';
 import type { DailyReportProps } from '@/components/dailyReport/types';
 import { DailyReportHeader } from '@/components/dailyReport/DailyReportHeader';
 import { DailyReportMeasurementBanner } from '@/components/dailyReport/DailyReportMeasurementBanner';
-import { DailyReportSummaryCards } from '@/components/dailyReport/DailyReportSummaryCards';
 import { DailyReportGeneralInfo } from '@/components/dailyReport/DailyReportGeneralInfo';
 import { DailyReportTextAreas } from '@/components/dailyReport/DailyReportTextAreas';
 import { DailyReportTeamsCard } from '@/components/dailyReport/DailyReportTeamsCard';
@@ -209,14 +208,6 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
 
             <DailyReportMobileSection
               className="order-2 lg:order-1"
-              title="Resumo do dia"
-              summary={`${summary.tasks} tarefa(s), ${summary.teams} equipe(s) e ${summary.occurrences} ocorrência(s).`}
-            >
-              <DailyReportSummaryCards summary={summary} />
-            </DailyReportMobileSection>
-
-            <DailyReportMobileSection
-              className="order-3 lg:order-2"
               title="Informações do dia"
               summary={currentReport.responsible ? `Responsável: ${currentReport.responsible}` : 'Responsável, clima e condição de trabalho.'}
             >
@@ -230,7 +221,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
               </fieldset>
             </DailyReportMobileSection>
 
-            <div className="order-4 grid grid-cols-1 gap-4 lg:order-3 lg:grid-cols-2">
+            <div className="order-3 grid grid-cols-1 gap-4 lg:order-2 lg:grid-cols-2">
               <DailyReportMobileSection
                 title="Equipe presente"
                 summary={(currentReport.teamsPresent || []).length > 0 ? `${currentReport.teamsPresent.length} equipe(s) lançada(s).` : 'Nenhuma equipe lançada.'}
@@ -265,7 +256,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
             </div>
 
             <DailyReportMobileSection
-              className="order-5 lg:order-4"
+              className="order-4 lg:order-3"
               title="Ocorrências, impedimentos e observações"
               summary={currentReport.impediments ? 'Há impedimentos registrados.' : currentReport.occurrences || currentReport.observations ? 'Há observações registradas.' : 'Nenhum registro adicional.'}
             >
@@ -275,7 +266,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
             </DailyReportMobileSection>
 
             <DailyReportMobileSection
-              className="order-6 lg:order-6"
+              className="order-5 lg:order-5"
               title="Produção executada"
               summary={summary.tasks > 0 ? `${summary.tasks} tarefa(s) com produção apontada.` : 'Nenhuma produção apontada nesta data.'}
             >
