@@ -363,6 +363,7 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(suggestFiscalItemStockConversion('BUCHA UX10A BALDE VERMELHO 600')).toMatchObject({ packaging: 'balde', contentPerPackage: 600, stockUnit: 'PC' });
     expect(suggestFiscalItemStockConversion('PARAFUSO CAIXA 100 UN')).toMatchObject({ packaging: 'caixa', contentPerPackage: 100 });
     expect(suggestFiscalItemStockConversion('Parafuso Chipboard 6,0x60 Flangeado Phillips Caixa 500pcs')).toMatchObject({ packaging: 'caixa', contentPerPackage: 500, stockUnit: 'PC' });
+    expect(suggestFiscalItemStockConversion('PARAFUSO PONTA AGULHA (EMB C/ 1000PCS)')).toMatchObject({ packaging: 'caixa', contentPerPackage: 1000, stockUnit: 'PC' });
     expect(suggestFiscalItemStockConversion('FIXADOR SACO 500')).toMatchObject({ packaging: 'saco', contentPerPackage: 500 });
     expect(suggestFiscalItemStockConversion('CIMENTO SACO 50 KG')).toBeUndefined();
     expect(suggestFiscalItemStockConversion('BROCA 6X110 SC30')).toBeUndefined();
@@ -410,18 +411,34 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(corrected.warehouse!.movements[0]).toMatchObject({ quantity: 1000, itemUnit: 'PC' });
   });
 
-  it('bloqueia correção histórica de embalagem quando já houve consumo posterior', () => {
+  it('converte retiradas históricas na unidade antiga junto com a entrada', () => {
     const legacy = note({ status: 'a_conferir', items: [{ ...note().items[0], description: 'BUCHA CAIXA 100', quantity: 1, unit: 'CX' }] });
     const posted = approveFiscalNote(withNote(legacy), legacy.id);
     const entry = posted.warehouse!.movements[0];
     posted.warehouse!.movements.push({
       id: 'withdrawal-after-entry', type: 'retirada', date: '2026-09-08', createdAt: new Date(Date.parse(entry.createdAt) + 1000).toISOString(),
-      itemKey: entry.itemKey, itemDescription: entry.itemDescription, itemUnit: entry.itemUnit, quantity: 1,
+      itemKey: entry.itemKey, itemDescription: entry.itemDescription, itemUnit: entry.itemUnit, quantity: 0.1,
+    });
+    const review = reviewFiscalNotePackagingConversions(posted)[0];
+    expect(review).toMatchObject({ canCorrect: true, dependentMovementCount: 1 });
+    const corrected = confirmFiscalNotePackagingConversion(posted, legacy.id, legacy.items[0].id);
+    const withdrawal = corrected.warehouse!.movements.find(movement => movement.id === 'withdrawal-after-entry')!;
+    expect(withdrawal).toMatchObject({ quantity: 10, itemUnit: 'PC' });
+    expect(withdrawal.notes).toMatch(/Conversão auditada/i);
+  });
+
+  it('continua bloqueando conversão histórica quando a movimentação posterior já está em outra unidade', () => {
+    const legacy = note({ status: 'a_conferir', items: [{ ...note().items[0], description: 'BUCHA CAIXA 100', quantity: 1, unit: 'CX' }] });
+    const posted = approveFiscalNote(withNote(legacy), legacy.id);
+    const entry = posted.warehouse!.movements[0];
+    posted.warehouse!.movements.push({
+      id: 'withdrawal-pc', type: 'retirada', date: '2026-09-08', createdAt: new Date(Date.parse(entry.createdAt) + 1000).toISOString(),
+      itemKey: entry.itemKey, itemDescription: entry.itemDescription, itemUnit: 'PC', quantity: 10,
     });
     const review = reviewFiscalNotePackagingConversions(posted)[0];
     expect(review.canCorrect).toBe(false);
-    expect(review.blockers.join(' ')).toMatch(/movimentações posteriores/i);
-    expect(() => confirmFiscalNotePackagingConversion(posted, legacy.id, legacy.items[0].id)).toThrow(/movimentações posteriores/i);
+    expect(review.blockers.join(' ')).toMatch(/outra unidade/i);
+    expect(() => confirmFiscalNotePackagingConversion(posted, legacy.id, legacy.items[0].id)).toThrow(/outra unidade/i);
   });
 
   it('mantém compatibilidade com item antigo sem campos de conversão', () => {

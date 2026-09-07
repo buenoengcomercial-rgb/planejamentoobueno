@@ -158,6 +158,17 @@ export interface FiscalStockConversionSuggestion {
  */
 export function suggestFiscalItemStockConversion(description?: string): FiscalStockConversionSuggestion | undefined {
   const tokens = normalizeLookup(description).split(' ').filter(Boolean);
+  // Alguns fornecedores registram a embalagem apenas como "EMB C/1000PCS".
+  // A unidade de peças está explícita, então é uma indicação segura de caixa.
+  const embeddedPackagingIndex = tokens.findIndex((token, index) => token === 'emb' && tokens[index + 1] === 'c');
+  if (embeddedPackagingIndex >= 0) {
+    for (let index = embeddedPackagingIndex + 2; index < tokens.length; index += 1) {
+      const token = tokens[index];
+      const compactPieceCount = token.match(/^(\d{2,5})(?:pc|pcs|peca|pecas)$/);
+      const countToken = compactPieceCount?.[1] ?? (/^\d{2,5}$/.test(token) && ['pc', 'pcs', 'peca', 'pecas'].includes(tokens[index + 1] || '') ? token : undefined);
+      if (countToken) return { packaging: 'caixa', contentPerPackage: Number(countToken), stockUnit: 'PC' };
+    }
+  }
   const packagingIndex = tokens.findIndex(token => token === 'balde' || token === 'caixa' || token === 'saco');
   if (packagingIndex < 0) return undefined;
   const packaging = tokens[packagingIndex] as FiscalStockConversionSuggestion['packaging'];
@@ -3422,14 +3433,18 @@ export interface FiscalNotePackagingConversionReviewItem {
   suggestedStockQuantity: number;
   suggestedStockUnit: string;
   packaging: FiscalStockConversionSuggestion['packaging'];
+  /** Movimentos posteriores na mesma unidade antiga que podem ser convertidos com segurança. */
+  dependentMovementIds: string[];
+  dependentMovementCount: number;
   blockers: string[];
   canCorrect: boolean;
 }
 
 /**
  * Lista somente lançamentos históricos claramente identificáveis e ainda
- * seguros para correção. Retiradas posteriores bloqueiam a ação para não
- * inventar saldo físico nem reescrever consumo já registrado.
+ * seguros para correção. Retiradas/devoluções posteriores na mesma unidade
+ * legada podem ser convertidas na mesma confirmação, preservando o consumo
+ * já registrado. Referências em outra unidade continuam bloqueadas.
  */
 export function reviewFiscalNotePackagingConversions(project: Project): FiscalNotePackagingConversionReviewItem[] {
   const wh = ensureWarehouse(project).warehouse!;
@@ -3442,15 +3457,21 @@ export function reviewFiscalNotePackagingConversions(project: Project): FiscalNo
       const entry = wh.movements.find(movement => movement.fiscalNoteId === note.id && movement.fiscalNoteItemId === item.id && movement.type === 'entrada' && !movement.reversedById);
       const blockers: string[] = [];
       if (!entry) blockers.push('A entrada original não possui vínculo técnico suficiente para correção automática.');
+      const dependentMovementIds: string[] = [];
       if (entry) {
-        const laterUse = wh.movements.some(movement =>
+        const laterMovements = wh.movements.filter(movement =>
           movement.itemKey === entry.itemKey &&
           movement.id !== entry.id &&
           !movement.reversedById &&
           movement.type !== 'estorno' &&
           movement.createdAt > entry.createdAt,
         );
-        if (laterUse) blockers.push('Há movimentações posteriores deste material; faça a conferência física antes de ajustar o saldo.');
+        const convertibleTypes = new Set<WarehouseMovementType>(['retirada', 'devolucao', 'perda', 'transferencia_saida', 'transferencia_entrada', 'ajuste_positivo', 'ajuste_negativo']);
+        const incompatible = laterMovements.filter(movement => !convertibleTypes.has(movement.type) || normalizeLookup(movement.itemUnit) !== normalizeLookup(entry.itemUnit));
+        if (incompatible.length) blockers.push('Há movimentações posteriores em outra unidade ou outra entrada deste material; faça a conferência física antes de ajustar o saldo.');
+        dependentMovementIds.push(...laterMovements
+          .filter(movement => convertibleTypes.has(movement.type) && normalizeLookup(movement.itemUnit) === normalizeLookup(entry.itemUnit))
+          .map(movement => movement.id));
       }
       reviews.push({
         noteId: note.id,
@@ -3464,6 +3485,8 @@ export function reviewFiscalNotePackagingConversions(project: Project): FiscalNo
         suggestedStockQuantity: Number(item.quantity || 0) * suggestion.contentPerPackage,
         suggestedStockUnit: suggestion.stockUnit,
         packaging: suggestion.packaging,
+        dependentMovementIds,
+        dependentMovementCount: dependentMovementIds.length,
         blockers,
         canCorrect: blockers.length === 0,
       });
@@ -3509,6 +3532,7 @@ export function confirmFiscalNotePackagingConversion(
   const updatedNote = { ...note, items, updatedAt: confirmedAt, updatedBy: auditActor ?? note.updatedBy };
   const newUnitPrice = fiscalItemGlobalUnitPrice(convertedItem, updatedNote);
   const difference = convertedStockQuantity - review.currentStockQuantity;
+  const dependentMovementIds = new Set(review.dependentMovementIds);
   const movements = wh.movements.map(movement => movement.fiscalNoteId === noteId && movement.fiscalNoteItemId === itemId && movement.type === 'entrada' && !movement.reversedById
     ? {
         ...movement,
@@ -3519,7 +3543,31 @@ export function confirmFiscalNotePackagingConversion(
         updatedBy: auditActor,
         notes: `${movement.notes || ''} Correção auditada de ${review.packaging}: ${review.currentStockQuantity} ${movement.itemUnit} para ${convertedStockQuantity} ${convertedItem.stockUnit}.`.trim(),
       }
-    : movement);
+    : dependentMovementIds.has(movement.id)
+      ? {
+          ...movement,
+          quantity: trunc2(Number(movement.quantity || 0) * factor),
+          itemUnit: convertedItem.stockUnit!,
+          unitPrice: movement.unitPrice == null ? undefined : Number(movement.unitPrice) / factor,
+          costSnapshot: movement.costSnapshot == null ? undefined : Number(movement.costSnapshot) / factor,
+          updatedAt: confirmedAt,
+          updatedBy: auditActor,
+          notes: `${movement.notes || ''} Conversão auditada de unidade: ${review.packaging} × ${factor}.`.trim(),
+        }
+      : movement);
+  const requisitions = wh.requisitions.map(requisition => {
+    const items = requisition.items.map(item => !item.movementId || !dependentMovementIds.has(item.movementId)
+      ? item
+      : {
+          ...item,
+          quantity: trunc2(Number(item.quantity || 0) * factor),
+          unit: convertedItem.stockUnit!,
+          unitCostSnapshot: item.unitCostSnapshot == null ? undefined : Number(item.unitCostSnapshot) / factor,
+        });
+    return items.some((item, index) => item !== requisition.items[index])
+      ? { ...requisition, items, updatedAt: confirmedAt, updatedBy: auditActor ?? requisition.updatedBy }
+      : requisition;
+  });
   const warehouseItems = wh.items.map(item => item.key !== itemKey ? item : {
     ...item,
     unit: convertedItem.stockUnit!,
@@ -3529,6 +3577,7 @@ export function confirmFiscalNotePackagingConversion(
   return setWh(p, {
     fiscalNotes: wh.fiscalNotes.map(candidate => candidate.id === noteId ? updatedNote : candidate),
     movements,
+    requisitions,
     items: warehouseItems,
   });
 }
