@@ -18,6 +18,7 @@ import { DailyReportPhotosCard } from '@/components/dailyReport/DailyReportPhoto
 import { DailyReportPhotoLightbox } from '@/components/dailyReport/DailyReportPhotoLightbox';
 import { DailyReportPhotoDeleteDialog } from '@/components/dailyReport/DailyReportPhotoDeleteDialog';
 import { DailyReportProductionSection } from '@/components/dailyReport/DailyReportProductionSection';
+import { DailyReportMobileSection } from '@/components/dailyReport/DailyReportMobileSection';
 import { PeriodReportsSection } from '@/components/dailyReport/PeriodReportsSection';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
@@ -176,73 +177,116 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
         <TabsContent value="day" className="mt-4 space-y-4">
           <DailyReportMeasurementBanner dateMembership={dateMembership} />
 
-          <DailyReportSummaryCards summary={summary} />
-
           {readOnly && !concluded && (
             <div role="status" className="rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
               Este perfil pode consultar e imprimir o Diário, mas não pode alterar os registros.
             </div>
           )}
 
-          <fieldset disabled={effectiveReadOnly} className="space-y-4 disabled:opacity-80">
+          <div className="flex flex-col gap-4">
+            <fieldset disabled={effectiveReadOnly} className="order-1 disabled:opacity-80 lg:order-5">
+              <DailyReportPhotosCard
+                photos={photos}
+                visiblePhotos={visiblePhotos}
+                photosByTask={photosByTask}
+                photoTaskOptions={photoTaskOptions}
+                pendingTaskId={pendingTaskId}
+                setPendingTaskId={setPendingTaskId}
+                photoFilter={photoFilter}
+                setPhotoFilter={setPhotoFilter}
+                uploadingCount={uploadingCount}
+                cameraCaptureState={cameraCaptureState}
+                cameraLocationError={cameraLocationError}
+                fileInputRef={fileInputRef}
+                handleFiles={handleFiles}
+                handleCameraFiles={handleCameraFiles}
+                prepareCameraCapture={prepareCameraCapture}
+                updatePhoto={updatePhoto}
+                setLightbox={setLightbox}
+                setConfirmDelete={setConfirmDelete}
+              />
+            </fieldset>
 
-          <DailyReportGeneralInfo
-            currentReport={currentReport}
-            updateField={updateField}
-            onClearDay={clearDailyReport}
-            hasProduction={production.some(item => item.actualQuantity > 0)}
-          />
+            <DailyReportMobileSection
+              className="order-2 lg:order-1"
+              title="Resumo do dia"
+              summary={`${summary.tasks} tarefa(s), ${summary.teams} equipe(s) e ${summary.occurrences} ocorrência(s).`}
+            >
+              <DailyReportSummaryCards summary={summary} />
+            </DailyReportMobileSection>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <DailyReportTeamsCard
-          currentReport={currentReport}
-          projectTeams={projectTeams}
-          teamByCode={teamByCode}
-          teamDisplay={teamDisplay}
-          suggestedTeamCodes={suggestedTeamCodes}
-          addTeamRow={addTeamRow}
-          updateTeamRow={updateTeamRow}
-          removeTeamRow={removeTeamRow}
-          addSuggestedTeams={addSuggestedTeams}
-        />
-        <DailyReportEquipmentCard
-          currentReport={currentReport}
-          addEqRow={addEqRow}
-          updateEqRow={updateEqRow}
-          removeEqRow={removeEqRow}
-        />
+            <DailyReportMobileSection
+              className="order-3 lg:order-2"
+              title="Informações do dia"
+              summary={currentReport.responsible ? `Responsável: ${currentReport.responsible}` : 'Responsável, clima e condição de trabalho.'}
+            >
+              <fieldset disabled={effectiveReadOnly} className="disabled:opacity-80">
+                <DailyReportGeneralInfo
+                  currentReport={currentReport}
+                  updateField={updateField}
+                  onClearDay={clearDailyReport}
+                  hasProduction={production.some(item => item.actualQuantity > 0)}
+                />
+              </fieldset>
+            </DailyReportMobileSection>
+
+            <div className="order-4 grid grid-cols-1 gap-4 lg:order-3 lg:grid-cols-2">
+              <DailyReportMobileSection
+                title="Equipe presente"
+                summary={(currentReport.teamsPresent || []).length > 0 ? `${currentReport.teamsPresent.length} equipe(s) lançada(s).` : 'Nenhuma equipe lançada.'}
+              >
+                <fieldset disabled={effectiveReadOnly} className="disabled:opacity-80">
+                  <DailyReportTeamsCard
+                    currentReport={currentReport}
+                    projectTeams={projectTeams}
+                    teamByCode={teamByCode}
+                    teamDisplay={teamDisplay}
+                    suggestedTeamCodes={suggestedTeamCodes}
+                    addTeamRow={addTeamRow}
+                    updateTeamRow={updateTeamRow}
+                    removeTeamRow={removeTeamRow}
+                    addSuggestedTeams={addSuggestedTeams}
+                  />
+                </fieldset>
+              </DailyReportMobileSection>
+              <DailyReportMobileSection
+                title="Equipamentos"
+                summary={(currentReport.equipment || []).length > 0 ? `${currentReport.equipment.length} equipamento(s) lançado(s).` : 'Nenhum equipamento lançado.'}
+              >
+                <fieldset disabled={effectiveReadOnly} className="disabled:opacity-80">
+                  <DailyReportEquipmentCard
+                    currentReport={currentReport}
+                    addEqRow={addEqRow}
+                    updateEqRow={updateEqRow}
+                    removeEqRow={removeEqRow}
+                  />
+                </fieldset>
+              </DailyReportMobileSection>
+            </div>
+
+            <DailyReportMobileSection
+              className="order-5 lg:order-4"
+              title="Ocorrências, impedimentos e observações"
+              summary={currentReport.impediments ? 'Há impedimentos registrados.' : currentReport.occurrences || currentReport.observations ? 'Há observações registradas.' : 'Nenhum registro adicional.'}
+            >
+              <fieldset disabled={effectiveReadOnly} className="disabled:opacity-80">
+                <DailyReportTextAreas currentReport={currentReport} updateField={updateField} />
+              </fieldset>
+            </DailyReportMobileSection>
+
+            <DailyReportMobileSection
+              className="order-6 lg:order-6"
+              title="Produção executada"
+              summary={summary.tasks > 0 ? `${summary.tasks} tarefa(s) com produção apontada.` : 'Nenhuma produção apontada nesta data.'}
+            >
+              <DailyReportProductionSection
+                selectedDate={selectedDate}
+                grouped={grouped}
+                photosByTask={photosByTask}
+                setPhotoFilter={setPhotoFilter}
+              />
+            </DailyReportMobileSection>
           </div>
-
-          <DailyReportTextAreas currentReport={currentReport} updateField={updateField} />
-
-          <DailyReportPhotosCard
-        photos={photos}
-        visiblePhotos={visiblePhotos}
-        photosByTask={photosByTask}
-        photoTaskOptions={photoTaskOptions}
-        pendingTaskId={pendingTaskId}
-        setPendingTaskId={setPendingTaskId}
-        photoFilter={photoFilter}
-        setPhotoFilter={setPhotoFilter}
-        uploadingCount={uploadingCount}
-        cameraCaptureState={cameraCaptureState}
-        cameraLocationError={cameraLocationError}
-        fileInputRef={fileInputRef}
-        handleFiles={handleFiles}
-        handleCameraFiles={handleCameraFiles}
-        prepareCameraCapture={prepareCameraCapture}
-        updatePhoto={updatePhoto}
-        setLightbox={setLightbox}
-        setConfirmDelete={setConfirmDelete}
-          />
-
-          <DailyReportProductionSection
-        selectedDate={selectedDate}
-        grouped={grouped}
-        photosByTask={photosByTask}
-        setPhotoFilter={setPhotoFilter}
-          />
-          </fieldset>
         </TabsContent>
       </Tabs>
 
