@@ -14,18 +14,18 @@ const project = { id: 'obra-1', name: 'Obra', phases: [] } as never;
 const onProjectChange = vi.fn();
 
 describe('DailyProductionWorkspace', () => {
-  it('exibe diretamente a Produção sem a aba interna de planejamento', () => {
+  it('exibe diretamente a Produção sem a aba interna de planejamento', async () => {
     render(<DailyProductionWorkspace project={project} initialTab="production" onProductionChange={onProjectChange} onDailyReportChange={onProjectChange} />);
 
-    expect(screen.getByText('Conteúdo de produção')).toBeInTheDocument();
+    expect(await screen.findByText('Conteúdo de produção')).toBeInTheDocument();
     expect(screen.queryByRole('tab')).not.toBeInTheDocument();
     expect(screen.queryByText('Produção e Diário de Obra')).not.toBeInTheDocument();
   });
 
-  it('exibe diretamente o Diário sem a aba interna de produção', () => {
+  it('exibe diretamente o Diário sem a aba interna de produção', async () => {
     render(<DailyProductionWorkspace project={project} initialTab="dailyReport" onProductionChange={onProjectChange} onDailyReportChange={onProjectChange} />);
 
-    expect(screen.getByText('Conteúdo do diário')).toBeInTheDocument();
+    expect(await screen.findByText('Conteúdo do diário')).toBeInTheDocument();
     expect(screen.queryByRole('tab')).not.toBeInTheDocument();
   });
 });
