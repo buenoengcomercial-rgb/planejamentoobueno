@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { formatCoordinates, photoStampLines, requestCameraPhotoStamp } from './dailyReportPhotoStamp';
+import { formatCoordinates, formatProjectPlaceLabel, photoStampLines, requestCameraPhotoStamp } from './dailyReportPhotoStamp';
 
 describe('dailyReportPhotoStamp', () => {
   it('formata coordenadas no padrão exibido no carimbo de campo', () => {
@@ -17,6 +16,12 @@ describe('dailyReportPhotoStamp', () => {
       '8.750339° S, 63.910549° W',
       'Porto Velho · RO',
     ]);
+  });
+
+  it('usa o endereço fixo da obra e completa apenas a cidade e UF ausentes', () => {
+    expect(formatProjectPlaceLabel('Avenida Farquar, 2900', 'Porto Velho', 'RO')).toBe('Avenida Farquar, 2900 — Porto Velho/RO');
+    expect(formatProjectPlaceLabel('Avenida Farquar, 2900 — Porto Velho/RO', 'Porto Velho', 'RO')).toBe('Avenida Farquar, 2900 — Porto Velho/RO');
+    expect(formatProjectPlaceLabel(undefined, 'Porto Velho', 'RO')).toBe('Porto Velho/RO');
   });
 
   it('exige posição atual do GPS, sem aceitar posição em cache', async () => {

@@ -10,6 +10,26 @@ export interface DailyReportPhotoStamp {
   placeLabel?: string;
 }
 
+function normalizedForMatch(value: string) {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
+}
+
+/**
+ * Combina o endereço fixo cadastrado no cabeçalho da obra com município/UF
+ * sem repetir informações que já estejam registradas no próprio endereço.
+ */
+export function formatProjectPlaceLabel(location?: string, municipality?: string, state?: string) {
+  const fixedLocation = location?.trim();
+  const city = municipality?.trim();
+  const uf = state?.trim().toUpperCase();
+  const locationForMatch = normalizedForMatch(fixedLocation || '');
+  const cityIncluded = Boolean(city && locationForMatch.includes(normalizedForMatch(city)));
+  const ufIncluded = Boolean(uf && new RegExp(`(^|[^A-Z])${uf}([^A-Z]|$)`, 'i').test(fixedLocation || ''));
+  const cityState = [cityIncluded ? undefined : city, ufIncluded ? undefined : uf].filter(Boolean).join('/');
+
+  return [fixedLocation, cityState].filter(Boolean).join(' — ') || undefined;
+}
+
 export function formatCoordinates(location: DailyReportPhotoLocation) {
   const latitudeHemisphere = location.latitude >= 0 ? 'N' : 'S';
   const longitudeHemisphere = location.longitude >= 0 ? 'E' : 'W';

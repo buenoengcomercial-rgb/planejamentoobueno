@@ -10,7 +10,7 @@ import {
 import type { ProductionEntry } from '@/components/dailyReport/types';
 import { optimizeDailyReportPhoto } from '@/lib/dailyReportPhotoOptimization';
 import { ATTACHMENT_OPTIMIZATION_VERSION } from '@/lib/attachmentOptimizationVersion';
-import { requestCameraPhotoStamp, type DailyReportPhotoStamp } from '@/lib/dailyReportPhotoStamp';
+import { formatProjectPlaceLabel, requestCameraPhotoStamp, type DailyReportPhotoStamp } from '@/lib/dailyReportPhotoStamp';
 
 interface UseDailyReportPhotosArgs {
   project: Project;
@@ -160,10 +160,8 @@ export function useDailyReportPhotos({
 
   const cameraPlaceLabel = useMemo(() => {
     const calendar = project.scheduleCalendar;
-    return calendar?.municipio
-      ? `${calendar.municipio}${calendar.uf ? ` · ${calendar.uf}` : ''}`
-      : undefined;
-  }, [project.scheduleCalendar]);
+    return formatProjectPlaceLabel(project.contractInfo?.location, calendar?.municipio, calendar?.uf);
+  }, [project.contractInfo?.location, project.scheduleCalendar]);
 
   const prepareCameraCapture = useCallback(async () => {
     if (cameraCaptureState === 'locating') return;
