@@ -25,6 +25,7 @@ import type {
   FiscalInvoiceEntry,
   DailyReport,
   WarehouseProjectMaterialLink,
+  WarehouseSupplierPresentation,
   WarehouseInventorySession,
   WarehouseInventoryLine,
 } from '@/types/project';
@@ -217,6 +218,91 @@ export function applyFiscalItemStockConversionSuggestion(item: WarehouseFiscalNo
   };
 }
 
+function supplierPresentationCode(value?: string) {
+  return normalizeProductCode(value) || '';
+}
+
+/** Localiza a apresentação ativa apenas pelo CNPJ e código comercial exatos. */
+export function findWarehouseSupplierPresentation(project: Project, supplierCnpj?: string, supplierProductCode?: string) {
+  const cnpj = (supplierCnpj ?? '').replace(/\D/g, '');
+  const code = supplierPresentationCode(supplierProductCode);
+  if (!cnpj || !code) return undefined;
+  return ensureWarehouse(project).warehouse!.supplierPresentations?.find(rule => rule.active
+    && rule.supplierCnpj.replace(/\D/g, '') === cnpj
+    && supplierPresentationCode(rule.supplierProductCode) === code);
+}
+
+/**
+ * Aplica uma apresentação cadastrada ao rascunho. A confirmação continua
+ * obrigatória e uma escolha manual já iniciada pelo usuário nunca é sobrescrita.
+ */
+export function applyWarehouseSupplierPresentation(project: Project, supplierCnpj: string | undefined, item: WarehouseFiscalNoteItem): WarehouseFiscalNoteItem {
+  if (item.stockConversionStatus === 'confirmed' || item.stockConversionSource === 'manual') return item;
+  const rule = findWarehouseSupplierPresentation(project, supplierCnpj, item.productCode);
+  if (!rule) return applyFiscalItemStockConversionSuggestion(item);
+  const quantity = Number(item.quantity || 0);
+  return {
+    ...item,
+    itemKey: rule.warehouseItemKey,
+    stockQuantity: quantity > 0 ? quantity * rule.contentPerFiscalUnit : 0,
+    stockUnit: rule.stockUnit,
+    conversionFactor: rule.contentPerFiscalUnit,
+    stockConversionStatus: 'manual',
+    stockConversionSource: 'supplier_presentation',
+    stockConversionPresentationId: rule.id,
+    stockConversionPackaging: 'fornecedor',
+    stockConversionConfirmedAt: undefined,
+    stockConversionConfirmedBy: undefined,
+  };
+}
+
+export function applyWarehouseSupplierPresentations(project: Project, note: Pick<WarehouseFiscalNote, 'supplierCnpj' | 'items'>): WarehouseFiscalNoteItem[] {
+  return note.items.map(item => applyWarehouseSupplierPresentation(project, note.supplierCnpj, item));
+}
+
+export function upsertWarehouseSupplierPresentation(
+  project: Project,
+  input: Omit<WarehouseSupplierPresentation, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'updatedBy'> & Partial<Pick<WarehouseSupplierPresentation, 'id'>>,
+  actor?: WarehouseActorInput,
+): Project {
+  const p = ensureWarehouse(project);
+  const cnpj = input.supplierCnpj.replace(/\D/g, '');
+  const code = input.supplierProductCode.trim();
+  if (!cnpj || !supplierPresentationCode(code)) throw new Error('Informe o CNPJ e o código do produto do fornecedor.');
+  if (!input.warehouseItemKey) throw new Error('Selecione o material físico vinculado.');
+  if (!(Number(input.contentPerFiscalUnit) > 0)) throw new Error('Informe um conteúdo por unidade maior que zero.');
+  if (!input.stockUnit.trim()) throw new Error('Informe a unidade de estoque.');
+  const existing = p.warehouse!.supplierPresentations ?? [];
+  const duplicate = existing.find(rule => rule.id !== input.id && rule.active
+    && rule.supplierCnpj.replace(/\D/g, '') === cnpj
+    && supplierPresentationCode(rule.supplierProductCode) === supplierPresentationCode(code));
+  if (duplicate) throw new Error('Já existe uma apresentação ativa para este CNPJ e código do fornecedor.');
+  const now = nowISO();
+  const audit = normalizeWarehouseActor(actor);
+  const current = existing.find(rule => rule.id === input.id);
+  const rule: WarehouseSupplierPresentation = {
+    id: current?.id ?? uid(),
+    supplierName: input.supplierName?.trim() || undefined,
+    supplierCnpj: cnpj,
+    supplierProductCode: code,
+    warehouseItemKey: input.warehouseItemKey,
+    contentPerFiscalUnit: Number(input.contentPerFiscalUnit),
+    stockUnit: input.stockUnit.trim().toUpperCase(),
+    active: input.active !== false,
+    createdAt: current?.createdAt ?? now,
+    createdBy: current?.createdBy ?? audit,
+    updatedAt: current ? now : undefined,
+    updatedBy: current ? audit : undefined,
+  };
+  return { ...p, warehouse: { ...p.warehouse!, supplierPresentations: current ? existing.map(value => value.id === rule.id ? rule : value) : [...existing, rule] } };
+}
+
+export function archiveWarehouseSupplierPresentation(project: Project, id: string, actor?: WarehouseActorInput): Project {
+  const p = ensureWarehouse(project);
+  const now = nowISO();
+  return { ...p, warehouse: { ...p.warehouse!, supplierPresentations: (p.warehouse!.supplierPresentations ?? []).map(rule => rule.id === id ? { ...rule, active: false, updatedAt: now, updatedBy: normalizeWarehouseActor(actor) } : rule) } };
+}
+
 export function fiscalItemStockQuantity(item: Pick<WarehouseFiscalNoteItem, 'quantity' | 'stockQuantity' | 'conversionFactor'>): number {
   const explicit = Number(item.stockQuantity);
   if (Number.isFinite(explicit) && explicit > 0) return explicit;
@@ -307,6 +393,7 @@ export function emptyWarehouse(): WarehouseState {
     fiscalNotes: [],
     fiscalDuplicateReconciliationVersion: undefined,
     materialLinks: [],
+    supplierPresentations: [],
     inventorySessions: [],
     valuationMethod: 'weighted_average',
   };
@@ -385,6 +472,7 @@ function normalizeWarehouse(state?: Partial<WarehouseState>): WarehouseState {
     fiscalNotes: normalizeFiscalNotes(state?.fiscalNotes ?? []),
     fiscalDuplicateReconciliationVersion: state?.fiscalDuplicateReconciliationVersion,
     materialLinks: state?.materialLinks ?? [],
+    supplierPresentations: state?.supplierPresentations ?? [],
     inventorySessions: state?.inventorySessions ?? [],
     valuationMethod: 'weighted_average',
   };
@@ -410,6 +498,7 @@ export function ensureWarehouse(project: Project): Project {
       wh.fiscalNotes !== cur.fiscalNotes ||
       wh.fiscalDuplicateReconciliationVersion !== cur.fiscalDuplicateReconciliationVersion ||
       wh.materialLinks !== cur.materialLinks ||
+      wh.supplierPresentations !== cur.supplierPresentations ||
       wh.inventorySessions !== cur.inventorySessions ||
       wh.valuationMethod !== cur.valuationMethod
     : false;
@@ -2514,7 +2603,10 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
   if (p.warehouse?.movements.some(m => m.fiscalNoteId === noteId && m.type === 'entrada' && !m.reversedById)) {
     return p;
   }
-  const pendingConversion = note.items.find(item => fiscalItemStockConversionStatus(item) === 'suggested');
+  const pendingConversion = note.items.find(item => {
+    const status = fiscalItemStockConversionStatus(item);
+    return status === 'suggested' || status === 'manual';
+  });
   if (pendingConversion) {
     throw new Error(`Confirme a conversão de embalagem do item ${pendingConversion.description || pendingConversion.id} antes de lançar no estoque.`);
   }
@@ -3432,7 +3524,7 @@ export interface FiscalNotePackagingConversionReviewItem {
   currentStockQuantity: number;
   suggestedStockQuantity: number;
   suggestedStockUnit: string;
-  packaging: FiscalStockConversionSuggestion['packaging'];
+  packaging: FiscalStockConversionSuggestion['packaging'] | 'fornecedor';
   /** Movimentos posteriores na mesma unidade antiga que podem ser convertidos com segurança. */
   dependentMovementIds: string[];
   dependentMovementCount: number;
@@ -3453,13 +3545,14 @@ export function reviewFiscalNotePackagingConversions(project: Project): FiscalNo
     if (note.status !== 'aprovada') continue;
     for (const item of note.items) {
       const suggestion = suggestFiscalItemStockConversion(item.description);
+      const supplierPresentation = findWarehouseSupplierPresentation(project, note.supplierCnpj, item.productCode);
       const entry = wh.movements.find(movement => movement.fiscalNoteId === note.id && movement.fiscalNoteItemId === item.id && movement.type === 'entrada' && !movement.reversedById);
-      if (!suggestion) continue;
+      if (!suggestion && !supplierPresentation) continue;
       const conversionConfirmed = fiscalItemStockConversionStatus(item) === 'confirmed' || fiscalItemConversionFactor(item) !== 1;
       const expectedStockQuantity = conversionConfirmed
         ? fiscalItemStockQuantity(item)
-        : Number(item.quantity || 0) * suggestion.contentPerPackage;
-      const expectedStockUnit = conversionConfirmed ? fiscalItemStockUnit(item) : suggestion.stockUnit;
+        : Number(item.quantity || 0) * Number(supplierPresentation?.contentPerFiscalUnit ?? suggestion!.contentPerPackage);
+      const expectedStockUnit = conversionConfirmed ? fiscalItemStockUnit(item) : (supplierPresentation?.stockUnit ?? suggestion!.stockUnit);
       const entryNeedsReconciliation = !!entry && (
         Number(entry.quantity || 0) !== expectedStockQuantity ||
         normalizeLookup(entry.itemUnit) !== normalizeLookup(expectedStockUnit)
@@ -3497,7 +3590,7 @@ export function reviewFiscalNotePackagingConversions(project: Project): FiscalNo
         currentStockQuantity: entry ? Number(entry.quantity || 0) : fiscalItemStockQuantity(item),
         suggestedStockQuantity: expectedStockQuantity,
         suggestedStockUnit: expectedStockUnit,
-        packaging: suggestion.packaging,
+        packaging: supplierPresentation ? 'fornecedor' : suggestion!.packaging,
         dependentMovementIds,
         dependentMovementCount: dependentMovementIds.length,
         blockers,

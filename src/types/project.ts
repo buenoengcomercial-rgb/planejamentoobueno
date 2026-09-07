@@ -1044,7 +1044,7 @@ export type WarehouseFiscalCostReviewStatus =
   | 'confirmed';
 
 /** Situação da conversão entre a embalagem discriminada na NF e o estoque físico. */
-export type WarehouseFiscalStockConversionStatus = 'not_required' | 'suggested' | 'confirmed';
+export type WarehouseFiscalStockConversionStatus = 'not_required' | 'suggested' | 'manual' | 'confirmed';
 
 export interface WarehouseFiscalNoteItem {
   id: string;
@@ -1062,9 +1062,12 @@ export interface WarehouseFiscalNoteItem {
   /** Sugestões por descrição precisam ser conferidas antes de gerar estoque. */
   stockConversionStatus?: WarehouseFiscalStockConversionStatus;
   /** Embalagem identificada na descrição, preservada para conferência e auditoria. */
-  stockConversionPackaging?: 'balde' | 'caixa' | 'saco';
+  stockConversionPackaging?: 'balde' | 'caixa' | 'saco' | 'fornecedor';
   stockConversionConfirmedAt?: string;
   stockConversionConfirmedBy?: WarehouseAuditActor;
+  /** Origem da proposta de conversão, sem alterar os dados fiscais. */
+  stockConversionSource?: 'description' | 'supplier_presentation' | 'manual';
+  stockConversionPresentationId?: string;
   /** Valor unitario informado na nota fiscal, sem frete/ICMS extra. */
   unitPrice: number;
   /** Legado: frete extra alocado manualmente para este item. Novas notas usam WarehouseFiscalNote.freightAmount. */
@@ -1326,6 +1329,22 @@ export interface WarehouseProjectMaterialLink {
   updatedBy?: WarehouseAuditActor;
 }
 
+/** Apresentação comercial de um produto de fornecedor que deve virar estoque físico. */
+export interface WarehouseSupplierPresentation {
+  id: string;
+  supplierName?: string;
+  supplierCnpj: string;
+  supplierProductCode: string;
+  warehouseItemKey: string;
+  contentPerFiscalUnit: number;
+  stockUnit: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt?: string;
+  createdBy?: WarehouseAuditActor;
+  updatedBy?: WarehouseAuditActor;
+}
+
 export type WarehouseInventorySessionStatus = 'em_contagem' | 'em_revisao' | 'aplicado' | 'cancelado';
 
 export interface WarehouseInventoryLine {
@@ -1368,6 +1387,7 @@ export interface WarehouseState {
   /** Versão da reconciliação única de notas fiscais duplicadas já executada. */
   fiscalDuplicateReconciliationVersion?: number;
   materialLinks?: WarehouseProjectMaterialLink[];
+  supplierPresentations?: WarehouseSupplierPresentation[];
   inventorySessions?: WarehouseInventorySession[];
   valuationMethod?: 'weighted_average';
 }

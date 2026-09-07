@@ -1,6 +1,6 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { ElementType } from 'react';
-import type { MaterialCostClass, Project, WarehouseAuditActor } from '@/types/project';
+import type { MaterialCostClass, Project, WarehouseAuditActor, WarehouseSupplierPresentation } from '@/types/project';
 import {
   computeWarehouseRows,
   getMaterialPurchaseHistory,
@@ -9,6 +9,8 @@ import {
   unlinkWarehouseProjectMaterial,
   upsertItemConfig,
   upsertWarehouseProjectMaterialLink,
+  archiveWarehouseSupplierPresentation,
+  upsertWarehouseSupplierPresentation,
 } from '@/lib/warehouse';
 import { MATERIAL_COST_CLASS_LABEL, setMaterialCostClass, suggestMaterialsFromProject } from '@/lib/materialComparisons';
 import { computeWarehouseStockOverviewRows, type WarehouseStockOverviewRow } from '@/lib/warehouseStockOverview';
@@ -19,7 +21,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Archive, ArrowDown, ArrowDownUp, ArrowUp, Boxes, BrickWall, Check, ChevronDown, ChevronsUpDown, CircleSlash, Download, Eye, HardHat, History, Link2, Plus, Search, Truck, Unlink, X } from 'lucide-react';
+import { Archive, ArrowDown, ArrowDownUp, ArrowUp, Boxes, BrickWall, Check, ChevronDown, ChevronsUpDown, CircleSlash, Download, Eye, HardHat, History, Link2, PackagePlus, Plus, Search, Truck, Unlink, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
@@ -104,6 +106,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
   const [sort, setSort] = useState<StockSort>({ key: 'withdrawn', direction: 'desc' });
   const [historyFor, setHistoryFor] = useState<{ key: string; description: string } | null>(null);
   const [linkFor, setLinkFor] = useState<string | null>(null);
+  const [presentationFor, setPresentationFor] = useState<string | null>(null);
   const rows = useMemo(
     () => computeWarehouseStockOverviewRows(project, showArchived),
     [project, showArchived],
@@ -190,6 +193,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
           <span className="mr-auto text-xs text-muted-foreground">Ordenado por <strong className="font-semibold text-foreground">{stockSortLabel[sort.key]}</strong> · {filtered.length} item(ns)</span>
         <Button size="sm" variant={showAllColumns ? 'secondary' : 'outline'} className="hidden min-h-11 text-xs md:inline-flex" aria-pressed={showAllColumns} onClick={() => setShowAllColumns(value => !value)}>{showAllColumns ? 'Visão resumida' : 'Todas as colunas'}</Button>
         {onNewEntry && <Button size="sm" variant="outline" className="min-h-11 text-xs" onClick={onNewEntry}><Plus className="w-3.5 h-3.5 mr-1" />Nova entrada</Button>}
+        <Button size="sm" variant="outline" className="min-h-11 text-xs" onClick={() => setPresentationFor(filtered.find(row => row.isPhysicalStock)?.key ?? rows.find(row => row.isPhysicalStock)?.key ?? null)} disabled={!rows.some(row => row.isPhysicalStock)}><PackagePlus className="mr-1 h-3.5 w-3.5" />Apresentações por fornecedor</Button>
         {archivedCount > 0 && (
           <Button size="sm" variant={showArchived ? 'secondary' : 'outline'} className="min-h-11 text-xs" onClick={() => setShowArchived(value => !value)}>
             <Archive className="mr-1 h-3.5 w-3.5" />
@@ -316,6 +320,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
         onProjectChange={onProjectChange}
         onClose={() => setLinkFor(null)}
       />
+      <SupplierPresentationDialog project={project} rows={rows} itemKey={presentationFor} onSelectKey={setPresentationFor} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setPresentationFor(null)} />
       <PurchaseHistoryDialog project={project} target={historyFor} onClose={() => setHistoryFor(null)} />
       {confirmDialog}
     </div>
@@ -331,6 +336,57 @@ function StockMobileCard({ row, canArchive, onClassChange, onLink, onHistory, on
   onArchive: () => void;
 }) {
   return <article className={`space-y-3 rounded-xl border p-3 shadow-sm ${row.underMin ? 'border-destructive/50 bg-destructive/5' : row.isPhysicalStock ? 'border-primary/25 bg-primary/5' : 'bg-muted/25'}`}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</div><div className="font-bold leading-snug">{row.description}</div></div><WarehouseStatusBadge label={row.isPhysicalStock ? (row.underMin ? 'Estoque baixo' : 'Estoque físico') : 'Planejamento'} tone={row.underMin ? 'danger' : row.isPhysicalStock ? 'success' : 'neutral'} /></div><label className="block"><span className="mb-1 block text-xs font-semibold text-muted-foreground">Classificação</span><StockClassSelect row={row} onChange={onClassChange} mobile /></label><dl className="grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Contratado</dt><dd className="font-semibold">{row.contracted.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Acréscimo do aditivo</dt><dd className="font-semibold text-primary">+{row.additive.toLocaleString('pt-BR')} {row.unit}</dd></div><div className="rounded bg-primary/5 p-2"><dt className="text-xs text-muted-foreground">Planejado total</dt><dd className="font-semibold">{row.planned.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.isPhysicalStock ? <><div><dt className="text-xs text-muted-foreground">Saldo disponível</dt><dd className={`font-bold ${row.underMin ? 'text-destructive' : 'text-primary'}`}>{row.balance.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Já retirado</dt><dd>{row.withdrawn.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.costClass === 'material' && <div><dt className="text-xs text-muted-foreground">Estoque baixo</dt><dd className={row.underMin ? 'font-bold text-destructive' : ''}>{row.effectiveMinStock?.toLocaleString('pt-BR') ?? '—'} {row.unit}</dd></div>}</> : <div className="col-span-2 rounded-lg bg-muted/60 p-2 text-xs text-muted-foreground">Sem estoque físico: aguarda compra, nota fiscal ou cadastro no almoxarifado.</div>}</dl>{row.isPhysicalStock && <div className={`grid gap-2 ${canArchive ? 'grid-cols-3' : 'grid-cols-2'}`}><StockLinkButton row={row} onClick={onLink} mobile /><Button variant="outline" className="min-h-11" onClick={onHistory}><History className="h-4 w-4" /><span>Histórico</span></Button>{canArchive && <Button variant="outline" className="min-h-11 text-destructive" onClick={onArchive}><Archive className="h-4 w-4" /><span>Arquivar</span></Button>}</div>}</article>;
+}
+
+function SupplierPresentationDialog({ project, rows, itemKey, onSelectKey, auditActor, onProjectChange, onClose }: {
+  project: Project;
+  rows: WarehouseStockOverviewRow[];
+  itemKey: string | null;
+  onSelectKey: (key: string) => void;
+  auditActor?: WarehouseAuditActor;
+  onProjectChange: (next: Project) => void;
+  onClose: () => void;
+}) {
+  const row = rows.find(value => value.key === itemKey && value.isPhysicalStock) ?? rows.find(value => value.isPhysicalStock);
+  const [editing, setEditing] = useState<WarehouseSupplierPresentation | null>(null);
+  const [supplierName, setSupplierName] = useState('');
+  const [supplierCnpj, setSupplierCnpj] = useState('');
+  const [productCode, setProductCode] = useState('');
+  const [content, setContent] = useState('1');
+  const [stockUnit, setStockUnit] = useState('PC');
+  const rules = (project.warehouse?.supplierPresentations ?? []).filter(rule => rule.warehouseItemKey === row?.key);
+  const reset = (rule?: WarehouseSupplierPresentation | null) => {
+    setEditing(rule ?? null);
+    setSupplierName(rule?.supplierName ?? '');
+    setSupplierCnpj(rule?.supplierCnpj ?? '');
+    setProductCode(rule?.supplierProductCode ?? '');
+    setContent(String(rule?.contentPerFiscalUnit ?? 1));
+    setStockUnit(rule?.stockUnit ?? row?.unit ?? 'PC');
+  };
+  useEffect(() => { reset(null); }, [row?.key]);
+  const save = () => {
+    if (!row) return;
+    try {
+      onProjectChange(upsertWarehouseSupplierPresentation(project, {
+        id: editing?.id,
+        supplierName,
+        supplierCnpj,
+        supplierProductCode: productCode,
+        warehouseItemKey: row.key,
+        contentPerFiscalUnit: Number(content),
+        stockUnit,
+        active: true,
+      }, auditActor));
+      toast.success(editing ? 'Apresentação atualizada para futuras entradas.' : 'Apresentação cadastrada para futuras entradas.');
+      reset(null);
+    } catch (error) { toast.error((error as Error).message); }
+  };
+  const deactivate = (rule: WarehouseSupplierPresentation) => {
+    onProjectChange(archiveWarehouseSupplierPresentation(project, rule.id, auditActor));
+    if (editing?.id === rule.id) reset(null);
+    toast.success('Apresentação desativada. O histórico permanece preservado.');
+  };
+  return <Dialog open={!!itemKey} onOpenChange={open => !open && onClose()}><DialogContent className="warehouse-ui max-w-2xl max-h-[85vh] overflow-y-auto"><DialogHeader><DialogTitle>Apresentações por fornecedor</DialogTitle><DialogDescription>Cadastre como o fornecedor vende este material. A nota fiscal continua com sua quantidade original; o estoque recebe a quantidade física convertida.</DialogDescription></DialogHeader>{row && <div className="space-y-4"><label className="block text-sm font-medium">Material físico<select className="mt-1 min-h-11 w-full rounded-md border bg-background px-3" value={row.key} onChange={event => onSelectKey(event.target.value)}>{rows.filter(value => value.isPhysicalStock).map(value => <option key={value.key} value={value.key}>{value.description} · {value.unit}</option>)}</select></label><div className="grid gap-3 sm:grid-cols-2"><label className="text-sm font-medium">Fornecedor<Input className="mt-1 min-h-11" value={supplierName} onChange={event => setSupplierName(event.target.value)} placeholder="Nome exibido na NF" /></label><label className="text-sm font-medium">CNPJ<Input className="mt-1 min-h-11" value={supplierCnpj} onChange={event => setSupplierCnpj(event.target.value)} placeholder="Somente números ou formatado" /></label><label className="text-sm font-medium">Código do produto no fornecedor<Input className="mt-1 min-h-11" value={productCode} onChange={event => setProductCode(event.target.value)} placeholder="Ex.: MLB582" /></label><label className="text-sm font-medium">Conteúdo por unidade fiscal<Input className="mt-1 min-h-11" type="number" min="0.0001" step="any" value={content} onChange={event => setContent(event.target.value)} /></label><label className="text-sm font-medium">Unidade no estoque<Input className="mt-1 min-h-11" value={stockUnit} onChange={event => setStockUnit(event.target.value)} placeholder="PC" /></label></div><div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-sm">Cada unidade da NF deste fornecedor entrará como <strong>{Number(content || 0).toLocaleString('pt-BR')} {stockUnit || row.unit}</strong> no estoque.</div><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => reset(null)}>Limpar</Button><Button onClick={save}>{editing ? 'Salvar alteração' : 'Cadastrar apresentação'}</Button></div><div className="space-y-2 border-t pt-3"><h4 className="font-semibold">Regras deste material</h4>{rules.length ? rules.map(rule => <div key={rule.id} className={`flex flex-wrap items-center gap-2 rounded-md border p-2 text-sm ${rule.active ? '' : 'opacity-60'}`}><div className="min-w-0 flex-1"><strong>{rule.supplierName || rule.supplierCnpj}</strong><div className="text-xs text-muted-foreground">{rule.supplierCnpj} · código {rule.supplierProductCode} · 1 unidade = {rule.contentPerFiscalUnit} {rule.stockUnit} {rule.active ? '' : '· desativada'}</div></div><Button size="sm" variant="outline" onClick={() => reset(rule)}>Editar</Button>{rule.active && <Button size="sm" variant="outline" className="text-destructive" onClick={() => deactivate(rule)}>Desativar</Button>}</div>) : <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">Nenhuma apresentação cadastrada para este material.</p>}</div></div>}<div className="flex justify-end"><Button variant="outline" onClick={onClose}>Fechar</Button></div></DialogContent></Dialog>;
 }
 
 function MaterialLinkDialog({ project, itemKey, projectMaterials, auditActor, canUnlink, onProjectChange, onClose }: {

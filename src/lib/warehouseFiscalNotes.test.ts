@@ -3,6 +3,7 @@ import type { Project, WarehouseFiscalNote } from '@/types/project';
 import {
   approveFiscalNote,
   applyFiscalItemStockConversionSuggestion,
+  applyWarehouseSupplierPresentation,
   archiveFiscalNote,
   archiveLegacyFiscalNoteDrafts,
   cancelFiscalNote,
@@ -33,6 +34,7 @@ import {
   replacePostedFiscalNote,
   updateFiscalItemPurchaseGroup,
   suggestFiscalItemStockConversion,
+  upsertWarehouseSupplierPresentation,
 } from './warehouse';
 
 function baseProject(): Project {
@@ -89,6 +91,32 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     const candidate = note({ id: 'pdf', invoiceNumber: '4169', totalAmount: 243.8 });
     expect(findFiscalNoteDuplicate(withNote(existing), candidate)?.id).toBe('existente');
     expect(() => approveFiscalNote({ ...withNote(existing), warehouse: { ...withNote(existing).warehouse!, fiscalNotes: [existing, candidate] } }, candidate.id)).toThrow(/já foi lançada/i);
+  });
+
+  it('aplica apresentação por CNPJ e código sem alterar a quantidade fiscal', () => {
+    const project = upsertWarehouseSupplierPresentation(baseProject(), {
+      supplierName: 'Jessica', supplierCnpj: '57.893.587/0001-22', supplierProductCode: 'MLB582',
+      warehouseItemKey: 'parafuso-fisico', contentPerFiscalUnit: 1000, stockUnit: 'PC', active: true,
+    });
+    const converted = applyWarehouseSupplierPresentation(project, '57.893.587/0001-22', {
+      ...note().items[0], productCode: 'MLB582', quantity: 4, unit: 'UNID',
+    });
+    expect(converted.quantity).toBe(4);
+    expect(converted.stockQuantity).toBe(4000);
+    expect(converted.stockUnit).toBe('PC');
+    expect(converted.itemKey).toBe('parafuso-fisico');
+    expect(converted.stockConversionStatus).toBe('manual');
+    expect(() => approveFiscalNote(withNote(note({ items: [converted] })), 'nf-1')).toThrow(/confirme a conversão/i);
+  });
+
+  it('não aplica apresentação de outro fornecedor ao mesmo código', () => {
+    const project = upsertWarehouseSupplierPresentation(baseProject(), {
+      supplierCnpj: '57.893.587/0001-22', supplierProductCode: 'MLB582',
+      warehouseItemKey: 'parafuso-fisico', contentPerFiscalUnit: 1000, stockUnit: 'PC', active: true,
+    });
+    const untouched = applyWarehouseSupplierPresentation(project, '12.345.678/0001-95', { ...note().items[0], productCode: 'MLB582', quantity: 4 });
+    expect(untouched.stockQuantity).toBeUndefined();
+    expect(untouched.stockConversionStatus).toBeUndefined();
   });
 
   it('não confunde número normalizado quando CNPJ ou valor são diferentes', () => {
