@@ -83,6 +83,33 @@ describe('DailyReportPhotosCard', () => {
     expect(screen.getByText('A localização atual do aparelho é obrigatória para fotos da câmera.')).toBeVisible();
   });
 
+  it('mantém uma orientação de contingência quando o navegador não abre a câmera automaticamente', () => {
+    render(
+      <DailyReportPhotosCard
+        photos={[]}
+        visiblePhotos={[]}
+        photosByTask={new Map()}
+        photoTaskOptions={[]}
+        pendingTaskId="__general__"
+        setPendingTaskId={vi.fn()}
+        photoFilter="all"
+        setPhotoFilter={vi.fn()}
+        uploadingCount={0}
+        cameraCaptureState="ready"
+        cameraLocationError={undefined}
+        fileInputRef={createRef<HTMLInputElement>()}
+        handleFiles={vi.fn()}
+        handleCameraFiles={vi.fn()}
+        prepareCameraCapture={vi.fn()}
+        updatePhoto={vi.fn()}
+        setLightbox={vi.fn()}
+        setConfirmDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Localização atual pronta. Se a câmera não abrir, toque em Câmera novamente.')).toBeVisible();
+  });
+
   it('solicita a abertura automática da câmera após obter a localização', () => {
     const prepareCameraCapture = vi.fn();
     const { container } = render(

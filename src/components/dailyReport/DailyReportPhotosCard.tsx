@@ -160,7 +160,7 @@ export function DailyReportPhotosCard({
           </div>
           <p className={cameraLocationError ? 'text-[11px] leading-tight text-destructive sm:max-w-[280px]' : 'text-[11px] leading-tight text-muted-foreground sm:max-w-[280px]'} aria-live="polite">
             {cameraLocationError || (cameraCaptureState === 'ready'
-              ? 'Localização atual pronta. A câmera está sendo aberta.'
+              ? 'Localização atual pronta. Se a câmera não abrir, toque em Câmera novamente.'
               : 'A localização atual do aparelho é obrigatória para fotos da câmera.')}
           </p>
         </div>
