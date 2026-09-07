@@ -151,9 +151,10 @@ export interface FiscalStockConversionSuggestion {
 }
 
 /**
- * Identifica somente uma contagem isolada após uma embalagem explícita. Medidas
- * (ex.: saco 50 KG) e códigos/dimensões (ex.: 6X110, SC30) ficam de fora para
- * que a sugestão nunca substitua a conferência humana.
+ * Identifica somente uma contagem explícita após uma embalagem. Aceita a
+ * grafia comercial "500pcs", além de "500 PC", mas não interpreta medidas
+ * (ex.: saco 50 KG) nem códigos/dimensões (ex.: 6X110, SC30), para que a
+ * sugestão nunca substitua a conferência humana.
  */
 export function suggestFiscalItemStockConversion(description?: string): FiscalStockConversionSuggestion | undefined {
   const tokens = normalizeLookup(description).split(' ').filter(Boolean);
@@ -162,10 +163,12 @@ export function suggestFiscalItemStockConversion(description?: string): FiscalSt
   const packaging = tokens[packagingIndex] as FiscalStockConversionSuggestion['packaging'];
   for (let index = packagingIndex + 1; index < tokens.length; index += 1) {
     const token = tokens[index];
-    if (!/^\d{2,5}$/.test(token)) continue;
+    const compactPieceCount = token.match(/^(\d{2,5})(?:pc|pcs|peca|pecas|un|und|unid|unids)$/);
+    const countToken = compactPieceCount?.[1] ?? (/^\d{2,5}$/.test(token) ? token : undefined);
+    if (!countToken) continue;
     // Peso, medida e tensão são grandezas, não conteúdo em peças.
     if (['kg', 'g', 'mg', 'l', 'ml', 'm', 'cm', 'mm', 'v', 'w'].includes(tokens[index + 1] || '')) return undefined;
-    const contentPerPackage = Number(token);
+    const contentPerPackage = Number(countToken);
     if (contentPerPackage > 0) return { packaging, contentPerPackage, stockUnit: 'PC' };
   }
   return undefined;
@@ -3476,6 +3479,7 @@ export function confirmFiscalNotePackagingConversion(
   itemId: string,
   actor?: WarehouseActorInput,
   stockUnit = 'PC',
+  contentPerPackage?: number,
 ): Project {
   const review = reviewFiscalNotePackagingConversions(project).find(item => item.noteId === noteId && item.itemId === itemId);
   if (!review) throw new Error('Esta entrada não possui uma conversão histórica pendente.');
@@ -3486,12 +3490,14 @@ export function confirmFiscalNotePackagingConversion(
   const originalItem = note.items.find(candidate => candidate.id === itemId)!;
   const itemKey = originalItem.itemKey ?? wh.movements.find(movement => movement.fiscalNoteId === noteId && movement.fiscalNoteItemId === itemId && movement.type === 'entrada' && !movement.reversedById)?.itemKey;
   if (!itemKey) throw new Error('A entrada original não possui material vinculado para correção.');
-  const factor = review.suggestedStockQuantity / Number(originalItem.quantity || 1);
+  const factor = Number(contentPerPackage ?? (review.suggestedStockQuantity / Number(originalItem.quantity || 1)));
+  if (!Number.isFinite(factor) || factor <= 0) throw new Error('Informe uma quantidade válida de conteúdo por embalagem.');
+  const convertedStockQuantity = Number(originalItem.quantity || 0) * factor;
   const confirmedAt = nowISO();
   const auditActor = normalizeWarehouseActor(actor);
   const convertedItem: WarehouseFiscalNoteItem = {
     ...originalItem,
-    stockQuantity: review.suggestedStockQuantity,
+    stockQuantity: convertedStockQuantity,
     stockUnit: stockUnit.trim() || 'PC',
     conversionFactor: factor,
     stockConversionStatus: 'confirmed',
@@ -3502,16 +3508,16 @@ export function confirmFiscalNotePackagingConversion(
   const items = note.items.map(item => item.id === itemId ? convertedItem : item);
   const updatedNote = { ...note, items, updatedAt: confirmedAt, updatedBy: auditActor ?? note.updatedBy };
   const newUnitPrice = fiscalItemGlobalUnitPrice(convertedItem, updatedNote);
-  const difference = review.suggestedStockQuantity - review.currentStockQuantity;
+  const difference = convertedStockQuantity - review.currentStockQuantity;
   const movements = wh.movements.map(movement => movement.fiscalNoteId === noteId && movement.fiscalNoteItemId === itemId && movement.type === 'entrada' && !movement.reversedById
     ? {
         ...movement,
-        quantity: review.suggestedStockQuantity,
+        quantity: convertedStockQuantity,
         itemUnit: convertedItem.stockUnit!,
         unitPrice: newUnitPrice,
         updatedAt: confirmedAt,
         updatedBy: auditActor,
-        notes: `${movement.notes || ''} Correção auditada de ${review.packaging}: ${review.currentStockQuantity} ${movement.itemUnit} para ${review.suggestedStockQuantity} ${convertedItem.stockUnit}.`.trim(),
+        notes: `${movement.notes || ''} Correção auditada de ${review.packaging}: ${review.currentStockQuantity} ${movement.itemUnit} para ${convertedStockQuantity} ${convertedItem.stockUnit}.`.trim(),
       }
     : movement);
   const warehouseItems = wh.items.map(item => item.key !== itemKey ? item : {

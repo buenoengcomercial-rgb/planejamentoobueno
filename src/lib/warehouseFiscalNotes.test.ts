@@ -362,6 +362,7 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
   it('sugere balde, caixa e saco com conteúdo em peças, mas ignora medidas e códigos', () => {
     expect(suggestFiscalItemStockConversion('BUCHA UX10A BALDE VERMELHO 600')).toMatchObject({ packaging: 'balde', contentPerPackage: 600, stockUnit: 'PC' });
     expect(suggestFiscalItemStockConversion('PARAFUSO CAIXA 100 UN')).toMatchObject({ packaging: 'caixa', contentPerPackage: 100 });
+    expect(suggestFiscalItemStockConversion('Parafuso Chipboard 6,0x60 Flangeado Phillips Caixa 500pcs')).toMatchObject({ packaging: 'caixa', contentPerPackage: 500, stockUnit: 'PC' });
     expect(suggestFiscalItemStockConversion('FIXADOR SACO 500')).toMatchObject({ packaging: 'saco', contentPerPackage: 500 });
     expect(suggestFiscalItemStockConversion('CIMENTO SACO 50 KG')).toBeUndefined();
     expect(suggestFiscalItemStockConversion('BROCA 6X110 SC30')).toBeUndefined();
@@ -397,6 +398,16 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(corrected.warehouse!.fiscalNotes[0].items[0]).toMatchObject({ stockQuantity: 600, stockUnit: 'PC', stockConversionStatus: 'confirmed' });
     expect(corrected.warehouse!.movements[0]).toMatchObject({ quantity: 600, itemUnit: 'PC' });
     expect(fiscalItemStockConversionStatus(corrected.warehouse!.fiscalNotes[0].items[0])).toBe('confirmed');
+  });
+
+  it('permite ao proprietário confirmar a conversão histórica de duas caixas de 500 como mil peças', () => {
+    const legacy = note({ status: 'a_conferir', items: [{ ...note().items[0], description: 'PARAFUSO CHIPBOARD CAIXA 500PCS', quantity: 2, unit: 'UN', itemKey: 'warehouse-nf|caixa-500' }] });
+    const posted = approveFiscalNote(withNote(legacy), legacy.id);
+    const review = reviewFiscalNotePackagingConversions(posted)[0];
+    expect(review).toMatchObject({ fiscalQuantity: 2, suggestedStockQuantity: 1000, suggestedStockUnit: 'PC', canCorrect: true });
+    const corrected = confirmFiscalNotePackagingConversion(posted, legacy.id, legacy.items[0].id, { userName: 'Proprietário' }, 'PC', 500);
+    expect(corrected.warehouse!.fiscalNotes[0].items[0]).toMatchObject({ quantity: 2, unit: 'UN', stockQuantity: 1000, stockUnit: 'PC', conversionFactor: 500, stockConversionStatus: 'confirmed' });
+    expect(corrected.warehouse!.movements[0]).toMatchObject({ quantity: 1000, itemUnit: 'PC' });
   });
 
   it('bloqueia correção histórica de embalagem quando já houve consumo posterior', () => {

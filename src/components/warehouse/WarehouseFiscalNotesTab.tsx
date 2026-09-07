@@ -426,6 +426,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const [cancelOpen, setCancelOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [reconciliationOpen, setReconciliationOpen] = useState(false);
+  const [packagingCorrection, setPackagingCorrection] = useState<{ noteId: string; itemId: string } | null>(null);
+  const [packagingCorrectionFactor, setPackagingCorrectionFactor] = useState(1);
+  const [packagingCorrectionUnit, setPackagingCorrectionUnit] = useState('PC');
   const [previewAttachment, setPreviewAttachment] = useState<WarehouseAttachment | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -438,6 +441,12 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')), [project.materialComparisons]);
   const archivedStockReview = useMemo(() => reviewArchivedFiscalNoteStock(project), [project]);
   const packagingConversionReviews = useMemo(() => reviewFiscalNotePackagingConversions(project), [project]);
+  const selectedPackagingCorrection = useMemo(() => packagingCorrection
+    ? packagingConversionReviews.find(review => review.noteId === packagingCorrection.noteId && review.itemId === packagingCorrection.itemId)
+    : undefined, [packagingConversionReviews, packagingCorrection]);
+  const selectedPackagingReviews = useMemo(() => selected
+    ? packagingConversionReviews.filter(review => review.noteId === selected.id)
+    : [], [packagingConversionReviews, selected]);
 
   const counts = useMemo(() => ({
     posted: notes.filter(note => fiscalNoteViewGroup(note) === 'posted').length,
@@ -770,13 +779,22 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     toast.success(`${result.reconciledNoteIds.length} documento(s) reconciliado(s) com estorno auditável.`);
   };
 
-  const confirmHistoricalPackagingConversion = async (review: (typeof packagingConversionReviews)[number]) => {
+  const openPackagingCorrection = (review: (typeof packagingConversionReviews)[number]) => {
+    setPackagingCorrection({ noteId: review.noteId, itemId: review.itemId });
+    setPackagingCorrectionFactor(review.fiscalQuantity > 0 ? review.suggestedStockQuantity / review.fiscalQuantity : 1);
+    setPackagingCorrectionUnit(review.suggestedStockUnit);
+  };
+
+  const confirmHistoricalPackagingConversion = async (review: (typeof packagingConversionReviews)[number], stockUnit = review.suggestedStockUnit, contentPerPackage?: number) => {
     try {
       setProcessing(true);
-      const next = confirmFiscalNotePackagingConversion(project, review.noteId, review.itemId, auditActor, review.suggestedStockUnit);
+      const next = confirmFiscalNotePackagingConversion(project, review.noteId, review.itemId, auditActor, stockUnit, contentPerPackage);
       if (onCommitProject) await onCommitProject(next);
       else onProjectChange(next);
-      toast.success(`Entrada histórica corrigida para ${decimal(review.suggestedStockQuantity)} ${review.suggestedStockUnit}, com auditoria.`);
+      const correctedQuantity = Number(review.fiscalQuantity || 0) * Number(contentPerPackage ?? (review.fiscalQuantity > 0 ? review.suggestedStockQuantity / review.fiscalQuantity : 0));
+      setSelected(current => current?.id === review.noteId ? next.warehouse?.fiscalNotes?.find(note => note.id === review.noteId) ?? current : current);
+      setPackagingCorrection(null);
+      toast.success(`Entrada histórica corrigida para ${decimal(correctedQuantity)} ${stockUnit.trim() || 'PC'}, com auditoria.`);
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -864,7 +882,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
       {group === 'posted' && canReviewPackagingConversions && packagingConversionReviews.length > 0 && (
         <section className="rounded-lg border border-warning/40 bg-warning/10 p-4">
           <div className="flex items-start gap-3"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" /><div><h3 className="font-semibold">Embalagens antigas para conferência</h3><p className="text-sm text-muted-foreground">Essas notas foram lançadas sem converter balde, caixa ou saco em quantidade física. Nenhum saldo será alterado sem sua confirmação.</p></div></div>
-          <div className="mt-3 space-y-2">{packagingConversionReviews.map(review => <div key={`${review.noteId}-${review.itemId}`} className="flex flex-col gap-2 rounded-md border bg-background/80 p-3 text-sm sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><strong>{review.description}</strong><div className="text-muted-foreground">NF {review.invoiceNumber || '—'} · {decimal(review.currentStockQuantity)} {review.fiscalUnit} → {decimal(review.suggestedStockQuantity)} {review.suggestedStockUnit}</div>{review.blockers.map(blocker => <div key={blocker} className="mt-1 text-xs text-warning">{blocker}</div>)}</div>{review.canCorrect && <Button className="min-h-11" disabled={processing} onClick={() => void confirmHistoricalPackagingConversion(review)}>Confirmar correção</Button>}</div>)}</div>
+          <div className="mt-3 space-y-2">{packagingConversionReviews.map(review => <div key={`${review.noteId}-${review.itemId}`} className="flex flex-col gap-2 rounded-md border bg-background/80 p-3 text-sm sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><strong>{review.description}</strong><div className="text-muted-foreground">NF {review.invoiceNumber || '—'} · {decimal(review.currentStockQuantity)} {review.fiscalUnit} → {decimal(review.suggestedStockQuantity)} {review.suggestedStockUnit}</div>{review.blockers.map(blocker => <div key={blocker} className="mt-1 text-xs text-warning">{blocker}</div>)}</div>{review.canCorrect && <Button className="min-h-11" disabled={processing} onClick={() => openPackagingCorrection(review)}>Editar conversão</Button>}</div>)}</div>
         </section>
       )}
 
@@ -950,6 +968,10 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
                 {fiscalNoteCostReviewStatus(selected) === 'pending' && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" />Compra interestadual: informe somente os custos que existirem. Frete e ICMS/DIFAL aguardam conferência fiscal. A entrada pode ser lançada normalmente.</div>}
                 {fiscalNoteCostReviewStatus(selected) === 'unknown_origin' && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" />Verifique a UF do fornecedor para identificar se a compra é interestadual.</div>}
               </section>
+              {isPosted && canReviewPackagingConversions && selectedPackagingReviews.length > 0 && <section className="space-y-3 rounded-md border border-warning/40 bg-warning/10 p-3">
+                <div><h3 className="font-semibold">Conversão de embalagens no estoque</h3><p className="text-sm text-muted-foreground">A NF permanece como emitida. Corrija somente a quantidade física que entrou no estoque.</p></div>
+                {selectedPackagingReviews.map(review => <div key={review.itemId} className="flex flex-col gap-2 rounded-md border bg-background/80 p-3 text-sm sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><strong>{review.description}</strong><div className="text-muted-foreground">NF: {decimal(review.fiscalQuantity)} {review.fiscalUnit} · Estoque atual: {decimal(review.currentStockQuantity)} {review.fiscalUnit} · Sugestão: {decimal(review.suggestedStockQuantity)} {review.suggestedStockUnit}</div>{review.blockers.map(blocker => <div key={blocker} className="mt-1 text-xs text-warning">{blocker}</div>)}</div>{review.canCorrect && <Button className="min-h-11" disabled={processing} onClick={() => openPackagingCorrection(review)}>Editar quantidade no estoque</Button>}</div>)}
+              </section>}
               <details className="rounded-md border p-3"><summary className="cursor-pointer font-medium">Mais detalhes</summary><div className="mt-3"><label className="mb-1 block text-sm font-medium">Observações</label><Textarea value={selected.notes || ''} readOnly={!(isDraft || canEditPostedRecord)} onChange={event => setSelected({ ...selected, notes: event.target.value })} /><div className="mt-2 text-sm text-muted-foreground">Faturas: {selected.invoices?.length || 0}.</div></div></details>
               {selected.status === 'cancelada' && <div className="rounded-md border p-3 text-sm"><strong>Cancelamento definitivo</strong><br /><strong>Responsável:</strong> {selected.canceledBy || '—'}<br /><strong>Motivo:</strong> {selected.cancellationReason}</div>}
             </div>
@@ -964,6 +986,21 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
               {canDelete && (isPosted || isArchived) && <Button variant="destructive" onClick={() => setDeleteOpen(true)}>Excluir definitivamente</Button>}
             </div>
           </>}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!packagingCorrection} onOpenChange={open => { if (!open && !processing) setPackagingCorrection(null); }}>
+        <DialogContent className="warehouse-ui max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Editar conversão para estoque</DialogTitle>
+            <DialogDescription>A quantidade e a unidade fiscais não serão alteradas. Esta confirmação atualiza a entrada no estoque e registra a auditoria.</DialogDescription>
+          </DialogHeader>
+          {selectedPackagingCorrection && <div className="space-y-4">
+            <div className="rounded-md border bg-muted/30 p-3 text-sm"><strong>{selectedPackagingCorrection.description}</strong><div className="mt-1 text-muted-foreground">Nota fiscal: {decimal(selectedPackagingCorrection.fiscalQuantity)} {selectedPackagingCorrection.fiscalUnit}</div></div>
+            <div className="grid grid-cols-2 gap-3"><MobileField label="Conteúdo por embalagem"><DecimalInput ariaLabel="Conteúdo por embalagem para correção histórica" value={packagingCorrectionFactor} onChange={setPackagingCorrectionFactor} /></MobileField><MobileField label="Unidade no estoque"><Input aria-label="Unidade de estoque para correção histórica" className="min-h-11 text-center" value={packagingCorrectionUnit} onChange={event => setPackagingCorrectionUnit(event.target.value)} /></MobileField></div>
+            <div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-sm"><span className="text-muted-foreground">Entrará no estoque: </span><strong>{decimal(Number(selectedPackagingCorrection.fiscalQuantity || 0) * Number(packagingCorrectionFactor || 0))} {packagingCorrectionUnit.trim() || 'PC'}</strong></div>
+          </div>}
+          <DialogFooter><Button variant="outline" disabled={processing} onClick={() => setPackagingCorrection(null)}>Voltar</Button><Button disabled={!selectedPackagingCorrection || processing || !(packagingCorrectionFactor > 0)} onClick={() => selectedPackagingCorrection && void confirmHistoricalPackagingConversion(selectedPackagingCorrection, packagingCorrectionUnit, packagingCorrectionFactor)}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Confirmar e atualizar estoque</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
