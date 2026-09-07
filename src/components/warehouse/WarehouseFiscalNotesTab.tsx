@@ -107,6 +107,38 @@ type TransientFiscalReaderNote = ParsedNote & {
   supplierLocationText?: string | null;
 };
 
+/**
+ * Campos que o formulário de uma entrada já lançada pode alterar. Metadados
+ * de auditoria e o estado transitório da tela não devem recriar movimentos.
+ */
+function postedFiscalNoteEditSnapshot(note: WarehouseFiscalNote) {
+  return JSON.stringify({
+    supplierName: note.supplierName ?? '',
+    supplierCnpj: note.supplierCnpj ?? '',
+    supplierState: note.supplierState ?? '',
+    invoiceNumber: note.invoiceNumber ?? '',
+    issueDate: note.issueDate ?? '',
+    totalAmount: Number(note.totalAmount || 0),
+    freightAmount: Number(note.freightAmount || 0),
+    icmsAmount: Number(note.icmsAmount || 0),
+    notes: note.notes ?? '',
+    items: note.items.map(item => ({
+      id: item.id,
+      productCode: item.productCode ?? '',
+      description: item.description ?? '',
+      quantity: Number(item.quantity || 0),
+      unit: item.unit ?? '',
+      unitPrice: Number(item.unitPrice || 0),
+      totalPrice: Number(item.totalPrice || 0),
+      stockQuantity: Number(item.stockQuantity ?? item.quantity ?? 0),
+      stockUnit: item.stockUnit ?? item.unit ?? '',
+      conversionFactor: Number(item.conversionFactor ?? 1),
+      stockConversionStatus: item.stockConversionStatus ?? 'not_required',
+      stockConversionPackaging: item.stockConversionPackaging ?? '',
+    })),
+  });
+}
+
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_IMAGES = 4;
 const PDF_TEXT_ONLY_MIN_CHARS = 900;
@@ -722,6 +754,15 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     if (!selected || !isPosted || !canEditPosted) return;
     try {
       setProcessing(true);
+      const persisted = project.warehouse?.fiscalNotes?.find(note => note.id === selected.id);
+      // O botão também é usado para aplicar uma conversão histórica. Se ela
+      // já estiver conciliada, não há entrada para recriar — e recriá-la
+      // falharia corretamente por causa das retiradas já vinculadas.
+      if (persisted && postedFiscalNoteEditSnapshot(persisted) === postedFiscalNoteEditSnapshot(selected)) {
+        setSelected(persisted);
+        toast.success('Entrada já está conciliada; nenhuma movimentação precisou ser recriada.');
+        return;
+      }
       const confirmedConversionsPendingSync = reviewFiscalNotePackagingConversions(project)
         .filter(review => review.noteId === selected.id)
         .filter(review => fiscalItemStockConversionStatus(selected.items.find(item => item.id === review.itemId) ?? {}) === 'confirmed');

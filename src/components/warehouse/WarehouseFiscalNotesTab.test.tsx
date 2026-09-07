@@ -4,7 +4,7 @@ import type { Project, WarehouseFiscalNote } from '@/types/project';
 import { computeWarehouseRows, emptyWarehouse } from '@/lib/warehouse';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
 
-const { createHeaderImageMock, createObjectURLMock, destroyPdfMock, downloadMock, getDocumentMock, invokeMock, removeMock, renderPdfPageMock, revokeObjectURLMock, uploadMock } = vi.hoisted(() => ({
+const { createHeaderImageMock, createObjectURLMock, destroyPdfMock, downloadMock, getDocumentMock, invokeMock, removeMock, renderPdfPageMock, revokeObjectURLMock, toastSuccessMock, uploadMock } = vi.hoisted(() => ({
   createHeaderImageMock: vi.fn(),
   createObjectURLMock: vi.fn(),
   destroyPdfMock: vi.fn(),
@@ -14,7 +14,12 @@ const { createHeaderImageMock, createObjectURLMock, destroyPdfMock, downloadMock
   removeMock: vi.fn(),
   renderPdfPageMock: vi.fn(),
   revokeObjectURLMock: vi.fn(),
+  toastSuccessMock: vi.fn(),
   uploadMock: vi.fn(),
+}));
+
+vi.mock('sonner', () => ({
+  toast: { success: toastSuccessMock, error: vi.fn(), warning: vi.fn(), message: vi.fn() },
 }));
 
 vi.mock('@/lib/fiscalSupplierHeaderImage', () => ({
@@ -114,6 +119,7 @@ async function readDocument(container: HTMLElement, name = 'nota.jpg') {
 describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', () => {
   beforeEach(() => {
     createHeaderImageMock.mockReset().mockResolvedValue('data:image/jpeg;base64,Y2FiZWNhbGhv');
+    toastSuccessMock.mockReset();
     invokeMock.mockReset().mockResolvedValue({
       data: {
         ok: true,
@@ -198,6 +204,27 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
 
     view.rerender(<WarehouseFiscalNotesTab project={projectWithPostedNote()} onProjectChange={vi.fn()} canManage={false} />);
     expect(screen.queryByRole('button', { name: 'Cancelar lançamento' })).not.toBeInTheDocument();
+  });
+
+  it('não recria uma entrada lançada sem alterações, mesmo quando já possui retirada vinculada', async () => {
+    const project = projectWithPostedNote();
+    const note = project.warehouse!.fiscalNotes[0];
+    project.warehouse!.movements = [{
+      id: 'entry-posted', createdAt: '2026-08-15T10:00:00.000Z', type: 'entrada', date: '2026-08-15',
+      itemKey: 'warehouse-nf|material-1', itemDescription: note.items[0].description, itemUnit: 'UN', quantity: 2,
+      fiscalNoteId: note.id, fiscalNoteItemId: note.items[0].id,
+    }, {
+      id: 'withdrawal-posted', createdAt: '2026-08-16T10:00:00.000Z', type: 'retirada', date: '2026-08-16',
+      itemKey: 'warehouse-nf|material-1', itemDescription: note.items[0].description, itemUnit: 'UN', quantity: 1,
+    }];
+    const onProjectChange = vi.fn();
+    render(<WarehouseFiscalNotesTab project={project} onProjectChange={onProjectChange} canManage canEditPosted />);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Visualizar dados e grupos' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar e recalcular' }));
+
+    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith(expect.stringMatching(/Entrada já está conciliada/i)));
+    expect(onProjectChange).not.toHaveBeenCalled();
   });
 
   it('permite ao proprietário excluir também uma entrada arquivada', () => {
