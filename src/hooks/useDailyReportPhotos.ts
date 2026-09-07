@@ -163,7 +163,7 @@ export function useDailyReportPhotos({
     return formatProjectPlaceLabel(project.contractInfo?.location, calendar?.municipio, calendar?.uf);
   }, [project.contractInfo?.location, project.scheduleCalendar]);
 
-  const prepareCameraCapture = useCallback(async () => {
+  const prepareCameraCapture = useCallback(async (onLocationReady?: () => void) => {
     if (cameraCaptureState === 'locating') return;
     setCameraCaptureState('locating');
     setCameraLocationError(undefined);
@@ -173,7 +173,8 @@ export function useDailyReportPhotos({
       if (!stamp.location) throw new Error('Não foi possível obter a localização do aparelho.');
       preparedCameraLocationRef.current = stamp.location;
       setCameraCaptureState('ready');
-      toast({ title: 'Localização obtida', description: 'Toque em Abrir câmera para registrar a foto com o carimbo GPS.' });
+      onLocationReady?.();
+      toast({ title: 'Localização obtida', description: 'Abrindo a câmera para registrar a foto com o carimbo GPS.' });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Não foi possível obter a localização do aparelho.';
       setCameraLocationError(message);

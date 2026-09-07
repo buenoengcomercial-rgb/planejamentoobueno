@@ -63,7 +63,7 @@ interface DailyReportPhotosCardProps {
   fileInputRef: React.RefObject<HTMLInputElement>;
   handleFiles: (files: FileList) => void;
   handleCameraFiles: (files: FileList) => void;
-  prepareCameraCapture: () => void;
+  prepareCameraCapture: (onLocationReady?: () => void) => void;
   updatePhoto: (id: string, patch: Partial<DailyReportAttachment>) => void;
   setLightbox: (p: DailyReportAttachment | null) => void;
   setConfirmDelete: (p: DailyReportAttachment | null) => void;
@@ -143,13 +143,15 @@ export function DailyReportPhotosCard({
               size="sm"
               variant="outline"
               className="min-h-11 sm:min-h-9"
-              onClick={() => cameraCaptureState === 'ready' ? cameraInputRef.current?.click() : prepareCameraCapture()}
+              onClick={() => cameraCaptureState === 'ready'
+                ? cameraInputRef.current?.click()
+                : prepareCameraCapture(() => cameraInputRef.current?.click())}
               disabled={uploadingCount > 0 || cameraCaptureState === 'locating'}
             >
               {uploadingCount > 0 || cameraCaptureState === 'locating'
                 ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
                 : <Camera className="mr-1 h-3.5 w-3.5" />}
-              {cameraCaptureState === 'locating' ? 'Obtendo localização…' : cameraCaptureState === 'ready' ? 'Abrir câmera' : 'Câmera'}
+              {cameraCaptureState === 'locating' ? 'Obtendo localização…' : 'Câmera'}
             </Button>
             <Button size="sm" variant="default" className="min-h-11 sm:min-h-9" onClick={() => fileInputRef.current?.click()} disabled={uploadingCount > 0}>
               {uploadingCount > 0 ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="mr-1 h-3.5 w-3.5" />}
@@ -158,7 +160,7 @@ export function DailyReportPhotosCard({
           </div>
           <p className={cameraLocationError ? 'text-[11px] leading-tight text-destructive sm:max-w-[280px]' : 'text-[11px] leading-tight text-muted-foreground sm:max-w-[280px]'} aria-live="polite">
             {cameraLocationError || (cameraCaptureState === 'ready'
-              ? 'Localização atual pronta. Toque em Abrir câmera.'
+              ? 'Localização atual pronta. A câmera está sendo aberta.'
               : 'A localização atual do aparelho é obrigatória para fotos da câmera.')}
           </p>
         </div>

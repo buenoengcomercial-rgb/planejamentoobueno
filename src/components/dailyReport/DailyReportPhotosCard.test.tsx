@@ -82,4 +82,41 @@ describe('DailyReportPhotosCard', () => {
     renderPhotosCard();
     expect(screen.getByText('A localização atual do aparelho é obrigatória para fotos da câmera.')).toBeVisible();
   });
+
+  it('solicita a abertura automática da câmera após obter a localização', () => {
+    const prepareCameraCapture = vi.fn();
+    const { container } = render(
+      <DailyReportPhotosCard
+        photos={[]}
+        visiblePhotos={[]}
+        photosByTask={new Map()}
+        photoTaskOptions={[]}
+        pendingTaskId="__general__"
+        setPendingTaskId={vi.fn()}
+        photoFilter="all"
+        setPhotoFilter={vi.fn()}
+        uploadingCount={0}
+        cameraCaptureState="idle"
+        cameraLocationError={undefined}
+        fileInputRef={createRef<HTMLInputElement>()}
+        handleFiles={vi.fn()}
+        handleCameraFiles={vi.fn()}
+        prepareCameraCapture={prepareCameraCapture}
+        updatePhoto={vi.fn()}
+        setLightbox={vi.fn()}
+        setConfirmDelete={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Câmera' }));
+
+    expect(prepareCameraCapture).toHaveBeenCalledWith(expect.any(Function));
+    const openCamera = prepareCameraCapture.mock.calls[0][0] as () => void;
+    const cameraInput = container.querySelector<HTMLInputElement>('input[capture="environment"]')!;
+    const clickCamera = vi.spyOn(cameraInput, 'click');
+
+    openCamera();
+
+    expect(clickCamera).toHaveBeenCalledOnce();
+  });
 });
