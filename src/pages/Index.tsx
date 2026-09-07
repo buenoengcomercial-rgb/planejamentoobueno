@@ -5,9 +5,8 @@ import { AppView, Project } from '@/types/project';
 import AppSidebar from '@/components/AppSidebar';
 import UndoButton from '@/components/UndoButton';
 import SaveStatusIndicator, { SaveStatus } from '@/components/SaveStatusIndicator';
-import CloudDraftRecoveryDialog from '@/components/CloudDraftRecoveryDialog';
 import MigrationDialog from '@/components/MigrationDialog';
-import { Menu, X, Loader2, Building2, AlertTriangle } from 'lucide-react';
+import { Menu, X, Loader2, Building2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { applyRupToProject, applyDailyLogsToProject, calculateCPM, captureBaseline, syncBaselineWithRup, settleAllDependencies } from '@/lib/calculations';
 import { resolveObraConfig } from '@/components/ConfiguracaoObra';
@@ -56,11 +55,8 @@ import {
   inspectProjectDraft,
   projectHasLocalChanges,
   resolveRemoteVersionAction,
-  restoreWarehouseFromDraft,
   serializeProject,
-  summarizeWarehouseRecovery,
   writeProjectDraft,
-  type StoredProjectDraft,
 } from '@/lib/cloudProjectDrafts';
 import type { ProjectMeta } from '@/lib/projectStorage';
 import { supabase } from '@/integrations/supabase/client';
@@ -91,13 +87,6 @@ const VIEW_ROUTE: Record<AppView, string> = {
 const ROUTE_VIEW = Object.fromEntries(Object.entries(VIEW_ROUTE).map(([view, route]) => [route, view])) as Record<string, AppView>;
 
 type UndoStacks = Record<AppView, Project[]>;
-
-interface DraftRecoveryState {
-  cloudProject: Project;
-  cloudUpdatedAt: string | null;
-  draft: StoredProjectDraft;
-  open: boolean;
-}
 
 function createDraftProject(name = ''): Project {
   const today = new Date().toISOString().split('T')[0];
@@ -176,7 +165,6 @@ export default function Index() {
   const [currentProjectUpdatedAt, setCurrentProjectUpdatedAt] = useState<string | null>(null);
   const [lastCloudConfirmedAt, setLastCloudConfirmedAt] = useState<string | null>(null);
   const [remoteUpdateAt, setRemoteUpdateAt] = useState<string | null>(null);
-  const [draftRecovery, setDraftRecovery] = useState<DraftRecoveryState | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [dailyReportInitialDate, setDailyReportInitialDate] = useState<string | undefined>(undefined);
@@ -392,33 +380,26 @@ export default function Index() {
     repairApplied = false,
     inspectDraft = true,
   ) => {
-    let projectForState = projectToLoad;
-    const cloudProjectJson = projectToLoad ? serializeProject(projectToLoad) : null;
+    const projectForState = projectToLoad;
     const draftInspection = projectToLoad && inspectDraft
       ? inspectProjectDraft(projectToLoad, updatedAt)
       : { kind: 'none' as const, reason: 'missing' as const };
-    const recoveredDraft = draftInspection.kind === 'recoverable' ? draftInspection.draft : null;
-    if (recoveredDraft) {
-      projectForState = recoveredDraft.project;
-      toast.info('Recuperei um rascunho recente deste aparelho. Ele ainda será conferido na nuvem.');
-    } else if (draftInspection.kind === 'identical' && projectToLoad) {
+    if (projectToLoad && draftInspection.kind !== 'none') {
       discardProjectDraft(projectToLoad.id);
-    } else if (draftInspection.kind === 'candidate' && projectToLoad) {
-      setDraftRecovery({ cloudProject: projectToLoad, cloudUpdatedAt: updatedAt, draft: draftInspection.draft, open: true });
+      if (draftInspection.kind !== 'identical') {
+        toast.info('Os dados locais desta obra foram descartados; a versão da nuvem foi carregada.');
+      }
     }
 
-    skipNextAutoSaveRef.current = !recoveredDraft && !repairApplied;
-    conflictDetectedRef.current = draftInspection.kind === 'candidate';
+    skipNextAutoSaveRef.current = !repairApplied;
+    conflictDetectedRef.current = false;
     currentProjectUpdatedAtRef.current = updatedAt;
     rawProjectRef.current = projectForState;
-    lastSavedProjectJsonRef.current = repairApplied
-      ? null
-      : recoveredDraft ? cloudProjectJson : (projectForState ? serializeProject(projectForState) : null);
+    lastSavedProjectJsonRef.current = repairApplied ? null : (projectForState ? serializeProject(projectForState) : null);
     setCurrentProjectUpdatedAt(updatedAt);
     setRawProject(projectForState);
     setLastCloudConfirmedAt(new Date().toISOString());
-    if (draftInspection.kind === 'candidate') setSaveStatus('conflict');
-    else if (recoveredDraft || repairApplied) setSaveStatus('saving');
+    if (repairApplied) setSaveStatus('saving');
     else setSaveStatus('saved');
   }, [discardProjectDraft]);
 
@@ -484,23 +465,22 @@ export default function Index() {
 
   const handleCloudConflict = useCallback(async (localProject: Project) => {
     conflictDetectedRef.current = true;
-    setSaveStatus('conflict');
-    const draft = writeProjectDraft(localProject, currentProjectUpdatedAtRef.current);
+    setSaveStatus('saving');
     try {
       const record = await loadCloudProjectRecord(localProject.id);
-      if (record && draft) {
-        setDraftRecovery({
-          cloudProject: record.project,
-          cloudUpdatedAt: record.updatedAt,
-          draft,
-          open: true,
-        });
+      if (record) {
+        replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false);
+        discardProjectDraft(record.project.id);
+        conflictDetectedRef.current = false;
+        toast.warning('A obra foi atualizada em outro aparelho. Os dados da nuvem foram carregados e a cópia local foi descartada.');
+        return;
       }
     } catch (error) {
       console.warn('Não foi possível carregar a versão concorrente da obra.', error);
     }
-    toast.error('Esta obra foi atualizada em outro aparelho. Compare as versões antes de continuar.');
-  }, []);
+    setSaveStatus(navigator.onLine ? 'error' : 'offline');
+    toast.error('Não foi possível carregar a versão da nuvem. Nenhuma cópia local será enviada por cima dela.');
+  }, [discardProjectDraft, replaceProjectWithoutAutoSave]);
 
   useEffect(() => {
     rawProjectRef.current = rawProject;
@@ -683,25 +663,11 @@ export default function Index() {
       let latestLocal = rawProjectRef.current;
       if (!latestLocal || latestLocal.id !== current.id) return;
 
-      // Existe rascunho local: tentar gravar antes de trazer a versão remota,
-      // para que a atualização de outro usuário seja aplicada sem perder o que está na tela.
+      // A nuvem é a fonte obrigatória: uma atualização remota nunca recebe
+      // por cima um rascunho que permaneceu aberto neste aparelho.
       if (projectHasLocalChanges(latestLocal, lastSavedProjectJsonRef.current)) {
-        if (!orgId || !canPersistProject) {
-          await handleCloudConflict(latestLocal);
-          return;
-        }
-        try {
-          await persistProject(latestLocal, orgId);
-        } catch (error) {
-          if (error instanceof CloudProjectConflictError) {
-            await handleCloudConflict(latestLocal);
-          } else {
-            throw error;
-          }
-          return;
-        }
-        latestLocal = rawProjectRef.current;
-        if (!latestLocal || latestLocal.id !== current.id) return;
+        await handleCloudConflict(latestLocal);
+        return;
       }
 
       const record = await loadCloudProjectRecord(current.id);
@@ -723,7 +689,7 @@ export default function Index() {
     } finally {
       remoteCheckInFlightRef.current = false;
     }
-  }, [canPersistProject, handleCloudConflict, orgId, persistProject, replaceProjectWithoutAutoSave]);
+  }, [handleCloudConflict, replaceProjectWithoutAutoSave]);
 
   useEffect(() => {
     const projectId = rawProject?.id;
@@ -903,8 +869,7 @@ export default function Index() {
         return;
       }
       if (conflictDetectedRef.current) {
-        toast.error('Compare as versões da obra antes de continuar editando.');
-        setDraftRecovery(previous => previous ? { ...previous, open: true } : previous);
+        toast.error('A sincronização com a nuvem ainda não foi concluída. Recarregue a obra antes de editar.');
         return;
       }
       setRawProject(prev => {
@@ -963,8 +928,7 @@ export default function Index() {
   const commitProjectNow = useCallback(async (next: Project) => {
     if (!user || !orgId || !canPersistProject) throw new Error('Você não tem permissão para salvar esta obra.');
     if (conflictDetectedRef.current) {
-      setDraftRecovery(previous => previous ? { ...previous, open: true } : previous);
-      throw new Error('Esta obra foi atualizada em outro aparelho. Compare as versões antes de continuar.');
+      throw new Error('A sincronização com a nuvem ainda não foi concluída. Recarregue a obra antes de salvar.');
     }
     if (saveTimerRef.current) {
       window.clearTimeout(saveTimerRef.current);
@@ -1143,75 +1107,6 @@ export default function Index() {
     await signOut();
     navigate('/auth', { replace: true });
   };
-
-  const handleUseCloudVersion = useCallback(async () => {
-    const recovery = draftRecovery;
-    if (!recovery) return;
-    const record = await loadCloudProjectRecord(recovery.cloudProject.id);
-    if (!record) throw new Error('Não foi possível reler esta obra na nuvem. Tente novamente.');
-    replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false);
-    discardProjectDraft(record.project.id);
-    setDraftRecovery(null);
-    conflictDetectedRef.current = false;
-    toast.success('Dados da nuvem confirmados. A cópia antiga deste aparelho foi descartada.');
-  }, [discardProjectDraft, draftRecovery, replaceProjectWithoutAutoSave]);
-
-  const handleRestoreDraftWarehouse = useCallback(async () => {
-    const recovery = draftRecovery;
-    if (!recovery || !orgId) return;
-    const latest = await loadCloudProjectRecord(recovery.cloudProject.id);
-    if (!latest) throw new Error('Não foi possível reler esta obra na nuvem. Tente novamente.');
-    if (latest.updatedAt !== recovery.cloudUpdatedAt) {
-      setDraftRecovery(previous => previous ? {
-        ...previous,
-        cloudProject: latest.project,
-        cloudUpdatedAt: latest.updatedAt,
-        open: true,
-      } : previous);
-      throw new Error('A nuvem mudou novamente. A comparação foi atualizada; confira antes de restaurar.');
-    }
-
-    const restored = restoreWarehouseFromDraft(latest.project, recovery.draft.project, auditActor);
-    const expected = summarizeWarehouseRecovery(restored);
-    const preservedEquipmentIds = (latest.project.warehouse?.equipments ?? []).map(item => item.id).sort();
-    currentProjectUpdatedAtRef.current = latest.updatedAt;
-    lastSavedProjectJsonRef.current = serializeProject(latest.project);
-    conflictDetectedRef.current = false;
-    writeProjectDraft(restored, latest.updatedAt);
-    setSaveStatus('saving');
-    try {
-      await persistProject(restored, orgId, { retainDraftUntilVerified: true });
-    } catch (error) {
-      if (error instanceof CloudProjectConflictError) await handleCloudConflict(restored);
-      throw error;
-    }
-
-    const verified = await loadCloudProjectRecord(restored.id);
-    if (!verified) {
-      conflictDetectedRef.current = true;
-      setSaveStatus('conflict');
-      throw new Error('A recuperação foi enviada, mas não pôde ser relida para conferência. O rascunho foi mantido.');
-    }
-    const actual = summarizeWarehouseRecovery(verified.project);
-    const actualEquipmentIds = (verified.project.warehouse?.equipments ?? []).map(item => item.id).sort();
-    if (
-      actual.postedNotes !== expected.postedNotes
-      || actual.archivedNotes !== expected.archivedNotes
-      || actual.materials !== expected.materials
-      || actual.movements !== expected.movements
-      || JSON.stringify(actualEquipmentIds) !== JSON.stringify(preservedEquipmentIds)
-    ) {
-      conflictDetectedRef.current = true;
-      setSaveStatus('conflict');
-      throw new Error('A nuvem não confirmou todos os dados recuperados. O rascunho foi mantido para nova tentativa.');
-    }
-
-    replaceProjectWithoutAutoSave(verified.project, verified.updatedAt, verified.repairApplied, false);
-    discardProjectDraft(verified.project.id);
-    setDraftRecovery(null);
-    conflictDetectedRef.current = false;
-    toast.success('Almoxarifado restaurado, equipamentos preservados e nuvem conferida.');
-  }, [auditActor, discardProjectDraft, draftRecovery, handleCloudConflict, orgId, persistProject, replaceProjectWithoutAutoSave]);
 
   const sidebarProjects: ProjectMeta[] = useMemo(
     () => cloudList.map(p => ({ id: p.id, name: p.name, createdAt: p.createdAt, updatedAt: p.updatedAt })),
@@ -1413,16 +1308,6 @@ export default function Index() {
         <div className="absolute top-3 right-4 z-20">
           <SaveStatusIndicator status={saveStatus} confirmedAt={lastCloudConfirmedAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} />
         </div>
-        {draftRecovery && !draftRecovery.open && (
-          <div role="alert" className="mx-3 mt-14 flex flex-col gap-3 rounded-xl border border-warning/40 bg-warning/10 p-3 text-sm sm:mx-4 sm:flex-row sm:items-center lg:mt-12">
-            <AlertTriangle className="h-5 w-5 shrink-0 text-warning" />
-            <div className="min-w-0 flex-1">
-              <strong>Esta obra foi atualizada em outro aparelho.</strong>
-              <p className="text-muted-foreground">O salvamento está pausado até você comparar a nuvem com a cópia deste aparelho.</p>
-            </div>
-            <Button type="button" onClick={() => setDraftRecovery(previous => previous ? { ...previous, open: true } : previous)}>Comparar versões</Button>
-          </div>
-        )}
         <Suspense fallback={
           <div className="flex items-center justify-center py-24">
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -1458,17 +1343,6 @@ export default function Index() {
 
       {orgId && <MigrationDialog organizationId={orgId} onMigrated={async () => { await refreshCloudList(); }} />}
 
-      {draftRecovery && (
-        <CloudDraftRecoveryDialog
-          open={draftRecovery.open}
-          cloudProject={draftRecovery.cloudProject}
-          draft={draftRecovery.draft}
-          canRestore={canPersistProject}
-          onOpenChange={open => setDraftRecovery(previous => previous ? { ...previous, open } : previous)}
-          onUseCloud={handleUseCloudVersion}
-          onRestoreWarehouse={handleRestoreDraftWarehouse}
-        />
-      )}
     </div>
   );
 }
