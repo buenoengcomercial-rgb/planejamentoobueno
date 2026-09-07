@@ -38,6 +38,7 @@ interface Props {
   canApproveInventory?: boolean;
   canArchiveWarehouseRecords?: boolean;
   canEditPostedWarehouseRecords?: boolean;
+  canSupplementRequisitions?: boolean;
   canDeleteWarehouseRecords?: boolean;
   canManageEquipmentGroups?: boolean;
   canOptimizeStorage?: boolean;
@@ -46,7 +47,7 @@ interface Props {
   auditActor?: WarehouseAuditActor;
 }
 
-export default function Warehouse({ project, onProjectChange, onCommitProject, onSaveStorageMaintenanceProject, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor }: Props) {
+export default function Warehouse({ project, onProjectChange, onCommitProject, onSaveStorageMaintenanceProject, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canSupplementRequisitions = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor }: Props) {
   const [tab, setTab] = useState(() => canViewPanel ? 'painel' : 'notas');
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
   useEffect(() => {
@@ -120,7 +121,7 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
           />
         </TabsContent>
         <TabsContent value="requisicoes" className="mt-3">
-          <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canDelete={canDeleteWarehouseRecords} canEdit={canEditPostedWarehouseRecords} />
+          <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canDelete={canDeleteWarehouseRecords} canEdit={canEditPostedWarehouseRecords} canSupplement={canSupplementRequisitions} />
         </TabsContent>
         <TabsContent value="materiais-retirados" className="mt-3">
           <WarehouseWithdrawnMaterialsTab project={ensured} />

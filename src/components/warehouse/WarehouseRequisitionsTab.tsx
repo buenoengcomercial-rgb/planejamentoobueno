@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Camera, Check, ChevronDown, ChevronsUpDown, FileDown, HardHat, History, ImagePlus, PackageOpen, Pencil, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
 import {
   computeWarehouseRows,
+  addRequisitionSupplement,
   correctDeliveredRequisition,
   createAndDeliverRequisition,
   ensureWarehouse,
@@ -36,7 +37,7 @@ import {
 } from './WarehouseVisual';
 import { toast } from 'sonner';
 
-interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canDelete?: boolean; canEdit?: boolean; }
+interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canDelete?: boolean; canEdit?: boolean; canSupplement?: boolean; }
 
 interface WithdrawalForm {
   date: string;
@@ -184,7 +185,7 @@ export default function WarehouseRequisitionsTab(props: Props) {
   );
 }
 
-function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor, canDelete = false, canEdit = false }: Props) {
+function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor, canDelete = false, canEdit = false, canSupplement = false }: Props) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const wh = ensureWarehouse(project).warehouse!;
   const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
@@ -208,6 +209,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
   const [errors, setErrors] = useState<WithdrawalErrors>({});
   const [returnTarget, setReturnTarget] = useState<WarehouseRequisition | null>(null);
   const [correctionTarget, setCorrectionTarget] = useState<WarehouseRequisition | null>(null);
+  const [supplementTarget, setSupplementTarget] = useState<WarehouseRequisition | null>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
   const buildingGroups = useMemo(
@@ -489,18 +491,18 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
                       </div>
                       {isDateGroupExpanded(dateGroup) && <div className="withdrawal-branch min-w-0 pt-3">
                         <div className="space-y-3 md:hidden">{dateGroup.requisitions.map(requisition => (
-                          <WithdrawalHistoryCard key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit}
+                          <WithdrawalHistoryCard key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement}
                             onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })}
-                            onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onCorrect={() => setCorrectionTarget(requisition)} />
+                            onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onCorrect={() => setCorrectionTarget(requisition)} onSupplement={() => setSupplementTarget(requisition)} />
                         ))}</div>
                         <div className="hidden min-w-0 overflow-x-auto md:block">
                           <table className="withdrawal-records w-full table-fixed text-xs">
                             <colgroup><col className="w-10" /><col className="w-[16%]" /><col className="w-[13%]" /><col className="w-[17%]" /><col className="w-[15%]" /><col className="w-12" /><col className="w-24" /><col /></colgroup>
                             <thead><tr><th><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data da operação</th><th className="p-2 text-left">Último registro</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead>
                             <tbody>{dateGroup.requisitions.map(requisition => (
-                              <WithdrawalHistoryRow key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit}
+                              <WithdrawalHistoryRow key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement}
                                 onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })}
-                                onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onCorrect={() => setCorrectionTarget(requisition)} />
+                                onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onCorrect={() => setCorrectionTarget(requisition)} onSupplement={() => setSupplementTarget(requisition)} />
                             ))}</tbody>
                           </table>
                         </div>
@@ -515,6 +517,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
       </section>
       <MaterialReturnDialog project={project} requisition={returnTarget} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setReturnTarget(null)} />
       <CorrectionDialog project={project} requisition={correctionTarget} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setCorrectionTarget(null)} />
+      <RequisitionSupplementDialog project={project} requisition={supplementTarget} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setSupplementTarget(null)} />
       {confirmDialog}
     </div>
   );
@@ -536,13 +539,15 @@ interface WithdrawalHistoryEntryProps {
   active: boolean;
   canDelete: boolean;
   canEdit: boolean;
+  canSupplement: boolean;
   onToggle: () => void;
   onDelete: () => void;
   onReturn: () => void;
   onCorrect: () => void;
+  onSupplement: () => void;
 }
 
-function WithdrawalHistoryCard({ project, requisition, movements, active, canDelete, canEdit, onToggle, onDelete, onReturn, onCorrect }: WithdrawalHistoryEntryProps) {
+function WithdrawalHistoryCard({ project, requisition, movements, active, canDelete, canEdit, canSupplement, onToggle, onDelete, onReturn, onCorrect, onSupplement }: WithdrawalHistoryEntryProps) {
   const latest = latestRequisitionActivity(requisition, movements);
   return <article data-expanded={active} className={`withdrawal-record overflow-hidden rounded-lg border bg-card ${active ? 'border-primary/60' : 'border-border'}`}>
     <button type="button" className="min-h-11 w-full p-3 text-left hover:bg-muted/30" onClick={onToggle} aria-expanded={active}>
@@ -551,11 +556,11 @@ function WithdrawalHistoryCard({ project, requisition, movements, active, canDel
       <div className="mt-1 text-xs text-muted-foreground">{requisition.items.length} item(ns) · Operação: {formatOperationalDate(requisition.date)}</div>
       <div className="text-xs text-muted-foreground">Último registro: {formatRecordedAt({ createdAt: latest }, requisition.date)}</div>
     </button>
-    {active && <div data-testid="withdrawal-history-details" className="withdrawal-detail withdrawal-branch mb-3 mr-2 rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} onDelete={onDelete} onReturn={onReturn} onCorrect={onCorrect} /></div>}
+    {active && <div data-testid="withdrawal-history-details" className="withdrawal-detail withdrawal-branch mb-3 mr-2 rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} onDelete={onDelete} onReturn={onReturn} onCorrect={onCorrect} onSupplement={onSupplement} /></div>}
   </article>;
 }
 
-function WithdrawalHistoryRow({ project, requisition, movements, active, canDelete, canEdit, onToggle, onDelete, onReturn, onCorrect }: WithdrawalHistoryEntryProps) {
+function WithdrawalHistoryRow({ project, requisition, movements, active, canDelete, canEdit, canSupplement, onToggle, onDelete, onReturn, onCorrect, onSupplement }: WithdrawalHistoryEntryProps) {
   const latest = latestRequisitionActivity(requisition, movements);
   return <Fragment>
     <tr data-testid="withdrawal-history-row" aria-expanded={active} tabIndex={0} aria-label={`Retirada ${requisition.number}`} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggle(); } }} className={`withdrawal-record cursor-pointer border-y bg-card ${active ? 'border-primary/60' : 'border-border'}`} onClick={onToggle}>
@@ -568,7 +573,7 @@ function WithdrawalHistoryRow({ project, requisition, movements, active, canDele
       <td className="p-2"><WarehouseStatusBadge label={requisition.status === 'rascunho' ? 'Pendente legado' : 'Entregue'} tone={requisition.status === 'rascunho' ? 'warning' : 'success'} /></td>
       <td className="p-2"><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} createdAt={requisition.createdAt} updatedAt={requisition.updatedAt} className="space-y-0.5" /></td>
     </tr>
-    {active && <tr data-testid="withdrawal-history-details" className="withdrawal-detail-row"><td colSpan={8} className="!px-0 py-3"><div className="withdrawal-detail withdrawal-branch rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} onDelete={onDelete} onReturn={onReturn} onCorrect={onCorrect} /></div></td></tr>}
+    {active && <tr data-testid="withdrawal-history-details" className="withdrawal-detail-row"><td colSpan={8} className="!px-0 py-3"><div className="withdrawal-detail withdrawal-branch rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} onDelete={onDelete} onReturn={onReturn} onCorrect={onCorrect} onSupplement={onSupplement} /></div></td></tr>}
   </Fragment>;
 }
 
@@ -577,7 +582,7 @@ function PhotoPreview({ file, onRemove }: { file: File; onRemove: () => void }) 
   return <div className="relative aspect-square overflow-hidden rounded-md border"><img src={url} alt={file.name} className="h-full w-full object-cover" onLoad={() => URL.revokeObjectURL(url)} /><Button type="button" size="icon" variant="destructive" className="absolute right-1 top-1 h-8 w-8" onClick={onRemove} aria-label={`Remover ${file.name}`}><X className="h-4 w-4" /></Button></div>;
 }
 
-function WithdrawalDetails({ project, requisition, canDelete, canEdit, onDelete, onReturn, onCorrect }: { project: Project; requisition: WarehouseRequisition; canDelete: boolean; canEdit: boolean; onDelete: () => void; onReturn: () => void; onCorrect: () => void }) {
+function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupplement, onDelete, onReturn, onCorrect, onSupplement }: { project: Project; requisition: WarehouseRequisition; canDelete: boolean; canEdit: boolean; canSupplement: boolean; onDelete: () => void; onReturn: () => void; onCorrect: () => void; onSupplement: () => void }) {
   const returns = ensureWarehouse(project).warehouse!.movements
     .filter(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.requisitionId === requisition.id && !movement.reversedById)
     .slice()
@@ -585,14 +590,51 @@ function WithdrawalDetails({ project, requisition, canDelete, canEdit, onDelete,
   const returnable = requisition.status === 'entregue' ? getReturnableRequisitionItems(project, requisition.id) : [];
   const returnableByItem = new Map(returnable.map(item => [item.itemKey, item] as const));
   const hasReturnable = requisition.status === 'entregue' && returnable.some(item => item.availableQuantity > 0);
-  const notes = requisition.notes?.trim();
+  const notes = [
+    requisition.notes?.trim(),
+    ...(requisition.supplements ?? []).map(supplement => `Complemento de ${formatOperationalDate(supplement.date)} por ${supplement.receiverName}: ${supplement.items.map(item => `${item.description} (${item.quantity.toLocaleString('pt-BR')} ${item.unit})`).join(', ')}`),
+  ].filter(Boolean).join('\n');
   const actions = <div className="withdrawal-detail-actions flex flex-wrap justify-end gap-1">
     <Button size="sm" variant="outline" className="h-8 px-2 text-[11px]" onClick={() => generateRequisitionReceipt(project, requisition)}><FileDown className="mr-1 h-3.5 w-3.5" />PDF</Button>
+    {canSupplement && requisition.status === 'entregue' && <Button size="sm" variant="outline" className="h-8 px-2 text-[11px]" onClick={onSupplement}><Plus className="mr-1 h-3.5 w-3.5" />Adicionar complemento</Button>}
     {canEdit && <Button size="sm" variant="outline" className="h-8 px-2 text-[11px]" disabled={returns.length > 0 || requisition.status !== 'entregue'} title={returns.length ? 'A correção é bloqueada porque existe devolução vinculada.' : undefined} onClick={onCorrect}><Pencil className="mr-1 h-3.5 w-3.5" />Corrigir retirada</Button>}
     {hasReturnable && <Button size="sm" className="h-8 px-2 text-[11px]" onClick={onReturn}><RotateCcw className="mr-1 h-3.5 w-3.5" />Registrar devolução</Button>}
     {canDelete && <Button size="sm" variant="destructive" className="h-8 px-2 text-[11px]" onClick={onDelete}><Trash2 className="mr-1 h-3.5 w-3.5" />Excluir</Button>}
   </div>;
   return <div className="space-y-2">{canEdit && returns.length > 0 && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">Esta retirada possui devolução registrada. Para preservar o histórico, a correção de material ou quantidade está bloqueada.</div>}{notes && <div className="rounded-md border border-muted-foreground/20 bg-background/70 px-3 py-2 text-sm"><span className="mr-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Observação:</span>{notes}</div>}<div className="overflow-x-auto"><table className="withdrawal-materials w-full min-w-[1020px] table-fixed text-xs"><colgroup><col className="w-[8%]" /><col /><col className="w-[5%]" /><col className="w-[7%]" /><col className="w-[7%]" /><col className="w-[8%]" /><col className="w-[37%]" /></colgroup><thead><tr><th className="p-1.5 text-left">Código</th><th className="p-1.5 text-left">Material</th><th className="p-1.5 text-left">Un.</th><th className="p-1.5 text-right">Retirado</th><th className="p-1.5 text-right text-success">Devolvido</th><th className="p-1.5 text-right text-primary">Em campo</th><th className="p-1 text-right align-middle">{actions}</th></tr></thead><tbody>{requisition.items.map(item => { const summary = returnableByItem.get(item.itemKey); return <tr key={item.itemKey} className="border-t"><td className="p-1.5">{item.code || '—'}</td><td className="p-1.5 md:truncate" title={item.description}>{item.description}</td><td className="p-1.5">{item.unit}</td><td className="p-1.5 text-right font-mono">{item.quantity.toLocaleString('pt-BR')}</td><td className="p-1.5 text-right font-mono text-success">{(summary?.returnedQuantity ?? 0).toLocaleString('pt-BR')}</td><td className="p-1.5 text-right font-mono font-bold text-primary">{(summary?.availableQuantity ?? item.quantity).toLocaleString('pt-BR')}</td><td aria-hidden="true" className="p-0" /></tr>; })}</tbody></table></div>{returns.length > 0 && <div className="rounded-lg border border-success/30 bg-success/5 p-3"><div className="mb-2 text-sm font-bold text-success">Devoluções registradas</div><div className="space-y-2 text-sm">{returns.map(movement => <div key={movement.id} className="rounded-md border border-success/20 bg-background/70 p-2"><strong>{movement.returnNumber || 'Devolução'}</strong> · operação: {formatOperationalDate(movement.date)} · registro: {formatRecordedAt(movement, movement.date)} · devolvido por {movement.returnerName || 'Não informado'}<div className="mt-1 font-medium text-success">{movement.itemDescription}: {movement.quantity.toLocaleString('pt-BR')} {movement.itemUnit}</div></div>)}</div></div>}</div>;
+}
+
+function RequisitionSupplementDialog({ project, requisition, auditActor, onProjectChange, onClose }: { project: Project; requisition: WarehouseRequisition | null; auditActor?: WarehouseAuditActor; onProjectChange: (project: Project) => void; onClose: () => void }) {
+  const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
+  const [date, setDate] = useState(warehouseOperationalDate());
+  const [receiverName, setReceiverName] = useState('');
+  const [notes, setNotes] = useState('');
+  const [items, setItems] = useState<WarehouseRequisitionItem[]>([]);
+  const [signatureReceiver, setSignatureReceiver] = useState<string | undefined>();
+  const [photos, setPhotos] = useState<File[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [idempotencyKey, setIdempotencyKey] = useState(uidWarehouse());
+  useEffect(() => {
+    setDate(warehouseOperationalDate()); setReceiverName(requisition?.receiverName || requisition?.requesterName || ''); setNotes(''); setItems([]); setSignatureReceiver(undefined); setPhotos([]); setIdempotencyKey(uidWarehouse());
+  }, [requisition?.id]);
+  const addItem = () => setItems(current => [...current, { itemKey: '', description: '', unit: '', quantity: 1 }]);
+  const updateItem = (index: number, itemKey: string) => {
+    const row = rows.find(candidate => candidate.key === itemKey);
+    if (!row) return;
+    setItems(current => current.map((item, itemIndex) => itemIndex === index ? { itemKey: row.key, code: row.code, description: row.description, unit: row.unit, quantity: item.quantity || 1 } : item));
+  };
+  const save = async () => {
+    if (!requisition) return;
+    try {
+      setSaving(true);
+      const attachments = await Promise.all(photos.slice(0, 3).map(file => makeAttachment(file, project.id, 'foto', 'withdrawals')));
+      const result = addRequisitionSupplement(project, { requisitionId: requisition.id, date, receiverName, signatureReceiver: signatureReceiver ?? '', notes, attachments, idempotencyKey, items }, auditActor);
+      onProjectChange(result.project);
+      toast.success(`Complemento registrado na ${requisition.number} e estoque baixado.`);
+      onClose();
+    } catch (error) { toast.error((error as Error).message); } finally { setSaving(false); }
+  };
+  return <Dialog open={!!requisition} onOpenChange={open => !open && !saving && onClose()}><DialogContent className="max-h-[90dvh] max-w-3xl overflow-y-auto p-4 sm:p-6"><DialogHeader><DialogTitle>Adicionar complemento</DialogTitle><DialogDescription>Entrega adicional na requisição {requisition?.number}. Os itens originais não serão alterados.</DialogDescription></DialogHeader><div className="space-y-3"><div className="grid gap-3 sm:grid-cols-2"><WarehouseField label="Data da entrega"><Input className="min-h-11" type="date" value={date} onChange={event => setDate(event.target.value)} /></WarehouseField><WarehouseField label="Quem recebeu"><Input className="min-h-11" value={receiverName} onChange={event => setReceiverName(event.target.value)} /></WarehouseField></div>{items.map((item, index) => <div key={`${item.itemKey}-${index}`} className="grid gap-2 rounded-lg border p-3 sm:grid-cols-[1fr_130px_44px]"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={item.itemKey} onChange={event => updateItem(index, event.target.value)} aria-label={`Material complementar ${index + 1}`}><option value="">Selecione o material</option>{rows.map(row => <option key={row.key} value={row.key}>{row.code ? `${row.code} · ` : ''}{row.description} · saldo {row.balance.toLocaleString('pt-BR')} {row.unit}</option>)}</select><Input className="min-h-11" type="number" min="0" step="any" value={item.quantity} onChange={event => setItems(current => current.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry))} aria-label={`Quantidade complementar de ${item.description}`} /><Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => setItems(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover ${item.description}`}><Trash2 className="h-4 w-4" /></Button></div>)}<Button type="button" variant="outline" className="min-h-11" onClick={addItem}><Plus className="mr-2 h-4 w-4" />Adicionar material</Button><WarehouseField label="Observação" optional><Input className="min-h-11" value={notes} onChange={event => setNotes(event.target.value)} placeholder="Motivo do complemento" /></WarehouseField><div className="rounded-lg border bg-muted/30 p-3"><SignaturePad label="Assinatura de quem recebeu o complemento" value={signatureReceiver} onChange={setSignatureReceiver} /></div><WarehouseField label="Fotos da entrega" optional><Input className="min-h-11" type="file" accept="image/*" multiple onChange={event => setPhotos(Array.from(event.target.files ?? []).slice(0, 3))} /><p className="mt-1 text-xs text-muted-foreground">Opcional · até 3 fotos.</p></WarehouseField></div><DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" className="min-h-11" disabled={saving} onClick={onClose}>Cancelar</Button><Button className="min-h-11" disabled={saving} onClick={save}><Check className="mr-2 h-4 w-4" />{saving ? 'Registrando...' : 'Confirmar complemento'}</Button></DialogFooter></DialogContent></Dialog>;
 }
 
 function CorrectionDialog({ project, requisition, auditActor, onProjectChange, onClose }: { project: Project; requisition: WarehouseRequisition | null; auditActor?: WarehouseAuditActor; onProjectChange: (project: Project) => void; onClose: () => void }) {

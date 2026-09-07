@@ -1279,6 +1279,7 @@ export default function Index() {
             canApproveInventory={role === 'owner' || role === 'admin'}
             canArchiveWarehouseRecords={warehouseEditor}
             canEditPostedWarehouseRecords={role === 'owner'}
+            canSupplementRequisitions={warehouseEditor}
             canDeleteWarehouseRecords={role === 'owner'}
             canManageEquipmentGroups={role === 'owner' || role === 'warehouse_operator'}
             canOptimizeStorage={role === 'owner'}

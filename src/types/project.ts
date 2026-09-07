@@ -1174,6 +1174,21 @@ export interface WarehouseRequisitionItem {
   unitCostSnapshot?: number;
 }
 
+/** Entrega adicional vinculada a uma requisição já concluída, sem alterar a retirada original. */
+export interface WarehouseRequisitionSupplement {
+  id: string;
+  date: string;
+  items: WarehouseRequisitionItem[];
+  receiverName: string;
+  signatureReceiver: string;
+  notes?: string;
+  attachments?: WarehouseAttachment[];
+  idempotencyKey: string;
+  createdAt: string;
+  createdBy?: WarehouseAuditActor;
+  publishedToDailyReportId?: string;
+}
+
 export type WarehouseRequisitionStatus = 'rascunho' | 'entregue' | 'cancelada';
 
 export interface WarehouseRequisition {
@@ -1192,6 +1207,8 @@ export interface WarehouseRequisition {
   workFront?: string;
   notes?: string;
   items: WarehouseRequisitionItem[];
+  /** Complementos entregues depois da retirada original. */
+  supplements?: WarehouseRequisitionSupplement[];
   signatureWarehouse?: string; // dataURL PNG
   signatureReceiver?: string;
   warehouseOperator?: string;

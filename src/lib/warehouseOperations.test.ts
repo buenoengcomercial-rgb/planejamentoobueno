@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Project, WarehouseAttachment } from '@/types/project';
 import {
   addEquipment,
+  addRequisitionSupplement,
   addMovement,
   applyInventorySession,
   closeInventorySession,
@@ -340,5 +341,29 @@ describe('operação integrada do almoxarifado', () => {
       equipmentId: 'legacy-equipment', equipmentName: 'Furadeira antiga', status: 'em_uso',
     })]);
     expect(legacy).not.toHaveProperty('equipments');
+  });
+
+  it('registra complemento auditado sem alterar a retirada original e permite devolução consolidada', () => {
+    const delivered = createAndDeliverRequisition(withStock(), {
+      date: '2026-08-17', chapterId: 'chapter-1', chapterName: 'Prédio 1', receiverName: 'Equipe Alpha', requesterName: 'Equipe Alpha', signatureReceiver: 'assinatura-original', deliveryIdempotencyKey: 'req-complemento',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 2 }],
+    }, { actor, publishToDailyReport: true });
+    const requisition = delivered.project.warehouse!.requisitions[0];
+    const result = addRequisitionSupplement(delivered.project, {
+      requisitionId: requisition.id, date: '2026-08-18', receiverName: 'Equipe Alpha', signatureReceiver: 'assinatura-complemento', idempotencyKey: 'complemento-1', notes: 'Necessidade adicional',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 3 }],
+    }, actor);
+    const updated = result.project.warehouse!.requisitions[0];
+    expect(updated.items).toHaveLength(1);
+    expect(updated.items[0].quantity).toBe(2);
+    expect(updated.supplements).toHaveLength(1);
+    expect(updated.supplements?.[0]).toMatchObject({ receiverName: 'EQUIPE ALPHA', signatureReceiver: 'assinatura-complemento' });
+    expect(result.project.warehouse!.movements.filter(movement => movement.requisitionId === requisition.id && movement.type === 'retirada')).toHaveLength(2);
+    expect(getReturnableRequisitionItems(result.project, requisition.id)[0]).toMatchObject({ withdrawnQuantity: 5, availableQuantity: 5 });
+    expect(result.project.dailyReports?.find(report => report.date === '2026-08-18')?.observations).toContain('Complemento');
+    expect(addRequisitionSupplement(result.project, {
+      requisitionId: requisition.id, date: '2026-08-18', receiverName: 'Equipe Alpha', signatureReceiver: 'assinatura-complemento', idempotencyKey: 'complemento-1',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 3 }],
+    }, actor).project.warehouse!.movements.filter(movement => movement.requisitionId === requisition.id && movement.type === 'retirada')).toHaveLength(2);
   });
 });

@@ -7,6 +7,7 @@ import type {
   WarehouseMovementType,
   WarehouseRequisition,
   WarehouseRequisitionItem,
+  WarehouseRequisitionSupplement,
   CustodyTerm,
   CustodyTermEquipmentItem,
   WarehouseEquipmentGroup,
@@ -762,19 +763,29 @@ export function getReturnableRequisitionItems(project: Project, requisitionId: s
     returnedByItem.set(movement.itemKey, trunc2((returnedByItem.get(movement.itemKey) ?? 0) + movement.quantity));
   }
 
-  return requisition.items.map(item => {
-    const withdrawnQuantity = Number(item.quantity) || 0;
+  const withdrawnByItem = new Map<string, WarehouseReturnableRequisitionItem>();
+  const withdrawalMovements = wh.movements.filter(movement => movement.type === 'retirada' && movement.requisitionId === requisitionId && !movement.reversedById);
+  // Registros legados podem não possuir o movimento espelhado; preserve a base da requisição nesses casos.
+  const sources = withdrawalMovements.length ? withdrawalMovements : requisition.items.map(item => ({
+    itemKey: item.itemKey, itemCode: item.code, itemDescription: item.description, itemUnit: item.unit,
+    quantity: item.quantity, costSnapshot: item.unitCostSnapshot,
+  }));
+  for (const source of sources) {
+    const existing = withdrawnByItem.get(source.itemKey);
+    withdrawnByItem.set(source.itemKey, {
+      itemKey: source.itemKey,
+      code: source.itemCode,
+      description: source.itemDescription,
+      unit: source.itemUnit,
+      withdrawnQuantity: trunc2((existing?.withdrawnQuantity ?? 0) + Number(source.quantity || 0)),
+      returnedQuantity: 0,
+      availableQuantity: 0,
+      unitCostSnapshot: source.costSnapshot ?? existing?.unitCostSnapshot,
+    });
+  }
+  return Array.from(withdrawnByItem.values()).map(item => {
     const returnedQuantity = returnedByItem.get(item.itemKey) ?? 0;
-    return {
-      itemKey: item.itemKey,
-      code: item.code,
-      description: item.description,
-      unit: item.unit,
-      withdrawnQuantity,
-      returnedQuantity,
-      availableQuantity: trunc2(Math.max(0, withdrawnQuantity - returnedQuantity)),
-      unitCostSnapshot: item.unitCostSnapshot,
-    };
+    return { ...item, returnedQuantity, availableQuantity: trunc2(Math.max(0, item.withdrawnQuantity - returnedQuantity)) };
   });
 }
 
@@ -1102,6 +1113,95 @@ export function createAndDeliverRequisition(
   };
 }
 
+export interface AddRequisitionSupplementInput {
+  requisitionId: string;
+  date: string;
+  receiverName: string;
+  signatureReceiver: string;
+  notes?: string;
+  attachments?: WarehouseAttachment[];
+  /** Chave por tentativa de envio para impedir toque duplo/reenvio. */
+  idempotencyKey: string;
+  items: Array<Pick<WarehouseRequisitionItem, 'itemKey' | 'code' | 'description' | 'unit' | 'quantity'>>;
+}
+
+export interface AddRequisitionSupplementResult {
+  project: Project;
+  supplementId: string;
+  movementIds: string[];
+}
+
+/** Entrega materiais adicionais sem reescrever a retirada original. */
+export function addRequisitionSupplement(project: Project, input: AddRequisitionSupplementInput, actor?: WarehouseActorInput): AddRequisitionSupplementResult {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const requisition = wh.requisitions.find(entry => entry.id === input.requisitionId);
+  if (!requisition) throw new Error('Retirada não encontrada.');
+  if (requisition.status !== 'entregue') throw new Error('O complemento só pode ser registrado em uma retirada entregue.');
+  if (!input.date?.trim()) throw new Error('Informe a data do complemento.');
+  const receiverName = normalizeWarehouseReceiverName(input.receiverName);
+  if (!receiverName) throw new Error('Informe quem recebeu os materiais.');
+  if (!input.signatureReceiver?.trim()) throw new Error('Colete a assinatura de quem recebeu o complemento.');
+  const idempotencyKey = input.idempotencyKey?.trim();
+  if (!idempotencyKey) throw new Error('Não foi possível identificar esta tentativa de complemento. Tente novamente.');
+  const existing = requisition.supplements?.find(supplement => supplement.idempotencyKey === idempotencyKey);
+  if (existing) return { project: p, supplementId: existing.id, movementIds: existing.items.map(item => item.movementId).filter((id): id is string => !!id) };
+  if (!input.items.length) throw new Error('Adicione ao menos um material ao complemento.');
+
+  const requested = new Map<string, AddRequisitionSupplementInput['items'][number]>();
+  for (const item of input.items) {
+    const quantity = Number(item.quantity);
+    if (!item.itemKey || !item.description?.trim() || !item.unit?.trim() || !Number.isFinite(quantity) || quantity <= 0) throw new Error('Todos os materiais do complemento devem ter quantidade positiva.');
+    if (requested.has(item.itemKey)) throw new Error('Cada material deve aparecer uma única vez no complemento.');
+    requested.set(item.itemKey, { ...item, quantity });
+  }
+  const availableByKey = new Map(computeWarehouseRows(p, { includeManual: true }).map(row => [row.key, row.balance]));
+  for (const item of requested.values()) {
+    if (item.quantity > (availableByKey.get(item.itemKey) ?? 0)) throw new Error(`${item.description}: quantidade maior que o saldo disponível.`);
+  }
+
+  const supplementId = uid();
+  const createdAt = nowISO();
+  const auditActor = normalizeWarehouseActor(actor);
+  const movementIds: string[] = [];
+  const items: WarehouseRequisitionItem[] = [];
+  const movements = [...wh.movements];
+  for (const item of requested.values()) {
+    const unitCostSnapshot = warehouseValuationForItem(wh, item.itemKey).averageUnitCost;
+    const movementId = uid();
+    movements.push({
+      id: movementId, type: 'retirada', date: input.date, createdAt, createdBy: auditActor,
+      itemKey: item.itemKey, itemCode: item.code, itemDescription: item.description, itemUnit: item.unit,
+      quantity: item.quantity, unitPrice: unitCostSnapshot, costSnapshot: unitCostSnapshot,
+      requisitionId: requisition.id, originType: 'withdrawal', originId: supplementId,
+      chapterId: requisition.chapterId, taskId: requisition.taskId, teamId: requisition.teamId,
+      workerName: receiverName, workFront: requisition.workFront,
+      responsible: warehouseActorLegacyValue(actor), user: warehouseActorLegacyValue(actor),
+      notes: input.notes?.trim() || `Complemento da retirada ${requisition.number}.`, attachments: input.attachments,
+    });
+    movementIds.push(movementId);
+    items.push({ ...item, quantity: item.quantity, movementId, unitCostSnapshot });
+  }
+  const supplement: WarehouseRequisitionSupplement = {
+    id: supplementId, date: input.date, receiverName, signatureReceiver: input.signatureReceiver.trim(),
+    notes: input.notes?.trim() || undefined, attachments: input.attachments, idempotencyKey, items, createdAt, createdBy: auditActor,
+  };
+  const updatedRequisition: WarehouseRequisition = {
+    ...requisition, supplements: [...(requisition.supplements ?? []), supplement], updatedAt: createdAt, updatedBy: auditActor ?? requisition.updatedBy,
+  };
+  const next = setWh(p, { movements, requisitions: wh.requisitions.map(entry => entry.id === requisition.id ? updatedRequisition : entry) });
+  const published = publishRequisitionSupplementToDailyReport(next, requisition.id, supplement.id);
+  return {
+    project: logToProject(published, {
+      entityType: 'warehouse_requisition', entityId: requisition.id, action: 'updated',
+      title: `Complemento registrado na retirada ${requisition.number}`,
+      description: `${items.length} material(is) entregue(s) adicionalmente sem alterar a retirada original.`,
+      before: { requisition }, after: { supplement, movements: movements.filter(movement => movement.originId === supplementId) },
+      userId: auditActor?.userId, userName: auditActor?.userName, userEmail: auditActor?.userEmail,
+    }), supplementId, movementIds,
+  };
+}
+
 export function publishRequisitionToDailyReport(project: Project, requisitionId: string): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
@@ -1134,6 +1234,32 @@ function requisitionDailyReportBlock(req: WarehouseRequisition): string {
   const summary = req.items.map(it => `  • ${it.description} — ${it.quantity} ${it.unit}`).join('\n');
   const context = [req.chapterName, req.receiverName || req.requesterName].filter(Boolean).join(' — ');
   return `[Almoxarifado ${req.number}${context ? ` — ${context}` : ''}]\n${summary}`;
+}
+
+function requisitionSupplementDailyReportBlock(req: WarehouseRequisition, supplement: WarehouseRequisitionSupplement): string {
+  const summary = supplement.items.map(item => `  • ${item.description} — ${item.quantity} ${item.unit}`).join('\n');
+  const context = [req.chapterName, supplement.receiverName].filter(Boolean).join(' — ');
+  return `[Almoxarifado ${req.number} — Complemento${context ? ` — ${context}` : ''}]\n${summary}`;
+}
+
+function publishRequisitionSupplementToDailyReport(project: Project, requisitionId: string, supplementId: string): Project {
+  const p = ensureWarehouse(project);
+  const req = p.warehouse!.requisitions.find(entry => entry.id === requisitionId);
+  const supplement = req?.supplements?.find(entry => entry.id === supplementId);
+  if (!req || !supplement) return p;
+  const dailyReports = [...(p.dailyReports ?? [])];
+  const block = requisitionSupplementDailyReportBlock(req, supplement);
+  let report = dailyReports.find(entry => entry.date === supplement.date);
+  if (report) {
+    report = { ...report, observations: report.observations ? `${report.observations}\n${block}` : block, updatedAt: nowISO() };
+    dailyReports[dailyReports.findIndex(entry => entry.id === report!.id)] = report;
+  } else {
+    report = { id: uid(), date: supplement.date, observations: block, createdAt: nowISO(), updatedAt: nowISO() };
+    dailyReports.push(report);
+  }
+  return updateRequisition({ ...p, dailyReports }, requisitionId, {
+    supplements: req.supplements?.map(entry => entry.id === supplementId ? { ...entry, publishedToDailyReportId: report!.id } : entry),
+  });
 }
 
 // ============== INVENTÁRIO MENSAL ==============
