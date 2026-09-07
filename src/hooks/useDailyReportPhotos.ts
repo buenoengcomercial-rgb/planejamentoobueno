@@ -33,6 +33,9 @@ export function useDailyReportPhotos({
   const [uploadingCount, setUploadingCount] = useState(0);
   const [lightbox, setLightbox] = useState<DailyReportAttachment | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<DailyReportAttachment | null>(null);
+  const [cameraCaptureState, setCameraCaptureState] = useState<'idle' | 'locating' | 'ready'>('idle');
+  const [cameraLocationError, setCameraLocationError] = useState<string | undefined>();
+  const preparedCameraLocationRef = useRef<DailyReportPhotoStamp['location']>();
 
   const photos: DailyReportAttachment[] = useMemo(
     () => (currentReport.attachments || []).filter(a => (a.type ?? 'image') === 'image'),
@@ -155,14 +158,49 @@ export function useDailyReportPhotos({
 
   const handleFiles = useCallback((files: FileList | File[]) => uploadFiles(files), [uploadFiles]);
 
-  const handleCameraFiles = useCallback(async (files: FileList | File[]) => {
+  const cameraPlaceLabel = useMemo(() => {
     const calendar = project.scheduleCalendar;
-    const placeLabel = calendar?.municipio
+    return calendar?.municipio
       ? `${calendar.municipio}${calendar.uf ? ` · ${calendar.uf}` : ''}`
       : undefined;
-    const stamp = await requestCameraPhotoStamp(placeLabel);
+  }, [project.scheduleCalendar]);
+
+  const prepareCameraCapture = useCallback(async () => {
+    if (cameraCaptureState === 'locating') return;
+    setCameraCaptureState('locating');
+    setCameraLocationError(undefined);
+    preparedCameraLocationRef.current = undefined;
+    try {
+      const stamp = await requestCameraPhotoStamp(cameraPlaceLabel);
+      if (!stamp.location) throw new Error('Não foi possível obter a localização do aparelho.');
+      preparedCameraLocationRef.current = stamp.location;
+      setCameraCaptureState('ready');
+      toast({ title: 'Localização obtida', description: 'Toque em Abrir câmera para registrar a foto com o carimbo GPS.' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Não foi possível obter a localização do aparelho.';
+      setCameraLocationError(message);
+      setCameraCaptureState('idle');
+      toast({ variant: 'destructive', title: 'Foto não iniciada', description: message });
+    }
+  }, [cameraCaptureState, cameraPlaceLabel]);
+
+  const handleCameraFiles = useCallback(async (files: FileList | File[]) => {
+    const location = preparedCameraLocationRef.current;
+    if (!location) {
+      const message = 'Obtenha a localização antes de abrir a câmera.';
+      setCameraLocationError(message);
+      toast({ variant: 'destructive', title: 'Foto não anexada', description: message });
+      return;
+    }
+    const stamp: DailyReportPhotoStamp = {
+      capturedAt: new Date().toISOString(),
+      location,
+      placeLabel: cameraPlaceLabel,
+    };
+    preparedCameraLocationRef.current = undefined;
+    setCameraCaptureState('idle');
     await uploadFiles(files, stamp);
-  }, [project.scheduleCalendar, uploadFiles]);
+  }, [cameraPlaceLabel, uploadFiles]);
 
   const updatePhoto = useCallback((id: string, patch: Partial<DailyReportAttachment>) => persist(r => ({
     ...r,
@@ -183,6 +221,8 @@ export function useDailyReportPhotos({
     photoFilter,
     setPhotoFilter,
     uploadingCount,
+    cameraCaptureState,
+    cameraLocationError,
     lightbox,
     setLightbox,
     confirmDelete,
@@ -194,6 +234,7 @@ export function useDailyReportPhotos({
     photoTaskOptions,
     handleFiles,
     handleCameraFiles,
+    prepareCameraCapture,
     updatePhoto,
     removePhoto,
   };

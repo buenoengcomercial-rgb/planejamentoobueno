@@ -74,6 +74,8 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
     photoFilter,
     setPhotoFilter,
     uploadingCount,
+    cameraCaptureState,
+    cameraLocationError,
     lightbox,
     setLightbox,
     confirmDelete,
@@ -85,6 +87,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
     photoTaskOptions,
     handleFiles,
     handleCameraFiles,
+    prepareCameraCapture,
     updatePhoto,
     removePhoto,
   } = useDailyReportPhotos({ project, currentReport, persist, production, selectedDate });
@@ -222,9 +225,12 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
         photoFilter={photoFilter}
         setPhotoFilter={setPhotoFilter}
         uploadingCount={uploadingCount}
+        cameraCaptureState={cameraCaptureState}
+        cameraLocationError={cameraLocationError}
         fileInputRef={fileInputRef}
         handleFiles={handleFiles}
         handleCameraFiles={handleCameraFiles}
+        prepareCameraCapture={prepareCameraCapture}
         updatePhoto={updatePhoto}
         setLightbox={setLightbox}
         setConfirmDelete={setConfirmDelete}

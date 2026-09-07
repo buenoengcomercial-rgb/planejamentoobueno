@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { formatCoordinates, photoStampLines } from './dailyReportPhotoStamp';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { formatCoordinates, photoStampLines, requestCameraPhotoStamp } from './dailyReportPhotoStamp';
 
 describe('dailyReportPhotoStamp', () => {
   it('formata coordenadas no padrão exibido no carimbo de campo', () => {
@@ -17,4 +18,35 @@ describe('dailyReportPhotoStamp', () => {
       'Porto Velho · RO',
     ]);
   });
+
+  it('exige posição atual do GPS, sem aceitar posição em cache', async () => {
+    const getCurrentPosition = vi.fn((success: PositionCallback) => success({
+      coords: { latitude: -8.750339, longitude: -63.910549, accuracy: 5 },
+    } as GeolocationPosition));
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
+    Object.defineProperty(navigator, 'geolocation', { configurable: true, value: { getCurrentPosition } });
+
+    await expect(requestCameraPhotoStamp('Porto Velho · RO')).resolves.toMatchObject({
+      location: { latitude: -8.750339, longitude: -63.910549, accuracy: 5 },
+    });
+    expect(getCurrentPosition).toHaveBeenCalledWith(expect.any(Function), expect.any(Function), expect.objectContaining({ enableHighAccuracy: true, maximumAge: 0 }));
+  });
+
+  it('interrompe a captura quando a permissão de localização é negada', async () => {
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
+    Object.defineProperty(navigator, 'geolocation', {
+      configurable: true,
+      value: {
+        getCurrentPosition: (_success: PositionCallback, failure: PositionErrorCallback) => failure({
+          code: 1,
+          PERMISSION_DENIED: 1,
+          POSITION_UNAVAILABLE: 2,
+        } as GeolocationPositionError),
+      },
+    });
+
+    await expect(requestCameraPhotoStamp()).rejects.toThrow('Permita a localização');
+  });
+
+  afterEach(() => vi.restoreAllMocks());
 });

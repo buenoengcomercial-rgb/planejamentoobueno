@@ -15,9 +15,12 @@ function renderPhotosCard(handleFiles = vi.fn()) {
       photoFilter="all"
       setPhotoFilter={vi.fn()}
       uploadingCount={0}
+      cameraCaptureState="idle"
+      cameraLocationError={undefined}
       fileInputRef={createRef<HTMLInputElement>()}
       handleFiles={handleFiles}
       handleCameraFiles={handleFiles}
+      prepareCameraCapture={vi.fn()}
       updatePhoto={vi.fn()}
       setLightbox={vi.fn()}
       setConfirmDelete={vi.fn()}
@@ -53,9 +56,12 @@ describe('DailyReportPhotosCard', () => {
         photoFilter="all"
         setPhotoFilter={vi.fn()}
         uploadingCount={0}
+        cameraCaptureState="ready"
+        cameraLocationError={undefined}
         fileInputRef={createRef<HTMLInputElement>()}
         handleFiles={handleFiles}
         handleCameraFiles={handleCameraFiles}
+        prepareCameraCapture={vi.fn()}
         updatePhoto={vi.fn()}
         setLightbox={vi.fn()}
         setConfirmDelete={vi.fn()}
@@ -70,5 +76,10 @@ describe('DailyReportPhotosCard', () => {
 
     expect(handleCameraFiles).toHaveBeenCalledWith(expect.objectContaining({ length: 1 }));
     expect(handleFiles).toHaveBeenCalledWith(expect.objectContaining({ length: 1 }));
+  });
+
+  it('explica que a localização atual é obrigatória antes da câmera', () => {
+    renderPhotosCard();
+    expect(screen.getByText('A localização atual do aparelho é obrigatória para fotos da câmera.')).toBeVisible();
   });
 });

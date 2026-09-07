@@ -33,17 +33,25 @@ export function photoStampLines(stamp: DailyReportPhotoStamp) {
 
 export async function requestCameraPhotoStamp(placeLabel?: string): Promise<DailyReportPhotoStamp> {
   const capturedAt = new Date().toISOString();
-  if (!navigator.geolocation) return { capturedAt, placeLabel };
+  if (!window.isSecureContext) throw new Error('A localização exige uma conexão segura (HTTPS).');
+  if (!navigator.geolocation) throw new Error('Este navegador não disponibiliza a localização do aparelho.');
 
-  const location = await new Promise<DailyReportPhotoLocation | undefined>((resolve) => {
+  const location = await new Promise<DailyReportPhotoLocation>((resolve, reject) => {
     navigator.geolocation.getCurrentPosition(
       position => resolve({
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
         accuracy: position.coords.accuracy,
       }),
-      () => resolve(undefined),
-      { enableHighAccuracy: true, timeout: 12_000, maximumAge: 60_000 },
+      error => {
+        const message = error.code === error.PERMISSION_DENIED
+          ? 'Permita a localização para registrar a foto da câmera.'
+          : error.code === error.POSITION_UNAVAILABLE
+            ? 'O GPS do celular não está disponível. Ative-o e tente novamente.'
+            : 'Não foi possível obter a localização a tempo. Verifique o sinal e tente novamente.';
+        reject(new Error(message));
+      },
+      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 0 },
     );
   });
 

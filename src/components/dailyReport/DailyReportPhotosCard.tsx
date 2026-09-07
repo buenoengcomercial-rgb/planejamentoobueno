@@ -58,9 +58,12 @@ interface DailyReportPhotosCardProps {
   photoFilter: string;
   setPhotoFilter: (v: string) => void;
   uploadingCount: number;
+  cameraCaptureState: 'idle' | 'locating' | 'ready';
+  cameraLocationError?: string;
   fileInputRef: React.RefObject<HTMLInputElement>;
   handleFiles: (files: FileList) => void;
   handleCameraFiles: (files: FileList) => void;
+  prepareCameraCapture: () => void;
   updatePhoto: (id: string, patch: Partial<DailyReportAttachment>) => void;
   setLightbox: (p: DailyReportAttachment | null) => void;
   setConfirmDelete: (p: DailyReportAttachment | null) => void;
@@ -76,9 +79,12 @@ export function DailyReportPhotosCard({
   photoFilter,
   setPhotoFilter,
   uploadingCount,
+  cameraCaptureState,
+  cameraLocationError,
   fileInputRef,
   handleFiles,
   handleCameraFiles,
+  prepareCameraCapture,
   updatePhoto,
   setLightbox,
   setConfirmDelete,
@@ -114,7 +120,7 @@ export function DailyReportPhotosCard({
             className="hidden"
             onChange={(e) => {
               if (e.target.files && e.target.files.length > 0) {
-                handleFiles(e.target.files);
+                handleCameraFiles(e.target.files);
                 e.target.value = '';
               }
             }}
@@ -127,22 +133,34 @@ export function DailyReportPhotosCard({
             className="hidden"
             onChange={(e) => {
               if (e.target.files && e.target.files.length > 0) {
-                handleCameraFiles(e.target.files);
+                handleFiles(e.target.files);
                 e.target.value = '';
               }
             }}
           />
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
-            <Button size="sm" variant="outline" className="min-h-11 sm:min-h-9" onClick={() => cameraInputRef.current?.click()} disabled={uploadingCount > 0}>
-              {uploadingCount > 0 ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Camera className="mr-1 h-3.5 w-3.5" />}
-              Câmera
+            <Button
+              size="sm"
+              variant="outline"
+              className="min-h-11 sm:min-h-9"
+              onClick={() => cameraCaptureState === 'ready' ? cameraInputRef.current?.click() : prepareCameraCapture()}
+              disabled={uploadingCount > 0 || cameraCaptureState === 'locating'}
+            >
+              {uploadingCount > 0 || cameraCaptureState === 'locating'
+                ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                : <Camera className="mr-1 h-3.5 w-3.5" />}
+              {cameraCaptureState === 'locating' ? 'Obtendo localização…' : cameraCaptureState === 'ready' ? 'Abrir câmera' : 'Câmera'}
             </Button>
             <Button size="sm" variant="default" className="min-h-11 sm:min-h-9" onClick={() => fileInputRef.current?.click()} disabled={uploadingCount > 0}>
               {uploadingCount > 0 ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="mr-1 h-3.5 w-3.5" />}
               Galeria
             </Button>
           </div>
-          <p className="text-[11px] leading-tight text-muted-foreground sm:max-w-[280px]">Fotos pela câmera recebem data, hora e localização autorizada pelo aparelho.</p>
+          <p className={cameraLocationError ? 'text-[11px] leading-tight text-destructive sm:max-w-[280px]' : 'text-[11px] leading-tight text-muted-foreground sm:max-w-[280px]'} aria-live="polite">
+            {cameraLocationError || (cameraCaptureState === 'ready'
+              ? 'Localização atual pronta. Toque em Abrir câmera.'
+              : 'A localização atual do aparelho é obrigatória para fotos da câmera.')}
+          </p>
         </div>
       </CardHeader>
       <CardContent
