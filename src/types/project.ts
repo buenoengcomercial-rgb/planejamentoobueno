@@ -1356,6 +1356,8 @@ export interface WarehouseState {
   equipmentGroups: WarehouseEquipmentGroup[];
   custodyTerms: CustodyTerm[];
   fiscalNotes?: WarehouseFiscalNote[];
+  /** Versão da reconciliação única de notas fiscais duplicadas já executada. */
+  fiscalDuplicateReconciliationVersion?: number;
   materialLinks?: WarehouseProjectMaterialLink[];
   inventorySessions?: WarehouseInventorySession[];
   valuationMethod?: 'weighted_average';

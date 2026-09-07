@@ -232,6 +232,7 @@ export function emptyWarehouse(): WarehouseState {
     equipmentGroups: [],
     custodyTerms: [],
     fiscalNotes: [],
+    fiscalDuplicateReconciliationVersion: undefined,
     materialLinks: [],
     inventorySessions: [],
     valuationMethod: 'weighted_average',
@@ -309,6 +310,7 @@ function normalizeWarehouse(state?: Partial<WarehouseState>): WarehouseState {
     equipmentGroups: normalizeEquipmentGroups(state?.equipmentGroups ?? [], state?.equipments ?? []),
     custodyTerms: state?.custodyTerms ?? [],
     fiscalNotes: normalizeFiscalNotes(state?.fiscalNotes ?? []),
+    fiscalDuplicateReconciliationVersion: state?.fiscalDuplicateReconciliationVersion,
     materialLinks: state?.materialLinks ?? [],
     inventorySessions: state?.inventorySessions ?? [],
     valuationMethod: 'weighted_average',
@@ -333,6 +335,7 @@ export function ensureWarehouse(project: Project): Project {
       wh.equipmentGroups !== cur.equipmentGroups ||
       wh.custodyTerms !== cur.custodyTerms ||
       wh.fiscalNotes !== cur.fiscalNotes ||
+      wh.fiscalDuplicateReconciliationVersion !== cur.fiscalDuplicateReconciliationVersion ||
       wh.materialLinks !== cur.materialLinks ||
       wh.inventorySessions !== cur.inventorySessions ||
       wh.valuationMethod !== cur.valuationMethod
@@ -3330,22 +3333,107 @@ export function isValidCnpj(value?: string): boolean {
   return d1 === Number(cnpj[12]) && d2 === Number(cnpj[13]);
 }
 
-/** Procura uma nota já lançada com o mesmo CNPJ + número + valor total, ignorando ela mesma. */
+/**
+ * Chave comparável da numeração fiscal. A apresentação original da nota nunca
+ * é alterada: esta forma serve apenas para identificar leituras equivalentes
+ * como 4169, 004169 e 000.004.169.
+ */
+export function normalizeFiscalNoteNumber(value?: string): string {
+  const digits = (value ?? '').replace(/\D/g, '');
+  if (!digits) return '';
+  return digits.replace(/^0+(?=\d)/, '');
+}
+
+export function fiscalNoteDuplicateKey(note: Pick<WarehouseFiscalNote, 'supplierCnpj' | 'invoiceNumber' | 'totalAmount'>): string | undefined {
+  const cnpj = (note.supplierCnpj ?? '').replace(/\D/g, '');
+  const invoiceNumber = normalizeFiscalNoteNumber(note.invoiceNumber);
+  if (!cnpj || !invoiceNumber) return undefined;
+  return `${cnpj}|${invoiceNumber}|${moneyCents(note.totalAmount)}`;
+}
+
+/** Procura uma nota já lançada com o mesmo CNPJ + número normalizado + valor total, ignorando ela mesma. */
 export function findFiscalNoteDuplicate(
   project: Project,
   candidate: Pick<WarehouseFiscalNote, 'supplierCnpj' | 'invoiceNumber' | 'totalAmount' | 'id'>,
 ): WarehouseFiscalNote | undefined {
-  const cnpj = (candidate.supplierCnpj ?? '').replace(/\D/g, '');
-  const num = (candidate.invoiceNumber ?? '').trim();
-  if (!cnpj || !num) return undefined;
-  const total = Number(candidate.totalAmount || 0);
+  const key = fiscalNoteDuplicateKey(candidate);
+  if (!key) return undefined;
   return (project.warehouse?.fiscalNotes ?? []).find(n =>
     n.id !== candidate.id &&
     n.status === 'aprovada' &&
-    (n.supplierCnpj ?? '').replace(/\D/g, '') === cnpj &&
-    (n.invoiceNumber ?? '').trim() === num &&
-    Math.abs(Number(n.totalAmount || 0) - total) < 0.01,
+    fiscalNoteDuplicateKey(n) === key,
   );
+}
+
+export const FISCAL_DUPLICATE_RECONCILIATION_VERSION = 1;
+
+export interface FiscalDuplicateReconciliationResult {
+  project: Project;
+  canceledNoteIds: string[];
+  pendingNoteIds: string[];
+  alreadyReconciled: boolean;
+}
+
+/**
+ * Reconcilia uma única vez duplicidades históricas. Mantém a entrada mais
+ * antiga e cancela as posteriores quando não há consumo que impeça o estorno.
+ * Havendo referência posterior, preserva o histórico e registra a pendência
+ * de ajuste para conferência do proprietário.
+ */
+export function reconcileFiscalNoteDuplicates(
+  project: Project,
+  actor?: WarehouseActorInput,
+): FiscalDuplicateReconciliationResult {
+  let next = ensureWarehouse(project);
+  const warehouse = next.warehouse!;
+  if ((warehouse.fiscalDuplicateReconciliationVersion ?? 0) >= FISCAL_DUPLICATE_RECONCILIATION_VERSION) {
+    return { project: next, canceledNoteIds: [], pendingNoteIds: [], alreadyReconciled: true };
+  }
+
+  const groups = new Map<string, WarehouseFiscalNote[]>();
+  for (const note of warehouse.fiscalNotes ?? []) {
+    if (note.status !== 'aprovada') continue;
+    const key = fiscalNoteDuplicateKey(note);
+    if (!key) continue;
+    groups.set(key, [...(groups.get(key) ?? []), note]);
+  }
+
+  const canceledNoteIds: string[] = [];
+  const pendingNoteIds: string[] = [];
+  for (const [key, group] of groups) {
+    if (group.length < 2) continue;
+    const ordered = [...group].sort((left, right) =>
+      (left.createdAt || left.stockPostedAt || '').localeCompare(right.createdAt || right.stockPostedAt || '') || left.id.localeCompare(right.id),
+    );
+    const kept = ordered[0];
+    for (const duplicate of ordered.slice(1)) {
+      const reason = `Duplicidade fiscal automática: mesma chave normalizada ${key}; mantida a entrada ${kept.invoiceNumber || kept.id}.`;
+      const result = cancelFiscalNote(next, duplicate.id, { reason, actor });
+      if (result.canceled) {
+        canceledNoteIds.push(duplicate.id);
+        next = logToProject(result.project, {
+          ...normalizeWarehouseActor(actor),
+          entityType: 'warehouse_fiscal_note', entityId: duplicate.id, action: 'rejected',
+          title: `Entrada duplicada ${duplicate.invoiceNumber || duplicate.id} cancelada automaticamente`,
+          description: reason,
+          before: { status: 'aprovada', duplicateOf: kept.id },
+          after: { status: 'cancelada', duplicateOf: kept.id },
+          metadata: { duplicateKey: key, keptNoteId: kept.id, reconciliationVersion: FISCAL_DUPLICATE_RECONCILIATION_VERSION },
+        });
+      } else {
+        pendingNoteIds.push(duplicate.id);
+        next = logToProject(result.project, {
+          ...normalizeWarehouseActor(actor),
+          entityType: 'warehouse_fiscal_note', entityId: duplicate.id, action: 'updated',
+          title: `Ajuste de duplicidade pendente para a nota ${duplicate.invoiceNumber || duplicate.id}`,
+          description: `A nota é duplicada da entrada ${kept.invoiceNumber || kept.id}, mas possui histórico posterior que impede estorno automático. ${result.blockers.join(' ')}`,
+          metadata: { duplicateKey: key, keptNoteId: kept.id, blockers: result.blockers, reconciliationVersion: FISCAL_DUPLICATE_RECONCILIATION_VERSION },
+        });
+      }
+    }
+  }
+  next = setWh(next, { fiscalDuplicateReconciliationVersion: FISCAL_DUPLICATE_RECONCILIATION_VERSION });
+  return { project: next, canceledNoteIds, pendingNoteIds, alreadyReconciled: false };
 }
 
 const STOPWORDS = new Set([

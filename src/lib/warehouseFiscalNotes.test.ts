@@ -13,6 +13,8 @@ import {
   emptyWarehouse,
   ensureWarehouse,
   findFiscalNoteDuplicate,
+  normalizeFiscalNoteNumber,
+  reconcileFiscalNoteDuplicates,
   fiscalItemConversionFactor,
   fiscalItemGlobalTotal,
   fiscalItemGlobalUnitPrice,
@@ -71,6 +73,51 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     const existing = note({ status: 'aprovada' });
     const candidate = note({ id: 'nf-candidate' });
     expect(findFiscalNoteDuplicate(withNote(existing), candidate)?.id).toBe(existing.id);
+  });
+
+  it.each(['4169', '004169', '000.004.169'])('normaliza a numeração fiscal %s sem alterar a identidade', value => {
+    expect(normalizeFiscalNoteNumber(value)).toBe('4169');
+  });
+
+  it('bloqueia a mesma NF quando o PDF altera apenas zeros e pontuação', () => {
+    const existing = note({ id: 'existente', status: 'aprovada', invoiceNumber: '000.004.169', totalAmount: 243.8 });
+    const candidate = note({ id: 'pdf', invoiceNumber: '4169', totalAmount: 243.8 });
+    expect(findFiscalNoteDuplicate(withNote(existing), candidate)?.id).toBe('existente');
+    expect(() => approveFiscalNote({ ...withNote(existing), warehouse: { ...withNote(existing).warehouse!, fiscalNotes: [existing, candidate] } }, candidate.id)).toThrow(/já foi lançada/i);
+  });
+
+  it('não confunde número normalizado quando CNPJ ou valor são diferentes', () => {
+    const existing = note({ id: 'existente', status: 'aprovada', invoiceNumber: '000.004.169', totalAmount: 243.8 });
+    expect(findFiscalNoteDuplicate(withNote(existing), note({ id: 'valor', invoiceNumber: '4169', totalAmount: 243.81 }))).toBeUndefined();
+    expect(findFiscalNoteDuplicate(withNote(existing), note({ id: 'cnpj', invoiceNumber: '4169', supplierCnpj: '98.765.432/0001-10', totalAmount: 243.8 }))).toBeUndefined();
+  });
+
+  it('reconcilia a duplicidade histórica mantendo a entrada mais antiga e auditando o cancelamento', () => {
+    const older = note({ id: 'mais-antiga', status: 'aprovada', invoiceNumber: '000.004.169', totalAmount: 243.8, createdAt: '2026-08-21T10:55:00.000Z' });
+    const newer = note({ id: 'mais-nova', status: 'aprovada', invoiceNumber: '4169', totalAmount: 243.8, createdAt: '2026-09-07T09:41:00.000Z' });
+    const project = { ...baseProject(), warehouse: { ...emptyWarehouse(), fiscalNotes: [older, newer], movements: [
+      { id: 'entrada-antiga', type: 'entrada' as const, date: '2026-08-21', createdAt: older.createdAt, fiscalNoteId: older.id, itemKey: 'nf-antiga', itemDescription: 'Cimento CP II', itemUnit: 'SC', quantity: 2 },
+      { id: 'entrada-nova', type: 'entrada' as const, date: '2026-09-07', createdAt: newer.createdAt, fiscalNoteId: newer.id, itemKey: 'nf-nova', itemDescription: 'Cimento CP II', itemUnit: 'SC', quantity: 2 },
+    ] } };
+    const reconciled = reconcileFiscalNoteDuplicates(project, { userName: 'Proprietário' });
+    expect(reconciled.canceledNoteIds).toEqual(['mais-nova']);
+    expect(reconciled.project.warehouse!.fiscalNotes!.find(entry => entry.id === 'mais-antiga')?.status).toBe('aprovada');
+    expect(reconciled.project.warehouse!.fiscalNotes!.find(entry => entry.id === 'mais-nova')?.status).toBe('cancelada');
+    expect(reconciled.project.auditLogs?.at(-1)).toMatchObject({ entityId: 'mais-nova', action: 'rejected' });
+  });
+
+  it('registra pendência auditável se uma duplicidade tiver consumo posterior', () => {
+    const older = note({ id: 'mais-antiga', status: 'aprovada', invoiceNumber: '000.004.169', totalAmount: 243.8, createdAt: '2026-08-21T10:55:00.000Z' });
+    const newer = note({ id: 'mais-nova', status: 'aprovada', invoiceNumber: '4169', totalAmount: 243.8, createdAt: '2026-09-07T09:41:00.000Z' });
+    const project = { ...baseProject(), warehouse: { ...emptyWarehouse(), fiscalNotes: [older, newer], movements: [
+      { id: 'entrada-antiga', type: 'entrada' as const, date: '2026-08-21', createdAt: older.createdAt, fiscalNoteId: older.id, itemKey: 'nf-antiga', itemDescription: 'Cimento CP II', itemUnit: 'SC', quantity: 2 },
+      { id: 'entrada-nova', type: 'entrada' as const, date: '2026-09-07', createdAt: newer.createdAt, fiscalNoteId: newer.id, itemKey: 'nf-nova', itemDescription: 'Cimento CP II', itemUnit: 'SC', quantity: 2 },
+      { id: 'consumo', type: 'retirada' as const, date: '2026-09-08', createdAt: '2026-09-08T10:00:00.000Z', itemKey: 'nf-nova', itemDescription: 'Cimento CP II', itemUnit: 'SC', quantity: 1 },
+    ] } };
+    const reconciled = reconcileFiscalNoteDuplicates(project, { userName: 'Proprietário' });
+    expect(reconciled.pendingNoteIds).toEqual(['mais-nova']);
+    expect(reconciled.project.warehouse!.fiscalNotes!.find(entry => entry.id === 'mais-nova')?.status).toBe('aprovada');
+    expect(reconciled.project.auditLogs?.at(-1)?.title).toMatch(/pendente/i);
   });
 
   it('permite ao proprietário substituir uma entrada sem consumo posterior e recalcula o saldo', () => {

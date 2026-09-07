@@ -14,6 +14,7 @@ import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
 import { logToProject, userInfoFromSupabaseUser } from '@/lib/audit';
+import { reconcileFiscalNoteDuplicates } from '@/lib/warehouse';
 import { buildOperationalProjectFromPendingAdditives, getPendingAdditiveScheduleControls } from '@/lib/additiveSchedule';
 import { mergeOperationalProjectIntoRaw } from '@/lib/operationalProject';
 
@@ -560,7 +561,24 @@ export default function Index() {
             .find(id => !!id && list.some(projectMeta => projectMeta.id === id)) ?? list[0].id;
           const record = await loadCloudProjectRecord(preferredProjectId);
           if (cancelled) return;
-          if (record) replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied);
+          if (record) {
+            let projectToLoad = record.project;
+            let updatedAt = record.updatedAt;
+            if (role === 'owner') {
+              const reconciliation = reconcileFiscalNoteDuplicates(record.project, auditActor);
+              if (!reconciliation.alreadyReconciled) {
+                updatedAt = await upsertCloudProject(reconciliation.project, orgId, record.updatedAt);
+                projectToLoad = reconciliation.project;
+                if (reconciliation.canceledNoteIds.length) {
+                  toast.warning(`${reconciliation.canceledNoteIds.length} entrada(s) fiscal(is) duplicada(s) foram canceladas automaticamente.`);
+                }
+                if (reconciliation.pendingNoteIds.length) {
+                  toast.warning(`${reconciliation.pendingNoteIds.length} duplicidade(s) possuem consumo posterior e exigem ajuste/conferência.`);
+                }
+              }
+            }
+            replaceProjectWithoutAutoSave(projectToLoad, updatedAt, record.repairApplied);
+          }
         } else {
           replaceProjectWithoutAutoSave(null);
         }
@@ -573,7 +591,7 @@ export default function Index() {
       }
     })();
     return () => { cancelled = true; };
-  }, [user, orgId, creator, refreshCloudList, replaceProjectWithoutAutoSave]);
+  }, [user, orgId, creator, refreshCloudList, replaceProjectWithoutAutoSave, role, auditActor]);
 
   // Salvamento debounced (somente se o usuário pode editar)
   useEffect(() => {
@@ -990,7 +1008,22 @@ export default function Index() {
       if (!(await flushPendingSave())) return;
       const record = await loadCloudProjectRecord(id);
       if (record) {
-        replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied);
+        let projectToLoad = record.project;
+        let updatedAt = record.updatedAt;
+        if (role === 'owner') {
+          const reconciliation = reconcileFiscalNoteDuplicates(record.project, auditActor);
+          if (!reconciliation.alreadyReconciled) {
+            updatedAt = await upsertCloudProject(reconciliation.project, orgId!, record.updatedAt);
+            projectToLoad = reconciliation.project;
+            if (reconciliation.canceledNoteIds.length) {
+              toast.warning(`${reconciliation.canceledNoteIds.length} entrada(s) fiscal(is) duplicada(s) foram canceladas automaticamente.`);
+            }
+            if (reconciliation.pendingNoteIds.length) {
+              toast.warning(`${reconciliation.pendingNoteIds.length} duplicidade(s) possuem consumo posterior e exigem ajuste/conferência.`);
+            }
+          }
+        }
+        replaceProjectWithoutAutoSave(projectToLoad, updatedAt, record.repairApplied);
         undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
         setUndoVersion(v => v + 1);
       }
