@@ -722,6 +722,24 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     if (!selected || !isPosted || !canEditPosted) return;
     try {
       setProcessing(true);
+      const confirmedConversionsPendingSync = reviewFiscalNotePackagingConversions(project)
+        .filter(review => review.noteId === selected.id)
+        .filter(review => fiscalItemStockConversionStatus(selected.items.find(item => item.id === review.itemId) ?? {}) === 'confirmed');
+      if (confirmedConversionsPendingSync.length) {
+        let next = project;
+        for (const conversion of confirmedConversionsPendingSync) {
+          const current = reviewFiscalNotePackagingConversions(next)
+            .find(review => review.noteId === conversion.noteId && review.itemId === conversion.itemId);
+          if (!current) continue;
+          const item = next.warehouse?.fiscalNotes?.find(note => note.id === selected.id)?.items.find(candidate => candidate.id === current.itemId);
+          const factor = item ? fiscalItemConversionFactor(item) : current.suggestedStockQuantity / Number(current.fiscalQuantity || 1);
+          next = confirmFiscalNotePackagingConversion(next, current.noteId, current.itemId, auditActor, item?.stockUnit || current.suggestedStockUnit, factor);
+        }
+        await commitOwnerChange(next);
+        setSelected(next.warehouse?.fiscalNotes?.find(note => note.id === selected.id) ?? selected);
+        toast.success('Conversão confirmada aplicada ao estoque e às requisições vinculadas.');
+        return;
+      }
       const next = replacePostedFiscalNote(project, selected.id, selected, auditActor);
       await commitOwnerChange(next);
       setSelected(next.warehouse?.fiscalNotes?.find(note => note.id === selected.id) ?? null);

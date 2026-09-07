@@ -3453,8 +3453,21 @@ export function reviewFiscalNotePackagingConversions(project: Project): FiscalNo
     if (note.status !== 'aprovada') continue;
     for (const item of note.items) {
       const suggestion = suggestFiscalItemStockConversion(item.description);
-      if (!suggestion || fiscalItemStockConversionStatus(item) === 'confirmed' || fiscalItemConversionFactor(item) !== 1) continue;
       const entry = wh.movements.find(movement => movement.fiscalNoteId === note.id && movement.fiscalNoteItemId === item.id && movement.type === 'entrada' && !movement.reversedById);
+      if (!suggestion) continue;
+      const conversionConfirmed = fiscalItemStockConversionStatus(item) === 'confirmed' || fiscalItemConversionFactor(item) !== 1;
+      const expectedStockQuantity = conversionConfirmed
+        ? fiscalItemStockQuantity(item)
+        : Number(item.quantity || 0) * suggestion.contentPerPackage;
+      const expectedStockUnit = conversionConfirmed ? fiscalItemStockUnit(item) : suggestion.stockUnit;
+      const entryNeedsReconciliation = !!entry && (
+        Number(entry.quantity || 0) !== expectedStockQuantity ||
+        normalizeLookup(entry.itemUnit) !== normalizeLookup(expectedStockUnit)
+      );
+      // Conversões já aplicadas corretamente não voltam para a fila; porém uma
+      // conversão confirmada cuja entrada ainda está em CX/BD precisa ser
+      // reconciliada sem recriar a nota e sem perder requisições históricas.
+      if (conversionConfirmed && !entryNeedsReconciliation) continue;
       const blockers: string[] = [];
       if (!entry) blockers.push('A entrada original não possui vínculo técnico suficiente para correção automática.');
       const dependentMovementIds: string[] = [];
@@ -3481,9 +3494,9 @@ export function reviewFiscalNotePackagingConversions(project: Project): FiscalNo
         description: item.description,
         fiscalQuantity: Number(item.quantity || 0),
         fiscalUnit: item.unit?.trim() || 'UN',
-        currentStockQuantity: fiscalItemStockQuantity(item),
-        suggestedStockQuantity: Number(item.quantity || 0) * suggestion.contentPerPackage,
-        suggestedStockUnit: suggestion.stockUnit,
+        currentStockQuantity: entry ? Number(entry.quantity || 0) : fiscalItemStockQuantity(item),
+        suggestedStockQuantity: expectedStockQuantity,
+        suggestedStockUnit: expectedStockUnit,
         packaging: suggestion.packaging,
         dependentMovementIds,
         dependentMovementCount: dependentMovementIds.length,

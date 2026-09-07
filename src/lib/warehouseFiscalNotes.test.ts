@@ -411,6 +411,18 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(corrected.warehouse!.movements[0]).toMatchObject({ quantity: 1000, itemUnit: 'PC' });
   });
 
+  it('reconcilia uma conversão já confirmada cuja entrada antiga ainda está em caixas', () => {
+    const legacy = note({ status: 'a_conferir', items: [{ ...note().items[0], description: 'PARAFUSO (EMB C/1000PCS)', quantity: 2, unit: 'CX', itemKey: 'warehouse-nf|caixa-confirmada' }] });
+    const posted = approveFiscalNote(withNote(legacy), legacy.id);
+    posted.warehouse!.fiscalNotes[0].items[0] = {
+      ...posted.warehouse!.fiscalNotes[0].items[0], stockQuantity: 2000, stockUnit: 'PC', conversionFactor: 1000, stockConversionStatus: 'confirmed',
+    };
+    const review = reviewFiscalNotePackagingConversions(posted)[0];
+    expect(review).toMatchObject({ currentStockQuantity: 2, suggestedStockQuantity: 2000, suggestedStockUnit: 'PC', canCorrect: true });
+    const corrected = confirmFiscalNotePackagingConversion(posted, legacy.id, legacy.items[0].id);
+    expect(corrected.warehouse!.movements[0]).toMatchObject({ quantity: 2000, itemUnit: 'PC' });
+  });
+
   it('converte retiradas históricas na unidade antiga junto com a entrada', () => {
     const legacy = note({ status: 'a_conferir', items: [{ ...note().items[0], description: 'BUCHA CAIXA 100', quantity: 1, unit: 'CX' }] });
     const posted = approveFiscalNote(withNote(legacy), legacy.id);
