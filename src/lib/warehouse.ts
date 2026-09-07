@@ -3524,7 +3524,7 @@ export interface FiscalNotePackagingConversionReviewItem {
   currentStockQuantity: number;
   suggestedStockQuantity: number;
   suggestedStockUnit: string;
-  packaging: FiscalStockConversionSuggestion['packaging'] | 'fornecedor';
+  packaging: FiscalStockConversionSuggestion['packaging'] | 'fornecedor' | 'manual';
   /** Movimentos posteriores na mesma unidade antiga que podem ser convertidos com segurança. */
   dependentMovementIds: string[];
   dependentMovementCount: number;
@@ -3538,7 +3538,10 @@ export interface FiscalNotePackagingConversionReviewItem {
  * legada podem ser convertidas na mesma confirmação, preservando o consumo
  * já registrado. Referências em outra unidade continuam bloqueadas.
  */
-export function reviewFiscalNotePackagingConversions(project: Project): FiscalNotePackagingConversionReviewItem[] {
+export function reviewFiscalNotePackagingConversions(
+  project: Project,
+  manualCorrection?: Pick<FiscalNotePackagingConversionReviewItem, 'noteId' | 'itemId'>,
+): FiscalNotePackagingConversionReviewItem[] {
   const wh = ensureWarehouse(project).warehouse!;
   const reviews: FiscalNotePackagingConversionReviewItem[] = [];
   for (const note of wh.fiscalNotes ?? []) {
@@ -3547,12 +3550,13 @@ export function reviewFiscalNotePackagingConversions(project: Project): FiscalNo
       const suggestion = suggestFiscalItemStockConversion(item.description);
       const supplierPresentation = findWarehouseSupplierPresentation(project, note.supplierCnpj, item.productCode);
       const entry = wh.movements.find(movement => movement.fiscalNoteId === note.id && movement.fiscalNoteItemId === item.id && movement.type === 'entrada' && !movement.reversedById);
-      if (!suggestion && !supplierPresentation) continue;
+      const isManualCorrection = manualCorrection?.noteId === note.id && manualCorrection.itemId === item.id;
+      if (!suggestion && !supplierPresentation && !isManualCorrection) continue;
       const conversionConfirmed = fiscalItemStockConversionStatus(item) === 'confirmed' || fiscalItemConversionFactor(item) !== 1;
       const expectedStockQuantity = conversionConfirmed
         ? fiscalItemStockQuantity(item)
-        : Number(item.quantity || 0) * Number(supplierPresentation?.contentPerFiscalUnit ?? suggestion!.contentPerPackage);
-      const expectedStockUnit = conversionConfirmed ? fiscalItemStockUnit(item) : (supplierPresentation?.stockUnit ?? suggestion!.stockUnit);
+        : Number(item.quantity || 0) * Number(supplierPresentation?.contentPerFiscalUnit ?? suggestion?.contentPerPackage ?? 1);
+      const expectedStockUnit = conversionConfirmed ? fiscalItemStockUnit(item) : (supplierPresentation?.stockUnit ?? suggestion?.stockUnit ?? item.unit?.trim() ?? 'UN');
       const entryNeedsReconciliation = !!entry && (
         Number(entry.quantity || 0) !== expectedStockQuantity ||
         normalizeLookup(entry.itemUnit) !== normalizeLookup(expectedStockUnit)
@@ -3590,7 +3594,7 @@ export function reviewFiscalNotePackagingConversions(project: Project): FiscalNo
         currentStockQuantity: entry ? Number(entry.quantity || 0) : fiscalItemStockQuantity(item),
         suggestedStockQuantity: expectedStockQuantity,
         suggestedStockUnit: expectedStockUnit,
-        packaging: supplierPresentation ? 'fornecedor' : suggestion!.packaging,
+        packaging: supplierPresentation ? 'fornecedor' : suggestion?.packaging ?? 'manual',
         dependentMovementIds,
         dependentMovementCount: dependentMovementIds.length,
         blockers,
@@ -3609,8 +3613,10 @@ export function confirmFiscalNotePackagingConversion(
   actor?: WarehouseActorInput,
   stockUnit = 'PC',
   contentPerPackage?: number,
+  allowManualCorrection = false,
 ): Project {
-  const review = reviewFiscalNotePackagingConversions(project).find(item => item.noteId === noteId && item.itemId === itemId);
+  const review = reviewFiscalNotePackagingConversions(project, allowManualCorrection ? { noteId, itemId } : undefined)
+    .find(item => item.noteId === noteId && item.itemId === itemId);
   if (!review) throw new Error('Esta entrada não possui uma conversão histórica pendente.');
   if (!review.canCorrect) throw new Error(review.blockers[0] || 'A correção desta entrada exige conferência manual.');
   const p = ensureWarehouse(project);

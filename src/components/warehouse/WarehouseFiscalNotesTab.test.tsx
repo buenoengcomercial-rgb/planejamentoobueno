@@ -227,6 +227,24 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(onProjectChange).not.toHaveBeenCalled();
   });
 
+  it('abre a correção histórica ao converter uma nota já lançada sem apresentação detectada', () => {
+    const project = projectWithPostedNote();
+    const note = project.warehouse!.fiscalNotes[0];
+    project.warehouse!.movements = [{
+      id: 'entry-manual-conversion', createdAt: '2026-08-15T10:00:00.000Z', type: 'entrada', date: '2026-08-15',
+      itemKey: note.items[0].itemKey!, itemDescription: note.items[0].description, itemUnit: 'UN', quantity: 2,
+      fiscalNoteId: note.id, fiscalNoteItemId: note.items[0].id,
+    }];
+    render(<WarehouseFiscalNotesTab project={project} onProjectChange={vi.fn()} canManage canEditPosted canReviewPackagingConversions />);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Visualizar dados e grupos' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Converter para estoque' }));
+
+    expect(screen.getByRole('heading', { name: 'Editar conversão para estoque' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Conteúdo por embalagem para correção histórica' })).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Confirmar e atualizar estoque' })).toBeDisabled();
+  });
+
   it('permite ao proprietário excluir também uma entrada arquivada', () => {
     const onProjectChange = vi.fn();
     render(<WarehouseFiscalNotesTab project={projectWithArchivedOrphan()} onProjectChange={onProjectChange} canManage canDelete />);

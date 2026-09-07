@@ -1062,7 +1062,7 @@ export interface WarehouseFiscalNoteItem {
   /** Sugestões por descrição precisam ser conferidas antes de gerar estoque. */
   stockConversionStatus?: WarehouseFiscalStockConversionStatus;
   /** Embalagem identificada na descrição, preservada para conferência e auditoria. */
-  stockConversionPackaging?: 'balde' | 'caixa' | 'saco' | 'fornecedor';
+  stockConversionPackaging?: 'balde' | 'caixa' | 'saco' | 'fornecedor' | 'manual';
   stockConversionConfirmedAt?: string;
   stockConversionConfirmedBy?: WarehouseAuditActor;
   /** Origem da proposta de conversão, sem alterar os dados fiscais. */

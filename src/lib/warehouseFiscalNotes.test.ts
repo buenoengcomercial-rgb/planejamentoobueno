@@ -439,6 +439,18 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(corrected.warehouse!.movements[0]).toMatchObject({ quantity: 1000, itemUnit: 'PC' });
   });
 
+  it('permite iniciar uma correção histórica manual quando a descrição não identifica a embalagem', () => {
+    const legacy = note({ status: 'a_conferir', items: [{ ...note().items[0], description: 'PARAFUSO CHIPBOARD FLANGEADO MADEIRA 4.0X45', quantity: 4, unit: 'UNID', itemKey: 'warehouse-nf|parafuso-manual' }] });
+    const posted = approveFiscalNote(withNote(legacy), legacy.id);
+
+    expect(reviewFiscalNotePackagingConversions(posted)).toHaveLength(0);
+    expect(reviewFiscalNotePackagingConversions(posted, { noteId: legacy.id, itemId: legacy.items[0].id })[0]).toMatchObject({ packaging: 'manual', canCorrect: true });
+
+    const corrected = confirmFiscalNotePackagingConversion(posted, legacy.id, legacy.items[0].id, { userName: 'Proprietário' }, 'PC', 500, true);
+    expect(corrected.warehouse!.fiscalNotes[0].items[0]).toMatchObject({ quantity: 4, unit: 'UNID', stockQuantity: 2000, stockUnit: 'PC', conversionFactor: 500, stockConversionStatus: 'confirmed', stockConversionPackaging: 'manual' });
+    expect(corrected.warehouse!.movements[0]).toMatchObject({ quantity: 2000, itemUnit: 'PC' });
+  });
+
   it('reconcilia uma conversão já confirmada cuja entrada antiga ainda está em caixas', () => {
     const legacy = note({ status: 'a_conferir', items: [{ ...note().items[0], description: 'PARAFUSO (EMB C/1000PCS)', quantity: 2, unit: 'CX', itemKey: 'warehouse-nf|caixa-confirmada' }] });
     const posted = approveFiscalNote(withNote(legacy), legacy.id);

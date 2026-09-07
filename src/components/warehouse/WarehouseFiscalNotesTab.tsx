@@ -460,8 +460,8 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const [cancelOpen, setCancelOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [reconciliationOpen, setReconciliationOpen] = useState(false);
-  const [packagingCorrection, setPackagingCorrection] = useState<{ noteId: string; itemId: string } | null>(null);
-  const [packagingCorrectionFactor, setPackagingCorrectionFactor] = useState(1);
+  const [packagingCorrection, setPackagingCorrection] = useState<{ noteId: string; itemId: string; manual?: boolean } | null>(null);
+  const [packagingCorrectionFactor, setPackagingCorrectionFactor] = useState<number | undefined>(undefined);
   const [packagingCorrectionUnit, setPackagingCorrectionUnit] = useState('PC');
   const [previewAttachment, setPreviewAttachment] = useState<WarehouseAttachment | null>(null);
   const [cancelReason, setCancelReason] = useState('');
@@ -476,7 +476,8 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const archivedStockReview = useMemo(() => reviewArchivedFiscalNoteStock(project), [project]);
   const packagingConversionReviews = useMemo(() => reviewFiscalNotePackagingConversions(project), [project]);
   const selectedPackagingCorrection = useMemo(() => packagingCorrection
-    ? packagingConversionReviews.find(review => review.noteId === packagingCorrection.noteId && review.itemId === packagingCorrection.itemId)
+    ? reviewFiscalNotePackagingConversions(project, packagingCorrection.manual ? packagingCorrection : undefined)
+      .find(review => review.noteId === packagingCorrection.noteId && review.itemId === packagingCorrection.itemId)
     : undefined, [packagingConversionReviews, packagingCorrection]);
   const selectedPackagingReviews = useMemo(() => selected
     ? packagingConversionReviews.filter(review => review.noteId === selected.id)
@@ -721,6 +722,13 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const startItemStockConversion = (index: number) => {
     const item = selected?.items[index];
     if (!item) return;
+    if (isPosted) {
+      if (!canReviewPackagingConversions || !selected) return;
+      setPackagingCorrection({ noteId: selected.id, itemId: item.id, manual: true });
+      setPackagingCorrectionFactor(undefined);
+      setPackagingCorrectionUnit(fiscalItemStockUnit(item));
+      return;
+    }
     updateItem(index, {
       stockConversionStatus: 'manual',
       stockConversionSource: 'manual',
@@ -863,7 +871,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const confirmHistoricalPackagingConversion = async (review: (typeof packagingConversionReviews)[number], stockUnit = review.suggestedStockUnit, contentPerPackage?: number) => {
     try {
       setProcessing(true);
-      const next = confirmFiscalNotePackagingConversion(project, review.noteId, review.itemId, auditActor, stockUnit, contentPerPackage);
+      const next = confirmFiscalNotePackagingConversion(project, review.noteId, review.itemId, auditActor, stockUnit, contentPerPackage, review.packaging === 'manual');
       if (onCommitProject) await onCommitProject(next);
       else onProjectChange(next);
       const correctedQuantity = Number(review.fiscalQuantity || 0) * Number(contentPerPackage ?? (review.fiscalQuantity > 0 ? review.suggestedStockQuantity / review.fiscalQuantity : 0));
@@ -1024,10 +1032,10 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
                   <table className="w-full min-w-[1160px] table-fixed text-xs">
                     <colgroup><col className="w-[80px]" /><col className="w-[300px]" /><col className="w-[96px]" /><col className="w-[64px]" /><col className="w-[110px]" /><col className="w-[122px]" /><col className="w-[100px]" /><col className="w-[110px]" /><col className="w-[140px]" />{(isDraft || canEditPostedRecord) && <col className="w-11" />}</colgroup>
                     <thead className="bg-muted text-muted-foreground"><tr><th className="h-11 p-2 text-left align-middle">Cód. prod.</th><th className="h-11 p-2 text-left align-middle">Descrição</th><th className="h-11 p-1 text-center align-middle">Qtd. NF</th><th className="h-11 p-1 text-center align-middle">Un. NF</th><th className="h-11 p-1 text-center align-middle">V. unit. NF</th><th className="h-11 p-1 text-center align-middle">Total NF</th><th className="h-11 p-1 text-center align-middle">V. unit. global</th><th className="h-11 p-1 text-center align-middle">V. total global</th><th className="h-11 p-1 text-left align-middle">Grupo de compra</th>{(isDraft || canEditPostedRecord) && <th className="h-11 p-1" />}</tr></thead>
-                    <tbody>{selected.items.map((item, index) => <ItemTableRow key={item.id} note={selected} item={item} index={index} editable={!!isDraft || canEditPostedRecord} groupEditable={(canManage || canEditPosted) && !isArchived} purchaseGroups={purchaseGroups} onUpdate={updateItem} onConfirmStockConversion={confirmItemStockConversion} onStartStockConversion={startItemStockConversion} onGroupChange={value => updatePurchaseGroup(selected, item, value)} onRemove={() => setSelected({ ...selected, items: selected.items.filter((_, itemIndex) => itemIndex !== index) })} />)}</tbody>
+                    <tbody>{selected.items.map((item, index) => <ItemTableRow key={item.id} note={selected} item={item} index={index} editable={!!isDraft || canEditPostedRecord} canConvertStock={!!isDraft || (!!isPosted && canReviewPackagingConversions)} groupEditable={(canManage || canEditPosted) && !isArchived} purchaseGroups={purchaseGroups} onUpdate={updateItem} onConfirmStockConversion={confirmItemStockConversion} onStartStockConversion={startItemStockConversion} onGroupChange={value => updatePurchaseGroup(selected, item, value)} onRemove={() => setSelected({ ...selected, items: selected.items.filter((_, itemIndex) => itemIndex !== index) })} />)}</tbody>
                   </table>
                 </div>
-                <div className="space-y-2 md:hidden">{selected.items.map((item, index) => <ItemMobileCard key={item.id} note={selected} item={item} index={index} expanded={expandedItemId === item.id} onToggle={() => setExpandedItemId(current => current === item.id ? null : item.id)} editable={!!isDraft || canEditPostedRecord} groupEditable={(canManage || canEditPosted) && !isArchived} purchaseGroups={purchaseGroups} onUpdate={updateItem} onConfirmStockConversion={confirmItemStockConversion} onStartStockConversion={startItemStockConversion} onGroupChange={value => updatePurchaseGroup(selected, item, value)} onRemove={() => setSelected({ ...selected, items: selected.items.filter((_, itemIndex) => itemIndex !== index) })} />)}</div>
+                <div className="space-y-2 md:hidden">{selected.items.map((item, index) => <ItemMobileCard key={item.id} note={selected} item={item} index={index} expanded={expandedItemId === item.id} onToggle={() => setExpandedItemId(current => current === item.id ? null : item.id)} editable={!!isDraft || canEditPostedRecord} canConvertStock={!!isDraft || (!!isPosted && canReviewPackagingConversions)} groupEditable={(canManage || canEditPosted) && !isArchived} purchaseGroups={purchaseGroups} onUpdate={updateItem} onConfirmStockConversion={confirmItemStockConversion} onStartStockConversion={startItemStockConversion} onGroupChange={value => updatePurchaseGroup(selected, item, value)} onRemove={() => setSelected({ ...selected, items: selected.items.filter((_, itemIndex) => itemIndex !== index) })} />)}</div>
                 {!selected.items.length && <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">Nenhum item identificado. Adicione um item para concluir o lançamento.</div>}
               </section>
 
@@ -1284,6 +1292,7 @@ interface ItemEditorProps {
   item: WarehouseFiscalNoteItem;
   index: number;
   editable: boolean;
+  canConvertStock: boolean;
   groupEditable: boolean;
   purchaseGroups: Array<{ id: string; name: string }>;
   onUpdate: (index: number, patch: Partial<WarehouseFiscalNoteItem>) => void;
@@ -1303,7 +1312,7 @@ function CostReviewBadge({ note }: { note: WarehouseFiscalNote }) {
   return null;
 }
 
-function ItemTableRow({ note, item, index, editable, groupEditable, purchaseGroups, onUpdate, onConfirmStockConversion, onStartStockConversion, onGroupChange, onRemove }: ItemEditorProps) {
+function ItemTableRow({ note, item, index, editable, canConvertStock, groupEditable, purchaseGroups, onUpdate, onConfirmStockConversion, onStartStockConversion, onGroupChange, onRemove }: ItemEditorProps) {
   const showConversion = fiscalItemStockConversionStatus(item) !== 'not_required' || fiscalItemConversionFactor(item) !== 1;
   return <>
   <tr className="border-t">
@@ -1319,11 +1328,11 @@ function ItemTableRow({ note, item, index, editable, groupEditable, purchaseGrou
     {editable && <td className="p-1 text-center align-middle"><Button size="icon" variant="ghost" className="min-h-11 text-destructive" onClick={onRemove} aria-label="Remover item"><Trash2 className="h-4 w-4" /></Button></td>}
   </tr>
   {showConversion && <tr className="border-t bg-primary/5"><td colSpan={editable ? 10 : 9} className="p-2"><StockConversionEditor item={item} index={index} editable={editable} onUpdate={onUpdate} onConfirm={onConfirmStockConversion} /></td></tr>}
-  {editable && !showConversion && <tr className="border-t bg-primary/5"><td colSpan={10} className="p-2"><Button type="button" variant="outline" className="min-h-11" onClick={() => onStartStockConversion(index)}>Converter para estoque</Button></td></tr>}
+  {canConvertStock && !showConversion && <tr className="border-t bg-primary/5"><td colSpan={10} className="p-2"><Button type="button" variant="outline" className="min-h-11" onClick={() => onStartStockConversion(index)}>Converter para estoque</Button></td></tr>}
   </>;
 }
 
-function ItemMobileCard({ note, item, index, expanded = false, onToggle, editable, groupEditable, purchaseGroups, onUpdate, onConfirmStockConversion, onStartStockConversion, onGroupChange, onRemove }: ItemEditorProps) {
+function ItemMobileCard({ note, item, index, expanded = false, onToggle, editable, canConvertStock, groupEditable, purchaseGroups, onUpdate, onConfirmStockConversion, onStartStockConversion, onGroupChange, onRemove }: ItemEditorProps) {
   return <article className="overflow-hidden rounded-md border bg-card">
     <button type="button" className="flex min-h-16 w-full items-center gap-3 p-3 text-left" aria-expanded={expanded} onClick={onToggle}>
       <div className="min-w-0 flex-1"><div className="truncate text-sm font-semibold">{item.description || 'Item sem descrição'}</div><div className="mt-1 truncate text-xs text-muted-foreground">{item.productCode || 'Sem código'} · {decimal(Number(item.quantity || 0))} {item.unit || 'UN'}</div></div>
@@ -1333,7 +1342,7 @@ function ItemMobileCard({ note, item, index, expanded = false, onToggle, editabl
     {expanded && <div className="space-y-3 border-t p-3">
       <div className="grid grid-cols-2 gap-2"><div className="col-span-2"><MobileField label="Descrição"><AutoGrowDescription ariaLabel={`Descrição do item ${index + 1} no celular`} mobile value={item.description} readOnly={!editable} onChange={description => onUpdate(index, { description })} /></MobileField></div><MobileField label="Cód. prod."><Input aria-label={`Código do item ${index + 1} no celular`} className="min-h-11 text-center text-base" value={item.productCode || ''} readOnly={!editable} onChange={event => onUpdate(index, { productCode: event.target.value })} /></MobileField><MobileField label="Grupo de compra"><PurchaseGroupSelect value={item.purchaseGroupId} disabled={!groupEditable} groups={purchaseGroups} onChange={onGroupChange} /></MobileField></div>
       <fieldset className="rounded-md border p-2"><legend className="px-1 text-xs font-semibold text-muted-foreground">Dados da nota</legend><div className="grid grid-cols-2 gap-2"><MobileField label="Quantidade NF"><DecimalInput ariaLabel={`Quantidade NF do item ${index + 1} no celular`} value={item.quantity} readOnly={!editable} onChange={quantity => onUpdate(index, { quantity, totalPrice: quantity * Number(item.unitPrice || 0) })} /></MobileField><MobileField label="Unidade NF"><Input aria-label={`Unidade NF do item ${index + 1} no celular`} className="min-h-11 text-center text-base" value={item.unit || 'UN'} readOnly={!editable} onChange={event => onUpdate(index, { unit: event.target.value })} /></MobileField><MoneyInput label="Valor unitário NF" ariaLabel={`Valor unitário NF do item ${index + 1} no celular`} value={item.unitPrice} readOnly={!editable} onChange={unitPrice => onUpdate(index, { unitPrice: unitPrice ?? 0, totalPrice: Number(item.quantity || 0) * Number(unitPrice || 0) })} /><MoneyInput label="Total do item NF" ariaLabel={`Total NF do item ${index + 1} no celular`} value={item.totalPrice} readOnly={!editable} onChange={totalPrice => onUpdate(index, { totalPrice: totalPrice ?? 0, unitPrice: Number(item.quantity || 0) > 0 ? Number(totalPrice || 0) / Number(item.quantity) : 0 })} /></div></fieldset>
-      {(fiscalItemStockConversionStatus(item) !== 'not_required' || fiscalItemConversionFactor(item) !== 1) ? <StockConversionEditor item={item} index={index} editable={editable} onUpdate={onUpdate} onConfirm={onConfirmStockConversion} /> : editable && <Button type="button" variant="outline" className="min-h-11 w-full" onClick={() => onStartStockConversion(index)}>Converter para estoque</Button>}
+      {(fiscalItemStockConversionStatus(item) !== 'not_required' || fiscalItemConversionFactor(item) !== 1) ? <StockConversionEditor item={item} index={index} editable={editable} onUpdate={onUpdate} onConfirm={onConfirmStockConversion} /> : canConvertStock && <Button type="button" variant="outline" className="min-h-11 w-full" onClick={() => onStartStockConversion(index)}>Converter para estoque</Button>}
       <fieldset className="rounded-md border p-2"><legend className="px-1 text-xs font-semibold text-muted-foreground">Custo real rateado</legend><div className="grid grid-cols-2 gap-2"><MobileValue label="V. unit. global" value={money(fiscalItemGlobalUnitPrice(item, note))} /><MobileValue label="V. total global" value={money(fiscalItemGlobalTotal(item, note))} /></div></fieldset>
       {editable && <Button variant="outline" className="min-h-11 w-full text-destructive" onClick={onRemove}><Trash2 className="mr-2 h-4 w-4" />Remover item</Button>}
     </div>}
