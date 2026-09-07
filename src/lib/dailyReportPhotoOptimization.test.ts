@@ -43,6 +43,20 @@ describe('optimizeDailyReportPhoto', () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it('reduz qualidade até respeitar o limite de 100 KB antes do upload', async () => {
+    globalThis.createImageBitmap = vi.fn().mockResolvedValue({ width: 1280, height: 960, close: vi.fn() }) as typeof createImageBitmap;
+    const toBlob = vi.spyOn(canvas, 'toBlob').mockImplementation((_callback, _type, quality) => {
+      const size = quality === 0.76 ? 150 * 1024 : 99 * 1024;
+      _callback(new Blob([new Uint8Array(size)], { type: 'image/jpeg' }));
+    });
+
+    const optimized = await optimizeDailyReportPhoto(new File(['foto'], 'campo.jpg', { type: 'image/jpeg' }));
+
+    expect(optimized.size).toBeLessThanOrEqual(100 * 1024);
+    expect(toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/jpeg', 0.76);
+    expect(toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/jpeg', 0.64);
+  });
+
   it('recusa o upload quando a imagem não pode ser decodificada', async () => {
     globalThis.createImageBitmap = vi.fn().mockRejectedValue(new Error('arquivo inválido')) as typeof createImageBitmap;
     await expect(optimizeDailyReportPhoto(new File(['x'], 'quebrada.jpg', { type: 'image/jpeg' })))
@@ -64,6 +78,6 @@ describe('optimizeDailyReportPhoto', () => {
   });
 
   it('declara a política de armazenamento do Diário', () => {
-    expect(dailyReportPhotoOptimization).toEqual({ maxSide: 1280, jpegQuality: 0.76 });
+    expect(dailyReportPhotoOptimization).toMatchObject({ maxSide: 1280, minSide: 320, maxBytes: 100 * 1024 });
   });
 });

@@ -147,7 +147,7 @@ export function useDailyReportPhotos({
         const savedBytes = Math.max(0, originalBytes - storedBytes);
         const mb = (bytes: number) => `${(bytes / 1024 / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} MB`;
         toast({
-          title: `${uploaded.length} foto(s) otimizada(s) e anexada(s)`,
+          title: `${uploaded.length} foto(s) otimizada(s) e anexada(s) — até 100 KB cada`,
           description: savedBytes > 0 ? `Armazenamento reduzido de ${mb(originalBytes)} para ${mb(storedBytes)}.` : `Versão otimizada enviada (${mb(storedBytes)}).`,
         });
       }
