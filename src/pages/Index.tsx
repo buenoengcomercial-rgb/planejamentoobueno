@@ -7,7 +7,6 @@ import UndoButton from '@/components/UndoButton';
 import SaveStatusIndicator, { SaveStatus } from '@/components/SaveStatusIndicator';
 import CloudDraftRecoveryDialog from '@/components/CloudDraftRecoveryDialog';
 import MigrationDialog from '@/components/MigrationDialog';
-import ImportSyntheticDialog from '@/components/ImportSyntheticDialog';
 import { Menu, X, Loader2, Building2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { applyRupToProject, applyDailyLogsToProject, calculateCPM, captureBaseline, syncBaselineWithRup, settleAllDependencies } from '@/lib/calculations';
@@ -31,6 +30,7 @@ const AdditiveSchedule = lazyWithReload(() => import('@/components/AdditiveSched
 const RealCost = lazyWithReload(() => import('@/components/RealCost'));
 const Materials = lazyWithReload(() => import('@/components/Materials'));
 const WarehouseView = lazyWithReload(() => import('@/components/warehouse/Warehouse'));
+const ImportSyntheticDialog = lazyWithReload(() => import('@/components/ImportSyntheticDialog'));
 import { useAuth } from '@/hooks/useAuth';
 import { useOrganization } from '@/hooks/useOrganization';
 import { canAccessAppView, canCreateProject, canDeleteProject, canEditDailyReport, canEditProject, canEditWarehouse, ROLE_LABELS } from '@/lib/organizations';
@@ -1433,18 +1433,27 @@ export default function Index() {
       </main>
 
       {draftProjectForImport && (
-        <ImportSyntheticDialog
-          open={createProjectDialogOpen}
-          onClose={() => {
-            setCreateProjectDialogOpen(false);
-            setDraftProjectForImport(null);
-          }}
-          project={draftProjectForImport}
-          onProjectChange={() => undefined}
-          mode="create"
-          existingProjectNames={sidebarProjects.map(p => p.name)}
-          onCreateProject={handleCreateProjectFromImport}
-        />
+        <Suspense fallback={
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-4 backdrop-blur-sm" role="status" aria-live="polite">
+            <div className="flex items-center gap-3 rounded-lg border bg-card px-4 py-3 text-sm font-medium shadow-lg">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              Carregando importador de planilha…
+            </div>
+          </div>
+        }>
+          <ImportSyntheticDialog
+            open={createProjectDialogOpen}
+            onClose={() => {
+              setCreateProjectDialogOpen(false);
+              setDraftProjectForImport(null);
+            }}
+            project={draftProjectForImport}
+            onProjectChange={() => undefined}
+            mode="create"
+            existingProjectNames={sidebarProjects.map(p => p.name)}
+            onCreateProject={handleCreateProjectFromImport}
+          />
+        </Suspense>
       )}
 
       {orgId && <MigrationDialog organizationId={orgId} onMigrated={async () => { await refreshCloudList(); }} />}
