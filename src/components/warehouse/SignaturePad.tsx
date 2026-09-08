@@ -35,9 +35,10 @@ const getCanvasPoint = (canvas: HTMLCanvasElement, event: React.PointerEvent<HTM
 const prepareCanvas = (canvas: HTMLCanvasElement, height: number) => {
   const rect = canvas.getBoundingClientRect();
   const cssWidth = Math.max(1, rect.width || 640);
+  const cssHeight = Math.max(1, rect.height || height);
   const ratio = Math.max(1, window.devicePixelRatio || 1);
   const width = Math.round(cssWidth * ratio);
-  const pixelHeight = Math.round(height * ratio);
+  const pixelHeight = Math.round(cssHeight * ratio);
 
   if (canvas.width !== width || canvas.height !== pixelHeight) {
     canvas.width = width;
@@ -197,19 +198,19 @@ export default function SignaturePad({ value, onChange, label, height = 220 }: P
 
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
         <DialogContent
-          className="w-[calc(100vw-1rem)] max-w-2xl max-h-[95dvh] overflow-y-auto p-4 sm:p-6"
+          className="flex h-[100dvh] max-h-[100dvh] w-screen max-w-none flex-col gap-0 overflow-hidden rounded-none p-4 sm:p-8"
           onPointerDownOutside={event => event.preventDefault()}
           onInteractOutside={event => event.preventDefault()}
         >
-          <DialogHeader>
+          <DialogHeader className="shrink-0 pb-4">
             <DialogTitle>Assinar{label ? `: ${label}` : ''}</DialogTitle>
-            <DialogDescription>Risque somente a assinatura no campo abaixo. Ao confirmar, apenas os traços serão recortados e colocados no campo principal.</DialogDescription>
+            <DialogDescription>Use toda a tela como caixa de assinatura. Risque somente a assinatura; ao confirmar, apenas os traços serão recortados e ajustados proporcionalmente no campo principal.</DialogDescription>
           </DialogHeader>
-          <div className="rounded-lg border bg-background p-2">
+          <div className="min-h-0 flex-1 rounded-lg border bg-background p-2">
             <canvas
               ref={editorCanvasRef}
-              className="block w-full touch-none cursor-crosshair rounded border border-dashed border-primary/40 bg-white outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset"
-              style={{ height }}
+              className="block h-full min-h-0 w-full touch-none cursor-crosshair rounded border border-dashed border-primary/40 bg-white outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset"
+              style={{ height: '100%' }}
               tabIndex={0}
               aria-label={`${label || 'Área de assinatura'} — editor`}
               onPointerDown={startDrawing}
@@ -218,7 +219,7 @@ export default function SignaturePad({ value, onChange, label, height = 220 }: P
               onPointerCancel={finishDrawing}
             />
           </div>
-          <DialogFooter className="gap-2 sm:space-x-0">
+          <DialogFooter className="shrink-0 gap-2 pt-4 sm:space-x-0">
             <Button type="button" variant="outline" className="min-h-11" onClick={clearEditor}>Limpar campo</Button>
             <Button type="button" variant="outline" className="min-h-11" onClick={() => setEditorOpen(false)}>Cancelar</Button>
             <Button type="button" className="min-h-11" disabled={!editorHasInk} onClick={confirmSignature}>Usar assinatura</Button>
