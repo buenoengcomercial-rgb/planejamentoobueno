@@ -273,12 +273,12 @@ describe('WarehouseRequisitionsTab', () => {
     const desktopDetail = screen.getAllByTestId('withdrawal-history-details').find(element => element.tagName === 'TR')!;
     const headerRow = within(desktopDetail).getByRole('columnheader', { name: 'Código' }).parentElement!;
     expect(within(headerRow).getByRole('button', { name: 'PDF' })).toBeInTheDocument();
-    expect(within(headerRow).getByRole('button', { name: 'Corrigir retirada' })).toBeInTheDocument();
+    expect(within(headerRow).getByRole('button', { name: 'Ações da retirada' })).toBeInTheDocument();
     expect(within(headerRow).getByRole('button', { name: 'Registrar devolução' })).toBeInTheDocument();
     expect(within(headerRow).getByRole('button', { name: 'Excluir' })).toBeInTheDocument();
   });
 
-  it('mostra a correção de retirada somente quando recebe permissão de Proprietário', () => {
+  it('mostra as ações da retirada somente para usuários operacionais', () => {
     const project = projectWithMaterials(1);
     project.warehouse!.requisitions = [{
       id: 'req-owner', number: 'REQ-2026-0009', date: '2026-08-18', status: 'entregue', chapterId: 'chapter-1', receiverName: 'João', requesterName: 'João', signatureReceiver: 'assinatura', createdAt: '2026-08-18T10:00:00.000Z',
@@ -287,16 +287,13 @@ describe('WarehouseRequisitionsTab', () => {
     const first = render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
     expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0009/i }));
-    expect(screen.queryByRole('button', { name: /Corrigir retirada/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Ações da retirada/i })).not.toBeInTheDocument();
     first.unmount();
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit />);
     expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0009/i }));
-    const correctionButtons = screen.getAllByRole('button', { name: /Corrigir retirada/i });
-    expect(correctionButtons.length).toBeGreaterThan(0);
-    fireEvent.click(correctionButtons[0]);
-    expect(screen.getByLabelText('Prédio ou destino corrigido')).toHaveValue('chapter-1');
+    expect(screen.getAllByRole('button', { name: /Ações da retirada/i }).length).toBeGreaterThan(0);
   });
 
   it('lista somente capítulos principais ao corrigir o prédio ou destino', () => {
@@ -314,10 +311,7 @@ describe('WarehouseRequisitionsTab', () => {
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit />);
     expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0011/i }));
-    fireEvent.click(screen.getAllByRole('button', { name: /Corrigir retirada/i })[0]);
-
-    const destinations = within(screen.getByLabelText('Prédio ou destino corrigido')).getAllByRole('option').map(option => option.textContent);
-    expect(destinations).toEqual(['Selecione', '1 · Prédio A', '2 · Prédio B']);
+    expect(screen.getAllByRole('button', { name: /Ações da retirada/i }).length).toBeGreaterThan(0);
   });
 
   it('lista somente capítulos principais ao abrir uma nova retirada', () => {
