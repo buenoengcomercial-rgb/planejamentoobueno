@@ -92,7 +92,7 @@ const exportInk = (canvas: HTMLCanvasElement): string | undefined => {
   }
 };
 
-export default function SignaturePad({ value, onChange, label, height = 120 }: Props) {
+export default function SignaturePad({ value, onChange, label, height = 220 }: Props) {
   const editorCanvasRef = useRef<HTMLCanvasElement>(null);
   const drawingRef = useRef(false);
   const focusTimerRef = useRef<number | undefined>(undefined);
@@ -196,7 +196,11 @@ export default function SignaturePad({ value, onChange, label, height = 120 }: P
       </div>
 
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
-        <DialogContent className="w-[calc(100vw-1rem)] max-w-2xl max-h-[90dvh] overflow-y-auto p-4 sm:p-6">
+        <DialogContent
+          className="w-[calc(100vw-1rem)] max-w-2xl max-h-[95dvh] overflow-y-auto p-4 sm:p-6"
+          onPointerDownOutside={event => event.preventDefault()}
+          onInteractOutside={event => event.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>Assinar{label ? `: ${label}` : ''}</DialogTitle>
             <DialogDescription>Risque somente a assinatura no campo abaixo. Ao confirmar, apenas os traços serão recortados e colocados no campo principal.</DialogDescription>

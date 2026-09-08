@@ -22,7 +22,7 @@ describe('SignaturePad', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D);
     vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,assinatura');
     vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue({
-      x: 100, y: 20, left: 100, top: 20, right: 300, bottom: 140, width: 200, height: 120, toJSON: () => ({}),
+      x: 100, y: 20, left: 100, top: 20, right: 300, bottom: 240, width: 200, height: 220, toJSON: () => ({}),
     });
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
   });
@@ -65,6 +65,19 @@ describe('SignaturePad', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
     expect(onChange).not.toHaveBeenCalled();
     expect(screen.getAllByRole('img', { name: 'Assinatura registrada' })).toHaveLength(1);
+  });
+
+  it('mantém o editor aberto quando há clique fora e fecha apenas por ação explícita', async () => {
+    const onChange = vi.fn();
+    render(<SignaturePad label="Assinatura de teste" onChange={onChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Focar assinatura' }));
+    await screen.findByLabelText('Assinatura de teste — editor');
+
+    fireEvent.pointerDown(document.body);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('limpa a assinatura confirmada pelo botão principal', () => {
