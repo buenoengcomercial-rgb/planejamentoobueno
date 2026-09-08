@@ -20,6 +20,7 @@ describe('SignaturePad', () => {
     Object.values(context).forEach(value => { if (typeof value === 'function' && 'mockClear' in value) value.mockClear(); });
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D);
     vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,assinatura');
+    Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     vi.spyOn(HTMLCanvasElement.prototype, 'getBoundingClientRect').mockReturnValue({
       x: 100, y: 20, left: 100, top: 20, right: 300, bottom: 140, width: 200, height: 120, toJSON: () => ({}),
     });
@@ -46,5 +47,18 @@ describe('SignaturePad', () => {
     expect(context.moveTo).toHaveBeenCalledWith(50, 30);
     expect(context.lineTo).toHaveBeenCalledWith(80, 60);
     expect(onChange).toHaveBeenCalledWith('data:image/png;base64,assinatura');
+  });
+
+  it('foca o canvas, rola até o campo e destaca a área ao usar o botão', () => {
+    const onChange = vi.fn();
+    render(<SignaturePad label="Assinatura de teste" onChange={onChange} />);
+    const canvas = screen.getByLabelText('Assinatura de teste');
+    const focusButton = screen.getByRole('button', { name: 'Focar assinatura' });
+
+    fireEvent.click(focusButton);
+
+    expect(canvas).toHaveFocus();
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+    expect(focusButton.closest('.overflow-hidden')).toHaveClass('border-primary', 'ring-2');
   });
 });
