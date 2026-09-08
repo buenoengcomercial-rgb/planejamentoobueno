@@ -19,7 +19,17 @@ interface Props {
 
 const getCanvasPoint = (canvas: HTMLCanvasElement, event: React.PointerEvent<HTMLCanvasElement>) => {
   const rect = canvas.getBoundingClientRect();
-  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  const ratio = Math.max(1, window.devicePixelRatio || 1);
+  // O canvas pode ter sido dimensionado antes do modal terminar a animação.
+  // Converta sempre da área realmente exibida para o espaço lógico usado pelo contexto.
+  const logicalWidth = Math.max(1, canvas.width / ratio);
+  const logicalHeight = Math.max(1, canvas.height / ratio);
+  const displayWidth = Math.max(1, rect.width || logicalWidth);
+  const displayHeight = Math.max(1, rect.height || logicalHeight);
+  return {
+    x: (event.clientX - rect.left) * (logicalWidth / displayWidth),
+    y: (event.clientY - rect.top) * (logicalHeight / displayHeight),
+  };
 };
 
 const prepareCanvas = (canvas: HTMLCanvasElement, height: number) => {
@@ -95,15 +105,16 @@ export default function SignaturePad({ value, onChange, label, height = 120 }: P
 
   useEffect(() => {
     if (!editorOpen) return undefined;
-    const canvas = editorCanvasRef.current;
-    if (!canvas) return undefined;
-
-    prepareCanvas(canvas, height);
-    const context = canvas.getContext('2d');
-    context?.clearRect(0, 0, canvas.width, canvas.height);
     drawingRef.current = false;
     setEditorHasInk(false);
     focusTimerRef.current = window.setTimeout(() => {
+      // O conteúdo do Radix é portalizado e pode só receber o tamanho final
+      // depois deste efeito. Recalcular aqui evita usar a resolução padrão 300px.
+      const canvas = editorCanvasRef.current;
+      if (!canvas) return;
+      prepareCanvas(canvas, height);
+      const context = canvas.getContext('2d');
+      context?.clearRect(0, 0, canvas.width, canvas.height);
       canvas.focus({ preventScroll: true });
       canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 0);
