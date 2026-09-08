@@ -273,9 +273,17 @@ describe('WarehouseRequisitionsTab', () => {
     const desktopDetail = screen.getAllByTestId('withdrawal-history-details').find(element => element.tagName === 'TR')!;
     const headerRow = within(desktopDetail).getByRole('columnheader', { name: 'Código' }).parentElement!;
     expect(within(headerRow).getByRole('button', { name: 'PDF' })).toBeInTheDocument();
-    expect(within(headerRow).getByRole('button', { name: 'Ações da retirada' })).toBeInTheDocument();
+    const actionsButton = within(headerRow).getByRole('button', { name: 'Ações da retirada' });
+    expect(actionsButton).toBeInTheDocument();
     expect(within(headerRow).getByRole('button', { name: 'Registrar devolução' })).toBeInTheDocument();
     expect(within(headerRow).getByRole('button', { name: 'Excluir' })).toBeInTheDocument();
+
+    fireEvent.click(actionsButton);
+    const dialog = screen.getByRole('dialog', { name: 'Ações da retirada' });
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Tipo de ação')).toHaveValue('complement');
+    expect(within(dialog).getByText('Válvula de Aço Carbono')).toBeInTheDocument();
+    expect(within(dialog).queryByText('MAT-000')).not.toBeInTheDocument();
   });
 
   it('mostra as ações da retirada somente para usuários operacionais', () => {
@@ -311,7 +319,11 @@ describe('WarehouseRequisitionsTab', () => {
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit />);
     expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0011/i }));
-    expect(screen.getAllByRole('button', { name: /Ações da retirada/i }).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByRole('button', { name: /Ações da retirada/i })[0]);
+    fireEvent.change(screen.getByLabelText('Tipo de ação'), { target: { value: 'correction' } });
+    const destinations = within(screen.getByLabelText('Prédio / capítulo')).getAllByRole('option').map(option => option.textContent);
+    expect(destinations).toEqual(['Selecione', '1 · Prédio A', '2 · Prédio B']);
+    expect(screen.getByLabelText('Quantidade de Material disponível 0')).toHaveValue(2);
   });
 
   it('lista somente capítulos principais ao abrir uma nova retirada', () => {

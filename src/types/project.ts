@@ -1214,6 +1214,8 @@ export interface WarehouseRequisition {
   warehouseOperator?: string;
   deliveryAttachments?: WarehouseAttachment[];
   deliveryIdempotencyKey?: string;
+  /** Chaves de correções já aplicadas, evitando reenvio concorrente. */
+  correctionIdempotencyKeys?: string[];
   /** Se true, foi espelhada no diário do dia. */
   publishedToDailyReportId?: string;
   createdAt: string;

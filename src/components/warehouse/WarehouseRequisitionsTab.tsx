@@ -7,7 +7,6 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Camera, Check, ChevronDown, ChevronsUpDown, FileDown, HardHat, History, ImagePlus, PackageOpen, Pencil, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import {
   computeWarehouseRows,
   addRequisitionSupplement,
@@ -209,8 +208,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<WithdrawalErrors>({});
   const [returnTarget, setReturnTarget] = useState<WarehouseRequisition | null>(null);
-  const [correctionTarget, setCorrectionTarget] = useState<WarehouseRequisition | null>(null);
-  const [supplementTarget, setSupplementTarget] = useState<WarehouseRequisition | null>(null);
+  const [actionTarget, setActionTarget] = useState<WarehouseRequisition | null>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
   const buildingGroups = useMemo(
@@ -494,7 +492,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
                         <div className="space-y-3 md:hidden">{dateGroup.requisitions.map(requisition => (
                           <WithdrawalHistoryCard key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement}
                             onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })}
-                            onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onCorrect={() => setCorrectionTarget(requisition)} onSupplement={() => setSupplementTarget(requisition)} />
+                            onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onAction={() => setActionTarget(requisition)} />
                         ))}</div>
                         <div className="hidden min-w-0 overflow-x-auto md:block">
                           <table className="withdrawal-records w-full table-fixed text-xs">
@@ -503,7 +501,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
                             <tbody>{dateGroup.requisitions.map(requisition => (
                               <WithdrawalHistoryRow key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement}
                                 onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })}
-                                onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onCorrect={() => setCorrectionTarget(requisition)} onSupplement={() => setSupplementTarget(requisition)} />
+                                onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onAction={() => setActionTarget(requisition)} />
                             ))}</tbody>
                           </table>
                         </div>
@@ -517,8 +515,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
           </div>
       </section>
       <MaterialReturnDialog project={project} requisition={returnTarget} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setReturnTarget(null)} />
-      <CorrectionDialog project={project} requisition={correctionTarget} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setCorrectionTarget(null)} />
-      <RequisitionSupplementDialog project={project} requisition={supplementTarget} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setSupplementTarget(null)} />
+      <RequisitionActionDialog project={project} requisition={actionTarget} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setActionTarget(null)} />
       {confirmDialog}
     </div>
   );
@@ -544,11 +541,10 @@ interface WithdrawalHistoryEntryProps {
   onToggle: () => void;
   onDelete: () => void;
   onReturn: () => void;
-  onCorrect: () => void;
-  onSupplement: () => void;
+  onAction: () => void;
 }
 
-function WithdrawalHistoryCard({ project, requisition, movements, active, canDelete, canEdit, canSupplement, onToggle, onDelete, onReturn, onCorrect, onSupplement }: WithdrawalHistoryEntryProps) {
+function WithdrawalHistoryCard({ project, requisition, movements, active, canDelete, canEdit, canSupplement, onToggle, onDelete, onReturn, onAction }: WithdrawalHistoryEntryProps) {
   const latest = latestRequisitionActivity(requisition, movements);
   return <article data-expanded={active} className={`withdrawal-record overflow-hidden rounded-lg border bg-card ${active ? 'border-primary/60' : 'border-border'}`}>
     <button type="button" className="min-h-11 w-full p-3 text-left hover:bg-muted/30" onClick={onToggle} aria-expanded={active}>
@@ -557,11 +553,11 @@ function WithdrawalHistoryCard({ project, requisition, movements, active, canDel
       <div className="mt-1 text-xs text-muted-foreground">{requisition.items.length} item(ns) · Operação: {formatOperationalDate(requisition.date)}</div>
       <div className="text-xs text-muted-foreground">Último registro: {formatRecordedAt({ createdAt: latest }, requisition.date)}</div>
     </button>
-    {active && <div data-testid="withdrawal-history-details" className="withdrawal-detail withdrawal-branch mb-3 mr-2 rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} onDelete={onDelete} onReturn={onReturn} onCorrect={onCorrect} onSupplement={onSupplement} /></div>}
+    {active && <div data-testid="withdrawal-history-details" className="withdrawal-detail withdrawal-branch mb-3 mr-2 rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} onDelete={onDelete} onReturn={onReturn} onAction={onAction} /></div>}
   </article>;
 }
 
-function WithdrawalHistoryRow({ project, requisition, movements, active, canDelete, canEdit, canSupplement, onToggle, onDelete, onReturn, onCorrect, onSupplement }: WithdrawalHistoryEntryProps) {
+function WithdrawalHistoryRow({ project, requisition, movements, active, canDelete, canEdit, canSupplement, onToggle, onDelete, onReturn, onAction }: WithdrawalHistoryEntryProps) {
   const latest = latestRequisitionActivity(requisition, movements);
   return <Fragment>
     <tr data-testid="withdrawal-history-row" aria-expanded={active} tabIndex={0} aria-label={`Retirada ${requisition.number}`} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggle(); } }} className={`withdrawal-record cursor-pointer border-y bg-card ${active ? 'border-primary/60' : 'border-border'}`} onClick={onToggle}>
@@ -574,7 +570,7 @@ function WithdrawalHistoryRow({ project, requisition, movements, active, canDele
       <td className="p-2"><WarehouseStatusBadge label={requisition.status === 'rascunho' ? 'Pendente legado' : 'Entregue'} tone={requisition.status === 'rascunho' ? 'warning' : 'success'} /></td>
       <td className="p-2"><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} createdAt={requisition.createdAt} updatedAt={requisition.updatedAt} className="space-y-0.5" /></td>
     </tr>
-    {active && <tr data-testid="withdrawal-history-details" className="withdrawal-detail-row"><td colSpan={8} className="!px-0 py-3"><div className="withdrawal-detail withdrawal-branch rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} onDelete={onDelete} onReturn={onReturn} onCorrect={onCorrect} onSupplement={onSupplement} /></div></td></tr>}
+    {active && <tr data-testid="withdrawal-history-details" className="withdrawal-detail-row"><td colSpan={8} className="!px-0 py-3"><div className="withdrawal-detail withdrawal-branch rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} onDelete={onDelete} onReturn={onReturn} onAction={onAction} /></div></td></tr>}
   </Fragment>;
 }
 
@@ -583,7 +579,7 @@ function PhotoPreview({ file, onRemove }: { file: File; onRemove: () => void }) 
   return <div className="relative aspect-square overflow-hidden rounded-md border"><img src={url} alt={file.name} className="h-full w-full object-cover" onLoad={() => URL.revokeObjectURL(url)} /><Button type="button" size="icon" variant="destructive" className="absolute right-1 top-1 h-8 w-8" onClick={onRemove} aria-label={`Remover ${file.name}`}><X className="h-4 w-4" /></Button></div>;
 }
 
-function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupplement, onDelete, onReturn, onCorrect, onSupplement }: { project: Project; requisition: WarehouseRequisition; canDelete: boolean; canEdit: boolean; canSupplement: boolean; onDelete: () => void; onReturn: () => void; onCorrect: () => void; onSupplement: () => void }) {
+function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupplement, onDelete, onReturn, onAction }: { project: Project; requisition: WarehouseRequisition; canDelete: boolean; canEdit: boolean; canSupplement: boolean; onDelete: () => void; onReturn: () => void; onAction: () => void }) {
   const returns = ensureWarehouse(project).warehouse!.movements
     .filter(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.requisitionId === requisition.id && !movement.reversedById)
     .slice()
@@ -599,11 +595,131 @@ function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupple
   ].filter(Boolean).join('\n');
   const actions = <div className="withdrawal-detail-actions flex flex-wrap justify-end gap-1">
     <Button size="sm" variant="outline" className="h-8 px-2 text-[11px]" onClick={() => generateRequisitionReceipt(project, requisition)}><FileDown className="mr-1 h-3.5 w-3.5" />PDF</Button>
-    {canCorrect && requisition.status === 'entregue' && <DropdownMenu><DropdownMenuTrigger asChild><Button size="sm" variant="outline" className="h-8 px-2 text-[11px]" onClick={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()}><Pencil className="mr-1 h-3.5 w-3.5" />Ações da retirada</Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onClick={onSupplement}><Plus className="mr-2 h-4 w-4" />Adicionar complemento</DropdownMenuItem><DropdownMenuItem disabled={returns.length > 0} onClick={onCorrect}><Pencil className="mr-2 h-4 w-4" />Corrigir retirada</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
+    {canCorrect && requisition.status === 'entregue' && <Button size="sm" variant="outline" className="h-8 px-2 text-[11px]" onClick={event => { event.stopPropagation(); onAction(); }} onPointerDown={event => event.stopPropagation()}><Pencil className="mr-1 h-3.5 w-3.5" />Ações da retirada</Button>}
     {hasReturnable && <Button size="sm" className="h-8 px-2 text-[11px]" onClick={onReturn}><RotateCcw className="mr-1 h-3.5 w-3.5" />Registrar devolução</Button>}
     {canDelete && <Button size="sm" variant="destructive" className="h-8 px-2 text-[11px]" onClick={onDelete}><Trash2 className="mr-1 h-3.5 w-3.5" />Excluir</Button>}
   </div>;
   return <div className="space-y-2">{canCorrect && returns.length > 0 && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">Esta retirada possui devolução registrada. Para preservar o histórico, a correção de material ou quantidade está bloqueada.</div>}{notes && <div className="rounded-md border border-muted-foreground/20 bg-background/70 px-3 py-2 text-sm"><span className="mr-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Observação:</span>{notes}</div>}<div className="overflow-x-auto"><table className="withdrawal-materials w-full min-w-[1020px] table-fixed text-xs"><colgroup><col className="w-[8%]" /><col /><col className="w-[5%]" /><col className="w-[7%]" /><col className="w-[7%]" /><col className="w-[8%]" /><col className="w-[37%]" /></colgroup><thead><tr><th className="p-1.5 text-left">Código</th><th className="p-1.5 text-left">Material</th><th className="p-1.5 text-left">Un.</th><th className="p-1.5 text-right">Retirado</th><th className="p-1.5 text-right text-success">Devolvido</th><th className="p-1.5 text-right text-primary">Em campo</th><th className="p-1 text-right align-middle">{actions}</th></tr></thead><tbody>{requisition.items.map(item => { const summary = returnableByItem.get(item.itemKey); return <tr key={item.itemKey} className="border-t"><td className="p-1.5">{item.code || '—'}</td><td className="p-1.5 md:truncate" title={item.description}>{item.description}</td><td className="p-1.5">{item.unit}</td><td className="p-1.5 text-right font-mono">{item.quantity.toLocaleString('pt-BR')}</td><td className="p-1.5 text-right font-mono text-success">{(summary?.returnedQuantity ?? 0).toLocaleString('pt-BR')}</td><td className="p-1.5 text-right font-mono font-bold text-primary">{(summary?.availableQuantity ?? item.quantity).toLocaleString('pt-BR')}</td><td aria-hidden="true" className="p-0" /></tr>; })}</tbody></table></div>{returns.length > 0 && <div className="rounded-lg border border-success/30 bg-success/5 p-3"><div className="mb-2 text-sm font-bold text-success">Devoluções registradas</div><div className="space-y-2 text-sm">{returns.map(movement => <div key={movement.id} className="rounded-md border border-success/20 bg-background/70 p-2"><strong>{movement.returnNumber || 'Devolução'}</strong> · operação: {formatOperationalDate(movement.date)} · registro: {formatRecordedAt(movement, movement.date)} · devolvido por {movement.returnerName || 'Não informado'}<div className="mt-1 font-medium text-success">{movement.itemDescription}: {movement.quantity.toLocaleString('pt-BR')} {movement.itemUnit}</div></div>)}</div></div>}</div>;
+}
+
+type RequisitionActionMode = 'complement' | 'correction';
+
+function RequisitionActionDialog({ project, requisition, auditActor, onProjectChange, onClose }: { project: Project; requisition: WarehouseRequisition | null; auditActor?: WarehouseAuditActor; onProjectChange: (project: Project) => void; onClose: () => void }) {
+  const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
+  const numbering = useMemo(() => getChapterNumbering(project), [project]);
+  const chapters = useMemo(() => flattenPhasesByChapter(project).filter(phase => !phase.parentId).map(phase => ({ id: phase.id, name: `${numbering.get(phase.id) ?? phase.customNumber ?? ''} · ${phase.name}`.replace(/^\s*·\s*/, '') })), [numbering, project]);
+  const [mode, setMode] = useState<RequisitionActionMode>('complement');
+  const [date, setDate] = useState(warehouseOperationalDate());
+  const [chapterId, setChapterId] = useState('');
+  const [receiverName, setReceiverName] = useState('');
+  const [notes, setNotes] = useState('');
+  const [items, setItems] = useState<WarehouseRequisitionItem[]>([]);
+  const [signatureReceiver, setSignatureReceiver] = useState<string>();
+  const [photos, setPhotos] = useState<File[]>([]);
+  const [materialSearch, setMaterialSearch] = useState('');
+  const [saving, setSaving] = useState(false);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  const galleryRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!requisition) return;
+    setMode('complement');
+    setDate(warehouseOperationalDate());
+    setChapterId(requisition.chapterId ?? '');
+    setReceiverName(requisition.receiverName || requisition.requesterName || '');
+    setNotes('');
+    setItems([]);
+    setSignatureReceiver(undefined);
+    setPhotos([]);
+    setMaterialSearch('');
+  }, [requisition]);
+
+  const selectedKeys = new Set(items.map(item => item.itemKey));
+  const availableMaterials = useMemo(() => {
+    const tokens = normalizeSearch(materialSearch).split(/\s+/).filter(Boolean);
+    return rows.filter(row => (mode === 'correction' || row.balance > 0) && !selectedKeys.has(row.key)).filter(row => {
+      const haystack = normalizeSearch([row.code, row.description, row.unit].filter(Boolean).join(' '));
+      return tokens.every(token => haystack.includes(token));
+    });
+  }, [items, materialSearch, mode, rows]);
+
+  const switchMode = (nextMode: RequisitionActionMode) => {
+    if (!requisition) return;
+    setMode(nextMode);
+    setDate(nextMode === 'correction' ? requisition.date : warehouseOperationalDate());
+    setChapterId(requisition.chapterId ?? '');
+    setReceiverName(requisition.receiverName || requisition.requesterName || '');
+    setNotes('');
+    setItems(nextMode === 'correction' ? requisition.items.map(item => ({ ...item })) : []);
+    setSignatureReceiver(undefined);
+    setPhotos([]);
+    setMaterialSearch('');
+  };
+
+  const addMaterial = (key: string) => {
+    const row = rows.find(candidate => candidate.key === key);
+    if (!row || selectedKeys.has(row.key)) return;
+    setItems(current => [...current, { itemKey: row.key, code: row.code, description: row.description, unit: row.unit, quantity: 1 }]);
+    setMaterialSearch('');
+  };
+
+  const addPhotos = (files: FileList | null) => {
+    if (!files) return;
+    const incoming = Array.from(files).filter(file => file.type.startsWith('image/'));
+    setPhotos(current => [...current, ...incoming].slice(0, 3));
+    if (cameraRef.current) cameraRef.current.value = '';
+    if (galleryRef.current) galleryRef.current.value = '';
+    if (incoming.length + photos.length > 3) toast.warning('A operação aceita no máximo três fotos.');
+  };
+
+  const save = async () => {
+    if (!requisition || saving) return;
+    if (!items.length || items.some(item => !(item.quantity > 0))) {
+      toast.error('Adicione materiais com quantidade positiva.');
+      return;
+    }
+    if (mode === 'correction' && !chapterId) {
+      toast.error('Selecione o prédio ou destino.');
+      return;
+    }
+    if (mode === 'correction' && !notes.trim()) {
+      toast.error('Informe o motivo da correção.');
+      return;
+    }
+    if (mode === 'correction' && requisition.status !== 'entregue') {
+      toast.error('Somente retiradas entregues podem ser corrigidas.');
+      return;
+    }
+    if (mode === 'correction' && ensureWarehouse(project).warehouse!.movements.some(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.requisitionId === requisition.id && !movement.reversedById)) {
+      toast.error('Esta retirada possui devolução e não pode ser corrigida.');
+      return;
+    }
+    if (mode === 'complement' && !signatureReceiver?.trim()) {
+      toast.error('Colete a assinatura de quem recebeu o complemento.');
+      return;
+    }
+    setSaving(true);
+    try {
+      if (mode === 'correction') {
+        const chapter = chapters.find(candidate => candidate.id === chapterId);
+        const next = correctDeliveredRequisition(project, requisition.id, { items, chapterId, chapterName: chapter?.name, reason: notes.trim() || undefined, idempotencyKey: `${requisition.id}:${date}:${JSON.stringify(items)}` }, auditActor);
+        onProjectChange(next);
+        toast.success('Retirada corrigida e histórico registrado.');
+      } else {
+        const attachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'withdrawals')));
+        const result = addRequisitionSupplement(project, { requisitionId: requisition.id, date, receiverName, signatureReceiver: signatureReceiver ?? '', notes: notes.trim() || undefined, attachments, idempotencyKey: uidWarehouse(), items }, auditActor);
+        onProjectChange(result.project);
+        toast.success('Complemento registrado e estoque baixado.');
+      }
+      onClose();
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <Dialog open={!!requisition} onOpenChange={open => !open && !saving && onClose()}><DialogContent className="warehouse-ui flex max-h-[95dvh] w-[calc(100vw-1rem)] max-w-6xl flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11"><DialogHeader className="border-b p-4 pr-16"><DialogTitle>Ações da retirada</DialogTitle><DialogDescription>Atualize esta retirada ou acrescente materiais sem perder o histórico original.</DialogDescription></DialogHeader><div className="min-h-0 flex-1 overflow-y-auto p-4"><section className="space-y-4">{requisition && <div className="grid gap-3 md:grid-cols-[220px_1fr]"><WarehouseField label="Operação"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={mode} onChange={event => switchMode(event.target.value as RequisitionActionMode)} aria-label="Tipo de ação"><option value="complement">Adicionar complemento</option><option value="correction" disabled={ensureWarehouse(project).warehouse!.movements.some(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.requisitionId === requisition.id && !movement.reversedById)}>Corrigir retirada</option></select></WarehouseField><div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-muted-foreground"><strong className="text-foreground">{requisition.number}</strong> · retirada original preservada</div></div>}<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3"><WarehouseField label="Data da operação"><Input className="min-h-11 text-base" type="date" value={date} onChange={event => setDate(event.target.value)} /></WarehouseField><WarehouseField label="Prédio / capítulo"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={chapterId} onChange={event => setChapterId(event.target.value)} disabled={mode === 'complement'} aria-label="Prédio / capítulo"><option value="">Selecione</option>{chapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapter.name}</option>)}</select></WarehouseField><WarehouseField label="Quem recebeu"><Input className="min-h-11 text-base" value={receiverName} onChange={event => setReceiverName(event.target.value)} disabled={mode === 'complement'} /></WarehouseField></div><div className="overflow-hidden rounded-xl border"><WarehouseSectionHeader icon={PackageOpen} title="Escolha os materiais" description="Busque e toque no material para adicionar." help="A busca encontra código, descrição e unidade; a lista exibe somente o nome e o saldo." /><div className="p-3"><div className="mb-3 rounded-xl border border-primary/30 bg-primary/5 p-3"><div className="mb-2 flex flex-wrap items-center justify-between gap-2"><div className="text-sm font-bold text-primary">Materiais selecionados</div><WarehouseStatusBadge label={`${items.length} item(ns)`} tone={items.length ? 'info' : 'neutral'} /></div><div className="grid gap-2">{items.map((item, index) => <div key={`${item.itemKey}-${index}`} className="grid min-h-16 items-center gap-2 rounded-lg border border-primary/25 bg-background p-3 sm:grid-cols-[1fr_120px_100px_44px]"><div className="min-w-0"><div className="truncate text-sm font-bold">{item.description}</div><div className="text-xs text-muted-foreground">{item.unit}</div></div><Input className="min-h-11 text-center text-base" type="number" min="0" step="any" value={item.quantity || ''} onChange={event => setItems(current => current.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry))} aria-label={`Quantidade de ${item.description}`} /><span className="text-center text-xs text-muted-foreground">Saldo {rows.find(row => row.key === item.itemKey)?.balance.toLocaleString('pt-BR') ?? '0'}</span><Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => setItems(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover ${item.description}`}><Trash2 className="h-4 w-4" /></Button></div>)}{!items.length && <div className="rounded-lg border border-dashed bg-background/60 p-3 text-sm text-muted-foreground">Nenhum material selecionado.</div>}</div></div><label htmlFor="requisition-action-material-search" className="sr-only">Buscar material</label><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input id="requisition-action-material-search" className="min-h-11 pl-9 text-base" value={materialSearch} onChange={event => setMaterialSearch(event.target.value)} placeholder="Buscar por código, descrição ou unidade" /></div><div className="mt-2 max-h-64 overflow-y-auto rounded-lg border bg-background" aria-label="Materiais disponíveis">{availableMaterials.map((row, index) => <button key={row.key} type="button" className={`flex min-h-16 w-full items-center gap-3 border-b px-3 text-left last:border-0 hover:bg-primary/10 ${index % 2 ? 'bg-muted/25' : ''}`} onClick={() => addMaterial(row.key)}><span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><PackageOpen className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-bold leading-snug">{row.description}</span><span className="mt-1 block text-xs font-medium text-muted-foreground">{row.unit}</span></span><WarehouseStatusBadge label={`Saldo ${row.balance.toLocaleString('pt-BR')}`} tone="info" /><Plus className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" /></button>)}{!availableMaterials.length && <WarehouseEmptyState message="Nenhum material encontrado" hint="Tente outra palavra na busca." className="m-2" />}</div></div></div><WarehouseField label="Motivo" optional={mode === 'complement'}><Input className="min-h-11 text-base" value={notes} onChange={event => setNotes(event.target.value)} placeholder={mode === 'correction' ? 'Informe o motivo da correção' : 'Motivo do complemento'} required={mode === 'correction'} /></WarehouseField>{mode === 'complement' && <><div className="rounded-lg border bg-muted/30 p-3"><SignaturePad label="Assinatura de quem recebeu o complemento" value={signatureReceiver} onChange={setSignatureReceiver} /></div><div className="space-y-3 rounded-lg border bg-muted/30 p-3"><div className="flex items-center gap-2 text-sm font-bold">Fotos da entrega <span className="rounded-full border bg-background px-2 py-0.5 text-xs text-muted-foreground">Opcional · até 3</span></div><div className="grid grid-cols-3 gap-2">{photos.map((photo, index) => <PhotoPreview key={`${photo.name}-${index}`} file={photo} onRemove={() => setPhotos(current => current.filter((_, photoIndex) => photoIndex !== index))} />)}</div><input ref={cameraRef} className="hidden" type="file" accept="image/*" capture="environment" onChange={event => addPhotos(event.target.files)} /><input ref={galleryRef} className="hidden" type="file" accept="image/*" multiple onChange={event => addPhotos(event.target.files)} /><div className="grid grid-cols-2 gap-2"><Button type="button" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3} onClick={() => cameraRef.current?.click()}><Camera className="mr-2 h-4 w-4" />Tirar foto</Button><Button type="button" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3} onClick={() => galleryRef.current?.click()}><ImagePlus className="mr-2 h-4 w-4" />Galeria</Button></div></div></>}</section></div><DialogFooter className="gap-2 border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:space-x-0"><Button variant="outline" className="min-h-11 sm:min-w-28" disabled={saving} onClick={onClose}>Cancelar</Button><Button className="min-h-11 font-bold sm:min-w-52" disabled={saving} onClick={() => void save()}><Check className="mr-2 h-4 w-4" />{saving ? 'Salvando...' : mode === 'complement' ? 'Confirmar complemento' : 'Salvar correção'}</Button></DialogFooter></DialogContent></Dialog>;
 }
 
 function RequisitionSupplementDialog({ project, requisition, auditActor, onProjectChange, onClose }: { project: Project; requisition: WarehouseRequisition | null; auditActor?: WarehouseAuditActor; onProjectChange: (project: Project) => void; onClose: () => void }) {

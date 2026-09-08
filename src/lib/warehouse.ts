@@ -914,6 +914,8 @@ export interface CorrectWarehouseRequisitionInput {
   items: Array<Pick<WarehouseRequisitionItem, 'itemKey' | 'code' | 'description' | 'unit' | 'quantity'>>;
   chapterId?: string;
   chapterName?: string;
+  reason?: string;
+  idempotencyKey?: string;
 }
 
 /** Corrige uma retirada entregue sem devoluções, preservando uma trilha de auditoria do Proprietário. */
@@ -928,6 +930,8 @@ export function correctDeliveredRequisition(
   const requisition = wh.requisitions.find(entry => entry.id === requisitionId);
   if (!requisition) throw new Error('Retirada não encontrada.');
   if (requisition.status !== 'entregue') throw new Error('Somente retiradas entregues podem ser corrigidas.');
+  const idempotencyKey = input.idempotencyKey?.trim();
+  if (idempotencyKey && requisition.correctionIdempotencyKeys?.includes(idempotencyKey)) return p;
   const returns = wh.movements.filter(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.requisitionId === requisitionId && !movement.reversedById);
   if (returns.length) throw new Error('Esta retirada possui devolução registrada e não pode ser corrigida.');
   if (!input.items.length) throw new Error('Informe ao menos um material para a retirada.');
@@ -993,6 +997,7 @@ export function correctDeliveredRequisition(
     taskId: destinationChanged ? undefined : requisition.taskId,
     taskName: destinationChanged ? undefined : requisition.taskName,
     items: correctedItems,
+    correctionIdempotencyKeys: idempotencyKey ? [...(requisition.correctionIdempotencyKeys ?? []), idempotencyKey] : requisition.correctionIdempotencyKeys,
     updatedAt: timestamp,
     updatedBy: auditActor ?? requisition.updatedBy,
   };
@@ -1014,7 +1019,7 @@ export function correctDeliveredRequisition(
   }
   return logToProject(next, {
     entityType: 'warehouse_requisition', entityId: requisitionId, action: 'updated',
-    title: `Retirada ${requisition.number} corrigida`, description: 'Materiais, quantidades e destino corrigidos pelo Proprietário.',
+    title: `Retirada ${requisition.number} corrigida`, description: input.reason?.trim() ? `Materiais, quantidades e destino corrigidos. Motivo: ${input.reason.trim()}` : 'Materiais, quantidades e destino corrigidos.',
     before: { requisition, movements: originalMovements }, after: { requisition: correctedRequisition, movements: movements.filter(movement => movement.requisitionId === requisitionId && movement.type === 'retirada') },
     userId: auditActor?.userId, userName: auditActor?.userName, userEmail: auditActor?.userEmail,
   });
