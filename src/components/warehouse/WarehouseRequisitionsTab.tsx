@@ -66,6 +66,15 @@ const normalizeSearch = (value?: string) => (value ?? '')
   .toLocaleLowerCase('pt-BR')
   .trim();
 
+/** Nome exibido nos seletores do formulário de ações, sem repetir o código fiscal. */
+function materialDisplayName(code?: string, description?: string) {
+  const value = (description ?? '').trim();
+  const normalizedCode = (code ?? '').trim();
+  if (!value || !normalizedCode) return value;
+  const escapedCode = normalizedCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return value.replace(new RegExp(`^${escapedCode}\\s*(?:[-–—·:|]\\s*)?`, 'i'), '').trim() || value;
+}
+
 type TimestampedWarehouseRecord = { createdAt?: string; updatedAt?: string };
 
 const hasRecordedTime = (value?: string) => !!value && /^\d{4}-\d{2}-\d{2}T/.test(value);
@@ -640,7 +649,7 @@ function RequisitionActionDialog({ project, requisition, auditActor, onProjectCh
     return rows.filter(row => (mode === 'correction' || row.balance > 0) && !selectedKeys.has(row.key)).filter(row => {
       const haystack = normalizeSearch([row.code, row.description, row.unit].filter(Boolean).join(' '));
       return tokens.every(token => haystack.includes(token));
-    });
+    }).map(row => ({ ...row, description: materialDisplayName(row.code, row.description), originalDescription: row.description }));
   }, [items, materialSearch, mode, rows]);
 
   const switchMode = (nextMode: RequisitionActionMode) => {
@@ -650,14 +659,14 @@ function RequisitionActionDialog({ project, requisition, auditActor, onProjectCh
     setChapterId(requisition.chapterId ?? '');
     setReceiverName(requisition.receiverName || requisition.requesterName || '');
     setNotes('');
-    setItems(nextMode === 'correction' ? requisition.items.map(item => ({ ...item })) : []);
+    setItems(nextMode === 'correction' ? requisition.items.map(item => ({ ...item, description: materialDisplayName(item.code, item.description) })) : []);
     setSignatureReceiver(undefined);
     setPhotos([]);
     setMaterialSearch('');
   };
 
   const addMaterial = (key: string) => {
-    const row = rows.find(candidate => candidate.key === key);
+    const row = availableMaterials.find(candidate => candidate.key === key);
     if (!row || selectedKeys.has(row.key)) return;
     setItems(current => [...current, { itemKey: row.key, code: row.code, description: row.description, unit: row.unit, quantity: 1 }]);
     setMaterialSearch('');
