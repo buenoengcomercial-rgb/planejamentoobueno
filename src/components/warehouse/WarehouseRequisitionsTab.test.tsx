@@ -281,7 +281,10 @@ describe('WarehouseRequisitionsTab', () => {
     fireEvent.click(actionsButton);
     const dialog = screen.getByRole('dialog', { name: 'Ações da retirada' });
     expect(dialog).toBeInTheDocument();
-    expect(within(dialog).getByLabelText('Tipo de ação')).toHaveValue('complement');
+    expect(within(dialog).queryByLabelText('Tipo de ação')).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('heading', { name: 'Materiais da retirada original' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Editar retirada' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('heading', { name: 'Adicionar complemento' })).toBeInTheDocument();
     expect(within(dialog).getByText('Válvula de Aço Carbono')).toBeInTheDocument();
     expect(within(dialog).queryByText('MAT-000')).not.toBeInTheDocument();
   });
@@ -304,6 +307,21 @@ describe('WarehouseRequisitionsTab', () => {
     expect(screen.getAllByRole('button', { name: /Ações da retirada/i }).length).toBeGreaterThan(0);
   });
 
+  it('exibe o histórico de edição com responsável e data no detalhe', () => {
+    const project = projectWithMaterials(1);
+    project.warehouse!.requisitions = [{
+      id: 'req-history', number: 'REQ-2026-0042', date: '2026-08-18', status: 'entregue', chapterId: 'chapter-1', chapterName: 'Prédio 1', receiverName: 'Ana', createdAt: '2026-08-18T10:00:00.000Z',
+      items: [{ itemKey: 'material-0', code: 'MAT-000', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
+    }];
+    project.auditLogs = [{ id: 'audit-history', entityType: 'warehouse_requisition', entityId: 'req-history', action: 'updated', title: 'Retirada REQ-2026-0042 corrigida', description: 'Quantidade ajustada. Motivo: conferência', at: '2026-08-18T12:30:00.000Z', userName: 'Maria', metadata: { operation: 'requisition_correction' } }];
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit />);
+    expandAllWithdrawalDateGroups();
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0042/i }));
+    expect(screen.getAllByText('Histórico de alterações').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Maria/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/18\/08\/2026/).length).toBeGreaterThan(0);
+  });
+
   it('lista somente capítulos principais ao corrigir o prédio ou destino', () => {
     const project = projectWithMaterials(1);
     project.phases = [
@@ -320,10 +338,10 @@ describe('WarehouseRequisitionsTab', () => {
     expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0011/i }));
     fireEvent.click(screen.getAllByRole('button', { name: /Ações da retirada/i })[0]);
-    fireEvent.change(screen.getByLabelText('Tipo de ação'), { target: { value: 'correction' } });
-    const destinations = within(screen.getByLabelText('Prédio / capítulo')).getAllByRole('option').map(option => option.textContent);
+    fireEvent.click(screen.getByRole('button', { name: 'Editar retirada' }));
+    const destinations = within(screen.getByLabelText('Prédio / destino da correção')).getAllByRole('option').map(option => option.textContent);
     expect(destinations).toEqual(['Selecione', '1 · Prédio A', '2 · Prédio B']);
-    expect(screen.getByLabelText('Quantidade de Material disponível 0')).toHaveValue(2);
+    expect(screen.getByLabelText('Quantidade corrigida de Material disponível 0')).toHaveValue(2);
   });
 
   it('lista somente capítulos principais ao abrir uma nova retirada', () => {

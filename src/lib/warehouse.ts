@@ -1022,6 +1022,7 @@ export function correctDeliveredRequisition(
     title: `Retirada ${requisition.number} corrigida`, description: input.reason?.trim() ? `Materiais, quantidades e destino corrigidos. Motivo: ${input.reason.trim()}` : 'Materiais, quantidades e destino corrigidos.',
     before: { requisition, movements: originalMovements }, after: { requisition: correctedRequisition, movements: movements.filter(movement => movement.requisitionId === requisitionId && movement.type === 'retirada') },
     userId: auditActor?.userId, userName: auditActor?.userName, userEmail: auditActor?.userEmail,
+    metadata: { operation: 'requisition_correction', requisitionNumber: requisition.number, reason: input.reason?.trim() || undefined, affectedMovementIds: [...correctedMovementIds] },
   });
 }
 
@@ -1203,6 +1204,7 @@ export function addRequisitionSupplement(project: Project, input: AddRequisition
       description: `${items.length} material(is) entregue(s) adicionalmente sem alterar a retirada original.`,
       before: { requisition }, after: { supplement, movements: movements.filter(movement => movement.originId === supplementId) },
       userId: auditActor?.userId, userName: auditActor?.userName, userEmail: auditActor?.userEmail,
+      metadata: { operation: 'requisition_supplement', requisitionNumber: requisition.number, supplementId, affectedMovementIds: movementIds },
     }), supplementId, movementIds,
   };
 }

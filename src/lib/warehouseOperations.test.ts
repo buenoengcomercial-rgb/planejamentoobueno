@@ -182,7 +182,7 @@ describe('operação integrada do almoxarifado', () => {
     expect(corrected.warehouse!.movements.filter(movement => movement.type === 'retirada')).toHaveLength(1);
     expect(corrected.dailyReports?.[0].observations).toContain('Cimento — 2 SC');
     expect(corrected.dailyReports?.[0].observations).toContain('2 Prédio 2');
-    expect(corrected.auditLogs?.at(-1)).toMatchObject({ entityType: 'warehouse_requisition', action: 'updated', userName: 'Proprietário', before: expect.any(Object), after: expect.any(Object) });
+    expect(corrected.auditLogs?.at(-1)).toMatchObject({ entityType: 'warehouse_requisition', action: 'updated', userName: 'Proprietário', before: expect.any(Object), after: expect.any(Object), metadata: { operation: 'requisition_correction', requisitionNumber: requisition.number } });
   });
 
   it('bloqueia correção quando a retirada possui devolução vinculada', () => {
