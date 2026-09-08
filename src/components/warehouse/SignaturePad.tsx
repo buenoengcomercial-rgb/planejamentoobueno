@@ -199,6 +199,7 @@ export default function SignaturePad({ value, onChange, label, height = 220 }: P
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
         <DialogContent
           className="flex h-[100dvh] max-h-[100dvh] w-screen max-w-none flex-col gap-0 overflow-hidden rounded-none p-4 sm:p-8"
+          style={{ display: 'flex', flexDirection: 'column', height: '100dvh', maxHeight: '100dvh', width: '100vw', maxWidth: 'none' }}
           onPointerDownOutside={event => event.preventDefault()}
           onInteractOutside={event => event.preventDefault()}
         >
@@ -206,11 +207,11 @@ export default function SignaturePad({ value, onChange, label, height = 220 }: P
             <DialogTitle>Assinar{label ? `: ${label}` : ''}</DialogTitle>
             <DialogDescription>Use toda a tela como caixa de assinatura. Risque somente a assinatura; ao confirmar, apenas os traços serão recortados e ajustados proporcionalmente no campo principal.</DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 flex-1 rounded-lg border bg-background p-2">
+          <div className="min-h-0 flex-1 rounded-lg border bg-background p-2" style={{ minHeight: 0, flex: 1 }}>
             <canvas
               ref={editorCanvasRef}
               className="block h-full min-h-0 w-full touch-none cursor-crosshair rounded border border-dashed border-primary/40 bg-white outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset"
-              style={{ height: '100%' }}
+              style={{ display: 'block', height: '100%', width: '100%' }}
               tabIndex={0}
               aria-label={`${label || 'Área de assinatura'} — editor`}
               onPointerDown={startDrawing}
