@@ -350,14 +350,24 @@ async function fiscalReaderPages(files: File[]): Promise<{ pages: FiscalReaderPa
 
   if (firstFile.type === 'application/pdf' || firstFile.name.toLowerCase().endsWith('.pdf')) {
     const extracted = await extractPdf(firstFile);
-    return {
-      text: extracted.text,
-      pages: extracted.pageTexts.map((extractedText, sourceIndex) => ({
+    const pages = extracted.pageTexts
+      .map((extractedText, sourceIndex) => ({
         sourceIndex,
-        extractedText,
+        extractedText: extractedText.trim(),
         imageDataUrl: extracted.images[sourceIndex],
-      })),
-    };
+      }))
+      .filter(page => page.extractedText || page.imageDataUrl?.startsWith('data:image/'));
+
+    if (pages.length === 0) {
+      // PDF sem texto legível e sem render disponível: renderiza as páginas como imagem.
+      const rendered = (await renderPdfPreview(firstFile)).slice(0, PDF_IMAGE_PAGES);
+      return {
+        text: extracted.text,
+        pages: rendered.map((imageDataUrl, sourceIndex) => ({ sourceIndex, imageDataUrl })),
+      };
+    }
+
+    return { text: extracted.text, pages };
   }
 
   const imageDataUrls = await photoDataUrlsForAi(files);
