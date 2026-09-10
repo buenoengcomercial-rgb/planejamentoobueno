@@ -120,6 +120,10 @@ export function useDailyReportPhotos({
   }, [project.id, selectedDate, pendingTaskId, photoTaskOptions, currentReport.responsible]);
 
   const uploadFiles = useCallback(async (files: FileList | File[], stamp?: DailyReportPhotoStamp) => {
+    if (!navigator.onLine) {
+      toast({ variant: 'destructive', title: 'Sem conexão', description: 'Conecte-se à internet antes de enviar fotos ao Diário.' });
+      return;
+    }
     const arr = Array.from(files).filter(f => f.type.startsWith('image/') || /\.(jpe?g|png|webp|heic)$/i.test(f.name));
     if (arr.length === 0) return;
     setUploadingCount(c => c + arr.length);
@@ -143,6 +147,11 @@ export function useDailyReportPhotos({
         }
       }
       if (uploaded.length > 0) {
+        if (!navigator.onLine) {
+          await supabase.storage.from(PHOTO_BUCKET).remove(uploaded.map(photo => photo.storagePath).filter(Boolean) as string[]);
+          toast({ variant: 'destructive', title: 'Envio cancelado', description: 'A conexão caiu antes de registrar as fotos no Diário. Nenhuma foto foi salva.' });
+          return;
+        }
         persist(r => ({ ...r, attachments: [...(r.attachments || []), ...uploaded] }));
         const savedBytes = Math.max(0, originalBytes - storedBytes);
         const mb = (bytes: number) => `${(bytes / 1024 / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} MB`;
@@ -164,6 +173,10 @@ export function useDailyReportPhotos({
   }, [project.contractInfo?.location, project.scheduleCalendar]);
 
   const prepareCameraCapture = useCallback(async (onLocationReady?: () => void) => {
+    if (!navigator.onLine) {
+      toast({ variant: 'destructive', title: 'Sem conexão', description: 'Conecte-se à internet antes de abrir a câmera.' });
+      return;
+    }
     if (cameraCaptureState === 'locating') return;
     setCameraCaptureState('locating');
     setCameraLocationError(undefined);
@@ -201,12 +214,22 @@ export function useDailyReportPhotos({
     await uploadFiles(files, stamp);
   }, [cameraPlaceLabel, uploadFiles]);
 
-  const updatePhoto = useCallback((id: string, patch: Partial<DailyReportAttachment>) => persist(r => ({
-    ...r,
-    attachments: (r.attachments || []).map(a => a.id === id ? { ...a, ...patch } : a),
-  })), [persist]);
+  const updatePhoto = useCallback((id: string, patch: Partial<DailyReportAttachment>) => {
+    if (!navigator.onLine) {
+      toast({ variant: 'destructive', title: 'Sem conexão', description: 'Conecte-se à internet para editar a legenda.' });
+      return;
+    }
+    persist(r => ({
+      ...r,
+      attachments: (r.attachments || []).map(a => a.id === id ? { ...a, ...patch } : a),
+    }));
+  }, [persist]);
 
   const removePhoto = useCallback(async (att: DailyReportAttachment) => {
+    if (!navigator.onLine) {
+      toast({ variant: 'destructive', title: 'Sem conexão', description: 'Conecte-se à internet para remover uma foto.' });
+      return;
+    }
     if (att.storagePath) {
       try { await supabase.storage.from(PHOTO_BUCKET).remove([att.storagePath]); } catch { /* ignore */ }
     }

@@ -23,12 +23,22 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { CalendarDays, CheckCircle2, History, LockKeyhole, LockKeyholeOpen } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 
-export default function DailyReport({ project, onProjectChange, undoButton, readOnly = false, canManageConclusion = false, initialDate, initialMeasurementFilter, navKey }: DailyReportProps) {
+export default function DailyReport({ project, onProjectChange, undoButton, readOnly = false, canManageConclusion = false, canClearDay = false, initialDate, initialMeasurementFilter, navKey }: DailyReportProps) {
   const [activeView, setActiveView] = useState<'day' | 'history'>('day');
   const [completionDialog, setCompletionDialog] = useState<'conclude' | 'reopen' | null>(null);
+  const [online, setOnline] = useState(() => navigator.onLine);
+  useEffect(() => {
+    const updateOnline = () => setOnline(navigator.onLine);
+    window.addEventListener('online', updateOnline);
+    window.addEventListener('offline', updateOnline);
+    return () => {
+      window.removeEventListener('online', updateOnline);
+      window.removeEventListener('offline', updateOnline);
+    };
+  }, []);
   const {
     selectedDate,
     setSelectedDate,
@@ -43,7 +53,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
   } = useDailyReportState({ project, onProjectChange, initialDate, initialMeasurementFilter, navKey });
 
   const concluded = !!currentReport.concludedAt;
-  const effectiveReadOnly = readOnly || concluded;
+  const effectiveReadOnly = readOnly || concluded || !online;
 
   const { measurementPeriods, activePeriod, periodDates, dateMembership, periodSummary } =
     useDailyReportPeriods({ project, selectedDate, measurementFilter });
@@ -141,6 +151,10 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
             </Button>
           )}
         </div>
+      ) : !online ? (
+        <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          Sem conexão. Conecte-se à internet para inserir fotos, legendas ou editar este Diário.
+        </div>
       ) : !readOnly ? (
         <div className="flex justify-end">
           <Button type="button" variant="outline" className="min-h-11" onClick={() => setCompletionDialog('conclude')}>
@@ -216,6 +230,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
                   currentReport={currentReport}
                   updateField={updateField}
                   onClearDay={clearDailyReport}
+                  canClearDay={canClearDay}
                   hasProduction={production.some(item => item.actualQuantity > 0)}
                 />
               </fieldset>

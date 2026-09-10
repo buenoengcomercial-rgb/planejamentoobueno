@@ -18,6 +18,7 @@ interface DailyProductionWorkspaceProps {
   productionReadOnly?: boolean;
   dailyReportReadOnly?: boolean;
   dailyReportCanManageConclusion?: boolean;
+  dailyReportCanClearDay?: boolean;
   onProductionChange: (next: Project | ((prev: Project) => Project)) => void;
   onDailyReportChange: (next: Project | ((prev: Project) => Project)) => void;
   dailyReportInitialDate?: string;
@@ -35,6 +36,7 @@ export default function DailyProductionWorkspace({
   productionReadOnly = false,
   dailyReportReadOnly = false,
   dailyReportCanManageConclusion = false,
+  dailyReportCanClearDay = false,
   onProductionChange,
   onDailyReportChange,
   dailyReportInitialDate,
@@ -63,6 +65,7 @@ export default function DailyProductionWorkspace({
               undoButton={dailyReportUndoButton}
               readOnly={dailyReportReadOnly}
               canManageConclusion={dailyReportCanManageConclusion}
+              canClearDay={dailyReportCanClearDay}
               initialDate={dailyReportInitialDate}
               initialMeasurementFilter={dailyReportInitialFilter}
               navKey={dailyReportNavKey}

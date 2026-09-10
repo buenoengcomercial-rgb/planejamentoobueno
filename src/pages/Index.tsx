@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useDeferredValue, useCallback, useRef, Suspense } from 'react';
 import { flushSync } from 'react-dom';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { AppView, Project } from '@/types/project';
+import { AppView, DailyReport, Project } from '@/types/project';
 import AppSidebar from '@/components/AppSidebar';
 import UndoButton from '@/components/UndoButton';
 import SaveStatusIndicator, { SaveStatus } from '@/components/SaveStatusIndicator';
@@ -61,6 +61,7 @@ import {
 } from '@/lib/cloudProjectDrafts';
 import type { ProjectMeta } from '@/lib/projectStorage';
 import { supabase } from '@/integrations/supabase/client';
+import { loadOpenDailyReport, saveOpenDailyReport } from '@/lib/dailyReportCloudSync';
 
 const UNDO_LIMIT = 20;
 const SAVE_DEBOUNCE_MS = 4000;
@@ -88,6 +89,24 @@ const VIEW_ROUTE: Record<AppView, string> = {
 const ROUTE_VIEW = Object.fromEntries(Object.entries(VIEW_ROUTE).map(([view, route]) => [route, view])) as Record<string, AppView>;
 
 type UndoStacks = Record<AppView, Project[]>;
+
+function reportForDate(project: Project, date: string): DailyReport | undefined {
+  return (project.dailyReports ?? []).find(report => report.date === date);
+}
+
+function replaceReportForDate(project: Project, date: string, report: DailyReport | null): Project {
+  const withoutDate = (project.dailyReports ?? []).filter(item => item.date !== date);
+  return { ...project, dailyReports: report ? [...withoutDate, report] : withoutDate };
+}
+
+function replaceSavedDailyReport(serialized: string | null, date: string, report: DailyReport | null): string | null {
+  if (!serialized) return serialized;
+  try {
+    return serializeProject(replaceReportForDate(JSON.parse(serialized) as Project, date, report));
+  } catch {
+    return serialized;
+  }
+}
 
 function createDraftProject(name = ''): Project {
   const today = new Date().toISOString().split('T')[0];
@@ -203,6 +222,8 @@ export default function Index() {
   const initialLoadRef = useRef(false);
   const inFlightSaveRef = useRef<Promise<void> | null>(null);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const dailyReportSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingDailyReportSavesRef = useRef(0);
   const currentProjectUpdatedAtRef = useRef<string | null>(null);
   const saveRequestSeqRef = useRef(0);
   const lastSavedProjectJsonRef = useRef<string | null>(null);
@@ -508,6 +529,14 @@ export default function Index() {
   const flushPendingSave = useCallback(async () => {
     if (!user || !orgId || !rawProject || !initialLoadRef.current || !canPersistProject) return true;
 
+    if (pendingDailyReportSavesRef.current > 0) {
+      try {
+        await dailyReportSaveQueueRef.current;
+      } catch {
+        return false;
+      }
+    }
+
     if (saveTimerRef.current) {
       window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
@@ -597,6 +626,9 @@ export default function Index() {
   useEffect(() => {
     if (!user || !orgId || !rawProject || !initialLoadRef.current) return;
     if (!canPersistProject) return;
+    // O Diário tem fila própria em daily_reports. Não permita que o autosave
+    // global regrave a obra enquanto uma edição direta está sendo conciliada.
+    if (pendingDailyReportSavesRef.current > 0) return;
     if (conflictDetectedRef.current) return;
     if (skipNextAutoSaveRef.current) {
       skipNextAutoSaveRef.current = false;
@@ -627,6 +659,7 @@ export default function Index() {
   const checkRemoteProjectVersion = useCallback(async () => {
     const current = rawProjectRef.current;
     if (!current || !initialLoadRef.current || document.visibilityState !== 'visible') return;
+    if (pendingDailyReportSavesRef.current > 0) return;
     if (!navigator.onLine) {
       setSaveStatus('offline');
       return;
@@ -671,6 +704,11 @@ export default function Index() {
   const refreshProjectFromRealtime = useCallback(async () => {
     const current = rawProjectRef.current;
     if (!current || !initialLoadRef.current || remoteCheckInFlightRef.current) return;
+    if (pendingDailyReportSavesRef.current > 0) {
+      if (realtimeRefreshTimerRef.current) window.clearTimeout(realtimeRefreshTimerRef.current);
+      realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(), 600);
+      return;
+    }
     if (saveTimerRef.current || inFlightSaveRef.current) {
       if (realtimeRefreshTimerRef.current) window.clearTimeout(realtimeRefreshTimerRef.current);
       realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(), 1200);
@@ -678,7 +716,7 @@ export default function Index() {
     }
     remoteCheckInFlightRef.current = true;
     try {
-      let latestLocal = rawProjectRef.current;
+      const latestLocal = rawProjectRef.current;
       if (!latestLocal || latestLocal.id !== current.id) return;
 
       // A nuvem é a fonte obrigatória: uma atualização remota nunca recebe
@@ -709,10 +747,33 @@ export default function Index() {
     }
   }, [handleCloudConflict, replaceProjectWithoutAutoSave]);
 
+  const refreshDailyReportFromRealtime = useCallback((incoming: DailyReport) => {
+    if (pendingDailyReportSavesRef.current > 0) return;
+    const current = rawProjectRef.current;
+    if (!current || !incoming.date) return;
+    setRawProject(previous => {
+      if (!previous || previous.id !== current.id) return previous;
+      const currentReport = reportForDate(previous, incoming.date);
+      if (currentReport && serializeProject(currentReport) === serializeProject(incoming)) return previous;
+      const next = replaceReportForDate(previous, incoming.date, incoming);
+      rawProjectRef.current = next;
+      return next;
+    });
+    lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, incoming.date, incoming);
+    setRemoteUpdateAt(new Date().toISOString());
+  }, []);
+
   useEffect(() => {
     const projectId = rawProject?.id;
     if (!projectId || bootLoading) return;
-    const queueRefresh = (payload?: { new?: Record<string, unknown> | null }) => {
+    const queueRefresh = (payload?: { new?: Record<string, unknown> | null }, source?: string) => {
+      if (source === 'daily_reports') {
+        const incoming = payload?.new?.data as DailyReport | undefined;
+        if (incoming?.date) {
+          refreshDailyReportFromRealtime(incoming);
+          return;
+        }
+      }
       // Ignora o eco da própria gravação (mesma versão que já está carregada aqui).
       const remoteUpdatedAt = typeof payload?.new?.updated_at === 'string' ? payload.new.updated_at : null;
       if (remoteUpdatedAt && remoteUpdatedAt === currentProjectUpdatedAtRef.current) return;
@@ -733,7 +794,7 @@ export default function Index() {
     normalizedTables.forEach(table => {
       channel.on('postgres_changes', {
         event: '*', schema: 'public', table, filter: `project_id=eq.${projectId}`,
-      }, queueRefresh);
+      }, payload => queueRefresh(payload, table));
     });
     let fallbackTimer: number | null = null;
     const stopFallback = () => {
@@ -774,7 +835,7 @@ export default function Index() {
       }
       void supabase.removeChannel(channel);
     };
-  }, [bootLoading, checkRemoteProjectVersion, rawProject?.id, refreshProjectFromRealtime]);
+  }, [bootLoading, checkRemoteProjectVersion, rawProject?.id, refreshDailyReportFromRealtime, refreshProjectFromRealtime]);
 
   useEffect(() => {
     if (!rawProject?.id || bootLoading) return;
@@ -877,6 +938,74 @@ export default function Index() {
     [project],
   );
 
+  const saveDailyReportDirectly = useCallback((before: Project, after: Project) => {
+    const dates = new Set([
+      ...(before.dailyReports ?? []).map(report => report.date),
+      ...(after.dailyReports ?? []).map(report => report.date),
+    ]);
+    dates.forEach(date => {
+      const previous = reportForDate(before, date);
+      const local = reportForDate(after, date);
+      if (!local) return;
+      const base: DailyReport = previous ?? {
+        id: local.id,
+        date: local.date,
+        teamsPresent: [],
+        equipment: [],
+        attachments: [],
+        createdAt: local.createdAt,
+        updatedAt: local.updatedAt,
+      };
+      if (serializeProject(base) === serializeProject(local)) return;
+
+      pendingDailyReportSavesRef.current += 1;
+      setSaveStatus('saving');
+      const expectedLocal = local;
+      const request = dailyReportSaveQueueRef.current.catch(() => undefined).then(async () => {
+        const result = await saveOpenDailyReport(after.id, base, expectedLocal);
+        lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, date, result.report);
+        setRawProject(current => {
+          if (!current || current.id !== after.id) return current;
+          const currentReport = reportForDate(current, date);
+          // Uma edição mais recente já está na fila. Ela será conciliada contra
+          // a versão confirmada ao chegar sua vez; não a sobrescreva agora.
+          if (!currentReport || serializeProject(currentReport) !== serializeProject(expectedLocal)) return current;
+          const next = replaceReportForDate(current, date, result.report);
+          rawProjectRef.current = next;
+          return next;
+        });
+        if (result.conflicts.length > 0) {
+          toast.warning('A legenda ou campo já havia sido alterado em outro aparelho. Foi mantida a primeira edição salva.');
+        }
+      });
+      dailyReportSaveQueueRef.current = request;
+      void request.catch(async error => {
+        console.warn('Falha ao salvar o Diário diretamente.', error);
+        const newPaths = (expectedLocal.attachments ?? [])
+          .filter(attachment => !(base.attachments ?? []).some(previous => previous.id === attachment.id))
+          .map(attachment => attachment.storagePath)
+          .filter((path): path is string => !!path);
+        if (newPaths.length > 0) {
+          await supabase.storage.from('daily-report-photos').remove(newPaths).catch(() => undefined);
+        }
+        const confirmed = await loadOpenDailyReport(after.id, date).catch(() => null);
+        lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, date, confirmed ?? base);
+        setRawProject(current => {
+          if (!current || current.id !== after.id) return current;
+          const currentReport = reportForDate(current, date);
+          if (!currentReport || serializeProject(currentReport) !== serializeProject(expectedLocal)) return current;
+          const next = replaceReportForDate(current, date, confirmed ?? base);
+          rawProjectRef.current = next;
+          return next;
+        });
+        toast.error(error instanceof Error ? error.message : 'Não foi possível salvar o Diário. Nenhuma alteração foi confirmada.');
+      }).finally(() => {
+        pendingDailyReportSavesRef.current = Math.max(0, pendingDailyReportSavesRef.current - 1);
+        if (pendingDailyReportSavesRef.current === 0) setSaveStatus('saved');
+      });
+    });
+  }, []);
+
   const makeViewSetter = useCallback((view: AppView) => {
     return (next: Project | ((prev: Project) => Project)) => {
       const mayEditView = editor
@@ -884,6 +1013,10 @@ export default function Index() {
         || (view === 'warehouse' && warehouseEditor);
       if (!mayEditView) {
         toast.error('Você não tem permissão para editar.');
+        return;
+      }
+      if (view === 'dailyReport' && !navigator.onLine) {
+        toast.error('Conecte-se à internet para editar o Diário de Obra.');
         return;
       }
       if (conflictDetectedRef.current) {
@@ -896,7 +1029,7 @@ export default function Index() {
         const resolved = role === 'warehouse_operator' && view === 'warehouse'
           ? { ...prev, warehouse: candidate.warehouse }
           : candidate;
-        const synchronized = role === 'warehouse_operator' && view === 'warehouse'
+        const synchronized = view === 'dailyReport' || (role === 'warehouse_operator' && view === 'warehouse')
           ? resolved
           : synchronizeProjectScheduleToWorkStart(resolved);
         if (synchronized === prev) return prev;
@@ -908,7 +1041,9 @@ export default function Index() {
         stack.push(prev);
         if (stack.length > UNDO_LIMIT) stack.shift();
         rawProjectRef.current = synchronized;
-        if (synchronizedJson !== lastSavedProjectJsonRef.current) {
+        if (view === 'dailyReport') {
+          saveDailyReportDirectly(prev, synchronized);
+        } else if (synchronizedJson !== lastSavedProjectJsonRef.current) {
           scheduleProjectDraft(synchronized, currentProjectUpdatedAtRef.current);
         } else {
           discardProjectDraft(synchronized.id);
@@ -917,7 +1052,7 @@ export default function Index() {
         return synchronized;
       });
     };
-  }, [dailyReportEditor, discardProjectDraft, editor, role, scheduleProjectDraft, warehouseEditor]);
+  }, [dailyReportEditor, discardProjectDraft, editor, role, saveDailyReportDirectly, scheduleProjectDraft, warehouseEditor]);
 
   const ganttSetter = useMemo(() => makeViewSetter('gantt'), [makeViewSetter]);
   const managementSetter = useMemo(() => makeViewSetter('management'), [makeViewSetter]);
@@ -1231,6 +1366,7 @@ export default function Index() {
             productionReadOnly={!editor}
             dailyReportReadOnly={!dailyReportEditor}
             dailyReportCanManageConclusion={role === 'owner'}
+            dailyReportCanClearDay={editor}
             productionUndoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />}
             dailyReportUndoButton={<UndoButton canUndo={canUndo('dailyReport')} onUndo={() => handleUndo('dailyReport')} />}
             dailyReportInitialDate={dailyReportInitialDate}
@@ -1252,6 +1388,7 @@ export default function Index() {
             productionReadOnly={!editor}
             dailyReportReadOnly={!dailyReportEditor}
             dailyReportCanManageConclusion={role === 'owner'}
+            dailyReportCanClearDay={editor}
             productionUndoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />}
             dailyReportUndoButton={<UndoButton canUndo={canUndo('dailyReport')} onUndo={() => handleUndo('dailyReport')} />}
             dailyReportInitialDate={dailyReportInitialDate}

@@ -28,6 +28,8 @@ export interface DailyReportProps {
   readOnly?: boolean;
   /** Somente o Proprietário pode reabrir um Diário concluído. */
   canManageConclusion?: boolean;
+  /** Limpar um Diário inteiro remove dados e continua reservado à gestão. */
+  canClearDay?: boolean;
   /** Data ISO inicial vinda da Medição (ao clicar em "Abrir Diário"). */
   initialDate?: string;
   /** Filtro de medição inicial vindo da Medição (ex.: 'draft' ou id da medição). */

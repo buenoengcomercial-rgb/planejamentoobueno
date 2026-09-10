@@ -14,10 +14,11 @@ interface DailyReportGeneralInfoProps {
   currentReport: DailyReportEntry;
   updateField: <K extends keyof DailyReportEntry>(key: K, value: DailyReportEntry[K]) => void;
   onClearDay: () => void;
+  canClearDay?: boolean;
   hasProduction?: boolean;
 }
 
-export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay, hasProduction = false }: DailyReportGeneralInfoProps) {
+export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay, canClearDay = false, hasProduction = false }: DailyReportGeneralInfoProps) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
 
   const handleClearDay = () => {
@@ -40,9 +41,11 @@ export function DailyReportGeneralInfo({ currentReport, updateField, onClearDay,
       <Card>
         <CardHeader className="pb-3 flex flex-row items-center justify-between gap-2">
           <CardTitle className="text-base">Informações do dia</CardTitle>
-          <Button size="sm" variant="ghost" onClick={handleClearDay} className="min-h-11 text-sm sm:h-9 sm:min-h-9">
-            <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Limpar diário do dia
-          </Button>
+          {canClearDay && (
+            <Button size="sm" variant="ghost" onClick={handleClearDay} className="min-h-11 text-sm sm:h-9 sm:min-h-9">
+              <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Limpar diário do dia
+            </Button>
+          )}
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex flex-col gap-3 rounded-lg border border-border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
