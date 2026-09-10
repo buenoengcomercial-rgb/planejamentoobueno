@@ -60,7 +60,7 @@ describe('weeklyRoutine', () => {
     expect(week.find(day => day.date === '2026-08-15')).toBeUndefined();
   });
 
-  it('remove da Rotina uma atividade cuja produção acumulada atingiu o contratado', () => {
+  it('mostra a atividade concluída somente na data em que atingiu o contratado', () => {
     const completedProject = {
       ...project,
       phases: [{
@@ -75,8 +75,12 @@ describe('weeklyRoutine', () => {
       }],
     } as Project;
 
-    expect(buildWeeklyRoutine(completedProject, '2026-08-10', new Set(), weekdayCalendar)
-      .flatMap(day => day.activities)).toHaveLength(0);
+    const week = buildWeeklyRoutine(completedProject, '2026-08-10', new Set(), weekdayCalendar);
+    expect(week.find(day => day.date === '2026-08-12')?.activities).toHaveLength(0);
+    expect(week.find(day => day.date === '2026-08-13')?.activities).toMatchObject([{
+      taskId: 'task-1', completed: true, progressPercent: 100,
+    }]);
+    expect(week.find(day => day.date === '2026-08-14')?.activities).toHaveLength(0);
     expect(findNextScheduledActivity(completedProject, '2026-08-10', new Set(), weekdayCalendar)).toBeNull();
   });
 

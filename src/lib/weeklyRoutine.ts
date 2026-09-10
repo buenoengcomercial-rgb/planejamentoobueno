@@ -100,9 +100,23 @@ function activeTask(task: Task, excludedTaskIds: ReadonlySet<string>): boolean {
   if (task.suppressedByAdditive) return false;
   const fullySuppressed = (Number(task.quantity) || 0) <= 0
     && (task.additiveHistory ?? []).some(history => (history.suppressedQuantity || 0) > 0);
-  // A Rotina é uma fila operacional: atividade concluída permanece no
-  // Cronograma/Produção para auditoria, mas não deve voltar a ser programada.
-  return !fullySuppressed && !getProductionQuantityLimit(task).completed;
+  return !fullySuppressed;
+}
+
+/** Primeira data em que os apontamentos acumulados alcançaram o contratado. */
+function completionDateForTask(task: Task): string | undefined {
+  const limit = getProductionQuantityLimit(task);
+  if (!limit.completed) return undefined;
+
+  let accumulated = 0;
+  const logs = [...(task.dailyLogs ?? [])]
+    .filter(log => (Number(log.actualQuantity) || 0) > 0)
+    .sort((left, right) => left.date.localeCompare(right.date));
+  for (const log of logs) {
+    accumulated += Number(log.actualQuantity) || 0;
+    if (accumulated >= limit.contractedQuantity - 0.000001) return log.date;
+  }
+  return undefined;
 }
 
 function buildChapterByTask(project: Project): Map<string, { name: string; number?: string; path: WeeklyRoutineChapterPathItem[] }> {
@@ -225,7 +239,10 @@ export function buildWeeklyRoutine(
       .map(task => {
         const schedule = taskSchedule(task, calendar);
         const scheduledWeight = schedule.workDays.get(date) ?? 0;
-        if (scheduledWeight <= 0) return null;
+        const completionDate = completionDateForTask(task);
+        // A conclusão é relevante na data em que ocorreu; nas demais datas a
+        // atividade não volta à fila da Rotina, inclusive em semanas futuras.
+        if (completionDate ? completionDate !== date : scheduledWeight <= 0) return null;
         const plannedQuantity = quantityForDay(task, date, 'planned', scheduledWeight);
         const actualQuantity = quantityForDay(task, date, 'actual');
         const execution = executionSummary(task);
@@ -245,7 +262,7 @@ export function buildWeeklyRoutine(
           teamCode: task.team,
           responsible: task.responsible,
           reprogrammed: !!task.operationalReschedule,
-          completed: execution.progressPercent >= 100,
+          completed: !!completionDate,
         } satisfies WeeklyRoutineActivity;
       })
       .filter((activity): activity is NonNullable<typeof activity> => activity !== null)
@@ -267,7 +284,7 @@ export function findNextScheduledActivity(
 ): WeeklyRoutineActivity | null {
   const chapterByTask = buildChapterByTask(project);
   const candidates = getAllTasks(project)
-    .filter(task => activeTask(task, excludedTaskIds))
+    .filter(task => activeTask(task, excludedTaskIds) && !completionDateForTask(task))
     .map(task => {
       const schedule = taskSchedule(task, calendar);
       const date = [...schedule.workDays.keys()].find(workDate => workDate >= afterDate);

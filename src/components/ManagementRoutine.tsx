@@ -221,6 +221,7 @@ function ActivityCard({
         {activity.completed && <CheckCircle2 className={`h-4 w-4 shrink-0 text-success ${showChapter ? '' : 'ml-auto'}`} aria-label="Atividade concluída" />}
       </div>
       <p className="mt-1 line-clamp-3 text-sm font-semibold leading-snug text-foreground">{activity.taskName}</p>
+      {activity.completed && <Badge variant="outline" className="mt-2 border-success/30 bg-success/10 text-[10px] font-semibold text-success">Concluída</Badge>}
       {activity.reprogrammed && <Badge variant="outline" className="mt-2 border-violet-300 bg-violet-50 text-[10px] font-semibold text-violet-800">Atividade reprogramada</Badge>}
       <dl className="mt-3 grid grid-cols-2 gap-x-2 gap-y-1 text-xs text-muted-foreground">
         <div>
@@ -253,7 +254,7 @@ function ActivityCard({
         </div>
         <Progress value={activity.progressPercent} className="mt-1.5 h-2" aria-label={`${activity.progressPercent}% concluído`} />
       </div>
-      {!readOnly && (
+      {!readOnly && !activity.completed && (
         <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
           <label className="min-w-0 text-[11px] font-medium text-muted-foreground">
             Executado em {formatShortDate(activity.date)} ({activity.unit})
@@ -277,7 +278,7 @@ function ActivityCard({
       <Button type="button" variant="outline" size="sm" className="mt-2 min-h-10 w-full" onClick={() => onOpenProduction(activity.taskId, activity.date)}>
         Ir para produção <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
       </Button>
-      {onReschedule && <Button type="button" variant="ghost" size="sm" className="mt-1 min-h-9 w-full text-violet-700" onClick={() => onReschedule(activity.taskId)}>
+      {onReschedule && !activity.completed && <Button type="button" variant="ghost" size="sm" className="mt-1 min-h-9 w-full text-violet-700" onClick={() => onReschedule(activity.taskId)}>
         <CalendarClock className="mr-1.5 h-3.5 w-3.5" /> Reprogramar atividade
       </Button>}
     </article>
