@@ -11,6 +11,7 @@ import { getAllTasks } from '@/data/sampleProject';
 import { isDailyReportEmpty, pickLatestDailyReport } from '@/lib/dailyReportSummary';
 import { getChapterNumbering } from '@/lib/chapters';
 import { operationalEndDate, parseScheduleDate, scheduleDateISO, scheduleWorkdayWeight } from '@/lib/scheduleCalendar';
+import { getProductionQuantityLimit } from '@/lib/productionQuantityLimit';
 
 const DAY_MS = 86_400_000;
 
@@ -99,7 +100,9 @@ function activeTask(task: Task, excludedTaskIds: ReadonlySet<string>): boolean {
   if (task.suppressedByAdditive) return false;
   const fullySuppressed = (Number(task.quantity) || 0) <= 0
     && (task.additiveHistory ?? []).some(history => (history.suppressedQuantity || 0) > 0);
-  return !fullySuppressed;
+  // A Rotina é uma fila operacional: atividade concluída permanece no
+  // Cronograma/Produção para auditoria, mas não deve voltar a ser programada.
+  return !fullySuppressed && !getProductionQuantityLimit(task).completed;
 }
 
 function buildChapterByTask(project: Project): Map<string, { name: string; number?: string; path: WeeklyRoutineChapterPathItem[] }> {
@@ -144,9 +147,9 @@ function quantityForDay(task: Task, date: string, kind: 'planned' | 'actual', wo
 }
 
 function executionSummary(task: Task): { totalQuantity: number; executedQuantity: number; progressPercent: number } {
-  const totalQuantity = Math.max(0, Number(task.quantity) || 0);
-  const loggedQuantity = (task.dailyLogs ?? []).reduce((sum, log) => sum + (Number(log.actualQuantity) || 0), 0);
-  const executedQuantity = Math.max(0, Number(task.executedQuantityTotal) || 0, loggedQuantity);
+  const limit = getProductionQuantityLimit(task);
+  const totalQuantity = limit.contractedQuantity;
+  const executedQuantity = limit.executedQuantity;
   const progressFromQuantity = totalQuantity > 0 ? (executedQuantity / totalQuantity) * 100 : null;
   const fallbackProgress = Number(task.physicalProgress ?? task.percentComplete) || 0;
   const progressPercent = Math.min(100, Math.max(0, Math.round((progressFromQuantity ?? fallbackProgress) * 10) / 10));
@@ -242,7 +245,7 @@ export function buildWeeklyRoutine(
           teamCode: task.team,
           responsible: task.responsible,
           reprogrammed: !!task.operationalReschedule,
-          completed: plannedQuantity > 0 ? actualQuantity >= plannedQuantity : task.percentComplete >= 100,
+          completed: execution.progressPercent >= 100,
         } satisfies WeeklyRoutineActivity;
       })
       .filter((activity): activity is NonNullable<typeof activity> => activity !== null)

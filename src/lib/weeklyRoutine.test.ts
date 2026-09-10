@@ -55,9 +55,29 @@ describe('weeklyRoutine', () => {
       totalQuantity: 30,
       executedQuantity: 10,
       progressPercent: 33.3,
-      completed: true,
+      completed: false,
     });
     expect(week.find(day => day.date === '2026-08-15')).toBeUndefined();
+  });
+
+  it('remove da Rotina uma atividade cuja produção acumulada atingiu o contratado', () => {
+    const completedProject = {
+      ...project,
+      phases: [{
+        ...project.phases[0],
+        tasks: [{
+          ...project.phases[0].tasks[0],
+          dailyLogs: [
+            { id: 'log-1', date: '2026-08-12', plannedQuantity: 10, actualQuantity: 10 },
+            { id: 'log-2', date: '2026-08-13', plannedQuantity: 10, actualQuantity: 20 },
+          ],
+        }],
+      }],
+    } as Project;
+
+    expect(buildWeeklyRoutine(completedProject, '2026-08-10', new Set(), weekdayCalendar)
+      .flatMap(day => day.activities)).toHaveLength(0);
+    expect(findNextScheduledActivity(completedProject, '2026-08-10', new Set(), weekdayCalendar)).toBeNull();
   });
 
   it('remove da agenda os bloqueios operacionais pendentes, sem remover serviços com saldo contratual', () => {

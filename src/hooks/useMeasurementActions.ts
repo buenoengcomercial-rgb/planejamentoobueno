@@ -14,6 +14,10 @@ import { toast } from '@/hooks/use-toast';
 import { isoAddDays, suggestPeriodForNext, getProjectStartDate } from '@/components/measurement/measurementFormat';
 import { buildDailyReportSnapshot, type DailyReportPeriodSummary } from '@/lib/dailyReportSummary';
 import type { Row } from '@/components/measurement/types';
+import { getAllTasks } from '@/data/sampleProject';
+import { updateProjectTask } from '@/lib/taskTree';
+import { applyDailyProductionLogs } from '@/lib/dailyProductionLogs';
+import { validateDailyProductionLogs } from '@/lib/productionQuantityLimit';
 
 export interface UseMeasurementActionsParams {
   project: Project;
@@ -191,30 +195,34 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
     if (isSnapshotMode) return;
     const safeValue = Math.max(0, Number.isFinite(value) ? value : 0);
     const manualId = `manual-measurement-${effStart}-${effEnd}`;
-    onProjectChange({
-      ...project,
-      phases: project.phases.map(p => ({
-        ...p,
-        tasks: p.tasks.map(t => {
-          if (t.id !== taskId) return t;
-          const others = (t.dailyLogs || []).filter(l => l.id !== manualId);
-          if (safeValue <= 0) return { ...t, dailyLogs: others };
-          return {
-            ...t,
-            dailyLogs: [
-              ...others,
-              {
-                id: manualId,
-                date: effEnd,
-                plannedQuantity: 0,
-                actualQuantity: safeValue,
-                notes: 'Lançamento manual via Planilha de Medição',
-              },
-            ],
-          };
-        }),
-      })),
-    });
+    const currentTask = getAllTasks(project).find(task => task.id === taskId);
+    if (!currentTask) return;
+    const others = (currentTask.dailyLogs || []).filter(log => log.id !== manualId);
+    const candidateLogs = safeValue <= 0 ? others : [
+      ...others,
+      {
+        id: manualId,
+        date: effEnd,
+        plannedQuantity: 0,
+        actualQuantity: safeValue,
+        notes: 'Lançamento manual via Planilha de Medição',
+      },
+    ];
+    const validation = validateDailyProductionLogs(currentTask, candidateLogs);
+    if (!validation.allowed) {
+      toast({ variant: 'destructive', title: 'Quantidade acima do contrato', description: validation.message });
+      return;
+    }
+
+    onProjectChange(updateProjectTask(project, taskId, task => {
+      const nextOthers = (task.dailyLogs || []).filter(log => log.id !== manualId);
+      const nextLogs = safeValue <= 0 ? nextOthers : [
+        ...nextOthers,
+        { id: manualId, date: effEnd, plannedQuantity: 0, actualQuantity: safeValue, notes: 'Lançamento manual via Planilha de Medição' },
+      ];
+      if (!validateDailyProductionLogs(task, nextLogs).allowed) return task;
+      return { ...task, ...applyDailyProductionLogs(task, nextLogs) };
+    }));
   };
 
   // ───────── Gerar nova medição (snapshot a partir do live) ─────────

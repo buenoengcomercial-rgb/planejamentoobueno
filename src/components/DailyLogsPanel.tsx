@@ -1,8 +1,9 @@
-import { Fragment, useEffect } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { Task, DailyProductionLog, DailyLaborEntry } from '@/types/project';
 import { ClipboardList, Plus, Trash2, TrendingUp, TrendingDown, PlusCircle, Users } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
+import { getProductionQuantityLimit, maximumActualForDailyLog, validateDailyProductionLogs } from '@/lib/productionQuantityLimit';
 
 interface DailyLogsPanelProps {
   task: Task;
@@ -32,6 +33,7 @@ const EMPTY_DAILY_LOGS: DailyProductionLog[] = [];
 export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsPanelProps) {
   const logs = task.dailyLogs ?? EMPTY_DAILY_LOGS;
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
+  const [productionError, setProductionError] = useState<string | null>(null);
   const baseDuration = task.originalDuration ?? task.duration;
   const plannedDailyProduction = task.quantity && baseDuration > 0
     ? task.quantity / baseDuration
@@ -52,6 +54,7 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
   };
 
   const addLog = () => {
+    if (getProductionQuantityLimit(task).completed) return;
     const today = new Date().toISOString().split('T')[0];
     const lastDate = logs.length > 0
       ? [...logs].sort((a, b) => a.date.localeCompare(b.date))[logs.length - 1].date
@@ -67,6 +70,7 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
   };
 
   const addLogAfter = (afterId: string) => {
+    if (getProductionQuantityLimit(task).completed) return;
     const ref = logs.find(l => l.id === afterId);
     const date = ref ? nextDayISO(ref.date) : new Date().toISOString().split('T')[0];
     const newLog = buildLog(date);
@@ -79,7 +83,14 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
   };
 
   const updateLog = (id: string, updates: Partial<DailyProductionLog>) => {
-    onChange(logs.map(l => l.id === id ? { ...l, ...updates } : l));
+    const candidate = logs.map(l => l.id === id ? { ...l, ...updates } : l);
+    const validation = validateDailyProductionLogs(task, candidate);
+    if (!validation.allowed) {
+      setProductionError(validation.message ?? 'A produção informada ultrapassa a quantidade contratada.');
+      return;
+    }
+    setProductionError(null);
+    onChange(candidate);
   };
 
   const removeLog = (id: string) => {
@@ -171,6 +182,7 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
 
   const accStatus = statusForDelta(task.accumulatedDelayQuantity || 0, plannedDailyProduction);
   const unit = task.unit || 'un';
+  const productionLimit = getProductionQuantityLimit(task);
 
   return (
     <motion.div
@@ -215,8 +227,9 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
             )}
             <button
               onClick={addLog}
+              disabled={productionLimit.completed}
               className="text-[10px] px-2 py-1 rounded-md bg-muted text-muted-foreground hover:bg-muted/70 hover:text-foreground transition-colors flex items-center gap-1"
-              title="Adicionar lançamento ao final"
+              title={productionLimit.completed ? 'Atividade concluída; corrija um lançamento existente para liberar saldo.' : 'Adicionar lançamento ao final'}
             >
               <Plus className="w-3 h-3" /> Novo
             </button>
@@ -261,6 +274,13 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
           );
         })()}
 
+        {productionLimit.overContract && (
+          <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            Divergência histórica: o executado ({productionLimit.executedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {unit}) está acima do contratado ({productionLimit.contractedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {unit}). Reduza ou exclua um lançamento para corrigir.
+          </p>
+        )}
+        {productionError && <p role="alert" className="text-xs font-medium text-destructive">{productionError}</p>}
+
         <div className="grid grid-cols-8 gap-2 text-[10px] font-semibold text-muted-foreground uppercase">
           <div>Data</div>
           <div className="text-center">Meta ({unit})</div>
@@ -279,6 +299,7 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
             </p>
             <button
               onClick={addLog}
+              disabled={productionLimit.completed}
               className="text-[11px] px-3 py-1.5 rounded-md bg-primary/10 text-primary font-medium hover:bg-primary/20 transition-colors flex items-center gap-1.5"
             >
               <Plus className="w-3.5 h-3.5" /> Adicionar lançamento
@@ -294,8 +315,9 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
             <div className="flex items-center gap-1">
               <button
                 onClick={(e) => { e.stopPropagation(); addLogAfter(row.id); }}
+                disabled={productionLimit.completed}
                 className="p-1 rounded hover:bg-primary/20 text-primary transition-colors shrink-0"
-                title="Adicionar novo lançamento abaixo"
+                title={productionLimit.completed ? 'Atividade concluída; corrija um lançamento existente para liberar saldo.' : 'Adicionar novo lançamento abaixo'}
               >
                 <PlusCircle className="w-3.5 h-3.5" />
               </button>
@@ -306,23 +328,25 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
                 className="bg-transparent border border-current/30 rounded px-1 py-0.5 text-[10px] focus:outline-none focus:border-current min-w-0 flex-1"
               />
             </div>
+              <input
+                type="number"
+                min={0}
+                step={0.1}
+                value={row.plannedQuantity}
+                onChange={e => updateLog(row.id, { plannedQuantity: Number(e.target.value) })}
+                className="bg-transparent border border-current/30 rounded px-1 py-0.5 text-[11px] text-center focus:outline-none focus:border-current"
+              />
             <input
               type="number"
               min={0}
-              step={0.1}
-              value={row.plannedQuantity}
-              onChange={e => updateLog(row.id, { plannedQuantity: Number(e.target.value) })}
-              className="bg-transparent border border-current/30 rounded px-1 py-0.5 text-[11px] text-center focus:outline-none focus:border-current"
-            />
-            <input
-              type="number"
-              min={0}
+              max={maximumActualForDailyLog(task, row.id)}
               step={0.1}
               value={row.actualQuantity}
               data-actual-input={row.id}
               data-log-date={row.date}
               onChange={e => updateLog(row.id, { actualQuantity: Number(e.target.value) })}
               className="bg-transparent border border-current/30 rounded px-1 py-0.5 text-[11px] text-center font-bold focus:outline-none focus:border-current"
+              title={`Máximo permitido: ${maximumActualForDailyLog(task, row.id).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} ${unit}`}
             />
             <div className="text-center font-bold flex items-center justify-center gap-1">
               {row.delta > 0 ? <TrendingDown className="w-3 h-3" /> : row.delta < 0 ? <TrendingUp className="w-3 h-3" /> : null}

@@ -27,6 +27,7 @@ import { getAllTasks } from '@/data/sampleProject';
 import { updateProjectTask } from '@/lib/taskTree';
 import { resolveObraConfig } from '@/components/ConfiguracaoObra';
 import { applyDailyProductionLogs, upsertDailyProductionLog } from '@/lib/dailyProductionLogs';
+import { validateDailyProductionLogs } from '@/lib/productionQuantityLimit';
 import TaskRescheduleDialog from '@/components/TaskRescheduleDialog';
 import { approveRescheduleRequest, rejectRescheduleRequest, submitRescheduleRequest } from '@/lib/taskRescheduling';
 import { Badge } from '@/components/ui/badge';
@@ -37,6 +38,7 @@ import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { toast } from '@/hooks/use-toast';
 import {
   ArrowRight,
   CalendarCheck2,
@@ -207,7 +209,9 @@ function ActivityCard({
   const [actualDraft, setActualDraft] = useState(() => String(activity.actualQuantity || ''));
   useEffect(() => setActualDraft(activity.actualQuantity ? String(activity.actualQuantity) : ''), [activity.actualQuantity, activity.date, activity.taskId]);
   const actualQuantity = Number(actualDraft);
-  const canRegister = actualDraft.trim() !== '' && Number.isFinite(actualQuantity) && actualQuantity >= 0;
+  const maximumForDate = Math.max(0, activity.totalQuantity - (activity.executedQuantity - activity.actualQuantity));
+  const exceedsContract = actualDraft.trim() !== '' && actualQuantity > maximumForDate + 0.000001;
+  const canRegister = actualDraft.trim() !== '' && Number.isFinite(actualQuantity) && actualQuantity >= 0 && !exceedsContract;
   return (
     <article className={`group w-full rounded-lg border border-border border-l-4 bg-background p-3 text-left transition ${tone.card}`}>
       <div className="flex items-start justify-between gap-2">
@@ -256,14 +260,16 @@ function ActivityCard({
             <Input
               type="number"
               min={0}
+              max={maximumForDate}
               step="0.01"
               value={actualDraft}
               onChange={event => setActualDraft(event.target.value)}
               className="mt-1 h-10 text-sm"
               aria-label={`Quantidade executada em ${formatDateBR(activity.date)} para ${activity.taskName}`}
             />
+            {exceedsContract && <span className="mt-1 block text-[10px] font-medium text-destructive">Máximo permitido: {maximumForDate.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {activity.unit}.</span>}
           </label>
-          <Button type="button" size="sm" className="mt-[18px] min-h-10" disabled={!canRegister} onClick={() => onRegister(activity, actualQuantity)}>
+          <Button type="button" size="sm" className="mt-[18px] min-h-10" disabled={!canRegister} title={exceedsContract ? `Saldo disponível: ${maximumForDate.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} ${activity.unit}` : undefined} onClick={() => onRegister(activity, actualQuantity)}>
             Registrar
           </Button>
         </div>
@@ -373,8 +379,17 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
     [obraCalendar, pendingAdditiveTaskIds, project, selectedWeekStart],
   );
   const registerActivityProduction = (activity: WeeklyRoutineActivity, actualQuantity: number) => {
+    const currentTask = getAllTasks(project).find(task => task.id === activity.taskId);
+    if (!currentTask) return;
+    const candidateLogs = upsertDailyProductionLog(currentTask, activity.date, actualQuantity);
+    const initialValidation = validateDailyProductionLogs(currentTask, candidateLogs);
+    if (!initialValidation.allowed) {
+      toast({ variant: 'destructive', title: 'Quantidade acima do contrato', description: initialValidation.message });
+      return;
+    }
     onProjectChange(previous => updateProjectTask(previous, activity.taskId, task => {
       const logs = upsertDailyProductionLog(task, activity.date, actualQuantity);
+      if (!validateDailyProductionLogs(task, logs).allowed) return task;
       return { ...task, ...applyDailyProductionLogs(task, logs) };
     }));
   };
