@@ -11,6 +11,18 @@ export class DailyReportLockedError extends Error {
   }
 }
 
+export class DailyReportPermissionError extends Error {
+  constructor() {
+    super('O servidor não autorizou salvar este Diário. As permissões da Equipe de campo precisam ser verificadas. Nenhuma alteração foi confirmada.');
+    this.name = 'DailyReportPermissionError';
+  }
+}
+
+function saveError(error: { code?: string; message?: string }): Error {
+  return error.code === '42501' ? new DailyReportPermissionError()
+    : new Error(error.message || 'Não foi possível salvar o Diário.');
+}
+
 export interface DailyReportSaveResult {
   report: DailyReport | null;
   conflicts: string[];
@@ -124,6 +136,7 @@ export async function saveOpenDailyReport(
         .select('data')
         .maybeSingle();
       if (!error && data) return { report: data.data as unknown as DailyReport, conflicts: allConflicts };
+      if (error && error.code !== '23505') throw saveError(error);
       remote = await loadDailyReport(projectId, local.date);
       if (!remote) throw error ?? new Error('Não foi possível criar o Diário.');
     }
@@ -152,9 +165,15 @@ export async function saveOpenDailyReport(
       .eq('updated_at', remote.updated_at)
       .select('data')
       .maybeSingle();
-    if (error) throw error;
+    if (error) throw saveError(error);
     if (data) return { report: data.data as unknown as DailyReport, conflicts: allConflicts };
-    remote = await loadDailyReport(projectId, local.date);
+    const latest = await loadDailyReport(projectId, local.date);
+    // RLS pode ocultar a linha do UPDATE sem devolver HTTP 403. Se a versão
+    // continua igual, repetir não resolverá: isto não é concorrência.
+    if (latest?.id === remote.id && latest.updated_at === remote.updated_at) {
+      throw new DailyReportPermissionError();
+    }
+    remote = latest;
   }
 
   throw new Error('O Diário mudou várias vezes durante o salvamento. Tente novamente.');

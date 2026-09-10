@@ -182,6 +182,7 @@ export default function Index() {
   const [cloudList, setCloudList] = useState<CloudProjectMeta[]>([]);
   const [bootLoading, setBootLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [dailyReportSaveErrors, setDailyReportSaveErrors] = useState<Record<string, string>>({});
   const [currentProjectUpdatedAt, setCurrentProjectUpdatedAt] = useState<string | null>(null);
   const [lastCloudConfirmedAt, setLastCloudConfirmedAt] = useState<string | null>(null);
   const [remoteUpdateAt, setRemoteUpdateAt] = useState<string | null>(null);
@@ -403,6 +404,7 @@ export default function Index() {
     inspectDraft = true,
   ) => {
     const projectForState = projectToLoad;
+    if (rawProjectRef.current?.id !== projectToLoad?.id) setDailyReportSaveErrors({});
     const draftInspection = projectToLoad && inspectDraft
       ? inspectProjectDraft(projectToLoad, updatedAt)
       : { kind: 'none' as const, reason: 'missing' as const };
@@ -963,6 +965,11 @@ export default function Index() {
       const expectedLocal = local;
       const request = dailyReportSaveQueueRef.current.catch(() => undefined).then(async () => {
         const result = await saveOpenDailyReport(after.id, base, expectedLocal);
+        setDailyReportSaveErrors(errors => {
+          const next = { ...errors };
+          delete next[date];
+          return next;
+        });
         lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, date, result.report);
         setRawProject(current => {
           if (!current || current.id !== after.id) return current;
@@ -981,6 +988,9 @@ export default function Index() {
       dailyReportSaveQueueRef.current = request;
       void request.catch(async error => {
         console.warn('Falha ao salvar o Diário diretamente.', error);
+        const message = error instanceof Error ? error.message : 'Não foi possível salvar o Diário. Nenhuma alteração foi confirmada.';
+        setDailyReportSaveErrors(errors => ({ ...errors, [date]: message }));
+        setSaveStatus(navigator.onLine ? 'error' : 'offline');
         const newPaths = (expectedLocal.attachments ?? [])
           .filter(attachment => !(base.attachments ?? []).some(previous => previous.id === attachment.id))
           .map(attachment => attachment.storagePath)
@@ -998,7 +1008,7 @@ export default function Index() {
           rawProjectRef.current = next;
           return next;
         });
-        toast.error(error instanceof Error ? error.message : 'Não foi possível salvar o Diário. Nenhuma alteração foi confirmada.');
+        toast.error(message);
       }).finally(() => {
         pendingDailyReportSavesRef.current = Math.max(0, pendingDailyReportSavesRef.current - 1);
         if (pendingDailyReportSavesRef.current === 0) setSaveStatus('saved');
@@ -1477,13 +1487,18 @@ export default function Index() {
 
       <main ref={mainScrollRef} className="relative min-h-screen min-w-0 flex-1 overflow-x-clip overflow-y-auto pt-14 lg:pt-0">
         <div className="absolute top-3 right-4 z-20">
-          <SaveStatusIndicator status={saveStatus} confirmedAt={lastCloudConfirmedAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} />
+          <SaveStatusIndicator status={Object.keys(dailyReportSaveErrors).length && saveStatus !== 'saving' ? 'error' : saveStatus} confirmedAt={lastCloudConfirmedAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} />
         </div>
         <Suspense fallback={
           <div className="flex items-center justify-center py-24">
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
           </div>
         }>
+          {Object.entries(dailyReportSaveErrors).map(([date, message]) => (
+            <div key={date} role="alert" className="mx-4 mt-16 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm break-words">
+              <strong>Diário de {date.split('-').reverse().join('/')} não salvo.</strong> {message}
+            </div>
+          ))}
           {renderView()}
         </Suspense>
       </main>
