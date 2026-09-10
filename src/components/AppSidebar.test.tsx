@@ -32,6 +32,34 @@ describe('AppSidebar para Almoxarife', () => {
     expect(screen.queryByTitle('Excluir obra')).not.toBeInTheDocument();
   });
 
+  it('mostra somente o Diário de obra para a Equipe de campo', () => {
+    render(
+      <AppSidebar
+        currentView="dailyReport"
+        onViewChange={vi.fn()}
+        projectName="Obra teste"
+        collapsed={false}
+        onToggleCollapse={vi.fn()}
+        onSwitchProject={vi.fn()}
+        onCreateProject={vi.fn()}
+        onRenameProject={vi.fn()}
+        onDuplicateProject={vi.fn()}
+        onDeleteProject={vi.fn()}
+        activeProjectId="project-1"
+        projectsList={[{ id: 'project-1', name: 'Obra teste', createdAt: '2026-08-19T10:00:00.000Z', updatedAt: '2026-08-19T10:00:00.000Z' }]}
+        roleLabel="Equipe de campo"
+        allowedViews={['dailyReport']}
+        canManageProjects={false}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Diário de obra' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Dashboard' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Produção' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Almoxarifado' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Custos' })).not.toBeInTheDocument();
+  });
+
   it('mostra exclusão somente quando a permissão específica do Proprietário é concedida', () => {
     const props = {
       currentView: 'dashboard' as const,

@@ -3,8 +3,10 @@ import type { AppView } from '@/types/project';
 import {
   canAccessAppView,
   canDeleteProject,
+  canEditDailyReport,
   canEditProject,
   canEditWarehouse,
+  getRestrictedFallbackView,
   ORG_ROLE_OPTIONS,
   ROLE_LABELS,
   ROLE_PERMISSIONS,
@@ -36,6 +38,15 @@ describe('função Almoxarife', () => {
     expect(canAccessAppView('engineer', 'dashboard')).toBe(false);
     expect(canAccessAppView('engineer', 'realCost')).toBe(false);
     expect(canAccessAppView('engineer', 'gantt')).toBe(true);
+  });
+
+  it('reserva a Equipe de campo ao Diário de Obra, inclusive como rota de retorno', () => {
+    const views: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse'];
+    views.forEach(view => expect(canAccessAppView('field_user', view)).toBe(false));
+    expect(canAccessAppView('field_user', 'dailyReport')).toBe(true);
+    expect(canEditDailyReport('field_user')).toBe(true);
+    expect(getRestrictedFallbackView('field_user')).toBe('dailyReport');
+    expect(ROLE_PERMISSIONS.field_user).toContain('Acessar somente o Diário de Obra');
   });
 
   it('reserva a conferência de custos fiscais ao Administrador e ao Proprietário', () => {

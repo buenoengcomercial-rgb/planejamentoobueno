@@ -33,7 +33,7 @@ const WarehouseView = lazyWithReload(() => import('@/components/warehouse/Wareho
 const ImportSyntheticDialog = lazyWithReload(() => import('@/components/ImportSyntheticDialog'));
 import { useAuth } from '@/hooks/useAuth';
 import { useOrganization } from '@/hooks/useOrganization';
-import { canAccessAppView, canCreateProject, canDeleteProject, canEditDailyReport, canEditProject, canEditWarehouse, ROLE_LABELS } from '@/lib/organizations';
+import { canAccessAppView, canCreateProject, canDeleteProject, canEditDailyReport, canEditProject, canEditWarehouse, getRestrictedFallbackView, ROLE_LABELS } from '@/lib/organizations';
 import { Button } from '@/components/ui/button';
 import {
   listCloudProjects,
@@ -225,7 +225,7 @@ export default function Index() {
   const canPersistProject = editor || dailyReportEditor || warehouseEditor;
   const creator = role ? canCreateProject(role) : false;
   const remover = role ? canDeleteProject(role) : false;
-  const restrictedFallbackView: AppView = role === 'warehouse_operator' ? 'warehouse' : 'gantt';
+  const restrictedFallbackView: AppView = role ? getRestrictedFallbackView(role) : 'gantt';
 
   const cancelScheduledDraft = useCallback((projectId?: string) => {
     const pending = pendingDraftRef.current;

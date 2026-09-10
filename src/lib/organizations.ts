@@ -46,7 +46,7 @@ export const ROLE_DESCRIPTIONS: Record<OrgRole, string> = {
   admin: 'Gerencia usuários e obras, sem transferir a propriedade da empresa; confere frete e ICMS/DIFAL das entradas fiscais.',
   engineer: 'Edita planejamento, produção, medições e suprimentos.',
   warehouse_operator: 'Opera somente o Almoxarifado, sem acesso aos demais módulos.',
-  field_user: 'Consulta a programação e preenche os Diários de Obra.',
+  field_user: 'Acessa somente o Diário de Obra para consulta e preenchimento.',
   viewer: 'Acesso somente para consulta, sem alterações nos dados.',
 };
 
@@ -55,7 +55,7 @@ export const ROLE_PERMISSIONS: Record<OrgRole, string[]> = {
   admin: ['Administrar usuários', 'Criar obras', 'Editar todos os módulos', 'Conferir frete e ICMS/DIFAL das entradas fiscais'],
   engineer: ['Editar planejamento e campo', 'Gerir medições e suprimentos'],
   warehouse_operator: ['Acessar somente o Almoxarifado', 'Registrar entradas, retiradas e equipamentos', 'Cancelar lançamentos sem apagar o histórico'],
-  field_user: ['Consultar atividades', 'Preencher Diário de Obra'],
+  field_user: ['Acessar somente o Diário de Obra', 'Preencher Diário de Obra'],
   viewer: ['Consultar todos os módulos'],
 };
 
@@ -82,8 +82,16 @@ export function canEditWarehouse(role: OrgRole): boolean {
 }
 export function canAccessAppView(role: OrgRole, view: AppView): boolean {
   if (role === 'warehouse_operator') return view === 'warehouse';
+  if (role === 'field_user') return view === 'dailyReport';
   if (role === 'engineer') return view !== 'dashboard' && view !== 'realCost';
   return true;
+}
+
+/** Tela segura usada quando uma URL, sessão salva ou troca de perfil aponta para uma área restrita. */
+export function getRestrictedFallbackView(role: OrgRole): AppView {
+  if (role === 'warehouse_operator') return 'warehouse';
+  if (role === 'field_user') return 'dailyReport';
+  return 'gantt';
 }
 export function canDeleteProject(role: OrgRole): boolean {
   return role === 'owner';
