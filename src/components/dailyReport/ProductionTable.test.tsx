@@ -5,6 +5,7 @@ import { ProductionTable } from './ProductionTable';
 describe('ProductionTable', () => {
   it('mantém uma malha fixa de colunas para todos os grupos de produção', () => {
     const { container } = render(<ProductionTable entries={[{
+      chapterId: 'ch-1', chapterName: 'Capítulo 1', chapterNumber: '1', plannedQuantity: 20,
       taskId: 'task-1', taskName: 'Atividade com descrição longa para testar a coluna', unit: 'UN', actualQuantity: 12.5,
     }]} />);
 

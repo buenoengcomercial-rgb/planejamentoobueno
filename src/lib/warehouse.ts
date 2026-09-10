@@ -21,6 +21,7 @@ import type {
   WarehouseAuditActor,
   WarehouseFiscalNote,
   WarehouseFiscalNoteItem,
+  WarehouseFiscalStockConversionStatus,
   WarehouseFiscalDocumentType,
   FiscalItemLinkStatus,
   FiscalInvoiceEntry,
