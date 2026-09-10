@@ -127,7 +127,7 @@ function normalizePayload(raw: FiscalNotePayload, extractedText = ""): FiscalNot
             ? Number(item.sourcePageIndex)
             : undefined,
           description: String(item.description ?? "").trim(),
-          quantity: Number(item.quantity ?? 1) || 1,
+          quantity: Number(item.quantity ?? 0) || 0,
           unit: item.unit ? String(item.unit) : null,
           unitPrice: Number(item.unitPrice ?? 0) || 0,
           totalPrice: Number(item.totalPrice ?? 0) || 0,
@@ -217,6 +217,10 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json().catch(() => ({}));
+    if ((Array.isArray(body.pages) && (body.pages.length === 0 || body.pages.length > 4)) ||
+      (Array.isArray(body.fileDataUrls) && body.fileDataUrls.length > 4)) {
+      return jsonResponse({ error: 'Envie entre 1 e 4 páginas para leitura.', readerVersion: 'multipage-v1' }, 400);
+    }
     const fileDataUrl = String(body.fileDataUrl ?? "");
     const fileDataUrls = Array.isArray(body.fileDataUrls)
       ? body.fileDataUrls.map((url: unknown) => String(url)).filter((url: string) => url.startsWith("data:image/")).slice(0, 4)
@@ -229,15 +233,20 @@ Deno.serve(async (req) => {
     const fileName = String(body.fileName ?? "nota-fiscal");
 
     const pageInputs: FiscalReaderPageInput[] = Array.isArray(body.pages)
-      ? body.pages.slice(0, 4).map((page: unknown, index: number) => {
+      ? body.pages.map((page: unknown, index: number) => {
         const source = page && typeof page === 'object' ? page as Record<string, unknown> : {};
         return {
           sourceIndex: Number.isFinite(Number(source.sourceIndex)) ? Number(source.sourceIndex) : index,
           imageDataUrl: String(source.imageDataUrl ?? ''),
           extractedText: String(source.extractedText ?? '').slice(0, 8000),
         };
-      }).filter(page => page.imageDataUrl?.startsWith('data:image/') || page.extractedText)
+      })
       : [];
+
+    if (pageInputs.some(page => !Number.isInteger(page.sourceIndex) || page.sourceIndex < 0 || page.sourceIndex > 3) ||
+      new Set(pageInputs.map(page => page.sourceIndex)).size !== pageInputs.length) {
+      return jsonResponse({ error: 'Índices de página inválidos ou repetidos.', readerVersion: 'multipage-v1' }, 400);
+    }
 
     if (fileDataUrls.length === 0 && !extractedText && pageInputs.length === 0) {
       return jsonResponse({ error: "Envie imagem em data URL ou texto extraido do PDF para leitura por IA." }, 400);
@@ -258,8 +267,9 @@ Deno.serve(async (req) => {
         if (page.extractedText) pageContent.push({ type: 'text', text: `Texto extraído desta página:\n${page.extractedText}` });
         if (page.imageDataUrl?.startsWith('data:image/')) pageContent.push({ type: 'image_url', image_url: { url: page.imageDataUrl } });
         try {
+          if (!page.imageDataUrl?.startsWith('data:image/') && !page.extractedText?.trim()) throw new Error('Página sem imagem ou texto legível. Selecione o arquivo novamente.');
           const ai = await callLovableAiGateway({ model, userContent: pageContent });
-          if (!ai.ok) throw new Error(ai.error);
+          if (ai.ok === false) throw new Error(`HTTP ${ai.status}: ${ai.error}`);
           const parsed = JSON.parse(ai.content) as FiscalNotePayload;
           pageResults.push({
             sourceIndex: page.sourceIndex,
@@ -329,7 +339,7 @@ Deno.serve(async (req) => {
     }
 
     const ai = await callLovableAiGateway({ model, userContent });
-    if (!ai.ok) {
+    if (ai.ok === false) {
       return jsonResponse({ error: ai.error }, ai.status);
     }
 

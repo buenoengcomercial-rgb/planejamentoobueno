@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project, WarehouseFiscalNote } from '@/types/project';
 import { computeWarehouseRows, emptyWarehouse } from '@/lib/warehouse';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
+import { indikaItems } from '@/test/fixtures/indikaFiscalNote';
 
 const { createHeaderImageMock, createObjectURLMock, destroyPdfMock, downloadMock, getDocumentMock, invokeMock, removeMock, renderPdfPageMock, revokeObjectURLMock, toastSuccessMock, uploadMock } = vi.hoisted(() => ({
   createHeaderImageMock: vi.fn(),
@@ -24,6 +25,14 @@ vi.mock('sonner', () => ({
 
 vi.mock('@/lib/fiscalSupplierHeaderImage', () => ({
   createSupplierHeaderImageDataUrl: createHeaderImageMock,
+}));
+
+vi.mock('@/lib/equipmentPhotoOptimization', () => ({
+  optimizeEquipmentPhoto: async (file: File) => file,
+}));
+
+vi.mock('@/lib/attachmentOptimization', () => ({
+  optimizeStorageAttachment: async (file: File) => file,
 }));
 
 vi.mock('pdfjs-dist', () => ({
@@ -110,7 +119,7 @@ function projectWithArchivedOrphan(): Project {
 
 async function readDocument(container: HTMLElement, name = 'nota.jpg') {
   const inputs = container.querySelectorAll<HTMLInputElement>('input[type="file"]');
-  const file = new File(['imagem da nota'], name, { type: 'application/octet-stream' });
+  const file = new File(['imagem da nota'], name, { type: 'image/jpeg' });
   fireEvent.change(inputs[1], { target: { files: [file] } });
   fireEvent.click(await screen.findByRole('button', { name: 'Ler documento' }));
   expect(await screen.findByText('Validar entrada antes do lançamento')).toBeInTheDocument();
@@ -123,7 +132,8 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     invokeMock.mockReset().mockResolvedValue({
       data: {
         ok: true,
-        readerVersion: 'issuer-address-v1',
+        readerVersion: 'multipage-v1',
+        pages: [{ sourceIndex: 0, itemCount: 1, status: 'ready' }],
         note: {
           supplierName: 'FREITAS & CIA LTDA',
           supplierCnpj: '02.179.328/0001-42',
@@ -385,10 +395,12 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     const onProjectChange = vi.fn();
     const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={onProjectChange} canManage />);
     await readDocument(view.container, 'ilegivel.jpg');
-    expect(screen.getByText('Imagem ilegível')).toBeInTheDocument();
+    expect(screen.getAllByText('Imagem ilegível').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Tentar leitura novamente' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Adicionar item' }));
     expect(screen.getByText('Itens do documento (1)')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirmar lançamento' })).toBeDisabled();
+    expect(screen.queryByText('Conferida')).not.toBeInTheDocument();
     expect(onProjectChange).not.toHaveBeenCalled();
   });
 
@@ -399,7 +411,7 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     });
     const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={vi.fn()} canManage />);
     await readDocument(view.container, 'b-lux.jpg');
-    expect(screen.getByText(/Leitor de notas desatualizado/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Leitor de notas desatualizado/i).length).toBeGreaterThan(0);
     expect(screen.getByText('Leitura incompleta')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Tentar leitura novamente' })).toBeInTheDocument();
   });
@@ -415,7 +427,7 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.getByText('Lendo o documento. Permaneça nesta janela.')).toBeInTheDocument();
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
     await act(async () => resolveRead({
-      data: { ok: true, readerVersion: 'issuer-address-v1', note: { supplierName: 'Fornecedor', totalAmount: 10, items: [{ description: 'Tubo', quantity: 1, unit: 'UN', unitPrice: 10, totalPrice: 10 }] } },
+      data: { ok: true, readerVersion: 'multipage-v1', pages: [{ sourceIndex: 0, status: 'ready', itemCount: 1 }], note: { supplierName: 'Fornecedor', totalAmount: 10, items: [{ description: 'Tubo', quantity: 1, unit: 'UN', unitPrice: 10, totalPrice: 10 }] } },
       error: null,
     }));
     expect(await screen.findByText('Validar entrada antes do lançamento')).toBeInTheDocument();
@@ -445,9 +457,60 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.queryByText('Fator de conversão')).not.toBeInTheDocument();
   });
 
+  it('expõe o HTTP 400 real, mantém as duas páginas recuperáveis e não permite lançar zero itens', async () => {
+    const json = vi.fn().mockResolvedValue({ error: 'Envie imagem em data URL ou texto extraido do PDF para leitura por IA.' });
+    invokeMock.mockResolvedValueOnce({ data: null, error: { message: 'Edge Function returned a non-2xx status code', context: { status: 400, clone: () => ({ json }) } } });
+    const onProjectChange = vi.fn();
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={onProjectChange} canManage />);
+    fireEvent.change(view.container.querySelectorAll('input[type="file"]')[1], { target: { files: [
+      new File(['pagina1'], 'image (17).jpg', { type: 'image/jpeg' }), new File(['pagina2'], 'image (16).jpg', { type: 'image/jpeg' }),
+    ] } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Ler documento' }));
+    await screen.findByText('Validar entrada antes do lançamento');
+    expect(screen.getAllByText(/HTTP 400/).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: 'Repetir esta página' })).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Confirmar lançamento' })).toBeDisabled();
+    expect(screen.queryByText('Conferida')).not.toBeInTheDocument();
+    const pages = invokeMock.mock.calls[0][1].body.pages;
+    expect(pages).toHaveLength(2);
+    expect(pages.map((p: { sourceIndex: number }) => p.sourceIndex)).toEqual([0, 1]);
+    expect(pages.every((p: { imageDataUrl: string }) => p.imageDataUrl.startsWith('data:image/jpeg;'))).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar envio' }));
+    expect(onProjectChange).not.toHaveBeenCalled();
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it('preserva os 7 itens da página 1 e repete só a página 2 até fechar os 30 itens da Indika', async () => {
+    invokeMock.mockResolvedValueOnce({ data: { ok: true, readerVersion: 'multipage-v1',
+      note: { supplierName: 'Indika', invoiceNumber: '013758', totalAmount: 20617.5, productsAmount: 20617.5, items: indikaItems.slice(0, 7) },
+      pages: [{ sourceIndex: 0, pageNumber: 1, totalPages: 2, status: 'ready', itemCount: 7 }, { sourceIndex: 1, status: 'failed', itemCount: 0, error: 'HTTP 429' }],
+    }, error: null });
+    const onProjectChange = vi.fn();
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={onProjectChange} canManage />);
+    fireEvent.change(view.container.querySelectorAll('input[type="file"]')[1], { target: { files: [
+      new File(['pagina1'], 'image (17).jpg', { type: 'image/jpeg' }), new File(['pagina2'], 'image (16).jpg', { type: 'image/jpeg' }),
+    ] } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Ler documento' }));
+    await screen.findByText('Itens do documento (7)');
+    expect(screen.getByRole('button', { name: 'Confirmar lançamento' })).toBeDisabled();
+    invokeMock.mockResolvedValueOnce({ data: { ok: true, readerVersion: 'multipage-v1',
+      note: { items: indikaItems.slice(7) }, pages: [{ sourceIndex: 1, pageNumber: 2, totalPages: 2, itemCount: 23, status: 'ready' }],
+    }, error: null });
+    fireEvent.click(screen.getByRole('button', { name: 'Repetir esta página' }));
+    await screen.findByText('Itens do documento (30)');
+    expect(invokeMock.mock.calls[1][1].body.pages).toHaveLength(1);
+    expect(invokeMock.mock.calls[1][1].body.pages[0].sourceIndex).toBe(1);
+    expect(screen.getByText('Conferida')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirmar lançamento' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Visualizar anexo 1' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Visualizar anexo 2' })).toBeInTheDocument();
+    expect(onProjectChange).not.toHaveBeenCalled();
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
   it('mostra a conversão sugerida de embalagem e exige confirmação na conferência', async () => {
     invokeMock.mockResolvedValueOnce({
-      data: { ok: true, readerVersion: 'issuer-address-v1', note: {
+      data: { ok: true, readerVersion: 'multipage-v1', pages: [{ sourceIndex: 0, status: 'ready', itemCount: 1 }], note: {
         supplierName: 'Fornecedor', supplierCnpj: '12.345.678/0001-95', invoiceNumber: '200', issueDate: '2026-08-15', totalAmount: 200,
         items: [{ id: 'bucket', description: 'BUCHA UX10A BALDE VERMELHO 600', quantity: 2, unit: 'BD', unitPrice: 100, totalPrice: 200 }],
       } }, error: null,
@@ -577,6 +640,45 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('button', { name: /Visualizar documento/i })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Baixar' })).toBeInTheDocument();
+  });
+
+  it.each([2, 4])('envia todas as %s páginas de PDF misto, renderizando só as sem texto', async count => {
+    const text = 'CNPJ tabela de produtos '.repeat(60);
+    getDocumentMock.mockReturnValueOnce({ promise: Promise.resolve({
+      numPages: count,
+      getPage: async (number: number) => ({
+        getTextContent: async () => ({ items: number === 1 ? [{ str: text }] : [] }),
+        getViewport: ({ scale }: { scale: number }) => ({ width: 600 * scale, height: 840 * scale }),
+        render: renderPdfPageMock,
+      }),
+      destroy: destroyPdfMock,
+    }) });
+    const file = new File(['pdf'], 'misto.pdf', { type: 'application/pdf' });
+    Object.defineProperty(file, 'arrayBuffer', { value: async () => new ArrayBuffer(8) });
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={vi.fn()} canManage />);
+    fireEvent.change(view.container.querySelectorAll('input[type="file"]')[1], { target: { files: [file] } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Ler documento' }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+    const pages = invokeMock.mock.calls[0][1].body.pages;
+    expect(pages).toHaveLength(count);
+    expect(pages[0]).toMatchObject({ sourceIndex: 0, extractedText: text.trim() });
+    expect(pages[0].imageDataUrl).toBeUndefined();
+    expect(pages.slice(1).every((page: { imageDataUrl: string }) => page.imageDataUrl.startsWith('data:image/'))).toBe(true);
+    expect(renderPdfPageMock).toHaveBeenCalledTimes(count - 1);
+    expect(destroyPdfMock).toHaveBeenCalled();
+  });
+
+  it('rejeita PDF acima de quatro páginas antes de chamar a IA', async () => {
+    getDocumentMock.mockReturnValueOnce({ promise: Promise.resolve({ numPages: 5, destroy: destroyPdfMock }) });
+    const file = new File(['pdf'], 'cinco.pdf', { type: 'application/pdf' });
+    Object.defineProperty(file, 'arrayBuffer', { value: async () => new ArrayBuffer(8) });
+    const view = render(<WarehouseFiscalNotesTab project={emptyProject()} onProjectChange={vi.fn()} canManage />);
+    fireEvent.change(view.container.querySelectorAll('input[type="file"]')[1], { target: { files: [file] } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Ler documento' }));
+    expect(await screen.findByText('Leitura incompleta')).toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Confirmar lançamento' })).toBeDisabled();
+    expect(destroyPdfMock).toHaveBeenCalled();
   });
 
   it('renderiza todas as páginas do PDF internamente sem depender de iframe ou aba em branco', async () => {

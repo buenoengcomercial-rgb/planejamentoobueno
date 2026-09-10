@@ -49,6 +49,7 @@ import { inferSupplierStateFromIssuerAddress, normalizeBrazilianState } from '@/
 import { createSupplierHeaderImageDataUrl } from '@/lib/fiscalSupplierHeaderImage';
 import { optimizeEquipmentPhoto } from '@/lib/equipmentPhotoOptimization';
 import { fiscalReadingCheck } from '@/lib/fiscalMultipage';
+import { FISCAL_READER_VERSION, fiscalReaderError, reconcileReaderPages, validateFiscalReaderPages, type FiscalReaderPageInput } from '@/lib/fiscalReaderClient';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -110,7 +111,6 @@ type TransientFiscalReaderNote = ParsedNote & {
   supplierLocationText?: string | null;
 };
 
-type FiscalReaderPageInput = { sourceIndex: number; imageDataUrl?: string; extractedText?: string };
 
 /**
  * Campos que o formulário de uma entrada já lançada pode alterar. Metadados
@@ -148,10 +148,8 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_IMAGES = 4;
 const PDF_TEXT_ONLY_MIN_CHARS = 900;
 const MAX_DOCUMENT_PAGES = 4;
-const PDF_IMAGE_PAGES = MAX_DOCUMENT_PAGES;
-const PDF_IMAGE_TARGET_WIDTH = 1100;
+const PDF_IMAGE_TARGET_WIDTH = 1800;
 const DESTINATION_STATE = 'RO';
-const FISCAL_READER_VERSION = 'multipage-v1';
 const ACCEPTED = ['pdf', 'png', 'jpg', 'jpeg', 'webp'];
 
 function fiscalNoteSortValue(note: WarehouseFiscalNote, key: FiscalNoteSortKey, sequence: number) {
@@ -275,19 +273,16 @@ async function extractPdf(file: File) {
   }
   const text: string[] = [];
   const images: string[] = [];
-  for (let number = 1; number <= pdf.numPages; number += 1) {
-    const page = await pdf.getPage(number);
-    const content = await page.getTextContent();
-    text.push(content.items.map(item => ('str' in item ? String(item.str) : '')).join(' '));
-  }
-  const joined = text.join('\n');
-  const textIsReliable = joined.replace(/\s+/g, '').length >= PDF_TEXT_ONLY_MIN_CHARS && /cnpj/i.test(joined);
-  if (!textIsReliable) {
-    const pages = Math.min(pdf.numPages, PDF_IMAGE_PAGES);
-    for (let number = 1; number <= pages; number += 1) {
+  try {
+    for (let number = 1; number <= pdf.numPages; number += 1) {
       const page = await pdf.getPage(number);
+      const content = await page.getTextContent();
+      const pageText = content.items.map(item => ('str' in item ? String(item.str) : '')).join(' ');
+      text.push(pageText);
+      const textIsReliable = pageText.replace(/\s+/g, '').length >= PDF_TEXT_ONLY_MIN_CHARS && /cnpj/i.test(pageText);
+      if (textIsReliable) continue;
       const natural = page.getViewport({ scale: 1 });
-      const scale = Math.min(1.5, Math.max(0.9, PDF_IMAGE_TARGET_WIDTH / natural.width));
+      const scale = Math.min(3, PDF_IMAGE_TARGET_WIDTH / natural.width);
       const viewport = page.getViewport({ scale });
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d');
@@ -295,11 +290,13 @@ async function extractPdf(file: File) {
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
         await page.render({ canvas, canvasContext: context, viewport } as Parameters<typeof page.render>[0]).promise;
-        images.push(canvas.toDataURL('image/jpeg', 0.7));
+        images[number - 1] = canvas.toDataURL('image/jpeg', 0.85);
       }
     }
+    return { text: text.join('\n'), pageTexts: text, images };
+  } finally {
+    await pdf.destroy();
   }
-  return { text: joined, pageTexts: text, images };
 }
 
 
@@ -355,17 +352,7 @@ async function fiscalReaderPages(files: File[]): Promise<{ pages: FiscalReaderPa
         sourceIndex,
         extractedText: extractedText.trim(),
         imageDataUrl: extracted.images[sourceIndex],
-      }))
-      .filter(page => page.extractedText || page.imageDataUrl?.startsWith('data:image/'));
-
-    if (pages.length === 0) {
-      // PDF sem texto legível e sem render disponível: renderiza as páginas como imagem.
-      const rendered = (await renderPdfPreview(firstFile)).slice(0, PDF_IMAGE_PAGES);
-      return {
-        text: extracted.text,
-        pages: rendered.map((imageDataUrl, sourceIndex) => ({ sourceIndex, imageDataUrl })),
-      };
-    }
+      }));
 
     return { text: extracted.text, pages };
   }
@@ -392,6 +379,7 @@ async function readWithAi(input: { name: string; type?: string; pages: FiscalRea
 }
 
 async function requestAiRead(input: { name: string; type?: string; pages: FiscalReaderPageInput[]; text?: string }): Promise<ParsedNote> {
+  validateFiscalReaderPages(input.pages);
   const extractedText = (input.text || '').slice(0, 8000);
   const headerStateKnown = Boolean(inferSupplierStateFromIssuerAddress(extractedText || undefined));
   const supplierHeaderImageDataUrl = headerStateKnown ? undefined : await createSupplierHeaderImageDataUrl(input.pages[0]?.imageDataUrl);
@@ -405,7 +393,7 @@ async function requestAiRead(input: { name: string; type?: string; pages: Fiscal
     body: { fileName: input.name, fileType: input.type, pages: input.pages, supplierHeaderImageDataUrl, extractedText },
   });
 
-  if (error) throw new Error(error.message || 'Falha ao executar a leitura automática.');
+  if (error) throw new Error(await fiscalReaderError(error));
   if (!data?.ok || !data.note) throw new Error(data?.error || 'Não foi possível ler o documento.');
   if (data.readerVersion !== FISCAL_READER_VERSION) {
     throw new Error('Leitor de notas desatualizado. Implante a função read-fiscal-note pelo Lovable Cloud e tente novamente.');
@@ -432,7 +420,7 @@ async function requestAiRead(input: { name: string; type?: string; pages: Fiscal
     aiConfidence: confidence == null ? undefined : Number(confidence),
     documentTypeConfidence: note.documentTypeConfidence == null ? undefined : Number(note.documentTypeConfidence),
     productsAmount: Number(note.productsAmount || 0) || undefined,
-    extractionPages: data.pages,
+    extractionPages: reconcileReaderPages(input.pages, data.pages),
     items: (note.items ?? []).map(item => {
       const quantity = Number(item.quantity || 0);
       const unit = item.unit?.trim() || 'UN';
@@ -613,10 +601,12 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
       let processingError: string | undefined;
       try {
         const prepared = await fiscalReaderPages(selectedFiles);
+        draft.extractionPages = prepared.pages.map(page => ({ sourceIndex: page.sourceIndex, itemCount: 0, status: 'failed' as const }));
         extractedText = prepared.text;
         parsed = await readWithAi({ name: draft.sourceFileName, type: draft.sourceMimeType, pages: prepared.pages, text: extractedText });
       } catch (error) {
         processingError = (error as Error).message;
+        draft.extractionPages = draft.extractionPages?.map(page => ({ ...page, error: processingError }));
       }
       const deterministicType = classifyFiscalDocumentText(`${extractedText}\n${draft.sourceFileName}`);
       const completedAt = nowWarehouseISO();
@@ -627,13 +617,13 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
         extractedText,
         documentType: deterministicType !== 'outro' ? deterministicType : (parsed.documentType || 'outro'),
         documentTypeConfidence: deterministicType !== 'outro' ? 1 : Number(parsed.documentTypeConfidence || 0),
-        extractionStatus: processingError ? 'failed' : 'ready', processingError,
+        extractionStatus: processingError || parsed.extractionPages?.some(page => page.status !== 'ready') ? 'failed' : 'ready', processingError,
         extractionCompletedAt: completedAt, updatedAt: completedAt,
       };
       finalNote.costReviewStatus = fiscalNoteCostReviewStatus(finalNote);
       setSelected(finalNote);
-      if (processingError) {
-        toast.warning('A leitura automática falhou. Tente novamente ou preencha os dados manualmente.');
+      if (finalNote.extractionStatus === 'failed') {
+        toast.warning('A leitura ficou incompleta. Repita as páginas indicadas para concluir a conferência.');
         return;
       }
       if (!validItems(finalNote).length) {
@@ -666,15 +656,16 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
         extractedText,
         documentType: deterministicType !== 'outro' ? deterministicType : (parsed.documentType || 'outro'),
         documentTypeConfidence: deterministicType !== 'outro' ? 1 : Number(parsed.documentTypeConfidence || 0),
-        extractionStatus: 'ready', processingError: undefined, extractionCompletedAt: nowWarehouseISO(),
+        extractionStatus: parsed.extractionPages?.some(page => page.status !== 'ready') ? 'failed' : 'ready', processingError: undefined, extractionCompletedAt: nowWarehouseISO(),
       };
       setSelected(updated);
-      if (validItems(updated).length) toast.success('Leitura concluída. Confira os dados antes de confirmar o lançamento.');
+      if (updated.extractionStatus === 'failed') toast.warning('A leitura ficou incompleta. Repita as páginas indicadas.');
+      else if (validItems(updated).length) toast.success('Leitura concluída. Confira os dados antes de confirmar o lançamento.');
       else toast.warning('A leitura ainda não encontrou itens. Preencha um item manualmente.');
     } catch (error) {
       const failed = { ...selected, extractionStatus: 'failed' as const, processingError: (error as Error).message };
       setSelected(failed);
-      toast.error('A leitura falhou novamente. Preencha o item manualmente.');
+      toast.error((error as Error).message);
     } finally {
       setProcessing(false);
     }
@@ -876,6 +867,15 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
       if (!previousPages.some(existing => existing.sourceIndex === sourceIndex)) extractionPages.push({ ...retriedPage, sourceIndex });
       const updated: WarehouseFiscalNote = {
         ...selected,
+        supplierName: selected.supplierName || parsed.supplierName,
+        supplierCnpj: selected.supplierCnpj || parsed.supplierCnpj,
+        supplierState: selected.supplierState || parsed.supplierState,
+        invoiceNumber: selected.invoiceNumber || parsed.invoiceNumber,
+        issueDate: selected.issueDate || parsed.issueDate,
+        totalAmount: selected.totalAmount || parsed.totalAmount || 0,
+        productsAmount: selected.productsAmount || parsed.productsAmount,
+        invoices: selected.invoices?.length ? selected.invoices : parsed.invoices,
+        documentType: selected.documentType === 'outro' ? parsed.documentType : selected.documentType,
         items: [...selected.items.filter(item => item.sourcePageIndex !== sourceIndex), ...retriedItems],
         extractionPages,
         extractionStatus: extractionPages.some(candidate => candidate.status === 'failed') ? 'failed' : 'ready',

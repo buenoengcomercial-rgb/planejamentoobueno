@@ -62,6 +62,18 @@ function withNote(entry: WarehouseFiscalNote) {
 }
 
 describe('fluxo de documentos fiscais do almoxarifado', () => {
+  it.each([
+    { extractionPages: [], extractionStatus: 'ready' as const },
+    { extractionPages: [{ sourceIndex: 0, status: 'failed' as const, itemCount: 0 }], extractionStatus: 'failed' as const },
+    { extractionPages: [{ sourceIndex: 0, status: 'ready' as const, itemCount: 1, totalPages: 2 }], extractionStatus: 'ready' as const },
+  ])('bloqueia leitura incompleta no domínio sem gerar movimentos: %j', extraction => {
+    const project = withNote(note(extraction));
+    const before = JSON.stringify(project);
+    expect(() => approveFiscalNote(project, 'nf-1')).toThrow();
+    expect(JSON.stringify(project)).toBe(before);
+    expect(project.warehouse!.movements).toHaveLength(0);
+  });
+
   it('classifica Pedido de Venda 915 como comprovante não fiscal', () => {
     const type = classifyFiscalDocumentText('Bling - Pedido de Venda Nº 915 - Itens do pedido');
     expect(type).toBe('pedido_venda');

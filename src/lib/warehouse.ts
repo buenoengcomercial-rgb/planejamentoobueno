@@ -1,4 +1,5 @@
 import { ATTACHMENT_OPTIMIZATION_VERSION } from './attachmentOptimizationVersion';
+import { fiscalReadingCheck } from './fiscalMultipage';
 import type {
   Project,
   Task,
@@ -2730,6 +2731,11 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
   if (note.status === 'aprovada') return p;
   if (note.status === 'cancelada') throw new Error('Um lançamento cancelado é definitivo e não pode retornar ao estoque.');
   if (note.status === 'rejeitada') throw new Error('Um documento arquivado não pode ser lançado no estoque. Envie um novo documento.');
+  // Legacy posted-note corrections keep their historical contract. New reads must close every page and total.
+  if (note.extractionPages !== undefined || note.extractionStartedAt || note.extractionStatus === 'failed' || note.extractionStatus === 'reading') {
+    const readingCheck = fiscalReadingCheck(note);
+    if (!readingCheck.canPost) throw new Error(readingCheck.reason);
+  }
   const duplicate = findFiscalNoteDuplicate(p, note);
   if (duplicate) {
     throw new Error(`A nota ${duplicate.invoiceNumber || duplicate.id} já foi lançada no estoque e não pode gerar uma segunda entrada.`);
