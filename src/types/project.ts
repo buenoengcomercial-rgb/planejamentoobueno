@@ -1035,6 +1035,17 @@ export type WarehouseFiscalDocumentType =
 export type WarehouseFiscalExtractionStatus = 'reading' | 'ready' | 'failed';
 export type WarehouseFiscalArchiveReason = 'comprovante' | 'descartada' | 'lancamento_cancelado';
 
+/** Resultado auditável da leitura de cada página recebida. */
+export interface WarehouseFiscalExtractionPage {
+  sourceIndex: number;
+  pageNumber?: number;
+  totalPages?: number;
+  itemCount: number;
+  confidence?: number;
+  status: 'ready' | 'failed';
+  error?: string;
+}
+
 export type FiscalItemLinkStatus = 'vinculado' | 'pendente' | 'auto';
 
 export type WarehouseFiscalCostReviewStatus =
@@ -1087,6 +1098,8 @@ export interface WarehouseFiscalNoteItem {
   linkConfidence?: number;
   /** Confiança da IA na leitura deste item (0-1). */
   confidence?: number;
+  /** Página de origem na leitura multipágina; não altera o dado fiscal. */
+  sourcePageIndex?: number;
 }
 
 export type FiscalInvoicePaymentStatus = 'aberta' | 'paga' | 'vencida' | 'cancelada';
@@ -1120,6 +1133,8 @@ export interface WarehouseFiscalNote {
   invoiceNumber?: string;
   issueDate?: string;
   totalAmount: number;
+  /** Valor total dos produtos da DANFE, usado para conferir a soma dos itens. */
+  productsAmount?: number;
   /** Frete total da compra, rateado proporcionalmente entre os itens. */
   freightAmount?: number;
   /** ICMS/diferencial total da compra, rateado proporcionalmente entre os itens. */
@@ -1148,6 +1163,7 @@ export interface WarehouseFiscalNote {
   extractionStatus?: WarehouseFiscalExtractionStatus;
   extractionStartedAt?: string;
   extractionCompletedAt?: string;
+  extractionPages?: WarehouseFiscalExtractionPage[];
   archiveReason?: WarehouseFiscalArchiveReason;
   archivedAt?: string;
   archivedBy?: string;

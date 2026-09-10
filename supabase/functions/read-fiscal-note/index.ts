@@ -9,6 +9,7 @@ const corsHeaders = {
 };
 
 type FiscalNoteItem = {
+  sourcePageIndex?: number;
   productCode?: string | null;
   description?: string;
   quantity?: number;
@@ -38,6 +39,9 @@ type FiscalNotePayload = {
   invoiceNumber?: string | null;
   issueDate?: string | null;
   totalAmount?: number | null;
+  productsAmount?: number | null;
+  pageNumber?: number | null;
+  totalPages?: number | null;
   items?: FiscalNoteItem[];
   invoices?: FiscalInvoice[];
   notes?: string | null;
@@ -46,8 +50,23 @@ type FiscalNotePayload = {
   documentTypeConfidence?: number | null;
 };
 
+type FiscalReaderPageInput = {
+  sourceIndex: number;
+  imageDataUrl?: string;
+  extractedText?: string;
+};
+
+type FiscalReaderPageResult = {
+  sourceIndex: number;
+  pageNumber?: number | null;
+  totalPages?: number | null;
+  confidence?: number | null;
+  items?: FiscalNoteItem[];
+  error?: string;
+};
+
 const systemPrompt = `Voce le notas fiscais brasileiras (DANFE/NFe) de materiais de obra a partir de imagens ou texto extraido.
-Responda APENAS JSON valido com as chaves: accessKey, supplierName, supplierCnpj, supplierState, supplierCity, supplierHeaderText, supplierLocationText, invoiceNumber, issueDate, totalAmount, confidence, documentType, documentTypeConfidence, items[], invoices[], notes.
+Responda APENAS JSON valido com as chaves: accessKey, supplierName, supplierCnpj, supplierState, supplierCity, supplierHeaderText, supplierLocationText, invoiceNumber, issueDate, totalAmount, productsAmount, pageNumber, totalPages, confidence, documentType, documentTypeConfidence, items[], invoices[], notes.
 items[]: productCode, description, quantity, unit, unitPrice, totalPrice, category, confidence.
 invoices[]: number, dueDate, amount, paymentMethod, notes (parcelas de FATURA/DUPLICATAS/COBRANCA; [] se nao houver).
 Regras essenciais:
@@ -56,7 +75,10 @@ Regras essenciais:
 - supplierHeaderText: transcreva o bloco do emitente (razao social, rotulo CNPJ/CPF e numero, endereco, municipio, UF). supplierLocationText: copie literalmente a linha do emitente com cidade e UF (ex.: "Jundiai/SP"). supplierCity: municipio do emitente. supplierState: sigla oficial de 2 letras do emitente (Jundiai/SP -> "SP"); nunca deduza pelo CNPJ nem pela chave de acesso.
 - supplierCnpj: numero ao lado/abaixo do rotulo CNPJ/CPF do emitente; nunca inscricao estadual nem chave de acesso.
 - accessKey: os 44 digitos abaixo de CHAVE DE ACESSO, apenas para conferencia.
+- productsAmount: valor do campo "Valor total dos produtos" (antes de frete, desconto e outras despesas), quando existir.
+- pageNumber e totalPages: use a numeração impressa "Página X de Y"; se não houver, use null.
 - Extraia o codigo de cada item ("COD. PROD.", "Codigo", "Ref.") em productCode.
+- Quando receber uma página, extraia TODAS as linhas da tabela de itens dessa página. Não pare no primeiro bloco e não descarte linhas repetidas de outras páginas.
 - Valores em reais com ponto decimal; datas YYYY-MM-DD; confidence entre 0 e 1.
 - Nao invente dados ilegiveis: use null ou 0 e explique em notes.
 Nao escreva raciocinio: devolva direto o JSON.`;
@@ -91,6 +113,7 @@ function normalizePayload(raw: FiscalNotePayload, extractedText = ""): FiscalNot
     invoiceNumber: raw.invoiceNumber ?? null,
     issueDate: raw.issueDate ?? null,
     totalAmount: Number(raw.totalAmount ?? 0) || 0,
+    productsAmount: Number(raw.productsAmount ?? 0) || 0,
     notes: raw.notes ?? null,
     confidence: raw.confidence != null ? Math.max(0, Math.min(1, Number(raw.confidence))) : null,
     documentType: raw.documentType && documentTypes.has(raw.documentType) ? raw.documentType : "outro",
@@ -100,6 +123,9 @@ function normalizePayload(raw: FiscalNotePayload, extractedText = ""): FiscalNot
     items: Array.isArray(raw.items)
       ? raw.items.map((item) => ({
           productCode: item.productCode ? String(item.productCode).trim() : null,
+          sourcePageIndex: Number.isInteger(Number(item.sourcePageIndex)) && Number(item.sourcePageIndex) >= 0
+            ? Number(item.sourcePageIndex)
+            : undefined,
           description: String(item.description ?? "").trim(),
           quantity: Number(item.quantity ?? 1) || 1,
           unit: item.unit ? String(item.unit) : null,
@@ -119,6 +145,11 @@ function normalizePayload(raw: FiscalNotePayload, extractedText = ""): FiscalNot
         })).filter((inv) => inv.amount > 0 || inv.dueDate || inv.number)
       : [],
   };
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
 }
 
 async function callLovableAiGateway(input: {
@@ -197,11 +228,74 @@ Deno.serve(async (req) => {
     const supplierHeaderImageDataUrl = String(body.supplierHeaderImageDataUrl ?? "");
     const fileName = String(body.fileName ?? "nota-fiscal");
 
-    if (fileDataUrls.length === 0 && !extractedText) {
+    const pageInputs: FiscalReaderPageInput[] = Array.isArray(body.pages)
+      ? body.pages.slice(0, 4).map((page: unknown, index: number) => {
+        const source = page && typeof page === 'object' ? page as Record<string, unknown> : {};
+        return {
+          sourceIndex: Number.isFinite(Number(source.sourceIndex)) ? Number(source.sourceIndex) : index,
+          imageDataUrl: String(source.imageDataUrl ?? ''),
+          extractedText: String(source.extractedText ?? '').slice(0, 8000),
+        };
+      }).filter(page => page.imageDataUrl?.startsWith('data:image/') || page.extractedText)
+      : [];
+
+    if (fileDataUrls.length === 0 && !extractedText && pageInputs.length === 0) {
       return jsonResponse({ error: "Envie imagem em data URL ou texto extraido do PDF para leitura por IA." }, 400);
     }
 
     const model = Deno.env.get("LOVABLE_AI_MODEL") ?? "google/gemini-3-flash-preview";
+
+    if (pageInputs.length > 0) {
+      const pageResults: Array<{ sourceIndex: number; parsed?: FiscalNotePayload; page: FiscalReaderPageResult }> = [];
+      for (const page of pageInputs) {
+        const pageContent: Array<
+          | { type: "text"; text: string }
+          | { type: "image_url"; image_url: { url: string } }
+        > = [{
+          type: 'text',
+          text: `Leia exclusivamente esta página fiscal (origem ${page.sourceIndex + 1}). Extraia TODAS as linhas da tabela de itens nela visíveis. Identifique Página X de Y quando impresso.`,
+        }];
+        if (page.extractedText) pageContent.push({ type: 'text', text: `Texto extraído desta página:\n${page.extractedText}` });
+        if (page.imageDataUrl?.startsWith('data:image/')) pageContent.push({ type: 'image_url', image_url: { url: page.imageDataUrl } });
+        try {
+          const ai = await callLovableAiGateway({ model, userContent: pageContent });
+          if (!ai.ok) throw new Error(ai.error);
+          const parsed = JSON.parse(ai.content) as FiscalNotePayload;
+          pageResults.push({
+            sourceIndex: page.sourceIndex,
+            parsed,
+            page: {
+              sourceIndex: page.sourceIndex,
+              pageNumber: numberOrUndefined((parsed as FiscalNotePayload & { pageNumber?: unknown }).pageNumber),
+              totalPages: numberOrUndefined((parsed as FiscalNotePayload & { totalPages?: unknown }).totalPages),
+              confidence: parsed.confidence ?? null,
+              items: parsed.items ?? [],
+            },
+          });
+        } catch (error) {
+          pageResults.push({ sourceIndex: page.sourceIndex, page: { sourceIndex: page.sourceIndex, items: [], error: error instanceof Error ? error.message : 'Falha ao ler a página.' } });
+        }
+      }
+
+      const ordered = [...pageResults].sort((a, b) => (a.page.pageNumber ?? a.sourceIndex + 1) - (b.page.pageNumber ?? b.sourceIndex + 1));
+      const primary = ordered.find(result => result.page.pageNumber === 1 && result.parsed)?.parsed ?? ordered.find(result => result.parsed)?.parsed ?? {};
+      const items = ordered.flatMap(result => (result.page.items ?? []).map(item => ({ ...item, sourcePageIndex: result.sourceIndex })));
+      const normalized = normalizePayload({ ...primary, items });
+      return jsonResponse({
+        ok: true,
+        readerVersion: 'multipage-v1',
+        note: { ...normalized, productsAmount: Number(primary.productsAmount ?? 0) || undefined },
+        pages: ordered.map(result => ({
+          sourceIndex: result.sourceIndex,
+          pageNumber: result.page.pageNumber,
+          totalPages: result.page.totalPages,
+          confidence: result.page.confidence,
+          itemCount: result.page.items?.filter(item => String(item.description ?? '').trim()).length ?? 0,
+          status: result.page.error ? 'failed' : 'ready',
+          error: result.page.error,
+        })),
+      });
+    }
     const userContent: Array<
       | { type: "text"; text: string }
       | { type: "image_url"; image_url: { url: string } }

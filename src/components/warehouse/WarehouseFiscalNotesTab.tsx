@@ -48,6 +48,7 @@ import {
 import { inferSupplierStateFromIssuerAddress, normalizeBrazilianState } from '@/lib/fiscalSupplierState';
 import { createSupplierHeaderImageDataUrl } from '@/lib/fiscalSupplierHeaderImage';
 import { optimizeEquipmentPhoto } from '@/lib/equipmentPhotoOptimization';
+import { fiscalReadingCheck } from '@/lib/fiscalMultipage';
 import { supabase } from '@/integrations/supabase/client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -100,7 +101,7 @@ type FiscalNoteSortKey = 'sequence' | 'supplier' | 'cnpj' | 'invoice' | 'issueDa
 type SortDirection = 'asc' | 'desc';
 type ParsedNote = Partial<Pick<WarehouseFiscalNote,
   'supplierName' | 'supplierCnpj' | 'supplierState' | 'invoiceNumber' | 'issueDate' | 'totalAmount' | 'notes' |
-  'items' | 'invoices' | 'aiConfidence' | 'documentType' | 'documentTypeConfidence'>>;
+  'productsAmount' | 'items' | 'invoices' | 'aiConfidence' | 'documentType' | 'documentTypeConfidence' | 'extractionPages'>>;
 
 type TransientFiscalReaderNote = ParsedNote & {
   confidence?: number;
@@ -108,6 +109,8 @@ type TransientFiscalReaderNote = ParsedNote & {
   supplierHeaderText?: string | null;
   supplierLocationText?: string | null;
 };
+
+type FiscalReaderPageInput = { sourceIndex: number; imageDataUrl?: string; extractedText?: string };
 
 /**
  * Campos que o formulário de uma entrada já lançada pode alterar. Metadados
@@ -144,10 +147,11 @@ function postedFiscalNoteEditSnapshot(note: WarehouseFiscalNote) {
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_IMAGES = 4;
 const PDF_TEXT_ONLY_MIN_CHARS = 900;
-const PDF_IMAGE_PAGES = 2;
+const MAX_DOCUMENT_PAGES = 4;
+const PDF_IMAGE_PAGES = MAX_DOCUMENT_PAGES;
 const PDF_IMAGE_TARGET_WIDTH = 1100;
 const DESTINATION_STATE = 'RO';
-const FISCAL_READER_VERSION = 'issuer-address-v1';
+const FISCAL_READER_VERSION = 'multipage-v1';
 const ACCEPTED = ['pdf', 'png', 'jpg', 'jpeg', 'webp'];
 
 function fiscalNoteSortValue(note: WarehouseFiscalNote, key: FiscalNoteSortKey, sequence: number) {
@@ -265,6 +269,10 @@ async function extractPdf(file: File) {
   const pdfjs = await import('pdfjs-dist');
   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
   const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+  if (pdf.numPages > MAX_DOCUMENT_PAGES) {
+    await pdf.destroy();
+    throw new Error(`O PDF possui ${pdf.numPages} páginas. Envie no máximo ${MAX_DOCUMENT_PAGES} páginas.`);
+  }
   const text: string[] = [];
   const images: string[] = [];
   for (let number = 1; number <= pdf.numPages; number += 1) {
@@ -291,7 +299,7 @@ async function extractPdf(file: File) {
       }
     }
   }
-  return { text: joined, images };
+  return { text: joined, pageTexts: text, images };
 }
 
 
@@ -336,13 +344,36 @@ async function photoDataUrlsForAi(files: File[]): Promise<string[]> {
   return urls.filter(Boolean);
 }
 
+async function fiscalReaderPages(files: File[]): Promise<{ pages: FiscalReaderPageInput[]; text: string }> {
+  const firstFile = files[0];
+  if (!firstFile) return { pages: [], text: '' };
+
+  if (firstFile.type === 'application/pdf' || firstFile.name.toLowerCase().endsWith('.pdf')) {
+    const extracted = await extractPdf(firstFile);
+    return {
+      text: extracted.text,
+      pages: extracted.pageTexts.map((extractedText, sourceIndex) => ({
+        sourceIndex,
+        extractedText,
+        imageDataUrl: extracted.images[sourceIndex],
+      })),
+    };
+  }
+
+  const imageDataUrls = await photoDataUrlsForAi(files);
+  return {
+    text: '',
+    pages: imageDataUrls.map((imageDataUrl, sourceIndex) => ({ sourceIndex, imageDataUrl })),
+  };
+}
+
 
 
 /** Evita chamadas duplicadas à IA para o mesmo documento (economia de créditos). */
 const aiReadInFlight = new Map<string, Promise<ParsedNote>>();
 
-async function readWithAi(input: { name: string; type?: string; urls: string[]; text?: string }): Promise<ParsedNote> {
-  const key = `${input.name}|${input.urls.length}|${(input.urls[0] || '').length}|${(input.text || '').length}`;
+async function readWithAi(input: { name: string; type?: string; pages: FiscalReaderPageInput[]; text?: string }): Promise<ParsedNote> {
+  const key = `${input.name}|${input.pages.length}|${(input.pages[0]?.imageDataUrl || input.pages[0]?.extractedText || '').length}|${(input.text || '').length}`;
   const running = aiReadInFlight.get(key);
   if (running) return running;
   const task = requestAiRead(input).finally(() => aiReadInFlight.delete(key));
@@ -350,17 +381,18 @@ async function readWithAi(input: { name: string; type?: string; urls: string[]; 
   return task;
 }
 
-async function requestAiRead(input: { name: string; type?: string; urls: string[]; text?: string }): Promise<ParsedNote> {
+async function requestAiRead(input: { name: string; type?: string; pages: FiscalReaderPageInput[]; text?: string }): Promise<ParsedNote> {
   const extractedText = (input.text || '').slice(0, 8000);
   const headerStateKnown = Boolean(inferSupplierStateFromIssuerAddress(extractedText || undefined));
-  const supplierHeaderImageDataUrl = headerStateKnown ? undefined : await createSupplierHeaderImageDataUrl(input.urls[0]);
+  const supplierHeaderImageDataUrl = headerStateKnown ? undefined : await createSupplierHeaderImageDataUrl(input.pages[0]?.imageDataUrl);
   const { data, error } = await supabase.functions.invoke<{
     ok?: boolean;
     error?: string;
     readerVersion?: string;
     note?: TransientFiscalReaderNote;
+    pages?: NonNullable<WarehouseFiscalNote['extractionPages']>;
   }>('read-fiscal-note', {
-    body: { fileName: input.name, fileType: input.type, fileDataUrl: input.urls[0], fileDataUrls: input.urls, supplierHeaderImageDataUrl, extractedText },
+    body: { fileName: input.name, fileType: input.type, pages: input.pages, supplierHeaderImageDataUrl, extractedText },
   });
 
   if (error) throw new Error(error.message || 'Falha ao executar a leitura automática.');
@@ -389,11 +421,13 @@ async function requestAiRead(input: { name: string; type?: string; urls: string[
     totalAmount: Number(note.totalAmount || 0),
     aiConfidence: confidence == null ? undefined : Number(confidence),
     documentTypeConfidence: note.documentTypeConfidence == null ? undefined : Number(note.documentTypeConfidence),
+    productsAmount: Number(note.productsAmount || 0) || undefined,
+    extractionPages: data.pages,
     items: (note.items ?? []).map(item => {
       const quantity = Number(item.quantity || 0);
       const unit = item.unit?.trim() || 'UN';
       return applyFiscalItemStockConversionSuggestion({
-      ...newItem(), ...item, id: item.id || uidWarehouse(),
+      ...newItem(), ...item, id: item.id || uidWarehouse(), sourcePageIndex: item.sourcePageIndex,
       quantity,
       unit,
       stockQuantity: quantity,
@@ -520,6 +554,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const canEditPostedRecord = !!isPosted && canEditPosted;
   const canEditSelectedCosts = !!selected && (!!isDraft || (!!isPosted && (canReviewCosts || canEditPosted)));
   const selectedItemsSubtotal = selected?.items.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0) ?? 0;
+  const selectedReadingCheck = selected ? fiscalReadingCheck(selected) : null;
   const selectedGlobalCost = Number(selected?.totalAmount || selectedItemsSubtotal) + Number(selected?.freightAmount || 0) + Number(selected?.icmsAmount || 0);
   const cancelCheck = isPosted && selected ? checkFiscalNoteCancellation(project, selected.id) : null;
   useEffect(() => {
@@ -563,20 +598,13 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
         documentType: 'outro', documentTypeConfidence: 0,
       };
 
-      let urls: string[] = [];
       let extractedText = '';
       let parsed: ParsedNote = { totalAmount: 0, items: [] };
       let processingError: string | undefined;
       try {
-        if (selectedFiles[0].type === 'application/pdf' || selectedFiles[0].name.toLowerCase().endsWith('.pdf')) {
-          const extracted = await extractPdf(selectedFiles[0]);
-          urls = extracted.images;
-          extractedText = extracted.text;
-        } else {
-          urls = await photoDataUrlsForAi(selectedFiles);
-        }
-
-        parsed = await readWithAi({ name: draft.sourceFileName, type: draft.sourceMimeType, urls, text: extractedText });
+        const prepared = await fiscalReaderPages(selectedFiles);
+        extractedText = prepared.text;
+        parsed = await readWithAi({ name: draft.sourceFileName, type: draft.sourceMimeType, pages: prepared.pages, text: extractedText });
       } catch (error) {
         processingError = (error as Error).message;
       }
@@ -617,17 +645,10 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     try {
       setProcessing(true);
       const localFiles = await Promise.all(attachments.map(attachmentFile));
-      let urls: string[] = [];
       let extractedText = '';
-      if (localFiles[0].type === 'application/pdf' || localFiles[0].name.toLowerCase().endsWith('.pdf')) {
-        const extracted = await extractPdf(localFiles[0]);
-        urls = extracted.images;
-        extractedText = extracted.text;
-      } else {
-        urls = await photoDataUrlsForAi(localFiles);
-      }
-
-      const parsed = await readWithAi({ name: selected.sourceFileName, type: selected.sourceMimeType, urls, text: extractedText });
+      const prepared = await fiscalReaderPages(localFiles);
+      extractedText = prepared.text;
+      const parsed = await readWithAi({ name: selected.sourceFileName, type: selected.sourceMimeType, pages: prepared.pages, text: extractedText });
       const deterministicType = classifyFiscalDocumentText(`${extractedText}\n${selected.sourceFileName}`);
       const updated: WarehouseFiscalNote = {
         ...selected, ...parsed,
@@ -653,6 +674,8 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     if (!selected || !isDraft) return;
     if (duplicate) return toast.error('Esta nota já foi lançada. Cancele o envio ou abra o lançamento existente.');
     if (!validItems(selected).length) return toast.error('Inclua ao menos um item com descrição e quantidade maior que zero.');
+    const readingCheck = fiscalReadingCheck(selected);
+    if (!readingCheck.canPost) return toast.error(readingCheck.reason || 'Conclua a conferência da leitura antes de lançar a nota.');
     const normalized: WarehouseFiscalNote = {
       ...selected,
       items: selected.items.map(item => ({
@@ -811,6 +834,48 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
       toast.success('Entrada atualizada e estoque recalculado.');
     } catch (error) {
       toast.error((error as Error).message);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const retryExtractionPage = async (sourceIndex: number) => {
+    if (!selected || !isDraft) return;
+    const attachments = selected.attachments?.length ? selected.attachments : (selected.attachment ? [selected.attachment] : []);
+    if (!attachments.length) return toast.error('Nenhum anexo disponível para repetir a leitura desta página.');
+    try {
+      setProcessing(true);
+      const localFiles = await Promise.all(attachments.map(attachmentFile));
+      const prepared = await fiscalReaderPages(localFiles);
+      const page = prepared.pages.find(candidate => candidate.sourceIndex === sourceIndex);
+      if (!page) throw new Error('A página original não está disponível para nova leitura.');
+      const parsed = await readWithAi({
+        name: selected.sourceFileName,
+        type: selected.sourceMimeType,
+        pages: [page],
+        text: page.extractedText || '',
+      });
+      const retriedPage = parsed.extractionPages?.[0];
+      if (!retriedPage || retriedPage.status !== 'ready') throw new Error(retriedPage?.error || 'A página ainda não pôde ser lida.');
+      const retriedItems = applyWarehouseSupplierPresentations(project, {
+        supplierCnpj: selected.supplierCnpj,
+        items: suggestFiscalNoteItemLinks(project, parsed.items ?? [], selected.supplierCnpj),
+      });
+      const previousPages = selected.extractionPages ?? [];
+      const extractionPages = previousPages.map(existing => existing.sourceIndex === sourceIndex ? { ...retriedPage, sourceIndex } : existing);
+      if (!previousPages.some(existing => existing.sourceIndex === sourceIndex)) extractionPages.push({ ...retriedPage, sourceIndex });
+      const updated: WarehouseFiscalNote = {
+        ...selected,
+        items: [...selected.items.filter(item => item.sourcePageIndex !== sourceIndex), ...retriedItems],
+        extractionPages,
+        extractionStatus: extractionPages.some(candidate => candidate.status === 'failed') ? 'failed' : 'ready',
+        processingError: undefined,
+        extractionCompletedAt: nowWarehouseISO(),
+      };
+      setSelected(updated);
+      toast.success(`Página ${sourceIndex + 1} lida novamente. Confira os totais antes de lançar.`);
+    } catch (error) {
+      toast.error((error as Error).message || 'Não foi possível repetir a leitura desta página.');
     } finally {
       setProcessing(false);
     }
@@ -1004,7 +1069,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
             <DialogHeader className="border-b p-4 pr-12"><DialogTitle>Registrar entrada</DialogTitle><DialogDescription>Tire fotos ou envie um PDF. Esta janela permanecerá aberta durante a leitura e a conferência.</DialogDescription></DialogHeader>
             <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
               <div className="grid grid-cols-2 gap-2"><Button variant="outline" className="min-h-11" disabled={processing} onClick={() => cameraRef.current?.click()}><Camera className="mr-2 h-4 w-4" />Tirar foto</Button><Button variant="outline" className="min-h-11" disabled={processing} onClick={() => fileRef.current?.click()}><Upload className="mr-2 h-4 w-4" />Arquivo/PDF</Button></div>
-              <div className="space-y-2">{files.map((file, index) => <div key={`${file.name}-${index}`} className="flex min-h-16 items-center gap-3 rounded-md border p-2"><FilePreview file={file} /><span className="min-w-0 flex-1 truncate text-sm">{index + 1}. {file.name}</span><div className="flex gap-1"><Button size="icon" variant="ghost" disabled={index === 0 || processing} onClick={() => { setUploadedAttachments(null); setFiles(list => list.map((entry, i) => i === index - 1 ? file : i === index ? list[index - 1] : entry)); }} aria-label="Mover para cima">↑</Button><Button size="icon" variant="ghost" disabled={processing} onClick={() => { setUploadedAttachments(null); setFiles(list => list.filter((_, i) => i !== index)); }} aria-label="Remover foto"><X className="h-4 w-4" /></Button></div></div>)}</div>
+              <div className="space-y-2">{files.length > 0 && <p className="text-xs text-muted-foreground">Páginas em ordem de leitura (máximo de 4). Use a seta para corrigir a sequência antes de ler.</p>}{files.map((file, index) => <div key={`${file.name}-${index}`} className="flex min-h-16 items-center gap-3 rounded-md border p-2"><FilePreview file={file} /><span className="min-w-0 flex-1 truncate text-sm">{index + 1}. {file.name}</span><div className="flex gap-1"><Button size="icon" variant="ghost" disabled={index === 0 || processing} onClick={() => { setUploadedAttachments(null); setFiles(list => list.map((entry, i) => i === index - 1 ? file : i === index ? list[index - 1] : entry)); }} aria-label="Mover para cima">↑</Button><Button size="icon" variant="ghost" disabled={processing} onClick={() => { setUploadedAttachments(null); setFiles(list => list.filter((_, i) => i !== index)); }} aria-label="Remover foto"><X className="h-4 w-4" /></Button></div></div>)}</div>
               {!files.some(file => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) && files.length > 0 && files.length < MAX_IMAGES && <div className="grid grid-cols-2 gap-2"><Button variant="outline" className="min-h-11" disabled={processing} onClick={() => cameraRef.current?.click()}><Camera className="mr-2 h-4 w-4" />Nova captura</Button><Button variant="outline" className="min-h-11" disabled={processing} onClick={() => fileRef.current?.click()}><Plus className="mr-2 h-4 w-4" />Adicionar foto</Button></div>}
               {processing && <div className="flex items-center rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm font-semibold"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Lendo o documento. Permaneça nesta janela.</div>}
             </div>
@@ -1014,6 +1079,12 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 pb-24">
               {duplicate && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" /><strong>Nota já lançada:</strong> {duplicate.supplierName || 'Fornecedor não identificado'} · CNPJ {duplicate.supplierCnpj || '—'} · Nota {duplicate.invoiceNumber || '—'} · Emissão {duplicate.issueDate ? duplicate.issueDate.split('-').reverse().join('/') : '—'} · Valor {money(duplicate.totalAmount)}. Este envio não pode gerar outra entrada no estoque.</div>}
               {selected.processingError && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" />{selected.processingError} {isDraft && <Button className="ml-2" size="sm" variant="outline" disabled={processing} onClick={retryExtraction}>{processing ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1 h-3.5 w-3.5" />}Tentar leitura novamente</Button>}</div>}
+              {isDraft && selectedReadingCheck && <section className={`space-y-3 rounded-md border p-3 text-sm ${selectedReadingCheck.canPost ? 'border-success/40 bg-success/5' : 'border-warning/40 bg-warning/10'}`}>
+                <div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="font-semibold">Conferência da leitura</h3><p className="text-xs text-muted-foreground">O lançamento só será liberado quando todas as páginas e valores dos itens conferirem.</p></div><Badge variant={selectedReadingCheck.canPost ? 'default' : 'secondary'}>{selectedReadingCheck.canPost ? 'Conferida' : 'Pendente'}</Badge></div>
+                {!!selectedReadingCheck.pages.length && <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{selectedReadingCheck.pages.map((page, index) => <div key={`${page.sourceIndex}-${index}`} className="rounded border bg-background/70 p-2"><div className="font-medium">Página {page.pageNumber || page.sourceIndex + 1}{page.totalPages ? ` de ${page.totalPages}` : ''}</div><div className="text-xs text-muted-foreground">{page.status === 'ready' ? `${page.itemCount} item(ns) identificado(s)` : 'Não foi possível ler esta página'}</div>{page.confidence != null && <div className="text-xs text-muted-foreground">Confiança: {Math.round(page.confidence * 100)}%</div>}{page.error && <div className="mt-1 text-xs text-destructive">{page.error}</div>}{page.status === 'failed' && <Button size="sm" variant="outline" className="mt-2 min-h-9" disabled={processing} onClick={() => void retryExtractionPage(page.sourceIndex)}><RefreshCw className="mr-1 h-3.5 w-3.5" />Repetir esta página</Button>}</div>)}</div>}
+                <div className="grid gap-2 sm:grid-cols-3"><MoneyValue label="Subtotal identificado" value={selectedReadingCheck.itemsSubtotal} /><MoneyValue label="Valor dos produtos esperado" value={selectedReadingCheck.expectedProductsAmount} /><MoneyValue label="Diferença" value={selectedReadingCheck.difference} strong /></div>
+                {!selectedReadingCheck.canPost && <div className="text-sm font-medium text-warning-foreground"><AlertTriangle className="mr-1 inline h-4 w-4" />{selectedReadingCheck.reason}</div>}
+              </section>}
               {(selected.attachments?.length || selected.attachment) && <div className="flex flex-wrap items-center gap-2 rounded-md border p-3"><span className="mr-auto text-sm font-medium">Documento original</span>{(selected.attachments?.length ? selected.attachments : selected.attachment ? [selected.attachment] : []).map((attachment, index) => <div key={attachment.id} className="flex flex-wrap gap-2"><Button type="button" variant="outline" className="min-h-11" onClick={() => void openOriginalDocument(selected, index)}><Eye className="mr-2 h-4 w-4" />{index === 0 && (selected.attachments?.length || 0) <= 1 ? 'Visualizar documento' : `Visualizar anexo ${index + 1}`}</Button><Button type="button" variant="outline" className="min-h-11" onClick={() => void downloadOriginalDocument(selected, index)}><Download className="mr-2 h-4 w-4" />Baixar</Button></div>)}</div>}
 
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -1062,7 +1133,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
               {!isDraft && <Button variant="outline" onClick={() => setSelected(null)}>Fechar</Button>}
               {isDraft && <Button variant="outline" onClick={requestCloseSelected}>Cancelar envio</Button>}
               {isDraft && duplicate && <Button onClick={openDuplicate}>Abrir lançamento existente</Button>}
-              {isDraft && !duplicate && <Button onClick={() => void postSelectedDraft()} disabled={!validItems(selected).length || processing}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Confirmar lançamento</Button>}
+              {isDraft && !duplicate && <Button onClick={() => void postSelectedDraft()} disabled={!selectedReadingCheck?.canPost || processing}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Confirmar lançamento</Button>}
               {canReviewCosts && isPosted && <Button onClick={() => void savePostedCosts()} disabled={processing}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Confirmar custos</Button>}
               {canEditPostedRecord && <Button onClick={() => void savePostedEdit()} disabled={processing}>Salvar e recalcular</Button>}
               {canManage && isPosted && <Button variant="destructive" onClick={() => setCancelOpen(true)}>Cancelar lançamento</Button>}
