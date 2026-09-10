@@ -15,6 +15,8 @@ import { formatProjectPlaceLabel, requestCameraPhotoStamp, type DailyReportPhoto
 interface UseDailyReportPhotosArgs {
   project: Project;
   currentReport: DailyReport;
+  /** Identidade da sessão que enviou a foto; não confundir com o responsável do Diário. */
+  uploaderName?: string;
   persist: (updater: (r: DailyReport) => DailyReport) => void;
   production: ProductionEntry[];
   selectedDate: string;
@@ -23,6 +25,7 @@ interface UseDailyReportPhotosArgs {
 export function useDailyReportPhotos({
   project,
   currentReport,
+  uploaderName,
   persist,
   production,
   selectedDate,
@@ -97,7 +100,7 @@ export function useDailyReportPhotos({
       phaseChain: taskMeta?.phaseChain,
       quantity: taskMeta?.quantity,
       unit: taskMeta?.unit,
-      uploadedBy: currentReport.responsible || undefined,
+      uploadedBy: uploaderName?.trim() || undefined,
       uploadedAt: new Date().toISOString(),
       capturedAt: stamp?.capturedAt,
       captureSource: stamp ? 'camera' : undefined,
@@ -117,7 +120,7 @@ export function useDailyReportPhotos({
     if (error) throw new Error(`Não foi possível enviar ${file.name}: ${error.message}`);
     // Bucket é privado: a URL é gerada sob demanda via signed URL (resolvePhotoUrl).
     return { attachment: { ...base, storagePath: path }, originalBytes: file.size, storedBytes: optimized.size };
-  }, [project.id, selectedDate, pendingTaskId, photoTaskOptions, currentReport.responsible]);
+  }, [project.id, selectedDate, pendingTaskId, photoTaskOptions, uploaderName]);
 
   const uploadFiles = useCallback(async (files: FileList | File[], stamp?: DailyReportPhotoStamp) => {
     if (!navigator.onLine) {

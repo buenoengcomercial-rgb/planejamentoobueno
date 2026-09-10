@@ -26,7 +26,7 @@ import { CalendarDays, CheckCircle2, History, LockKeyhole, LockKeyholeOpen } fro
 import { useEffect, useState } from 'react';
 
 
-export default function DailyReport({ project, onProjectChange, undoButton, readOnly = false, canManageConclusion = false, canClearDay = false, initialDate, initialMeasurementFilter, navKey }: DailyReportProps) {
+export default function DailyReport({ project, onProjectChange, undoButton, readOnly = false, canManageConclusion = false, canClearDay = false, photoUploaderName, initialDate, initialMeasurementFilter, navKey }: DailyReportProps) {
   const [activeView, setActiveView] = useState<'day' | 'history'>('day');
   const [completionDialog, setCompletionDialog] = useState<'conclude' | 'reopen' | null>(null);
   const [online, setOnline] = useState(() => navigator.onLine);
@@ -100,7 +100,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
     prepareCameraCapture,
     updatePhoto,
     removePhoto,
-  } = useDailyReportPhotos({ project, currentReport, persist, production, selectedDate });
+  } = useDailyReportPhotos({ project, currentReport, uploaderName: photoUploaderName, persist, production, selectedDate });
 
   const { handlePrintDay, handlePrintPeriod } = useDailyReportPdf({
     project,

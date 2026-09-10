@@ -146,4 +146,40 @@ describe('DailyReportPhotosCard', () => {
 
     expect(clickCamera).toHaveBeenCalledOnce();
   });
+
+  it('mostra somente o nome de quem enviou a foto', () => {
+    const photo = {
+      id: 'foto-enviada',
+      type: 'image' as const,
+      fileName: 'registro.jpg',
+      caption: 'Registro da obra',
+      uploadedBy: 'Rafael Oliveira',
+      uploadedAt: '2026-09-10T12:00:00.000Z',
+    };
+
+    render(
+      <DailyReportPhotosCard
+        photos={[photo]}
+        visiblePhotos={[photo]}
+        photosByTask={new Map()}
+        photoTaskOptions={[]}
+        pendingTaskId="__general__"
+        setPendingTaskId={vi.fn()}
+        photoFilter="all"
+        setPhotoFilter={vi.fn()}
+        uploadingCount={0}
+        cameraCaptureState="idle"
+        fileInputRef={createRef<HTMLInputElement>()}
+        handleFiles={vi.fn()}
+        handleCameraFiles={vi.fn()}
+        prepareCameraCapture={vi.fn()}
+        updatePhoto={vi.fn()}
+        setLightbox={vi.fn()}
+        setConfirmDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Enviado por: Rafael Oliveira')).toBeVisible();
+    expect(screen.queryByText(/10\/09\/2026/)).not.toBeInTheDocument();
+  });
 });

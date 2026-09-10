@@ -246,9 +246,9 @@ export function DailyReportPhotosCard({
                         ))}
                       </SelectContent>
                     </Select>
-                    {p.uploadedAt && (
+                    {p.uploadedBy && (
                       <div className="text-xs text-muted-foreground truncate">
-                        {new Date(p.uploadedAt).toLocaleString('pt-BR')}
+                        Enviado por: {p.uploadedBy}
                       </div>
                     )}
                     <PhotoStorageInfo photo={p} />

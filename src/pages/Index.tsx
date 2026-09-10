@@ -1377,6 +1377,7 @@ export default function Index() {
             dailyReportReadOnly={!dailyReportEditor}
             dailyReportCanManageConclusion={role === 'owner'}
             dailyReportCanClearDay={editor}
+            dailyReportPhotoUploaderName={auditActor.userName}
             productionUndoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />}
             dailyReportUndoButton={<UndoButton canUndo={canUndo('dailyReport')} onUndo={() => handleUndo('dailyReport')} />}
             dailyReportInitialDate={dailyReportInitialDate}
@@ -1399,6 +1400,7 @@ export default function Index() {
             dailyReportReadOnly={!dailyReportEditor}
             dailyReportCanManageConclusion={role === 'owner'}
             dailyReportCanClearDay={editor}
+            dailyReportPhotoUploaderName={auditActor.userName}
             productionUndoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />}
             dailyReportUndoButton={<UndoButton canUndo={canUndo('dailyReport')} onUndo={() => handleUndo('dailyReport')} />}
             dailyReportInitialDate={dailyReportInitialDate}

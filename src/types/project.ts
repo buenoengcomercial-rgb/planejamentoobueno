@@ -626,6 +626,7 @@ export interface DailyReportAttachment {
   phaseChain?: string;
   quantity?: number;
   unit?: string;
+  /** Nome da pessoa autenticada que enviou a foto. */
   uploadedBy?: string;
   /** ISO timestamp. */
   uploadedAt?: string;
