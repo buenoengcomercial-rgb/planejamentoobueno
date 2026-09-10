@@ -350,14 +350,24 @@ async function fiscalReaderPages(files: File[]): Promise<{ pages: FiscalReaderPa
 
   if (firstFile.type === 'application/pdf' || firstFile.name.toLowerCase().endsWith('.pdf')) {
     const extracted = await extractPdf(firstFile);
-    return {
-      text: extracted.text,
-      pages: extracted.pageTexts.map((extractedText, sourceIndex) => ({
+    const pages = extracted.pageTexts
+      .map((extractedText, sourceIndex) => ({
         sourceIndex,
-        extractedText,
+        extractedText: extractedText.trim(),
         imageDataUrl: extracted.images[sourceIndex],
-      })),
-    };
+      }))
+      .filter(page => page.extractedText || page.imageDataUrl?.startsWith('data:image/'));
+
+    if (pages.length === 0) {
+      // PDF sem texto legível e sem render disponível: renderiza as páginas como imagem.
+      const rendered = (await renderPdfPreview(firstFile)).slice(0, PDF_IMAGE_PAGES);
+      return {
+        text: extracted.text,
+        pages: rendered.map((imageDataUrl, sourceIndex) => ({ sourceIndex, imageDataUrl })),
+      };
+    }
+
+    return { text: extracted.text, pages };
   }
 
   const imageDataUrls = await photoDataUrlsForAi(files);
@@ -1151,7 +1161,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
           </DialogHeader>
           {selectedPackagingCorrection && <div className="space-y-4">
             <div className="rounded-md border bg-muted/30 p-3 text-sm"><strong>{selectedPackagingCorrection.description}</strong><div className="mt-1 text-muted-foreground">Nota fiscal: {decimal(selectedPackagingCorrection.fiscalQuantity)} {selectedPackagingCorrection.fiscalUnit}</div></div>
-            <div className="grid grid-cols-2 gap-3"><MobileField label="Conteúdo por embalagem"><DecimalInput ariaLabel="Conteúdo por embalagem para correção histórica" value={packagingCorrectionFactor} onChange={setPackagingCorrectionFactor} /></MobileField><MobileField label="Unidade no estoque"><Input aria-label="Unidade de estoque para correção histórica" className="min-h-11 text-center" value={packagingCorrectionUnit} onChange={event => setPackagingCorrectionUnit(event.target.value)} /></MobileField></div>
+            <div className="grid grid-cols-2 gap-3"><MobileField label="Conteúdo por embalagem"><DecimalInput ariaLabel="Conteúdo por embalagem para correção histórica" value={packagingCorrectionFactor} readOnly={false} onChange={setPackagingCorrectionFactor} /></MobileField><MobileField label="Unidade no estoque"><Input aria-label="Unidade de estoque para correção histórica" className="min-h-11 text-center" value={packagingCorrectionUnit} onChange={event => setPackagingCorrectionUnit(event.target.value)} /></MobileField></div>
             <div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-sm"><span className="text-muted-foreground">Entrará no estoque: </span><strong>{decimal(Number(selectedPackagingCorrection.fiscalQuantity || 0) * Number(packagingCorrectionFactor || 0))} {packagingCorrectionUnit.trim() || 'PC'}</strong></div>
             {selectedPackagingCorrection.dependentMovementCount > 0 && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">{selectedPackagingCorrection.dependentMovementCount} movimentação(ões) posterior(es) em unidade antiga também serão convertidas. Ex.: <strong>0,1 cx</strong> com caixa de 1.000 passa a <strong>100 PC</strong>.</div>}
           </div>}

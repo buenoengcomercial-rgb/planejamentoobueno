@@ -21,6 +21,7 @@ import type {
   WarehouseAuditActor,
   WarehouseFiscalNote,
   WarehouseFiscalNoteItem,
+  WarehouseFiscalStockConversionStatus,
   WarehouseFiscalDocumentType,
   FiscalItemLinkStatus,
   FiscalInvoiceEntry,
@@ -187,7 +188,7 @@ export function suggestFiscalItemStockConversion(description?: string): FiscalSt
   return undefined;
 }
 
-export function fiscalItemStockConversionStatus(item: Pick<WarehouseFiscalNoteItem, 'stockConversionStatus'>): 'not_required' | 'suggested' | 'confirmed' {
+export function fiscalItemStockConversionStatus(item: Pick<WarehouseFiscalNoteItem, 'stockConversionStatus'>): WarehouseFiscalStockConversionStatus {
   return item.stockConversionStatus ?? 'not_required';
 }
 
