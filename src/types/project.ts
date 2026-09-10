@@ -649,6 +649,16 @@ export interface DailyReportAttachment {
   name?: string;
 }
 
+/** Correção auditável de uma descrição de material publicada pelo Almoxarifado. */
+export interface DailyReportWarehouseDescriptionCorrection {
+  id: string;
+  at: string;
+  by?: WarehouseAuditActor;
+  itemKey: string;
+  before: string;
+  after: string;
+}
+
 export interface DailyReport {
   id: string;
   date: string;
@@ -665,6 +675,8 @@ export interface DailyReport {
   impediments?: string;
   observations?: string;
   attachments?: DailyReportAttachment[];
+  /** Alterações de nomenclatura propagadas pelo Proprietário, sem editar observações livres. */
+  warehouseDescriptionCorrections?: DailyReportWarehouseDescriptionCorrection[];
   /** Diário finalizado: permanece em consulta até reabertura pelo Proprietário. */
   concludedAt?: string;
   /** Preenchido pelo banco a partir da sessão autenticada. */
@@ -1062,6 +1074,10 @@ export interface WarehouseFiscalNoteItem {
   /** Codigo do produto na nota fiscal (coluna COD. PROD.). */
   productCode?: string;
   description: string;
+  /** Texto originalmente lido/informado na NF, preservado na primeira correção operacional. */
+  fiscalDescriptionOriginal?: string;
+  descriptionCorrectedAt?: string;
+  descriptionCorrectedBy?: WarehouseAuditActor;
   quantity: number;
   unit?: string;
   /** Quantidade efetivamente recebida no estoque apos conversao da unidade fiscal. */

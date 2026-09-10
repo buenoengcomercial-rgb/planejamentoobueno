@@ -10,6 +10,7 @@ import {
   checkFiscalNoteCancellation,
   classifyFiscalDocumentText,
   computeWarehouseRows,
+  correctPostedFiscalMaterialDescription,
   createRequisition,
   deliverRequisition,
   emptyWarehouse,
@@ -166,12 +167,57 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
   });
 
   it('permite ao proprietário substituir uma entrada sem consumo posterior e recalcula o saldo', () => {
-    const original = note({ status: 'aprovada' });
+    const original = note();
     const project = approveFiscalNote(withNote(original), original.id);
     const updated = replacePostedFiscalNote(project, original.id, note({ status: 'aprovada', totalAmount: 150, items: [{ ...original.items[0], quantity: 3, unitPrice: 50, totalPrice: 150 }] }));
     expect(updated.warehouse!.fiscalNotes[0]).toMatchObject({ status: 'aprovada', totalAmount: 150 });
     expect(updated.warehouse!.movements.filter(movement => movement.type === 'entrada')).toHaveLength(1);
     expect(computeWarehouseRows(updated, { includeManual: true })[0].balance).toBe(3);
+  });
+
+  it('corrige a descrição lançada sem recriar movimentos, preserva a NF e propaga o histórico do material', () => {
+    const original = note();
+    const project = approveFiscalNote(withNote(original), original.id, { userId: 'owner-1', userName: 'Proprietário' });
+    const itemKey = project.warehouse!.fiscalNotes![0].items[0].itemKey!;
+    const entry = project.warehouse!.movements.find(movement => movement.type === 'entrada')!;
+    project.warehouse!.requisitions = [{
+      id: 'req-1', number: 'REQ-2026-0001', date: '2026-08-16', status: 'entregue', createdAt: '2026-08-16T10:00:00.000Z',
+      receiverName: 'João', chapterId: 'chapter-1', chapterName: 'Prédio A', publishedToDailyReportId: 'daily-1',
+      items: [{ itemKey, description: 'Cimento CP II', unit: 'SC', quantity: 1, movementId: 'withdrawal-1' }],
+      supplements: [{ id: 'supp-1', date: '2026-08-17', receiverName: 'João', signatureReceiver: 'assinatura', idempotencyKey: 'supp-key', createdAt: '2026-08-17T10:00:00.000Z', publishedToDailyReportId: 'daily-1', items: [{ itemKey, description: 'Cimento CP II', unit: 'SC', quantity: 1 }] }],
+    }];
+    project.warehouse!.movements.push(
+      { id: 'withdrawal-1', type: 'retirada', date: '2026-08-16', createdAt: '2026-08-16T10:00:00.000Z', requisitionId: 'req-1', itemKey, itemDescription: 'Cimento CP II', itemUnit: 'SC', quantity: 1 },
+      { id: 'return-1', type: 'devolucao', date: '2026-08-18', createdAt: '2026-08-18T10:00:00.000Z', requisitionId: 'req-1', itemKey, itemDescription: 'Cimento CP II', itemUnit: 'SC', quantity: 0.5 },
+    );
+    project.warehouse!.inventorySessions = [{ id: 'inventory-1', number: 'INV-202608-01', month: '2026-08', status: 'em_contagem', startedAt: '2026-08-18T10:00:00.000Z', lines: [{ itemKey, itemDescription: 'Cimento CP II', itemUnit: 'SC' }] }];
+    project.dailyReports = [{
+      id: 'daily-1', date: '2026-08-16', createdAt: '2026-08-16T10:00:00.000Z', updatedAt: '2026-08-16T10:00:00.000Z', concludedAt: '2026-08-18T10:00:00.000Z',
+      observations: '[Almoxarifado REQ-2026-0001 — Prédio A — JOÃO]\n  • Cimento CP II — 1 SC\n[Almoxarifado REQ-2026-0001 — Complemento — Prédio A — João]\n  • Cimento CP II — 1 SC',
+    }];
+    const balanceBefore = computeWarehouseRows(project, { includeManual: true }).find(row => row.key === itemKey)?.balance;
+    const corrected = correctPostedFiscalMaterialDescription(project, original.id, original.items[0].id, {
+      description: 'Cimento Portland CP II', expectedDescription: 'Cimento CP II', ownerAuthorized: true,
+    }, { userId: 'owner-1', userName: 'Proprietário' });
+
+    expect(corrected.warehouse!.fiscalNotes![0].items[0]).toMatchObject({ description: 'Cimento Portland CP II', fiscalDescriptionOriginal: 'Cimento CP II' });
+    expect(corrected.warehouse!.items.find(item => item.key === itemKey)?.description).toBe('Cimento Portland CP II');
+    expect(corrected.warehouse!.movements.map(movement => movement.itemDescription)).toEqual(['Cimento Portland CP II', 'Cimento Portland CP II', 'Cimento Portland CP II']);
+    expect(corrected.warehouse!.requisitions[0].items[0].description).toBe('Cimento Portland CP II');
+    expect(corrected.warehouse!.requisitions[0].supplements![0].items[0].description).toBe('Cimento Portland CP II');
+    expect(corrected.warehouse!.inventorySessions![0].lines[0].itemDescription).toBe('Cimento Portland CP II');
+    expect(corrected.dailyReports![0].observations).toContain('Cimento Portland CP II');
+    expect(corrected.dailyReports![0].warehouseDescriptionCorrections).toHaveLength(1);
+    expect(computeWarehouseRows(corrected, { includeManual: true }).find(row => row.key === itemKey)?.balance).toBe(balanceBefore);
+    expect(corrected.warehouse!.movements.find(movement => movement.id === entry.id)?.quantity).toBe(entry.quantity);
+    expect(corrected.auditLogs?.at(-1)).toMatchObject({ entityType: 'warehouse_fiscal_note', action: 'updated', before: { itemKey, description: 'Cimento CP II' }, after: { itemKey, description: 'Cimento Portland CP II' } });
+  });
+
+  it('não permite correção de descrição por perfil não proprietário nem texto vazio', () => {
+    const original = note({ status: 'aprovada' });
+    const project = approveFiscalNote(withNote(original), original.id);
+    expect(() => correctPostedFiscalMaterialDescription(project, original.id, original.items[0].id, { description: 'Novo nome', ownerAuthorized: false })).toThrow(/Proprietário/i);
+    expect(() => correctPostedFiscalMaterialDescription(project, original.id, original.items[0].id, { description: '   ', ownerAuthorized: true })).toThrow(/descrição/i);
   });
 
   it('impede excluir fisicamente uma entrada já vinculada a retirada posterior', () => {

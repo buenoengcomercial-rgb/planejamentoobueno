@@ -3097,6 +3097,164 @@ export function reviewPostedFiscalNoteCosts(
   });
 }
 
+export interface CorrectPostedFiscalMaterialDescriptionInput {
+  /** Nova legenda operacional exibida para o material físico. */
+  description: string;
+  /** Protege contra salvar uma edição iniciada antes de outra correção. */
+  expectedDescription?: string;
+  /** A interface só informa true para o Proprietário; o banco confirma a regra. */
+  ownerAuthorized: boolean;
+}
+
+/**
+ * Corrige somente a legenda de um material já lançado. Diferente de
+ * `replacePostedFiscalNote`, não remove nem recria entradas: saldos, custos,
+ * unidades, conversões e vínculos permanecem exatamente os mesmos.
+ */
+export function correctPostedFiscalMaterialDescription(
+  project: Project,
+  noteId: string,
+  noteItemId: string,
+  input: CorrectPostedFiscalMaterialDescriptionInput,
+  actor?: WarehouseActorInput,
+): Project {
+  if (!input.ownerAuthorized) throw new Error('Somente o Proprietário pode corrigir descrições de materiais lançados.');
+  const description = input.description.replace(/\s+/g, ' ').trim();
+  if (!description) throw new Error('Informe a nova descrição do material.');
+
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const sourceNote = wh.fiscalNotes.find(note => note.id === noteId);
+  if (!sourceNote) throw new Error('Entrada não encontrada.');
+  if (sourceNote.status !== 'aprovada') throw new Error('A correção de descrição está disponível somente para entradas lançadas.');
+  const sourceItem = sourceNote.items.find(item => item.id === noteItemId);
+  if (!sourceItem) throw new Error('Material da entrada não encontrado.');
+  if (input.expectedDescription != null && sourceItem.description !== input.expectedDescription) {
+    throw new Error('A descrição foi alterada em outra sessão. Reabra a entrada para conferir o texto salvo.');
+  }
+  if (sourceItem.description.trim() === description) throw new Error('A nova descrição é igual à já registrada.');
+
+  const itemKey = sourceItem.itemKey
+    ?? wh.movements.find(movement => movement.fiscalNoteId === noteId && movement.fiscalNoteItemId === noteItemId && movement.type === 'entrada' && !movement.reversedById)?.itemKey;
+  if (!itemKey) throw new Error('Este item não possui vínculo com o material físico do estoque.');
+
+  const timestamp = nowISO();
+  const auditActor = normalizeWarehouseActor(actor);
+  const originalDescription = sourceItem.description;
+  const fiscalNotes = wh.fiscalNotes.map(note => {
+    const affectsNote = note.items.some(item => item.itemKey === itemKey);
+    if (!affectsNote) return note;
+    return {
+      ...note,
+      updatedAt: timestamp,
+      updatedBy: auditActor ?? note.updatedBy,
+      items: note.items.map(item => item.itemKey !== itemKey ? item : {
+        ...item,
+        fiscalDescriptionOriginal: item.fiscalDescriptionOriginal ?? item.description,
+        description,
+        descriptionCorrectedAt: timestamp,
+        descriptionCorrectedBy: auditActor,
+      }),
+    };
+  });
+
+  const movements = wh.movements.map(movement => movement.itemKey !== itemKey ? movement : {
+    ...movement,
+    itemDescription: description,
+    updatedAt: timestamp,
+    updatedBy: auditActor,
+  });
+
+  const requisitions = wh.requisitions.map(requisition => {
+    const affectsRequisition = requisition.items.some(item => item.itemKey === itemKey)
+      || requisition.supplements?.some(supplement => supplement.items.some(item => item.itemKey === itemKey));
+    if (!affectsRequisition) return requisition;
+    return {
+      ...requisition,
+      updatedAt: timestamp,
+      updatedBy: auditActor ?? requisition.updatedBy,
+      items: requisition.items.map(item => item.itemKey === itemKey ? { ...item, description } : item),
+      supplements: requisition.supplements?.map(supplement => ({
+        ...supplement,
+        items: supplement.items.map(item => item.itemKey === itemKey ? { ...item, description } : item),
+      })),
+    };
+  });
+
+  const correctedRequisitionsById = new Map(requisitions.map(requisition => [requisition.id, requisition] as const));
+  const dailyReportBlocks = wh.requisitions.flatMap(requisition => {
+    const corrected = correctedRequisitionsById.get(requisition.id) ?? requisition;
+    const blocks: Array<{ reportId: string; oldBlock: string; newBlock: string }> = [];
+    if (requisition.publishedToDailyReportId) {
+      const oldBlock = requisitionDailyReportBlock(requisition);
+      const newBlock = requisitionDailyReportBlock(corrected);
+      if (oldBlock !== newBlock) blocks.push({ reportId: requisition.publishedToDailyReportId, oldBlock, newBlock });
+    }
+    for (const supplement of requisition.supplements ?? []) {
+      const correctedSupplement = corrected.supplements?.find(entry => entry.id === supplement.id) ?? supplement;
+      if (!supplement.publishedToDailyReportId) continue;
+      const oldBlock = requisitionSupplementDailyReportBlock(requisition, supplement);
+      const newBlock = requisitionSupplementDailyReportBlock(corrected, correctedSupplement);
+      if (oldBlock !== newBlock) blocks.push({ reportId: supplement.publishedToDailyReportId, oldBlock, newBlock });
+    }
+    return blocks;
+  });
+
+  const dailyReports = (p.dailyReports ?? []).map(report => {
+    const blocks = dailyReportBlocks.filter(block => block.reportId === report.id);
+    if (!blocks.length) return report;
+    let observations = report.observations ?? '';
+    for (const block of blocks) {
+      if (!observations.includes(block.oldBlock)) {
+        throw new Error(`O bloco do Almoxarifado no Diário de ${report.date.split('-').reverse().join('/')} foi alterado e precisa ser conferido antes de corrigir a descrição.`);
+      }
+      observations = observations.replace(block.oldBlock, block.newBlock);
+    }
+    return {
+      ...report,
+      observations,
+      updatedAt: timestamp,
+      warehouseDescriptionCorrections: [
+        ...(report.warehouseDescriptionCorrections ?? []),
+        { id: uid(), at: timestamp, by: auditActor, itemKey, before: originalDescription, after: description },
+      ],
+    };
+  });
+
+  const inventorySessions = (wh.inventorySessions ?? []).map(session => ({
+    ...session,
+    lines: session.lines.map(line => line.itemKey === itemKey ? { ...line, itemDescription: description } : line),
+  }));
+  const items = wh.items.map(item => item.key === itemKey ? { ...item, description } : item);
+  const stockMovements = p.stockMovements?.map(movement => movement.itemKey === itemKey
+    ? { ...movement, itemDescription: description }
+    : movement);
+  const updated = setWh({ ...p, dailyReports, stockMovements }, { fiscalNotes, movements, requisitions, inventorySessions, items });
+  const affectedMovementIds = movements.filter(movement => movement.itemKey === itemKey).map(movement => movement.id);
+  const affectedRequisitionIds = requisitions.filter(requisition => requisition.items.some(item => item.itemKey === itemKey)
+    || requisition.supplements?.some(supplement => supplement.items.some(item => item.itemKey === itemKey))).map(requisition => requisition.id);
+
+  return logToProject(updated, {
+    entityType: 'warehouse_fiscal_note',
+    entityId: noteId,
+    action: 'updated',
+    title: `Descrição do material da entrada ${sourceNote.invoiceNumber || noteId} corrigida`,
+    description: `Legenda atualizada de “${originalDescription}” para “${description}” sem alterar estoque, custos ou quantidades.`,
+    userId: auditActor?.userId,
+    userName: auditActor?.userName,
+    userEmail: auditActor?.userEmail,
+    before: { itemKey, description: originalDescription },
+    after: { itemKey, description },
+    metadata: {
+      operation: 'warehouse_material_description_correction',
+      noteItemId,
+      affectedMovementIds,
+      affectedRequisitionIds,
+      affectedDailyReportIds: dailyReportBlocks.map(block => block.reportId),
+    },
+  });
+}
+
 /**
  * Atualiza apenas a classificação analítica do material. A operação não toca
  * em quantidades, preços, movimentos ou saldos do almoxarifado.

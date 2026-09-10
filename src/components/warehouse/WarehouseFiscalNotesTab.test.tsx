@@ -216,6 +216,24 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.queryByRole('button', { name: 'Cancelar lançamento' })).not.toBeInTheDocument();
   });
 
+  it('permite ao proprietário corrigir a descrição sem usar o recálculo da entrada', async () => {
+    const onCommitProject = vi.fn().mockResolvedValue(undefined);
+    render(<WarehouseFiscalNotesTab project={projectWithPostedNote()} onProjectChange={vi.fn()} onCommitProject={onCommitProject} canManage canEditPosted auditActor={{ userId: 'owner-1', userName: 'Proprietário' }} />);
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Visualizar dados e grupos' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Corrigir descrição' }));
+    fireEvent.change(screen.getByLabelText('Nova descrição operacional'), { target: { value: 'FITA CREPE PROFISSIONAL 24MM X 50M' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar descrição' }));
+
+    await waitFor(() => expect(onCommitProject).toHaveBeenCalledWith(expect.objectContaining({ warehouse: expect.objectContaining({ fiscalNotes: [expect.objectContaining({ items: [expect.objectContaining({ description: 'FITA CREPE PROFISSIONAL 24MM X 50M', fiscalDescriptionOriginal: 'FITA CREPE 24MM X 50M' })] })] }) })));
+  });
+
+  it('não exibe a correção de descrição para quem não é proprietário', () => {
+    render(<WarehouseFiscalNotesTab project={projectWithPostedNote()} onProjectChange={vi.fn()} canManage />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Visualizar dados e grupos' })[0]);
+    expect(screen.queryByRole('button', { name: 'Corrigir descrição' })).not.toBeInTheDocument();
+  });
+
   it('não recria uma entrada lançada sem alterações, mesmo quando já possui retirada vinculada', async () => {
     const project = projectWithPostedNote();
     const note = project.warehouse!.fiscalNotes[0];

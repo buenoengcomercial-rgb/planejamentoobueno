@@ -16,6 +16,7 @@ import {
   cancelFiscalNote,
   checkFiscalNoteCancellation,
   classifyFiscalDocumentText,
+  correctPostedFiscalMaterialDescription,
   findFiscalNoteDuplicate,
   fiscalItemConversionFactor,
   fiscalItemGlobalTotal,
@@ -495,6 +496,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const [packagingCorrection, setPackagingCorrection] = useState<{ noteId: string; itemId: string; manual?: boolean } | null>(null);
   const [packagingCorrectionFactor, setPackagingCorrectionFactor] = useState<number | undefined>(undefined);
   const [packagingCorrectionUnit, setPackagingCorrectionUnit] = useState('PC');
+  const [descriptionCorrection, setDescriptionCorrection] = useState<{ noteId: string; itemId: string; expectedDescription: string; description: string } | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<WarehouseAttachment | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -840,6 +842,31 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     }
   };
 
+  const openDescriptionCorrection = (item: WarehouseFiscalNoteItem) => {
+    if (!selected || !isPosted || !canEditPosted) return;
+    setDescriptionCorrection({ noteId: selected.id, itemId: item.id, expectedDescription: item.description, description: item.description });
+  };
+
+  const confirmDescriptionCorrection = async () => {
+    if (!descriptionCorrection || !selected || !canEditPosted) return;
+    try {
+      setProcessing(true);
+      const next = correctPostedFiscalMaterialDescription(project, descriptionCorrection.noteId, descriptionCorrection.itemId, {
+        description: descriptionCorrection.description,
+        expectedDescription: descriptionCorrection.expectedDescription,
+        ownerAuthorized: true,
+      }, auditActor);
+      await commitOwnerChange(next);
+      setSelected(next.warehouse?.fiscalNotes.find(note => note.id === selected.id) ?? null);
+      setDescriptionCorrection(null);
+      toast.success('Descrição corrigida em todo o histórico do material, sem recalcular o estoque.');
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const retryExtractionPage = async (sourceIndex: number) => {
     if (!selected || !isDraft) return;
     const attachments = selected.attachments?.length ? selected.attachments : (selected.attachment ? [selected.attachment] : []);
@@ -1132,6 +1159,10 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
                 {fiscalNoteCostReviewStatus(selected) === 'pending' && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" />Compra interestadual: informe somente os custos que existirem. Frete e ICMS/DIFAL aguardam conferência fiscal. A entrada pode ser lançada normalmente.</div>}
                 {fiscalNoteCostReviewStatus(selected) === 'unknown_origin' && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm"><AlertTriangle className="mr-2 inline h-4 w-4" />Verifique a UF do fornecedor para identificar se a compra é interestadual.</div>}
               </section>
+              {isPosted && canEditPostedRecord && <section className="space-y-3 rounded-md border border-primary/30 bg-primary/5 p-3">
+                <div><h3 className="font-semibold">Corrigir descrições dos materiais</h3><p className="text-sm text-muted-foreground">Disponível somente ao Proprietário. Atualiza a legenda no estoque e no histórico sem alterar quantidades, custos ou movimentos.</p></div>
+                <div className="space-y-2">{selected.items.map(item => <div key={item.id} className="flex flex-col gap-2 rounded-md border bg-background/80 p-3 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><strong className="block break-words">{item.description || 'Item sem descrição'}</strong><div className="mt-1 text-xs text-muted-foreground">{item.fiscalDescriptionOriginal ? `Original da NF: ${item.fiscalDescriptionOriginal}` : 'A descrição original da NF será preservada ao corrigir.'}</div></div><Button type="button" variant="outline" className="min-h-11 shrink-0" disabled={processing} onClick={() => openDescriptionCorrection(item)}><Pencil className="mr-2 h-4 w-4" />Corrigir descrição</Button></div>)}</div>
+              </section>}
               {isPosted && canReviewPackagingConversions && selectedPackagingReviews.length > 0 && <section className="space-y-3 rounded-md border border-warning/40 bg-warning/10 p-3">
                 <div><h3 className="font-semibold">Conversão de estoque</h3><p className="text-sm text-muted-foreground">A NF permanece como emitida. Corrija somente a quantidade física que entrou no estoque.</p></div>
                 {selectedPackagingReviews.map(review => <div key={review.itemId} className="flex flex-col gap-2 rounded-md border bg-background/80 p-3 text-sm sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><strong>{review.description}</strong><div className="text-muted-foreground">NF: {decimal(review.fiscalQuantity)} {review.fiscalUnit} · Estoque atual: {decimal(review.currentStockQuantity)} {review.fiscalUnit} · Sugestão: {decimal(review.suggestedStockQuantity)} {review.suggestedStockUnit}</div>{review.dependentMovementCount > 0 && <div className="mt-1 text-xs text-muted-foreground">{review.dependentMovementCount} movimento(s) de consumo ou retorno serão convertidos para a nova unidade.</div>}{review.blockers.map(blocker => <div key={blocker} className="mt-1 text-xs text-warning">{blocker}</div>)}</div>{review.canCorrect && <Button className="min-h-11" disabled={processing} onClick={() => openPackagingCorrection(review)}>Editar quantidade no estoque</Button>}</div>)}
@@ -1166,6 +1197,20 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
             {selectedPackagingCorrection.dependentMovementCount > 0 && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">{selectedPackagingCorrection.dependentMovementCount} movimentação(ões) posterior(es) em unidade antiga também serão convertidas. Ex.: <strong>0,1 cx</strong> com caixa de 1.000 passa a <strong>100 PC</strong>.</div>}
           </div>}
           <DialogFooter><Button variant="outline" disabled={processing} onClick={() => setPackagingCorrection(null)}>Voltar</Button><Button disabled={!selectedPackagingCorrection || processing || !(packagingCorrectionFactor > 0)} onClick={() => selectedPackagingCorrection && void confirmHistoricalPackagingConversion(selectedPackagingCorrection, packagingCorrectionUnit, packagingCorrectionFactor)}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Confirmar e atualizar estoque</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!descriptionCorrection} onOpenChange={open => { if (!open && !processing) setDescriptionCorrection(null); }}>
+        <DialogContent className="warehouse-ui max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Corrigir descrição do material</DialogTitle>
+            <DialogDescription>A alteração será registrada pelo Proprietário e refletida no estoque, entradas, retiradas, devoluções, inventários e blocos do Diário de Obra. Quantidades, valores e unidades não serão alterados.</DialogDescription>
+          </DialogHeader>
+          {descriptionCorrection && <div className="space-y-4">
+            <div className="rounded-md border bg-muted/30 p-3 text-sm"><div className="text-xs font-semibold text-muted-foreground">Descrição original da NF</div><div className="mt-1 break-words">{selected?.items.find(item => item.id === descriptionCorrection.itemId)?.fiscalDescriptionOriginal ?? descriptionCorrection.expectedDescription}</div></div>
+            <div><label className="mb-1 block text-sm font-medium" htmlFor="warehouse-description-correction">Nova descrição operacional</label><Textarea id="warehouse-description-correction" value={descriptionCorrection.description} onChange={event => setDescriptionCorrection(current => current ? { ...current, description: event.target.value } : current)} placeholder="Descreva o material como deve aparecer no estoque" rows={3} /></div>
+          </div>}
+          <DialogFooter><Button variant="outline" disabled={processing} onClick={() => setDescriptionCorrection(null)}>Cancelar</Button><Button disabled={!descriptionCorrection?.description.trim() || processing} onClick={() => void confirmDescriptionCorrection()}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Pencil className="mr-2 h-4 w-4" />}Salvar descrição</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
