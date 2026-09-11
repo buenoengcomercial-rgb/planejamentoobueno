@@ -772,8 +772,16 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                   draggable={!readOnly}
                   onDragStart={e => { if (!readOnly) handleChapterDragStart(e, phase.id); }}
                   onDragEnd={handleChapterDragEnd}
+                  onClick={e => {
+                    // A linha inteira alterna o capítulo, exceto seus controles próprios.
+                    // Isso mantém edição, ações e drag-and-drop sem efeitos colaterais.
+                    const target = e.target as HTMLElement;
+                    if (target.closest('button, input, select, textarea, a, [role="button"]')) return;
+                    togglePhase(phase.id);
+                  }}
                   className={`flex-1 min-w-0 flex items-center gap-3 px-5 py-3 ${headerBgClass} text-foreground transition-colors duration-200 ease-out hover:bg-muted/70 ${readOnly ? 'cursor-default' : 'cursor-move'}`}
-                  title={readOnly ? undefined : 'Arraste para mover/reordenar este capítulo'}
+                  title={readOnly ? 'Clique para expandir ou recolher este capítulo' : 'Clique para expandir ou recolher; arraste para mover/reordenar este capítulo'}
+                  aria-expanded={isExpanded}
                 >
                   <GripVertical className="w-3.5 h-3.5 text-muted-foreground/60 flex-shrink-0" />
                   <button
