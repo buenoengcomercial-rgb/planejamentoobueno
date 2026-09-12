@@ -8,8 +8,11 @@ const { commitMock } = vi.hoisted(() => ({ commitMock: vi.fn() }));
 
 vi.mock('@/lib/warehouseCloudCommit', () => ({ commitWarehouseOperation: commitMock }));
 vi.mock('@/components/warehouse/SignaturePad', () => ({
-  default: ({ onChange }: { onChange: (value: string) => void }) => (
-    <button type="button" onClick={() => onChange('assinatura')}>Assinar teste</button>
+  default: ({ value, onChange }: { value?: string; onChange: (value: string) => void }) => (
+    <>
+      <button type="button" onClick={() => onChange('assinatura')}>Assinar teste</button>
+      {value && <img alt="Assinatura registrada" src={value} />}
+    </>
   ),
 }));
 
@@ -50,10 +53,43 @@ describe('confirmação visual da retirada', () => {
 
     await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
     expect(onProjectChange).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Registrando...' })).toBeDisabled();
+    const pendingButton = screen.getByRole('button', { name: 'Registrando...' });
+    expect(pendingButton).toBeDisabled();
+    fireEvent.click(pendingButton);
+    expect(commitMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'PDF' })).not.toBeInTheDocument();
 
     await act(async () => confirmServer?.());
     await waitFor(() => expect(onProjectChange).toHaveBeenCalledTimes(1));
+  });
+
+  it('preserva o formulário e não libera PDF quando a transação é rejeitada', async () => {
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    Element.prototype.scrollIntoView = vi.fn();
+    commitMock.mockRejectedValue(new Error('A auditoria desta operação não pôde ser validada.'));
+    const onProjectChange = vi.fn();
+    render(<WarehouseRequisitionsTab project={projectWithStock()} onProjectChange={onProjectChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Nova retirada/i }));
+    fireEvent.change(document.getElementById('withdrawal-chapter')!, { target: { value: 'chapter-1' } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Quem recebeu' }));
+    fireEvent.click(screen.getByText('CANANDA'));
+    fireEvent.click(within(screen.getByLabelText('Materiais disponíveis')).getByRole('button'));
+    fireEvent.click(screen.getByRole('button', { name: 'Assinar teste' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Entregar e baixar estoque' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Entregar e baixar estoque' })).toBeEnabled());
+    expect(onProjectChange).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('dialog', { name: 'Nova retirada de materiais' });
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Quem recebeu' })).toHaveTextContent('CANANDA');
+    expect(within(dialog).getByText('Materiais selecionados')).toBeInTheDocument();
+    expect(within(dialog).getByText('1 item(ns)')).toBeInTheDocument();
+    expect(screen.getByAltText('Assinatura registrada')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'PDF' })).not.toBeInTheDocument();
   });
 });

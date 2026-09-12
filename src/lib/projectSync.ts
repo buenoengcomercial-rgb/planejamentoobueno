@@ -168,6 +168,17 @@ export function setCloudSnapshot(projectId: string, project: Project) {
 }
 
 /**
+ * Registros antigos podem ter o identificador somente na coluna relacional,
+ * sem a cópia redundante dentro de `data`. A coluna é a fonte de verdade.
+ */
+export function hydrateAuditLogRow(row: { id: string; data: unknown }): AuditLog {
+  const data = row.data && typeof row.data === 'object' && !Array.isArray(row.data)
+    ? row.data as Record<string, unknown>
+    : {};
+  return { ...data, id: row.id } as unknown as AuditLog;
+}
+
+/**
  * Contratos terceirizados possuem uma cópia de segurança no projeto principal.
  * A tabela normalizada é usada para consulta e RLS, mas nunca pode apagar um
  * contrato recém-criado caso a sincronização dela falhe depois do PATCH pai.
@@ -292,7 +303,7 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
   }));
   const measurements = measRes.error ? null : (measRes.data ?? []).map(r => r.data as unknown as SavedMeasurement);
   const additives = addRes.error ? null : (addRes.data ?? []).map(r => r.data as unknown as Additive);
-  const auditLogs = audRes.error ? null : (audRes.data ?? []).map(r => r.data as unknown as AuditLog);
+  const auditLogs = audRes.error ? null : (audRes.data ?? []).map(hydrateAuditLogRow);
   const stockMovements = stkRes.error ? null : (stkRes.data ?? []).map(r => r.data as unknown as StockMovement);
   const priceHistory = phRes.error ? null : (phRes.data ?? []).map(r => r.data as unknown as PriceHistoryEntry);
   const budgetItems = biRes.error ? null : (biRes.data ?? []).map(r => r.data as unknown as BudgetItem);

@@ -33,6 +33,14 @@ interface WarehouseOperationResult {
 
 const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 
+const operationAuditName: Record<WarehouseCloudOperationType, string> = {
+  delivery: 'requisition_delivery',
+  supplement: 'requisition_supplement',
+  return: 'requisition_return',
+  correction: 'requisition_correction',
+  hard_delete: 'requisition_hard_delete',
+};
+
 function changedRows<T extends { id: string }>(before: T[], after: T[]): T[] {
   const beforeById = new Map(before.map(row => [row.id, row]));
   return after.filter(row => !same(beforeById.get(row.id), row));
@@ -41,6 +49,28 @@ function changedRows<T extends { id: string }>(before: T[], after: T[]): T[] {
 function missingIds<T extends { id: string }>(before: T[], after: T[]): string[] {
   const afterIds = new Set(after.map(row => row.id));
   return before.filter(row => !afterIds.has(row.id)).map(row => row.id);
+}
+
+function operationAuditRows(
+  before: AuditLog[],
+  after: AuditLog[],
+  operation: WarehouseCloudOperation,
+): AuditLog[] {
+  const beforeIds = new Set(before.flatMap(row => (
+    typeof row?.id === 'string' && row.id.trim() ? [row.id] : []
+  )));
+  return after.filter(row => (
+    typeof row?.id === 'string'
+    && row.id.trim().length > 0
+    && !beforeIds.has(row.id)
+    && row.entityType === 'warehouse_requisition'
+    && row.entityId === operation.requisitionId
+    && row.metadata?.operation === operationAuditName[operation.type]
+    && typeof row.at === 'string'
+    && row.at.trim().length > 0
+    && typeof row.action === 'string'
+    && row.action.trim().length > 0
+  ));
 }
 
 function warehouseCommitError(error: { code?: string; message?: string }): Error {
@@ -53,6 +83,9 @@ function warehouseCommitError(error: { code?: string; message?: string }): Error
   }
   if (/WAREHOUSE_RETURN_EXCEEDS_WITHDRAWAL/.test(message)) {
     return new Error('Outra devolução já consumiu parte do saldo devolvível. Nada foi duplicado; atualize a retirada e revise a quantidade.');
+  }
+  if (/WAREHOUSE_INVALID_AUDIT|null value in column ["']id["'].*audit_logs/i.test(message)) {
+    return new Error('A auditoria desta operação não pôde ser validada. Nenhuma requisição ou baixa de estoque foi gravada; atualize a obra e tente novamente.');
   }
   if (error.code === 'PGRST202' || /commit_warehouse_operation|schema cache|could not find the function/i.test(message)) {
     return new Error('A confirmação segura do Almoxarifado ainda não está disponível no servidor. A retirada não foi registrada nem liberada para PDF.');
@@ -98,7 +131,10 @@ export async function commitWarehouseOperation(
   const nextRequisition = afterWarehouse?.requisitions.find(row => row.id === operation.requisitionId) ?? null;
   const movementUpserts = changedRows(beforeWarehouse?.movements ?? [], afterWarehouse?.movements ?? []);
   const movementDeletes = missingIds(beforeWarehouse?.movements ?? [], afterWarehouse?.movements ?? []);
-  const auditUpserts = changedRows(before.auditLogs ?? [], after.auditLogs ?? []);
+  const auditUpserts = operationAuditRows(before.auditLogs ?? [], after.auditLogs ?? [], operation);
+  if (auditUpserts.length !== 1) {
+    throw new Error('Não foi possível preparar a auditoria segura desta operação. Nenhuma requisição ou baixa de estoque foi gravada; atualize a obra e tente novamente.');
+  }
 
   // `rpc` depende do contexto do SupabaseClient (`this.rest`). Não extraia o
   // método sem vinculá-lo: no preview isso resulta em "reading 'rest'" e a

@@ -89,4 +89,49 @@ describe('confirmação transacional do Almoxarifado', () => {
       type: 'delivery', requisitionId: provisional.requisitionId, operationKey: 'attempt-conflict',
     })).rejects.toThrow('primeira versão confirmada foi preservada');
   });
+
+  it('não reenvia auditorias legadas sem id ao confirmar uma nova retirada', async () => {
+    const before = stockedProject();
+    before.auditLogs = [
+      { entityType: 'project', entityId: before.id, action: 'updated', title: 'Legado 1', at: '2026-09-01T10:00:00.000Z' } as Project['auditLogs'][number],
+      { entityType: 'project', entityId: before.id, action: 'updated', title: 'Legado 2', at: '2026-09-02T10:00:00.000Z' } as Project['auditLogs'][number],
+    ];
+    const provisional = createAndDeliverRequisition(before, {
+      date: '2026-09-12', chapterId: 'chapter-1', receiverName: 'CANANDA', requesterName: 'CANANDA',
+      signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'attempt-legacy-audit',
+      items: [{ itemKey: 'placa', description: 'Placa', unit: 'UN', quantity: 1 }],
+    });
+    const requisition = provisional.project.warehouse!.requisitions[0];
+    const newAudit = provisional.project.auditLogs!.at(-1)!;
+    rpcMock.mockResolvedValue({
+      data: {
+        requisition: { ...requisition, number: 'REQ-2026-0117' },
+        movements: provisional.project.warehouse!.movements.filter(row => row.requisitionId === requisition.id),
+        auditLogs: [newAudit],
+      },
+      error: null,
+    });
+
+    const confirmed = await commitWarehouseOperation(before, provisional.project, {
+      type: 'delivery', requisitionId: provisional.requisitionId, operationKey: 'attempt-legacy-audit',
+    });
+
+    expect(rpcMock.mock.calls[0][1].p_audit_logs).toEqual([newAudit]);
+    expect(confirmed.auditLogs).toHaveLength(3);
+    expect(confirmed.warehouse!.movements.filter(row => row.requisitionId === requisition.id)).toHaveLength(1);
+  });
+
+  it('traduz rejeição de auditoria sem expor detalhes internos do banco', async () => {
+    const before = stockedProject();
+    const provisional = createAndDeliverRequisition(before, {
+      date: '2026-09-12', chapterId: 'chapter-1', receiverName: 'CANANDA', requesterName: 'CANANDA',
+      signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'attempt-invalid-audit',
+      items: [{ itemKey: 'placa', description: 'Placa', unit: 'UN', quantity: 1 }],
+    });
+    rpcMock.mockResolvedValue({ data: null, error: { code: '23502', message: 'WAREHOUSE_INVALID_AUDIT' } });
+
+    await expect(commitWarehouseOperation(before, provisional.project, {
+      type: 'delivery', requisitionId: provisional.requisitionId, operationKey: 'attempt-invalid-audit',
+    })).rejects.toThrow('Nenhuma requisição ou baixa de estoque foi gravada');
+  });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizedDeletePolicy } from '@/lib/projectSync';
+import { hydrateAuditLogRow, normalizedDeletePolicy } from '@/lib/projectSync';
 
 describe('proteção contra exclusão por snapshot desatualizado', () => {
   it('nunca interpreta ausência local como exclusão de requisição, Diário ou auditoria', () => {
@@ -12,5 +12,12 @@ describe('proteção contra exclusão por snapshot desatualizado', () => {
     expect(normalizedDeletePolicy('warehouse_movements', { originType: 'withdrawal' })).toBe(false);
     expect(normalizedDeletePolicy('warehouse_movements', { originType: 'return' })).toBe(false);
     expect(normalizedDeletePolicy('warehouse_movements', { originType: 'inventory' })).toBe(true);
+  });
+
+  it('restaura no JSON o identificador oficial da linha de auditoria', () => {
+    expect(hydrateAuditLogRow({
+      id: 'audit-official-id',
+      data: { title: 'Registro legado', id: 'identificador-incorreto' },
+    })).toMatchObject({ id: 'audit-official-id', title: 'Registro legado' });
   });
 });
