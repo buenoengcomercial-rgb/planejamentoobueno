@@ -768,6 +768,47 @@ export type Database = {
           },
         ]
       }
+      warehouse_operation_commits: {
+        Row: {
+          created_at: string
+          created_by: string
+          id: string
+          operation_key: string
+          operation_type: string
+          project_id: string
+          requisition_id: string
+          result: Json
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          id?: string
+          operation_key: string
+          operation_type: string
+          project_id: string
+          requisition_id: string
+          result?: Json
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          id?: string
+          operation_key?: string
+          operation_type?: string
+          project_id?: string
+          requisition_id?: string
+          result?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "warehouse_operation_commits_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       warehouse_requisitions: {
         Row: {
           created_at: string
@@ -816,6 +857,20 @@ export type Database = {
           _tasks: Json
         }
         Returns: undefined
+      }
+      commit_warehouse_operation: {
+        Args: {
+          p_audit_logs?: Json
+          p_delete_movement_ids?: Json
+          p_expected_requisition?: Json
+          p_operation_key: string
+          p_operation_type: string
+          p_project_id: string
+          p_requisition?: Json
+          p_requisition_id: string
+          p_upsert_movements?: Json
+        }
+        Returns: Json
       }
       duplicate_project: {
         Args: {
