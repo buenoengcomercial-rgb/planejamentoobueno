@@ -158,7 +158,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
         <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
           Sem conexão. Conecte-se à internet para inserir fotos, legendas ou editar este Diário.
         </div>
-      ) : !readOnly ? (
+      ) : !readOnly && canManageConclusion ? (
         <div className="flex justify-end">
           <Button type="button" variant="outline" className="min-h-11" onClick={() => setCompletionDialog('conclude')}>
             <LockKeyhole className="mr-2 h-4 w-4" /> Concluir diário
@@ -332,7 +332,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
             <AlertDialogAction
               className={completionDialog === 'conclude' ? 'bg-primary text-primary-foreground hover:bg-primary/90' : undefined}
               onClick={() => {
-                if (completionDialog === 'conclude') concludeDailyReport();
+                if (completionDialog === 'conclude' && canManageConclusion) concludeDailyReport();
                 if (completionDialog === 'reopen') reopenDailyReport();
                 setCompletionDialog(null);
               }}
