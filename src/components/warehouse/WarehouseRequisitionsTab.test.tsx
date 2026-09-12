@@ -520,6 +520,7 @@ describe('WarehouseRequisitionsTab', () => {
 
     expect(screen.getAllByText('06/09/2026').length).toBeGreaterThan(0);
     expect(screen.getAllByText('05/09/2026').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: /expandir cautelas de 06\/09\/2026/i }));
     expect(screen.getByTestId('custody-history-row')).toHaveTextContent('TC-2026-0010');
     expect(screen.getByTestId('custody-history-row')).toHaveTextContent('06/09/2026');
     expect(screen.getByTestId('custody-history-row')).toHaveTextContent('06/09/2026, 16:30');

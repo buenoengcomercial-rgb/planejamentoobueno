@@ -178,8 +178,10 @@ describe('operação integrada do almoxarifado', () => {
     expect(computeWarehouseRows(corrected, { includeManual: true })[0].balance).toBe(18);
     expect(corrected.warehouse!.requisitions[0]).toMatchObject({ chapterId: 'chapter-2', chapterName: '2 Prédio 2' });
     expect(corrected.warehouse!.requisitions[0].items[0]).toMatchObject({ quantity: 2, movementId: expect.any(String) });
-    expect(corrected.warehouse!.movements.find(movement => movement.type === 'retirada')).toMatchObject({ chapterId: 'chapter-2' });
-    expect(corrected.warehouse!.movements.filter(movement => movement.type === 'retirada')).toHaveLength(1);
+    const activeWithdrawals = corrected.warehouse!.movements.filter(movement => movement.type === 'retirada' && !movement.reversedById);
+    expect(activeWithdrawals[0]).toMatchObject({ chapterId: 'chapter-2' });
+    expect(activeWithdrawals).toHaveLength(1);
+    expect(corrected.warehouse!.movements.filter(movement => movement.type === 'estorno')).toHaveLength(1);
     expect(corrected.dailyReports?.[0].observations).toContain('Cimento — 2 SC');
     expect(corrected.dailyReports?.[0].observations).toContain('2 Prédio 2');
     expect(corrected.auditLogs?.at(-1)).toMatchObject({ entityType: 'warehouse_requisition', action: 'updated', userName: 'Proprietário', before: expect.any(Object), after: expect.any(Object), metadata: { operation: 'requisition_correction', requisitionNumber: requisition.number } });

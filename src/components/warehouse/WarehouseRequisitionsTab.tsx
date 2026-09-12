@@ -23,6 +23,7 @@ import {
   warehouseActorName,
 } from '@/lib/warehouse';
 import { deleteWarehouseAttachments } from '@/lib/warehouseAttachments';
+import { commitWarehouseOperation } from '@/lib/warehouseCloudCommit';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { flattenPhasesByChapter, getChapterNumbering } from '@/lib/chapters';
 import SignaturePad from './SignaturePad';
@@ -283,14 +284,24 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
   const deleteRequisition = (requisition: WarehouseRequisition) => confirm(
     { title: 'Excluir retirada definitivamente?', description: 'A retirada, as devoluções vinculadas, seus comprovantes, movimentos e o bloco gerado no Diário de Obra serão removidos.', confirmLabel: 'Excluir definitivamente' },
     async () => {
-      onProjectChange(hardDeleteRequisition(project, requisition.id));
-      try { await deleteWarehouseAttachments(requisition.deliveryAttachments); } catch { toast.warning('A retirada foi excluída, mas houve falha ao remover um anexo do Storage.'); }
-      setExpandedRequisitionIds(current => {
-        const next = new Set(current);
-        next.delete(requisition.id);
-        return next;
-      });
-      toast.success('Retirada excluída e saldo recalculado.');
+      try {
+        const next = hardDeleteRequisition(project, requisition.id, auditActor);
+        const confirmed = await commitWarehouseOperation(project, next, {
+          type: 'hard_delete',
+          requisitionId: requisition.id,
+          operationKey: `hard-delete:${requisition.id}`,
+        });
+        onProjectChange(confirmed);
+        try { await deleteWarehouseAttachments(requisition.deliveryAttachments); } catch { toast.warning('A retirada foi excluída, mas houve falha ao remover um anexo do Storage.'); }
+        setExpandedRequisitionIds(current => {
+          const expanded = new Set(current);
+          expanded.delete(requisition.id);
+          return expanded;
+        });
+        toast.success('Retirada excluída na nuvem e saldo recalculado.');
+      } catch (error) {
+        toast.error((error as Error).message);
+      }
     },
   );
 
@@ -367,11 +378,16 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
         signatureReceiver: form.signatureReceiver,
         deliveryAttachments,
         deliveryIdempotencyKey: form.deliveryIdempotencyKey,
-      }, { publishToDailyReport: true, actor: auditActor });
-      onProjectChange(result.project);
+      }, { publishToDailyReport: false, actor: auditActor });
+      const confirmed = await commitWarehouseOperation(project, result.project, {
+        type: 'delivery',
+        requisitionId: result.requisitionId,
+        operationKey: form.deliveryIdempotencyKey,
+      });
+      onProjectChange(confirmed);
       setExpandedRequisitionIds(current => new Set([...current, result.requisitionId]));
       reset();
-      toast.success('Retirada registrada e estoque baixado.');
+      toast.success('Retirada confirmada na nuvem e estoque baixado.');
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -630,6 +646,7 @@ function RequisitionActionDialog({ project, requisition, auditActor, onProjectCh
   const [photos, setPhotos] = useState<File[]>([]);
   const [materialSearch, setMaterialSearch] = useState('');
   const [saving, setSaving] = useState(false);
+  const [complementIdempotencyKey, setComplementIdempotencyKey] = useState(() => uidWarehouse());
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
 
@@ -646,6 +663,7 @@ function RequisitionActionDialog({ project, requisition, auditActor, onProjectCh
     setSignatureReceiver(undefined);
     setPhotos([]);
     setMaterialSearch('');
+    setComplementIdempotencyKey(uidWarehouse());
   }, [project, requisition]);
 
   const returnableByItem = useMemo(() => new Map((requisition ? getReturnableRequisitionItems(project, requisition.id) : []).map(item => [item.itemKey, item] as const)), [project, requisition]);
@@ -679,7 +697,7 @@ function RequisitionActionDialog({ project, requisition, auditActor, onProjectCh
     if (cameraRef.current) cameraRef.current.value = '';
     if (galleryRef.current) galleryRef.current.value = '';
   };
-  const saveCorrection = () => {
+  const saveCorrection = async () => {
     if (!requisition || saving) return;
     if (!correctionItems.length || correctionItems.some(item => !(item.quantity > 0))) return void toast.error('Adicione materiais com quantidade positiva.');
     if (!correctionChapterId) return void toast.error('Selecione o prédio ou destino.');
@@ -688,8 +706,12 @@ function RequisitionActionDialog({ project, requisition, auditActor, onProjectCh
     setSaving(true);
     try {
       const chapter = chapters.find(candidate => candidate.id === correctionChapterId);
-      const next = correctDeliveredRequisition(project, requisition.id, { items: correctionItems, chapterId: correctionChapterId, chapterName: chapter?.name, reason: correctionReason.trim(), idempotencyKey: `${requisition.id}:correction:${JSON.stringify({ correctionItems, correctionChapterId, correctionReason: correctionReason.trim() })}` }, auditActor);
-      onProjectChange(next);
+      const operationKey = `${requisition.id}:correction:${JSON.stringify({ correctionItems, correctionChapterId, correctionReason: correctionReason.trim() })}`;
+      const next = correctDeliveredRequisition(project, requisition.id, { items: correctionItems, chapterId: correctionChapterId, chapterName: chapter?.name, reason: correctionReason.trim(), idempotencyKey: operationKey }, auditActor);
+      const confirmed = await commitWarehouseOperation(project, next, {
+        type: 'correction', requisitionId: requisition.id, operationKey,
+      });
+      onProjectChange(confirmed);
       toast.success('Retirada corrigida e histórico registrado.');
       onClose();
     } catch (error) { toast.error((error as Error).message); } finally { setSaving(false); }
@@ -701,8 +723,11 @@ function RequisitionActionDialog({ project, requisition, auditActor, onProjectCh
     setSaving(true);
     try {
       const attachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'withdrawals')));
-      const result = addRequisitionSupplement(project, { requisitionId: requisition.id, date: complementDate, receiverName: complementReceiver, signatureReceiver, notes: complementNotes.trim() || undefined, attachments, idempotencyKey: uidWarehouse(), items: complementItems }, auditActor);
-      onProjectChange(result.project);
+      const result = addRequisitionSupplement(project, { requisitionId: requisition.id, date: complementDate, receiverName: complementReceiver, signatureReceiver, notes: complementNotes.trim() || undefined, attachments, idempotencyKey: complementIdempotencyKey, items: complementItems }, auditActor, { publishToDailyReport: false });
+      const confirmed = await commitWarehouseOperation(project, result.project, {
+        type: 'supplement', requisitionId: requisition.id, operationKey: complementIdempotencyKey,
+      });
+      onProjectChange(confirmed);
       toast.success('Complemento registrado e estoque baixado.');
       onClose();
     } catch (error) { toast.error((error as Error).message); } finally { setSaving(false); }
@@ -950,7 +975,7 @@ function MaterialReturnDialog({ project, requisition, auditActor, onProjectChang
     if (!open && !saving) { reset(); onClose(); }
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!requisition) return;
     const items = returnable.flatMap(item => {
       const quantity = Number((quantities[item.itemKey] ?? '').replace(',', '.'));
@@ -968,7 +993,10 @@ function MaterialReturnDialog({ project, requisition, auditActor, onProjectChang
         idempotencyKey,
         items,
       }, auditActor);
-      onProjectChange(result.project);
+      const confirmed = await commitWarehouseOperation(project, result.project, {
+        type: 'return', requisitionId: requisition.id, operationKey: idempotencyKey,
+      });
+      onProjectChange(confirmed);
       toast.success(`Devolução ${result.returnNumber} registrada e saldo recomposto.`);
       reset();
       onClose();

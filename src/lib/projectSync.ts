@@ -223,6 +223,41 @@ export function clearCloudSnapshot(projectId: string) {
   snapshots.delete(projectId);
 }
 
+export interface WarehouseOperationAcknowledgement {
+  requisitionId: string;
+  movementIds: string[];
+  auditLogIds: string[];
+}
+
+/**
+ * Avança somente as linhas confirmadas pela RPC transacional do Almoxarifado.
+ * Não marca o restante do projeto como salvo e, portanto, não esconde outras
+ * alterações locais ainda pendentes do autosave geral.
+ */
+export function acknowledgeWarehouseOperation(
+  project: Project,
+  acknowledgement: WarehouseOperationAcknowledgement,
+) {
+  const snapshot = snapshots.get(project.id);
+  if (!snapshot) return;
+  const requisition = project.warehouse?.requisitions.find(row => row.id === acknowledgement.requisitionId);
+  if (requisition) snapshot.requisitions.set(requisition.id, requisition);
+  else snapshot.requisitions.delete(acknowledgement.requisitionId);
+
+  const movementById = new Map((project.warehouse?.movements ?? []).map(row => [row.id, row]));
+  for (const id of acknowledgement.movementIds) {
+    const movement = movementById.get(id);
+    if (movement) snapshot.movements.set(id, movement);
+    else snapshot.movements.delete(id);
+  }
+
+  const auditById = new Map((project.auditLogs ?? []).map(row => [row.id, row]));
+  for (const id of acknowledgement.auditLogIds) {
+    const auditLog = auditById.get(id);
+    if (auditLog) snapshot.auditLogs.set(id, auditLog);
+  }
+}
+
 // ============== LOAD: HYDRATE ==============
 
 export async function hydrateProjectFromCloud(project: Project): Promise<Project> {
@@ -418,12 +453,14 @@ export async function syncCollectionsToCloud(project: Project, userId?: string):
 
   ops.push(...diffAndSync('warehouse_movements', prev.movements, next.movements, projectId, userId, m => ({
     occurred_at: (m as WarehouseMovement).date ?? null,
-  })));
-  ops.push(...diffAndSync('warehouse_requisitions', prev.requisitions, next.requisitions, projectId, userId));
+  }), movement => normalizedDeletePolicy('warehouse_movements', movement)));
+  // Retiradas nunca são excluídas porque desapareceram de um snapshot local.
+  // A exclusão administrativa usa uma RPC explícita, autenticada e auditada.
+  ops.push(...diffAndSync('warehouse_requisitions', prev.requisitions, next.requisitions, projectId, userId, undefined, () => false));
   ops.push(...diffAndSync('warehouse_custody', prev.custody, next.custody, projectId, userId));
   ops.push(...diffAndSync('daily_reports', prev.dailyReports, next.dailyReports, projectId, userId, d => ({
     report_date: (d as DailyReport).date,
-  })));
+  }), () => false));
   ops.push(...diffAndSync('measurements', prev.measurements, next.measurements, projectId, userId, m => {
     const meas = m as SavedMeasurement;
     return {
@@ -452,7 +489,7 @@ export async function syncCollectionsToCloud(project: Project, userId?: string):
       occurred_at: log.at ?? null,
       user_id: log.userId ?? null,
     };
-  }));
+  }, () => false));
   ops.push(...diffAndSync('stock_movements', prev.stockMovements, next.stockMovements, projectId, userId, s => {
     const stk = s as StockMovement;
     return {
@@ -514,6 +551,7 @@ function diffAndSync<T extends { id: string }>(
   projectId: string,
   userId?: string,
   extraCols?: (item: T) => Record<string, unknown>,
+  allowDelete?: (item: T) => boolean,
 ): Promise<unknown>[] {
   const ops: Promise<unknown>[] = [];
 
@@ -540,7 +578,9 @@ function diffAndSync<T extends { id: string }>(
 
   // deletes (presentes antes, ausentes agora)
   const toDelete: string[] = [];
-  for (const id of prev.keys()) if (!next.has(id)) toDelete.push(id);
+  for (const [id, item] of prev) {
+    if (!next.has(id) && (allowDelete?.(item) ?? true)) toDelete.push(id);
+  }
   if (toDelete.length > 0) {
     ops.push((async () => {
       const r = await supabase.from(table).delete().in('id', toDelete).eq('project_id', projectId);
@@ -549,6 +589,19 @@ function diffAndSync<T extends { id: string }>(
   }
 
   return ops;
+}
+
+/**
+ * Exclusões inferidas continuam válidas para ajustes administrativos que não
+ * pertencem a uma retirada. Movimentos vinculados a retirada/devolução só
+ * saem pela RPC explícita, evitando que outra tela apague estoque confirmado.
+ */
+export function normalizedDeletePolicy(
+  table: 'warehouse_movements' | 'warehouse_requisitions' | 'daily_reports' | 'audit_logs',
+  item: { originType?: WarehouseMovement['originType'] },
+): boolean {
+  if (table === 'warehouse_requisitions' || table === 'daily_reports' || table === 'audit_logs') return false;
+  return item.originType !== 'withdrawal' && item.originType !== 'return';
 }
 
 function diffAndSyncTaskLogs(
