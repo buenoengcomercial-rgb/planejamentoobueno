@@ -100,7 +100,10 @@ export async function commitWarehouseOperation(
   const movementDeletes = missingIds(beforeWarehouse?.movements ?? [], afterWarehouse?.movements ?? []);
   const auditUpserts = changedRows(before.auditLogs ?? [], after.auditLogs ?? []);
 
-  const rpc = supabase.rpc as unknown as (
+  // `rpc` depende do contexto do SupabaseClient (`this.rest`). Não extraia o
+  // método sem vinculá-lo: no preview isso resulta em "reading 'rest'" e a
+  // retirada permanece sem confirmação.
+  const rpc = supabase.rpc.bind(supabase) as unknown as (
     fn: string,
     args: Record<string, unknown>,
   ) => Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;

@@ -3,10 +3,13 @@ import type { Project, WarehouseRequisition } from '@/types/project';
 import { addMovement, createAndDeliverRequisition, emptyWarehouse } from '@/lib/warehouse';
 import { commitWarehouseOperation } from '@/lib/warehouseCloudCommit';
 
-const { rpcMock } = vi.hoisted(() => ({ rpcMock: vi.fn() }));
+const { rpcMock, supabaseMock } = vi.hoisted(() => {
+  const rpcMock = vi.fn();
+  return { rpcMock, supabaseMock: { rpc: rpcMock } };
+});
 
 vi.mock('@/integrations/supabase/client', () => ({
-  supabase: { rpc: rpcMock },
+  supabase: supabaseMock,
 }));
 
 function stockedProject(): Project {
@@ -59,6 +62,7 @@ describe('confirmação transacional do Almoxarifado', () => {
     });
 
     expect(rpcMock).toHaveBeenCalledTimes(1);
+    expect(rpcMock.mock.contexts[0]).toBe(supabaseMock);
     expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_operation');
     expect(rpcMock.mock.calls[0][1]).toMatchObject({
       p_project_id: 'project-1',
