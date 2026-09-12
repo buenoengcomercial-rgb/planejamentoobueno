@@ -24,11 +24,13 @@ ALTER TABLE public.warehouse_operation_commits ENABLE ROW LEVEL SECURITY;
 -- Requisições e seus movimentos saem somente pelas funções SECURITY DEFINER
 -- explícitas (exclusão individual ou limpeza integral do proprietário).
 DROP POLICY IF EXISTS wr_delete ON public.warehouse_requisitions;
+DROP POLICY IF EXISTS wr_delete_explicit_rpc_only ON public.warehouse_requisitions;
 CREATE POLICY wr_delete_explicit_rpc_only
 ON public.warehouse_requisitions FOR DELETE TO authenticated
 USING (false);
 
 DROP POLICY IF EXISTS wm_delete ON public.warehouse_movements;
+DROP POLICY IF EXISTS wm_delete_non_requisition_owner ON public.warehouse_movements;
 CREATE POLICY wm_delete_non_requisition_owner
 ON public.warehouse_movements FOR DELETE TO authenticated
 USING (
@@ -140,7 +142,7 @@ BEGIN
     INTO v_current_requisition
   FROM public.warehouse_requisitions wr
   WHERE wr.project_id = p_project_id
-    AND wr.id = p_requisition_id::uuid
+    AND wr.id = p_requisition_id
   FOR UPDATE;
   v_requisition_found := FOUND;
 
@@ -188,16 +190,16 @@ BEGIN
     WHERE wm.project_id = p_project_id
       AND wm.data ->> 'requisitionId' = p_requisition_id;
     DELETE FROM public.warehouse_requisitions wr
-    WHERE wr.project_id = p_project_id AND wr.id = p_requisition_id::uuid;
+    WHERE wr.project_id = p_project_id AND wr.id = p_requisition_id;
     v_requisition := NULL;
   ELSE
     IF p_operation_type = 'delivery' THEN
       INSERT INTO public.warehouse_requisitions (id, project_id, data, created_by)
-      VALUES (p_requisition_id::uuid, p_project_id, v_requisition, v_user);
+      VALUES (p_requisition_id, p_project_id, v_requisition, v_user);
     ELSE
       UPDATE public.warehouse_requisitions
       SET data = v_requisition
-      WHERE project_id = p_project_id AND id = p_requisition_id::uuid;
+      WHERE project_id = p_project_id AND id = p_requisition_id;
     END IF;
 
     FOR v_movement IN SELECT value FROM jsonb_array_elements(COALESCE(p_upsert_movements, '[]'::jsonb))
@@ -227,14 +229,14 @@ BEGIN
 
       SELECT wm.data INTO v_existing_movement
       FROM public.warehouse_movements wm
-      WHERE wm.id = (v_movement ->> 'id')::uuid;
+      WHERE wm.id = (v_movement ->> 'id');
       IF FOUND AND p_operation_type <> 'correction' AND v_existing_movement IS DISTINCT FROM v_movement THEN
         RAISE EXCEPTION 'WAREHOUSE_RECORD_CONFLICT';
       END IF;
 
       INSERT INTO public.warehouse_movements (id, project_id, data, occurred_at, created_by)
       VALUES (
-        (v_movement ->> 'id')::uuid, p_project_id, v_movement,
+        (v_movement ->> 'id'), p_project_id, v_movement,
         NULLIF(v_movement ->> 'date', '')::date, v_user
       )
       ON CONFLICT (id) DO UPDATE
@@ -314,7 +316,7 @@ BEGIN
   FROM public.warehouse_movements wm
   WHERE wm.project_id = p_project_id
     AND wm.id IN (
-      SELECT (value ->> 'id')::uuid
+      SELECT value ->> 'id'
       FROM jsonb_array_elements(COALESCE(p_upsert_movements, '[]'::jsonb))
     );
 
