@@ -3,9 +3,8 @@ import { getTeamDefinition, DEFAULT_TEAMS, TeamCode, TeamDefinition } from '@/li
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Settings2 } from 'lucide-react';
 import GerenciarEquipes from '@/components/GerenciarEquipes';
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { ChevronDown, ChevronRight, Zap, Users, AlertTriangle, Plus, Trash2, Edit3, Check, X, Upload, FolderPlus, GripVertical, ClipboardList, FolderTree, Folder, ArrowUpFromLine } from 'lucide-react';
-import ImportSyntheticDialog from '@/components/ImportSyntheticDialog';
+import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { ChevronDown, ChevronRight, Zap, Users, AlertTriangle, Plus, Trash2, Edit3, Check, X, Upload, FolderPlus, GripVertical, ClipboardList, FolderTree, Folder, ArrowUpFromLine, Loader2 } from 'lucide-react';
 import DailyLogsPanel from '@/components/DailyLogsPanel';
 
 import { calculateRupDuration } from '@/lib/calculations';
@@ -18,6 +17,9 @@ import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
 import { sortTasksForSchedule, withScheduleOrderForMove } from '@/lib/taskOrdering';
 import { normalizeLaborRole } from '@/lib/laborDimensioning';
 import { applyDailyProductionLogs, upsertDailyProductionLog } from '@/lib/dailyProductionLogs';
+import { lazyWithReload } from '@/lib/lazyWithReload';
+
+const ImportSyntheticDialog = lazyWithReload(() => import('@/components/ImportSyntheticDialog'));
 
 /** Encurta o nome da tarefa para no máximo `maxWords` palavras, adicionando "…" no final. */
 function truncateWords(text: string, maxWords = 4): string {
@@ -652,12 +654,23 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
         </div>
       </div>
 
-      <ImportSyntheticDialog
-        open={importSyntheticOpen}
-        onClose={() => setImportSyntheticOpen(false)}
-        project={project}
-        onProjectChange={onProjectChange}
-      />
+      {importSyntheticOpen ? (
+        <Suspense fallback={(
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-4 backdrop-blur-sm" role="status" aria-live="polite">
+            <div className="flex items-center gap-3 rounded-lg border bg-card px-4 py-3 text-sm font-medium shadow-lg">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              Carregando importador de planilha…
+            </div>
+          </div>
+        )}>
+          <ImportSyntheticDialog
+            open
+            onClose={() => setImportSyntheticOpen(false)}
+            project={project}
+            onProjectChange={onProjectChange}
+          />
+        </Suspense>
+      ) : null}
 
       {/* Legenda de equipes */}
       <div className="flex flex-wrap items-center gap-2 px-3 py-2 bg-card rounded-lg border border-border">

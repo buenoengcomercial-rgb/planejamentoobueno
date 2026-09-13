@@ -4,6 +4,10 @@ import TaskList from './TaskList';
 import type { Project, Task } from '@/types/project';
 import { TooltipProvider } from '@/components/ui/tooltip';
 
+vi.mock('@/components/ImportSyntheticDialog', () => ({
+  default: ({ open }: { open: boolean }) => open ? <div role="dialog">Importador carregado</div> : null,
+}));
+
 const task: Task = {
   id: 'task-1',
   name: 'Instalar hidrante',
@@ -47,5 +51,19 @@ describe('TaskList', () => {
     fireEvent.click(header!);
     expect(header).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('Instalar hidrante')).toBeInTheDocument();
+  });
+
+  it('carrega o importador de Excel somente depois da ação do usuário', async () => {
+    render(
+      <TooltipProvider>
+        <TaskList project={project} onProjectChange={vi.fn()} />
+      </TooltipProvider>,
+    );
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /atualizar planilha/i }));
+
+    expect(await screen.findByRole('dialog')).toHaveTextContent('Importador carregado');
   });
 });

@@ -41,3 +41,25 @@ Medição após separar rotas, núcleo do Almoxarifado, subabas e gráficos:
 Na abertura do Dashboard, o caminho crítico antes dos gráficos caiu de aproximadamente 452,09 kB gzip (`index` + Dashboard antigo) para 288,62 kB gzip (`index` + `Index` + Dashboard essencial), redução de **36,16%**. Os gráficos mantêm os mesmos dados e aparecem após o navegador liberar a primeira pintura.
 
 No Almoxarifado, o antigo pacote único de 98,36 kB gzip foi substituído por uma estrutura de 3,72 kB e subabas independentes. PDF, `jspdf` e leitura fiscal permanecem fora da abertura comum e são solicitados apenas pela área ou ação correspondente.
+
+## Resultado da etapa 3 — documentos sob demanda
+
+A auditoria do grafo de importações confirmou que `jspdf`, `jspdf-autotable`, `pdfjs-dist`, `xlsx` e `xlsx-js-style` não são dependências da entrada comum. Os motores permanecem em pacotes próprios e são alcançados somente pelas ações de importar, exportar, imprimir ou gerar recibo.
+
+Foi corrigida a última fronteira antecipada encontrada na jornada comum: a tela de Produção importava o `ImportSyntheticDialog` estaticamente mesmo fechado. Agora o diálogo é criado por `lazyWithReload` somente depois de **Atualizar planilha**. O manifesto de produção registra:
+
+- `TaskList` com `ImportSyntheticDialog` apenas em `dynamicImports`;
+- `ImportSyntheticDialog` como o consumidor isolado do `xlsx` usado na importação;
+- o gerador `warehouse/pdf` como consumidor isolado de `jspdf` e `jspdf-autotable`;
+- nenhuma dependência pesada de documentos nos imports da entrada `index.html`.
+
+Os tamanhos dos motores não mudaram — o objetivo desta etapa é evitar o download antes do uso:
+
+| Motor isolado | Minificado | Gzip | Momento de carregamento |
+| --- | ---: | ---: | --- |
+| XLSX de importação | 429,03 kB | 143,08 kB | Após abrir a importação |
+| XLSX com estilos | 627,18 kB | 322,92 kB | Ao exportar relatório formatado |
+| jsPDF | 390,27 kB | 128,72 kB | Ao gerar PDF/recibo |
+| PDF utilitário | 458,39 kB | 135,97 kB | Ao processar documento correspondente |
+
+Testes de arquitetura protegem as fronteiras da Produção, Diário, Medição e Almoxarifado contra a reintrodução de imports estáticos dos motores.
