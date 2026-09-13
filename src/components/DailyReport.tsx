@@ -160,7 +160,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
         </div>
       ) : !readOnly && canManageConclusion ? (
         <div className="flex justify-end">
-          <Button type="button" variant="outline" className="min-h-11" onClick={() => setCompletionDialog('conclude')}>
+          <Button type="button" className="min-h-11 w-full sm:w-auto" onClick={() => setCompletionDialog('conclude')}>
             <LockKeyhole className="mr-2 h-4 w-4" /> Concluir diário
           </Button>
         </div>

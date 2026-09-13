@@ -72,6 +72,7 @@ export function DailyReportHeader({
             <CalendarDays className="w-4 h-4 text-muted-foreground" />
             <input
               type="date"
+              aria-label="Data do Diário"
               value={selectedDate}
               onChange={e => setSelectedDate(e.target.value)}
               className="min-w-0 bg-transparent text-base focus:outline-none sm:text-sm"
@@ -82,7 +83,7 @@ export function DailyReportHeader({
           <Printer className="w-4 h-4 mr-1.5" /> PDF do dia
         </Button>
         {activePeriod && (
-          <Button onClick={handlePrintPeriod} variant="default" size="sm" className="h-11 text-sm sm:h-10" title="Exporta todos os dias do período da medição">
+          <Button onClick={handlePrintPeriod} variant="outline" size="sm" className="h-11 text-sm sm:h-10" title="Exporta todos os dias do período da medição">
             <Printer className="w-4 h-4 mr-1.5" /> PDF da medição
           </Button>
         )}
