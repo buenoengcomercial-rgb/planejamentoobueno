@@ -6,7 +6,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Camera, Check, ChevronDown, ChevronsUpDown, FileDown, HardHat, History, ImagePlus, PackageOpen, Pencil, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
+import { Camera, Check, CheckCircle2, ChevronDown, ChevronsUpDown, CloudUpload, FileDown, HardHat, History, ImagePlus, Loader2, PackageOpen, Pencil, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
 import {
   computeWarehouseRows,
   addRequisitionSupplement,
@@ -51,6 +51,9 @@ interface WithdrawalForm {
 }
 
 type WithdrawalErrors = Partial<Record<'chapterId' | 'receiverName' | 'items' | 'signatureReceiver', string>>;
+type WithdrawalSaveStage = 'idle' | 'uploading' | 'committing' | 'confirmed';
+
+const WITHDRAWAL_CONFIRMATION_DELAY_MS = 700;
 
 const initialForm = (): WithdrawalForm => ({
   date: warehouseOperationalDate(),
@@ -215,7 +218,9 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
   const [receiverSearch, setReceiverSearch] = useState('');
   const [materialSearch, setMaterialSearch] = useState('');
   const [photos, setPhotos] = useState<File[]>([]);
-  const [saving, setSaving] = useState(false);
+  const [saveStage, setSaveStage] = useState<WithdrawalSaveStage>('idle');
+  const [confirmedNumber, setConfirmedNumber] = useState('');
+  const saving = saveStage !== 'idle';
   const [errors, setErrors] = useState<WithdrawalErrors>({});
   const [returnTarget, setReturnTarget] = useState<WarehouseRequisition | null>(null);
   const [actionTarget, setActionTarget] = useState<WarehouseRequisition | null>(null);
@@ -267,6 +272,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
     setReceiverSearch('');
     setMaterialSearch('');
     setErrors({});
+    setSaveStage('idle');
+    setConfirmedNumber('');
     setOpen(false);
   };
   const hasWithdrawalDraft = Boolean(
@@ -280,6 +287,24 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
       reset,
     );
   };
+
+  useEffect(() => {
+    if (!saving) return;
+    const preventUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    const restoreCurrentPage = () => {
+      window.history.forward();
+      toast.warning('Aguarde a confirmação da retirada na nuvem.');
+    };
+    window.addEventListener('beforeunload', preventUnload);
+    window.addEventListener('popstate', restoreCurrentPage);
+    return () => {
+      window.removeEventListener('beforeunload', preventUnload);
+      window.removeEventListener('popstate', restoreCurrentPage);
+    };
+  }, [saving]);
 
   const deleteRequisition = (requisition: WarehouseRequisition) => confirm(
     { title: 'Excluir retirada definitivamente?', description: 'A retirada, as devoluções vinculadas, seus comprovantes, movimentos e o bloco gerado no Diário de Obra serão removidos.', confirmLabel: 'Excluir definitivamente' },
@@ -365,8 +390,9 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
     setErrors({});
 
     try {
-      setSaving(true);
+      setSaveStage(photos.length ? 'uploading' : 'committing');
       const deliveryAttachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'withdrawals')));
+      setSaveStage('committing');
       const result = createAndDeliverRequisition(project, {
         date: form.date,
         chapterId: chapter.id,
@@ -386,12 +412,20 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
       });
       onProjectChange(confirmed);
       setExpandedRequisitionIds(current => new Set([...current, result.requisitionId]));
-      reset();
+      const canonicalRequisition = confirmed.warehouse?.requisitions.find(row => row.id === result.requisitionId);
+      if (canonicalRequisition) {
+        const confirmedDateKey = `${buildingLabel(confirmed, canonicalRequisition.chapterId).key}:${canonicalRequisition.date || 'data-nao-informada'}`;
+        setDateExpansionOverrides(current => new Map(current).set(confirmedDateKey, true));
+      }
+      setConfirmedNumber(canonicalRequisition?.number ?? '');
+      setSaveStage('confirmed');
       toast.success('Retirada confirmada na nuvem e estoque baixado.');
+      await new Promise(resolve => window.setTimeout(resolve, WITHDRAWAL_CONFIRMATION_DELAY_MS));
+      reset();
     } catch (error) {
+      setSaveStage('idle');
+      setConfirmedNumber('');
       toast.error((error as Error).message);
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -409,12 +443,18 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
       </div>
 
       <Dialog open={open} onOpenChange={nextOpen => { if (!nextOpen) requestCloseWithdrawal(); }}>
-        <DialogContent className="warehouse-ui flex max-h-[95dvh] w-[calc(100vw-1rem)] max-w-6xl flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11">
+        <DialogContent
+          aria-busy={saving}
+          onEscapeKeyDown={event => { if (saving) event.preventDefault(); }}
+          onPointerDownOutside={event => { if (saving) event.preventDefault(); }}
+          onInteractOutside={event => { if (saving) event.preventDefault(); }}
+          className={`warehouse-ui flex max-h-[95dvh] w-[calc(100vw-1rem)] max-w-6xl flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11 ${saving ? '[&>button]:pointer-events-none [&>button]:opacity-30' : ''}`}
+        >
           <DialogHeader className="border-b p-4 pr-16">
             <DialogTitle>Nova retirada de materiais</DialogTitle>
             <DialogDescription>Preencha os dados, escolha os materiais e registre a assinatura antes de entregar.</DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <fieldset disabled={saving} className="min-h-0 min-w-0 flex-1 overflow-y-auto border-0 p-4 disabled:cursor-wait disabled:opacity-70">
             <section className="space-y-4">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <WarehouseField label="Data">
@@ -461,7 +501,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
                 </PopoverContent>
               </Popover>
             </WarehouseField>
-          </div>
+            </div>
           <div className="text-xs text-muted-foreground">Almoxarife identificado pelo login: <strong className="text-foreground">{warehouseActorName(auditActor)}</strong></div>
 
           <div className="overflow-hidden rounded-xl border">
@@ -491,10 +531,14 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
           </div>
           <WarehouseField label="Observação" optional><Input id="withdrawal-notes" className="min-h-11" value={form.notes} onChange={event => setForm({ ...form, notes: event.target.value })} placeholder="Ex.: local de aplicação" /></WarehouseField>
             </section>
-          </div>
+          </fieldset>
+          {saveStage !== 'idle' && <div role="status" aria-live="polite" className={`flex items-center gap-3 border-t px-4 py-3 text-sm font-semibold ${saveStage === 'confirmed' ? 'border-success/30 bg-success/10 text-success' : 'border-primary/25 bg-primary/5 text-primary'}`}>
+            {saveStage === 'confirmed' ? <CheckCircle2 className="h-5 w-5 shrink-0" /> : saveStage === 'uploading' ? <CloudUpload className="h-5 w-5 shrink-0" /> : <Loader2 className="h-5 w-5 shrink-0 animate-spin" />}
+            <span>{saveStage === 'uploading' ? 'Enviando fotos...' : saveStage === 'committing' ? 'Salvando retirada na nuvem...' : `Salvo na nuvem${confirmedNumber ? ` · ${confirmedNumber}` : ''}`}</span>
+          </div>}
           <DialogFooter className="gap-2 border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:space-x-0">
             <Button variant="outline" className="min-h-11 sm:min-w-28" disabled={saving} onClick={requestCloseWithdrawal}>Cancelar</Button>
-            <Button className="min-h-11 font-bold sm:min-w-52" disabled={saving} onClick={() => void submit()}><Check className="mr-2 h-4 w-4" />{saving ? 'Registrando...' : 'Entregar e baixar estoque'}</Button>
+            <Button className="min-h-11 font-bold sm:min-w-52" disabled={saving} onClick={() => void submit()}>{saveStage === 'confirmed' ? <CheckCircle2 className="mr-2 h-4 w-4" /> : saveStage === 'idle' ? <Check className="mr-2 h-4 w-4" /> : <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{saveStage === 'uploading' ? 'Enviando fotos...' : saveStage === 'committing' ? 'Salvando na nuvem...' : saveStage === 'confirmed' ? 'Salvo na nuvem' : 'Entregar e baixar estoque'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

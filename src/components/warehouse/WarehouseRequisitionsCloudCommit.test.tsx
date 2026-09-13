@@ -38,7 +38,16 @@ describe('confirmação visual da retirada', () => {
     Element.prototype.scrollIntoView = vi.fn();
     let confirmServer: (() => void) | undefined;
     commitMock.mockImplementation((_before: Project, after: Project) => new Promise<Project>(resolve => {
-      confirmServer = () => resolve(after);
+      confirmServer = () => resolve({
+        ...after,
+        warehouse: {
+          ...after.warehouse!,
+          requisitions: after.warehouse!.requisitions.map(requisition => ({
+            ...requisition,
+            number: 'REQ-2026-0120',
+          })),
+        },
+      });
     }));
     const onProjectChange = vi.fn();
     render(<WarehouseRequisitionsTab project={projectWithStock()} onProjectChange={onProjectChange} />);
@@ -53,14 +62,36 @@ describe('confirmação visual da retirada', () => {
 
     await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
     expect(onProjectChange).not.toHaveBeenCalled();
-    const pendingButton = screen.getByRole('button', { name: 'Registrando...' });
+    const pendingButton = screen.getByRole('button', { name: 'Salvando na nuvem...' });
     expect(pendingButton).toBeDisabled();
+    expect(document.getElementById('withdrawal-date')).toBeDisabled();
+    expect(document.getElementById('withdrawal-chapter')).toBeDisabled();
     fireEvent.click(pendingButton);
     expect(commitMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'PDF' })).not.toBeInTheDocument();
 
+    const dialog = screen.getByRole('dialog', { name: 'Nova retirada de materiais' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }));
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
+
+    const beforeUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(beforeUnload);
+    expect(beforeUnload.defaultPrevented).toBe(true);
+
+    const historyForward = vi.spyOn(window.history, 'forward').mockImplementation(() => undefined);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(historyForward).toHaveBeenCalledTimes(1);
+    historyForward.mockRestore();
+
     await act(async () => confirmServer?.());
     await waitFor(() => expect(onProjectChange).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('status')).toHaveTextContent('Salvo na nuvem · REQ-2026-0120');
+    expect(screen.getByRole('dialog', { name: 'Nova retirada de materiais' })).toBeInTheDocument();
+    await waitFor(
+      () => expect(screen.queryByRole('dialog', { name: 'Nova retirada de materiais' })).not.toBeInTheDocument(),
+      { timeout: 2_000 },
+    );
   });
 
   it('preserva o formulário e não libera PDF quando a transação é rejeitada', async () => {
