@@ -14,7 +14,6 @@ import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
 import { logToProject, userInfoFromSupabaseUser } from '@/lib/audit';
-import { reconcileFiscalNoteDuplicates } from '@/lib/warehouse';
 import { buildOperationalProjectFromPendingAdditives, getPendingAdditiveScheduleControls } from '@/lib/additiveSchedule';
 import { mergeOperationalProjectIntoRaw } from '@/lib/operationalProject';
 
@@ -58,7 +57,7 @@ import {
   resolveRemoteVersionAction,
   serializeProject,
   writeProjectDraft,
-} from '@/lib/cloudProjectDrafts';
+} from '@/lib/cloudProjectDraftCore';
 import type { ProjectMeta } from '@/lib/projectStorage';
 import { supabase } from '@/integrations/supabase/client';
 import { loadOpenDailyReport, saveOpenDailyReport } from '@/lib/dailyReportCloudSync';
@@ -66,11 +65,9 @@ import {
   mergeWarehouseCloudCommit,
   type WarehouseCloudCommitResult,
 } from '@/lib/warehouseCloudCommit';
-import {
-  commitWarehouseScopedOperation,
-  mergeWarehouseScopedCommit,
-  type WarehouseScopedCommitResult,
-  type WarehouseScopedDomain,
+import type {
+  WarehouseScopedCommitResult,
+  WarehouseScopedDomain,
 } from '@/lib/warehouseScopedCommit';
 
 const UNDO_LIMIT = 20;
@@ -617,6 +614,7 @@ export default function Index() {
             let projectToLoad = record.project;
             let updatedAt = record.updatedAt;
             if (role === 'owner') {
+              const { reconcileFiscalNoteDuplicates } = await import('@/lib/warehouse');
               const reconciliation = reconcileFiscalNoteDuplicates(record.project, auditActor);
               if (!reconciliation.alreadyReconciled) {
                 updatedAt = await upsertCloudProject(reconciliation.project, orgId, record.updatedAt);
@@ -1300,6 +1298,7 @@ export default function Index() {
       dailyReports: next.dailyReports,
     };
     setSaveStatus('saving');
+    const { commitWarehouseScopedOperation, mergeWarehouseScopedCommit } = await import('@/lib/warehouseScopedCommit');
     let result: WarehouseScopedCommitResult;
     try {
       result = await commitWarehouseScopedOperation(
@@ -1382,6 +1381,7 @@ export default function Index() {
         let projectToLoad = record.project;
         let updatedAt = record.updatedAt;
         if (role === 'owner') {
+          const { reconcileFiscalNoteDuplicates } = await import('@/lib/warehouse');
           const reconciliation = reconcileFiscalNoteDuplicates(record.project, auditActor);
           if (!reconciliation.alreadyReconciled) {
             updatedAt = await upsertCloudProject(reconciliation.project, orgId!, record.updatedAt);
