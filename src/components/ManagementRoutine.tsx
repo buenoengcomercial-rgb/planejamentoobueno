@@ -17,7 +17,6 @@ import {
   addDaysISO,
   buildRoutineSearchActivities,
   buildWeeklyRoutine,
-  findNextScheduledActivity,
   groupWeeklyRoutineActivities,
   startOfWeekISO,
   taskSchedule,
@@ -36,6 +35,7 @@ import { approveRescheduleRequest, createRescheduleRequest, rejectRescheduleRequ
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
@@ -43,11 +43,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/hooks/use-toast';
 import {
+  ArrowRight,
   CalendarCheck2,
   CalendarDays,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  ChevronDown,
   ClipboardCheck,
   Clock3,
   NotebookPen,
@@ -189,22 +190,20 @@ function chapterTone(chapterId: string) {
 
 function ActivityCard({
   activity,
+  onOpenProduction,
   onRegister,
   teams,
   readOnly = false,
   tone,
   onReschedule,
-  expanded,
-  onToggle,
 }: {
   activity: WeeklyRoutineActivity;
+  onOpenProduction: (taskId: string, dateISO: string) => void;
   onRegister: (activity: WeeklyRoutineActivity, actualQuantity: number) => void;
   teams: Project['teams'];
   readOnly?: boolean;
   tone: (typeof CHAPTER_TONES)[number];
   onReschedule?: (taskId: string) => void;
-  expanded: boolean;
-  onToggle: () => void;
 }) {
   const team = getTeamDefinition(activity.teamCode, teams?.length ? teams : DEFAULT_TEAMS);
   const [actualDraft, setActualDraft] = useState(() => String(activity.actualQuantity || ''));
@@ -214,27 +213,37 @@ function ActivityCard({
   const exceedsContract = actualDraft.trim() !== '' && actualQuantity > maximumForDate + 0.000001;
   const canRegister = actualDraft.trim() !== '' && Number.isFinite(actualQuantity) && actualQuantity >= 0 && !exceedsContract;
   return (
-    <article className={`overflow-hidden rounded-lg border border-l-4 bg-background transition ${tone.card}`}>
-      <button type="button" className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 p-3 text-left" onClick={onToggle} aria-expanded={expanded}>
-        {expanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-        <span className="min-w-0">
-          <span className="block truncate text-sm font-semibold text-foreground">{activity.taskName}</span>
-          <span className="mt-1 block text-xs text-muted-foreground">{formatShortDate(activity.startDate)}–{formatShortDate(activity.endDate)} · Meta {activity.plannedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {activity.unit}</span>
-        </span>
-        <span className="flex flex-wrap items-center justify-end gap-1.5">
-          {activity.reprogrammed && <Badge variant="outline" className="border-violet-300 bg-violet-50 text-[11px] font-semibold text-violet-800">Reprogramada</Badge>}
-          {activity.completed ? <Badge variant="outline" className="border-success/30 bg-success/10 text-success">Concluída</Badge> : <Badge variant="outline" className="tabular-nums">{activity.progressPercent.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%</Badge>}
-        </span>
-      </button>
-      {expanded && <div className="border-t border-border bg-background/80 p-3 sm:pl-10">
-        <div className="grid gap-3 sm:grid-cols-3">
-          <div><p className="text-xs text-muted-foreground">Equipe</p><p className="text-sm font-medium">{team?.label ?? 'Sem equipe'}</p></div>
-          <div><p className="text-xs text-muted-foreground">Executado</p><p className="text-sm font-medium tabular-nums">{activity.executedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} de {activity.totalQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {activity.unit}</p></div>
-          <div><p className="text-xs text-muted-foreground">Responsável</p><p className="truncate text-sm font-medium">{activity.responsible || 'Sem responsável'}</p></div>
+    <article className={`group w-full rounded-lg border border-border border-l-4 bg-background p-3 text-left transition ${tone.card}`}>
+      <div className="flex items-start justify-between gap-2">
+        <p className="line-clamp-3 text-sm font-semibold leading-snug text-foreground">{activity.taskName}</p>
+        {activity.completed && <CheckCircle2 className="h-4 w-4 shrink-0 text-success" aria-label="Atividade concluída" />}
+      </div>
+      {activity.completed && <Badge variant="outline" className="mt-2 border-success/30 bg-success/10 text-[10px] font-semibold text-success">Concluída</Badge>}
+      {activity.reprogrammed && <Badge variant="outline" className="mt-2 border-violet-300 bg-violet-50 text-[10px] font-semibold text-violet-800">Atividade reprogramada</Badge>}
+      <dl className="mt-3 grid grid-cols-2 gap-x-2 gap-y-1 text-xs text-muted-foreground">
+        <div><dt className="sr-only">Equipe</dt><dd>{team?.label ?? 'Sem equipe'}</dd></div>
+        <div className="text-right tabular-nums">
+          <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">Meta do dia</dt>
+          <dd className="font-medium text-foreground" aria-label={`Meta do dia: ${activity.plannedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} ${activity.unit}`}>
+            {activity.plannedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {activity.unit}
+          </dd>
         </div>
-        <Progress value={activity.progressPercent} className="mt-3 h-2" aria-label={`${activity.progressPercent}% concluído`} />
-        {!readOnly && !activity.completed && (
-        <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:max-w-lg">
+        <div><dt className="sr-only">Período</dt><dd>{formatShortDate(activity.startDate)}–{formatShortDate(activity.endDate)}</dd></div>
+        <div className="truncate text-right"><dt className="sr-only">Responsável</dt><dd>{activity.responsible || 'Sem responsável'}</dd></div>
+      </dl>
+      <div className="mt-3 rounded-md bg-muted/35 p-2.5">
+        <div className="grid grid-cols-2 gap-x-2 text-xs text-muted-foreground">
+          <span>Total: <strong className="font-semibold text-foreground">{activity.totalQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {activity.unit}</strong></span>
+          <span className="text-right">Executado: <strong className="font-semibold text-foreground">{activity.executedQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {activity.unit}</strong></span>
+        </div>
+        <div className="mt-2 flex items-center justify-between gap-2 text-[11px] font-medium text-muted-foreground">
+          <span>Conclusão da atividade</span>
+          <span className="text-foreground">{activity.progressPercent.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%</span>
+        </div>
+        <Progress value={activity.progressPercent} className="mt-1.5 h-2" aria-label={`${activity.progressPercent}% concluído`} />
+      </div>
+      {!readOnly && !activity.completed && (
+        <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
           <label className="min-w-0 text-[11px] font-medium text-muted-foreground">
             Executado em {formatShortDate(activity.date)} ({activity.unit})
             <Input
@@ -253,82 +262,90 @@ function ActivityCard({
             Registrar
           </Button>
         </div>
-        )}
+      )}
+      <Button type="button" variant="outline" size="sm" className="mt-2 min-h-10 w-full" onClick={() => onOpenProduction(activity.taskId, activity.date)}>
+        Ir para produção <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+      </Button>
       {onReschedule && !activity.completed && <Button type="button" variant="ghost" size="sm" className="mt-1 min-h-9 w-full text-violet-700" onClick={() => onReschedule(activity.taskId)}>
         <CalendarClock className="mr-1.5 h-3.5 w-3.5" /> Reprogramar atividade
       </Button>}
-      </div>}
     </article>
   );
 }
 
-function ActivityGroups({ groups, date, teams, onRegister, readOnly, onReschedule, depth = 0, rootChapterId, expandedGroups, onToggleGroup, expandedTaskId, onToggleTask, forceOpen = false }: {
+function ActivityGroups({ groups, date, teams, onOpenProduction, onRegister, readOnly, onReschedule, depth = 0, rootChapterId }: {
   groups: WeeklyRoutineActivityGroup[];
   date: string;
   teams: Project['teams'];
+  onOpenProduction: (taskId: string, dateISO: string) => void;
   onRegister: (activity: WeeklyRoutineActivity, actualQuantity: number) => void;
   readOnly: boolean;
   onReschedule?: (taskId: string) => void;
   depth?: number;
   rootChapterId?: string;
-  expandedGroups: ReadonlySet<string>;
-  onToggleGroup: (id: string) => void;
-  expandedTaskId: string | null;
-  onToggleTask: (id: string) => void;
-  forceOpen?: boolean;
 }) {
   return (
     <div className={`space-y-2 ${depth ? 'border-l border-primary/20 pl-2' : ''}`}>
       {groups.map(group => {
         const chapterRootId = rootChapterId ?? group.chapter.id;
         const tone = chapterTone(chapterRootId);
-        const isOpen = forceOpen || expandedGroups.has(group.chapter.id);
         return (
         <section key={group.chapter.id} className="space-y-2">
-          <button type="button" onClick={() => onToggleGroup(group.chapter.id)} aria-expanded={isOpen} className={`flex w-full items-center justify-between gap-2 rounded-md px-3 py-2.5 text-left ${depth ? tone.nested : tone.header}`}>
-            <span className="flex min-w-0 items-center gap-2">
-              {isOpen ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+          <div className={`flex items-center justify-between gap-2 rounded-md px-2 py-1.5 ${depth ? tone.nested : tone.header}`}>
             <p className="min-w-0 truncate text-[11px] font-bold uppercase tracking-wide text-foreground">
               {group.chapter.number ? `${group.chapter.number} · ` : ''}{group.chapter.name}
             </p>
-            </span>
             <Badge variant="outline" className={`shrink-0 text-[10px] ${tone.badge}`}>{group.totalActivities}</Badge>
-          </button>
-          {isOpen && group.activities.map(activity => (
+          </div>
+          {group.activities.map(activity => (
             <ActivityCard
               key={`${date}:${activity.taskId}`}
               activity={activity}
               teams={teams}
+              onOpenProduction={onOpenProduction}
               onRegister={onRegister}
               readOnly={readOnly}
               tone={tone}
               onReschedule={onReschedule}
-              expanded={expandedTaskId === activity.taskId}
-              onToggle={() => onToggleTask(activity.taskId)}
             />
           ))}
-          {isOpen && group.children.length > 0 && <ActivityGroups groups={group.children} date={date} teams={teams} onRegister={onRegister} readOnly={readOnly} onReschedule={onReschedule} depth={depth + 1} rootChapterId={chapterRootId} expandedGroups={expandedGroups} onToggleGroup={onToggleGroup} expandedTaskId={expandedTaskId} onToggleTask={onToggleTask} forceOpen={forceOpen} />}
+          {group.children.length > 0 && <ActivityGroups groups={group.children} date={date} teams={teams} onOpenProduction={onOpenProduction} onRegister={onRegister} readOnly={readOnly} onReschedule={onReschedule} depth={depth + 1} rootChapterId={chapterRootId} />}
         </section>
       )})}
     </div>
   );
 }
 
-export default function ManagementRoutine({ project, onProjectChange, onOpenDailyReport, readOnly = false, canRequestReschedule = false, canApproveReschedule = false, auditActor = {}, initialWeek, onWeekChange, undoButton }: Props) {
+function SelectedChapterActivities({ group, date, teams, onOpenProduction, onRegister, readOnly, onReschedule }: {
+  group?: WeeklyRoutineActivityGroup;
+  date: string;
+  teams: Project['teams'];
+  onOpenProduction: (taskId: string, dateISO: string) => void;
+  onRegister: (activity: WeeklyRoutineActivity, actualQuantity: number) => void;
+  readOnly: boolean;
+  onReschedule?: (taskId: string) => void;
+}) {
+  if (!group) return <p className="py-8 text-center text-xs text-muted-foreground">Sem atividade</p>;
+  const tone = chapterTone(group.chapter.id);
+  return (
+    <div className="space-y-2">
+      {group.activities.map(activity => (
+        <ActivityCard key={`${date}:${activity.taskId}`} activity={activity} teams={teams} onOpenProduction={onOpenProduction} onRegister={onRegister} readOnly={readOnly} tone={tone} onReschedule={onReschedule} />
+      ))}
+      {group.children.length > 0 && <ActivityGroups groups={group.children} date={date} teams={teams} onOpenProduction={onOpenProduction} onRegister={onRegister} readOnly={readOnly} onReschedule={onReschedule} depth={1} rootChapterId={group.chapter.id} />}
+    </div>
+  );
+}
+
+export default function ManagementRoutine({ project, onProjectChange, onOpenDailyReport, onOpenProduction, readOnly = false, canRequestReschedule = false, canApproveReschedule = false, auditActor = {}, initialWeek, onWeekChange, undoButton }: Props) {
   const routine = useMemo(() => ensureRoutine(project), [project]);
   const [activeTab, setActiveTab] = useState('agenda');
   const [rescheduleTaskId, setRescheduleTaskId] = useState<string | null>(null);
   const [selectedWeekStart, setSelectedWeekStart] = useState(() => startOfWeekISO(initialWeek || todayISO()));
-  const [selectedDate, setSelectedDate] = useState(() => initialWeek || todayISO());
+  const [selectedChapterId, setSelectedChapterId] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchDate, setSearchDate] = useState(() => initialWeek || todayISO());
   const [searchQuery, setSearchQuery] = useState('');
-  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => {
-    try {
-      return new Set(JSON.parse(localStorage.getItem(`obraplanner:routine-expanded:${project.id}`) || '[]'));
-    } catch {
-      return new Set();
-    }
-  });
   const obraCalendar = useMemo(() => resolveObraConfig(project), [project]);
   const pendingAdditiveTaskIds = useMemo(() => new Set(
     Object.entries(buildPendingAdditiveSuspensionMap(project))
@@ -339,28 +356,38 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
     () => buildWeeklyRoutine(project, selectedWeekStart, pendingAdditiveTaskIds, obraCalendar),
     [obraCalendar, pendingAdditiveTaskIds, project, selectedWeekStart],
   );
-  const selectedDay = week.find(day => day.date === selectedDate);
+  const rootChapters = useMemo(() => project.phases.filter(phase => !phase.parentId), [project.phases]);
+  const activeRootChapterIds = useMemo(() => new Set(
+    week.flatMap(day => day.activities.map(activity => activity.chapterPath[0]?.id).filter((id): id is string => !!id)),
+  ), [week]);
+  const selectedChapter = rootChapters.find(chapter => chapter.id === selectedChapterId);
+  const selectedWeekEnd = week.at(-1)?.date ?? selectedWeekStart;
+  const filteredWeek = useMemo(() => week.map(day => ({
+    ...day,
+    activities: day.activities.filter(activity => activity.chapterPath[0]?.id === selectedChapterId),
+  })), [selectedChapterId, week]);
+  const groupsByDay = useMemo(
+    () => new Map(filteredWeek.map(day => [day.date, groupWeeklyRoutineActivities(day.activities)])),
+    [filteredWeek],
+  );
+  const activities = filteredWeek.flatMap(day => day.activities);
+  const uniqueActivities = new Set(activities.map(activity => activity.taskId)).size;
+  const completedActivities = new Set(activities.filter(activity => activity.completed).map(activity => activity.taskId)).size;
+  const filledReports = week.filter(day => day.diaryStatus === 'filled' || day.diaryStatus === 'impediment' || day.diaryStatus === 'noProduction').length;
+  const pendingReports = week.filter(day => day.date <= todayISO() && day.diaryStatus === 'notFilled').length;
   const searchedActivities = useMemo(
-    () => buildRoutineSearchActivities(project, selectedDate, searchQuery, pendingAdditiveTaskIds, obraCalendar),
-    [obraCalendar, pendingAdditiveTaskIds, project, searchQuery, selectedDate],
+    () => buildRoutineSearchActivities(project, searchDate, searchQuery, pendingAdditiveTaskIds, obraCalendar)
+      .filter(activity => activity.chapterPath[0]?.id === selectedChapterId),
+    [obraCalendar, pendingAdditiveTaskIds, project, searchDate, searchQuery, selectedChapterId],
   );
-  const visibleActivities = useMemo(
-    () => searchQuery.trim() ? searchedActivities : (selectedDay?.activities ?? []),
-    [searchQuery, searchedActivities, selectedDay?.activities],
-  );
-  const visibleGroups = useMemo(() => groupWeeklyRoutineActivities(visibleActivities), [visibleActivities]);
-  const nextActivity = useMemo(
-    () => findNextScheduledActivity(project, addDaysISO(selectedWeekStart, 7), pendingAdditiveTaskIds, obraCalendar),
-    [obraCalendar, pendingAdditiveTaskIds, project, selectedWeekStart],
-  );
-  const registerActivityProduction = (activity: WeeklyRoutineActivity, actualQuantity: number) => {
+  const registerActivityProduction = (activity: WeeklyRoutineActivity, actualQuantity: number): boolean => {
     const currentTask = getAllTasks(project).find(task => task.id === activity.taskId);
-    if (!currentTask) return;
+    if (!currentTask) return false;
     const candidateLogs = upsertDailyProductionLog(currentTask, activity.date, actualQuantity);
     const initialValidation = validateDailyProductionLogs(currentTask, candidateLogs);
     if (!initialValidation.allowed) {
       toast({ variant: 'destructive', title: 'Quantidade acima do contrato', description: initialValidation.message });
-      return;
+      return false;
     }
     onProjectChange(previous => {
       let next = previous;
@@ -388,6 +415,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
     if (!taskSchedule(currentTask, obraCalendar).workDays.has(activity.date)) {
       toast({ title: canApproveReschedule ? 'Produção e cronograma atualizados' : 'Produção registrada', description: canApproveReschedule ? 'A atividade foi reprogramada automaticamente.' : 'A reprogramação foi enviada para aprovação.' });
     }
+    return true;
   };
 
   const submitTaskReschedule = (request: Parameters<typeof submitRescheduleRequest>[1], approveNow: boolean) => {
@@ -400,30 +428,47 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
   useEffect(() => {
     if (initialWeek) {
       setSelectedWeekStart(startOfWeekISO(initialWeek));
-      setSelectedDate(initialWeek);
+      setSearchDate(initialWeek);
     }
   }, [initialWeek]);
 
   useEffect(() => {
+    const storageKey = `obraplanner:routine-chapter:${project.id}`;
+    let storedChapterId = '';
     try {
-      localStorage.setItem(`obraplanner:routine-expanded:${project.id}`, JSON.stringify([...expandedGroups]));
+      storedChapterId = localStorage.getItem(storageKey) ?? '';
     } catch {
-      // A expansão é apenas preferência visual; indisponibilidade local não bloqueia a Rotina.
+      // A preferência visual não pode bloquear a Rotina.
     }
-  }, [expandedGroups, project.id]);
+    const storedExists = rootChapters.some(chapter => chapter.id === storedChapterId);
+    const firstActive = rootChapters.find(chapter => activeRootChapterIds.has(chapter.id));
+    setSelectedChapterId(storedExists ? storedChapterId : (firstActive?.id ?? rootChapters[0]?.id ?? ''));
+  }, [activeRootChapterIds, project.id, rootChapters]);
 
-  const selectDate = (date: string) => {
-    setSelectedDate(date);
-    setSelectedWeekStart(startOfWeekISO(date));
-    setExpandedTaskId(null);
-    onWeekChange?.(date);
+  useEffect(() => {
+    if (!selectedChapterId) return;
+    try {
+      localStorage.setItem(`obraplanner:routine-chapter:${project.id}`, selectedChapterId);
+    } catch {
+      // A preferência visual não pode bloquear a Rotina.
+    }
+  }, [project.id, selectedChapterId]);
+
+  const selectWeek = (date: string) => {
+    const normalized = startOfWeekISO(date);
+    setSelectedWeekStart(normalized);
+    onWeekChange?.(normalized);
   };
 
-  const toggleGroup = (id: string) => setExpandedGroups(previous => {
-    const next = new Set(previous);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    return next;
-  });
+  const openActivitySearch = () => {
+    const today = todayISO();
+    const calendarWeekEnd = addDaysISO(selectedWeekStart, 6);
+    const currentSearchDateInWeek = searchDate >= selectedWeekStart && searchDate <= calendarWeekEnd;
+    const todayInWeek = today >= selectedWeekStart && today <= calendarWeekEnd;
+    if (!currentSearchDateInWeek) setSearchDate(todayInWeek ? today : (week[0]?.date ?? selectedWeekStart));
+    setSearchQuery('');
+    setSearchOpen(true);
+  };
 
   const [meetingDraft, setMeetingDraft] = useState<ManagementWeeklyMeeting>(() => ({
     id: uid('meeting'),
@@ -493,49 +538,101 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
 
         <TabsContent value="agenda" className="mt-5 space-y-5">
           <section className="space-y-3 rounded-xl border border-border bg-card p-3 sm:p-4">
-            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="icon" className="min-h-11 min-w-11" onClick={() => selectDate(addDaysISO(selectedDate, -1))} aria-label="Dia anterior"><ChevronLeft className="h-4 w-4" /></Button>
-                <Input type="date" value={selectedDate} onChange={event => selectDate(event.target.value)} className="min-h-11 w-[170px]" aria-label="Data da rotina" />
-                <Button variant="outline" size="icon" className="min-h-11 min-w-11" onClick={() => selectDate(addDaysISO(selectedDate, 1))} aria-label="Próximo dia"><ChevronRight className="h-4 w-4" /></Button>
-                <Button variant="outline" className="min-h-11" onClick={() => selectDate(todayISO())}>Hoje</Button>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Capítulo</p>
+              {rootChapters.length ? (
+                <div className="mt-2 flex gap-2 overflow-x-auto pb-1" role="list" aria-label="Capítulos da rotina">
+                  {rootChapters.map(chapter => {
+                    const selected = chapter.id === selectedChapterId;
+                    return (
+                      <div key={chapter.id} role="listitem" className="shrink-0">
+                        <button
+                          type="button"
+                          aria-pressed={selected}
+                          title={chapter.name}
+                          onClick={() => { setSelectedChapterId(chapter.id); setSearchOpen(false); setSearchQuery(''); }}
+                          className={`min-h-11 rounded-lg border px-4 py-2 text-sm font-semibold transition ${selected ? 'border-primary bg-primary text-primary-foreground shadow-sm' : 'border-border bg-background text-foreground hover:border-primary/40 hover:bg-muted/50'}`}
+                        >
+                          {chapter.name}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : <p className="mt-2 text-sm text-muted-foreground">Nenhum capítulo cadastrado.</p>}
+            </div>
+            <div className="flex flex-col gap-3 border-t border-border pt-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Semana selecionada</p>
+                <p className="mt-1 text-base font-semibold">{formatDateBR(selectedWeekStart)} a {formatDateBR(selectedWeekEnd)}</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline" className={selectedDay ? DIARY_META[selectedDay.diaryStatus].className : ''}>{selectedDay ? DIARY_META[selectedDay.diaryStatus].label : 'Dia sem expediente'}</Badge>
-                <span className="text-sm text-muted-foreground">{visibleActivities.length} atividade(s)</span>
-                <Button size="sm" className="min-h-11" onClick={() => onOpenDailyReport(selectedDate)}><NotebookPen className="mr-1.5 h-4 w-4" /> Abrir diário</Button>
+                <Button variant="outline" size="sm" className="min-h-11" onClick={() => selectWeek(addDaysISO(selectedWeekStart, -7))}>
+                  <ChevronLeft className="mr-1 h-4 w-4" /> Semana anterior
+                </Button>
+                <Button variant="outline" size="sm" className="min-h-11" onClick={() => selectWeek(todayISO())}>Hoje</Button>
+                <Button variant="outline" size="sm" className="min-h-11" onClick={() => selectWeek(addDaysISO(selectedWeekStart, 7))}>
+                  Próxima semana <ChevronRight className="ml-1 h-4 w-4" />
+                </Button>
+                <Button variant="secondary" size="sm" className="min-h-11" disabled={!selectedChapterId} onClick={openActivitySearch}>
+                  <Search className="mr-1.5 h-4 w-4" /> Buscar atividade
+                </Button>
               </div>
-            </div>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input value={searchQuery} onChange={event => { setSearchQuery(event.target.value); setExpandedTaskId(null); }} className="min-h-11 pl-9" placeholder="Buscar qualquer atividade por nome, número ou capítulo" aria-label="Buscar atividade" />
-            </div>
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {Array.from({ length: 7 }, (_, index) => addDaysISO(selectedWeekStart, index)).map(date => {
-                const day = week.find(item => item.date === date);
-                const active = date === selectedDate;
-                return <button key={date} type="button" onClick={() => selectDate(date)} className={`min-w-[86px] rounded-lg border px-3 py-2 text-left transition ${active ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:bg-muted/60'}`}>
-                  <span className="block text-xs font-semibold uppercase">{dayName(date)}</span>
-                  <span className="block text-sm font-bold">{formatShortDate(date)}</span>
-                  <span className={`block text-xs ${active ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>{day?.activities.length ?? 0} atividade(s)</span>
-                </button>;
-              })}
             </div>
           </section>
 
-          {visibleActivities.length ? (
-            <section className="space-y-3">
-              <ActivityGroups groups={visibleGroups} date={selectedDate} teams={project.teams} onRegister={registerActivityProduction} readOnly={readOnly} onReschedule={canRequestReschedule || canApproveReschedule ? setRescheduleTaskId : undefined} expandedGroups={expandedGroups} onToggleGroup={toggleGroup} expandedTaskId={expandedTaskId} onToggleTask={id => setExpandedTaskId(previous => previous === id ? null : id)} forceOpen={!!searchQuery.trim()} />
-            </section>
+          <section className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-border bg-muted/25 px-4 py-3 text-sm" aria-label="Resumo da semana">
+            <span><strong className="tabular-nums text-foreground">{uniqueActivities}</strong> atividades programadas</span>
+            <span><strong className="tabular-nums text-success">{completedActivities}</strong> concluídas</span>
+            <span><strong className="tabular-nums text-success">{filledReports}</strong> Diários preenchidos</span>
+            <span><strong className={`tabular-nums ${pendingReports ? 'text-warning' : 'text-foreground'}`}>{pendingReports}</strong> Diários pendentes</span>
+          </section>
+
+          {!selectedChapter ? (
+            <Card className="border-dashed"><CardContent className="py-12 text-center text-sm text-muted-foreground">Cadastre um capítulo no Cronograma para organizar a Rotina.</CardContent></Card>
           ) : (
-            <Card className="border-dashed">
-              <CardContent className="flex flex-col items-center py-12 text-center">
-                <CalendarDays className="h-9 w-9 text-muted-foreground" />
-                <h2 className="mt-3 text-lg font-semibold">Nenhuma atividade encontrada</h2>
-                <p className="mt-2 text-sm text-muted-foreground">Altere a data ou busque uma atividade de qualquer período.</p>
-                {!searchQuery.trim() && nextActivity && <Button variant="outline" className="mt-4" onClick={() => selectDate(nextActivity.date)}>Ir para {formatDateBR(nextActivity.date)}</Button>}
-              </CardContent>
-            </Card>
+            <>
+              {!activities.length && <p className="rounded-lg border border-dashed border-border bg-muted/20 p-3 text-sm text-muted-foreground">Nenhuma atividade de {selectedChapter.name} está programada nesta semana. Use “Buscar atividade” para fazer um lançamento fora da programação.</p>}
+              <section className={`hidden gap-3 lg:grid ${filteredWeek.length === 6 ? 'grid-cols-6' : 'grid-cols-5'}`}>
+                {filteredWeek.map(day => {
+                  const diary = DIARY_META[day.diaryStatus];
+                  const isToday = day.date === todayISO();
+                  const rootGroup = groupsByDay.get(day.date)?.find(group => group.chapter.id === selectedChapterId);
+                  return (
+                    <div key={day.date} className={`min-w-0 rounded-xl border bg-card ${isToday ? 'border-primary/50 ring-1 ring-primary/20' : 'border-border'}`}>
+                      <div className="border-b border-border p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <div><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{dayName(day.date)}</p><p className="text-base font-bold">{formatShortDate(day.date)}</p></div>
+                          {isToday && <Badge>Hoje</Badge>}
+                        </div>
+                        <Badge variant="outline" className={`mt-2 max-w-full truncate text-[11px] ${diary.className}`}>{diary.label}</Badge>
+                        <p className="mt-2 text-xs text-muted-foreground">{day.activities.length} atividade(s)</p>
+                      </div>
+                      <div className="space-y-2 p-2.5">
+                        <SelectedChapterActivities group={rootGroup} date={day.date} teams={project.teams} onOpenProduction={onOpenProduction} onRegister={registerActivityProduction} readOnly={readOnly} onReschedule={canRequestReschedule || canApproveReschedule ? setRescheduleTaskId : undefined} />
+                      </div>
+                      <div className="border-t border-border p-2.5"><Button variant="ghost" size="sm" className="min-h-10 w-full text-xs" onClick={() => onOpenDailyReport(day.date)}><NotebookPen className="mr-1.5 h-4 w-4" /> Abrir diário</Button></div>
+                    </div>
+                  );
+                })}
+              </section>
+
+              <section className="space-y-3 lg:hidden">
+                {filteredWeek.map(day => {
+                  const diary = DIARY_META[day.diaryStatus];
+                  const rootGroup = groupsByDay.get(day.date)?.find(group => group.chapter.id === selectedChapterId);
+                  return (
+                    <Card key={day.date}>
+                      <CardHeader className="flex flex-row items-center justify-between gap-3 pb-3">
+                        <div><CardTitle className="text-base">{dayName(day.date)}, {formatDateBR(day.date)}</CardTitle><Badge variant="outline" className={`mt-2 text-xs ${diary.className}`}>{diary.label}</Badge><p className="mt-2 text-xs text-muted-foreground">{day.activities.length} atividade(s)</p></div>
+                        <Button size="sm" className="min-h-11" onClick={() => onOpenDailyReport(day.date)}><NotebookPen className="mr-1.5 h-4 w-4" /> Abrir diário</Button>
+                      </CardHeader>
+                      <CardContent className="space-y-2"><SelectedChapterActivities group={rootGroup} date={day.date} teams={project.teams} onOpenProduction={onOpenProduction} onRegister={registerActivityProduction} readOnly={readOnly} onReschedule={canRequestReschedule || canApproveReschedule ? setRescheduleTaskId : undefined} /></CardContent>
+                    </Card>
+                  );
+                })}
+              </section>
+            </>
           )}
 
         </TabsContent>
@@ -660,6 +757,52 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
           </section>
         </TabsContent>
       </Tabs>
+      <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
+        <DialogContent className="max-h-[90vh] overflow-hidden sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Buscar atividade em {selectedChapter?.name ?? 'capítulo'}</DialogTitle>
+            <DialogDescription>Escolha a data do lançamento e localize uma atividade deste capítulo. Se a data estiver fora da programação, a reprogramação seguirá as permissões atuais.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)]">
+            <div className="space-y-1.5">
+              <Label htmlFor="routine-search-date">Data da execução</Label>
+              <Input id="routine-search-date" type="date" value={searchDate} onChange={event => setSearchDate(event.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="routine-search-query">Atividade</Label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input id="routine-search-query" autoFocus value={searchQuery} onChange={event => setSearchQuery(event.target.value)} className="pl-9" placeholder="Digite o nome, número ou subcapítulo" />
+              </div>
+            </div>
+          </div>
+          <div className="max-h-[58vh] space-y-3 overflow-y-auto pr-1">
+            {!searchQuery.trim() ? (
+              <p className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">Digite para localizar uma atividade do capítulo selecionado.</p>
+            ) : searchedActivities.length ? searchedActivities.map(activity => (
+              <div key={activity.taskId} className="space-y-1.5">
+                {activity.chapterPath.length > 1 && <p className="truncate text-xs font-medium text-muted-foreground">{activity.chapterPath.slice(1).map(chapter => chapter.name).join(' › ')}</p>}
+                <ActivityCard
+                  activity={activity}
+                  teams={project.teams}
+                  onOpenProduction={onOpenProduction}
+                  onRegister={(candidate, quantity) => {
+                    if (registerActivityProduction(candidate, quantity)) {
+                      setSearchOpen(false);
+                      setSearchQuery('');
+                    }
+                  }}
+                  readOnly={readOnly}
+                  tone={chapterTone(selectedChapterId)}
+                  onReschedule={canRequestReschedule || canApproveReschedule ? setRescheduleTaskId : undefined}
+                />
+              </div>
+            )) : (
+              <p className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">Nenhuma atividade encontrada neste capítulo.</p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
       <TaskRescheduleDialog
         open={!!rescheduleTaskId}
         onOpenChange={open => { if (!open) setRescheduleTaskId(null); }}
