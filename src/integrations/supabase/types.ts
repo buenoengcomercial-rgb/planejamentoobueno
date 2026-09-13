@@ -850,6 +850,44 @@ export type Database = {
           },
         ]
       }
+      warehouse_scoped_commits: {
+        Row: {
+          created_at: string
+          created_by: string
+          domain: string
+          id: string
+          operation_key: string
+          project_id: string
+          result: Json
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          domain: string
+          id?: string
+          operation_key: string
+          project_id: string
+          result: Json
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          domain?: string
+          id?: string
+          operation_key?: string
+          project_id?: string
+          result?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "warehouse_scoped_commits_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -864,6 +902,42 @@ export type Database = {
         }
         Returns: undefined
       }
+      commit_warehouse_adjustment: {
+        Args: {
+          p_changes: Json
+          p_expected_warehouse_version: number
+          p_operation_key: string
+          p_project_id: string
+        }
+        Returns: Json
+      }
+      commit_warehouse_catalog: {
+        Args: {
+          p_changes: Json
+          p_expected_warehouse_version: number
+          p_operation_key: string
+          p_project_id: string
+        }
+        Returns: Json
+      }
+      commit_warehouse_custody: {
+        Args: {
+          p_changes: Json
+          p_expected_warehouse_version: number
+          p_operation_key: string
+          p_project_id: string
+        }
+        Returns: Json
+      }
+      commit_warehouse_inventory: {
+        Args: {
+          p_changes: Json
+          p_expected_warehouse_version: number
+          p_operation_key: string
+          p_project_id: string
+        }
+        Returns: Json
+      }
       commit_warehouse_operation: {
         Args: {
           p_audit_logs?: Json
@@ -875,6 +949,15 @@ export type Database = {
           p_requisition?: Json
           p_requisition_id: string
           p_upsert_movements?: Json
+        }
+        Returns: Json
+      }
+      commit_warehouse_receipt: {
+        Args: {
+          p_changes: Json
+          p_expected_warehouse_version: number
+          p_operation_key: string
+          p_project_id: string
         }
         Returns: Json
       }
