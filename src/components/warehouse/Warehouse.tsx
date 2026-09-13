@@ -1,23 +1,29 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import type { Project, WarehouseAuditActor } from '@/types/project';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, Warehouse as WarehouseIcon, ReceiptText, ClipboardCheck } from 'lucide-react';
 import { ensureWarehouse, panelSummary } from '@/lib/warehouse';
-import WarehousePanel from './WarehousePanel';
-import WarehouseStockTab from './WarehouseStockTab';
-import WarehouseMovementsTab from './WarehouseMovementsTab';
-import WarehouseRequisitionsTab from './WarehouseRequisitionsTab';
-import WarehouseEquipmentsTab from './WarehouseEquipmentsTab';
-import WarehouseInventoryTab from './WarehouseInventoryTab';
-import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
-import WarehouseBudgetMaterialsTab from './WarehouseBudgetMaterialsTab';
-import WarehouseWithdrawnMaterialsTab from './WarehouseWithdrawnMaterialsTab';
-import AttachmentOptimizationPanel from './AttachmentOptimizationPanel';
-import GlobalStorageMaintenancePanel from './GlobalStorageMaintenancePanel';
+import { lazyWithReload } from '@/lib/lazyWithReload';
 import './warehouse-visual.css';
 import type { WarehouseCloudCommitResult } from '@/lib/warehouseCloudCommit';
 import type { WarehouseScopedDomain } from '@/lib/warehouseScopedCommit';
 import { toast } from 'sonner';
+
+const WarehousePanel = lazyWithReload(() => import('./WarehousePanel'));
+const WarehouseStockTab = lazyWithReload(() => import('./WarehouseStockTab'));
+const WarehouseMovementsTab = lazyWithReload(() => import('./WarehouseMovementsTab'));
+const WarehouseRequisitionsTab = lazyWithReload(() => import('./WarehouseRequisitionsTab'));
+const WarehouseEquipmentsTab = lazyWithReload(() => import('./WarehouseEquipmentsTab'));
+const WarehouseInventoryTab = lazyWithReload(() => import('./WarehouseInventoryTab'));
+const WarehouseFiscalNotesTab = lazyWithReload(() => import('./WarehouseFiscalNotesTab'));
+const WarehouseBudgetMaterialsTab = lazyWithReload(() => import('./WarehouseBudgetMaterialsTab'));
+const WarehouseWithdrawnMaterialsTab = lazyWithReload(() => import('./WarehouseWithdrawnMaterialsTab'));
+const AttachmentOptimizationPanel = lazyWithReload(() => import('./AttachmentOptimizationPanel'));
+const GlobalStorageMaintenancePanel = lazyWithReload(() => import('./GlobalStorageMaintenancePanel'));
+
+function WarehouseAreaFallback() {
+  return <div className="flex min-h-32 items-center justify-center rounded-xl border bg-card p-6 text-sm font-medium text-muted-foreground" role="status" aria-live="polite">Carregando área do Almoxarifado...</div>;
+}
 
 const WAREHOUSE_TABS = [
   { value: 'painel', label: 'Painel', icon: LayoutDashboard },
@@ -98,8 +104,8 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
           <span className="mx-1.5">·</span>
           Termos abertos: <strong className="text-foreground">{summary.openCustodyCount}</strong>
         </span>
-        {canOptimizeStorage && <AttachmentOptimizationPanel project={ensured} onProjectChange={onProjectChange} onCommitProject={onCommitProject} />}
-        {canOptimizeStorage && onSaveStorageMaintenanceProject && storageMaintenanceOrganizationId && <GlobalStorageMaintenancePanel currentProject={ensured} onCurrentProjectChange={onProjectChange} saveProject={onSaveStorageMaintenanceProject} organizationId={storageMaintenanceOrganizationId} />}
+        {canOptimizeStorage && <Suspense fallback={null}><AttachmentOptimizationPanel project={ensured} onProjectChange={onProjectChange} onCommitProject={onCommitProject} /></Suspense>}
+        {canOptimizeStorage && onSaveStorageMaintenanceProject && storageMaintenanceOrganizationId && <Suspense fallback={null}><GlobalStorageMaintenancePanel currentProject={ensured} onCurrentProjectChange={onProjectChange} saveProject={onSaveStorageMaintenanceProject} organizationId={storageMaintenanceOrganizationId} /></Suspense>}
         </div>
       </div>
 
@@ -123,6 +129,7 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
           ))}
         </TabsList>
 
+        <Suspense fallback={<WarehouseAreaFallback />}>
         {canViewPanel && (
           <TabsContent value="painel" className="mt-3">
             <WarehousePanel project={ensured} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} />
@@ -163,6 +170,7 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
         <TabsContent value="inventario" className="mt-3">
           <WarehouseInventoryTab project={ensured} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canApprove={canApproveInventory} canDelete={canDeleteWarehouseRecords} />
         </TabsContent>
+        </Suspense>
       </Tabs>
     </div>
   );

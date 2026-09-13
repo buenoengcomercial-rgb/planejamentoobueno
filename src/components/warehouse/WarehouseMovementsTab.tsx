@@ -6,7 +6,6 @@ import { ArrowLeftRight, ChevronDown, FileDown, Paperclip, Search } from 'lucide
 import { ensureWarehouse, MOVEMENT_LABEL, movementSign } from '@/lib/warehouse';
 import { getChapterNumbering } from '@/lib/chapters';
 import { openWarehouseAttachment, warehouseAttachmentErrorMessage } from '@/lib/warehouseAttachments';
-import { generateRequisitionReceipt } from './pdf';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
 import { toast } from 'sonner';
 import { WarehouseEmptyState, WarehouseField, WarehouseSectionHeader, WarehouseStatusBadge } from './WarehouseVisual';
@@ -93,9 +92,10 @@ export default function WarehouseMovementsTab({ project }: Props) {
     try { await openWarehouseAttachment(attachment); } catch (error) { toast.error(warehouseAttachmentErrorMessage(error)); }
   };
 
-  const receipt = (group: MovementGroup) => {
+  const receipt = async (group: MovementGroup) => {
     const requisition = group.originType === 'withdrawal' ? wh.requisitions.find(candidate => candidate.id === group.originId) : undefined;
     if (!requisition) return toast.error('Não há comprovante de retirada para esta origem.');
+    const { generateRequisitionReceipt } = await import('./pdf');
     generateRequisitionReceipt(project, requisition);
   };
 

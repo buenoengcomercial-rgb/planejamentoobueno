@@ -27,7 +27,6 @@ import { commitWarehouseOperation, type WarehouseCloudCommitResult } from '@/lib
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { flattenPhasesByChapter, getChapterNumbering } from '@/lib/chapters';
 import SignaturePad from './SignaturePad';
-import { generateDailyWithdrawalConfirmationPdfs, generateRequisitionReceipt } from './pdf';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
 import WarehouseCustodyTab from './WarehouseCustodyTab';
 import {
@@ -256,7 +255,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
     next.set(dateGroup.key, !isDateGroupExpanded(dateGroup));
     return next;
   });
-  const generateDailyConfirmations = (building: RequisitionBuildingGroup, dateGroup: RequisitionDateGroup) => {
+  const generateDailyConfirmations = async (building: RequisitionBuildingGroup, dateGroup: RequisitionDateGroup) => {
+    const { generateDailyWithdrawalConfirmationPdfs } = await import('./pdf');
     const generated = generateDailyWithdrawalConfirmationPdfs(project, {
       date: dateGroup.date,
       buildingLabel: building.label,
@@ -720,7 +720,7 @@ function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupple
     ...(project.auditLogs ?? []).filter(log => log.entityType === 'warehouse_requisition' && log.entityId === requisition.id && !log.title.startsWith('Complemento registrado')).map(log => ({ at: log.at, title: log.title, description: log.description, actor: { userId: log.userId, userName: log.userName, userEmail: log.userEmail } })),
   ].sort((left, right) => left.at.localeCompare(right.at));
   const actions = <div className="withdrawal-detail-actions flex flex-wrap justify-end gap-1">
-    <Button size="sm" variant="outline" className="h-8 px-2 text-[11px]" onClick={() => generateRequisitionReceipt(project, requisition)}><FileDown className="mr-1 h-3.5 w-3.5" />PDF</Button>
+    <Button size="sm" variant="outline" className="h-8 px-2 text-[11px]" onClick={() => void import('./pdf').then(({ generateRequisitionReceipt }) => generateRequisitionReceipt(project, requisition))}><FileDown className="mr-1 h-3.5 w-3.5" />PDF</Button>
     {canCorrect && requisition.status === 'entregue' && <Button size="sm" variant="outline" className="h-8 px-2 text-[11px]" onClick={event => { event.stopPropagation(); onAction(); }} onPointerDown={event => event.stopPropagation()}><Pencil className="mr-1 h-3.5 w-3.5" />Ações da retirada</Button>}
     {hasReturnable && <Button size="sm" className="h-8 px-2 text-[11px]" onClick={onReturn}><RotateCcw className="mr-1 h-3.5 w-3.5" />Registrar devolução</Button>}
     {canDelete && <Button size="sm" variant="destructive" className="h-8 px-2 text-[11px]" onClick={onDelete}><Trash2 className="mr-1 h-3.5 w-3.5" />Excluir</Button>}

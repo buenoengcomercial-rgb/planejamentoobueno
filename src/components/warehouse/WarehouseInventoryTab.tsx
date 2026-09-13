@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Check, ClipboardCheck, FileDown, Plus, X } from 'lucide-react';
 import { toast } from 'sonner';
-import { generateInventoryReportPdf } from './pdf';
+import { generateInventoryReportPdf } from './pdfLazy';
 import { WarehouseEmptyState, WarehouseField, WarehouseSectionHeader, WarehouseStatusBadge, type WarehouseTone } from './WarehouseVisual';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 

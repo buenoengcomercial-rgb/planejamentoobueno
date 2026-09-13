@@ -25,10 +25,10 @@ const project: Project = {
 };
 
 describe('controle de acesso do almoxarifado', () => {
-  it('abre no Painel e mantém a mesma ordem no desktop e no seletor móvel', () => {
+  it('abre no Painel e mantém a mesma ordem no desktop e no seletor móvel', async () => {
     render(<Warehouse project={project} onProjectChange={vi.fn()} />);
 
-    expect(screen.getByText('Conteúdo do painel')).toBeInTheDocument();
+    expect(await screen.findByText('Conteúdo do painel')).toBeInTheDocument();
 
     const expectedLabels = ['Painel', 'Entrada', 'Retiradas e devoluções', 'Materiais retirados', 'Materiais do orçamento', 'Materiais', 'Equipamentos', 'Movimentações', 'Inventário'];
     const desktopLabels = screen.getAllByRole('tab').map(tab => tab.textContent?.trim());
@@ -41,7 +41,7 @@ describe('controle de acesso do almoxarifado', () => {
     expect(screen.queryByText('Relatórios')).not.toBeInTheDocument();
   });
 
-  it('permite acessar todas as áreas pelo seletor móvel', () => {
+  it('permite acessar todas as áreas pelo seletor móvel', async () => {
     render(<Warehouse project={project} onProjectChange={vi.fn()} />);
 
     const select = screen.getByLabelText('Área do almoxarifado');
@@ -59,15 +59,15 @@ describe('controle de acesso do almoxarifado', () => {
 
     for (const [value, content] of areas) {
       fireEvent.change(select, { target: { value } });
-      expect(screen.getByText(content)).toBeInTheDocument();
+      expect(await screen.findByText(content)).toBeInTheDocument();
     }
   });
 
-  it('oculta o Painel para o Almoxarife e abre diretamente em Entrada', () => {
+  it('oculta o Painel para o Almoxarife e abre diretamente em Entrada', async () => {
     render(<Warehouse project={project} onProjectChange={vi.fn()} canViewPanel={false} />);
 
     expect(screen.queryByText('Conteúdo do painel')).not.toBeInTheDocument();
-    expect(screen.getByText('Conteúdo de entrada')).toBeInTheDocument();
+    expect(await screen.findByText('Conteúdo de entrada')).toBeInTheDocument();
 
     const expectedLabels = ['Entrada', 'Retiradas e devoluções', 'Materiais retirados', 'Materiais do orçamento', 'Materiais', 'Equipamentos', 'Movimentações', 'Inventário'];
     const desktopLabels = screen.getAllByRole('tab').map(tab => tab.textContent?.trim());
@@ -83,12 +83,12 @@ describe('controle de acesso do almoxarifado', () => {
     const onProjectChange = vi.fn();
     const { rerender } = render(<Warehouse project={project} onProjectChange={onProjectChange} />);
 
-    expect(screen.getByText('Conteúdo do painel')).toBeInTheDocument();
+    expect(await screen.findByText('Conteúdo do painel')).toBeInTheDocument();
 
     rerender(<Warehouse project={project} onProjectChange={onProjectChange} canViewPanel={false} />);
 
     await waitFor(() => expect(screen.queryByText('Conteúdo do painel')).not.toBeInTheDocument());
-    expect(screen.getByText('Conteúdo de entrada')).toBeInTheDocument();
+    expect(await screen.findByText('Conteúdo de entrada')).toBeInTheDocument();
     expect(screen.getByLabelText('Área do almoxarifado')).toHaveValue('notas');
   });
 

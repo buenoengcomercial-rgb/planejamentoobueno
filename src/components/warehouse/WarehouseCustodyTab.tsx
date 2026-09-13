@@ -39,7 +39,6 @@ import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { getChapterNumbering } from '@/lib/chapters';
 import SignaturePad from './SignaturePad';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
-import { generateCustodyTermPdf } from './pdf';
 import { toast } from 'sonner';
 import {
   WarehouseEmptyState,
@@ -529,7 +528,7 @@ function PhotoPreview({ file, onRemove }: { file: File; onRemove: () => void }) 
 
 function CustodyDetails({ term, project, onReturn, canDelete, onDelete }: { term: CustodyTerm; project: Project; onReturn: (term: CustodyTerm, item: CustodyTermEquipmentItem) => void; canDelete: boolean; onDelete: () => void }) {
   const items = custodyTermEquipmentItems(term);
-  const actions = <div className="custody-detail-actions flex flex-wrap justify-end gap-1"><Button size="sm" variant="outline" className="min-h-9" onClick={() => generateCustodyTermPdf(project, term)}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{canDelete && <Button size="sm" variant="destructive" className="min-h-9" onClick={onDelete}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>}</div>;
+  const actions = <div className="custody-detail-actions flex flex-wrap justify-end gap-1"><Button size="sm" variant="outline" className="min-h-9" onClick={() => void import('./pdf').then(({ generateCustodyTermPdf }) => generateCustodyTermPdf(project, term))}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{canDelete && <Button size="sm" variant="destructive" className="min-h-9" onClick={onDelete}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>}</div>;
   return <div className="space-y-3">{(term.attachments?.length ?? 0) > 0 && <div className="text-xs text-muted-foreground">{term.attachments!.length} foto(s) registrada(s) na entrega.</div>}<div className="overflow-x-auto"><table className="w-full min-w-[760px] text-xs"><thead><tr><th className="p-2 text-left">Equipamento</th><th className="p-2 text-left">Estado / acessórios</th><th className="p-2 text-left">Situação</th><th className="p-2 text-left">Devolução</th><th className="p-2 text-right">{actions}</th></tr></thead><tbody>{items.map(item => <tr key={item.equipmentId} className="border-t"><td className="p-2"><div className="font-medium">{item.equipmentInternalCode || 'Código legado'} · {item.equipmentName}</div><div className="text-muted-foreground">Patrimônio {item.equipmentPatrimony || '—'} · Série {item.equipmentSerial || '—'}</div></td><td className="p-2">{item.stateOnDelivery || '—'}<div className="text-muted-foreground">{item.accessories || 'Sem acessórios'}</div></td><td className="p-2"><WarehouseStatusBadge label={statusLabel[item.status] || item.status} tone={statusTone(item.status)} /></td><td className="p-2">{item.returnedAt || '—'}<div className="text-muted-foreground">{item.stateOnReturn || item.divergenceNotes || ''}</div></td><td className="p-2 text-right">{item.status === 'em_uso' && <Button size="sm" variant="outline" className="min-h-10" onClick={() => onReturn(term, item)}><Undo2 className="mr-1 h-4 w-4" />Devolver</Button>}</td></tr>)}</tbody></table></div><WarehouseAuditIdentity createdBy={term.createdBy} updatedBy={term.updatedBy} createdAt={term.createdAt} updatedAt={term.updatedAt} className="rounded-md bg-muted/40 p-2 text-xs" /></div>;
 }
 
