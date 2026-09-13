@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
+import { vendorChunkName } from "./build/vendorChunks";
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -17,5 +18,12 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
     dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime"],
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: vendorChunkName,
+      },
+    },
   },
 });

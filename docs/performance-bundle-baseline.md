@@ -97,3 +97,22 @@ A auditoria das fronteiras eliminou carregamentos que anulavam o benefício do `
 | Adaptador PDF do Almoxarifado, gzip | 2,68 kB | 2,87 kB | motores continuam fora do adaptador |
 
 O manifesto confirma `additiveReports` como `dynamicImport` da tela do Aditivo e `jspdf`/`jspdf-autotable` como `dynamicImports` do adaptador de PDF. O build não apresenta aviso de módulo simultaneamente estático e dinâmico. Permanece o aviso genérico para pacotes acima de 500 kB: o XLSX com estilos está isolado por decisão e o pacote externo principal será tratado na etapa 6.
+
+## Resultado da etapa 6 — pacote externo estável e medição do caminho completo
+
+O pacote do cliente Supabase foi isolado como `vendor-cloud`, pois é uma dependência grande, estável e obrigatória desde a autenticação. O arquivo principal deixou de exceder 500 kB e alterações comuns na interface não invalidam mais o cache do cliente de nuvem.
+
+| Medição | Antes | Depois |
+| --- | ---: | ---: |
+| Arquivo principal, minificado | 541,50 kB | 326,70 kB |
+| Arquivo principal, gzip | 161,11 kB | 105,93 kB |
+| `vendor-cloud`, minificado | incorporado | 214,51 kB |
+| `vendor-cloud`, gzip | incorporado | 55,41 kB |
+| Caminho inicial real do Dashboard, minificado | 903,34 kB | 903,23 kB |
+| Caminho inicial real do Dashboard, gzip | 278,75 kB | 279,06 kB |
+
+A pequena diferença de 0,31 kB gzip na primeira visita (+0,11%) é o custo do limite entre arquivos; em retornos e novas versões da interface, o navegador pode reutilizar separadamente os 55,41 kB gzip do cliente da nuvem.
+
+Uma divisão ampla de React, roteamento, consultas, Radix e Floating também foi medida e rejeitada: ela promoveu dependências de páginas lazy, elevando o caminho inicial para 950,52 kB minificados e 291,33 kB gzip. Por isso a configuração final separa somente a fronteira que oferece cache sem antecipar módulos internos.
+
+O comando `pnpm build:analyze` agora gera o manifesto, percorre todos os imports estáticos da entrada, do núcleo autenticado e do Dashboard e calcula o total real minificado/gzip. A análise também falha se `jspdf`, `xlsx` ou `pdfjs-dist` entrarem novamente no caminho inicial.
