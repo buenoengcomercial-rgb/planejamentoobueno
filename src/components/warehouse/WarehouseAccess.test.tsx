@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
 import Warehouse from './Warehouse';
@@ -25,6 +25,8 @@ const project: Project = {
 };
 
 describe('controle de acesso do almoxarifado', () => {
+  beforeEach(() => sessionStorage.clear());
+
   it('abre no Painel e mantém a mesma ordem no desktop e no seletor móvel', async () => {
     render(<Warehouse project={project} onProjectChange={vi.fn()} />);
 
@@ -96,5 +98,16 @@ describe('controle de acesso do almoxarifado', () => {
     render(<Warehouse project={project} onProjectChange={vi.fn()} canDeleteWarehouseRecords canEditPostedWarehouseRecords />);
     expect(screen.queryByRole('button', { name: /Administração/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Limpeza dos dados de teste')).not.toBeInTheDocument();
+  });
+
+  it('restaura a última subaba visitada pelo proprietário ao retornar à obra', async () => {
+    const first = render(<Warehouse project={project} onProjectChange={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('Área do almoxarifado'), { target: { value: 'inventario' } });
+    expect(await screen.findByText('Conteúdo do inventário')).toBeInTheDocument();
+    first.unmount();
+
+    render(<Warehouse project={project} onProjectChange={vi.fn()} />);
+    expect(await screen.findByText('Conteúdo do inventário')).toBeInTheDocument();
+    expect(screen.getByLabelText('Área do almoxarifado')).toHaveValue('inventario');
   });
 });

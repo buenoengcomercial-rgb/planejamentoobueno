@@ -112,6 +112,19 @@ describe('WarehouseRequisitionsTab', () => {
     expect(within(available).getByText('Válvula de Aço Carbono')).toBeInTheDocument();
   });
 
+  it('limita a renderização inicial sem impedir a busca por materiais fora do primeiro lote', () => {
+    render(<WarehouseRequisitionsTab project={projectWithMaterials(75)} onProjectChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Nova retirada/i }));
+    const available = screen.getByLabelText('Materiais disponíveis');
+    expect(within(available).getAllByRole('button')).toHaveLength(60);
+    expect(within(available).getByText('Mostrando 60 de 75 materiais. Refine a busca para localizar os demais.')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText('Buscar por código, descrição ou unidade'), { target: { value: 'MAT-074' } });
+    expect(within(available).getAllByRole('button')).toHaveLength(1);
+    expect(within(available).getByText('Válvula de Aço Carbono')).toBeInTheDocument();
+  });
+
   it('continua a rolagem no formulário quando a lista de insumos chega ao limite', () => {
     render(<WarehouseRequisitionsTab project={projectWithMaterials()} onProjectChange={vi.fn()} />);
 

@@ -50,6 +50,21 @@ const WAREHOUSE_TABS = [
 
 type WarehouseTab = typeof WAREHOUSE_TABS[number]['value'];
 
+const warehouseTabStorageKey = (projectId: string) => `obraplanner:warehouse-tab:${projectId}`;
+
+const readWarehouseTab = (projectId: string, canViewPanel: boolean): WarehouseTab => {
+  const fallback: WarehouseTab = canViewPanel ? 'painel' : 'notas';
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const stored = window.sessionStorage.getItem(warehouseTabStorageKey(projectId));
+    const isWarehouseTab = WAREHOUSE_TABS.some(item => item.value === stored);
+    if (!isWarehouseTab || (!canViewPanel && stored === 'painel')) return fallback;
+    return stored as WarehouseTab;
+  } catch {
+    return fallback;
+  }
+};
+
 const NEXT_WAREHOUSE_TAB_PRELOAD: Record<WarehouseTab, () => Promise<unknown>> = {
   painel: loadWarehouseRequisitionsTab,
   notas: loadWarehouseStockTab,
@@ -85,7 +100,7 @@ interface Props {
 }
 
 export default function Warehouse({ project, onProjectChange, onCommitProject, onCloudWarehouseOperationConfirmed, onPrepareCloudWarehouseOperation, onCommitWarehouseScoped, onSaveStorageMaintenanceProject, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canSupplementRequisitions = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor }: Props) {
-  const [tab, setTab] = useState<WarehouseTab>(() => canViewPanel ? 'painel' : 'notas');
+  const [tab, setTab] = useState<WarehouseTab>(() => readWarehouseTab(project.id, canViewPanel));
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
   useEffect(() => {
     if (ensured !== project) onProjectChange(ensured);
@@ -93,6 +108,13 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
   useEffect(() => {
     if (!canViewPanel && tab === 'painel') setTab('notas');
   }, [canViewPanel, tab]);
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(warehouseTabStorageKey(project.id), tab);
+    } catch {
+      // A navegação continua funcional quando o armazenamento da sessão não está disponível.
+    }
+  }, [project.id, tab]);
   useEffect(() => scheduleIdlePreload(NEXT_WAREHOUSE_TAB_PRELOAD[tab]), [tab]);
   const summary = useMemo(() => panelSummary(ensured), [ensured]);
   const visibleTabs = canViewPanel
