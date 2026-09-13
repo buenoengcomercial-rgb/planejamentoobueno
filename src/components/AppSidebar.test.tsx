@@ -110,6 +110,8 @@ describe('AppSidebar para Almoxarife', () => {
     expect(screen.queryByRole('button', { name: 'Dashboard' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Custos' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Cronograma' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Produção e rotina' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Rotina semanal' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Almoxarifado' })).toBeInTheDocument();
   });
 });

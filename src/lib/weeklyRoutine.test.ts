@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Project } from '@/types/project';
-import { buildWeeklyRoutine, diaryStatusForDate, findNextScheduledActivity, groupWeeklyRoutineActivities, startOfWeekISO, type WeeklyRoutineCalendar } from './weeklyRoutine';
+import { buildRoutineSearchActivities, buildWeeklyRoutine, diaryStatusForDate, findNextScheduledActivity, groupWeeklyRoutineActivities, startOfWeekISO, type WeeklyRoutineCalendar } from './weeklyRoutine';
 
 const weekdayCalendar: WeeklyRoutineCalendar = { uf: 'RO', municipio: 'Porto Velho', trabalhaSabado: false };
 const saturdayCalendar: WeeklyRoutineCalendar = { ...weekdayCalendar, trabalhaSabado: true };
@@ -58,6 +58,16 @@ describe('weeklyRoutine', () => {
       completed: false,
     });
     expect(week.find(day => day.date === '2026-08-15')).toBeUndefined();
+  });
+
+  it('localiza uma atividade fora da data programada sem colocá-la na agenda comum', () => {
+    const date = '2026-08-20';
+    expect(buildWeeklyRoutine(project, date, new Set(), weekdayCalendar).flatMap(day => day.activities)).toHaveLength(0);
+    expect(buildRoutineSearchActivities(project, date, 'hidrantes', new Set(), weekdayCalendar)).toMatchObject([{
+      taskId: 'task-1',
+      date,
+      chapterName: 'Instalações',
+    }]);
   });
 
   it('mostra a atividade concluída somente na data em que atingiu o contratado', () => {

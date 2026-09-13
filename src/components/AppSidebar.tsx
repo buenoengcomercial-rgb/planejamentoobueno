@@ -1,5 +1,5 @@
 import { AppView } from '@/types/project';
-import { LayoutDashboard, GanttChart, ListTodo, ClipboardList, ClipboardCheck, ChevronsLeft, ChevronsRight, FolderOpen, Plus, ChevronDown, ChevronRight, Pencil, Copy, Trash2, Check, X, MoreHorizontal, Download, Upload, FileDown, Building2, Users, NotebookPen, FilePlus2, CircleDollarSign, Package, Warehouse, CalendarClock, LogOut } from 'lucide-react';
+import { LayoutDashboard, GanttChart, ListTodo, ClipboardList, ChevronsLeft, ChevronsRight, FolderOpen, Plus, ChevronDown, ChevronRight, Pencil, Copy, Trash2, Check, X, MoreHorizontal, Download, Upload, FileDown, Building2, Users, NotebookPen, FilePlus2, CircleDollarSign, Package, Warehouse, CalendarClock, LogOut } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
@@ -81,14 +81,13 @@ const navGroups: Array<{ label: string; items: NavigationItem[] }> = [
     label: 'Visão geral',
     items: [
       { view: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-      { view: 'management', label: 'Rotina semanal', icon: ClipboardCheck },
     ],
   },
   {
     label: 'Planejamento e campo',
     items: [
       { view: 'gantt', label: 'Cronograma', icon: GanttChart },
-      { view: 'tasks', label: 'Produção', icon: ListTodo },
+      { view: 'tasks', label: 'Produção e rotina', icon: ListTodo },
       { view: 'dailyReport', label: 'Diário de obra', icon: NotebookPen },
     ],
   },

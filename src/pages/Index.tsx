@@ -15,6 +15,7 @@ import { lazyWithReload } from '@/lib/lazyWithReload';
 import { scheduleIdlePreload } from '@/lib/idlePreload';
 import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
 import { logToProject, userInfoFromSupabaseUser } from '@/lib/audit';
+import { todayISO } from '@/lib/weeklyRoutine';
 
 // Lazy load: cada aba só baixa seu bundle quando aberta pela primeira vez.
 // Usa lazyWithReload para recuperar automaticamente de chunks obsoletos após deploy.
@@ -1563,25 +1564,58 @@ export default function Index() {
     );
   }
 
+  const productionRoutineNavigation = (active: 'production' | 'routine') => (
+    <div className="border-b border-border bg-card px-3 pt-3 sm:px-4 lg:px-5">
+      <div className="mx-auto flex max-w-[1800px] gap-1 rounded-lg bg-muted/50 p-1 sm:w-fit sm:mx-0">
+        <Button
+          type="button"
+          variant={active === 'production' ? 'default' : 'ghost'}
+          className="min-h-10 flex-1 sm:flex-none"
+          onClick={() => {
+            setProductionWorkspaceInitialTab('production');
+            setCurrentView('tasks');
+            navigate(`/obras/${project.id}/producao`);
+          }}
+        >
+          Produção
+        </Button>
+        <Button
+          type="button"
+          variant={active === 'routine' ? 'default' : 'ghost'}
+          className="min-h-10 flex-1 sm:flex-none"
+          onClick={() => {
+            setCurrentView('management');
+            navigate(`/obras/${project.id}/rotina?semana=${todayISO()}`);
+          }}
+        >
+          Rotina semanal
+        </Button>
+      </div>
+    </div>
+  );
+
   const renderView = () => {
     switch (safeCurrentView) {
       case 'dashboard':
         return <Dashboard project={project} undoButton={<UndoButton canUndo={canUndo('dashboard')} onUndo={() => handleUndo('dashboard')} />} />;
       case 'management':
         return (
-          <ManagementRoutine
-            project={project}
-            onProjectChange={managementSetter}
-            onOpenDailyReport={handleOpenDailyReport}
-            onOpenProduction={handleOpenProductionActivity}
-            readOnly={!editor}
-            canRequestReschedule={role === 'owner' || role === 'admin' || role === 'engineer'}
-            canApproveReschedule={role === 'owner' || role === 'admin'}
-            auditActor={auditActor}
-            initialWeek={new URLSearchParams(location.search).get('semana') || undefined}
-            onWeekChange={weekStart => navigate(`/obras/${project.id}/rotina?semana=${weekStart}`, { replace: true })}
-            undoButton={<UndoButton canUndo={canUndo('management')} onUndo={() => handleUndo('management')} />}
-          />
+          <>
+            {productionRoutineNavigation('routine')}
+            <ManagementRoutine
+              project={project}
+              onProjectChange={managementSetter}
+              onOpenDailyReport={handleOpenDailyReport}
+              onOpenProduction={handleOpenProductionActivity}
+              readOnly={!editor}
+              canRequestReschedule={role === 'owner' || role === 'admin' || role === 'engineer'}
+              canApproveReschedule={role === 'owner' || role === 'admin'}
+              auditActor={auditActor}
+              initialWeek={new URLSearchParams(location.search).get('semana') || undefined}
+              onWeekChange={date => navigate(`/obras/${project.id}/rotina?semana=${date}`, { replace: true })}
+              undoButton={<UndoButton canUndo={canUndo('management')} onUndo={() => handleUndo('management')} />}
+            />
+          </>
         );
       case 'gantt':
         return <GanttChart
@@ -1603,24 +1637,27 @@ export default function Index() {
         />;
       case 'tasks':
         return (
-          <DailyProductionWorkspace
-            project={project}
-            initialTab={productionWorkspaceInitialTab}
-            onProductionChange={tasksSetter}
-            onDailyReportChange={dailyReportSetter}
-            productionReadOnly={!editor}
-            dailyReportReadOnly={!dailyReportEditor}
-            dailyReportCanManageConclusion={role === 'owner'}
-            dailyReportCanClearDay={editor}
-            dailyReportPhotoUploaderName={auditActor.userName}
-            productionUndoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />}
-            dailyReportUndoButton={<UndoButton canUndo={canUndo('dailyReport')} onUndo={() => handleUndo('dailyReport')} />}
-            dailyReportInitialDate={dailyReportInitialDate}
-            dailyReportInitialFilter={dailyReportInitialFilter}
-            dailyReportNavKey={dailyReportNavKey}
-            productionFocusTaskId={new URLSearchParams(location.search).get('atividade') || undefined}
-            productionFocusDate={new URLSearchParams(location.search).get('data') || undefined}
-          />
+          <>
+            {productionRoutineNavigation('production')}
+            <DailyProductionWorkspace
+              project={project}
+              initialTab={productionWorkspaceInitialTab}
+              onProductionChange={tasksSetter}
+              onDailyReportChange={dailyReportSetter}
+              productionReadOnly={!editor}
+              dailyReportReadOnly={!dailyReportEditor}
+              dailyReportCanManageConclusion={role === 'owner'}
+              dailyReportCanClearDay={editor}
+              dailyReportPhotoUploaderName={auditActor.userName}
+              productionUndoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />}
+              dailyReportUndoButton={<UndoButton canUndo={canUndo('dailyReport')} onUndo={() => handleUndo('dailyReport')} />}
+              dailyReportInitialDate={dailyReportInitialDate}
+              dailyReportInitialFilter={dailyReportInitialFilter}
+              dailyReportNavKey={dailyReportNavKey}
+              productionFocusTaskId={new URLSearchParams(location.search).get('atividade') || undefined}
+              productionFocusDate={new URLSearchParams(location.search).get('data') || undefined}
+            />
+          </>
         );
       case 'measurement':
         return <Measurement project={project} onProjectChange={measurementSetter} undoButton={<UndoButton canUndo={canUndo('measurement')} onUndo={() => handleUndo('measurement')} />} onOpenDailyReport={handleOpenDailyReport} />;
@@ -1694,7 +1731,7 @@ export default function Index() {
 
       <div className={`fixed lg:sticky lg:top-0 lg:h-svh lg:self-start z-40 transition-transform lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <AppSidebar
-          currentView={safeCurrentView}
+          currentView={safeCurrentView === 'management' ? 'tasks' : safeCurrentView}
           onViewChange={(v) => {
             if (role && !canAccessAppView(role, v)) return;
             if (v === 'tasks') setProductionWorkspaceInitialTab('production');

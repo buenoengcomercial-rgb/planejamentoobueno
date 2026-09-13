@@ -149,6 +149,63 @@ function buildChapterByTask(project: Project): Map<string, { name: string; numbe
   return result;
 }
 
+function routineActivityForTask(
+  task: Task,
+  date: string,
+  chapterByTask: Map<string, { name: string; number?: string; path: WeeklyRoutineChapterPathItem[] }>,
+  calendar: WeeklyRoutineCalendar,
+  includeOutsideSchedule = false,
+): WeeklyRoutineActivity | null {
+  const schedule = taskSchedule(task, calendar);
+  const scheduledWeight = schedule.workDays.get(date) ?? 0;
+  const completionDate = completionDateForTask(task);
+  if (!includeOutsideSchedule && (completionDate ? completionDate !== date : scheduledWeight <= 0)) return null;
+  const chapter = chapterByTask.get(task.id);
+  return {
+    taskId: task.id,
+    taskName: task.name,
+    chapterName: chapter?.name ?? 'Sem capítulo',
+    chapterNumber: chapter?.number,
+    chapterPath: chapter?.path ?? [],
+    date,
+    startDate: schedule.startDate,
+    endDate: schedule.endDate,
+    plannedQuantity: quantityForDay(task, date, 'planned', scheduledWeight || workDayWeight(date, calendar)),
+    actualQuantity: quantityForDay(task, date, 'actual'),
+    ...executionSummary(task),
+    unit: task.unit || 'un',
+    teamCode: task.team,
+    responsible: task.responsible,
+    reprogrammed: !!task.operationalReschedule,
+    completed: !!completionDate,
+  };
+}
+
+/** Localiza qualquer atividade da EAP para lançamento na data escolhida. */
+export function buildRoutineSearchActivities(
+  project: Project,
+  date: string,
+  query: string,
+  excludedTaskIds: ReadonlySet<string> = new Set(),
+  calendar: WeeklyRoutineCalendar = DEFAULT_CALENDAR,
+): WeeklyRoutineActivity[] {
+  const normalized = query.trim().toLocaleLowerCase('pt-BR');
+  if (!normalized) return [];
+  const chapterByTask = buildChapterByTask(project);
+  return getAllTasks(project)
+    .filter(task => activeTask(task, excludedTaskIds))
+    .filter(task => {
+      const chapter = chapterByTask.get(task.id);
+      const searchable = [task.name, chapter?.number, ...(chapter?.path.map(item => `${item.number ?? ''} ${item.name}`) ?? [])]
+        .join(' ')
+        .toLocaleLowerCase('pt-BR');
+      return searchable.includes(normalized);
+    })
+    .map(task => routineActivityForTask(task, date, chapterByTask, calendar, true))
+    .filter((activity): activity is WeeklyRoutineActivity => !!activity)
+    .sort((left, right) => compareChapterPaths(left, right) || left.taskName.localeCompare(right.taskName, 'pt-BR'));
+}
+
 function quantityForDay(task: Task, date: string, kind: 'planned' | 'actual', workDayWeight = 0): number {
   const logs = (task.dailyLogs ?? []).filter(log => log.date === date);
   const logged = logs.reduce((sum, log) => sum + Number(kind === 'planned' ? log.plannedQuantity : log.actualQuantity || 0), 0);
@@ -236,35 +293,7 @@ export function buildWeeklyRoutine(
 
   return dates.map(date => {
     const activities = tasks
-      .map(task => {
-        const schedule = taskSchedule(task, calendar);
-        const scheduledWeight = schedule.workDays.get(date) ?? 0;
-        const completionDate = completionDateForTask(task);
-        // A conclusão é relevante na data em que ocorreu; nas demais datas a
-        // atividade não volta à fila da Rotina, inclusive em semanas futuras.
-        if (completionDate ? completionDate !== date : scheduledWeight <= 0) return null;
-        const plannedQuantity = quantityForDay(task, date, 'planned', scheduledWeight);
-        const actualQuantity = quantityForDay(task, date, 'actual');
-        const execution = executionSummary(task);
-        return {
-          taskId: task.id,
-          taskName: task.name,
-          chapterName: chapterByTask.get(task.id)?.name ?? 'Sem capítulo',
-          chapterNumber: chapterByTask.get(task.id)?.number,
-          chapterPath: chapterByTask.get(task.id)?.path ?? [],
-          date,
-          startDate: schedule.startDate,
-          endDate: schedule.endDate,
-          plannedQuantity,
-          actualQuantity,
-          ...execution,
-          unit: task.unit || 'un',
-          teamCode: task.team,
-          responsible: task.responsible,
-          reprogrammed: !!task.operationalReschedule,
-          completed: !!completionDate,
-        } satisfies WeeklyRoutineActivity;
-      })
+      .map(task => routineActivityForTask(task, date, chapterByTask, calendar))
       .filter((activity): activity is NonNullable<typeof activity> => activity !== null)
       .sort((a, b) => compareChapterPaths(a, b) || a.taskName.localeCompare(b.taskName, 'pt-BR', { sensitivity: 'base' }));
 
