@@ -37,20 +37,35 @@ describe('confirmação visual da retirada', () => {
     });
     Element.prototype.scrollIntoView = vi.fn();
     let confirmServer: (() => void) | undefined;
-    commitMock.mockImplementation((_before: Project, after: Project) => new Promise<Project>(resolve => {
+    commitMock.mockImplementation((_before: Project, after: Project) => new Promise(resolve => {
+      const requisitionId = after.warehouse!.requisitions[0].id;
       confirmServer = () => resolve({
-        ...after,
-        warehouse: {
-          ...after.warehouse!,
-          requisitions: after.warehouse!.requisitions.map(requisition => ({
-            ...requisition,
-            number: 'REQ-2026-0120',
-          })),
+        project: {
+          ...after,
+          warehouse: {
+            ...after.warehouse!,
+            requisitions: after.warehouse!.requisitions.map(requisition => ({
+              ...requisition,
+              number: 'REQ-2026-0120',
+            })),
+          },
         },
+        committedAt: '2026-09-12T14:00:00.000Z',
+        projectUpdatedAt: '2026-09-12T14:00:00.100Z',
+        warehouseUpdatedAt: '2026-09-12T14:00:00.100Z',
+        warehouseVersion: 3,
+        acknowledgement: {
+          requisitionId,
+          movementIds: after.warehouse!.movements.filter(movement => movement.requisitionId === requisitionId).map(movement => movement.id),
+          auditLogIds: (after.auditLogs ?? []).map(log => log.id),
+        },
+        dailyReportChanges: [],
       });
     }));
     const onProjectChange = vi.fn();
-    render(<WarehouseRequisitionsTab project={projectWithStock()} onProjectChange={onProjectChange} />);
+    const onCloudOperationConfirmed = vi.fn();
+    const onPrepareCloudOperation = vi.fn().mockResolvedValue(undefined);
+    render(<WarehouseRequisitionsTab project={projectWithStock()} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} />);
 
     fireEvent.click(screen.getByRole('button', { name: /Nova retirada/i }));
     fireEvent.change(document.getElementById('withdrawal-chapter')!, { target: { value: 'chapter-1' } });
@@ -61,6 +76,8 @@ describe('confirmação visual da retirada', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Entregar e baixar estoque' }));
 
     await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+    expect(onPrepareCloudOperation).toHaveBeenCalledTimes(1);
+    expect(onPrepareCloudOperation.mock.invocationCallOrder[0]).toBeLessThan(commitMock.mock.invocationCallOrder[0]);
     expect(onProjectChange).not.toHaveBeenCalled();
     const pendingButton = screen.getByRole('button', { name: 'Salvando na nuvem...' });
     expect(pendingButton).toBeDisabled();
@@ -85,7 +102,8 @@ describe('confirmação visual da retirada', () => {
     historyForward.mockRestore();
 
     await act(async () => confirmServer?.());
-    await waitFor(() => expect(onProjectChange).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onCloudOperationConfirmed).toHaveBeenCalledTimes(1));
+    expect(onProjectChange).not.toHaveBeenCalled();
     expect(screen.getByRole('status')).toHaveTextContent('Salvo na nuvem · REQ-2026-0120');
     expect(screen.getByRole('dialog', { name: 'Nova retirada de materiais' })).toBeInTheDocument();
     await waitFor(

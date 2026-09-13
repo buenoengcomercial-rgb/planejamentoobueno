@@ -17,6 +17,7 @@ import {
   emptyWarehouse,
   ensureWarehouse,
   hardDeleteEquipment,
+  hardDeleteInventorySession,
   issueCustodyTerm,
   panelSummary,
   getReturnableRequisitionItems,
@@ -261,6 +262,24 @@ describe('operação integrada do almoxarifado', () => {
     const repeated = applyInventorySession(applied, review.id, actor);
     expect(repeated.warehouse!.movements).toHaveLength(applied.warehouse!.movements.length);
     expect(computeWarehouseRows(repeated, { includeManual: true })[0].balance).toBe(18);
+  });
+
+  it('exclui inventário aplicado por estorno sem apagar movimentos confirmados', () => {
+    const stocked = withStock();
+    const created = createInventorySession(stocked, '2026-08', actor);
+    const counted = setInventoryCount(created.project, created.session.id, 'material-1', 18, actor);
+    const reviewed = closeInventorySession(counted, created.session.id, actor);
+    const applied = applyInventorySession(reviewed, created.session.id, actor);
+    const original = applied.warehouse!.movements.find(movement => movement.inventorySessionId === created.session.id)!;
+
+    const removed = hardDeleteInventorySession(applied, created.session.id, actor);
+    const preserved = removed.warehouse!.movements.find(movement => movement.id === original.id)!;
+    const reversal = removed.warehouse!.movements.find(movement => movement.reversesId === original.id)!;
+
+    expect(removed.warehouse!.inventorySessions).toHaveLength(0);
+    expect(preserved.reversedById).toBe(reversal.id);
+    expect(reversal).toMatchObject({ type: 'estorno', quantity: 2, createdBy: actor });
+    expect(computeWarehouseRows(removed, { includeManual: true })[0].balance).toBe(20);
   });
 
   it('gera código interno, bloqueia série duplicada e arquiva sem excluir', () => {

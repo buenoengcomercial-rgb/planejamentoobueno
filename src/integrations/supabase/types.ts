@@ -493,6 +493,8 @@ export type Database = {
           name: string
           organization_id: string
           updated_at: string
+          warehouse_updated_at: string
+          warehouse_version: number
         }
         Insert: {
           created_at?: string
@@ -501,6 +503,8 @@ export type Database = {
           name: string
           organization_id: string
           updated_at?: string
+          warehouse_updated_at?: string
+          warehouse_version?: number
         }
         Update: {
           created_at?: string
@@ -509,6 +513,8 @@ export type Database = {
           name?: string
           organization_id?: string
           updated_at?: string
+          warehouse_updated_at?: string
+          warehouse_version?: number
         }
         Relationships: [
           {

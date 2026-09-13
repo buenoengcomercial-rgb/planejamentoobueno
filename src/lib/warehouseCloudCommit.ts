@@ -6,6 +6,7 @@ import type {
   WarehouseRequisition,
 } from '@/types/project';
 import { acknowledgeWarehouseOperation } from '@/lib/projectSync';
+import type { WarehouseOperationAcknowledgement } from '@/lib/projectSync';
 
 type Json = import('@/integrations/supabase/types').Json;
 
@@ -28,7 +29,27 @@ interface WarehouseOperationResult {
   movements?: WarehouseMovement[];
   auditLogs?: AuditLog[];
   committedAt?: string;
+  projectUpdatedAt?: string;
+  warehouseUpdatedAt?: string;
+  warehouseVersion?: number;
   deleted?: boolean;
+}
+
+export interface WarehouseDailyReportChange {
+  date: string;
+  before: import('@/types/project').DailyReport | null;
+  after: import('@/types/project').DailyReport | null;
+}
+
+export interface WarehouseCloudCommitResult {
+  project: Project;
+  committedAt: string;
+  projectUpdatedAt: string;
+  warehouseUpdatedAt: string;
+  warehouseVersion: number;
+  acknowledgement: WarehouseOperationAcknowledgement;
+  /** Compatibilidade para retiradas antigas que publicavam um bloco no Diário. */
+  dailyReportChanges: WarehouseDailyReportChange[];
 }
 
 const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
@@ -111,6 +132,81 @@ function replaceRequisitionNumberInDailyReport(
   };
 }
 
+function changedDailyReports(before: Project, after: Project): WarehouseDailyReportChange[] {
+  const beforeByDate = new Map((before.dailyReports ?? []).map(report => [report.date, report]));
+  const afterByDate = new Map((after.dailyReports ?? []).map(report => [report.date, report]));
+  const dates = new Set([...beforeByDate.keys(), ...afterByDate.keys()]);
+  return [...dates].flatMap(date => {
+    const previous = beforeByDate.get(date) ?? null;
+    const next = afterByDate.get(date) ?? null;
+    if (same(previous, next)) return [];
+    return [{ date, before: previous, after: next }];
+  });
+}
+
+function replaceRowsById<T extends { id: string }>(
+  current: T[],
+  confirmed: T[],
+  affectedIds: readonly string[],
+): T[] {
+  const affected = new Set(affectedIds);
+  const confirmedById = new Map(confirmed.filter(row => affected.has(row.id)).map(row => [row.id, row]));
+  const merged = current.flatMap(row => {
+    if (!affected.has(row.id)) return [row];
+    const replacement = confirmedById.get(row.id);
+    return replacement ? [replacement] : [];
+  });
+  const existing = new Set(merged.map(row => row.id));
+  for (const row of confirmed) {
+    if (affected.has(row.id) && !existing.has(row.id)) merged.push(row);
+  }
+  return merged;
+}
+
+/**
+ * Aplica somente as linhas confirmadas pela transação. Alterações locais em
+ * Cronograma, Diário, Custos ou em outro cadastro do Almoxarifado permanecem
+ * intactas enquanto a confirmação está em trânsito.
+ */
+export function mergeWarehouseCloudCommit(
+  current: Project,
+  confirmation: WarehouseCloudCommitResult,
+): Project {
+  if (current.id !== confirmation.project.id) return current;
+  const currentWarehouse = current.warehouse;
+  const confirmedWarehouse = confirmation.project.warehouse;
+  if (!currentWarehouse || !confirmedWarehouse) return current;
+  const acknowledgement = confirmation.acknowledgement;
+  const confirmedReceiverNames = new Set((confirmedWarehouse.receivers ?? []).map(receiver => receiver.name));
+  const receivers = [
+    ...(currentWarehouse.receivers ?? []),
+    ...(confirmedWarehouse.receivers ?? []).filter(receiver => !confirmedReceiverNames.has(receiver.name)
+      || !(currentWarehouse.receivers ?? []).some(currentReceiver => currentReceiver.name === receiver.name)),
+  ].filter((receiver, index, rows) => rows.findIndex(candidate => candidate.name === receiver.name) === index);
+  return {
+    ...current,
+    warehouse: {
+      ...currentWarehouse,
+      receivers,
+      requisitions: replaceRowsById(
+        currentWarehouse.requisitions,
+        confirmedWarehouse.requisitions,
+        [acknowledgement.requisitionId],
+      ),
+      movements: replaceRowsById(
+        currentWarehouse.movements,
+        confirmedWarehouse.movements,
+        acknowledgement.movementIds,
+      ),
+    },
+    auditLogs: replaceRowsById(
+      current.auditLogs ?? [],
+      confirmation.project.auditLogs ?? [],
+      acknowledgement.auditLogIds,
+    ),
+  };
+}
+
 /**
  * Confirma uma operação crítica diretamente nas tabelas operacionais.
  * A UI só recebe o novo projeto depois que o banco devolve a transação inteira.
@@ -119,7 +215,7 @@ export async function commitWarehouseOperation(
   before: Project,
   after: Project,
   operation: WarehouseCloudOperation,
-): Promise<Project> {
+): Promise<WarehouseCloudCommitResult> {
   if (!navigator.onLine) {
     throw new Error('Conecte-se à internet para confirmar a operação. Nenhuma baixa foi realizada.');
   }
@@ -157,6 +253,14 @@ export async function commitWarehouseOperation(
   if (error) throw warehouseCommitError(error);
 
   const result = (data ?? {}) as WarehouseOperationResult;
+  if (
+    !result.committedAt
+    || !result.projectUpdatedAt
+    || !result.warehouseUpdatedAt
+    || !Number.isSafeInteger(result.warehouseVersion)
+  ) {
+    throw new Error('A operação chegou ao servidor, mas a versão segura do Almoxarifado não foi confirmada. Atualize a página antes de tentar novamente.');
+  }
   const canonicalRequisition = result.requisition ?? null;
   let confirmed = replaceRequisitionNumberInDailyReport(after, nextRequisition?.number, canonicalRequisition?.number);
   const warehouse = confirmed.warehouse;
@@ -190,5 +294,17 @@ export async function commitWarehouseOperation(
     movementIds: affectedMovementIds,
     auditLogIds: affectedAuditIds,
   });
-  return confirmed;
+  return {
+    project: confirmed,
+    committedAt: result.committedAt,
+    projectUpdatedAt: result.projectUpdatedAt,
+    warehouseUpdatedAt: result.warehouseUpdatedAt,
+    warehouseVersion: result.warehouseVersion!,
+    acknowledgement: {
+      requisitionId: operation.requisitionId,
+      movementIds: affectedMovementIds,
+      auditLogIds: affectedAuditIds,
+    },
+    dailyReportChanges: changedDailyReports(before, confirmed),
+  };
 }

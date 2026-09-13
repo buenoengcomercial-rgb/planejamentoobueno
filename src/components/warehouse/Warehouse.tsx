@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Project, WarehouseAuditActor } from '@/types/project';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, Warehouse as WarehouseIcon, ReceiptText, ClipboardCheck } from 'lucide-react';
@@ -15,6 +15,9 @@ import WarehouseWithdrawnMaterialsTab from './WarehouseWithdrawnMaterialsTab';
 import AttachmentOptimizationPanel from './AttachmentOptimizationPanel';
 import GlobalStorageMaintenancePanel from './GlobalStorageMaintenancePanel';
 import './warehouse-visual.css';
+import type { WarehouseCloudCommitResult } from '@/lib/warehouseCloudCommit';
+import type { WarehouseScopedDomain } from '@/lib/warehouseScopedCommit';
+import { toast } from 'sonner';
 
 const WAREHOUSE_TABS = [
   { value: 'painel', label: 'Painel', icon: LayoutDashboard },
@@ -32,6 +35,9 @@ interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
   onCommitProject?: (next: Project) => Promise<void>;
+  onCloudWarehouseOperationConfirmed?: (confirmation: WarehouseCloudCommitResult) => void | Promise<void>;
+  onPrepareCloudWarehouseOperation?: () => void | Promise<void>;
+  onCommitWarehouseScoped?: (next: Project, domain: WarehouseScopedDomain) => Promise<Project>;
   canManageFiscalNotes?: boolean;
   canReviewFiscalCosts?: boolean;
   canViewPanel?: boolean;
@@ -47,7 +53,7 @@ interface Props {
   auditActor?: WarehouseAuditActor;
 }
 
-export default function Warehouse({ project, onProjectChange, onCommitProject, onSaveStorageMaintenanceProject, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canSupplementRequisitions = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor }: Props) {
+export default function Warehouse({ project, onProjectChange, onCommitProject, onCloudWarehouseOperationConfirmed, onPrepareCloudWarehouseOperation, onCommitWarehouseScoped, onSaveStorageMaintenanceProject, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canSupplementRequisitions = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor }: Props) {
   const [tab, setTab] = useState(() => canViewPanel ? 'painel' : 'notas');
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
   useEffect(() => {
@@ -60,6 +66,21 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
   const visibleTabs = canViewPanel
     ? WAREHOUSE_TABS
     : WAREHOUSE_TABS.filter(item => item.value !== 'painel');
+  const commitChildChange = useCallback((next: Project, domain: WarehouseScopedDomain) => {
+    if (!onCommitWarehouseScoped) {
+      toast.error('A transação segura do Almoxarifado ainda não está disponível. Nada foi gravado.');
+      return;
+    }
+    void onCommitWarehouseScoped(next, domain).catch(error => toast.error((error as Error).message));
+  }, [onCommitWarehouseScoped]);
+  const commitReceiptChildChange = useCallback(
+    (next: Project) => commitChildChange(next, 'receipt'),
+    [commitChildChange],
+  );
+  const commitEquipmentChildChange = useCallback(
+    (next: Project) => commitChildChange(next, 'catalog'),
+    [commitChildChange],
+  );
 
   return (
     <div className="warehouse-ui space-y-4 p-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:p-4">
@@ -104,14 +125,15 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
 
         {canViewPanel && (
           <TabsContent value="painel" className="mt-3">
-            <WarehousePanel project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
+            <WarehousePanel project={ensured} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} />
           </TabsContent>
         )}
         <TabsContent value="notas" className="mt-3">
           <WarehouseFiscalNotesTab
             project={ensured}
-            onProjectChange={onProjectChange}
+            onProjectChange={commitReceiptChildChange}
             onCommitProject={onCommitProject}
+            onCommitWarehouseScoped={onCommitWarehouseScoped}
             canManage={canManageFiscalNotes}
             canReviewCosts={canReviewFiscalCosts}
             canEditPosted={canEditPostedWarehouseRecords}
@@ -121,16 +143,16 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
           />
         </TabsContent>
         <TabsContent value="requisicoes" className="mt-3">
-          <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canDelete={canDeleteWarehouseRecords} canEdit={canEditPostedWarehouseRecords} canSupplement={canSupplementRequisitions} />
+          <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudWarehouseOperationConfirmed} onPrepareCloudOperation={onPrepareCloudWarehouseOperation} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canDelete={canDeleteWarehouseRecords} canEdit={canEditPostedWarehouseRecords} canSupplement={canSupplementRequisitions} />
         </TabsContent>
         <TabsContent value="materiais-retirados" className="mt-3">
           <WarehouseWithdrawnMaterialsTab project={ensured} />
         </TabsContent>
         <TabsContent value="equipamentos" className="mt-3">
-          <WarehouseEquipmentsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} canDelete={canDeleteWarehouseRecords} canManageGroups={canManageEquipmentGroups} canEdit={canArchiveWarehouseRecords} />
+          <WarehouseEquipmentsTab project={ensured} onProjectChange={commitEquipmentChildChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} canDelete={canDeleteWarehouseRecords} canManageGroups={canManageEquipmentGroups} canEdit={canArchiveWarehouseRecords} />
         </TabsContent>
         <TabsContent value="estoque" className="mt-3">
-          <WarehouseStockTab onNewEntry={() => setTab('notas')} project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} canDelete={canDeleteWarehouseRecords} />
+          <WarehouseStockTab onNewEntry={() => setTab('notas')} project={ensured} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} canDelete={canDeleteWarehouseRecords} />
         </TabsContent>
         <TabsContent value="materiais-orcamento" className="mt-3">
           <WarehouseBudgetMaterialsTab project={ensured} />
@@ -139,7 +161,7 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
           <WarehouseMovementsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
         </TabsContent>
         <TabsContent value="inventario" className="mt-3">
-          <WarehouseInventoryTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} canApprove={canApproveInventory} canDelete={canDeleteWarehouseRecords} />
+          <WarehouseInventoryTab project={ensured} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canApprove={canApproveInventory} canDelete={canDeleteWarehouseRecords} />
         </TabsContent>
       </Tabs>
     </div>

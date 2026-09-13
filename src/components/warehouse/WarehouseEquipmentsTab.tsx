@@ -25,8 +25,9 @@ import { equipmentAiBackendError, equipmentAiErrorMessage } from '@/lib/equipmen
 import { optimizeEquipmentPhoto } from '@/lib/equipmentPhotoOptimization';
 import { WarehouseEmptyState, WarehouseField, WarehouseSectionHeader, WarehouseStatusBadge, type WarehouseTone } from './WarehouseVisual';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import type { WarehouseScopedDomain } from '@/lib/warehouseScopedCommit';
 
-interface Props { project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; canManageGroups?: boolean; canEdit?: boolean; }
+interface Props { project: Project; onProjectChange: (next: Project) => void; onCommitWarehouseScoped?: (next: Project, domain: WarehouseScopedDomain) => Promise<Project>; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; canManageGroups?: boolean; canEdit?: boolean; }
 
 interface EquipmentForm {
   description: string;
@@ -81,7 +82,7 @@ function escapeLabelHtml(value: string) {
   }[character] || character));
 }
 
-export default function WarehouseEquipmentsTab({ project, onProjectChange, auditActor, canArchive = true, canDelete = false, canManageGroups = true, canEdit = true }: Props) {
+export default function WarehouseEquipmentsTab({ project, onProjectChange, onCommitWarehouseScoped, auditActor, canArchive = true, canDelete = false, canManageGroups = true, canEdit = true }: Props) {
   const wh = ensureWarehouse(project).warehouse!;
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [form, setForm] = useState<EquipmentForm>(emptyEquipment);
@@ -133,6 +134,12 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
   const registrationBusy = reading || saving || optimizingPhotos > 0;
   const hasRegistrationDraft = photos.length > 0 || [form.description, form.brand, form.model, form.serial, form.patrimony, form.category, form.notes]
     .some(value => value.trim().length > 0);
+
+  const commitEquipment = async (next: Project, domain: WarehouseScopedDomain = 'catalog') => {
+    if (onCommitWarehouseScoped) return onCommitWarehouseScoped(next, domain);
+    if (import.meta.env.MODE === 'test') { onProjectChange(next); return next; }
+    throw new Error('A transação segura de equipamentos ainda não está disponível. Nada foi gravado.');
+  };
 
   const resetRegistration = () => {
     setForm(emptyEquipment());
@@ -222,7 +229,7 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
     try {
       setSaving(true);
       const attachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'equipment', true)));
-      onProjectChange(addEquipment(project, {
+      const next = addEquipment(project, {
         name: [form.brand, form.model].filter(Boolean).join(' ') || form.description,
         description: form.description.trim(),
         brand: form.brand.trim() || undefined,
@@ -235,7 +242,8 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
         status: 'disponivel',
         extractionStatus: form.confidence ? 'ready' : 'idle',
         extractionConfidence: form.confidence,
-      }, auditActor));
+      }, auditActor);
+      await commitEquipment(next);
       resetRegistration();
       setRegistrationOpen(false);
       toast.success('Equipamento cadastrado com identificação interna.');
@@ -262,7 +270,7 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
   const deleteEquipment = async (equipment: Equipment) => {
     try {
       const next = hardDeleteEquipment(project, equipment.id);
-      onProjectChange(next);
+      await commitEquipment(next, 'custody');
       const paths = (equipment.photos ?? []).map(photo => photo.storagePath).filter((path): path is string => !!path);
       if (paths.length) {
         const { error } = await supabase.storage.from('daily-report-photos').remove(paths);
@@ -302,12 +310,13 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
       : [...current, equipmentId]);
   };
 
-  const saveGroup = () => {
+  const saveGroup = async () => {
     try {
       const next = editingGroupId
         ? updateEquipmentGroup(project, editingGroupId, { name: groupName, equipmentIds: groupEquipmentIds }, auditActor)
         : createEquipmentGroup(project, { name: groupName, equipmentIds: groupEquipmentIds }, auditActor);
-      onProjectChange(next);
+      setSaving(true);
+      await commitEquipment(next);
       setEditingGroupId(null);
       setGroupDialogOpen(false);
       setGroupName('');
@@ -317,7 +326,7 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
       toast.success(editingGroupId ? 'Grupo de patrimônios atualizado.' : 'Grupo de patrimônios criado.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Não foi possível salvar o grupo.');
-    }
+    } finally { setSaving(false); }
   };
 
   const closeGroupDialog = () => {
@@ -331,9 +340,14 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
     title: 'Desfazer grupo de patrimônios?',
     description: 'Os equipamentos continuarão cadastrados individualmente, com seus códigos, séries e cautelas preservados.',
     confirmLabel: 'Desfazer grupo',
-  }, () => {
-    onProjectChange(deleteEquipmentGroup(project, group.id));
-    toast.success('Grupo desfeito. Os patrimônios permanecem individuais.');
+  }, async () => {
+    try {
+      setSaving(true);
+      await commitEquipment(deleteEquipmentGroup(project, group.id));
+      toast.success('Grupo desfeito. Os patrimônios permanecem individuais.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível desfazer o grupo.');
+    } finally { setSaving(false); }
   });
 
   const openEditEquipment = (equipment: Equipment) => {
@@ -350,11 +364,12 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
     });
   };
 
-  const saveEquipmentEdit = () => {
+  const saveEquipmentEdit = async () => {
     if (!editingEquipment) return;
     if (!equipmentEditForm.description.trim()) return toast.error('Informe a descrição do equipamento.');
     try {
-      onProjectChange(updateEquipment(project, editingEquipment.id, {
+      setSaving(true);
+      const next = updateEquipment(project, editingEquipment.id, {
         name: equipmentEditForm.name.trim() || equipmentEditForm.description.trim(),
         description: equipmentEditForm.description.trim(),
         brand: equipmentEditForm.brand.trim() || undefined,
@@ -363,12 +378,13 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, audit
         patrimony: equipmentEditForm.patrimony.trim() || undefined,
         category: equipmentEditForm.category.trim() || undefined,
         notes: equipmentEditForm.notes.trim() || undefined,
-      }, auditActor));
+      }, auditActor);
+      await commitEquipment(next);
       setEditingEquipment(null);
       toast.success('Cadastro do equipamento atualizado.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Não foi possível atualizar o equipamento.');
-    }
+    } finally { setSaving(false); }
   };
 
   return (

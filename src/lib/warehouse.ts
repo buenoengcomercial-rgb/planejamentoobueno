@@ -1517,14 +1517,52 @@ export function cancelInventorySession(project: Project, sessionId: string, acto
   return setWh(p, { inventorySessions: sessions });
 }
 
-/** Remove o inventário e exclusivamente os ajustes derivados da própria sessão. */
-export function hardDeleteInventorySession(project: Project, sessionId: string): Project {
+/**
+ * Remove a sessão, mas preserva o livro: ajustes já aplicados são anulados por
+ * estornos vinculados, nunca apagados fisicamente.
+ */
+export function hardDeleteInventorySession(
+  project: Project,
+  sessionId: string,
+  actor?: WarehouseActorInput,
+): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
   if (!(wh.inventorySessions ?? []).some(session => session.id === sessionId)) return p;
+  const timestamp = nowISO();
+  const auditActor = normalizeWarehouseActor(actor);
+  const actorLabel = warehouseActorLegacyValue(actor);
+  const reversals: WarehouseMovement[] = [];
+  const movements = wh.movements.map(movement => {
+    const fromSession = movement.inventorySessionId === sessionId
+      || (movement.originType === 'inventory' && movement.originId === sessionId);
+    if (!fromSession || movement.reversedById || movement.type === 'estorno') return movement;
+    const reversalId = uid();
+    reversals.push({
+      id: reversalId,
+      createdAt: timestamp,
+      createdBy: auditActor,
+      type: 'estorno',
+      date: todayISO(),
+      itemKey: movement.itemKey,
+      itemCode: movement.itemCode,
+      itemDescription: movement.itemDescription,
+      itemUnit: movement.itemUnit,
+      quantity: movement.quantity,
+      unitPrice: movement.unitPrice,
+      costSnapshot: movement.costSnapshot,
+      originType: 'inventory',
+      originId: sessionId,
+      inventorySessionId: sessionId,
+      user: actorLabel,
+      notes: `Estorno pela exclusão auditada do inventário ${sessionId}.`,
+      reversesId: movement.id,
+    });
+    return { ...movement, reversedById: reversalId, updatedAt: timestamp, updatedBy: auditActor ?? movement.updatedBy };
+  });
   return setWh(p, {
     inventorySessions: (wh.inventorySessions ?? []).filter(session => session.id !== sessionId),
-    movements: wh.movements.filter(movement => movement.inventorySessionId !== sessionId && !(movement.originType === 'inventory' && movement.originId === sessionId)),
+    movements: [...movements, ...reversals],
   });
 }
 

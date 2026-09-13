@@ -90,6 +90,7 @@ interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
   onCommitProject?: (next: Project) => Promise<void>;
+  onCommitWarehouseScoped?: (next: Project, domain: 'receipt') => Promise<Project>;
   canManage?: boolean;
   canReviewCosts?: boolean;
   canEditPosted?: boolean;
@@ -479,7 +480,7 @@ async function removeUploadedAttachments(attachments: WarehouseAttachment[] | nu
   if (error) console.warn('Não foi possível remover uploads provisórios.', error);
 }
 
-export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCommitProject, canManage = true, canReviewCosts = true, canEditPosted = false, canDelete = false, canReviewPackagingConversions = false, auditActor }: Props) {
+export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCommitProject, onCommitWarehouseScoped, canManage = true, canReviewCosts = true, canEditPosted = false, canDelete = false, canReviewPackagingConversions = false, auditActor }: Props) {
   const [group, setGroup] = useState<ViewGroup>('posted');
   const [search, setSearch] = useState('');
   const [pendingOnly, setPendingOnly] = useState(false);
@@ -502,6 +503,16 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const archivedLegacyDraftIdsRef = useRef(new Set<string>());
+
+  const commitReceipt = async (next: Project) => {
+    if (onCommitWarehouseScoped) return onCommitWarehouseScoped(next, 'receipt');
+    if (import.meta.env.MODE === 'test') {
+      if (onCommitProject) await onCommitProject(next);
+      else onProjectChange(next);
+      return next;
+    }
+    throw new Error('A transação segura de recebimento ainda não está disponível. Nada foi gravado.');
+  };
   const destinationState = DESTINATION_STATE;
   const notes = useMemo(() => project.warehouse?.fiscalNotes ?? [], [project.warehouse?.fiscalNotes]);
   const purchaseGroups = useMemo(() => (project.materialComparisons ?? [])
@@ -706,8 +717,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
       };
       const saved = upsertFiscalNote(project, persistentNote, auditActor);
       const posted = approveFiscalNote(saved, persistentNote.id, auditActor);
-      if (onCommitProject) await onCommitProject(posted);
-      else onProjectChange(posted);
+      await commitReceipt(posted);
       setSelected(null);
       setUploadOpen(false);
       setExpandedItemId(null);
@@ -783,16 +793,23 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     }
   };
 
-  const confirmCancel = () => {
+  const confirmCancel = async () => {
     if (!selected) return;
     const result = cancelFiscalNote(project, selected.id, { reason: cancelReason, actor: auditActor });
     if (!result.canceled) return toast.error(result.blockers.join(' '));
-    onProjectChange(result.project);
-    setCancelOpen(false);
-    setCancelReason('');
-    setSelected(null);
-    setGroup('archived');
-    toast.success('Lançamento cancelado definitivamente.');
+    try {
+      setProcessing(true);
+      await commitReceipt(result.project);
+      setCancelOpen(false);
+      setCancelReason('');
+      setSelected(null);
+      setGroup('archived');
+      toast.success('Lançamento cancelado definitivamente.');
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setProcessing(false);
+    }
   };
 
   const commitOwnerChange = async (next: Project) => {
@@ -954,14 +971,21 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     }
   };
 
-  const confirmArchivedStockReconciliation = () => {
+  const confirmArchivedStockReconciliation = async () => {
     const safeIds = archivedStockReview.issues.filter(issue => issue.canReconcile).map(issue => issue.noteId);
     if (!safeIds.length) return;
     const result = reconcileArchivedFiscalNoteStock(project, safeIds, auditActor);
     if (!result.reconciledNoteIds.length) return toast.error('Nenhum lançamento pôde ser reconciliado.');
-    onProjectChange(result.project);
-    setReconciliationOpen(false);
-    toast.success(`${result.reconciledNoteIds.length} documento(s) reconciliado(s) com estorno auditável.`);
+    try {
+      setProcessing(true);
+      await commitReceipt(result.project);
+      setReconciliationOpen(false);
+      toast.success(`${result.reconciledNoteIds.length} documento(s) reconciliado(s) com estorno auditável.`);
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setProcessing(false);
+    }
   };
 
   const openPackagingCorrection = (review: (typeof packagingConversionReviews)[number]) => {
@@ -1023,8 +1047,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
         confirmCosts: true,
         actor: auditActor,
       });
-      if (onCommitProject) await onCommitProject(next);
-      else onProjectChange(next);
+      await commitReceipt(next);
       setSelected(next.warehouse?.fiscalNotes?.find(note => note.id === selected.id) ?? selected);
       toast.success('Custos conferidos e movimentos reavaliados sem alterar quantidades.');
     } catch (error) {
@@ -1214,7 +1237,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
         </DialogContent>
       </Dialog>
 
-      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}><DialogContent className="warehouse-ui"><DialogHeader><DialogTitle>Cancelar lançamento definitivamente</DialogTitle><DialogDescription>A entrada original não será apagada. O sistema criará movimentos de estorno, preservará o documento e impedirá qualquer relançamento deste registro.</DialogDescription></DialogHeader>{cancelCheck && !cancelCheck.allowed && <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"><strong>Cancelamento bloqueado:</strong><ul className="mt-2 list-disc pl-5">{cancelCheck.blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul></div>}<div><label className="mb-1 block text-sm font-medium">Motivo obrigatório</label><Textarea value={cancelReason} onChange={event => setCancelReason(event.target.value)} placeholder="Explique por que o lançamento deve ser cancelado" /></div><DialogFooter><Button variant="outline" onClick={() => setCancelOpen(false)}>Voltar</Button><Button variant="destructive" disabled={!cancelCheck?.allowed || !cancelReason.trim()} onClick={confirmCancel}>Confirmar estorno definitivo</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={cancelOpen} onOpenChange={open => { if (!processing) setCancelOpen(open); }}><DialogContent className="warehouse-ui"><DialogHeader><DialogTitle>Cancelar lançamento definitivamente</DialogTitle><DialogDescription>A entrada original não será apagada. O sistema criará movimentos de estorno, preservará o documento e impedirá qualquer relançamento deste registro.</DialogDescription></DialogHeader>{cancelCheck && !cancelCheck.allowed && <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm"><strong>Cancelamento bloqueado:</strong><ul className="mt-2 list-disc pl-5">{cancelCheck.blockers.map(blocker => <li key={blocker}>{blocker}</li>)}</ul></div>}<div><label className="mb-1 block text-sm font-medium">Motivo obrigatório</label><Textarea value={cancelReason} disabled={processing} onChange={event => setCancelReason(event.target.value)} placeholder="Explique por que o lançamento deve ser cancelado" /></div><DialogFooter><Button variant="outline" disabled={processing} onClick={() => setCancelOpen(false)}>Voltar</Button><Button variant="destructive" disabled={processing || !cancelCheck?.allowed || !cancelReason.trim()} onClick={() => void confirmCancel()}>{processing ? 'Salvando na nuvem...' : 'Confirmar estorno definitivo'}</Button></DialogFooter></DialogContent></Dialog>
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}><DialogContent className="warehouse-ui"><DialogHeader><DialogTitle>Excluir entrada definitivamente?</DialogTitle><DialogDescription>Esta ação remove a nota e seus documentos. O estoque será recalculado somente se não houver retiradas ou ajustes posteriores vinculados.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" disabled={processing} onClick={() => setDeleteOpen(false)}>Voltar</Button><Button variant="destructive" disabled={processing} onClick={() => void confirmOwnerDelete()}>{processing ? 'Excluindo...' : 'Excluir definitivamente'}</Button></DialogFooter></DialogContent></Dialog>
 

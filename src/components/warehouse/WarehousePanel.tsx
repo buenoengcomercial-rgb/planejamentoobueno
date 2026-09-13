@@ -12,10 +12,12 @@ import { AlertTriangle, PackagePlus, ClipboardList, FileWarning, MapPinned, Rece
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { WarehouseSectionHeader } from './WarehouseVisual';
+import { toast } from 'sonner';
 
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
+  onCommitWarehouseScoped?: (next: Project, domain: 'receipt') => Promise<Project>;
   auditActor?: WarehouseAuditActor;
 }
 
@@ -50,7 +52,7 @@ function dateBR(value?: string) {
   return `${day}/${month}/${year}`;
 }
 
-export default function WarehousePanel({ project, onProjectChange, auditActor }: Props) {
+export default function WarehousePanel({ project, onProjectChange, onCommitWarehouseScoped, auditActor }: Props) {
   const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
   const s = useMemo(() => panelSummary(project), [project]);
   const rows = useMemo(
@@ -81,7 +83,14 @@ export default function WarehousePanel({ project, onProjectChange, auditActor }:
             status,
           },
         ];
-    onProjectChange(upsertFiscalNote(project, { ...note, invoices, updatedAt: new Date().toISOString() }, auditActor, true));
+    const next = upsertFiscalNote(project, { ...note, invoices, updatedAt: new Date().toISOString() }, auditActor, true);
+    if (onCommitWarehouseScoped) {
+      void onCommitWarehouseScoped(next, 'receipt').catch(error => toast.error((error as Error).message));
+    } else if (import.meta.env.MODE === 'test') {
+      onProjectChange(next);
+    } else {
+      toast.error('A transação segura de recebimento ainda não está disponível. Nada foi gravado.');
+    }
   };
 
   return (

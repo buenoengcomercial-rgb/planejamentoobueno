@@ -22,12 +22,16 @@ export interface CloudProjectMeta {
 export interface CloudProjectRecord {
   project: Project;
   updatedAt: string;
+  warehouseVersion: number;
+  warehouseUpdatedAt: string;
   repairApplied?: boolean;
 }
 
 export interface CloudProjectVersion {
   projectId: string;
   updatedAt: string;
+  warehouseVersion: number;
+  warehouseUpdatedAt: string;
 }
 
 export class CloudProjectConflictError extends Error {
@@ -72,18 +76,23 @@ export class CloudProjectPartialSyncError extends Error {
 export async function getCloudProjectVersion(id: string): Promise<CloudProjectVersion | null> {
   const { data, error } = await supabase
     .from('projects')
-    .select('id, updated_at')
+    .select('id, updated_at, warehouse_version, warehouse_updated_at')
     .eq('id', id)
     .maybeSingle();
   if (error) throw error;
   if (!data) return null;
-  return { projectId: data.id, updatedAt: data.updated_at };
+  return {
+    projectId: data.id,
+    updatedAt: data.updated_at,
+    warehouseVersion: data.warehouse_version,
+    warehouseUpdatedAt: data.warehouse_updated_at,
+  };
 }
 
 export async function loadCloudProjectRecord(id: string): Promise<CloudProjectRecord | null> {
   const { data, error } = await supabase
     .from('projects')
-    .select('id, name, data_json, updated_at')
+    .select('id, name, data_json, updated_at, warehouse_version, warehouse_updated_at')
     .eq('id', id)
     .maybeSingle();
   if (error) throw error;
@@ -96,6 +105,8 @@ export async function loadCloudProjectRecord(id: string): Promise<CloudProjectRe
   return {
     project: repaired.project,
     updatedAt: data.updated_at,
+    warehouseVersion: data.warehouse_version,
+    warehouseUpdatedAt: data.warehouse_updated_at,
     repairApplied: repaired.changed,
   };
 }

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project, WarehouseRequisition } from '@/types/project';
 import { addMovement, createAndDeliverRequisition, emptyWarehouse } from '@/lib/warehouse';
-import { commitWarehouseOperation } from '@/lib/warehouseCloudCommit';
+import { commitWarehouseOperation, mergeWarehouseCloudCommit, type WarehouseCloudCommitResult } from '@/lib/warehouseCloudCommit';
 
 const { rpcMock, supabaseMock } = vi.hoisted(() => {
   const rpcMock = vi.fn();
@@ -53,6 +53,9 @@ describe('confirmação transacional do Almoxarifado', () => {
         movements: provisional.project.warehouse!.movements.filter(row => row.requisitionId === localRequisition.id),
         auditLogs: canonicalAudit,
         committedAt: '2026-09-12T14:00:00.000Z',
+        projectUpdatedAt: '2026-09-12T14:00:00.100Z',
+        warehouseUpdatedAt: '2026-09-12T14:00:00.100Z',
+        warehouseVersion: 7,
       },
       error: null,
     });
@@ -72,8 +75,12 @@ describe('confirmação transacional do Almoxarifado', () => {
     });
     expect(rpcMock.mock.calls[0][1].p_upsert_movements).toHaveLength(1);
     expect(rpcMock.mock.calls[0][1].p_audit_logs).toHaveLength(1);
-    expect(confirmed.warehouse!.requisitions[0].number).toBe('REQ-2026-0116');
-    expect(confirmed.dailyReports?.[0].observations).toContain('REQ-2026-0116');
+    expect(confirmed.project.warehouse!.requisitions[0].number).toBe('REQ-2026-0116');
+    expect(confirmed.project.dailyReports?.[0].observations).toContain('REQ-2026-0116');
+    expect(confirmed).toMatchObject({ warehouseVersion: 7, projectUpdatedAt: '2026-09-12T14:00:00.100Z' });
+    expect(confirmed.dailyReportChanges).toEqual([
+      expect.objectContaining({ date: '2026-09-12', before: null }),
+    ]);
   });
 
   it('bloqueia uma segunda edição concorrente sem aplicar o projeto local', async () => {
@@ -108,6 +115,10 @@ describe('confirmação transacional do Almoxarifado', () => {
         requisition: { ...requisition, number: 'REQ-2026-0117' },
         movements: provisional.project.warehouse!.movements.filter(row => row.requisitionId === requisition.id),
         auditLogs: [newAudit],
+        committedAt: '2026-09-12T14:00:00.000Z',
+        projectUpdatedAt: '2026-09-12T14:00:00.100Z',
+        warehouseUpdatedAt: '2026-09-12T14:00:00.100Z',
+        warehouseVersion: 8,
       },
       error: null,
     });
@@ -117,8 +128,8 @@ describe('confirmação transacional do Almoxarifado', () => {
     });
 
     expect(rpcMock.mock.calls[0][1].p_audit_logs).toEqual([newAudit]);
-    expect(confirmed.auditLogs).toHaveLength(3);
-    expect(confirmed.warehouse!.movements.filter(row => row.requisitionId === requisition.id)).toHaveLength(1);
+    expect(confirmed.project.auditLogs).toHaveLength(3);
+    expect(confirmed.project.warehouse!.movements.filter(row => row.requisitionId === requisition.id)).toHaveLength(1);
   });
 
   it('traduz rejeição de auditoria sem expor detalhes internos do banco', async () => {
@@ -133,5 +144,31 @@ describe('confirmação transacional do Almoxarifado', () => {
     await expect(commitWarehouseOperation(before, provisional.project, {
       type: 'delivery', requisitionId: provisional.requisitionId, operationKey: 'attempt-invalid-audit',
     })).rejects.toThrow('Nenhuma requisição ou baixa de estoque foi gravada');
+  });
+
+  it('mescla somente as linhas confirmadas sem apagar uma edição local de outro módulo', () => {
+    const current = stockedProject();
+    current.name = 'Nome local ainda pendente';
+    current.warehouse!.items = [{ key: 'config-local', description: 'Cadastro em edição', unit: 'UN' }];
+    const confirmedProject = stockedProject();
+    confirmedProject.warehouse!.requisitions = [{
+      id: 'req-1', number: 'REQ-2026-0200', date: '2026-09-12', requesterName: 'CANANDA',
+      receiverName: 'CANANDA', status: 'entregue', items: [], createdAt: '2026-09-12T14:00:00.000Z',
+    }];
+    const confirmation: WarehouseCloudCommitResult = {
+      project: confirmedProject,
+      committedAt: '2026-09-12T14:00:00.000Z',
+      projectUpdatedAt: '2026-09-12T14:00:00.100Z',
+      warehouseUpdatedAt: '2026-09-12T14:00:00.100Z',
+      warehouseVersion: 9,
+      acknowledgement: { requisitionId: 'req-1', movementIds: [], auditLogIds: [] },
+      dailyReportChanges: [],
+    };
+
+    const merged = mergeWarehouseCloudCommit(current, confirmation);
+
+    expect(merged.name).toBe('Nome local ainda pendente');
+    expect(merged.warehouse!.items).toEqual(current.warehouse!.items);
+    expect(merged.warehouse!.requisitions).toEqual(confirmedProject.warehouse!.requisitions);
   });
 });

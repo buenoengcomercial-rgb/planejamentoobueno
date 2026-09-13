@@ -35,10 +35,12 @@ import PriceHistoryTab from './materials/PriceHistoryTab';
 import PurchaseOrderTab from './materials/PurchaseOrderTab';
 import StockTab from './materials/StockTab';
 import { NumberInput, parseBR } from './materials/numberInput';
+import type { WarehouseScopedDomain } from '@/lib/warehouseScopedCommit';
 
 interface Props {
   project: Project;
   onProjectChange: (next: Project | ((prev: Project) => Project)) => void;
+  onCommitWarehouseScoped?: (next: Project, domain: WarehouseScopedDomain) => Promise<Project>;
   auditActor?: WarehouseAuditActor;
 }
 
@@ -81,7 +83,7 @@ function writeMaterialsUiSession(projectId: string, patch: Partial<MaterialsUiSe
   }
 }
 
-export default function Materials({ project, onProjectChange, auditActor }: Props) {
+export default function Materials({ project, onProjectChange, onCommitWarehouseScoped, auditActor }: Props) {
   const ctl = useMaterialComparisons(project, onProjectChange);
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [section, setSection] = useState<MaterialsSection>(() => readMaterialsUiSession(project.id)?.section ?? 'insumos');
@@ -437,7 +439,7 @@ export default function Materials({ project, onProjectChange, auditActor }: Prop
                 <PurchaseOrderTab project={project} comparison={ctl.active} onProjectChange={onProjectChange} />
               </TabsContent>
               <TabsContent value="estoque" className="mt-3">
-                <StockTab project={project} onProjectChange={onProjectChange} auditActor={auditActor} />
+                <StockTab project={project} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} />
               </TabsContent>
               <TabsContent value="historico" className="mt-3">
                 <PriceHistoryTab project={project} />

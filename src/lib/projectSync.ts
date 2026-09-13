@@ -269,6 +269,41 @@ export function acknowledgeWarehouseOperation(
   }
 }
 
+export interface WarehouseScopedAcknowledgement {
+  movementIds: string[];
+  custodyIds: string[];
+  auditLogIds: string[];
+}
+
+/** Avança somente as linhas devolvidas por uma RPC específica do Almoxarifado. */
+export function acknowledgeWarehouseScopedOperation(
+  project: Project,
+  acknowledgement: WarehouseScopedAcknowledgement,
+) {
+  const snapshot = snapshots.get(project.id);
+  if (!snapshot) return;
+
+  const movementById = new Map((project.warehouse?.movements ?? []).map(row => [row.id, row]));
+  acknowledgement.movementIds.forEach(id => {
+    const row = movementById.get(id);
+    if (row) snapshot.movements.set(id, row);
+    else snapshot.movements.delete(id);
+  });
+
+  const custodyById = new Map((project.warehouse?.custodyTerms ?? []).map(row => [row.id, row]));
+  acknowledgement.custodyIds.forEach(id => {
+    const row = custodyById.get(id);
+    if (row) snapshot.custody.set(id, row);
+    else snapshot.custody.delete(id);
+  });
+
+  const auditById = new Map((project.auditLogs ?? []).map(row => [row.id, row]));
+  acknowledgement.auditLogIds.forEach(id => {
+    const row = auditById.get(id);
+    if (row) snapshot.auditLogs.set(id, row);
+  });
+}
+
 // ============== LOAD: HYDRATE ==============
 
 export async function hydrateProjectFromCloud(project: Project): Promise<Project> {

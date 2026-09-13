@@ -204,7 +204,7 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     ]);
   });
 
-  it('cria e mantém um grupo manual mesmo quando as descrições dos patrimônios divergem', () => {
+  it('cria e mantém um grupo manual mesmo quando as descrições dos patrimônios divergem', async () => {
     const projectWithDuplicates = projectWithEquipmentList([
       { id: 'equipment-1', name: 'Adaptador', description: 'Adaptador de mandril com haste SDS', internalCode: 'EQ-2026-0001', serial: 'SERIE-01' },
       { id: 'equipment-2', name: 'Suporte', description: 'Suporte adaptador para serra copo', internalCode: 'EQ-2026-0002', serial: 'SERIE-02' },
@@ -223,6 +223,7 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     fireEvent.change(within(dialog).getByLabelText('Nome do grupo'), { target: { value: 'Adaptadores de mandril' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Criar grupo' }));
 
+    await waitFor(() => expect(onProjectChange).toHaveBeenCalledTimes(1));
     const saved = onProjectChange.mock.calls[0][0] as Project;
     expect(saved.warehouse!.equipmentGroups).toMatchObject([{ name: 'Adaptadores de mandril', equipmentIds: ['equipment-1', 'equipment-2'] }]);
 

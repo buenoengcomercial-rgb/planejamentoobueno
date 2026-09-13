@@ -22,6 +22,7 @@ import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
+  onCommitWarehouseScoped?: (next: Project, domain: 'inventory') => Promise<Project>;
   auditActor?: WarehouseAuditActor;
   canApprove?: boolean;
   canDelete?: boolean;
@@ -35,53 +36,101 @@ const inventoryTone = (status: WarehouseInventorySession['status']): WarehouseTo
   return 'neutral';
 };
 
-export default function WarehouseInventoryTab({ project, onProjectChange, auditActor, canApprove = true, canDelete = false }: Props) {
+export default function WarehouseInventoryTab({ project, onProjectChange, onCommitWarehouseScoped, auditActor, canApprove = true, canDelete = false }: Props) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const wh = ensureWarehouse(project).warehouse!;
   const sessions = useMemo(() => (wh.inventorySessions ?? []).slice().sort((a, b) => b.startedAt.localeCompare(a.startedAt)), [wh.inventorySessions]);
   const [selectedId, setSelectedId] = useState<string | null>(() => sessions.find(session => session.status === 'em_contagem' || session.status === 'em_revisao')?.id ?? null);
   const [month, setMonth] = useState(() => warehouseOperationalDate().slice(0, 7));
   const [justification, setJustification] = useState('');
+  const [countDrafts, setCountDrafts] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
   const selected = sessions.find(session => session.id === selectedId) ?? sessions[0];
 
-  const create = () => {
+  const commitInventory = async (next: Project) => {
+    if (onCommitWarehouseScoped) return onCommitWarehouseScoped(next, 'inventory');
+    if (import.meta.env.MODE === 'test') { onProjectChange(next); return next; }
+    throw new Error('A transação segura de inventário ainda não está disponível. Nada foi gravado.');
+  };
+
+  const create = async () => {
     try {
+      setSaving(true);
       const result = createInventorySession(project, month, auditActor, justification);
-      onProjectChange(result.project);
+      await commitInventory(result.project);
       setSelectedId(result.session.id);
       setJustification('');
       toast.success(`Inventário ${result.session.number} aberto para contagem cega.`);
     } catch (error) { toast.error((error as Error).message); }
+    finally { setSaving(false); }
   };
 
-  const close = () => {
+  const close = async () => {
     if (!selected) return;
     try {
-      onProjectChange(closeInventorySession(project, selected.id, auditActor));
+      setSaving(true);
+      await commitInventory(closeInventorySession(project, selected.id, auditActor));
       toast.success('Contagem encerrada e diferenças liberadas para revisão.');
     } catch (error) { toast.error((error as Error).message); }
+    finally { setSaving(false); }
   };
 
-  const apply = () => {
+  const apply = async () => {
     if (!selected) return;
     try {
-      onProjectChange(applyInventorySession(project, selected.id, auditActor));
+      setSaving(true);
+      await commitInventory(applyInventorySession(project, selected.id, auditActor));
       toast.success('Inventário aplicado. Os ajustes foram registrados no extrato.');
     } catch (error) { toast.error((error as Error).message); }
+    finally { setSaving(false); }
   };
 
-  const cancel = () => {
+  const cancel = async () => {
     if (!selected) return;
-    onProjectChange(cancelInventorySession(project, selected.id, auditActor));
-    toast.message('Sessão de inventário cancelada sem alterar o estoque.');
+    try {
+      setSaving(true);
+      await commitInventory(cancelInventorySession(project, selected.id, auditActor));
+      toast.message('Sessão de inventário cancelada sem alterar o estoque.');
+    } catch (error) { toast.error((error as Error).message); }
+    finally { setSaving(false); }
   };
   const remove = () => {
     if (!selected) return;
-    confirm({ title: 'Excluir inventário definitivamente?', description: 'A sessão e seus ajustes derivados no extrato serão removidos.', confirmLabel: 'Excluir definitivamente' }, () => {
-      onProjectChange(hardDeleteInventorySession(project, selected.id));
-      setSelectedId(null);
-      toast.success('Inventário excluído e ajustes revertidos.');
+    confirm({ title: 'Excluir inventário definitivamente?', description: 'A sessão e seus ajustes derivados no extrato serão removidos.', confirmLabel: 'Excluir definitivamente' }, async () => {
+      try {
+        setSaving(true);
+        await commitInventory(hardDeleteInventorySession(project, selected.id, auditActor));
+        setSelectedId(null);
+        toast.success('Inventário excluído e ajustes revertidos.');
+      } catch (error) { toast.error((error as Error).message); }
+      finally { setSaving(false); }
     });
+  };
+
+  const countKey = (sessionId: string, itemKey: string) => `${sessionId}:${itemKey}`;
+  const countValue = (sessionId: string, itemKey: string, saved?: number) => countDrafts[countKey(sessionId, itemKey)] ?? saved ?? '';
+  const updateCountDraft = (sessionId: string, itemKey: string, value: string) => {
+    setCountDrafts(current => ({ ...current, [countKey(sessionId, itemKey)]: value }));
+  };
+  const saveCount = async (sessionId: string, itemKey: string, saved?: number) => {
+    const key = countKey(sessionId, itemKey);
+    if (!(key in countDrafts)) return;
+    const raw = countDrafts[key];
+    const value = raw === '' ? undefined : Number(raw);
+    if (value === saved || (value == null && saved == null)) {
+      setCountDrafts(current => { const next = { ...current }; delete next[key]; return next; });
+      return;
+    }
+    try {
+      setSaving(true);
+      const next = setInventoryCount(project, sessionId, itemKey, value, auditActor);
+      await commitInventory(next);
+      setCountDrafts(current => { const nextDrafts = { ...current }; delete nextDrafts[key]; return nextDrafts; });
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const exportCsv = (session: WarehouseInventorySession) => {
@@ -106,7 +155,7 @@ export default function WarehouseInventoryTab({ project, onProjectChange, auditA
       <aside className="space-y-3">
         <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
           <WarehouseSectionHeader icon={ClipboardCheck} title="Inventário mensal" description="Abra uma sessão para contar." help="A contagem é cega. O saldo esperado só aparece depois que todos os materiais forem contados." />
-          <div className="space-y-3 p-3"><WarehouseField label="Mês"><Input className="min-h-11" type="month" value={month} onChange={event => setMonth(event.target.value)} /></WarehouseField><WarehouseField label="Justificativa" optional><Input className="min-h-11" value={justification} onChange={event => setJustification(event.target.value)} placeholder="Somente para recontagem" /></WarehouseField><Button className="min-h-12 w-full font-bold" onClick={create}><Plus className="mr-2 h-4 w-4" />Abrir sessão</Button></div>
+          <div className="space-y-3 p-3"><WarehouseField label="Mês"><Input className="min-h-11" type="month" value={month} onChange={event => setMonth(event.target.value)} /></WarehouseField><WarehouseField label="Justificativa" optional><Input className="min-h-11" value={justification} onChange={event => setJustification(event.target.value)} placeholder="Somente para recontagem" /></WarehouseField><Button className="min-h-12 w-full font-bold" disabled={saving} onClick={() => void create()}><Plus className="mr-2 h-4 w-4" />Abrir sessão</Button></div>
           <div className="border-t bg-muted/30 p-3 text-xs text-muted-foreground">Responsável: <strong className="text-foreground">{warehouseActorName(auditActor)}</strong></div>
         </div>
         <div className="overflow-hidden rounded-xl border bg-card"><WarehouseSectionHeader title="Sessões" description={`${sessions.length} registro(s)`} icon={ClipboardCheck} tone="neutral" />{sessions.map(session => <button key={session.id} type="button" className={`w-full border-b p-3 text-left last:border-0 ${selected?.id === session.id ? 'bg-primary/10' : 'hover:bg-muted/30'}`} onClick={() => setSelectedId(session.id)}><div className="flex justify-between gap-2"><strong className="text-sm">{session.number}</strong><span className="text-xs">{session.month}</span></div><div className="mt-2 flex flex-wrap items-center gap-2"><WarehouseStatusBadge label={session.status.split('_').join(' ')} tone={inventoryTone(session.status)} /><span className="text-xs text-muted-foreground">{session.lines.length} material(is)</span></div></button>)}{!sessions.length && <WarehouseEmptyState message="Nenhuma sessão" hint="Abra o inventário do mês." icon={ClipboardCheck} className="m-2" />}</div>
@@ -114,9 +163,9 @@ export default function WarehouseInventoryTab({ project, onProjectChange, auditA
 
       <section className="overflow-hidden rounded-xl border bg-card">
         {!selected ? <WarehouseEmptyState message="Nenhum inventário selecionado" hint="Abra o inventário do mês para iniciar." icon={ClipboardCheck} className="m-3 min-h-52" /> : <>
-          <div className="flex flex-col gap-3 border-b bg-primary/5 p-3 sm:flex-row sm:flex-wrap sm:items-center"><div><h3 className="text-lg font-bold">{selected.number}</h3><div className="mt-2 flex flex-wrap items-center gap-2"><WarehouseStatusBadge label={selected.status.split('_').join(' ')} tone={inventoryTone(selected.status)} /><span className="text-sm text-muted-foreground">{selected.status === 'em_contagem' ? `${counted} de ${total} materiais contados` : `${total} material(is)`}</span></div></div><div className="grid grid-cols-1 gap-2 sm:ml-auto sm:flex sm:flex-wrap">{selected.status === 'em_contagem' && <><Button variant="outline" className="min-h-11 bg-background" onClick={cancel}><X className="mr-2 h-4 w-4" />Cancelar</Button><Button className="min-h-11 font-bold" onClick={close} disabled={counted !== total || total === 0}><ClipboardCheck className="mr-2 h-4 w-4" />Encerrar contagem</Button></>}{selected.status === 'em_revisao' && <Button className="min-h-11 font-bold" disabled={!canApprove} onClick={apply}><Check className="mr-2 h-4 w-4" />{canApprove ? 'Confirmar e aplicar ajustes' : 'Aguardando administrador'}</Button>}{selected.status === 'aplicado' && <><Button variant="outline" className="min-h-11 bg-background" onClick={() => exportCsv(selected)}><FileDown className="mr-2 h-4 w-4" />CSV</Button><Button variant="outline" className="min-h-11 bg-background" onClick={() => generateInventoryReportPdf(project, selected)}><FileDown className="mr-2 h-4 w-4" />PDF</Button></>}{canDelete && <Button variant="destructive" className="min-h-11" onClick={remove}><X className="mr-2 h-4 w-4" />Excluir</Button>}</div></div>
-          <div className="space-y-2 p-3 md:hidden">{selected.lines.map(line => { const impact = line.difference != null && line.unitCostSnapshot != null ? line.difference * line.unitCostSnapshot : undefined; return <article key={line.itemKey} className="rounded-md border p-3"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="font-medium leading-snug">{line.itemDescription}</div><div className="mt-0.5 text-xs text-muted-foreground">{line.itemCode || 'Sem código'} · {line.itemUnit}</div></div>{selected.status !== 'em_contagem' && <span className={`shrink-0 rounded-full bg-muted px-2 py-1 text-xs font-semibold ${(line.difference ?? 0) < 0 ? 'text-destructive' : (line.difference ?? 0) > 0 ? 'text-success' : ''}`}>Dif. {line.difference?.toLocaleString('pt-BR') ?? '—'}</span>}</div>{selected.status === 'em_contagem' ? <div className="mt-3"><label htmlFor={`inventory-count-${line.itemKey}`} className="mb-1 block text-xs font-semibold">Quantidade contada</label><Input id={`inventory-count-${line.itemKey}`} className="min-h-11 w-full text-right text-base" inputMode="decimal" type="number" min="0" step="any" value={line.countedQuantity ?? ''} onChange={event => { const value = event.target.value === '' ? undefined : Number(event.target.value); try { onProjectChange(setInventoryCount(project, selected.id, line.itemKey, value, auditActor)); } catch (error) { toast.error((error as Error).message); } }} /></div> : <dl className="mt-3 grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Esperado</dt><dd className="font-mono">{line.expectedQuantity?.toLocaleString('pt-BR') ?? '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Contado</dt><dd className="font-mono">{line.countedQuantity?.toLocaleString('pt-BR') ?? '—'}</dd></div><div className="col-span-2"><dt className="text-xs text-muted-foreground">Impacto</dt><dd className="font-mono">{impact == null ? 'Cálculo incompleto' : impact.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</dd></div></dl>}</article>; })}</div>
-          <div className="hidden max-h-[calc(100dvh-330px)] overflow-auto md:block"><table className="w-full min-w-[720px] text-sm"><thead className="sticky top-0 bg-muted text-muted-foreground"><tr><th className="p-2 text-left">Material</th><th className="p-2 text-center">Un</th>{selected.status !== 'em_contagem' && <th className="p-2 text-right">Esperado</th>}<th className="p-2 text-right">Contado</th>{selected.status !== 'em_contagem' && <><th className="p-2 text-right">Diferença</th><th className="p-2 text-right">Impacto</th></>}</tr></thead><tbody>{selected.lines.map(line => { const impact = line.difference != null && line.unitCostSnapshot != null ? line.difference * line.unitCostSnapshot : undefined; return <tr key={line.itemKey} className="border-t"><td className="p-2"><div className="font-medium">{line.itemDescription}</div><div className="text-xs text-muted-foreground">{line.itemCode || 'Sem código'}</div></td><td className="p-2 text-center">{line.itemUnit}</td>{selected.status !== 'em_contagem' && <td className="p-2 text-right font-mono">{line.expectedQuantity?.toLocaleString('pt-BR') ?? '—'}</td>}<td className="p-2 text-right">{selected.status === 'em_contagem' ? <Input className="ml-auto min-h-11 w-32 text-right" type="number" min="0" step="any" value={line.countedQuantity ?? ''} onChange={event => { const value = event.target.value === '' ? undefined : Number(event.target.value); try { onProjectChange(setInventoryCount(project, selected.id, line.itemKey, value, auditActor)); } catch (error) { toast.error((error as Error).message); } }} aria-label={`Contagem de ${line.itemDescription}`} /> : <span className="font-mono">{line.countedQuantity?.toLocaleString('pt-BR') ?? '—'}</span>}</td>{selected.status !== 'em_contagem' && <><td className={`p-2 text-right font-mono ${(line.difference ?? 0) < 0 ? 'text-destructive' : (line.difference ?? 0) > 0 ? 'text-success' : ''}`}>{line.difference?.toLocaleString('pt-BR') ?? '—'}</td><td className="p-2 text-right font-mono">{impact == null ? 'Cálculo incompleto' : impact.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td></>}</tr>; })}</tbody></table></div>
+          <div className="flex flex-col gap-3 border-b bg-primary/5 p-3 sm:flex-row sm:flex-wrap sm:items-center"><div><h3 className="text-lg font-bold">{selected.number}</h3><div className="mt-2 flex flex-wrap items-center gap-2"><WarehouseStatusBadge label={selected.status.split('_').join(' ')} tone={inventoryTone(selected.status)} /><span className="text-sm text-muted-foreground">{selected.status === 'em_contagem' ? `${counted} de ${total} materiais contados` : `${total} material(is)`}</span></div></div><div className="grid grid-cols-1 gap-2 sm:ml-auto sm:flex sm:flex-wrap">{selected.status === 'em_contagem' && <><Button variant="outline" className="min-h-11 bg-background" disabled={saving} onClick={() => void cancel()}><X className="mr-2 h-4 w-4" />Cancelar</Button><Button className="min-h-11 font-bold" onClick={() => void close()} disabled={saving || counted !== total || total === 0}><ClipboardCheck className="mr-2 h-4 w-4" />Encerrar contagem</Button></>}{selected.status === 'em_revisao' && <Button className="min-h-11 font-bold" disabled={saving || !canApprove} onClick={() => void apply()}><Check className="mr-2 h-4 w-4" />{canApprove ? 'Confirmar e aplicar ajustes' : 'Aguardando administrador'}</Button>}{selected.status === 'aplicado' && <><Button variant="outline" className="min-h-11 bg-background" onClick={() => exportCsv(selected)}><FileDown className="mr-2 h-4 w-4" />CSV</Button><Button variant="outline" className="min-h-11 bg-background" onClick={() => generateInventoryReportPdf(project, selected)}><FileDown className="mr-2 h-4 w-4" />PDF</Button></>}{canDelete && <Button variant="destructive" className="min-h-11" disabled={saving} onClick={remove}><X className="mr-2 h-4 w-4" />Excluir</Button>}</div></div>
+          <div className="space-y-2 p-3 md:hidden">{selected.lines.map(line => { const impact = line.difference != null && line.unitCostSnapshot != null ? line.difference * line.unitCostSnapshot : undefined; return <article key={line.itemKey} className="rounded-md border p-3"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="font-medium leading-snug">{line.itemDescription}</div><div className="mt-0.5 text-xs text-muted-foreground">{line.itemCode || 'Sem código'} · {line.itemUnit}</div></div>{selected.status !== 'em_contagem' && <span className={`shrink-0 rounded-full bg-muted px-2 py-1 text-xs font-semibold ${(line.difference ?? 0) < 0 ? 'text-destructive' : (line.difference ?? 0) > 0 ? 'text-success' : ''}`}>Dif. {line.difference?.toLocaleString('pt-BR') ?? '—'}</span>}</div>{selected.status === 'em_contagem' ? <div className="mt-3"><label htmlFor={`inventory-count-${line.itemKey}`} className="mb-1 block text-xs font-semibold">Quantidade contada</label><Input id={`inventory-count-${line.itemKey}`} className="min-h-11 w-full text-right text-base" inputMode="decimal" type="number" min="0" step="any" disabled={saving} value={countValue(selected.id, line.itemKey, line.countedQuantity)} onChange={event => updateCountDraft(selected.id, line.itemKey, event.target.value)} onBlur={() => void saveCount(selected.id, line.itemKey, line.countedQuantity)} /></div> : <dl className="mt-3 grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Esperado</dt><dd className="font-mono">{line.expectedQuantity?.toLocaleString('pt-BR') ?? '—'}</dd></div><div><dt className="text-xs text-muted-foreground">Contado</dt><dd className="font-mono">{line.countedQuantity?.toLocaleString('pt-BR') ?? '—'}</dd></div><div className="col-span-2"><dt className="text-xs text-muted-foreground">Impacto</dt><dd className="font-mono">{impact == null ? 'Cálculo incompleto' : impact.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</dd></div></dl>}</article>; })}</div>
+          <div className="hidden max-h-[calc(100dvh-330px)] overflow-auto md:block"><table className="w-full min-w-[720px] text-sm"><thead className="sticky top-0 bg-muted text-muted-foreground"><tr><th className="p-2 text-left">Material</th><th className="p-2 text-center">Un</th>{selected.status !== 'em_contagem' && <th className="p-2 text-right">Esperado</th>}<th className="p-2 text-right">Contado</th>{selected.status !== 'em_contagem' && <><th className="p-2 text-right">Diferença</th><th className="p-2 text-right">Impacto</th></>}</tr></thead><tbody>{selected.lines.map(line => { const impact = line.difference != null && line.unitCostSnapshot != null ? line.difference * line.unitCostSnapshot : undefined; return <tr key={line.itemKey} className="border-t"><td className="p-2"><div className="font-medium">{line.itemDescription}</div><div className="text-xs text-muted-foreground">{line.itemCode || 'Sem código'}</div></td><td className="p-2 text-center">{line.itemUnit}</td>{selected.status !== 'em_contagem' && <td className="p-2 text-right font-mono">{line.expectedQuantity?.toLocaleString('pt-BR') ?? '—'}</td>}<td className="p-2 text-right">{selected.status === 'em_contagem' ? <Input className="ml-auto min-h-11 w-32 text-right" type="number" min="0" step="any" disabled={saving} value={countValue(selected.id, line.itemKey, line.countedQuantity)} onChange={event => updateCountDraft(selected.id, line.itemKey, event.target.value)} onBlur={() => void saveCount(selected.id, line.itemKey, line.countedQuantity)} aria-label={`Contagem de ${line.itemDescription}`} /> : <span className="font-mono">{line.countedQuantity?.toLocaleString('pt-BR') ?? '—'}</span>}</td>{selected.status !== 'em_contagem' && <><td className={`p-2 text-right font-mono ${(line.difference ?? 0) < 0 ? 'text-destructive' : (line.difference ?? 0) > 0 ? 'text-success' : ''}`}>{line.difference?.toLocaleString('pt-BR') ?? '—'}</td><td className="p-2 text-right font-mono">{impact == null ? 'Cálculo incompleto' : impact.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td></>}</tr>; })}</tbody></table></div>
         </>}
       </section>
       {confirmDialog}

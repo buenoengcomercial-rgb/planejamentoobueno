@@ -62,6 +62,16 @@ import {
 import type { ProjectMeta } from '@/lib/projectStorage';
 import { supabase } from '@/integrations/supabase/client';
 import { loadOpenDailyReport, saveOpenDailyReport } from '@/lib/dailyReportCloudSync';
+import {
+  mergeWarehouseCloudCommit,
+  type WarehouseCloudCommitResult,
+} from '@/lib/warehouseCloudCommit';
+import {
+  commitWarehouseScopedOperation,
+  mergeWarehouseScopedCommit,
+  type WarehouseScopedCommitResult,
+  type WarehouseScopedDomain,
+} from '@/lib/warehouseScopedCommit';
 
 const UNDO_LIMIT = 20;
 const SAVE_DEBOUNCE_MS = 4000;
@@ -233,6 +243,8 @@ export default function Index() {
   const remoteCheckInFlightRef = useRef(false);
   const realtimeRefreshTimerRef = useRef<number | null>(null);
   const lastLocalSaveAtRef = useRef(0);
+  const ownWarehouseRealtimeRowsRef = useRef<Map<string, number>>(new Map());
+  const currentWarehouseVersionRef = useRef<number | null>(null);
   const realtimeConnectedRef = useRef(false);
   const [realtimeConnected, setRealtimeConnected] = useState(false);
   const mainScrollRef = useRef<HTMLElement | null>(null);
@@ -402,9 +414,13 @@ export default function Index() {
     updatedAt: string | null = null,
     repairApplied = false,
     inspectDraft = true,
+    warehouseVersion?: number,
   ) => {
     const projectForState = projectToLoad;
-    if (rawProjectRef.current?.id !== projectToLoad?.id) setDailyReportSaveErrors({});
+    if (rawProjectRef.current?.id !== projectToLoad?.id) {
+      setDailyReportSaveErrors({});
+      currentWarehouseVersionRef.current = warehouseVersion ?? null;
+    }
     const draftInspection = projectToLoad && inspectDraft
       ? inspectProjectDraft(projectToLoad, updatedAt)
       : { kind: 'none' as const, reason: 'missing' as const };
@@ -418,6 +434,7 @@ export default function Index() {
     skipNextAutoSaveRef.current = !repairApplied;
     conflictDetectedRef.current = false;
     currentProjectUpdatedAtRef.current = updatedAt;
+    if (warehouseVersion !== undefined) currentWarehouseVersionRef.current = warehouseVersion;
     rawProjectRef.current = projectForState;
     lastSavedProjectJsonRef.current = repairApplied ? null : (projectForState ? serializeProject(projectForState) : null);
     setCurrentProjectUpdatedAt(updatedAt);
@@ -456,6 +473,10 @@ export default function Index() {
       conflictDetectedRef.current = false;
       lastLocalSaveAtRef.current = Date.now();
       currentProjectUpdatedAtRef.current = updatedAt;
+      // O trigger do banco pode avançar a versão do Almoxarifado quando uma
+      // tela ainda migrada parcialmente alterar sua ramificação. A próxima
+      // operação crítica relê essa versão antes de gravar.
+      currentWarehouseVersionRef.current = null;
       lastSavedProjectJsonRef.current = nextJson;
       setCurrentProjectUpdatedAt(updatedAt);
       setLastCloudConfirmedAt(new Date().toISOString());
@@ -493,7 +514,7 @@ export default function Index() {
     try {
       const record = await loadCloudProjectRecord(localProject.id);
       if (record) {
-        replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false);
+        replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false, record.warehouseVersion);
         discardProjectDraft(record.project.id);
         conflictDetectedRef.current = false;
         toast.warning('A obra foi atualizada em outro aparelho. Os dados da nuvem foram carregados e a cópia local foi descartada.');
@@ -608,7 +629,7 @@ export default function Index() {
                 }
               }
             }
-            replaceProjectWithoutAutoSave(projectToLoad, updatedAt, record.repairApplied);
+            replaceProjectWithoutAutoSave(projectToLoad, updatedAt, record.repairApplied, true, record.warehouseVersion);
           }
         } else {
           replaceProjectWithoutAutoSave(null);
@@ -676,6 +697,7 @@ export default function Index() {
       const hasLocalChanges = projectHasLocalChanges(current, lastSavedProjectJsonRef.current);
       const action = resolveRemoteVersionAction(remoteVersion.updatedAt, currentProjectUpdatedAtRef.current, hasLocalChanges);
       if (action === 'current') {
+        currentWarehouseVersionRef.current = remoteVersion.warehouseVersion;
         setSaveStatus('saved');
         return;
       }
@@ -693,7 +715,7 @@ export default function Index() {
         await handleCloudConflict(latestLocal);
         return;
       }
-      replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false);
+      replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false, record.warehouseVersion);
       toast.info('Dados atualizados a partir de outro aparelho.');
     } catch (error) {
       console.warn('Falha ao conferir a versão da obra na nuvem.', error);
@@ -733,12 +755,13 @@ export default function Index() {
       const remoteJson = serializeProject(record.project);
       if (!record.repairApplied && remoteJson === lastSavedProjectJsonRef.current) {
         currentProjectUpdatedAtRef.current = record.updatedAt;
+        currentWarehouseVersionRef.current = record.warehouseVersion;
         setCurrentProjectUpdatedAt(record.updatedAt);
         setLastCloudConfirmedAt(new Date().toISOString());
         setSaveStatus('saved');
         return;
       }
-      replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false);
+      replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false, record.warehouseVersion);
       setRemoteUpdateAt(new Date().toISOString());
       toast.info('Atualizado com as alterações de outro usuário.');
     } catch (error) {
@@ -768,13 +791,27 @@ export default function Index() {
   useEffect(() => {
     const projectId = rawProject?.id;
     if (!projectId || bootLoading) return;
-    const queueRefresh = (payload?: { new?: Record<string, unknown> | null }, source?: string) => {
+    const queueRefresh = (payload?: { new?: Record<string, unknown> | null; old?: Record<string, unknown> | null }, source?: string) => {
       if (source === 'daily_reports') {
         const incoming = payload?.new?.data as DailyReport | undefined;
         if (incoming?.date) {
           refreshDailyReportFromRealtime(incoming);
           return;
         }
+      }
+      const rowId = typeof payload?.new?.id === 'string'
+        ? payload.new.id
+        : typeof payload?.old?.id === 'string'
+          ? payload.old.id
+          : null;
+      if (source && rowId) {
+        const key = `${source}:${rowId}`;
+        const expiresAt = ownWarehouseRealtimeRowsRef.current.get(key);
+        if (expiresAt && expiresAt > Date.now()) {
+          ownWarehouseRealtimeRowsRef.current.delete(key);
+          return;
+        }
+        if (expiresAt) ownWarehouseRealtimeRowsRef.current.delete(key);
       }
       // Ignora o eco da própria gravação (mesma versão que já está carregada aqui).
       const remoteUpdatedAt = typeof payload?.new?.updated_at === 'string' ? payload.new.updated_at : null;
@@ -1127,6 +1164,179 @@ export default function Index() {
     setUndoVersion(value => value + 1);
   }, [canPersistProject, handleCloudConflict, orgId, persistProject, role, user]);
 
+  const prepareWarehouseCloudOperation = useCallback(async () => {
+    if (!user || !orgId || !warehouseEditor) throw new Error('Você não tem permissão para salvar o Almoxarifado.');
+    if (conflictDetectedRef.current) throw new Error('Atualize a obra antes de salvar o Almoxarifado.');
+
+    // Nunca deixe um autosave geral concorrer com a transação do estoque. Uma
+    // alteração anterior é confirmada primeiro; depois disso, somente a RPC
+    // específica pode escrever o Almoxarifado.
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+      const pending = rawProjectRef.current;
+      if (pending) await persistProject(pending, orgId);
+    }
+    if (inFlightSaveRef.current) await inFlightSaveRef.current;
+  }, [orgId, persistProject, user, warehouseEditor]);
+
+  const applyWarehouseCloudConfirmation = useCallback(async (confirmation: WarehouseCloudCommitResult) => {
+    const active = rawProjectRef.current;
+    if (!active || active.id !== confirmation.project.id) {
+      throw new Error('A retirada foi confirmada, mas outra obra está aberta. Reabra a obra para conferir o histórico.');
+    }
+
+    let confirmedProject = confirmation.project;
+    const confirmedReports = new Map<string, DailyReport | null>();
+    for (const change of confirmation.dailyReportChanges) {
+      if (!change.before && !change.after) continue;
+      const reference = change.after ?? change.before!;
+      const emptyReport: DailyReport = {
+        id: reference.id,
+        date: reference.date,
+        teamsPresent: [],
+        equipment: [],
+        attachments: [],
+        createdAt: reference.createdAt,
+        updatedAt: reference.updatedAt,
+      };
+      const saved = await saveOpenDailyReport(
+        confirmedProject.id,
+        change.before ?? emptyReport,
+        change.after ?? emptyReport,
+      );
+      confirmedReports.set(change.date, saved.report);
+      confirmedProject = replaceReportForDate(confirmedProject, change.date, saved.report);
+    }
+
+    const enrichedConfirmation: WarehouseCloudCommitResult = {
+      ...confirmation,
+      project: confirmedProject,
+    };
+    const parseSavedBaseline = () => {
+      if (!lastSavedProjectJsonRef.current) return active;
+      try { return JSON.parse(lastSavedProjectJsonRef.current) as Project; }
+      catch { return active; }
+    };
+    let savedBaseline = mergeWarehouseCloudCommit(parseSavedBaseline(), enrichedConfirmation);
+    for (const [date, report] of confirmedReports) {
+      savedBaseline = replaceReportForDate(savedBaseline, date, report);
+    }
+    const savedBaselineJson = serializeProject(savedBaseline);
+    lastSavedProjectJsonRef.current = savedBaselineJson;
+
+    const expiresAt = Date.now() + 10_000;
+    ownWarehouseRealtimeRowsRef.current.set(`warehouse_requisitions:${confirmation.acknowledgement.requisitionId}`, expiresAt);
+    confirmation.acknowledgement.movementIds.forEach(id => {
+      ownWarehouseRealtimeRowsRef.current.set(`warehouse_movements:${id}`, expiresAt);
+    });
+    confirmation.acknowledgement.auditLogIds.forEach(id => {
+      ownWarehouseRealtimeRowsRef.current.set(`audit_logs:${id}`, expiresAt);
+    });
+    currentWarehouseVersionRef.current = confirmation.warehouseVersion;
+    lastLocalSaveAtRef.current = Date.now();
+    currentProjectUpdatedAtRef.current = confirmation.projectUpdatedAt;
+    setCurrentProjectUpdatedAt(confirmation.projectUpdatedAt);
+    setLastCloudConfirmedAt(confirmation.committedAt);
+    setCloudList(previous => previous.map(meta => meta.id === confirmation.project.id
+      ? { ...meta, updatedAt: confirmation.projectUpdatedAt }
+      : meta));
+
+    setRawProject(current => {
+      if (!current || current.id !== confirmation.project.id) return current;
+      let merged = mergeWarehouseCloudCommit(current, enrichedConfirmation);
+      for (const [date, report] of confirmedReports) merged = replaceReportForDate(merged, date, report);
+      const fullyConfirmed = serializeProject(merged) === savedBaselineJson;
+      if (fullyConfirmed) {
+        if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+        discardProjectDraft(merged.id);
+        skipNextAutoSaveRef.current = true;
+        setSaveStatus('saved');
+      } else {
+        scheduleProjectDraft(merged, confirmation.projectUpdatedAt);
+        setSaveStatus('saving');
+      }
+      rawProjectRef.current = merged;
+      return merged;
+    });
+  }, [discardProjectDraft, scheduleProjectDraft]);
+
+  const commitWarehouseScopedNow = useCallback(async (next: Project, domain: WarehouseScopedDomain): Promise<Project> => {
+    await prepareWarehouseCloudOperation();
+
+    const before = rawProjectRef.current;
+    if (!before || before.id !== next.id) throw new Error('A operação não pertence à obra aberta.');
+    if (currentWarehouseVersionRef.current == null) {
+      const remote = await getCloudProjectVersion(before.id);
+      if (!remote || remote.updatedAt !== currentProjectUpdatedAtRef.current) {
+        throw new Error('A versão do Almoxarifado mudou. Atualize a obra antes de continuar.');
+      }
+      currentWarehouseVersionRef.current = remote.warehouseVersion;
+    }
+
+    const scopedNext: Project = {
+      ...before,
+      warehouse: next.warehouse,
+      auditLogs: next.auditLogs,
+      stockMovements: next.stockMovements,
+      materialPriceHistory: next.materialPriceHistory,
+      dailyReports: next.dailyReports,
+    };
+    setSaveStatus('saving');
+    let result: WarehouseScopedCommitResult;
+    try {
+      result = await commitWarehouseScopedOperation(
+        before,
+        scopedNext,
+        currentWarehouseVersionRef.current,
+        '',
+        domain,
+      );
+    } catch (error) {
+      setSaveStatus(navigator.onLine ? 'error' : 'offline');
+      throw error;
+    }
+
+    const parseSavedBaseline = () => {
+      if (!lastSavedProjectJsonRef.current) return before;
+      try { return JSON.parse(lastSavedProjectJsonRef.current) as Project; }
+      catch { return before; }
+    };
+    const savedBaseline = mergeWarehouseScopedCommit(parseSavedBaseline(), result);
+    const savedBaselineJson = serializeProject(savedBaseline);
+    lastSavedProjectJsonRef.current = savedBaselineJson;
+
+    const expiresAt = Date.now() + 10_000;
+    result.affectedMovementIds.forEach(id => ownWarehouseRealtimeRowsRef.current.set(`warehouse_movements:${id}`, expiresAt));
+    result.affectedCustodyIds.forEach(id => ownWarehouseRealtimeRowsRef.current.set(`warehouse_custody:${id}`, expiresAt));
+    result.affectedAuditIds.forEach(id => ownWarehouseRealtimeRowsRef.current.set(`audit_logs:${id}`, expiresAt));
+    currentWarehouseVersionRef.current = result.warehouseVersion;
+    lastLocalSaveAtRef.current = Date.now();
+    currentProjectUpdatedAtRef.current = result.projectUpdatedAt;
+    setCurrentProjectUpdatedAt(result.projectUpdatedAt);
+    setLastCloudConfirmedAt(result.committedAt);
+    setCloudList(previous => previous.map(meta => meta.id === result.project.id ? { ...meta, updatedAt: result.projectUpdatedAt } : meta));
+
+    let applied = result.project;
+    setRawProject(current => {
+      if (!current || current.id !== result.project.id) return current;
+      applied = mergeWarehouseScopedCommit(current, result);
+      const fullyConfirmed = serializeProject(applied) === savedBaselineJson;
+      if (fullyConfirmed) {
+        discardProjectDraft(applied.id);
+        skipNextAutoSaveRef.current = true;
+        setSaveStatus('saved');
+      } else {
+        scheduleProjectDraft(applied, result.projectUpdatedAt);
+        setSaveStatus('saving');
+      }
+      rawProjectRef.current = applied;
+      return applied;
+    });
+    return applied;
+  }, [discardProjectDraft, prepareWarehouseCloudOperation, scheduleProjectDraft]);
+
   const saveStorageMaintenanceProject = useCallback(async (next: Project, expectedUpdatedAt: string) => {
     if (!user || !orgId || !canPersistProject || role !== 'owner') {
       throw new Error('Somente o Proprietário pode executar a manutenção global do Storage.');
@@ -1168,7 +1378,7 @@ export default function Index() {
             }
           }
         }
-        replaceProjectWithoutAutoSave(projectToLoad, updatedAt, record.repairApplied);
+        replaceProjectWithoutAutoSave(projectToLoad, updatedAt, record.repairApplied, true, record.warehouseVersion);
         undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
         setUndoVersion(v => v + 1);
       }
@@ -1213,7 +1423,7 @@ export default function Index() {
       throw new Error('A estrutura importada nao foi confirmada no banco. A obra incompleta foi removida; tente novamente.');
     }
     const list = await refreshCloudList();
-    replaceProjectWithoutAutoSave(persisted.project, list.find(p => p.id === projectWithName.id)?.updatedAt ?? persisted.updatedAt ?? updatedAt);
+    replaceProjectWithoutAutoSave(persisted.project, list.find(p => p.id === projectWithName.id)?.updatedAt ?? persisted.updatedAt ?? updatedAt, false, true, persisted.warehouseVersion);
     undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
     setUndoVersion(v => v + 1);
     setCurrentView('dashboard');
@@ -1266,7 +1476,7 @@ export default function Index() {
         if (next) {
           const record = await loadCloudProjectRecord(next.id);
           if (record) {
-            replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied);
+            replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, true, record.warehouseVersion);
             undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
           }
         }
@@ -1415,13 +1625,16 @@ export default function Index() {
       case 'realCost':
         return <RealCost project={project} onProjectChange={realCostSetter} canManageSubcontracts={role === 'owner' || role === 'admin'} canDeleteSubcontractHistory={role === 'owner'} auditActor={auditActor} />;
       case 'materials':
-        return <Materials project={project} onProjectChange={materialsSetter} auditActor={auditActor} />;
+        return <Materials project={project} onProjectChange={materialsSetter} onCommitWarehouseScoped={commitWarehouseScopedNow} auditActor={auditActor} />;
       case 'warehouse':
         return (
           <WarehouseView
             project={project}
             onProjectChange={warehouseSetter}
             onCommitProject={commitProjectNow}
+            onCloudWarehouseOperationConfirmed={applyWarehouseCloudConfirmation}
+            onPrepareCloudWarehouseOperation={prepareWarehouseCloudOperation}
+            onCommitWarehouseScoped={commitWarehouseScopedNow}
             canManageFiscalNotes={warehouseEditor}
             canReviewFiscalCosts={role === 'owner' || role === 'admin'}
             canViewPanel={role !== 'warehouse_operator' && role !== 'engineer'}

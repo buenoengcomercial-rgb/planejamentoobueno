@@ -15,10 +15,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Plus, ArrowDown, ArrowUp, Settings2, Search, Undo2 } from 'lucide-react';
 import { formatQty, parseBR } from './numberInput';
+import { toast } from 'sonner';
+import type { WarehouseScopedDomain } from '@/lib/warehouseScopedCommit';
 
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
+  onCommitWarehouseScoped?: (next: Project, domain: WarehouseScopedDomain) => Promise<Project>;
   auditActor?: WarehouseAuditActor;
 }
 
@@ -45,7 +48,7 @@ function deriveStatus(row: WarehouseRow): MC.StockStatus {
   return 'em_estoque';
 }
 
-export default function StockTab({ project, onProjectChange, auditActor }: Props) {
+export default function StockTab({ project, onCommitWarehouseScoped, auditActor }: Props) {
   const rows = useMemo(() => computeWarehouseRows(project), [project]);
   const warehouse = useMemo(() => ensureWarehouse(project).warehouse!, [project]);
   const suppliers = useMemo(() => MC.getProjectSuppliers(project), [project]);
@@ -53,6 +56,7 @@ export default function StockTab({ project, onProjectChange, auditActor }: Props
   const taskById = useMemo(() => new Map(tasks.map(task => [task.id, task.name])), [tasks]);
   const [search, setSearch] = useState('');
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     type: 'entrada' as StockAction,
     date: new Date().toISOString().slice(0, 10),
@@ -81,36 +85,61 @@ export default function StockTab({ project, onProjectChange, auditActor }: Props
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [warehouse.movements, selectedKey]);
 
-  const addMove = () => {
+  const addMove = async () => {
     if (!selected) return;
     const rawQty = parseBR(form.quantity);
     if (rawQty === undefined || rawQty === 0) return;
-
-    let type: WarehouseMovementType;
     if (form.type === 'entrada') {
-      if (rawQty <= 0) return;
-      type = 'entrada';
-    } else if (form.type === 'retirada') {
-      if (rawQty <= 0) return;
-      type = 'retirada';
-    } else {
-      type = rawQty > 0 ? 'ajuste_positivo' : 'ajuste_negativo';
+      toast.error('Registre entradas pela nota fiscal na aba Entrada do Almoxarifado.');
+      return;
+    }
+    if (form.type === 'retirada') {
+      toast.error('Registre saídas pela requisição assinada em Retiradas e devoluções.');
+      return;
+    }
+    if (!onCommitWarehouseScoped) {
+      toast.error('A transação segura de ajuste ainda não está disponível. Nada foi gravado.');
+      return;
     }
 
-    onProjectChange(addMovement(project, {
-      date: form.date,
-      itemKey: selected.key,
-      itemCode: selected.code,
-      itemDescription: selected.description,
-      itemUnit: selected.unit,
-      type,
-      quantity: Math.abs(rawQty),
-      supplierId: type === 'entrada' ? (form.supplierId || undefined) : undefined,
-      taskId: type === 'retirada' ? (form.taskId || undefined) : undefined,
-      notes: form.notes || undefined,
-      responsible: form.responsible || undefined,
-    }, auditActor));
-    setForm({ ...form, quantity: '', notes: '', taskId: type === 'retirada' ? form.taskId : '' });
+    const type: WarehouseMovementType = rawQty > 0 ? 'ajuste_positivo' : 'ajuste_negativo';
+    try {
+      setSaving(true);
+      await onCommitWarehouseScoped(addMovement(project, {
+        date: form.date,
+        itemKey: selected.key,
+        itemCode: selected.code,
+        itemDescription: selected.description,
+        itemUnit: selected.unit,
+        type,
+        quantity: Math.abs(rawQty),
+        notes: form.notes || undefined,
+        responsible: form.responsible || undefined,
+      }, auditActor), 'adjustment');
+      setForm({ ...form, quantity: '', notes: '', taskId: '' });
+      toast.success('Ajuste confirmado na nuvem e registrado no extrato.');
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reverse = async (movement: WarehouseMovement) => {
+    if (!onCommitWarehouseScoped) return void toast.error('A transação segura de estorno ainda não está disponível. Nada foi gravado.');
+    if (movement.requisitionId || movement.fiscalNoteId) {
+      toast.error('Use a correção da requisição ou o cancelamento da nota para estornar este movimento.');
+      return;
+    }
+    try {
+      setSaving(true);
+      await onCommitWarehouseScoped(reverseMovement(project, movement.id, auditActor), 'adjustment');
+      toast.success('Estorno confirmado na nuvem e vinculado ao movimento original.');
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (rows.length === 0) {
@@ -249,7 +278,7 @@ export default function StockTab({ project, onProjectChange, auditActor }: Props
                 onChange={e => setForm({ ...form, notes: e.target.value })}
                 className="h-8 text-xs"
               />
-              <Button size="sm" className="h-8 w-full text-xs" onClick={addMove}>
+              <Button size="sm" className="h-8 w-full text-xs" disabled={saving} onClick={() => void addMove()}>
                 <Plus className="w-3.5 h-3.5 mr-1" /> Registrar no Almoxarifado
               </Button>
             </div>
@@ -284,7 +313,8 @@ export default function StockTab({ project, onProjectChange, auditActor }: Props
                         <button
                           className="text-warning opacity-70 hover:opacity-100"
                           title="Estornar movimento"
-                          onClick={() => onProjectChange(reverseMovement(project, movement.id, auditActor))}
+                          disabled={saving}
+                          onClick={() => void reverse(movement)}
                         >
                           <Undo2 className="w-3 h-3" />
                         </button>

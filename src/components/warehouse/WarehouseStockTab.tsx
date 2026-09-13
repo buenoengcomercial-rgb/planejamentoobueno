@@ -27,7 +27,7 @@ import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { WarehouseSectionHeader, WarehouseStatusBadge } from './WarehouseVisual';
 
-interface Props { onNewEntry?: () => void; project: Project; onProjectChange: (next: Project) => void; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; }
+interface Props { onNewEntry?: () => void; project: Project; onProjectChange: (next: Project) => void; onCommitWarehouseScoped?: (next: Project, domain: 'catalog') => Promise<Project>; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; }
 
 const stockClassLabel: Record<MaterialCostClass, string> = { ...MATERIAL_COST_CLASS_LABEL, unclassified: 'Diversos' };
 const stockClassIcon: Record<MaterialCostClass, ElementType> = { material: BrickWall, labor: HardHat, equipment: Truck, unclassified: CircleSlash };
@@ -93,7 +93,7 @@ function StockMinimumInput({ row, onCommit }: { row: WarehouseStockOverviewRow; 
   </div>;
 }
 
-export default function WarehouseStockTab({ onNewEntry, project, onProjectChange, auditActor, canArchive = true, canDelete = false }: Props) {
+export default function WarehouseStockTab({ onNewEntry, project, onProjectChange, onCommitWarehouseScoped, auditActor, canArchive = true, canDelete = false }: Props) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
@@ -111,6 +111,11 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
     () => computeWarehouseStockOverviewRows(project, showArchived),
     [project, showArchived],
   );
+  const commitCatalog = async (next: Project) => {
+    if (onCommitWarehouseScoped) return onCommitWarehouseScoped(next, 'catalog');
+    if (import.meta.env.MODE === 'test') { onProjectChange(next); return next; }
+    throw new Error('A transação segura de cadastro ainda não está disponível. Nada foi gravado.');
+  };
   const archivedCount = project.warehouse?.items.filter(item => !!item.archivedAt).length ?? 0;
   const purchaseGroups = useMemo(() => (project.materialComparisons ?? [])
     .map(comparison => ({ id: comparison.id, name: comparison.name }))
@@ -144,7 +149,8 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
   const orderedClasses = sort.key === 'costClass' && sort.direction === 'desc' ? [...stockClassOrder].reverse() : stockClassOrder;
 
   const setMin = (key: string, code: string | undefined, description: string, unit: string, min: number) => {
-    onProjectChange(upsertItemConfig(project, { key, code, description, unit, minStock: Number.isFinite(min) ? min : undefined }));
+    void commitCatalog(upsertItemConfig(project, { key, code, description, unit, minStock: Number.isFinite(min) ? min : undefined }))
+      .catch(error => toast.error((error as Error).message));
   };
 
 
@@ -160,7 +166,10 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
         ),
         confirmLabel: 'Arquivar e ocultar',
       },
-      () => onProjectChange(removeWarehouseItem(project, key)),
+      async () => {
+        try { await commitCatalog(removeWarehouseItem(project, key)); }
+        catch (error) { toast.error((error as Error).message); }
+      },
     );
   };
   const setClassification = (row: WarehouseStockOverviewRow, costClass: MaterialCostClass) => {
@@ -168,8 +177,8 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
   };
   const handleDeleteItem = (key: string, description: string) => confirm(
     { title: 'Excluir material definitivamente?', description: `O material ${description} será removido. Materiais com histórico exigem primeiro a correção do registro de origem.`, confirmLabel: 'Excluir definitivamente' },
-    () => {
-      try { onProjectChange(hardDeleteWarehouseItem(project, key)); toast.success('Material excluído definitivamente.'); }
+    async () => {
+      try { await commitCatalog(hardDeleteWarehouseItem(project, key)); toast.success('Material excluído definitivamente.'); }
       catch (error) { toast.error((error as Error).message); }
     },
   );
@@ -317,10 +326,10 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
         projectMaterials={projectMaterials}
         auditActor={auditActor}
         canUnlink={canArchive}
-        onProjectChange={onProjectChange}
+        onCommitProject={commitCatalog}
         onClose={() => setLinkFor(null)}
       />
-      <SupplierPresentationDialog project={project} rows={rows} itemKey={presentationFor} onSelectKey={setPresentationFor} auditActor={auditActor} onProjectChange={onProjectChange} onClose={() => setPresentationFor(null)} />
+      <SupplierPresentationDialog project={project} rows={rows} itemKey={presentationFor} onSelectKey={setPresentationFor} auditActor={auditActor} onCommitProject={commitCatalog} onClose={() => setPresentationFor(null)} />
       <PurchaseHistoryDialog project={project} target={historyFor} onClose={() => setHistoryFor(null)} />
       {confirmDialog}
     </div>
@@ -338,13 +347,13 @@ function StockMobileCard({ row, canArchive, onClassChange, onLink, onHistory, on
   return <article className={`space-y-3 rounded-xl border p-3 shadow-sm ${row.underMin ? 'border-destructive/50 bg-destructive/5' : row.isPhysicalStock ? 'border-primary/25 bg-primary/5' : 'bg-muted/25'}`}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</div><div className="font-bold leading-snug">{row.description}</div></div><WarehouseStatusBadge label={row.isPhysicalStock ? (row.underMin ? 'Estoque baixo' : 'Estoque físico') : 'Planejamento'} tone={row.underMin ? 'danger' : row.isPhysicalStock ? 'success' : 'neutral'} /></div><label className="block"><span className="mb-1 block text-xs font-semibold text-muted-foreground">Classificação</span><StockClassSelect row={row} onChange={onClassChange} mobile /></label><dl className="grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Contratado</dt><dd className="font-semibold">{row.contracted.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Acréscimo do aditivo</dt><dd className="font-semibold text-primary">+{row.additive.toLocaleString('pt-BR')} {row.unit}</dd></div><div className="rounded bg-primary/5 p-2"><dt className="text-xs text-muted-foreground">Planejado total</dt><dd className="font-semibold">{row.planned.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.isPhysicalStock ? <><div><dt className="text-xs text-muted-foreground">Saldo disponível</dt><dd className={`font-bold ${row.underMin ? 'text-destructive' : 'text-primary'}`}>{row.balance.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Já retirado</dt><dd>{row.withdrawn.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.costClass === 'material' && <div><dt className="text-xs text-muted-foreground">Estoque baixo</dt><dd className={row.underMin ? 'font-bold text-destructive' : ''}>{row.effectiveMinStock?.toLocaleString('pt-BR') ?? '—'} {row.unit}</dd></div>}</> : <div className="col-span-2 rounded-lg bg-muted/60 p-2 text-xs text-muted-foreground">Sem estoque físico: aguarda compra, nota fiscal ou cadastro no almoxarifado.</div>}</dl>{row.isPhysicalStock && <div className={`grid gap-2 ${canArchive ? 'grid-cols-3' : 'grid-cols-2'}`}><StockLinkButton row={row} onClick={onLink} mobile /><Button variant="outline" className="min-h-11" onClick={onHistory}><History className="h-4 w-4" /><span>Histórico</span></Button>{canArchive && <Button variant="outline" className="min-h-11 text-destructive" onClick={onArchive}><Archive className="h-4 w-4" /><span>Arquivar</span></Button>}</div>}</article>;
 }
 
-function SupplierPresentationDialog({ project, rows, itemKey, onSelectKey, auditActor, onProjectChange, onClose }: {
+function SupplierPresentationDialog({ project, rows, itemKey, onSelectKey, auditActor, onCommitProject, onClose }: {
   project: Project;
   rows: WarehouseStockOverviewRow[];
   itemKey: string | null;
   onSelectKey: (key: string) => void;
   auditActor?: WarehouseAuditActor;
-  onProjectChange: (next: Project) => void;
+  onCommitProject: (next: Project) => Promise<Project>;
   onClose: () => void;
 }) {
   const row = rows.find(value => value.key === itemKey && value.isPhysicalStock) ?? rows.find(value => value.isPhysicalStock);
@@ -364,10 +373,10 @@ function SupplierPresentationDialog({ project, rows, itemKey, onSelectKey, audit
     setStockUnit(rule?.stockUnit ?? row?.unit ?? 'PC');
   };
   useEffect(() => { reset(null); }, [row?.key]);
-  const save = () => {
+  const save = async () => {
     if (!row) return;
     try {
-      onProjectChange(upsertWarehouseSupplierPresentation(project, {
+      const next = upsertWarehouseSupplierPresentation(project, {
         id: editing?.id,
         supplierName,
         supplierCnpj,
@@ -376,26 +385,29 @@ function SupplierPresentationDialog({ project, rows, itemKey, onSelectKey, audit
         contentPerFiscalUnit: Number(content),
         stockUnit,
         active: true,
-      }, auditActor));
+      }, auditActor);
+      await onCommitProject(next);
       toast.success(editing ? 'Apresentação atualizada para futuras entradas.' : 'Apresentação cadastrada para futuras entradas.');
       reset(null);
     } catch (error) { toast.error((error as Error).message); }
   };
-  const deactivate = (rule: WarehouseSupplierPresentation) => {
-    onProjectChange(archiveWarehouseSupplierPresentation(project, rule.id, auditActor));
-    if (editing?.id === rule.id) reset(null);
-    toast.success('Apresentação desativada. O histórico permanece preservado.');
+  const deactivate = async (rule: WarehouseSupplierPresentation) => {
+    try {
+      await onCommitProject(archiveWarehouseSupplierPresentation(project, rule.id, auditActor));
+      if (editing?.id === rule.id) reset(null);
+      toast.success('Apresentação desativada. O histórico permanece preservado.');
+    } catch (error) { toast.error((error as Error).message); }
   };
   return <Dialog open={!!itemKey} onOpenChange={open => !open && onClose()}><DialogContent className="warehouse-ui max-w-2xl max-h-[85vh] overflow-y-auto"><DialogHeader><DialogTitle>Apresentações por fornecedor</DialogTitle><DialogDescription>Cadastre como o fornecedor vende este material. A nota fiscal continua com sua quantidade original; o estoque recebe a quantidade física convertida.</DialogDescription></DialogHeader>{row && <div className="space-y-4"><label className="block text-sm font-medium">Material físico<select className="mt-1 min-h-11 w-full rounded-md border bg-background px-3" value={row.key} onChange={event => onSelectKey(event.target.value)}>{rows.filter(value => value.isPhysicalStock).map(value => <option key={value.key} value={value.key}>{value.description} · {value.unit}</option>)}</select></label><div className="grid gap-3 sm:grid-cols-2"><label className="text-sm font-medium">Fornecedor<Input className="mt-1 min-h-11" value={supplierName} onChange={event => setSupplierName(event.target.value)} placeholder="Nome exibido na NF" /></label><label className="text-sm font-medium">CNPJ<Input className="mt-1 min-h-11" value={supplierCnpj} onChange={event => setSupplierCnpj(event.target.value)} placeholder="Somente números ou formatado" /></label><label className="text-sm font-medium">Código do produto no fornecedor<Input className="mt-1 min-h-11" value={productCode} onChange={event => setProductCode(event.target.value)} placeholder="Ex.: MLB582" /></label><label className="text-sm font-medium">Conteúdo por unidade fiscal<Input className="mt-1 min-h-11" type="number" min="0.0001" step="any" value={content} onChange={event => setContent(event.target.value)} /></label><label className="text-sm font-medium">Unidade no estoque<Input className="mt-1 min-h-11" value={stockUnit} onChange={event => setStockUnit(event.target.value)} placeholder="PC" /></label></div><div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-sm">Cada unidade da NF deste fornecedor entrará como <strong>{Number(content || 0).toLocaleString('pt-BR')} {stockUnit || row.unit}</strong> no estoque.</div><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => reset(null)}>Limpar</Button><Button onClick={save}>{editing ? 'Salvar alteração' : 'Cadastrar apresentação'}</Button></div><div className="space-y-2 border-t pt-3"><h4 className="font-semibold">Regras deste material</h4>{rules.length ? rules.map(rule => <div key={rule.id} className={`flex flex-wrap items-center gap-2 rounded-md border p-2 text-sm ${rule.active ? '' : 'opacity-60'}`}><div className="min-w-0 flex-1"><strong>{rule.supplierName || rule.supplierCnpj}</strong><div className="text-xs text-muted-foreground">{rule.supplierCnpj} · código {rule.supplierProductCode} · 1 unidade = {rule.contentPerFiscalUnit} {rule.stockUnit} {rule.active ? '' : '· desativada'}</div></div><Button size="sm" variant="outline" onClick={() => reset(rule)}>Editar</Button>{rule.active && <Button size="sm" variant="outline" className="text-destructive" onClick={() => deactivate(rule)}>Desativar</Button>}</div>) : <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">Nenhuma apresentação cadastrada para este material.</p>}</div></div>}<div className="flex justify-end"><Button variant="outline" onClick={onClose}>Fechar</Button></div></DialogContent></Dialog>;
 }
 
-function MaterialLinkDialog({ project, itemKey, projectMaterials, auditActor, canUnlink, onProjectChange, onClose }: {
+function MaterialLinkDialog({ project, itemKey, projectMaterials, auditActor, canUnlink, onCommitProject, onClose }: {
   project: Project;
   itemKey: string | null;
   projectMaterials: ReturnType<typeof suggestMaterialsFromProject>;
   auditActor?: WarehouseAuditActor;
   canUnlink: boolean;
-  onProjectChange: (project: Project) => void;
+  onCommitProject: (project: Project) => Promise<Project>;
   onClose: () => void;
 }) {
   const row = useMemo(() => itemKey ? computeWarehouseRows(project, { includeManual: true, includeArchived: true }).find(candidate => candidate.key === itemKey) : undefined, [itemKey, project]);
@@ -405,11 +417,11 @@ function MaterialLinkDialog({ project, itemKey, projectMaterials, auditActor, ca
   const [unplannedReason, setUnplannedReason] = useState(row?.unplannedReason || '');
   const selectedMaterial = projectMaterials.find(material => material.key === projectMaterialKey);
 
-  const addLink = () => {
+  const addLink = async () => {
     if (!row || !selectedMaterial) return toast.error('Selecione um insumo previsto.');
     const factor = Number(conversionFactor.replace(',', '.'));
     try {
-      onProjectChange(upsertWarehouseProjectMaterialLink(project, {
+      const next = upsertWarehouseProjectMaterialLink(project, {
         warehouseItemKey: row.key,
         projectMaterialKey: selectedMaterial.key,
         projectMaterialCode: selectedMaterial.code,
@@ -417,7 +429,8 @@ function MaterialLinkDialog({ project, itemKey, projectMaterials, auditActor, ca
         projectMaterialUnit: selectedMaterial.unit,
         conversionFactor: factor,
         source: 'manual',
-      }, auditActor));
+      }, auditActor);
+      await onCommitProject(next);
       setProjectMaterialKey('');
       setProjectMaterialOpen(false);
       setConversionFactor('1');
@@ -425,19 +438,25 @@ function MaterialLinkDialog({ project, itemKey, projectMaterials, auditActor, ca
     } catch (error) { toast.error((error as Error).message); }
   };
 
-  const markUnplanned = () => {
+  const markUnplanned = async () => {
     if (!row || !unplannedReason.trim()) return toast.error('Informe a justificativa do material não previsto.');
-    onProjectChange(upsertItemConfig(project, {
-      key: row.key,
-      code: row.code,
-      description: row.description,
-      unit: row.unit,
-      manualItem: row.manualItem,
-      minStock: row.minStock,
-      purchaseGroupId: row.purchaseGroupId,
-      unplannedReason: unplannedReason.trim(),
-    }));
-    toast.success('Material classificado como não previsto.');
+    try {
+      await onCommitProject(upsertItemConfig(project, {
+        key: row.key,
+        code: row.code,
+        description: row.description,
+        unit: row.unit,
+        manualItem: row.manualItem,
+        minStock: row.minStock,
+        purchaseGroupId: row.purchaseGroupId,
+        unplannedReason: unplannedReason.trim(),
+      }));
+      toast.success('Material classificado como não previsto.');
+    } catch (error) { toast.error((error as Error).message); }
+  };
+
+  const onProjectChange = (next: Project) => {
+    void onCommitProject(next).catch(error => toast.error((error as Error).message));
   };
 
   return <Dialog open={!!itemKey} onOpenChange={open => !open && onClose()}><DialogContent className="warehouse-ui max-w-3xl"><DialogHeader><DialogTitle>Revisar vínculos do material</DialogTitle><DialogDescription>{row?.description} · Um material físico pode representar mais de um insumo previsto.</DialogDescription></DialogHeader>{row && <div className="space-y-4"><div className="grid gap-3 rounded-md border p-3 md:grid-cols-[1fr_130px_auto]"><div className="min-w-0"><label className="mb-1 block text-xs font-semibold">Insumo previsto</label><Popover open={projectMaterialOpen} onOpenChange={setProjectMaterialOpen}><PopoverTrigger asChild><Button variant="outline" role="combobox" aria-expanded={projectMaterialOpen} aria-label="Selecionar insumo previsto" className="min-h-11 w-full justify-between px-3 font-normal"><span className={cn('truncate text-left', !selectedMaterial && 'text-muted-foreground')}>{selectedMaterial?.description || 'Pesquisar insumo previsto'}</span><ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" /></Button></PopoverTrigger><PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] p-0"><Command><CommandInput placeholder="Digite uma palavra-chave..." /><CommandList><CommandEmpty>Nenhum insumo previsto encontrado.</CommandEmpty><CommandGroup>{projectMaterials.map(material => <CommandItem key={material.key} value={`${material.description} ${material.unit}`} onSelect={() => { setProjectMaterialKey(material.key); setConversionFactor(material.unit.trim().toLowerCase() === row.unit.trim().toLowerCase() ? '1' : ''); setProjectMaterialOpen(false); }} className="min-h-11 gap-2"><Check className={cn('h-4 w-4 shrink-0', projectMaterialKey === material.key ? 'opacity-100' : 'opacity-0')} /><span className="min-w-0 flex-1"><span className="block whitespace-normal leading-snug">{material.description}</span><span className="block text-xs text-muted-foreground">Previsto: {material.quantity.toLocaleString('pt-BR')} {material.unit}</span></span></CommandItem>)}</CommandGroup></CommandList></Command></PopoverContent></Popover></div><div><label className="mb-1 block text-xs font-semibold">Conversão</label><Input className="min-h-11 text-center" value={conversionFactor} onChange={event => setConversionFactor(event.target.value)} placeholder="Fator" /></div><Button className="min-h-11 self-end" onClick={addLink}><Link2 className="mr-2 h-4 w-4" />Vincular</Button></div><div><h4 className="mb-2 text-sm font-semibold">Vínculos confirmados</h4>{row.projectLinks.map(link => <div key={link.id} className="flex min-h-11 items-center gap-2 border-t py-2"><span className="min-w-0 flex-1 text-sm">{link.projectMaterialDescription} ({link.projectMaterialUnit})</span><span className="text-xs text-muted-foreground">fator {link.conversionFactor}</span>{canUnlink && <Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => onProjectChange(unlinkWarehouseProjectMaterial(project, link.id, auditActor))} aria-label={`Desvincular ${link.projectMaterialDescription}`}><Unlink className="h-4 w-4" /></Button>}</div>)}{!row.projectLinks.length && <div className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">Nenhum vínculo confirmado.</div>}</div>{!row.projectLinks.length && <div className="rounded-md border border-warning/30 bg-warning/5 p-3"><label className="mb-1 block text-xs font-semibold">Ou classifique como material não previsto</label><div className="flex gap-2"><Input className="min-h-11" value={unplannedReason} onChange={event => setUnplannedReason(event.target.value)} placeholder="Justificativa obrigatória" /><Button variant="outline" className="min-h-11" onClick={markUnplanned}>Confirmar</Button></div></div>}</div>}<div className="flex justify-end"><Button variant="outline" onClick={onClose}>Fechar</Button></div></DialogContent></Dialog>;

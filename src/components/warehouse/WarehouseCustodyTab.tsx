@@ -53,6 +53,7 @@ import {
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
+  onCommitWarehouseScoped?: (next: Project, domain: 'custody') => Promise<Project>;
   auditActor?: WarehouseAuditActor;
   canDelete?: boolean;
 }
@@ -188,7 +189,7 @@ function groupCustodyTermsByBuilding(project: Project, terms: CustodyTerm[]): Cu
   }).sort((left, right) => Number(left.isMissingBuilding) - Number(right.isMissingBuilding) || left.label.localeCompare(right.label, 'pt-BR', { numeric: true }));
 }
 
-export default function WarehouseCustodyTab({ project, onProjectChange, auditActor, canDelete = false }: Props) {
+export default function WarehouseCustodyTab({ project, onProjectChange, onCommitWarehouseScoped, auditActor, canDelete = false }: Props) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const wh = ensureWarehouse(project).warehouse!;
   const numbering = useMemo(() => getChapterNumbering(project), [project]);
@@ -218,6 +219,12 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
   });
   const [returnPhotos, setReturnPhotos] = useState<File[]>([]);
   const [returning, setReturning] = useState(false);
+
+  const commitCustody = async (next: Project) => {
+    if (onCommitWarehouseScoped) return onCommitWarehouseScoped(next, 'custody');
+    if (import.meta.env.MODE === 'test') { onProjectChange(next); return next; }
+    throw new Error('A transação segura de cautela ainda não está disponível. Nada foi gravado.');
+  };
 
   const availableEquipments = useMemo(() => {
     const tokens = normalizeSearch(equipmentSearch).split(/\s+/).filter(Boolean);
@@ -314,7 +321,7 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
         equipments: form.equipments,
       }, auditActor);
       const createdId = next.warehouse!.custodyTerms.at(-1)?.id ?? null;
-      onProjectChange(next);
+      await commitCustody(next);
       if (createdId) setExpandedTermIds(current => new Set([...current, createdId]));
       reset();
       toast.success('Cautela emitida e equipamentos marcados como Em uso.');
@@ -339,10 +346,11 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
     try {
       setReturning(true);
       const returnAttachments = await Promise.all(returnPhotos.map(file => makeAttachment(file, project.id, 'foto', 'equipment-returns')));
-      onProjectChange(returnCustodyEquipment(project, returnTarget.term.id, returnTarget.item.equipmentId, {
+      const next = returnCustodyEquipment(project, returnTarget.term.id, returnTarget.item.equipmentId, {
         ...returnData,
         returnAttachments,
-      }, auditActor));
+      }, auditActor);
+      await commitCustody(next);
       setReturnTarget(null);
       setReturnPhotos([]);
       toast.success('Devolução do equipamento registrada.');
@@ -370,18 +378,22 @@ export default function WarehouseCustodyTab({ project, onProjectChange, auditAct
   const deleteTerm = (term: CustodyTerm) => confirm(
     { title: 'Excluir cautela definitivamente?', description: 'O termo, suas fotos e devoluções vinculadas serão removidos; equipamentos ainda em uso voltarão para disponível.', confirmLabel: 'Excluir definitivamente' },
     async () => {
-      onProjectChange(hardDeleteCustodyTerm(project, term.id));
-      const attachments = [
-        ...(term.attachments ?? []), ...(term.returnAttachments ?? []),
-        ...custodyTermEquipmentItems(term).flatMap(item => item.returnAttachments ?? []),
-      ];
-      try { await deleteWarehouseAttachments(attachments); } catch { toast.warning('A cautela foi excluída, mas houve falha ao remover um anexo do Storage.'); }
-      setExpandedTermIds(current => {
-        const next = new Set(current);
-        next.delete(term.id);
-        return next;
-      });
-      toast.success('Cautela excluída e equipamentos restaurados.');
+      try {
+        await commitCustody(hardDeleteCustodyTerm(project, term.id));
+        const attachments = [
+          ...(term.attachments ?? []), ...(term.returnAttachments ?? []),
+          ...custodyTermEquipmentItems(term).flatMap(item => item.returnAttachments ?? []),
+        ];
+        try { await deleteWarehouseAttachments(attachments); } catch { toast.warning('A cautela foi excluída, mas houve falha ao remover um anexo do Storage.'); }
+        setExpandedTermIds(current => {
+          const next = new Set(current);
+          next.delete(term.id);
+          return next;
+        });
+        toast.success('Cautela excluída e equipamentos restaurados.');
+      } catch (error) {
+        toast.error((error as Error).message);
+      }
     },
   );
 
