@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { Project, WarehouseAuditActor, WarehouseMovementType } from '@/types/project';
+import type { Project, WarehouseAuditActor, WarehouseMovement, WarehouseMovementType } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import {
   addMovement,
