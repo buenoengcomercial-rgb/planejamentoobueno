@@ -26,6 +26,7 @@ import { buildPendingAdditiveSuspensionMap, isStatusOnlySuspension } from '@/lib
 import { getAllTasks } from '@/data/sampleProject';
 import { updateProjectTask } from '@/lib/taskTree';
 import { resolveObraConfig } from '@/components/ConfiguracaoObra';
+import { ModulePageHeader } from '@/components/ModulePageHeader';
 import { applyDailyProductionLogs, upsertDailyProductionLog } from '@/lib/dailyProductionLogs';
 import { validateDailyProductionLogs } from '@/lib/productionQuantityLimit';
 import TaskRescheduleDialog from '@/components/TaskRescheduleDialog';
@@ -461,16 +462,16 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
 
   return (
     <div className="mx-auto max-w-[1800px] space-y-5 p-4 lg:p-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
+      <ModulePageHeader
+        eyebrow={(
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             <CalendarCheck2 className="h-4 w-4 text-primary" /> Visão geral
           </div>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight text-foreground">Rotina semanal</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Atividades programadas e situação dos Diários de Obra, sem duplicar o Cronograma.</p>
-        </div>
-        {undoButton}
-      </header>
+        )}
+        title="Rotina semanal"
+        description="Atividades programadas e situação dos Diários de Obra, sem duplicar o Cronograma."
+        actions={undoButton}
+      />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="grid h-auto min-h-11 w-full grid-cols-2 sm:inline-flex sm:w-auto">

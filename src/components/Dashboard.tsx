@@ -6,6 +6,7 @@ import { getChapterTree, getChapterTasks, getChapterNumbering } from '@/lib/chap
 import { motion } from 'framer-motion';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { lazyWithReload } from '@/lib/lazyWithReload';
+import { ModulePageHeader } from './ModulePageHeader';
 import {
   AlertTriangle,
   BrickWall,
@@ -149,13 +150,7 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <h2 className="text-2xl font-bold text-foreground">Dashboard</h2>
-          <p className="text-sm text-muted-foreground mt-1">{project.name}</p>
-        </div>
-        {undoButton}
-      </div>
+      <ModulePageHeader title="Dashboard" description={project.name} actions={undoButton} />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {cards.map((card, i) => (

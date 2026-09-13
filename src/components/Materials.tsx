@@ -5,6 +5,7 @@ import * as MC from '@/lib/materialComparisons';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
+import { ModulePageHeader } from '@/components/ModulePageHeader';
 import { Input } from '@/components/ui/input';
 import {
   Dialog,
@@ -204,11 +205,11 @@ export default function Materials({ project, onProjectChange, onCommitWarehouseS
 
   return (
     <div className="p-4 space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h2 className="text-xl font-bold text-foreground">Materiais e compras</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Insumos do projeto, cotações, pedidos, recebimento e histórico em um único fluxo.</p>
-          <span className="mt-2 block text-xs text-muted-foreground">
+      <ModulePageHeader
+        title="Materiais e compras"
+        description="Insumos do projeto, cotações, pedidos, recebimento e histórico em um único fluxo."
+        meta={(
+          <span>
             Comparativos: <strong className="text-foreground">{summary.count}</strong>
             <span className="mx-1.5">·</span>
             Em aberto: <strong className="text-foreground">{summary.open}</strong>
@@ -217,8 +218,8 @@ export default function Materials({ project, onProjectChange, onCommitWarehouseS
             <span className="mx-1.5">·</span>
             Economia: <strong className="text-success">R$ {summary.totalEconomy.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</strong>
           </span>
-        </div>
-      </div>
+        )}
+      />
 
       <Tabs
         value={section}

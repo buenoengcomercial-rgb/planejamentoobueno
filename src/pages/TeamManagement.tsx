@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
+import { ModulePageHeader } from '@/components/ModulePageHeader';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Loader2, ArrowLeft, UserPlus, Trash2, ShieldOff, ShieldCheck, KeyRound, Mail, Check } from 'lucide-react';
 import { toast } from 'sonner';
@@ -233,15 +234,15 @@ export default function TeamManagement() {
   return (
     <div className="min-h-screen bg-background p-3 pt-14 sm:p-6">
       <div className="max-w-4xl mx-auto space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="mb-2 -ml-2">
+        <ModulePageHeader
+          eyebrow={(
+            <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="-ml-2">
               <ArrowLeft className="w-4 h-4 mr-1" /> Voltar
             </Button>
-            <h1 className="text-2xl font-bold">Usuários da empresa</h1>
-            <p className="text-sm text-muted-foreground">{membership.organization.name}</p>
-          </div>
-        </div>
+          )}
+          title="Usuários da empresa"
+          description={membership.organization.name}
+        />
 
         <Card>
           <CardHeader>
