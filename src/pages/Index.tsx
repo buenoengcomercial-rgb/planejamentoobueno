@@ -414,7 +414,7 @@ export default function Index() {
     updatedAt: string | null = null,
     repairApplied = false,
     inspectDraft = true,
-    warehouseVersion?: number,
+    warehouseVersion?: number | null,
   ) => {
     const projectForState = projectToLoad;
     if (rawProjectRef.current?.id !== projectToLoad?.id) {
@@ -1178,6 +1178,19 @@ export default function Index() {
       if (pending) await persistProject(pending, orgId);
     }
     if (inFlightSaveRef.current) await inFlightSaveRef.current;
+
+    if (currentWarehouseVersionRef.current == null) {
+      const active = rawProjectRef.current;
+      if (!active) throw new Error('Nenhuma obra está aberta para registrar a operação.');
+      const remote = await getCloudProjectVersion(active.id);
+      if (!remote || remote.updatedAt !== currentProjectUpdatedAtRef.current) {
+        throw new Error('A versão do Almoxarifado mudou. Atualize a obra antes de continuar.');
+      }
+      if (remote.warehouseVersion == null) {
+        throw new Error('A atualização segura do Almoxarifado ainda não foi instalada no servidor. Nada foi gravado.');
+      }
+      currentWarehouseVersionRef.current = remote.warehouseVersion;
+    }
   }, [orgId, persistProject, user, warehouseEditor]);
 
   const applyWarehouseCloudConfirmation = useCallback(async (confirmation: WarehouseCloudCommitResult) => {
@@ -1271,6 +1284,9 @@ export default function Index() {
       const remote = await getCloudProjectVersion(before.id);
       if (!remote || remote.updatedAt !== currentProjectUpdatedAtRef.current) {
         throw new Error('A versão do Almoxarifado mudou. Atualize a obra antes de continuar.');
+      }
+      if (remote.warehouseVersion == null) {
+        throw new Error('A atualização segura do Almoxarifado ainda não foi instalada no servidor. Nada foi gravado.');
       }
       currentWarehouseVersionRef.current = remote.warehouseVersion;
     }

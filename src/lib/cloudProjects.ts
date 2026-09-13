@@ -22,16 +22,16 @@ export interface CloudProjectMeta {
 export interface CloudProjectRecord {
   project: Project;
   updatedAt: string;
-  warehouseVersion: number;
-  warehouseUpdatedAt: string;
+  warehouseVersion: number | null;
+  warehouseUpdatedAt: string | null;
   repairApplied?: boolean;
 }
 
 export interface CloudProjectVersion {
   projectId: string;
   updatedAt: string;
-  warehouseVersion: number;
-  warehouseUpdatedAt: string;
+  warehouseVersion: number | null;
+  warehouseUpdatedAt: string | null;
 }
 
 export class CloudProjectConflictError extends Error {
@@ -72,30 +72,56 @@ export class CloudProjectPartialSyncError extends Error {
   }
 }
 
+const isMissingWarehouseVersionColumn = (error: { code?: string; message?: string }) => (
+  ['42703', 'PGRST204'].includes(error.code ?? '')
+  && /warehouse_(version|updated_at)/i.test(error.message ?? '')
+);
+
 /** Consulta leve usada para detectar alterações feitas em outro aparelho. */
 export async function getCloudProjectVersion(id: string): Promise<CloudProjectVersion | null> {
-  const { data, error } = await supabase
+  const current = await supabase
     .from('projects')
     .select('id, updated_at, warehouse_version, warehouse_updated_at')
     .eq('id', id)
     .maybeSingle();
-  if (error) throw error;
-  if (!data) return null;
+  if (current.error && !isMissingWarehouseVersionColumn(current.error)) throw current.error;
+  if (current.error) {
+    const legacy = await supabase.from('projects').select('id, updated_at').eq('id', id).maybeSingle();
+    if (legacy.error) throw legacy.error;
+    if (!legacy.data) return null;
+    return {
+      projectId: legacy.data.id,
+      updatedAt: legacy.data.updated_at,
+      warehouseVersion: null,
+      warehouseUpdatedAt: null,
+    };
+  }
+  if (!current.data) return null;
   return {
-    projectId: data.id,
-    updatedAt: data.updated_at,
-    warehouseVersion: data.warehouse_version,
-    warehouseUpdatedAt: data.warehouse_updated_at,
+    projectId: current.data.id,
+    updatedAt: current.data.updated_at,
+    warehouseVersion: current.data.warehouse_version,
+    warehouseUpdatedAt: current.data.warehouse_updated_at,
   };
 }
 
 export async function loadCloudProjectRecord(id: string): Promise<CloudProjectRecord | null> {
-  const { data, error } = await supabase
+  const current = await supabase
     .from('projects')
     .select('id, name, data_json, updated_at, warehouse_version, warehouse_updated_at')
     .eq('id', id)
     .maybeSingle();
-  if (error) throw error;
+  if (current.error && !isMissingWarehouseVersionColumn(current.error)) throw current.error;
+  let data = current.data;
+  let warehouseVersion: number | null = current.data?.warehouse_version ?? null;
+  let warehouseUpdatedAt: string | null = current.data?.warehouse_updated_at ?? null;
+  if (current.error) {
+    const legacy = await supabase.from('projects').select('id, name, data_json, updated_at').eq('id', id).maybeSingle();
+    if (legacy.error) throw legacy.error;
+    data = legacy.data ? { ...legacy.data, warehouse_version: 0, warehouse_updated_at: legacy.data.updated_at } : null;
+    warehouseVersion = null;
+    warehouseUpdatedAt = null;
+  }
   if (!data) return null;
   const proj = (data.data_json ?? {}) as unknown as Project;
   const base: Project = { ...proj, id: data.id, name: data.name };
@@ -105,8 +131,8 @@ export async function loadCloudProjectRecord(id: string): Promise<CloudProjectRe
   return {
     project: repaired.project,
     updatedAt: data.updated_at,
-    warehouseVersion: data.warehouse_version,
-    warehouseUpdatedAt: data.warehouse_updated_at,
+    warehouseVersion,
+    warehouseUpdatedAt,
     repairApplied: repaired.changed,
   };
 }
