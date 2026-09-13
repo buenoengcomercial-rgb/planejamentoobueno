@@ -1,12 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import type {
-  ManagementActionStatus,
-  ManagementChecklistItem,
-  ManagementChecklistStatus,
-  ManagementMeetingAction,
-  ManagementRoleAssignment,
-  ManagementRoutine as ManagementRoutineData,
-  ManagementWeeklyMeeting,
   Project,
   WeeklyRoutineActivity,
   WeeklyRoutineDiaryStatus,
@@ -39,23 +32,14 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/hooks/use-toast';
 import {
   ArrowRight,
   CalendarCheck2,
-  CalendarDays,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  ClipboardCheck,
-  Clock3,
   NotebookPen,
-  Plus,
-  Save,
-  Settings2,
-  Users,
   CalendarClock,
   Search,
 } from 'lucide-react';
@@ -82,61 +66,6 @@ function dayName(date: string): string {
     : new Date(`${date}T12:00:00`).getDay() - 1];
 }
 
-const ROLE_LABEL: Record<ManagementRoleAssignment['role'], string> = {
-  gestor_obra: 'Gestor da obra',
-  mestre_encarregado: 'Mestre / encarregado',
-  compras: 'Compras',
-  medicao: 'Medição',
-  diario_obra: 'Diário de obra',
-  almoxarifado: 'Almoxarifado',
-  financeiro: 'Financeiro',
-  qualidade: 'Qualidade',
-};
-
-const CHECK_STATUS_LABEL: Record<ManagementChecklistStatus, string> = {
-  pendente: 'Pendente',
-  feito: 'Feito',
-  nao_aplicavel: 'N/A',
-};
-
-const ACTION_STATUS_LABEL: Record<ManagementActionStatus, string> = {
-  aberta: 'Aberta',
-  em_andamento: 'Em andamento',
-  concluida: 'Concluída',
-  cancelada: 'Cancelada',
-};
-
-const DEFAULT_CHECKLIST: Array<Pick<ManagementChecklistItem, 'id' | 'title' | 'ownerRole' | 'status'>> = [
-  { id: 'cronograma-atualizado', title: 'Cronograma atualizado', ownerRole: 'gestor_obra', status: 'pendente' },
-  { id: 'diario-preenchido', title: 'Diário de obra preenchido', ownerRole: 'diario_obra', status: 'pendente' },
-  { id: 'restricoes-revisadas', title: 'Restrições da semana revisadas', ownerRole: 'gestor_obra', status: 'pendente' },
-  { id: 'materiais-criticos', title: 'Materiais críticos conferidos', ownerRole: 'compras', status: 'pendente' },
-  { id: 'medicoes-pendentes', title: 'Medições pendentes revisadas', ownerRole: 'medicao', status: 'pendente' },
-  { id: 'notas-pendentes', title: 'Notas fiscais pendentes conferidas', ownerRole: 'almoxarifado', status: 'pendente' },
-  { id: 'custo-real', title: 'Custo real atualizado', ownerRole: 'financeiro', status: 'pendente' },
-  { id: 'decisoes-registradas', title: 'Decisões da semana registradas', ownerRole: 'gestor_obra', status: 'pendente' },
-];
-
-const DEFAULT_ROLES: ManagementRoleAssignment[] = [
-  { id: 'gestor_obra', role: 'gestor_obra', personName: '' },
-  { id: 'mestre_encarregado', role: 'mestre_encarregado', personName: '' },
-  { id: 'compras', role: 'compras', personName: '' },
-  { id: 'medicao', role: 'medicao', personName: '' },
-  { id: 'diario_obra', role: 'diario_obra', personName: '' },
-  { id: 'almoxarifado', role: 'almoxarifado', personName: '' },
-  { id: 'financeiro', role: 'financeiro', personName: '' },
-  { id: 'qualidade', role: 'qualidade', personName: '' },
-];
-
-function uid(prefix: string) {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function nowISO() {
-  return new Date().toISOString();
-}
-
 function formatDateBR(value: string) {
   const [year, month, day] = value.slice(0, 10).split('-');
   return `${day}/${month}/${year}`;
@@ -145,24 +74,6 @@ function formatDateBR(value: string) {
 function formatShortDate(value: string) {
   const [, month, day] = value.slice(0, 10).split('-');
   return `${day}/${month}`;
-}
-
-function ensureRoutine(project: Project): ManagementRoutineData {
-  const existing = project.managementRoutine;
-  return {
-    responsibleName: existing?.responsibleName ?? '',
-    foremanName: existing?.foremanName ?? '',
-    buyerName: existing?.buyerName ?? '',
-    measurementResponsibleName: existing?.measurementResponsibleName ?? '',
-    dailyReportResponsibleName: existing?.dailyReportResponsibleName ?? '',
-    weeklyMeetingDay: existing?.weeklyMeetingDay ?? 'segunda-feira',
-    measurementPeriod: existing?.measurementPeriod ?? 'mensal',
-    internalApprovalRule: existing?.internalApprovalRule ?? '',
-    roles: DEFAULT_ROLES.map(role => ({ ...role, ...(existing?.roles ?? []).find(saved => saved.role === role.role) })),
-    weeklyChecklist: DEFAULT_CHECKLIST.map(item => ({ ...item, ...(existing?.weeklyChecklist ?? []).find(saved => saved.id === item.id) })),
-    meetings: existing?.meetings ?? [],
-    weeklyPlans: existing?.weeklyPlans ?? [],
-  };
 }
 
 const DIARY_META: Record<WeeklyRoutineDiaryStatus, { label: string; className: string }> = {
@@ -338,8 +249,6 @@ function SelectedChapterActivities({ group, date, teams, onOpenProduction, onReg
 }
 
 export default function ManagementRoutine({ project, onProjectChange, onOpenDailyReport, onOpenProduction, readOnly = false, canRequestReschedule = false, canApproveReschedule = false, auditActor = {}, initialWeek, onWeekChange, undoButton }: Props) {
-  const routine = useMemo(() => ensureRoutine(project), [project]);
-  const [activeTab, setActiveTab] = useState('agenda');
   const [rescheduleTaskId, setRescheduleTaskId] = useState<string | null>(null);
   const [selectedWeekStart, setSelectedWeekStart] = useState(() => startOfWeekISO(initialWeek || todayISO()));
   const [selectedChapterId, setSelectedChapterId] = useState('');
@@ -470,53 +379,6 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
     setSearchOpen(true);
   };
 
-  const [meetingDraft, setMeetingDraft] = useState<ManagementWeeklyMeeting>(() => ({
-    id: uid('meeting'),
-    date: todayISO(),
-    participants: '',
-    problems: '',
-    decisions: '',
-    nextPending: '',
-    actions: [],
-    createdAt: nowISO(),
-    updatedAt: nowISO(),
-  }));
-  const [actionDraft, setActionDraft] = useState<ManagementMeetingAction>({
-    id: uid('action'),
-    title: '',
-    responsible: '',
-    dueDate: '',
-    status: 'aberta',
-  });
-
-  const updateRoutine = (patch: Partial<ManagementRoutineData>) => {
-    onProjectChange(previous => ({ ...previous, managementRoutine: { ...ensureRoutine(previous), ...patch } }));
-  };
-
-  const updateRole = (role: ManagementRoleAssignment['role'], patch: Partial<ManagementRoleAssignment>) => {
-    updateRoutine({ roles: routine.roles.map(item => item.role === role ? { ...item, ...patch } : item) });
-  };
-
-  const updateChecklist = (id: string, patch: Partial<ManagementChecklistItem>) => {
-    updateRoutine({
-      weeklyChecklist: routine.weeklyChecklist.map(item => item.id === id ? { ...item, ...patch, updatedAt: nowISO() } : item),
-    });
-  };
-
-  const addActionToDraft = () => {
-    const title = actionDraft.title.trim();
-    if (!title) return;
-    setMeetingDraft(previous => ({ ...previous, actions: [...previous.actions, { ...actionDraft, id: uid('action'), title }] }));
-    setActionDraft({ id: uid('action'), title: '', responsible: '', dueDate: '', status: 'aberta' });
-  };
-
-  const saveMeeting = () => {
-    if (!meetingDraft.date) return;
-    const saved = { ...meetingDraft, id: uid('meeting'), createdAt: nowISO(), updatedAt: nowISO() };
-    updateRoutine({ meetings: [saved, ...routine.meetings].slice(0, 40) });
-    setMeetingDraft({ id: uid('meeting'), date: todayISO(), participants: '', problems: '', decisions: '', nextPending: '', actions: [], createdAt: nowISO(), updatedAt: nowISO() });
-  };
-
   return (
     <div className="mx-auto max-w-[1800px] space-y-5 p-4 lg:p-6">
       <ModulePageHeader
@@ -530,13 +392,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
         actions={undoButton}
       />
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid h-auto min-h-11 w-full grid-cols-2 sm:inline-flex sm:w-auto">
-          <TabsTrigger value="agenda" className="min-h-10 gap-2 px-4 text-sm"><CalendarDays className="h-4 w-4" /> Agenda da semana</TabsTrigger>
-          <TabsTrigger value="configuracao" className="min-h-10 gap-2 px-4 text-sm"><Settings2 className="h-4 w-4" /> Configuração da rotina</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="agenda" className="mt-5 space-y-5">
+      <main className="space-y-5">
           <section className="space-y-3 rounded-xl border border-border bg-card p-3 sm:p-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Capítulo</p>
@@ -635,128 +491,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
             </>
           )}
 
-        </TabsContent>
-
-        <TabsContent value="configuracao" className="mt-5 space-y-5">
-          <Card>
-            <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Settings2 className="h-4 w-4 text-primary" /> Responsáveis e parâmetros</CardTitle></CardHeader>
-            <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-              {[
-                ['Responsável pela obra', 'responsibleName'],
-                ['Mestre / encarregado', 'foremanName'],
-                ['Responsável por compras', 'buyerName'],
-                ['Responsável por medição', 'measurementResponsibleName'],
-                ['Responsável pelo diário', 'dailyReportResponsibleName'],
-                ['Dia da reunião semanal', 'weeklyMeetingDay'],
-                ['Período padrão de medição', 'measurementPeriod'],
-                ['Regra de aprovação interna', 'internalApprovalRule'],
-              ].map(([label, key]) => (
-                <div key={key} className="space-y-1.5">
-                  <Label htmlFor={`routine-${key}`}>{label}</Label>
-                  <Input id={`routine-${key}`} value={String(routine[key as keyof ManagementRoutineData] ?? '')} onChange={event => updateRoutine({ [key]: event.target.value })} />
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-
-          <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-            <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><ClipboardCheck className="h-4 w-4 text-primary" /> Checklist de apoio</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
-                {routine.weeklyChecklist.map(item => (
-                  <div key={item.id} className="rounded-lg border border-border p-3">
-                    <p className="text-sm font-semibold">{item.title}</p>
-                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_150px]">
-                      <div className="space-y-1.5">
-                        <Label htmlFor={`check-note-${item.id}`} className="text-xs">Observação</Label>
-                        <Input id={`check-note-${item.id}`} value={item.notes ?? ''} onChange={event => updateChecklist(item.id, { notes: event.target.value })} />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor={`check-status-${item.id}`} className="text-xs">Situação</Label>
-                        <select id={`check-status-${item.id}`} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={item.status} onChange={event => updateChecklist(item.id, { status: event.target.value as ManagementChecklistStatus })}>
-                          {Object.entries(CHECK_STATUS_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Users className="h-4 w-4 text-primary" /> Papéis e responsabilidades</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
-                {routine.roles.map(role => (
-                  <div key={role.role} className="grid grid-cols-1 gap-3 rounded-lg border border-border p-3 sm:grid-cols-2">
-                    <p className="sm:col-span-2 text-sm font-semibold">{ROLE_LABEL[role.role]}</p>
-                    <div className="space-y-1.5">
-                      <Label htmlFor={`role-owner-${role.role}`} className="text-xs">Responsável direto</Label>
-                      <Input id={`role-owner-${role.role}`} value={role.personName} onChange={event => updateRole(role.role, { personName: event.target.value })} />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor={`role-approval-${role.role}`} className="text-xs">Quem aprova</Label>
-                      <Input id={`role-approval-${role.role}`} value={role.approvalPersonName ?? ''} onChange={event => updateRole(role.role, { approvalPersonName: event.target.value })} />
-                    </div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          </section>
-
-          <section className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-            <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Plus className="h-4 w-4 text-primary" /> Ata da reunião semanal</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
-                <div className="space-y-1.5"><Label htmlFor="meeting-date">Data</Label><Input id="meeting-date" type="date" value={meetingDraft.date} onChange={event => setMeetingDraft(previous => ({ ...previous, date: event.target.value }))} /></div>
-                <div className="space-y-1.5"><Label htmlFor="meeting-participants">Participantes</Label><Textarea id="meeting-participants" value={meetingDraft.participants ?? ''} onChange={event => setMeetingDraft(previous => ({ ...previous, participants: event.target.value }))} /></div>
-                <div className="space-y-1.5"><Label htmlFor="meeting-problems">Problemas encontrados</Label><Textarea id="meeting-problems" value={meetingDraft.problems ?? ''} onChange={event => setMeetingDraft(previous => ({ ...previous, problems: event.target.value }))} /></div>
-                <div className="space-y-1.5"><Label htmlFor="meeting-decisions">Decisões tomadas</Label><Textarea id="meeting-decisions" value={meetingDraft.decisions ?? ''} onChange={event => setMeetingDraft(previous => ({ ...previous, decisions: event.target.value }))} /></div>
-                <div className="space-y-1.5"><Label htmlFor="meeting-pending">Pendências para a próxima reunião</Label><Textarea id="meeting-pending" value={meetingDraft.nextPending ?? ''} onChange={event => setMeetingDraft(previous => ({ ...previous, nextPending: event.target.value }))} /></div>
-
-                <div className="rounded-lg border border-border p-3">
-                  <p className="text-sm font-semibold">Ações da reunião</p>
-                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_150px_145px_auto]">
-                    <Input aria-label="Ação ou decisão" placeholder="Ação ou decisão" value={actionDraft.title} onChange={event => setActionDraft(previous => ({ ...previous, title: event.target.value }))} />
-                    <Input aria-label="Responsável pela ação" placeholder="Responsável" value={actionDraft.responsible ?? ''} onChange={event => setActionDraft(previous => ({ ...previous, responsible: event.target.value }))} />
-                    <Input aria-label="Prazo da ação" type="date" value={actionDraft.dueDate ?? ''} onChange={event => setActionDraft(previous => ({ ...previous, dueDate: event.target.value }))} />
-                    <Button type="button" variant="outline" className="min-h-10" onClick={addActionToDraft}><Plus className="h-4 w-4" /><span className="sr-only">Adicionar ação</span></Button>
-                  </div>
-                  {meetingDraft.actions.length > 0 && (
-                    <ul className="mt-3 space-y-2">
-                      {meetingDraft.actions.map(action => <li key={action.id} className="rounded-md bg-muted/40 p-2 text-sm">{action.title} · {action.responsible || 'Sem responsável'}</li>)}
-                    </ul>
-                  )}
-                </div>
-                <Button onClick={saveMeeting} className="min-h-11"><Save className="mr-2 h-4 w-4" /> Salvar reunião</Button>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Clock3 className="h-4 w-4 text-primary" /> Histórico e pendências</CardTitle></CardHeader>
-              <CardContent className="space-y-3">
-                {routine.meetings.length === 0 ? (
-                  <p className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">Nenhuma reunião registrada.</p>
-                ) : routine.meetings.map(meeting => (
-                  <article key={meeting.id} className="rounded-lg border border-border p-4">
-                    <p className="text-sm font-semibold">Reunião de {formatDateBR(meeting.date)}</p>
-                    {meeting.decisions && <p className="mt-2 text-sm text-muted-foreground">{meeting.decisions}</p>}
-                    {meeting.actions.length > 0 && (
-                      <div className="mt-3 space-y-2">
-                        {meeting.actions.map(action => (
-                          <div key={action.id} className="flex items-center justify-between gap-3 rounded-md bg-muted/40 p-2 text-sm">
-                            <span>{action.title}</span>
-                            <Badge variant="outline">{ACTION_STATUS_LABEL[action.status]}</Badge>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </article>
-                ))}
-              </CardContent>
-            </Card>
-          </section>
-        </TabsContent>
-      </Tabs>
+      </main>
       <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
         <DialogContent className="max-h-[90vh] overflow-hidden sm:max-w-3xl">
           <DialogHeader>

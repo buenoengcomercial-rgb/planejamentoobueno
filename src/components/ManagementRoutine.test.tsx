@@ -67,8 +67,15 @@ describe('ManagementRoutine semanal por capítulo', () => {
   });
 
   it('mostra somente o capítulo escolhido e guarda a preferência por obra', () => {
+    const onProjectChange = vi.fn();
     const projectWithTwoChapters = {
       ...project,
+      managementRoutine: {
+        responsibleName: 'Responsável preservado',
+        weeklyChecklist: [],
+        roles: [],
+        meetings: [],
+      },
       phases: [
         { ...project.phases[0], tasks: [{ ...project.phases[0].tasks[0], startDate: '2026-08-10' }] },
         {
@@ -92,13 +99,17 @@ describe('ManagementRoutine semanal por capítulo', () => {
     render(
       <ManagementRoutine
         project={projectWithTwoChapters}
-        onProjectChange={vi.fn()}
+        onProjectChange={onProjectChange}
         onOpenDailyReport={vi.fn()}
         onOpenProduction={vi.fn()}
         initialWeek="2026-08-10"
       />,
     );
 
+    expect(screen.queryByRole('tab', { name: 'Agenda da semana' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Configuração da rotina' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Responsáveis e parâmetros')).not.toBeInTheDocument();
+    expect(screen.getByText('Capítulo')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Incêndio' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getAllByText('Instalar detector de fumaça').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Testar central de alarme').length).toBeGreaterThan(0);
@@ -110,5 +121,6 @@ describe('ManagementRoutine semanal por capítulo', () => {
     expect(screen.queryByText('Testar central de alarme')).not.toBeInTheDocument();
     expect(screen.getAllByText('Instalar hidrante').length).toBeGreaterThan(0);
     expect(localStorage.getItem('obraplanner:routine-chapter:project-routine')).toBe('chapter-2');
+    expect(onProjectChange).not.toHaveBeenCalled();
   });
 });
