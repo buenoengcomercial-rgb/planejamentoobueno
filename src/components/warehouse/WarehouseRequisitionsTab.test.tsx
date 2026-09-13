@@ -112,6 +112,24 @@ describe('WarehouseRequisitionsTab', () => {
     expect(within(available).getByText('Válvula de Aço Carbono')).toBeInTheDocument();
   });
 
+  it('continua a rolagem no formulário quando a lista de insumos chega ao limite', () => {
+    render(<WarehouseRequisitionsTab project={projectWithMaterials()} onProjectChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Nova retirada/i }));
+    const formScroll = screen.getByTestId('withdrawal-form-scroll');
+    const available = screen.getByTestId('available-materials-scroll');
+    const scrollBy = vi.fn();
+    Object.defineProperties(available, {
+      scrollTop: { configurable: true, writable: true, value: 192 },
+      clientHeight: { configurable: true, value: 64 },
+      scrollHeight: { configurable: true, value: 256 },
+    });
+    Object.defineProperty(formScroll, 'scrollBy', { configurable: true, value: scrollBy });
+
+    fireEvent.wheel(available, { deltaY: 48 });
+    expect(scrollBy).toHaveBeenCalledWith({ top: 48, behavior: 'auto' });
+  });
+
   it('usa histórico em largura total com detalhes expansíveis', () => {
     const project = projectWithMaterials(1);
     project.warehouse!.requisitions = [{

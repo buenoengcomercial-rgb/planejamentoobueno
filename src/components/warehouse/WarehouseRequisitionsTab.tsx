@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type TouchEvent, type WheelEvent } from 'react';
 import type { Project, WarehouseAuditActor, WarehouseMovement, WarehouseRequisition, WarehouseRequisitionItem } from '@/types/project';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -226,6 +226,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
   const [actionTarget, setActionTarget] = useState<WarehouseRequisition | null>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
+  const withdrawalFormScrollRef = useRef<HTMLFieldSetElement>(null);
+  const materialListTouchStartY = useRef<number | null>(null);
   const buildingGroups = useMemo(
     () => groupRequisitionsByBuilding(project, wh.requisitions, wh.movements),
     [project, wh.movements, wh.requisitions],
@@ -263,6 +265,41 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
     setErrors(current => ({ ...current, receiverName: undefined }));
     setReceiverSearch('');
     setReceiverOpen(false);
+  };
+
+  const shouldHandoffMaterialScroll = (materialList: HTMLDivElement, deltaY: number) => {
+    if (!deltaY) return false;
+    const isAtTop = materialList.scrollTop <= 0;
+    const isAtBottom = materialList.scrollTop + materialList.clientHeight >= materialList.scrollHeight - 1;
+    return (deltaY < 0 && isAtTop) || (deltaY > 0 && isAtBottom);
+  };
+
+  const scrollWithdrawalForm = (deltaY: number) => {
+    const formScroll = withdrawalFormScrollRef.current;
+    if (!formScroll || !deltaY) return;
+    if (typeof formScroll.scrollBy === 'function') formScroll.scrollBy({ top: deltaY, behavior: 'auto' });
+    else formScroll.scrollTop += deltaY;
+  };
+
+  const handleMaterialListWheel = (event: WheelEvent<HTMLDivElement>) => {
+    if (!shouldHandoffMaterialScroll(event.currentTarget, event.deltaY)) return;
+    event.preventDefault();
+    scrollWithdrawalForm(event.deltaY);
+  };
+
+  const handleMaterialListTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    materialListTouchStartY.current = event.touches[0]?.clientY ?? null;
+  };
+
+  const handleMaterialListTouchMove = (event: TouchEvent<HTMLDivElement>) => {
+    const currentY = event.touches[0]?.clientY;
+    const previousY = materialListTouchStartY.current;
+    if (currentY === undefined || previousY === null) return;
+    const deltaY = previousY - currentY;
+    materialListTouchStartY.current = currentY;
+    if (!shouldHandoffMaterialScroll(event.currentTarget, deltaY)) return;
+    event.preventDefault();
+    scrollWithdrawalForm(deltaY);
   };
 
   const reset = () => {
@@ -448,13 +485,13 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
           onEscapeKeyDown={event => { if (saving) event.preventDefault(); }}
           onPointerDownOutside={event => { if (saving) event.preventDefault(); }}
           onInteractOutside={event => { if (saving) event.preventDefault(); }}
-          className={`warehouse-ui flex max-h-[95dvh] w-[calc(100vw-1rem)] max-w-6xl flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11 ${saving ? '[&>button]:pointer-events-none [&>button]:opacity-30' : ''}`}
+          className={`warehouse-ui flex h-[95dvh] max-h-[95dvh] w-[calc(100vw-1rem)] max-w-6xl flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11 ${saving ? '[&>button]:pointer-events-none [&>button]:opacity-30' : ''}`}
         >
           <DialogHeader className="border-b p-4 pr-16">
             <DialogTitle>Nova retirada de materiais</DialogTitle>
             <DialogDescription>Preencha os dados, escolha os materiais e registre a assinatura antes de entregar.</DialogDescription>
           </DialogHeader>
-          <fieldset disabled={saving} className="min-h-0 min-w-0 flex-1 overflow-y-auto border-0 p-4 disabled:cursor-wait disabled:opacity-70">
+          <fieldset ref={withdrawalFormScrollRef} data-testid="withdrawal-form-scroll" disabled={saving} className="min-h-0 min-w-0 flex-1 overflow-y-scroll overscroll-y-contain border-0 p-4 disabled:cursor-wait disabled:opacity-70">
             <section className="space-y-4">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <WarehouseField label="Data">
@@ -520,7 +557,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, auditActor,
                 </div>
               </div>
               <label htmlFor="withdrawal-material-search" className="sr-only">Buscar material para adicionar</label><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input id="withdrawal-material-search" className="min-h-11 pl-9 text-base" value={materialSearch} onChange={event => setMaterialSearch(event.target.value)} placeholder="Buscar por código, descrição ou unidade" /></div>
-              <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border bg-background" aria-label="Materiais disponíveis">{availableMaterials.map((row, index) => <button key={row.key} type="button" className={`flex min-h-16 w-full items-center gap-3 border-b px-3 text-left last:border-0 hover:bg-primary/10 ${index % 2 ? 'bg-muted/25' : ''}`} onClick={() => addMaterial(row.key)}><span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><PackageOpen className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-bold leading-snug">{row.description}</span><span className="mt-1 block text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</span></span><WarehouseStatusBadge label={`Saldo ${row.balance.toLocaleString('pt-BR')}`} tone="info" /><Plus className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" /></button>)}{!availableMaterials.length && <WarehouseEmptyState message="Nenhum material encontrado" hint="Tente outra palavra na busca." className="m-2" />}</div>
+              <div data-testid="available-materials-scroll" className="mt-2 max-h-64 touch-pan-y overflow-y-auto rounded-lg border bg-background" aria-label="Materiais disponíveis" onWheel={handleMaterialListWheel} onTouchStart={handleMaterialListTouchStart} onTouchMove={handleMaterialListTouchMove} onTouchEnd={() => { materialListTouchStartY.current = null; }} onTouchCancel={() => { materialListTouchStartY.current = null; }}>{availableMaterials.map((row, index) => <button key={row.key} type="button" className={`flex min-h-16 w-full items-center gap-3 border-b px-3 text-left last:border-0 hover:bg-primary/10 ${index % 2 ? 'bg-muted/25' : ''}`} onClick={() => addMaterial(row.key)}><span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><PackageOpen className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-bold leading-snug">{row.description}</span><span className="mt-1 block text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</span></span><WarehouseStatusBadge label={`Saldo ${row.balance.toLocaleString('pt-BR')}`} tone="info" /><Plus className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" /></button>)}{!availableMaterials.length && <WarehouseEmptyState message="Nenhum material encontrado" hint="Tente outra palavra na busca." className="m-2" />}</div>
               {errors.items && <div role="alert" className="mt-2 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm font-semibold text-destructive">{errors.items}</div>}
             </div>
           </div>
