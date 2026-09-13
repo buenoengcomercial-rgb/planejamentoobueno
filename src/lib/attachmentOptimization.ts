@@ -1,5 +1,6 @@
-import { jsPDF } from 'jspdf';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
+type JsPdfInstance = import('jspdf').jsPDF;
 
 export type AttachmentOptimizationProfile = 'field-photo' | 'fiscal-document';
 
@@ -71,11 +72,11 @@ export async function optimizeImageAttachment(file: File, profile: AttachmentOpt
  * Se a versão resultante for maior, o PDF original já é a alternativa mais leve. */
 export async function optimizeFiscalPdf(file: File): Promise<File> {
   if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) throw new Error('Selecione um PDF válido.');
-  const pdfjs = await import('pdfjs-dist');
+  const [{ jsPDF }, pdfjs] = await Promise.all([import('jspdf'), import('pdfjs-dist')]);
   pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
   const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
   try {
-    let output: jsPDF | undefined;
+    let output: JsPdfInstance | undefined;
     for (let number = 1; number <= pdf.numPages; number += 1) {
       const page = await pdf.getPage(number);
       const natural = page.getViewport({ scale: 1 });

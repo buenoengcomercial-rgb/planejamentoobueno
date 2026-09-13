@@ -4,7 +4,8 @@ import { generateCurvaS, suggestOptimizations } from '@/lib/calculations';
 import { buildDashboardFinancialSummary } from '@/lib/dashboardFinancial';
 import { getChapterTree, getChapterTasks, getChapterNumbering } from '@/lib/chapters';
 import { motion } from 'framer-motion';
-import { useMemo } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import { lazyWithReload } from '@/lib/lazyWithReload';
 import {
   AlertTriangle,
   BrickWall,
@@ -16,21 +17,13 @@ import {
   Truck,
   Zap,
 } from 'lucide-react';
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+
+const DashboardCostChart = lazyWithReload(() => import('./DashboardCharts').then(module => ({ default: module.DashboardCostChart })));
+const DashboardOperationalCharts = lazyWithReload(() => import('./DashboardCharts').then(module => ({ default: module.DashboardOperationalCharts })));
+
+function ChartFallback({ className = 'h-[220px]' }: { className?: string }) {
+  return <div className={`${className} animate-pulse rounded-lg bg-muted/40`} role="status" aria-label="Carregando gráficos" />;
+}
 
 interface DashboardProps {
   project: Project;
@@ -86,6 +79,16 @@ function MetricLine({ label, value, strong = false }: { label: string; value: st
 }
 
 export default function Dashboard({ project, undoButton }: DashboardProps) {
+  const [chartsReady, setChartsReady] = useState(false);
+  useEffect(() => {
+    const windowWithIdle = window as Window & { requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void };
+    if (windowWithIdle.requestIdleCallback) {
+      const id = windowWithIdle.requestIdleCallback(() => setChartsReady(true), { timeout: 800 });
+      return () => windowWithIdle.cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(() => setChartsReady(true), 0);
+    return () => window.clearTimeout(id);
+  }, []);
   const tasks = useMemo(() => getAllTasks(project), [project]);
   const financial = useMemo(() => buildDashboardFinancialSummary(project), [project]);
   const totalTasks = tasks.length;
@@ -252,88 +255,15 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
             <span className="text-[11px] text-muted-foreground">{financial.quotedItemsCount} item(ns) cotado(s)</span>
           </div>
           <div className="h-[260px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={costUsageChart}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} />
-                <YAxis tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} tickFormatter={value => compactBRL(Number(value)).replace('R$', '').trim()} />
-                <Tooltip
-                  formatter={(value: number, name: string) => [fmtBRL(value), name === 'orcado' ? 'Orcado' : 'Utilizado']}
-                  labelFormatter={(label, payload) => {
-                    const row = payload?.[0]?.payload;
-                    if (!row) return label;
-                    return `${label} - saldo ${fmtBRL(row.saldo)} - ${row.itensPendentes} pendente(s)`;
-                  }}
-                  contentStyle={{ borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--card))' }}
-                />
-                <Legend />
-                <Bar dataKey="orcado" name="Orcado" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
-                <Bar dataKey="utilizado" name="Utilizado" fill="hsl(152, 60%, 42%)" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            {chartsReady ? <Suspense fallback={<ChartFallback className="h-[260px]" />}><DashboardCostChart data={costUsageChart} /></Suspense> : <ChartFallback className="h-[260px]" />}
           </div>
         </div>
       </motion.div>
       </details>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="lg:col-span-2 bg-card rounded-xl p-5 border border-border shadow-sm">
-          <h3 className="text-sm font-semibold text-foreground mb-4">Progresso por Capítulo</h3>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={phaseData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-              <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} />
-              <YAxis tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} domain={[0, 100]} />
-              <Tooltip contentStyle={{ borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--card))' }} />
-              <Bar dataKey="progresso" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </motion.div>
-
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }} className="bg-card rounded-xl p-5 border border-border shadow-sm">
-          <h3 className="text-sm font-semibold text-foreground mb-4">Status das Tarefas</h3>
-          <ResponsiveContainer width="100%" height={220}>
-            <PieChart>
-              <Pie data={statusData} cx="50%" cy="50%" innerRadius={55} outerRadius={80} paddingAngle={4} dataKey="value">
-                {statusData.map((entry, i) => (
-                  <Cell key={i} fill={entry.color} />
-                ))}
-              </Pie>
-              <Tooltip contentStyle={{ borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--card))' }} />
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="flex justify-center gap-4 mt-2">
-            {statusData.map(s => (
-              <div key={s.name} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <div className="w-2.5 h-2.5 rounded-full" style={{ background: s.color }} />
-                {s.name}
-              </div>
-            ))}
-          </div>
-        </motion.div>
-      </div>
-
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }} className="bg-card rounded-xl p-5 border border-border shadow-sm">
-        <h3 className="text-sm font-semibold text-foreground mb-4">Curva S - Planejado vs Realizado</h3>
-        <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={curvaS}>
-            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-            <XAxis dataKey="day" tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} />
-            <YAxis tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} domain={[0, 100]} unit="%" />
-            <Tooltip contentStyle={{ borderRadius: 8, border: '1px solid hsl(var(--border))', background: 'hsl(var(--card))' }} />
-            <Area type="monotone" dataKey="planejado" stroke="hsl(var(--primary))" fill="hsl(var(--primary) / 0.1)" strokeWidth={2} name="Planejado" />
-            <Area type="monotone" dataKey="realizado" stroke="hsl(var(--success))" fill="hsl(var(--success) / 0.1)" strokeWidth={2} name="Realizado" />
-          </AreaChart>
-        </ResponsiveContainer>
-        <div className="flex justify-center gap-6 mt-2">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <div className="w-6 h-0.5 bg-primary rounded" /> Planejado
-          </div>
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <div className="w-6 h-0.5 bg-success rounded" /> Realizado
-          </div>
-        </div>
-      </motion.div>
+      {chartsReady
+        ? <Suspense fallback={<><ChartFallback /><ChartFallback /></>}><DashboardOperationalCharts phaseData={phaseData} statusData={statusData} curvaS={curvaS} /></Suspense>
+        : <><ChartFallback /><ChartFallback /></>}
 
       {optimizations.length > 0 && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6 }} className="bg-card rounded-xl p-5 border border-border shadow-sm">
