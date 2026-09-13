@@ -14,7 +14,7 @@ import {
   estimateTaskValue,
   buildOrderedTasks,
 } from '@/components/measurement/measurementFormat';
-import { resolveObraConfig } from '@/components/ConfiguracaoObra';
+import { resolveObraConfig } from '@/lib/obraConfig';
 import { calculateLineTotal } from '@/lib/financialEngine';
 
 export interface UseMeasurementRowsParams {

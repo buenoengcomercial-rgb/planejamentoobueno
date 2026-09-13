@@ -14,7 +14,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import DependencyArrows from './gantt/DependencyArrows';
-import ConfiguracaoObra, { ObraConfig, loadObraConfig } from './ConfiguracaoObra';
+import ConfiguracaoObra from './ConfiguracaoObra';
+import { loadObraConfig, type ObraConfig } from '@/lib/obraConfig';
 import { DAY_WIDTH, ROW_HEIGHT, FlatTask } from './gantt/types';
 import { addDays, diffDays, formatDateFull, formatDateShort, getEndDate, getWorkEndDate, MONTH_NAMES_PT, dateToISO, toISODateLocal, parseISODateLocal, countWorkDays } from './gantt/utils';
 import { getFeriadosMap, FeriadoInfo, calcularDiasUteis } from '@/lib/feriados';

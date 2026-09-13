@@ -9,19 +9,17 @@ import MigrationDialog from '@/components/MigrationDialog';
 import { Menu, X, Loader2, Building2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { applyRupToProject, applyDailyLogsToProject, calculateCPM, captureBaseline, syncBaselineWithRup, settleAllDependencies } from '@/lib/calculations';
-import { resolveObraConfig } from '@/components/ConfiguracaoObra';
+import { resolveObraConfig } from '@/lib/obraConfig';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
 import { logToProject, userInfoFromSupabaseUser } from '@/lib/audit';
-import { buildOperationalProjectFromPendingAdditives, getPendingAdditiveScheduleControls } from '@/lib/additiveSchedule';
-import { mergeOperationalProjectIntoRaw } from '@/lib/operationalProject';
 
 // Lazy load: cada aba só baixa seu bundle quando aberta pela primeira vez.
 // Usa lazyWithReload para recuperar automaticamente de chunks obsoletos após deploy.
 const Dashboard = lazyWithReload(() => import('@/components/Dashboard'));
-const ManagementRoutine = lazyWithReload(() => import('@/components/ManagementRoutine'));
-const GanttChart = lazyWithReload(() => import('@/components/GanttChart'));
+const ManagementRoutine = lazyWithReload(() => import('@/components/OperationalManagementRoutine'));
+const GanttChart = lazyWithReload(() => import('@/components/OperationalGanttChart'));
 const Measurement = lazyWithReload(() => import('@/components/Measurement'));
 const DailyProductionWorkspace = lazyWithReload(() => import('@/components/DailyProductionWorkspace'));
 const Additive = lazyWithReload(() => import('@/components/Additive'));
@@ -964,17 +962,6 @@ export default function Index() {
     return calculateCPM(enriched);
   }, [deferredRawProject, needsDependencySettle]);
 
-  // A prévia do aditivo é operacional: aparece no Cronograma e na Rotina sem
-  // antecipar nenhuma alteração no contrato salvo em `rawProject`.
-  const operationalProject = useMemo(
-    () => project ? buildOperationalProjectFromPendingAdditives(project) : null,
-    [project],
-  );
-  const pendingAdditiveScheduleControls = useMemo(
-    () => project ? getPendingAdditiveScheduleControls(project) : new Map(),
-    [project],
-  );
-
   const saveDailyReportDirectly = useCallback((before: Project, after: Project) => {
     const dates = new Set([
       ...(before.dailyReports ?? []).map(report => report.date),
@@ -1109,19 +1096,6 @@ export default function Index() {
   const realCostSetter = useMemo(() => makeViewSetter('realCost'), [makeViewSetter]);
   const materialsSetter = useMemo(() => makeViewSetter('materials'), [makeViewSetter]);
   const warehouseSetter = useMemo(() => makeViewSetter('warehouse'), [makeViewSetter]);
-  const makeOperationalSetter = useCallback((baseSetter: (next: Project | ((previous: Project) => Project)) => void) => (
-    next: Project | ((previous: Project) => Project),
-  ) => {
-    baseSetter(previous => {
-      const operational = buildOperationalProjectFromPendingAdditives(previous);
-      const nextOperational = typeof next === 'function'
-        ? (next as (project: Project) => Project)(operational)
-        : next;
-      return mergeOperationalProjectIntoRaw(previous, nextOperational);
-    });
-  }, []);
-  const operationalGanttSetter = useMemo(() => makeOperationalSetter(ganttSetter), [ganttSetter, makeOperationalSetter]);
-  const operationalManagementSetter = useMemo(() => makeOperationalSetter(managementSetter), [makeOperationalSetter, managementSetter]);
 
   const commitProjectNow = useCallback(async (next: Project) => {
     if (!user || !orgId || !canPersistProject) throw new Error('Você não tem permissão para salvar esta obra.');
@@ -1560,8 +1534,8 @@ export default function Index() {
       case 'management':
         return (
           <ManagementRoutine
-            project={operationalProject ?? project}
-            onProjectChange={operationalManagementSetter}
+            project={project}
+            onProjectChange={managementSetter}
             onOpenDailyReport={handleOpenDailyReport}
             onOpenProduction={handleOpenProductionActivity}
             readOnly={!editor}
@@ -1575,9 +1549,8 @@ export default function Index() {
         );
       case 'gantt':
         return <GanttChart
-          project={operationalProject ?? project}
-          onProjectChange={operationalGanttSetter}
-          lockedTaskLabels={Object.fromEntries(Array.from(pendingAdditiveScheduleControls.entries()).map(([taskId, control]) => [taskId, control.additiveName]))}
+          project={project}
+          onProjectChange={ganttSetter}
           readOnly={!editor}
           canRequestReschedule={role === 'owner' || role === 'admin' || role === 'engineer'}
           canApproveReschedule={role === 'owner' || role === 'admin'}

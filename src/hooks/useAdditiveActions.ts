@@ -50,7 +50,7 @@ import {
   settleAdditiveScheduleDraft,
   validateAdditiveSchedule,
 } from '@/lib/additiveSchedule';
-import { resolveObraConfig } from '@/components/ConfiguracaoObra';
+import { resolveObraConfig } from '@/lib/obraConfig';
 
 interface Params {
   project: Project;

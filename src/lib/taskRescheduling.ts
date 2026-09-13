@@ -3,7 +3,7 @@ import type { AuditUserInfo } from '@/lib/audit';
 import { logToProject } from '@/lib/audit';
 import { getAllTasks } from '@/data/sampleProject';
 import { propagateAllDependencies } from '@/lib/calculations';
-import type { ObraConfig } from '@/components/ConfiguracaoObra';
+import type { ObraConfig } from '@/lib/obraConfig';
 import { syncPendingAdditiveSchedulePlans } from '@/lib/additiveSchedule';
 import { operationalDelayDuration, operationalEndDate, nextOperationalDate } from '@/lib/scheduleCalendar';
 import { replaceProjectTasksById } from '@/lib/taskTree';

@@ -63,3 +63,19 @@ Os tamanhos dos motores não mudaram — o objetivo desta etapa é evitar o down
 | PDF utilitário | 458,39 kB | 135,97 kB | Ao processar documento correspondente |
 
 Testes de arquitetura protegem as fronteiras da Produção, Diário, Medição e Almoxarifado contra a reintrodução de imports estáticos dos motores.
+
+## Resultado da etapa 4 — núcleo autenticado mais leve
+
+O `Index.tsx` deixou de carregar e calcular a projeção operacional dos aditivos em todas as páginas. A projeção, seus controles e a mesclagem segura com o projeto-base agora pertencem a adaptadores exclusivos do Cronograma e da Rotina. Dashboard, Produção, Diário, Medição, Custos, Materiais e Almoxarifado não baixam mais esse núcleo antes de precisar dele.
+
+A leitura do calendário da obra também foi separada da interface de configuração: o núcleo leve mantém exatamente a mesma normalização e compatibilidade com obras legadas, enquanto diálogos, seletores e dados de feriados permanecem no pacote técnico que realmente os utiliza.
+
+| Pacote | Antes | Depois | Redução |
+| --- | ---: | ---: | ---: |
+| Aplicação autenticada (`Index`), minificado | 395,87 kB | 284,09 kB | 28,24% |
+| Aplicação autenticada (`Index`), gzip | 123,02 kB | 89,13 kB | 27,55% |
+| Abertura do Dashboard antes dos gráficos, gzip | 288,69 kB | 254,90 kB | 11,70% nesta etapa |
+
+Comparado à linha de base de 452,09 kB gzip para a abertura do Dashboard, o caminho essencial acumulado está em 254,90 kB gzip, redução total de aproximadamente **43,62%**. O pacote `additiveSchedule` ficou isolado em 7,38 kB gzip e é solicitado apenas nas jornadas que precisam da projeção.
+
+Testes funcionais confirmam que alterações feitas sobre a projeção continuam sendo mescladas no projeto-base pelas mesmas regras, preservando tarefas contratuais, rascunho do aditivo, produção e dependências.

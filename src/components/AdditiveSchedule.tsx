@@ -9,7 +9,7 @@ import { Card } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { resolveObraConfig } from '@/components/ConfiguracaoObra';
+import { resolveObraConfig } from '@/lib/obraConfig';
 import AdditiveScheduleFinancialForecast from '@/components/additiveSchedule/AdditiveScheduleFinancialForecast';
 import { buildAdditiveScheduleForecast } from '@/lib/additiveScheduleForecast';
 import {

@@ -25,7 +25,7 @@ import {
 import { buildPendingAdditiveSuspensionMap, isStatusOnlySuspension } from '@/lib/additiveSchedule';
 import { getAllTasks } from '@/data/sampleProject';
 import { updateProjectTask } from '@/lib/taskTree';
-import { resolveObraConfig } from '@/components/ConfiguracaoObra';
+import { resolveObraConfig } from '@/lib/obraConfig';
 import { ModulePageHeader } from '@/components/ModulePageHeader';
 import { applyDailyProductionLogs, upsertDailyProductionLog } from '@/lib/dailyProductionLogs';
 import { validateDailyProductionLogs } from '@/lib/productionQuantityLimit';

@@ -31,7 +31,7 @@ import {
   type RealCostSignal,
 } from '@/lib/realCost';
 import { fmtBRL, fmtPct } from '@/components/measurement/measurementFormat';
-import { resolveObraConfig } from '@/components/ConfiguracaoObra';
+import { resolveObraConfig } from '@/lib/obraConfig';
 import { Button } from '@/components/ui/button';
 import { logToProject, type AuditUserInfo } from '@/lib/audit';
 import { allocateSubcontractValue, freezeSubcontractPayments, subcontractBalance, subcontractExecutedQuantity, subcontractPaidValue } from '@/lib/subcontracts';

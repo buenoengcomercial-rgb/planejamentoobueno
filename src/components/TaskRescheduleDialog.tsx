@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Project, Task } from '@/types/project';
 import type { AuditUserInfo } from '@/lib/audit';
 import { createRescheduleRequest, reschedulePreview } from '@/lib/taskRescheduling';
-import type { ObraConfig } from '@/components/ConfiguracaoObra';
+import type { ObraConfig } from '@/lib/obraConfig';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
