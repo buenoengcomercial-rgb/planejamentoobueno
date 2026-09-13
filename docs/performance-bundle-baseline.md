@@ -79,3 +79,21 @@ A leitura do calendário da obra também foi separada da interface de configura�
 Comparado à linha de base de 452,09 kB gzip para a abertura do Dashboard, o caminho essencial acumulado está em 254,90 kB gzip, redução total de aproximadamente **43,62%**. O pacote `additiveSchedule` ficou isolado em 7,38 kB gzip e é solicitado apenas nas jornadas que precisam da projeção.
 
 Testes funcionais confirmam que alterações feitas sobre a projeção continuam sendo mescladas no projeto-base pelas mesmas regras, preservando tarefas contratuais, rascunho do aditivo, produção e dependências.
+
+## Resultado da etapa 5 — importações estáticas e dinâmicas coerentes
+
+A auditoria das fronteiras eliminou carregamentos que anulavam o benefício do `import()`:
+
+- os oito geradores de relatório do Aditivo deixaram de ser importados pela tela e agora são carregados somente ao executar uma exportação;
+- o pequeno adaptador de PDF do Almoxarifado também deixou de importar `jspdf` e `jspdf-autotable` estaticamente: primeiro abre-se a ação de recibo, cautela, inventário ou confirmação diária e só então os motores são baixados;
+- dependências já presentes no núcleo compartilhado, como a identidade visual e o cliente da nuvem, deixaram de ser solicitadas novamente por importações dinâmicas sem efeito;
+- o XLSX continua isolado em pacote próprio. A leitura síncrona usada pelo diálogo de importação só alcança esse pacote depois que o próprio diálogo, que é lazy, for aberto; as demais exportações continuam acionando-o explicitamente.
+
+| Pacote | Antes | Depois | Resultado |
+| --- | ---: | ---: | --- |
+| Tela do Aditivo, minificado | 170,86 kB | 133,43 kB | -21,91% |
+| Tela do Aditivo, gzip | 47,44 kB | 37,02 kB | -21,96% |
+| Relatórios do Aditivo, gzip | incorporado à tela | 10,86 kB | somente após exportar |
+| Adaptador PDF do Almoxarifado, gzip | 2,68 kB | 2,87 kB | motores continuam fora do adaptador |
+
+O manifesto confirma `additiveReports` como `dynamicImport` da tela do Aditivo e `jspdf`/`jspdf-autotable` como `dynamicImports` do adaptador de PDF. O build não apresenta aviso de módulo simultaneamente estático e dinâmico. Permanece o aviso genérico para pacotes acima de 500 kB: o XLSX com estilos está isolado por decisão e o pacote externo principal será tratado na etapa 6.

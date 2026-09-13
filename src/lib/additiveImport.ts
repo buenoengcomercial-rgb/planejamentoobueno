@@ -18,6 +18,7 @@ import { applyAdditiveProductivityToTask } from '@/lib/additiveProductivity';
 import { resolveAnalyticComposition } from '@/lib/analyticLinks';
 import { getAdditiveExportSummary } from './additiveExportSummary';
 import { calculateRupDuration, type JornadaConfig } from '@/lib/calculations';
+import { company, loadCompanyLogoForPdf } from './companyBranding';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
@@ -2414,10 +2415,9 @@ export async function exportAdditiveToPdf(
   projectOrName: Project | string | null | undefined,
   showAnalytic: boolean,
 ) {
-  const [jsPDFMod, autoTableMod, branding] = await Promise.all([
+  const [jsPDFMod, autoTableMod] = await Promise.all([
     import('jspdf'),
     import('jspdf-autotable'),
-    import('./companyBranding'),
   ]);
   const jsPDF = (jsPDFMod as any).default || (jsPDFMod as any).jsPDF || jsPDFMod;
   const autoTable = (autoTableMod as any).default || (autoTableMod as any).autoTable || autoTableMod;
@@ -2439,7 +2439,7 @@ export async function exportAdditiveToPdf(
       : (project?.name || 'Obra');
   const ci = project?.contractInfo || {};
 
-  const logo = await branding.loadCompanyLogoForPdf().catch(() => null);
+  const logo = await loadCompanyLogoForPdf().catch(() => null);
   const logoTargetW = 30;
   let logoH = 0;
   if (logo) {
@@ -2646,7 +2646,7 @@ export async function exportAdditiveToPdf(
     doc.setPage(p);
     doc.setFontSize(7);
     doc.setTextColor(120);
-    const footer = `${branding.company.name} · ${branding.company.cnpj} · ${branding.company.city}`;
+    const footer = `${company.name} · ${company.cnpj} · ${company.city}`;
     doc.text(footer, pageWidth / 2, doc.internal.pageSize.getHeight() - 5, { align: 'center' });
     doc.text(`Pág. ${p}/${pageCount}`, pageWidth - margin, doc.internal.pageSize.getHeight() - 5, { align: 'right' });
   }

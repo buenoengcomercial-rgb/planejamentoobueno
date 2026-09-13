@@ -19,6 +19,8 @@ describe('fronteiras sob demanda de PDF e Excel', () => {
     const inventory = source('src/components/warehouse/pdfLazy.ts');
     const requisitions = source('src/components/warehouse/WarehouseRequisitionsTab.tsx');
     const custody = source('src/components/warehouse/WarehouseCustodyTab.tsx');
+    const warehousePdf = source('src/components/warehouse/pdf.ts');
+    const additiveActions = source('src/hooks/useAdditiveActions.ts');
 
     expect(dailyReport).toContain("import('jspdf')");
     expect(measurement).toContain("import('jspdf')");
@@ -26,5 +28,11 @@ describe('fronteiras sob demanda de PDF e Excel', () => {
     expect(inventory).toContain("await import('./pdf')");
     expect(requisitions).toContain("await import('./pdf')");
     expect(custody).toContain("import('./pdf')");
+    expect(warehousePdf).not.toMatch(/import\s+jsPDF\s+from\s+['"]jspdf['"]/);
+    expect(warehousePdf).not.toMatch(/import\s+autoTable\s+from\s+['"]jspdf-autotable['"]/);
+    expect(warehousePdf).toContain("import('jspdf')");
+    expect(warehousePdf).toContain("import('jspdf-autotable')");
+    expect(additiveActions).not.toMatch(/from\s+['"]@\/lib\/additiveReports['"]/);
+    expect(additiveActions).toContain("import('@/lib/additiveReports')");
   });
 });

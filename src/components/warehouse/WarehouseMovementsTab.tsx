@@ -96,7 +96,7 @@ export default function WarehouseMovementsTab({ project }: Props) {
     const requisition = group.originType === 'withdrawal' ? wh.requisitions.find(candidate => candidate.id === group.originId) : undefined;
     if (!requisition) return toast.error('Não há comprovante de retirada para esta origem.');
     const { generateRequisitionReceipt } = await import('./pdf');
-    generateRequisitionReceipt(project, requisition);
+    await generateRequisitionReceipt(project, requisition);
   };
 
   return (

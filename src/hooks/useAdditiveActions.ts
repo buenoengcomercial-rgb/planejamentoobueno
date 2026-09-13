@@ -30,16 +30,6 @@ import {
   synchronizeAdditiveCompositionOccurrences,
   upsertAdditiveCompositionTemplate,
 } from '@/lib/additiveCompositionCatalog';
-import {
-  exportAdditiveSyntheticCompletePro,
-  exportAdditiveNewServicesPro,
-  exportAdditiveCalculationMemoryPro,
-  exportAdditiveSyntheticCompletePdf,
-  exportAdditiveNewServicesPdf,
-  exportAdditiveCalculationMemoryPdf,
-  exportAdditivePackagePro,
-  exportAdditivePackagePdf,
-} from '@/lib/additiveReports';
 import { useAuth } from '@/hooks/useAuth';
 import { logToProject, userInfoFromSupabaseUser } from '@/lib/audit';
 import type { AdditiveStateApi } from '@/hooks/useAdditiveState';
@@ -51,6 +41,8 @@ import {
   validateAdditiveSchedule,
 } from '@/lib/additiveSchedule';
 import { resolveObraConfig } from '@/lib/obraConfig';
+
+const loadAdditiveReports = () => import('@/lib/additiveReports');
 
 interface Params {
   project: Project;
@@ -547,6 +539,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
   const handleExportSyntheticCompleteExcel = async () => {
     if (!active) return;
     try {
+      const { exportAdditiveSyntheticCompletePro } = await loadAdditiveReports();
       await exportAdditiveSyntheticCompletePro(project, active);
       toast.success('Sintética Completa exportada');
       logAdd(active.id, { action: 'exported', title: 'Sintética Completa exportada em Excel' });
@@ -556,6 +549,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
   const handleExportNewServicesExcel = async () => {
     if (!active) return;
     try {
+      const { exportAdditiveNewServicesPro } = await loadAdditiveReports();
       await exportAdditiveNewServicesPro(project, active);
       toast.success('Novas Composições exportadas');
       logAdd(active.id, { action: 'exported', title: 'Novas Composições exportadas em Excel' });
@@ -565,6 +559,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
   const handleExportCalculationMemoryExcel = async () => {
     if (!active) return;
     try {
+      const { exportAdditiveCalculationMemoryPro } = await loadAdditiveReports();
       await exportAdditiveCalculationMemoryPro(project, active);
       toast.success('Memória de Cálculo exportada');
       logAdd(active.id, { action: 'exported', title: 'Memória de Cálculo exportada em Excel' });
@@ -586,6 +581,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
   const handleExportSyntheticCompletePdf = async () => {
     if (!active) return;
     try {
+      const { exportAdditiveSyntheticCompletePdf } = await loadAdditiveReports();
       await exportAdditiveSyntheticCompletePdf(project, active);
       toast.success('Sintética Completa (PDF) gerada');
       logAdd(active.id, { action: 'exported', title: 'Sintética Completa exportada em PDF' });
@@ -595,6 +591,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
   const handleExportNewServicesPdf = async () => {
     if (!active) return;
     try {
+      const { exportAdditiveNewServicesPdf } = await loadAdditiveReports();
       await exportAdditiveNewServicesPdf(project, active);
       toast.success('Novas Composições (PDF) gerada');
       logAdd(active.id, { action: 'exported', title: 'Novas Composições exportadas em PDF' });
@@ -604,6 +601,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
   const handleExportCalculationMemoryPdf = async () => {
     if (!active) return;
     try {
+      const { exportAdditiveCalculationMemoryPdf } = await loadAdditiveReports();
       await exportAdditiveCalculationMemoryPdf(project, active);
       toast.success('Memória de Cálculo (PDF) gerada');
       logAdd(active.id, { action: 'exported', title: 'Memória de Cálculo exportada em PDF' });
@@ -613,6 +611,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
   const handleExportPackageExcel = async () => {
     if (!active) return;
     try {
+      const { exportAdditivePackagePro } = await loadAdditiveReports();
       await exportAdditivePackagePro(project, active);
       toast.success('Pacote completo (Excel) gerado');
       logAdd(active.id, { action: 'exported', title: 'Pacote completo exportado em Excel' });
@@ -622,6 +621,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
   const handleExportPackagePdf = async () => {
     if (!active) return;
     try {
+      const { exportAdditivePackagePdf } = await loadAdditiveReports();
       await exportAdditivePackagePdf(project, active);
       toast.success('Pacote completo (PDF) gerado');
       logAdd(active.id, { action: 'exported', title: 'Pacote completo exportado em PDF' });

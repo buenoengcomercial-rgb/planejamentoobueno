@@ -36,6 +36,7 @@ import { linkKeyOf, suggestMaterialsFromProject } from '@/lib/materialComparison
 import { trunc2 } from '@/lib/financialEngine';
 import { getChapterNumbering } from '@/lib/chapters';
 import { logToProject } from '@/lib/audit';
+import { supabase } from '@/integrations/supabase/client';
 
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const nowISO = () => new Date().toISOString();
@@ -3917,8 +3918,6 @@ export async function makeAttachment(
     uploadedAt: nowISO(),
   };
   try {
-    // Import dinâmico para evitar ciclo lib→integrations em tempo de build.
-    const { supabase } = await import('@/integrations/supabase/client');
     const { error } = await supabase.storage
       .from('daily-report-photos')
       .upload(path, optimized, { contentType: mimeType, upsert: false });

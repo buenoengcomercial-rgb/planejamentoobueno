@@ -257,7 +257,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
   });
   const generateDailyConfirmations = async (building: RequisitionBuildingGroup, dateGroup: RequisitionDateGroup) => {
     const { generateDailyWithdrawalConfirmationPdfs } = await import('./pdf');
-    const generated = generateDailyWithdrawalConfirmationPdfs(project, {
+    const generated = await generateDailyWithdrawalConfirmationPdfs(project, {
       date: dateGroup.date,
       buildingLabel: building.label,
       requisitions: dateGroup.requisitions,

@@ -1,9 +1,21 @@
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import type { Project, WarehouseRequisition, CustodyTerm, WarehouseInventorySession } from '@/types/project';
 import { custodyTermAggregateStatus, custodyTermEquipmentItems } from '@/lib/warehouse';
 
-function header(doc: jsPDF, project: Project, title: string, subtitle: string) {
+type JsPdfInstance = import('jspdf').jsPDF;
+type JsPdfConstructor = typeof import('jspdf').jsPDF;
+type AutoTable = typeof import('jspdf-autotable').default;
+
+async function loadWarehousePdfEngine(): Promise<{ jsPDF: JsPdfConstructor; autoTable: AutoTable }> {
+  const [jspdf, autoTableModule] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
+  return {
+    jsPDF: ((jspdf as unknown as { jsPDF?: JsPdfConstructor; default?: JsPdfConstructor }).jsPDF
+      ?? (jspdf as unknown as { default: JsPdfConstructor }).default),
+    autoTable: ((autoTableModule as unknown as { default?: AutoTable; autoTable?: AutoTable }).default
+      ?? (autoTableModule as unknown as { autoTable: AutoTable }).autoTable),
+  };
+}
+
+function header(doc: JsPdfInstance, project: Project, title: string, subtitle: string) {
   doc.setFontSize(14);
   doc.setFont('helvetica', 'bold');
   doc.text(title, 14, 18);
@@ -18,7 +30,7 @@ function header(doc: jsPDF, project: Project, title: string, subtitle: string) {
   doc.line(14, 33, 196, 33);
 }
 
-function signatures(doc: jsPDF, y: number, leftLabel: string, leftSig: string | undefined, rightLabel: string, rightSig: string | undefined) {
+function signatures(doc: JsPdfInstance, y: number, leftLabel: string, leftSig: string | undefined, rightLabel: string, rightSig: string | undefined) {
   const w = 80, h = 30;
   doc.setDrawColor(160);
   if (leftSig) try { doc.addImage(leftSig, 'PNG', 18, y, w, h); } catch { /* ignore */ }
@@ -30,7 +42,8 @@ function signatures(doc: jsPDF, y: number, leftLabel: string, leftSig: string | 
   doc.text(rightLabel, 110, y + h + 6);
 }
 
-export function generateRequisitionReceipt(project: Project, req: WarehouseRequisition) {
+export async function generateRequisitionReceipt(project: Project, req: WarehouseRequisition) {
+  const { jsPDF, autoTable } = await loadWarehousePdfEngine();
   const doc = new jsPDF();
   header(doc, project, 'RECIBO DE RETIRADA DE MATERIAL', `${req.number} · ${req.date}`);
   doc.setFontSize(10);
@@ -75,7 +88,8 @@ function pdfFilePart(value: string) {
 }
 
 /** Gera um comprovante separado para cada recebedor de um prédio e data operacional. */
-export function generateDailyWithdrawalConfirmationPdfs(project: Project, { date, buildingLabel, requisitions }: DailyWithdrawalConfirmationPdfOptions) {
+export async function generateDailyWithdrawalConfirmationPdfs(project: Project, { date, buildingLabel, requisitions }: DailyWithdrawalConfirmationPdfOptions) {
+  const { jsPDF, autoTable } = await loadWarehousePdfEngine();
   const delivered = requisitions.filter(requisition => requisition.status === 'entregue');
   const byReceiver = new Map<string, WarehouseRequisition[]>();
   for (const requisition of delivered) {
@@ -124,7 +138,8 @@ export function generateDailyWithdrawalConfirmationPdfs(project: Project, { date
   return byReceiver.size;
 }
 
-export function generateInventoryReportPdf(project: Project, session: WarehouseInventorySession) {
+export async function generateInventoryReportPdf(project: Project, session: WarehouseInventorySession) {
+  const { jsPDF, autoTable } = await loadWarehousePdfEngine();
   const doc = new jsPDF();
   header(doc, project, 'RELATÓRIO MENSAL DE INVENTÁRIO', `${session.number} · ${session.month}`);
   autoTable(doc, {
@@ -150,7 +165,8 @@ export function generateInventoryReportPdf(project: Project, session: WarehouseI
   doc.save(`${session.number}.pdf`);
 }
 
-export function generateCustodyTermPdf(project: Project, term: CustodyTerm) {
+export async function generateCustodyTermPdf(project: Project, term: CustodyTerm) {
+  const { jsPDF, autoTable } = await loadWarehousePdfEngine();
   const doc = new jsPDF();
   header(doc, project, 'TERMO DE CAUTELA DE EQUIPAMENTO', `${term.number} · ${term.issuedAt}`);
   doc.setFontSize(10);

@@ -7,8 +7,8 @@ const { saveMock, tableMock } = vi.hoisted(() => ({
   tableMock: vi.fn(),
 }));
 
-vi.mock('jspdf', () => ({
-  default: class MockJsPdf {
+vi.mock('jspdf', () => {
+  class MockJsPdf {
     lastAutoTable?: { finalY: number };
     setFontSize() {}
     setFont() {}
@@ -19,8 +19,9 @@ vi.mock('jspdf', () => ({
     addImage() {}
     addPage() {}
     save = saveMock;
-  },
-}));
+  }
+  return { default: MockJsPdf, jsPDF: MockJsPdf };
+});
 
 vi.mock('jspdf-autotable', () => ({
   default: (doc: { lastAutoTable?: { finalY: number } }, options: unknown) => {
@@ -37,7 +38,7 @@ describe('PDF de cautela', () => {
     tableMock.mockClear();
   });
 
-  it('gera o PDF de uma cautela legada de equipamento único', () => {
+  it('gera o PDF de uma cautela legada de equipamento único', async () => {
     const legacyTerm: CustodyTerm = {
       id: 'legacy-term',
       number: 'TC-2025-0001',
@@ -51,14 +52,14 @@ describe('PDF de cautela', () => {
       signatureReceiver: 'data:image/png;base64,AA==',
     };
 
-    expect(() => generateCustodyTermPdf(project, legacyTerm)).not.toThrow();
+    await expect(generateCustodyTermPdf(project, legacyTerm)).resolves.toBeUndefined();
     expect(tableMock).toHaveBeenCalledWith(expect.objectContaining({
       body: [expect.arrayContaining([expect.stringContaining('EQ-LEGADO'), 'Furadeira antiga'])],
     }));
     expect(saveMock).toHaveBeenCalledWith('termo-TC-2025-0001.pdf');
   });
 
-  it('inclui uma linha para cada equipamento de uma cautela agrupada', () => {
+  it('inclui uma linha para cada equipamento de uma cautela agrupada', async () => {
     const groupedTerm: CustodyTerm = {
       id: 'grouped-term',
       number: 'TC-2026-0001',
@@ -74,7 +75,7 @@ describe('PDF de cautela', () => {
       ],
     };
 
-    generateCustodyTermPdf(project, groupedTerm);
+    await generateCustodyTermPdf(project, groupedTerm);
 
     expect(tableMock).toHaveBeenCalledWith(expect.objectContaining({ body: expect.arrayContaining([
       expect.arrayContaining([expect.stringContaining('EQ-0001'), 'Furadeira']),
@@ -104,8 +105,8 @@ describe('PDF diário de confirmação de retirada', () => {
     tableMock.mockClear();
   });
 
-  it('gera um arquivo por recebedor e ignora requisições não entregues', () => {
-    const generated = generateDailyWithdrawalConfirmationPdfs(project, {
+  it('gera um arquivo por recebedor e ignora requisições não entregues', async () => {
+    const generated = await generateDailyWithdrawalConfirmationPdfs(project, {
       date: '2026-09-03',
       buildingLabel: '3 · Incêndio - Curvo 02',
       requisitions: [requisition('1', 'Ana'), requisition('2', 'Ana'), requisition('3', 'Bia'), requisition('4', 'Rascunho', 'rascunho')],
