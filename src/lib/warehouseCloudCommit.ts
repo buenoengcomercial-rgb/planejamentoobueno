@@ -127,7 +127,7 @@ function replaceRequisitionNumberInDailyReport(
     ...project,
     dailyReports: project.dailyReports?.map(report => ({
       ...report,
-      observations: report.observations?.replaceAll(`[Almoxarifado ${beforeNumber}`, `[Almoxarifado ${afterNumber}`),
+      observations: report.observations?.split(`[Almoxarifado ${beforeNumber}`).join(`[Almoxarifado ${afterNumber}`),
     })),
   };
 }

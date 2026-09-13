@@ -2024,6 +2024,7 @@ export type AuditEntityType =
   | 'task'
   | 'warehouse_fiscal_note'
   | 'warehouse_requisition'
+  | 'warehouse'
   | 'subcontract'
   | 'project';
 

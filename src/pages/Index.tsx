@@ -779,7 +779,7 @@ export default function Index() {
     setRawProject(previous => {
       if (!previous || previous.id !== current.id) return previous;
       const currentReport = reportForDate(previous, incoming.date);
-      if (currentReport && serializeProject(currentReport) === serializeProject(incoming)) return previous;
+      if (currentReport && JSON.stringify(currentReport) === JSON.stringify(incoming)) return previous;
       const next = replaceReportForDate(previous, incoming.date, incoming);
       rawProjectRef.current = next;
       return next;
@@ -995,7 +995,7 @@ export default function Index() {
         createdAt: local.createdAt,
         updatedAt: local.updatedAt,
       };
-      if (serializeProject(base) === serializeProject(local)) return;
+      if (JSON.stringify(base) === JSON.stringify(local)) return;
 
       pendingDailyReportSavesRef.current += 1;
       setSaveStatus('saving');
@@ -1013,7 +1013,7 @@ export default function Index() {
           const currentReport = reportForDate(current, date);
           // Uma edição mais recente já está na fila. Ela será conciliada contra
           // a versão confirmada ao chegar sua vez; não a sobrescreva agora.
-          if (!currentReport || serializeProject(currentReport) !== serializeProject(expectedLocal)) return current;
+          if (!currentReport || JSON.stringify(currentReport) !== JSON.stringify(expectedLocal)) return current;
           const next = replaceReportForDate(current, date, result.report);
           rawProjectRef.current = next;
           return next;
@@ -1040,7 +1040,7 @@ export default function Index() {
         setRawProject(current => {
           if (!current || current.id !== after.id) return current;
           const currentReport = reportForDate(current, date);
-          if (!currentReport || serializeProject(currentReport) !== serializeProject(expectedLocal)) return current;
+          if (!currentReport || JSON.stringify(currentReport) !== JSON.stringify(expectedLocal)) return current;
           const next = replaceReportForDate(current, date, confirmed ?? base);
           rawProjectRef.current = next;
           return next;
