@@ -12,21 +12,35 @@ import { applyRupToProject, applyDailyLogsToProject, calculateCPM, captureBaseli
 import { resolveObraConfig } from '@/lib/obraConfig';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 import { lazyWithReload } from '@/lib/lazyWithReload';
+import { scheduleIdlePreload } from '@/lib/idlePreload';
 import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
 import { logToProject, userInfoFromSupabaseUser } from '@/lib/audit';
 
 // Lazy load: cada aba só baixa seu bundle quando aberta pela primeira vez.
 // Usa lazyWithReload para recuperar automaticamente de chunks obsoletos após deploy.
-const Dashboard = lazyWithReload(() => import('@/components/Dashboard'));
-const ManagementRoutine = lazyWithReload(() => import('@/components/OperationalManagementRoutine'));
-const GanttChart = lazyWithReload(() => import('@/components/OperationalGanttChart'));
-const Measurement = lazyWithReload(() => import('@/components/Measurement'));
-const DailyProductionWorkspace = lazyWithReload(() => import('@/components/DailyProductionWorkspace'));
-const Additive = lazyWithReload(() => import('@/components/Additive'));
-const AdditiveSchedule = lazyWithReload(() => import('@/components/AdditiveSchedule'));
-const RealCost = lazyWithReload(() => import('@/components/RealCost'));
-const Materials = lazyWithReload(() => import('@/components/Materials'));
-const WarehouseView = lazyWithReload(() => import('@/components/warehouse/Warehouse'));
+const loadDashboard = () => import('@/components/Dashboard');
+const loadManagementRoutine = () => import('@/components/OperationalManagementRoutine');
+const loadGanttChart = () => import('@/components/OperationalGanttChart');
+const loadMeasurement = () => import('@/components/Measurement');
+const loadDailyProductionWorkspace = () => import('@/components/DailyProductionWorkspace');
+const loadTaskList = () => import('@/components/TaskList');
+const loadDailyReport = () => import('@/components/DailyReport');
+const loadAdditive = () => import('@/components/Additive');
+const loadAdditiveSchedule = () => import('@/components/AdditiveSchedule');
+const loadRealCost = () => import('@/components/RealCost');
+const loadMaterials = () => import('@/components/Materials');
+const loadWarehouse = () => import('@/components/warehouse/Warehouse');
+
+const Dashboard = lazyWithReload(loadDashboard);
+const ManagementRoutine = lazyWithReload(loadManagementRoutine);
+const GanttChart = lazyWithReload(loadGanttChart);
+const Measurement = lazyWithReload(loadMeasurement);
+const DailyProductionWorkspace = lazyWithReload(loadDailyProductionWorkspace);
+const Additive = lazyWithReload(loadAdditive);
+const AdditiveSchedule = lazyWithReload(loadAdditiveSchedule);
+const RealCost = lazyWithReload(loadRealCost);
+const Materials = lazyWithReload(loadMaterials);
+const WarehouseView = lazyWithReload(loadWarehouse);
 const ImportSyntheticDialog = lazyWithReload(() => import('@/components/ImportSyntheticDialog'));
 import { useAuth } from '@/hooks/useAuth';
 import { useOrganization } from '@/hooks/useOrganization';
@@ -76,6 +90,20 @@ const REALTIME_FALLBACK_POLL_MS = 15000;
 const UI_SESSION_VERSION = 1;
 const APP_UI_SESSION_KEY = 'obraplanner:ui-session';
 const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse'];
+
+const NEXT_VIEW_PRELOAD: Record<AppView, { view: AppView; load: () => Promise<unknown> }> = {
+  dashboard: { view: 'management', load: loadManagementRoutine },
+  management: { view: 'tasks', load: () => Promise.all([loadDailyProductionWorkspace(), loadTaskList()]) },
+  gantt: { view: 'tasks', load: () => Promise.all([loadDailyProductionWorkspace(), loadTaskList()]) },
+  tasks: { view: 'dailyReport', load: loadDailyReport },
+  dailyReport: { view: 'tasks', load: loadTaskList },
+  measurement: { view: 'realCost', load: loadRealCost },
+  additive: { view: 'additiveSchedule', load: loadAdditiveSchedule },
+  additiveSchedule: { view: 'additive', load: loadAdditive },
+  realCost: { view: 'measurement', load: loadMeasurement },
+  materials: { view: 'warehouse', load: loadWarehouse },
+  warehouse: { view: 'materials', load: loadMaterials },
+};
 
 const VIEW_ROUTE: Record<AppView, string> = {
   dashboard: 'dashboard',
@@ -961,6 +989,14 @@ export default function Index() {
     }
     return calculateCPM(enriched);
   }, [deferredRawProject, needsDependencySettle]);
+  const idlePreloadProjectId = project?.id;
+
+  useEffect(() => {
+    if (bootLoading || !idlePreloadProjectId || !role) return;
+    const candidate = NEXT_VIEW_PRELOAD[safeCurrentView];
+    if (!canAccessAppView(role, candidate.view)) return;
+    return scheduleIdlePreload(candidate.load);
+  }, [bootLoading, idlePreloadProjectId, role, safeCurrentView]);
 
   const saveDailyReportDirectly = useCallback((before: Project, after: Project) => {
     const dates = new Set([

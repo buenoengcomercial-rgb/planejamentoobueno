@@ -116,3 +116,27 @@ A pequena diferença de 0,31 kB gzip na primeira visita (+0,11%) é o custo do l
 Uma divisão ampla de React, roteamento, consultas, Radix e Floating também foi medida e rejeitada: ela promoveu dependências de páginas lazy, elevando o caminho inicial para 950,52 kB minificados e 291,33 kB gzip. Por isso a configuração final separa somente a fronteira que oferece cache sem antecipar módulos internos.
 
 O comando `pnpm build:analyze` agora gera o manifesto, percorre todos os imports estáticos da entrada, do núcleo autenticado e do Dashboard e calcula o total real minificado/gzip. A análise também falha se `jspdf`, `xlsx` ou `pdfjs-dist` entrarem novamente no caminho inicial.
+
+## Resultado da etapa 7 — pré-carregamento ocioso controlado
+
+Depois da montagem da tela atual e de 1,2 segundo de espera, o navegador pode preparar uma única jornada seguinte durante um período ocioso. A política segue os fluxos mais próximos, como Dashboard → Rotina, Aditivo → Cronograma do aditivo e Materiais → Almoxarifado. Produção e Diário também preparam diretamente o conteúdo interno correspondente, evitando uma segunda espera na troca.
+
+O Almoxarifado usa a mesma regra entre subabas: Painel prepara Retiradas, Entrada prepara Materiais e Equipamentos prepara Inventário, sempre um destino por vez. O agendamento anterior é cancelado ao trocar de página ou subaba.
+
+O pré-carregamento é desativado quando:
+
+- a economia de dados está ligada;
+- a conexão informa `2g` ou `slow-2g`;
+- a página está oculta;
+- o navegador não oferece `requestIdleCallback`;
+- o perfil não possui acesso à próxima página.
+
+PDF, XLSX, PDF.js, importadores e painéis administrativos não fazem parte das políticas. Importar um módulo não executa salvamento, consulta ou transação: apenas prepara seu código estático no cache do navegador.
+
+| Medição | Etapa 6 | Etapa 7 |
+| --- | ---: | ---: |
+| Caminho inicial real do Dashboard, minificado | 903,23 kB | 905,18 kB |
+| Caminho inicial real do Dashboard, gzip | 279,06 kB | 279,70 kB |
+| Sobrecarga da política antes do período ocioso | — | 0,64 kB gzip |
+
+O `build:analyze` continua confirmando que os motores de documentos permanecem fora do caminho inicial. Testes específicos protegem as condições de rede, visibilidade, atraso, cancelamento, permissão e as listas permitidas de pré-carga.

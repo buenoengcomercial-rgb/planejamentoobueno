@@ -4,20 +4,31 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, Warehouse as WarehouseIcon, ReceiptText, ClipboardCheck } from 'lucide-react';
 import { ensureWarehouse, panelSummary } from '@/lib/warehouse';
 import { lazyWithReload } from '@/lib/lazyWithReload';
+import { scheduleIdlePreload } from '@/lib/idlePreload';
 import './warehouse-visual.css';
 import type { WarehouseCloudCommitResult } from '@/lib/warehouseCloudCommit';
 import type { WarehouseScopedDomain } from '@/lib/warehouseScopedCommit';
 import { toast } from 'sonner';
 
-const WarehousePanel = lazyWithReload(() => import('./WarehousePanel'));
-const WarehouseStockTab = lazyWithReload(() => import('./WarehouseStockTab'));
-const WarehouseMovementsTab = lazyWithReload(() => import('./WarehouseMovementsTab'));
-const WarehouseRequisitionsTab = lazyWithReload(() => import('./WarehouseRequisitionsTab'));
-const WarehouseEquipmentsTab = lazyWithReload(() => import('./WarehouseEquipmentsTab'));
-const WarehouseInventoryTab = lazyWithReload(() => import('./WarehouseInventoryTab'));
-const WarehouseFiscalNotesTab = lazyWithReload(() => import('./WarehouseFiscalNotesTab'));
-const WarehouseBudgetMaterialsTab = lazyWithReload(() => import('./WarehouseBudgetMaterialsTab'));
-const WarehouseWithdrawnMaterialsTab = lazyWithReload(() => import('./WarehouseWithdrawnMaterialsTab'));
+const loadWarehousePanel = () => import('./WarehousePanel');
+const loadWarehouseStockTab = () => import('./WarehouseStockTab');
+const loadWarehouseMovementsTab = () => import('./WarehouseMovementsTab');
+const loadWarehouseRequisitionsTab = () => import('./WarehouseRequisitionsTab');
+const loadWarehouseEquipmentsTab = () => import('./WarehouseEquipmentsTab');
+const loadWarehouseInventoryTab = () => import('./WarehouseInventoryTab');
+const loadWarehouseFiscalNotesTab = () => import('./WarehouseFiscalNotesTab');
+const loadWarehouseBudgetMaterialsTab = () => import('./WarehouseBudgetMaterialsTab');
+const loadWarehouseWithdrawnMaterialsTab = () => import('./WarehouseWithdrawnMaterialsTab');
+
+const WarehousePanel = lazyWithReload(loadWarehousePanel);
+const WarehouseStockTab = lazyWithReload(loadWarehouseStockTab);
+const WarehouseMovementsTab = lazyWithReload(loadWarehouseMovementsTab);
+const WarehouseRequisitionsTab = lazyWithReload(loadWarehouseRequisitionsTab);
+const WarehouseEquipmentsTab = lazyWithReload(loadWarehouseEquipmentsTab);
+const WarehouseInventoryTab = lazyWithReload(loadWarehouseInventoryTab);
+const WarehouseFiscalNotesTab = lazyWithReload(loadWarehouseFiscalNotesTab);
+const WarehouseBudgetMaterialsTab = lazyWithReload(loadWarehouseBudgetMaterialsTab);
+const WarehouseWithdrawnMaterialsTab = lazyWithReload(loadWarehouseWithdrawnMaterialsTab);
 const AttachmentOptimizationPanel = lazyWithReload(() => import('./AttachmentOptimizationPanel'));
 const GlobalStorageMaintenancePanel = lazyWithReload(() => import('./GlobalStorageMaintenancePanel'));
 
@@ -36,6 +47,20 @@ const WAREHOUSE_TABS = [
   { value: 'movimentos', label: 'Movimentações', icon: ArrowLeftRight },
   { value: 'inventario', label: 'Inventário', icon: ListChecks },
 ] as const;
+
+type WarehouseTab = typeof WAREHOUSE_TABS[number]['value'];
+
+const NEXT_WAREHOUSE_TAB_PRELOAD: Record<WarehouseTab, () => Promise<unknown>> = {
+  painel: loadWarehouseRequisitionsTab,
+  notas: loadWarehouseStockTab,
+  requisicoes: loadWarehouseWithdrawnMaterialsTab,
+  'materiais-retirados': loadWarehouseRequisitionsTab,
+  'materiais-orcamento': loadWarehouseStockTab,
+  estoque: loadWarehouseFiscalNotesTab,
+  equipamentos: loadWarehouseInventoryTab,
+  movimentos: loadWarehouseInventoryTab,
+  inventario: loadWarehouseMovementsTab,
+};
 
 interface Props {
   project: Project;
@@ -60,7 +85,7 @@ interface Props {
 }
 
 export default function Warehouse({ project, onProjectChange, onCommitProject, onCloudWarehouseOperationConfirmed, onPrepareCloudWarehouseOperation, onCommitWarehouseScoped, onSaveStorageMaintenanceProject, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canSupplementRequisitions = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor }: Props) {
-  const [tab, setTab] = useState(() => canViewPanel ? 'painel' : 'notas');
+  const [tab, setTab] = useState<WarehouseTab>(() => canViewPanel ? 'painel' : 'notas');
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
   useEffect(() => {
     if (ensured !== project) onProjectChange(ensured);
@@ -68,6 +93,7 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
   useEffect(() => {
     if (!canViewPanel && tab === 'painel') setTab('notas');
   }, [canViewPanel, tab]);
+  useEffect(() => scheduleIdlePreload(NEXT_WAREHOUSE_TAB_PRELOAD[tab]), [tab]);
   const summary = useMemo(() => panelSummary(ensured), [ensured]);
   const visibleTabs = canViewPanel
     ? WAREHOUSE_TABS
@@ -109,14 +135,14 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
         </div>
       </div>
 
-      <Tabs value={tab} onValueChange={setTab} className="w-full">
+      <Tabs value={tab} onValueChange={value => setTab(value as WarehouseTab)} className="w-full">
         <div className="lg:hidden">
           <label htmlFor="warehouse-mobile-tab" className="mb-1.5 block text-xs font-semibold text-muted-foreground">Área do almoxarifado</label>
           <select
             id="warehouse-mobile-tab"
             className="min-h-12 w-full rounded-lg border-2 border-primary/30 bg-card px-3 text-base font-semibold shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             value={tab}
-            onChange={event => setTab(event.target.value)}
+            onChange={event => setTab(event.target.value as WarehouseTab)}
           >
             {visibleTabs.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
           </select>
