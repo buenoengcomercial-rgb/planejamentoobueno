@@ -140,7 +140,6 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
   const [importSyntheticOpen, setImportSyntheticOpen] = useState(false);
   const [editingPhase, setEditingPhase] = useState<string | null>(null);
   const [phaseNameDraft, setPhaseNameDraft] = useState('');
-  const [editingNumberId, setEditingNumberId] = useState<string | null>(null);
   const [numberDraft, setNumberDraft] = useState('');
   const handledProductionFocusRef = useRef<string | null>(null);
 
@@ -239,13 +238,16 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
     });
     setEditingPhase(newId);
     setPhaseNameDraft(parentId ? 'Novo Subcapítulo' : 'Novo Capítulo');
+    const parentNumber = parentId ? chapterNumbering.get(parentId) : undefined;
+    setNumberDraft(parentNumber ? `${parentNumber}.${siblings.length + 1}` : String(siblings.length + 1));
   };
 
   const renamePhase = (phaseId: string) => {
     if (!phaseNameDraft.trim()) return;
+    const reordered = reorderChapterByNumber(project, phaseId, numberDraft.trim());
     onProjectChange({
-      ...project,
-      phases: project.phases.map(p => p.id === phaseId ? { ...p, name: phaseNameDraft.trim() } : p),
+      ...reordered,
+      phases: reordered.phases.map(p => p.id === phaseId ? { ...p, name: phaseNameDraft.trim() } : p),
     });
     setEditingPhase(null);
   };
@@ -259,13 +261,6 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
         .map(p => p.parentId === phaseId ? { ...p, parentId: undefined } : p),
     });
   };
-
-  /** Salva numeração customizada do capítulo. Reordena automaticamente quando numérico. */
-  const saveChapterNumber = useCallback((phaseId: string) => {
-    const v = numberDraft.trim();
-    onProjectChange(reorderChapterByNumber(project, phaseId, v));
-    setEditingNumberId(null);
-  }, [numberDraft, project, onProjectChange]);
 
   /** Move um capítulo/subcapítulo para outro pai (ou promove a principal se newParentId === null). */
   const handleMoveChapter = useCallback((chapterId: string, newParentId: string | null) => {
@@ -704,12 +699,12 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
             {readOnly ? null : (
               <>
             {editingPhase === phase.id ? (
-              <button onClick={() => renamePhase(phase.id)} className="h-7 w-7 flex items-center justify-center rounded hover:bg-success/20 text-success transition-colors flex-shrink-0" title="Salvar nome">
+              <button onClick={() => renamePhase(phase.id)} className="h-7 w-7 flex items-center justify-center rounded hover:bg-success/20 text-success transition-colors flex-shrink-0" title="Salvar capítulo">
                 <Check className="w-3.5 h-3.5" />
               </button>
             ) : (
               <button
-                onClick={() => { setEditingPhase(phase.id); setPhaseNameDraft(phase.name); }}
+                onClick={() => { setEditingPhase(phase.id); setPhaseNameDraft(phase.name); setNumberDraft(phase.customNumber ?? chapterNumbering.get(phase.id) ?? ''); }}
                 className="h-7 w-7 flex items-center justify-center rounded hover:bg-primary/20 text-muted-foreground hover:text-primary transition-colors flex-shrink-0"
                 title="Renomear capítulo"
               >
@@ -792,7 +787,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                     if (target.closest('button, input, select, textarea, a, [role="button"]')) return;
                     togglePhase(phase.id);
                   }}
-                  className={`flex-1 min-w-0 flex items-center gap-3 px-5 py-3 ${headerBgClass} text-foreground transition-colors duration-200 ease-out hover:bg-muted/70 ${readOnly ? 'cursor-default' : 'cursor-move'}`}
+                  className={`flex-1 min-w-0 flex items-center gap-3 px-5 py-3 ${headerBgClass} cursor-pointer text-foreground transition-colors duration-200 ease-out hover:bg-muted/70`}
                   title={readOnly ? 'Clique para expandir ou recolher este capítulo' : 'Clique para expandir ou recolher; arraste para mover/reordenar este capítulo'}
                   aria-expanded={isExpanded}
                 >
@@ -808,37 +803,26 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                     {isExpanded ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
                   </button>
                   <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: phase.color }} />
-                  {editingNumberId === phase.id ? (
+                  {editingPhase === phase.id ? (
                     <input
-                      autoFocus
+                      aria-label={`Numeração do capítulo ${phase.name}`}
                       value={numberDraft}
                       onChange={e => setNumberDraft(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') saveChapterNumber(phase.id); if (e.key === 'Escape') setEditingNumberId(null); }}
-                      onBlur={() => saveChapterNumber(phase.id)}
+                      onKeyDown={e => { if (e.key === 'Enter') renamePhase(phase.id); if (e.key === 'Escape') setEditingPhase(null); }}
                       onClick={e => e.stopPropagation()}
                       onMouseDown={e => e.stopPropagation()}
                       onDragStart={e => e.preventDefault()}
                       className="text-xs font-bold text-foreground bg-transparent border border-primary rounded px-1.5 py-0.5 w-16 tabular-nums focus:outline-none"
                       placeholder={String(pi + 1)}
                     />
-                  ) : readOnly ? (
-                    <span className="text-xs font-bold text-muted-foreground tabular-nums px-1.5 py-0.5">{num}</span>
                   ) : (
-                    <button
-                      onClick={e => { e.stopPropagation(); setEditingNumberId(phase.id); setNumberDraft(phase.customNumber ?? num); }}
-                      onMouseDown={e => e.stopPropagation()}
-                      onDragStart={e => e.preventDefault()}
-                      draggable={false}
-                      className="text-xs font-bold text-muted-foreground tabular-nums hover:text-primary hover:bg-primary/10 rounded px-1.5 py-0.5 transition-colors"
-                      title="Clique para editar a numeração"
-                    >
-                      {num}
-                    </button>
+                    <span className="text-xs font-bold text-muted-foreground tabular-nums px-1.5 py-0.5">{num}</span>
                   )}
                   {editingPhase === phase.id ? (
                     <div className="flex items-center gap-2 flex-1 min-w-0" onClick={e => e.stopPropagation()}>
                       <input
                         autoFocus
+                        aria-label={`Nome do capítulo ${phase.name}`}
                         value={phaseNameDraft}
                         onChange={e => setPhaseNameDraft(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') renamePhase(phase.id); if (e.key === 'Escape') setEditingPhase(null); }}
