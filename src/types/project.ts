@@ -1219,6 +1219,17 @@ export interface WarehouseRequisitionSupplement {
   idempotencyKey: string;
   createdAt: string;
   createdBy?: WarehouseAuditActor;
+  /** Ausente em registros legados significa complemento ativo. */
+  status?: 'active' | 'cancelled';
+  /** Fotografia dos itens existentes imediatamente antes do estorno total. */
+  cancelledItems?: WarehouseRequisitionItem[];
+  updatedAt?: string;
+  updatedBy?: WarehouseAuditActor;
+  cancelledAt?: string;
+  cancelledBy?: WarehouseAuditActor;
+  cancellationReason?: string;
+  /** Chaves de correções já confirmadas, evitando repetição concorrente. */
+  correctionIdempotencyKeys?: string[];
   publishedToDailyReportId?: string;
 }
 

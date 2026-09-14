@@ -9,6 +9,7 @@ import {
   computeWarehouseRows,
   computeWarehouseUsageByChapter,
   correctDeliveredRequisition,
+  correctRequisitionSupplement,
   createEquipmentGroup,
   deleteEquipmentGroup,
   createAndDeliverRequisition,
@@ -21,6 +22,7 @@ import {
   issueCustodyTerm,
   panelSummary,
   getReturnableRequisitionItems,
+  getRequisitionMaterialSummaries,
   registerMaterialReturn,
   removeEquipment,
   returnCustodyEquipment,
@@ -386,5 +388,78 @@ describe('operação integrada do almoxarifado', () => {
       requisitionId: requisition.id, date: '2026-08-18', receiverName: 'Equipe Alpha', signatureReceiver: 'assinatura-complemento', idempotencyKey: 'complemento-1',
       items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 3 }],
     }, actor).project.warehouse!.movements.filter(movement => movement.requisitionId === requisition.id && movement.type === 'retirada')).toHaveLength(2);
+  });
+
+  it('consolida complementos na requisição e corrige ou estorna somente a entrega selecionada', () => {
+    const delivered = createAndDeliverRequisition(withStock(), {
+      date: '2026-09-14', chapterId: 'chapter-1', chapterName: 'Prédio 1', receiverName: 'Marcelo', requesterName: 'Marcelo', signatureReceiver: 'assinatura-original', deliveryIdempotencyKey: 'req-completa',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 2 }],
+    }, { actor });
+    const requisition = delivered.project.warehouse!.requisitions[0];
+    const complemented = addRequisitionSupplement(delivered.project, {
+      requisitionId: requisition.id, date: '2026-09-14', receiverName: 'Marcelo', signatureReceiver: 'assinatura-complemento', idempotencyKey: 'complemento-completo',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 3 }],
+    }, actor);
+
+    expect(getRequisitionMaterialSummaries(complemented.project, requisition.id)).toEqual([
+      expect.objectContaining({ withdrawnQuantity: 5, availableQuantity: 5, deliveries: expect.arrayContaining([
+        expect.objectContaining({ sourceType: 'original', quantity: 2 }),
+        expect.objectContaining({ sourceType: 'supplement', sourceId: complemented.supplementId, quantity: 3 }),
+      ]) }),
+    ]);
+
+    const corrected = correctRequisitionSupplement(complemented.project, {
+      requisitionId: requisition.id,
+      supplementId: complemented.supplementId,
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 1 }],
+      reason: 'Quantidade conferida no campo',
+      idempotencyKey: 'corrigir-complemento-1',
+    }, actor);
+    const correctedRequisition = corrected.project.warehouse!.requisitions[0];
+    expect(correctedRequisition.items[0].quantity).toBe(2);
+    expect(correctedRequisition.supplements?.[0]).toMatchObject({ status: 'active', items: [expect.objectContaining({ quantity: 1 })] });
+    expect(getRequisitionMaterialSummaries(corrected.project, requisition.id)[0]).toMatchObject({ withdrawnQuantity: 3, availableQuantity: 3 });
+    expect(computeWarehouseRows(corrected.project, { includeManual: true })[0].balance).toBe(17);
+    expect(corrected.project.auditLogs?.at(-1)?.metadata).toMatchObject({ operation: 'requisition_supplement_correction', supplementId: complemented.supplementId, cancelled: false });
+    const movementCount = corrected.project.warehouse!.movements.length;
+    expect(correctRequisitionSupplement(corrected.project, {
+      requisitionId: requisition.id,
+      supplementId: complemented.supplementId,
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 1 }],
+      reason: 'Quantidade conferida no campo',
+      idempotencyKey: 'corrigir-complemento-1',
+    }, actor).project.warehouse!.movements).toHaveLength(movementCount);
+
+    const cancelled = correctRequisitionSupplement(corrected.project, {
+      requisitionId: requisition.id,
+      supplementId: complemented.supplementId,
+      items: [],
+      reason: 'Complemento lançado por engano',
+      idempotencyKey: 'estornar-complemento-1',
+    }, actor);
+    expect(cancelled.project.warehouse!.requisitions[0].supplements?.[0]).toMatchObject({
+      status: 'cancelled',
+      items: [],
+      cancelledItems: [expect.objectContaining({ itemKey: 'material-1', quantity: 1 })],
+      cancellationReason: 'Complemento lançado por engano',
+    });
+    expect(getRequisitionMaterialSummaries(cancelled.project, requisition.id)[0]).toMatchObject({ withdrawnQuantity: 2, availableQuantity: 2, deliveries: [expect.objectContaining({ sourceType: 'original' })] });
+    expect(computeWarehouseRows(cancelled.project, { includeManual: true })[0].balance).toBe(18);
+  });
+
+  it('bloqueia correção de complemento quando existe devolução vinculada', () => {
+    const delivered = createAndDeliverRequisition(withStock(), {
+      date: '2026-09-14', chapterId: 'chapter-1', receiverName: 'Marcelo', requesterName: 'Marcelo', signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'req-complemento-devolvido',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 2 }],
+    }, { actor });
+    const requisition = delivered.project.warehouse!.requisitions[0];
+    const complemented = addRequisitionSupplement(delivered.project, {
+      requisitionId: requisition.id, date: '2026-09-14', receiverName: 'Marcelo', signatureReceiver: 'assinatura', idempotencyKey: 'complemento-devolvido',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 1 }],
+    }, actor);
+    const returned = registerMaterialReturn(complemented.project, { requisitionId: requisition.id, date: '2026-09-14', returnerName: 'Marcelo', conditionConfirmed: true, idempotencyKey: 'dev-complemento', items: [{ itemKey: 'material-1', quantity: 1 }] }, actor);
+    expect(() => correctRequisitionSupplement(returned.project, {
+      requisitionId: requisition.id, supplementId: complemented.supplementId, items: [], reason: 'Erro', idempotencyKey: 'corrigir-bloqueado',
+    }, actor)).toThrow(/devolução/i);
   });
 });

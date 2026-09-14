@@ -723,6 +723,150 @@ export interface WarehouseReturnableRequisitionItem {
   unitCostSnapshot?: number;
 }
 
+export interface WarehouseRequisitionDeliveryContribution {
+  id: string;
+  sourceType: 'original' | 'supplement';
+  sourceId: string;
+  date: string;
+  receiverName?: string;
+  itemKey: string;
+  code?: string;
+  description: string;
+  unit: string;
+  quantity: number;
+  movementId?: string;
+  unitCostSnapshot?: number;
+}
+
+export interface WarehouseRequisitionMaterialSummary extends WarehouseReturnableRequisitionItem {
+  deliveries: WarehouseRequisitionDeliveryContribution[];
+}
+
+function requisitionDeliveryContributions(
+  wh: WarehouseState,
+  requisition: WarehouseRequisition,
+): WarehouseRequisitionDeliveryContribution[] {
+  const activeMovements = wh.movements.filter(movement => (
+    movement.type === 'retirada'
+    && movement.requisitionId === requisition.id
+    && !movement.reversedById
+  ));
+  const activeById = new Map(activeMovements.map(movement => [movement.id, movement] as const));
+  const usedMovementIds = new Set<string>();
+  const supplementById = new Map((requisition.supplements ?? []).map(supplement => [supplement.id, supplement] as const));
+  const cancelledSupplementIds = new Set((requisition.supplements ?? [])
+    .filter(supplement => supplement.status === 'cancelled')
+    .map(supplement => supplement.id));
+  const contributions: WarehouseRequisitionDeliveryContribution[] = [];
+
+  const appendSnapshot = (
+    item: WarehouseRequisitionItem,
+    sourceType: 'original' | 'supplement',
+    sourceId: string,
+    date: string,
+    receiverName?: string,
+  ) => {
+    const expectedOrigin = sourceType === 'original' ? requisition.id : sourceId;
+    const movement = (item.movementId ? activeById.get(item.movementId) : undefined)
+      ?? activeMovements.find(candidate => (
+        !usedMovementIds.has(candidate.id)
+        && candidate.itemKey === item.itemKey
+        && (candidate.originId === expectedOrigin || (sourceType === 'original' && !candidate.originId))
+      ));
+    if (item.movementId && !movement && wh.movements.some(candidate => candidate.id === item.movementId && candidate.reversedById)) return;
+    if (movement) usedMovementIds.add(movement.id);
+    contributions.push({
+      id: movement?.id ?? `${sourceType}:${sourceId}:${item.itemKey}`,
+      sourceType,
+      sourceId,
+      date,
+      receiverName,
+      itemKey: movement?.itemKey ?? item.itemKey,
+      code: movement?.itemCode ?? item.code,
+      description: movement?.itemDescription ?? item.description,
+      unit: movement?.itemUnit ?? item.unit,
+      quantity: Number(movement?.quantity ?? item.quantity ?? 0),
+      movementId: movement?.id ?? item.movementId,
+      unitCostSnapshot: movement?.costSnapshot ?? item.unitCostSnapshot,
+    });
+  };
+
+  for (const item of requisition.items) {
+    appendSnapshot(
+      item,
+      'original',
+      requisition.id,
+      requisition.date,
+      requisition.receiverName || requisition.requesterName,
+    );
+  }
+  for (const supplement of requisition.supplements ?? []) {
+    if (supplement.status === 'cancelled') continue;
+    for (const item of supplement.items) {
+      appendSnapshot(item, 'supplement', supplement.id, supplement.date, supplement.receiverName);
+    }
+  }
+
+  for (const movement of activeMovements) {
+    if (usedMovementIds.has(movement.id) || (movement.originId && cancelledSupplementIds.has(movement.originId))) continue;
+    const supplement = movement.originId ? supplementById.get(movement.originId) : undefined;
+    contributions.push({
+      id: movement.id,
+      sourceType: supplement ? 'supplement' : 'original',
+      sourceId: supplement?.id ?? requisition.id,
+      date: supplement?.date ?? movement.date ?? requisition.date,
+      receiverName: supplement?.receiverName || movement.workerName || requisition.receiverName || requisition.requesterName,
+      itemKey: movement.itemKey,
+      code: movement.itemCode,
+      description: movement.itemDescription,
+      unit: movement.itemUnit,
+      quantity: Number(movement.quantity || 0),
+      movementId: movement.id,
+      unitCostSnapshot: movement.costSnapshot,
+    });
+  }
+  return contributions.filter(contribution => contribution.itemKey && contribution.quantity > 0);
+}
+
+/** Projeção operacional única: retirada original e complementos ativos, consolidados por material. */
+export function getRequisitionMaterialSummaries(project: Project, requisitionId: string): WarehouseRequisitionMaterialSummary[] {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const requisition = wh.requisitions.find(entry => entry.id === requisitionId);
+  if (!requisition) throw new Error('Retirada não encontrada.');
+
+  const returnedByItem = new Map<string, number>();
+  for (const movement of wh.movements) {
+    if (movement.reversedById || movement.type !== 'devolucao' || movement.originType !== 'return' || movement.requisitionId !== requisitionId) continue;
+    returnedByItem.set(movement.itemKey, trunc2((returnedByItem.get(movement.itemKey) ?? 0) + movement.quantity));
+  }
+
+  const summaries = new Map<string, WarehouseRequisitionMaterialSummary>();
+  for (const delivery of requisitionDeliveryContributions(wh, requisition)) {
+    const existing = summaries.get(delivery.itemKey);
+    summaries.set(delivery.itemKey, {
+      itemKey: delivery.itemKey,
+      code: delivery.code ?? existing?.code,
+      description: delivery.description || existing?.description || 'Material sem descrição',
+      unit: delivery.unit || existing?.unit || 'UN',
+      withdrawnQuantity: trunc2((existing?.withdrawnQuantity ?? 0) + delivery.quantity),
+      returnedQuantity: 0,
+      availableQuantity: 0,
+      unitCostSnapshot: delivery.unitCostSnapshot ?? existing?.unitCostSnapshot,
+      deliveries: [...(existing?.deliveries ?? []), delivery],
+    });
+  }
+
+  return Array.from(summaries.values()).map(summary => {
+    const returnedQuantity = returnedByItem.get(summary.itemKey) ?? 0;
+    return {
+      ...summary,
+      returnedQuantity,
+      availableQuantity: trunc2(Math.max(0, summary.withdrawnQuantity - returnedQuantity)),
+    };
+  });
+}
+
 export interface RegisterMaterialReturnInput {
   requisitionId: string;
   date: string;
@@ -755,41 +899,10 @@ export function nextMaterialReturnNumber(state: WarehouseState): string {
  */
 export function getReturnableRequisitionItems(project: Project, requisitionId: string): WarehouseReturnableRequisitionItem[] {
   const p = ensureWarehouse(project);
-  const wh = p.warehouse!;
-  const requisition = wh.requisitions.find(entry => entry.id === requisitionId);
+  const requisition = p.warehouse!.requisitions.find(entry => entry.id === requisitionId);
   if (!requisition) throw new Error('Retirada não encontrada.');
   if (requisition.status !== 'entregue') throw new Error('A devolução só pode ser registrada em uma retirada entregue.');
-
-  const returnedByItem = new Map<string, number>();
-  for (const movement of wh.movements) {
-    if (movement.reversedById || movement.type !== 'devolucao' || movement.originType !== 'return' || movement.requisitionId !== requisitionId) continue;
-    returnedByItem.set(movement.itemKey, trunc2((returnedByItem.get(movement.itemKey) ?? 0) + movement.quantity));
-  }
-
-  const withdrawnByItem = new Map<string, WarehouseReturnableRequisitionItem>();
-  const withdrawalMovements = wh.movements.filter(movement => movement.type === 'retirada' && movement.requisitionId === requisitionId && !movement.reversedById);
-  // Registros legados podem não possuir o movimento espelhado; preserve a base da requisição nesses casos.
-  const sources = withdrawalMovements.length ? withdrawalMovements : requisition.items.map(item => ({
-    itemKey: item.itemKey, itemCode: item.code, itemDescription: item.description, itemUnit: item.unit,
-    quantity: item.quantity, costSnapshot: item.unitCostSnapshot,
-  }));
-  for (const source of sources) {
-    const existing = withdrawnByItem.get(source.itemKey);
-    withdrawnByItem.set(source.itemKey, {
-      itemKey: source.itemKey,
-      code: source.itemCode,
-      description: source.itemDescription,
-      unit: source.itemUnit,
-      withdrawnQuantity: trunc2((existing?.withdrawnQuantity ?? 0) + Number(source.quantity || 0)),
-      returnedQuantity: 0,
-      availableQuantity: 0,
-      unitCostSnapshot: source.costSnapshot ?? existing?.unitCostSnapshot,
-    });
-  }
-  return Array.from(withdrawnByItem.values()).map(item => {
-    const returnedQuantity = returnedByItem.get(item.itemKey) ?? 0;
-    return { ...item, returnedQuantity, availableQuantity: trunc2(Math.max(0, item.withdrawnQuantity - returnedQuantity)) };
-  });
+  return getRequisitionMaterialSummaries(p, requisitionId).map(({ deliveries: _deliveries, ...item }) => item);
 }
 
 /** Registra a devolução de sobra como movimento separado e positivo, sem alterar a retirada original. */
@@ -1286,7 +1399,7 @@ export function addRequisitionSupplement(
   }
   const supplement: WarehouseRequisitionSupplement = {
     id: supplementId, date: input.date, receiverName, signatureReceiver: input.signatureReceiver.trim(),
-    notes: input.notes?.trim() || undefined, attachments: input.attachments, idempotencyKey, items, createdAt, createdBy: auditActor,
+    notes: input.notes?.trim() || undefined, attachments: input.attachments, idempotencyKey, items, createdAt, createdBy: auditActor, status: 'active',
   };
   const updatedRequisition: WarehouseRequisition = {
     ...requisition, supplements: [...(requisition.supplements ?? []), supplement], updatedAt: createdAt, updatedBy: auditActor ?? requisition.updatedBy,
@@ -1304,6 +1417,228 @@ export function addRequisitionSupplement(
       userId: auditActor?.userId, userName: auditActor?.userName, userEmail: auditActor?.userEmail,
       metadata: { operation: 'requisition_supplement', requisitionNumber: requisition.number, supplementId, affectedMovementIds: movementIds },
     }), supplementId, movementIds,
+  };
+}
+
+export interface CorrectRequisitionSupplementInput {
+  requisitionId: string;
+  supplementId: string;
+  items: Array<Pick<WarehouseRequisitionItem, 'itemKey' | 'code' | 'description' | 'unit' | 'quantity'>>;
+  reason: string;
+  idempotencyKey: string;
+}
+
+export interface CorrectRequisitionSupplementResult {
+  project: Project;
+  supplementId: string;
+  movementIds: string[];
+}
+
+/** Corrige ou estorna um complemento sem reescrever a retirada original. */
+export function correctRequisitionSupplement(
+  project: Project,
+  input: CorrectRequisitionSupplementInput,
+  actor?: WarehouseActorInput,
+): CorrectRequisitionSupplementResult {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const requisition = wh.requisitions.find(entry => entry.id === input.requisitionId);
+  if (!requisition) throw new Error('Retirada não encontrada.');
+  if (requisition.status !== 'entregue') throw new Error('Somente retiradas entregues podem ter complementos corrigidos.');
+  const supplement = requisition.supplements?.find(entry => entry.id === input.supplementId);
+  if (!supplement) throw new Error('Complemento não encontrado.');
+  if (supplement.status === 'cancelled') throw new Error('Este complemento já foi estornado.');
+  const reason = input.reason?.trim();
+  if (!reason) throw new Error('Informe o motivo da correção ou do estorno.');
+  const idempotencyKey = input.idempotencyKey?.trim();
+  if (!idempotencyKey) throw new Error('Não foi possível identificar esta tentativa de correção. Tente novamente.');
+  if (supplement.correctionIdempotencyKeys?.includes(idempotencyKey)) {
+    return {
+      project: p,
+      supplementId: supplement.id,
+      movementIds: supplement.items.map(item => item.movementId).filter((id): id is string => !!id),
+    };
+  }
+  const hasReturns = wh.movements.some(movement => (
+    movement.type === 'devolucao'
+    && movement.originType === 'return'
+    && movement.requisitionId === requisition.id
+    && !movement.reversedById
+  ));
+  if (hasReturns) throw new Error('Esta retirada possui devolução registrada e seus complementos não podem ser corrigidos.');
+
+  const requested = new Map<string, CorrectRequisitionSupplementInput['items'][number]>();
+  for (const item of input.items) {
+    const quantity = Number(item.quantity);
+    if (!item.itemKey || !item.description?.trim() || !item.unit?.trim() || !Number.isFinite(quantity) || quantity <= 0) {
+      throw new Error('Todos os materiais mantidos no complemento devem ter quantidade positiva.');
+    }
+    if (requested.has(item.itemKey)) throw new Error('Cada material deve aparecer uma única vez no complemento.');
+    requested.set(item.itemKey, { ...item, quantity });
+  }
+
+  const supplementMovementIds = new Set(supplement.items.map(item => item.movementId).filter((id): id is string => !!id));
+  const activeMovements = wh.movements.filter(movement => (
+    movement.type === 'retirada'
+    && movement.requisitionId === requisition.id
+    && !movement.reversedById
+    && (movement.originId === supplement.id || supplementMovementIds.has(movement.id))
+  ));
+  if (supplement.items.length && !activeMovements.length) {
+    throw new Error('Os movimentos deste complemento não foram localizados. Atualize o Almoxarifado antes de corrigir.');
+  }
+
+  const originalByKey = new Map<string, number>();
+  for (const movement of activeMovements) {
+    originalByKey.set(movement.itemKey, trunc2((originalByKey.get(movement.itemKey) ?? 0) + Number(movement.quantity || 0)));
+  }
+  const availableByKey = new Map(computeWarehouseRows(p, { includeManual: true })
+    .map(row => [row.key, trunc2(row.balance + (originalByKey.get(row.key) ?? 0))] as const));
+  for (const item of requested.values()) {
+    if (item.quantity > (availableByKey.get(item.itemKey) ?? 0)) {
+      throw new Error(`${item.description}: quantidade maior que o saldo disponível para correção.`);
+    }
+  }
+
+  const timestamp = nowISO();
+  const auditActor = normalizeWarehouseActor(actor);
+  const changedMovementIds: string[] = [];
+  const movements = wh.movements.map(movement => ({ ...movement }));
+  for (const original of activeMovements) {
+    const reversalId = uid();
+    const movementIndex = movements.findIndex(movement => movement.id === original.id);
+    movements[movementIndex] = {
+      ...original,
+      reversedById: reversalId,
+      updatedAt: timestamp,
+      updatedBy: auditActor ?? original.updatedBy,
+    };
+    movements.push({
+      id: reversalId,
+      createdAt: timestamp,
+      createdBy: auditActor,
+      type: 'estorno',
+      date: supplement.date,
+      itemKey: original.itemKey,
+      itemCode: original.itemCode,
+      itemDescription: original.itemDescription,
+      itemUnit: original.itemUnit,
+      quantity: original.quantity,
+      unitPrice: original.unitPrice,
+      costSnapshot: original.costSnapshot,
+      requisitionId: requisition.id,
+      originType: 'withdrawal',
+      originId: supplement.id,
+      chapterId: original.chapterId,
+      taskId: original.taskId,
+      teamId: original.teamId,
+      workerName: original.workerName,
+      workFront: original.workFront,
+      responsible: warehouseActorLegacyValue(actor),
+      user: warehouseActorLegacyValue(actor),
+      notes: `Estorno para correção do complemento da retirada ${requisition.number}. Motivo: ${reason}`,
+      reversesId: original.id,
+    });
+    changedMovementIds.push(original.id, reversalId);
+  }
+
+  const correctedItems: WarehouseRequisitionItem[] = [];
+  for (const item of requested.values()) {
+    const unitCostSnapshot = warehouseValuationForItem(wh, item.itemKey).averageUnitCost;
+    const movementId = uid();
+    movements.push({
+      id: movementId,
+      createdAt: timestamp,
+      createdBy: auditActor,
+      type: 'retirada',
+      date: supplement.date,
+      itemKey: item.itemKey,
+      itemCode: item.code,
+      itemDescription: item.description,
+      itemUnit: item.unit,
+      quantity: item.quantity,
+      unitPrice: unitCostSnapshot,
+      costSnapshot: unitCostSnapshot,
+      requisitionId: requisition.id,
+      originType: 'withdrawal',
+      originId: supplement.id,
+      chapterId: requisition.chapterId,
+      taskId: requisition.taskId,
+      teamId: requisition.teamId,
+      workerName: supplement.receiverName,
+      workFront: requisition.workFront,
+      responsible: warehouseActorLegacyValue(actor),
+      user: warehouseActorLegacyValue(actor),
+      notes: supplement.notes || `Complemento corrigido da retirada ${requisition.number}.`,
+      attachments: supplement.attachments,
+    });
+    correctedItems.push({ ...item, quantity: item.quantity, movementId, unitCostSnapshot });
+    changedMovementIds.push(movementId);
+  }
+
+  const cancelled = correctedItems.length === 0;
+  const correctedSupplement: WarehouseRequisitionSupplement = {
+    ...supplement,
+    items: correctedItems,
+    status: cancelled ? 'cancelled' : 'active',
+    cancelledItems: cancelled ? supplement.items.map(item => ({ ...item })) : undefined,
+    updatedAt: timestamp,
+    updatedBy: auditActor ?? supplement.updatedBy,
+    correctionIdempotencyKeys: [...(supplement.correctionIdempotencyKeys ?? []), idempotencyKey],
+    cancelledAt: cancelled ? timestamp : undefined,
+    cancelledBy: cancelled ? auditActor : undefined,
+    cancellationReason: cancelled ? reason : undefined,
+  };
+  const updatedRequisition: WarehouseRequisition = {
+    ...requisition,
+    supplements: requisition.supplements?.map(entry => entry.id === supplement.id ? correctedSupplement : entry),
+    updatedAt: timestamp,
+    updatedBy: auditActor ?? requisition.updatedBy,
+  };
+  let next = setWh(p, {
+    requisitions: wh.requisitions.map(entry => entry.id === requisition.id ? updatedRequisition : entry),
+    movements,
+  });
+  if (supplement.publishedToDailyReportId) {
+    const oldBlock = requisitionSupplementDailyReportBlock(requisition, supplement);
+    const newBlock = cancelled ? '' : requisitionSupplementDailyReportBlock(updatedRequisition, correctedSupplement);
+    next = {
+      ...next,
+      dailyReports: (next.dailyReports ?? []).map(report => report.id !== supplement.publishedToDailyReportId ? report : {
+        ...report,
+        observations: (report.observations ?? '').replace(oldBlock, newBlock).replace(/^\n+|\n+$/g, '').replace(/\n{3,}/g, '\n\n'),
+        updatedAt: timestamp,
+      }),
+    };
+  }
+
+  return {
+    project: logToProject(next, {
+      entityType: 'warehouse_requisition',
+      entityId: requisition.id,
+      action: 'updated',
+      title: cancelled
+        ? `Complemento da retirada ${requisition.number} estornado`
+        : `Complemento da retirada ${requisition.number} corrigido`,
+      description: cancelled
+        ? `Todos os materiais do complemento foram estornados. Motivo: ${reason}`
+        : `Materiais e quantidades do complemento foram corrigidos. Motivo: ${reason}`,
+      before: { supplement, movements: activeMovements },
+      after: { supplement: correctedSupplement, movements: movements.filter(movement => changedMovementIds.includes(movement.id)) },
+      userId: auditActor?.userId,
+      userName: auditActor?.userName,
+      userEmail: auditActor?.userEmail,
+      metadata: {
+        operation: 'requisition_supplement_correction',
+        requisitionNumber: requisition.number,
+        supplementId: supplement.id,
+        reason,
+        cancelled,
+        affectedMovementIds: changedMovementIds,
+      },
+    }),
+    supplementId: supplement.id,
+    movementIds: changedMovementIds,
   };
 }
 

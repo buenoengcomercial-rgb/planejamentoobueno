@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project, WarehouseRequisition } from '@/types/project';
-import { addMovement, createAndDeliverRequisition, emptyWarehouse } from '@/lib/warehouse';
+import {
+  addMovement,
+  addRequisitionSupplement,
+  correctRequisitionSupplement,
+  createAndDeliverRequisition,
+  emptyWarehouse,
+} from '@/lib/warehouse';
 import { commitWarehouseOperation, mergeWarehouseCloudCommit, type WarehouseCloudCommitResult } from '@/lib/warehouseCloudCommit';
 
 const { rpcMock, supabaseMock } = vi.hoisted(() => {
@@ -170,5 +176,69 @@ describe('confirmação transacional do Almoxarifado', () => {
     expect(merged.name).toBe('Nome local ainda pendente');
     expect(merged.warehouse!.items).toEqual(current.warehouse!.items);
     expect(merged.warehouse!.requisitions).toEqual(confirmedProject.warehouse!.requisitions);
+  });
+
+  it('confirma a correção de um complemento pela RPC dedicada sem reenviar a retirada inteira como operação genérica', async () => {
+    const stocked = stockedProject();
+    const delivered = createAndDeliverRequisition(stocked, {
+      date: '2026-09-12', chapterId: 'chapter-1', receiverName: 'CANANDA', requesterName: 'CANANDA',
+      signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'delivery-for-supplement',
+      items: [{ itemKey: 'placa', description: 'Placa', unit: 'UN', quantity: 2 }],
+    }, { actor: { userId: 'user-1', userName: 'Gabriel' } });
+    const complemented = addRequisitionSupplement(delivered.project, {
+      requisitionId: delivered.requisitionId,
+      date: '2026-09-13', receiverName: 'CANANDA', signatureReceiver: 'assinatura',
+      idempotencyKey: 'supplement-1',
+      items: [{ itemKey: 'placa', description: 'Placa', unit: 'UN', quantity: 3 }],
+    }, { actor: { userId: 'user-1', userName: 'Gabriel' }, publishToDailyReport: false });
+    const corrected = correctRequisitionSupplement(complemented.project, {
+      requisitionId: delivered.requisitionId,
+      supplementId: complemented.supplementId,
+      reason: 'Quantidade digitada incorretamente',
+      idempotencyKey: 'supplement-correction-1',
+      items: [{ itemKey: 'placa', description: 'Placa', unit: 'UN', quantity: 1 }],
+    }, { userId: 'user-1', userName: 'Gabriel' });
+    const correctedRequisition = corrected.project.warehouse!.requisitions.find(row => row.id === delivered.requisitionId)!;
+    const changedMovements = corrected.project.warehouse!.movements.filter(row => corrected.movementIds.includes(row.id));
+    const correctionAudit = corrected.project.auditLogs!.at(-1)!;
+    rpcMock.mockResolvedValue({
+      data: {
+        requisition: correctedRequisition,
+        movements: changedMovements,
+        auditLogs: [correctionAudit],
+        committedAt: '2026-09-14T12:00:00.000Z',
+        projectUpdatedAt: '2026-09-14T12:00:00.100Z',
+        warehouseUpdatedAt: '2026-09-14T12:00:00.100Z',
+        warehouseVersion: 10,
+      },
+      error: null,
+    });
+
+    const confirmed = await commitWarehouseOperation(complemented.project, corrected.project, {
+      type: 'supplement_correction',
+      requisitionId: delivered.requisitionId,
+      supplementId: complemented.supplementId,
+      operationKey: 'supplement-correction-1',
+    });
+
+    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_supplement_correction');
+    expect(rpcMock.mock.calls[0][1]).toMatchObject({
+      p_project_id: 'project-1',
+      p_operation_key: 'supplement-correction-1',
+      p_requisition_id: delivered.requisitionId,
+      p_supplement_id: complemented.supplementId,
+    });
+    expect(rpcMock.mock.calls[0][1]).not.toHaveProperty('p_operation_type');
+    expect(rpcMock.mock.calls[0][1].p_audit_logs).toEqual([correctionAudit]);
+    expect(rpcMock.mock.calls[0][1].p_upsert_movements).toHaveLength(3);
+    expect(confirmed.project.warehouse!.requisitions.find(row => row.id === delivered.requisitionId)?.supplements?.[0].items[0].quantity).toBe(1);
+  });
+
+  it('bloqueia a correção quando o complemento não foi identificado', async () => {
+    const project = stockedProject();
+    await expect(commitWarehouseOperation(project, project, {
+      type: 'supplement_correction', requisitionId: 'req-1', operationKey: 'correction-without-supplement',
+    })).rejects.toThrow('identificar o complemento');
+    expect(rpcMock).not.toHaveBeenCalled();
   });
 });

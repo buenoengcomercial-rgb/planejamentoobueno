@@ -1,5 +1,5 @@
 import type { Project, WarehouseRequisition, CustodyTerm, WarehouseInventorySession } from '@/types/project';
-import { custodyTermAggregateStatus, custodyTermEquipmentItems } from '@/lib/warehouse';
+import { custodyTermAggregateStatus, custodyTermEquipmentItems, getRequisitionMaterialSummaries } from '@/lib/warehouse';
 
 type JsPdfInstance = import('jspdf').jsPDF;
 type JsPdfConstructor = typeof import('jspdf').jsPDF;
@@ -44,6 +44,7 @@ function signatures(doc: JsPdfInstance, y: number, leftLabel: string, leftSig: s
 
 export async function generateRequisitionReceipt(project: Project, req: WarehouseRequisition) {
   const { jsPDF, autoTable } = await loadWarehousePdfEngine();
+  const materials = getRequisitionMaterialSummaries(project, req.id);
   const doc = new jsPDF();
   header(doc, project, 'RECIBO DE RETIRADA DE MATERIAL', `${req.number} · ${req.date}`);
   doc.setFontSize(10);
@@ -57,8 +58,14 @@ export async function generateRequisitionReceipt(project: Project, req: Warehous
 
   autoTable(doc, {
     startY: y + 2,
-    head: [['Código', 'Descrição', 'Un', 'Qtd']],
-    body: req.items.map(it => [it.code ?? '—', it.description, it.unit, String(it.quantity)]),
+    head: [['Código', 'Descrição', 'Un', 'Qtd total', 'Entregas']],
+    body: materials.map(item => [
+      item.code ?? '—',
+      item.description,
+      item.unit,
+      String(item.withdrawnQuantity),
+      item.deliveries.map(delivery => `${delivery.sourceType === 'original' ? 'Original' : 'Complemento'} ${formatOperationalDate(delivery.date)}: ${delivery.quantity} ${delivery.unit}`).join('\n'),
+    ]),
     styles: { fontSize: 9 },
     headStyles: { fillColor: [60, 60, 60] },
   });

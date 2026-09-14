@@ -13,6 +13,7 @@ type Json = import('@/integrations/supabase/types').Json;
 export type WarehouseCloudOperationType =
   | 'delivery'
   | 'supplement'
+  | 'supplement_correction'
   | 'return'
   | 'correction'
   | 'hard_delete';
@@ -20,6 +21,7 @@ export type WarehouseCloudOperationType =
 export interface WarehouseCloudOperation {
   type: WarehouseCloudOperationType;
   requisitionId: string;
+  supplementId?: string;
   /** Chave estável por tentativa. Repetir a mesma chamada não duplica a baixa. */
   operationKey: string;
 }
@@ -57,6 +59,7 @@ const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.st
 const operationAuditName: Record<WarehouseCloudOperationType, string> = {
   delivery: 'requisition_delivery',
   supplement: 'requisition_supplement',
+  supplement_correction: 'requisition_supplement_correction',
   return: 'requisition_return',
   correction: 'requisition_correction',
   hard_delete: 'requisition_hard_delete',
@@ -105,10 +108,16 @@ function warehouseCommitError(error: { code?: string; message?: string }): Error
   if (/WAREHOUSE_RETURN_EXCEEDS_WITHDRAWAL/.test(message)) {
     return new Error('Outra devolução já consumiu parte do saldo devolvível. Nada foi duplicado; atualize a retirada e revise a quantidade.');
   }
+  if (/WAREHOUSE_SUPPLEMENT_HAS_RETURN/.test(message)) {
+    return new Error('Esta requisição possui devolução registrada. Para preservar a rastreabilidade, o complemento não foi alterado.');
+  }
+  if (/WAREHOUSE_(?:SUPPLEMENT_SCOPE_VIOLATION|INVALID_SUPPLEMENT|INCOMPLETE_SUPPLEMENT_REVERSAL|INVALID_MOVEMENT(?:_REVERSAL)?)/.test(message)) {
+    return new Error('A correção do complemento não passou pela validação de segurança. Nada foi alterado; atualize o Almoxarifado e tente novamente.');
+  }
   if (/WAREHOUSE_INVALID_AUDIT|null value in column ["']id["'].*audit_logs/i.test(message)) {
     return new Error('A auditoria desta operação não pôde ser validada. Nenhuma requisição ou baixa de estoque foi gravada; atualize a obra e tente novamente.');
   }
-  if (error.code === 'PGRST202' || /commit_warehouse_operation|schema cache|could not find the function/i.test(message)) {
+  if (error.code === 'PGRST202' || /commit_warehouse_(?:operation|supplement_correction)|schema cache|could not find the function/i.test(message)) {
     return new Error('A confirmação segura do Almoxarifado ainda não está disponível no servidor. A retirada não foi registrada nem liberada para PDF.');
   }
   if (error.code === '42501') {
@@ -220,6 +229,9 @@ export async function commitWarehouseOperation(
     throw new Error('Conecte-se à internet para confirmar a operação. Nenhuma baixa foi realizada.');
   }
   if (!operation.operationKey.trim()) throw new Error('Não foi possível identificar esta tentativa. Tente novamente.');
+  if (operation.type === 'supplement_correction' && !operation.supplementId?.trim()) {
+    throw new Error('Não foi possível identificar o complemento que será corrigido. Nenhuma alteração foi gravada.');
+  }
 
   const beforeWarehouse = before.warehouse;
   const afterWarehouse = after.warehouse;
@@ -239,11 +251,16 @@ export async function commitWarehouseOperation(
     fn: string,
     args: Record<string, unknown>,
   ) => Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;
-  const { data, error } = await rpc('commit_warehouse_operation', {
+  const rpcName = operation.type === 'supplement_correction'
+    ? 'commit_warehouse_supplement_correction'
+    : 'commit_warehouse_operation';
+  const { data, error } = await rpc(rpcName, {
     p_project_id: before.id,
     p_operation_key: operation.operationKey,
-    p_operation_type: operation.type,
     p_requisition_id: operation.requisitionId,
+    ...(operation.type === 'supplement_correction'
+      ? { p_supplement_id: operation.supplementId }
+      : { p_operation_type: operation.type }),
     p_expected_requisition: expectedRequisition as unknown as Json,
     p_requisition: nextRequisition as unknown as Json,
     p_upsert_movements: movementUpserts as unknown as Json,

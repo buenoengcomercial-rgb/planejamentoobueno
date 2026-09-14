@@ -952,6 +952,20 @@ export type Database = {
         }
         Returns: Json
       }
+      commit_warehouse_supplement_correction: {
+        Args: {
+          p_audit_logs?: Json
+          p_delete_movement_ids?: Json
+          p_expected_requisition?: Json
+          p_operation_key: string
+          p_project_id: string
+          p_requisition?: Json
+          p_requisition_id: string
+          p_supplement_id: string
+          p_upsert_movements?: Json
+        }
+        Returns: Json
+      }
       commit_warehouse_receipt: {
         Args: {
           p_changes: Json

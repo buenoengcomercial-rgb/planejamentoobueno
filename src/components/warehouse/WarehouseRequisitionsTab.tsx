@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type TouchEvent, type WheelEvent } from 'react';
-import type { Project, WarehouseAuditActor, WarehouseMovement, WarehouseRequisition, WarehouseRequisitionItem } from '@/types/project';
+import type { Project, WarehouseAuditActor, WarehouseMovement, WarehouseRequisition, WarehouseRequisitionItem, WarehouseRequisitionSupplement } from '@/types/project';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
@@ -11,10 +11,12 @@ import {
   computeWarehouseRows,
   addRequisitionSupplement,
   correctDeliveredRequisition,
+  correctRequisitionSupplement,
   createAndDeliverRequisition,
   ensureWarehouse,
   hardDeleteRequisition,
   getReturnableRequisitionItems,
+  getRequisitionMaterialSummaries,
   makeAttachment,
   normalizeWarehouseReceiverName,
   registerMaterialReturn,
@@ -186,12 +188,12 @@ function groupRequisitionsByBuilding(project: Project, requisitions: WarehouseRe
       label: building.label,
       isMissingBuilding: building.isMissingBuilding,
       requisitions: sortedRequisitions,
-      itemCount: buildingRequisitions.reduce((total, requisition) => total + requisition.items.length, 0),
+      itemCount: buildingRequisitions.reduce((total, requisition) => total + getRequisitionMaterialSummaries(project, requisition.id).length, 0),
       dateGroups: Array.from(byDate.entries()).map(([date, dateRequisitions]) => ({
         key: `${key}:${date}`,
         date,
         requisitions: dateRequisitions,
-        itemCount: dateRequisitions.reduce((total, requisition) => total + requisition.items.length, 0),
+        itemCount: dateRequisitions.reduce((total, requisition) => total + getRequisitionMaterialSummaries(project, requisition.id).length, 0),
       })).sort((left, right) => right.date.localeCompare(left.date)),
     };
   }).sort((left, right) => Number(left.isMissingBuilding) - Number(right.isMissingBuilding) || left.label.localeCompare(right.label, 'pt-BR', { numeric: true }));
@@ -642,7 +644,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
           </div>
       </section>
       <MaterialReturnDialog project={project} requisition={returnTarget} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onClose={() => setReturnTarget(null)} />
-      <RequisitionActionDialog project={project} requisition={actionTarget} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onClose={() => setActionTarget(null)} />
+      <RequisitionActionDialog project={project} requisition={actionTarget} auditActor={auditActor} canEditOriginal={canEdit} canEditSupplements={canSupplement} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onClose={() => setActionTarget(null)} />
       {confirmDialog}
     </div>
   );
@@ -673,11 +675,12 @@ interface WithdrawalHistoryEntryProps {
 
 function WithdrawalHistoryCard({ project, requisition, movements, active, canDelete, canEdit, canSupplement, onToggle, onDelete, onReturn, onAction }: WithdrawalHistoryEntryProps) {
   const latest = latestRequisitionActivity(requisition, movements);
+  const materialCount = getRequisitionMaterialSummaries(project, requisition.id).length;
   return <article data-expanded={active} className={`withdrawal-record overflow-hidden rounded-lg border bg-card ${active ? 'border-primary/60' : 'border-border'}`}>
     <button type="button" className="min-h-11 w-full p-3 text-left hover:bg-muted/30" onClick={onToggle} aria-expanded={active}>
       <div className="flex items-center justify-between gap-2"><strong>{requisition.number}</strong><ChevronDown className={`h-4 w-4 shrink-0 ${active ? 'rotate-180 text-primary' : ''}`} /></div>
       <div className="mt-1 break-words font-semibold">{requisition.receiverName || requisition.requesterName || '—'}</div>
-      <div className="mt-1 text-xs text-muted-foreground">{requisition.items.length} item(ns) · Operação: {formatOperationalDate(requisition.date)}</div>
+      <div className="mt-1 text-xs text-muted-foreground">{materialCount} item(ns) · Operação: {formatOperationalDate(requisition.date)}</div>
       <div className="text-xs text-muted-foreground">Último registro: {formatRecordedAt({ createdAt: latest }, requisition.date)}</div>
     </button>
     {active && <div data-testid="withdrawal-history-details" className="withdrawal-detail withdrawal-branch mb-3 mr-2 rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} onDelete={onDelete} onReturn={onReturn} onAction={onAction} /></div>}
@@ -686,6 +689,7 @@ function WithdrawalHistoryCard({ project, requisition, movements, active, canDel
 
 function WithdrawalHistoryRow({ project, requisition, movements, active, canDelete, canEdit, canSupplement, onToggle, onDelete, onReturn, onAction }: WithdrawalHistoryEntryProps) {
   const latest = latestRequisitionActivity(requisition, movements);
+  const materialCount = getRequisitionMaterialSummaries(project, requisition.id).length;
   return <Fragment>
     <tr data-testid="withdrawal-history-row" aria-expanded={active} tabIndex={0} aria-label={`Retirada ${requisition.number}`} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggle(); } }} className={`withdrawal-record cursor-pointer border-y bg-card ${active ? 'border-primary/60' : 'border-border'}`} onClick={onToggle}>
       <td className="p-2"><ChevronDown className={`h-4 w-4 ${active ? 'rotate-180 text-primary' : ''}`} /></td>
@@ -693,7 +697,7 @@ function WithdrawalHistoryRow({ project, requisition, movements, active, canDele
       <td className="p-2">{formatOperationalDate(requisition.date)}</td>
       <td className="p-2">{formatRecordedAt({ createdAt: latest }, requisition.date)}</td>
       <td className="p-2 font-semibold">{requisition.receiverName || requisition.requesterName || '—'}</td>
-      <td className="p-2 text-center">{requisition.items.length}</td>
+      <td className="p-2 text-center">{materialCount}</td>
       <td className="p-2"><WarehouseStatusBadge label={requisition.status === 'rascunho' ? 'Pendente legado' : 'Entregue'} tone={requisition.status === 'rascunho' ? 'warning' : 'success'} /></td>
       <td className="p-2"><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} createdAt={requisition.createdAt} updatedAt={requisition.updatedAt} className="space-y-0.5" /></td>
     </tr>
@@ -707,17 +711,18 @@ function PhotoPreview({ file, onRemove }: { file: File; onRemove: () => void }) 
 }
 
 function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupplement, onDelete, onReturn, onAction }: { project: Project; requisition: WarehouseRequisition; canDelete: boolean; canEdit: boolean; canSupplement: boolean; onDelete: () => void; onReturn: () => void; onAction: () => void }) {
+  const [expandedMaterialKeys, setExpandedMaterialKeys] = useState<Set<string>>(new Set());
   const returns = ensureWarehouse(project).warehouse!.movements
     .filter(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.requisitionId === requisition.id && !movement.reversedById)
     .slice()
     .sort((left, right) => recordTimestamp(right, right.date).localeCompare(recordTimestamp(left, left.date)));
   const returnable = requisition.status === 'entregue' ? getReturnableRequisitionItems(project, requisition.id) : [];
-  const returnableByItem = new Map(returnable.map(item => [item.itemKey, item] as const));
+  const materialSummaries = getRequisitionMaterialSummaries(project, requisition.id);
   const hasReturnable = requisition.status === 'entregue' && returnable.some(item => item.availableQuantity > 0);
   const canCorrect = canEdit || canSupplement;
   const notes = requisition.notes?.trim();
   const history = [
-    ...(requisition.supplements ?? []).map(supplement => ({ at: supplement.createdAt, title: 'Complemento adicionado', description: `${supplement.items.map(item => `${item.description} (${item.quantity.toLocaleString('pt-BR')} ${item.unit})`).join(', ')}${supplement.notes ? ` · ${supplement.notes}` : ''}`, actor: supplement.createdBy })),
+    ...(requisition.supplements ?? []).map(supplement => ({ at: supplement.createdAt, title: 'Complemento adicionado', description: `${supplement.status === 'cancelled' ? 'Complemento posteriormente estornado' : supplement.items.map(item => `${item.description} (${item.quantity.toLocaleString('pt-BR')} ${item.unit})`).join(', ')}${supplement.notes ? ` · ${supplement.notes}` : ''}`, actor: supplement.createdBy })),
     ...(project.auditLogs ?? []).filter(log => log.entityType === 'warehouse_requisition' && log.entityId === requisition.id && !log.title.startsWith('Complemento registrado')).map(log => ({ at: log.at, title: log.title, description: log.description, actor: { userId: log.userId, userName: log.userName, userEmail: log.userEmail } })),
   ].sort((left, right) => left.at.localeCompare(right.at));
   const actions = <div className="withdrawal-detail-actions flex flex-wrap justify-end gap-1">
@@ -726,16 +731,172 @@ function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupple
     {hasReturnable && <Button size="sm" className="h-8 px-2 text-[11px]" onClick={onReturn}><RotateCcw className="mr-1 h-3.5 w-3.5" />Registrar devolução</Button>}
     {canDelete && <Button size="sm" variant="destructive" className="h-8 px-2 text-[11px]" onClick={onDelete}><Trash2 className="mr-1 h-3.5 w-3.5" />Excluir</Button>}
   </div>;
-  return <div className="space-y-2">{canCorrect && returns.length > 0 && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">Esta retirada possui devolução registrada. Para preservar o histórico, a correção de material ou quantidade está bloqueada.</div>}{notes && <div className="rounded-md border border-muted-foreground/20 bg-background/70 px-3 py-2 text-sm"><span className="mr-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Observação:</span>{notes}</div>}<div className="overflow-x-auto"><table className="withdrawal-materials w-full min-w-[1020px] table-fixed text-xs"><colgroup><col className="w-[8%]" /><col /><col className="w-[5%]" /><col className="w-[7%]" /><col className="w-[7%]" /><col className="w-[8%]" /><col className="w-[37%]" /></colgroup><thead><tr><th className="p-1.5 text-left">Código</th><th className="p-1.5 text-left">Material</th><th className="p-1.5 text-left">Un.</th><th className="p-1.5 text-right">Retirado</th><th className="p-1.5 text-right text-success">Devolvido</th><th className="p-1.5 text-right text-primary">Em campo</th><th className="p-1 text-right align-middle">{actions}</th></tr></thead><tbody>{requisition.items.map(item => { const summary = returnableByItem.get(item.itemKey); return <tr key={item.itemKey} className="border-t"><td className="p-1.5">{item.code || '—'}</td><td className="p-1.5 md:truncate" title={item.description}>{item.description}</td><td className="p-1.5">{item.unit}</td><td className="p-1.5 text-right font-mono">{item.quantity.toLocaleString('pt-BR')}</td><td className="p-1.5 text-right font-mono text-success">{(summary?.returnedQuantity ?? 0).toLocaleString('pt-BR')}</td><td className="p-1.5 text-right font-mono font-bold text-primary">{(summary?.availableQuantity ?? item.quantity).toLocaleString('pt-BR')}</td><td aria-hidden="true" className="p-0" /></tr>; })}</tbody></table></div>{returns.length > 0 && <div className="rounded-lg border border-success/30 bg-success/5 p-3"><div className="mb-2 text-sm font-bold text-success">Devoluções registradas</div><div className="space-y-2 text-sm">{returns.map(movement => <div key={movement.id} className="rounded-md border border-success/20 bg-background/70 p-2"><strong>{movement.returnNumber || 'Devolução'}</strong> · operação: {formatOperationalDate(movement.date)} · registro: {formatRecordedAt(movement, movement.date)} · devolvido por {movement.returnerName || 'Não informado'}<div className="mt-1 font-medium text-success">{movement.itemDescription}: {movement.quantity.toLocaleString('pt-BR')} {movement.itemUnit}</div></div>)}</div></div>}{history.length > 0 && <div className="rounded-lg border border-primary/25 bg-primary/5 p-3"><div className="mb-2 text-sm font-bold text-primary">Histórico de alterações</div><div className="space-y-2">{history.map((entry, index) => <div key={`${entry.at}-${index}`} className="rounded-md border bg-background/80 p-2 text-sm"><div className="font-semibold">{entry.title}</div><div className="text-xs text-muted-foreground">{entry.actor?.userName || entry.actor?.userEmail || 'Usuário não identificado'} · {formatRecordedAt({ createdAt: entry.at }, requisition.date)}</div>{entry.description && <div className="mt-1 break-words text-xs">{entry.description}</div>}</div>)}</div></div>}</div>;
+  return <div className="space-y-2">
+    {canCorrect && returns.length > 0 && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">Esta retirada possui devolução registrada. Para preservar o histórico, a correção de material ou quantidade está bloqueada.</div>}
+    {notes && <div className="rounded-md border border-muted-foreground/20 bg-background/70 px-3 py-2 text-sm"><span className="mr-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Observação:</span>{notes}</div>}
+    <div className="overflow-x-auto">
+      <table className="withdrawal-materials w-full min-w-[1020px] table-fixed text-xs">
+        <colgroup><col className="w-[8%]" /><col /><col className="w-[5%]" /><col className="w-[7%]" /><col className="w-[7%]" /><col className="w-[8%]" /><col className="w-[37%]" /></colgroup>
+        <thead><tr><th className="p-1.5 text-left">Código</th><th className="p-1.5 text-left">Material</th><th className="p-1.5 text-left">Un.</th><th className="p-1.5 text-right">Retirado</th><th className="p-1.5 text-right text-success">Devolvido</th><th className="p-1.5 text-right text-primary">Em campo</th><th className="p-1 text-right align-middle">{actions}</th></tr></thead>
+        <tbody>{materialSummaries.map(summary => {
+          const expanded = expandedMaterialKeys.has(summary.itemKey);
+          return <Fragment key={summary.itemKey}>
+            <tr className="border-t">
+              <td className="p-1.5">{summary.code || '—'}</td>
+              <td className="p-1.5">
+                <button type="button" className="flex w-full items-center gap-1.5 text-left font-medium hover:text-primary" aria-expanded={expanded} onClick={() => setExpandedMaterialKeys(current => { const next = new Set(current); if (next.has(summary.itemKey)) next.delete(summary.itemKey); else next.add(summary.itemKey); return next; })}>
+                  <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${expanded ? 'rotate-180 text-primary' : ''}`} />
+                  <span className="truncate" title={summary.description}>{summary.description}</span>
+                  {summary.deliveries.some(delivery => delivery.sourceType === 'supplement') && <span className="shrink-0 rounded-full border border-primary/30 bg-primary/5 px-1.5 py-0.5 text-[10px] font-semibold text-primary">Com complemento</span>}
+                </button>
+              </td>
+              <td className="p-1.5">{summary.unit}</td>
+              <td className="p-1.5 text-right font-mono">{summary.withdrawnQuantity.toLocaleString('pt-BR')}</td>
+              <td className="p-1.5 text-right font-mono text-success">{summary.returnedQuantity.toLocaleString('pt-BR')}</td>
+              <td className="p-1.5 text-right font-mono font-bold text-primary">{summary.availableQuantity.toLocaleString('pt-BR')}</td>
+              <td aria-hidden="true" className="p-0" />
+            </tr>
+            {expanded && <tr className="border-t border-primary/15 bg-primary/[0.03]"><td colSpan={7} className="p-2 pl-10"><div className="grid gap-1 sm:grid-cols-2 xl:grid-cols-3">{summary.deliveries.map(delivery => <div key={delivery.id} className="rounded-md border bg-background/80 px-2.5 py-2"><div className="flex items-center justify-between gap-2"><strong>{delivery.sourceType === 'original' ? 'Retirada original' : 'Complemento'}</strong><span className="font-mono font-bold">{delivery.quantity.toLocaleString('pt-BR')} {delivery.unit}</span></div><div className="mt-1 text-muted-foreground">{formatOperationalDate(delivery.date)} · {delivery.receiverName || 'Recebedor não informado'}</div></div>)}</div></td></tr>}
+          </Fragment>;
+        })}</tbody>
+      </table>
+    </div>
+    {returns.length > 0 && <div className="rounded-lg border border-success/30 bg-success/5 p-3"><div className="mb-2 text-sm font-bold text-success">Devoluções registradas</div><div className="space-y-2 text-sm">{returns.map(movement => <div key={movement.id} className="rounded-md border border-success/20 bg-background/70 p-2"><strong>{movement.returnNumber || 'Devolução'}</strong> · operação: {formatOperationalDate(movement.date)} · registro: {formatRecordedAt(movement, movement.date)} · devolvido por {movement.returnerName || 'Não informado'}<div className="mt-1 font-medium text-success">{movement.itemDescription}: {movement.quantity.toLocaleString('pt-BR')} {movement.itemUnit}</div></div>)}</div></div>}
+    {history.length > 0 && <div className="rounded-lg border border-primary/25 bg-primary/5 p-3"><div className="mb-2 text-sm font-bold text-primary">Histórico de alterações</div><div className="space-y-2">{history.map((entry, index) => <div key={`${entry.at}-${index}`} className="rounded-md border bg-background/80 p-2 text-sm"><div className="font-semibold">{entry.title}</div><div className="text-xs text-muted-foreground">{entry.actor?.userName || entry.actor?.userEmail || 'Usuário não identificado'} · {formatRecordedAt({ createdAt: entry.at }, requisition.date)}</div>{entry.description && <div className="mt-1 break-words text-xs">{entry.description}</div>}</div>)}</div></div>}
+  </div>;
 }
 
-type RequisitionActionMode = 'complement' | 'correction';
+function SupplementDeliveryEditor({ project, requisition, supplement, auditActor, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onSavingChange, onClose }: {
+  project: Project;
+  requisition: WarehouseRequisition;
+  supplement: WarehouseRequisitionSupplement;
+  auditActor?: WarehouseAuditActor;
+  onProjectChange: (project: Project) => void;
+  onCloudOperationConfirmed?: (confirmation: WarehouseCloudCommitResult) => void | Promise<void>;
+  onPrepareCloudOperation?: () => void | Promise<void>;
+  onSavingChange: (saving: boolean) => void;
+  onClose: () => void;
+}) {
+  const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
+  const [editing, setEditing] = useState(false);
+  const [items, setItems] = useState<WarehouseRequisitionItem[]>([]);
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [operationKey, setOperationKey] = useState(() => uidWarehouse());
+  const hasReturns = ensureWarehouse(project).warehouse!.movements.some(movement => (
+    movement.type === 'devolucao'
+    && movement.originType === 'return'
+    && movement.requisitionId === requisition.id
+    && !movement.reversedById
+  ));
 
-/** Formulário único: retirada original em consulta/edição e complemento separado. */
-function RequisitionActionDialog({ project, requisition, auditActor, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onClose }: { project: Project; requisition: WarehouseRequisition | null; auditActor?: WarehouseAuditActor; onProjectChange: (project: Project) => void; onCloudOperationConfirmed?: (confirmation: WarehouseCloudCommitResult) => void | Promise<void>; onPrepareCloudOperation?: () => void | Promise<void>; onClose: () => void }) {
+  const reset = () => {
+    setItems(supplement.items.map(item => ({ ...item, description: materialDisplayName(item.code, item.description) })));
+    setReason('');
+    setOperationKey(uidWarehouse());
+  };
+  useEffect(() => {
+    reset();
+    setEditing(false);
+  // O identificador/versionamento do complemento controla a reabertura limpa do formulário.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supplement.id, supplement.updatedAt]);
+
+  const updateMaterial = (index: number, itemKey: string) => {
+    const row = rows.find(candidate => candidate.key === itemKey);
+    if (!row) return;
+    setItems(current => current.map((item, itemIndex) => itemIndex === index ? {
+      itemKey: row.key,
+      code: row.code,
+      description: materialDisplayName(row.code, row.description),
+      unit: row.unit,
+      quantity: item.quantity || 1,
+    } : item));
+  };
+  const submit = async () => {
+    if (saving) return;
+    if (!reason.trim()) return void toast.error('Informe o motivo da correção ou do estorno.');
+    if (items.some(item => !item.itemKey || !(item.quantity > 0))) return void toast.error('Revise os materiais e as quantidades do complemento.');
+    setSaving(true);
+    onSavingChange(true);
+    try {
+      const result = correctRequisitionSupplement(project, {
+        requisitionId: requisition.id,
+        supplementId: supplement.id,
+        items,
+        reason: reason.trim(),
+        idempotencyKey: operationKey,
+      }, auditActor);
+      await onPrepareCloudOperation?.();
+      const confirmation = await commitWarehouseOperation(project, result.project, {
+        type: 'supplement_correction',
+        requisitionId: requisition.id,
+        supplementId: supplement.id,
+        operationKey,
+      });
+      if (onCloudOperationConfirmed) await onCloudOperationConfirmed(confirmation);
+      else onProjectChange(confirmation.project);
+      toast.success(items.length ? 'Complemento corrigido e estoque atualizado.' : 'Complemento estornado e estoque recomposto.');
+      onClose();
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setSaving(false);
+      onSavingChange(false);
+    }
+  };
+
+  const cancelled = supplement.status === 'cancelled';
+  const visibleItems = cancelled ? (supplement.cancelledItems ?? supplement.items) : supplement.items;
+  return <section className={`rounded-xl border ${cancelled ? 'border-muted bg-muted/20' : 'border-primary/20'}`}>
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 p-3">
+      <div>
+        <div className="flex flex-wrap items-center gap-2"><h4 className="text-sm font-bold">Complemento de {formatOperationalDate(supplement.date)}</h4><WarehouseStatusBadge label={cancelled ? 'Estornado' : 'Confirmado'} tone={cancelled ? 'neutral' : 'success'} /></div>
+        <p className="text-xs text-muted-foreground">Recebedor: {supplement.receiverName || 'Não informado'} · {visibleItems.length} item(ns)</p>
+      </div>
+      {!cancelled && !editing && <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="outline" className="min-h-11" disabled={hasReturns} onClick={() => { reset(); setEditing(true); }}><Pencil className="mr-2 h-4 w-4" />Editar complemento</Button>
+        <Button type="button" variant="outline" className="min-h-11 text-destructive hover:text-destructive" disabled={hasReturns} onClick={() => { reset(); setItems([]); setEditing(true); }}><RotateCcw className="mr-2 h-4 w-4" />Estornar complemento</Button>
+      </div>}
+    </div>
+    <div className="space-y-3 p-3">
+      {!editing && visibleItems.map(item => <div key={item.movementId ?? item.itemKey} className="grid gap-2 rounded-lg border bg-background p-3 sm:grid-cols-[1fr_130px]"><div><div className="font-bold">{materialDisplayName(item.code, item.description)}</div><div className="text-xs text-muted-foreground">{item.code || 'Sem código'} · {item.unit}</div></div><div className={`text-right font-mono font-bold ${cancelled ? 'line-through text-muted-foreground' : ''}`}>{item.quantity.toLocaleString('pt-BR')} {item.unit}</div></div>)}
+      {!editing && cancelled && <div className="text-sm text-muted-foreground">Os materiais permanecem no histórico, mas não compõem mais o saldo retirado.</div>}
+      {editing && <>
+        {items.map((item, index) => <div key={`${item.movementId ?? item.itemKey}-${index}`} className="grid gap-2 rounded-lg border bg-background p-3 sm:grid-cols-[1fr_130px_44px]">
+          <select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={item.itemKey} onChange={event => updateMaterial(index, event.target.value)} aria-label={`Material corrigido do complemento ${index + 1}`}>{rows.map(row => <option key={row.key} value={row.key}>{row.code ? `${row.code} · ` : ''}{materialDisplayName(row.code, row.description)} · saldo {row.balance.toLocaleString('pt-BR')} {row.unit}</option>)}</select>
+          <Input className="min-h-11 text-center text-base" type="number" min="0" step="any" value={item.quantity || ''} onChange={event => setItems(current => current.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry))} aria-label={`Quantidade corrigida de ${item.description}`} />
+          <Button type="button" size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => setItems(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Estornar ${item.description}`}><Trash2 className="h-4 w-4" /></Button>
+        </div>)}
+        <Button type="button" variant="outline" className="min-h-11" onClick={() => setItems(current => [...current, { itemKey: '', description: '', unit: '', quantity: 1 }])}><Plus className="mr-2 h-4 w-4" />Adicionar material</Button>
+        {!items.length && <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm font-medium">Ao confirmar, todo este complemento será estornado e o estoque será recomposto.</div>}
+        <WarehouseField label="Motivo da correção ou estorno"><Input className="min-h-11 text-base" value={reason} onChange={event => setReason(event.target.value)} placeholder="Descreva por que o complemento está sendo ajustado" /></WarehouseField>
+        <div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="outline" className="min-h-11" disabled={saving} onClick={() => { reset(); setEditing(false); }}>Cancelar</Button><Button type="button" variant={items.length ? 'default' : 'destructive'} className="min-h-11" disabled={saving} onClick={() => void submit()}><Check className="mr-2 h-4 w-4" />{saving ? 'Salvando na nuvem...' : items.length ? 'Salvar correção' : 'Confirmar estorno'}</Button></div>
+      </>}
+      {hasReturns && !cancelled && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">Há devolução vinculada à requisição; este complemento está bloqueado para correção.</div>}
+    </div>
+  </section>;
+}
+
+interface RequisitionActionDialogProps {
+  project: Project;
+  requisition: WarehouseRequisition | null;
+  auditActor?: WarehouseAuditActor;
+  canEditOriginal: boolean;
+  canEditSupplements: boolean;
+  onProjectChange: (project: Project) => void;
+  onCloudOperationConfirmed?: (confirmation: WarehouseCloudCommitResult) => void | Promise<void>;
+  onPrepareCloudOperation?: () => void | Promise<void>;
+  onClose: () => void;
+}
+
+/** Formulário único: retirada original, complementos confirmados e nova entrega. */
+function RequisitionActionDialog({ project, requisition, auditActor, canEditOriginal, canEditSupplements, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onClose }: RequisitionActionDialogProps) {
   const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
   const numbering = useMemo(() => getChapterNumbering(project), [project]);
-  const chapters = useMemo(() => flattenPhasesByChapter(project).filter(phase => !phase.parentId).map(phase => ({ id: phase.id, name: `${numbering.get(phase.id) ?? phase.customNumber ?? ''} · ${phase.name}`.replace(/^\s*·\s*/, '') })), [numbering, project]);
+  const chapters = useMemo(() => flattenPhasesByChapter(project)
+    .filter(phase => !phase.parentId)
+    .map(phase => ({ id: phase.id, name: `${numbering.get(phase.id) ?? phase.customNumber ?? ''} · ${phase.name}`.replace(/^\s*·\s*/, '') })), [numbering, project]);
   const [editingOriginal, setEditingOriginal] = useState(false);
   const [correctionItems, setCorrectionItems] = useState<WarehouseRequisitionItem[]>([]);
   const [correctionChapterId, setCorrectionChapterId] = useState('');
@@ -748,6 +909,7 @@ function RequisitionActionDialog({ project, requisition, auditActor, onProjectCh
   const [photos, setPhotos] = useState<File[]>([]);
   const [materialSearch, setMaterialSearch] = useState('');
   const [saving, setSaving] = useState(false);
+  const [supplementSaving, setSupplementSaving] = useState(false);
   const [complementIdempotencyKey, setComplementIdempotencyKey] = useState(() => uidWarehouse());
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
@@ -768,8 +930,12 @@ function RequisitionActionDialog({ project, requisition, auditActor, onProjectCh
     setComplementIdempotencyKey(uidWarehouse());
   }, [project, requisition]);
 
-  const returnableByItem = useMemo(() => new Map((requisition ? getReturnableRequisitionItems(project, requisition.id) : []).map(item => [item.itemKey, item] as const)), [project, requisition]);
-  const correctionBlocked = !!requisition && ensureWarehouse(project).warehouse!.movements.some(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.requisitionId === requisition.id && !movement.reversedById);
+  const correctionBlocked = !!requisition && ensureWarehouse(project).warehouse!.movements.some(movement => (
+    movement.type === 'devolucao'
+    && movement.originType === 'return'
+    && movement.requisitionId === requisition.id
+    && !movement.reversedById
+  ));
   const selectedComplementKeys = useMemo(() => new Set(complementItems.map(item => item.itemKey)), [complementItems]);
   const availableMaterials = useMemo(() => {
     const tokens = normalizeSearch(materialSearch).split(/\s+/).filter(Boolean);
@@ -799,6 +965,7 @@ function RequisitionActionDialog({ project, requisition, auditActor, onProjectCh
     if (cameraRef.current) cameraRef.current.value = '';
     if (galleryRef.current) galleryRef.current.value = '';
   };
+
   const saveCorrection = async () => {
     if (!requisition || saving) return;
     if (!correctionItems.length || correctionItems.some(item => !(item.quantity > 0))) return void toast.error('Adicione materiais com quantidade positiva.');
@@ -811,14 +978,16 @@ function RequisitionActionDialog({ project, requisition, auditActor, onProjectCh
       const operationKey = `${requisition.id}:correction:${JSON.stringify({ correctionItems, correctionChapterId, correctionReason: correctionReason.trim() })}`;
       const next = correctDeliveredRequisition(project, requisition.id, { items: correctionItems, chapterId: correctionChapterId, chapterName: chapter?.name, reason: correctionReason.trim(), idempotencyKey: operationKey }, auditActor);
       await onPrepareCloudOperation?.();
-      const confirmation = await commitWarehouseOperation(project, next, {
-        type: 'correction', requisitionId: requisition.id, operationKey,
-      });
+      const confirmation = await commitWarehouseOperation(project, next, { type: 'correction', requisitionId: requisition.id, operationKey });
       if (onCloudOperationConfirmed) await onCloudOperationConfirmed(confirmation);
       else onProjectChange(confirmation.project);
       toast.success('Retirada corrigida e histórico registrado.');
       onClose();
-    } catch (error) { toast.error((error as Error).message); } finally { setSaving(false); }
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
   };
   const saveComplement = async () => {
     if (!requisition || saving) return;
@@ -829,126 +998,10 @@ function RequisitionActionDialog({ project, requisition, auditActor, onProjectCh
       const attachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'withdrawals')));
       const result = addRequisitionSupplement(project, { requisitionId: requisition.id, date: complementDate, receiverName: complementReceiver, signatureReceiver, notes: complementNotes.trim() || undefined, attachments, idempotencyKey: complementIdempotencyKey, items: complementItems }, auditActor, { publishToDailyReport: false });
       await onPrepareCloudOperation?.();
-      const confirmation = await commitWarehouseOperation(project, result.project, {
-        type: 'supplement', requisitionId: requisition.id, operationKey: complementIdempotencyKey,
-      });
+      const confirmation = await commitWarehouseOperation(project, result.project, { type: 'supplement', requisitionId: requisition.id, operationKey: complementIdempotencyKey });
       if (onCloudOperationConfirmed) await onCloudOperationConfirmed(confirmation);
       else onProjectChange(confirmation.project);
-      toast.success('Complemento registrado e estoque baixado.');
-      onClose();
-    } catch (error) { toast.error((error as Error).message); } finally { setSaving(false); }
-  };
-
-  return <Dialog open={!!requisition} onOpenChange={open => !open && !saving && onClose()}><DialogContent className="warehouse-ui flex max-h-[95dvh] w-[calc(100vw-1rem)] max-w-6xl flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11"><DialogHeader className="border-b p-4 pr-16"><DialogTitle>Ações da retirada</DialogTitle><DialogDescription>Consulte a retirada original, edite quando necessário ou acrescente materiais abaixo.</DialogDescription></DialogHeader><div className="min-h-0 flex-1 overflow-y-auto p-4"><section className="space-y-4">{requisition && <><div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm"><strong>{requisition.number}</strong><span className="text-muted-foreground"> · retirada original preservada</span><div className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3"><span>Data: <strong className="text-foreground">{formatOperationalDate(requisition.date)}</strong></span><span>Destino: <strong className="text-foreground">{requisition.chapterName || 'Não informado'}</strong></span><span>Recebedor: <strong className="text-foreground">{requisition.receiverName || requisition.requesterName || '—'}</strong></span></div></div><section className="rounded-xl border"><div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 p-3"><div><h3 className="text-sm font-bold">Materiais da retirada original</h3><p className="text-xs text-muted-foreground">Quantidade, unidade e situação atual; o código não é exibido neste formulário.</p></div>{!editingOriginal && <Button type="button" variant="outline" className="min-h-11" disabled={correctionBlocked} onClick={() => setEditingOriginal(true)}><Pencil className="mr-2 h-4 w-4" />Editar retirada</Button>}</div><div className="space-y-2 p-3">{(editingOriginal ? correctionItems : requisition.items).map((item, index) => { const summary = returnableByItem.get(item.itemKey); return <div key={`${item.itemKey}-${index}`} className="grid gap-2 rounded-lg border bg-background p-3 sm:grid-cols-[1fr_110px_110px_110px]"><div className="min-w-0"><div className="break-words text-sm font-bold">{materialDisplayName(item.code, item.description)}</div><div className="text-xs text-muted-foreground">{item.unit}</div></div>{editingOriginal ? <><Input className="min-h-11 text-center text-base" type="number" min="0" step="any" value={item.quantity || ''} onChange={event => setCorrectionItems(current => current.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry))} aria-label={`Quantidade corrigida de ${materialDisplayName(item.code, item.description)}`} /><span className="text-center text-xs text-muted-foreground">Saldo {rows.find(row => row.key === item.itemKey)?.balance.toLocaleString('pt-BR') ?? '0'}</span><Button type="button" size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" disabled={correctionItems.length === 1} onClick={() => setCorrectionItems(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover ${materialDisplayName(item.code, item.description)}`}><Trash2 className="h-4 w-4" /></Button></> : <><span className="text-right text-sm font-mono">{item.quantity.toLocaleString('pt-BR')} {item.unit}</span><span className="text-right text-xs text-success">Devolvido {summary?.returnedQuantity?.toLocaleString('pt-BR') ?? '0'}</span><span className="text-right text-xs font-bold text-primary">Em campo {summary?.availableQuantity?.toLocaleString('pt-BR') ?? item.quantity.toLocaleString('pt-BR')}</span></>}</div>; })}{editingOriginal && <><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input className="min-h-11 pl-9 text-base" value={materialSearch} onChange={event => setMaterialSearch(event.target.value)} placeholder="Buscar material para a correção" /></div><div className="max-h-44 overflow-y-auto rounded-lg border">{rows.filter(row => row.balance > 0 && !correctionItems.some(item => item.itemKey === row.key)).filter(row => normalizeSearch([row.code, row.description, row.unit].join(' ')).includes(normalizeSearch(materialSearch))).map(row => <button type="button" key={row.key} className="flex min-h-14 w-full items-center gap-3 border-b px-3 text-left last:border-0 hover:bg-primary/10" onClick={() => addCorrectionMaterial(row.key)}><span className="min-w-0 flex-1"><span className="block break-words text-sm font-bold">{materialDisplayName(row.code, row.description)}</span><span className="text-xs text-muted-foreground">{row.unit} · saldo {row.balance.toLocaleString('pt-BR')}</span></span><Plus className="h-4 w-4 text-primary" /></button>)}</div><WarehouseField label="Prédio / destino"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={correctionChapterId} onChange={event => setCorrectionChapterId(event.target.value)} aria-label="Prédio / destino da correção"><option value="">Selecione</option>{chapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapter.name}</option>)}</select></WarehouseField><WarehouseField label="Motivo da correção"><Input className="min-h-11 text-base" value={correctionReason} onChange={event => setCorrectionReason(event.target.value)} placeholder="Explique o que foi ajustado" required /></WarehouseField><div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="outline" className="min-h-11" disabled={saving} onClick={() => { setEditingOriginal(false); setCorrectionItems(requisition.items.map(item => ({ ...item, description: materialDisplayName(item.code, item.description) }))); setCorrectionReason(''); }}>Cancelar edição</Button><Button type="button" className="min-h-11" disabled={saving || correctionBlocked} onClick={saveCorrection}><Check className="mr-2 h-4 w-4" />Salvar edição</Button></div></>}</div>{correctionBlocked && <div className="border-t bg-warning/10 p-3 text-sm">Esta retirada possui devolução registrada; a edição original está bloqueada.</div>}</section><section className="rounded-xl border border-primary/25"><div className="border-b bg-primary/5 p-3"><h3 className="text-sm font-bold text-primary">Adicionar complemento</h3><p className="text-xs text-muted-foreground">Acrescente materiais na mesma requisição sem alterar a retirada original.</p></div><div className="space-y-3 p-3"><div className="grid gap-3 sm:grid-cols-2"><WarehouseField label="Data da entrega"><Input className="min-h-11 text-base" type="date" value={complementDate} onChange={event => setComplementDate(event.target.value)} /></WarehouseField><WarehouseField label="Quem recebeu"><Input className="min-h-11 text-base" value={complementReceiver} onChange={event => setComplementReceiver(event.target.value)} /></WarehouseField></div>{complementItems.map((item, index) => <div key={`${item.itemKey}-${index}`} className="grid min-h-16 items-center gap-2 rounded-lg border bg-background p-3 sm:grid-cols-[1fr_120px_100px_44px]"><div className="min-w-0"><div className="break-words text-sm font-bold">{item.description}</div><div className="text-xs text-muted-foreground">{item.unit}</div></div><Input className="min-h-11 text-center text-base" type="number" min="0" step="any" value={item.quantity || ''} onChange={event => setComplementItems(current => current.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry))} aria-label={`Quantidade complementar de ${item.description}`} /><span className="text-center text-xs text-muted-foreground">Saldo {rows.find(row => row.key === item.itemKey)?.balance.toLocaleString('pt-BR') ?? '0'}</span><Button type="button" size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => setComplementItems(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover complemento ${item.description}`}><Trash2 className="h-4 w-4" /></Button></div>)}<label htmlFor="requisition-action-material-search" className="sr-only">Buscar material para complemento</label><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input id="requisition-action-material-search" className="min-h-11 pl-9 text-base" value={materialSearch} onChange={event => setMaterialSearch(event.target.value)} placeholder="Buscar material por código, descrição ou unidade" /></div><div className="max-h-56 overflow-y-auto rounded-lg border bg-background" aria-label="Materiais disponíveis para complemento">{availableMaterials.map((row, index) => <button key={row.key} type="button" className={`flex min-h-16 w-full items-center gap-3 border-b px-3 text-left last:border-0 hover:bg-primary/10 ${index % 2 ? 'bg-muted/25' : ''}`} onClick={() => addComplementMaterial(row.key)}><span className="min-w-0 flex-1"><span className="block break-words text-sm font-bold">{row.description}</span><span className="mt-1 block text-xs font-medium text-muted-foreground">{row.unit}</span></span><WarehouseStatusBadge label={`Saldo ${row.balance.toLocaleString('pt-BR')}`} tone="info" /><Plus className="h-5 w-5 shrink-0 text-primary" /></button>)}</div><WarehouseField label="Observação" optional><Input className="min-h-11 text-base" value={complementNotes} onChange={event => setComplementNotes(event.target.value)} placeholder="Motivo do complemento" /></WarehouseField><div className="rounded-lg border bg-muted/30 p-3"><SignaturePad label="Assinatura de quem recebeu o complemento" value={signatureReceiver} onChange={setSignatureReceiver} /></div><div className="space-y-3 rounded-lg border bg-muted/30 p-3"><div className="flex items-center gap-2 text-sm font-bold">Fotos da entrega <span className="rounded-full border bg-background px-2 py-0.5 text-xs text-muted-foreground">Opcional · até 3</span></div><div className="grid grid-cols-3 gap-2">{photos.map((photo, index) => <PhotoPreview key={`${photo.name}-${index}`} file={photo} onRemove={() => setPhotos(current => current.filter((_, photoIndex) => photoIndex !== index))} />)}</div><input ref={cameraRef} className="hidden" type="file" accept="image/*" capture="environment" onChange={event => addPhotos(event.target.files)} /><input ref={galleryRef} className="hidden" type="file" accept="image/*" multiple onChange={event => addPhotos(event.target.files)} /><div className="grid grid-cols-2 gap-2"><Button type="button" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3} onClick={() => cameraRef.current?.click()}><Camera className="mr-2 h-4 w-4" />Tirar foto</Button><Button type="button" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3} onClick={() => galleryRef.current?.click()}><ImagePlus className="mr-2 h-4 w-4" />Galeria</Button></div></div><div className="flex justify-end"><Button type="button" className="min-h-11" disabled={saving} onClick={() => void saveComplement()}><Check className="mr-2 h-4 w-4" />Confirmar complemento</Button></div></div></section></>}</section></div><DialogFooter className="gap-2 border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:space-x-0"><Button variant="outline" className="min-h-11 sm:min-w-28" disabled={saving} onClick={onClose}>Fechar</Button></DialogFooter></DialogContent></Dialog>;
-}
-
-function RequisitionActionDialogLegacy({ project, requisition, auditActor, onProjectChange, onClose }: { project: Project; requisition: WarehouseRequisition | null; auditActor?: WarehouseAuditActor; onProjectChange: (project: Project) => void; onClose: () => void }) {
-  const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
-  const numbering = useMemo(() => getChapterNumbering(project), [project]);
-  const chapters = useMemo(() => flattenPhasesByChapter(project).filter(phase => !phase.parentId).map(phase => ({ id: phase.id, name: `${numbering.get(phase.id) ?? phase.customNumber ?? ''} · ${phase.name}`.replace(/^\s*·\s*/, '') })), [numbering, project]);
-  const [mode, setMode] = useState<RequisitionActionMode>('complement');
-  const [date, setDate] = useState(warehouseOperationalDate());
-  const [chapterId, setChapterId] = useState('');
-  const [receiverName, setReceiverName] = useState('');
-  const [notes, setNotes] = useState('');
-  const [items, setItems] = useState<WarehouseRequisitionItem[]>([]);
-  const [signatureReceiver, setSignatureReceiver] = useState<string>();
-  const [photos, setPhotos] = useState<File[]>([]);
-  const [materialSearch, setMaterialSearch] = useState('');
-  const [saving, setSaving] = useState(false);
-  const cameraRef = useRef<HTMLInputElement>(null);
-  const galleryRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!requisition) return;
-    setMode('complement');
-    setDate(warehouseOperationalDate());
-    setChapterId(requisition.chapterId ?? '');
-    setReceiverName(requisition.receiverName || requisition.requesterName || '');
-    setNotes('');
-    setItems([]);
-    setSignatureReceiver(undefined);
-    setPhotos([]);
-    setMaterialSearch('');
-  }, [requisition]);
-
-  const selectedKeys = new Set(items.map(item => item.itemKey));
-  const availableMaterials = useMemo(() => {
-    const tokens = normalizeSearch(materialSearch).split(/\s+/).filter(Boolean);
-    return rows.filter(row => (mode === 'correction' || row.balance > 0) && !selectedKeys.has(row.key)).filter(row => {
-      const haystack = normalizeSearch([row.code, row.description, row.unit].filter(Boolean).join(' '));
-      return tokens.every(token => haystack.includes(token));
-    }).map(row => ({ ...row, description: materialDisplayName(row.code, row.description), originalDescription: row.description }));
-  }, [items, materialSearch, mode, rows]);
-
-  const switchMode = (nextMode: RequisitionActionMode) => {
-    if (!requisition) return;
-    setMode(nextMode);
-    setDate(nextMode === 'correction' ? requisition.date : warehouseOperationalDate());
-    setChapterId(requisition.chapterId ?? '');
-    setReceiverName(requisition.receiverName || requisition.requesterName || '');
-    setNotes('');
-    setItems(nextMode === 'correction' ? requisition.items.map(item => ({ ...item, description: materialDisplayName(item.code, item.description) })) : []);
-    setSignatureReceiver(undefined);
-    setPhotos([]);
-    setMaterialSearch('');
-  };
-
-  const addMaterial = (key: string) => {
-    const row = availableMaterials.find(candidate => candidate.key === key);
-    if (!row || selectedKeys.has(row.key)) return;
-    setItems(current => [...current, { itemKey: row.key, code: row.code, description: row.description, unit: row.unit, quantity: 1 }]);
-    setMaterialSearch('');
-  };
-
-  const addPhotos = (files: FileList | null) => {
-    if (!files) return;
-    const incoming = Array.from(files).filter(file => file.type.startsWith('image/'));
-    setPhotos(current => [...current, ...incoming].slice(0, 3));
-    if (cameraRef.current) cameraRef.current.value = '';
-    if (galleryRef.current) galleryRef.current.value = '';
-    if (incoming.length + photos.length > 3) toast.warning('A operação aceita no máximo três fotos.');
-  };
-
-  const save = async () => {
-    if (!requisition || saving) return;
-    if (!items.length || items.some(item => !(item.quantity > 0))) {
-      toast.error('Adicione materiais com quantidade positiva.');
-      return;
-    }
-    if (mode === 'correction' && !chapterId) {
-      toast.error('Selecione o prédio ou destino.');
-      return;
-    }
-    if (mode === 'correction' && !notes.trim()) {
-      toast.error('Informe o motivo da correção.');
-      return;
-    }
-    if (mode === 'correction' && requisition.status !== 'entregue') {
-      toast.error('Somente retiradas entregues podem ser corrigidas.');
-      return;
-    }
-    if (mode === 'correction' && ensureWarehouse(project).warehouse!.movements.some(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.requisitionId === requisition.id && !movement.reversedById)) {
-      toast.error('Esta retirada possui devolução e não pode ser corrigida.');
-      return;
-    }
-    if (mode === 'complement' && !signatureReceiver?.trim()) {
-      toast.error('Colete a assinatura de quem recebeu o complemento.');
-      return;
-    }
-    setSaving(true);
-    try {
-      if (mode === 'correction') {
-        const chapter = chapters.find(candidate => candidate.id === chapterId);
-        const next = correctDeliveredRequisition(project, requisition.id, { items, chapterId, chapterName: chapter?.name, reason: notes.trim() || undefined, idempotencyKey: `${requisition.id}:${date}:${JSON.stringify(items)}` }, auditActor);
-        onProjectChange(next);
-        toast.success('Retirada corrigida e histórico registrado.');
-      } else {
-        const attachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'withdrawals')));
-        const result = addRequisitionSupplement(project, { requisitionId: requisition.id, date, receiverName, signatureReceiver: signatureReceiver ?? '', notes: notes.trim() || undefined, attachments, idempotencyKey: uidWarehouse(), items }, auditActor);
-        onProjectChange(result.project);
-        toast.success('Complemento registrado e estoque baixado.');
-      }
+      toast.success('Complemento registrado, exibido na requisição e estoque baixado.');
       onClose();
     } catch (error) {
       toast.error((error as Error).message);
@@ -957,93 +1010,34 @@ function RequisitionActionDialogLegacy({ project, requisition, auditActor, onPro
     }
   };
 
-  return <Dialog open={!!requisition} onOpenChange={open => !open && !saving && onClose()}><DialogContent className="warehouse-ui flex max-h-[95dvh] w-[calc(100vw-1rem)] max-w-6xl flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11"><DialogHeader className="border-b p-4 pr-16"><DialogTitle>Ações da retirada</DialogTitle><DialogDescription>Atualize esta retirada ou acrescente materiais sem perder o histórico original.</DialogDescription></DialogHeader><div className="min-h-0 flex-1 overflow-y-auto p-4"><section className="space-y-4">{requisition && <div className="grid gap-3 md:grid-cols-[220px_1fr]"><WarehouseField label="Operação"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={mode} onChange={event => switchMode(event.target.value as RequisitionActionMode)} aria-label="Tipo de ação"><option value="complement">Adicionar complemento</option><option value="correction" disabled={ensureWarehouse(project).warehouse!.movements.some(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.requisitionId === requisition.id && !movement.reversedById)}>Corrigir retirada</option></select></WarehouseField><div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-muted-foreground"><strong className="text-foreground">{requisition.number}</strong> · retirada original preservada</div></div>}<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3"><WarehouseField label="Data da operação"><Input className="min-h-11 text-base" type="date" value={date} onChange={event => setDate(event.target.value)} /></WarehouseField><WarehouseField label="Prédio / capítulo"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={chapterId} onChange={event => setChapterId(event.target.value)} disabled={mode === 'complement'} aria-label="Prédio / capítulo"><option value="">Selecione</option>{chapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapter.name}</option>)}</select></WarehouseField><WarehouseField label="Quem recebeu"><Input className="min-h-11 text-base" value={receiverName} onChange={event => setReceiverName(event.target.value)} disabled={mode === 'complement'} /></WarehouseField></div><div className="overflow-hidden rounded-xl border"><WarehouseSectionHeader icon={PackageOpen} title="Escolha os materiais" description="Busque e toque no material para adicionar." help="A busca encontra código, descrição e unidade; a lista exibe somente o nome e o saldo." /><div className="p-3"><div className="mb-3 rounded-xl border border-primary/30 bg-primary/5 p-3"><div className="mb-2 flex flex-wrap items-center justify-between gap-2"><div className="text-sm font-bold text-primary">Materiais selecionados</div><WarehouseStatusBadge label={`${items.length} item(ns)`} tone={items.length ? 'info' : 'neutral'} /></div><div className="grid gap-2">{items.map((item, index) => <div key={`${item.itemKey}-${index}`} className="grid min-h-16 items-center gap-2 rounded-lg border border-primary/25 bg-background p-3 sm:grid-cols-[1fr_120px_100px_44px]"><div className="min-w-0"><div className="truncate text-sm font-bold">{item.description}</div><div className="text-xs text-muted-foreground">{item.unit}</div></div><Input className="min-h-11 text-center text-base" type="number" min="0" step="any" value={item.quantity || ''} onChange={event => setItems(current => current.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry))} aria-label={`Quantidade de ${item.description}`} /><span className="text-center text-xs text-muted-foreground">Saldo {rows.find(row => row.key === item.itemKey)?.balance.toLocaleString('pt-BR') ?? '0'}</span><Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => setItems(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover ${item.description}`}><Trash2 className="h-4 w-4" /></Button></div>)}{!items.length && <div className="rounded-lg border border-dashed bg-background/60 p-3 text-sm text-muted-foreground">Nenhum material selecionado.</div>}</div></div><label htmlFor="requisition-action-material-search" className="sr-only">Buscar material</label><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input id="requisition-action-material-search" className="min-h-11 pl-9 text-base" value={materialSearch} onChange={event => setMaterialSearch(event.target.value)} placeholder="Buscar por código, descrição ou unidade" /></div><div className="mt-2 max-h-64 overflow-y-auto rounded-lg border bg-background" aria-label="Materiais disponíveis">{availableMaterials.map((row, index) => <button key={row.key} type="button" className={`flex min-h-16 w-full items-center gap-3 border-b px-3 text-left last:border-0 hover:bg-primary/10 ${index % 2 ? 'bg-muted/25' : ''}`} onClick={() => addMaterial(row.key)}><span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><PackageOpen className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-bold leading-snug">{row.description}</span><span className="mt-1 block text-xs font-medium text-muted-foreground">{row.unit}</span></span><WarehouseStatusBadge label={`Saldo ${row.balance.toLocaleString('pt-BR')}`} tone="info" /><Plus className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" /></button>)}{!availableMaterials.length && <WarehouseEmptyState message="Nenhum material encontrado" hint="Tente outra palavra na busca." className="m-2" />}</div></div></div><WarehouseField label="Motivo" optional={mode === 'complement'}><Input className="min-h-11 text-base" value={notes} onChange={event => setNotes(event.target.value)} placeholder={mode === 'correction' ? 'Informe o motivo da correção' : 'Motivo do complemento'} required={mode === 'correction'} /></WarehouseField>{mode === 'complement' && <><div className="rounded-lg border bg-muted/30 p-3"><SignaturePad label="Assinatura de quem recebeu o complemento" value={signatureReceiver} onChange={setSignatureReceiver} /></div><div className="space-y-3 rounded-lg border bg-muted/30 p-3"><div className="flex items-center gap-2 text-sm font-bold">Fotos da entrega <span className="rounded-full border bg-background px-2 py-0.5 text-xs text-muted-foreground">Opcional · até 3</span></div><div className="grid grid-cols-3 gap-2">{photos.map((photo, index) => <PhotoPreview key={`${photo.name}-${index}`} file={photo} onRemove={() => setPhotos(current => current.filter((_, photoIndex) => photoIndex !== index))} />)}</div><input ref={cameraRef} className="hidden" type="file" accept="image/*" capture="environment" onChange={event => addPhotos(event.target.files)} /><input ref={galleryRef} className="hidden" type="file" accept="image/*" multiple onChange={event => addPhotos(event.target.files)} /><div className="grid grid-cols-2 gap-2"><Button type="button" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3} onClick={() => cameraRef.current?.click()}><Camera className="mr-2 h-4 w-4" />Tirar foto</Button><Button type="button" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3} onClick={() => galleryRef.current?.click()}><ImagePlus className="mr-2 h-4 w-4" />Galeria</Button></div></div></>}</section></div><DialogFooter className="gap-2 border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:space-x-0"><Button variant="outline" className="min-h-11 sm:min-w-28" disabled={saving} onClick={onClose}>Cancelar</Button><Button className="min-h-11 font-bold sm:min-w-52" disabled={saving} onClick={() => void save()}><Check className="mr-2 h-4 w-4" />{saving ? 'Salvando...' : mode === 'complement' ? 'Confirmar complemento' : 'Salvar correção'}</Button></DialogFooter></DialogContent></Dialog>;
-}
+  const busy = saving || supplementSaving;
+  return <Dialog open={!!requisition} onOpenChange={open => !open && !busy && onClose()}>
+    <DialogContent className="warehouse-ui flex max-h-[95dvh] w-[calc(100vw-1rem)] max-w-6xl flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11">
+      <DialogHeader className="border-b p-4 pr-16"><DialogTitle>Ações da retirada</DialogTitle><DialogDescription>Consulte todas as entregas desta requisição, corrija quando permitido ou acrescente materiais.</DialogDescription></DialogHeader>
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        {requisition && <div className="space-y-4">
+          <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm"><strong>{requisition.number}</strong><span className="text-muted-foreground"> · requisição com histórico preservado</span><div className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3"><span>Data: <strong className="text-foreground">{formatOperationalDate(requisition.date)}</strong></span><span>Destino: <strong className="text-foreground">{requisition.chapterName || 'Não informado'}</strong></span><span>Recebedor: <strong className="text-foreground">{requisition.receiverName || requisition.requesterName || '—'}</strong></span></div></div>
 
-function RequisitionSupplementDialog({ project, requisition, auditActor, onProjectChange, onClose }: { project: Project; requisition: WarehouseRequisition | null; auditActor?: WarehouseAuditActor; onProjectChange: (project: Project) => void; onClose: () => void }) {
-  const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
-  const [date, setDate] = useState(warehouseOperationalDate());
-  const [receiverName, setReceiverName] = useState('');
-  const [notes, setNotes] = useState('');
-  const [items, setItems] = useState<WarehouseRequisitionItem[]>([]);
-  const [signatureReceiver, setSignatureReceiver] = useState<string | undefined>();
-  const [photos, setPhotos] = useState<File[]>([]);
-  const [materialPickerOpen, setMaterialPickerOpen] = useState(false);
-  const [materialSearch, setMaterialSearch] = useState('');
-  const cameraRef = useRef<HTMLInputElement>(null);
-  const galleryRef = useRef<HTMLInputElement>(null);
-  const [saving, setSaving] = useState(false);
-  const [idempotencyKey, setIdempotencyKey] = useState(uidWarehouse());
-  useEffect(() => {
-    setDate(warehouseOperationalDate()); setReceiverName(requisition?.receiverName || requisition?.requesterName || ''); setNotes(''); setItems([]); setSignatureReceiver(undefined); setPhotos([]); setIdempotencyKey(uidWarehouse());
-  }, [requisition?.id]);
-  const addItem = () => setItems(current => [...current, { itemKey: '', description: '', unit: '', quantity: 1 }]);
-  const updateItem = (index: number, itemKey: string) => {
-    const row = rows.find(candidate => candidate.key === itemKey);
-    if (!row) return;
-    setItems(current => current.map((item, itemIndex) => itemIndex === index ? { itemKey: row.key, code: row.code, description: row.description, unit: row.unit, quantity: item.quantity || 1 } : item));
-  };
-  const selectableMaterials = useMemo(() => rows.filter(row => row.balance > 0), [rows]);
-  const addPhotos = (files: FileList | null) => {
-    if (!files) return;
-    const incoming = Array.from(files).filter(file => file.type.startsWith('image/'));
-    const accepted = incoming.slice(0, Math.max(0, 3 - photos.length));
-    if (incoming.length > accepted.length) toast.warning('O complemento aceita no máximo três fotos.');
-    setPhotos(current => [...current, ...accepted]);
-    if (cameraRef.current) cameraRef.current.value = '';
-    if (galleryRef.current) galleryRef.current.value = '';
-  };
-  const save = async () => {
-    if (!requisition) return;
-    try {
-      setSaving(true);
-      const attachments = await Promise.all(photos.slice(0, 3).map(file => makeAttachment(file, project.id, 'foto', 'withdrawals')));
-      const result = addRequisitionSupplement(project, { requisitionId: requisition.id, date, receiverName, signatureReceiver: signatureReceiver ?? '', notes, attachments, idempotencyKey, items }, auditActor);
-      onProjectChange(result.project);
-      toast.success(`Complemento registrado na ${requisition.number} e estoque baixado.`);
-      onClose();
-    } catch (error) { toast.error((error as Error).message); } finally { setSaving(false); }
-  };
-  return <Dialog open={!!requisition} onOpenChange={open => !open && !saving && onClose()}><DialogContent className="max-h-[90dvh] max-w-3xl overflow-y-auto p-4 sm:p-6"><DialogHeader><DialogTitle>Adicionar complemento</DialogTitle><DialogDescription>Entrega adicional na requisição {requisition?.number}. Os itens originais não serão alterados.</DialogDescription></DialogHeader><div className="space-y-3"><input ref={cameraRef} className="hidden" type="file" accept="image/*" capture="environment" onChange={event => addPhotos(event.target.files)} /><input ref={galleryRef} className="hidden" type="file" accept="image/*" multiple onChange={event => addPhotos(event.target.files)} /><div className="grid gap-3 sm:grid-cols-2"><WarehouseField label="Data da entrega"><Input className="min-h-11" type="date" value={date} onChange={event => setDate(event.target.value)} /></WarehouseField><WarehouseField label="Quem recebeu"><Input className="min-h-11" value={receiverName} onChange={event => setReceiverName(event.target.value)} /></WarehouseField></div>{items.map((item, index) => <div key={`${item.itemKey}-${index}`} className="grid gap-2 rounded-lg border p-3 sm:grid-cols-[1fr_130px_44px]"><Popover open={materialPickerOpen} onOpenChange={open => { setMaterialPickerOpen(open); if (open) setMaterialSearch(''); }}><PopoverTrigger asChild><Button type="button" variant="outline" className="min-h-11 w-full justify-between overflow-hidden text-left text-base font-normal" aria-label={`Material complementar ${index + 1}`}><span className="truncate">{item.description || 'Selecione o material'}</span><ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-60" /></Button></PopoverTrigger><PopoverContent align="start" className="w-[min(32rem,calc(100vw-2rem))] p-0"><Command shouldFilter={false}><CommandInput value={materialSearch} onValueChange={setMaterialSearch} placeholder="Buscar material..." /><CommandList><CommandEmpty>Nenhum material encontrado.</CommandEmpty><CommandGroup>{selectableMaterials.filter(row => normalizeSearch(row.description).includes(normalizeSearch(materialSearch))).map(row => <CommandItem key={row.key} value={row.description} onSelect={() => { updateItem(index, row.key); setMaterialPickerOpen(false); }} className="min-h-11"><Check className={`mr-2 h-4 w-4 ${item.itemKey === row.key ? 'opacity-100' : 'opacity-0'}`} /><span className="min-w-0 flex-1 truncate">{row.description}</span><span className="ml-2 shrink-0 text-xs text-muted-foreground">Saldo {row.balance.toLocaleString('pt-BR')} {row.unit}</span></CommandItem>)}</CommandGroup></CommandList></Command></PopoverContent></Popover><Input className="min-h-11" type="number" min="0" step="any" value={item.quantity} onChange={event => setItems(current => current.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry))} aria-label={`Quantidade complementar de ${item.description}`} /><Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => setItems(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover ${item.description}`}><Trash2 className="h-4 w-4" /></Button></div>)}<Button type="button" variant="outline" className="min-h-11" onClick={addItem}><Plus className="mr-2 h-4 w-4" />Adicionar material</Button><WarehouseField label="Observação" optional><Input className="min-h-11" value={notes} onChange={event => setNotes(event.target.value)} placeholder="Motivo do complemento" /></WarehouseField><div className="rounded-lg border bg-muted/30 p-3"><SignaturePad label="Assinatura de quem recebeu o complemento" value={signatureReceiver} onChange={setSignatureReceiver} /></div><div className="space-y-3 rounded-lg border bg-muted/30 p-3"><div className="flex items-center gap-2 text-sm font-bold">Fotos da entrega <span className="rounded-full border bg-background px-2 py-0.5 text-xs text-muted-foreground">Opcional · até 3</span></div><div className="grid grid-cols-3 gap-2">{photos.map((photo, index) => <PhotoPreview key={`${photo.name}-${index}`} file={photo} onRemove={() => setPhotos(current => current.filter((_, photoIndex) => photoIndex !== index))} />)}</div><div className="grid grid-cols-2 gap-2"><Button type="button" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3} onClick={() => cameraRef.current?.click()}><Camera className="mr-2 h-4 w-4" />Tirar foto</Button><Button type="button" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3} onClick={() => galleryRef.current?.click()}><ImagePlus className="mr-2 h-4 w-4" />Galeria</Button></div></div></div><DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" className="min-h-11" disabled={saving} onClick={onClose}>Cancelar</Button><Button className="min-h-11" disabled={saving} onClick={save}><Check className="mr-2 h-4 w-4" />{saving ? 'Registrando...' : 'Confirmar complemento'}</Button></DialogFooter></DialogContent></Dialog>;
-}
+          <section className="rounded-xl border">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 p-3"><div><h3 className="text-sm font-bold">Materiais da retirada original</h3><p className="text-xs text-muted-foreground">A retirada original permanece separada dos complementos.</p></div>{canEditOriginal && !editingOriginal && <Button type="button" variant="outline" className="min-h-11" disabled={correctionBlocked} onClick={() => setEditingOriginal(true)}><Pencil className="mr-2 h-4 w-4" />Editar retirada</Button>}</div>
+            <div className="space-y-2 p-3">{(editingOriginal ? correctionItems : requisition.items).map((item, index) => <div key={`${item.itemKey}-${index}`} className="grid gap-2 rounded-lg border bg-background p-3 sm:grid-cols-[1fr_120px_120px_44px]"><div className="min-w-0"><div className="break-words text-sm font-bold">{materialDisplayName(item.code, item.description)}</div><div className="text-xs text-muted-foreground">{item.code || 'Sem código'} · {item.unit}</div></div>{editingOriginal ? <><Input className="min-h-11 text-center text-base" type="number" min="0" step="any" value={item.quantity || ''} onChange={event => setCorrectionItems(current => current.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry))} aria-label={`Quantidade corrigida de ${materialDisplayName(item.code, item.description)}`} /><span className="text-center text-xs text-muted-foreground">Saldo {rows.find(row => row.key === item.itemKey)?.balance.toLocaleString('pt-BR') ?? '0'}</span><Button type="button" size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" disabled={correctionItems.length === 1} onClick={() => setCorrectionItems(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover ${materialDisplayName(item.code, item.description)}`}><Trash2 className="h-4 w-4" /></Button></> : <><span className="text-right font-mono font-bold sm:col-span-3">{item.quantity.toLocaleString('pt-BR')} {item.unit}</span></>}</div>)}
+              {editingOriginal && <><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input className="min-h-11 pl-9 text-base" value={materialSearch} onChange={event => setMaterialSearch(event.target.value)} placeholder="Buscar material para a correção" /></div><div className="max-h-44 overflow-y-auto rounded-lg border">{rows.filter(row => row.balance > 0 && !correctionItems.some(item => item.itemKey === row.key)).filter(row => normalizeSearch([row.code, row.description, row.unit].join(' ')).includes(normalizeSearch(materialSearch))).map(row => <button type="button" key={row.key} className="flex min-h-14 w-full items-center gap-3 border-b px-3 text-left last:border-0 hover:bg-primary/10" onClick={() => addCorrectionMaterial(row.key)}><span className="min-w-0 flex-1"><span className="block break-words text-sm font-bold">{materialDisplayName(row.code, row.description)}</span><span className="text-xs text-muted-foreground">{row.unit} · saldo {row.balance.toLocaleString('pt-BR')}</span></span><Plus className="h-4 w-4 text-primary" /></button>)}</div><WarehouseField label="Prédio / destino"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={correctionChapterId} onChange={event => setCorrectionChapterId(event.target.value)} aria-label="Prédio / destino da correção"><option value="">Selecione</option>{chapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapter.name}</option>)}</select></WarehouseField><WarehouseField label="Motivo da correção"><Input className="min-h-11 text-base" value={correctionReason} onChange={event => setCorrectionReason(event.target.value)} placeholder="Explique o que foi ajustado" required /></WarehouseField><div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="outline" className="min-h-11" disabled={saving} onClick={() => { setEditingOriginal(false); setCorrectionItems(requisition.items.map(item => ({ ...item, description: materialDisplayName(item.code, item.description) }))); setCorrectionReason(''); }}>Cancelar edição</Button><Button type="button" className="min-h-11" disabled={saving || correctionBlocked} onClick={() => void saveCorrection()}><Check className="mr-2 h-4 w-4" />{saving ? 'Salvando na nuvem...' : 'Salvar edição'}</Button></div></>}
+            </div>
+            {correctionBlocked && canEditOriginal && <div className="border-t bg-warning/10 p-3 text-sm">Esta retirada possui devolução registrada; a edição original está bloqueada.</div>}
+          </section>
 
-function CorrectionDialog({ project, requisition, auditActor, onProjectChange, onClose }: { project: Project; requisition: WarehouseRequisition | null; auditActor?: WarehouseAuditActor; onProjectChange: (project: Project) => void; onClose: () => void }) {
-  const [items, setItems] = useState<WarehouseRequisitionItem[]>([]);
-  const [chapterId, setChapterId] = useState('');
-  const [destinationChanged, setDestinationChanged] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
-  const numbering = useMemo(() => getChapterNumbering(project), [project]);
-  const chapters = useMemo(() => flattenPhasesByChapter(project).filter(phase => !phase.parentId).map(phase => ({
-    id: phase.id,
-    name: `${numbering.get(phase.id) ?? phase.customNumber ?? ''} · ${phase.name}`.replace(/^\s*·\s*/, ''),
-  })), [numbering, project]);
-  const currentDestinationIsNested = !!requisition?.chapterId && rootChapterId(project, requisition.chapterId) !== requisition.chapterId;
-  useEffect(() => { setItems(requisition?.items.map(item => ({ ...item })) ?? []); setChapterId(rootChapterId(project, requisition?.chapterId) ?? requisition?.chapterId ?? ''); setDestinationChanged(false); }, [project, requisition]);
-  const update = (index: number, itemKey: string) => {
-    const row = rows.find(candidate => candidate.key === itemKey);
-    if (!row) return;
-    setItems(current => current.map((item, itemIndex) => itemIndex === index ? { itemKey: row.key, code: row.code, description: row.description, unit: row.unit, quantity: item.quantity || 1 } : item));
-  };
-  const save = () => {
-    if (!requisition) return;
-    const chapter = chapters.find(candidate => candidate.id === chapterId);
-    if (!chapter) return toast.error('Selecione o prédio / destino da retirada.');
-    const preservedDestination = currentDestinationIsNested && !destinationChanged;
-    try {
-      setSaving(true);
-      onProjectChange(correctDeliveredRequisition(project, requisition.id, {
-        items,
-        chapterId: preservedDestination ? requisition.chapterId : chapter.id,
-        chapterName: preservedDestination ? requisition.chapterName : chapter.name,
-      }, auditActor));
-      toast.success('Retirada corrigida, estoque recalculado e histórico auditado.');
-      onClose();
-    } catch (error) { toast.error((error as Error).message); } finally { setSaving(false); }
-  };
-  return <Dialog open={!!requisition} onOpenChange={open => !open && !saving && onClose()}><DialogContent className="max-h-[90dvh] max-w-3xl overflow-y-auto p-4 sm:p-6"><DialogHeader><DialogTitle>Corrigir retirada</DialogTitle><DialogDescription>Somente o Proprietário pode alterar destino, materiais e quantidades. A correção atualiza estoque, Diário de Obra e trilha de auditoria.</DialogDescription></DialogHeader><div className="space-y-3"><WarehouseField label="Prédio / destino"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={chapterId} onChange={event => { setChapterId(event.target.value); setDestinationChanged(true); }} aria-label="Prédio ou destino corrigido"><option value="">Selecione</option>{chapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapter.name}</option>)}</select>{currentDestinationIsNested && !destinationChanged && <p className="mt-1 text-xs text-muted-foreground">O destino atual está em um subcapítulo e será preservado enquanto outro capítulo não for escolhido.</p>}</WarehouseField>{items.map((item, index) => <div key={`${item.itemKey}-${index}`} className="grid gap-2 rounded-lg border p-3 sm:grid-cols-[1fr_130px_44px]"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={item.itemKey} onChange={event => update(index, event.target.value)} aria-label={`Material corrigido ${index + 1}`}><option value="">Selecione o material</option>{rows.map(row => <option key={row.key} value={row.key}>{row.code ? `${row.code} · ` : ''}{row.description} · saldo {row.balance.toLocaleString('pt-BR')} {row.unit}</option>)}</select><Input className="min-h-11 text-base" type="number" min="0" step="any" value={item.quantity} onChange={event => setItems(current => current.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry))} aria-label={`Quantidade corrigida de ${item.description}`} /><Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" disabled={items.length === 1} onClick={() => setItems(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover ${item.description}`}><Trash2 className="h-4 w-4" /></Button></div>)}<Button type="button" variant="outline" className="min-h-11" onClick={() => setItems(current => [...current, { itemKey: '', description: '', unit: '', quantity: 1 }])}><Plus className="mr-2 h-4 w-4" />Adicionar material</Button></div><DialogFooter className="gap-2 sm:gap-0"><Button variant="outline" className="min-h-11" disabled={saving} onClick={onClose}>Cancelar</Button><Button className="min-h-11" disabled={saving} onClick={save}><Check className="mr-2 h-4 w-4" />{saving ? 'Corrigindo...' : 'Salvar correção'}</Button></DialogFooter></DialogContent></Dialog>;
-}
+          {!!requisition.supplements?.length && <section className="space-y-3"><div><h3 className="text-sm font-bold">Complementos confirmados</h3><p className="text-xs text-muted-foreground">Cada entrega permanece identificada, embora a lista principal some materiais iguais.</p></div>{requisition.supplements.map(supplement => canEditSupplements ? <SupplementDeliveryEditor key={supplement.id} project={project} requisition={requisition} supplement={supplement} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onSavingChange={setSupplementSaving} onClose={onClose} /> : <section key={supplement.id} className="rounded-xl border bg-muted/20 p-3"><div className="flex items-center justify-between gap-2"><strong>Complemento de {formatOperationalDate(supplement.date)}</strong><WarehouseStatusBadge label={supplement.status === 'cancelled' ? 'Estornado' : 'Confirmado'} tone={supplement.status === 'cancelled' ? 'neutral' : 'success'} /></div><div className="mt-2 space-y-1 text-sm">{(supplement.status === 'cancelled' ? supplement.cancelledItems ?? supplement.items : supplement.items).map(item => <div key={item.movementId ?? item.itemKey} className={supplement.status === 'cancelled' ? 'line-through text-muted-foreground' : ''}>{materialDisplayName(item.code, item.description)} · {item.quantity.toLocaleString('pt-BR')} {item.unit}</div>)}</div></section>)}</section>}
 
+          {canEditSupplements && <section className="rounded-xl border border-primary/25">
+            <div className="border-b bg-primary/5 p-3"><h3 className="text-sm font-bold text-primary">Adicionar complemento</h3><p className="text-xs text-muted-foreground">Acrescente materiais na mesma requisição sem alterar as entregas anteriores.</p></div>
+            <div className="space-y-3 p-3"><div className="grid gap-3 sm:grid-cols-2"><WarehouseField label="Data da entrega"><Input className="min-h-11 text-base" type="date" value={complementDate} onChange={event => setComplementDate(event.target.value)} /></WarehouseField><WarehouseField label="Quem recebeu"><Input className="min-h-11 text-base" value={complementReceiver} onChange={event => setComplementReceiver(event.target.value)} /></WarehouseField></div>{complementItems.map((item, index) => <div key={`${item.itemKey}-${index}`} className="grid min-h-16 items-center gap-2 rounded-lg border bg-background p-3 sm:grid-cols-[1fr_120px_100px_44px]"><div className="min-w-0"><div className="break-words text-sm font-bold">{item.description}</div><div className="text-xs text-muted-foreground">{item.unit}</div></div><Input className="min-h-11 text-center text-base" type="number" min="0" step="any" value={item.quantity || ''} onChange={event => setComplementItems(current => current.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry))} aria-label={`Quantidade complementar de ${item.description}`} /><span className="text-center text-xs text-muted-foreground">Saldo {rows.find(row => row.key === item.itemKey)?.balance.toLocaleString('pt-BR') ?? '0'}</span><Button type="button" size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => setComplementItems(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover complemento ${item.description}`}><Trash2 className="h-4 w-4" /></Button></div>)}<label htmlFor="requisition-action-material-search" className="sr-only">Buscar material para complemento</label><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input id="requisition-action-material-search" className="min-h-11 pl-9 text-base" value={materialSearch} onChange={event => setMaterialSearch(event.target.value)} placeholder="Buscar material por código, descrição ou unidade" /></div><div className="max-h-56 overflow-y-auto rounded-lg border bg-background" aria-label="Materiais disponíveis para complemento">{availableMaterials.map((row, index) => <button key={row.key} type="button" className={`flex min-h-16 w-full items-center gap-3 border-b px-3 text-left last:border-0 hover:bg-primary/10 ${index % 2 ? 'bg-muted/25' : ''}`} onClick={() => addComplementMaterial(row.key)}><span className="min-w-0 flex-1"><span className="block break-words text-sm font-bold">{row.description}</span><span className="mt-1 block text-xs font-medium text-muted-foreground">{row.unit}</span></span><WarehouseStatusBadge label={`Saldo ${row.balance.toLocaleString('pt-BR')}`} tone="info" /><Plus className="h-5 w-5 shrink-0 text-primary" /></button>)}</div><WarehouseField label="Observação" optional><Input className="min-h-11 text-base" value={complementNotes} onChange={event => setComplementNotes(event.target.value)} placeholder="Motivo do complemento" /></WarehouseField><div className="rounded-lg border bg-muted/30 p-3"><SignaturePad label="Assinatura de quem recebeu o complemento" value={signatureReceiver} onChange={setSignatureReceiver} /></div><div className="space-y-3 rounded-lg border bg-muted/30 p-3"><div className="flex items-center gap-2 text-sm font-bold">Fotos da entrega <span className="rounded-full border bg-background px-2 py-0.5 text-xs text-muted-foreground">Opcional · até 3</span></div><div className="grid grid-cols-3 gap-2">{photos.map((photo, index) => <PhotoPreview key={`${photo.name}-${index}`} file={photo} onRemove={() => setPhotos(current => current.filter((_, photoIndex) => photoIndex !== index))} />)}</div><input ref={cameraRef} className="hidden" type="file" accept="image/*" capture="environment" onChange={event => addPhotos(event.target.files)} /><input ref={galleryRef} className="hidden" type="file" accept="image/*" multiple onChange={event => addPhotos(event.target.files)} /><div className="grid grid-cols-2 gap-2"><Button type="button" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3} onClick={() => cameraRef.current?.click()}><Camera className="mr-2 h-4 w-4" />Tirar foto</Button><Button type="button" variant="outline" className="min-h-11 bg-background" disabled={photos.length >= 3} onClick={() => galleryRef.current?.click()}><ImagePlus className="mr-2 h-4 w-4" />Galeria</Button></div></div><div className="flex justify-end"><Button type="button" className="min-h-11" disabled={saving} onClick={() => void saveComplement()}><Check className="mr-2 h-4 w-4" />{saving ? 'Salvando na nuvem...' : 'Confirmar complemento'}</Button></div></div>
+          </section>}
+        </div>}
+      </div>
+      <DialogFooter className="gap-2 border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:space-x-0"><Button variant="outline" className="min-h-11 sm:min-w-28" disabled={busy} onClick={onClose}>Fechar</Button></DialogFooter>
+    </DialogContent>
+  </Dialog>;
+}
 function MaterialReturnDialog({ project, requisition, auditActor, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onClose }: {
   project: Project;
   requisition: WarehouseRequisition | null;

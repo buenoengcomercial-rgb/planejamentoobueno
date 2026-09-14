@@ -31,7 +31,9 @@ function projectWithMaterials(count = 15): Project {
 }
 
 function expandAllWithdrawalDateGroups() {
-  screen.getAllByTestId('withdrawal-date-group').filter(element => element.tagName === 'SECTION').forEach(element => {
+  screen.getAllByTestId('withdrawal-date-group').filter(element => (
+    element.tagName === 'SECTION' && element.getAttribute('data-expanded') === 'false'
+  )).forEach(element => {
     const button = within(element).getByRole('button', { name: /expandir requisições/i });
     fireEvent.click(button);
   });
@@ -297,7 +299,7 @@ describe('WarehouseRequisitionsTab', () => {
       items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
     }];
 
-    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit canDelete />);
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit canSupplement canDelete />);
     expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0041/i }));
 
@@ -318,6 +320,36 @@ describe('WarehouseRequisitionsTab', () => {
     expect(within(dialog).getByRole('heading', { name: 'Adicionar complemento' })).toBeInTheDocument();
     expect(within(dialog).getByText('Válvula de Aço Carbono')).toBeInTheDocument();
     expect(within(dialog).queryByText('MAT-000')).not.toBeInTheDocument();
+  });
+
+  it('exibe complementos na lista consolidada e permite ao perfil operacional editar somente o complemento', () => {
+    const project = projectWithMaterials(2);
+    project.warehouse!.requisitions = [{
+      id: 'req-supplement', number: 'REQ-2026-0117', date: '2026-09-14', status: 'entregue', chapterId: 'chapter-1', receiverName: 'Marcelo', createdAt: '2026-09-14T09:04:00.000Z',
+      items: [{ itemKey: 'material-0', code: 'MAT-000', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
+      supplements: [{ id: 'supp-1', date: '2026-09-14', receiverName: 'Marcelo', signatureReceiver: 'assinatura', idempotencyKey: 'supp-key', createdAt: '2026-09-14T09:36:00.000Z', status: 'active', items: [
+        { itemKey: 'material-0', code: 'MAT-000', description: 'Material disponível 0', unit: 'UN', quantity: 3 },
+        { itemKey: 'material-1', code: 'MAT-001', description: 'Material disponível 1', unit: 'PC', quantity: 4 },
+      ] }],
+    }];
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canSupplement />);
+    expandAllWithdrawalDateGroups();
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0117/i }));
+    const desktopDetail = screen.getAllByTestId('withdrawal-history-details').find(element => element.tagName === 'TR')!;
+    const consolidatedMaterial = within(desktopDetail).getByRole('button', { name: /Material disponível 0.*Com complemento/i });
+    expect(consolidatedMaterial.closest('tr')).toHaveTextContent('5');
+    expect(within(desktopDetail).getByRole('button', { name: /Material disponível 1.*Com complemento/i })).toBeInTheDocument();
+    fireEvent.click(consolidatedMaterial);
+    expect(within(desktopDetail).getByText('Retirada original')).toBeInTheDocument();
+    expect(within(desktopDetail).getByText('Complemento')).toBeInTheDocument();
+
+    fireEvent.click(within(desktopDetail).getByRole('button', { name: 'Ações da retirada' }));
+    const dialog = screen.getByRole('dialog', { name: 'Ações da retirada' });
+    expect(within(dialog).getByRole('heading', { name: 'Complementos confirmados' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Editar complemento' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Estornar complemento' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Editar retirada' })).not.toBeInTheDocument();
   });
 
   it('mostra as ações da retirada somente para usuários operacionais', () => {

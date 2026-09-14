@@ -19,6 +19,10 @@ const scopedMigrationSql = readFileSync(resolve(
   process.cwd(),
   'supabase/migrations/20260912233000_scoped_warehouse_commits.sql',
 ), 'utf8');
+const supplementCorrectionMigrationSql = readFileSync(resolve(
+  process.cwd(),
+  'supabase/migrations/20260914120000_atomic_supplement_corrections.sql',
+), 'utf8');
 
 describe('atomic warehouse operation migration', () => {
   it('keeps legacy requisition and movement IDs as text', () => {
@@ -70,5 +74,20 @@ describe('atomic warehouse operation migration', () => {
     expect(scopedMigrationSql).toContain("RAISE EXCEPTION 'WAREHOUSE_IMMUTABLE_MOVEMENT'");
     expect(scopedMigrationSql).not.toContain('ON CONFLICT (id) DO NOTHING');
     expect(scopedMigrationSql).not.toContain('CREATE OR REPLACE FUNCTION public.commit_warehouse_scope(');
+  });
+
+  it('corrige somente o complemento selecionado com estorno, auditoria e bloqueio concorrente', () => {
+    expect(supplementCorrectionMigrationSql).toContain('CREATE OR REPLACE FUNCTION public.commit_warehouse_supplement_correction');
+    expect(supplementCorrectionMigrationSql).toContain('PERFORM pg_advisory_xact_lock');
+    expect(supplementCorrectionMigrationSql).toContain('WAREHOUSE_SUPPLEMENT_SCOPE_VIOLATION');
+    expect(supplementCorrectionMigrationSql).toContain('WAREHOUSE_SUPPLEMENT_HAS_RETURN');
+    expect(supplementCorrectionMigrationSql).toContain('WAREHOUSE_INSUFFICIENT_STOCK');
+    expect(supplementCorrectionMigrationSql).toContain("v_role NOT IN ('owner', 'admin', 'engineer', 'warehouse_operator')");
+    expect(supplementCorrectionMigrationSql).toContain("v_audit #>> '{metadata,operation}' IS DISTINCT FROM 'requisition_supplement_correction'");
+    expect(supplementCorrectionMigrationSql).toContain("v_new_supplement -> 'cancelledItems'");
+    expect(supplementCorrectionMigrationSql).toContain('SELECT wm.project_id, wm.data INTO v_existing_movement_project_id');
+    expect(supplementCorrectionMigrationSql).toContain("v_movement ->> 'type' NOT IN ('retirada', 'estorno')");
+    expect(supplementCorrectionMigrationSql).toContain("v_movement ->> 'type' = 'retirada'");
+    expect(supplementCorrectionMigrationSql).not.toMatch(/DELETE\s+FROM\s+public\.warehouse_movements/i);
   });
 });

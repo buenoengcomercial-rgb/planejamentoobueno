@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CustodyTerm, Project, WarehouseRequisition } from '@/types/project';
-import { generateCustodyTermPdf, generateDailyWithdrawalConfirmationPdfs } from './pdf';
+import { emptyWarehouse } from '@/lib/warehouse';
+import { generateCustodyTermPdf, generateDailyWithdrawalConfirmationPdfs, generateRequisitionReceipt } from './pdf';
 
 const { saveMock, tableMock } = vi.hoisted(() => ({
   saveMock: vi.fn(),
@@ -117,5 +118,38 @@ describe('PDF diário de confirmação de retirada', () => {
     expect(saveMock.mock.calls.every(([fileName]) => String(fileName).startsWith('confirmacao-retirada-2026-09-03-'))).toBe(true);
     expect(tableMock).toHaveBeenCalledTimes(2);
     expect((tableMock.mock.calls[0][0] as { body: unknown[] }).body).toHaveLength(2);
+  });
+});
+
+describe('PDF individual da retirada', () => {
+  beforeEach(() => {
+    saveMock.mockClear();
+    tableMock.mockClear();
+  });
+
+  it('consolida retirada original e complementos ativos sem perder a origem das entregas', async () => {
+    const req = requisition('0117', 'Marcelo');
+    req.supplements = [{
+      id: 'supplement-1', date: '2026-09-04', receiverName: 'Kennedy', signatureReceiver: 'assinatura',
+      idempotencyKey: 'supplement-key', createdAt: '2026-09-04T09:00:00.000Z', status: 'active',
+      items: [{ itemKey: '0117', code: 'MAT-01', description: 'Material teste', unit: 'UN', quantity: 3 }],
+    }];
+    const warehouse = emptyWarehouse();
+    warehouse.requisitions = [req];
+    const receiptProject = { ...project, warehouse };
+
+    await generateRequisitionReceipt(receiptProject, req);
+
+    expect(tableMock).toHaveBeenCalledWith(expect.objectContaining({
+      body: [[
+        'MAT-01',
+        'Material teste',
+        'UN',
+        '5',
+        expect.stringContaining('Original'),
+      ]],
+    }));
+    expect((tableMock.mock.calls[0][0] as { body: string[][] }).body[0][4]).toContain('Complemento');
+    expect(saveMock).toHaveBeenCalledWith('recibo-REQ-0117.pdf');
   });
 });
