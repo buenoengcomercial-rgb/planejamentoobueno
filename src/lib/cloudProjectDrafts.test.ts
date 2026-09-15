@@ -68,6 +68,21 @@ describe('rascunho local seguro', () => {
     expect(inspectProjectDraft(cloud, '2026-08-18T12:00:00.000Z').kind).toBe('recoverable');
   });
 
+  it('preserva o escopo necessário para repetir uma sincronização normalizada parcial', () => {
+    const cloud = project();
+    const local = { ...cloud, name: 'Pai salvo com detalhes pendentes' };
+    writeProjectDraft(local, '2026-08-18T12:00:00.000Z', undefined, {
+      pendingNormalizedSync: true,
+      loadedCollections: ['warehouseMovements', 'auditLogs', 'warehouseMovements'],
+    });
+
+    const inspection = inspectProjectDraft(cloud, '2026-08-18T12:00:00.000Z');
+    expect(inspection.kind).toBe('recoverable');
+    if (inspection.kind !== 'recoverable') return;
+    expect(inspection.draft.pendingNormalizedSync).toBe(true);
+    expect(inspection.draft.loadedCollections).toEqual(['warehouseMovements', 'auditLogs']);
+  });
+
   it('descarta silenciosamente um rascunho idêntico e não depende do horário do aparelho', () => {
     const cloud = project();
     writeProjectDraft(cloud, '2026-08-18T12:00:00.000Z');

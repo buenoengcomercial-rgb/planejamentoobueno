@@ -13,6 +13,11 @@
  * Snapshot de "estado salvo" é mantido em memória por projectId para diff.
  */
 import { supabase } from '@/integrations/supabase/client';
+import {
+  PROJECT_COLLECTION_KEYS,
+  normalizeProjectCollections,
+  type ProjectCollectionKey,
+} from '@/lib/projectDataScope';
 import type {
   Project,
   WarehouseMovement,
@@ -62,6 +67,7 @@ export interface ContractImportPayload {
 }
 
 interface Snapshot {
+  loadedCollections: Set<ProjectCollectionKey>;
   movements: Map<string, WarehouseMovement>;
   requisitions: Map<string, WarehouseRequisition>;
   custody: Map<string, CustodyTerm>;
@@ -82,8 +88,19 @@ interface Snapshot {
 
 const snapshots = new Map<string, Snapshot>();
 
+interface PendingProjectHydration {
+  projectId: string;
+  collections: ProjectCollectionKey[];
+}
+
+// Uma resposta de rede ainda não é a fotografia aceita pela UI. O WeakMap
+// vincula os metadados ao objeto exato devolvido pela hidratação sem inserir
+// campos transitórios no Project nem avançar o snapshot prematuramente.
+const pendingProjectHydrations = new WeakMap<Project, PendingProjectHydration>();
+
 function emptySnapshot(): Snapshot {
   return {
+    loadedCollections: new Set(),
     movements: new Map(),
     requisitions: new Map(),
     custody: new Map(),
@@ -104,7 +121,6 @@ function emptySnapshot(): Snapshot {
 }
 
 function phaseToChapterRow(phase: Phase, orderIndex: number): ChapterRow {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { tasks: _tasks, ...rest } = phase;
   return {
     parent_id: phase.parentId ?? null,
@@ -115,7 +131,6 @@ function phaseToChapterRow(phase: Phase, orderIndex: number): ChapterRow {
 }
 
 function taskToTaskRow(task: Task, chapterId: string, parentTaskId: string | null, orderIndex: number): TaskRow {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { children: _c, dailyLogs: _dl, ...rest } = task;
   return {
     chapter_id: chapterId,
@@ -129,30 +144,63 @@ function taskToTaskRow(task: Task, chapterId: string, parentTaskId: string | nul
   };
 }
 
-function buildSnapshot(project: Project): Snapshot {
+function buildSnapshot(
+  project: Project,
+  collections: readonly ProjectCollectionKey[] = PROJECT_COLLECTION_KEYS,
+): Snapshot {
+  const loadedCollections = new Set(collections);
   const snap = emptySnapshot();
-  for (const m of project.warehouse?.movements ?? []) snap.movements.set(m.id, m);
-  for (const r of project.warehouse?.requisitions ?? []) snap.requisitions.set(r.id, r);
-  for (const c of project.warehouse?.custodyTerms ?? []) snap.custody.set(c.id, c);
-  for (const d of project.dailyReports ?? []) snap.dailyReports.set(d.id, d);
-  for (const m of project.measurements ?? []) snap.measurements.set(m.id, m);
-  for (const a of project.additives ?? []) snap.additives.set(a.id, a);
-  for (const l of project.auditLogs ?? []) snap.auditLogs.set(l.id, l);
-  for (const s of project.stockMovements ?? []) snap.stockMovements.set(s.id, s);
-  for (const h of project.materialPriceHistory ?? []) snap.priceHistory.set(h.id, h);
-  for (const b of project.budgetItems ?? []) snap.budgetItems.set(b.id, b);
-  for (const c of project.materialComparisons ?? []) snap.materialComparisons.set(c.id, c);
-  for (const a of project.analyticCompositions ?? []) snap.analyticCompositions.set(a.id, a);
-  for (const subcontract of project.subcontracts ?? []) snap.subcontracts.set(subcontract.id, subcontract);
+  snap.loadedCollections = loadedCollections;
+  if (loadedCollections.has('warehouseMovements')) {
+    for (const m of project.warehouse?.movements ?? []) snap.movements.set(m.id, m);
+  }
+  if (loadedCollections.has('warehouseRequisitions')) {
+    for (const r of project.warehouse?.requisitions ?? []) snap.requisitions.set(r.id, r);
+  }
+  if (loadedCollections.has('warehouseCustody')) {
+    for (const c of project.warehouse?.custodyTerms ?? []) snap.custody.set(c.id, c);
+  }
+  if (loadedCollections.has('dailyReports')) {
+    for (const d of project.dailyReports ?? []) snap.dailyReports.set(d.id, d);
+  }
+  if (loadedCollections.has('measurements')) {
+    for (const m of project.measurements ?? []) snap.measurements.set(m.id, m);
+  }
+  if (loadedCollections.has('additives')) {
+    for (const a of project.additives ?? []) snap.additives.set(a.id, a);
+  }
+  if (loadedCollections.has('auditLogs')) {
+    for (const l of project.auditLogs ?? []) snap.auditLogs.set(l.id, l);
+  }
+  if (loadedCollections.has('stockMovements')) {
+    for (const s of project.stockMovements ?? []) snap.stockMovements.set(s.id, s);
+  }
+  if (loadedCollections.has('materialPriceHistory')) {
+    for (const h of project.materialPriceHistory ?? []) snap.priceHistory.set(h.id, h);
+  }
+  if (loadedCollections.has('budgetItems')) {
+    for (const b of project.budgetItems ?? []) snap.budgetItems.set(b.id, b);
+  }
+  if (loadedCollections.has('materialComparisons')) {
+    for (const c of project.materialComparisons ?? []) snap.materialComparisons.set(c.id, c);
+  }
+  if (loadedCollections.has('analyticCompositions')) {
+    for (const a of project.analyticCompositions ?? []) snap.analyticCompositions.set(a.id, a);
+  }
+  if (loadedCollections.has('subcontracts')) {
+    for (const subcontract of project.subcontracts ?? []) snap.subcontracts.set(subcontract.id, subcontract);
+  }
 
   const phases = project.phases ?? [];
   phases.forEach((phase, idx) => {
-    snap.chapters.set(phase.id, phaseToChapterRow(phase, idx));
+    if (loadedCollections.has('eapChapters')) snap.chapters.set(phase.id, phaseToChapterRow(phase, idx));
     const walkTasksWithOrder = (tasks: Task[], parentTaskId: string | null) => {
       tasks.forEach((t, tIdx) => {
-        snap.tasks.set(t.id, taskToTaskRow(t, phase.id, parentTaskId, tIdx));
-        for (const log of t.dailyLogs ?? []) {
-          snap.taskLogs.set(log.id, { taskId: t.id, log });
+        if (loadedCollections.has('tasks')) snap.tasks.set(t.id, taskToTaskRow(t, phase.id, parentTaskId, tIdx));
+        if (loadedCollections.has('taskDailyLogs')) {
+          for (const log of t.dailyLogs ?? []) {
+            snap.taskLogs.set(log.id, { taskId: t.id, log });
+          }
         }
         if (t.children?.length) walkTasksWithOrder(t.children, t.id);
       });
@@ -165,6 +213,107 @@ function buildSnapshot(project: Project): Snapshot {
 
 export function setCloudSnapshot(projectId: string, project: Project) {
   snapshots.set(projectId, buildSnapshot(project));
+}
+
+const SNAPSHOT_MAP_BY_COLLECTION: Record<ProjectCollectionKey, keyof Omit<Snapshot, 'loadedCollections'>> = {
+  warehouseMovements: 'movements',
+  warehouseRequisitions: 'requisitions',
+  warehouseCustody: 'custody',
+  dailyReports: 'dailyReports',
+  taskDailyLogs: 'taskLogs',
+  measurements: 'measurements',
+  additives: 'additives',
+  auditLogs: 'auditLogs',
+  stockMovements: 'stockMovements',
+  materialPriceHistory: 'priceHistory',
+  budgetItems: 'budgetItems',
+  materialComparisons: 'materialComparisons',
+  analyticCompositions: 'analyticCompositions',
+  subcontracts: 'subcontracts',
+  eapChapters: 'chapters',
+  tasks: 'tasks',
+};
+
+function mergeCloudSnapshot(
+  projectId: string,
+  project: Project,
+  collections: readonly ProjectCollectionKey[],
+) {
+  const current = snapshots.get(projectId) ?? emptySnapshot();
+  const incoming = buildSnapshot(project, collections);
+  for (const collection of collections) {
+    const mapKey = SNAPSHOT_MAP_BY_COLLECTION[collection];
+    // Os mapas possuem tipos específicos, mas a atribuição é sempre feita pelo
+    // vínculo estático acima entre coleção e mapa.
+    (current[mapKey] as Map<string, unknown>) = incoming[mapKey] as Map<string, unknown>;
+    current.loadedCollections.add(collection);
+  }
+  snapshots.set(projectId, current);
+}
+
+export interface ConfirmProjectHydrationOptions {
+  /**
+   * Substitui a fotografia anterior somente no instante da confirmação.
+   * Use na abertura/troca de obra para não limpar um snapshot válido enquanto
+   * uma resposta de rede que ainda pode ser descartada está em andamento.
+   */
+  replaceExisting?: boolean;
+}
+
+/** Coleções efetivamente recebidas por esta resposta, independentemente do snapshot atual. */
+export function getHydratedProjectCollections(project: Project): ProjectCollectionKey[] {
+  const pending = pendingProjectHydrations.get(project);
+  if (!pending || pending.projectId !== project.id) return [];
+  return [...pending.collections];
+}
+
+/**
+ * Confirma uma resposta de hidratação depois que o chamador validar obra, rota
+ * e sequência. Respostas descartadas nunca devem chamar esta função.
+ */
+export function confirmHydratedProjectCollections(
+  project: Project,
+  options: ConfirmProjectHydrationOptions = {},
+): ProjectCollectionKey[] {
+  const pending = pendingProjectHydrations.get(project);
+  if (!pending || pending.projectId !== project.id) return [];
+  const collections = [...pending.collections];
+  confirmProjectCollectionsSnapshot(project, collections, options);
+  pendingProjectHydrations.delete(project);
+  return collections;
+}
+
+/** Libera explicitamente os metadados de uma resposta que a UI descartou. */
+export function discardHydratedProjectCollections(project: Project): void {
+  pendingProjectHydrations.delete(project);
+}
+
+/**
+ * Atualiza no snapshot somente coleções já aceitas pela UI, por exemplo um
+ * Diário recebido por realtime. Nenhum outro domínio do projeto é tocado.
+ */
+export function confirmProjectCollectionsSnapshot(
+  project: Project,
+  collections: readonly ProjectCollectionKey[],
+  options: ConfirmProjectHydrationOptions = {},
+): ProjectCollectionKey[] {
+  const confirmed = normalizeProjectCollections(collections);
+  if (options.replaceExisting) snapshots.set(project.id, buildSnapshot(project, confirmed));
+  else mergeCloudSnapshot(project.id, project, confirmed);
+  return confirmed;
+}
+
+export function getLoadedProjectCollections(projectId: string): ProjectCollectionKey[] {
+  const loaded = snapshots.get(projectId)?.loadedCollections ?? new Set<ProjectCollectionKey>();
+  return PROJECT_COLLECTION_KEYS.filter(collection => loaded.has(collection));
+}
+
+export function getMissingProjectCollections(
+  projectId: string,
+  required: readonly ProjectCollectionKey[],
+): ProjectCollectionKey[] {
+  const loaded = new Set(getLoadedProjectCollections(projectId));
+  return normalizeProjectCollections(required).filter(collection => !loaded.has(collection));
 }
 
 /**
@@ -232,6 +381,19 @@ export function buildContractImportPayload(project: Project): ContractImportPayl
 
 export function clearCloudSnapshot(projectId: string) {
   snapshots.delete(projectId);
+}
+
+export class ProjectSnapshotUnavailableError extends Error {
+  constructor() {
+    super('Os dados desta obra precisam ser recarregados antes de salvar. Nenhuma coleção foi alterada.');
+    this.name = 'ProjectSnapshotUnavailableError';
+  }
+}
+
+export function assertProjectSnapshotAvailable(projectId: string) {
+  if (!snapshots.get(projectId)?.loadedCollections.size) {
+    throw new ProjectSnapshotUnavailableError();
+  }
 }
 
 export interface WarehouseOperationAcknowledgement {
@@ -306,48 +468,114 @@ export function acknowledgeWarehouseScopedOperation(
 
 // ============== LOAD: HYDRATE ==============
 
-export async function hydrateProjectFromCloud(project: Project): Promise<Project> {
+type DataRow = { id: string; data: unknown };
+type TaskLogDataRow = DataRow & { task_id: string };
+type ChapterDataRow = DataRow & { parent_id: string | null; order_index: number };
+type TaskDataRow = DataRow & {
+  chapter_id: string;
+  parent_task_id: string | null;
+  order_index: number;
+};
+type QueryError = { message?: string } | null;
+type QueryResult<T> = { data: T[] | null; error: QueryError };
+
+async function optionalQuery<T>(
+  enabled: boolean,
+  query: () => PromiseLike<{ data: T[] | null; error: QueryError }>,
+): Promise<QueryResult<T>> {
+  if (!enabled) return { data: null, error: null };
+  const result = await query();
+  return { data: result.data, error: result.error };
+}
+
+export interface ProjectHydrationOptions {
+  collections?: readonly ProjectCollectionKey[];
+  /** Em telas operacionais, coleção ausente deve bloquear em vez de parecer vazia. */
+  strict?: boolean;
+}
+
+export class ProjectHydrationError extends Error {
+  constructor(public readonly collections: ProjectCollectionKey[]) {
+    super('Não foi possível carregar todos os dados necessários desta área.');
+    this.name = 'ProjectHydrationError';
+  }
+}
+
+export async function hydrateProjectFromCloud(
+  project: Project,
+  options: ProjectHydrationOptions = {},
+): Promise<Project> {
   const projectId = project.id;
+  const requested = normalizeProjectCollections(options.collections ?? PROJECT_COLLECTION_KEYS);
+  const wants = new Set(requested);
   const [movRes, reqRes, custRes, drRes, logsRes, measRes, addRes, audRes, stkRes, phRes, biRes, mcRes, acRes, subRes, chRes, tkRes] = await Promise.all([
-    supabase.from('warehouse_movements').select('id, data').eq('project_id', projectId),
-    supabase.from('warehouse_requisitions').select('id, data').eq('project_id', projectId),
-    supabase.from('warehouse_custody').select('id, data').eq('project_id', projectId),
-    supabase.from('daily_reports').select('id, data').eq('project_id', projectId),
-    supabase.from('task_daily_logs').select('id, task_id, data').eq('project_id', projectId),
-    supabase.from('measurements').select('id, data').eq('project_id', projectId),
-    supabase.from('additives').select('id, data').eq('project_id', projectId),
-    supabase.from('audit_logs').select('id, data').eq('project_id', projectId),
-    supabase.from('stock_movements').select('id, data').eq('project_id', projectId),
-    supabase.from('material_price_history').select('id, data').eq('project_id', projectId),
-    supabase.from('budget_items').select('id, data').eq('project_id', projectId),
-    supabase.from('material_comparisons').select('id, data').eq('project_id', projectId),
-    supabase.from('analytic_compositions').select('id, data').eq('project_id', projectId),
-    supabase.from('subcontracts').select('id, data').eq('project_id', projectId),
-    supabase.from('eap_chapters').select('id, parent_id, order_index, data').eq('project_id', projectId).order('order_index'),
-    supabase.from('tasks').select('id, chapter_id, parent_task_id, order_index, data').eq('project_id', projectId).order('order_index'),
+    optionalQuery<DataRow>(wants.has('warehouseMovements'), () => supabase.from('warehouse_movements').select('id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('warehouseRequisitions'), () => supabase.from('warehouse_requisitions').select('id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('warehouseCustody'), () => supabase.from('warehouse_custody').select('id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('dailyReports'), () => supabase.from('daily_reports').select('id, data').eq('project_id', projectId)),
+    optionalQuery<TaskLogDataRow>(wants.has('taskDailyLogs'), () => supabase.from('task_daily_logs').select('id, task_id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('measurements'), () => supabase.from('measurements').select('id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('additives'), () => supabase.from('additives').select('id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('auditLogs'), () => supabase.from('audit_logs').select('id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('stockMovements'), () => supabase.from('stock_movements').select('id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('materialPriceHistory'), () => supabase.from('material_price_history').select('id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('budgetItems'), () => supabase.from('budget_items').select('id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('materialComparisons'), () => supabase.from('material_comparisons').select('id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('analyticCompositions'), () => supabase.from('analytic_compositions').select('id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('subcontracts'), () => supabase.from('subcontracts').select('id, data').eq('project_id', projectId)),
+    optionalQuery<ChapterDataRow>(wants.has('eapChapters'), () => supabase.from('eap_chapters').select('id, parent_id, order_index, data').eq('project_id', projectId).order('order_index')),
+    optionalQuery<TaskDataRow>(wants.has('tasks'), () => supabase.from('tasks').select('id, chapter_id, parent_task_id, order_index, data').eq('project_id', projectId).order('order_index')),
   ]);
 
-  // Falha silenciosa: mantém o que veio no data_json (legado / sem permissão).
-  const movements = movRes.error ? null : (movRes.data ?? []).map(r => r.data as unknown as WarehouseMovement);
-  const requisitions = reqRes.error ? null : (reqRes.data ?? []).map(r => r.data as unknown as WarehouseRequisition);
-  const custody = custRes.error ? null : (custRes.data ?? []).map(r => r.data as unknown as CustodyTerm);
-  const dailyReports = drRes.error ? null : (drRes.data ?? []).map(r => r.data as unknown as DailyReport);
-  const taskLogs = logsRes.error ? null : (logsRes.data ?? []).map(r => ({
+  const resultByCollection: Record<ProjectCollectionKey, QueryResult<unknown>> = {
+    warehouseMovements: movRes,
+    warehouseRequisitions: reqRes,
+    warehouseCustody: custRes,
+    dailyReports: drRes,
+    taskDailyLogs: logsRes,
+    measurements: measRes,
+    additives: addRes,
+    auditLogs: audRes,
+    stockMovements: stkRes,
+    materialPriceHistory: phRes,
+    budgetItems: biRes,
+    materialComparisons: mcRes,
+    analyticCompositions: acRes,
+    subcontracts: subRes,
+    eapChapters: chRes,
+    tasks: tkRes,
+  };
+  const failed = requested.filter(collection => resultByCollection[collection].error);
+  if (options.strict && failed.length > 0) throw new ProjectHydrationError(failed);
+  let loaded = requested.filter(collection => !resultByCollection[collection].error);
+  // Capítulos e tarefas formam uma única fotografia hierárquica. Em uma
+  // hidratação não estrita, o sucesso isolado de uma dessas consultas não pode
+  // promover a outra (que falhou) a coleção carregada durante a confirmação.
+  // Descarte o par inteiro para que uma próxima hidratação tente ambos de novo.
+  if (failed.includes('eapChapters') || failed.includes('tasks')) {
+    loaded = loaded.filter(collection => collection !== 'eapChapters' && collection !== 'tasks');
+  }
+  const loadedSet = new Set(loaded);
+
+  const movements = loadedSet.has('warehouseMovements') ? (movRes.data ?? []).map(r => r.data as WarehouseMovement) : null;
+  const requisitions = loadedSet.has('warehouseRequisitions') ? (reqRes.data ?? []).map(r => r.data as WarehouseRequisition) : null;
+  const custody = loadedSet.has('warehouseCustody') ? (custRes.data ?? []).map(r => r.data as CustodyTerm) : null;
+  const dailyReports = loadedSet.has('dailyReports') ? (drRes.data ?? []).map(r => r.data as DailyReport) : null;
+  const taskLogs = loadedSet.has('taskDailyLogs') ? (logsRes.data ?? []).map(r => ({
     taskId: r.task_id,
-    log: r.data as unknown as DailyProductionLog,
-  }));
-  const measurements = measRes.error ? null : (measRes.data ?? []).map(r => r.data as unknown as SavedMeasurement);
-  const additives = addRes.error ? null : (addRes.data ?? []).map(r => r.data as unknown as Additive);
-  const auditLogs = audRes.error ? null : (audRes.data ?? []).map(hydrateAuditLogRow);
-  const stockMovements = stkRes.error ? null : (stkRes.data ?? []).map(r => r.data as unknown as StockMovement);
-  const priceHistory = phRes.error ? null : (phRes.data ?? []).map(r => r.data as unknown as PriceHistoryEntry);
-  const budgetItems = biRes.error ? null : (biRes.data ?? []).map(r => r.data as unknown as BudgetItem);
-  const materialComparisons = mcRes.error ? null : (mcRes.data ?? []).map(r => r.data as unknown as MaterialComparison);
-  const analyticCompositions = acRes.error ? null : (acRes.data ?? []).map(r => r.data as unknown as AdditiveComposition);
-  const subcontracts = subRes.error ? null : (subRes.data ?? []).map(r => r.data as unknown as Subcontract);
+    log: r.data as DailyProductionLog,
+  })) : null;
+  const measurements = loadedSet.has('measurements') ? (measRes.data ?? []).map(r => r.data as SavedMeasurement) : null;
+  const additives = loadedSet.has('additives') ? (addRes.data ?? []).map(r => r.data as Additive) : null;
+  const auditLogs = loadedSet.has('auditLogs') ? (audRes.data ?? []).map(hydrateAuditLogRow) : null;
+  const stockMovements = loadedSet.has('stockMovements') ? (stkRes.data ?? []).map(r => r.data as StockMovement) : null;
+  const priceHistory = loadedSet.has('materialPriceHistory') ? (phRes.data ?? []).map(r => r.data as PriceHistoryEntry) : null;
+  const budgetItems = loadedSet.has('budgetItems') ? (biRes.data ?? []).map(r => r.data as BudgetItem) : null;
+  const materialComparisons = loadedSet.has('materialComparisons') ? (mcRes.data ?? []).map(r => r.data as MaterialComparison) : null;
+  const analyticCompositions = loadedSet.has('analyticCompositions') ? (acRes.data ?? []).map(r => r.data as AdditiveComposition) : null;
+  const subcontracts = loadedSet.has('subcontracts') ? (subRes.data ?? []).map(r => r.data as Subcontract) : null;
 
   const next: Project = { ...project };
-
   if (movements !== null || requisitions !== null || custody !== null) {
     const existing = project.warehouse ?? {
       locations: [], items: [], movements: [], requisitions: [], equipments: [], equipmentGroups: [], custodyTerms: [],
@@ -361,8 +589,6 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
   }
   if (dailyReports !== null) next.dailyReports = dailyReports;
   // As tabelas normalizadas são a fonte de verdade, inclusive quando vazias.
-  // Manter os valores legados do data_json ao receber [] ressuscitava históricos
-  // já apagados na nuvem após uma limpeza administrativa.
   if (measurements !== null) next.measurements = measurements;
   if (additives !== null) next.additives = additives;
   if (auditLogs !== null) next.auditLogs = auditLogs;
@@ -371,83 +597,124 @@ export async function hydrateProjectFromCloud(project: Project): Promise<Project
   if (budgetItems !== null) next.budgetItems = budgetItems;
   if (materialComparisons !== null) next.materialComparisons = materialComparisons;
   if (analyticCompositions !== null) next.analyticCompositions = analyticCompositions;
-  next.subcontracts = reconcileSubcontracts(project.subcontracts, subcontracts);
+  if (loadedSet.has('subcontracts')) next.subcontracts = reconcileSubcontracts(project.subcontracts, subcontracts);
 
-  // ===== Reconstrói phases[] a partir de eap_chapters + tasks =====
-  const chapterRows = chRes.error ? null : (chRes.data ?? []);
-  const taskRows = tkRes.error ? null : (tkRes.data ?? []);
-
+  const chapterRows = loadedSet.has('eapChapters') ? (chRes.data ?? []) : null;
+  const taskRows = loadedSet.has('tasks') ? (tkRes.data ?? []) : null;
   const logsByTask = new Map<string, DailyProductionLog[]>();
   if (taskLogs !== null) {
     for (const { taskId, log } of taskLogs) {
-      const arr = logsByTask.get(taskId) ?? [];
-      arr.push(log);
-      logsByTask.set(taskId, arr);
+      const rows = logsByTask.get(taskId) ?? [];
+      rows.push(log);
+      logsByTask.set(taskId, rows);
     }
   }
 
-  if (chapterRows !== null && chapterRows.length > 0) {
+  if (chapterRows !== null && taskRows !== null) {
     type TR = NonNullable<typeof taskRows>[number];
     const childrenByParent = new Map<string, TR[]>();
     const rootTasksByChapter = new Map<string, TR[]>();
-    for (const tr of (taskRows ?? []) as TR[]) {
-      if (tr.parent_task_id) {
-        const carr = childrenByParent.get(tr.parent_task_id) ?? [];
-        carr.push(tr);
-        childrenByParent.set(tr.parent_task_id, carr);
+    for (const row of taskRows) {
+      if (row.parent_task_id) {
+        const children = childrenByParent.get(row.parent_task_id) ?? [];
+        children.push(row);
+        childrenByParent.set(row.parent_task_id, children);
       } else {
-        const rarr = rootTasksByChapter.get(tr.chapter_id) ?? [];
-        rarr.push(tr);
-        rootTasksByChapter.set(tr.chapter_id, rarr);
+        const roots = rootTasksByChapter.get(row.chapter_id) ?? [];
+        roots.push(row);
+        rootTasksByChapter.set(row.chapter_id, roots);
       }
     }
 
     const buildTask = (row: TR): Task => {
-      const t = { ...(row.data as object) } as Task;
-      t.id = row.id;
-      const kids = (childrenByParent.get(row.id) ?? [])
+      const task = { ...(row.data as object) } as Task;
+      task.id = row.id;
+      const children = (childrenByParent.get(row.id) ?? [])
         .slice()
-        .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
-        .map(c => buildTask(c));
-      if (kids.length > 0) t.children = kids;
-      else delete t.children;
-      const logs = logsByTask.get(row.id);
-      if (logs && logs.length > 0) t.dailyLogs = logs;
-      return t;
+        .sort((left, right) => (left.order_index ?? 0) - (right.order_index ?? 0))
+        .map(buildTask);
+      if (children.length > 0) task.children = children;
+      else delete task.children;
+      if (taskLogs !== null) task.dailyLogs = logsByTask.get(row.id) ?? [];
+      return task;
     };
 
-    const phases: Phase[] = chapterRows
+    next.phases = chapterRows
       .slice()
-      .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
-      .map(ch => {
-        const base = { ...(ch.data as object) } as Phase;
-        base.id = ch.id;
-        if (ch.parent_id) base.parentId = ch.parent_id; else delete (base as Partial<Phase>).parentId;
-        base.order = ch.order_index;
-        const roots = (rootTasksByChapter.get(ch.id) ?? [])
+      .sort((left, right) => (left.order_index ?? 0) - (right.order_index ?? 0))
+      .map(chapter => {
+        const phase = { ...(chapter.data as object) } as Phase;
+        phase.id = chapter.id;
+        if (chapter.parent_id) phase.parentId = chapter.parent_id;
+        else delete (phase as Partial<Phase>).parentId;
+        phase.order = chapter.order_index;
+        phase.tasks = (rootTasksByChapter.get(chapter.id) ?? [])
           .slice()
-          .sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0))
-          .map(r => buildTask(r));
-        base.tasks = roots;
-        return base;
+          .sort((left, right) => (left.order_index ?? 0) - (right.order_index ?? 0))
+          .map(buildTask);
+        return phase;
       });
-    next.phases = phases;
-  } else if (taskLogs !== null && taskLogs.length > 0) {
-    next.phases = (project.phases ?? []).map(p => mapPhaseTasks(p, logsByTask));
+  } else if (taskLogs !== null) {
+    next.phases = (project.phases ?? []).map(phase => mapPhaseTasks(phase, logsByTask, true));
   }
 
-  setCloudSnapshot(projectId, next);
+  pendingProjectHydrations.set(next, { projectId, collections: loaded });
   return next;
 }
 
-function mapPhaseTasks(phase: Phase, byTask: Map<string, DailyProductionLog[]>): Phase {
-  return { ...phase, tasks: phase.tasks?.map(t => mapTask(t, byTask)) ?? [] };
+function mapPhaseTasks(phase: Phase, byTask: Map<string, DailyProductionLog[]>, replaceAll = false): Phase {
+  return { ...phase, tasks: phase.tasks?.map(t => mapTask(t, byTask, replaceAll)) ?? [] };
 }
-function mapTask(task: Task, byTask: Map<string, DailyProductionLog[]>): Task {
+function mapTask(task: Task, byTask: Map<string, DailyProductionLog[]>, replaceAll = false): Task {
   const next: Task = { ...task };
-  if (byTask.has(task.id)) next.dailyLogs = byTask.get(task.id)!;
-  if (task.children?.length) next.children = task.children.map(c => mapTask(c, byTask));
+  if (replaceAll || byTask.has(task.id)) next.dailyLogs = byTask.get(task.id) ?? [];
+  if (task.children?.length) next.children = task.children.map(c => mapTask(c, byTask, replaceAll));
   return next;
+}
+
+export function mergeHydratedProjectCollections(
+  current: Project,
+  hydrated: Project,
+  collections: readonly ProjectCollectionKey[],
+): Project {
+  const loaded = new Set(normalizeProjectCollections(collections));
+  const next: Project = { ...current };
+  if (loaded.has('warehouseMovements') || loaded.has('warehouseRequisitions') || loaded.has('warehouseCustody')) {
+    const currentWarehouse = current.warehouse;
+    const hydratedWarehouse = hydrated.warehouse;
+    if (hydratedWarehouse) {
+      next.warehouse = {
+        ...(currentWarehouse ?? hydratedWarehouse),
+        ...(loaded.has('warehouseMovements') ? { movements: hydratedWarehouse.movements } : {}),
+        ...(loaded.has('warehouseRequisitions') ? { requisitions: hydratedWarehouse.requisitions } : {}),
+        ...(loaded.has('warehouseCustody') ? { custodyTerms: hydratedWarehouse.custodyTerms } : {}),
+      };
+    }
+  }
+  if (loaded.has('dailyReports')) next.dailyReports = hydrated.dailyReports;
+  if (loaded.has('measurements')) next.measurements = hydrated.measurements;
+  if (loaded.has('additives')) next.additives = hydrated.additives;
+  if (loaded.has('auditLogs')) next.auditLogs = hydrated.auditLogs;
+  if (loaded.has('stockMovements')) next.stockMovements = hydrated.stockMovements;
+  if (loaded.has('materialPriceHistory')) next.materialPriceHistory = hydrated.materialPriceHistory;
+  if (loaded.has('budgetItems')) next.budgetItems = hydrated.budgetItems;
+  if (loaded.has('materialComparisons')) next.materialComparisons = hydrated.materialComparisons;
+  if (loaded.has('analyticCompositions')) next.analyticCompositions = hydrated.analyticCompositions;
+  if (loaded.has('subcontracts')) next.subcontracts = hydrated.subcontracts;
+  if (loaded.has('eapChapters') || loaded.has('tasks')) next.phases = hydrated.phases;
+  else if (loaded.has('taskDailyLogs')) {
+    const logsByTask = new Map<string, DailyProductionLog[]>();
+    for (const phase of hydrated.phases ?? []) collectTaskLogs(phase.tasks ?? [], logsByTask);
+    next.phases = (current.phases ?? []).map(phase => mapPhaseTasks(phase, logsByTask, true));
+  }
+  return next;
+}
+
+function collectTaskLogs(tasks: Task[], target: Map<string, DailyProductionLog[]>) {
+  for (const task of tasks) {
+    target.set(task.id, task.dailyLogs ?? []);
+    if (task.children?.length) collectTaskLogs(task.children, target);
+  }
 }
 
 
@@ -490,87 +757,124 @@ export function stripNormalizedCollections(project: Project): Project {
  *
  * A sincronização é estrita: qualquer falha impede o snapshot de avançar.
  */
-export async function syncCollectionsToCloud(project: Project, userId?: string): Promise<void> {
+export interface ProjectCollectionSyncOptions {
+  /** Exclusivo para a criação inicial, quando o objeto em memória é a fonte completa. */
+  allowCompleteWithoutSnapshot?: boolean;
+}
+
+export async function syncCollectionsToCloud(
+  project: Project,
+  userId?: string,
+  options: ProjectCollectionSyncOptions = {},
+): Promise<void> {
   const projectId = project.id;
-  const prev = snapshots.get(projectId) ?? emptySnapshot();
-  const next = buildSnapshot(project);
+  const existingSnapshot = snapshots.get(projectId);
+  if (!options.allowCompleteWithoutSnapshot) assertProjectSnapshotAvailable(projectId);
+  const trackedCollections = existingSnapshot?.loadedCollections.size
+    ? [...existingSnapshot.loadedCollections]
+    : [...PROJECT_COLLECTION_KEYS];
+  const prev = existingSnapshot ?? emptySnapshot();
+  const next = buildSnapshot(project, trackedCollections);
+  const tracks = (collection: ProjectCollectionKey) => next.loadedCollections.has(collection);
 
   const ops: Promise<unknown>[] = [];
 
-  ops.push(...diffAndSync('warehouse_movements', prev.movements, next.movements, projectId, userId, m => ({
-    occurred_at: (m as WarehouseMovement).date ?? null,
-  }), movement => normalizedDeletePolicy('warehouse_movements', movement)));
+  if (tracks('warehouseMovements')) {
+    ops.push(...diffAndSync('warehouse_movements', prev.movements, next.movements, projectId, userId, m => ({
+      occurred_at: (m as WarehouseMovement).date ?? null,
+    }), movement => normalizedDeletePolicy('warehouse_movements', movement)));
+  }
   // Retiradas nunca são excluídas porque desapareceram de um snapshot local.
   // A exclusão administrativa usa uma RPC explícita, autenticada e auditada.
-  ops.push(...diffAndSync('warehouse_requisitions', prev.requisitions, next.requisitions, projectId, userId, undefined, () => false));
-  ops.push(...diffAndSync('warehouse_custody', prev.custody, next.custody, projectId, userId));
-  ops.push(...diffAndSync('daily_reports', prev.dailyReports, next.dailyReports, projectId, userId, d => ({
-    report_date: (d as DailyReport).date,
-  }), () => false));
-  ops.push(...diffAndSync('measurements', prev.measurements, next.measurements, projectId, userId, m => {
-    const meas = m as SavedMeasurement;
-    return {
-      number: meas.number ?? null,
-      status: meas.status ?? null,
-      start_date: meas.startDate ?? null,
-      end_date: meas.endDate ?? null,
-      issue_date: meas.issueDate ?? null,
-    };
-  }));
-  ops.push(...diffAndSync('additives', prev.additives, next.additives, projectId, userId, a => {
-    const add = a as Additive;
-    return {
-      name: add.name ?? null,
-      status: add.status ?? null,
-      version: add.version ?? null,
-      imported_at: add.importedAt ?? null,
-    };
-  }));
-  ops.push(...diffAndSync('audit_logs', prev.auditLogs, next.auditLogs, projectId, userId, l => {
-    const log = l as AuditLog;
-    return {
-      entity_type: log.entityType ?? null,
-      entity_id: log.entityId ?? null,
-      action: log.action ?? null,
-      occurred_at: log.at ?? null,
-      user_id: log.userId ?? null,
-    };
-  }, () => false));
-  ops.push(...diffAndSync('stock_movements', prev.stockMovements, next.stockMovements, projectId, userId, s => {
-    const stk = s as StockMovement;
-    return {
-      item_key: stk.itemKey ?? null,
-      occurred_at: stk.date ? stk.date.slice(0, 10) : null,
-      movement_type: stk.type ?? null,
-    };
-  }));
-  ops.push(...diffAndSync('material_price_history', prev.priceHistory, next.priceHistory, projectId, userId, h => ({
-    item_key: (h as PriceHistoryEntry).itemCode ?? null,
-  })));
-  ops.push(...diffAndSync('budget_items', prev.budgetItems, next.budgetItems, projectId, userId, b => {
-    const bi = b as BudgetItem;
-    return {
-      item: bi.item ?? null,
-      code: bi.code ?? null,
-      source: bi.source ?? null,
-      task_id: bi.taskId ?? null,
-      additive_id: bi.additiveId ?? null,
-    };
-  }));
-  ops.push(...diffAndSync('material_comparisons', prev.materialComparisons, next.materialComparisons, projectId, userId, c => {
-    const mc = c as MaterialComparison;
-    return { name: mc.name ?? null, status: mc.status ?? null };
-  }));
-  ops.push(...diffAndSync('analytic_compositions', prev.analyticCompositions, next.analyticCompositions, projectId, userId, a => ({
-    code: (a as AdditiveComposition).code ?? null,
-  })));
-  ops.push(...diffAndSync('subcontracts', prev.subcontracts, next.subcontracts, projectId, userId, s => {
-    const subcontract = s as Subcontract;
-    return { name: subcontract.name, contractor_name: subcontract.contractorName, status: subcontract.status, contract_date: subcontract.contractDate, contracted_value: subcontract.contractedValue };
-  }));
-  ops.push(...diffAndSyncTaskLogs(prev.taskLogs, next.taskLogs, projectId, userId));
-  ops.push(...diffAndSyncEAP('eap_chapters', prev.chapters, next.chapters, projectId, userId));
-  ops.push(...diffAndSyncEAP('tasks', prev.tasks, next.tasks, projectId, userId));
+  if (tracks('warehouseRequisitions')) ops.push(...diffAndSync('warehouse_requisitions', prev.requisitions, next.requisitions, projectId, userId, undefined, () => false));
+  if (tracks('warehouseCustody')) ops.push(...diffAndSync('warehouse_custody', prev.custody, next.custody, projectId, userId));
+  if (tracks('dailyReports')) {
+    ops.push(...diffAndSync('daily_reports', prev.dailyReports, next.dailyReports, projectId, userId, d => ({
+      report_date: (d as DailyReport).date,
+    }), () => false));
+  }
+  if (tracks('measurements')) {
+    ops.push(...diffAndSync('measurements', prev.measurements, next.measurements, projectId, userId, m => {
+      const meas = m as SavedMeasurement;
+      return {
+        number: meas.number ?? null,
+        status: meas.status ?? null,
+        start_date: meas.startDate ?? null,
+        end_date: meas.endDate ?? null,
+        issue_date: meas.issueDate ?? null,
+      };
+    }));
+  }
+  if (tracks('additives')) {
+    ops.push(...diffAndSync('additives', prev.additives, next.additives, projectId, userId, a => {
+      const add = a as Additive;
+      return {
+        name: add.name ?? null,
+        status: add.status ?? null,
+        version: add.version ?? null,
+        imported_at: add.importedAt ?? null,
+      };
+    }));
+  }
+  if (tracks('auditLogs')) {
+    ops.push(...diffAndSync('audit_logs', prev.auditLogs, next.auditLogs, projectId, userId, l => {
+      const log = l as AuditLog;
+      return {
+        entity_type: log.entityType ?? null,
+        entity_id: log.entityId ?? null,
+        action: log.action ?? null,
+        occurred_at: log.at ?? null,
+        user_id: log.userId ?? null,
+      };
+    }, () => false));
+  }
+  if (tracks('stockMovements')) {
+    ops.push(...diffAndSync('stock_movements', prev.stockMovements, next.stockMovements, projectId, userId, s => {
+      const stk = s as StockMovement;
+      return {
+        item_key: stk.itemKey ?? null,
+        occurred_at: stk.date ? stk.date.slice(0, 10) : null,
+        movement_type: stk.type ?? null,
+      };
+    }));
+  }
+  if (tracks('materialPriceHistory')) {
+    ops.push(...diffAndSync('material_price_history', prev.priceHistory, next.priceHistory, projectId, userId, h => ({
+      item_key: (h as PriceHistoryEntry).itemCode ?? null,
+    })));
+  }
+  if (tracks('budgetItems')) {
+    ops.push(...diffAndSync('budget_items', prev.budgetItems, next.budgetItems, projectId, userId, b => {
+      const bi = b as BudgetItem;
+      return {
+        item: bi.item ?? null,
+        code: bi.code ?? null,
+        source: bi.source ?? null,
+        task_id: bi.taskId ?? null,
+        additive_id: bi.additiveId ?? null,
+      };
+    }));
+  }
+  if (tracks('materialComparisons')) {
+    ops.push(...diffAndSync('material_comparisons', prev.materialComparisons, next.materialComparisons, projectId, userId, c => {
+      const mc = c as MaterialComparison;
+      return { name: mc.name ?? null, status: mc.status ?? null };
+    }));
+  }
+  if (tracks('analyticCompositions')) {
+    ops.push(...diffAndSync('analytic_compositions', prev.analyticCompositions, next.analyticCompositions, projectId, userId, a => ({
+      code: (a as AdditiveComposition).code ?? null,
+    })));
+  }
+  if (tracks('subcontracts')) {
+    ops.push(...diffAndSync('subcontracts', prev.subcontracts, next.subcontracts, projectId, userId, s => {
+      const subcontract = s as Subcontract;
+      return { name: subcontract.name, contractor_name: subcontract.contractorName, status: subcontract.status, contract_date: subcontract.contractDate, contracted_value: subcontract.contractedValue };
+    }));
+  }
+  if (tracks('taskDailyLogs')) ops.push(...diffAndSyncTaskLogs(prev.taskLogs, next.taskLogs, projectId, userId));
+  if (tracks('eapChapters')) ops.push(...diffAndSyncEAP('eap_chapters', prev.chapters, next.chapters, projectId, userId));
+  if (tracks('tasks')) ops.push(...diffAndSyncEAP('tasks', prev.tasks, next.tasks, projectId, userId));
 
 
   const results = await Promise.allSettled(ops);

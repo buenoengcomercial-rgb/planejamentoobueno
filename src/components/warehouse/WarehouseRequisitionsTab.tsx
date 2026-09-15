@@ -25,7 +25,11 @@ import {
   warehouseActorName,
 } from '@/lib/warehouse';
 import { deleteWarehouseAttachments } from '@/lib/warehouseAttachments';
-import { commitWarehouseOperation, type WarehouseCloudCommitResult } from '@/lib/warehouseCloudCommit';
+import {
+  commitWarehouseOperation,
+  type WarehouseCloudCommitResult,
+  type WarehouseCloudOperation,
+} from '@/lib/warehouseCloudCommit';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { flattenPhasesByChapter, getChapterNumbering } from '@/lib/chapters';
 import SignaturePad from './SignaturePad';
@@ -47,6 +51,14 @@ interface Props {
   onCloudOperationConfirmed?: (confirmation: WarehouseCloudCommitResult) => void | Promise<void>;
   /** Finaliza qualquer autosave anterior antes de iniciar a transação crítica. */
   onPrepareCloudOperation?: () => void | Promise<void>;
+  /** Mantém preparação, RPC e aplicação local sob uma única trava de navegação. */
+  onCommitCloudOperation?: (
+    before: Project,
+    after: Project,
+    operation: WarehouseCloudOperation,
+  ) => Promise<WarehouseCloudCommitResult>;
+  /** Mantém upload, transação e confirmação sob a mesma trava de navegação. */
+  onRunCriticalCloudOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
   onCommitWarehouseScoped?: (next: Project, domain: WarehouseScopedDomain) => Promise<Project>;
   auditActor?: WarehouseAuditActor;
   canDelete?: boolean;
@@ -212,7 +224,7 @@ export default function WarehouseRequisitionsTab(props: Props) {
   );
 }
 
-function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, auditActor, canDelete = false, canEdit = false, canSupplement = false }: Props) {
+function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onCommitCloudOperation, onRunCriticalCloudOperation, auditActor, canDelete = false, canEdit = false, canSupplement = false }: Props) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const wh = ensureWarehouse(project).warehouse!;
   const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
@@ -247,10 +259,15 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
     [project, wh.movements, wh.requisitions],
   );
   const currentOperationalDate = warehouseOperationalDate();
-  const applyCloudConfirmation = async (confirmation: WarehouseCloudCommitResult) => {
-    if (onCloudOperationConfirmed) await onCloudOperationConfirmed(confirmation);
-    else onProjectChange(confirmation.project);
-  };
+  const executeConfirmedOperation = (after: Project, operation: WarehouseCloudOperation) => executeCloudOperation(
+    project,
+    after,
+    operation,
+    { onCommitCloudOperation, onPrepareCloudOperation, onCloudOperationConfirmed, onProjectChange },
+  );
+  const runCriticalOperation = <T,>(operation: () => Promise<T>) => (
+    onRunCriticalCloudOperation ? onRunCriticalCloudOperation(operation) : operation()
+  );
   const isDateGroupExpanded = (dateGroup: RequisitionDateGroup) => dateExpansionOverrides.get(dateGroup.key) ?? dateGroup.date === currentOperationalDate;
   const toggleDateGroup = (dateGroup: RequisitionDateGroup) => setDateExpansionOverrides(current => {
     const next = new Map(current);
@@ -351,15 +368,9 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
       event.preventDefault();
       event.returnValue = '';
     };
-    const restoreCurrentPage = () => {
-      window.history.forward();
-      toast.warning('Aguarde a confirmação da retirada na nuvem.');
-    };
     window.addEventListener('beforeunload', preventUnload);
-    window.addEventListener('popstate', restoreCurrentPage);
     return () => {
       window.removeEventListener('beforeunload', preventUnload);
-      window.removeEventListener('popstate', restoreCurrentPage);
     };
   }, [saving]);
 
@@ -368,13 +379,11 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
     async () => {
       try {
         const next = hardDeleteRequisition(project, requisition.id, auditActor);
-        await onPrepareCloudOperation?.();
-        const confirmation = await commitWarehouseOperation(project, next, {
+        await executeConfirmedOperation(next, {
           type: 'hard_delete',
           requisitionId: requisition.id,
           operationKey: `hard-delete:${requisition.id}`,
         });
-        await applyCloudConfirmation(confirmation);
         try { await deleteWarehouseAttachments(requisition.deliveryAttachments); } catch { toast.warning('A retirada foi excluída, mas houve falha ao remover um anexo do Storage.'); }
         setExpandedRequisitionIds(current => {
           const expanded = new Set(current);
@@ -448,40 +457,40 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
     setErrors({});
 
     try {
-      setSaveStage(photos.length ? 'uploading' : 'committing');
-      const deliveryAttachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'withdrawals')));
-      setSaveStage('committing');
-      const result = createAndDeliverRequisition(project, {
-        date: form.date,
-        chapterId: chapter.id,
-        chapterName: chapter.name,
-        receiverName,
-        requesterName: receiverName,
-        notes: form.notes.trim() || undefined,
-        items: form.items,
-        signatureReceiver: form.signatureReceiver,
-        deliveryAttachments,
-        deliveryIdempotencyKey: form.deliveryIdempotencyKey,
-      }, { publishToDailyReport: false, actor: auditActor });
-      await onPrepareCloudOperation?.();
-      const confirmation = await commitWarehouseOperation(project, result.project, {
-        type: 'delivery',
-        requisitionId: result.requisitionId,
-        operationKey: form.deliveryIdempotencyKey,
+      await runCriticalOperation(async () => {
+        setSaveStage(photos.length ? 'uploading' : 'committing');
+        const deliveryAttachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'withdrawals')));
+        setSaveStage('committing');
+        const result = createAndDeliverRequisition(project, {
+          date: form.date,
+          chapterId: chapter.id,
+          chapterName: chapter.name,
+          receiverName,
+          requesterName: receiverName,
+          notes: form.notes.trim() || undefined,
+          items: form.items,
+          signatureReceiver: form.signatureReceiver,
+          deliveryAttachments,
+          deliveryIdempotencyKey: form.deliveryIdempotencyKey,
+        }, { publishToDailyReport: false, actor: auditActor });
+        const confirmation = await executeConfirmedOperation(result.project, {
+          type: 'delivery',
+          requisitionId: result.requisitionId,
+          operationKey: form.deliveryIdempotencyKey,
+        });
+        const confirmed = confirmation.project;
+        setExpandedRequisitionIds(current => new Set([...current, result.requisitionId]));
+        const canonicalRequisition = confirmed.warehouse?.requisitions.find(row => row.id === result.requisitionId);
+        if (canonicalRequisition) {
+          const confirmedDateKey = `${buildingLabel(confirmed, canonicalRequisition.chapterId).key}:${canonicalRequisition.date || 'data-nao-informada'}`;
+          setDateExpansionOverrides(current => new Map(current).set(confirmedDateKey, true));
+        }
+        setConfirmedNumber(canonicalRequisition?.number ?? '');
+        setSaveStage('confirmed');
+        toast.success('Retirada confirmada na nuvem e estoque baixado.');
+        await new Promise(resolve => window.setTimeout(resolve, WITHDRAWAL_CONFIRMATION_DELAY_MS));
+        reset();
       });
-      await applyCloudConfirmation(confirmation);
-      const confirmed = confirmation.project;
-      setExpandedRequisitionIds(current => new Set([...current, result.requisitionId]));
-      const canonicalRequisition = confirmed.warehouse?.requisitions.find(row => row.id === result.requisitionId);
-      if (canonicalRequisition) {
-        const confirmedDateKey = `${buildingLabel(confirmed, canonicalRequisition.chapterId).key}:${canonicalRequisition.date || 'data-nao-informada'}`;
-        setDateExpansionOverrides(current => new Map(current).set(confirmedDateKey, true));
-      }
-      setConfirmedNumber(canonicalRequisition?.number ?? '');
-      setSaveStage('confirmed');
-      toast.success('Retirada confirmada na nuvem e estoque baixado.');
-      await new Promise(resolve => window.setTimeout(resolve, WITHDRAWAL_CONFIRMATION_DELAY_MS));
-      reset();
     } catch (error) {
       setSaveStage('idle');
       setConfirmedNumber('');
@@ -643,8 +652,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
             {!wh.requisitions.length && <WarehouseEmptyState message="Nenhuma retirada registrada" hint="Use Nova retirada para começar." />}
           </div>
       </section>
-      <MaterialReturnDialog project={project} requisition={returnTarget} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onClose={() => setReturnTarget(null)} />
-      <RequisitionActionDialog project={project} requisition={actionTarget} auditActor={auditActor} canEditOriginal={canEdit} canEditSupplements={canSupplement} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onClose={() => setActionTarget(null)} />
+      <MaterialReturnDialog project={project} requisition={returnTarget} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onClose={() => setReturnTarget(null)} />
+      <RequisitionActionDialog project={project} requisition={actionTarget} auditActor={auditActor} canEditOriginal={canEdit} canEditSupplements={canSupplement} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onRunCriticalCloudOperation={onRunCriticalCloudOperation} onClose={() => setActionTarget(null)} />
       {confirmDialog}
     </div>
   );
@@ -766,7 +775,30 @@ function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupple
   </div>;
 }
 
-function SupplementDeliveryEditor({ project, requisition, supplement, auditActor, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onSavingChange, onClose }: {
+type CommitCloudOperation = NonNullable<Props['onCommitCloudOperation']>;
+
+async function executeCloudOperation(
+  before: Project,
+  after: Project,
+  operation: WarehouseCloudOperation,
+  handlers: {
+    onCommitCloudOperation?: CommitCloudOperation;
+    onPrepareCloudOperation?: Props['onPrepareCloudOperation'];
+    onCloudOperationConfirmed?: Props['onCloudOperationConfirmed'];
+    onProjectChange: Props['onProjectChange'];
+  },
+): Promise<WarehouseCloudCommitResult> {
+  if (handlers.onCommitCloudOperation) {
+    return handlers.onCommitCloudOperation(before, after, operation);
+  }
+  await handlers.onPrepareCloudOperation?.();
+  const confirmation = await commitWarehouseOperation(before, after, operation);
+  if (handlers.onCloudOperationConfirmed) await handlers.onCloudOperationConfirmed(confirmation);
+  else handlers.onProjectChange(confirmation.project);
+  return confirmation;
+}
+
+function SupplementDeliveryEditor({ project, requisition, supplement, auditActor, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onCommitCloudOperation, onSavingChange, onClose }: {
   project: Project;
   requisition: WarehouseRequisition;
   supplement: WarehouseRequisitionSupplement;
@@ -774,6 +806,7 @@ function SupplementDeliveryEditor({ project, requisition, supplement, auditActor
   onProjectChange: (project: Project) => void;
   onCloudOperationConfirmed?: (confirmation: WarehouseCloudCommitResult) => void | Promise<void>;
   onPrepareCloudOperation?: () => void | Promise<void>;
+  onCommitCloudOperation?: CommitCloudOperation;
   onSavingChange: (saving: boolean) => void;
   onClose: () => void;
 }) {
@@ -827,15 +860,12 @@ function SupplementDeliveryEditor({ project, requisition, supplement, auditActor
         reason: reason.trim(),
         idempotencyKey: operationKey,
       }, auditActor);
-      await onPrepareCloudOperation?.();
-      const confirmation = await commitWarehouseOperation(project, result.project, {
+      await executeCloudOperation(project, result.project, {
         type: 'supplement_correction',
         requisitionId: requisition.id,
         supplementId: supplement.id,
         operationKey,
-      });
-      if (onCloudOperationConfirmed) await onCloudOperationConfirmed(confirmation);
-      else onProjectChange(confirmation.project);
+      }, { onCommitCloudOperation, onPrepareCloudOperation, onCloudOperationConfirmed, onProjectChange });
       toast.success(items.length ? 'Complemento corrigido e estoque atualizado.' : 'Complemento estornado e estoque recomposto.');
       onClose();
     } catch (error) {
@@ -887,11 +917,13 @@ interface RequisitionActionDialogProps {
   onProjectChange: (project: Project) => void;
   onCloudOperationConfirmed?: (confirmation: WarehouseCloudCommitResult) => void | Promise<void>;
   onPrepareCloudOperation?: () => void | Promise<void>;
+  onCommitCloudOperation?: CommitCloudOperation;
+  onRunCriticalCloudOperation?: Props['onRunCriticalCloudOperation'];
   onClose: () => void;
 }
 
 /** Formulário único: retirada original, complementos confirmados e nova entrega. */
-function RequisitionActionDialog({ project, requisition, auditActor, canEditOriginal, canEditSupplements, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onClose }: RequisitionActionDialogProps) {
+function RequisitionActionDialog({ project, requisition, auditActor, canEditOriginal, canEditSupplements, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onCommitCloudOperation, onRunCriticalCloudOperation, onClose }: RequisitionActionDialogProps) {
   const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
   const numbering = useMemo(() => getChapterNumbering(project), [project]);
   const chapters = useMemo(() => flattenPhasesByChapter(project)
@@ -977,10 +1009,9 @@ function RequisitionActionDialog({ project, requisition, auditActor, canEditOrig
       const chapter = chapters.find(candidate => candidate.id === correctionChapterId);
       const operationKey = `${requisition.id}:correction:${JSON.stringify({ correctionItems, correctionChapterId, correctionReason: correctionReason.trim() })}`;
       const next = correctDeliveredRequisition(project, requisition.id, { items: correctionItems, chapterId: correctionChapterId, chapterName: chapter?.name, reason: correctionReason.trim(), idempotencyKey: operationKey }, auditActor);
-      await onPrepareCloudOperation?.();
-      const confirmation = await commitWarehouseOperation(project, next, { type: 'correction', requisitionId: requisition.id, operationKey });
-      if (onCloudOperationConfirmed) await onCloudOperationConfirmed(confirmation);
-      else onProjectChange(confirmation.project);
+      await executeCloudOperation(project, next, { type: 'correction', requisitionId: requisition.id, operationKey }, {
+        onCommitCloudOperation, onPrepareCloudOperation, onCloudOperationConfirmed, onProjectChange,
+      });
       toast.success('Retirada corrigida e histórico registrado.');
       onClose();
     } catch (error) {
@@ -995,14 +1026,16 @@ function RequisitionActionDialog({ project, requisition, auditActor, canEditOrig
     if (!signatureReceiver?.trim()) return void toast.error('Colete a assinatura de quem recebeu o complemento.');
     setSaving(true);
     try {
-      const attachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'withdrawals')));
-      const result = addRequisitionSupplement(project, { requisitionId: requisition.id, date: complementDate, receiverName: complementReceiver, signatureReceiver, notes: complementNotes.trim() || undefined, attachments, idempotencyKey: complementIdempotencyKey, items: complementItems }, auditActor, { publishToDailyReport: false });
-      await onPrepareCloudOperation?.();
-      const confirmation = await commitWarehouseOperation(project, result.project, { type: 'supplement', requisitionId: requisition.id, operationKey: complementIdempotencyKey });
-      if (onCloudOperationConfirmed) await onCloudOperationConfirmed(confirmation);
-      else onProjectChange(confirmation.project);
-      toast.success('Complemento registrado, exibido na requisição e estoque baixado.');
-      onClose();
+      const operation = async () => {
+        const attachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'withdrawals')));
+        const result = addRequisitionSupplement(project, { requisitionId: requisition.id, date: complementDate, receiverName: complementReceiver, signatureReceiver, notes: complementNotes.trim() || undefined, attachments, idempotencyKey: complementIdempotencyKey, items: complementItems }, auditActor, { publishToDailyReport: false });
+        await executeCloudOperation(project, result.project, { type: 'supplement', requisitionId: requisition.id, operationKey: complementIdempotencyKey }, {
+          onCommitCloudOperation, onPrepareCloudOperation, onCloudOperationConfirmed, onProjectChange,
+        });
+        toast.success('Complemento registrado, exibido na requisição e estoque baixado.');
+        onClose();
+      };
+      await (onRunCriticalCloudOperation ? onRunCriticalCloudOperation(operation) : operation());
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -1026,7 +1059,7 @@ function RequisitionActionDialog({ project, requisition, auditActor, canEditOrig
             {correctionBlocked && canEditOriginal && <div className="border-t bg-warning/10 p-3 text-sm">Esta retirada possui devolução registrada; a edição original está bloqueada.</div>}
           </section>
 
-          {!!requisition.supplements?.length && <section className="space-y-3"><div><h3 className="text-sm font-bold">Complementos confirmados</h3><p className="text-xs text-muted-foreground">Cada entrega permanece identificada, embora a lista principal some materiais iguais.</p></div>{requisition.supplements.map(supplement => canEditSupplements ? <SupplementDeliveryEditor key={supplement.id} project={project} requisition={requisition} supplement={supplement} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onSavingChange={setSupplementSaving} onClose={onClose} /> : <section key={supplement.id} className="rounded-xl border bg-muted/20 p-3"><div className="flex items-center justify-between gap-2"><strong>Complemento de {formatOperationalDate(supplement.date)}</strong><WarehouseStatusBadge label={supplement.status === 'cancelled' ? 'Estornado' : 'Confirmado'} tone={supplement.status === 'cancelled' ? 'neutral' : 'success'} /></div><div className="mt-2 space-y-1 text-sm">{(supplement.status === 'cancelled' ? supplement.cancelledItems ?? supplement.items : supplement.items).map(item => <div key={item.movementId ?? item.itemKey} className={supplement.status === 'cancelled' ? 'line-through text-muted-foreground' : ''}>{materialDisplayName(item.code, item.description)} · {item.quantity.toLocaleString('pt-BR')} {item.unit}</div>)}</div></section>)}</section>}
+          {!!requisition.supplements?.length && <section className="space-y-3"><div><h3 className="text-sm font-bold">Complementos confirmados</h3><p className="text-xs text-muted-foreground">Cada entrega permanece identificada, embora a lista principal some materiais iguais.</p></div>{requisition.supplements.map(supplement => canEditSupplements ? <SupplementDeliveryEditor key={supplement.id} project={project} requisition={requisition} supplement={supplement} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onSavingChange={setSupplementSaving} onClose={onClose} /> : <section key={supplement.id} className="rounded-xl border bg-muted/20 p-3"><div className="flex items-center justify-between gap-2"><strong>Complemento de {formatOperationalDate(supplement.date)}</strong><WarehouseStatusBadge label={supplement.status === 'cancelled' ? 'Estornado' : 'Confirmado'} tone={supplement.status === 'cancelled' ? 'neutral' : 'success'} /></div><div className="mt-2 space-y-1 text-sm">{(supplement.status === 'cancelled' ? supplement.cancelledItems ?? supplement.items : supplement.items).map(item => <div key={item.movementId ?? item.itemKey} className={supplement.status === 'cancelled' ? 'line-through text-muted-foreground' : ''}>{materialDisplayName(item.code, item.description)} · {item.quantity.toLocaleString('pt-BR')} {item.unit}</div>)}</div></section>)}</section>}
 
           {canEditSupplements && <section className="rounded-xl border border-primary/25">
             <div className="border-b bg-primary/5 p-3"><h3 className="text-sm font-bold text-primary">Adicionar complemento</h3><p className="text-xs text-muted-foreground">Acrescente materiais na mesma requisição sem alterar as entregas anteriores.</p></div>
@@ -1038,13 +1071,14 @@ function RequisitionActionDialog({ project, requisition, auditActor, canEditOrig
     </DialogContent>
   </Dialog>;
 }
-function MaterialReturnDialog({ project, requisition, auditActor, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onClose }: {
+function MaterialReturnDialog({ project, requisition, auditActor, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onCommitCloudOperation, onClose }: {
   project: Project;
   requisition: WarehouseRequisition | null;
   auditActor?: WarehouseAuditActor;
   onProjectChange: (project: Project) => void;
   onCloudOperationConfirmed?: (confirmation: WarehouseCloudCommitResult) => void | Promise<void>;
   onPrepareCloudOperation?: () => void | Promise<void>;
+  onCommitCloudOperation?: CommitCloudOperation;
   onClose: () => void;
 }) {
   const returnable = useMemo(() => requisition ? getReturnableRequisitionItems(project, requisition.id) : [], [project, requisition]);
@@ -1095,12 +1129,9 @@ function MaterialReturnDialog({ project, requisition, auditActor, onProjectChang
         idempotencyKey,
         items,
       }, auditActor);
-      await onPrepareCloudOperation?.();
-      const confirmation = await commitWarehouseOperation(project, result.project, {
+      await executeCloudOperation(project, result.project, {
         type: 'return', requisitionId: requisition.id, operationKey: idempotencyKey,
-      });
-      if (onCloudOperationConfirmed) await onCloudOperationConfirmed(confirmation);
-      else onProjectChange(confirmation.project);
+      }, { onCommitCloudOperation, onPrepareCloudOperation, onCloudOperationConfirmed, onProjectChange });
       toast.success(`Devolução ${result.returnNumber} registrada e saldo recomposto.`);
       reset();
       onClose();

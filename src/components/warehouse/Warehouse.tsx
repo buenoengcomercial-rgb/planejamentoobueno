@@ -6,9 +6,14 @@ import { ensureWarehouse, panelSummary } from '@/lib/warehouse';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { scheduleIdlePreload } from '@/lib/idlePreload';
 import './warehouse-visual.css';
-import type { WarehouseCloudCommitResult } from '@/lib/warehouseCloudCommit';
+import type { WarehouseCloudCommitResult, WarehouseCloudOperation } from '@/lib/warehouseCloudCommit';
 import type { WarehouseScopedDomain } from '@/lib/warehouseScopedCommit';
 import { toast } from 'sonner';
+import {
+  readWarehouseTab,
+  warehouseTabStorageKey,
+  type WarehouseTab,
+} from '@/lib/projectDataScope';
 
 const loadWarehousePanel = () => import('./WarehousePanel');
 const loadWarehouseStockTab = () => import('./WarehouseStockTab');
@@ -48,23 +53,6 @@ const WAREHOUSE_TABS = [
   { value: 'inventario', label: 'Inventário', icon: ListChecks },
 ] as const;
 
-type WarehouseTab = typeof WAREHOUSE_TABS[number]['value'];
-
-const warehouseTabStorageKey = (projectId: string) => `obraplanner:warehouse-tab:${projectId}`;
-
-const readWarehouseTab = (projectId: string, canViewPanel: boolean): WarehouseTab => {
-  const fallback: WarehouseTab = canViewPanel ? 'painel' : 'notas';
-  if (typeof window === 'undefined') return fallback;
-  try {
-    const stored = window.sessionStorage.getItem(warehouseTabStorageKey(projectId));
-    const isWarehouseTab = WAREHOUSE_TABS.some(item => item.value === stored);
-    if (!isWarehouseTab || (!canViewPanel && stored === 'painel')) return fallback;
-    return stored as WarehouseTab;
-  } catch {
-    return fallback;
-  }
-};
-
 const NEXT_WAREHOUSE_TAB_PRELOAD: Record<WarehouseTab, () => Promise<unknown>> = {
   painel: loadWarehouseRequisitionsTab,
   notas: loadWarehouseStockTab,
@@ -83,6 +71,12 @@ interface Props {
   onCommitProject?: (next: Project) => Promise<void>;
   onCloudWarehouseOperationConfirmed?: (confirmation: WarehouseCloudCommitResult) => void | Promise<void>;
   onPrepareCloudWarehouseOperation?: () => void | Promise<void>;
+  onCommitCloudWarehouseOperation?: (
+    before: Project,
+    after: Project,
+    operation: WarehouseCloudOperation,
+  ) => Promise<WarehouseCloudCommitResult>;
+  onRunCriticalCloudWarehouseOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
   onCommitWarehouseScoped?: (next: Project, domain: WarehouseScopedDomain) => Promise<Project>;
   canManageFiscalNotes?: boolean;
   canReviewFiscalCosts?: boolean;
@@ -97,17 +91,25 @@ interface Props {
   onSaveStorageMaintenanceProject?: (project: Project, expectedUpdatedAt: string) => Promise<string>;
   storageMaintenanceOrganizationId?: string;
   auditActor?: WarehouseAuditActor;
+  activeTab?: WarehouseTab;
+  onActiveTabChange?: (tab: WarehouseTab) => void;
+  isTabDataReady?: boolean;
 }
 
-export default function Warehouse({ project, onProjectChange, onCommitProject, onCloudWarehouseOperationConfirmed, onPrepareCloudWarehouseOperation, onCommitWarehouseScoped, onSaveStorageMaintenanceProject, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canSupplementRequisitions = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor }: Props) {
-  const [tab, setTab] = useState<WarehouseTab>(() => readWarehouseTab(project.id, canViewPanel));
+export default function Warehouse({ project, onProjectChange, onCommitProject, onCloudWarehouseOperationConfirmed, onPrepareCloudWarehouseOperation, onCommitCloudWarehouseOperation, onRunCriticalCloudWarehouseOperation, onCommitWarehouseScoped, onSaveStorageMaintenanceProject, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canSupplementRequisitions = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor, activeTab, onActiveTabChange, isTabDataReady = true }: Props) {
+  const [internalTab, setInternalTab] = useState<WarehouseTab>(() => readWarehouseTab(project.id, canViewPanel));
+  const tab = activeTab ?? internalTab;
+  const setTab = useCallback((next: WarehouseTab) => {
+    setInternalTab(next);
+    onActiveTabChange?.(next);
+  }, [onActiveTabChange]);
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
   useEffect(() => {
     if (ensured !== project) onProjectChange(ensured);
   }, [ensured, project, onProjectChange]);
   useEffect(() => {
     if (!canViewPanel && tab === 'painel') setTab('notas');
-  }, [canViewPanel, tab]);
+  }, [canViewPanel, setTab, tab]);
   useEffect(() => {
     try {
       window.sessionStorage.setItem(warehouseTabStorageKey(project.id), tab);
@@ -116,7 +118,9 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
     }
   }, [project.id, tab]);
   useEffect(() => scheduleIdlePreload(NEXT_WAREHOUSE_TAB_PRELOAD[tab]), [tab]);
-  const summary = useMemo(() => panelSummary(ensured), [ensured]);
+  // O resumo exige várias coleções de todo o Almoxarifado. Fora do Painel,
+  // não deixe esses indicadores bloquearem a subaba operacional escolhida.
+  const summary = useMemo(() => tab === 'painel' ? panelSummary(ensured) : null, [ensured, tab]);
   const visibleTabs = canViewPanel
     ? WAREHOUSE_TABS
     : WAREHOUSE_TABS.filter(item => item.value !== 'painel');
@@ -147,13 +151,15 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
           </div>
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
-        <span className="text-xs text-muted-foreground">
-          Abaixo do mínimo: <strong className="text-destructive">{summary.underMinCount}</strong>
-          <span className="mx-1.5">·</span>
-          Termos abertos: <strong className="text-foreground">{summary.openCustodyCount}</strong>
-        </span>
-        {canOptimizeStorage && <Suspense fallback={null}><AttachmentOptimizationPanel project={ensured} onProjectChange={onProjectChange} onCommitProject={onCommitProject} /></Suspense>}
-        {canOptimizeStorage && onSaveStorageMaintenanceProject && storageMaintenanceOrganizationId && <Suspense fallback={null}><GlobalStorageMaintenancePanel currentProject={ensured} onCurrentProjectChange={onProjectChange} saveProject={onSaveStorageMaintenanceProject} organizationId={storageMaintenanceOrganizationId} /></Suspense>}
+          {summary && (
+            <span className="text-xs text-muted-foreground">
+              Abaixo do mínimo: <strong className="text-destructive">{summary.underMinCount}</strong>
+              <span className="mx-1.5">·</span>
+              Termos abertos: <strong className="text-foreground">{summary.openCustodyCount}</strong>
+            </span>
+          )}
+          {canOptimizeStorage && <Suspense fallback={null}><AttachmentOptimizationPanel project={ensured} onProjectChange={onProjectChange} onCommitProject={onCommitProject} /></Suspense>}
+          {canOptimizeStorage && onSaveStorageMaintenanceProject && storageMaintenanceOrganizationId && <Suspense fallback={null}><GlobalStorageMaintenancePanel currentProject={ensured} onCurrentProjectChange={onProjectChange} saveProject={onSaveStorageMaintenanceProject} organizationId={storageMaintenanceOrganizationId} /></Suspense>}
         </div>
       </div>
 
@@ -177,48 +183,52 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
           ))}
         </TabsList>
 
-        <Suspense fallback={<WarehouseAreaFallback />}>
-        {canViewPanel && (
-          <TabsContent value="painel" className="mt-3">
-            <WarehousePanel project={ensured} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} />
-          </TabsContent>
+        {isTabDataReady ? (
+          <Suspense fallback={<WarehouseAreaFallback />}>
+            {canViewPanel && (
+              <TabsContent value="painel" className="mt-3">
+                <WarehousePanel project={ensured} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} />
+              </TabsContent>
+            )}
+            <TabsContent value="notas" className="mt-3">
+              <WarehouseFiscalNotesTab
+                project={ensured}
+                onProjectChange={commitReceiptChildChange}
+                onCommitProject={onCommitProject}
+                onCommitWarehouseScoped={onCommitWarehouseScoped}
+                canManage={canManageFiscalNotes}
+                canReviewCosts={canReviewFiscalCosts}
+                canEditPosted={canEditPostedWarehouseRecords}
+                canDelete={canDeleteWarehouseRecords}
+                canReviewPackagingConversions={canEditPostedWarehouseRecords}
+                auditActor={auditActor}
+              />
+            </TabsContent>
+            <TabsContent value="requisicoes" className="mt-3">
+              <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudWarehouseOperationConfirmed} onPrepareCloudOperation={onPrepareCloudWarehouseOperation} onCommitCloudOperation={onCommitCloudWarehouseOperation} onRunCriticalCloudOperation={onRunCriticalCloudWarehouseOperation} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canDelete={canDeleteWarehouseRecords} canEdit={canEditPostedWarehouseRecords} canSupplement={canSupplementRequisitions} />
+            </TabsContent>
+            <TabsContent value="materiais-retirados" className="mt-3">
+              <WarehouseWithdrawnMaterialsTab project={ensured} />
+            </TabsContent>
+            <TabsContent value="equipamentos" className="mt-3">
+              <WarehouseEquipmentsTab project={ensured} onProjectChange={commitEquipmentChildChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} canDelete={canDeleteWarehouseRecords} canManageGroups={canManageEquipmentGroups} canEdit={canArchiveWarehouseRecords} />
+            </TabsContent>
+            <TabsContent value="estoque" className="mt-3">
+              <WarehouseStockTab onNewEntry={() => setTab('notas')} project={ensured} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} canDelete={canDeleteWarehouseRecords} />
+            </TabsContent>
+            <TabsContent value="materiais-orcamento" className="mt-3">
+              <WarehouseBudgetMaterialsTab project={ensured} />
+            </TabsContent>
+            <TabsContent value="movimentos" className="mt-3">
+              <WarehouseMovementsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
+            </TabsContent>
+            <TabsContent value="inventario" className="mt-3">
+              <WarehouseInventoryTab project={ensured} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canApprove={canApproveInventory} canDelete={canDeleteWarehouseRecords} />
+            </TabsContent>
+          </Suspense>
+        ) : (
+          <WarehouseAreaFallback />
         )}
-        <TabsContent value="notas" className="mt-3">
-          <WarehouseFiscalNotesTab
-            project={ensured}
-            onProjectChange={commitReceiptChildChange}
-            onCommitProject={onCommitProject}
-            onCommitWarehouseScoped={onCommitWarehouseScoped}
-            canManage={canManageFiscalNotes}
-            canReviewCosts={canReviewFiscalCosts}
-            canEditPosted={canEditPostedWarehouseRecords}
-            canDelete={canDeleteWarehouseRecords}
-            canReviewPackagingConversions={canEditPostedWarehouseRecords}
-            auditActor={auditActor}
-          />
-        </TabsContent>
-        <TabsContent value="requisicoes" className="mt-3">
-          <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudWarehouseOperationConfirmed} onPrepareCloudOperation={onPrepareCloudWarehouseOperation} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canDelete={canDeleteWarehouseRecords} canEdit={canEditPostedWarehouseRecords} canSupplement={canSupplementRequisitions} />
-        </TabsContent>
-        <TabsContent value="materiais-retirados" className="mt-3">
-          <WarehouseWithdrawnMaterialsTab project={ensured} />
-        </TabsContent>
-        <TabsContent value="equipamentos" className="mt-3">
-          <WarehouseEquipmentsTab project={ensured} onProjectChange={commitEquipmentChildChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} canDelete={canDeleteWarehouseRecords} canManageGroups={canManageEquipmentGroups} canEdit={canArchiveWarehouseRecords} />
-        </TabsContent>
-        <TabsContent value="estoque" className="mt-3">
-          <WarehouseStockTab onNewEntry={() => setTab('notas')} project={ensured} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} canDelete={canDeleteWarehouseRecords} />
-        </TabsContent>
-        <TabsContent value="materiais-orcamento" className="mt-3">
-          <WarehouseBudgetMaterialsTab project={ensured} />
-        </TabsContent>
-        <TabsContent value="movimentos" className="mt-3">
-          <WarehouseMovementsTab project={ensured} onProjectChange={onProjectChange} auditActor={auditActor} />
-        </TabsContent>
-        <TabsContent value="inventario" className="mt-3">
-          <WarehouseInventoryTab project={ensured} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canApprove={canApproveInventory} canDelete={canDeleteWarehouseRecords} />
-        </TabsContent>
-        </Suspense>
       </Tabs>
     </div>
   );

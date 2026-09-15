@@ -1,4 +1,5 @@
 import type { Project } from '@/types/project';
+import type { ProjectCollectionKey } from '@/lib/projectDataScope';
 
 export const PROJECT_DRAFT_VERSION = 2 as const;
 export const LEGACY_PROJECT_DRAFT_VERSION = 1 as const;
@@ -9,6 +10,14 @@ export interface StoredProjectDraft {
   savedAt?: string;
   localDraftUpdatedAt: string;
   project: Project;
+  /** Coleções realmente carregadas quando o rascunho foi criado. */
+  pendingNormalizedSync?: boolean;
+  loadedCollections?: ProjectCollectionKey[];
+}
+
+export interface ProjectDraftWriteOptions {
+  pendingNormalizedSync?: boolean;
+  loadedCollections?: readonly ProjectCollectionKey[];
 }
 
 export type ProjectDraftInspection =
@@ -64,6 +73,10 @@ export function readStoredProjectDraft(projectId: string, storage: Storage | nul
       savedAt: parsed.savedAt,
       localDraftUpdatedAt,
       project: parsed.project,
+      pendingNormalizedSync: parsed.pendingNormalizedSync === true,
+      loadedCollections: Array.isArray(parsed.loadedCollections)
+        ? parsed.loadedCollections
+        : undefined,
     };
   } catch {
     return null;
@@ -87,6 +100,7 @@ export function writeProjectDraft(
   project: Project,
   baseUpdatedAt: string | null,
   storage: Storage | null = defaultStorage(),
+  options: ProjectDraftWriteOptions = {},
 ): StoredProjectDraft | null {
   if (!storage) return null;
   if (storageWithUnavailableDraftQuota.has(storage)) return null;
@@ -98,6 +112,10 @@ export function writeProjectDraft(
     savedAt: now,
     localDraftUpdatedAt: now,
     project: safeProject,
+    pendingNormalizedSync: options.pendingNormalizedSync === true || undefined,
+    loadedCollections: options.loadedCollections?.length
+      ? [...new Set(options.loadedCollections)]
+      : undefined,
   };
   try {
     storage.setItem(projectDraftKey(project.id), JSON.stringify(draft));

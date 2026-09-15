@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { hydrateAuditLogRow, normalizedDeletePolicy } from '@/lib/projectSync';
+import {
+  clearCloudSnapshot,
+  hydrateAuditLogRow,
+  normalizedDeletePolicy,
+  ProjectSnapshotUnavailableError,
+  syncCollectionsToCloud,
+} from '@/lib/projectSync';
+import type { Project } from '@/types/project';
 
 describe('proteção contra exclusão por snapshot desatualizado', () => {
   it('nunca interpreta ausência local como exclusão de requisição, Diário ou auditoria', () => {
@@ -19,5 +26,17 @@ describe('proteção contra exclusão por snapshot desatualizado', () => {
       id: 'audit-official-id',
       data: { title: 'Registro legado', id: 'identificador-incorreto' },
     })).toMatchObject({ id: 'audit-official-id', title: 'Registro legado' });
+  });
+
+  it('falha fechado quando não existe fotografia das coleções carregadas', async () => {
+    const project = {
+      id: 'obra-parcial',
+      name: 'Obra parcial',
+      phases: [],
+      totalBudget: 0,
+    } as Project;
+    clearCloudSnapshot(project.id);
+
+    await expect(syncCollectionsToCloud(project)).rejects.toBeInstanceOf(ProjectSnapshotUnavailableError);
   });
 });

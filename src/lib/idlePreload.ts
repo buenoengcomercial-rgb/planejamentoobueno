@@ -3,7 +3,7 @@ interface ConnectionHint {
   effectiveType?: string;
 }
 
-interface IdlePreloadWindow extends Window {
+interface IdlePreloadWindow {
   requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
   cancelIdleCallback?: (id: number) => void;
 }
@@ -25,7 +25,7 @@ export function scheduleIdlePreload(
   { delayMs = 1200, timeoutMs = 4000 }: { delayMs?: number; timeoutMs?: number } = {},
 ): () => void {
   if (typeof window === 'undefined' || typeof document === 'undefined') return () => undefined;
-  const idleWindow = window as IdlePreloadWindow;
+  const idleWindow = window as unknown as IdlePreloadWindow;
   const connection = (navigator as Navigator & { connection?: ConnectionHint }).connection;
   if (!canIdlePreload({
     visibilityState: document.visibilityState,

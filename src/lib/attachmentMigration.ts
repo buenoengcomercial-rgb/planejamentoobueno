@@ -1,7 +1,12 @@
 import type { Project } from '@/types/project';
 import { supabase } from '@/integrations/supabase/client';
 import { ATTACHMENT_OPTIMIZATION_VERSION, optimizeStorageAttachment } from './attachmentOptimization';
-import { listCloudProjects, loadCloudProjectRecord, type CloudProjectMeta } from './cloudProjects';
+import {
+  discardCloudProjectRecord,
+  listCloudProjects,
+  loadCloudProjectRecord,
+  type CloudProjectMeta,
+} from './cloudProjects';
 
 export type MigratableAttachment = {
   id: string;
@@ -83,7 +88,8 @@ function objectBytes(metadata: unknown): number {
 async function listStorageTree(prefix: string): Promise<StorageObjectAudit[]> {
   const objects: StorageObjectAudit[] = [];
   let offset = 0;
-  do {
+  let hasMore = true;
+  while (hasMore) {
     const { data, error } = await supabase.storage.from(BUCKET).list(prefix, { limit: 100, offset, sortBy: { column: 'name', order: 'asc' } });
     if (error) throw new Error(`Não foi possível listar o Storage de ${prefix}: ${error.message}`);
     const batch = data ?? [];
@@ -92,9 +98,9 @@ async function listStorageTree(prefix: string): Promise<StorageObjectAudit[]> {
       if (item.id) objects.push({ path, bytes: objectBytes(item.metadata) });
       else objects.push(...await listStorageTree(path));
     }
-    if (batch.length < 100) break;
-    offset += batch.length;
-  } while (true);
+    hasMore = batch.length >= 100;
+    if (hasMore) offset += batch.length;
+  }
   return objects;
 }
 
@@ -103,14 +109,23 @@ export async function auditOrganizationStorage(): Promise<StorageProjectAudit[]>
   const projects = await listCloudProjects();
   const result: StorageProjectAudit[] = [];
   for (const meta of projects) {
-    const record = await loadCloudProjectRecord(meta.id);
+    // Esta é uma leitura auxiliar: o projeto não será adotado pela UI. Portanto,
+    // a hidratação precisa permanecer isolada do snapshot usado pelo autosave da
+    // obra aberta. A leitura estrita também impede classificar como órfão um
+    // arquivo cuja coleção tenha falhado ao carregar.
+    const record = await loadCloudProjectRecord(meta.id, {
+      strict: true,
+      deferSnapshot: true,
+    });
     if (!record) continue;
-    const attachments = collectProjectAttachments(record.project);
+    const inspectedProject = record.project;
+    discardCloudProjectRecord(record);
+    const attachments = collectProjectAttachments(inspectedProject);
     const referenced = new Set(attachments.flatMap(attachment => attachment.storagePath ? [attachment.storagePath] : []));
     const objects = await listStorageTree(meta.id);
     result.push({
       meta,
-      project: record.project,
+      project: inspectedProject,
       updatedAt: record.updatedAt,
       attachments,
       candidates: attachments.filter(needsOptimization),

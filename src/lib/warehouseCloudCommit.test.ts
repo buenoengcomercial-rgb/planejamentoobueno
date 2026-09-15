@@ -190,7 +190,7 @@ describe('confirmação transacional do Almoxarifado', () => {
       date: '2026-09-13', receiverName: 'CANANDA', signatureReceiver: 'assinatura',
       idempotencyKey: 'supplement-1',
       items: [{ itemKey: 'placa', description: 'Placa', unit: 'UN', quantity: 3 }],
-    }, { actor: { userId: 'user-1', userName: 'Gabriel' }, publishToDailyReport: false });
+    }, { userId: 'user-1', userName: 'Gabriel' }, { publishToDailyReport: false });
     const corrected = correctRequisitionSupplement(complemented.project, {
       requisitionId: delivered.requisitionId,
       supplementId: complemented.supplementId,

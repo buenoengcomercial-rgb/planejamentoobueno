@@ -2,13 +2,18 @@ import { supabase } from '@/integrations/supabase/client';
 import { Project } from '@/types/project';
 import { sampleProject } from '@/data/sampleProject';
 import {
+  confirmHydratedProjectCollections,
+  discardHydratedProjectCollections,
+  getHydratedProjectCollections,
   hydrateProjectFromCloud,
   stripNormalizedCollections,
   syncCollectionsToCloud,
   clearCloudSnapshot,
   setCloudSnapshot,
   buildContractImportPayload,
+  assertProjectSnapshotAvailable,
 } from '@/lib/projectSync';
+import type { ProjectCollectionKey } from '@/lib/projectDataScope';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
 import { prepareWarehouseTestReset } from '@/lib/warehouseReset';
 
@@ -25,6 +30,33 @@ export interface CloudProjectRecord {
   warehouseVersion: number | null;
   warehouseUpdatedAt: string | null;
   repairApplied?: boolean;
+  loadedCollections: ProjectCollectionKey[];
+}
+
+export interface CloudProjectLoadOptions {
+  collections?: readonly ProjectCollectionKey[];
+  strict?: boolean;
+  /**
+   * Mantido por compatibilidade. Toda resposta agora é adiada por padrão e só
+   * avança o snapshot por `confirmCloudProjectRecord`.
+   */
+  deferSnapshot?: boolean;
+}
+
+const pendingCloudRecordHydrations = new WeakMap<CloudProjectRecord, Project>();
+
+export function confirmCloudProjectRecord(record: CloudProjectRecord): ProjectCollectionKey[] {
+  const hydrated = pendingCloudRecordHydrations.get(record);
+  if (!hydrated) return record.loadedCollections;
+  pendingCloudRecordHydrations.delete(record);
+  return confirmHydratedProjectCollections(hydrated, { replaceExisting: true });
+}
+
+export function discardCloudProjectRecord(record: CloudProjectRecord): void {
+  const hydrated = pendingCloudRecordHydrations.get(record);
+  if (!hydrated) return;
+  pendingCloudRecordHydrations.delete(record);
+  discardHydratedProjectCollections(hydrated);
 }
 
 export interface CloudProjectVersion {
@@ -56,8 +88,13 @@ export async function listCloudProjects(): Promise<CloudProjectMeta[]> {
 }
 
 export async function loadCloudProject(id: string): Promise<Project | null> {
-  const record = await loadCloudProjectRecord(id);
-  return record?.project ?? null;
+  const record = await loadCloudProjectRecord(id, { strict: true, deferSnapshot: true });
+  if (!record) return null;
+  const project = record.project;
+  // Esta API devolve apenas o objeto e, portanto, não oferece ao chamador um
+  // token para confirmar adoção. Trate-a sempre como leitura auxiliar.
+  discardCloudProjectRecord(record);
+  return project;
 }
 
 /** O projeto principal foi salvo, mas uma coleção normalizada ficou pendente. */
@@ -105,7 +142,10 @@ export async function getCloudProjectVersion(id: string): Promise<CloudProjectVe
   };
 }
 
-export async function loadCloudProjectRecord(id: string): Promise<CloudProjectRecord | null> {
+export async function loadCloudProjectRecord(
+  id: string,
+  options: CloudProjectLoadOptions = {},
+): Promise<CloudProjectRecord | null> {
   const current = await supabase
     .from('projects')
     .select('id, name, data_json, updated_at, warehouse_version, warehouse_updated_at')
@@ -125,16 +165,30 @@ export async function loadCloudProjectRecord(id: string): Promise<CloudProjectRe
   if (!data) return null;
   const proj = (data.data_json ?? {}) as unknown as Project;
   const base: Project = { ...proj, id: data.id, name: data.name };
-  // Hidrata coleções normalizadas (almoxarifado, diários, apontamentos).
-  const hydrated = await hydrateProjectFromCloud(base);
-  const repaired = repairProjectAnalyticLinks(hydrated);
-  return {
+  // Hidrata apenas as coleções necessárias para a rota atual. Sem escopo
+  // explícito, mantém o carregamento completo usado por importação e backup.
+  const hydrated = await hydrateProjectFromCloud(base, options);
+  const loadedCollections = getHydratedProjectCollections(hydrated);
+  const loaded = new Set(loadedCollections);
+  const canRepairAnalyticLinks = loaded.has('budgetItems')
+    && loaded.has('analyticCompositions')
+    && loaded.has('additives');
+  const repaired = canRepairAnalyticLinks
+    ? repairProjectAnalyticLinks(hydrated)
+    : { project: hydrated, changed: false };
+  const record: CloudProjectRecord = {
     project: repaired.project,
     updatedAt: data.updated_at,
     warehouseVersion,
     warehouseUpdatedAt,
     repairApplied: repaired.changed,
+    loadedCollections,
   };
+  // Ler não significa adotar. Todas as respostas permanecem pendentes até o
+  // chamador validar obra/rota/versão e confirmar explicitamente o registro.
+  // Isso impede uma leitura auxiliar de ampliar o snapshot de uma UI parcial.
+  pendingCloudRecordHydrations.set(record, hydrated);
+  return record;
 }
 
 async function getCurrentUserId(): Promise<string | undefined> {
@@ -153,6 +207,9 @@ export async function upsertCloudProject(project: Project, organizationId: strin
   const slim = stripNormalizedCollections(project);
 
   if (expectedUpdatedAt) {
+    // Falhar antes do PATCH pai evita afirmar um salvamento parcial quando a
+    // fotografia necessária ao diff foi invalidada.
+    assertProjectSnapshotAvailable(project.id);
     const { data, error } = await supabase
       .from('projects')
       .update({
@@ -169,7 +226,10 @@ export async function upsertCloudProject(project: Project, organizationId: strin
     try {
       await syncCollectionsToCloud(project, userId);
     } catch (syncError) {
-      clearCloudSnapshot(project.id);
+      // `syncCollectionsToCloud` só avança o snapshot depois que todas as
+      // operações terminam. Preserve a fotografia anterior para que uma falha
+      // parcial possa ser repetida de forma idempotente, sem transformar dados
+      // ainda não confirmados em uma carga "sem snapshot".
       throw new CloudProjectPartialSyncError(data.updated_at, syncError);
     }
     return data.updated_at;
@@ -182,6 +242,7 @@ export async function upsertCloudProject(project: Project, organizationId: strin
     .maybeSingle();
   if (existingError) throw existingError;
   const isNewProject = !existing;
+  if (!isNewProject) assertProjectSnapshotAvailable(project.id);
   if (isNewProject && project.contractSchemaVersion === 2) {
     const contractPayload = buildContractImportPayload(project);
     const { data, error } = await (supabase.rpc as unknown as (
@@ -217,18 +278,23 @@ export async function upsertCloudProject(project: Project, organizationId: strin
   const { data, error } = await parentQuery.select('updated_at').single();
   if (error) throw error;
   try {
-    await syncCollectionsToCloud(project, userId);
+    await syncCollectionsToCloud(project, userId, {
+      allowCompleteWithoutSnapshot: isNewProject,
+    });
     return data.updated_at;
   } catch (syncError) {
-    clearCloudSnapshot(project.id);
     if (isNewProject) {
+      clearCloudSnapshot(project.id);
       const rollback = await supabase
         .from('projects')
         .delete()
         .eq('id', project.id)
-        .eq('organization_id', organizationId);
-      if (rollback.error) {
-        throw new Error(`A importacao falhou e a obra incompleta nao pode ser removida automaticamente: ${rollback.error.message}`);
+        .eq('organization_id', organizationId)
+        .select('id')
+        .maybeSingle();
+      if (rollback.error || rollback.data?.id !== project.id) {
+        const detail = rollback.error?.message || 'o servidor não confirmou a remoção do registro';
+        throw new Error(`A importacao falhou e a obra incompleta nao pode ser removida automaticamente: ${detail}`);
       }
       // Em uma criação inicial, o rollback também removeu a cópia de segurança
       // do projeto. Portanto, essa falha ainda é integral e deve ser reportada
@@ -250,26 +316,36 @@ export async function createCloudProject(name: string, organizationId: string, b
     totalBudget: 0,
     ...base,
   };
-  const { error } = await supabase
-    .from('projects')
-    .insert([{
-      id: seed.id,
-      organization_id: organizationId,
-      name: seed.name,
-      data_json: seed as unknown as import('@/integrations/supabase/types').Json,
-    }])
-    .select('id')
-    .single();
-  if (error) throw error;
+  // Use o mesmo fluxo integral das importações: primeiro confirma o registro
+  // pai e todas as coleções normalizadas (com rollback compensatório em caso
+  // de falha), e somente então o snapshot passa a representar dados salvos.
+  await upsertCloudProject(seed, organizationId);
   return seed;
 }
 
-export async function renameCloudProject(id: string, newName: string, organizationId: string): Promise<Project | null> {
-  const proj = await loadCloudProject(id);
-  if (!proj) return null;
-  const updated = { ...proj, name: newName };
-  await upsertCloudProject(updated, organizationId);
-  return updated;
+export async function renameCloudProject(id: string, newName: string, organizationId: string): Promise<CloudProjectRecord | null> {
+  const record = await loadCloudProjectRecord(id, { strict: true, deferSnapshot: true });
+  if (!record) return null;
+  try {
+    // Renomear não precisa regravar nenhuma coleção normalizada. A trava
+    // otimista evita sobrescrever até mesmo o nome alterado em outro aparelho.
+    const { data, error } = await supabase
+      .from('projects')
+      .update({ name: newName })
+      .eq('id', id)
+      .eq('organization_id', organizationId)
+      .eq('updated_at', record.updatedAt)
+      .select('updated_at')
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new CloudProjectConflictError();
+    record.project = { ...record.project, name: newName };
+    record.updatedAt = data.updated_at;
+    return record;
+  } catch (error) {
+    discardCloudProjectRecord(record);
+    throw error;
+  }
 }
 
 export async function duplicateCloudProject(id: string, organizationId: string): Promise<Project | null> {
@@ -386,7 +462,7 @@ export async function clearCloudWarehouseAsOwner(projectId: string, password: st
     if (error) throw new Error(`Não foi possível apagar ${table}: ${error.message}`);
   }
 
-  const current = await loadCloudProjectRecord(projectId);
+  const current = await loadCloudProjectRecord(projectId, { strict: true, deferSnapshot: true });
   if (!current) throw new Error('Não foi possível carregar a obra antes da limpeza.');
   const previousEquipmentIds = new Set((current.project.warehouse?.equipments ?? []).map(equipment => equipment.id));
   const { project: cleared } = prepareWarehouseTestReset(current.project, {
@@ -396,13 +472,18 @@ export async function clearCloudWarehouseAsOwner(projectId: string, password: st
 
   // Sem trava otimista: a limpeza é uma operação administrativa deliberada.
   try {
+    // A manutenção adotará esta fotografia completa exclusivamente durante a
+    // gravação. Em qualquer falha, o snapshot é invalidado e um autosave comum
+    // será bloqueado até uma nova hidratação da UI.
+    confirmCloudProjectRecord(current);
     await upsertCloudProject(cleared, projectAccess.data.organization_id);
   } catch (error) {
+    clearCloudSnapshot(projectId);
     throw new Error(`Não foi possível salvar a limpeza: ${error instanceof Error ? error.message : String(error)}`);
   }
   clearCloudSnapshot(projectId);
 
-  const verified = await loadCloudProjectRecord(projectId);
+  const verified = await loadCloudProjectRecord(projectId, { strict: true, deferSnapshot: true });
   if (!verified) throw new Error('A limpeza foi salva, mas não foi possível conferir o resultado. Atualize a página.');
   const verifiedWarehouse = verified.project.warehouse;
   const historiesRemain = (verifiedWarehouse?.movements.length ?? 0) > 0
@@ -416,6 +497,7 @@ export async function clearCloudWarehouseAsOwner(projectId: string, password: st
     || (verified.project.materialPriceHistory?.length ?? 0) > 0;
   const verifiedEquipmentIds = new Set((verifiedWarehouse?.equipments ?? []).map(equipment => equipment.id));
   const equipmentWasLost = [...previousEquipmentIds].some(id => !verifiedEquipmentIds.has(id));
+  discardCloudProjectRecord(verified);
 
   if (equipmentWasLost) {
     throw new Error('A conferência detectou diferença no cadastro de equipamentos. A limpeza foi interrompida para revisão.');
