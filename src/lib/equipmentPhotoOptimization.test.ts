@@ -35,22 +35,20 @@ describe('optimizeEquipmentPhoto', () => {
     });
   }
 
-  it('limita o maior lado a 1280 px e gera um JPEG menor', async () => {
+  it('limita o maior lado a 960 px e gera um JPEG menor', async () => {
     const close = mockBitmap(4000, 3000);
     mockJpeg(1_000);
     const original = new File([new Uint8Array(5_000)], 'furadeira.png', { type: 'image/png' });
 
     const optimized = await optimizeEquipmentPhoto(original);
 
-    expect(canvas.width).toBe(1280);
-    expect(canvas.height).toBe(960);
-    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 1280, 960);
+    expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 960, 720);
     expect(optimized).not.toBe(original);
     expect(optimized.name).toBe('furadeira.jpg');
     expect(optimized.type).toBe('image/jpeg');
     expect(optimized.size).toBe(1_000);
     expect(close).toHaveBeenCalled();
-    expect(equipmentPhotoOptimization).toEqual({ maxSide: 1280, jpegQuality: 0.78 });
+    expect(equipmentPhotoOptimization).toEqual({ maxSide: 960, jpegQuality: 0.72 });
   });
 
   it('não amplia imagem pequena', async () => {
@@ -60,9 +58,9 @@ describe('optimizeEquipmentPhoto', () => {
 
     await optimizeEquipmentPhoto(original);
 
-    expect(canvas.width).toBe(640);
-    expect(canvas.height).toBe(480);
     expect(drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 640, 480);
+    expect(canvas.width).toBe(0);
+    expect(canvas.height).toBe(0);
   });
 
   it('preserva o original quando a conversão fica maior e recusa falha de conversão', async () => {
@@ -74,5 +72,17 @@ describe('optimizeEquipmentPhoto', () => {
 
     globalThis.createImageBitmap = vi.fn().mockRejectedValue(new Error('imagem inválida')) as typeof createImageBitmap;
     await expect(optimizeEquipmentPhoto(original)).rejects.toThrow('imagem inválida');
+  });
+
+  it('mantém a versão reduzida mesmo quando o JPEG fica maior que o original', async () => {
+    mockBitmap(4_000, 3_000);
+    mockJpeg(6_000);
+    const original = new File([new Uint8Array(5_000)], 'camera.png', { type: 'image/png' });
+
+    const optimized = await optimizeEquipmentPhoto(original);
+
+    expect(optimized).not.toBe(original);
+    expect(optimized.type).toBe('image/jpeg');
+    expect(optimized.size).toBe(6_000);
   });
 });

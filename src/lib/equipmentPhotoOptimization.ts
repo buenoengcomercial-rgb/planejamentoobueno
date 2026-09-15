@@ -1,5 +1,7 @@
-const EQUIPMENT_PHOTO_MAX_SIDE = 1280;
-const EQUIPMENT_PHOTO_JPEG_QUALITY = 0.78;
+// Um aparelho de campo pode receber fotos de 12 MP ou mais. Reduzir logo na
+// entrada evita manter três bitmaps grandes no navegador durante o cadastro.
+const EQUIPMENT_PHOTO_MAX_SIDE = 960;
+const EQUIPMENT_PHOTO_JPEG_QUALITY = 0.72;
 
 type DecodedImage = {
   source: CanvasImageSource;
@@ -63,6 +65,7 @@ export async function optimizeEquipmentPhoto(file: File): Promise<File> {
   if (!file.type.startsWith('image/')) return file;
 
   let decoded: DecodedImage | undefined;
+  let canvas: HTMLCanvasElement | undefined;
   try {
     decoded = await decodeImage(file);
     if (!decoded.width || !decoded.height) return file;
@@ -70,7 +73,7 @@ export async function optimizeEquipmentPhoto(file: File): Promise<File> {
     const scale = Math.min(1, EQUIPMENT_PHOTO_MAX_SIDE / Math.max(decoded.width, decoded.height));
     const width = Math.max(1, Math.round(decoded.width * scale));
     const height = Math.max(1, Math.round(decoded.height * scale));
-    const canvas = document.createElement('canvas');
+    canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext('2d');
@@ -78,7 +81,10 @@ export async function optimizeEquipmentPhoto(file: File): Promise<File> {
     context.drawImage(decoded.source, 0, 0, width, height);
 
     const blob = await canvasToBlob(canvas);
-    if (blob.size >= file.size) return file;
+    // Um original redimensionado nunca volta para o formulário: mesmo que o
+    // JPEG resulte em mais bytes, conservar o original grande faria o celular
+    // decodificar novamente todos os megapixels para cada miniatura.
+    if (scale === 1 && blob.size >= file.size) return file;
     return new File([blob], jpegName(file.name), {
       type: 'image/jpeg',
       lastModified: file.lastModified,
@@ -87,6 +93,12 @@ export async function optimizeEquipmentPhoto(file: File): Promise<File> {
     throw new Error(error instanceof Error ? error.message : 'Não foi possível otimizar a foto.');
   } finally {
     decoded?.release();
+    // O canvas não é liberado necessariamente na mesma coleta de lixo. Zerar
+    // suas dimensões solta o bitmap de trabalho antes da próxima foto.
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
   }
 }
 
