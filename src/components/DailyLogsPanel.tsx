@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
 import { Task, DailyProductionLog, DailyLaborEntry } from '@/types/project';
 import { ClipboardList, Plus, Trash2, TrendingUp, TrendingDown, Users } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -30,10 +30,55 @@ const STATUS_BG: Record<string, string> = {
 
 const EMPTY_DAILY_LOGS: DailyProductionLog[] = [];
 
+type DraftValues = Record<string, string>;
+
+const hasOwn = (values: DraftValues, key: string) => Object.prototype.hasOwnProperty.call(values, key);
+const logDraftKey = (logId: string, field: 'date' | 'plannedQuantity' | 'actualQuantity' | 'notes') => `log:${logId}:${field}`;
+const laborDraftKey = (logId: string, entryId: string, field: 'workerName' | 'role' | 'teamCode' | 'hours' | 'hourlyCost') => `labor:${logId}:${entryId}:${field}`;
+
+function numberDraft(values: DraftValues, key: string, fallback: number): { value: number; valid: boolean } {
+  if (!hasOwn(values, key)) return { value: fallback, valid: true };
+  const value = Number(values[key]);
+  return Number.isFinite(value) ? { value, valid: true } : { value: fallback, valid: false };
+}
+
+function applyDraftValues(logs: DailyProductionLog[], drafts: DraftValues): { logs: DailyProductionLog[]; hasInvalidNumber: boolean } {
+  let hasInvalidNumber = false;
+  const nextLogs = logs.map(log => {
+    const planned = numberDraft(drafts, logDraftKey(log.id, 'plannedQuantity'), log.plannedQuantity);
+    const actual = numberDraft(drafts, logDraftKey(log.id, 'actualQuantity'), log.actualQuantity);
+    hasInvalidNumber ||= !planned.valid || !actual.valid;
+
+    return {
+      ...log,
+      date: hasOwn(drafts, logDraftKey(log.id, 'date')) ? drafts[logDraftKey(log.id, 'date')] : log.date,
+      plannedQuantity: planned.value,
+      actualQuantity: actual.value,
+      notes: hasOwn(drafts, logDraftKey(log.id, 'notes')) ? drafts[logDraftKey(log.id, 'notes')] : log.notes,
+      laborEntries: log.laborEntries?.map(entry => {
+        const hours = numberDraft(drafts, laborDraftKey(log.id, entry.id, 'hours'), entry.hours);
+        const hourlyCost = numberDraft(drafts, laborDraftKey(log.id, entry.id, 'hourlyCost'), entry.hourlyCost);
+        hasInvalidNumber ||= !hours.valid || !hourlyCost.valid;
+        return {
+          ...entry,
+          workerName: hasOwn(drafts, laborDraftKey(log.id, entry.id, 'workerName')) ? drafts[laborDraftKey(log.id, entry.id, 'workerName')] : entry.workerName,
+          role: hasOwn(drafts, laborDraftKey(log.id, entry.id, 'role')) ? drafts[laborDraftKey(log.id, entry.id, 'role')] : entry.role,
+          teamCode: hasOwn(drafts, laborDraftKey(log.id, entry.id, 'teamCode')) ? drafts[laborDraftKey(log.id, entry.id, 'teamCode')] : entry.teamCode,
+          hours: hours.value,
+          hourlyCost: hourlyCost.value,
+        };
+      }),
+    };
+  });
+  return { logs: nextLogs, hasInvalidNumber };
+}
+
 export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsPanelProps) {
   const logs = task.dailyLogs ?? EMPTY_DAILY_LOGS;
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [productionError, setProductionError] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<DraftValues>({});
+  const draftsRef = useRef<DraftValues>({});
   const baseDuration = task.originalDuration ?? task.duration;
   const plannedDailyProduction = task.quantity && baseDuration > 0
     ? task.quantity / baseDuration
@@ -53,35 +98,91 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
     return `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}-${String(base.getDate()).padStart(2, '0')}`;
   };
 
+  const updateDraft = useCallback((key: string, value: string) => {
+    setProductionError(null);
+    setDrafts(current => {
+      const next = { ...current, [key]: value };
+      draftsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const discardDraft = useCallback((key: string) => {
+    setProductionError(null);
+    setDrafts(current => {
+      if (!hasOwn(current, key)) return current;
+      const { [key]: _discarded, ...next } = current;
+      draftsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const inputValue = useCallback((key: string, saved: string | number | undefined) => (
+    hasOwn(drafts, key) ? drafts[key] : String(saved ?? '')
+  ), [drafts]);
+
+  const resolveDrafts = useCallback((): DailyProductionLog[] | null => {
+    const resolved = applyDraftValues(logs, draftsRef.current);
+    if (resolved.hasInvalidNumber) {
+      setProductionError('Informe um número válido antes de confirmar o lançamento.');
+      return null;
+    }
+    const validation = validateDailyProductionLogs(task, resolved.logs);
+    if (!validation.allowed) {
+      setProductionError(validation.message ?? 'A produção informada ultrapassa a quantidade contratada.');
+      return null;
+    }
+    return resolved.logs;
+  }, [logs, task]);
+
+  const commitResolvedLogs = useCallback((nextLogs: DailyProductionLog[]) => {
+    const hasChanges = JSON.stringify(nextLogs) !== JSON.stringify(logs);
+    draftsRef.current = {};
+    setDrafts({});
+    setProductionError(null);
+    if (hasChanges) onChange(nextLogs);
+  }, [logs, onChange]);
+
+  const commitDrafts = useCallback(() => {
+    if (Object.keys(draftsRef.current).length === 0) return true;
+    const resolved = resolveDrafts();
+    if (!resolved) return false;
+    commitResolvedLogs(resolved);
+    return true;
+  }, [commitResolvedLogs, resolveDrafts]);
+
+  const handleDeferredBlur = useCallback((event: FocusEvent<HTMLInputElement>) => {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Element && nextTarget.closest('[data-daily-log-action]')) return;
+    commitDrafts();
+  }, [commitDrafts]);
+
+  const handleDeferredKeyDown = useCallback((event: KeyboardEvent<HTMLInputElement>, key: string) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      commitDrafts();
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      discardDraft(key);
+    }
+  }, [commitDrafts, discardDraft]);
+
   const addLog = () => {
-    if (getProductionQuantityLimit(task).completed) return;
+    const currentLogs = resolveDrafts();
+    if (!currentLogs || getProductionQuantityLimit(task, currentLogs).completed) return;
     const today = new Date().toISOString().split('T')[0];
-    const lastDate = logs.length > 0
-      ? [...logs].sort((a, b) => a.date.localeCompare(b.date))[logs.length - 1].date
+    const lastDate = currentLogs.length > 0
+      ? [...currentLogs].sort((a, b) => a.date.localeCompare(b.date))[currentLogs.length - 1].date
       : null;
     const date = lastDate ? nextDayISO(lastDate) : today;
     const newLog = buildLog(date);
-    onChange([...logs, newLog]);
+    commitResolvedLogs([...currentLogs, newLog]);
     setTimeout(() => {
       const el = document.querySelector<HTMLInputElement>(`[data-actual-input="${newLog.id}"]`);
       el?.focus();
       el?.select();
     }, 50);
-  };
-
-  const updateLog = (id: string, updates: Partial<DailyProductionLog>) => {
-    const candidate = logs.map(l => l.id === id ? { ...l, ...updates } : l);
-    const validation = validateDailyProductionLogs(task, candidate);
-    if (!validation.allowed) {
-      setProductionError(validation.message ?? 'A produção informada ultrapassa a quantidade contratada.');
-      return;
-    }
-    setProductionError(null);
-    onChange(candidate);
-  };
-
-  const removeLog = (id: string) => {
-    onChange(logs.filter(l => l.id !== id));
   };
 
   useEffect(() => {
@@ -95,6 +196,8 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
   }, [focusDate, logs]);
 
   const addLaborEntry = (logId: string) => {
+    const currentLogs = resolveDrafts();
+    if (!currentLogs) return;
     const entry: DailyLaborEntry = {
       id: `labor-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       role: '',
@@ -103,31 +206,32 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
       hours: 8,
       hourlyCost: 0,
     };
-    const target = logs.find(log => log.id === logId);
-    updateLog(logId, { laborEntries: [...(target?.laborEntries ?? []), entry] });
-  };
-
-  const updateLaborEntry = (logId: string, entryId: string, patch: Partial<DailyLaborEntry>) => {
-    const target = logs.find(log => log.id === logId);
-    updateLog(logId, {
-      laborEntries: (target?.laborEntries ?? []).map(entry =>
-        entry.id === entryId ? { ...entry, ...patch } : entry),
-    });
+    commitResolvedLogs(currentLogs.map(log => log.id === logId
+      ? { ...log, laborEntries: [...(log.laborEntries ?? []), entry] }
+      : log));
   };
 
   const removeLaborEntry = (logId: string, entryId: string) => {
-    const target = logs.find(log => log.id === logId);
-    updateLog(logId, {
-      laborEntries: (target?.laborEntries ?? []).filter(entry => entry.id !== entryId),
-    });
+    const currentLogs = resolveDrafts();
+    if (!currentLogs) return;
+    commitResolvedLogs(currentLogs.map(log => log.id === logId
+      ? { ...log, laborEntries: (log.laborEntries ?? []).filter(entry => entry.id !== entryId) }
+      : log));
   };
 
+  const localPreview = useMemo(() => applyDraftValues(logs, drafts), [drafts, logs]);
+  const previewValidation = useMemo(() => (
+    localPreview.hasInvalidNumber ? null : validateDailyProductionLogs(task, localPreview.logs)
+  ), [localPreview, task]);
+  const previewLogs = localPreview.hasInvalidNumber || !previewValidation?.allowed ? logs : localPreview.logs;
+  const previewTask = useMemo(() => ({ ...task, dailyLogs: previewLogs }), [previewLogs, task]);
 
-  // Linhas: saldo dia, saldo acumulado, executado acumulado, falta executar
+  // Linhas: saldo dia, saldo acumulado, executado acumulado, falta executar.
+  // As prévias usam o rascunho local, sem regravar a tarefa enquanto se digita.
   let acc = 0;
   let execAcc = 0;
   const totalQty = task.quantity || 0;
-  const sortedLogs = [...logs].sort((a, b) => a.date.localeCompare(b.date));
+  const sortedLogs = [...previewLogs].sort((a, b) => a.date.localeCompare(b.date));
   const rows = sortedLogs.map(l => {
     const planned = l.plannedQuantity || 0;
     const actual = l.actualQuantity || 0;
@@ -169,7 +273,7 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
 
   const accStatus = statusForDelta(task.accumulatedDelayQuantity || 0, plannedDailyProduction);
   const unit = task.unit || 'un';
-  const productionLimit = getProductionQuantityLimit(task);
+  const productionLimit = getProductionQuantityLimit(task, previewLogs);
 
   return (
     <motion.div
@@ -286,6 +390,7 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
             </p>
             <button
               onClick={addLog}
+              data-daily-log-action
               disabled={productionLimit.completed}
               className="min-h-11 text-[11px] px-3 py-1.5 rounded-md bg-primary/10 text-primary font-medium hover:bg-primary/20 transition-colors flex items-center gap-1.5"
             >
@@ -302,8 +407,10 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
             <div className="flex items-center gap-1">
               <input
                 type="date"
-                value={row.date}
-                onChange={e => updateLog(row.id, { date: e.target.value })}
+                value={inputValue(logDraftKey(row.id, 'date'), row.date)}
+                onChange={event => updateDraft(logDraftKey(row.id, 'date'), event.target.value)}
+                onBlur={handleDeferredBlur}
+                onKeyDown={event => handleDeferredKeyDown(event, logDraftKey(row.id, 'date'))}
                 className="bg-transparent border border-current/30 rounded px-1 py-0.5 text-[10px] focus:outline-none focus:border-current min-w-0 flex-1"
               />
             </div>
@@ -311,21 +418,25 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
                 type="number"
                 min={0}
                 step={0.1}
-                value={row.plannedQuantity}
-                onChange={e => updateLog(row.id, { plannedQuantity: Number(e.target.value) })}
+                value={inputValue(logDraftKey(row.id, 'plannedQuantity'), row.plannedQuantity)}
+                onChange={event => updateDraft(logDraftKey(row.id, 'plannedQuantity'), event.target.value)}
+                onBlur={handleDeferredBlur}
+                onKeyDown={event => handleDeferredKeyDown(event, logDraftKey(row.id, 'plannedQuantity'))}
                 className="bg-transparent border border-current/30 rounded px-1 py-0.5 text-[11px] text-center focus:outline-none focus:border-current"
               />
             <input
               type="number"
               min={0}
-              max={maximumActualForDailyLog(task, row.id)}
+              max={maximumActualForDailyLog(previewTask, row.id)}
               step={0.1}
-              value={row.actualQuantity}
+              value={inputValue(logDraftKey(row.id, 'actualQuantity'), row.actualQuantity)}
               data-actual-input={row.id}
               data-log-date={row.date}
-              onChange={e => updateLog(row.id, { actualQuantity: Number(e.target.value) })}
+              onChange={event => updateDraft(logDraftKey(row.id, 'actualQuantity'), event.target.value)}
+              onBlur={handleDeferredBlur}
+              onKeyDown={event => handleDeferredKeyDown(event, logDraftKey(row.id, 'actualQuantity'))}
               className="bg-transparent border border-current/30 rounded px-1 py-0.5 text-[11px] text-center font-bold focus:outline-none focus:border-current"
-              title={`Máximo permitido: ${maximumActualForDailyLog(task, row.id).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} ${unit}`}
+              title={`Máximo permitido: ${maximumActualForDailyLog(previewTask, row.id).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} ${unit}`}
             />
             <div className="text-center font-bold flex items-center justify-center gap-1">
               {row.delta > 0 ? <TrendingDown className="w-3 h-3" /> : row.delta < 0 ? <TrendingUp className="w-3 h-3" /> : null}
@@ -337,9 +448,11 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
             </div>
             <input
               type="text"
-              value={row.notes || ''}
+              value={inputValue(logDraftKey(row.id, 'notes'), row.notes)}
               placeholder="—"
-              onChange={e => updateLog(row.id, { notes: e.target.value })}
+              onChange={event => updateDraft(logDraftKey(row.id, 'notes'), event.target.value)}
+              onBlur={handleDeferredBlur}
+              onKeyDown={event => handleDeferredKeyDown(event, logDraftKey(row.id, 'notes'))}
               className="bg-transparent border border-current/30 rounded px-1 py-0.5 text-[10px] focus:outline-none focus:border-current"
             />
             <div className="text-center flex items-center justify-center gap-1">
@@ -348,6 +461,7 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
                   e.stopPropagation();
                   addLaborEntry(row.id);
                 }}
+                data-daily-log-action
                 className="p-1 rounded hover:bg-primary/20 text-primary transition-colors"
                 title="Apontar mão de obra deste dia"
               >
@@ -356,6 +470,8 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
               <button
                 onClick={(e) => {
                   e.stopPropagation();
+                  const currentLogs = resolveDrafts();
+                  if (!currentLogs) return;
                   confirm(
                     {
                       title: 'Deseja excluir este lançamento diário?',
@@ -371,9 +487,10 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
                       ),
                       confirmLabel: 'Excluir lançamento',
                     },
-                    () => removeLog(row.id),
+                    () => commitResolvedLogs(currentLogs.filter(log => log.id !== row.id)),
                   );
                 }}
+                data-daily-log-action
                 className="p-1 rounded hover:bg-destructive/20 text-destructive transition-colors"
                 title="Excluir lançamento"
               >
@@ -397,37 +514,47 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
                   return (
                     <div key={entry.id} className="grid grid-cols-[1.2fr_1fr_0.7fr_0.65fr_0.8fr_0.8fr_28px] gap-2 items-center">
                       <input
-                        value={entry.workerName ?? ''}
+                        value={inputValue(laborDraftKey(row.id, entry.id, 'workerName'), entry.workerName)}
                         placeholder="Nome"
-                        onChange={event => updateLaborEntry(row.id, entry.id, { workerName: event.target.value })}
+                        onChange={event => updateDraft(laborDraftKey(row.id, entry.id, 'workerName'), event.target.value)}
+                        onBlur={handleDeferredBlur}
+                        onKeyDown={event => handleDeferredKeyDown(event, laborDraftKey(row.id, entry.id, 'workerName'))}
                         className="h-7 rounded border border-border bg-background px-2 text-[10px]"
                       />
                       <input
-                        value={entry.role}
+                        value={inputValue(laborDraftKey(row.id, entry.id, 'role'), entry.role)}
                         placeholder="Pedreiro"
-                        onChange={event => updateLaborEntry(row.id, entry.id, { role: event.target.value })}
+                        onChange={event => updateDraft(laborDraftKey(row.id, entry.id, 'role'), event.target.value)}
+                        onBlur={handleDeferredBlur}
+                        onKeyDown={event => handleDeferredKeyDown(event, laborDraftKey(row.id, entry.id, 'role'))}
                         className="h-7 rounded border border-border bg-background px-2 text-[10px]"
                       />
                       <input
-                        value={entry.teamCode ?? ''}
+                        value={inputValue(laborDraftKey(row.id, entry.id, 'teamCode'), entry.teamCode)}
                         placeholder="Equipe"
-                        onChange={event => updateLaborEntry(row.id, entry.id, { teamCode: event.target.value })}
+                        onChange={event => updateDraft(laborDraftKey(row.id, entry.id, 'teamCode'), event.target.value)}
+                        onBlur={handleDeferredBlur}
+                        onKeyDown={event => handleDeferredKeyDown(event, laborDraftKey(row.id, entry.id, 'teamCode'))}
                         className="h-7 rounded border border-border bg-background px-2 text-[10px]"
                       />
                       <input
                         type="number"
                         min={0}
                         step={0.25}
-                        value={entry.hours}
-                        onChange={event => updateLaborEntry(row.id, entry.id, { hours: Number(event.target.value) })}
+                        value={inputValue(laborDraftKey(row.id, entry.id, 'hours'), entry.hours)}
+                        onChange={event => updateDraft(laborDraftKey(row.id, entry.id, 'hours'), event.target.value)}
+                        onBlur={handleDeferredBlur}
+                        onKeyDown={event => handleDeferredKeyDown(event, laborDraftKey(row.id, entry.id, 'hours'))}
                         className="h-7 rounded border border-border bg-background px-2 text-right text-[10px]"
                       />
                       <input
                         type="number"
                         min={0}
                         step={0.01}
-                        value={entry.hourlyCost}
-                        onChange={event => updateLaborEntry(row.id, entry.id, { hourlyCost: Number(event.target.value) })}
+                        value={inputValue(laborDraftKey(row.id, entry.id, 'hourlyCost'), entry.hourlyCost)}
+                        onChange={event => updateDraft(laborDraftKey(row.id, entry.id, 'hourlyCost'), event.target.value)}
+                        onBlur={handleDeferredBlur}
+                        onKeyDown={event => handleDeferredKeyDown(event, laborDraftKey(row.id, entry.id, 'hourlyCost'))}
                         className="h-7 rounded border border-border bg-background px-2 text-right text-[10px]"
                       />
                       <span className="text-right text-[10px] font-semibold">
@@ -436,6 +563,7 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
                       <button
                         type="button"
                         onClick={() => removeLaborEntry(row.id, entry.id)}
+                        data-daily-log-action
                         className="p-1 text-destructive hover:bg-destructive/10 rounded"
                         title="Excluir apontamento de mão de obra"
                       >
@@ -453,6 +581,7 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
           <div className="flex justify-end pt-1">
             <button
               onClick={addLog}
+              data-daily-log-action
               disabled={productionLimit.completed}
               className="min-h-11 px-3 py-2 rounded-md bg-primary/10 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
               title={productionLimit.completed ? 'Atividade concluída; corrija um lançamento existente para liberar saldo.' : 'Adicionar lançamento após o último apontamento'}
