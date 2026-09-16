@@ -837,7 +837,7 @@ export function getRequisitionMaterialSummaries(project: Project, requisitionId:
 
   const returnedByItem = new Map<string, number>();
   for (const movement of wh.movements) {
-    if (movement.reversedById || movement.type !== 'devolucao' || movement.originType !== 'return' || movement.requisitionId !== requisitionId) continue;
+    if (movement.reversedById || movement.type !== 'devolucao' || !['return', 'cancellation'].includes(movement.originType ?? '') || movement.requisitionId !== requisitionId) continue;
     returnedByItem.set(movement.itemKey, trunc2((returnedByItem.get(movement.itemKey) ?? 0) + movement.quantity));
   }
 
@@ -1057,7 +1057,7 @@ export interface CorrectWarehouseRequisitionInput {
   idempotencyKey?: string;
 }
 
-/** Corrige uma retirada entregue sem devoluções, preservando uma trilha de auditoria do Proprietário. */
+/** Corrige uma retirada entregue sem devoluções, sempre por estorno auditado. */
 export function correctDeliveredRequisition(
   project: Project,
   requisitionId: string,
@@ -1207,6 +1207,106 @@ export function correctDeliveredRequisition(
       requisitionNumber: requisition.number,
       reason: input.reason?.trim() || undefined,
       affectedMovementIds: [...originalMovements.map(movement => movement.id), ...reversalMovementIds, ...correctedMovementIds],
+    },
+  });
+}
+
+export interface CancelDeliveredRequisitionInput {
+  reason: string;
+  /** Confirma que nenhuma unidade ainda em campo foi aplicada ou consumida. */
+  materialsConfirmedInWarehouse: boolean;
+  /** Chave estável para não duplicar a recomposição em uma repetição incerta. */
+  idempotencyKey: string;
+}
+
+/**
+ * Cancela uma retirada entregue sem apagar documento, assinatura ou movimentos.
+ * As quantidades ainda em campo retornam ao livro como devolução de cancelamento;
+ * devoluções já registradas permanecem intactas.
+ */
+export function cancelDeliveredRequisition(
+  project: Project,
+  requisitionId: string,
+  input: CancelDeliveredRequisitionInput,
+  actor?: WarehouseActorInput,
+): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const requisition = wh.requisitions.find(entry => entry.id === requisitionId);
+  if (!requisition) throw new Error('Retirada não encontrada.');
+  const idempotencyKey = input.idempotencyKey.trim();
+  // Uma resposta perdida não pode criar outra devolução técnica: repetir a
+  // mesma chave devolve o snapshot já cancelado, mesmo após mudar o status.
+  if (idempotencyKey && requisition.cancellationIdempotencyKeys?.includes(idempotencyKey)) return p;
+  if (requisition.status !== 'entregue') throw new Error('Somente retiradas entregues podem ser canceladas.');
+  const reason = input.reason.trim();
+  if (!reason) throw new Error('Informe o motivo do cancelamento.');
+  if (!input.materialsConfirmedInWarehouse) throw new Error('Confirme que o material não foi aplicado e está disponível no Almoxarifado.');
+  if (!idempotencyKey) throw new Error('Não foi possível identificar esta tentativa de cancelamento. Tente novamente.');
+
+  const timestamp = nowISO();
+  const auditActor = normalizeWarehouseActor(actor);
+  const actorLabel = warehouseActorLegacyValue(actor);
+  const returnable = getRequisitionMaterialSummaries(p, requisitionId)
+    .filter(item => item.availableQuantity > 0);
+  const cancellationMovements: WarehouseMovement[] = returnable.map(item => ({
+    id: uid(),
+    type: 'devolucao',
+    date: warehouseOperationalDate(),
+    createdAt: timestamp,
+    createdBy: auditActor,
+    itemKey: item.itemKey,
+    itemCode: item.code,
+    itemDescription: item.description,
+    itemUnit: item.unit,
+    quantity: item.availableQuantity,
+    unitPrice: item.unitCostSnapshot,
+    costSnapshot: item.unitCostSnapshot,
+    requisitionId,
+    originType: 'cancellation',
+    originId: idempotencyKey,
+    chapterId: requisition.chapterId,
+    taskId: requisition.taskId,
+    teamId: requisition.teamId,
+    workerName: requisition.receiverName || requisition.requesterName,
+    workFront: requisition.workFront,
+    responsible: actorLabel,
+    user: actorLabel,
+    returnCondition: 'apto_estoque',
+    notes: `Cancelamento da retirada ${requisition.number}: ${reason}`,
+  }));
+  const cancelledRequisition: WarehouseRequisition = {
+    ...requisition,
+    status: 'cancelada',
+    cancelledAt: timestamp,
+    cancelledBy: auditActor,
+    cancellationReason: reason,
+    cancellationIdempotencyKeys: [...(requisition.cancellationIdempotencyKeys ?? []), idempotencyKey],
+    updatedAt: timestamp,
+    updatedBy: auditActor ?? requisition.updatedBy,
+  };
+  const next = setWh(p, {
+    requisitions: wh.requisitions.map(entry => entry.id === requisitionId ? cancelledRequisition : entry),
+    movements: [...wh.movements, ...cancellationMovements],
+  });
+  return logToProject(next, {
+    entityType: 'warehouse_requisition',
+    entityId: requisitionId,
+    action: 'updated',
+    title: `Retirada ${requisition.number} cancelada`,
+    description: cancellationMovements.length
+      ? `Cancelamento auditado. ${cancellationMovements.length} material(is) retornaram ao saldo. Motivo: ${reason}`
+      : `Cancelamento auditado sem saldo pendente em campo. Motivo: ${reason}`,
+    before: { requisition },
+    after: { requisition: cancelledRequisition, movements: cancellationMovements },
+    userId: auditActor?.userId,
+    userName: auditActor?.userName,
+    userEmail: auditActor?.userEmail,
+    metadata: {
+      operation: 'requisition_cancellation',
+      requisitionNumber: requisition.number,
+      idempotencyKey,
+      affectedMovementIds: cancellationMovements.map(movement => movement.id),
     },
   });
 }

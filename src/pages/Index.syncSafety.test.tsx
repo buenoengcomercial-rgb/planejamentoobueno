@@ -475,7 +475,7 @@ describe('segurança de sincronização da página da obra', () => {
     expect(localStorage.getItem(projectDraftKey('project-1'))).not.toBeNull();
   });
 
-  it('não troca de obra até terminar a aplicação completa de uma operação do Almoxarifado', async () => {
+  it('libera a navegação após a confirmação do Almoxarifado, mesmo com o espelho legado do Diário pendente', async () => {
     const dailyConfirmation = deferred<{ report: DailyReport | null; conflicts: string[] }>();
     const confirmedProject = makeProject();
     mocks.saveOpenDailyReport.mockReturnValueOnce(dailyConfirmation.promise);
@@ -500,22 +500,17 @@ describe('segurança de sincronização da página da obra', () => {
     await waitFor(() => expect(mocks.commitWarehouseOperation).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(mocks.saveOpenDailyReport).toHaveBeenCalledTimes(1));
 
-    // A RPC já terminou; somente a conciliação do Diário ainda está pendente.
+    // A RPC já terminou; o espelho do Diário não pode prolongar a trava da
+    // retirada nem impedir o trabalho em outra obra.
     fireEvent.click(screen.getByRole('button', { name: 'Trocar obra de teste' }));
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
+    await waitFor(() => {
+      expect(mocks.loadCloudProjectRecord.mock.calls.some(([id]) => id === 'project-2')).toBe(true);
     });
-    expect(mocks.loadCloudProjectRecord.mock.calls.some(([id]) => id === 'project-2')).toBe(false);
 
     await act(async () => {
       dailyConfirmation.resolve({ report, conflicts: [] });
       await Promise.resolve();
       await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(mocks.loadCloudProjectRecord.mock.calls.some(([id]) => id === 'project-2')).toBe(true);
     });
   });
 

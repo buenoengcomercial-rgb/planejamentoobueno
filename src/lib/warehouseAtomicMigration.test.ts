@@ -23,6 +23,10 @@ const supplementCorrectionMigrationSql = readFileSync(resolve(
   process.cwd(),
   'supabase/migrations/20260914120000_atomic_supplement_corrections.sql',
 ), 'utf8');
+const requisitionAdjustmentMigrationSql = readFileSync(resolve(
+  process.cwd(),
+  'supabase/migrations/20260916120000_operational_requisition_corrections_and_cancellations.sql',
+), 'utf8');
 
 describe('atomic warehouse operation migration', () => {
   it('keeps legacy requisition and movement IDs as text', () => {
@@ -89,5 +93,20 @@ describe('atomic warehouse operation migration', () => {
     expect(supplementCorrectionMigrationSql).toContain("v_movement ->> 'type' NOT IN ('retirada', 'estorno')");
     expect(supplementCorrectionMigrationSql).toContain("v_movement ->> 'type' = 'retirada'");
     expect(supplementCorrectionMigrationSql).not.toMatch(/DELETE\s+FROM\s+public\.warehouse_movements/i);
+  });
+
+  it('permite ajuste operacional ao Almoxarife por estorno e cancelamento, sem ampliar hard delete', () => {
+    expect(requisitionAdjustmentMigrationSql).toContain('CREATE OR REPLACE FUNCTION public.commit_warehouse_requisition_adjustment');
+    expect(requisitionAdjustmentMigrationSql).toContain("p_operation_type NOT IN ('correction', 'cancellation')");
+    expect(requisitionAdjustmentMigrationSql).toContain("v_role NOT IN ('owner', 'admin', 'engineer', 'warehouse_operator')");
+    expect(requisitionAdjustmentMigrationSql).toContain('PERFORM pg_advisory_xact_lock');
+    expect(requisitionAdjustmentMigrationSql).toContain('WAREHOUSE_CORRECTION_SCOPE_VIOLATION');
+    expect(requisitionAdjustmentMigrationSql).toContain('WAREHOUSE_CANCELLATION_SCOPE_VIOLATION');
+    expect(requisitionAdjustmentMigrationSql).toContain('WAREHOUSE_CANCELLATION_RETURN_MISMATCH');
+    expect(requisitionAdjustmentMigrationSql).toContain("'requisition_cancellation'");
+    expect(requisitionAdjustmentMigrationSql).toContain("'originType' IS DISTINCT FROM 'cancellation'");
+    expect(requisitionAdjustmentMigrationSql).toContain("COALESCE(wm.data ->> 'originId', '') IN ('', p_requisition_id)");
+    expect(requisitionAdjustmentMigrationSql).not.toMatch(/DELETE\s+FROM\s+public\.(warehouse_movements|warehouse_requisitions|audit_logs)/i);
+    expect(requisitionAdjustmentMigrationSql).not.toContain('hard_delete');
   });
 });

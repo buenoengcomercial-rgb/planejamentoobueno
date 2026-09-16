@@ -12,6 +12,7 @@ import {
   addRequisitionSupplement,
   correctDeliveredRequisition,
   correctRequisitionSupplement,
+  cancelDeliveredRequisition,
   createAndDeliverRequisition,
   ensureWarehouse,
   hardDeleteRequisition,
@@ -62,8 +63,11 @@ interface Props {
   onCommitWarehouseScoped?: (next: Project, domain: WarehouseScopedDomain) => Promise<Project>;
   auditActor?: WarehouseAuditActor;
   canDelete?: boolean;
+  /** Correção auditada da retirada original; exclusão física continua separada. */
   canEdit?: boolean;
   canSupplement?: boolean;
+  /** Cancelamento por estorno e arquivamento, disponível a operadores do Almoxarifado. */
+  canCancel?: boolean;
 }
 
 interface WithdrawalForm {
@@ -224,7 +228,7 @@ export default function WarehouseRequisitionsTab(props: Props) {
   );
 }
 
-function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onCommitCloudOperation, onRunCriticalCloudOperation, auditActor, canDelete = false, canEdit = false, canSupplement = false }: Props) {
+function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onCommitCloudOperation, onRunCriticalCloudOperation, auditActor, canDelete = false, canEdit = false, canSupplement = false, canCancel = false }: Props) {
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const wh = ensureWarehouse(project).warehouse!;
   const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
@@ -250,13 +254,18 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
   const [errors, setErrors] = useState<WithdrawalErrors>({});
   const [returnTarget, setReturnTarget] = useState<WarehouseRequisition | null>(null);
   const [actionTarget, setActionTarget] = useState<WarehouseRequisition | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<WarehouseRequisition | null>(null);
+  const [historyView, setHistoryView] = useState<'active' | 'cancelled'>('active');
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
   const withdrawalFormScrollRef = useRef<HTMLFieldSetElement>(null);
   const materialListTouchStartY = useRef<number | null>(null);
+  const visibleRequisitions = useMemo(() => wh.requisitions.filter(requisition => (
+    historyView === 'cancelled' ? requisition.status === 'cancelada' : requisition.status !== 'cancelada'
+  )), [historyView, wh.requisitions]);
   const buildingGroups = useMemo(
-    () => groupRequisitionsByBuilding(project, wh.requisitions, wh.movements),
-    [project, wh.movements, wh.requisitions],
+    () => groupRequisitionsByBuilding(project, visibleRequisitions, wh.movements),
+    [project, visibleRequisitions, wh.movements],
   );
   const currentOperationalDate = warehouseOperationalDate();
   const executeConfirmedOperation = (after: Project, operation: WarehouseCloudOperation) => executeCloudOperation(
@@ -613,7 +622,13 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
       </Dialog>
 
       <section className="overflow-hidden rounded-xl border bg-card">
-          <WarehouseSectionHeader icon={History} title="Histórico de retiradas e devoluções" description={`${wh.requisitions.length} retirada(s)`} tone="neutral" />
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-3 py-2 sm:px-4">
+            <WarehouseSectionHeader icon={History} title="Histórico de retiradas e devoluções" description={`${visibleRequisitions.length} ${historyView === 'cancelled' ? 'cancelada(s)' : 'retirada(s)'}`} tone="neutral" />
+            <div className="flex rounded-lg border bg-background p-1" role="tablist" aria-label="Situação das retiradas">
+              <Button type="button" size="sm" variant={historyView === 'active' ? 'default' : 'ghost'} onClick={() => setHistoryView('active')}>Ativas</Button>
+              <Button type="button" size="sm" variant={historyView === 'cancelled' ? 'default' : 'ghost'} onClick={() => setHistoryView('cancelled')}>Canceladas</Button>
+            </div>
+          </div>
           <div className="withdrawal-tree space-y-4 p-2 sm:p-3">
             {buildingGroups.map(building => (
               <section key={building.key} data-testid="withdrawal-building-group" className="withdrawal-building min-w-0">
@@ -628,18 +643,18 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
                       </div>
                       {isDateGroupExpanded(dateGroup) && <div className="withdrawal-branch min-w-0 pt-3">
                         <div className="space-y-3 md:hidden">{dateGroup.requisitions.map(requisition => (
-                          <WithdrawalHistoryCard key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement}
+                          <WithdrawalHistoryCard key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel}
                             onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })}
-                            onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onAction={() => setActionTarget(requisition)} />
+                            onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onAction={() => setActionTarget(requisition)} onCancel={() => setCancelTarget(requisition)} />
                         ))}</div>
                         <div className="hidden min-w-0 overflow-x-auto md:block">
                           <table className="withdrawal-records w-full table-fixed text-xs">
                             <colgroup><col className="w-10" /><col className="w-[16%]" /><col className="w-[13%]" /><col className="w-[17%]" /><col className="w-[15%]" /><col className="w-12" /><col className="w-24" /><col /></colgroup>
                             <thead><tr><th><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data da operação</th><th className="p-2 text-left">Último registro</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead>
                             <tbody>{dateGroup.requisitions.map(requisition => (
-                              <WithdrawalHistoryRow key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement}
+                              <WithdrawalHistoryRow key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel}
                                 onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })}
-                                onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onAction={() => setActionTarget(requisition)} />
+                                onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onAction={() => setActionTarget(requisition)} onCancel={() => setCancelTarget(requisition)} />
                             ))}</tbody>
                           </table>
                         </div>
@@ -649,10 +664,11 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
                 </div>
               </section>
             ))}
-            {!wh.requisitions.length && <WarehouseEmptyState message="Nenhuma retirada registrada" hint="Use Nova retirada para começar." />}
+            {!visibleRequisitions.length && <WarehouseEmptyState message={historyView === 'cancelled' ? 'Nenhuma retirada cancelada' : 'Nenhuma retirada registrada'} hint={historyView === 'cancelled' ? 'Cancelamentos auditados aparecerão aqui.' : 'Use Nova retirada para começar.'} />}
           </div>
       </section>
       <MaterialReturnDialog project={project} requisition={returnTarget} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onClose={() => setReturnTarget(null)} />
+      <CancelRequisitionDialog project={project} requisition={cancelTarget} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onRunCriticalCloudOperation={onRunCriticalCloudOperation} onClose={() => setCancelTarget(null)} />
       <RequisitionActionDialog project={project} requisition={actionTarget} auditActor={auditActor} canEditOriginal={canEdit} canEditSupplements={canSupplement} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onRunCriticalCloudOperation={onRunCriticalCloudOperation} onClose={() => setActionTarget(null)} />
       {confirmDialog}
     </div>
@@ -676,13 +692,15 @@ interface WithdrawalHistoryEntryProps {
   canDelete: boolean;
   canEdit: boolean;
   canSupplement: boolean;
+  canCancel: boolean;
   onToggle: () => void;
   onDelete: () => void;
   onReturn: () => void;
   onAction: () => void;
+  onCancel: () => void;
 }
 
-function WithdrawalHistoryCard({ project, requisition, movements, active, canDelete, canEdit, canSupplement, onToggle, onDelete, onReturn, onAction }: WithdrawalHistoryEntryProps) {
+function WithdrawalHistoryCard({ project, requisition, movements, active, canDelete, canEdit, canSupplement, canCancel, onToggle, onDelete, onReturn, onAction, onCancel }: WithdrawalHistoryEntryProps) {
   const latest = latestRequisitionActivity(requisition, movements);
   const materialCount = getRequisitionMaterialSummaries(project, requisition.id).length;
   return <article data-expanded={active} className={`withdrawal-record overflow-hidden rounded-lg border bg-card ${active ? 'border-primary/60' : 'border-border'}`}>
@@ -692,11 +710,11 @@ function WithdrawalHistoryCard({ project, requisition, movements, active, canDel
       <div className="mt-1 text-xs text-muted-foreground">{materialCount} item(ns) · Operação: {formatOperationalDate(requisition.date)}</div>
       <div className="text-xs text-muted-foreground">Último registro: {formatRecordedAt({ createdAt: latest }, requisition.date)}</div>
     </button>
-    {active && <div data-testid="withdrawal-history-details" className="withdrawal-detail withdrawal-branch mb-3 mr-2 rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} onDelete={onDelete} onReturn={onReturn} onAction={onAction} /></div>}
+    {active && <div data-testid="withdrawal-history-details" className="withdrawal-detail withdrawal-branch mb-3 mr-2 rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel} onDelete={onDelete} onReturn={onReturn} onAction={onAction} onCancel={onCancel} /></div>}
   </article>;
 }
 
-function WithdrawalHistoryRow({ project, requisition, movements, active, canDelete, canEdit, canSupplement, onToggle, onDelete, onReturn, onAction }: WithdrawalHistoryEntryProps) {
+function WithdrawalHistoryRow({ project, requisition, movements, active, canDelete, canEdit, canSupplement, canCancel, onToggle, onDelete, onReturn, onAction, onCancel }: WithdrawalHistoryEntryProps) {
   const latest = latestRequisitionActivity(requisition, movements);
   const materialCount = getRequisitionMaterialSummaries(project, requisition.id).length;
   return <Fragment>
@@ -707,10 +725,10 @@ function WithdrawalHistoryRow({ project, requisition, movements, active, canDele
       <td className="p-2">{formatRecordedAt({ createdAt: latest }, requisition.date)}</td>
       <td className="p-2 font-semibold">{requisition.receiverName || requisition.requesterName || '—'}</td>
       <td className="p-2 text-center">{materialCount}</td>
-      <td className="p-2"><WarehouseStatusBadge label={requisition.status === 'rascunho' ? 'Pendente legado' : 'Entregue'} tone={requisition.status === 'rascunho' ? 'warning' : 'success'} /></td>
+      <td className="p-2"><WarehouseStatusBadge label={requisition.status === 'cancelada' ? 'Cancelada' : requisition.status === 'rascunho' ? 'Pendente legado' : 'Entregue'} tone={requisition.status === 'cancelada' ? 'neutral' : requisition.status === 'rascunho' ? 'warning' : 'success'} /></td>
       <td className="p-2"><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} createdAt={requisition.createdAt} updatedAt={requisition.updatedAt} className="space-y-0.5" /></td>
     </tr>
-    {active && <tr data-testid="withdrawal-history-details" className="withdrawal-detail-row"><td colSpan={8} className="!px-0 py-3"><div className="withdrawal-detail withdrawal-branch rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} onDelete={onDelete} onReturn={onReturn} onAction={onAction} /></div></td></tr>}
+    {active && <tr data-testid="withdrawal-history-details" className="withdrawal-detail-row"><td colSpan={8} className="!px-0 py-3"><div className="withdrawal-detail withdrawal-branch rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel} onDelete={onDelete} onReturn={onReturn} onAction={onAction} onCancel={onCancel} /></div></td></tr>}
   </Fragment>;
 }
 
@@ -719,7 +737,7 @@ function PhotoPreview({ file, onRemove }: { file: File; onRemove: () => void }) 
   return <div className="relative aspect-square overflow-hidden rounded-md border"><img src={url} alt={file.name} className="h-full w-full object-cover" onLoad={() => URL.revokeObjectURL(url)} /><Button type="button" size="icon" variant="destructive" className="absolute right-1 top-1 h-8 w-8" onClick={onRemove} aria-label={`Remover ${file.name}`}><X className="h-4 w-4" /></Button></div>;
 }
 
-function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupplement, onDelete, onReturn, onAction }: { project: Project; requisition: WarehouseRequisition; canDelete: boolean; canEdit: boolean; canSupplement: boolean; onDelete: () => void; onReturn: () => void; onAction: () => void }) {
+function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupplement, canCancel, onDelete, onReturn, onAction, onCancel }: { project: Project; requisition: WarehouseRequisition; canDelete: boolean; canEdit: boolean; canSupplement: boolean; canCancel: boolean; onDelete: () => void; onReturn: () => void; onAction: () => void; onCancel: () => void }) {
   const [expandedMaterialKeys, setExpandedMaterialKeys] = useState<Set<string>>(new Set());
   const returns = ensureWarehouse(project).warehouse!.movements
     .filter(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.requisitionId === requisition.id && !movement.reversedById)
@@ -738,6 +756,7 @@ function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupple
     <Button size="sm" variant="outline" className="h-8 px-2 text-[11px]" onClick={() => void import('./pdf').then(({ generateRequisitionReceipt }) => generateRequisitionReceipt(project, requisition))}><FileDown className="mr-1 h-3.5 w-3.5" />PDF</Button>
     {canCorrect && requisition.status === 'entregue' && <Button size="sm" variant="outline" className="h-8 px-2 text-[11px]" onClick={event => { event.stopPropagation(); onAction(); }} onPointerDown={event => event.stopPropagation()}><Pencil className="mr-1 h-3.5 w-3.5" />Ações da retirada</Button>}
     {hasReturnable && <Button size="sm" className="h-8 px-2 text-[11px]" onClick={onReturn}><RotateCcw className="mr-1 h-3.5 w-3.5" />Registrar devolução</Button>}
+    {canCancel && requisition.status === 'entregue' && <Button size="sm" variant="outline" className="h-8 px-2 text-[11px] text-destructive hover:text-destructive" onClick={onCancel}><RotateCcw className="mr-1 h-3.5 w-3.5" />Cancelar retirada</Button>}
     {canDelete && <Button size="sm" variant="destructive" className="h-8 px-2 text-[11px]" onClick={onDelete}><Trash2 className="mr-1 h-3.5 w-3.5" />Excluir</Button>}
   </div>;
   return <div className="space-y-2">
@@ -798,7 +817,7 @@ async function executeCloudOperation(
   return confirmation;
 }
 
-function SupplementDeliveryEditor({ project, requisition, supplement, auditActor, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onCommitCloudOperation, onSavingChange, onClose }: {
+function SupplementDeliveryEditor({ project, requisition, supplement, auditActor, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onCommitCloudOperation, onRunCriticalCloudOperation, onSavingChange, onClose }: {
   project: Project;
   requisition: WarehouseRequisition;
   supplement: WarehouseRequisitionSupplement;
@@ -807,6 +826,7 @@ function SupplementDeliveryEditor({ project, requisition, supplement, auditActor
   onCloudOperationConfirmed?: (confirmation: WarehouseCloudCommitResult) => void | Promise<void>;
   onPrepareCloudOperation?: () => void | Promise<void>;
   onCommitCloudOperation?: CommitCloudOperation;
+  onRunCriticalCloudOperation?: Props['onRunCriticalCloudOperation'];
   onSavingChange: (saving: boolean) => void;
   onClose: () => void;
 }) {
@@ -853,19 +873,22 @@ function SupplementDeliveryEditor({ project, requisition, supplement, auditActor
     setSaving(true);
     onSavingChange(true);
     try {
-      const result = correctRequisitionSupplement(project, {
-        requisitionId: requisition.id,
-        supplementId: supplement.id,
-        items,
-        reason: reason.trim(),
-        idempotencyKey: operationKey,
-      }, auditActor);
-      await executeCloudOperation(project, result.project, {
-        type: 'supplement_correction',
-        requisitionId: requisition.id,
-        supplementId: supplement.id,
-        operationKey,
-      }, { onCommitCloudOperation, onPrepareCloudOperation, onCloudOperationConfirmed, onProjectChange });
+      const operation = async () => {
+        const result = correctRequisitionSupplement(project, {
+          requisitionId: requisition.id,
+          supplementId: supplement.id,
+          items,
+          reason: reason.trim(),
+          idempotencyKey: operationKey,
+        }, auditActor);
+        await executeCloudOperation(project, result.project, {
+          type: 'supplement_correction',
+          requisitionId: requisition.id,
+          supplementId: supplement.id,
+          operationKey,
+        }, { onCommitCloudOperation, onPrepareCloudOperation, onCloudOperationConfirmed, onProjectChange });
+      };
+      await (onRunCriticalCloudOperation ? onRunCriticalCloudOperation(operation) : operation());
       toast.success(items.length ? 'Complemento corrigido e estoque atualizado.' : 'Complemento estornado e estoque recomposto.');
       onClose();
     } catch (error) {
@@ -942,6 +965,7 @@ function RequisitionActionDialog({ project, requisition, auditActor, canEditOrig
   const [materialSearch, setMaterialSearch] = useState('');
   const [saving, setSaving] = useState(false);
   const [supplementSaving, setSupplementSaving] = useState(false);
+  const [correctionIdempotencyKey, setCorrectionIdempotencyKey] = useState(() => uidWarehouse());
   const [complementIdempotencyKey, setComplementIdempotencyKey] = useState(() => uidWarehouse());
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
@@ -959,6 +983,7 @@ function RequisitionActionDialog({ project, requisition, auditActor, canEditOrig
     setSignatureReceiver(undefined);
     setPhotos([]);
     setMaterialSearch('');
+    setCorrectionIdempotencyKey(uidWarehouse());
     setComplementIdempotencyKey(uidWarehouse());
   }, [project, requisition]);
 
@@ -1007,11 +1032,13 @@ function RequisitionActionDialog({ project, requisition, auditActor, canEditOrig
     setSaving(true);
     try {
       const chapter = chapters.find(candidate => candidate.id === correctionChapterId);
-      const operationKey = `${requisition.id}:correction:${JSON.stringify({ correctionItems, correctionChapterId, correctionReason: correctionReason.trim() })}`;
-      const next = correctDeliveredRequisition(project, requisition.id, { items: correctionItems, chapterId: correctionChapterId, chapterName: chapter?.name, reason: correctionReason.trim(), idempotencyKey: operationKey }, auditActor);
-      await executeCloudOperation(project, next, { type: 'correction', requisitionId: requisition.id, operationKey }, {
-        onCommitCloudOperation, onPrepareCloudOperation, onCloudOperationConfirmed, onProjectChange,
-      });
+      const operation = async () => {
+        const next = correctDeliveredRequisition(project, requisition.id, { items: correctionItems, chapterId: correctionChapterId, chapterName: chapter?.name, reason: correctionReason.trim(), idempotencyKey: correctionIdempotencyKey }, auditActor);
+        await executeCloudOperation(project, next, { type: 'correction', requisitionId: requisition.id, operationKey: correctionIdempotencyKey }, {
+          onCommitCloudOperation, onPrepareCloudOperation, onCloudOperationConfirmed, onProjectChange,
+        });
+      };
+      await (onRunCriticalCloudOperation ? onRunCriticalCloudOperation(operation) : operation());
       toast.success('Retirada corrigida e histórico registrado.');
       onClose();
     } catch (error) {
@@ -1052,14 +1079,14 @@ function RequisitionActionDialog({ project, requisition, auditActor, canEditOrig
           <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm"><strong>{requisition.number}</strong><span className="text-muted-foreground"> · requisição com histórico preservado</span><div className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3"><span>Data: <strong className="text-foreground">{formatOperationalDate(requisition.date)}</strong></span><span>Destino: <strong className="text-foreground">{requisition.chapterName || 'Não informado'}</strong></span><span>Recebedor: <strong className="text-foreground">{requisition.receiverName || requisition.requesterName || '—'}</strong></span></div></div>
 
           <section className="rounded-xl border">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 p-3"><div><h3 className="text-sm font-bold">Materiais da retirada original</h3><p className="text-xs text-muted-foreground">A retirada original permanece separada dos complementos.</p></div>{canEditOriginal && !editingOriginal && <Button type="button" variant="outline" className="min-h-11" disabled={correctionBlocked} onClick={() => setEditingOriginal(true)}><Pencil className="mr-2 h-4 w-4" />Editar retirada</Button>}</div>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 p-3"><div><h3 className="text-sm font-bold">Materiais da retirada original</h3><p className="text-xs text-muted-foreground">A retirada original permanece separada dos complementos.</p></div>{canEditOriginal && !editingOriginal && <Button type="button" variant="outline" className="min-h-11" disabled={correctionBlocked} onClick={() => { setCorrectionIdempotencyKey(uidWarehouse()); setEditingOriginal(true); }}><Pencil className="mr-2 h-4 w-4" />Editar retirada</Button>}</div>
             <div className="space-y-2 p-3">{(editingOriginal ? correctionItems : requisition.items).map((item, index) => <div key={`${item.itemKey}-${index}`} className="grid gap-2 rounded-lg border bg-background p-3 sm:grid-cols-[1fr_120px_120px_44px]"><div className="min-w-0"><div className="break-words text-sm font-bold">{materialDisplayName(item.code, item.description)}</div><div className="text-xs text-muted-foreground">{item.code || 'Sem código'} · {item.unit}</div></div>{editingOriginal ? <><Input className="min-h-11 text-center text-base" type="number" min="0" step="any" value={item.quantity || ''} onChange={event => setCorrectionItems(current => current.map((entry, itemIndex) => itemIndex === index ? { ...entry, quantity: Number(event.target.value) } : entry))} aria-label={`Quantidade corrigida de ${materialDisplayName(item.code, item.description)}`} /><span className="text-center text-xs text-muted-foreground">Saldo {rows.find(row => row.key === item.itemKey)?.balance.toLocaleString('pt-BR') ?? '0'}</span><Button type="button" size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" disabled={correctionItems.length === 1} onClick={() => setCorrectionItems(current => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remover ${materialDisplayName(item.code, item.description)}`}><Trash2 className="h-4 w-4" /></Button></> : <><span className="text-right font-mono font-bold sm:col-span-3">{item.quantity.toLocaleString('pt-BR')} {item.unit}</span></>}</div>)}
-              {editingOriginal && <><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input className="min-h-11 pl-9 text-base" value={materialSearch} onChange={event => setMaterialSearch(event.target.value)} placeholder="Buscar material para a correção" /></div><div className="max-h-44 overflow-y-auto rounded-lg border">{rows.filter(row => row.balance > 0 && !correctionItems.some(item => item.itemKey === row.key)).filter(row => normalizeSearch([row.code, row.description, row.unit].join(' ')).includes(normalizeSearch(materialSearch))).map(row => <button type="button" key={row.key} className="flex min-h-14 w-full items-center gap-3 border-b px-3 text-left last:border-0 hover:bg-primary/10" onClick={() => addCorrectionMaterial(row.key)}><span className="min-w-0 flex-1"><span className="block break-words text-sm font-bold">{materialDisplayName(row.code, row.description)}</span><span className="text-xs text-muted-foreground">{row.unit} · saldo {row.balance.toLocaleString('pt-BR')}</span></span><Plus className="h-4 w-4 text-primary" /></button>)}</div><WarehouseField label="Prédio / destino"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={correctionChapterId} onChange={event => setCorrectionChapterId(event.target.value)} aria-label="Prédio / destino da correção"><option value="">Selecione</option>{chapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapter.name}</option>)}</select></WarehouseField><WarehouseField label="Motivo da correção"><Input className="min-h-11 text-base" value={correctionReason} onChange={event => setCorrectionReason(event.target.value)} placeholder="Explique o que foi ajustado" required /></WarehouseField><div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="outline" className="min-h-11" disabled={saving} onClick={() => { setEditingOriginal(false); setCorrectionItems(requisition.items.map(item => ({ ...item, description: materialDisplayName(item.code, item.description) }))); setCorrectionReason(''); }}>Cancelar edição</Button><Button type="button" className="min-h-11" disabled={saving || correctionBlocked} onClick={() => void saveCorrection()}><Check className="mr-2 h-4 w-4" />{saving ? 'Salvando na nuvem...' : 'Salvar edição'}</Button></div></>}
+              {editingOriginal && <><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input className="min-h-11 pl-9 text-base" value={materialSearch} onChange={event => setMaterialSearch(event.target.value)} placeholder="Buscar material para a correção" /></div><div className="max-h-44 overflow-y-auto rounded-lg border">{rows.filter(row => row.balance > 0 && !correctionItems.some(item => item.itemKey === row.key)).filter(row => normalizeSearch([row.code, row.description, row.unit].join(' ')).includes(normalizeSearch(materialSearch))).map(row => <button type="button" key={row.key} className="flex min-h-14 w-full items-center gap-3 border-b px-3 text-left last:border-0 hover:bg-primary/10" onClick={() => addCorrectionMaterial(row.key)}><span className="min-w-0 flex-1"><span className="block break-words text-sm font-bold">{materialDisplayName(row.code, row.description)}</span><span className="text-xs text-muted-foreground">{row.unit} · saldo {row.balance.toLocaleString('pt-BR')}</span></span><Plus className="h-4 w-4 text-primary" /></button>)}</div><WarehouseField label="Prédio / destino"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={correctionChapterId} onChange={event => setCorrectionChapterId(event.target.value)} aria-label="Prédio / destino da correção"><option value="">Selecione</option>{chapters.map(chapter => <option key={chapter.id} value={chapter.id}>{chapter.name}</option>)}</select></WarehouseField><WarehouseField label="Motivo da correção"><Input className="min-h-11 text-base" value={correctionReason} onChange={event => setCorrectionReason(event.target.value)} placeholder="Explique o que foi ajustado" required /></WarehouseField><div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="outline" className="min-h-11" disabled={saving} onClick={() => { setEditingOriginal(false); setCorrectionItems(requisition.items.map(item => ({ ...item, description: materialDisplayName(item.code, item.description) }))); setCorrectionReason(''); setCorrectionIdempotencyKey(uidWarehouse()); }}>Cancelar edição</Button><Button type="button" className="min-h-11" disabled={saving || correctionBlocked} onClick={() => void saveCorrection()}><Check className="mr-2 h-4 w-4" />{saving ? 'Salvando correção na nuvem...' : 'Salvar edição'}</Button></div></>}
             </div>
             {correctionBlocked && canEditOriginal && <div className="border-t bg-warning/10 p-3 text-sm">Esta retirada possui devolução registrada; a edição original está bloqueada.</div>}
           </section>
 
-          {!!requisition.supplements?.length && <section className="space-y-3"><div><h3 className="text-sm font-bold">Complementos confirmados</h3><p className="text-xs text-muted-foreground">Cada entrega permanece identificada, embora a lista principal some materiais iguais.</p></div>{requisition.supplements.map(supplement => canEditSupplements ? <SupplementDeliveryEditor key={supplement.id} project={project} requisition={requisition} supplement={supplement} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onSavingChange={setSupplementSaving} onClose={onClose} /> : <section key={supplement.id} className="rounded-xl border bg-muted/20 p-3"><div className="flex items-center justify-between gap-2"><strong>Complemento de {formatOperationalDate(supplement.date)}</strong><WarehouseStatusBadge label={supplement.status === 'cancelled' ? 'Estornado' : 'Confirmado'} tone={supplement.status === 'cancelled' ? 'neutral' : 'success'} /></div><div className="mt-2 space-y-1 text-sm">{(supplement.status === 'cancelled' ? supplement.cancelledItems ?? supplement.items : supplement.items).map(item => <div key={item.movementId ?? item.itemKey} className={supplement.status === 'cancelled' ? 'line-through text-muted-foreground' : ''}>{materialDisplayName(item.code, item.description)} · {item.quantity.toLocaleString('pt-BR')} {item.unit}</div>)}</div></section>)}</section>}
+          {!!requisition.supplements?.length && <section className="space-y-3"><div><h3 className="text-sm font-bold">Complementos confirmados</h3><p className="text-xs text-muted-foreground">Cada entrega permanece identificada, embora a lista principal some materiais iguais.</p></div>{requisition.supplements.map(supplement => canEditSupplements ? <SupplementDeliveryEditor key={supplement.id} project={project} requisition={requisition} supplement={supplement} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onRunCriticalCloudOperation={onRunCriticalCloudOperation} onSavingChange={setSupplementSaving} onClose={onClose} /> : <section key={supplement.id} className="rounded-xl border bg-muted/20 p-3"><div className="flex items-center justify-between gap-2"><strong>Complemento de {formatOperationalDate(supplement.date)}</strong><WarehouseStatusBadge label={supplement.status === 'cancelled' ? 'Estornado' : 'Confirmado'} tone={supplement.status === 'cancelled' ? 'neutral' : 'success'} /></div><div className="mt-2 space-y-1 text-sm">{(supplement.status === 'cancelled' ? supplement.cancelledItems ?? supplement.items : supplement.items).map(item => <div key={item.movementId ?? item.itemKey} className={supplement.status === 'cancelled' ? 'line-through text-muted-foreground' : ''}>{materialDisplayName(item.code, item.description)} · {item.quantity.toLocaleString('pt-BR')} {item.unit}</div>)}</div></section>)}</section>}
 
           {canEditSupplements && <section className="rounded-xl border border-primary/25">
             <div className="border-b bg-primary/5 p-3"><h3 className="text-sm font-bold text-primary">Adicionar complemento</h3><p className="text-xs text-muted-foreground">Acrescente materiais na mesma requisição sem alterar as entregas anteriores.</p></div>
@@ -1071,6 +1098,75 @@ function RequisitionActionDialog({ project, requisition, auditActor, canEditOrig
     </DialogContent>
   </Dialog>;
 }
+function CancelRequisitionDialog({ project, requisition, auditActor, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onCommitCloudOperation, onRunCriticalCloudOperation, onClose }: {
+  project: Project;
+  requisition: WarehouseRequisition | null;
+  auditActor?: WarehouseAuditActor;
+  onProjectChange: (project: Project) => void;
+  onCloudOperationConfirmed?: (confirmation: WarehouseCloudCommitResult) => void | Promise<void>;
+  onPrepareCloudOperation?: () => void | Promise<void>;
+  onCommitCloudOperation?: CommitCloudOperation;
+  onRunCriticalCloudOperation?: Props['onRunCriticalCloudOperation'];
+  onClose: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  const [materialsConfirmedInWarehouse, setMaterialsConfirmedInWarehouse] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [idempotencyKey, setIdempotencyKey] = useState(() => uidWarehouse());
+  const requisitionId = requisition?.id;
+  const returnable = useMemo(() => requisition ? getRequisitionMaterialSummaries(project, requisition.id)
+    .filter(item => item.availableQuantity > 0) : [], [project, requisition]);
+
+  useEffect(() => {
+    if (!requisitionId) return;
+    setReason('');
+    setMaterialsConfirmedInWarehouse(false);
+    setSaving(false);
+    setIdempotencyKey(uidWarehouse());
+  }, [requisitionId]);
+
+  const submit = async () => {
+    if (!requisition || saving) return;
+    if (!reason.trim()) return void toast.error('Informe o motivo do cancelamento.');
+    if (!materialsConfirmedInWarehouse) return void toast.error('Confirme a situação física dos materiais antes de cancelar.');
+    setSaving(true);
+    try {
+      const operation = async () => {
+        const next = cancelDeliveredRequisition(project, requisition.id, {
+          reason,
+          materialsConfirmedInWarehouse,
+          idempotencyKey,
+        }, auditActor);
+        await executeCloudOperation(project, next, {
+          type: 'cancellation', requisitionId: requisition.id, operationKey: idempotencyKey,
+        }, { onCommitCloudOperation, onPrepareCloudOperation, onCloudOperationConfirmed, onProjectChange });
+      };
+      await (onRunCriticalCloudOperation ? onRunCriticalCloudOperation(operation) : operation());
+      toast.success('Retirada cancelada, saldo recomposto e histórico preservado.');
+      onClose();
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <Dialog open={!!requisition} onOpenChange={open => !open && !saving && onClose()}>
+    <DialogContent className="warehouse-ui max-w-2xl">
+      <DialogHeader>
+        <DialogTitle>Cancelar retirada e retirar da lista ativa</DialogTitle>
+        <DialogDescription>A requisição, assinatura e movimentos permanecem no histórico. Somente o saldo ainda em campo será recomposto.</DialogDescription>
+      </DialogHeader>
+      {requisition && <div className="space-y-4">
+        <div className="rounded-lg border bg-muted/30 p-3 text-sm"><strong>{requisition.number}</strong><div className="mt-1 text-muted-foreground">{returnable.length ? `${returnable.length} material(is) ainda serão devolvidos ao saldo.` : 'Não há saldo pendente em campo; somente o status será cancelado.'}</div></div>
+        <WarehouseField label="Motivo do cancelamento"><textarea className="min-h-24 w-full rounded-md border bg-background p-3 text-base" value={reason} disabled={saving} onChange={event => setReason(event.target.value)} placeholder="Ex.: retirada lançada por engano; materiais não saíram do Almoxarifado." /></WarehouseField>
+        <label className="flex min-h-11 items-start gap-3 rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm"><input className="mt-1 h-5 w-5 accent-primary" type="checkbox" checked={materialsConfirmedInWarehouse} disabled={saving} onChange={event => setMaterialsConfirmedInWarehouse(event.target.checked)} /><span><strong>Confirmo a situação física</strong><br /><span className="text-muted-foreground">Os materiais ainda em campo não foram aplicados e estão disponíveis para retornar ao Almoxarifado.</span></span></label>
+      </div>}
+      <DialogFooter><Button variant="outline" disabled={saving} onClick={onClose}>Voltar</Button><Button variant="destructive" disabled={saving || !reason.trim() || !materialsConfirmedInWarehouse} onClick={() => void submit()}>{saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}{saving ? 'Cancelando na nuvem...' : 'Confirmar cancelamento'}</Button></DialogFooter>
+    </DialogContent>
+  </Dialog>;
+}
+
 function MaterialReturnDialog({ project, requisition, auditActor, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onCommitCloudOperation, onClose }: {
   project: Project;
   requisition: WarehouseRequisition | null;

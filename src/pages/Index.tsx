@@ -2080,32 +2080,9 @@ export default function Index() {
       throw new Error('A retirada foi confirmada, mas outra obra está aberta. Reabra a obra para conferir o histórico.');
     }
 
-    let confirmedProject = confirmation.project;
-    const confirmedReports = new Map<string, DailyReport | null>();
-    for (const change of confirmation.dailyReportChanges) {
-      if (!change.before && !change.after) continue;
-      const reference = change.after ?? change.before!;
-      const emptyReport: DailyReport = {
-        id: reference.id,
-        date: reference.date,
-        teamsPresent: [],
-        equipment: [],
-        attachments: [],
-        createdAt: reference.createdAt,
-        updatedAt: reference.updatedAt,
-      };
-      const saved = await saveOpenDailyReport(
-        confirmedProject.id,
-        change.before ?? emptyReport,
-        change.after ?? emptyReport,
-      );
-      confirmedReports.set(change.date, saved.report);
-      confirmedProject = replaceReportForDate(confirmedProject, change.date, saved.report);
-    }
-
-    // A transação já foi confirmada no servidor, mas a interface pode ter
-    // mudado de obra enquanto os Diários vinculados eram conciliados. Nesse
-    // caso, não contamine os refs globais da nova obra.
+    // A resposta da RPC do Almoxarifado é a confirmação oficial da retirada,
+    // movimentos e auditoria. Um espelho legado no Diário jamais pode segurar
+    // este ponto nem transformar uma confirmação em aparente falha.
     if (rawProjectRef.current?.id !== confirmation.project.id) {
       setCloudList(previous => previous.map(meta => meta.id === confirmation.project.id
         ? { ...meta, updatedAt: confirmation.projectUpdatedAt }
@@ -2113,19 +2090,12 @@ export default function Index() {
       throw new Error('A retirada foi salva na nuvem, mas outra obra está aberta. Reabra a obra original para conferi-la.');
     }
 
-    const enrichedConfirmation: WarehouseCloudCommitResult = {
-      ...confirmation,
-      project: confirmedProject,
-    };
     const parseSavedBaseline = () => {
       if (!lastSavedProjectJsonRef.current) return active;
       try { return JSON.parse(lastSavedProjectJsonRef.current) as Project; }
       catch { return active; }
     };
-    let savedBaseline = mergeWarehouseCloudCommit(parseSavedBaseline(), enrichedConfirmation);
-    for (const [date, report] of confirmedReports) {
-      savedBaseline = replaceReportForDate(savedBaseline, date, report);
-    }
+    const savedBaseline = mergeWarehouseCloudCommit(parseSavedBaseline(), confirmation);
     const savedBaselineJson = serializeProject(savedBaseline);
     lastSavedProjectJsonRef.current = savedBaselineJson;
 
@@ -2148,8 +2118,7 @@ export default function Index() {
 
     setRawProject(current => {
       if (!current || current.id !== confirmation.project.id) return current;
-      let merged = mergeWarehouseCloudCommit(current, enrichedConfirmation);
-      for (const [date, report] of confirmedReports) merged = replaceReportForDate(merged, date, report);
+      const merged = mergeWarehouseCloudCommit(current, confirmation);
       const fullyConfirmed = serializeProject(merged) === savedBaselineJson;
       if (fullyConfirmed) {
         if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
@@ -2164,7 +2133,57 @@ export default function Index() {
       rawProjectRef.current = merged;
       return merged;
     });
-  }, [discardProjectDraft, scheduleProjectDraft]);
+
+    // O Diário é uma projeção complementar de registros antigos. Ele é
+    // conciliado depois da confirmação, em fila própria, sem repetir a baixa
+    // nem travar o modal de retirada/correção se estiver indisponível.
+    const dailyChanges = confirmation.dailyReportChanges.filter(change => !!change.before || !!change.after);
+    if (dailyChanges.length > 0) {
+      const reconcileDailyMirror = async () => {
+        for (const change of dailyChanges) {
+          const reference = change.after ?? change.before!;
+          const emptyReport: DailyReport = {
+            id: reference.id,
+            date: reference.date,
+            teamsPresent: [],
+            equipment: [],
+            attachments: [],
+            createdAt: reference.createdAt,
+            updatedAt: reference.updatedAt,
+          };
+          const beforeReport = change.before ?? emptyReport;
+          const afterReport = change.after ?? emptyReport;
+          const request = dailyReportSaveQueueRef.current
+            .catch(() => undefined)
+            .then(() => saveOpenDailyReport(confirmation.project.id, beforeReport, afterReport));
+          dailyReportSaveQueueRef.current = request;
+          try {
+            const saved = await request;
+            mergeConfirmedDailyReportIntoPartialSync(confirmation.project.id, change.date, saved.report);
+            lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, change.date, saved.report);
+            clearLocalProjectCollections(confirmation.project.id, ['dailyReports']);
+            setRawProject(current => {
+              if (!current || current.id !== confirmation.project.id) return current;
+              const currentReport = reportForDate(current, change.date);
+              // Não sobrescreve uma edição de Diário feita após a retirada.
+              if (currentReport && JSON.stringify(currentReport) !== JSON.stringify(afterReport)) return current;
+              const next = replaceReportForDate(current, change.date, saved.report);
+              rawProjectRef.current = next;
+              return next;
+            });
+          } catch (error) {
+            console.warn('Retirada confirmada; falhou apenas a projeção complementar no Diário.', error);
+            setDailyReportSaveErrors(errors => ({
+              ...errors,
+              [change.date]: 'A retirada foi salva. O espelho deste Diário será reconciliado ao abrir a área.',
+            }));
+            toast.warning('Retirada salva na nuvem. O espelho do Diário será reconciliado separadamente.');
+          }
+        }
+      };
+      void reconcileDailyMirror();
+    }
+  }, [clearLocalProjectCollections, discardProjectDraft, mergeConfirmedDailyReportIntoPartialSync, scheduleProjectDraft]);
 
   const commitWarehouseRequisitionNow = useCallback((
     before: Project,
@@ -2773,7 +2792,9 @@ export default function Index() {
             canApproveInventory={role === 'owner' || role === 'admin'}
             canArchiveWarehouseRecords={warehouseEditor}
             canEditPostedWarehouseRecords={role === 'owner'}
+            canCorrectDeliveredRequisitions={warehouseEditor}
             canSupplementRequisitions={warehouseEditor}
+            canCancelDeliveredRequisitions={warehouseEditor}
             canDeleteWarehouseRecords={role === 'owner'}
             canManageEquipmentGroups={role === 'owner' || role === 'warehouse_operator'}
             canOptimizeStorage={role === 'owner'}

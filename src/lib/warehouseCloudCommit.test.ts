@@ -3,6 +3,8 @@ import type { Project, WarehouseRequisition } from '@/types/project';
 import {
   addMovement,
   addRequisitionSupplement,
+  cancelDeliveredRequisition,
+  correctDeliveredRequisition,
   correctRequisitionSupplement,
   createAndDeliverRequisition,
   emptyWarehouse,
@@ -176,6 +178,60 @@ describe('confirmação transacional do Almoxarifado', () => {
     expect(merged.name).toBe('Nome local ainda pendente');
     expect(merged.warehouse!.items).toEqual(current.warehouse!.items);
     expect(merged.warehouse!.requisitions).toEqual(confirmedProject.warehouse!.requisitions);
+  });
+
+  it('envia correção e cancelamento da retirada à RPC segura de ajuste, sem usar exclusão física', async () => {
+    const delivered = createAndDeliverRequisition(stockedProject(), {
+      date: '2026-09-12', chapterId: 'chapter-1', receiverName: 'CANANDA', requesterName: 'CANANDA',
+      signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'delivery-adjustment',
+      items: [{ itemKey: 'placa', description: 'Placa', unit: 'UN', quantity: 4 }],
+    }, { actor: { userId: 'warehouse-1', userName: 'Almoxarife' } });
+    const requisition = delivered.project.warehouse!.requisitions[0];
+    const corrected = correctDeliveredRequisition(delivered.project, requisition.id, {
+      items: [{ itemKey: 'placa', description: 'Placa', unit: 'UN', quantity: 2 }],
+      reason: 'Quantidade corrigida', idempotencyKey: 'correction-1',
+    }, { userId: 'warehouse-1', userName: 'Almoxarife' });
+    const correctedRequisition = corrected.warehouse!.requisitions[0];
+    const correctionAudit = corrected.auditLogs!.at(-1)!;
+    rpcMock.mockResolvedValue({
+      data: {
+        requisition: correctedRequisition,
+        movements: corrected.warehouse!.movements,
+        auditLogs: [correctionAudit],
+        committedAt: '2026-09-14T12:00:00.000Z', projectUpdatedAt: '2026-09-14T12:00:00.100Z',
+        warehouseUpdatedAt: '2026-09-14T12:00:00.100Z', warehouseVersion: 10,
+      }, error: null,
+    });
+
+    await commitWarehouseOperation(delivered.project, corrected, {
+      type: 'correction', requisitionId: requisition.id, operationKey: 'correction-1',
+    });
+    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_requisition_adjustment');
+    expect(rpcMock.mock.calls[0][1]).toMatchObject({ p_operation_type: 'correction', p_delete_movement_ids: [] });
+
+    const cancelled = cancelDeliveredRequisition(corrected, requisition.id, {
+      reason: 'Retirada não entregue', materialsConfirmedInWarehouse: true, idempotencyKey: 'cancellation-1',
+    }, { userId: 'warehouse-1', userName: 'Almoxarife' });
+    const cancellationRequisition = cancelled.warehouse!.requisitions[0];
+    const cancellationAudit = cancelled.auditLogs!.at(-1)!;
+    rpcMock.mockResolvedValue({
+      data: {
+        requisition: cancellationRequisition,
+        movements: cancelled.warehouse!.movements,
+        auditLogs: [cancellationAudit],
+        committedAt: '2026-09-14T12:01:00.000Z', projectUpdatedAt: '2026-09-14T12:01:00.100Z',
+        warehouseUpdatedAt: '2026-09-14T12:01:00.100Z', warehouseVersion: 11,
+      }, error: null,
+    });
+
+    await commitWarehouseOperation(corrected, cancelled, {
+      type: 'cancellation', requisitionId: requisition.id, operationKey: 'cancellation-1',
+    });
+    expect(rpcMock.mock.calls[1][0]).toBe('commit_warehouse_requisition_adjustment');
+    expect(rpcMock.mock.calls[1][1]).toMatchObject({ p_operation_type: 'cancellation', p_delete_movement_ids: [] });
+    expect(rpcMock.mock.calls[1][1].p_upsert_movements).toEqual([
+      expect.objectContaining({ type: 'devolucao', originType: 'cancellation' }),
+    ]);
   });
 
   it('confirma a correção de um complemento pela RPC dedicada sem reenviar a retirada inteira como operação genérica', async () => {

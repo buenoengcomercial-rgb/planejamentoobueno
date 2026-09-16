@@ -1025,6 +1025,8 @@ export type WarehouseMovementOriginType =
   | 'withdrawal'
   | 'inventory'
   | 'return'
+  /** Estorno operacional de uma retirada cancelada, sem apagar o histórico. */
+  | 'cancellation'
   | 'loss'
   | 'reversal'
   | 'legacy';
@@ -1260,6 +1262,12 @@ export interface WarehouseRequisition {
   deliveryIdempotencyKey?: string;
   /** Chaves de correções já aplicadas, evitando reenvio concorrente. */
   correctionIdempotencyKeys?: string[];
+  /** Cancelamento conserva a retirada e seus comprovantes apenas no histórico. */
+  cancelledAt?: string;
+  cancelledBy?: WarehouseAuditActor;
+  cancellationReason?: string;
+  /** Chaves já confirmadas para que uma tentativa incerta não gere novo estorno. */
+  cancellationIdempotencyKeys?: string[];
   /** Se true, foi espelhada no diário do dia. */
   publishedToDailyReportId?: string;
   createdAt: string;

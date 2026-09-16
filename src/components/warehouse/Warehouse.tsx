@@ -84,7 +84,9 @@ interface Props {
   canApproveInventory?: boolean;
   canArchiveWarehouseRecords?: boolean;
   canEditPostedWarehouseRecords?: boolean;
+  canCorrectDeliveredRequisitions?: boolean;
   canSupplementRequisitions?: boolean;
+  canCancelDeliveredRequisitions?: boolean;
   canDeleteWarehouseRecords?: boolean;
   canManageEquipmentGroups?: boolean;
   canOptimizeStorage?: boolean;
@@ -96,7 +98,7 @@ interface Props {
   isTabDataReady?: boolean;
 }
 
-export default function Warehouse({ project, onProjectChange, onCommitProject, onCloudWarehouseOperationConfirmed, onPrepareCloudWarehouseOperation, onCommitCloudWarehouseOperation, onRunCriticalCloudWarehouseOperation, onCommitWarehouseScoped, onSaveStorageMaintenanceProject, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canSupplementRequisitions = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor, activeTab, onActiveTabChange, isTabDataReady = true }: Props) {
+export default function Warehouse({ project, onProjectChange, onCommitProject, onCloudWarehouseOperationConfirmed, onPrepareCloudWarehouseOperation, onCommitCloudWarehouseOperation, onRunCriticalCloudWarehouseOperation, onCommitWarehouseScoped, onSaveStorageMaintenanceProject, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canCorrectDeliveredRequisitions = false, canSupplementRequisitions = false, canCancelDeliveredRequisitions = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor, activeTab, onActiveTabChange, isTabDataReady = true }: Props) {
   const [internalTab, setInternalTab] = useState<WarehouseTab>(() => readWarehouseTab(project.id, canViewPanel));
   const tab = activeTab ?? internalTab;
   const setTab = useCallback((next: WarehouseTab) => {
@@ -205,7 +207,7 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
               />
             </TabsContent>
             <TabsContent value="requisicoes" className="mt-3">
-              <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudWarehouseOperationConfirmed} onPrepareCloudOperation={onPrepareCloudWarehouseOperation} onCommitCloudOperation={onCommitCloudWarehouseOperation} onRunCriticalCloudOperation={onRunCriticalCloudWarehouseOperation} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canDelete={canDeleteWarehouseRecords} canEdit={canEditPostedWarehouseRecords} canSupplement={canSupplementRequisitions} />
+              <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudWarehouseOperationConfirmed} onPrepareCloudOperation={onPrepareCloudWarehouseOperation} onCommitCloudOperation={onCommitCloudWarehouseOperation} onRunCriticalCloudOperation={onRunCriticalCloudWarehouseOperation} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canDelete={canDeleteWarehouseRecords} canEdit={canCorrectDeliveredRequisitions} canSupplement={canSupplementRequisitions} canCancel={canCancelDeliveredRequisitions} />
             </TabsContent>
             <TabsContent value="materiais-retirados" className="mt-3">
               <WarehouseWithdrawnMaterialsTab project={ensured} />

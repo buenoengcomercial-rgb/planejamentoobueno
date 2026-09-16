@@ -8,6 +8,7 @@ import {
   closeInventorySession,
   computeWarehouseRows,
   computeWarehouseUsageByChapter,
+  cancelDeliveredRequisition,
   correctDeliveredRequisition,
   correctRequisitionSupplement,
   createEquipmentGroup,
@@ -176,7 +177,7 @@ describe('operação integrada do almoxarifado', () => {
       items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 2 }],
       chapterId: 'chapter-2',
       chapterName: '2 Prédio 2',
-    }, { userId: 'owner-1', userName: 'Proprietário' });
+    }, actor);
 
     expect(computeWarehouseRows(corrected, { includeManual: true })[0].balance).toBe(18);
     expect(corrected.warehouse!.requisitions[0]).toMatchObject({ chapterId: 'chapter-2', chapterName: '2 Prédio 2' });
@@ -187,7 +188,37 @@ describe('operação integrada do almoxarifado', () => {
     expect(corrected.warehouse!.movements.filter(movement => movement.type === 'estorno')).toHaveLength(1);
     expect(corrected.dailyReports?.[0].observations).toContain('Cimento — 2 SC');
     expect(corrected.dailyReports?.[0].observations).toContain('2 Prédio 2');
-    expect(corrected.auditLogs?.at(-1)).toMatchObject({ entityType: 'warehouse_requisition', action: 'updated', userName: 'Proprietário', before: expect.any(Object), after: expect.any(Object), metadata: { operation: 'requisition_correction', requisitionNumber: requisition.number } });
+    expect(corrected.auditLogs?.at(-1)).toMatchObject({ entityType: 'warehouse_requisition', action: 'updated', userName: 'Almoxarife', before: expect.any(Object), after: expect.any(Object), metadata: { operation: 'requisition_correction', requisitionNumber: requisition.number } });
+  });
+
+  it('cancela uma retirada entregue por estorno auditado, sem apagar a requisição ou movimentos', () => {
+    const delivered = createAndDeliverRequisition(withStock(), {
+      date: '2026-08-17', chapterId: 'chapter-1', chapterName: '1 Prédio 1', receiverName: 'Equipe Alpha', requesterName: 'Equipe Alpha', signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'cancelar-1',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 4 }],
+    }, { actor });
+    const requisition = delivered.project.warehouse!.requisitions[0];
+
+    expect(() => cancelDeliveredRequisition(delivered.project, requisition.id, {
+      reason: 'Lançamento em duplicidade', materialsConfirmedInWarehouse: false, idempotencyKey: 'cancelamento-1',
+    }, actor)).toThrow(/confirme/i);
+
+    const cancelled = cancelDeliveredRequisition(delivered.project, requisition.id, {
+      reason: 'Lançamento em duplicidade', materialsConfirmedInWarehouse: true, idempotencyKey: 'cancelamento-1',
+    }, actor);
+    const cancelledRequisition = cancelled.warehouse!.requisitions.find(row => row.id === requisition.id)!;
+    const technicalReturn = cancelled.warehouse!.movements.find(row => row.originId === 'cancelamento-1')!;
+
+    expect(cancelledRequisition).toMatchObject({
+      status: 'cancelada',
+      cancellationReason: 'Lançamento em duplicidade',
+      cancelledBy: { userId: 'user-1' },
+    });
+    expect(technicalReturn).toMatchObject({ type: 'devolucao', originType: 'cancellation', quantity: 4, requisitionId: requisition.id });
+    expect(computeWarehouseRows(cancelled, { includeManual: true })[0].balance).toBe(20);
+    expect(cancelled.auditLogs?.at(-1)).toMatchObject({ metadata: { operation: 'requisition_cancellation' } });
+    expect(cancelDeliveredRequisition(cancelled, requisition.id, {
+      reason: 'Lançamento em duplicidade', materialsConfirmedInWarehouse: true, idempotencyKey: 'cancelamento-1',
+    }, actor).warehouse!.movements.filter(row => row.originId === 'cancelamento-1')).toHaveLength(1);
   });
 
   it('bloqueia correção quando a retirada possui devolução vinculada', () => {

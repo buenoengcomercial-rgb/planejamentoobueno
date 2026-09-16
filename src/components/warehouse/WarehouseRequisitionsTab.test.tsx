@@ -364,10 +364,18 @@ describe('WarehouseRequisitionsTab', () => {
     expect(screen.queryByRole('button', { name: /Ações da retirada/i })).not.toBeInTheDocument();
     first.unmount();
 
-    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit />);
+    const operational = render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit />);
     expandAllWithdrawalDateGroups();
     fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0009/i }));
     expect(screen.getAllByRole('button', { name: /Ações da retirada/i }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Cancelar retirada' })).not.toBeInTheDocument();
+    operational.unmount();
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit canCancel />);
+    expandAllWithdrawalDateGroups();
+    fireEvent.click(screen.getByRole('button', { name: /REQ-2026-0009/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Cancelar retirada' })[0]);
+    expect(screen.getByRole('dialog', { name: /Cancelar retirada e retirar da lista ativa/i })).toBeInTheDocument();
   });
 
   it('exibe o histórico de edição com responsável e data no detalhe', () => {

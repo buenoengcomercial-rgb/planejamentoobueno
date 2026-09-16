@@ -16,6 +16,7 @@ export type WarehouseCloudOperationType =
   | 'supplement_correction'
   | 'return'
   | 'correction'
+  | 'cancellation'
   | 'hard_delete';
 
 export interface WarehouseCloudOperation {
@@ -62,6 +63,7 @@ const operationAuditName: Record<WarehouseCloudOperationType, string> = {
   supplement_correction: 'requisition_supplement_correction',
   return: 'requisition_return',
   correction: 'requisition_correction',
+  cancellation: 'requisition_cancellation',
   hard_delete: 'requisition_hard_delete',
 };
 
@@ -111,14 +113,20 @@ function warehouseCommitError(error: { code?: string; message?: string }): Error
   if (/WAREHOUSE_SUPPLEMENT_HAS_RETURN/.test(message)) {
     return new Error('Esta requisição possui devolução registrada. Para preservar a rastreabilidade, o complemento não foi alterado.');
   }
+  if (/WAREHOUSE_(?:CORRECTION_SCOPE_VIOLATION|CANCELLATION_SCOPE_VIOLATION|CANCELLATION_RETURN_MISMATCH)/.test(message)) {
+    return new Error('A correção ou o cancelamento não passou pela validação de segurança. Nada foi alterado; atualize o Almoxarifado e tente novamente.');
+  }
   if (/WAREHOUSE_(?:SUPPLEMENT_SCOPE_VIOLATION|INVALID_SUPPLEMENT|INCOMPLETE_SUPPLEMENT_REVERSAL|INVALID_MOVEMENT(?:_REVERSAL)?)/.test(message)) {
     return new Error('A correção do complemento não passou pela validação de segurança. Nada foi alterado; atualize o Almoxarifado e tente novamente.');
   }
   if (/WAREHOUSE_INVALID_AUDIT|null value in column ["']id["'].*audit_logs/i.test(message)) {
     return new Error('A auditoria desta operação não pôde ser validada. Nenhuma requisição ou baixa de estoque foi gravada; atualize a obra e tente novamente.');
   }
-  if (error.code === 'PGRST202' || /commit_warehouse_(?:operation|supplement_correction)|schema cache|could not find the function/i.test(message)) {
+  if (error.code === 'PGRST202' || /commit_warehouse_(?:operation|supplement_correction|requisition_adjustment)|schema cache|could not find the function/i.test(message)) {
     return new Error('A confirmação segura do Almoxarifado ainda não está disponível no servidor. A retirada não foi registrada nem liberada para PDF.');
+  }
+  if (/WAREHOUSE_OWNER_ONLY/.test(message)) {
+    return new Error('Esta ação continua exclusiva do Proprietário. Nenhuma alteração foi confirmada.');
   }
   if (error.code === '42501') {
     return new Error('O servidor não autorizou esta operação no Almoxarifado. Nenhuma alteração foi confirmada.');
@@ -253,7 +261,9 @@ export async function commitWarehouseOperation(
   ) => Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;
   const rpcName = operation.type === 'supplement_correction'
     ? 'commit_warehouse_supplement_correction'
-    : 'commit_warehouse_operation';
+    : operation.type === 'correction' || operation.type === 'cancellation'
+      ? 'commit_warehouse_requisition_adjustment'
+      : 'commit_warehouse_operation';
   const { data, error } = await rpc(rpcName, {
     p_project_id: before.id,
     p_operation_key: operation.operationKey,
