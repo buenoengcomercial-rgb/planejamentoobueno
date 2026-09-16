@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   PROJECT_COLLECTION_KEYS,
   normalizeProjectCollections,
+  projectAreasForCollections,
   projectCollectionsForView,
+  projectCollectionsForRealtimeTable,
 } from '@/lib/projectDataScope';
 
 describe('escopos progressivos de dados da obra', () => {
@@ -47,5 +49,20 @@ describe('escopos progressivos de dados da obra', () => {
   it('mantém capítulos e tarefas como uma fotografia indivisível', () => {
     expect(normalizeProjectCollections(['tasks'])).toEqual(['eapChapters', 'tasks']);
     expect(normalizeProjectCollections(['eapChapters'])).toEqual(['eapChapters', 'tasks']);
+  });
+
+  it('traduz eventos remotos em coleções e áreas sem misturar domínios', () => {
+    expect(projectCollectionsForRealtimeTable('warehouse_requisitions')).toEqual([
+      'warehouseRequisitions',
+    ]);
+    expect(projectCollectionsForRealtimeTable('tasks')).toEqual(['eapChapters', 'tasks']);
+    expect(projectCollectionsForRealtimeTable('projects')).toEqual([]);
+    expect(projectCollectionsForRealtimeTable('tabela_desconhecida')).toEqual([]);
+
+    expect(projectAreasForCollections([
+      'warehouseRequisitions',
+      'dailyReports',
+      'tasks',
+    ])).toEqual(['Almoxarifado', 'Diário de Obra', 'Planejamento e campo']);
   });
 });

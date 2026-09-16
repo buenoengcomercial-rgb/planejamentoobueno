@@ -23,4 +23,9 @@ describe('SaveStatusIndicator', () => {
     rerender(<SaveStatusIndicator status="offline" />);
     expect(screen.getByText('Sem internet')).toBeInTheDocument();
   });
+
+  it('avisa atualizações de outras áreas sem interromper o salvamento atual', () => {
+    render(<SaveStatusIndicator status="saved" pendingRemoteAreas={['Almoxarifado', 'Diário de Obra']} />);
+    expect(screen.getByText('Atualizações em outras áreas: Almoxarifado, Diário de Obra')).toBeInTheDocument();
+  });
 });

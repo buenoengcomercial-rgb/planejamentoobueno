@@ -21,6 +21,58 @@ export const PROJECT_COLLECTION_KEYS = [
 
 export type ProjectCollectionKey = typeof PROJECT_COLLECTION_KEYS[number];
 
+/**
+ * Fronteira única entre eventos do banco e a fotografia parcial da UI.
+ * A EAP é indivisível: qualquer evento de capítulo ou tarefa sempre atualiza
+ * as duas coleções, evitando uma árvore com pai e filhos de versões diferentes.
+ */
+const REALTIME_TABLE_COLLECTIONS: Record<string, readonly ProjectCollectionKey[]> = {
+  warehouse_movements: ['warehouseMovements'],
+  warehouse_requisitions: ['warehouseRequisitions'],
+  warehouse_custody: ['warehouseCustody'],
+  daily_reports: ['dailyReports'],
+  task_daily_logs: ['taskDailyLogs'],
+  measurements: ['measurements'],
+  additives: ['additives'],
+  audit_logs: ['auditLogs'],
+  stock_movements: ['stockMovements'],
+  material_price_history: ['materialPriceHistory'],
+  budget_items: ['budgetItems'],
+  material_comparisons: ['materialComparisons'],
+  analytic_compositions: ['analyticCompositions'],
+  subcontracts: ['subcontracts'],
+  eap_chapters: ['eapChapters', 'tasks'],
+  tasks: ['eapChapters', 'tasks'],
+};
+
+export const PROJECT_REALTIME_TABLES = Object.keys(REALTIME_TABLE_COLLECTIONS) as Array<keyof typeof REALTIME_TABLE_COLLECTIONS>;
+
+const PROJECT_AREA_COLLECTIONS: ReadonlyArray<{
+  label: string;
+  collections: readonly ProjectCollectionKey[];
+}> = [
+  { label: 'Almoxarifado', collections: ['warehouseMovements', 'warehouseRequisitions', 'warehouseCustody', 'stockMovements'] },
+  { label: 'Diário de Obra', collections: ['dailyReports'] },
+  { label: 'Planejamento e campo', collections: ['taskDailyLogs', 'eapChapters', 'tasks'] },
+  { label: 'Medição', collections: ['measurements'] },
+  { label: 'Aditivo', collections: ['additives'] },
+  { label: 'Custos', collections: ['subcontracts'] },
+  { label: 'Materiais e orçamento', collections: ['budgetItems', 'materialComparisons', 'analyticCompositions', 'materialPriceHistory'] },
+  { label: 'Histórico', collections: ['auditLogs'] },
+];
+
+export function projectCollectionsForRealtimeTable(table?: string): ProjectCollectionKey[] {
+  if (!table) return [];
+  return normalizeProjectCollections(REALTIME_TABLE_COLLECTIONS[table] ?? []);
+}
+
+export function projectAreasForCollections(collections: readonly ProjectCollectionKey[]): string[] {
+  const selected = new Set(normalizeProjectCollections(collections));
+  return PROJECT_AREA_COLLECTIONS
+    .filter(area => area.collections.some(collection => selected.has(collection)))
+    .map(area => area.label);
+}
+
 export const WAREHOUSE_TAB_VALUES = [
   'painel',
   'notas',

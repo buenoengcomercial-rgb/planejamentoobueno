@@ -5,8 +5,11 @@ import {
   confirmProjectCollectionsSnapshot,
   discardHydratedProjectCollections,
   getHydratedProjectCollections,
+  getChangedProjectCollections,
+  hasProjectMetadataChanges,
   getLoadedProjectCollections,
   hydrateProjectFromCloud,
+  mergeProjectMetadata,
   mergeHydratedProjectCollections,
   ProjectHydrationError,
   syncCollectionsToCloud,
@@ -77,6 +80,30 @@ beforeEach(() => {
 });
 
 describe('hidratação progressiva da obra', () => {
+  it('detecta somente a coleção alterada e preserva coleções normalizadas ao receber metadados', () => {
+    const before = {
+      ...project('scoped-change'),
+      dailyReports: [{ id: 'report-1', date: '2026-09-14', notes: 'Antes' }],
+      auditLogs: [{ id: 'audit-1', action: 'created' }],
+    } as Project;
+    const after = {
+      ...before,
+      dailyReports: [{ id: 'report-1', date: '2026-09-14', notes: 'Depois' }],
+    } as Project;
+
+    expect(getChangedProjectCollections(before, after)).toEqual(['dailyReports']);
+    expect(hasProjectMetadataChanges(before, after)).toBe(false);
+    expect(hasProjectMetadataChanges(before, { ...before, name: 'Outro nome' })).toBe(true);
+
+    const merged = mergeProjectMetadata(after, {
+      ...project('scoped-change'),
+      name: 'Obra renomeada',
+    });
+    expect(merged.name).toBe('Obra renomeada');
+    expect(merged.dailyReports).toEqual(after.dailyReports);
+    expect(merged.auditLogs).toEqual(after.auditLogs);
+  });
+
   it('consulta somente as tabelas das coleções solicitadas', async () => {
     const current = project('progressive-requested-only');
     clearCloudSnapshot(current.id);

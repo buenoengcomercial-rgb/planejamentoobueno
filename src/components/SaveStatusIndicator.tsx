@@ -10,6 +10,7 @@ interface Props {
   projectId?: string;
   live?: boolean;
   remoteUpdateAt?: string | null;
+  pendingRemoteAreas?: readonly string[];
 }
 
 function timeLabel(value?: string | null) {
@@ -19,7 +20,7 @@ function timeLabel(value?: string | null) {
   return parsed.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
-export default function SaveStatusIndicator({ status, className, confirmedAt, projectId, live, remoteUpdateAt }: Props) {
+export default function SaveStatusIndicator({ status, className, confirmedAt, projectId, live, remoteUpdateAt, pendingRemoteAreas = [] }: Props) {
   const map = {
     idle:   { icon: Cloud,   text: 'Pronto',          color: 'text-muted-foreground' },
     saving: { icon: Loader2, text: 'Salvando...',     color: 'text-muted-foreground', spin: true },
@@ -50,6 +51,11 @@ export default function SaveStatusIndicator({ status, className, confirmedAt, pr
         {live ? 'Tempo real ativo' : 'Tempo real reconectando'}
         {remoteUpdated ? ` · Atualizado por outro usuário ${remoteUpdated}` : ''}
       </span>
+      {pendingRemoteAreas.length > 0 && (
+        <span className="mt-1 max-w-full rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          Atualizações em outras áreas: {pendingRemoteAreas.join(', ')}
+        </span>
+      )}
     </div>
   );
 }

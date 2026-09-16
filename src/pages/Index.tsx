@@ -94,16 +94,23 @@ import {
   confirmProjectCollectionsSnapshot,
   discardHydratedProjectCollections,
   getHydratedProjectCollections,
+  getChangedProjectCollections,
+  hasProjectMetadataChanges,
   getLoadedProjectCollections,
   getMissingProjectCollections,
   hydrateProjectFromCloud,
   mergeHydratedProjectCollections,
+  mergeProjectMetadata,
   ProjectHydrationError,
   ProjectSnapshotUnavailableError,
 } from '@/lib/projectSync';
 import {
   PROJECT_COLLECTION_KEYS,
+  PROJECT_REALTIME_TABLES,
   WORK_START_COLLECTIONS,
+  normalizeProjectCollections,
+  projectAreasForCollections,
+  projectCollectionsForRealtimeTable,
   projectCollectionsForView,
   readWarehouseTab,
   type ProjectCollectionKey,
@@ -274,6 +281,8 @@ export default function Index() {
   const [currentProjectUpdatedAt, setCurrentProjectUpdatedAt] = useState<string | null>(null);
   const [lastCloudConfirmedAt, setLastCloudConfirmedAt] = useState<string | null>(null);
   const [remoteUpdateAt, setRemoteUpdateAt] = useState<string | null>(null);
+  const [pendingRemoteAreas, setPendingRemoteAreas] = useState<string[]>([]);
+  const [remoteDirtyRevision, setRemoteDirtyRevision] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [dailyReportInitialDate, setDailyReportInitialDate] = useState<string | undefined>(undefined);
@@ -342,10 +351,14 @@ export default function Index() {
   const conflictingDraftRef = useRef<{ project: Project; baseUpdatedAt: string | null } | null>(null);
   const remoteCheckInFlightRef = useRef(false);
   const realtimeRefreshTimerRef = useRef<number | null>(null);
+  const pendingRealtimeSourcesRef = useRef<Set<string>>(new Set());
   const lastLocalSaveAtRef = useRef(0);
   const ownWarehouseRealtimeRowsRef = useRef<Map<string, number>>(new Map());
   const currentWarehouseVersionRef = useRef<number | null>(null);
   const realtimeConnectedRef = useRef(false);
+  const remoteDirtyCollectionsRef = useRef<Map<string, Set<ProjectCollectionKey>>>(new Map());
+  const localDirtyCollectionsRef = useRef<Map<string, Set<ProjectCollectionKey>>>(new Map());
+  const localMetadataDirtyRef = useRef<Set<string>>(new Set());
   const dataLoadSequenceRef = useRef(0);
   const projectOpenSequenceRef = useRef(0);
   const activeDataScopeKeyRef = useRef('');
@@ -444,10 +457,74 @@ export default function Index() {
   );
   const requiredProjectCollectionsKey = requiredProjectCollections.join('|');
   activeDataScopeKeyRef.current = requiredProjectCollectionsKey;
+  // Um evento de outra área não hidrata a tela atual. A coleção fica marcada
+  // até o usuário entrar na área correspondente; então a hidratação normal
+  // busca somente aquele domínio e mantém filtros, formulários e scroll.
+  void remoteDirtyRevision;
+  const staleCurrentViewCollections = rawProject
+    ? requiredProjectCollections.filter(collection => remoteDirtyCollectionsRef.current.get(rawProject.id)?.has(collection))
+    : [];
   const missingProjectCollections = rawProject
-    ? getMissingProjectCollections(rawProject.id, requiredProjectCollections)
+    ? normalizeProjectCollections([
+      ...getMissingProjectCollections(rawProject.id, requiredProjectCollections),
+      ...staleCurrentViewCollections,
+    ])
     : requiredProjectCollections;
   const currentViewDataReady = !!rawProject && missingProjectCollections.length === 0;
+
+  const refreshPendingRemoteAreas = useCallback((projectId: string) => {
+    const dirty = [...(remoteDirtyCollectionsRef.current.get(projectId) ?? [])];
+    setPendingRemoteAreas(projectAreasForCollections(dirty));
+  }, []);
+
+  const markRemoteCollections = useCallback((projectId: string, collections: readonly ProjectCollectionKey[]) => {
+    const normalized = normalizeProjectCollections(collections);
+    if (normalized.length === 0) return;
+    const dirty = remoteDirtyCollectionsRef.current.get(projectId) ?? new Set<ProjectCollectionKey>();
+    normalized.forEach(collection => dirty.add(collection));
+    remoteDirtyCollectionsRef.current.set(projectId, dirty);
+    refreshPendingRemoteAreas(projectId);
+    setRemoteDirtyRevision(revision => revision + 1);
+    setRemoteUpdateAt(new Date().toISOString());
+  }, [refreshPendingRemoteAreas]);
+
+  const clearRemoteCollections = useCallback((projectId: string, collections: readonly ProjectCollectionKey[]) => {
+    const dirty = remoteDirtyCollectionsRef.current.get(projectId);
+    if (!dirty) return;
+    normalizeProjectCollections(collections).forEach(collection => dirty.delete(collection));
+    if (dirty.size === 0) remoteDirtyCollectionsRef.current.delete(projectId);
+    refreshPendingRemoteAreas(projectId);
+    setRemoteDirtyRevision(revision => revision + 1);
+  }, [refreshPendingRemoteAreas]);
+
+  const markLocalProjectChanges = useCallback((before: Project, after: Project) => {
+    const changed = getChangedProjectCollections(before, after);
+    if (changed.length > 0) {
+      const dirty = localDirtyCollectionsRef.current.get(after.id) ?? new Set<ProjectCollectionKey>();
+      changed.forEach(collection => dirty.add(collection));
+      localDirtyCollectionsRef.current.set(after.id, dirty);
+    }
+    if (hasProjectMetadataChanges(before, after)) localMetadataDirtyRef.current.add(after.id);
+  }, []);
+
+  const clearLocalProjectCollections = useCallback((projectId: string, collections?: readonly ProjectCollectionKey[]) => {
+    if (!collections) {
+      localDirtyCollectionsRef.current.delete(projectId);
+      localMetadataDirtyRef.current.delete(projectId);
+      return;
+    }
+    const dirty = localDirtyCollectionsRef.current.get(projectId);
+    if (!dirty) return;
+    normalizeProjectCollections(collections).forEach(collection => dirty.delete(collection));
+    if (dirty.size === 0) localDirtyCollectionsRef.current.delete(projectId);
+  }, []);
+
+  const hasLocalCollectionConflict = useCallback((projectId: string, collections: readonly ProjectCollectionKey[]) => {
+    const local = localDirtyCollectionsRef.current.get(projectId);
+    if (!local) return false;
+    return normalizeProjectCollections(collections).some(collection => local.has(collection));
+  }, []);
+
   const synchronizeLoadedProjectSchedule = useCallback((candidate: Project) => (
     getMissingProjectCollections(candidate.id, WORK_START_COLLECTIONS).length === 0
       ? synchronizeProjectScheduleToWorkStart(candidate)
@@ -600,6 +677,14 @@ export default function Index() {
     let projectForState = projectToLoad;
     if (rawProjectRef.current?.id !== projectToLoad?.id) {
       setDailyReportSaveErrors({});
+      remoteDirtyCollectionsRef.current.delete(rawProjectRef.current?.id ?? '');
+      remoteDirtyCollectionsRef.current.delete(projectToLoad?.id ?? '');
+      localDirtyCollectionsRef.current.delete(rawProjectRef.current?.id ?? '');
+      localDirtyCollectionsRef.current.delete(projectToLoad?.id ?? '');
+      localMetadataDirtyRef.current.delete(rawProjectRef.current?.id ?? '');
+      localMetadataDirtyRef.current.delete(projectToLoad?.id ?? '');
+      setPendingRemoteAreas([]);
+      setRemoteDirtyRevision(revision => revision + 1);
       currentWarehouseVersionRef.current = warehouseVersion ?? null;
       partialSyncPendingRef.current = null;
       setPartialSyncIssue(null);
@@ -780,6 +865,13 @@ export default function Index() {
         }
         setPartialSyncIssue(current => current?.projectId === effectiveProject.id ? null : current);
         lastSavedProjectJsonRef.current = effectiveJson;
+        // Só limpa o escopo local se nenhuma edição mais nova chegou enquanto
+        // esta requisição estava em voo. Assim uma alteração de outra área não
+        // transforma um rascunho novo em "salvo" por engano.
+        if (rawProjectRef.current?.id === effectiveProject.id
+          && serializeProject(rawProjectRef.current) === effectiveJson) {
+          clearLocalProjectCollections(effectiveProject.id);
+        }
         setLastCloudConfirmedAt(new Date().toISOString());
         if (pendingAtRequest && rawProjectRef.current?.id === effectiveProject.id) {
           skipNextAutoSaveRef.current = true;
@@ -813,7 +905,7 @@ export default function Index() {
     } finally {
       if (inFlightSaveRef.current === request) inFlightSaveRef.current = null;
     }
-  }, [discardProjectDraft, writeProtectedProjectDraft]);
+  }, [clearLocalProjectCollections, discardProjectDraft, writeProtectedProjectDraft]);
 
   const handleCloudConflict = useCallback(async (localProject: Project) => {
     conflictDetectedRef.current = true;
@@ -1197,6 +1289,7 @@ export default function Index() {
           : { project: cloudMerged, changed: false };
         const merged = repaired.project;
         confirmHydratedProjectCollections(hydrated);
+        clearRemoteCollections(projectId, requestCollections);
         skipNextAutoSaveRef.current = !repaired.changed;
         rawProjectRef.current = merged;
         setRawProject(merged);
@@ -1217,7 +1310,7 @@ export default function Index() {
   // A chave representa integralmente o escopo. A lista ausente é fotografada
   // no início de cada tentativa para impedir loops por identidade do array.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bootLoading, dataLoadRetry, rawProject?.id, requiredProjectCollectionsKey]);
+  }, [bootLoading, dataLoadRetry, rawProject?.id, requiredProjectCollectionsKey, remoteDirtyRevision]);
 
   // Salvamento debounced (somente se o usuário pode editar)
   useEffect(() => {
@@ -1291,11 +1384,15 @@ export default function Index() {
         return;
       }
       if (action === 'conflict') {
-        await handleCloudConflict(currentAfterVersionCheck);
+        // Sem um evento de tabela não há como atribuir a mudança a uma
+        // coleção com segurança. Preserve a tela e deixe a próxima entrada na
+        // área buscar seu escopo; nunca substitua o projeto inteiro.
+        markRemoteCollections(current.id, requiredProjectCollections);
         return;
       }
 
       setSaveStatus('updating');
+      const localJsonAtRequest = serializeProject(currentAfterVersionCheck);
       const record = await loadCloudProjectRecord(current.id, {
         collections: requiredProjectCollections,
         strict: true,
@@ -1307,23 +1404,45 @@ export default function Index() {
         discardCloudProjectRecord(record);
         return;
       }
-      if (projectHasLocalChanges(latestLocal, lastSavedProjectJsonRef.current, !!saveTimerRef.current || !!inFlightSaveRef.current)) {
+      const localChangedDuringRequest = serializeProject(latestLocal) !== localJsonAtRequest;
+      if (hasLocalCollectionConflict(current.id, requiredProjectCollections)) {
         discardCloudProjectRecord(record);
         await handleCloudConflict(latestLocal);
         return;
       }
       confirmCloudProjectRecord(record);
-      replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false, record.warehouseVersion);
-      toast.info('Dados atualizados a partir de outro aparelho.');
+      const merged = mergeHydratedProjectCollections(latestLocal, record.project, requiredProjectCollections);
+      let savedMerged = merged;
+      if (lastSavedProjectJsonRef.current) {
+        try {
+          savedMerged = mergeHydratedProjectCollections(
+            JSON.parse(lastSavedProjectJsonRef.current) as Project,
+            record.project,
+            requiredProjectCollections,
+          );
+        } catch {
+          savedMerged = merged;
+        }
+      }
+      lastSavedProjectJsonRef.current = serializeProject(savedMerged);
+      currentProjectUpdatedAtRef.current = record.updatedAt;
+      currentWarehouseVersionRef.current = record.warehouseVersion;
+      setCurrentProjectUpdatedAt(record.updatedAt);
+      setLastCloudConfirmedAt(new Date().toISOString());
+      clearRemoteCollections(current.id, requiredProjectCollections);
+      skipNextAutoSaveRef.current = !localChangedDuringRequest;
+      rawProjectRef.current = merged;
+      setRawProject(merged);
+      setSaveStatus(localChangedDuringRequest ? 'saving' : 'saved');
     } catch (error) {
       console.warn('Falha ao conferir a versão da obra na nuvem.', error);
       setSaveStatus(navigator.onLine ? 'error' : 'offline');
     } finally {
       remoteCheckInFlightRef.current = false;
     }
-  }, [handleCloudConflict, orgId, replaceProjectWithoutAutoSave, requiredProjectCollections]);
+  }, [clearRemoteCollections, handleCloudConflict, hasLocalCollectionConflict, markRemoteCollections, orgId, requiredProjectCollections]);
 
-  const refreshProjectFromRealtime = useCallback(async () => {
+  const refreshProjectFromRealtime = useCallback(async (sources: readonly string[] = []) => {
     const current = rawProjectRef.current;
     if (!current || !initialLoadRef.current || remoteCheckInFlightRef.current) return;
     if (conflictDetectedRef.current) {
@@ -1336,14 +1455,50 @@ export default function Index() {
     }
     if (pendingDailyReportSavesRef.current > 0) {
       if (realtimeRefreshTimerRef.current) window.clearTimeout(realtimeRefreshTimerRef.current);
-      realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(), 600);
+      realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(sources), 600);
       return;
     }
     if (saveTimerRef.current || inFlightSaveRef.current) {
       if (realtimeRefreshTimerRef.current) window.clearTimeout(realtimeRefreshTimerRef.current);
-      realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(), 1200);
+      realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(sources), 1200);
       return;
     }
+
+    const affectedCollections = normalizeProjectCollections(
+      sources.flatMap(source => projectCollectionsForRealtimeTable(source)),
+    );
+    const metadataOnly = sources.includes('projects') && affectedCollections.length === 0;
+    // A verificação de versão sem realtime informa que algo mudou, mas não
+    // identifica a tabela. Nesse caso o limite seguro continua sendo apenas a
+    // área atualmente aberta — nunca a obra inteira.
+    const requestCollections = affectedCollections.length > 0
+      ? affectedCollections
+      : metadataOnly
+        ? []
+        : requiredProjectCollections;
+    const activeCollections = requestCollections.filter(collection => requiredProjectCollections.includes(collection));
+    const inactiveCollections = requestCollections.filter(collection => !requiredProjectCollections.includes(collection));
+    if (inactiveCollections.length > 0) markRemoteCollections(current.id, inactiveCollections);
+    if ((metadataOnly && localMetadataDirtyRef.current.has(current.id))
+      || (requestCollections.length > 0 && hasLocalCollectionConflict(current.id, requestCollections))) {
+      markRemoteCollections(current.id, requestCollections);
+      await handleCloudConflict(current);
+      return;
+    }
+
+    // Outra aba recebeu alteração: atualize somente o marcador e a versão
+    // otimista. Não faça download, não troque objetos locais e não mexa no UI.
+    if (requestCollections.length > 0 && activeCollections.length === 0) {
+      const remoteVersion = await getCloudProjectVersion(current.id).catch(() => null);
+      if (remoteVersion && rawProjectRef.current?.id === current.id) {
+        currentProjectUpdatedAtRef.current = remoteVersion.updatedAt;
+        currentWarehouseVersionRef.current = remoteVersion.warehouseVersion;
+        setCurrentProjectUpdatedAt(remoteVersion.updatedAt);
+        setLastCloudConfirmedAt(new Date().toISOString());
+      }
+      return;
+    }
+
     remoteCheckInFlightRef.current = true;
     try {
       const latestLocal = rawProjectRef.current;
@@ -1352,15 +1507,8 @@ export default function Index() {
       const updatedAtAtRequest = currentProjectUpdatedAtRef.current;
       const dataScopeAtRequest = activeDataScopeKeyRef.current;
 
-      // A nuvem é a fonte obrigatória: uma atualização remota nunca recebe
-      // por cima um rascunho que permaneceu aberto neste aparelho.
-      if (projectHasLocalChanges(latestLocal, lastSavedProjectJsonRef.current)) {
-        await handleCloudConflict(latestLocal);
-        return;
-      }
-
       const record = await loadCloudProjectRecord(current.id, {
-        collections: requiredProjectCollections,
+        collections: requestCollections,
         strict: true,
         deferSnapshot: true,
       });
@@ -1372,38 +1520,56 @@ export default function Index() {
       }
       const localChangedDuringRequest = serializeProject(localAfterRequest) !== localJsonAtRequest
         || currentProjectUpdatedAtRef.current !== updatedAtAtRequest
-        || activeDataScopeKeyRef.current !== dataScopeAtRequest
-        || projectHasLocalChanges(localAfterRequest, lastSavedProjectJsonRef.current);
-      if (localChangedDuringRequest) {
+        || activeDataScopeKeyRef.current !== dataScopeAtRequest;
+      if (localChangedDuringRequest && hasLocalCollectionConflict(current.id, requestCollections)) {
         discardCloudProjectRecord(record);
         await handleCloudConflict(localAfterRequest);
         return;
       }
       confirmCloudProjectRecord(record);
-      const remoteJson = serializeProject(record.project);
-      if (!record.repairApplied && remoteJson === lastSavedProjectJsonRef.current) {
-        currentProjectUpdatedAtRef.current = record.updatedAt;
-        currentWarehouseVersionRef.current = record.warehouseVersion;
-        setCurrentProjectUpdatedAt(record.updatedAt);
-        setLastCloudConfirmedAt(new Date().toISOString());
-        setSaveStatus('saved');
-        return;
+      const merged = metadataOnly
+        ? mergeProjectMetadata(localAfterRequest, record.project)
+        : mergeHydratedProjectCollections(localAfterRequest, record.project, requestCollections);
+      let savedMerged = merged;
+      if (lastSavedProjectJsonRef.current) {
+        try {
+          const saved = JSON.parse(lastSavedProjectJsonRef.current) as Project;
+          savedMerged = metadataOnly
+            ? mergeProjectMetadata(saved, record.project)
+            : mergeHydratedProjectCollections(saved, record.project, requestCollections);
+        } catch {
+          savedMerged = merged;
+        }
       }
-      replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false, record.warehouseVersion);
+      lastSavedProjectJsonRef.current = serializeProject(savedMerged);
+      currentProjectUpdatedAtRef.current = record.updatedAt;
+      currentWarehouseVersionRef.current = record.warehouseVersion;
+      setCurrentProjectUpdatedAt(record.updatedAt);
+      setLastCloudConfirmedAt(new Date().toISOString());
+      clearRemoteCollections(current.id, requestCollections);
       setRemoteUpdateAt(new Date().toISOString());
-      toast.info('Atualizado com as alterações de outro usuário.');
+      skipNextAutoSaveRef.current = !localChangedDuringRequest;
+      rawProjectRef.current = merged;
+      setRawProject(merged);
+      setSaveStatus(localChangedDuringRequest ? 'saving' : 'saved');
     } catch (error) {
       console.warn('Falha ao aplicar atualização em tempo real.', error);
       setSaveStatus(navigator.onLine ? 'error' : 'offline');
     } finally {
       remoteCheckInFlightRef.current = false;
     }
-  }, [handleCloudConflict, replaceProjectWithoutAutoSave, requiredProjectCollections]);
+  }, [clearRemoteCollections, handleCloudConflict, hasLocalCollectionConflict, markRemoteCollections, requiredProjectCollections]);
 
   const refreshDailyReportFromRealtime = useCallback((incoming: DailyReport) => {
     const current = rawProjectRef.current;
     if (!current || !incoming.date) return;
     if (conflictDetectedRef.current) return;
+    // Mesmo se a coleção tiver sido carregada para um cálculo auxiliar, uma
+    // alteração no Diário não deve remodelar outra tela aberta.
+    if (safeCurrentView !== 'dailyReport') {
+      markRemoteCollections(current.id, ['dailyReports']);
+      return;
+    }
     if (pendingDailyReportSavesRef.current > 0 || saveTimerRef.current || inFlightSaveRef.current) {
       pendingRealtimeDailyReportsRef.current.set(`${current.id}:${incoming.date}`, {
         projectId: current.id,
@@ -1424,7 +1590,10 @@ export default function Index() {
     }
     // Um evento isolado não representa a coleção completa. Se o Diário ainda
     // não foi carregado nesta sessão, aguarde a hidratação normal da área.
-    if (getMissingProjectCollections(current.id, ['dailyReports']).length > 0) return;
+    if (getMissingProjectCollections(current.id, ['dailyReports']).length > 0) {
+      markRemoteCollections(current.id, ['dailyReports']);
+      return;
+    }
     mergeConfirmedDailyReportIntoPartialSync(current.id, incoming.date, incoming);
     const currentReport = reportForDate(current, incoming.date);
     if (currentReport && JSON.stringify(currentReport) === JSON.stringify(incoming)) return;
@@ -1435,7 +1604,7 @@ export default function Index() {
     setRawProject(next);
     lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, incoming.date, incoming);
     setRemoteUpdateAt(new Date().toISOString());
-  }, [mergeConfirmedDailyReportIntoPartialSync]);
+  }, [markRemoteCollections, mergeConfirmedDailyReportIntoPartialSync, safeCurrentView]);
 
   useEffect(() => {
     refreshDailyReportFromRealtimeRef.current = refreshDailyReportFromRealtime;
@@ -1481,21 +1650,24 @@ export default function Index() {
       // Ignora o eco da própria gravação (mesma versão que já está carregada aqui).
       const remoteUpdatedAt = typeof payload?.new?.updated_at === 'string' ? payload.new.updated_at : null;
       if (remoteUpdatedAt && remoteUpdatedAt === currentProjectUpdatedAtRef.current) return;
+      // O próprio save normalmente publica várias linhas normalizadas em
+      // sequência. A janela curta evita refetch do que já foi confirmado;
+      // qualquer alteração externa posterior continua coberta pelo realtime e
+      // pela verificação de versão.
       if (Date.now() - lastLocalSaveAtRef.current < 800) return;
+      if (source) pendingRealtimeSourcesRef.current.add(source);
       if (realtimeRefreshTimerRef.current) window.clearTimeout(realtimeRefreshTimerRef.current);
-      realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(), 1200);
+      realtimeRefreshTimerRef.current = window.setTimeout(() => {
+        const sources = [...pendingRealtimeSourcesRef.current];
+        pendingRealtimeSourcesRef.current.clear();
+        void refreshProjectFromRealtime(sources);
+      }, 1200);
     };
     const channel = supabase.channel(`project-live:${projectId}`);
     channel.on('postgres_changes', {
       event: '*', schema: 'public', table: 'projects', filter: `id=eq.${projectId}`,
-    }, queueRefresh);
-    const normalizedTables = [
-      'warehouse_movements', 'warehouse_requisitions', 'warehouse_custody',
-      'daily_reports', 'task_daily_logs', 'measurements', 'additives', 'audit_logs',
-      'stock_movements', 'material_price_history', 'budget_items', 'material_comparisons',
-      'analytic_compositions', 'subcontracts', 'eap_chapters', 'tasks',
-    ] as const;
-    normalizedTables.forEach(table => {
+    }, payload => queueRefresh(payload, 'projects'));
+    PROJECT_REALTIME_TABLES.forEach(table => {
       channel.on('postgres_changes', {
         event: '*', schema: 'public', table, filter: `project_id=eq.${projectId}`,
       }, payload => queueRefresh(payload, table));
@@ -1684,6 +1856,7 @@ export default function Index() {
           return next;
         });
         lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, date, result.report);
+        clearLocalProjectCollections(after.id, ['dailyReports']);
         setRawProject(current => {
           if (!current || current.id !== after.id) return current;
           const currentReport = reportForDate(current, date);
@@ -1733,7 +1906,7 @@ export default function Index() {
         }
       });
     });
-  }, [mergeConfirmedDailyReportIntoPartialSync]);
+  }, [clearLocalProjectCollections, mergeConfirmedDailyReportIntoPartialSync]);
 
   const makeViewSetter = useCallback((view: AppView) => {
     return (next: Project | ((prev: Project) => Project)) => {
@@ -1770,6 +1943,7 @@ export default function Index() {
         // não gera novo estado (evitava o autosave reiniciar para sempre).
         const synchronizedJson = serializeProject(synchronized);
         if (synchronizedJson === serializeProject(prev)) return prev;
+        markLocalProjectChanges(prev, synchronized);
         const stack = undoStacksRef.current[view];
         stack.push(prev);
         if (stack.length > UNDO_LIMIT) stack.shift();
@@ -1785,7 +1959,7 @@ export default function Index() {
         return synchronized;
       });
     };
-  }, [dailyReportEditor, discardProjectDraft, editor, role, saveDailyReportDirectly, scheduleProjectDraft, synchronizeLoadedProjectSchedule, warehouseEditor]);
+  }, [dailyReportEditor, discardProjectDraft, editor, markLocalProjectChanges, role, saveDailyReportDirectly, scheduleProjectDraft, synchronizeLoadedProjectSchedule, warehouseEditor]);
 
   const ganttSetter = useMemo(() => makeViewSetter('gantt'), [makeViewSetter]);
   const managementSetter = useMemo(() => makeViewSetter('management'), [makeViewSetter]);
@@ -2673,7 +2847,7 @@ export default function Index() {
 
       <main ref={mainScrollRef} className="relative min-h-screen min-w-0 flex-1 overflow-x-clip overflow-y-auto pt-14 lg:pt-0">
         <div className="absolute top-3 right-4 z-20">
-          <SaveStatusIndicator status={Object.keys(dailyReportSaveErrors).length && saveStatus !== 'saving' ? 'error' : saveStatus} confirmedAt={lastCloudConfirmedAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} />
+          <SaveStatusIndicator status={Object.keys(dailyReportSaveErrors).length && saveStatus !== 'saving' ? 'error' : saveStatus} confirmedAt={lastCloudConfirmedAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} pendingRemoteAreas={pendingRemoteAreas} />
         </div>
         {partialSyncIssue?.projectId === rawProject.id && (
           <div

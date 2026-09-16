@@ -234,6 +234,72 @@ const SNAPSHOT_MAP_BY_COLLECTION: Record<ProjectCollectionKey, keyof Omit<Snapsh
   tasks: 'tasks',
 };
 
+function snapshotCollectionEqual(
+  left: Snapshot,
+  right: Snapshot,
+  collection: ProjectCollectionKey,
+): boolean {
+  const mapKey = SNAPSHOT_MAP_BY_COLLECTION[collection];
+  const leftMap = left[mapKey] as Map<string, unknown>;
+  const rightMap = right[mapKey] as Map<string, unknown>;
+  if (leftMap.size !== rightMap.size) return false;
+  for (const [id, value] of leftMap) {
+    if (!rightMap.has(id) || !shallowEqualJSON(value, rightMap.get(id))) return false;
+  }
+  return true;
+}
+
+/** Retorna somente as coleções efetivamente alteradas entre duas fotografias. */
+export function getChangedProjectCollections(
+  before: Project,
+  after: Project,
+  collections: readonly ProjectCollectionKey[] = PROJECT_COLLECTION_KEYS,
+): ProjectCollectionKey[] {
+  const requested = normalizeProjectCollections(collections);
+  const beforeSnapshot = buildSnapshot(before, requested);
+  const afterSnapshot = buildSnapshot(after, requested);
+  return requested.filter(collection => !snapshotCollectionEqual(beforeSnapshot, afterSnapshot, collection));
+}
+
+/** Campos da linha principal que não pertencem às coleções normalizadas. */
+export function hasProjectMetadataChanges(before: Project, after: Project): boolean {
+  return !shallowEqualJSON(stripNormalizedCollections(before), stripNormalizedCollections(after));
+}
+
+/**
+ * Aplica somente os campos guardados em `projects.data_json`, preservando as
+ * coleções normalizadas que a tela atual já mantém em memória. Eventos da
+ * tabela principal são metadados e não autorizam uma hidratação integral.
+ */
+export function mergeProjectMetadata(current: Project, incoming: Project): Project {
+  const metadata = stripNormalizedCollections(incoming);
+  const next: Project = {
+    ...current,
+    ...metadata,
+    phases: current.phases,
+    dailyReports: current.dailyReports,
+    measurements: current.measurements,
+    additives: current.additives,
+    auditLogs: current.auditLogs,
+    stockMovements: current.stockMovements,
+    materialPriceHistory: current.materialPriceHistory,
+    budgetItems: current.budgetItems,
+    materialComparisons: current.materialComparisons,
+    analyticCompositions: current.analyticCompositions,
+    subcontracts: current.subcontracts,
+  };
+  if (current.warehouse || metadata.warehouse) {
+    next.warehouse = {
+      ...(current.warehouse ?? metadata.warehouse!),
+      ...(metadata.warehouse ?? {}),
+      movements: current.warehouse?.movements ?? [],
+      requisitions: current.warehouse?.requisitions ?? [],
+      custodyTerms: current.warehouse?.custodyTerms ?? [],
+    };
+  }
+  return next;
+}
+
 function mergeCloudSnapshot(
   projectId: string,
   project: Project,
