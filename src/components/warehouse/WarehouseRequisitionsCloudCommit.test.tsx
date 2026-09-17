@@ -4,15 +4,16 @@ import type { Project } from '@/types/project';
 import { addMovement, emptyWarehouse } from '@/lib/warehouse';
 import WarehouseRequisitionsTab from '@/components/warehouse/WarehouseRequisitionsTab';
 
-const { commitMock, makeAttachmentMock } = vi.hoisted(() => ({
+const { commitMock, makeAttachmentMock, makeAttachmentsMock } = vi.hoisted(() => ({
   commitMock: vi.fn(),
   makeAttachmentMock: vi.fn(),
+  makeAttachmentsMock: vi.fn(),
 }));
 
 vi.mock('@/lib/warehouseCloudCommit', () => ({ commitWarehouseOperation: commitMock }));
 vi.mock('@/lib/warehouse', async importOriginal => {
   const actual = await importOriginal<typeof import('@/lib/warehouse')>();
-  return { ...actual, makeAttachment: makeAttachmentMock };
+  return { ...actual, makeAttachment: makeAttachmentMock, makeAttachments: makeAttachmentsMock };
 });
 vi.mock('@/components/warehouse/SignaturePad', () => ({
   default: ({ value, onChange }: { value?: string; onChange: (value: string) => void }) => (
@@ -39,6 +40,7 @@ describe('confirmação visual da retirada', () => {
   beforeEach(() => {
     commitMock.mockReset();
     makeAttachmentMock.mockReset();
+    makeAttachmentsMock.mockReset();
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:foto-teste') });
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
   });
@@ -159,7 +161,7 @@ describe('confirmação visual da retirada', () => {
     });
     Element.prototype.scrollIntoView = vi.fn();
     let finishUpload: (() => void) | undefined;
-    makeAttachmentMock.mockImplementation(() => new Promise(resolve => {
+    makeAttachmentsMock.mockImplementation(() => new Promise(resolve => {
       finishUpload = () => resolve({
         id: 'attachment-1',
         name: 'foto.jpg',
@@ -210,7 +212,7 @@ describe('confirmação visual da retirada', () => {
     fireEvent.change(galleryInput, { target: { files: [new File(['foto'], 'foto.jpg', { type: 'image/jpeg' })] } });
     fireEvent.click(screen.getByRole('button', { name: 'Entregar e baixar estoque' }));
 
-    await waitFor(() => expect(makeAttachmentMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(makeAttachmentsMock).toHaveBeenCalledTimes(1));
     expect(criticalFlowCalls).toBe(1);
     expect(commitMock).not.toHaveBeenCalled();
     expect(criticalFlowFinished).toBe(false);

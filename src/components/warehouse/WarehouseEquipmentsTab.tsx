@@ -10,7 +10,7 @@ import {
   deleteEquipmentGroup,
   ensureWarehouse,
   hardDeleteEquipment,
-  makeAttachment,
+  makeAttachments,
   readFileAsDataURL,
   removeEquipment,
   updateEquipment,
@@ -239,7 +239,7 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, onCom
     setErrors({});
     try {
       setSaving(true);
-      const attachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'equipment', true)));
+      const attachments = await makeAttachments(photos, project.id, 'foto', 'equipment', true);
       const next = addEquipment(project, {
         name: [form.brand, form.model].filter(Boolean).join(' ') || form.description,
         description: form.description.trim(),

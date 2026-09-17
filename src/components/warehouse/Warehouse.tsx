@@ -1,7 +1,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import type { Project, WarehouseAuditActor } from '@/types/project';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, Warehouse as WarehouseIcon, ReceiptText, ClipboardCheck } from 'lucide-react';
+import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, Warehouse as WarehouseIcon, ReceiptText, ClipboardCheck, HardDriveDownload } from 'lucide-react';
 import { ensureWarehouse, panelSummary } from '@/lib/warehouse';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { scheduleIdlePreload } from '@/lib/idlePreload';
@@ -24,6 +24,7 @@ const loadWarehouseInventoryTab = () => import('./WarehouseInventoryTab');
 const loadWarehouseFiscalNotesTab = () => import('./WarehouseFiscalNotesTab');
 const loadWarehouseBudgetMaterialsTab = () => import('./WarehouseBudgetMaterialsTab');
 const loadWarehouseWithdrawnMaterialsTab = () => import('./WarehouseWithdrawnMaterialsTab');
+const loadWarehouseAttachmentMaintenanceTab = () => import('./WarehouseAttachmentMaintenanceTab');
 
 const WarehousePanel = lazyWithReload(loadWarehousePanel);
 const WarehouseStockTab = lazyWithReload(loadWarehouseStockTab);
@@ -34,8 +35,7 @@ const WarehouseInventoryTab = lazyWithReload(loadWarehouseInventoryTab);
 const WarehouseFiscalNotesTab = lazyWithReload(loadWarehouseFiscalNotesTab);
 const WarehouseBudgetMaterialsTab = lazyWithReload(loadWarehouseBudgetMaterialsTab);
 const WarehouseWithdrawnMaterialsTab = lazyWithReload(loadWarehouseWithdrawnMaterialsTab);
-const AttachmentOptimizationPanel = lazyWithReload(() => import('./AttachmentOptimizationPanel'));
-const GlobalStorageMaintenancePanel = lazyWithReload(() => import('./GlobalStorageMaintenancePanel'));
+const WarehouseAttachmentMaintenanceTab = lazyWithReload(loadWarehouseAttachmentMaintenanceTab);
 
 function WarehouseAreaFallback() {
   return <div className="flex min-h-32 items-center justify-center rounded-xl border bg-card p-6 text-sm font-medium text-muted-foreground" role="status" aria-live="polite">Carregando área do Almoxarifado...</div>;
@@ -63,6 +63,7 @@ const NEXT_WAREHOUSE_TAB_PRELOAD: Record<WarehouseTab, () => Promise<unknown>> =
   equipamentos: loadWarehouseInventoryTab,
   movimentos: loadWarehouseInventoryTab,
   inventario: loadWarehouseMovementsTab,
+  manutencao: loadWarehouseAttachmentMaintenanceTab,
 };
 
 interface Props {
@@ -90,7 +91,7 @@ interface Props {
   canDeleteWarehouseRecords?: boolean;
   canManageEquipmentGroups?: boolean;
   canOptimizeStorage?: boolean;
-  onSaveStorageMaintenanceProject?: (project: Project, expectedUpdatedAt: string) => Promise<string>;
+  onCommitAttachmentMigration?: (before: Project, after: Project) => Promise<Project>;
   storageMaintenanceOrganizationId?: string;
   auditActor?: WarehouseAuditActor;
   activeTab?: WarehouseTab;
@@ -98,8 +99,8 @@ interface Props {
   isTabDataReady?: boolean;
 }
 
-export default function Warehouse({ project, onProjectChange, onCommitProject, onCloudWarehouseOperationConfirmed, onPrepareCloudWarehouseOperation, onCommitCloudWarehouseOperation, onRunCriticalCloudWarehouseOperation, onCommitWarehouseScoped, onSaveStorageMaintenanceProject, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canCorrectDeliveredRequisitions = false, canSupplementRequisitions = false, canCancelDeliveredRequisitions = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor, activeTab, onActiveTabChange, isTabDataReady = true }: Props) {
-  const [internalTab, setInternalTab] = useState<WarehouseTab>(() => readWarehouseTab(project.id, canViewPanel));
+export default function Warehouse({ project, onProjectChange, onCommitProject, onCloudWarehouseOperationConfirmed, onPrepareCloudWarehouseOperation, onCommitCloudWarehouseOperation, onRunCriticalCloudWarehouseOperation, onCommitWarehouseScoped, onCommitAttachmentMigration, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canCorrectDeliveredRequisitions = false, canSupplementRequisitions = false, canCancelDeliveredRequisitions = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor, activeTab, onActiveTabChange, isTabDataReady = true }: Props) {
+  const [internalTab, setInternalTab] = useState<WarehouseTab>(() => readWarehouseTab(project.id, canViewPanel, canOptimizeStorage));
   const tab = activeTab ?? internalTab;
   const setTab = useCallback((next: WarehouseTab) => {
     setInternalTab(next);
@@ -113,6 +114,9 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
     if (!canViewPanel && tab === 'painel') setTab('notas');
   }, [canViewPanel, setTab, tab]);
   useEffect(() => {
+    if (!canOptimizeStorage && tab === 'manutencao') setTab(canViewPanel ? 'painel' : 'notas');
+  }, [canOptimizeStorage, canViewPanel, setTab, tab]);
+  useEffect(() => {
     try {
       window.sessionStorage.setItem(warehouseTabStorageKey(project.id), tab);
     } catch {
@@ -123,9 +127,12 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
   // O resumo exige várias coleções de todo o Almoxarifado. Fora do Painel,
   // não deixe esses indicadores bloquearem a subaba operacional escolhida.
   const summary = useMemo(() => tab === 'painel' ? panelSummary(ensured) : null, [ensured, tab]);
-  const visibleTabs = canViewPanel
+  const regularTabs = canViewPanel
     ? WAREHOUSE_TABS
     : WAREHOUSE_TABS.filter(item => item.value !== 'painel');
+  const visibleTabs = canOptimizeStorage
+    ? [...regularTabs, { value: 'manutencao' as const, label: 'Manutenção', icon: HardDriveDownload }]
+    : regularTabs;
   const commitChildChange = useCallback((next: Project, domain: WarehouseScopedDomain) => {
     if (!onCommitWarehouseScoped) {
       toast.error('A transação segura do Almoxarifado ainda não está disponível. Nada foi gravado.');
@@ -160,8 +167,6 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
               Termos abertos: <strong className="text-foreground">{summary.openCustodyCount}</strong>
             </span>
           )}
-          {canOptimizeStorage && <Suspense fallback={null}><AttachmentOptimizationPanel project={ensured} onProjectChange={onProjectChange} onCommitProject={onCommitProject} /></Suspense>}
-          {canOptimizeStorage && onSaveStorageMaintenanceProject && storageMaintenanceOrganizationId && <Suspense fallback={null}><GlobalStorageMaintenancePanel currentProject={ensured} onCurrentProjectChange={onProjectChange} saveProject={onSaveStorageMaintenanceProject} organizationId={storageMaintenanceOrganizationId} /></Suspense>}
         </div>
       </div>
 
@@ -227,6 +232,7 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
             <TabsContent value="inventario" className="mt-3">
               <WarehouseInventoryTab project={ensured} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canApprove={canApproveInventory} canDelete={canDeleteWarehouseRecords} />
             </TabsContent>
+            {canOptimizeStorage && <TabsContent value="manutencao" className="mt-3"><WarehouseAttachmentMaintenanceTab project={ensured} organizationId={storageMaintenanceOrganizationId} onCommitAttachmentMigration={onCommitAttachmentMigration} /></TabsContent>}
           </Suspense>
         ) : (
           <WarehouseAreaFallback />

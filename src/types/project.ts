@@ -645,6 +645,8 @@ export interface DailyReportAttachment {
   optimizedAt?: string;
   /** Versão do perfil de compactação usado ao gravar (ver ATTACHMENT_OPTIMIZATION_VERSION). */
   optimizationVersion?: number;
+  /** Cópia anterior mantida quando a limpeza física não foi confirmada. */
+  cleanupPendingStoragePath?: string;
 
   /** Compat: alguns diários antigos podem só guardar `name`. */
   name?: string;
@@ -949,6 +951,8 @@ export interface WarehouseAttachment {
   optimizedAt?: string;
   /** Versão do perfil de compactação usado ao gravar (ver ATTACHMENT_OPTIMIZATION_VERSION). */
   optimizationVersion?: number;
+  /** Cópia anterior mantida quando a limpeza física não foi confirmada. */
+  cleanupPendingStoragePath?: string;
 
   kind?: 'nf' | 'foto' | 'recibo' | 'termo' | 'outro';
   uploadedAt: string;

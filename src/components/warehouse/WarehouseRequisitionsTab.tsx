@@ -18,7 +18,7 @@ import {
   hardDeleteRequisition,
   getReturnableRequisitionItems,
   getRequisitionMaterialSummaries,
-  makeAttachment,
+  makeAttachments,
   normalizeWarehouseReceiverName,
   registerMaterialReturn,
   uidWarehouse,
@@ -468,7 +468,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
     try {
       await runCriticalOperation(async () => {
         setSaveStage(photos.length ? 'uploading' : 'committing');
-        const deliveryAttachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'withdrawals')));
+        const deliveryAttachments = await makeAttachments(photos, project.id, 'foto', 'withdrawals');
         setSaveStage('committing');
         const result = createAndDeliverRequisition(project, {
           date: form.date,
@@ -1054,7 +1054,7 @@ function RequisitionActionDialog({ project, requisition, auditActor, canEditOrig
     setSaving(true);
     try {
       const operation = async () => {
-        const attachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'withdrawals')));
+        const attachments = await makeAttachments(photos, project.id, 'foto', 'withdrawals');
         const result = addRequisitionSupplement(project, { requisitionId: requisition.id, date: complementDate, receiverName: complementReceiver, signatureReceiver, notes: complementNotes.trim() || undefined, attachments, idempotencyKey: complementIdempotencyKey, items: complementItems }, auditActor, { publishToDailyReport: false });
         await executeCloudOperation(project, result.project, { type: 'supplement', requisitionId: requisition.id, operationKey: complementIdempotencyKey }, {
           onCommitCloudOperation, onPrepareCloudOperation, onCloudOperationConfirmed, onProjectChange,

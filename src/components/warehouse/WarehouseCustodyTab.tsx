@@ -29,7 +29,7 @@ import {
   ensureWarehouse,
   hardDeleteCustodyTerm,
   issueCustodyTerm,
-  makeAttachment,
+  makeAttachments,
   returnCustodyEquipment,
   warehouseActorName,
   warehouseOperationalDate,
@@ -308,7 +308,7 @@ export default function WarehouseCustodyTab({ project, onProjectChange, onCommit
     setErrors({});
     try {
       setSaving(true);
-      const attachments = await Promise.all(photos.map(file => makeAttachment(file, project.id, 'foto', 'equipment-custody')));
+      const attachments = await makeAttachments(photos, project.id, 'foto', 'equipment-custody');
       const next = issueCustodyTerm(project, {
         issuedAt: form.issuedAt,
         dueDate: form.dueDate || undefined,
@@ -344,7 +344,7 @@ export default function WarehouseCustodyTab({ project, onProjectChange, onCommit
     if (exception && !returnPhotos.length) return toast.error('Adicione ao menos uma foto da ocorrência.');
     try {
       setReturning(true);
-      const returnAttachments = await Promise.all(returnPhotos.map(file => makeAttachment(file, project.id, 'foto', 'equipment-returns')));
+      const returnAttachments = await makeAttachments(returnPhotos, project.id, 'foto', 'equipment-returns');
       const next = returnCustodyEquipment(project, returnTarget.term.id, returnTarget.item.equipmentId, {
         ...returnData,
         returnAttachments,

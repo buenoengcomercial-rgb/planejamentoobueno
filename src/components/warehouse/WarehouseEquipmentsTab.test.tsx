@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Equipment, Project } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
@@ -328,6 +328,33 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     await waitFor(() => expect(uploadMock).toHaveBeenCalled());
     expect(uploadMock.mock.calls[0][1]).toBe(optimized);
     expect(screen.queryByRole('dialog', { name: 'Cadastrar novo equipamento' })).not.toBeInTheDocument();
+  });
+
+  it('processa segunda e terceira foto em sequência antes de liberar o cadastro', async () => {
+    const releases: Array<() => void> = [];
+    optimizePhotoMock.mockImplementation((file: File) => new Promise<File>(resolve => {
+      releases.push(() => resolve(file));
+    }));
+    render(<WarehouseEquipmentsTab project={project()} onProjectChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar equipamento' }));
+    const [, gallery] = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="file"]'));
+    fireEvent.change(gallery, { target: { files: [
+      new File(['1'], 'primeira.jpg', { type: 'image/jpeg' }),
+      new File(['2'], 'segunda.jpg', { type: 'image/jpeg' }),
+      new File(['3'], 'terceira.jpg', { type: 'image/jpeg' }),
+    ] } });
+
+    await waitFor(() => expect(optimizePhotoMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'Câmera' })).toBeDisabled();
+    await act(async () => releases.shift()?.());
+    await waitFor(() => expect(optimizePhotoMock).toHaveBeenCalledTimes(2));
+    await act(async () => releases.shift()?.());
+    await waitFor(() => expect(optimizePhotoMock).toHaveBeenCalledTimes(3));
+    await act(async () => releases.shift()?.());
+
+    await waitFor(() => expect(screen.queryByText('Preparando foto para salvar no celular...')).not.toBeInTheDocument());
+    expect(optimizePhotoMock.mock.calls.map(([file]) => (file as File).name)).toEqual(['primeira.jpg', 'segunda.jpg', 'terceira.jpg']);
   });
 
   it('abre a foto original ao tocar na miniatura', async () => {

@@ -5,6 +5,7 @@ import {
   projectAreasForCollections,
   projectCollectionsForView,
   projectCollectionsForRealtimeTable,
+  readWarehouseTab,
 } from '@/lib/projectDataScope';
 
 describe('escopos progressivos de dados da obra', () => {
@@ -64,5 +65,18 @@ describe('escopos progressivos de dados da obra', () => {
       'dailyReports',
       'tasks',
     ])).toEqual(['Almoxarifado', 'Diário de Obra', 'Planejamento e campo']);
+  });
+
+  it('carrega anexos legados apenas ao Proprietário e somente na manutenção', () => {
+    expect(projectCollectionsForView('warehouse', 'manutencao')).toEqual(expect.arrayContaining([
+      'warehouseRequisitions',
+      'warehouseCustody',
+      'dailyReports',
+    ]));
+    expect(projectCollectionsForView('warehouse', 'manutencao')).not.toContain('budgetItems');
+
+    window.sessionStorage.setItem('obraplanner:warehouse-tab:obra-teste', 'manutencao');
+    expect(readWarehouseTab('obra-teste', true, false)).toBe('painel');
+    expect(readWarehouseTab('obra-teste', true, true)).toBe('manutencao');
   });
 });

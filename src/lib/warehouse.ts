@@ -4346,7 +4346,10 @@ export async function makeAttachment(
     mimeType,
     originalBytes: file.size,
     storedBytes: optimized.size,
-    optimizedAt: optimized === file ? undefined : nowISO(),
+    // Mesmo quando o arquivo já é menor que o perfil geraria, ele foi avaliado
+    // antes do upload. Marcar a versão evita que a manutenção de legado tente
+    // reprocessar indefinidamente um anexo novo que não tinha ganho possível.
+    optimizedAt: nowISO(),
     optimizationVersion: ATTACHMENT_OPTIMIZATION_VERSION,
 
     kind,
@@ -4363,6 +4366,22 @@ export async function makeAttachment(
     const message = err instanceof Error ? err.message : '';
     throw new Error(`Não foi possível enviar ${file.name} para a nuvem${message ? `: ${message}` : '. Verifique a internet e tente novamente.'}`);
   }
+}
+
+/** Processa e envia anexos em sequência para não manter vários bitmaps grandes
+ * simultaneamente na memória do celular. */
+export async function makeAttachments(
+  files: readonly File[],
+  projectId: string,
+  kind?: WarehouseAttachment['kind'],
+  folder = 'documents',
+  alreadyOptimized = false,
+): Promise<WarehouseAttachment[]> {
+  const attachments: WarehouseAttachment[] = [];
+  for (const file of files) {
+    attachments.push(await makeAttachment(file, projectId, kind, folder, alreadyOptimized));
+  }
+  return attachments;
 }
 
 // ============== HELPERS: NOTAS FISCAIS / VÍNCULO DE MATERIAIS ==============

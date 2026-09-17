@@ -35,7 +35,7 @@ import { resolveObraConfig } from '@/lib/obraConfig';
 import { Button } from '@/components/ui/button';
 import { logToProject, type AuditUserInfo } from '@/lib/audit';
 import { allocateSubcontractValue, freezeSubcontractPayments, subcontractBalance, subcontractExecutedQuantity, subcontractPaidValue } from '@/lib/subcontracts';
-import { makeAttachment } from '@/lib/warehouse';
+import { makeAttachments } from '@/lib/warehouse';
 import { downloadWarehouseAttachment, openWarehouseAttachment, warehouseAttachmentErrorMessage } from '@/lib/warehouseAttachments';
 import { toast } from 'sonner';
 
@@ -656,7 +656,7 @@ export function SubcontractsTab({ project, analysis, canManage, canDeleteHistory
       return;
     }
     setSavingPayment(true);
-    void Promise.all(paymentFiles.map(file => makeAttachment(file, project.id, 'recibo', 'subcontract-payments')))
+    void makeAttachments(paymentFiles, project.id, 'recibo', 'subcontract-payments')
       .then(attachments => persistPayment(contract, amount, attachments))
       .catch(error => toast.error(error instanceof Error ? error.message : 'Não foi possível enviar o comprovante. O pagamento não foi lançado.'))
       .finally(() => setSavingPayment(false));
@@ -691,7 +691,7 @@ export function SubcontractsTab({ project, analysis, canManage, canDeleteHistory
       return;
     }
     setSavingEditedPayment(true);
-    void Promise.all(editingPaymentFiles.map(file => makeAttachment(file, project.id, 'recibo', 'subcontract-payments')))
+    void makeAttachments(editingPaymentFiles, project.id, 'recibo', 'subcontract-payments')
       .then(attachments => persistEditedPayment(contract, payment, amount, attachments))
       .catch(error => toast.error(error instanceof Error ? error.message : 'Não foi possível enviar o comprovante. A alteração não foi gravada.'))
       .finally(() => setSavingEditedPayment(false));

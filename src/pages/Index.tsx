@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useDeferredValue, useCallback, useRef, Suspense } from 'react';
 import { flushSync } from 'react-dom';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { AppView, DailyReport, Project } from '@/types/project';
+import { AppView, DailyReport, Project, WarehouseRequisition } from '@/types/project';
 import AppSidebar from '@/components/AppSidebar';
 import UndoButton from '@/components/UndoButton';
 import SaveStatusIndicator, { SaveStatus } from '@/components/SaveStatusIndicator';
@@ -1160,7 +1160,7 @@ export default function Index() {
           const rememberedProjectId = readAppUiSession()?.projectId;
           const preferredProjectId = [initialRouteProjectIdRef.current, rememberedProjectId, list[0].id]
             .find(id => !!id && list.some(projectMeta => projectMeta.id === id)) ?? list[0].id;
-          const initialWarehouseTab = readWarehouseTab(preferredProjectId, canViewWarehousePanel);
+          const initialWarehouseTab = readWarehouseTab(preferredProjectId, canViewWarehousePanel, role === 'owner');
           setWarehouseTab(initialWarehouseTab);
           const initialView = role && !canAccessAppView(role, initialViewRef.current)
             ? restrictedFallbackView
@@ -2349,18 +2349,85 @@ export default function Index() {
     });
   }, [discardProjectDraft, prepareWarehouseCloudOperation, scheduleProjectDraft]);
 
-  const saveStorageMaintenanceProject = useCallback(async (next: Project, expectedUpdatedAt: string) => {
-    if (!user || !orgId || !canPersistProject || role !== 'owner') {
-      throw new Error('Somente o Proprietário pode executar a manutenção global do Storage.');
-    }
-    if (conflictDetectedRef.current || partialSyncPendingRef.current?.projectId === next.id) {
-      throw new Error('Resolva a sincronização pendente antes de executar a manutenção global do Storage.');
-    }
-    if (saveTimerRef.current || inFlightSaveRef.current) {
-      throw new Error('Aguarde a confirmação do salvamento atual antes de executar a manutenção global do Storage.');
-    }
-    return upsertCloudProject(next, orgId, expectedUpdatedAt);
-  }, [canPersistProject, orgId, role, user]);
+  /**
+   * A manutenção de anexos é exclusiva do Proprietário e nunca delega ao
+   * autosave da obra. Cada referência é confirmada na coleção que a possui.
+   */
+  const commitAttachmentMigrationNow = useCallback((before: Project, after: Project): Promise<Project> => {
+    return runCriticalWarehouseClientOperation(async () => {
+      if (role !== 'owner') throw new Error('Somente o Proprietário pode executar a manutenção de anexos antigos.');
+      if (!navigator.onLine) throw new Error('Conecte-se à internet para confirmar a manutenção do anexo.');
+      const { attachmentMigrationScope } = await import('@/lib/attachmentMigration');
+      const scope = attachmentMigrationScope(before, after);
+
+      if (scope.kind === 'custody') return commitWarehouseScopedNow(after, 'custody');
+      if (scope.kind === 'warehouse-state') return commitWarehouseScopedNow(after, scope.domain);
+
+      await prepareWarehouseCloudOperation('requisition');
+      const active = rawProjectRef.current;
+      if (!active || active.id !== before.id) throw new Error('A obra aberta mudou antes da confirmação. O arquivo original foi preservado.');
+
+      if (scope.kind === 'daily-report') {
+        const currentReport = reportForDate(active, scope.before.date);
+        if (!currentReport || JSON.stringify(currentReport) !== JSON.stringify(scope.before)) {
+          throw new Error('O Diário foi alterado em outro aparelho. Atualize antes de reotimizar este anexo.');
+        }
+        const saved = await saveOpenDailyReport(active.id, scope.before, scope.after);
+        if (!saved.report || saved.conflicts.length > 0) {
+          throw new Error('O Diário mudou durante a manutenção. A referência anterior foi preservada.');
+        }
+        const confirmed = replaceReportForDate(active, scope.before.date, saved.report);
+        confirmProjectCollectionsSnapshot(confirmed, ['dailyReports']);
+        lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, scope.before.date, saved.report);
+        skipNextAutoSaveRef.current = true;
+        rawProjectRef.current = confirmed;
+        setRawProject(current => current?.id === confirmed.id ? confirmed : current);
+        setSaveStatus('saved');
+        return confirmed;
+      }
+
+      const currentRequisition = active.warehouse?.requisitions.find(row => row.id === scope.before.id);
+      if (!currentRequisition || JSON.stringify(currentRequisition) !== JSON.stringify(scope.before)) {
+        throw new Error('A retirada foi alterada em outro aparelho. Atualize antes de reotimizar este anexo.');
+      }
+      const { data: remote, error: loadError } = await supabase
+        .from('warehouse_requisitions')
+        .select('data, updated_at')
+        .eq('project_id', active.id)
+        .eq('id', scope.before.id)
+        .maybeSingle();
+      if (loadError) throw new Error(`Não foi possível conferir a retirada: ${loadError.message}`);
+      if (!remote || JSON.stringify(remote.data) !== JSON.stringify(scope.before)) {
+        throw new Error('A retirada já foi alterada na nuvem. Atualize antes de reotimizar este anexo.');
+      }
+      const { data: updated, error: updateError } = await supabase
+        .from('warehouse_requisitions')
+        .update({ data: scope.after as never })
+        .eq('project_id', active.id)
+        .eq('id', scope.before.id)
+        .eq('updated_at', remote.updated_at)
+        .select('data')
+        .maybeSingle();
+      if (updateError) throw new Error(`Não foi possível confirmar o anexo da retirada: ${updateError.message}`);
+      if (!updated) throw new Error('A retirada mudou durante a confirmação. Atualize antes de tentar novamente.');
+
+      const confirmedRequisition = updated.data as unknown as WarehouseRequisition;
+      const confirmed: Project = {
+        ...active,
+        warehouse: {
+          ...active.warehouse!,
+          requisitions: active.warehouse!.requisitions.map(row => row.id === confirmedRequisition.id ? confirmedRequisition : row),
+        },
+      };
+      confirmProjectCollectionsSnapshot(confirmed, ['warehouseRequisitions']);
+      ownWarehouseRealtimeRowsRef.current.set(`warehouse_requisitions:${confirmedRequisition.id}`, Date.now() + 10_000);
+      skipNextAutoSaveRef.current = true;
+      rawProjectRef.current = confirmed;
+      setRawProject(current => current?.id === confirmed.id ? confirmed : current);
+      setSaveStatus('saved');
+      return confirmed;
+    });
+  }, [commitWarehouseScopedNow, prepareWarehouseCloudOperation, role, runCriticalWarehouseClientOperation]);
 
   const handleUndo = useCallback((view: AppView) => {
     if (conflictDetectedRef.current) {
@@ -2388,7 +2455,7 @@ export default function Index() {
     try {
       await runProtectedNavigation(async () => {
         const openSequence = ++projectOpenSequenceRef.current;
-        const nextWarehouseTab = readWarehouseTab(id, canViewWarehousePanel);
+        const nextWarehouseTab = readWarehouseTab(id, canViewWarehousePanel, role === 'owner');
         setWarehouseTab(nextWarehouseTab);
         const record = await loadCloudProjectRecord(id, {
           collections: includePendingDraftCollections(
@@ -2550,7 +2617,7 @@ export default function Index() {
         if (rawProject && id === rawProject.id) {
           const next = list[0];
           if (next) {
-            const nextWarehouseTab = readWarehouseTab(next.id, canViewWarehousePanel);
+            const nextWarehouseTab = readWarehouseTab(next.id, canViewWarehousePanel, role === 'owner');
             setWarehouseTab(nextWarehouseTab);
             const record = await loadCloudProjectRecord(next.id, {
               collections: includePendingDraftCollections(
@@ -2798,7 +2865,7 @@ export default function Index() {
             canDeleteWarehouseRecords={role === 'owner'}
             canManageEquipmentGroups={role === 'owner' || role === 'warehouse_operator'}
             canOptimizeStorage={role === 'owner'}
-            onSaveStorageMaintenanceProject={saveStorageMaintenanceProject}
+            onCommitAttachmentMigration={commitAttachmentMigrationNow}
             storageMaintenanceOrganizationId={orgId}
             auditActor={auditActor}
             activeTab={warehouseTab}

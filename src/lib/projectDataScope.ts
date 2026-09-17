@@ -83,6 +83,7 @@ export const WAREHOUSE_TAB_VALUES = [
   'equipamentos',
   'movimentos',
   'inventario',
+  'manutencao',
 ] as const;
 
 export type WarehouseTab = typeof WAREHOUSE_TAB_VALUES[number];
@@ -224,6 +225,16 @@ const WAREHOUSE_TAB_COLLECTIONS: Record<WarehouseTab, ProjectCollectionKey[]> = 
     'warehouseMovements',
     ...WAREHOUSE_PLANNING,
   ]),
+  // Exclusiva do Proprietário. Carrega as coleções que podem conter anexos
+  // legados, mas somente quando a manutenção é aberta.
+  manutencao: unique([
+    ...WAREHOUSE_LEGACY_GUARD,
+    'warehouseMovements',
+    'warehouseRequisitions',
+    'warehouseCustody',
+    'dailyReports',
+    'auditLogs',
+  ]),
 };
 
 export function projectCollectionsForView(
@@ -255,12 +266,12 @@ export function isWarehouseTab(value: unknown): value is WarehouseTab {
   return typeof value === 'string' && WAREHOUSE_TAB_VALUES.includes(value as WarehouseTab);
 }
 
-export function readWarehouseTab(projectId: string, canViewPanel: boolean): WarehouseTab {
+export function readWarehouseTab(projectId: string, canViewPanel: boolean, canMaintainAttachments = false): WarehouseTab {
   const fallback: WarehouseTab = canViewPanel ? 'painel' : 'notas';
   if (typeof window === 'undefined') return fallback;
   try {
     const stored = window.sessionStorage.getItem(warehouseTabStorageKey(projectId));
-    if (!isWarehouseTab(stored) || (!canViewPanel && stored === 'painel')) return fallback;
+    if (!isWarehouseTab(stored) || (!canViewPanel && stored === 'painel') || (!canMaintainAttachments && stored === 'manutencao')) return fallback;
     return stored;
   } catch {
     return fallback;

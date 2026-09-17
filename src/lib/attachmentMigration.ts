@@ -1,4 +1,10 @@
-import type { Project } from '@/types/project';
+import type {
+  CustodyTerm,
+  DailyReport,
+  Project,
+  WarehouseRequisition,
+  WarehouseState,
+} from '@/types/project';
 import { supabase } from '@/integrations/supabase/client';
 import { ATTACHMENT_OPTIMIZATION_VERSION, optimizeStorageAttachment } from './attachmentOptimization';
 import {
@@ -17,11 +23,20 @@ export type MigratableAttachment = {
   kind?: 'nf' | 'foto' | 'recibo' | 'termo' | 'outro';
   optimizedAt?: string;
   optimizationVersion?: number;
+  /** Cópia anterior preservada porque a limpeza física falhou após a confirmação. */
+  cleanupPendingStoragePath?: string;
   storedBytes?: number;
   fileName?: string;
 };
 
+export type AttachmentMigrationScope =
+  | { kind: 'daily-report'; before: DailyReport; after: DailyReport }
+  | { kind: 'requisition'; before: WarehouseRequisition; after: WarehouseRequisition }
+  | { kind: 'custody'; before: CustodyTerm; after: CustodyTerm }
+  | { kind: 'warehouse-state'; domain: 'receipt' | 'catalog' };
+
 const BUCKET = 'daily-report-photos';
+const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
 
 function isAttachment(value: unknown): value is MigratableAttachment {
   if (!value || typeof value !== 'object') return false;
@@ -53,6 +68,96 @@ export function collectUnoptimizedAttachments(project: Project): MigratableAttac
   visit(project.dailyReports);
   visit(project.warehouse);
   return [...found.values()];
+}
+
+function changedRows<T extends { id: string }>(before: T[], after: T[]): Array<{ before: T; after: T }> {
+  if (before.length !== after.length) {
+    throw new Error('A manutenção não pode incluir, remover ou substituir registros.');
+  }
+  const beforeById = new Map(before.map(row => [row.id, row]));
+  return after.flatMap(row => {
+    const previous = beforeById.get(row.id);
+    if (!previous) throw new Error('A manutenção não pode incluir, remover ou substituir registros.');
+    return !same(previous, row) ? [{ before: previous, after: row }] : [];
+  });
+}
+
+/**
+ * A reotimização só pode alterar uma referência de anexo por vez. Esta
+ * classificação impede que uma manutenção de Storage se transforme em
+ * persistência genérica da obra ou em regravação de movimentos confirmados.
+ */
+export function attachmentMigrationScope(before: Project, after: Project): AttachmentMigrationScope {
+  if (before.id !== after.id) throw new Error('O anexo não pertence à obra aberta.');
+  const projectKeys = [...new Set([...Object.keys(before), ...Object.keys(after)])] as Array<keyof Project>;
+  const changedProjectKeys = projectKeys.filter(key => key !== 'dailyReports' && key !== 'warehouse' && !same(before[key], after[key]));
+  if (changedProjectKeys.length) {
+    throw new Error('A manutenção não pode alterar dados fora da coleção dona do anexo.');
+  }
+
+  const daily = changedRows(before.dailyReports ?? [], after.dailyReports ?? []);
+  const requisitions = changedRows(
+    before.warehouse?.requisitions ?? [],
+    after.warehouse?.requisitions ?? [],
+  );
+  const custody = changedRows(
+    before.warehouse?.custodyTerms ?? [],
+    after.warehouse?.custodyTerms ?? [],
+  );
+  const previousWarehouse = before.warehouse;
+  const nextWarehouse = after.warehouse;
+  if (!previousWarehouse || !nextWarehouse) {
+    throw new Error('Não foi possível identificar a coleção responsável pelo anexo.');
+  }
+  const rowCollections = new Set<keyof WarehouseState>(['requisitions', 'custodyTerms']);
+  const warehouseKeys = [...new Set([...Object.keys(previousWarehouse), ...Object.keys(nextWarehouse)])] as Array<keyof WarehouseState>;
+  const changedStateKeys = warehouseKeys
+    .filter(key => !rowCollections.has(key) && !same(previousWarehouse[key], nextWarehouse[key]));
+  const changedCollections = Number(daily.length > 0) + Number(requisitions.length > 0) + Number(custody.length > 0) + changedStateKeys.length;
+
+  if (changedCollections !== 1 || daily.length > 1 || requisitions.length > 1 || custody.length > 1) {
+    throw new Error('A manutenção deve alterar um único anexo por vez.');
+  }
+  if (daily.length) return { kind: 'daily-report', ...daily[0] };
+  if (requisitions.length) return { kind: 'requisition', ...requisitions[0] };
+  if (custody.length) return { kind: 'custody', ...custody[0] };
+  if (changedStateKeys.length === 1 && changedStateKeys[0] === 'fiscalNotes') return { kind: 'warehouse-state', domain: 'receipt' };
+  if (changedStateKeys.length === 1 && (changedStateKeys[0] === 'equipments' || changedStateKeys[0] === 'equipmentGroups')) {
+    return { kind: 'warehouse-state', domain: 'catalog' };
+  }
+  throw new Error('Este anexo histórico não pode ser atualizado sem alterar outro registro. A cópia original foi preservada.');
+}
+
+function updateAttachmentByStoredPath(
+  value: unknown,
+  attachmentId: string,
+  storagePath: string,
+  update: (attachment: MigratableAttachment) => MigratableAttachment,
+): unknown {
+  if (Array.isArray(value)) return value.map(item => updateAttachmentByStoredPath(item, attachmentId, storagePath, update));
+  if (!value || typeof value !== 'object') return value;
+  if (isAttachment(value) && value.id === attachmentId && value.storagePath === storagePath) return update(value);
+  const entries = Object.entries(value as Record<string, unknown>);
+  let changed = false;
+  const next = Object.fromEntries(entries.map(([key, item]) => {
+    const result = updateAttachmentByStoredPath(item, attachmentId, storagePath, update);
+    changed ||= result !== item;
+    return [key, result];
+  }));
+  return changed ? next : value;
+}
+
+/** Mantém o caminho anterior somente quando sua limpeza física não confirmou. */
+export function markAttachmentCleanupPending(
+  project: Project,
+  attachmentId: string,
+  storedPath: string,
+  previousPath: string,
+): Project {
+  return updateAttachmentByStoredPath(project, attachmentId, storedPath, attachment => ({
+    ...attachment,
+    cleanupPendingStoragePath: previousPath,
+  })) as Project;
 }
 
 /** Lista todos os anexos referenciados por uma obra, inclusive os já otimizados. */
