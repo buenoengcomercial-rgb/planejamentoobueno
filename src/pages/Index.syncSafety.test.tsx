@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   listCloudProjects: vi.fn(),
   loadCloudProjectRecord: vi.fn(),
   upsertCloudProject: vi.fn(),
+  getCloudProjectVersion: vi.fn(),
   commitWarehouseOperation: vi.fn(),
   warehouseUpload: vi.fn(),
   saveOpenDailyReport: vi.fn(),
@@ -72,7 +73,7 @@ vi.mock('@/lib/cloudProjects', () => {
     deleteCloudProjectAsOwner: vi.fn(),
     generateUniqueCloudName: vi.fn(),
     getSampleSeed: vi.fn(),
-    getCloudProjectVersion: vi.fn().mockResolvedValue(null),
+    getCloudProjectVersion: mocks.getCloudProjectVersion,
     confirmCloudProjectRecord: vi.fn(),
     discardCloudProjectRecord: vi.fn(),
   };
@@ -201,7 +202,24 @@ vi.mock('@/components/OperationalGanttChart', () => ({ default: () => null }));
 vi.mock('@/components/Measurement', () => ({ default: () => null }));
 vi.mock('@/components/TaskList', () => ({ default: () => null }));
 vi.mock('@/components/DailyReport', () => ({ default: () => null }));
-vi.mock('@/components/Additive', () => ({ default: () => null }));
+vi.mock('@/components/Additive', async () => {
+  const { createElement } = await import('react');
+  type Setter = (next: Project | ((current: Project) => Project)) => void;
+  return {
+    default: ({ project, onProjectChange }: { project: Project; onProjectChange: Setter }) => createElement(
+      'div',
+      { 'data-testid': 'additive-workspace' },
+      createElement('span', { 'data-testid': 'additive-count' }, String(project.additives?.length ?? 0)),
+      createElement('button', {
+        type: 'button',
+        onClick: () => onProjectChange(current => ({
+          ...current,
+          additives: [{ id: 'additive-local', title: 'Alteração local no Aditivo' }],
+        })),
+      }, 'Alterar Aditivo local'),
+    ),
+  };
+});
 vi.mock('@/components/AdditiveSchedule', () => ({ default: () => null }));
 vi.mock('@/components/RealCost', () => ({ default: () => null }));
 vi.mock('@/components/Materials', () => ({ default: () => null }));
@@ -256,7 +274,7 @@ vi.mock('@/components/warehouse/Warehouse', async () => {
 });
 
 import Index from './Index';
-import { CloudProjectPartialSyncError } from '@/lib/cloudProjects';
+import { CloudProjectConflictError, CloudProjectPartialSyncError } from '@/lib/cloudProjects';
 
 const report: DailyReport = {
   id: 'daily-1',
@@ -337,6 +355,7 @@ beforeEach(() => {
     id === first.id ? cloudRecord(first) : cloudRecord(second)
   ));
   mocks.upsertCloudProject.mockResolvedValue('cloud-v3');
+  mocks.getCloudProjectVersion.mockResolvedValue(null);
   mocks.commitWarehouseOperation.mockReset();
   mocks.warehouseUpload.mockReset();
   mocks.warehouseUpload.mockResolvedValue(undefined);
@@ -512,6 +531,64 @@ describe('segurança de sincronização da página da obra', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+  });
+
+  it('rebaseia uma entrada remota do Almoxarifado ao salvar o Aditivo sem abrir conflito', async () => {
+    const remoteWarehouseProject = {
+      ...makeProject(),
+      warehouse: {
+        ...emptyWarehouse(),
+        fiscalDuplicateReconciliationVersion: 1,
+        movements: [{ id: 'movimento-remoto', kind: 'entry', quantity: 1 }],
+      },
+    } as Project;
+    let warehouseHasAdvanced = false;
+    mocks.loadCloudProjectRecord.mockImplementation(async (id: string) => {
+      if (id !== 'project-1') return cloudRecord(makeProject('project-2'));
+      return warehouseHasAdvanced
+        ? { ...cloudRecord(remoteWarehouseProject, 'cloud-v3'), warehouseVersion: 2 }
+        : cloudRecord(makeProject());
+    });
+    mocks.getCloudProjectVersion.mockResolvedValue({
+      id: 'project-1',
+      updatedAt: 'cloud-v3',
+      warehouseVersion: 2,
+      warehouseUpdatedAt: '2026-09-14T10:00:00.000Z',
+    });
+    mocks.upsertCloudProject
+      .mockImplementationOnce(async () => {
+        warehouseHasAdvanced = true;
+        throw new CloudProjectConflictError();
+      })
+      .mockResolvedValueOnce('cloud-v4');
+
+    renderIndex('aditivo');
+    expect(await screen.findByTestId('additive-workspace')).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar Aditivo local' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+      await Promise.resolve();
+    });
+
+    expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(2);
+    expect(mocks.getCloudProjectVersion).toHaveBeenCalledWith('project-1');
+    expect(mocks.loadCloudProjectRecord).toHaveBeenLastCalledWith('project-1', expect.objectContaining({
+      collections: [
+        'warehouseMovements',
+        'warehouseRequisitions',
+        'warehouseCustody',
+        'stockMovements',
+      ],
+      strict: true,
+      deferSnapshot: true,
+    }));
+    expect(mocks.upsertCloudProject.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      additives: [{ id: 'additive-local', title: 'Alteração local no Aditivo' }],
+      warehouse: expect.objectContaining({ movements: [{ id: 'movimento-remoto', kind: 'entry', quantity: 1 }] }),
+    }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('mantém módulo e obra enquanto as fotos da retirada ainda estão sendo enviadas', async () => {

@@ -47,6 +47,28 @@ const REALTIME_TABLE_COLLECTIONS: Record<string, readonly ProjectCollectionKey[]
 
 export const PROJECT_REALTIME_TABLES = Object.keys(REALTIME_TABLE_COLLECTIONS) as Array<keyof typeof REALTIME_TABLE_COLLECTIONS>;
 
+/**
+ * Coleções que uma versão nova do Almoxarifado pode ter alterado.
+ *
+ * A versão é avançada pela RPC atômica do Almoxarifado. Ela é suficiente para
+ * identificar esse domínio mesmo quando o evento detalhado chega atrasado ou
+ * a conferência periódica enxerga apenas a linha principal da obra.
+ */
+export const WAREHOUSE_REMOTE_SYNC_COLLECTIONS: readonly ProjectCollectionKey[] = [
+  'warehouseMovements',
+  'warehouseRequisitions',
+  'warehouseCustody',
+  'stockMovements',
+];
+
+/** Não trate uma versão desconhecida como avanço: o chamador mantém o fluxo conservador. */
+export function hasRemoteWarehouseVersionAdvance(
+  knownVersion: number | null | undefined,
+  remoteVersion: number | null | undefined,
+): boolean {
+  return knownVersion != null && remoteVersion != null && remoteVersion > knownVersion;
+}
+
 const PROJECT_AREA_COLLECTIONS: ReadonlyArray<{
   label: string;
   collections: readonly ProjectCollectionKey[];

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   PROJECT_COLLECTION_KEYS,
+  WAREHOUSE_REMOTE_SYNC_COLLECTIONS,
+  hasRemoteWarehouseVersionAdvance,
   normalizeProjectCollections,
   projectAreasForCollections,
   projectCollectionsForView,
@@ -65,6 +67,19 @@ describe('escopos progressivos de dados da obra', () => {
       'dailyReports',
       'tasks',
     ])).toEqual(['Almoxarifado', 'Diário de Obra', 'Planejamento e campo']);
+  });
+
+  it('reconhece um avanço do Almoxarifado sem confundi-lo com o Aditivo', () => {
+    expect(WAREHOUSE_REMOTE_SYNC_COLLECTIONS).toEqual([
+      'warehouseMovements',
+      'warehouseRequisitions',
+      'warehouseCustody',
+      'stockMovements',
+    ]);
+    expect(WAREHOUSE_REMOTE_SYNC_COLLECTIONS).not.toContain('additives');
+    expect(hasRemoteWarehouseVersionAdvance(4, 5)).toBe(true);
+    expect(hasRemoteWarehouseVersionAdvance(5, 5)).toBe(false);
+    expect(hasRemoteWarehouseVersionAdvance(null, 5)).toBe(false);
   });
 
   it('carrega anexos legados apenas ao Proprietário e somente na manutenção', () => {
