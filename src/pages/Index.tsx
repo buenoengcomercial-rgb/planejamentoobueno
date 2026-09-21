@@ -364,6 +364,10 @@ export default function Index() {
   const lastObservedWarehouseVersionRef = useRef<number | null>(null);
   const realtimeConnectedRef = useRef(false);
   const remoteDirtyCollectionsRef = useRef<Map<string, Set<ProjectCollectionKey>>>(new Map());
+  // Mantém a origem detalhada do evento enquanto o debounce/autosave está em
+  // curso. Não é estado de UI: impede que uma área em edição pareça incompleta
+  // antes de sabermos se ela precisa de rebase ou de conflito explícito.
+  const pendingRealtimeCollectionsRef = useRef<Map<string, Set<ProjectCollectionKey>>>(new Map());
   const localDirtyCollectionsRef = useRef<Map<string, Set<ProjectCollectionKey>>>(new Map());
   const localMetadataDirtyRef = useRef<Set<string>>(new Set());
   const dataLoadSequenceRef = useRef(0);
@@ -503,6 +507,13 @@ export default function Index() {
     refreshPendingRemoteAreas(projectId);
     setRemoteDirtyRevision(revision => revision + 1);
   }, [refreshPendingRemoteAreas]);
+
+  const clearPendingRealtimeCollections = useCallback((projectId: string, collections: readonly ProjectCollectionKey[]) => {
+    const pending = pendingRealtimeCollectionsRef.current.get(projectId);
+    if (!pending) return;
+    normalizeProjectCollections(collections).forEach(collection => pending.delete(collection));
+    if (pending.size === 0) pendingRealtimeCollectionsRef.current.delete(projectId);
+  }, []);
 
   const markLocalProjectChanges = useCallback((before: Project, after: Project) => {
     const changed = getChangedProjectCollections(before, after);
@@ -686,6 +697,8 @@ export default function Index() {
       setDailyReportSaveErrors({});
       remoteDirtyCollectionsRef.current.delete(rawProjectRef.current?.id ?? '');
       remoteDirtyCollectionsRef.current.delete(projectToLoad?.id ?? '');
+      pendingRealtimeCollectionsRef.current.delete(rawProjectRef.current?.id ?? '');
+      pendingRealtimeCollectionsRef.current.delete(projectToLoad?.id ?? '');
       localDirtyCollectionsRef.current.delete(rawProjectRef.current?.id ?? '');
       localDirtyCollectionsRef.current.delete(projectToLoad?.id ?? '');
       localMetadataDirtyRef.current.delete(rawProjectRef.current?.id ?? '');
@@ -799,45 +812,45 @@ export default function Index() {
   }, [discardProjectDraft]);
 
   /**
-   * Uma confirmação atômica do Almoxarifado também avança `projects.updated_at`.
-   * Quando a tela atual está editando outro domínio, rebaseamos somente as
-   * coleções do Almoxarifado e mantemos a edição local intacta. Assim o próximo
-   * save usa a versão nova da obra sem transformar uma entrada em conflito no
-   * Aditivo, Cronograma ou Diário.
+   * Rebaseia exclusivamente coleções identificadas pelo evento remoto. Isso
+   * preserva o que está sendo editado em outra área e nunca transforma uma
+   * atualização de Diário, Aditivo, Custos ou Almoxarifado em cópia integral
+   * da obra. A coincidência com uma coleção local ainda exige conflito explícito.
    */
-  const refreshRemoteWarehouseInBackground = useCallback(async (
+  const refreshRemoteCollectionsInBackground = useCallback(async (
     projectToRebase: Project,
+    collections: readonly ProjectCollectionKey[],
     knownRemoteVersion?: CloudProjectVersion,
   ): Promise<Project | null> => {
     const current = rawProjectRef.current;
     if (!current || current.id !== projectToRebase.id || conflictDetectedRef.current) return null;
 
+    const requestedCollections = normalizeProjectCollections(collections);
+    if (requestedCollections.length === 0) return null;
+
     let remoteVersion = knownRemoteVersion;
     try {
       remoteVersion ??= await getCloudProjectVersion(current.id) ?? undefined;
     } catch (error) {
-      console.warn('Não foi possível conferir a versão remota do Almoxarifado.', error);
+      console.warn('Não foi possível conferir a versão remota da área alterada.', error);
       return null;
     }
-    if (!remoteVersion || !hasRemoteWarehouseVersionAdvance(
-      lastObservedWarehouseVersionRef.current,
-      remoteVersion.warehouseVersion,
-    )) return null;
+    if (!remoteVersion) return null;
 
-    // Uma edição local de estoque/requisição ainda é conflito real. Não a
-    // rebaseie automaticamente nem substitua o formulário em andamento.
-    if (hasLocalCollectionConflict(current.id, WAREHOUSE_REMOTE_SYNC_COLLECTIONS)) return null;
+    // Um formulário local no mesmo domínio ainda é conflito real. Não o
+    // rebaseie automaticamente nem substitua o que está sendo digitado.
+    if (hasLocalCollectionConflict(current.id, requestedCollections)) return null;
 
-    markRemoteCollections(current.id, WAREHOUSE_REMOTE_SYNC_COLLECTIONS);
+    markRemoteCollections(current.id, requestedCollections);
     let record: CloudProjectRecord;
     try {
       record = await loadCloudProjectRecord(current.id, {
-        collections: WAREHOUSE_REMOTE_SYNC_COLLECTIONS,
+        collections: requestedCollections,
         strict: true,
         deferSnapshot: true,
       });
     } catch (error) {
-      console.warn('Não foi possível atualizar o Almoxarifado em segundo plano.', error);
+      console.warn('Não foi possível atualizar a área alterada em segundo plano.', error);
       return null;
     }
     if (!record) return null;
@@ -848,7 +861,7 @@ export default function Index() {
     if (!latest
       || latest.id !== current.id
       || record.updatedAt !== remoteVersion.updatedAt
-      || hasLocalCollectionConflict(current.id, WAREHOUSE_REMOTE_SYNC_COLLECTIONS)
+      || hasLocalCollectionConflict(current.id, requestedCollections)
       || conflictDetectedRef.current) {
       discardCloudProjectRecord(record);
       return null;
@@ -857,12 +870,12 @@ export default function Index() {
     const rebasedCurrent = mergeHydratedProjectCollections(
       latest,
       record.project,
-      WAREHOUSE_REMOTE_SYNC_COLLECTIONS,
+      requestedCollections,
     );
     const rebasedForRetry = mergeHydratedProjectCollections(
       projectToRebase,
       record.project,
-      WAREHOUSE_REMOTE_SYNC_COLLECTIONS,
+      requestedCollections,
     );
     let rebasedSavedBaseline = rebasedCurrent;
     if (lastSavedProjectJsonRef.current) {
@@ -870,7 +883,7 @@ export default function Index() {
         rebasedSavedBaseline = mergeHydratedProjectCollections(
           JSON.parse(lastSavedProjectJsonRef.current) as Project,
           record.project,
-          WAREHOUSE_REMOTE_SYNC_COLLECTIONS,
+          requestedCollections,
         );
       } catch {
         // A fotografia em tela ainda é mais segura que descartar a edição local.
@@ -886,14 +899,43 @@ export default function Index() {
     setCurrentProjectUpdatedAt(record.updatedAt);
     setLastCloudConfirmedAt(new Date().toISOString());
     setRemoteUpdateAt(new Date().toISOString());
-    clearRemoteCollections(current.id, WAREHOUSE_REMOTE_SYNC_COLLECTIONS);
-    // Se houver Aditivo/Diário pendente, o autosave continua normalmente; se
+    clearRemoteCollections(current.id, requestedCollections);
+    clearPendingRealtimeCollections(current.id, requestedCollections);
+    // Se outra área tiver edição pendente, o autosave continua normalmente; se
     // não houver, o rebase remoto não pode disparar uma gravação redundante.
     skipNextAutoSaveRef.current = !projectHasLocalChanges(rebasedCurrent, lastSavedProjectJsonRef.current);
     rawProjectRef.current = rebasedCurrent;
     setRawProject(rebasedCurrent);
     return rebasedForRetry;
-  }, [clearRemoteCollections, hasLocalCollectionConflict, markRemoteCollections]);
+  }, [clearPendingRealtimeCollections, clearRemoteCollections, hasLocalCollectionConflict, markRemoteCollections]);
+
+  /**
+   * Operações atômicas do Almoxarifado também avançam `projects.updated_at`.
+   * A versão própria permite identificá-las com segurança até quando o evento
+   * detalhado chega depois da alteração da linha principal da obra.
+   */
+  const refreshRemoteWarehouseInBackground = useCallback(async (
+    projectToRebase: Project,
+    knownRemoteVersion?: CloudProjectVersion,
+  ): Promise<Project | null> => {
+    let remoteVersion = knownRemoteVersion;
+    try {
+      remoteVersion ??= await getCloudProjectVersion(projectToRebase.id) ?? undefined;
+    } catch (error) {
+      console.warn('Não foi possível conferir a versão remota do Almoxarifado.', error);
+      return null;
+    }
+    if (!remoteVersion || !hasRemoteWarehouseVersionAdvance(
+      lastObservedWarehouseVersionRef.current,
+      remoteVersion.warehouseVersion,
+    )) return null;
+
+    return refreshRemoteCollectionsInBackground(
+      projectToRebase,
+      WAREHOUSE_REMOTE_SYNC_COLLECTIONS,
+      remoteVersion,
+    );
+  }, [refreshRemoteCollectionsInBackground]);
 
   const persistProject = useCallback(async (
     projectToSave: Project,
@@ -936,7 +978,12 @@ export default function Index() {
             break;
           } catch (error) {
             if (attempt === 0 && error instanceof CloudProjectConflictError) {
-              const rebased = await refreshRemoteWarehouseInBackground(effectiveProject);
+              const knownRemoteCollections = [
+                ...(pendingRealtimeCollectionsRef.current.get(effectiveProject.id) ?? []),
+                ...(remoteDirtyCollectionsRef.current.get(effectiveProject.id) ?? []),
+              ];
+              const rebased = await refreshRemoteWarehouseInBackground(effectiveProject)
+                ?? await refreshRemoteCollectionsInBackground(effectiveProject, knownRemoteCollections);
               if (rebased) {
                 effectiveProject = rebased;
                 effectiveJson = serializeProject(rebased);
@@ -1032,7 +1079,7 @@ export default function Index() {
     } finally {
       if (inFlightSaveRef.current === request) inFlightSaveRef.current = null;
     }
-  }, [clearLocalProjectCollections, discardProjectDraft, refreshRemoteWarehouseInBackground, writeProtectedProjectDraft]);
+  }, [clearLocalProjectCollections, discardProjectDraft, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, writeProtectedProjectDraft]);
 
   const handleCloudConflict = useCallback(async (localProject: Project) => {
     conflictDetectedRef.current = true;
@@ -1503,6 +1550,15 @@ export default function Index() {
         || saveTimerRef.current
         || inFlightSaveRef.current) return;
       if (await refreshRemoteWarehouseInBackground(currentAfterVersionCheck, remoteVersion)) return;
+      const knownRemoteCollections = [
+        ...(pendingRealtimeCollectionsRef.current.get(current.id) ?? []),
+        ...(remoteDirtyCollectionsRef.current.get(current.id) ?? []),
+      ];
+      if (await refreshRemoteCollectionsInBackground(
+        currentAfterVersionCheck,
+        knownRemoteCollections,
+        remoteVersion,
+      )) return;
       setLastCloudConfirmedAt(new Date().toISOString());
       const hasLocalChanges = projectHasLocalChanges(currentAfterVersionCheck, lastSavedProjectJsonRef.current);
       const action = resolveRemoteVersionAction(remoteVersion.updatedAt, currentProjectUpdatedAtRef.current, hasLocalChanges);
@@ -1570,7 +1626,7 @@ export default function Index() {
     } finally {
       remoteCheckInFlightRef.current = false;
     }
-  }, [clearRemoteCollections, handleCloudConflict, hasLocalCollectionConflict, markRemoteCollections, orgId, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
+  }, [clearRemoteCollections, handleCloudConflict, hasLocalCollectionConflict, markRemoteCollections, orgId, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
 
   const refreshProjectFromRealtime = useCallback(async (sources: readonly string[] = []) => {
     const current = rawProjectRef.current;
@@ -1600,6 +1656,7 @@ export default function Index() {
     if (affectedCollections.some(collection => WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection))) {
       if (await refreshRemoteWarehouseInBackground(current)) return;
     }
+    if (await refreshRemoteCollectionsInBackground(current, affectedCollections)) return;
     const metadataOnly = sources.includes('projects') && affectedCollections.length === 0;
     // A verificação de versão sem realtime informa que algo mudou, mas não
     // identifica a tabela. Nesse caso o limite seguro continua sendo apenas a
@@ -1693,7 +1750,7 @@ export default function Index() {
     } finally {
       remoteCheckInFlightRef.current = false;
     }
-  }, [clearRemoteCollections, handleCloudConflict, hasLocalCollectionConflict, markRemoteCollections, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
+  }, [clearRemoteCollections, handleCloudConflict, hasLocalCollectionConflict, markRemoteCollections, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
 
   const refreshDailyReportFromRealtime = useCallback((incoming: DailyReport) => {
     const current = rawProjectRef.current;
@@ -1790,7 +1847,18 @@ export default function Index() {
       // qualquer alteração externa posterior continua coberta pelo realtime e
       // pela verificação de versão.
       if (Date.now() - lastLocalSaveAtRef.current < 800) return;
-      if (source) pendingRealtimeSourcesRef.current.add(source);
+      if (source) {
+        const affectedCollections = projectCollectionsForRealtimeTable(source);
+        // Registra imediatamente a área que chegou pelo realtime. Se o
+        // autosave terminar antes do debounce, ele ainda sabe quais coleções
+        // remotas pode rebasear sem tocar na edição local de outro módulo.
+        if (affectedCollections.length > 0) {
+          const pending = pendingRealtimeCollectionsRef.current.get(projectId) ?? new Set<ProjectCollectionKey>();
+          affectedCollections.forEach(collection => pending.add(collection));
+          pendingRealtimeCollectionsRef.current.set(projectId, pending);
+        }
+        pendingRealtimeSourcesRef.current.add(source);
+      }
       if (realtimeRefreshTimerRef.current) window.clearTimeout(realtimeRefreshTimerRef.current);
       realtimeRefreshTimerRef.current = window.setTimeout(() => {
         const sources = [...pendingRealtimeSourcesRef.current];

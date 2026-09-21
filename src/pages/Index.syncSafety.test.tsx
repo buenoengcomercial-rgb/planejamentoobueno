@@ -15,6 +15,10 @@ const mocks = vi.hoisted(() => ({
   loadCloudProjectRecord: vi.fn(),
   upsertCloudProject: vi.fn(),
   getCloudProjectVersion: vi.fn(),
+  realtimeHandlers: [] as Array<{
+    table: string;
+    callback: (payload: { new?: Record<string, unknown> | null; old?: Record<string, unknown> | null }) => void;
+  }>,
   commitWarehouseOperation: vi.fn(),
   warehouseUpload: vi.fn(),
   saveOpenDailyReport: vi.fn(),
@@ -114,7 +118,10 @@ vi.mock('sonner', () => ({
 
 vi.mock('@/integrations/supabase/client', () => {
   const channel = {
-    on: vi.fn(() => channel),
+    on: vi.fn((_: string, config: { table: string }, callback: (payload: { new?: Record<string, unknown> | null; old?: Record<string, unknown> | null }) => void) => {
+      mocks.realtimeHandlers.push({ table: config.table, callback });
+      return channel;
+    }),
     subscribe: vi.fn(() => channel),
   };
   return {
@@ -347,6 +354,7 @@ function deferred<T>() {
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
+  mocks.realtimeHandlers.length = 0;
   vi.useRealTimers();
   const first = makeProject();
   const second = makeProject('project-2');
@@ -589,6 +597,85 @@ describe('segurança de sincronização da página da obra', () => {
       warehouse: expect.objectContaining({ movements: [{ id: 'movimento-remoto', kind: 'entry', quantity: 1 }] }),
     }));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('rebaseia uma alteração remota do Diário ao salvar o Aditivo sem abrir conflito', async () => {
+    const remoteDailyProject = {
+      ...makeProject(),
+      dailyReports: [{ ...report, observations: 'Atualização remota no Diário' }],
+    };
+    let dailyHasAdvanced = false;
+    mocks.loadCloudProjectRecord.mockImplementation(async (id: string) => {
+      if (id !== 'project-1') return cloudRecord(makeProject('project-2'));
+      return dailyHasAdvanced
+        ? cloudRecord(remoteDailyProject, 'cloud-v3')
+        : cloudRecord(makeProject());
+    });
+    mocks.getCloudProjectVersion.mockResolvedValue({
+      projectId: 'project-1',
+      updatedAt: 'cloud-v3',
+      warehouseVersion: 1,
+      warehouseUpdatedAt: '2026-09-14T10:00:00.000Z',
+    });
+    mocks.upsertCloudProject
+      .mockImplementationOnce(async () => {
+        dailyHasAdvanced = true;
+        throw new CloudProjectConflictError();
+      })
+      .mockResolvedValueOnce('cloud-v4');
+
+    renderIndex('aditivo');
+    expect(await screen.findByTestId('additive-workspace')).toBeInTheDocument();
+    const dailyRealtime = mocks.realtimeHandlers.find(handler => handler.table === 'daily_reports');
+    expect(dailyRealtime).toBeDefined();
+    act(() => dailyRealtime?.callback({
+      new: {
+        id: 'daily-1',
+        updated_at: 'cloud-v3',
+        data: { ...remoteDailyProject.dailyReports[0] },
+      },
+    }));
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar Aditivo local' }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+      await Promise.resolve();
+    });
+
+    expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(2);
+    expect(mocks.loadCloudProjectRecord).toHaveBeenLastCalledWith('project-1', expect.objectContaining({
+      collections: ['dailyReports'],
+      strict: true,
+      deferSnapshot: true,
+    }));
+    expect(mocks.upsertCloudProject.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      additives: [{ id: 'additive-local', title: 'Alteração local no Aditivo' }],
+      dailyReports: [{ ...report, observations: 'Atualização remota no Diário' }],
+    }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('mantém conflito explícito quando a mudança remota atinge o mesmo Aditivo em edição', async () => {
+    mocks.upsertCloudProject.mockRejectedValueOnce(new CloudProjectConflictError());
+
+    renderIndex('aditivo');
+    expect(await screen.findByTestId('additive-workspace')).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar Aditivo local' }));
+    const additiveRealtime = mocks.realtimeHandlers.find(handler => handler.table === 'additives');
+    expect(additiveRealtime).toBeDefined();
+    act(() => additiveRealtime?.callback({
+      new: { id: 'additive-remote', updated_at: 'cloud-v3' },
+    }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+      await Promise.resolve();
+    });
+
+    expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Conflito de cópia local')).toBeInTheDocument();
   });
 
   it('mantém módulo e obra enquanto as fotos da retirada ainda estão sendo enviadas', async () => {
