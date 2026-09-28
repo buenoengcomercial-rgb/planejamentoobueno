@@ -33,6 +33,25 @@ const project = {
 } as Project;
 
 describe('TaskList', () => {
+  it('mostra a descrição completa de uma tarefa longa com quebra de linha', () => {
+    const longName = 'PLACA DE SINALIZACAO DE SEGURANCA CONTRA INCENDIO FOTOLUMINESCENTE PARA ORIENTACAO DA ROTA DE FUGA NO PAVIMENTO';
+    const longNameProject = {
+      ...project,
+      phases: [{ ...project.phases[0], tasks: [{ ...task, name: longName }] }],
+    } as Project;
+    const { container } = render(
+      <TooltipProvider>
+        <TaskList project={longNameProject} onProjectChange={vi.fn()} />
+      </TooltipProvider>,
+    );
+
+    const taskRow = container.querySelector('[data-task-id="task-1"]');
+    const name = screen.getByText(longName);
+    expect(taskRow).toContainElement(name);
+    expect(name).toHaveClass('whitespace-normal', 'break-words');
+    expect(name).not.toHaveClass('truncate');
+  });
+
   it('expande e recolhe o capítulo pelo clique na área neutra da linha', () => {
     const { container } = render(
       <TooltipProvider>

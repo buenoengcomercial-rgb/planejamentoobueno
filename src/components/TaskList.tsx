@@ -970,9 +970,9 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <span
-                                        className={`text-sm font-semibold truncate text-left transition-colors cursor-pointer ${rowTeam ? 'hover:opacity-70' : 'text-foreground hover:text-primary'}`}
+                                        className={`min-w-0 flex-1 whitespace-normal break-words text-left text-sm font-semibold transition-colors cursor-pointer ${rowTeam ? 'hover:opacity-70' : 'text-foreground hover:text-primary'}`}
                                       >
-                                        {truncateWords(task.name, 8)}
+                                        {task.name}
                                       </span>
                                     </TooltipTrigger>
                                     <TooltipContent side="top" className="max-w-md whitespace-normal break-words">

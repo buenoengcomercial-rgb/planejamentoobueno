@@ -36,6 +36,30 @@ const project = {
 describe('ManagementRoutine semanal por capítulo', () => {
   beforeEach(() => localStorage.clear());
 
+  it('mostra o nome completo da atividade nos cartões da rotina', () => {
+    const longName = 'Instalar e testar detectores de fumaça em todos os ambientes do pavimento conforme o projeto de prevenção de incêndio';
+    const longNameProject = {
+      ...project,
+      phases: [{ ...project.phases[0], tasks: [{ ...project.phases[0].tasks[0], name: longName }] }],
+    } as Project;
+    render(
+      <ManagementRoutine
+        project={longNameProject}
+        onProjectChange={vi.fn()}
+        onOpenDailyReport={vi.fn()}
+        onOpenProduction={vi.fn()}
+        initialWeek="2026-08-10"
+      />,
+    );
+
+    const names = screen.getAllByText(longName);
+    expect(names.length).toBeGreaterThan(0);
+    names.forEach(name => {
+      expect(name).toHaveClass('whitespace-normal', 'break-words');
+      expect(name).not.toHaveClass('line-clamp-3');
+    });
+  });
+
   it('busca atividade fora da data e grava produção com reprogramação aprovada', () => {
     const onProjectChange = vi.fn();
     render(

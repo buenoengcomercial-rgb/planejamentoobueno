@@ -126,7 +126,7 @@ function ActivityCard({
   return (
     <article className={`group w-full rounded-lg border border-border border-l-4 bg-background p-3 text-left transition ${tone.card}`}>
       <div className="flex items-start justify-between gap-2">
-        <p className="line-clamp-3 text-sm font-semibold leading-snug text-foreground">{activity.taskName}</p>
+        <p className="min-w-0 flex-1 whitespace-normal break-words text-sm font-semibold leading-snug text-foreground">{activity.taskName}</p>
         {activity.completed && <CheckCircle2 className="h-4 w-4 shrink-0 text-success" aria-label="Atividade concluída" />}
       </div>
       {activity.completed && <Badge variant="outline" className="mt-2 border-success/30 bg-success/10 text-[10px] font-semibold text-success">Concluída</Badge>}
