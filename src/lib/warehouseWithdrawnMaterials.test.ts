@@ -65,11 +65,48 @@ describe('warehouseWithdrawnMaterialsByChapter', () => {
 
     const [chapter] = warehouseWithdrawnMaterialsByChapter(current);
     expect(chapter.rows).toHaveLength(1);
-    expect(chapter.rows[0]).toMatchObject({ withdrawnQuantity: 16 });
+    expect(chapter.rows[0]).toMatchObject({ registeredQuantity: 18, returnedQuantity: 2, withdrawnQuantity: 16 });
     expect(chapter.rows[0].requisitions).toEqual([
-      { id: 'req-curvo', number: 'REQ-1', withdrawnQuantity: 8 },
-      { id: 'req-extra', number: 'REQ-15', withdrawnQuantity: 8 },
+      { id: 'req-curvo', number: 'REQ-1', registeredQuantity: 10, returnedQuantity: 2, withdrawnQuantity: 8 },
+      { id: 'req-extra', number: 'REQ-15', registeredQuantity: 8, returnedQuantity: 0, withdrawnQuantity: 8 },
     ]);
+  });
+
+  it('usa o total registrado da requisição, incluindo complemento, e desconta a devolução', () => {
+    const current = project([
+      withdrawal('ret-1', 'req-curvo', 9),
+      returned('dev-1', 'req-curvo', 3),
+    ]);
+    current.warehouse!.requisitions[0].items = [{
+      itemKey: 'fisico-sirene', description: 'SIRENE AUDIOVISUAL ENDERECAVEL SOBREPOR SAVQ-E', unit: 'UN', quantity: 9,
+    }];
+    current.warehouse!.requisitions[0].supplements = [{
+      id: 'supp-1', date: '2026-09-05', receiverName: 'Felipe', signatureReceiver: 'assinatura',
+      idempotencyKey: 'supp-1', createdAt: '2026-09-05T08:00:00.000Z',
+      items: [{ itemKey: 'fisico-sirene', description: 'SIRENE AUDIOVISUAL ENDERECAVEL SOBREPOR SAVQ-E', unit: 'UN', quantity: 4 }],
+    }];
+
+    const row = warehouseWithdrawnMaterialsByChapter(current)[0].rows[0];
+    expect(row).toMatchObject({ registeredQuantity: 13, returnedQuantity: 3, withdrawnQuantity: 10 });
+    expect(row.requisitions[0]).toMatchObject({
+      id: 'req-curvo', registeredQuantity: 13, returnedQuantity: 3, withdrawnQuantity: 10,
+    });
+  });
+
+  it('inclui retirada integralmente devolvida na conta quando ainda há saldo do mesmo material', () => {
+    const current = project([
+      withdrawal('ret-1', 'req-curvo', 9),
+      returned('dev-1', 'req-curvo', 9),
+      withdrawal('ret-2', 'req-extra', 4),
+    ]);
+    current.warehouse!.requisitions.push({
+      id: 'req-extra', number: 'REQ-15', date: '2026-09-05', status: 'entregue',
+      chapterId: 'chapter-3', receiverName: 'Felipe', items: [], createdAt: '2026-09-05T08:15:00.000Z',
+    });
+
+    const row = warehouseWithdrawnMaterialsByChapter(current)[0].rows[0];
+    expect(row).toMatchObject({ registeredQuantity: 13, returnedQuantity: 9, withdrawnQuantity: 4 });
+    expect(row.requisitions[0]).toMatchObject({ number: 'REQ-1', withdrawnQuantity: 0, returnedQuantity: 9 });
   });
 
   it('ignora requisição sem capítulo ou ainda não entregue', () => {

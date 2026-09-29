@@ -49,4 +49,18 @@ describe('WarehouseWithdrawnMaterialsTab', () => {
     fireEvent.click(links[0]);
     expect(onOpenRequisition).toHaveBeenCalledExactlyOnceWith('req-1');
   });
+
+  it('mostra no registro o líquido após devolução', () => {
+    const withReturn = structuredClone(project);
+    withReturn.warehouse!.movements.push({
+      id: 'sirene-return', type: 'devolucao', originType: 'return', requisitionId: 'req-1',
+      date: '2026-09-05', createdAt: '2026-09-05T08:00:00.000Z', itemKey: 'sirene',
+      itemDescription: 'Sirene audiovisual', itemUnit: 'UN', quantity: 3,
+    });
+    render(<WarehouseWithdrawnMaterialsTab project={withReturn} onOpenRequisition={vi.fn()} />);
+
+    expect(screen.getAllByText('devolução: 3 UN', { exact: false })).toHaveLength(2);
+    expect(screen.getAllByText('Registrado 9 · Devolvido 3')).toHaveLength(2);
+    expect(screen.getAllByText('6 UN')).not.toHaveLength(0);
+  });
 });
