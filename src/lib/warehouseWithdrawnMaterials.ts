@@ -1,5 +1,4 @@
-import type { Project } from '@/types/project';
-import { getRequisitionMaterialSummaries } from './warehouse';
+import type { Project, WarehouseMovement } from '@/types/project';
 
 export interface WarehouseWithdrawnMaterialRow {
   key: string;
@@ -37,40 +36,50 @@ function chapterResolver(project: Project) {
 }
 
 export function warehouseWithdrawnMaterialsByChapter(project: Project): WarehouseWithdrawnMaterialChapter[] {
+  const requisitionsById = new Map((project.warehouse?.requisitions ?? []).map(requisition => [requisition.id, requisition] as const));
+  const returnedByRequisitionItem = new Map<string, number>();
+  const withdrawalsByRequisitionItem = new Map<string, WarehouseMovement>();
+  for (const movement of project.warehouse?.movements ?? []) {
+    if (movement.reversedById || !movement.requisitionId) continue;
+    const movementKey = `${movement.requisitionId}|${movement.itemKey}`;
+    if (movement.type === 'devolucao' && movement.originType === 'return') {
+      returnedByRequisitionItem.set(movementKey, round((returnedByRequisitionItem.get(movementKey) ?? 0) + Math.max(0, Number(movement.quantity) || 0)));
+      continue;
+    }
+    if (movement.type !== 'retirada') continue;
+    const current = withdrawalsByRequisitionItem.get(movementKey);
+    withdrawalsByRequisitionItem.set(movementKey, current
+      ? { ...current, quantity: round((Number(current.quantity) || 0) + Math.max(0, Number(movement.quantity) || 0)) }
+      : movement);
+  }
+
   const chapterOf = chapterResolver(project);
   const chapters = new Map<string, WarehouseWithdrawnMaterialChapter>();
-  for (const requisition of project.warehouse?.requisitions ?? []) {
-    if (requisition.status !== 'entregue' || !requisition.chapterId) continue;
+  for (const [movementKey, movement] of withdrawalsByRequisitionItem) {
+    const requisition = requisitionsById.get(movement.requisitionId);
+    if (requisition?.status !== 'entregue' || !requisition.chapterId) continue;
+    const registeredQuantity = round(Number(movement.quantity) || 0);
+    const returnedQuantity = round(returnedByRequisitionItem.get(movementKey) ?? 0);
+    const netQuantity = round(Math.max(0, registeredQuantity - returnedQuantity));
+    if (!netQuantity) continue;
     const chapter = chapterOf(requisition.chapterId);
     const receiverName = requisition.receiverName?.trim() || requisition.requesterName?.trim() || 'Não informado';
     const bucket = chapters.get(chapter.id) ?? { ...chapter, rows: [] };
-    for (const summary of getRequisitionMaterialSummaries(project, requisition.id)) {
-      const registeredQuantity = round(summary.withdrawnQuantity);
-      if (!registeredQuantity) continue;
-      const netQuantity = round(summary.availableQuantity);
-      const key = `${summary.itemKey}|${receiverName}`;
-      let row = bucket.rows.find(candidate => candidate.key === key);
-      if (!row) {
-        row = { key, code: summary.code, description: summary.description, unit: summary.unit, receiverName, registeredQuantity: 0, returnedQuantity: 0, withdrawnQuantity: 0, requisitions: [] };
-        bucket.rows.push(row);
-      }
-      row.registeredQuantity = round(row.registeredQuantity + registeredQuantity);
-      row.returnedQuantity = round(row.returnedQuantity + summary.returnedQuantity);
-      row.withdrawnQuantity = round(row.withdrawnQuantity + netQuantity);
-      row.requisitions.push({
-        id: requisition.id,
-        number: requisition.number || 'Sem número',
-        registeredQuantity,
-        returnedQuantity: round(summary.returnedQuantity),
-        withdrawnQuantity: netQuantity,
-      });
+    chapters.set(chapter.id, bucket);
+    const key = `${movement.itemKey}|${receiverName}`;
+    let row = bucket.rows.find(candidate => candidate.key === key);
+    if (!row) {
+      row = { key, code: movement.itemCode, description: movement.itemDescription, unit: movement.itemUnit, receiverName, registeredQuantity: 0, returnedQuantity: 0, withdrawnQuantity: 0, requisitions: [] };
+      bucket.rows.push(row);
     }
-    if (bucket.rows.length) chapters.set(chapter.id, bucket);
+    row.registeredQuantity = round(row.registeredQuantity + registeredQuantity);
+    row.returnedQuantity = round(row.returnedQuantity + returnedQuantity);
+    row.withdrawnQuantity = round(row.withdrawnQuantity + netQuantity);
+    row.requisitions.push({ id: requisition.id, number: requisition.number || 'Sem número', registeredQuantity, returnedQuantity, withdrawnQuantity: netQuantity });
   }
 
   return Array.from(chapters.values())
     .map(chapter => ({ ...chapter, rows: chapter.rows
-      .filter(row => row.withdrawnQuantity > 0)
       .map(row => ({ ...row, requisitions: row.requisitions.sort((left, right) => left.number.localeCompare(right.number, 'pt-BR', { numeric: true })) }))
       .sort((left, right) => left.description.localeCompare(right.description, 'pt-BR')) }))
     .filter(chapter => chapter.rows.length > 0)
