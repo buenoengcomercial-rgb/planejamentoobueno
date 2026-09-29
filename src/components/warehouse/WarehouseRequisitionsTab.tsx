@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type TouchEvent, type WheelEvent } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type TouchEvent, type WheelEvent } from 'react';
 import type { Project, WarehouseAuditActor, WarehouseMovement, WarehouseRequisition, WarehouseRequisitionItem, WarehouseRequisitionSupplement } from '@/types/project';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -267,7 +267,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
   const [errors, setErrors] = useState<WithdrawalErrors>({});
   const [returnTarget, setReturnTarget] = useState<WarehouseRequisition | null>(null);
   const [actionTarget, setActionTarget] = useState<WarehouseRequisition | null>(null);
-  const [openActionInEditMode, setOpenActionInEditMode] = useState(false);
+  const openRequisitionActions = useCallback((requisition: WarehouseRequisition) => setActionTarget(requisition), []);
   const handledOpenRequisitionId = useRef<string | null>(null);
   const [cancelTarget, setCancelTarget] = useState<WarehouseRequisition | null>(null);
   const [historyView, setHistoryView] = useState<'active' | 'cancelled'>('active');
@@ -288,13 +288,12 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
     const requisition = wh.requisitions.find(candidate => candidate.id === openRequisitionId);
     if (requisition?.status === 'entregue') {
       setHistoryView('active');
-      setActionTarget(requisition);
-      setOpenActionInEditMode(true);
+      openRequisitionActions(requisition);
     } else {
       toast.error('Registro de retirada não encontrado.');
     }
     onOpenRequisitionHandled?.();
-  }, [openRequisitionId, onOpenRequisitionHandled, wh.requisitions]);
+  }, [openRequisitionId, onOpenRequisitionHandled, openRequisitionActions, wh.requisitions]);
   const buildingGroups = useMemo(
     () => groupRequisitionsByBuilding(project, visibleRequisitions, wh.movements),
     [project, visibleRequisitions, wh.movements],
@@ -773,7 +772,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
                         <div className="space-y-3 md:hidden">{dateGroup.requisitions.map(requisition => (
                           <WithdrawalHistoryCard key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel}
                             onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })}
-                            onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onAction={() => { setOpenActionInEditMode(false); setActionTarget(requisition); }} onCancel={() => setCancelTarget(requisition)} />
+                            onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onAction={() => openRequisitionActions(requisition)} onCancel={() => setCancelTarget(requisition)} />
                         ))}</div>
                         <div className="hidden min-w-0 overflow-x-auto md:block">
                           <table className="withdrawal-records w-full table-fixed text-xs">
@@ -782,7 +781,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
                             <tbody>{dateGroup.requisitions.map(requisition => (
                               <WithdrawalHistoryRow key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel}
                                 onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })}
-                                onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onAction={() => { setOpenActionInEditMode(false); setActionTarget(requisition); }} onCancel={() => setCancelTarget(requisition)} />
+                                onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onAction={() => openRequisitionActions(requisition)} onCancel={() => setCancelTarget(requisition)} />
                             ))}</tbody>
                           </table>
                         </div>
@@ -797,7 +796,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
       </section>
       <MaterialReturnDialog project={project} requisition={returnTarget} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onClose={() => setReturnTarget(null)} />
       <CancelRequisitionDialog project={project} requisition={cancelTarget} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onRunCriticalCloudOperation={onRunCriticalCloudOperation} onClose={() => setCancelTarget(null)} />
-      <RequisitionActionDialog project={project} requisition={actionTarget} auditActor={auditActor} canEditOriginal={canEdit} canEditSupplements={canSupplement} openInEditMode={openActionInEditMode} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onRunCriticalCloudOperation={onRunCriticalCloudOperation} onStartReturn={() => { setReturnTarget(actionTarget); setActionTarget(null); }} onClose={() => setActionTarget(null)} />
+      <RequisitionActionDialog project={project} requisition={actionTarget} auditActor={auditActor} canEditOriginal={canEdit} canEditSupplements={canSupplement} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onRunCriticalCloudOperation={onRunCriticalCloudOperation} onStartReturn={() => { setReturnTarget(actionTarget); setActionTarget(null); }} onClose={() => setActionTarget(null)} />
       {confirmDialog}
     </div>
   );
@@ -1065,7 +1064,6 @@ interface RequisitionActionDialogProps {
   auditActor?: WarehouseAuditActor;
   canEditOriginal: boolean;
   canEditSupplements: boolean;
-  openInEditMode?: boolean;
   onProjectChange: (project: Project) => void;
   onCloudOperationConfirmed?: (confirmation: WarehouseCloudCommitResult) => void | Promise<void>;
   onPrepareCloudOperation?: () => void | Promise<void>;
@@ -1076,7 +1074,7 @@ interface RequisitionActionDialogProps {
 }
 
 /** Formulário único: retirada original, complementos confirmados e nova entrega. */
-function RequisitionActionDialog({ project, requisition, auditActor, canEditOriginal, canEditSupplements, openInEditMode = false, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onCommitCloudOperation, onRunCriticalCloudOperation, onStartReturn, onClose }: RequisitionActionDialogProps) {
+function RequisitionActionDialog({ project, requisition, auditActor, canEditOriginal, canEditSupplements, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onCommitCloudOperation, onRunCriticalCloudOperation, onStartReturn, onClose }: RequisitionActionDialogProps) {
   const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
   const numbering = useMemo(() => getChapterNumbering(project), [project]);
   const chapters = useMemo(() => flattenPhasesByChapter(project)
@@ -1102,11 +1100,7 @@ function RequisitionActionDialog({ project, requisition, auditActor, canEditOrig
 
   useEffect(() => {
     if (!requisition) return;
-    const hasReturn = ensureWarehouse(project).warehouse!.movements.some(movement => (
-      movement.type === 'devolucao' && movement.originType === 'return'
-      && movement.requisitionId === requisition.id && !movement.reversedById
-    ));
-    setEditingOriginal(openInEditMode && canEditOriginal && !hasReturn);
+    setEditingOriginal(false);
     setCorrectionItems(requisition.items.map(item => ({ ...item, description: materialDisplayName(item.code, item.description) })));
     setCorrectionChapterId(rootChapterId(project, requisition.chapterId) ?? requisition.chapterId ?? '');
     setCorrectionReason('');
@@ -1119,7 +1113,7 @@ function RequisitionActionDialog({ project, requisition, auditActor, canEditOrig
     setMaterialSearch('');
     setCorrectionIdempotencyKey(uidWarehouse());
     setComplementIdempotencyKey(uidWarehouse());
-  }, [project, requisition, canEditOriginal, openInEditMode]);
+  }, [project, requisition]);
 
   const correctionBlocked = !!requisition && ensureWarehouse(project).warehouse!.movements.some(movement => (
     movement.type === 'devolucao'

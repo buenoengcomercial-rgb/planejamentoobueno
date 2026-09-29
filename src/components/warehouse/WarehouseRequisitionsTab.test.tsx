@@ -167,7 +167,7 @@ describe('WarehouseRequisitionsTab', () => {
     expect(screen.queryByRole('columnheader', { name: 'Equipe' })).not.toBeInTheDocument();
   });
 
-  it('abre diretamente a edição auditada quando recebe uma retirada da aba de materiais', async () => {
+  it('abre as mesmas ações da retirada ao vir da aba de materiais, sem entrar em edição', async () => {
     const project = projectWithMaterials(1);
     project.warehouse!.requisitions = [{
       id: 'req-1', number: 'REQ-2026-0001', date: '2026-08-18', status: 'entregue',
@@ -180,6 +180,9 @@ describe('WarehouseRequisitionsTab', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'Ações da retirada' });
     expect(within(dialog).getByText('REQ-2026-0001')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Editar retirada' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Salvar edição' })).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Editar retirada' }));
     await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Salvar edição' })).toBeInTheDocument());
     expect(onOpenRequisitionHandled).toHaveBeenCalled();
   });
