@@ -554,6 +554,29 @@ async function optionalQuery<T>(
   return { data: result.data, error: result.error };
 }
 
+// O PostgREST limita a quantidade de linhas devolvidas por consulta. Saldo de
+// estoque exige o livro inteiro: uma página parcial pode mostrar saldo falso.
+const WAREHOUSE_MOVEMENT_PAGE_SIZE = 500;
+
+async function loadWarehouseMovementRows(projectId: string): Promise<QueryResult<DataRow>> {
+  const rows: DataRow[] = [];
+  let lastId: string | undefined;
+  while (true) {
+    let query = supabase.from('warehouse_movements')
+      .select('id, data')
+      .eq('project_id', projectId)
+      .order('id', { ascending: true })
+      .limit(WAREHOUSE_MOVEMENT_PAGE_SIZE);
+    if (lastId) query = query.gt('id', lastId);
+    const result = await query;
+    if (result.error) return { data: null, error: result.error };
+    const page = result.data ?? [];
+    rows.push(...page);
+    if (page.length < WAREHOUSE_MOVEMENT_PAGE_SIZE) return { data: rows, error: null };
+    lastId = page[page.length - 1].id;
+  }
+}
+
 export interface ProjectHydrationOptions {
   collections?: readonly ProjectCollectionKey[];
   /** Em telas operacionais, coleção ausente deve bloquear em vez de parecer vazia. */
@@ -575,7 +598,7 @@ export async function hydrateProjectFromCloud(
   const requested = normalizeProjectCollections(options.collections ?? PROJECT_COLLECTION_KEYS);
   const wants = new Set(requested);
   const [movRes, reqRes, custRes, drRes, logsRes, measRes, addRes, audRes, stkRes, phRes, biRes, mcRes, acRes, subRes, chRes, tkRes] = await Promise.all([
-    optionalQuery<DataRow>(wants.has('warehouseMovements'), () => supabase.from('warehouse_movements').select('id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('warehouseMovements'), () => loadWarehouseMovementRows(projectId)),
     optionalQuery<DataRow>(wants.has('warehouseRequisitions'), () => supabase.from('warehouse_requisitions').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('warehouseCustody'), () => supabase.from('warehouse_custody').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('dailyReports'), () => supabase.from('daily_reports').select('id, data').eq('project_id', projectId)),

@@ -55,6 +55,8 @@ beforeEach(() => {
       select: vi.fn(),
       eq: vi.fn(),
       order: vi.fn(),
+      limit: vi.fn(),
+      gt: vi.fn(),
       upsert: vi.fn(),
       delete: vi.fn(),
       in: vi.fn(),
@@ -63,6 +65,8 @@ beforeEach(() => {
     builder.select.mockReturnValue(builder);
     builder.eq.mockReturnValue(builder);
     builder.order.mockReturnValue(builder);
+    builder.limit.mockReturnValue(builder);
+    builder.gt.mockReturnValue(builder);
     builder.upsert.mockImplementation(() => {
       methodCalls.push({ table, method: 'upsert' });
       return builder;
@@ -80,6 +84,79 @@ beforeEach(() => {
 });
 
 describe('hidratação progressiva da obra', () => {
+  it('carrega todas as páginas do livro de movimentos antes de confirmar o saldo', async () => {
+    const current = project('warehouse-movements-paginated');
+    clearCloudSnapshot(current.id);
+    const movements = Array.from({ length: 501 }, (_, index) => ({
+      id: `movement-${String(index).padStart(4, '0')}`,
+      data: { id: `movement-${String(index).padStart(4, '0')}`, itemKey: 'material-1', quantity: 1 },
+    }));
+    const requestedAfter: Array<string | undefined> = [];
+    fromMock.mockImplementation((table: string) => {
+      expect(table).toBe('warehouse_movements');
+      let afterId: string | undefined;
+      const query = {
+        select: vi.fn(),
+        eq: vi.fn(),
+        order: vi.fn(),
+        limit: vi.fn(),
+        gt: vi.fn((field: string, value: string) => {
+          expect(field).toBe('id');
+          afterId = value;
+          return query;
+        }),
+        then: (resolve: (result: MockQueryResult) => unknown) => {
+          requestedAfter.push(afterId);
+          return Promise.resolve(resolve({
+            data: movements.filter(row => !afterId || row.id > afterId).slice(0, 500),
+            error: null,
+          }));
+        },
+      };
+      query.select.mockReturnValue(query);
+      query.eq.mockReturnValue(query);
+      query.order.mockReturnValue(query);
+      query.limit.mockReturnValue(query);
+      return query;
+    });
+
+    const hydrated = await hydrateProjectFromCloud(current, {
+      collections: ['warehouseMovements'],
+      strict: true,
+    });
+
+    expect(hydrated.warehouse?.movements).toHaveLength(501);
+    expect(requestedAfter).toEqual([undefined, 'movement-0499']);
+    expect(getHydratedProjectCollections(hydrated)).toEqual(['warehouseMovements']);
+  });
+
+  it('não confirma um extrato parcial quando uma página falha', async () => {
+    const current = project('warehouse-movements-page-error');
+    clearCloudSnapshot(current.id);
+    let calls = 0;
+    fromMock.mockImplementation(() => {
+      const query = {
+        select: vi.fn(), eq: vi.fn(), order: vi.fn(), limit: vi.fn(), gt: vi.fn(),
+        then: (resolve: (result: MockQueryResult) => unknown) => Promise.resolve(resolve(
+          ++calls === 1
+            ? { data: Array.from({ length: 500 }, (_, index) => ({ id: `m-${index}`, data: { id: `m-${index}` } })), error: null }
+            : { data: null, error: { message: 'falha na segunda página' } },
+        )),
+      };
+      for (const method of [query.select, query.eq, query.order, query.limit, query.gt]) method.mockReturnValue(query);
+      return query;
+    });
+
+    await expect(hydrateProjectFromCloud(current, {
+      collections: ['warehouseMovements'], strict: true,
+    })).rejects.toEqual(expect.objectContaining({
+      name: ProjectHydrationError.name,
+      collections: ['warehouseMovements'],
+    }));
+    expect(calls).toBe(2);
+    expect(getLoadedProjectCollections(current.id)).toEqual([]);
+  });
+
   it('detecta somente a coleção alterada e preserva coleções normalizadas ao receber metadados', () => {
     const before = {
       ...project('scoped-change'),
