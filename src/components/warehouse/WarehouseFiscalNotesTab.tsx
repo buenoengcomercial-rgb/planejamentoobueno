@@ -521,9 +521,9 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const archivedStockReview = useMemo(() => reviewArchivedFiscalNoteStock(project), [project]);
   const packagingConversionReviews = useMemo(() => reviewFiscalNotePackagingConversions(project), [project]);
   const selectedPackagingCorrection = useMemo(() => packagingCorrection
-    ? reviewFiscalNotePackagingConversions(project, packagingCorrection.manual ? packagingCorrection : undefined)
+    ? reviewFiscalNotePackagingConversions(project, packagingCorrection.manual ? packagingCorrection : undefined, packagingCorrectionUnit)
       .find(review => review.noteId === packagingCorrection.noteId && review.itemId === packagingCorrection.itemId)
-    : undefined, [packagingConversionReviews, packagingCorrection]);
+    : undefined, [project, packagingCorrection, packagingCorrectionUnit]);
   const selectedPackagingReviews = useMemo(() => selected
     ? packagingConversionReviews.filter(review => review.noteId === selected.id)
     : [], [packagingConversionReviews, selected]);
@@ -1211,7 +1211,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
         <DialogContent className="warehouse-ui max-w-lg">
           <DialogHeader>
             <DialogTitle>Editar conversão para estoque</DialogTitle>
-            <DialogDescription>A quantidade e a unidade fiscais não serão alteradas. Esta confirmação atualiza a entrada e os consumos antigos na mesma unidade, preservando a auditoria.</DialogDescription>
+            <DialogDescription>A quantidade e a unidade fiscais não serão alteradas. Quando a unidade de estoque permanece a mesma, as retiradas existentes mantêm suas quantidades. Em outras unidades, a revisão indica os movimentos que serão convertidos.</DialogDescription>
           </DialogHeader>
           {selectedPackagingCorrection && <div className="space-y-4">
             <div className="rounded-md border bg-muted/30 p-3 text-sm"><strong>{selectedPackagingCorrection.description}</strong><div className="mt-1 text-muted-foreground">Nota fiscal: {decimal(selectedPackagingCorrection.fiscalQuantity)} {selectedPackagingCorrection.fiscalUnit}</div></div>
@@ -1219,7 +1219,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
             <div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-sm"><span className="text-muted-foreground">Entrará no estoque: </span><strong>{decimal(Number(selectedPackagingCorrection.fiscalQuantity || 0) * Number(packagingCorrectionFactor || 0))} {packagingCorrectionUnit.trim() || 'PC'}</strong></div>
             {selectedPackagingCorrection.dependentMovementCount > 0 && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">{selectedPackagingCorrection.dependentMovementCount} movimentação(ões) posterior(es) em unidade antiga também serão convertidas. Ex.: <strong>0,1 cx</strong> com caixa de 1.000 passa a <strong>100 PC</strong>.</div>}
           </div>}
-          <DialogFooter><Button variant="outline" disabled={processing} onClick={() => setPackagingCorrection(null)}>Voltar</Button><Button disabled={!selectedPackagingCorrection || processing || !(packagingCorrectionFactor > 0)} onClick={() => selectedPackagingCorrection && void confirmHistoricalPackagingConversion(selectedPackagingCorrection, packagingCorrectionUnit, packagingCorrectionFactor)}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Confirmar e atualizar estoque</Button></DialogFooter>
+          <DialogFooter><Button variant="outline" disabled={processing} onClick={() => setPackagingCorrection(null)}>Voltar</Button><Button disabled={!selectedPackagingCorrection?.canCorrect || processing || !(packagingCorrectionFactor > 0)} onClick={() => selectedPackagingCorrection && void confirmHistoricalPackagingConversion(selectedPackagingCorrection, packagingCorrectionUnit, packagingCorrectionFactor)}>{processing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Confirmar e atualizar estoque</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 

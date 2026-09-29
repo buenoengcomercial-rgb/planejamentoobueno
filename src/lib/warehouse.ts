@@ -4435,13 +4435,15 @@ export interface FiscalNotePackagingConversionReviewItem {
 
 /**
  * Lista somente lançamentos históricos claramente identificáveis e ainda
- * seguros para correção. Retiradas/devoluções posteriores na mesma unidade
- * legada podem ser convertidas na mesma confirmação, preservando o consumo
- * já registrado. Referências em outra unidade continuam bloqueadas.
+ * seguros para correção. Retiradas/devoluções na unidade antiga só são
+ * convertidas quando a unidade de estoque muda; se permanece igual, suas
+ * quantidades físicas são preservadas. Referências em outra unidade continuam
+ * bloqueadas.
  */
 export function reviewFiscalNotePackagingConversions(
   project: Project,
   manualCorrection?: Pick<FiscalNotePackagingConversionReviewItem, 'noteId' | 'itemId'>,
+  requestedStockUnit?: string,
 ): FiscalNotePackagingConversionReviewItem[] {
   const wh = ensureWarehouse(project).warehouse!;
   const reviews: FiscalNotePackagingConversionReviewItem[] = [];
@@ -4470,6 +4472,8 @@ export function reviewFiscalNotePackagingConversions(
       if (!entry) blockers.push('A entrada original não possui vínculo técnico suficiente para correção automática.');
       const dependentMovementIds: string[] = [];
       if (entry) {
+        const effectiveStockUnit = requestedStockUnit === undefined ? expectedStockUnit : (requestedStockUnit.trim() || 'PC');
+        const sameStockUnit = normalizeLookup(entry.itemUnit) === normalizeLookup(effectiveStockUnit);
         const laterMovements = wh.movements.filter(movement =>
           movement.itemKey === entry.itemKey &&
           movement.id !== entry.id &&
@@ -4478,9 +4482,12 @@ export function reviewFiscalNotePackagingConversions(
           movement.createdAt > entry.createdAt,
         );
         const convertibleTypes = new Set<WarehouseMovementType>(['retirada', 'devolucao', 'perda', 'transferencia_saida', 'transferencia_entrada', 'ajuste_positivo', 'ajuste_negativo']);
-        const incompatible = laterMovements.filter(movement => !convertibleTypes.has(movement.type) || normalizeLookup(movement.itemUnit) !== normalizeLookup(entry.itemUnit));
+        const incompatible = laterMovements.filter(movement =>
+          normalizeLookup(movement.itemUnit) !== normalizeLookup(entry.itemUnit) ||
+          (!convertibleTypes.has(movement.type) && !(sameStockUnit && movement.type === 'entrada')),
+        );
         if (incompatible.length) blockers.push('Há movimentações posteriores em outra unidade ou outra entrada deste material; faça a conferência física antes de ajustar o saldo.');
-        dependentMovementIds.push(...laterMovements
+        if (!sameStockUnit) dependentMovementIds.push(...laterMovements
           .filter(movement => convertibleTypes.has(movement.type) && normalizeLookup(movement.itemUnit) === normalizeLookup(entry.itemUnit))
           .map(movement => movement.id));
       }
@@ -4516,7 +4523,7 @@ export function confirmFiscalNotePackagingConversion(
   contentPerPackage?: number,
   allowManualCorrection = false,
 ): Project {
-  const review = reviewFiscalNotePackagingConversions(project, allowManualCorrection ? { noteId, itemId } : undefined)
+  const review = reviewFiscalNotePackagingConversions(project, allowManualCorrection ? { noteId, itemId } : undefined, stockUnit)
     .find(item => item.noteId === noteId && item.itemId === itemId);
   if (!review) throw new Error('Esta entrada não possui uma conversão histórica pendente.');
   if (!review.canCorrect) throw new Error(review.blockers[0] || 'A correção desta entrada exige conferência manual.');

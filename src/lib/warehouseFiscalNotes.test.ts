@@ -537,6 +537,38 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(withdrawal.notes).toMatch(/Conversão auditada/i);
   });
 
+  it('converte a segunda nota de kits sem multiplicar retiradas já lançadas em unidades físicas', () => {
+    const description = 'Vibra Stop Amortecedor Vibracao P/ Maquinas Cap. 500kg. 4un';
+    const itemKey = 'warehouse-nf|vibra-stop';
+    const first = note({
+      id: 'nf-108287', invoiceNumber: '000.108.287', status: 'aprovada',
+      items: [{ ...note().items[0], id: 'first-item', description, itemKey, quantity: 8, unit: 'UN', stockQuantity: 32, stockUnit: 'UN', conversionFactor: 4, stockConversionStatus: 'confirmed' }],
+    });
+    const second = note({
+      id: 'nf-108674', invoiceNumber: '000.108.674', status: 'aprovada',
+      items: [{ ...note().items[0], id: 'second-item', description, itemKey, quantity: 2, unit: 'UN' }],
+    });
+    const project = withNote(first);
+    project.warehouse!.fiscalNotes.push(second);
+    project.warehouse!.movements = [
+      { id: 'entry-second', type: 'entrada', date: '2026-08-07', createdAt: '2026-08-07T10:00:00.000Z', itemKey, itemDescription: description, itemUnit: 'UN', quantity: 2, fiscalNoteId: second.id, fiscalNoteItemId: second.items[0].id },
+      { id: 'entry-first', type: 'entrada', date: '2026-08-05', createdAt: '2026-08-08T10:00:00.000Z', itemKey, itemDescription: description, itemUnit: 'UN', quantity: 32, fiscalNoteId: first.id, fiscalNoteItemId: first.items[0].id },
+      { id: 'withdrawal-2', type: 'retirada', date: '2026-09-14', createdAt: '2026-09-14T10:00:00.000Z', itemKey, itemDescription: description, itemUnit: 'UN', quantity: 2 },
+      { id: 'withdrawal-8', type: 'retirada', date: '2026-09-17', createdAt: '2026-09-17T10:00:00.000Z', itemKey, itemDescription: description, itemUnit: 'UN', quantity: 8 },
+    ];
+
+    const review = reviewFiscalNotePackagingConversions(project, { noteId: second.id, itemId: second.items[0].id })[0];
+    expect(review).toMatchObject({ currentStockQuantity: 2, canCorrect: true, dependentMovementCount: 0 });
+
+    const corrected = confirmFiscalNotePackagingConversion(project, second.id, second.items[0].id, { userName: 'Proprietário' }, 'UN', 4, true);
+    const movements = corrected.warehouse!.movements;
+    expect(movements.find(movement => movement.id === 'entry-second')).toMatchObject({ quantity: 8, itemUnit: 'UN' });
+    expect(movements.find(movement => movement.id === 'withdrawal-2')).toMatchObject({ quantity: 2, itemUnit: 'UN' });
+    expect(movements.find(movement => movement.id === 'withdrawal-8')).toMatchObject({ quantity: 8, itemUnit: 'UN' });
+    expect(movements.filter(movement => movement.type === 'entrada').reduce((sum, movement) => sum + movement.quantity, 0)).toBe(40);
+    expect(movements.filter(movement => movement.type === 'retirada').reduce((sum, movement) => sum + movement.quantity, 0)).toBe(10);
+  });
+
   it('continua bloqueando conversão histórica quando a movimentação posterior já está em outra unidade', () => {
     const legacy = note({ status: 'a_conferir', items: [{ ...note().items[0], description: 'BUCHA CAIXA 100', quantity: 1, unit: 'CX' }] });
     const posted = approveFiscalNote(withNote(legacy), legacy.id);
