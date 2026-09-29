@@ -52,6 +52,26 @@ describe('warehouseWithdrawnMaterialsByChapter', () => {
     expect(chapter.rows[0]).toMatchObject({ withdrawnQuantity: 9 });
   });
 
+  it('mantém cada número de retirada e sua quantidade líquida ao agrupar o mesmo material e recebedor', () => {
+    const current = project([
+      withdrawal('ret-1', 'req-curvo', 10),
+      withdrawal('ret-2', 'req-extra', 8),
+      returned('dev-1', 'req-curvo', 2),
+    ]);
+    current.warehouse!.requisitions.push({
+      id: 'req-extra', number: 'REQ-15', date: '2026-09-05', status: 'entregue',
+      chapterId: 'chapter-3', receiverName: 'Felipe', items: [], createdAt: '2026-09-05T08:15:00.000Z',
+    });
+
+    const [chapter] = warehouseWithdrawnMaterialsByChapter(current);
+    expect(chapter.rows).toHaveLength(1);
+    expect(chapter.rows[0]).toMatchObject({ withdrawnQuantity: 16 });
+    expect(chapter.rows[0].requisitions).toEqual([
+      { id: 'req-curvo', number: 'REQ-1', withdrawnQuantity: 8 },
+      { id: 'req-extra', number: 'REQ-15', withdrawnQuantity: 8 },
+    ]);
+  });
+
   it('ignora requisição sem capítulo ou ainda não entregue', () => {
     const current = project([withdrawal('ret-1', 'req-curvo', 9)]);
     current.warehouse!.requisitions.push(

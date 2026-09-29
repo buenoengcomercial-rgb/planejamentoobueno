@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import WarehouseWithdrawnMaterialsTab from './WarehouseWithdrawnMaterialsTab';
 
@@ -24,7 +24,7 @@ const project = {
 
 describe('WarehouseWithdrawnMaterialsTab', () => {
   it('filtra os materiais retirados por recebedor e busca', () => {
-    render(<WarehouseWithdrawnMaterialsTab project={project} />);
+    render(<WarehouseWithdrawnMaterialsTab project={project} onOpenRequisition={vi.fn()} />);
 
     expect(screen.getByRole('button', { name: 'Retirado líquido' })).toBeInTheDocument();
     expect(screen.queryByText(/maior quantidade líquida retirada primeiro/i)).not.toBeInTheDocument();
@@ -38,5 +38,15 @@ describe('WarehouseWithdrawnMaterialsTab', () => {
     fireEvent.change(screen.getByPlaceholderText('Código ou descrição'), { target: { value: 'sirene' } });
     expect(screen.queryAllByText('Luminária de emergência')).toHaveLength(0);
     expect(screen.getByText(/Nenhum material encontrado/i)).toBeInTheDocument();
+  });
+
+  it('exibe o número da requisição ao lado do material e abre a retirada selecionada', () => {
+    const onOpenRequisition = vi.fn();
+    render(<WarehouseWithdrawnMaterialsTab project={project} onOpenRequisition={onOpenRequisition} />);
+
+    const links = screen.getAllByRole('button', { name: /Abrir retirada REQ-1/i });
+    expect(links).toHaveLength(2);
+    fireEvent.click(links[0]);
+    expect(onOpenRequisition).toHaveBeenCalledExactlyOnceWith('req-1');
   });
 });

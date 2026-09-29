@@ -7,6 +7,7 @@ export interface WarehouseWithdrawnMaterialRow {
   unit: string;
   receiverName: string;
   withdrawnQuantity: number;
+  requisitions: Array<{ id: string; number: string; withdrawnQuantity: number }>;
 }
 
 export interface WarehouseWithdrawnMaterialChapter {
@@ -64,14 +65,18 @@ export function warehouseWithdrawnMaterialsByChapter(project: Project): Warehous
     const key = `${movement.itemKey}|${receiverName}`;
     let row = bucket.rows.find(candidate => candidate.key === key);
     if (!row) {
-      row = { key, code: movement.itemCode, description: movement.itemDescription, unit: movement.itemUnit, receiverName, withdrawnQuantity: 0 };
+      row = { key, code: movement.itemCode, description: movement.itemDescription, unit: movement.itemUnit, receiverName, withdrawnQuantity: 0, requisitions: [] };
       bucket.rows.push(row);
     }
-    row.withdrawnQuantity = round(row.withdrawnQuantity + quantity);
+    const netQuantity = round(quantity);
+    row.withdrawnQuantity = round(row.withdrawnQuantity + netQuantity);
+    row.requisitions.push({ id: requisition.id, number: requisition.number || 'Sem número', withdrawnQuantity: netQuantity });
   }
 
   return Array.from(chapters.values())
-    .map(chapter => ({ ...chapter, rows: chapter.rows.sort((left, right) => left.description.localeCompare(right.description, 'pt-BR')) }))
+    .map(chapter => ({ ...chapter, rows: chapter.rows
+      .map(row => ({ ...row, requisitions: row.requisitions.sort((left, right) => left.number.localeCompare(right.number, 'pt-BR', { numeric: true })) }))
+      .sort((left, right) => left.description.localeCompare(right.description, 'pt-BR')) }))
     .filter(chapter => chapter.rows.length > 0)
     .sort((left, right) => left.number.localeCompare(right.number, 'pt-BR', { numeric: true }));
 }

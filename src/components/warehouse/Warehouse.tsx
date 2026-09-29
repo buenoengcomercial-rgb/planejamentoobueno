@@ -101,11 +101,17 @@ interface Props {
 
 export default function Warehouse({ project, onProjectChange, onCommitProject, onCloudWarehouseOperationConfirmed, onPrepareCloudWarehouseOperation, onCommitCloudWarehouseOperation, onRunCriticalCloudWarehouseOperation, onCommitWarehouseScoped, onCommitAttachmentMigration, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canCorrectDeliveredRequisitions = false, canSupplementRequisitions = false, canCancelDeliveredRequisitions = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor, activeTab, onActiveTabChange, isTabDataReady = true }: Props) {
   const [internalTab, setInternalTab] = useState<WarehouseTab>(() => readWarehouseTab(project.id, canViewPanel, canOptimizeStorage));
+  const [focusedRequisitionId, setFocusedRequisitionId] = useState<string | null>(null);
   const tab = activeTab ?? internalTab;
   const setTab = useCallback((next: WarehouseTab) => {
     setInternalTab(next);
     onActiveTabChange?.(next);
   }, [onActiveTabChange]);
+  const openRequisition = useCallback((requisitionId: string) => {
+    setFocusedRequisitionId(requisitionId);
+    setTab('requisicoes');
+  }, [setTab]);
+  const handleOpenRequisitionHandled = useCallback(() => setFocusedRequisitionId(null), []);
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
   useEffect(() => {
     if (ensured !== project) onProjectChange(ensured);
@@ -212,10 +218,10 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
               />
             </TabsContent>
             <TabsContent value="requisicoes" className="mt-3">
-              <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudWarehouseOperationConfirmed} onPrepareCloudOperation={onPrepareCloudWarehouseOperation} onCommitCloudOperation={onCommitCloudWarehouseOperation} onRunCriticalCloudOperation={onRunCriticalCloudWarehouseOperation} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canDelete={canDeleteWarehouseRecords} canEdit={canCorrectDeliveredRequisitions} canSupplement={canSupplementRequisitions} canCancel={canCancelDeliveredRequisitions} />
+              <WarehouseRequisitionsTab project={ensured} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudWarehouseOperationConfirmed} onPrepareCloudOperation={onPrepareCloudWarehouseOperation} onCommitCloudOperation={onCommitCloudWarehouseOperation} onRunCriticalCloudOperation={onRunCriticalCloudWarehouseOperation} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canDelete={canDeleteWarehouseRecords} canEdit={canCorrectDeliveredRequisitions} canSupplement={canSupplementRequisitions} canCancel={canCancelDeliveredRequisitions} openRequisitionId={focusedRequisitionId} onOpenRequisitionHandled={handleOpenRequisitionHandled} />
             </TabsContent>
             <TabsContent value="materiais-retirados" className="mt-3">
-              <WarehouseWithdrawnMaterialsTab project={ensured} />
+              <WarehouseWithdrawnMaterialsTab project={ensured} onOpenRequisition={openRequisition} />
             </TabsContent>
             <TabsContent value="equipamentos" className="mt-3">
               <WarehouseEquipmentsTab project={ensured} onProjectChange={commitEquipmentChildChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} canArchive={canArchiveWarehouseRecords} canDelete={canDeleteWarehouseRecords} canManageGroups={canManageEquipmentGroups} canEdit={canArchiveWarehouseRecords} />

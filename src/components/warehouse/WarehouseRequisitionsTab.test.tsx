@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import { addMovement, emptyWarehouse } from '@/lib/warehouse';
@@ -165,6 +165,38 @@ describe('WarehouseRequisitionsTab', () => {
     expect(screen.getAllByRole('columnheader', { name: 'Devolvido' }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('columnheader', { name: 'Em campo' }).length).toBeGreaterThan(0);
     expect(screen.queryByRole('columnheader', { name: 'Equipe' })).not.toBeInTheDocument();
+  });
+
+  it('abre diretamente a edição auditada quando recebe uma retirada da aba de materiais', async () => {
+    const project = projectWithMaterials(1);
+    project.warehouse!.requisitions = [{
+      id: 'req-1', number: 'REQ-2026-0001', date: '2026-08-18', status: 'entregue',
+      chapterId: 'chapter-1', receiverName: 'João', createdAt: '2026-08-18T10:00:00.000Z',
+      items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
+    }];
+    const onOpenRequisitionHandled = vi.fn();
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} canEdit openRequisitionId="req-1" onOpenRequisitionHandled={onOpenRequisitionHandled} />);
+
+    const dialog = await screen.findByRole('dialog', { name: 'Ações da retirada' });
+    expect(within(dialog).getByText('REQ-2026-0001')).toBeInTheDocument();
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Salvar edição' })).toBeInTheDocument());
+    expect(onOpenRequisitionHandled).toHaveBeenCalled();
+  });
+
+  it('abre apenas a consulta quando o usuário não pode corrigir retiradas', async () => {
+    const project = projectWithMaterials(1);
+    project.warehouse!.requisitions = [{
+      id: 'req-1', number: 'REQ-2026-0001', date: '2026-08-18', status: 'entregue',
+      chapterId: 'chapter-1', receiverName: 'João', createdAt: '2026-08-18T10:00:00.000Z',
+      items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }],
+    }];
+
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} openRequisitionId="req-1" />);
+
+    const dialog = await screen.findByRole('dialog', { name: 'Ações da retirada' });
+    expect(within(dialog).getByText('REQ-2026-0001')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Salvar edição' })).not.toBeInTheDocument();
   });
 
   it('destaca a borda da requisição aberta e recua seu detalhe', () => {
