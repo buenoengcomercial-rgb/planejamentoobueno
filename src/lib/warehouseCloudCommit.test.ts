@@ -9,7 +9,7 @@ import {
   createAndDeliverRequisition,
   emptyWarehouse,
 } from '@/lib/warehouse';
-import { commitWarehouseOperation, mergeWarehouseCloudCommit, type WarehouseCloudCommitResult } from '@/lib/warehouseCloudCommit';
+import { commitWarehouseOperation, mergeWarehouseCloudCommit, WarehouseInsufficientStockError, type WarehouseCloudCommitResult } from '@/lib/warehouseCloudCommit';
 
 const { rpcMock, supabaseMock } = vi.hoisted(() => {
   const rpcMock = vi.fn();
@@ -103,6 +103,25 @@ describe('confirmação transacional do Almoxarifado', () => {
     await expect(commitWarehouseOperation(before, provisional.project, {
       type: 'delivery', requisitionId: provisional.requisitionId, operationKey: 'attempt-conflict',
     })).rejects.toThrow('primeira versão confirmada foi preservada');
+  });
+
+  it('identifica os materiais sem saldo devolvidos pela transação atômica', async () => {
+    const before = stockedProject();
+    const provisional = createAndDeliverRequisition(before, {
+      date: '2026-09-12', chapterId: 'chapter-1', receiverName: 'CANANDA', requesterName: 'CANANDA',
+      signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'attempt-insufficient',
+      items: [{ itemKey: 'placa', description: 'Placa', unit: 'UN', quantity: 8 }],
+    });
+    rpcMock.mockResolvedValue({ data: null, error: {
+      message: 'WAREHOUSE_INSUFFICIENT_STOCK',
+      details: JSON.stringify([{ itemKey: 'placa', requested: 8, available: 4 }]),
+    } });
+    await expect(commitWarehouseOperation(before, provisional.project, {
+      type: 'delivery', requisitionId: provisional.requisitionId, operationKey: 'attempt-insufficient',
+    })).rejects.toMatchObject({
+      name: WarehouseInsufficientStockError.name,
+      items: [{ itemKey: 'placa', requested: 8, available: 4 }],
+    });
   });
 
   it('não reenvia auditorias legadas sem id ao confirmar uma nova retirada', async () => {

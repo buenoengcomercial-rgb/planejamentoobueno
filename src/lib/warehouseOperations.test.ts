@@ -15,6 +15,7 @@ import {
   deleteEquipmentGroup,
   createAndDeliverRequisition,
   createInventorySession,
+  createSpotInventorySession,
   custodyTermEquipmentItems,
   emptyWarehouse,
   ensureWarehouse,
@@ -295,6 +296,22 @@ describe('operação integrada do almoxarifado', () => {
     const repeated = applyInventorySession(applied, review.id, actor);
     expect(repeated.warehouse!.movements).toHaveLength(applied.warehouse!.movements.length);
     expect(computeWarehouseRows(repeated, { includeManual: true })[0].balance).toBe(18);
+  });
+
+  it('confere somente o material afetado sem interferir no inventário mensal', () => {
+    const stocked = withStock();
+    const monthly = createInventorySession(stocked, '2026-08', actor);
+    expect(() => createSpotInventorySession(monthly.project, ['material-1'], '', actor)).toThrow(/motivo/i);
+    const spot = createSpotInventorySession(monthly.project, ['material-1'], 'Origem da devolução desconhecida', actor);
+    expect(spot.session).toMatchObject({ kind: 'spot', justification: 'Origem da devolução desconhecida', status: 'em_contagem' });
+    expect(spot.session.lines).toHaveLength(1);
+    expect(spot.session.lines[0].expectedQuantity).toBeUndefined();
+    expect(createInventorySession(spot.project, '2026-08', actor).session.id).toBe(monthly.session.id);
+    const counted = setInventoryCount(spot.project, spot.session.id, 'material-1', 22, actor);
+    const reviewed = closeInventorySession(counted, spot.session.id, actor);
+    const applied = applyInventorySession(reviewed, spot.session.id, actor);
+    expect(applied.warehouse!.movements.filter(movement => movement.inventorySessionId === spot.session.id)).toHaveLength(1);
+    expect(computeWarehouseRows(applied, { includeManual: true }).find(row => row.key === 'material-1')?.balance).toBe(22);
   });
 
   it('exclui inventário aplicado por estorno sem apagar movimentos confirmados', () => {

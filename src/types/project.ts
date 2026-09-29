@@ -1438,6 +1438,8 @@ export interface WarehouseInventorySession {
   id: string;
   number: string;
   month: string;
+  /** Ausente nos registros antigos: inventário mensal. */
+  kind?: 'monthly' | 'spot';
   status: WarehouseInventorySessionStatus;
   startedAt: string;
   closedAt?: string;

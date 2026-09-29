@@ -5,6 +5,8 @@ import {
   cancelInventorySession,
   closeInventorySession,
   createInventorySession,
+  createSpotInventorySession,
+  computeWarehouseRows,
   ensureWarehouse,
   setInventoryCount,
   hardDeleteInventorySession,
@@ -46,6 +48,15 @@ export default function WarehouseInventoryTab({ project, onProjectChange, onComm
   const [selectedId, setSelectedId] = useState<string | null>(() => sessions.find(session => session.status === 'em_contagem' || session.status === 'em_revisao')?.id ?? null);
   const [month, setMonth] = useState(() => warehouseOperationalDate().slice(0, 7));
   const [justification, setJustification] = useState('');
+  const [spotReason, setSpotReason] = useState('');
+  const [spotSearch, setSpotSearch] = useState('');
+  const [spotKeys, setSpotKeys] = useState<string[]>([]);
+  const stockRows = useMemo(() => computeWarehouseRows(project, { includeManual: true }).filter(row => !row.archived), [project]);
+  const spotMatches = useMemo(() => {
+    const query = normalizeInventorySearch(spotSearch);
+    if (!query) return [];
+    return stockRows.filter(row => normalizeInventorySearch([row.code, row.description, row.unit].filter(Boolean).join(' ')).includes(query)).slice(0, 20);
+  }, [spotSearch, stockRows]);
   const [countDrafts, setCountDrafts] = useState<Record<string, string>>({});
   const [lineSearch, setLineSearch] = useState('');
   const [linePage, setLinePage] = useState(1);
@@ -81,6 +92,20 @@ export default function WarehouseInventoryTab({ project, onProjectChange, onComm
       setSelectedId(result.session.id);
       setJustification('');
       toast.success(`Inventário ${result.session.number} aberto para contagem cega.`);
+    } catch (error) { toast.error((error as Error).message); }
+    finally { setSaving(false); }
+  };
+
+  const createSpot = async () => {
+    try {
+      setSaving(true);
+      const result = createSpotInventorySession(project, spotKeys, spotReason, auditActor);
+      await commitInventory(result.project);
+      setSelectedId(result.session.id);
+      setSpotKeys([]);
+      setSpotReason('');
+      setSpotSearch('');
+      toast.success(`Conferência ${result.session.number} aberta para contagem cega.`);
     } catch (error) { toast.error((error as Error).message); }
     finally { setSaving(false); }
   };
@@ -178,7 +203,18 @@ export default function WarehouseInventoryTab({ project, onProjectChange, onComm
           <div className="space-y-3 p-3"><WarehouseField label="Mês"><Input className="min-h-11" type="month" value={month} onChange={event => setMonth(event.target.value)} /></WarehouseField><WarehouseField label="Justificativa" optional><Input className="min-h-11" value={justification} onChange={event => setJustification(event.target.value)} placeholder="Somente para recontagem" /></WarehouseField><Button className="min-h-12 w-full font-bold" disabled={saving} onClick={() => void create()}><Plus className="mr-2 h-4 w-4" />Abrir sessão</Button></div>
           <div className="border-t bg-muted/30 p-3 text-xs text-muted-foreground">Responsável: <strong className="text-foreground">{warehouseActorName(auditActor)}</strong></div>
         </div>
-        <div className="overflow-hidden rounded-xl border bg-card"><WarehouseSectionHeader title="Sessões" description={`${sessions.length} registro(s)`} icon={ClipboardCheck} tone="neutral" />{sessions.map(session => <button key={session.id} type="button" className={`w-full border-b p-3 text-left last:border-0 ${selected?.id === session.id ? 'bg-primary/10' : 'hover:bg-muted/30'}`} onClick={() => setSelectedId(session.id)}><div className="flex justify-between gap-2"><strong className="text-sm">{session.number}</strong><span className="text-xs">{session.month}</span></div><div className="mt-2 flex flex-wrap items-center gap-2"><WarehouseStatusBadge label={session.status.split('_').join(' ')} tone={inventoryTone(session.status)} /><span className="text-xs text-muted-foreground">{session.lines.length} material(is)</span></div></button>)}{!sessions.length && <WarehouseEmptyState message="Nenhuma sessão" hint="Abra o inventário do mês." icon={ClipboardCheck} className="m-2" />}</div>
+        <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+          <WarehouseSectionHeader icon={ClipboardCheck} title="Conferência pontual" description="Conte somente os materiais com divergência." help="Informe a contagem física e o motivo. A aprovação e a auditoria seguem o fluxo do inventário mensal." />
+          <div className="space-y-3 p-3">
+            <WarehouseField label="Buscar material"><Input className="min-h-11" value={spotSearch} onChange={event => setSpotSearch(event.target.value)} placeholder="Código ou descrição" /></WarehouseField>
+            {!!spotMatches.length && <div className="max-h-44 overflow-y-auto rounded-md border">{spotMatches.map(row => <button key={row.key} type="button" className="flex min-h-11 w-full items-center gap-2 border-b px-2 text-left text-xs last:border-0 hover:bg-muted/30" onClick={() => setSpotKeys(current => current.includes(row.key) ? current.filter(key => key !== row.key) : [...current, row.key])}><span className="min-w-0 flex-1 break-words">{row.description} · {row.unit}</span><span className="font-bold text-primary">{spotKeys.includes(row.key) ? 'Selecionado' : 'Adicionar'}</span></button>)}</div>}
+            {!!spotKeys.length && <div className="rounded-md bg-primary/5 p-2 text-xs">{spotKeys.length} material(is) selecionado(s): {spotKeys.map(key => stockRows.find(row => row.key === key)?.description ?? key).join(', ')}</div>}
+            <WarehouseField label="Motivo da conferência"><Input className="min-h-11" value={spotReason} onChange={event => setSpotReason(event.target.value)} placeholder="Ex.: devolução sem requisição identificada" /></WarehouseField>
+            <Button className="min-h-12 w-full font-bold" disabled={saving || !spotKeys.length || !spotReason.trim()} onClick={() => void createSpot()}><Plus className="mr-2 h-4 w-4" />Abrir conferência pontual</Button>
+            <p className="text-xs text-muted-foreground">Se a requisição for conhecida, registre a devolução nela. A conferência pontual é para origem desconhecida.</p>
+          </div>
+        </div>
+        <div className="overflow-hidden rounded-xl border bg-card"><WarehouseSectionHeader title="Sessões" description={`${sessions.length} registro(s)`} icon={ClipboardCheck} tone="neutral" />{sessions.map(session => <button key={session.id} type="button" className={`w-full border-b p-3 text-left last:border-0 ${selected?.id === session.id ? 'bg-primary/10' : 'hover:bg-muted/30'}`} onClick={() => setSelectedId(session.id)}><div className="flex justify-between gap-2"><strong className="text-sm">{session.number}</strong><span className="text-xs">{session.month}</span></div><div className="mt-2 flex flex-wrap items-center gap-2"><WarehouseStatusBadge label={session.status.split('_').join(' ')} tone={inventoryTone(session.status)} /><span className="text-xs font-medium text-muted-foreground">{session.kind === 'spot' ? 'Pontual' : 'Mensal'} · {session.lines.length} material(is)</span></div></button>)}{!sessions.length && <WarehouseEmptyState message="Nenhuma sessão" hint="Abra o inventário do mês." icon={ClipboardCheck} className="m-2" />}</div>
       </aside>
 
       <section className="overflow-hidden rounded-xl border bg-card">

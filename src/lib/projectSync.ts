@@ -558,23 +558,45 @@ async function optionalQuery<T>(
 // estoque exige o livro inteiro: uma página parcial pode mostrar saldo falso.
 const WAREHOUSE_MOVEMENT_PAGE_SIZE = 500;
 
-async function loadWarehouseMovementRows(projectId: string): Promise<QueryResult<DataRow>> {
-  const rows: DataRow[] = [];
-  let lastId: string | undefined;
-  while (true) {
-    let query = supabase.from('warehouse_movements')
-      .select('id, data')
-      .eq('project_id', projectId)
-      .order('id', { ascending: true })
-      .limit(WAREHOUSE_MOVEMENT_PAGE_SIZE);
-    if (lastId) query = query.gt('id', lastId);
-    const result = await query;
-    if (result.error) return { data: null, error: result.error };
-    const page = result.data ?? [];
-    rows.push(...page);
-    if (page.length < WAREHOUSE_MOVEMENT_PAGE_SIZE) return { data: rows, error: null };
-    lastId = page[page.length - 1].id;
+async function warehouseLedgerVersion(projectId: string): Promise<number> {
+  const result = await supabase.from('projects').select('warehouse_version').eq('id', projectId).maybeSingle();
+  if (result.error || !Number.isSafeInteger(result.data?.warehouse_version)) {
+    throw result.error ?? new Error('A versão do livro de estoque não está disponível.');
   }
+  return result.data!.warehouse_version;
+}
+
+async function loadWarehouseMovementRows(projectId: string): Promise<QueryResult<DataRow>> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const startVersion = await warehouseLedgerVersion(projectId);
+      const rows: DataRow[] = [];
+      let lastId: string | undefined;
+      let expectedCount: number | null = null;
+      while (true) {
+        let query = supabase.from('warehouse_movements')
+          .select('id, data', rows.length ? undefined : { count: 'exact' })
+          .eq('project_id', projectId)
+          .order('id', { ascending: true })
+          .limit(WAREHOUSE_MOVEMENT_PAGE_SIZE);
+        if (lastId) query = query.gt('id', lastId);
+        const result = await query;
+        if (result.error) return { data: null, error: result.error };
+        if (expectedCount === null) expectedCount = result.count;
+        const page = result.data ?? [];
+        rows.push(...page);
+        if (page.length < WAREHOUSE_MOVEMENT_PAGE_SIZE) break;
+        lastId = page[page.length - 1].id;
+      }
+      const endVersion = await warehouseLedgerVersion(projectId);
+      if (startVersion === endVersion && expectedCount !== null && rows.length === expectedCount) {
+        return { data: rows, error: null };
+      }
+    } catch (error) {
+      return { data: null, error: error as Error };
+    }
+  }
+  return { data: null, error: new Error('O estoque mudou durante o carregamento. Atualize o Almoxarifado para tentar novamente.') };
 }
 
 export interface ProjectHydrationOptions {

@@ -28,9 +28,11 @@ import {
 import { deleteWarehouseAttachments } from '@/lib/warehouseAttachments';
 import {
   commitWarehouseOperation,
+  WarehouseInsufficientStockError,
   type WarehouseCloudCommitResult,
   type WarehouseCloudOperation,
 } from '@/lib/warehouseCloudCommit';
+import { checkWarehouseWithdrawalAvailability, insufficientWarehouseItems, warehouseOperationWasCommitted, WarehouseAvailabilityUnavailableError, type WarehouseAvailabilityResult } from '@/lib/warehouseAvailability';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { flattenPhasesByChapter, getChapterNumbering } from '@/lib/chapters';
 import SignaturePad from './SignaturePad';
@@ -83,7 +85,7 @@ interface WithdrawalForm {
 }
 
 type WithdrawalErrors = Partial<Record<'chapterId' | 'receiverName' | 'items' | 'signatureReceiver', string>>;
-type WithdrawalSaveStage = 'idle' | 'uploading' | 'committing' | 'confirmed';
+type WithdrawalSaveStage = 'idle' | 'checking' | 'uploading' | 'committing' | 'uncertain' | 'confirmed';
 
 const WITHDRAWAL_CONFIRMATION_DELAY_MS = 700;
 
@@ -257,6 +259,11 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
   const [saveStage, setSaveStage] = useState<WithdrawalSaveStage>('idle');
   const [confirmedNumber, setConfirmedNumber] = useState('');
   const saving = saveStage !== 'idle';
+  const [availability, setAvailability] = useState<WarehouseAvailabilityResult | null>(null);
+  const [availabilityError, setAvailabilityError] = useState('');
+  const [checkingAvailability, setCheckingAvailability] = useState(false);
+  const submitLock = useRef(false);
+  const preparedAttempt = useRef<{ before: Project; after: Project; operation: WarehouseCloudOperation; requisitionId: string } | null>(null);
   const [errors, setErrors] = useState<WithdrawalErrors>({});
   const [returnTarget, setReturnTarget] = useState<WarehouseRequisition | null>(null);
   const [actionTarget, setActionTarget] = useState<WarehouseRequisition | null>(null);
@@ -327,6 +334,29 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
         return tokens.every(token => haystack.includes(token));
       });
   }, [form.items, materialSearch, rows]);
+  const selectedQuantities = useMemo(() => form.items.map(item => ({ itemKey: item.itemKey, quantity: item.quantity })), [form.items]);
+  useEffect(() => {
+    if (!open || !selectedQuantities.length || selectedQuantities.some(item => !(item.quantity > 0))) {
+      setAvailability(null);
+      setAvailabilityError('');
+      setCheckingAvailability(false);
+      return;
+    }
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setCheckingAvailability(true);
+      void checkWarehouseWithdrawalAvailability(project.id, selectedQuantities).then(result => {
+        if (!active) return;
+        setAvailability(result);
+        setAvailabilityError('');
+      }).catch((error: Error) => {
+        if (!active) return;
+        setAvailability(null);
+        setAvailabilityError(error.message);
+      }).finally(() => { if (active) setCheckingAvailability(false); });
+    }, 250);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [open, project.id, selectedQuantities]);
   const visibleAvailableMaterials = useMemo(() => availableMaterials.slice(0, 60), [availableMaterials]);
   const receiverNames = useMemo(() => (wh.receivers ?? []).map(receiver => receiver.name), [wh.receivers]);
   const normalizedReceiverSearch = normalizeWarehouseReceiverName(receiverSearch);
@@ -374,6 +404,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
   };
 
   const reset = () => {
+    preparedAttempt.current = null;
+    submitLock.current = false;
     setForm(initialForm());
     setPhotos([]);
     setReceiverOpen(false);
@@ -382,6 +414,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
     setErrors({});
     setSaveStage('idle');
     setConfirmedNumber('');
+    setAvailability(null);
+    setAvailabilityError('');
     setOpen(false);
   };
   const hasWithdrawalDraft = Boolean(
@@ -465,7 +499,69 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
     if (photos.length + incoming.length > 3) toast.warning('A retirada aceita no máximo três fotos.');
   };
 
+  const finishConfirmedWithdrawal = async (confirmation: WarehouseCloudCommitResult, requisitionId: string) => {
+    const confirmed = confirmation.project;
+    setExpandedRequisitionIds(current => new Set([...current, requisitionId]));
+    const canonicalRequisition = confirmed.warehouse?.requisitions.find(row => row.id === requisitionId);
+    if (canonicalRequisition) {
+      const confirmedDateKey = `${buildingLabel(confirmed, canonicalRequisition.chapterId).key}:${canonicalRequisition.date || 'data-nao-informada'}`;
+      setDateExpansionOverrides(current => new Map(current).set(confirmedDateKey, true));
+    }
+    setConfirmedNumber(canonicalRequisition?.number ?? '');
+    setSaveStage('confirmed');
+    toast.success('Retirada confirmada na nuvem e estoque baixado.');
+    await new Promise(resolve => window.setTimeout(resolve, WITHDRAWAL_CONFIRMATION_DELAY_MS));
+    reset();
+  };
+
+  const preflightSelectedMaterials = async () => {
+    try {
+      const current = await checkWarehouseWithdrawalAvailability(project.id, selectedQuantities);
+      setAvailability(current);
+      setAvailabilityError('');
+      const insufficient = insufficientWarehouseItems(current);
+      if (insufficient.length) throw new WarehouseInsufficientStockError(insufficient);
+    } catch (error) {
+      if (error instanceof WarehouseAvailabilityUnavailableError) {
+        setAvailabilityError(error.message);
+        return;
+      }
+      throw error;
+    }
+  };
+
+  const retryUncertainWithdrawal = async () => {
+    if (submitLock.current || !preparedAttempt.current) return;
+    submitLock.current = true;
+    const attempt = preparedAttempt.current;
+    try {
+      await runCriticalOperation(async () => {
+        setSaveStage('checking');
+        // Uma resposta perdida pode esconder uma confirmação já concluída.
+        // A mesma chave e o mesmo payload são reutilizados em ambos os casos.
+        const alreadyCommitted = await warehouseOperationWasCommitted(attempt.before.id, attempt.operation.operationKey);
+        if (!alreadyCommitted) await preflightSelectedMaterials();
+        setSaveStage('committing');
+        const confirmation = await executeCloudOperation(attempt.before, attempt.after, attempt.operation,
+          { onCommitCloudOperation, onPrepareCloudOperation, onCloudOperationConfirmed, onProjectChange });
+        await finishConfirmedWithdrawal(confirmation, attempt.requisitionId);
+      });
+    } catch (error) {
+      if (error instanceof WarehouseInsufficientStockError) {
+        preparedAttempt.current = null;
+        setAvailability({ warehouseVersion: availability?.warehouseVersion ?? 0, items: error.items });
+        setSaveStage('idle');
+      } else if (/auditoria.*não pôde|não passou pela validação|não autorizou|exclusiva do proprietário|alterada por outro usuário|devolução registrada/i.test((error as Error).message)) {
+        preparedAttempt.current = null;
+        setSaveStage('idle');
+      } else setSaveStage('uncertain');
+      toast.error((error as Error).message);
+    } finally { submitLock.current = false; }
+  };
+
   const submit = async () => {
+    if (submitLock.current) return;
+    submitLock.current = true;
     const chapter = chapters.find(candidate => candidate.id === form.chapterId);
     const nextErrors: WithdrawalErrors = {};
     const receiverName = normalizeWarehouseReceiverName(form.receiverName);
@@ -474,8 +570,6 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
     if (!form.items.length) nextErrors.items = 'Adicione ao menos um material.';
     const invalid = form.items.find(item => !(item.quantity > 0));
     if (invalid) nextErrors.items = `Revise a quantidade de ${invalid.description}.`;
-    const exceeds = form.items.find(item => item.quantity > (rows.find(row => row.key === item.itemKey)?.balance ?? 0));
-    if (exceeds) nextErrors.items = `${exceeds.description}: quantidade maior que o saldo.`;
     if (!form.signatureReceiver) nextErrors.signatureReceiver = 'Colete a assinatura.';
     if (Object.keys(nextErrors).length) {
       setErrors(nextErrors);
@@ -486,12 +580,15 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
         : document.getElementById(targets[first ?? ''] ?? '');
       target?.focus();
       toast.error(nextErrors[first as keyof WithdrawalErrors] ?? 'Revise os campos destacados.');
+      submitLock.current = false;
       return;
     }
     setErrors({});
 
     try {
       await runCriticalOperation(async () => {
+        setSaveStage('checking');
+        await preflightSelectedMaterials();
         setSaveStage(photos.length ? 'uploading' : 'committing');
         const deliveryAttachments = await makeAttachments(photos, project.id, 'foto', 'withdrawals');
         setSaveStage('committing');
@@ -507,29 +604,33 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
           deliveryAttachments,
           deliveryIdempotencyKey: form.deliveryIdempotencyKey,
         }, { publishToDailyReport: false, actor: auditActor });
-        const confirmation = await executeConfirmedOperation(result.project, {
+        const operation: WarehouseCloudOperation = {
           type: 'delivery',
           requisitionId: result.requisitionId,
           operationKey: form.deliveryIdempotencyKey,
-        });
-        const confirmed = confirmation.project;
-        setExpandedRequisitionIds(current => new Set([...current, result.requisitionId]));
-        const canonicalRequisition = confirmed.warehouse?.requisitions.find(row => row.id === result.requisitionId);
-        if (canonicalRequisition) {
-          const confirmedDateKey = `${buildingLabel(confirmed, canonicalRequisition.chapterId).key}:${canonicalRequisition.date || 'data-nao-informada'}`;
-          setDateExpansionOverrides(current => new Map(current).set(confirmedDateKey, true));
-        }
-        setConfirmedNumber(canonicalRequisition?.number ?? '');
-        setSaveStage('confirmed');
-        toast.success('Retirada confirmada na nuvem e estoque baixado.');
-        await new Promise(resolve => window.setTimeout(resolve, WITHDRAWAL_CONFIRMATION_DELAY_MS));
-        reset();
+        };
+        preparedAttempt.current = { before: project, after: result.project, operation, requisitionId: result.requisitionId };
+        const confirmation = await executeCloudOperation(project, result.project, operation,
+          { onCommitCloudOperation, onPrepareCloudOperation, onCloudOperationConfirmed, onProjectChange });
+        await finishConfirmedWithdrawal(confirmation, result.requisitionId);
       });
     } catch (error) {
-      setSaveStage('idle');
+      if (error instanceof WarehouseInsufficientStockError) {
+        preparedAttempt.current = null;
+        if (error.items.length) setAvailability({ warehouseVersion: availability?.warehouseVersion ?? 0, items: error.items });
+        else {
+          try { setAvailability(await checkWarehouseWithdrawalAvailability(project.id, selectedQuantities)); }
+          catch (availabilityFailure) { setAvailabilityError((availabilityFailure as Error).message); }
+        }
+      }
+      const definitiveRejection = error instanceof WarehouseInsufficientStockError
+        || /auditoria.*não pôde|não passou pela validação|não autorizou|exclusiva do proprietário|alterada por outro usuário|devolução registrada/i.test((error as Error).message);
+      const ambiguous = Boolean(preparedAttempt.current && !definitiveRejection);
+      if (!ambiguous) preparedAttempt.current = null;
+      setSaveStage(ambiguous ? 'uncertain' : 'idle');
       setConfirmedNumber('');
       toast.error((error as Error).message);
-    }
+    } finally { submitLock.current = false; }
   };
 
   return (
@@ -615,12 +716,14 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
                 <div className="grid gap-2">
                   {form.items.map((item, index) => {
                     const row = rows.find(candidate => candidate.key === item.itemKey);
-                    const balance = row?.balance ?? 0;
+                    const serverBalance = availability?.items.find(candidate => candidate.itemKey === item.itemKey)?.available;
+                    const balance = serverBalance ?? row?.balance ?? 0;
                     const after = balance - Number(item.quantity || 0);
-                    return <div key={item.itemKey} className="grid min-h-16 items-center gap-2 rounded-lg border border-primary/25 bg-background p-3 shadow-sm sm:grid-cols-[1fr_120px_180px_44px]"><div className="min-w-0"><div className="truncate text-sm font-bold">{item.description}</div><div className="text-xs text-muted-foreground">{item.code || 'Sem código'} · {item.unit}</div></div><Input className="min-h-11 text-center text-base" type="number" min="0" max={balance} step="any" value={item.quantity || ''} onChange={event => updateQuantity(index, Number(event.target.value))} aria-label={`Quantidade de ${item.description}`} /><div className="rounded-md bg-primary/5 p-2 text-center text-xs"><span>Saldo {balance.toLocaleString('pt-BR')}</span> − <strong>{Number(item.quantity || 0).toLocaleString('pt-BR')}</strong> = <span className={after < 0 ? 'text-destructive' : 'text-primary'}>{after.toLocaleString('pt-BR')} {item.unit}</span></div><Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => setForm(current => ({ ...current, items: current.items.filter((_, itemIndex) => itemIndex !== index) }))} aria-label={`Remover ${item.description}`}><Trash2 className="h-4 w-4" /></Button></div>;
+                    return <div key={item.itemKey} className={`grid min-h-16 items-center gap-2 rounded-lg border bg-background p-3 shadow-sm sm:grid-cols-[1fr_120px_180px_44px] ${after < 0 ? 'border-destructive' : 'border-primary/25'}`}><div className="min-w-0"><div className="text-sm font-bold leading-snug">{item.description}</div><div className="text-xs text-muted-foreground">{item.code || 'Sem código'} · {item.unit}</div>{after < 0 && <div role="alert" className="mt-1 text-xs font-semibold text-destructive">Faltam {Math.abs(after).toLocaleString('pt-BR')} {item.unit}; reduza a quantidade ou confira o estoque.</div>}</div><Input className="min-h-11 text-center text-base" type="number" min="0" step="any" value={item.quantity || ''} onChange={event => updateQuantity(index, Number(event.target.value))} aria-label={`Quantidade de ${item.description}`} /><div className={`rounded-md p-2 text-center text-xs ${after < 0 ? 'bg-destructive/10' : 'bg-primary/5'}`}><span>Saldo {serverBalance == null ? 'local' : 'atual'} {balance.toLocaleString('pt-BR')}</span> − <strong>Solicitado {Number(item.quantity || 0).toLocaleString('pt-BR')}</strong> = <span className={after < 0 ? 'text-destructive' : 'text-primary'}>{after.toLocaleString('pt-BR')} {item.unit}</span></div><Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => setForm(current => ({ ...current, items: current.items.filter((_, itemIndex) => itemIndex !== index) }))} aria-label={`Remover ${item.description}`}><Trash2 className="h-4 w-4" /></Button></div>;
                   })}
                   {!form.items.length && <div className="rounded-lg border border-dashed bg-background/60 p-3 text-sm text-muted-foreground">Nenhum material selecionado. Escolha abaixo os materiais da retirada.</div>}
                 </div>
+                {form.items.length > 0 && <div role="status" className="mt-2 text-xs text-muted-foreground">{checkingAvailability ? 'Conferindo saldos no servidor...' : availabilityError || (availability ? 'Saldos atuais conferidos no servidor.' : 'Saldos locais; aguarde a conferência do servidor.')}</div>}
               </div>
               <label htmlFor="withdrawal-material-search" className="sr-only">Buscar material para adicionar</label><div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input id="withdrawal-material-search" className="min-h-11 pl-9 text-base" value={materialSearch} onChange={event => setMaterialSearch(event.target.value)} placeholder="Buscar por código, descrição ou unidade" /></div>
               <div data-testid="available-materials-scroll" className="mt-2 max-h-64 touch-pan-y overflow-y-auto rounded-lg border bg-background" aria-label="Materiais disponíveis" onWheel={handleMaterialListWheel} onTouchStart={handleMaterialListTouchStart} onTouchMove={handleMaterialListTouchMove} onTouchEnd={() => { materialListTouchStartY.current = null; }} onTouchCancel={() => { materialListTouchStartY.current = null; }}>{visibleAvailableMaterials.map((row, index) => <button key={row.key} type="button" className={`flex min-h-16 w-full items-center gap-3 border-b px-3 text-left last:border-0 hover:bg-primary/10 ${index % 2 ? 'bg-muted/25' : ''}`} onClick={() => addMaterial(row.key)}><span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><PackageOpen className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-bold leading-snug">{row.description}</span><span className="mt-1 block text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</span></span><WarehouseStatusBadge label={`Saldo ${row.balance.toLocaleString('pt-BR')}`} tone="info" /><Plus className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" /></button>)}{availableMaterials.length > visibleAvailableMaterials.length && <div className="border-t bg-muted/40 px-3 py-2 text-center text-xs font-medium text-muted-foreground" role="status">Mostrando {visibleAvailableMaterials.length} de {availableMaterials.length} materiais. Refine a busca para localizar os demais.</div>}{!availableMaterials.length && <WarehouseEmptyState message="Nenhum material encontrado" hint="Tente outra palavra na busca." className="m-2" />}</div>
@@ -636,12 +739,12 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
             </section>
           </fieldset>
           {saveStage !== 'idle' && <div role="status" aria-live="polite" className={`flex items-center gap-3 border-t px-4 py-3 text-sm font-semibold ${saveStage === 'confirmed' ? 'border-success/30 bg-success/10 text-success' : 'border-primary/25 bg-primary/5 text-primary'}`}>
-            {saveStage === 'confirmed' ? <CheckCircle2 className="h-5 w-5 shrink-0" /> : saveStage === 'uploading' ? <CloudUpload className="h-5 w-5 shrink-0" /> : <Loader2 className="h-5 w-5 shrink-0 animate-spin" />}
-            <span>{saveStage === 'uploading' ? 'Enviando fotos...' : saveStage === 'committing' ? 'Salvando retirada na nuvem...' : `Salvo na nuvem${confirmedNumber ? ` · ${confirmedNumber}` : ''}`}</span>
+            {saveStage === 'confirmed' ? <CheckCircle2 className="h-5 w-5 shrink-0" /> : saveStage === 'uploading' ? <CloudUpload className="h-5 w-5 shrink-0" /> : saveStage === 'uncertain' ? <History className="h-5 w-5 shrink-0" /> : <Loader2 className="h-5 w-5 shrink-0 animate-spin" />}
+            <span>{saveStage === 'checking' ? 'Conferindo saldo e tentativa no servidor...' : saveStage === 'uploading' ? 'Enviando fotos...' : saveStage === 'committing' ? 'Salvando retirada na nuvem...' : saveStage === 'uncertain' ? 'Resposta incerta: verifique a mesma tentativa antes de continuar. Os dados permanecem aqui.' : `Salvo na nuvem${confirmedNumber ? ` · ${confirmedNumber}` : ''}`}</span>
           </div>}
           <DialogFooter className="gap-2 border-t bg-background p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] sm:space-x-0">
             <Button variant="outline" className="min-h-11 sm:min-w-28" disabled={saving} onClick={requestCloseWithdrawal}>Cancelar</Button>
-            <Button className="min-h-11 font-bold sm:min-w-52" disabled={saving} onClick={() => void submit()}>{saveStage === 'confirmed' ? <CheckCircle2 className="mr-2 h-4 w-4" /> : saveStage === 'idle' ? <Check className="mr-2 h-4 w-4" /> : <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{saveStage === 'uploading' ? 'Enviando fotos...' : saveStage === 'committing' ? 'Salvando na nuvem...' : saveStage === 'confirmed' ? 'Salvo na nuvem' : 'Entregar e baixar estoque'}</Button>
+            <Button className="min-h-11 font-bold sm:min-w-52" disabled={saving && saveStage !== 'uncertain'} onClick={() => void (saveStage === 'uncertain' ? retryUncertainWithdrawal() : submit())}>{saveStage === 'confirmed' ? <CheckCircle2 className="mr-2 h-4 w-4" /> : saveStage === 'idle' || saveStage === 'uncertain' ? <Check className="mr-2 h-4 w-4" /> : <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{saveStage === 'uploading' ? 'Enviando fotos...' : saveStage === 'checking' ? 'Conferindo saldo...' : saveStage === 'committing' ? 'Salvando na nuvem...' : saveStage === 'confirmed' ? 'Salvo na nuvem' : saveStage === 'uncertain' ? 'Verificar e concluir tentativa' : 'Entregar e baixar estoque'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -694,7 +797,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
       </section>
       <MaterialReturnDialog project={project} requisition={returnTarget} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onClose={() => setReturnTarget(null)} />
       <CancelRequisitionDialog project={project} requisition={cancelTarget} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onRunCriticalCloudOperation={onRunCriticalCloudOperation} onClose={() => setCancelTarget(null)} />
-      <RequisitionActionDialog project={project} requisition={actionTarget} auditActor={auditActor} canEditOriginal={canEdit} canEditSupplements={canSupplement} openInEditMode={openActionInEditMode} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onRunCriticalCloudOperation={onRunCriticalCloudOperation} onClose={() => setActionTarget(null)} />
+      <RequisitionActionDialog project={project} requisition={actionTarget} auditActor={auditActor} canEditOriginal={canEdit} canEditSupplements={canSupplement} openInEditMode={openActionInEditMode} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onRunCriticalCloudOperation={onRunCriticalCloudOperation} onStartReturn={() => { setReturnTarget(actionTarget); setActionTarget(null); }} onClose={() => setActionTarget(null)} />
       {confirmDialog}
     </div>
   );
@@ -968,11 +1071,12 @@ interface RequisitionActionDialogProps {
   onPrepareCloudOperation?: () => void | Promise<void>;
   onCommitCloudOperation?: CommitCloudOperation;
   onRunCriticalCloudOperation?: Props['onRunCriticalCloudOperation'];
+  onStartReturn: () => void;
   onClose: () => void;
 }
 
 /** Formulário único: retirada original, complementos confirmados e nova entrega. */
-function RequisitionActionDialog({ project, requisition, auditActor, canEditOriginal, canEditSupplements, openInEditMode = false, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onCommitCloudOperation, onRunCriticalCloudOperation, onClose }: RequisitionActionDialogProps) {
+function RequisitionActionDialog({ project, requisition, auditActor, canEditOriginal, canEditSupplements, openInEditMode = false, onProjectChange, onCloudOperationConfirmed, onPrepareCloudOperation, onCommitCloudOperation, onRunCriticalCloudOperation, onStartReturn, onClose }: RequisitionActionDialogProps) {
   const rows = useMemo(() => computeWarehouseRows(project, { includeManual: true }), [project]);
   const numbering = useMemo(() => getChapterNumbering(project), [project]);
   const chapters = useMemo(() => flattenPhasesByChapter(project)
@@ -1106,7 +1210,7 @@ function RequisitionActionDialog({ project, requisition, auditActor, canEditOrig
       <DialogHeader className="border-b p-4 pr-16"><DialogTitle>Ações da retirada</DialogTitle><DialogDescription>Consulte todas as entregas desta requisição, corrija quando permitido ou acrescente materiais.</DialogDescription></DialogHeader>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {requisition && <div className="space-y-4">
-          <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm"><strong>{requisition.number}</strong><span className="text-muted-foreground"> · requisição com histórico preservado</span><div className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3"><span>Data: <strong className="text-foreground">{formatOperationalDate(requisition.date)}</strong></span><span>Destino: <strong className="text-foreground">{requisition.chapterName || 'Não informado'}</strong></span><span>Recebedor: <strong className="text-foreground">{requisition.receiverName || requisition.requesterName || '—'}</strong></span></div></div>
+          <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm"><strong>{requisition.number}</strong><span className="text-muted-foreground"> · requisição com histórico preservado</span><div className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3"><span>Data: <strong className="text-foreground">{formatOperationalDate(requisition.date)}</strong></span><span>Destino: <strong className="text-foreground">{requisition.chapterName || 'Não informado'}</strong></span><span>Recebedor: <strong className="text-foreground">{requisition.receiverName || requisition.requesterName || '—'}</strong></span></div>{requisition.status === 'entregue' && getRequisitionMaterialSummaries(project, requisition.id).some(item => item.availableQuantity > 0) && <Button type="button" variant="outline" className="mt-3 min-h-11" disabled={busy} onClick={onStartReturn}><RotateCcw className="mr-2 h-4 w-4" />Registrar devolução desta requisição</Button>}</div>
 
           <section className="rounded-xl border">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 p-3"><div><h3 className="text-sm font-bold">Materiais da retirada original</h3><p className="text-xs text-muted-foreground">A retirada original permanece separada dos complementos.</p></div>{canEditOriginal && !editingOriginal && <Button type="button" variant="outline" className="min-h-11" disabled={correctionBlocked} onClick={() => { setCorrectionIdempotencyKey(uidWarehouse()); setEditingOriginal(true); }}><Pencil className="mr-2 h-4 w-4" />Editar retirada</Button>}</div>

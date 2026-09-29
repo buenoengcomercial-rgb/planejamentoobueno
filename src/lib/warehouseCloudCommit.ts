@@ -99,13 +99,29 @@ function operationAuditRows(
   ));
 }
 
-function warehouseCommitError(error: { code?: string; message?: string }): Error {
+export class WarehouseInsufficientStockError extends Error {
+  constructor(public readonly items: Array<{ itemKey: string; requested: number; available: number }>) {
+    super('O saldo mudou antes da confirmação. Revise os materiais destacados; nenhuma retirada foi gravada.');
+    this.name = 'WarehouseInsufficientStockError';
+  }
+}
+
+function warehouseCommitError(error: { code?: string; message?: string; details?: string }): Error {
   const message = error.message ?? '';
   if (/WAREHOUSE_RECORD_CONFLICT/.test(message)) {
     return new Error('Esta retirada foi alterada por outro usuário. A primeira versão confirmada foi preservada; recarregue e revise antes de tentar novamente.');
   }
   if (/WAREHOUSE_INSUFFICIENT_STOCK/.test(message)) {
-    return new Error('O saldo mudou antes da confirmação. A retirada não foi gravada; atualize o almoxarifado e revise as quantidades.');
+    try {
+      const parsed: unknown = JSON.parse(error.details ?? '[]');
+      if (Array.isArray(parsed)) {
+        const items = parsed.filter(item => item && typeof item.itemKey === 'string'
+          && Number.isFinite(Number(item.requested)) && Number.isFinite(Number(item.available)))
+          .map(item => ({ itemKey: item.itemKey as string, requested: Number(item.requested), available: Number(item.available) }));
+        if (items.length) return new WarehouseInsufficientStockError(items);
+      }
+    } catch { /* Older server versions do not return structured details. */ }
+    return new WarehouseInsufficientStockError([]);
   }
   if (/WAREHOUSE_RETURN_EXCEEDS_WITHDRAWAL/.test(message)) {
     return new Error('Outra devolução já consumiu parte do saldo devolvível. Nada foi duplicado; atualize a retirada e revise a quantidade.');
@@ -258,7 +274,7 @@ export async function commitWarehouseOperation(
   const rpc = supabase.rpc.bind(supabase) as unknown as (
     fn: string,
     args: Record<string, unknown>,
-  ) => Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;
+  ) => Promise<{ data: unknown; error: { code?: string; message?: string; details?: string } | null }>;
   const rpcName = operation.type === 'supplement_correction'
     ? 'commit_warehouse_supplement_correction'
     : operation.type === 'correction' || operation.type === 'cancellation'

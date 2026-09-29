@@ -1819,10 +1819,10 @@ export function createInventorySession(
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
   const active = (wh.inventorySessions ?? []).find(session =>
-    session.month === month && (session.status === 'em_contagem' || session.status === 'em_revisao'),
+    session.month === month && session.kind !== 'spot' && (session.status === 'em_contagem' || session.status === 'em_revisao'),
   );
   if (active) return { project: p, session: active };
-  const priorApplied = (wh.inventorySessions ?? []).some(session => session.month === month && session.status === 'aplicado');
+  const priorApplied = (wh.inventorySessions ?? []).some(session => session.month === month && session.kind !== 'spot' && session.status === 'aplicado');
   if (priorApplied && !justification?.trim()) {
     throw new Error('Informe a justificativa para abrir uma recontagem do mesmo mês.');
   }
@@ -1841,6 +1841,35 @@ export function createInventorySession(
       itemDescription: row.description,
       itemUnit: row.unit,
     })),
+  };
+  return { project: setWh(p, { inventorySessions: [...(wh.inventorySessions ?? []), session] }), session };
+}
+
+/** Conferência restrita aos itens informados, seguindo a mesma aprovação do inventário mensal. */
+export function createSpotInventorySession(
+  project: Project,
+  itemKeys: string[],
+  reason: string,
+  actor?: WarehouseActorInput,
+): { project: Project; session: WarehouseInventorySession } {
+  if (!reason.trim()) throw new Error('Informe o motivo da conferência pontual.');
+  const responsible = normalizeWarehouseActor(actor);
+  if (!responsible) throw new Error('Identifique o responsável antes de abrir a conferência pontual.');
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const keys = new Set(itemKeys);
+  const rows = computeWarehouseRows(p, { includeManual: true }).filter(row => keys.has(row.key) && !row.archived);
+  if (!keys.size || rows.length !== keys.size) throw new Error('Selecione materiais válidos para a conferência pontual.');
+  const month = todayISO().slice(0, 7);
+  const prefix = `INV-P-${month.replace('-', '')}`;
+  const count = Math.max(0, ...(wh.inventorySessions ?? [])
+    .filter(entry => entry.number.startsWith(`${prefix}-`))
+    .map(entry => Number(entry.number.slice(prefix.length + 1)) || 0)) + 1;
+  const session: WarehouseInventorySession = {
+    id: uid(), number: `${prefix}-${String(count).padStart(2, '0')}`, month,
+    kind: 'spot', status: 'em_contagem', startedAt: nowISO(),
+    justification: reason.trim(), createdBy: responsible,
+    lines: rows.map(row => ({ itemKey: row.key, itemCode: row.code, itemDescription: row.description, itemUnit: row.unit })),
   };
   return { project: setWh(p, { inventorySessions: [...(wh.inventorySessions ?? []), session] }), session };
 }

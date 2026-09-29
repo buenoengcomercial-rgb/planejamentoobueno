@@ -1,5 +1,5 @@
 import type { Project, WarehouseRequisition, CustodyTerm, WarehouseInventorySession } from '@/types/project';
-import { custodyTermAggregateStatus, custodyTermEquipmentItems, getRequisitionMaterialSummaries } from '@/lib/warehouse';
+import { custodyTermAggregateStatus, custodyTermEquipmentItems, getRequisitionMaterialSummaries, warehouseActorName } from '@/lib/warehouse';
 
 type JsPdfInstance = import('jspdf').jsPDF;
 type JsPdfConstructor = typeof import('jspdf').jsPDF;
@@ -148,9 +148,13 @@ export async function generateDailyWithdrawalConfirmationPdfs(project: Project, 
 export async function generateInventoryReportPdf(project: Project, session: WarehouseInventorySession) {
   const { jsPDF, autoTable } = await loadWarehousePdfEngine();
   const doc = new jsPDF();
-  header(doc, project, 'RELATÓRIO MENSAL DE INVENTÁRIO', `${session.number} · ${session.month}`);
+  header(doc, project, session.kind === 'spot' ? 'RELATÓRIO DE CONFERÊNCIA PONTUAL' : 'RELATÓRIO MENSAL DE INVENTÁRIO', `${session.number} · ${session.month}`);
+  const context = session.kind === 'spot'
+    ? doc.splitTextToSize(`Motivo: ${session.justification ?? 'Não informado'} · Responsável: ${warehouseActorName(session.createdBy)}`, 180)
+    : [];
+  if (context.length) { doc.setFontSize(9); doc.text(context, 14, 39); }
   autoTable(doc, {
-    startY: 40,
+    startY: context.length ? 42 + context.length * 4 : 40,
     head: [['Código', 'Material', 'Un', 'Esperado', 'Contado', 'Diferença', 'Valor']],
     body: session.lines.map(line => {
       const impact = line.difference != null && line.unitCostSnapshot != null
