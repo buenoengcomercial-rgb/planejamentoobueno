@@ -158,7 +158,15 @@ vi.mock('@/components/UndoButton', async () => {
 });
 
 vi.mock('@/components/DailyProductionWorkspace', async () => {
-  const { createElement } = await import('react');
+  const { createElement, useState } = await import('react');
+  const DraftInput = () => {
+    const [value, setValue] = useState('');
+    return createElement('input', {
+      'aria-label': 'Rascunho da produção no teste',
+      value,
+      onChange: (event: { target: { value: string } }) => setValue(event.target.value),
+    });
+  };
   type Setter = (next: Project | ((current: Project) => Project)) => void;
   interface Props {
     project: Project;
@@ -171,6 +179,7 @@ vi.mock('@/components/DailyProductionWorkspace', async () => {
       'div',
       { 'data-testid': 'project-workspace' },
       createElement('span', { 'data-testid': 'project-name' }, project.name),
+      createElement(DraftInput),
       createElement('button', {
         type: 'button',
         onClick: () => onProductionChange(current => ({ ...current, name: 'Alteração geral pendente' })),
@@ -231,9 +240,18 @@ vi.mock('@/components/AdditiveSchedule', () => ({ default: () => null }));
 vi.mock('@/components/RealCost', () => ({ default: () => null }));
 vi.mock('@/components/Materials', () => ({ default: () => null }));
 vi.mock('@/components/warehouse/Warehouse', async () => {
-  const { createElement } = await import('react');
+  const { createElement, useState } = await import('react');
+  const DraftInput = () => {
+    const [value, setValue] = useState('');
+    return createElement('input', {
+      'aria-label': 'Rascunho do Almoxarifado no teste',
+      value,
+      onChange: (event: { target: { value: string } }) => setValue(event.target.value),
+    });
+  };
   interface Props {
     project: Project;
+    isTabDataReady?: boolean;
     onProjectChange: (next: Project | ((current: Project) => Project)) => void;
     onCommitCloudWarehouseOperation?: (
       before: Project,
@@ -243,9 +261,12 @@ vi.mock('@/components/warehouse/Warehouse', async () => {
     onRunCriticalCloudWarehouseOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
   }
   return {
-    default: ({ project, onProjectChange, onCommitCloudWarehouseOperation, onRunCriticalCloudWarehouseOperation }: Props) => createElement(
+    default: ({ project, isTabDataReady, onProjectChange, onCommitCloudWarehouseOperation, onRunCriticalCloudWarehouseOperation }: Props) => isTabDataReady === false
+      ? createElement('div', null, 'Carregando área do Almoxarifado...')
+      : createElement(
       'div',
       { 'data-testid': 'warehouse-workspace' },
+      createElement(DraftInput),
       createElement('button', {
         type: 'button',
         onClick: () => onProjectChange(current => ({ ...current, name: 'Alteração geral pendente' })),
@@ -375,6 +396,45 @@ afterEach(() => {
 });
 
 describe('segurança de sincronização da página da obra', () => {
+  it.each([
+    ['producao', 'tasks', 'project-workspace', 'Rascunho da produção no teste'],
+    ['almoxarifado', 'warehouse_movements', 'warehouse-workspace', 'Rascunho do Almoxarifado no teste'],
+  ])('mantém %s montada durante uma atualização remota', async (routeView, table, workspaceId, draftLabel) => {
+    const remoteRecord = deferred<ReturnType<typeof cloudRecord>>();
+    let reads = 0;
+    mocks.loadCloudProjectRecord.mockImplementation(async () => (
+      ++reads === 1 ? cloudRecord(makeProject()) : remoteRecord.promise
+    ));
+    mocks.getCloudProjectVersion.mockResolvedValue({
+      id: 'project-1', updatedAt: 'cloud-v3', warehouseVersion: 2,
+      warehouseUpdatedAt: '2026-09-14T10:00:00.000Z',
+    });
+
+    renderIndex(routeView);
+    expect(await screen.findByTestId(workspaceId)).toBeInTheDocument();
+    const draft = screen.getByRole('textbox', { name: draftLabel });
+    fireEvent.change(draft, { target: { value: 'Preenchimento em andamento' } });
+
+    const realtime = mocks.realtimeHandlers.find(handler => handler.table === table);
+    expect(realtime).toBeDefined();
+    vi.useFakeTimers();
+    act(() => realtime?.callback({ new: { id: 'remote-row', updated_at: 'cloud-v3' } }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_200); });
+
+    expect(reads).toBe(2);
+    expect(screen.getByTestId(workspaceId)).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: draftLabel })).toBe(draft);
+    expect(draft).toHaveValue('Preenchimento em andamento');
+
+    await act(async () => {
+      remoteRecord.resolve(cloudRecord(makeProject(), 'cloud-v3'));
+      await Promise.resolve();
+    });
+    expect(screen.getByRole('textbox', { name: draftLabel })).toBe(draft);
+    expect(draft).toHaveValue('Preenchimento em andamento');
+    expect(reads).toBe(2);
+  });
+
   it('recupera e confirma um rascunho local válido sem descartar a edição', async () => {
     const local = {
       ...makeProject(),

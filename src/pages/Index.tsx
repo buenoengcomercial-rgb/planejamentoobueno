@@ -364,6 +364,7 @@ export default function Index() {
   const lastObservedWarehouseVersionRef = useRef<number | null>(null);
   const realtimeConnectedRef = useRef(false);
   const remoteDirtyCollectionsRef = useRef<Map<string, Set<ProjectCollectionKey>>>(new Map());
+  const backgroundRefreshingCollectionsRef = useRef<Map<string, Set<ProjectCollectionKey>>>(new Map());
   // Mantém a origem detalhada do evento enquanto o debounce/autosave está em
   // curso. Não é estado de UI: impede que uma área em edição pareça incompleta
   // antes de sabermos se ela precisa de rebase ou de conflito explícito.
@@ -476,11 +477,15 @@ export default function Index() {
     ? requiredProjectCollections.filter(collection => remoteDirtyCollectionsRef.current.get(rawProject.id)?.has(collection))
     : [];
   const missingProjectCollections = rawProject
-    ? normalizeProjectCollections([
-      ...getMissingProjectCollections(rawProject.id, requiredProjectCollections),
-      ...staleCurrentViewCollections,
-    ])
+    ? getMissingProjectCollections(rawProject.id, requiredProjectCollections)
     : requiredProjectCollections;
+  const backgroundRefreshing = rawProject
+    ? backgroundRefreshingCollectionsRef.current.get(rawProject.id)
+    : undefined;
+  const collectionsToHydrate = normalizeProjectCollections([
+    ...missingProjectCollections,
+    ...staleCurrentViewCollections,
+  ]).filter(collection => !backgroundRefreshing?.has(collection));
   const currentViewDataReady = !!rawProject && missingProjectCollections.length === 0;
 
   const refreshPendingRemoteAreas = useCallback((projectId: string) => {
@@ -697,6 +702,8 @@ export default function Index() {
       setDailyReportSaveErrors({});
       remoteDirtyCollectionsRef.current.delete(rawProjectRef.current?.id ?? '');
       remoteDirtyCollectionsRef.current.delete(projectToLoad?.id ?? '');
+      backgroundRefreshingCollectionsRef.current.delete(rawProjectRef.current?.id ?? '');
+      backgroundRefreshingCollectionsRef.current.delete(projectToLoad?.id ?? '');
       pendingRealtimeCollectionsRef.current.delete(rawProjectRef.current?.id ?? '');
       pendingRealtimeCollectionsRef.current.delete(projectToLoad?.id ?? '');
       localDirtyCollectionsRef.current.delete(rawProjectRef.current?.id ?? '');
@@ -841,7 +848,11 @@ export default function Index() {
     // rebaseie automaticamente nem substitua o que está sendo digitado.
     if (hasLocalCollectionConflict(current.id, requestedCollections)) return null;
 
+    const refreshing = backgroundRefreshingCollectionsRef.current.get(current.id) ?? new Set<ProjectCollectionKey>();
+    requestedCollections.forEach(collection => refreshing.add(collection));
+    backgroundRefreshingCollectionsRef.current.set(current.id, refreshing);
     markRemoteCollections(current.id, requestedCollections);
+    try {
     let record: CloudProjectRecord;
     try {
       record = await loadCloudProjectRecord(current.id, {
@@ -907,6 +918,14 @@ export default function Index() {
     rawProjectRef.current = rebasedCurrent;
     setRawProject(rebasedCurrent);
     return rebasedForRetry;
+    } finally {
+      const active = backgroundRefreshingCollectionsRef.current.get(current.id);
+      requestedCollections.forEach(collection => active?.delete(collection));
+      if (active?.size === 0) backgroundRefreshingCollectionsRef.current.delete(current.id);
+      // Se a atualização falhar, o marcador pendente aciona uma nova leitura
+      // sem desmontar a tela que já possui dados.
+      setRemoteDirtyRevision(revision => revision + 1);
+    }
   }, [clearPendingRealtimeCollections, clearRemoteCollections, hasLocalCollectionConflict, markRemoteCollections]);
 
   /**
@@ -1407,12 +1426,12 @@ export default function Index() {
   }, [user, orgId, creator, refreshCloudList, replaceProjectWithoutAutoSave, role, auditActor, canViewWarehousePanel, restrictedFallbackView]);
 
   useEffect(() => {
-    if (bootLoading || !rawProject?.id || missingProjectCollections.length === 0) {
-      if (rawProject?.id && missingProjectCollections.length === 0) setDataLoadError(null);
+    if (bootLoading || !rawProject?.id || collectionsToHydrate.length === 0) {
+      if (rawProject?.id && missingProjectCollections.length === 0 && staleCurrentViewCollections.length === 0) setDataLoadError(null);
       return;
     }
     const projectId = rawProject.id;
-    const requestCollections = [...missingProjectCollections] as ProjectCollectionKey[];
+    const requestCollections = [...collectionsToHydrate] as ProjectCollectionKey[];
     const sequence = ++dataLoadSequenceRef.current;
     setDataLoadError(null);
 
@@ -3164,6 +3183,12 @@ export default function Index() {
               {partialSyncRetrying && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Tentar novamente
             </Button>
+          </div>
+        )}
+        {currentViewDataReady && staleCurrentViewCollections.length > 0 && dataLoadError && (
+          <div role="alert" className="mx-4 mt-16 flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
+            <span>Há dados novos nesta área que ainda não puderam ser carregados. A tela e os campos em edição foram preservados.</span>
+            <Button type="button" size="sm" variant="outline" onClick={() => setDataLoadRetry(value => value + 1)}>Tentar novamente</Button>
           </div>
         )}
         <Suspense fallback={
