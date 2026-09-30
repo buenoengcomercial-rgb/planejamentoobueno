@@ -36,12 +36,27 @@
 - Exibir número da requisição, horário e responsável logo após a confirmação.
 - Em resposta incerta, reutilizar a mesma tentativa para consultar o servidor, evitando duplicidade; só liberar o PDF após localizar a confirmação.
 
+### 6. Aperfeiçoar cancelamento de retirada
+- Manter o cancelamento como **estorno auditado**, sem apagar a retirada, a assinatura, os movimentos ou o responsável original.
+- Antes de cancelar, apresentar um resumo com requisição, materiais, quantidades retiradas, quantidades já devolvidas e saldo que retornará ao estoque.
+- Exigir motivo e confirmação da situação física; deixar explícito que somente materiais realmente disponíveis voltam ao saldo.
+- Separar os casos: **retirada não aconteceu**, **retirada parcial**, **lançamento duplicado** e **outro motivo**, mantendo campo complementar obrigatório quando necessário.
+- Quando já houver devolução, calcular e devolver somente a quantidade ainda em campo; nunca recompor o que já retornou anteriormente.
+- Bloquear o cancelamento se outro usuário tiver corrigido, devolvido ou cancelado a retirada enquanto a janela estava aberta; atualizar os dados e permitir nova revisão sem perder o motivo digitado.
+- Após confirmar, retirar o registro da lista ativa, mantê-lo na aba **Canceladas** e mostrar quem cancelou, quando, por quê e quanto foi recomposto por material.
+- Permitir gerar um comprovante de cancelamento somente após a confirmação do servidor, com referência à retirada original e ao histórico de devoluções.
+- Não permitir “desfazer cancelamento” diretamente. Uma eventual reversão deverá ser uma nova operação auditada, nunca alteração silenciosa do histórico.
+- Melhorar o texto da confirmação final para evitar que “cancelar registro” seja confundido com exclusão definitiva.
+
 ## Validação
 
 - Simular dois usuários retirando simultaneamente o mesmo material: uma operação confirma e a outra recebe o novo saldo, sem baixa parcial.
 - Interromper e restaurar a atualização em tempo real: a tela reconecta e recupera o saldo sem recarregar a página.
 - Simular perda da resposta depois da gravação: a repetição encontra a confirmação existente e não duplica a retirada.
 - Simular função indisponível: o usuário é avisado antes da entrega e nenhum PDF é gerado.
+- Cancelar retirada integral, parcial e com devolução anterior: conferir recomposição exata do saldo e preservação do histórico.
+- Simular dois usuários cancelando ou alterando a mesma retirada: somente a primeira versão é aceita e a segunda recebe os dados atuais para revisão.
+- Confirmar que usuários sem permissão não veem nem executam o cancelamento.
 - Validar o fluxo completo no computador e no celular, incluindo assinatura, fotos, conflito, nova confirmação e PDF.
 
 ## Limites
