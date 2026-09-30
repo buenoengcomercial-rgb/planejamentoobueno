@@ -902,6 +902,10 @@ export type Database = {
         }
         Returns: undefined
       }
+      check_warehouse_withdrawal_availability: {
+        Args: { p_items: Json; p_project_id: string }
+        Returns: Json
+      }
       commit_warehouse_adjustment: {
         Args: {
           p_changes: Json
@@ -958,6 +962,34 @@ export type Database = {
           p_expected_warehouse_version: number
           p_operation_key: string
           p_project_id: string
+        }
+        Returns: Json
+      }
+      commit_warehouse_requisition_adjustment: {
+        Args: {
+          p_audit_logs?: Json
+          p_delete_movement_ids?: Json
+          p_expected_requisition?: Json
+          p_operation_key: string
+          p_operation_type: string
+          p_project_id: string
+          p_requisition?: Json
+          p_requisition_id: string
+          p_upsert_movements?: Json
+        }
+        Returns: Json
+      }
+      commit_warehouse_supplement_correction: {
+        Args: {
+          p_audit_logs?: Json
+          p_delete_movement_ids?: Json
+          p_expected_requisition?: Json
+          p_operation_key: string
+          p_project_id: string
+          p_requisition?: Json
+          p_requisition_id: string
+          p_supplement_id: string
+          p_upsert_movements?: Json
         }
         Returns: Json
       }
