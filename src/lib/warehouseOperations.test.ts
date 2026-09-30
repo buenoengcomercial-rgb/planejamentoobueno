@@ -222,6 +222,31 @@ describe('operação integrada do almoxarifado', () => {
     }, actor).warehouse!.movements.filter(row => row.originId === 'cancelamento-1')).toHaveLength(1);
   });
 
+  it('cancela somente a quantidade ainda em campo após uma devolução parcial', () => {
+    const delivered = createAndDeliverRequisition(withStock(), {
+      date: '2026-08-17', chapterId: 'chapter-1', receiverName: 'Equipe Alpha', requesterName: 'Equipe Alpha',
+      signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'cancelar-com-devolucao',
+      items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 4 }],
+    }, { actor });
+    const requisition = delivered.project.warehouse!.requisitions[0];
+    const returned = registerMaterialReturn(delivered.project, {
+      requisitionId: requisition.id, date: '2026-08-18', returnerName: 'Equipe Alpha',
+      conditionConfirmed: true, idempotencyKey: 'devolucao-antes-do-cancelamento',
+      items: [{ itemKey: 'material-1', quantity: 1.5 }],
+    }, actor);
+
+    const cancelled = cancelDeliveredRequisition(returned.project, requisition.id, {
+      reason: 'Retirada cancelada após conferência', materialsConfirmedInWarehouse: true,
+      idempotencyKey: 'cancelamento-apos-devolucao',
+    }, actor);
+
+    expect(cancelled.warehouse!.movements.find(row => row.originId === 'cancelamento-apos-devolucao')).toMatchObject({
+      type: 'devolucao', originType: 'cancellation', quantity: 2.5,
+    });
+    expect(cancelled.warehouse!.movements.find(row => row.originId === 'devolucao-antes-do-cancelamento')).toMatchObject({ quantity: 1.5 });
+    expect(computeWarehouseRows(cancelled, { includeManual: true })[0].balance).toBe(20);
+  });
+
   it('bloqueia correção quando a retirada possui devolução vinculada', () => {
     const delivered = createAndDeliverRequisition(withStock(), {
       date: '2026-08-17', chapterId: 'chapter-1', receiverName: 'Equipe Alpha', requesterName: 'Equipe Alpha', signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'corrigir-bloqueado',

@@ -316,4 +316,28 @@ describe('confirmação transacional do Almoxarifado', () => {
     })).rejects.toThrow('identificar o complemento');
     expect(rpcMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { type: 'cancellation' as const, auditOperation: 'requisition_cancellation', expected: 'O cancelamento da retirada não foi confirmado' },
+    { type: 'correction' as const, auditOperation: 'requisition_correction', expected: 'A correção da retirada não foi confirmada' },
+    { type: 'supplement_correction' as const, auditOperation: 'requisition_supplement_correction', expected: 'A correção do complemento não foi confirmada' },
+  ])('explica a falta da RPC ao tentar $type sem alterar o projeto', async ({ type, auditOperation, expected }) => {
+    const before = stockedProject();
+    const after: Project = {
+      ...before,
+      auditLogs: [{
+        id: 'audit-missing-rpc', entityType: 'warehouse_requisition', entityId: 'req-1',
+        action: 'updated', title: 'Operação não confirmada', at: '2026-09-14T12:00:00.000Z',
+        metadata: { operation: auditOperation },
+      }],
+    };
+    rpcMock.mockResolvedValue({ data: null, error: { code: 'PGRST202', message: 'Could not find the function in the schema cache' } });
+
+    await expect(commitWarehouseOperation(before, after, {
+      type, requisitionId: 'req-1', supplementId: type === 'supplement_correction' ? 'supplement-1' : undefined,
+      operationKey: `missing-${type}`,
+    })).rejects.toThrow(expected);
+    expect(after.warehouse).toBe(before.warehouse);
+    expect(rpcMock).toHaveBeenCalledTimes(1);
+  });
 });

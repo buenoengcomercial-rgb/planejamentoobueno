@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
-import { addMovement, emptyWarehouse } from '@/lib/warehouse';
+import { addMovement, createAndDeliverRequisition, emptyWarehouse } from '@/lib/warehouse';
 import WarehouseRequisitionsTab from '@/components/warehouse/WarehouseRequisitionsTab';
 import { WarehouseAvailabilityUnavailableError } from '@/lib/warehouseAvailability';
 import { WarehouseInsufficientStockError } from '@/lib/warehouseCloudCommit';
@@ -169,6 +169,34 @@ describe('confirmação visual da retirada', () => {
     expect(within(dialog).getByText('1 item(ns)')).toBeInTheDocument();
     expect(screen.getByAltText('Assinatura registrada')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'PDF' })).not.toBeInTheDocument();
+  });
+
+  it('mantém o cancelamento preenchido quando o servidor rejeita a confirmação', async () => {
+    const delivered = createAndDeliverRequisition(projectWithStock(), {
+      date: '2026-09-12', chapterId: 'chapter-1', receiverName: 'CANANDA', requesterName: 'CANANDA',
+      signatureReceiver: 'assinatura', deliveryIdempotencyKey: 'delivered-for-cancellation',
+      items: [{ itemKey: 'placa', description: 'Placa de sinalização', unit: 'UN', quantity: 4 }],
+    });
+    commitMock.mockRejectedValue(new Error('O cancelamento da retirada não foi confirmado. A função de confirmação ainda não está disponível no servidor.'));
+    const onProjectChange = vi.fn();
+    render(<WarehouseRequisitionsTab project={delivered.project} onProjectChange={onProjectChange} canEdit canCancel />);
+    screen.getAllByTestId('withdrawal-date-group').filter(element => (
+      element.tagName === 'SECTION' && element.getAttribute('data-expanded') === 'false'
+    )).forEach(element => fireEvent.click(within(element).getByRole('button', { name: /expandir requisições/i })));
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(delivered.project.warehouse!.requisitions[0].number) }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Cancelar retirada' })[0]);
+    const dialog = screen.getByRole('dialog', { name: /Cancelar retirada e retirar da lista ativa/i });
+    const reason = within(dialog).getByPlaceholderText(/retirada lançada por engano/i);
+    fireEvent.change(reason, { target: { value: 'Registro duplicado conferido em campo' } });
+    fireEvent.click(within(dialog).getByRole('checkbox'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirmar cancelamento' }));
+
+    await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Confirmar cancelamento' })).toBeEnabled());
+    expect(dialog).toBeInTheDocument();
+    expect(reason).toHaveValue('Registro duplicado conferido em campo');
+    expect(within(dialog).getByRole('checkbox')).toBeChecked();
+    expect(onProjectChange).not.toHaveBeenCalled();
   });
 
   it('mostra no item o saldo concorrente e conserva assinatura e quantidade', async () => {

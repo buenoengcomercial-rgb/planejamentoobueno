@@ -27,6 +27,7 @@ const requisitionAdjustmentMigrationSql = readFileSync(resolve(
   process.cwd(),
   'supabase/migrations/20260916120000_operational_requisition_corrections_and_cancellations.sql',
 ), 'utf8');
+const deploymentGateSql = readFileSync(resolve(process.cwd(), 'scripts/check-warehouse-rpcs.sql'), 'utf8');
 
 describe('atomic warehouse operation migration', () => {
   it('keeps legacy requisition and movement IDs as text', () => {
@@ -98,7 +99,7 @@ describe('atomic warehouse operation migration', () => {
   it('permite ajuste operacional ao Almoxarife por estorno e cancelamento, sem ampliar hard delete', () => {
     expect(requisitionAdjustmentMigrationSql).toContain('CREATE OR REPLACE FUNCTION public.commit_warehouse_requisition_adjustment');
     expect(requisitionAdjustmentMigrationSql).toContain("p_operation_type NOT IN ('correction', 'cancellation')");
-    expect(requisitionAdjustmentMigrationSql).toContain("v_role NOT IN ('owner', 'admin', 'engineer', 'warehouse_operator')");
+    expect(requisitionAdjustmentMigrationSql).toContain("v_role IS NULL OR v_role NOT IN ('owner', 'admin', 'engineer', 'warehouse_operator')");
     expect(requisitionAdjustmentMigrationSql).toContain('PERFORM pg_advisory_xact_lock');
     expect(requisitionAdjustmentMigrationSql).toContain('WAREHOUSE_CORRECTION_SCOPE_VIOLATION');
     expect(requisitionAdjustmentMigrationSql).toContain('WAREHOUSE_CANCELLATION_SCOPE_VIOLATION');
@@ -108,5 +109,21 @@ describe('atomic warehouse operation migration', () => {
     expect(requisitionAdjustmentMigrationSql).toContain("COALESCE(wm.data ->> 'originId', '') IN ('', p_requisition_id)");
     expect(requisitionAdjustmentMigrationSql).not.toMatch(/DELETE\s+FROM\s+public\.(warehouse_movements|warehouse_requisitions|audit_logs)/i);
     expect(requisitionAdjustmentMigrationSql).not.toContain('hard_delete');
+  });
+
+  it('exige no gate de publicação todas as RPCs chamadas pelo Almoxarifado', () => {
+    const callers = [
+      'src/lib/warehouseCloudCommit.ts',
+      'src/lib/warehouseScopedCommit.ts',
+      'src/lib/warehouseAvailability.ts',
+    ].map(path => readFileSync(resolve(process.cwd(), path), 'utf8')).join('\n');
+    const called = [...new Set([...callers.matchAll(/'((?:check|commit)_warehouse_[a-z_]+)'/g)].map(match => match[1]))].sort();
+    const required = [...deploymentGateSql.matchAll(/\('((?:check|commit)_warehouse_[a-z_]+)',\s*'public\./g)]
+      .map(match => match[1]).sort();
+
+    expect(required).toEqual(called);
+    expect(deploymentGateSql).toContain("has_function_privilege('authenticated'");
+    expect(deploymentGateSql).toContain("has_function_privilege('anon'");
+    expect(deploymentGateSql).toContain('ready_to_publish');
   });
 });

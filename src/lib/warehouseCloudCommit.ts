@@ -106,7 +106,10 @@ export class WarehouseInsufficientStockError extends Error {
   }
 }
 
-function warehouseCommitError(error: { code?: string; message?: string; details?: string }): Error {
+function warehouseCommitError(
+  error: { code?: string; message?: string; details?: string },
+  operationType: WarehouseCloudOperationType,
+): Error {
   const message = error.message ?? '';
   if (/WAREHOUSE_RECORD_CONFLICT/.test(message)) {
     return new Error('Esta retirada foi alterada por outro usuário. A primeira versão confirmada foi preservada; recarregue e revise antes de tentar novamente.');
@@ -138,8 +141,17 @@ function warehouseCommitError(error: { code?: string; message?: string; details?
   if (/WAREHOUSE_INVALID_AUDIT|null value in column ["']id["'].*audit_logs/i.test(message)) {
     return new Error('A auditoria desta operação não pôde ser validada. Nenhuma requisição ou baixa de estoque foi gravada; atualize a obra e tente novamente.');
   }
-  if (error.code === 'PGRST202' || /commit_warehouse_(?:operation|supplement_correction|requisition_adjustment)|schema cache|could not find the function/i.test(message)) {
-    return new Error('A confirmação segura do Almoxarifado ainda não está disponível no servidor. A retirada não foi registrada nem liberada para PDF.');
+  if (error.code === 'PGRST202' || /schema cache|could not find the function/i.test(message)) {
+    const failedAction: Record<WarehouseCloudOperationType, string> = {
+      delivery: 'A retirada não foi registrada nem liberada para PDF',
+      supplement: 'O complemento da retirada não foi confirmado',
+      supplement_correction: 'A correção do complemento não foi confirmada',
+      return: 'A devolução não foi confirmada',
+      correction: 'A correção da retirada não foi confirmada',
+      cancellation: 'O cancelamento da retirada não foi confirmado',
+      hard_delete: 'A exclusão da retirada não foi confirmada',
+    };
+    return new Error(`${failedAction[operationType]}. A função de confirmação ainda não está disponível no servidor; nenhuma alteração foi gravada. Informe o suporte.`);
   }
   if (/WAREHOUSE_OWNER_ONLY/.test(message)) {
     return new Error('Esta ação continua exclusiva do Proprietário. Nenhuma alteração foi confirmada.');
@@ -293,7 +305,7 @@ export async function commitWarehouseOperation(
     p_delete_movement_ids: movementDeletes as unknown as Json,
     p_audit_logs: auditUpserts as unknown as Json,
   });
-  if (error) throw warehouseCommitError(error);
+  if (error) throw warehouseCommitError(error, operation.type);
 
   const result = (data ?? {}) as WarehouseOperationResult;
   if (

@@ -33,6 +33,7 @@ function movementOrigin(movement: WarehouseMovement): { type: WarehouseMovementO
 const ORIGIN_LABEL: Record<WarehouseMovementOriginType, string> = {
   fiscal_note: 'Nota fiscal',
   withdrawal: 'Retirada',
+  cancellation: 'Cancelamento',
   inventory: 'Inventário',
   return: 'Devolução',
   loss: 'Perda / avaria',

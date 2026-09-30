@@ -57,7 +57,7 @@ BEGIN
    AND om.status = 'active'::public.member_status
   WHERE p.id = p_project_id;
 
-  IF v_role NOT IN ('owner', 'admin', 'engineer', 'warehouse_operator') THEN
+  IF v_role IS NULL OR v_role NOT IN ('owner', 'admin', 'engineer', 'warehouse_operator') THEN
     RAISE EXCEPTION 'WAREHOUSE_PERMISSION_DENIED' USING ERRCODE = '42501';
   END IF;
 
@@ -133,10 +133,10 @@ BEGIN
     OR v_audit ->> 'entityId' IS DISTINCT FROM p_requisition_id
     OR COALESCE(btrim(v_audit ->> 'action'), '') = ''
     OR COALESCE(btrim(v_audit ->> 'at'), '') = ''
-    OR v_audit #>> '{metadata,operation}' IS DISTINCT FROM CASE p_operation_type
-      WHEN 'correction' THEN 'requisition_correction'
-      ELSE 'requisition_cancellation'
-    END
+    OR (p_operation_type = 'correction'
+      AND v_audit #>> '{metadata,operation}' IS DISTINCT FROM 'requisition_correction')
+    OR (p_operation_type = 'cancellation'
+      AND v_audit #>> '{metadata,operation}' IS DISTINCT FROM 'requisition_cancellation')
     OR COALESCE(v_audit ->> 'userId', v_user::text) IS DISTINCT FROM v_user::text
     OR EXISTS (SELECT 1 FROM public.audit_logs al WHERE al.id = v_audit ->> 'id') THEN
     RAISE EXCEPTION 'WAREHOUSE_INVALID_AUDIT';
