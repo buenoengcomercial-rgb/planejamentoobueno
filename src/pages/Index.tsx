@@ -374,7 +374,7 @@ export default function Index() {
   const currentRouteRef = useRef(`${location.pathname}${location.search}`);
   currentRouteRef.current = `${location.pathname}${location.search}`;
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const dailyReportSaveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const dailyReportSaveQueueRef = useRef<Promise<any>>(Promise.resolve());
   const pendingDailyReportSavesRef = useRef(0);
   const pendingRealtimeDailyReportsRef = useRef<Map<string, { projectId: string; report: DailyReport }>>(new Map());
   const realtimeDailyReportTimerRef = useRef<number | null>(null);

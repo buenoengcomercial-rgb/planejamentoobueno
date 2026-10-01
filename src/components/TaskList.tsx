@@ -489,7 +489,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
   }, [auditActor, onProjectChange, project]);
 
   const updateDailyLogs = useCallback((phaseId: string, task: Task, logs: DailyProductionLog[]) => {
-    const updatedTask = applyDailyProductionLogs(task, logs);
+    const updatedTask = applyDailyProductionLogs(task, logs) as Task;
     let updated: Project = {
       ...project,
       phases: project.phases.map(phase => phase.id === phaseId
