@@ -49,7 +49,7 @@ describe('transações por domínio normalizado', () => {
       ...base,
       budgetItems: [{ ...base.budgetItems![0], code: 'B' }],
       materialComparisons: [{ id: 'comparison-1', name: 'Comparação', status: 'draft' }],
-    } as Project;
+    } as unknown as Project;
     rpc.mockResolvedValue({ data: '2026-10-01T00:00:00Z', error: null });
     expect(await save(next)).toBeTruthy();
     expect(rpc).toHaveBeenCalledWith('save_normalized_domain', expect.objectContaining({
