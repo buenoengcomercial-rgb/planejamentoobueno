@@ -36,6 +36,9 @@ describe('colunas de auditoria do almoxarifado', () => {
 
   it('exibe criador e último alterador em Requisições', () => {
     render(<WarehouseRequisitionsTab project={auditProject()} onProjectChange={vi.fn()} />);
+    const historyTab = screen.getByRole('tab', { name: 'Histórico completo' });
+    fireEvent.mouseDown(historyTab, { button: 0, ctrlKey: false });
+    fireEvent.click(historyTab);
     fireEvent.click(screen.getByRole('button', { name: /expandir requisições/i }));
     expect(screen.getByRole('columnheader', { name: 'Incluído / alterado por' })).toBeInTheDocument();
     expect(screen.getAllByText(/Carla/).length).toBeGreaterThan(0);

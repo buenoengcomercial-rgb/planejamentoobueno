@@ -9,7 +9,9 @@ import type {
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
+  CalendarDays,
   Camera,
   Check,
   ChevronDown,
@@ -158,6 +160,15 @@ function custodyBuildingLabel(project: Project, chapterId?: string) {
   return { key: building.id, label: `${number ? `${number} · ` : ''}${building.name}`, isMissingBuilding: false };
 }
 
+function custodyDestination(project: Project, term: CustodyTerm) {
+  const building = custodyBuildingLabel(project, term.chapterId);
+  const chapter = project.phases.find(phase => phase.id === term.chapterId);
+  if (!chapter || building.isMissingBuilding) return building.label;
+  if (chapter.id === building.key) return building.label;
+  const number = getChapterNumbering(project).get(chapter.id);
+  return `${building.label} · ${number ? `${number} · ` : ''}${chapter.name}`;
+}
+
 function groupCustodyTermsByBuilding(project: Project, terms: CustodyTerm[]): CustodyBuildingGroup[] {
   const byBuilding = new Map<string, CustodyTerm[]>();
   for (const term of terms) {
@@ -200,6 +211,8 @@ export default function WarehouseCustodyTab({ project, onProjectChange, onCommit
     [numbering, project.phases],
   );
   const [open, setOpen] = useState(false);
+  const [custodyView, setCustodyView] = useState<'daily' | 'history'>('daily');
+  const [selectedDate, setSelectedDate] = useState(warehouseOperationalDate);
   const [expandedTermIds, setExpandedTermIds] = useState<Set<string>>(() => new Set());
   const [dateExpansionOverrides, setDateExpansionOverrides] = useState<Map<string, boolean>>(() => new Map());
   const [form, setForm] = useState<CustodyForm>(initialForm);
@@ -361,7 +374,18 @@ export default function WarehouseCustodyTab({ project, onProjectChange, onCommit
   };
 
   const sortedTerms = wh.custodyTerms.slice().sort((a, b) => b.issuedAt.localeCompare(a.issuedAt) || b.createdAt.localeCompare(a.createdAt));
+  const dailyTerms = useMemo(() => wh.custodyTerms.filter(term => term.issuedAt === selectedDate)
+    .sort((a, b) => custodyRecordTimestamp(b).localeCompare(custodyRecordTimestamp(a)) || b.number.localeCompare(a.number, 'pt-BR', { numeric: true })), [wh.custodyTerms, selectedDate]);
   const custodyBuildingGroups = useMemo(() => groupCustodyTermsByBuilding(project, sortedTerms), [project, sortedTerms]);
+  const generateSelectedDatePdfs = async () => {
+    try {
+      const { generateCustodyTermPdf } = await import('./pdf');
+      for (const term of dailyTerms) await generateCustodyTermPdf(project, term);
+      toast.success(`${dailyTerms.length} PDF(s) de cautela gerado(s) para ${formatOperationalDate(selectedDate)}.`);
+    } catch (error) {
+      toast.error((error as Error).message);
+    }
+  };
   const currentOperationalDate = warehouseOperationalDate();
   const isDateGroupExpanded = (dateGroup: CustodyDateGroup) => dateExpansionOverrides.get(dateGroup.key) ?? dateGroup.date === currentOperationalDate;
   const toggleDateGroup = (dateGroup: CustodyDateGroup) => setDateExpansionOverrides(current => {
@@ -458,6 +482,32 @@ export default function WarehouseCustodyTab({ project, onProjectChange, onCommit
         </DialogContent>
       </Dialog>
 
+      <Tabs value={custodyView} onValueChange={value => setCustodyView(value as 'daily' | 'history')} className="space-y-3">
+        <TabsList className="grid h-auto min-h-12 w-full grid-cols-2 rounded-xl border bg-muted/70 p-1 shadow-sm max-[320px]:grid-cols-1 sm:w-fit sm:min-w-[390px]" aria-label="Consulta de equipamentos e cautelas">
+          <TabsTrigger value="daily" className="min-h-11 rounded-lg px-2 text-xs font-bold max-[320px]:whitespace-normal data-[state=active]:bg-card data-[state=active]:text-primary sm:text-sm">Movimentações do dia</TabsTrigger>
+          <TabsTrigger value="history" className="min-h-11 rounded-lg px-2 text-xs font-bold max-[320px]:whitespace-normal data-[state=active]:bg-card data-[state=active]:text-primary sm:text-sm">Histórico completo</TabsTrigger>
+        </TabsList>
+        <TabsContent value="daily" className="mt-0">
+          <section aria-label="Movimentações do dia" className="min-w-0 space-y-3">
+            <div className="flex flex-col gap-3 rounded-xl border bg-card p-3 sm:flex-row sm:items-end sm:justify-between sm:p-4">
+              <div className="min-w-0"><h3 className="flex items-center gap-2 font-semibold"><CalendarDays className="h-4 w-4 text-primary" />Movimentações do dia</h3><p className="mt-1 text-sm text-muted-foreground">{dailyTerms.length} cautela(s) com emissão nesta data.</p></div>
+              <div className="flex flex-wrap items-end gap-2">
+                <label className="min-w-[11rem] flex-1 text-sm font-medium sm:flex-none" htmlFor="daily-custody-date">Data das movimentações<Input id="daily-custody-date" type="date" className="mt-1 min-h-11 text-base" value={selectedDate} onChange={event => setSelectedDate(event.target.value)} /></label>
+                <Button type="button" variant="outline" className="min-h-11" onClick={() => setSelectedDate(warehouseOperationalDate())}>Hoje</Button>
+                <Button type="button" variant="outline" className="min-h-11" disabled={!dailyTerms.length} onClick={() => void generateSelectedDatePdfs()}><FileDown className="mr-1 h-4 w-4" />Gerar PDFs</Button>
+              </div>
+            </div>
+            {dailyTerms.length > 0 && <p className="px-1 text-xs text-muted-foreground md:hidden">Deslize a tabela para ver todas as colunas. Toque em uma cautela para abrir os detalhes.</p>}
+            {dailyTerms.length ? <div className="min-w-0 max-w-full overflow-x-auto rounded-xl border bg-card" tabIndex={0} aria-label="Tabela de cautelas; deslize lateralmente para ver todas as colunas">
+              <table aria-label="Cautelas da data selecionada" className="custody-records w-full min-w-[1180px] table-fixed text-xs">
+                <colgroup><col className="w-10" /><col className="w-36" /><col className="w-28" /><col className="w-40" /><col className="w-28" /><col className="w-56" /><col className="w-24" /><col className="w-32" /><col className="w-[220px]" /></colgroup>
+                <thead><tr><th><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data da operação</th><th className="p-2 text-left">Último registro</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Destino</th><th className="p-2 text-center">Equipamentos</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead>
+                <tbody>{dailyTerms.map(term => <CustodyHistoryRow key={term.id} term={term} expanded={expandedTermIds.has(term.id)} onToggle={() => toggleTerm(term.id)} project={project} onReturn={startReturn} canDelete={canDelete} onDelete={() => deleteTerm(term)} showDestination />)}</tbody>
+              </table>
+            </div> : <WarehouseEmptyState message="Nenhuma cautela nesta data" hint="Escolha outra data para consultar as cautelas." icon={Wrench} />}
+          </section>
+        </TabsContent>
+        <TabsContent value="history" className="mt-0">
       <section className="overflow-hidden rounded-xl border bg-card">
         <WarehouseSectionHeader icon={History} title="Histórico de cautelas" description={`${sortedTerms.length} registro(s)`} tone="neutral" />
         <div className="custody-tree space-y-4 p-2 sm:p-3">
@@ -486,6 +536,8 @@ export default function WarehouseCustodyTab({ project, onProjectChange, onCommit
           {!sortedTerms.length && <WarehouseEmptyState message="Nenhuma cautela emitida" hint="Use Nova cautela para começar." icon={Wrench} />}
         </div>
       </section>
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={!!returnTarget} onOpenChange={value => { if (!value && !returning) setReturnTarget(null); }}>
         <DialogContent className="warehouse-ui max-h-[calc(100dvh-1rem)] overflow-y-auto sm:max-w-xl">
@@ -529,7 +581,7 @@ function PhotoPreview({ file, onRemove }: { file: File; onRemove: () => void }) 
 function CustodyDetails({ term, project, onReturn, canDelete, onDelete }: { term: CustodyTerm; project: Project; onReturn: (term: CustodyTerm, item: CustodyTermEquipmentItem) => void; canDelete: boolean; onDelete: () => void }) {
   const items = custodyTermEquipmentItems(term);
   const actions = <div className="custody-detail-actions flex flex-wrap justify-end gap-1"><Button size="sm" variant="outline" className="min-h-9" onClick={() => void import('./pdf').then(({ generateCustodyTermPdf }) => generateCustodyTermPdf(project, term))}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{canDelete && <Button size="sm" variant="destructive" className="min-h-9" onClick={onDelete}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>}</div>;
-  return <div className="space-y-3">{(term.attachments?.length ?? 0) > 0 && <div className="text-xs text-muted-foreground">{term.attachments!.length} foto(s) registrada(s) na entrega.</div>}<div className="overflow-x-auto"><table className="w-full min-w-[760px] text-xs"><thead><tr><th className="p-2 text-left">Equipamento</th><th className="p-2 text-left">Estado / acessórios</th><th className="p-2 text-left">Situação</th><th className="p-2 text-left">Devolução</th><th className="p-2 text-right">{actions}</th></tr></thead><tbody>{items.map(item => <tr key={item.equipmentId} className="border-t"><td className="p-2"><div className="font-medium">{item.equipmentInternalCode || 'Código legado'} · {item.equipmentName}</div><div className="text-muted-foreground">Patrimônio {item.equipmentPatrimony || '—'} · Série {item.equipmentSerial || '—'}</div></td><td className="p-2">{item.stateOnDelivery || '—'}<div className="text-muted-foreground">{item.accessories || 'Sem acessórios'}</div></td><td className="p-2"><WarehouseStatusBadge label={statusLabel[item.status] || item.status} tone={statusTone(item.status)} /></td><td className="p-2">{item.returnedAt || '—'}<div className="text-muted-foreground">{item.stateOnReturn || item.divergenceNotes || ''}</div></td><td className="p-2 text-right">{item.status === 'em_uso' && <Button size="sm" variant="outline" className="min-h-10" onClick={() => onReturn(term, item)}><Undo2 className="mr-1 h-4 w-4" />Devolver</Button>}</td></tr>)}</tbody></table></div><WarehouseAuditIdentity createdBy={term.createdBy} updatedBy={term.updatedBy} createdAt={term.createdAt} updatedAt={term.updatedAt} className="rounded-md bg-muted/40 p-2 text-xs" /></div>;
+  return <div className="space-y-3">{(term.attachments?.length ?? 0) > 0 && <div className="text-xs text-muted-foreground">{term.attachments!.length} foto(s) registrada(s) na entrega.</div>}<div className="overflow-x-auto"><table className="w-[820px] table-fixed text-xs md:w-full md:min-w-[760px]"><colgroup><col className="w-[34%]" /><col className="w-[19%]" /><col className="w-[16%]" /><col className="w-[16%]" /><col className="w-[15%]" /></colgroup><thead><tr><th className="p-2 text-left">Equipamento</th><th className="p-2 text-left">Estado / acessórios</th><th className="p-2 text-left">Situação</th><th className="p-2 text-left">Devolução</th><th className="p-2 text-right">{actions}</th></tr></thead><tbody>{items.map(item => <tr key={item.equipmentId} className="border-t"><td className="p-2"><div className="whitespace-normal break-words font-medium [overflow-wrap:anywhere]">{item.equipmentInternalCode || 'Código legado'} · {item.equipmentName}</div><div className="text-muted-foreground">Patrimônio {item.equipmentPatrimony || '—'} · Série {item.equipmentSerial || '—'}</div></td><td className="p-2">{item.stateOnDelivery || '—'}<div className="text-muted-foreground">{item.accessories || 'Sem acessórios'}</div></td><td className="p-2"><WarehouseStatusBadge label={statusLabel[item.status] || item.status} tone={statusTone(item.status)} /></td><td className="p-2">{item.returnedAt || '—'}<div className="text-muted-foreground">{item.stateOnReturn || item.divergenceNotes || ''}</div></td><td className="p-2 text-right">{item.status === 'em_uso' && <Button size="sm" variant="outline" className="min-h-10" onClick={() => onReturn(term, item)}><Undo2 className="mr-1 h-4 w-4" />Devolver</Button>}</td></tr>)}</tbody></table></div><WarehouseAuditIdentity createdBy={term.createdBy} updatedBy={term.updatedBy} createdAt={term.createdAt} updatedAt={term.updatedAt} className="rounded-md bg-muted/40 p-2 text-xs" /></div>;
 }
 
 function CustodyMobileCard({ term, expanded, onToggle, onReturn, project, canDelete, onDelete }: { term: CustodyTerm; expanded: boolean; onToggle: () => void; onReturn: (term: CustodyTerm, item: CustodyTermEquipmentItem) => void; project: Project; canDelete: boolean; onDelete: () => void }) {
@@ -538,8 +590,8 @@ function CustodyMobileCard({ term, expanded, onToggle, onReturn, project, canDel
   return <article className={`overflow-hidden rounded-lg border bg-card ${expanded ? 'border-primary/70' : 'border-border'}`}><button type="button" className="w-full p-3 text-left" onClick={onToggle} aria-expanded={expanded}><div className="flex justify-between gap-2"><strong className="font-mono">{term.number}</strong><ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${expanded ? 'rotate-180 text-primary' : ''}`} /></div><div className="mt-1 text-sm font-semibold">{term.workerName}</div><div className="mt-1 text-xs text-muted-foreground">{items.length} equipamento(s) · Operação: {formatOperationalDate(term.issuedAt)}</div><div className="mt-1 text-xs text-muted-foreground">Último registro: {formatCustodyRecordedAt(term)}</div><div className="mt-2 flex flex-wrap items-center gap-2"><WarehouseStatusBadge label={statusLabel[aggregate] || aggregate} tone={statusTone(aggregate)} /><span className="text-xs text-muted-foreground">{term.dueDate || 'Sem prazo'}</span></div></button>{expanded && <div className="custody-detail custody-branch bg-muted/40 p-3"><CustodyDetails term={term} project={project} onReturn={onReturn} canDelete={canDelete} onDelete={onDelete} /></div>}</article>;
 }
 
-function CustodyHistoryRow({ term, expanded, onToggle, project, onReturn, canDelete, onDelete }: { term: CustodyTerm; expanded: boolean; onToggle: () => void; project: Project; onReturn: (term: CustodyTerm, item: CustodyTermEquipmentItem) => void; canDelete: boolean; onDelete: () => void }) {
+function CustodyHistoryRow({ term, expanded, onToggle, project, onReturn, canDelete, onDelete, showDestination = false }: { term: CustodyTerm; expanded: boolean; onToggle: () => void; project: Project; onReturn: (term: CustodyTerm, item: CustodyTermEquipmentItem) => void; canDelete: boolean; onDelete: () => void; showDestination?: boolean }) {
   const items = custodyTermEquipmentItems(term);
   const aggregate = custodyTermAggregateStatus(items);
-  return <Fragment><tr data-testid="custody-history-row" className={`custody-record cursor-pointer border-t ${expanded ? 'border-l-2 border-l-primary' : ''}`} onClick={onToggle} aria-expanded={expanded}><td className="p-2 text-center"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180 text-primary' : ''}`} /></td><td className="p-2 font-mono font-semibold">{term.number}</td><td className="p-2">{formatOperationalDate(term.issuedAt)}</td><td className="p-2">{formatCustodyRecordedAt(term)}</td><td className="p-2 font-semibold">{term.workerName}</td><td className="p-2 text-center">{items.length}</td><td className="p-2"><WarehouseStatusBadge label={statusLabel[aggregate] || aggregate} tone={statusTone(aggregate)} /></td><td className="p-2"><WarehouseAuditIdentity createdBy={term.createdBy} updatedBy={term.updatedBy} createdAt={term.createdAt} updatedAt={term.updatedAt} /></td></tr>{expanded && <tr data-testid="custody-history-details" className="custody-detail-row"><td colSpan={8} className="px-0 py-3"><div className="custody-detail custody-branch rounded-r-lg border-l-primary bg-muted/40 p-3"><CustodyDetails term={term} project={project} onReturn={onReturn} canDelete={canDelete} onDelete={onDelete} /></div></td></tr>}</Fragment>;
+  return <Fragment><tr data-testid="custody-history-row" aria-label={`Cautela ${term.number}`} tabIndex={0} className={`custody-record cursor-pointer border-t ${expanded ? 'border-l-2 border-l-primary' : ''}`} onClick={onToggle} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggle(); } }} aria-expanded={expanded}><td className="p-2 text-center"><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? 'rotate-180 text-primary' : ''}`} /></td><td className="p-2 font-mono font-semibold">{term.number}</td><td className="p-2">{formatOperationalDate(term.issuedAt)}</td><td className="p-2">{formatCustodyRecordedAt(term)}</td><td className="p-2 break-words font-semibold [overflow-wrap:anywhere]">{term.workerName}</td>{showDestination && <td className="p-2 break-words font-medium [overflow-wrap:anywhere]">{custodyDestination(project, term)}</td>}<td className="p-2 text-center">{items.length}</td><td className="p-2"><WarehouseStatusBadge label={statusLabel[aggregate] || aggregate} tone={statusTone(aggregate)} /></td><td className="p-2"><WarehouseAuditIdentity createdBy={term.createdBy} updatedBy={term.updatedBy} createdAt={term.createdAt} updatedAt={term.updatedAt} /></td></tr>{expanded && <tr data-testid="custody-history-details" className="custody-detail-row"><td colSpan={showDestination ? 9 : 8} className="px-0 py-3"><div className="custody-detail custody-branch rounded-r-lg border-l-primary bg-muted/40 p-3">{showDestination && <div className="mb-2 text-sm"><span className="font-semibold text-muted-foreground">Destino: </span>{custodyDestination(project, term)}</div>}<CustodyDetails term={term} project={project} onReturn={onReturn} canDelete={canDelete} onDelete={onDelete} /></div></td></tr>}</Fragment>;
 }

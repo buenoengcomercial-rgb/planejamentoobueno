@@ -48,6 +48,9 @@ function expandAllWithdrawalDateGroups() {
 }
 
 function expandAllCustodyDateGroups() {
+  const tab = screen.getByRole('tab', { name: 'Histórico completo' });
+  fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
+  fireEvent.click(tab);
   screen.getAllByTestId('custody-date-group').filter(element => element.tagName === 'SECTION').forEach(element => {
     const button = within(element).getByRole('button', { name: /expandir cautelas/i });
     fireEvent.click(button);
@@ -613,6 +616,9 @@ describe('WarehouseRequisitionsTab', () => {
     fireEvent.mouseDown(equipmentTab, { button: 0, ctrlKey: false });
     fireEvent.click(equipmentTab);
 
+    const historyTab = screen.getByRole('tab', { name: 'Histórico completo' });
+    fireEvent.mouseDown(historyTab, { button: 0, ctrlKey: false });
+    fireEvent.click(historyTab);
     const buildingRows = screen.getAllByTestId('custody-building-group').filter(element => element.tagName === 'SECTION');
     expect(buildingRows).toHaveLength(2);
     expect(buildingRows[0]).toHaveTextContent('Prédio A');
@@ -635,6 +641,9 @@ describe('WarehouseRequisitionsTab', () => {
     fireEvent.mouseDown(equipmentTab, { button: 0, ctrlKey: false });
     fireEvent.click(equipmentTab);
 
+    const historyTab = screen.getByRole('tab', { name: 'Histórico completo' });
+    fireEvent.mouseDown(historyTab, { button: 0, ctrlKey: false });
+    fireEvent.click(historyTab);
     expect(screen.getAllByText('06/09/2026').length).toBeGreaterThan(0);
     expect(screen.getAllByText('05/09/2026').length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: /expandir cautelas de 06\/09\/2026/i }));
