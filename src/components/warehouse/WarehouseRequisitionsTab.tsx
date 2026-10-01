@@ -800,9 +800,9 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
         <TabsContent value="daily" className="mt-0">
           <WarehouseDailyMovements date={selectedDate} onDateChange={setSelectedDate} requisitionCount={dailyRequisitions.length} deliveredCount={dailyRequisitions.filter(requisition => requisition.status === 'entregue').length} onGenerate={() => void generateSelectedDateConfirmations()}>
             {dailyRequisitions.length ? <div className="min-w-0 max-w-full overflow-x-auto rounded-xl border bg-card" tabIndex={0} aria-label="Tabela de requisições; deslize lateralmente para ver todas as colunas">
-              <table aria-label="Requisições da data selecionada" className="withdrawal-records w-full min-w-[980px] table-fixed text-xs">
-                <colgroup><col className="w-10" /><col className="w-[16%]" /><col className="w-[13%]" /><col className="w-[17%]" /><col className="w-[15%]" /><col className="w-12" /><col className="w-24" /><col /></colgroup>
-                <thead><tr><th><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data da operação</th><th className="p-2 text-left">Último registro</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead>
+              <table aria-label="Requisições da data selecionada" className="withdrawal-records w-full min-w-[1180px] table-fixed text-xs">
+                <colgroup><col className="w-10" /><col className="w-36" /><col className="w-28" /><col className="w-40" /><col className="w-28" /><col className="w-56" /><col className="w-12" /><col className="w-24" /><col className="w-[220px]" /></colgroup>
+                <thead><tr><th><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data da operação</th><th className="p-2 text-left">Último registro</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Destino</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead>
                 <tbody>{dailyRequisitions.map(requisition => (
                   <WithdrawalHistoryRow key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel} showDestination
                     onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })}
@@ -919,11 +919,12 @@ function WithdrawalHistoryRow({ project, requisition, movements, active, canDele
       <td className="p-2">{formatOperationalDate(requisition.date)}</td>
       <td className="p-2">{formatRecordedAt({ createdAt: latest }, requisition.date)}</td>
       <td className="p-2 font-semibold">{requisition.receiverName || requisition.requesterName || '—'}</td>
+      {showDestination && <td className="p-2 break-words font-medium [overflow-wrap:anywhere]">{requisitionDestination(project, requisition.chapterId)}</td>}
       <td className="p-2 text-center">{materialCount}</td>
       <td className="p-2"><WarehouseStatusBadge label={requisition.status === 'cancelada' ? 'Cancelada' : requisition.status === 'rascunho' ? 'Pendente legado' : 'Entregue'} tone={requisition.status === 'cancelada' ? 'neutral' : requisition.status === 'rascunho' ? 'warning' : 'success'} /></td>
       <td className="p-2"><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} createdAt={requisition.createdAt} updatedAt={requisition.updatedAt} className="space-y-0.5" /></td>
     </tr>
-    {active && <tr data-testid="withdrawal-history-details" className="withdrawal-detail-row"><td colSpan={8} className="!px-0 py-3"><div className="withdrawal-detail withdrawal-branch rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel} showDestination={showDestination} onDelete={onDelete} onReturn={onReturn} onAction={onAction} onCancel={onCancel} /></div></td></tr>}
+    {active && <tr data-testid="withdrawal-history-details" className="withdrawal-detail-row"><td colSpan={showDestination ? 9 : 8} className="!px-0 py-3"><div className="withdrawal-detail withdrawal-branch rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel} showDestination={showDestination} onDelete={onDelete} onReturn={onReturn} onAction={onAction} onCancel={onCancel} /></div></td></tr>}
   </Fragment>;
 }
 
@@ -955,12 +956,12 @@ function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupple
     {canDelete && <Button size="sm" variant="destructive" className="h-8 px-2 text-[11px]" onClick={onDelete}><Trash2 className="mr-1 h-3.5 w-3.5" />Excluir</Button>}
   </div>;
   return <div className="space-y-2">
-    {showDestination && <div className="rounded-md border border-muted-foreground/20 bg-background/70 px-3 py-2 text-sm"><span className="mr-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Destino:</span>{requisitionDestination(project, requisition.chapterId)}</div>}
+    {showDestination && <div className="rounded-md border border-muted-foreground/20 bg-background/70 px-3 py-2 text-sm md:hidden"><span className="mr-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Destino:</span>{requisitionDestination(project, requisition.chapterId)}</div>}
     {canCorrect && returns.length > 0 && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">Esta retirada possui devolução registrada. Para preservar o histórico, a correção de material ou quantidade está bloqueada.</div>}
     {notes && <div className="rounded-md border border-muted-foreground/20 bg-background/70 px-3 py-2 text-sm"><span className="mr-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Observação:</span>{notes}</div>}
     <div className="overflow-x-auto">
-      <table className="withdrawal-materials w-full min-w-[1020px] table-fixed text-xs">
-        <colgroup><col className="w-[8%]" /><col /><col className="w-[5%]" /><col className="w-[7%]" /><col className="w-[7%]" /><col className="w-[8%]" /><col className="w-[37%]" /></colgroup>
+      <table className="withdrawal-materials w-[820px] min-w-[820px] table-fixed text-xs md:w-full md:min-w-[1020px]">
+        <colgroup><col className="w-[8%]" /><col /><col className="w-[5%]" /><col className="w-[7%]" /><col className="w-[7%]" /><col className="w-[8%]" /><col className="w-[32%]" /></colgroup>
         <thead><tr><th className="p-1.5 text-left">Código</th><th className="p-1.5 text-left">Material</th><th className="p-1.5 text-left">Un.</th><th className="p-1.5 text-right">Retirado</th><th className="p-1.5 text-right text-success">Devolvido</th><th className="p-1.5 text-right text-primary">Em campo</th><th className="p-1 text-right align-middle">{actions}</th></tr></thead>
         <tbody>{materialSummaries.map(summary => {
           const expanded = expandedMaterialKeys.has(summary.itemKey);
@@ -968,10 +969,10 @@ function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupple
             <tr className="border-t">
               <td className="p-1.5">{summary.code || '—'}</td>
               <td className="p-1.5">
-                <button type="button" className="flex w-full items-center gap-1.5 text-left font-medium hover:text-primary" aria-expanded={expanded} onClick={() => setExpandedMaterialKeys(current => { const next = new Set(current); if (next.has(summary.itemKey)) next.delete(summary.itemKey); else next.add(summary.itemKey); return next; })}>
-                  <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${expanded ? 'rotate-180 text-primary' : ''}`} />
-                  <span className="truncate" title={summary.description}>{summary.description}</span>
-                  {summary.deliveries.some(delivery => delivery.sourceType === 'supplement') && <span className="shrink-0 rounded-full border border-primary/30 bg-primary/5 px-1.5 py-0.5 text-[10px] font-semibold text-primary">Com complemento</span>}
+                <button type="button" className="grid w-full grid-cols-[auto_minmax(0,1fr)] items-start gap-x-1.5 gap-y-1 text-left font-medium hover:text-primary" aria-expanded={expanded} onClick={() => setExpandedMaterialKeys(current => { const next = new Set(current); if (next.has(summary.itemKey)) next.delete(summary.itemKey); else next.add(summary.itemKey); return next; })}>
+                  <ChevronDown className={`mt-0.5 h-3.5 w-3.5 shrink-0 transition-transform ${expanded ? 'rotate-180 text-primary' : ''}`} />
+                  <span className="min-w-0 whitespace-normal break-words leading-snug [overflow-wrap:anywhere]">{summary.description}</span>
+                  {summary.deliveries.some(delivery => delivery.sourceType === 'supplement') && <span className="col-start-2 w-fit rounded-full border border-primary/30 bg-primary/5 px-1.5 py-0.5 text-[10px] font-semibold text-primary">Com complemento</span>}
                 </button>
               </td>
               <td className="p-1.5">{summary.unit}</td>

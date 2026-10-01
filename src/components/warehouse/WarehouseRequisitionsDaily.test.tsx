@@ -84,9 +84,11 @@ describe('movimentações diárias de materiais', () => {
     expect(rows.map(row => row.getAttribute('aria-label'))).toEqual([
       'Retirada REQ-2026-0005', 'Retirada REQ-2026-0002', 'Retirada REQ-2026-0004', 'Retirada REQ-2026-0003',
     ]);
-    for (const heading of ['Nº', 'Data da operação', 'Último registro', 'Recebedor', 'Itens', 'Status', 'Incluído / alterado por']) {
+    for (const heading of ['Nº', 'Data da operação', 'Último registro', 'Recebedor', 'Destino', 'Itens', 'Status', 'Incluído / alterado por']) {
       expect(within(table).getByRole('columnheader', { name: heading })).toBeInTheDocument();
     }
+    expect(rows[1]).toHaveTextContent('Frente B');
+    expect(rows[3]).toHaveTextContent('Prédio não informado');
     expect(within(table).queryByText('REQ-2026-0001')).not.toBeInTheDocument();
     expect(screen.queryByTestId('daily-building-group')).not.toBeInTheDocument();
     expect(screen.queryByText('Prédio A')).not.toBeInTheDocument();
@@ -99,6 +101,7 @@ describe('movimentações diárias de materiais', () => {
     fireEvent.change(screen.getByLabelText('Data das movimentações'), { target: { value: '2026-09-30' } });
     fireEvent.click(screen.getByRole('row', { name: 'Retirada REQ-2026-0002' }));
     const details = screen.getByTestId('withdrawal-history-details');
+    expect(details.querySelector(':scope > td')).toHaveAttribute('colspan', '9');
     expect(details).toHaveTextContent('Prédio A');
     expect(details).toHaveTextContent('Frente B');
     expect(details).toHaveTextContent('Registro');
