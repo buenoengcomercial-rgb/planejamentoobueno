@@ -180,6 +180,9 @@ describe('confirmação visual da retirada', () => {
     commitMock.mockRejectedValue(new Error('O cancelamento da retirada não foi confirmado. A função de confirmação ainda não está disponível no servidor.'));
     const onProjectChange = vi.fn();
     render(<WarehouseRequisitionsTab project={delivered.project} onProjectChange={onProjectChange} canEdit canCancel />);
+    const historyTab = screen.getByRole('tab', { name: 'Histórico completo' });
+    fireEvent.mouseDown(historyTab, { button: 0, ctrlKey: false });
+    fireEvent.click(historyTab);
     screen.getAllByTestId('withdrawal-date-group').filter(element => (
       element.tagName === 'SECTION' && element.getAttribute('data-expanded') === 'false'
     )).forEach(element => fireEvent.click(within(element).getByRole('button', { name: /expandir requisições/i })));

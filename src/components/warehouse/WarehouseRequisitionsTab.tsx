@@ -39,6 +39,7 @@ import { flattenPhasesByChapter, getChapterNumbering } from '@/lib/chapters';
 import SignaturePad from './SignaturePad';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
 import WarehouseCustodyTab from './WarehouseCustodyTab';
+import WarehouseDailyMovements from './WarehouseDailyMovements';
 import {
   WarehouseEmptyState,
   WarehouseField,
@@ -227,9 +228,9 @@ export default function WarehouseRequisitionsTab(props: Props) {
   }, [props.openRequisitionId]);
   return (
     <Tabs value={area} onValueChange={setArea} className="space-y-3">
-      <TabsList className="grid h-auto min-h-12 w-full grid-cols-2 rounded-xl border bg-muted/70 p-1 shadow-sm sm:w-fit sm:min-w-[400px]">
-        <TabsTrigger value="materiais" className="min-h-11 rounded-lg font-bold data-[state=active]:bg-card data-[state=active]:text-primary"><PackageOpen className="mr-2 h-4 w-4" />Materiais</TabsTrigger>
-        <TabsTrigger value="equipamentos" className="min-h-11 rounded-lg font-bold data-[state=active]:bg-card data-[state=active]:text-primary"><HardHat className="mr-2 h-4 w-4" />Equipamentos / Cautelas</TabsTrigger>
+      <TabsList className="grid h-auto min-h-12 w-full grid-cols-2 rounded-xl border bg-muted/70 p-1 shadow-sm max-[320px]:grid-cols-1 sm:w-fit sm:min-w-[400px]">
+        <TabsTrigger value="materiais" className="min-h-11 rounded-lg font-bold max-[320px]:whitespace-normal data-[state=active]:bg-card data-[state=active]:text-primary"><PackageOpen className="mr-2 h-4 w-4" />Materiais</TabsTrigger>
+        <TabsTrigger value="equipamentos" className="min-h-11 rounded-lg font-bold max-[320px]:whitespace-normal data-[state=active]:bg-card data-[state=active]:text-primary"><HardHat className="mr-2 h-4 w-4" />Equipamentos / Cautelas</TabsTrigger>
       </TabsList>
       <TabsContent value="materiais" className="mt-0"><WarehouseMaterialWithdrawalsTab {...props} /></TabsContent>
       <TabsContent value="equipamentos" className="mt-0"><WarehouseCustodyTab {...props} /></TabsContent>
@@ -271,6 +272,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
   const openRequisitionActions = useCallback((requisition: WarehouseRequisition) => setActionTarget(requisition), []);
   const handledOpenRequisitionId = useRef<string | null>(null);
   const [cancelTarget, setCancelTarget] = useState<WarehouseRequisition | null>(null);
+  const [materialView, setMaterialView] = useState<'daily' | 'history'>('daily');
+  const [selectedDate, setSelectedDate] = useState(() => warehouseOperationalDate());
   const [historyView, setHistoryView] = useState<'active' | 'cancelled'>('active');
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
@@ -288,6 +291,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
     handledOpenRequisitionId.current = openRequisitionId;
     const requisition = wh.requisitions.find(candidate => candidate.id === openRequisitionId);
     if (requisition?.status === 'entregue') {
+      setMaterialView('history');
       setHistoryView('active');
       openRequisitionActions(requisition);
     } else {
@@ -754,6 +758,13 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
         </DialogContent>
       </Dialog>
 
+      <Tabs value={materialView} onValueChange={value => setMaterialView(value as 'daily' | 'history')} className="space-y-3">
+        <TabsList className="grid h-auto min-h-12 w-full grid-cols-2 rounded-xl border bg-muted/70 p-1 shadow-sm max-[320px]:grid-cols-1 sm:w-fit sm:min-w-[390px]" aria-label="Consulta de materiais">
+          <TabsTrigger value="daily" className="min-h-11 rounded-lg px-2 text-xs font-bold max-[320px]:whitespace-normal data-[state=active]:bg-card data-[state=active]:text-primary sm:text-sm">Movimentações do dia</TabsTrigger>
+          <TabsTrigger value="history" className="min-h-11 rounded-lg px-2 text-xs font-bold max-[320px]:whitespace-normal data-[state=active]:bg-card data-[state=active]:text-primary sm:text-sm">Histórico completo</TabsTrigger>
+        </TabsList>
+        <TabsContent value="daily" className="mt-0"><WarehouseDailyMovements project={project} date={selectedDate} onDateChange={setSelectedDate} /></TabsContent>
+        <TabsContent value="history" className="mt-0">
       <section className="overflow-hidden rounded-xl border bg-card">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-3 py-2 sm:px-4">
             <WarehouseSectionHeader icon={History} title="Histórico de retiradas e devoluções" description={`${visibleRequisitions.length} ${historyView === 'cancelled' ? 'cancelada(s)' : 'retirada(s)'}`} tone="neutral" />
@@ -800,6 +811,8 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
             {!visibleRequisitions.length && <WarehouseEmptyState message={historyView === 'cancelled' ? 'Nenhuma retirada cancelada' : 'Nenhuma retirada registrada'} hint={historyView === 'cancelled' ? 'Cancelamentos auditados aparecerão aqui.' : 'Use Nova retirada para começar.'} />}
           </div>
       </section>
+        </TabsContent>
+      </Tabs>
       <MaterialReturnDialog project={project} requisition={returnTarget} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onClose={() => setReturnTarget(null)} />
       <CancelRequisitionDialog project={project} requisition={cancelTarget} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onRunCriticalCloudOperation={onRunCriticalCloudOperation} onClose={() => setCancelTarget(null)} />
       <RequisitionActionDialog project={project} requisition={actionTarget} auditActor={auditActor} canEditOriginal={canEdit} canEditSupplements={canSupplement} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onRunCriticalCloudOperation={onRunCriticalCloudOperation} onStartReturn={() => { setReturnTarget(actionTarget); setActionTarget(null); }} onClose={() => setActionTarget(null)} />

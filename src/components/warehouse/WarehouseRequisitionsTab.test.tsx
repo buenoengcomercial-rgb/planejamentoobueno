@@ -30,7 +30,15 @@ function projectWithMaterials(count = 15): Project {
   return current;
 }
 
+function openWithdrawalHistory() {
+  const tab = screen.getByRole('tab', { name: 'Histórico completo' });
+  if (tab.getAttribute('data-state') === 'active') return;
+  fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
+  fireEvent.click(tab);
+}
+
 function expandAllWithdrawalDateGroups() {
+  openWithdrawalHistory();
   screen.getAllByTestId('withdrawal-date-group').filter(element => (
     element.tagName === 'SECTION' && element.getAttribute('data-expanded') === 'false'
   )).forEach(element => {
@@ -232,6 +240,7 @@ describe('WarehouseRequisitionsTab', () => {
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
 
+    openWithdrawalHistory();
     const building = screen.getByTestId('withdrawal-building-group');
     const date = screen.getByTestId('withdrawal-date-group');
     expect(building).toContainElement(date);
@@ -319,6 +328,7 @@ describe('WarehouseRequisitionsTab', () => {
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
 
+    openWithdrawalHistory();
     expect(screen.getByTestId('withdrawal-history-row')).toHaveTextContent('REQ-2026-0020');
     expect(screen.queryByText('REQ-2026-0019')).not.toBeInTheDocument();
     const olderDate = screen.getAllByTestId('withdrawal-date-group').filter(element => element.tagName === 'SECTION').find(element => element.textContent?.includes('18/08/2026'))!;
@@ -512,6 +522,7 @@ describe('WarehouseRequisitionsTab', () => {
 
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
 
+    openWithdrawalHistory();
     const buildingRows = screen.getAllByTestId('withdrawal-building-group').filter(element => element.tagName === 'SECTION');
     expect(buildingRows).toHaveLength(3);
     expect(buildingRows[0]).toHaveTextContent('Prédio A');
