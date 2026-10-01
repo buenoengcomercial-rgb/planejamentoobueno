@@ -1,5 +1,6 @@
 import type { Project } from '@/types/project';
 import type { ProjectCollectionKey } from '@/lib/projectDataScope';
+import { clearIndexedDbProjectDraft, getCachedIndexedDbProjectDraft } from '@/lib/cloudDraftIndexedDb';
 
 export const PROJECT_DRAFT_VERSION = 2 as const;
 export const LEGACY_PROJECT_DRAFT_VERSION = 1 as const;
@@ -59,15 +60,16 @@ function defaultStorage(): Storage | null {
 }
 
 export function readStoredProjectDraft(projectId: string, storage: Storage | null = defaultStorage()): StoredProjectDraft | null {
-  if (!storage) return null;
+  if (!storage) return getCachedIndexedDbProjectDraft(projectId);
+  let local: StoredProjectDraft | null = null;
   try {
     const raw = storage.getItem(projectDraftKey(projectId));
-    if (!raw) return null;
+    if (!raw) return getCachedIndexedDbProjectDraft(projectId);
     const parsed = JSON.parse(raw) as Partial<StoredProjectDraft>;
-    if (!parsed.project || parsed.project.id !== projectId || typeof parsed.version !== 'number') return null;
+    if (!parsed.project || parsed.project.id !== projectId || typeof parsed.version !== 'number') return getCachedIndexedDbProjectDraft(projectId);
     const localDraftUpdatedAt = parsed.localDraftUpdatedAt ?? parsed.savedAt;
-    if (!localDraftUpdatedAt) return null;
-    return {
+    if (!localDraftUpdatedAt) return getCachedIndexedDbProjectDraft(projectId);
+    local = {
       version: parsed.version,
       baseUpdatedAt: parsed.baseUpdatedAt ?? null,
       savedAt: parsed.savedAt,
@@ -79,8 +81,29 @@ export function readStoredProjectDraft(projectId: string, storage: Storage | nul
         : undefined,
     };
   } catch {
-    return null;
+    return getCachedIndexedDbProjectDraft(projectId);
   }
+  const indexed = getCachedIndexedDbProjectDraft(projectId);
+  return indexed && indexed.localDraftUpdatedAt > (local?.localDraftUpdatedAt ?? '') ? indexed : local;
+}
+
+export function createProjectDraft(
+  project: Project,
+  baseUpdatedAt: string | null,
+  options: ProjectDraftWriteOptions = {},
+): StoredProjectDraft {
+  const now = new Date().toISOString();
+  return {
+    version: PROJECT_DRAFT_VERSION,
+    baseUpdatedAt,
+    savedAt: now,
+    localDraftUpdatedAt: now,
+    project: sanitizeProjectDraft(project),
+    pendingNormalizedSync: options.pendingNormalizedSync === true || undefined,
+    loadedCollections: options.loadedCollections?.length
+      ? [...new Set(options.loadedCollections)]
+      : undefined,
+  };
 }
 
 export function inspectProjectDraft(
@@ -104,19 +127,7 @@ export function writeProjectDraft(
 ): StoredProjectDraft | null {
   if (!storage) return null;
   if (storageWithUnavailableDraftQuota.has(storage)) return null;
-  const now = new Date().toISOString();
-  const safeProject = sanitizeProjectDraft(project);
-  const draft: StoredProjectDraft = {
-    version: PROJECT_DRAFT_VERSION,
-    baseUpdatedAt,
-    savedAt: now,
-    localDraftUpdatedAt: now,
-    project: safeProject,
-    pendingNormalizedSync: options.pendingNormalizedSync === true || undefined,
-    loadedCollections: options.loadedCollections?.length
-      ? [...new Set(options.loadedCollections)]
-      : undefined,
-  };
+  const draft = createProjectDraft(project, baseUpdatedAt, options);
   try {
     storage.setItem(projectDraftKey(project.id), JSON.stringify(draft));
     return draft;
@@ -131,6 +142,7 @@ export function writeProjectDraft(
 
 export function clearProjectDraft(projectId: string, storage: Storage | null = defaultStorage()): void {
   storage?.removeItem(projectDraftKey(projectId));
+  if (storage === defaultStorage()) void clearIndexedDbProjectDraft(projectId);
 }
 
 export function projectHasLocalChanges(

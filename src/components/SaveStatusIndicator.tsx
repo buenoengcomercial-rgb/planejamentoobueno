@@ -8,6 +8,7 @@ interface Props {
   status: SaveStatus;
   className?: string;
   confirmedAt?: string | null;
+  lastCheckedAt?: string | null;
   projectId?: string;
   live?: boolean;
   remoteUpdateAt?: string | null;
@@ -24,7 +25,7 @@ function timeLabel(value?: string | null) {
   return parsed.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
-export default function SaveStatusIndicator({ status, className, confirmedAt, projectId, live, remoteUpdateAt, pendingRemoteAreas = [], partialSyncPending = false, partialSyncDraftProtected = false, syncRetrying = false }: Props) {
+export default function SaveStatusIndicator({ status, className, confirmedAt, lastCheckedAt, projectId, live, remoteUpdateAt, pendingRemoteAreas = [], partialSyncPending = false, partialSyncDraftProtected = false, syncRetrying = false }: Props) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (live) return;
@@ -51,10 +52,13 @@ export default function SaveStatusIndicator({ status, className, confirmedAt, pr
   const Icon = cfg.icon;
   const confirmed = timeLabel(confirmedAt);
   const remoteUpdated = timeLabel(remoteUpdateAt);
-  const lastCheckAge = confirmedAt ? now - new Date(confirmedAt).getTime() : Number.POSITIVE_INFINITY;
+  const lastCheckAge = lastCheckedAt ? now - new Date(lastCheckedAt).getTime() : Number.POSITIVE_INFINITY;
+  const elapsed = Number.isFinite(lastCheckAge) && lastCheckAge >= 0
+    ? lastCheckAge < 60_000 ? 'há menos de 1 min' : `há ${Math.floor(lastCheckAge / 60_000)} min`
+    : null;
   const liveLabel = live ? 'Atualizado · Tempo real ativo'
     : lastCheckAge < 30_000 ? 'Reconectando · dados conferidos recentemente'
-      : 'Dados podem estar desatualizados';
+      : `Dados podem estar desatualizados${elapsed ? ` · última conferência ${elapsed}` : ''}`;
   const shortProjectId = projectId?.slice(0, 8);
   return (
     <div className={cn('flex max-w-[65vw] flex-col items-end text-right text-[11px] leading-tight', cfg.color, className)}>

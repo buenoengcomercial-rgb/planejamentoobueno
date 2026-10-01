@@ -75,6 +75,7 @@ import {
 } from '@/lib/cloudProjects';
 import {
   clearProjectDraft,
+  createProjectDraft,
   inspectProjectDraft,
   projectHasLocalChanges,
   readStoredProjectDraft,
@@ -82,6 +83,7 @@ import {
   serializeProject,
   writeProjectDraft,
 } from '@/lib/cloudProjectDraftCore';
+import { preloadIndexedDbProjectDraft, supportsIndexedDbDrafts, writeIndexedDbProjectDraft } from '@/lib/cloudDraftIndexedDb';
 import type { ProjectMeta } from '@/lib/projectStorage';
 import { supabase } from '@/integrations/supabase/client';
 import { loadOpenDailyReport, saveOpenDailyReport } from '@/lib/dailyReportCloudSync';
@@ -288,6 +290,7 @@ export default function Index() {
   const [dailyReportSaveErrors, setDailyReportSaveErrors] = useState<Record<string, string>>({});
   const [currentProjectUpdatedAt, setCurrentProjectUpdatedAt] = useState<string | null>(null);
   const [lastCloudConfirmedAt, setLastCloudConfirmedAt] = useState<string | null>(null);
+  const [lastRemoteCheckAt, setLastRemoteCheckAt] = useState<string | null>(null);
   const [remoteUpdateAt, setRemoteUpdateAt] = useState<string | null>(null);
   const [pendingRemoteAreas, setPendingRemoteAreas] = useState<string[]>([]);
   const [remoteDirtyRevision, setRemoteDirtyRevision] = useState(0);
@@ -443,6 +446,20 @@ export default function Index() {
       pendingNormalizedSync: true,
       loadedCollections,
     } : { loadedCollections });
+    if (!stored && supportsIndexedDbDrafts()) {
+      const candidate = createProjectDraft(project, baseUpdatedAt, partial ? {
+        pendingNormalizedSync: true, loadedCollections,
+      } : { loadedCollections });
+      void writeIndexedDbProjectDraft(candidate).then(confirmed => {
+        if (!confirmed) return;
+        const current = partialSyncPendingRef.current;
+        if (current?.projectId === project.id && !current.draftProtected) {
+          partialSyncPendingRef.current = { ...current, draftProtected: true };
+          setPartialSyncIssue({ projectId: project.id, draftProtected: true });
+        }
+        if (conflictDetectedRef.current && rawProjectRef.current?.id === project.id) setSaveStatus('conflict');
+      });
+    }
     if (partial && stored && !partial.draftProtected) {
       partialSyncPendingRef.current = { ...partial, draftProtected: true };
       setPartialSyncIssue({ projectId: project.id, draftProtected: true });
@@ -480,7 +497,19 @@ export default function Index() {
       draftWriteTimerRef.current = null;
       pendingDraftRef.current = null;
       if (draft) {
-        writeProtectedProjectDraft(draft.project, draft.baseUpdatedAt);
+        if (!supportsIndexedDbDrafts()) {
+          writeProtectedProjectDraft(draft.project, draft.baseUpdatedAt);
+          return;
+        }
+        const partial = partialSyncPendingRef.current?.projectId === draft.project.id
+          ? partialSyncPendingRef.current : null;
+        const candidate = createProjectDraft(draft.project, draft.baseUpdatedAt, {
+          pendingNormalizedSync: !!partial,
+          loadedCollections: partial?.loadedCollections ?? getLoadedProjectCollections(draft.project.id),
+        });
+        void writeIndexedDbProjectDraft(candidate).then(confirmed => {
+          if (!confirmed) writeProtectedProjectDraft(draft.project, draft.baseUpdatedAt);
+        });
       }
     }, LOCAL_DRAFT_DEBOUNCE_MS);
   }, [writeProtectedProjectDraft]);
@@ -734,6 +763,7 @@ export default function Index() {
     const cloudProjectForBaseline = projectToLoad;
     let projectForState = projectToLoad;
     if (rawProjectRef.current?.id !== projectToLoad?.id) {
+      setLastRemoteCheckAt(null);
       setDailyReportSaveErrors({});
       remoteDirtyCollectionsRef.current.delete(rawProjectRef.current?.id ?? '');
       remoteDirtyCollectionsRef.current.delete(projectToLoad?.id ?? '');
@@ -1418,6 +1448,7 @@ export default function Index() {
           const rememberedProjectId = readAppUiSession()?.projectId;
           const preferredProjectId = [initialRouteProjectIdRef.current, rememberedProjectId, list[0].id]
             .find(id => !!id && list.some(projectMeta => projectMeta.id === id)) ?? list[0].id;
+          await preloadIndexedDbProjectDraft(preferredProjectId);
           const initialWarehouseTab = readWarehouseTab(preferredProjectId, canViewWarehousePanel, role === 'owner');
           setWarehouseTab(initialWarehouseTab);
           const initialView = role && !canAccessAppView(role, initialViewRef.current)
@@ -1656,6 +1687,7 @@ export default function Index() {
         || conflictDetectedRef.current
         || saveTimerRef.current
         || inFlightSaveRef.current) return;
+      setLastRemoteCheckAt(new Date().toISOString());
       if (await refreshRemoteWarehouseInBackground(currentAfterVersionCheck, remoteVersion)) return;
       const knownRemoteCollections = [
         ...(pendingRealtimeCollectionsRef.current.get(current.id) ?? []),
@@ -2811,6 +2843,8 @@ export default function Index() {
     try {
       await runProtectedNavigation(async () => {
         const openSequence = ++projectOpenSequenceRef.current;
+        await preloadIndexedDbProjectDraft(id);
+        if (openSequence !== projectOpenSequenceRef.current) return;
         const nextWarehouseTab = readWarehouseTab(id, canViewWarehousePanel, role === 'owner');
         setWarehouseTab(nextWarehouseTab);
         const record = await loadCloudProjectRecord(id, {
@@ -2973,6 +3007,7 @@ export default function Index() {
         if (rawProject && id === rawProject.id) {
           const next = list[0];
           if (next) {
+            await preloadIndexedDbProjectDraft(next.id);
             const nextWarehouseTab = readWarehouseTab(next.id, canViewWarehousePanel, role === 'owner');
             setWarehouseTab(nextWarehouseTab);
             const record = await loadCloudProjectRecord(next.id, {
@@ -3313,7 +3348,7 @@ export default function Index() {
 
       <main ref={mainScrollRef} className="relative min-h-screen min-w-0 flex-1 overflow-x-clip overflow-y-auto pt-14 lg:pt-0">
         <div className="absolute top-3 right-4 z-20">
-          <SaveStatusIndicator status={Object.keys(dailyReportSaveErrors).length && saveStatus !== 'saving' ? 'error' : saveStatus} confirmedAt={lastCloudConfirmedAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} pendingRemoteAreas={pendingRemoteAreas} partialSyncPending={partialSyncIssue?.projectId === rawProject.id} partialSyncDraftProtected={partialSyncIssue?.draftProtected} syncRetrying={partialSyncRetrying} />
+          <SaveStatusIndicator status={Object.keys(dailyReportSaveErrors).length && saveStatus !== 'saving' ? 'error' : saveStatus} confirmedAt={lastCloudConfirmedAt} lastCheckedAt={lastRemoteCheckAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} pendingRemoteAreas={pendingRemoteAreas} partialSyncPending={partialSyncIssue?.projectId === rawProject.id} partialSyncDraftProtected={partialSyncIssue?.draftProtected} syncRetrying={partialSyncRetrying} />
         </div>
         {partialSyncIssue?.projectId === rawProject.id && (
           <div

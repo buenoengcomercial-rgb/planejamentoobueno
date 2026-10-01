@@ -31,10 +31,10 @@ describe('SaveStatusIndicator', () => {
 
   it('distingue reconexão recente de dados possivelmente antigos e da sincronização parcial', () => {
     const recent = new Date().toISOString();
-    const { rerender } = render(<SaveStatusIndicator status="saved" confirmedAt={recent} live={false} />);
+    const { rerender } = render(<SaveStatusIndicator status="saved" confirmedAt="2020-01-01T00:00:00Z" lastCheckedAt={recent} live={false} />);
     expect(screen.getByText('Reconectando · dados conferidos recentemente')).toBeInTheDocument();
-    rerender(<SaveStatusIndicator status="saved" confirmedAt="2020-01-01T00:00:00Z" live={false} />);
-    expect(screen.getByText('Dados podem estar desatualizados')).toBeInTheDocument();
+    rerender(<SaveStatusIndicator status="saved" confirmedAt={recent} lastCheckedAt="2020-01-01T00:00:00Z" live={false} />);
+    expect(screen.getByText(/Dados podem estar desatualizados · última conferência há/)).toBeInTheDocument();
     rerender(<SaveStatusIndicator status="error" partialSyncPending syncRetrying live={true} />);
     expect(screen.getByText('Sincronização parcial — tentando novamente')).toBeInTheDocument();
     expect(screen.getByText('Atualizado · Tempo real ativo')).toBeInTheDocument();
