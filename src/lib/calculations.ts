@@ -59,6 +59,26 @@ function workEndDate(startISO: string, duration: number, cal?: WorkCalendar): Da
   return addWorkDaysCal(start, dur, cal);
 }
 
+function isValidScheduleDate(value: string | undefined): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value.slice(0, 10))) return false;
+  const parsed = parseISODateLocal(value);
+  if (!Number.isFinite(parsed.getTime())) return false;
+  return toISODateLocal(parsed) === value.slice(0, 10);
+}
+
+function safeCalendarDuration(value: number): number | null {
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function taskEndDateISO(startDate: string, duration: number): string | null {
+  if (!isValidScheduleDate(startDate)) return null;
+  const validDuration = safeCalendarDuration(duration);
+  if (validDuration === null) return null;
+  const end = parseISODateLocal(startDate);
+  end.setDate(end.getDate() + Math.max(0, validDuration - 1));
+  return Number.isFinite(end.getTime()) ? toISODateLocal(end) : null;
+}
+
 /** Próximo dia útil estritamente APÓS `date`. */
 function nextWorkDayAfter(date: Date, cal?: WorkCalendar): Date {
   const d = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
@@ -153,14 +173,13 @@ export function captureBaseline(project: Project): Project {
         const baseDuration = isRup
           ? calculateRupDuration(t).duration
           : t.duration;
-        const start = parseISODateLocal(t.startDate);
-        const end = new Date(start);
-        // Fim = último dia trabalhado = start + (duration − 1)
-        end.setDate(end.getDate() + Math.max(0, baseDuration - 1));
+        const endDate = taskEndDateISO(t.startDate, baseDuration);
+        // Dados incompletos não devem derrubar a tela nem gerar uma linha de base falsa.
+        if (!endDate) return t;
         const baseline: TaskBaseline = {
           startDate: t.startDate,
           duration: baseDuration,
-          endDate: end.toISOString().split('T')[0],
+          endDate,
           plannedDailyProduction: t.quantity && baseDuration > 0 ? t.quantity / baseDuration : undefined,
           quantity: t.quantity,
           capturedAt: now,
@@ -185,16 +204,14 @@ export function syncBaselineWithRup(project: Project): Project {
         if (!isRup) return t;
         const rupDuration = calculateRupDuration(t).duration;
         if (rupDuration === t.baseline.duration) return t;
-        const start = parseISODateLocal(t.baseline.startDate);
-        const end = new Date(start);
-        // Fim = último dia trabalhado = start + (duration − 1)
-        end.setDate(end.getDate() + Math.max(0, rupDuration - 1));
+        const endDate = taskEndDateISO(t.baseline.startDate, rupDuration);
+        if (!endDate) return t;
         return {
           ...t,
           baseline: {
             ...t.baseline,
             duration: rupDuration,
-            endDate: end.toISOString().split('T')[0],
+            endDate,
             plannedDailyProduction: t.quantity && rupDuration > 0
               ? t.quantity / rupDuration
               : t.baseline.plannedDailyProduction,
@@ -218,14 +235,11 @@ export function applyDailyLogsToProject(project: Project): Project {
 
         // Build "current" mirror of baseline by default
         const buildCurrent = (overrides: Partial<NonNullable<Task['current']>> = {}): NonNullable<Task['current']> => {
-          const start = parseISODateLocal(t.startDate);
-          const end = new Date(start);
-          // Fim = último dia trabalhado = start + (duration − 1)
-          end.setDate(end.getDate() + Math.max(0, t.duration - 1));
+          const endDate = taskEndDateISO(t.startDate, t.duration);
           return {
             startDate: t.startDate,
             duration: t.duration,
-            endDate: end.toISOString().split('T')[0],
+            endDate: endDate ?? t.current?.endDate ?? t.startDate,
             ...overrides,
           };
         };
