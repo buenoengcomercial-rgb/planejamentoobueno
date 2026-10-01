@@ -196,12 +196,12 @@ describe('hidratação progressiva da obra', () => {
   it('detecta somente a coleção alterada e preserva coleções normalizadas ao receber metadados', () => {
     const before = {
       ...project('scoped-change'),
-      dailyReports: [{ id: 'report-1', date: '2026-09-14', notes: 'Antes' }],
+      dailyReports: [{ id: 'report-1', date: '2026-09-14', observations: 'Antes', createdAt: '2026-09-14T10:00:00.000Z', updatedAt: '2026-09-14T10:00:00.000Z' }],
       auditLogs: [{ id: 'audit-1', action: 'created' }],
     } as Project;
     const after = {
       ...before,
-      dailyReports: [{ id: 'report-1', date: '2026-09-14', notes: 'Depois' }],
+      dailyReports: [{ id: 'report-1', date: '2026-09-14', observations: 'Depois', createdAt: '2026-09-14T10:00:00.000Z', updatedAt: '2026-09-14T11:00:00.000Z' }],
     } as Project;
 
     expect(getChangedProjectCollections(before, after)).toEqual(['dailyReports']);

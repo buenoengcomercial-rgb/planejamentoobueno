@@ -219,7 +219,9 @@ export function setCloudSnapshot(projectId: string, project: Project) {
   snapshots.set(projectId, buildSnapshot(project));
 }
 
-const SNAPSHOT_MAP_BY_COLLECTION: Record<ProjectCollectionKey, keyof Omit<Snapshot, 'loadedCollections'>> = {
+type SnapshotMapKey = Exclude<keyof Snapshot, 'loadedCollections' | 'projectData'>;
+
+const SNAPSHOT_MAP_BY_COLLECTION: Record<ProjectCollectionKey, SnapshotMapKey> = {
   warehouseMovements: 'movements',
   warehouseRequisitions: 'requisitions',
   warehouseCustody: 'custody',

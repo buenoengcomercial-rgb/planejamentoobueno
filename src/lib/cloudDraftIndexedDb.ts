@@ -13,7 +13,7 @@ export function supportsIndexedDbDrafts(): boolean {
 
 function database(): Promise<IDBDatabase> {
   if (!databasePromise) {
-    databasePromise = new Promise((resolve, reject) => {
+    databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open(DATABASE, 1);
       request.onupgradeneeded = () => {
         if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE);
