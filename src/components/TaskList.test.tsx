@@ -103,6 +103,101 @@ describe('TaskList', () => {
     expect(onProjectChange).not.toHaveBeenCalled();
   });
 
+  it('abre a data vinda da Rotina sem criar apontamento até a ação do usuário', () => {
+    const onProjectChange = vi.fn();
+    render(<TooltipProvider>
+      <TaskList project={project} onProjectChange={onProjectChange}
+        focusTaskId="task-1" focusDate="2026-09-30" auditActor={{ userId: 'owner-1', userName: 'Proprietário' }} />
+    </TooltipProvider>);
+
+    expect(screen.getByRole('button', { name: 'Lançar em 30/09/2026' })).toBeInTheDocument();
+    expect(onProjectChange).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar em 30/09/2026' }));
+    expect(onProjectChange).toHaveBeenCalledTimes(1);
+    const saved = onProjectChange.mock.calls[0][0] as Project;
+    expect(saved.phases[0].tasks[0].dailyLogs?.[0].date).toBe('2026-09-30');
+    expect(saved.auditLogs?.[0]).toMatchObject({
+      entityType: 'task', entityId: 'task-1', action: 'created',
+      userId: 'owner-1', after: expect.objectContaining({ date: '2026-09-30' }),
+    });
+  });
+
+  it('registra antes e depois ao corrigir um apontamento existente', () => {
+    const onProjectChange = vi.fn();
+    const existing = { id: 'log-1', date: '2026-09-30', plannedQuantity: 1, actualQuantity: 0.5 };
+    const withLog = {
+      ...project,
+      phases: [{ ...project.phases[0], tasks: [{ ...task, dailyLogs: [existing] }] }],
+    } as Project;
+    const { container } = render(<TooltipProvider>
+      <TaskList project={withLog} onProjectChange={onProjectChange}
+        focusTaskId="task-1" focusDate="2026-09-30" auditActor={{ userId: 'owner-1' }} />
+    </TooltipProvider>);
+    const actual = container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')!;
+    fireEvent.change(actual, { target: { value: '1' } });
+    fireEvent.blur(actual);
+
+    const saved = onProjectChange.mock.calls[0][0] as Project;
+    expect(saved.auditLogs?.[0]).toMatchObject({
+      action: 'updated', title: 'Apontamento de produção corrigido',
+      userId: 'owner-1', before: existing,
+      after: expect.objectContaining({ actualQuantity: 1 }),
+    });
+  });
+
+  it('mantém o progresso manual como rascunho até sair do campo', () => {
+    const onProjectChange = vi.fn();
+    render(<TooltipProvider><TaskList project={project} onProjectChange={onProjectChange} /></TooltipProvider>);
+    const percent = screen.getByRole('spinbutton', { name: 'Progresso manual de Instalar hidrante' });
+    fireEvent.focus(percent);
+    fireEvent.change(percent, { target: { value: '40' } });
+    expect(onProjectChange).not.toHaveBeenCalled();
+    fireEvent.blur(percent);
+    expect(onProjectChange).toHaveBeenCalledTimes(1);
+    const saved = onProjectChange.mock.calls[0][0] as Project;
+    expect(saved.phases[0].tasks[0].percentComplete).toBe(40);
+    expect(saved.auditLogs?.[0]).toMatchObject({
+      entityType: 'task', action: 'updated', title: 'Progresso manual corrigido',
+      before: { percentComplete: 0 }, after: { percentComplete: 40 },
+    });
+  });
+
+  it('registra a tarefa e apontamentos anteriores ao excluir', () => {
+    const onProjectChange = vi.fn();
+    const existingLog = { id: 'log-1', date: '2026-09-30', plannedQuantity: 1, actualQuantity: 0.5 };
+    const withLog = {
+      ...project,
+      phases: [{ ...project.phases[0], tasks: [{ ...task, dailyLogs: [existingLog] }] }],
+    } as Project;
+    render(<TooltipProvider><TaskList project={withLog} onProjectChange={onProjectChange} /></TooltipProvider>);
+    fireEvent.click(screen.getByTitle('Excluir tarefa'));
+    fireEvent.click(screen.getByRole('button', { name: 'Excluir tarefa' }));
+    const saved = onProjectChange.mock.calls[0][0] as Project;
+    expect(saved.phases[0].tasks).toHaveLength(0);
+    expect(saved.auditLogs?.[0]).toMatchObject({
+      entityType: 'task', action: 'deleted',
+      before: expect.objectContaining({ id: 'task-1', dailyLogs: [existingLog] }),
+      metadata: { phaseId: 'phase-1', removedLogIds: ['log-1'] },
+    });
+  });
+
+  it('localiza tarefas dentro de capítulo recolhido sem salvar ou reordenar a EAP', () => {
+    const onProjectChange = vi.fn();
+    const filteredProject = {
+      ...project,
+      phases: [{ ...project.phases[0], tasks: [task, { ...task, id: 'task-2', name: 'Montar bomba' }] }],
+    } as Project;
+    render(<TooltipProvider><TaskList project={filteredProject} onProjectChange={onProjectChange} /></TooltipProvider>);
+    fireEvent.click(screen.getByTitle('Recolher'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Buscar tarefa ou capítulo' }), { target: { value: 'bomba' } });
+    expect(screen.getByText('Montar bomba')).toBeInTheDocument();
+    expect(screen.queryByText('Instalar hidrante')).not.toBeInTheDocument();
+    expect(onProjectChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Limpar filtros' }));
+    expect(screen.queryByText('Montar bomba')).not.toBeInTheDocument();
+  });
+
   it('carrega o importador de Excel somente depois da ação do usuário', async () => {
     render(
       <TooltipProvider>

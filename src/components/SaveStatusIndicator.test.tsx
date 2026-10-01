@@ -28,4 +28,15 @@ describe('SaveStatusIndicator', () => {
     render(<SaveStatusIndicator status="saved" pendingRemoteAreas={['Almoxarifado', 'Diário de Obra']} />);
     expect(screen.getByText('Atualizações em outras áreas: Almoxarifado, Diário de Obra')).toBeInTheDocument();
   });
+
+  it('distingue reconexão recente de dados possivelmente antigos e da sincronização parcial', () => {
+    const recent = new Date().toISOString();
+    const { rerender } = render(<SaveStatusIndicator status="saved" confirmedAt={recent} live={false} />);
+    expect(screen.getByText('Reconectando · dados conferidos recentemente')).toBeInTheDocument();
+    rerender(<SaveStatusIndicator status="saved" confirmedAt="2020-01-01T00:00:00Z" live={false} />);
+    expect(screen.getByText('Dados podem estar desatualizados')).toBeInTheDocument();
+    rerender(<SaveStatusIndicator status="error" partialSyncPending syncRetrying live={true} />);
+    expect(screen.getByText('Sincronização parcial — tentando novamente')).toBeInTheDocument();
+    expect(screen.getByText('Atualizado · Tempo real ativo')).toBeInTheDocument();
+  });
 });

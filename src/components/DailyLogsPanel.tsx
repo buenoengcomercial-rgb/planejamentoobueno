@@ -4,8 +4,11 @@ import { ClipboardList, Plus, Trash2, TrendingUp, TrendingDown, Users } from 'lu
 import { motion } from 'framer-motion';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { getProductionQuantityLimit, maximumActualForDailyLog, validateDailyProductionLogs } from '@/lib/productionQuantityLimit';
+import { registerPendingEditCommit } from '@/lib/pendingEditCommits';
+import { registerPendingForm } from '@/lib/pendingFormNavigation';
 
 interface DailyLogsPanelProps {
+  projectId?: string;
   task: Task;
   onChange: (logs: DailyProductionLog[]) => void;
   focusDate?: string;
@@ -31,6 +34,23 @@ const STATUS_BG: Record<string, string> = {
 const EMPTY_DAILY_LOGS: DailyProductionLog[] = [];
 
 type DraftValues = Record<string, string>;
+
+function productionDraftKey(projectId: string | undefined, taskId: string): string | null {
+  return projectId ? `obraplanner:production-field-draft:${projectId}:${taskId}` : null;
+}
+
+function readProductionDraft(key: string | null, logs: DailyProductionLog[]): DraftValues {
+  if (!key) return {};
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return {};
+    const stored = JSON.parse(raw) as { base: string; drafts: DraftValues; savedAt: number };
+    if (Date.now() - stored.savedAt > 24 * 60 * 60 * 1000 || stored.base !== JSON.stringify(logs)) return {};
+    return stored.drafts ?? {};
+  } catch {
+    return {};
+  }
+}
 
 const hasOwn = (values: DraftValues, key: string) => Object.prototype.hasOwnProperty.call(values, key);
 const logDraftKey = (logId: string, field: 'date' | 'plannedQuantity' | 'actualQuantity' | 'notes') => `log:${logId}:${field}`;
@@ -73,12 +93,14 @@ function applyDraftValues(logs: DailyProductionLog[], drafts: DraftValues): { lo
   return { logs: nextLogs, hasInvalidNumber };
 }
 
-export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsPanelProps) {
+export default function DailyLogsPanel({ projectId, task, onChange, focusDate }: DailyLogsPanelProps) {
   const logs = task.dailyLogs ?? EMPTY_DAILY_LOGS;
+  const storageKey = productionDraftKey(projectId, task.id);
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [productionError, setProductionError] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<DraftValues>({});
-  const draftsRef = useRef<DraftValues>({});
+  const [draftProtectionError, setDraftProtectionError] = useState(false);
+  const [drafts, setDrafts] = useState<DraftValues>(() => readProductionDraft(storageKey, logs));
+  const draftsRef = useRef<DraftValues>(drafts);
   const baseDuration = task.originalDuration ?? task.duration;
   const plannedDailyProduction = task.quantity && baseDuration > 0
     ? task.quantity / baseDuration
@@ -100,22 +122,32 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
 
   const updateDraft = useCallback((key: string, value: string) => {
     setProductionError(null);
-    setDrafts(current => {
-      const next = { ...current, [key]: value };
-      draftsRef.current = next;
-      return next;
-    });
-  }, []);
+    const next = { ...draftsRef.current, [key]: value };
+    draftsRef.current = next;
+    setDrafts(next);
+    if (storageKey) {
+      try {
+        localStorage.setItem(storageKey, JSON.stringify({ base: JSON.stringify(logs), drafts: next, savedAt: Date.now() }));
+        setDraftProtectionError(false);
+      } catch {
+        setDraftProtectionError(true);
+      }
+    }
+  }, [logs, storageKey]);
 
   const discardDraft = useCallback((key: string) => {
     setProductionError(null);
-    setDrafts(current => {
-      if (!hasOwn(current, key)) return current;
-      const { [key]: _discarded, ...next } = current;
-      draftsRef.current = next;
-      return next;
-    });
-  }, []);
+    if (!hasOwn(draftsRef.current, key)) return;
+    const { [key]: _discarded, ...next } = draftsRef.current;
+    draftsRef.current = next;
+    setDrafts(next);
+    if (storageKey) {
+      try {
+        if (Object.keys(next).length === 0) localStorage.removeItem(storageKey);
+        else localStorage.setItem(storageKey, JSON.stringify({ base: JSON.stringify(logs), drafts: next, savedAt: Date.now() }));
+      } catch { setDraftProtectionError(true); }
+    }
+  }, [logs, storageKey]);
 
   const inputValue = useCallback((key: string, saved: string | number | undefined) => (
     hasOwn(drafts, key) ? drafts[key] : String(saved ?? '')
@@ -151,6 +183,13 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
     return true;
   }, [commitResolvedLogs, resolveDrafts]);
 
+  useEffect(() => registerPendingEditCommit(`production:${projectId ?? ''}:${task.id}`, commitDrafts), [commitDrafts, projectId, task.id]);
+  useEffect(() => registerPendingForm(
+    `production:${projectId ?? ''}:${task.id}`,
+    'apontamento diário',
+    () => Object.keys(draftsRef.current).length > 0,
+  ), [projectId, task.id]);
+
   const handleDeferredBlur = useCallback((event: FocusEvent<HTMLInputElement>) => {
     const nextTarget = event.relatedTarget;
     if (nextTarget instanceof Element && nextTarget.closest('[data-daily-log-action]')) return;
@@ -168,14 +207,14 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
     }
   }, [commitDrafts, discardDraft]);
 
-  const addLog = () => {
+  const addLog = (requestedDate?: string) => {
     const currentLogs = resolveDrafts();
     if (!currentLogs || getProductionQuantityLimit(task, currentLogs).completed) return;
     const today = new Date().toISOString().split('T')[0];
     const lastDate = currentLogs.length > 0
       ? [...currentLogs].sort((a, b) => a.date.localeCompare(b.date))[currentLogs.length - 1].date
       : null;
-    const date = lastDate ? nextDayISO(lastDate) : today;
+    const date = requestedDate ?? (lastDate ? nextDayISO(lastDate) : today);
     const newLog = buildLog(date);
     commitResolvedLogs([...currentLogs, newLog]);
     setTimeout(() => {
@@ -371,6 +410,18 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
           </p>
         )}
         {productionError && <p role="alert" className="text-xs font-medium text-destructive">{productionError}</p>}
+        {draftProtectionError && <p role="alert" className="text-xs font-medium text-destructive">Não foi possível proteger este campo neste aparelho. Confirme o lançamento antes de sair da tela.</p>}
+        {focusDate && !logs.some(log => log.date === focusDate) && (
+          <button
+            type="button"
+            data-daily-log-action
+            disabled={productionLimit.completed}
+            onClick={() => addLog(focusDate)}
+            className="min-h-11 self-start rounded-md bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-50"
+          >
+            <Plus className="mr-1.5 inline h-3.5 w-3.5" /> Lançar em {focusDate.split('-').reverse().join('/')}
+          </button>
+        )}
 
         <div className="grid grid-cols-8 gap-2 text-[10px] font-semibold text-muted-foreground uppercase">
           <div>Data</div>
@@ -383,13 +434,13 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
           <div className="text-center">Ação</div>
         </div>
 
-        {rows.length === 0 && (
+        {rows.length === 0 && !focusDate && (
           <div className="flex flex-col items-center gap-2 py-3">
             <p className="text-[11px] text-muted-foreground italic">
               Sem lançamentos. Adicione o primeiro registro de produção.
             </p>
             <button
-              onClick={addLog}
+              onClick={() => addLog()}
               data-daily-log-action
               disabled={productionLimit.completed}
               className="min-h-11 text-[11px] px-3 py-1.5 rounded-md bg-primary/10 text-primary font-medium hover:bg-primary/20 transition-colors flex items-center gap-1.5"
@@ -580,7 +631,7 @@ export default function DailyLogsPanel({ task, onChange, focusDate }: DailyLogsP
         {rows.length > 0 && (
           <div className="flex justify-end pt-1">
             <button
-              onClick={addLog}
+              onClick={() => addLog()}
               data-daily-log-action
               disabled={productionLimit.completed}
               className="min-h-11 px-3 py-2 rounded-md bg-primary/10 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors flex items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"

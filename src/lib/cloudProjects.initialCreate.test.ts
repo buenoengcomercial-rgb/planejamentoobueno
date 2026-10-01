@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
     dailyReports: [],
   })),
   syncCollectionsToCloud: vi.fn(),
+  syncProductionAtomically: vi.fn(),
   clearCloudSnapshot: vi.fn(),
   setCloudSnapshot: vi.fn(),
   buildContractImportPayload: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock('@/lib/projectSync', () => ({
   hydrateProjectFromCloud: mocks.hydrateProjectFromCloud,
   stripNormalizedCollections: mocks.stripNormalizedCollections,
   syncCollectionsToCloud: mocks.syncCollectionsToCloud,
+  syncProductionAtomically: mocks.syncProductionAtomically,
   clearCloudSnapshot: mocks.clearCloudSnapshot,
   setCloudSnapshot: mocks.setCloudSnapshot,
   buildContractImportPayload: mocks.buildContractImportPayload,
@@ -76,6 +78,7 @@ describe('criação inicial segura da obra', () => {
     vi.clearAllMocks();
     mocks.getUser.mockResolvedValue({ data: { user: { id: 'user-1' } } });
     mocks.syncCollectionsToCloud.mockResolvedValue(undefined);
+    mocks.syncProductionAtomically.mockResolvedValue(null);
     mocks.hydrateProjectFromCloud.mockImplementation(async (project: Project) => project);
     mocks.getHydratedProjectCollections.mockReturnValue([]);
     mocks.confirmHydratedProjectCollections.mockReturnValue([]);

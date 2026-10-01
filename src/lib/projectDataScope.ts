@@ -31,7 +31,9 @@ const REALTIME_TABLE_COLLECTIONS: Record<string, readonly ProjectCollectionKey[]
   warehouse_requisitions: ['warehouseRequisitions'],
   warehouse_custody: ['warehouseCustody'],
   daily_reports: ['dailyReports'],
-  task_daily_logs: ['taskDailyLogs'],
+  // A resposta da tabela de apontamentos contém task_id, mas a hidratação
+  // precisa da árvore de tarefas para aplicar cada log ao registro correto.
+  task_daily_logs: ['taskDailyLogs', 'eapChapters', 'tasks'],
   measurements: ['measurements'],
   additives: ['additives'],
   audit_logs: ['auditLogs'],
@@ -41,8 +43,10 @@ const REALTIME_TABLE_COLLECTIONS: Record<string, readonly ProjectCollectionKey[]
   material_comparisons: ['materialComparisons'],
   analytic_compositions: ['analyticCompositions'],
   subcontracts: ['subcontracts'],
-  eap_chapters: ['eapChapters', 'tasks'],
-  tasks: ['eapChapters', 'tasks'],
+  // A tarefa normalizada não contém seus apontamentos; a árvore completa da
+  // Produção precisa das três tabelas para não apagar logs em memória.
+  eap_chapters: ['taskDailyLogs', 'eapChapters', 'tasks'],
+  tasks: ['taskDailyLogs', 'eapChapters', 'tasks'],
 };
 
 export const PROJECT_REALTIME_TABLES = Object.keys(REALTIME_TABLE_COLLECTIONS) as Array<keyof typeof REALTIME_TABLE_COLLECTIONS>;
@@ -147,7 +151,7 @@ const VIEW_COLLECTIONS: Record<Exclude<AppView, 'warehouse'>, ProjectCollectionK
   ]),
   management: unique([...SCHEDULE, 'dailyReports', 'auditLogs']),
   gantt: unique([...SCHEDULE, 'budgetItems', 'auditLogs']),
-  tasks: unique([...SCHEDULE]),
+  tasks: unique([...SCHEDULE, 'auditLogs']),
   dailyReport: unique([
     ...SCHEDULE,
     'warehouseMovements',

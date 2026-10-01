@@ -86,8 +86,52 @@ describe('ManagementRoutine semanal por capítulo', () => {
     const task = updated.phases[0].tasks[0];
     expect(task.startDate).toBe('2026-08-20');
     expect(task.dailyLogs).toEqual(expect.arrayContaining([expect.objectContaining({ date: '2026-08-20', actualQuantity: 4 })]));
+    expect(updated.auditLogs).toEqual(expect.arrayContaining([expect.objectContaining({
+      entityType: 'task', entityId: 'task-1', action: 'created',
+      after: expect.objectContaining({ date: '2026-08-20', actualQuantity: 4 }),
+    })]));
     expect(task.operationalReschedule).toMatchObject({ startDate: '2026-08-20' });
     expect(updated.rescheduleRequests).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: 'task-1', status: 'approved' })]));
+  });
+
+  it('oferece busca na EAP inteira sem mudar o capítulo selecionado', () => {
+    const onProjectChange = vi.fn();
+    const withOtherChapter = {
+      ...project,
+      phases: [project.phases[0], {
+        ...project.phases[0], id: 'chapter-2', name: 'Hidráulica', customNumber: '2',
+        tasks: [{ ...project.phases[0].tasks[0], id: 'task-2', phase: 'chapter-2', name: 'Montar bomba' }],
+      }],
+    } as Project;
+    render(<ManagementRoutine project={withOtherChapter} onProjectChange={onProjectChange} onOpenDailyReport={vi.fn()} onOpenProduction={vi.fn()} initialWeek="2026-08-10" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Buscar atividade' }));
+    fireEvent.change(screen.getByLabelText('Atividade'), { target: { value: 'bomba' } });
+    expect(screen.queryByText('Montar bomba')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Buscar em toda a EAP' }));
+    expect(screen.getByText('Montar bomba')).toBeInTheDocument();
+    expect(document.querySelector('button[title="Incêndio"]')).toHaveAttribute('aria-pressed', 'true');
+    expect(onProjectChange).not.toHaveBeenCalled();
+  });
+
+  it('abre o Diário correspondente a partir das pendências da semana', () => {
+    const onOpenDailyReport = vi.fn();
+    render(<ManagementRoutine project={project} onProjectChange={vi.fn()} onOpenDailyReport={onOpenDailyReport} onOpenProduction={vi.fn()} initialWeek="2026-08-10" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Ver pendências' }));
+    expect(screen.getByRole('region', { name: 'Pendências da semana' })).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Abrir Diário' })[0]);
+    expect(onOpenDailyReport).toHaveBeenCalledWith('2026-08-10');
+  });
+
+  it('aponta uma atividade do dia usando a mesma validação da Rotina', () => {
+    const onProjectChange = vi.fn();
+    render(<ManagementRoutine project={project} onProjectChange={onProjectChange} onOpenDailyReport={vi.fn()} onOpenProduction={vi.fn()} initialWeek="2026-08-10" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Apontar o dia' }));
+    const daily = screen.getByRole('region', { name: 'Apontar o dia' });
+    expect(daily).toHaveTextContent('Instalar detector de fumaça');
+    fireEvent.change(screen.getByRole('spinbutton', { name: /Realizado em 10\/08\/2026 para Instalar detector/i }), { target: { value: '4' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Registrar' }));
+    const updater = onProjectChange.mock.calls.at(-1)?.[0] as (previous: Project) => Project;
+    expect(updater(project).phases[0].tasks[0].dailyLogs).toEqual(expect.arrayContaining([expect.objectContaining({ date: '2026-08-10', actualQuantity: 4 })]));
   });
 
   it('mostra somente o capítulo escolhido e guarda a preferência por obra', () => {

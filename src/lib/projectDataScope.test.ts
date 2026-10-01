@@ -58,7 +58,8 @@ describe('escopos progressivos de dados da obra', () => {
     expect(projectCollectionsForRealtimeTable('warehouse_requisitions')).toEqual([
       'warehouseRequisitions',
     ]);
-    expect(projectCollectionsForRealtimeTable('tasks')).toEqual(['eapChapters', 'tasks']);
+    expect(projectCollectionsForRealtimeTable('tasks')).toEqual(['taskDailyLogs', 'eapChapters', 'tasks']);
+    expect(projectCollectionsForRealtimeTable('task_daily_logs')).toEqual(['taskDailyLogs', 'eapChapters', 'tasks']);
     expect(projectCollectionsForRealtimeTable('projects')).toEqual([]);
     expect(projectCollectionsForRealtimeTable('tabela_desconhecida')).toEqual([]);
 

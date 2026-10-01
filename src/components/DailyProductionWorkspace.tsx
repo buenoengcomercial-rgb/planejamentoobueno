@@ -1,6 +1,7 @@
 import { Suspense } from 'react';
 import { Loader2 } from 'lucide-react';
 import type { Project } from '@/types/project';
+import type { AuditUserInfo } from '@/lib/audit';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 
 // Produção e Diário são rotas independentes. Carregar somente a área aberta
@@ -27,6 +28,7 @@ interface DailyProductionWorkspaceProps {
   dailyReportNavKey?: number;
   productionFocusTaskId?: string;
   productionFocusDate?: string;
+  auditActor?: AuditUserInfo;
 }
 
 export default function DailyProductionWorkspace({
@@ -46,6 +48,7 @@ export default function DailyProductionWorkspace({
   dailyReportNavKey,
   productionFocusTaskId,
   productionFocusDate,
+  auditActor,
 }: DailyProductionWorkspaceProps) {
   return (
     <div className="space-y-4 p-3 pt-4 sm:p-4 lg:p-5">
@@ -60,6 +63,7 @@ export default function DailyProductionWorkspace({
               readOnly={productionReadOnly}
               focusTaskId={productionFocusTaskId}
               focusDate={productionFocusDate}
+              auditActor={auditActor}
             />
           ) : (
             <DailyReport

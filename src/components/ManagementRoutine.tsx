@@ -4,7 +4,7 @@ import type {
   WeeklyRoutineActivity,
   WeeklyRoutineDiaryStatus,
 } from '@/types/project';
-import type { AuditUserInfo } from '@/lib/audit';
+import { logToProject, type AuditUserInfo } from '@/lib/audit';
 import { DEFAULT_TEAMS, getTeamDefinition } from '@/lib/teams';
 import {
   addDaysISO,
@@ -23,6 +23,7 @@ import { resolveObraConfig } from '@/lib/obraConfig';
 import { ModulePageHeader } from '@/components/ModulePageHeader';
 import { applyDailyProductionLogs, upsertDailyProductionLog } from '@/lib/dailyProductionLogs';
 import { validateDailyProductionLogs } from '@/lib/productionQuantityLimit';
+import { registerPendingForm } from '@/lib/pendingFormNavigation';
 import TaskRescheduleDialog from '@/components/TaskRescheduleDialog';
 import { approveRescheduleRequest, createRescheduleRequest, rejectRescheduleRequest, submitRescheduleRequest } from '@/lib/taskRescheduling';
 import { Badge } from '@/components/ui/badge';
@@ -120,6 +121,11 @@ function ActivityCard({
   const [actualDraft, setActualDraft] = useState(() => String(activity.actualQuantity || ''));
   useEffect(() => setActualDraft(activity.actualQuantity ? String(activity.actualQuantity) : ''), [activity.actualQuantity, activity.date, activity.taskId]);
   const actualQuantity = Number(actualDraft);
+  useEffect(() => registerPendingForm(
+    `routine:${activity.taskId}:${activity.date}`,
+    'produção da rotina',
+    () => actualDraft.trim() !== '' && actualDraft !== String(activity.actualQuantity || ''),
+  ), [activity.actualQuantity, activity.date, activity.taskId, actualDraft]);
   const maximumForDate = Math.max(0, activity.totalQuantity - (activity.executedQuantity - activity.actualQuantity));
   const exceedsContract = actualDraft.trim() !== '' && actualQuantity > maximumForDate + 0.000001;
   const canRegister = actualDraft.trim() !== '' && Number.isFinite(actualQuantity) && actualQuantity >= 0 && !exceedsContract;
@@ -182,6 +188,42 @@ function ActivityCard({
       </Button>}
     </article>
   );
+}
+
+function DailyQuickEntry({ activity, teams, readOnly, onRegister, onOpenProduction }: {
+  activity: WeeklyRoutineActivity;
+  teams: Project['teams'];
+  readOnly: boolean;
+  onRegister: (activity: WeeklyRoutineActivity, quantity: number) => boolean;
+  onOpenProduction: (taskId: string, date: string) => void;
+}) {
+  const [draft, setDraft] = useState(() => activity.actualQuantity ? String(activity.actualQuantity) : '');
+  useEffect(() => setDraft(activity.actualQuantity ? String(activity.actualQuantity) : ''), [activity.actualQuantity, activity.date, activity.taskId]);
+  useEffect(() => registerPendingForm(
+    `routine-quick:${activity.taskId}:${activity.date}`,
+    'apontamento do dia',
+    () => draft.trim() !== '' && draft !== String(activity.actualQuantity || ''),
+  ), [activity.actualQuantity, activity.date, activity.taskId, draft]);
+  const team = getTeamDefinition(activity.teamCode, teams?.length ? teams : DEFAULT_TEAMS);
+  const maximum = Math.max(0, activity.totalQuantity - (activity.executedQuantity - activity.actualQuantity));
+  const quantity = Number(draft);
+  const valid = draft.trim() !== '' && Number.isFinite(quantity) && quantity >= 0 && quantity <= maximum + 0.000001;
+  const confirm = () => {
+    if (valid && onRegister(activity, quantity)) setDraft(String(quantity));
+  };
+  return <div className="grid gap-3 rounded-lg border bg-background p-3 sm:grid-cols-[minmax(0,1fr)_130px_130px] sm:items-center">
+    <div className="min-w-0">
+      <p className="text-xs text-muted-foreground">{activity.chapterPath.map(chapter => chapter.name).join(' › ')}</p>
+      <p className="break-words text-sm font-semibold">{activity.taskName}</p>
+      <p className="text-xs text-muted-foreground">{team?.label ?? 'Sem equipe'} · {activity.responsible || 'Sem responsável'} · Meta {activity.plannedQuantity.toLocaleString('pt-BR')} {activity.unit} · Saldo {Math.max(0, activity.totalQuantity - activity.executedQuantity).toLocaleString('pt-BR')} {activity.unit}</p>
+    </div>
+    <div className="text-xs text-muted-foreground">{activity.completed ? 'Concluída' : activity.actualQuantity > 0 ? 'Informada' : 'Pendente'}<br />Realizado: {activity.actualQuantity.toLocaleString('pt-BR')} {activity.unit}</div>
+    <div className="flex flex-wrap items-center gap-2">
+      {!readOnly && !activity.completed && <><Input type="number" inputMode="decimal" min={0} max={maximum} step="0.01" value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); confirm(); } }} aria-label={`Realizado em ${formatDateBR(activity.date)} para ${activity.taskName}`} className="min-h-11 w-24" /><Button type="button" size="sm" className="min-h-11" disabled={!valid} onClick={confirm}>Registrar</Button></>}
+      <Button type="button" variant="outline" size="sm" className="min-h-11" onClick={() => onOpenProduction(activity.taskId, activity.date)}>Detalhes</Button>
+    </div>
+    {draft.trim() !== '' && !valid && <p role="alert" className="text-xs text-destructive sm:col-span-3">Informe um valor entre 0 e {maximum.toLocaleString('pt-BR')} {activity.unit}.</p>}
+  </div>;
 }
 
 function ActivityGroups({ groups, date, teams, onOpenProduction, onRegister, readOnly, onReschedule, depth = 0, rootChapterId }: {
@@ -255,6 +297,10 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchDate, setSearchDate] = useState(() => initialWeek || todayISO());
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchAllChapters, setSearchAllChapters] = useState(false);
+  const [showExceptions, setShowExceptions] = useState(false);
+  const [dailyMode, setDailyMode] = useState(false);
+  const [dailyDate, setDailyDate] = useState(() => initialWeek || todayISO());
   const obraCalendar = useMemo(() => resolveObraConfig(project), [project]);
   const pendingAdditiveTaskIds = useMemo(() => new Set(
     Object.entries(buildPendingAdditiveSuspensionMap(project))
@@ -284,10 +330,15 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
   const completedActivities = new Set(activities.filter(activity => activity.completed).map(activity => activity.taskId)).size;
   const filledReports = week.filter(day => day.diaryStatus === 'filled' || day.diaryStatus === 'impediment' || day.diaryStatus === 'noProduction').length;
   const pendingReports = week.filter(day => day.date <= todayISO() && day.diaryStatus === 'notFilled').length;
+  const diaryExceptions = week.filter(day => day.date <= todayISO() && (day.diaryStatus === 'notFilled' || day.diaryStatus === 'impediment'));
+  const activityExceptions = activities.filter(activity => activity.date <= todayISO() && !activity.completed && (
+    (activity.plannedQuantity > 0 && activity.actualQuantity < activity.plannedQuantity) || !activity.teamCode
+  ));
+  const dailyActivities = week.find(day => day.date === dailyDate)?.activities.filter(activity => activity.chapterPath[0]?.id === selectedChapterId) ?? [];
   const searchedActivities = useMemo(
     () => buildRoutineSearchActivities(project, searchDate, searchQuery, pendingAdditiveTaskIds, obraCalendar)
-      .filter(activity => activity.chapterPath[0]?.id === selectedChapterId),
-    [obraCalendar, pendingAdditiveTaskIds, project, searchDate, searchQuery, selectedChapterId],
+      .filter(activity => searchAllChapters || activity.chapterPath[0]?.id === selectedChapterId),
+    [obraCalendar, pendingAdditiveTaskIds, project, searchAllChapters, searchDate, searchQuery, selectedChapterId],
   );
   const registerActivityProduction = (activity: WeeklyRoutineActivity, actualQuantity: number): boolean => {
     const currentTask = getAllTasks(project).find(task => task.id === activity.taskId);
@@ -319,6 +370,18 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
         if (!validateDailyProductionLogs(task, logs).allowed) return task;
         return { ...task, ...applyDailyProductionLogs(task, logs) };
       });
+      const before = taskBefore.dailyLogs?.find(log => log.date === activity.date);
+      const after = getAllTasks(next).find(task => task.id === activity.taskId)?.dailyLogs?.find(log => log.date === activity.date);
+      if (after && JSON.stringify(before) !== JSON.stringify(after)) {
+        next = logToProject(next, {
+          ...auditActor,
+          entityType: 'task', entityId: activity.taskId,
+          action: before ? 'updated' : 'created',
+          title: before ? 'Apontamento de produção corrigido' : 'Apontamento de produção criado',
+          description: `${taskBefore.name} · ${activity.date}`,
+          before, after, metadata: { logId: after.id, date: activity.date },
+        });
+      }
       return next;
     });
     if (!taskSchedule(currentTask, obraCalendar).workDays.has(activity.date)) {
@@ -364,8 +427,10 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
   }, [project.id, selectedChapterId]);
 
   const selectWeek = (date: string) => {
+    if (!date) return;
     const normalized = startOfWeekISO(date);
     setSelectedWeekStart(normalized);
+    setDailyDate(date);
     onWeekChange?.(normalized);
   };
 
@@ -423,6 +488,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
                 <p className="mt-1 text-base font-semibold">{formatDateBR(selectedWeekStart)} a {formatDateBR(selectedWeekEnd)}</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" variant={dailyMode ? 'default' : 'outline'} size="sm" className="min-h-11" onClick={() => { setDailyMode(value => !value); if (!dailyMode) setDailyDate(todayISO() >= selectedWeekStart && todayISO() <= selectedWeekEnd ? todayISO() : week[0]?.date ?? selectedWeekStart); }}> {dailyMode ? 'Ver semana' : 'Apontar o dia'} </Button>
                 <Button variant="outline" size="sm" className="min-h-11" onClick={() => selectWeek(addDaysISO(selectedWeekStart, -7))}>
                   <ChevronLeft className="mr-1 h-4 w-4" /> Semana anterior
                 </Button>
@@ -442,14 +508,37 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
             <span><strong className="tabular-nums text-success">{completedActivities}</strong> concluídas</span>
             <span><strong className="tabular-nums text-success">{filledReports}</strong> Diários preenchidos</span>
             <span><strong className={`tabular-nums ${pendingReports ? 'text-warning' : 'text-foreground'}`}>{pendingReports}</strong> Diários pendentes</span>
+            {(diaryExceptions.length > 0 || activityExceptions.length > 0) && <Button type="button" variant="link" size="sm" className="ml-auto min-h-10 px-0" aria-expanded={showExceptions} onClick={() => setShowExceptions(value => !value)}>{showExceptions ? 'Ocultar pendências' : 'Ver pendências'}</Button>}
           </section>
+
+          {showExceptions && (
+            <section className="space-y-2 rounded-xl border border-warning/40 bg-warning/5 p-3 sm:p-4" aria-label="Pendências da semana">
+              <h3 className="text-sm font-semibold">Pendências da semana</h3>
+              {diaryExceptions.map(day => <div key={`diary:${day.date}`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-background p-2 text-sm">
+                <span>{formatDateBR(day.date)} · {day.diaryStatus === 'impediment' ? 'Dia com impedimento' : 'Diário pendente'}</span>
+                <Button type="button" variant="outline" size="sm" className="min-h-10" onClick={() => onOpenDailyReport(day.date)}>Abrir Diário</Button>
+              </div>)}
+              {activityExceptions.map(activity => <div key={`activity:${activity.taskId}:${activity.date}`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-background p-2 text-sm">
+                <span className="min-w-0 flex-1 break-words">{formatDateBR(activity.date)} · {activity.taskName} · {!activity.teamCode ? 'Sem equipe' : 'Abaixo da meta'}</span>
+                <Button type="button" variant="outline" size="sm" className="min-h-10" onClick={() => onOpenProduction(activity.taskId, activity.date)}>Revisar produção</Button>
+              </div>)}
+              {diaryExceptions.length === 0 && activityExceptions.length === 0 && <p className="text-sm text-muted-foreground">Nenhuma pendência nesta semana.</p>}
+            </section>
+          )}
 
           {!selectedChapter ? (
             <Card className="border-dashed"><CardContent className="py-12 text-center text-sm text-muted-foreground">Cadastre um capítulo no Cronograma para organizar a Rotina.</CardContent></Card>
           ) : (
             <>
-              {!activities.length && <p className="rounded-lg border border-dashed border-border bg-muted/20 p-3 text-sm text-muted-foreground">Nenhuma atividade de {selectedChapter.name} está programada nesta semana. Use “Buscar atividade” para fazer um lançamento fora da programação.</p>}
-              <section className={`hidden gap-3 lg:grid ${filteredWeek.length === 6 ? 'grid-cols-6' : 'grid-cols-5'}`}>
+              {!activities.length && !dailyMode && <p className="rounded-lg border border-dashed border-border bg-muted/20 p-3 text-sm text-muted-foreground">Nenhuma atividade de {selectedChapter.name} está programada nesta semana. Use “Buscar atividade” para fazer um lançamento fora da programação.</p>}
+              {dailyMode && <section className="space-y-3 rounded-xl border bg-card p-3 sm:p-4" aria-label="Apontar o dia">
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <label className="text-sm font-medium">Data do apontamento<Input type="date" value={dailyDate} onChange={event => selectWeek(event.target.value)} className="mt-1 min-h-11" /></label>
+                  <span className="text-xs text-muted-foreground">{dailyActivities.length} atividade(s) · {dailyActivities.filter(activity => activity.actualQuantity > 0).length} informada(s)</span>
+                </div>
+                {dailyActivities.length ? dailyActivities.map(activity => <DailyQuickEntry key={`${activity.taskId}:${activity.date}`} activity={activity} teams={project.teams} readOnly={readOnly} onRegister={registerActivityProduction} onOpenProduction={onOpenProduction} />) : <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">Nenhuma atividade deste capítulo está programada neste dia. Use “Buscar atividade” para registrar uma execução fora da programação.</p>}
+              </section>}
+              {!dailyMode && <section className={`hidden gap-3 lg:grid ${filteredWeek.length === 6 ? 'grid-cols-6' : 'grid-cols-5'}`}>
                 {filteredWeek.map(day => {
                   const diary = DIARY_META[day.diaryStatus];
                   const isToday = day.date === todayISO();
@@ -471,9 +560,9 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
                     </div>
                   );
                 })}
-              </section>
+              </section>}
 
-              <section className="space-y-3 lg:hidden">
+              {!dailyMode && <section className="space-y-3 lg:hidden">
                 {filteredWeek.map(day => {
                   const diary = DIARY_META[day.diaryStatus];
                   const rootGroup = groupsByDay.get(day.date)?.find(group => group.chapter.id === selectedChapterId);
@@ -487,7 +576,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
                     </Card>
                   );
                 })}
-              </section>
+              </section>}
             </>
           )}
 
@@ -495,8 +584,8 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
       <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
         <DialogContent className="max-h-[90vh] overflow-hidden sm:max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Buscar atividade em {selectedChapter?.name ?? 'capítulo'}</DialogTitle>
-            <DialogDescription>Escolha a data do lançamento e localize uma atividade deste capítulo. Se a data estiver fora da programação, a reprogramação seguirá as permissões atuais.</DialogDescription>
+            <DialogTitle>Buscar atividade {searchAllChapters ? 'em toda a EAP' : `em ${selectedChapter?.name ?? 'capítulo'}`}</DialogTitle>
+            <DialogDescription>Escolha a data do lançamento e localize uma atividade. Se a data estiver fora da programação, a reprogramação seguirá as permissões atuais.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-[180px_minmax(0,1fr)]">
             <div className="space-y-1.5">
@@ -511,12 +600,13 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
               </div>
             </div>
           </div>
+          <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={searchAllChapters} onChange={event => setSearchAllChapters(event.target.checked)} /> Buscar em toda a EAP</label>
           <div className="max-h-[58vh] space-y-3 overflow-y-auto pr-1">
             {!searchQuery.trim() ? (
               <p className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">Digite para localizar uma atividade do capítulo selecionado.</p>
             ) : searchedActivities.length ? searchedActivities.map(activity => (
               <div key={activity.taskId} className="space-y-1.5">
-                {activity.chapterPath.length > 1 && <p className="truncate text-xs font-medium text-muted-foreground">{activity.chapterPath.slice(1).map(chapter => chapter.name).join(' › ')}</p>}
+                <p className="truncate text-xs font-medium text-muted-foreground">{activity.chapterPath.map(chapter => chapter.name).join(' › ')}</p>
                 <ActivityCard
                   activity={activity}
                   teams={project.teams}
@@ -528,12 +618,12 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
                     }
                   }}
                   readOnly={readOnly}
-                  tone={chapterTone(selectedChapterId)}
+                  tone={chapterTone(activity.chapterPath[0]?.id ?? selectedChapterId)}
                   onReschedule={canRequestReschedule || canApproveReschedule ? setRescheduleTaskId : undefined}
                 />
               </div>
             )) : (
-              <p className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">Nenhuma atividade encontrada neste capítulo.</p>
+              <p className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">Nenhuma atividade encontrada.</p>
             )}
           </div>
         </DialogContent>

@@ -4,6 +4,8 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DailyReport, Project } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
+import { supabase } from '@/integrations/supabase/client';
+import { registerPendingForm } from '@/lib/pendingFormNavigation';
 import {
   projectDraftKey,
   readStoredProjectDraft,
@@ -56,11 +58,13 @@ vi.mock('@/lib/cloudProjects', () => {
   class MockCloudProjectPartialSyncError extends Error {
     updatedAt: string;
     detail: unknown;
+    cause: unknown;
 
     constructor(updatedAt: string, detail: unknown) {
       super('partial sync');
       this.updatedAt = updatedAt;
       this.detail = detail;
+      this.cause = detail;
     }
   }
 
@@ -373,6 +377,8 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  window.scrollTo = vi.fn();
+  Element.prototype.scrollTo = vi.fn();
   localStorage.clear();
   vi.clearAllMocks();
   mocks.realtimeHandlers.length = 0;
@@ -396,6 +402,81 @@ afterEach(() => {
 });
 
 describe('segurança de sincronização da página da obra', () => {
+  it('repete uma falha transitória de autosave sem exigir nova edição', async () => {
+    mocks.upsertCloudProject.mockRejectedValueOnce(new Error('Failed to fetch'));
+    renderIndex();
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar projeto' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+    expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+    expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(2);
+    expect(mocks.toastError).not.toHaveBeenCalledWith('Erro ao salvar na nuvem. Sua alteração ficou apenas neste navegador.');
+  });
+
+  it('não repete automaticamente um erro de permissão', async () => {
+    mocks.upsertCloudProject.mockRejectedValueOnce({ code: '42501', message: 'permission denied' });
+    renderIndex();
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar projeto' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(40_000); });
+    expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(1);
+    expect(mocks.toastError).toHaveBeenCalledWith('Erro ao salvar na nuvem. Sua alteração ficou apenas neste navegador.');
+  });
+
+  it('repete uma sincronização parcial transitória após proteger o rascunho', async () => {
+    mocks.upsertCloudProject
+      .mockRejectedValueOnce(new CloudProjectPartialSyncError('cloud-v3', new Error('Failed to fetch')))
+      .mockResolvedValueOnce('cloud-v4');
+    renderIndex();
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar projeto' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+    expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(1);
+    expect(readStoredProjectDraft('project-1')).not.toBeNull();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(2);
+    expect(readStoredProjectDraft('project-1')).toBeNull();
+  });
+
+  it('mantém o mesmo canal em tempo real ao trocar de área da mesma obra', async () => {
+    renderIndex();
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+    expect(supabase.channel).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Dashboard de teste' }));
+    await waitFor(() => expect(screen.queryByTestId('project-workspace')).not.toBeInTheDocument());
+    expect(supabase.channel).toHaveBeenCalledTimes(1);
+    expect(supabase.removeChannel).not.toHaveBeenCalled();
+  });
+
+  it('pede confirmação antes de desmontar um formulário operacional não confirmado', async () => {
+    renderIndex();
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+    const unregister = registerPendingForm('test-form', 'formulário de teste', () => true);
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Abrir Dashboard de teste' }));
+      expect(screen.getByText('Sair com formulário em preenchimento?')).toBeInTheDocument();
+      expect(screen.getByTestId('project-workspace')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Continuar preenchendo' }));
+      expect(screen.getByTestId('project-workspace')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Abrir Dashboard de teste' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Descartar e sair' }));
+      await waitFor(() => expect(screen.queryByTestId('project-workspace')).not.toBeInTheDocument());
+    } finally {
+      unregister();
+    }
+  });
+
   it.each([
     ['producao', 'tasks', 'project-workspace', 'Rascunho da produção no teste'],
     ['almoxarifado', 'warehouse_movements', 'warehouse-workspace', 'Rascunho do Almoxarifado no teste'],
@@ -736,6 +817,42 @@ describe('segurança de sincronização da página da obra', () => {
 
     expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(1);
     expect(screen.getByText('Conflito de cópia local')).toBeInTheDocument();
+  });
+
+  it('reconcilia registros diferentes no mesmo Aditivo sem perder a edição local', async () => {
+    const remoteAdditive = { id: 'additive-remote', title: 'Criado em outro aparelho' };
+    const remoteProject = { ...makeProject(), additives: [remoteAdditive] } as Project;
+    let remoteHasAdvanced = false;
+    mocks.loadCloudProjectRecord.mockImplementation(async (id: string) => {
+      if (id !== 'project-1') return cloudRecord(makeProject('project-2'));
+      return remoteHasAdvanced ? cloudRecord(remoteProject, 'cloud-v3') : cloudRecord(makeProject());
+    });
+    mocks.getCloudProjectVersion.mockResolvedValue({
+      projectId: 'project-1', updatedAt: 'cloud-v3', warehouseVersion: 1,
+      warehouseUpdatedAt: '2026-09-14T10:00:00.000Z',
+    });
+    mocks.upsertCloudProject
+      .mockImplementationOnce(async () => { remoteHasAdvanced = true; throw new CloudProjectConflictError(); })
+      .mockResolvedValueOnce('cloud-v4');
+
+    renderIndex('aditivo');
+    expect(await screen.findByTestId('additive-workspace')).toBeInTheDocument();
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar Aditivo local' }));
+    const additiveRealtime = mocks.realtimeHandlers.find(handler => handler.table === 'additives');
+    expect(additiveRealtime).toBeDefined();
+    act(() => additiveRealtime?.callback({ new: { id: remoteAdditive.id, updated_at: 'cloud-v3' } }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+      await Promise.resolve();
+    });
+
+    expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(2);
+    expect(mocks.upsertCloudProject.mock.calls[1]?.[0].additives).toEqual([
+      remoteAdditive,
+      { id: 'additive-local', title: 'Alteração local no Aditivo' },
+    ]);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('mantém módulo e obra enquanto as fotos da retirada ainda estão sendo enviadas', async () => {

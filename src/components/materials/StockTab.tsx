@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { registerPendingForm } from '@/lib/pendingFormNavigation';
 import type { Project, WarehouseAuditActor, WarehouseMovement, WarehouseMovementType } from '@/types/project';
 import * as MC from '@/lib/materialComparisons';
 import {
@@ -66,6 +67,11 @@ export default function StockTab({ project, onCommitWarehouseScoped, auditActor 
     responsible: '',
     taskId: '',
   });
+  useEffect(() => registerPendingForm(
+    `stock-adjustment:${project.id}`,
+    'ajuste de estoque',
+    () => !!selectedKey && !!(form.quantity.trim() || form.notes.trim() || form.responsible.trim()),
+  ), [form.quantity, form.notes, form.responsible, project.id, selectedKey]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();

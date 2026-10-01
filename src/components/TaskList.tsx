@@ -4,7 +4,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Settings2 } from 'lucide-react';
 import GerenciarEquipes from '@/components/GerenciarEquipes';
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { ChevronDown, ChevronRight, Zap, Users, AlertTriangle, Plus, Trash2, Edit3, Check, X, Upload, FolderPlus, GripVertical, ClipboardList, FolderTree, Folder, ArrowUpFromLine, Loader2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Zap, Users, AlertTriangle, Plus, Trash2, Edit3, Check, X, Upload, FolderPlus, GripVertical, ClipboardList, FolderTree, Folder, ArrowUpFromLine, Loader2, Search } from 'lucide-react';
 import DailyLogsPanel from '@/components/DailyLogsPanel';
 
 import { calculateRupDuration } from '@/lib/calculations';
@@ -16,8 +16,13 @@ import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
 import { sortTasksForSchedule, withScheduleOrderForMove } from '@/lib/taskOrdering';
 import { normalizeLaborRole } from '@/lib/laborDimensioning';
-import { applyDailyProductionLogs, upsertDailyProductionLog } from '@/lib/dailyProductionLogs';
+import { applyDailyProductionLogs } from '@/lib/dailyProductionLogs';
 import { lazyWithReload } from '@/lib/lazyWithReload';
+import { filterProductionTasks, type ProductionStatusFilter } from '@/lib/productionTaskFilter';
+import { todayISO } from '@/lib/weeklyRoutine';
+import { logToProject, type AuditUserInfo } from '@/lib/audit';
+import { registerPendingEditCommit } from '@/lib/pendingEditCommits';
+import { registerPendingForm } from '@/lib/pendingFormNavigation';
 
 const ImportSyntheticDialog = lazyWithReload(() => import('@/components/ImportSyntheticDialog'));
 const collapsedPhasesStorageKey = (projectId: string) => `obraplanner:production:collapsed-phases:${projectId}`;
@@ -47,6 +52,7 @@ interface TaskListProps {
   readOnly?: boolean;
   focusTaskId?: string;
   focusDate?: string;
+  auditActor?: AuditUserInfo;
 }
 
 const DAILY_HOURS = 8;
@@ -113,7 +119,54 @@ function InlineInput({ value, onChange, type = 'text', className = '', min, max,
   );
 }
 
-export default function TaskList({ project, onProjectChange, undoButton, readOnly = false, focusTaskId, focusDate }: TaskListProps) {
+function PercentProgressInput({ task, onCommit, rowTeam }: {
+  task: Task;
+  onCommit: (percent: number) => void;
+  rowTeam: boolean;
+}) {
+  const [draft, setDraft] = useState(String(task.percentComplete));
+  const draftRef = useRef(draft);
+  const editingRef = useRef(false);
+  useEffect(() => {
+    if (editingRef.current) return;
+    draftRef.current = String(task.percentComplete);
+    setDraft(draftRef.current);
+  }, [task.percentComplete]);
+  const commit = useCallback(() => {
+    const parsed = Number(draftRef.current);
+    const value = Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : task.percentComplete;
+    draftRef.current = String(value);
+    setDraft(draftRef.current);
+    editingRef.current = false;
+    if (value !== task.percentComplete) onCommit(value);
+    return true;
+  }, [onCommit, task.percentComplete]);
+  useEffect(() => registerPendingEditCommit(`percent:${task.id}`, commit), [commit, task.id]);
+  useEffect(() => registerPendingForm(
+    `percent:${task.id}`, 'progresso manual da tarefa',
+    () => editingRef.current && draftRef.current !== String(task.percentComplete),
+  ), [task.id, task.percentComplete]);
+  return <input
+    aria-label={`Progresso manual de ${task.name}`}
+    type="number" min={0} max={100} value={draft}
+    onFocus={event => { editingRef.current = true; event.currentTarget.select(); }}
+    onChange={event => { draftRef.current = event.target.value; setDraft(event.target.value); }}
+    onBlur={commit}
+    onKeyDown={event => {
+      if (event.key === 'Enter') { event.preventDefault(); commit(); event.currentTarget.blur(); }
+      if (event.key === 'Escape') {
+        draftRef.current = String(task.percentComplete);
+        setDraft(draftRef.current);
+        editingRef.current = false;
+        event.currentTarget.blur();
+      }
+    }}
+    className={`w-11 rounded border bg-transparent px-0.5 py-0.5 text-center text-xs font-bold ${rowTeam ? 'border-current/30' : 'border-border'}`}
+    style={rowTeam ? { color: 'inherit' } : undefined}
+  />;
+}
+
+export default function TaskList({ project, onProjectChange, undoButton, readOnly = false, focusTaskId, focusDate, auditActor }: TaskListProps) {
   // Lista de equipes do projeto (com fallback aos defaults).
   const projectTeams: TeamDefinition[] = project.teams ?? DEFAULT_TEAMS;
   const teamDef = useCallback((code?: TeamCode) => getTeamDefinition(code, projectTeams), [projectTeams]);
@@ -136,6 +189,9 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
   }, [expandedPhases, project.id, project.phases]);
 
   const [expandedRup, setExpandedRup] = useState<string | null>(null);
+  const [taskSearch, setTaskSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<ProductionStatusFilter>('all');
+  const [teamFilter, setTeamFilter] = useState('');
   const [expandedDaily, setExpandedDaily] = useState<string | null>(null);
   const [simulating, setSimulating] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<string | null>(null);
@@ -143,7 +199,6 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
   const [editingPhase, setEditingPhase] = useState<string | null>(null);
   const [phaseNameDraft, setPhaseNameDraft] = useState('');
   const [numberDraft, setNumberDraft] = useState('');
-  const handledProductionFocusRef = useRef<string | null>(null);
 
   // Drag-and-drop state
   const [dragPhaseId, setDragPhaseId] = useState<string | null>(null);
@@ -412,6 +467,8 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
   };
 
   const updateTask = useCallback((phaseId: string, taskId: string, updates: Partial<Task>) => {
+    const before = project.phases.find(phase => phase.id === phaseId)?.tasks.find(task => task.id === taskId);
+    if (!before) return;
     const updated = {
       ...project,
       phases: project.phases.map(p =>
@@ -420,25 +477,45 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
           : p
       ),
     };
+    onProjectChange('percentComplete' in updates && updates.percentComplete !== before.percentComplete
+      ? logToProject(updated, {
+          ...auditActor,
+          entityType: 'task', entityId: taskId, action: 'updated',
+          title: 'Progresso manual corrigido', description: before.name,
+          before: { percentComplete: before.percentComplete },
+          after: { percentComplete: updates.percentComplete },
+        })
+      : updated);
+  }, [auditActor, onProjectChange, project]);
+
+  const updateDailyLogs = useCallback((phaseId: string, task: Task, logs: DailyProductionLog[]) => {
+    const updatedTask = applyDailyProductionLogs(task, logs);
+    let updated: Project = {
+      ...project,
+      phases: project.phases.map(phase => phase.id === phaseId
+        ? { ...phase, tasks: phase.tasks.map(current => current.id === task.id ? updatedTask : current) }
+        : phase),
+    };
+    const previousLogs = new Map((task.dailyLogs ?? []).map(log => [log.id, log]));
+    const currentLogs = new Map(logs.map(log => [log.id, log]));
+    for (const id of new Set([...previousLogs.keys(), ...currentLogs.keys()])) {
+      const before = previousLogs.get(id);
+      const after = currentLogs.get(id);
+      if (JSON.stringify(before) === JSON.stringify(after)) continue;
+      const action = !before ? 'created' : !after ? 'deleted' : 'updated';
+      updated = logToProject(updated, {
+        ...auditActor,
+        entityType: 'task', entityId: task.id, action,
+        title: action === 'created' ? 'Apontamento de produção criado'
+          : action === 'deleted' ? 'Apontamento de produção excluído'
+            : 'Apontamento de produção corrigido',
+        description: `${task.name} · ${after?.date ?? before?.date ?? ''}`,
+        before, after,
+        metadata: { logId: id, date: after?.date ?? before?.date },
+      });
+    }
     onProjectChange(updated);
-  }, [onProjectChange, project]);
-
-  // A navegação vinda da Rotina representa uma intenção explícita de apontar
-  // naquela data. Cria a linha uma única vez, sem alterar o avanço físico.
-  useEffect(() => {
-    if (!focusTaskId || !focusDate || readOnly) return;
-    const phase = project.phases.find(item => item.tasks.some(task => task.id === focusTaskId));
-    const task = phase?.tasks.find(item => item.id === focusTaskId);
-    if (!phase || !task) return;
-
-    const focusKey = `${focusTaskId}:${focusDate}`;
-    if (handledProductionFocusRef.current === focusKey) return;
-    handledProductionFocusRef.current = focusKey;
-    if (task.dailyLogs?.some(log => log.date === focusDate)) return;
-
-    const logs = upsertDailyProductionLog(task, focusDate, 0);
-    updateTask(phase.id, task.id, applyDailyProductionLogs(task, logs));
-  }, [focusTaskId, focusDate, project, readOnly, updateTask]);
+  }, [auditActor, onProjectChange, project]);
 
   const updateLaborComp = (phaseId: string, taskId: string, compId: string, updates: Partial<LaborComposition>) => {
     const updated = {
@@ -522,7 +599,9 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
   };
 
   const deleteTask = (phaseId: string, taskId: string) => {
-    onProjectChange({
+    const before = project.phases.find(phase => phase.id === phaseId)?.tasks.find(task => task.id === taskId);
+    if (!before) return;
+    const updated = {
       ...project,
       phases: project.phases.map(p =>
         p.id === phaseId
@@ -535,7 +614,13 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
             }
           : p
       ),
-    });
+    };
+    onProjectChange(logToProject(updated, {
+      ...auditActor,
+      entityType: 'task', entityId: taskId, action: 'deleted',
+      title: 'Tarefa de produção excluída', description: before.name,
+      before, metadata: { phaseId, removedLogIds: (before.dailyLogs ?? []).map(log => log.id) },
+    }));
     if (expandedRup === taskId) setExpandedRup(null);
     if (editingTask === taskId) setEditingTask(null);
   };
@@ -599,6 +684,11 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
 
   // Memoiza árvore/numeração para evitar recomputação a cada toggle.
   const chapterTree = useMemo(() => getChapterTree(project), [project]);
+  const taskFilter = useMemo(
+    () => filterProductionTasks(project, taskSearch, statusFilter, teamFilter, todayISO()),
+    [project, taskSearch, statusFilter, teamFilter],
+  );
+  const isVisibleExpanded = (phaseId: string) => expandedPhases.has(phaseId) || (taskFilter.active && taskFilter.phaseIds.has(phaseId));
   const chapterNumbering = useMemo(() => getChapterNumbering(project), [project]);
   const mainChapters = useMemo(() => project.phases.filter(p => !p.parentId), [project.phases]);
   const orderedMainChapters = useMemo(() => {
@@ -649,6 +739,25 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
             </>
           )}
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card p-3" aria-label="Localizar tarefas da Produção">
+        <label className="relative min-w-[220px] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <span className="sr-only">Buscar tarefa ou capítulo</span>
+          <input value={taskSearch} onChange={event => setTaskSearch(event.target.value)} placeholder="Buscar tarefa ou capítulo" className="min-h-11 w-full rounded-md border border-border bg-background pl-9 pr-3 text-sm" />
+        </label>
+        <label className="sr-only" htmlFor="production-status-filter">Situação da tarefa</label>
+        <select id="production-status-filter" value={statusFilter} onChange={event => setStatusFilter(event.target.value as ProductionStatusFilter)} className="min-h-11 rounded-md border border-border bg-background px-3 text-sm">
+          <option value="all">Todas as situações</option><option value="in_progress">Em andamento</option><option value="delayed">Atrasadas</option><option value="no_team">Sem equipe</option><option value="complete">Concluídas</option>
+        </select>
+        <label className="sr-only" htmlFor="production-team-filter">Equipe da tarefa</label>
+        <select id="production-team-filter" value={teamFilter} onChange={event => setTeamFilter(event.target.value)} className="min-h-11 rounded-md border border-border bg-background px-3 text-sm">
+          <option value="">Todas as equipes</option>
+          {projectTeams.map(team => <option key={team.code} value={team.code}>{team.label}</option>)}
+        </select>
+        {taskFilter.active && <button type="button" className="min-h-11 rounded-md border border-border px-3 text-sm hover:bg-muted" onClick={() => { setTaskSearch(''); setStatusFilter('all'); setTeamFilter(''); }}>Limpar filtros</button>}
+        {taskFilter.active && <span className="text-xs text-muted-foreground" role="status">{taskFilter.count} tarefa(s)</span>}
       </div>
 
       {importSyntheticOpen ? (
@@ -743,7 +852,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
         // Renderiza um cartão de capítulo (com suas tarefas dentro). Reaproveita o layout existente.
         const renderPhaseCard = (phase: Phase, pi: number, isSub: boolean, depth: number = 0) => {
           const phaseProgress = phase.tasks.length ? Math.round(phase.tasks.reduce((s, t) => s + t.percentComplete, 0) / phase.tasks.length) : 0;
-          const isExpanded = expandedPhases.has(phase.id);
+          const isExpanded = isVisibleExpanded(phase.id);
           const hasCritical = phase.tasks.some(t => t.isCritical);
           const num = numbering.get(phase.id) || '';
           const isDropTarget = dropChapterTargetId === phase.id && dragChapterId !== phase.id;
@@ -779,8 +888,8 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                 onDrop={e => handleChapterDrop(e, phase.id)}
               >
                 <div
-                  draggable={!readOnly}
-                  onDragStart={e => { if (!readOnly) handleChapterDragStart(e, phase.id); }}
+                  draggable={!readOnly && !taskFilter.active}
+                  onDragStart={e => { if (!readOnly && !taskFilter.active) handleChapterDragStart(e, phase.id); }}
                   onDragEnd={handleChapterDragEnd}
                   onClick={e => {
                     // A linha inteira alterna o capítulo, exceto seus controles próprios.
@@ -790,7 +899,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                     togglePhase(phase.id);
                   }}
                   className={`flex-1 min-w-0 flex items-center gap-3 px-5 py-3 ${headerBgClass} cursor-pointer text-foreground transition-colors duration-200 ease-out hover:bg-muted/70`}
-                  title={readOnly ? 'Clique para expandir ou recolher este capítulo' : 'Clique para expandir ou recolher; arraste para mover/reordenar este capítulo'}
+                  title={readOnly || taskFilter.active ? 'Clique para expandir ou recolher este capítulo' : 'Clique para expandir ou recolher; arraste para mover/reordenar este capítulo'}
                   aria-expanded={isExpanded}
                 >
                   <GripVertical className="w-3.5 h-3.5 text-muted-foreground/60 flex-shrink-0" />
@@ -885,7 +994,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                 <div className="overflow-hidden" data-chapter-body>
                      <div className="border-t border-border overflow-x-auto">
                        <div className="min-w-[1200px]">
-                       {phase.tasks.length > 0 && (
+                       {phase.tasks.some(task => !taskFilter.active || taskFilter.taskIds.has(task.id)) && (
                          <div className="grid gap-2 px-3 py-2.5 bg-secondary/50 text-xs font-semibold text-muted-foreground uppercase tracking-wide" style={{ gridTemplateColumns: '44px minmax(360px,4fr) 110px 120px 90px 110px 90px 160px 96px' }}>
                            <div>Eq.</div>
                            <div>Tarefa</div>
@@ -899,7 +1008,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                          </div>
                        )}
 
-                      {sortTasksForSchedule(phase.tasks).map(task => {
+                      {sortTasksForSchedule(phase.tasks).filter(task => !taskFilter.active || taskFilter.taskIds.has(task.id)).map(task => {
                         const endDate = new Date(task.startDate);
                         // Fim = último dia trabalhado = start + (duration − 1)
                         endDate.setDate(endDate.getDate() + Math.max(0, task.duration - 1));
@@ -911,10 +1020,10 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                         return (
                           <div
                             key={task.id}
-                            draggable={!readOnly}
-                            onDragStart={() => { if (!readOnly) handleDragStart(phase.id, task.id); }}
-                            onDragOver={(e) => { if (!readOnly) handleDragOver(e, task.id); }}
-                            onDrop={(e) => { if (!readOnly) handleDrop(e, phase.id, task.id); }}
+                            draggable={!readOnly && !taskFilter.active}
+                            onDragStart={() => { if (!readOnly && !taskFilter.active) handleDragStart(phase.id, task.id); }}
+                            onDragOver={(e) => { if (!readOnly && !taskFilter.active) handleDragOver(e, task.id); }}
+                            onDrop={(e) => { if (!readOnly && !taskFilter.active) handleDrop(e, phase.id, task.id); }}
                             onDragEnd={handleDragEnd}
                             className={`${dropTargetId === task.id && dragTaskId !== task.id ? 'border-t-2 border-t-primary' : ''} ${dragTaskId === task.id ? 'opacity-40' : ''}`}
                           >
@@ -1109,19 +1218,12 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                                       style={{ width: `${task.percentComplete}%` }}
                                     />
                                   </div>
-                                  {readOnly ? (
-                                    <span className="w-11 text-xs font-bold text-center tabular-nums">{task.percentComplete}%</span>
+                                  {readOnly || (task.dailyLogs?.length ?? 0) > 0 ? (
+                                    <span className="w-11 text-xs font-bold text-center tabular-nums"
+                                      title={readOnly ? undefined : 'Progresso calculado pelos apontamentos diários'}>{task.percentComplete}%</span>
                                   ) : (
-                                    <input
-                                      type="number"
-                                      min={0}
-                                      max={100}
-                                      value={task.percentComplete}
-                                      onFocus={e => e.currentTarget.select()}
-                                      onChange={e => updateTask(phase.id, task.id, { percentComplete: Math.min(100, Math.max(0, Number(e.target.value))) })}
-                                      className={`w-11 text-xs font-bold text-center bg-transparent border rounded px-0.5 py-0.5 ${rowTeam ? 'border-current/30' : 'border-border'}`}
-                                      style={rowTeam ? { color: 'inherit' } : undefined}
-                                    />
+                                    <PercentProgressInput task={task} rowTeam={!!rowTeam}
+                                      onCommit={percentComplete => updateTask(phase.id, task.id, { percentComplete })} />
                                   )}
                                 </div>
                               </div>
@@ -1325,8 +1427,9 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                             {/* Daily production log panel */}
                             {expandedDaily === task.id && (
                                 <DailyLogsPanel
+                                  projectId={project.id}
                                   task={task}
-                                  onChange={(logs: DailyProductionLog[]) => updateTask(phase.id, task.id, applyDailyProductionLogs(task, logs))}
+                                  onChange={(logs: DailyProductionLog[]) => updateDailyLogs(phase.id, task, logs)}
                                   focusDate={focusTaskId === task.id ? focusDate : undefined}
                                 />
                             )}
@@ -1361,13 +1464,14 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
             )}
 
             {(() => {
-              const renderNode = (node: import('@/lib/chapters').ChapterNode, idx: number, depth: number): JSX.Element => (
+              const renderNode = (node: import('@/lib/chapters').ChapterNode, idx: number, depth: number): JSX.Element | null => (
+                taskFilter.active && !taskFilter.phaseIds.has(node.phase.id) ? null :
                 <div key={node.phase.id} className="space-y-2" style={{ marginLeft: depth > 0 ? `${depth * 1.5}rem` : undefined }}>
                   {renderPhaseCard(node.phase, idx, depth > 0, depth)}
-                  {expandedPhases.has(node.phase.id) && node.children.map((child, cIdx) =>
+                  {isVisibleExpanded(node.phase.id) && node.children.map((child, cIdx) =>
                     renderNode(child, idx * 100 + cIdx, depth + 1),
                   )}
-                  {!readOnly && expandedPhases.has(node.phase.id) && (() => {
+                  {!readOnly && !taskFilter.active && isVisibleExpanded(node.phase.id) && (() => {
                     const isAddDropActive =
                       dragChapterId &&
                       dragChapterId !== node.phase.id &&
@@ -1430,10 +1534,12 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
               );
               return tree.map((node, idx) => renderNode(node, idx, 0));
             })()}
+            {taskFilter.active && taskFilter.phaseIds.size === 0 && <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">Nenhuma tarefa encontrada. Ajuste ou limpe os filtros.</p>}
 
             {/* Phases órfãs (parentId apontando para um capítulo inexistente) */}
             {project.phases
               .filter(p => p.parentId && !project.phases.some(c => c.id === p.parentId))
+              .filter(p => !taskFilter.active || taskFilter.phaseIds.has(p.id))
               .map((p, i) => renderPhaseCard(p, tree.length + i, false))}
 
             {/* Drop zone final: solta um capítulo aqui para enviá-lo ao fim da lista. */}

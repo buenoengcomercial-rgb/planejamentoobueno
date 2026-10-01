@@ -5,12 +5,16 @@ import { AppView, DailyReport, Project, WarehouseRequisition } from '@/types/pro
 import AppSidebar from '@/components/AppSidebar';
 import UndoButton from '@/components/UndoButton';
 import SaveStatusIndicator, { SaveStatus } from '@/components/SaveStatusIndicator';
+import { recordSyncDiagnostic } from '@/lib/syncDiagnostics';
 import MigrationDialog from '@/components/MigrationDialog';
 import { Menu, X, Loader2, Building2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { applyRupToProject, applyDailyLogsToProject, calculateCPM, captureBaseline, syncBaselineWithRup, settleAllDependencies } from '@/lib/calculations';
 import { resolveObraConfig } from '@/lib/obraConfig';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
+import { getPendingFormNames } from '@/lib/pendingFormNavigation';
+import { cloudRetryDelay, isTransientCloudError } from '@/lib/cloudRetry';
+import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { scheduleIdlePreload } from '@/lib/idlePreload';
 import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
@@ -102,6 +106,7 @@ import {
   getMissingProjectCollections,
   hydrateProjectFromCloud,
   mergeHydratedProjectCollections,
+  mergeProjectRecordsThreeWay,
   mergeProjectMetadata,
   ProjectHydrationError,
   ProjectSnapshotUnavailableError,
@@ -125,7 +130,6 @@ const UNDO_LIMIT = 20;
 const SAVE_DEBOUNCE_MS = 4000;
 const LOCAL_DRAFT_DEBOUNCE_MS = 900;
 const REMOTE_VERSION_POLL_MS = 15000;
-const REALTIME_FALLBACK_POLL_MS = 15000;
 const UI_SESSION_VERSION = 1;
 const APP_UI_SESSION_KEY = 'obraplanner:ui-session';
 
@@ -303,33 +307,58 @@ export default function Index() {
     draftProtected: boolean;
   } | null>(null);
   const [partialSyncRetrying, setPartialSyncRetrying] = useState(false);
+  const [saveRetryTick, setSaveRetryTick] = useState(0);
   const [draftConflictProjectId, setDraftConflictProjectId] = useState<string | null>(null);
   const [draftConflictResolving, setDraftConflictResolving] = useState(false);
   const [recoveredDraftSaveRevision, setRecoveredDraftSaveRevision] = useState(0);
+  const { confirm: confirmDiscardPendingForm, dialog: pendingFormDialog } = useConfirmDelete();
+
+  const openAfterPendingFormCheck = useCallback((open: () => void) => {
+    const pendingForms = getPendingFormNames();
+    if (pendingForms.length === 0) {
+      open();
+      return;
+    }
+    confirmDiscardPendingForm({
+      title: 'Sair com formulário em preenchimento?',
+      description: `Há alterações não confirmadas em ${pendingForms.join(', ')}. Deseja descartá-las e continuar?`,
+      confirmLabel: 'Descartar e sair',
+      cancelLabel: 'Continuar preenchendo',
+    }, open);
+  }, [confirmDiscardPendingForm]);
 
   const handleOpenDailyReport = useCallback((dateISO: string, measurementFilter?: string) => {
-    setDailyReportInitialDate(dateISO);
-    setDailyReportInitialFilter(measurementFilter);
-    setDailyReportNavKey(k => k + 1); // força re-aplicação mesmo se valores se repetirem
-    setProductionWorkspaceInitialTab('dailyReport');
-    setCurrentView('dailyReport');
-    setSidebarOpen(false);
-    const projectId = rawProjectRef.current?.id;
-    if (projectId) navigate(`/obras/${projectId}/diario?data=${dateISO}`);
-  }, [navigate]);
+    openAfterPendingFormCheck(() => {
+      setDailyReportInitialDate(dateISO);
+      setDailyReportInitialFilter(measurementFilter);
+      setDailyReportNavKey(k => k + 1); // força re-aplicação mesmo se valores se repetirem
+      setProductionWorkspaceInitialTab('dailyReport');
+      setCurrentView('dailyReport');
+      setSidebarOpen(false);
+      const projectId = rawProjectRef.current?.id;
+      if (projectId) navigate(`/obras/${projectId}/diario?data=${dateISO}`);
+    });
+  }, [navigate, openAfterPendingFormCheck]);
 
   const handleOpenProductionActivity = useCallback((taskId: string, dateISO: string) => {
-    setProductionWorkspaceInitialTab('production');
-    setCurrentView('tasks');
-    setSidebarOpen(false);
-    const projectId = rawProjectRef.current?.id;
-    if (projectId) navigate(`/obras/${projectId}/producao?atividade=${encodeURIComponent(taskId)}&data=${encodeURIComponent(dateISO)}`);
-  }, [navigate]);
+    openAfterPendingFormCheck(() => {
+      setProductionWorkspaceInitialTab('production');
+      setCurrentView('tasks');
+      setSidebarOpen(false);
+      const projectId = rawProjectRef.current?.id;
+      if (projectId) navigate(`/obras/${projectId}/producao?atividade=${encodeURIComponent(taskId)}&data=${encodeURIComponent(dateISO)}`);
+    });
+  }, [navigate, openAfterPendingFormCheck]);
 
   const undoStacksRef = useRef<UndoStacks>({ dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] });
   const [undoVersion, setUndoVersion] = useState(0);
   const rawProjectRef = useRef<Project | null>(null);
   const saveTimerRef = useRef<number | null>(null);
+  const saveRetryTimerRef = useRef<number | null>(null);
+  const saveRetryAttemptRef = useRef(0);
+  const saveRetryProjectJsonRef = useRef<string | null>(null);
+  const partialSyncRetryAttemptRef = useRef(0);
+  const partialSyncRetryableRef = useRef(false);
   const draftWriteTimerRef = useRef<number | null>(null);
   const pendingDraftRef = useRef<{ project: Project; baseUpdatedAt: string | null } | null>(null);
   const initialLoadRef = useRef(false);
@@ -347,6 +376,8 @@ export default function Index() {
   const pendingRealtimeDailyReportsRef = useRef<Map<string, { projectId: string; report: DailyReport }>>(new Map());
   const realtimeDailyReportTimerRef = useRef<number | null>(null);
   const refreshDailyReportFromRealtimeRef = useRef<(incoming: DailyReport) => void>(() => undefined);
+  const checkRemoteProjectVersionRef = useRef<() => Promise<void>>(async () => undefined);
+  const refreshProjectFromRealtimeRef = useRef<(sources: readonly string[]) => Promise<void>>(async () => undefined);
   const currentProjectUpdatedAtRef = useRef<string | null>(null);
   const saveRequestSeqRef = useRef(0);
   const lastSavedProjectJsonRef = useRef<string | null>(null);
@@ -356,7 +387,6 @@ export default function Index() {
   const remoteCheckInFlightRef = useRef(false);
   const realtimeRefreshTimerRef = useRef<number | null>(null);
   const pendingRealtimeSourcesRef = useRef<Set<string>>(new Set());
-  const lastLocalSaveAtRef = useRef(0);
   const ownWarehouseRealtimeRowsRef = useRef<Map<string, number>>(new Map());
   const currentWarehouseVersionRef = useRef<number | null>(null);
   // Mantém a última versão observada mesmo quando uma tela legado força a
@@ -482,10 +512,15 @@ export default function Index() {
   const backgroundRefreshing = rawProject
     ? backgroundRefreshingCollectionsRef.current.get(rawProject.id)
     : undefined;
+  const locallyDirty = localDirtyCollectionsRef.current.get(rawProject?.id ?? '');
+  const productionLocallyDirty = ['taskDailyLogs', 'eapChapters', 'tasks']
+    .some(collection => locallyDirty?.has(collection as ProjectCollectionKey));
   const collectionsToHydrate = normalizeProjectCollections([
     ...missingProjectCollections,
     ...staleCurrentViewCollections,
-  ]).filter(collection => !backgroundRefreshing?.has(collection));
+  ]).filter(collection => !backgroundRefreshing?.has(collection)
+    && !locallyDirty?.has(collection)
+    && !(productionLocallyDirty && ['taskDailyLogs', 'eapChapters', 'tasks'].includes(collection)));
   const currentViewDataReady = !!rawProject && missingProjectCollections.length === 0;
 
   const refreshPendingRemoteAreas = useCallback((projectId: string) => {
@@ -844,10 +879,6 @@ export default function Index() {
     }
     if (!remoteVersion) return null;
 
-    // Um formulário local no mesmo domínio ainda é conflito real. Não o
-    // rebaseie automaticamente nem substitua o que está sendo digitado.
-    if (hasLocalCollectionConflict(current.id, requestedCollections)) return null;
-
     const refreshing = backgroundRefreshingCollectionsRef.current.get(current.id) ?? new Set<ProjectCollectionKey>();
     requestedCollections.forEach(collection => refreshing.add(collection));
     backgroundRefreshingCollectionsRef.current.set(current.id, refreshing);
@@ -872,33 +903,39 @@ export default function Index() {
     if (!latest
       || latest.id !== current.id
       || record.updatedAt !== remoteVersion.updatedAt
-      || hasLocalCollectionConflict(current.id, requestedCollections)
       || conflictDetectedRef.current) {
       discardCloudProjectRecord(record);
       return null;
     }
 
-    const rebasedCurrent = mergeHydratedProjectCollections(
-      latest,
-      record.project,
-      requestedCollections,
-    );
-    const rebasedForRetry = mergeHydratedProjectCollections(
-      projectToRebase,
-      record.project,
-      requestedCollections,
-    );
-    let rebasedSavedBaseline = rebasedCurrent;
+    const sameCollectionEdited = hasLocalCollectionConflict(current.id, requestedCollections);
+    let savedBaseline: Project | null = null;
     if (lastSavedProjectJsonRef.current) {
-      try {
-        rebasedSavedBaseline = mergeHydratedProjectCollections(
-          JSON.parse(lastSavedProjectJsonRef.current) as Project,
-          record.project,
-          requestedCollections,
-        );
-      } catch {
-        // A fotografia em tela ainda é mais segura que descartar a edição local.
+      try { savedBaseline = JSON.parse(lastSavedProjectJsonRef.current) as Project; } catch { /* preserve conflict */ }
+    }
+    let rebasedCurrent = sameCollectionEdited
+      ? savedBaseline && mergeProjectRecordsThreeWay(savedBaseline, latest, record.project, requestedCollections)
+      : mergeHydratedProjectCollections(latest, record.project, requestedCollections);
+    let rebasedForRetry = sameCollectionEdited
+      ? savedBaseline && mergeProjectRecordsThreeWay(savedBaseline, projectToRebase, record.project, requestedCollections)
+      : mergeHydratedProjectCollections(projectToRebase, record.project, requestedCollections);
+    if (!rebasedCurrent || !rebasedForRetry) {
+      discardCloudProjectRecord(record);
+      return null;
+    }
+    const remoteMetadataChanged = savedBaseline && hasProjectMetadataChanges(savedBaseline, record.project);
+    if (remoteMetadataChanged) {
+      if (hasProjectMetadataChanges(savedBaseline, latest)) {
+        discardCloudProjectRecord(record);
+        return null;
       }
+      rebasedCurrent = mergeProjectMetadata(rebasedCurrent, record.project);
+      rebasedForRetry = mergeProjectMetadata(rebasedForRetry, record.project);
+    }
+    let rebasedSavedBaseline = rebasedCurrent;
+    if (savedBaseline) {
+      rebasedSavedBaseline = mergeHydratedProjectCollections(savedBaseline, record.project, requestedCollections);
+      if (remoteMetadataChanged) rebasedSavedBaseline = mergeProjectMetadata(rebasedSavedBaseline, record.project);
     }
 
     confirmCloudProjectRecord(record);
@@ -906,7 +943,6 @@ export default function Index() {
     currentProjectUpdatedAtRef.current = record.updatedAt;
     currentWarehouseVersionRef.current = record.warehouseVersion;
     lastObservedWarehouseVersionRef.current = record.warehouseVersion;
-    lastLocalSaveAtRef.current = Date.now();
     setCurrentProjectUpdatedAt(record.updatedAt);
     setLastCloudConfirmedAt(new Date().toISOString());
     setRemoteUpdateAt(new Date().toISOString());
@@ -1032,6 +1068,7 @@ export default function Index() {
         };
         const draft = writeProtectedProjectDraft(effectiveProject, updatedAt);
         const draftProtected = !!draft;
+        partialSyncRetryableRef.current = isTransientCloudError(error);
         const pending = partialSyncPendingRef.current;
         if (pending?.projectId === effectiveProject.id) {
           partialSyncPendingRef.current = { ...pending, draftProtected };
@@ -1045,7 +1082,6 @@ export default function Index() {
         }
       }
       conflictDetectedRef.current = false;
-      lastLocalSaveAtRef.current = Date.now();
       currentProjectUpdatedAtRef.current = updatedAt;
       // O trigger do banco pode avançar a versão do Almoxarifado quando uma
       // tela ainda migrada parcialmente alterar sua ramificação. A próxima
@@ -1053,6 +1089,8 @@ export default function Index() {
       currentWarehouseVersionRef.current = null;
       setCurrentProjectUpdatedAt(updatedAt);
       if (!partialSync) {
+        partialSyncRetryAttemptRef.current = 0;
+        partialSyncRetryableRef.current = false;
         if (partialSyncPendingRef.current?.projectId === effectiveProject.id) {
           partialSyncPendingRef.current = null;
         }
@@ -1115,7 +1153,7 @@ export default function Index() {
     }
   }, [cancelScheduledDraft, writeProtectedProjectDraft]);
 
-  const retryPendingPartialSync = useCallback(async () => {
+  const retryPendingPartialSync = useCallback(async (silent = false) => {
     const pending = partialSyncPendingRef.current;
     if (!pending || !orgId || partialSyncRetrying) return;
     if (!navigator.onLine) {
@@ -1131,21 +1169,44 @@ export default function Index() {
         setSaveStatus('error');
         return;
       }
-      toast.success('Sincronização detalhada confirmada na nuvem.');
+      if (!silent) toast.success('Sincronização detalhada confirmada na nuvem.');
     } catch (error) {
       console.warn('Não foi possível repetir a sincronização detalhada.', error);
       if (error instanceof CloudProjectConflictError) {
+        partialSyncRetryableRef.current = false;
         partialSyncPendingRef.current = null;
         setPartialSyncIssue(null);
         await handleCloudConflict(pending.project);
         return;
       }
       setSaveStatus(navigator.onLine ? 'error' : 'offline');
-      toast.error('A sincronização ainda não foi confirmada. A cópia pendente foi mantida.');
+      partialSyncRetryableRef.current = isTransientCloudError(error);
+      setPartialSyncIssue(current => current?.projectId === pending.projectId ? { ...current } : current);
+      if (!silent) toast.error('A sincronização ainda não foi confirmada. A cópia pendente foi mantida.');
     } finally {
       setPartialSyncRetrying(false);
     }
   }, [handleCloudConflict, orgId, partialSyncRetrying, persistProject]);
+
+  useEffect(() => {
+    if (!partialSyncIssue || !partialSyncIssue.draftProtected || !partialSyncRetryableRef.current
+      || partialSyncRetrying || !navigator.onLine) return;
+    const delay = cloudRetryDelay(partialSyncRetryAttemptRef.current++);
+    if (delay === null) return;
+    const timer = window.setTimeout(() => void retryPendingPartialSync(true), delay);
+    return () => window.clearTimeout(timer);
+  }, [partialSyncIssue, partialSyncRetrying, retryPendingPartialSync]);
+
+  useEffect(() => {
+    const retryWhenOnline = () => {
+      if (partialSyncPendingRef.current && partialSyncRetryableRef.current) {
+        partialSyncRetryAttemptRef.current = 0;
+        void retryPendingPartialSync(true);
+      }
+    };
+    window.addEventListener('online', retryWhenOnline);
+    return () => window.removeEventListener('online', retryWhenOnline);
+  }, [retryPendingPartialSync]);
 
   const downloadConflictingDraft = useCallback(() => {
     if (!draftConflictProjectId) return;
@@ -1323,6 +1384,10 @@ export default function Index() {
   const runProtectedNavigation = useCallback(async <T,>(
     action: () => Promise<T>,
   ): Promise<T | undefined> => {
+    if (getPendingFormNames().length > 0) {
+      toast.warning('Conclua ou descarte o formulário em preenchimento antes de trocar de obra ou sair desta área.');
+      return undefined;
+    }
     if (navigationInFlightRef.current) {
       toast.warning('Aguarde a navegação atual terminar.');
       return undefined;
@@ -1508,6 +1573,7 @@ export default function Index() {
   // Salvamento debounced (somente se o usuário pode editar)
   useEffect(() => {
     void recoveredDraftSaveRevision;
+    void saveRetryTick;
     if (!user || !orgId || !rawProject || !initialLoadRef.current) return;
     if (!canPersistProject) return;
     // O Diário tem fila própria em daily_reports. Não permita que o autosave
@@ -1519,26 +1585,48 @@ export default function Index() {
       setSaveStatus(partialSyncPendingRef.current?.projectId === rawProject.id ? 'error' : 'saved');
       return;
     }
+    const currentJson = serializeProject(rawProject);
+    if (saveRetryProjectJsonRef.current !== currentJson) {
+      saveRetryProjectJsonRef.current = currentJson;
+      saveRetryAttemptRef.current = 0;
+    }
+    if (saveRetryTimerRef.current !== null) {
+      window.clearTimeout(saveRetryTimerRef.current);
+      saveRetryTimerRef.current = null;
+    }
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-    setSaveStatus('saving');
+    setSaveStatus(navigator.onLine ? 'pending' : 'offline');
     saveTimerRef.current = window.setTimeout(async () => {
       try {
         saveTimerRef.current = null;
+        setSaveStatus('saving');
         await persistProject(rawProject, orgId);
+        if (partialSyncPendingRef.current?.projectId !== rawProject.id) saveRetryAttemptRef.current = 0;
       } catch (e) {
         console.warn(e);
         if (e instanceof CloudProjectConflictError) {
           await handleCloudConflict(rawProject);
         } else {
           setSaveStatus(navigator.onLine ? 'error' : 'offline');
-          toast.error('Erro ao salvar na nuvem. Sua alteração ficou apenas neste navegador.');
+          const retryDelay = isTransientCloudError(e) ? cloudRetryDelay(saveRetryAttemptRef.current++) : null;
+          if (retryDelay !== null) {
+            saveRetryTimerRef.current = window.setTimeout(() => {
+              saveRetryTimerRef.current = null;
+              if (rawProjectRef.current?.id === rawProject.id && !conflictDetectedRef.current) {
+                setSaveRetryTick(value => value + 1);
+              }
+            }, retryDelay);
+          } else {
+            toast.error('Erro ao salvar na nuvem. Sua alteração ficou apenas neste navegador.');
+          }
         }
       }
     }, SAVE_DEBOUNCE_MS);
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+      if (saveRetryTimerRef.current !== null) window.clearTimeout(saveRetryTimerRef.current);
     };
-  }, [rawProject, user, orgId, canPersistProject, persistProject, handleCloudConflict, recoveredDraftSaveRevision]);
+  }, [rawProject, user, orgId, canPersistProject, persistProject, handleCloudConflict, recoveredDraftSaveRevision, saveRetryTick]);
 
   const checkRemoteProjectVersion = useCallback(async () => {
     const current = rawProjectRef.current;
@@ -1817,9 +1905,11 @@ export default function Index() {
     setRemoteUpdateAt(new Date().toISOString());
   }, [markRemoteCollections, mergeConfirmedDailyReportIntoPartialSync, safeCurrentView]);
 
-  useEffect(() => {
-    refreshDailyReportFromRealtimeRef.current = refreshDailyReportFromRealtime;
-  }, [refreshDailyReportFromRealtime]);
+  // A assinatura pertence à obra, enquanto os callbacks acompanham a aba
+  // aberta. Referências atualizadas evitam desmontar o canal ao trocar de área.
+  checkRemoteProjectVersionRef.current = checkRemoteProjectVersion;
+  refreshProjectFromRealtimeRef.current = refreshProjectFromRealtime;
+  refreshDailyReportFromRealtimeRef.current = refreshDailyReportFromRealtime;
 
   useEffect(() => {
     const pendingReports = pendingRealtimeDailyReportsRef.current;
@@ -1840,7 +1930,7 @@ export default function Index() {
       if (source === 'daily_reports') {
         const incoming = payload?.new?.data as DailyReport | undefined;
         if (incoming?.date) {
-          refreshDailyReportFromRealtime(incoming);
+          refreshDailyReportFromRealtimeRef.current(incoming);
           return;
         }
       }
@@ -1861,11 +1951,9 @@ export default function Index() {
       // Ignora o eco da própria gravação (mesma versão que já está carregada aqui).
       const remoteUpdatedAt = typeof payload?.new?.updated_at === 'string' ? payload.new.updated_at : null;
       if (remoteUpdatedAt && remoteUpdatedAt === currentProjectUpdatedAtRef.current) return;
-      // O próprio save normalmente publica várias linhas normalizadas em
-      // sequência. A janela curta evita refetch do que já foi confirmado;
-      // qualquer alteração externa posterior continua coberta pelo realtime e
-      // pela verificação de versão.
-      if (Date.now() - lastLocalSaveAtRef.current < 800) return;
+      // O eco da própria gravação é descartado pela versão confirmada acima.
+      // Uma janela baseada só no relógio poderia esconder a edição de outro
+      // usuário feita logo após o nosso salvamento enquanto o canal segue ativo.
       if (source) {
         const affectedCollections = projectCollectionsForRealtimeTable(source);
         // Registra imediatamente a área que chegou pelo realtime. Se o
@@ -1882,7 +1970,7 @@ export default function Index() {
       realtimeRefreshTimerRef.current = window.setTimeout(() => {
         const sources = [...pendingRealtimeSourcesRef.current];
         pendingRealtimeSourcesRef.current.clear();
-        void refreshProjectFromRealtime(sources);
+        void refreshProjectFromRealtimeRef.current(sources);
       }, 1200);
     };
     const channel = supabase.channel(`project-live:${projectId}`);
@@ -1894,37 +1982,61 @@ export default function Index() {
         event: '*', schema: 'public', table, filter: `project_id=eq.${projectId}`,
       }, payload => queueRefresh(payload, table));
     });
-    let fallbackTimer: number | null = null;
-    const stopFallback = () => {
-      if (fallbackTimer) { window.clearInterval(fallbackTimer); fallbackTimer = null; }
+    let disposed = false;
+    let reconnectTimer: number | null = null;
+    let reconnectAttempts = 0;
+    const clearReconnect = () => {
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     };
-    const startFallback = () => {
-      if (fallbackTimer) return;
-      fallbackTimer = window.setInterval(() => void checkRemoteProjectVersion(), REALTIME_FALLBACK_POLL_MS);
+    const scheduleReconnect = (immediate = false) => {
+      if (disposed || reconnectTimer !== null || realtimeConnectedRef.current) return;
+      const delay = immediate ? 0 : [2000, 5000, 15000, 30000][Math.min(reconnectAttempts++, 3)];
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        if (disposed || realtimeConnectedRef.current) return;
+        if (!navigator.onLine || document.visibilityState !== 'visible') return;
+        recordSyncDiagnostic({ area: 'realtime', operation: 'reconnect', outcome: 'disconnected', attempt: reconnectAttempts });
+        channel.subscribe(handleChannelStatus);
+        // Um canal CLOSED pode não responder à primeira tentativa. O polling
+        // de versão cobre o intervalo até uma assinatura voltar a confirmar.
+        scheduleReconnect();
+      }, delay);
     };
-    channel.subscribe(status => {
+    const handleChannelStatus = (status: string) => {
+      if (disposed) return;
       const connected = status === 'SUBSCRIBED';
+      const wasConnected = realtimeConnectedRef.current;
       realtimeConnectedRef.current = connected;
       setRealtimeConnected(connected);
       if (connected) {
-        stopFallback();
-        void checkRemoteProjectVersion();
+        if (!wasConnected) recordSyncDiagnostic({ area: 'realtime', operation: 'channel', outcome: 'connected' });
+        clearReconnect();
+        reconnectAttempts = 0;
+        void checkRemoteProjectVersionRef.current();
         return;
       }
       if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        if (wasConnected) recordSyncDiagnostic({ area: 'realtime', operation: 'channel', outcome: 'disconnected' });
         console.warn(`[realtime] Canal da obra ${projectId} indisponível: ${status}`);
-        startFallback();
+        if (status === 'CLOSED') scheduleReconnect();
       }
-    });
+    };
+    channel.subscribe(handleChannelStatus);
     const handleVisibility = () => {
       if (document.visibilityState !== 'visible') return;
-      if (realtimeConnectedRef.current) void checkRemoteProjectVersion();
-      else void channel.subscribe();
+      if (!realtimeConnectedRef.current) scheduleReconnect(true);
+    };
+    const handleOnline = () => {
+      if (!realtimeConnectedRef.current) scheduleReconnect(true);
     };
     document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('online', handleOnline);
     return () => {
+      disposed = true;
       document.removeEventListener('visibilitychange', handleVisibility);
-      stopFallback();
+      window.removeEventListener('online', handleOnline);
+      clearReconnect();
       realtimeConnectedRef.current = false;
       setRealtimeConnected(false);
       if (realtimeRefreshTimerRef.current) {
@@ -1933,32 +2045,51 @@ export default function Index() {
       }
       void supabase.removeChannel(channel);
     };
-  }, [bootLoading, checkRemoteProjectVersion, rawProject?.id, refreshDailyReportFromRealtime, refreshProjectFromRealtime]);
+  }, [bootLoading, rawProject?.id]);
 
   useEffect(() => {
     if (!rawProject?.id || bootLoading) return;
-    const checkNow = () => void checkRemoteProjectVersion();
+    let checkTimer: number | null = null;
+    const checkNow = () => {
+      if (checkTimer !== null) return;
+      checkTimer = window.setTimeout(() => {
+        checkTimer = null;
+        void checkRemoteProjectVersionRef.current();
+      }, 200);
+    };
     const handleOnline = () => {
       setSaveStatus(conflictDetectedRef.current ? 'conflict' : 'updating');
+      const current = rawProjectRef.current;
+      if (current && saveRetryAttemptRef.current > 0 && !conflictDetectedRef.current
+        && partialSyncPendingRef.current?.projectId !== current.id
+        && serializeProject(current) !== lastSavedProjectJsonRef.current) {
+        saveRetryAttemptRef.current = 0;
+        setSaveRetryTick(value => value + 1);
+      }
       checkNow();
     };
     const handleOffline = () => setSaveStatus('offline');
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') checkNow();
     };
-    const timer = window.setInterval(checkNow, REMOTE_VERSION_POLL_MS);
+    // O tempo real cobre a sessão conectada. Uma única consulta periódica
+    // substitui o fallback e o polling permanente enquanto ele está ativo.
+    const timer = window.setInterval(() => {
+      if (!realtimeConnectedRef.current) checkNow();
+    }, REMOTE_VERSION_POLL_MS);
     window.addEventListener('focus', checkNow);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
     document.addEventListener('visibilitychange', handleVisibility);
     return () => {
       window.clearInterval(timer);
+      if (checkTimer !== null) window.clearTimeout(checkTimer);
       window.removeEventListener('focus', checkNow);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [bootLoading, checkRemoteProjectVersion, rawProject?.id]);
+  }, [bootLoading, rawProject?.id]);
 
   const protectLocalDraftBeforePageSleeps = useCallback(() => {
     if (!canPersistProject || !rawProjectRef.current) return;
@@ -1996,6 +2127,7 @@ export default function Index() {
       const partialSyncPending = !!currentId && partialSyncPendingRef.current?.projectId === currentId;
       if (!saveTimerRef.current
         && !inFlightSaveRef.current
+        && getPendingFormNames().length === 0
         && !warehouseClientOperationInFlightRef.current
         && !warehouseOperationInFlightRef.current
         && !warehouseScopedOperationInFlightRef.current
@@ -2332,7 +2464,6 @@ export default function Index() {
     });
     currentWarehouseVersionRef.current = confirmation.warehouseVersion;
     lastObservedWarehouseVersionRef.current = confirmation.warehouseVersion;
-    lastLocalSaveAtRef.current = Date.now();
     currentProjectUpdatedAtRef.current = confirmation.projectUpdatedAt;
     setCurrentProjectUpdatedAt(confirmation.projectUpdatedAt);
     setLastCloudConfirmedAt(confirmation.committedAt);
@@ -2540,7 +2671,6 @@ export default function Index() {
       result.affectedAuditIds.forEach(id => ownWarehouseRealtimeRowsRef.current.set(`audit_logs:${id}`, expiresAt));
       currentWarehouseVersionRef.current = result.warehouseVersion;
       lastObservedWarehouseVersionRef.current = result.warehouseVersion;
-      lastLocalSaveAtRef.current = Date.now();
       currentProjectUpdatedAtRef.current = result.projectUpdatedAt;
       setCurrentProjectUpdatedAt(result.projectUpdatedAt);
       setLastCloudConfirmedAt(result.committedAt);
@@ -3020,6 +3150,7 @@ export default function Index() {
           <>
             {productionRoutineNavigation('production')}
             <DailyProductionWorkspace
+              auditActor={auditActor}
               project={project}
               initialTab={productionWorkspaceInitialTab}
               onProductionChange={tasksSetter}
@@ -3044,6 +3175,7 @@ export default function Index() {
       case 'dailyReport':
         return (
           <DailyProductionWorkspace
+            auditActor={auditActor}
             project={project}
             initialTab="dailyReport"
             onProductionChange={tasksSetter}
@@ -3131,10 +3263,30 @@ export default function Index() {
               toast.warning('Aguarde a confirmação da operação do Almoxarifado na nuvem.');
               return;
             }
-            if (v === 'tasks') setProductionWorkspaceInitialTab('production');
-            if (v === 'dailyReport') setProductionWorkspaceInitialTab('dailyReport');
-            setCurrentView(v);
-            setSidebarOpen(false);
+            if (v === safeCurrentView) return;
+            flushSync(() => { flushPendingEditCommits(); });
+            const pendingDraft = pendingDraftRef.current;
+            if (pendingDraft && !conflictDetectedRef.current) {
+              cancelScheduledDraft(pendingDraft.project.id);
+              writeProtectedProjectDraft(pendingDraft.project, pendingDraft.baseUpdatedAt);
+            }
+            const switchView = () => {
+              if (v === 'tasks') setProductionWorkspaceInitialTab('production');
+              if (v === 'dailyReport') setProductionWorkspaceInitialTab('dailyReport');
+              setCurrentView(v);
+              setSidebarOpen(false);
+            };
+            const forms = getPendingFormNames();
+            if (forms.length > 0) {
+              confirmDiscardPendingForm({
+                title: 'Sair com formulário em preenchimento?',
+                description: `Os dados de ${forms.join(', ')} ainda não foram confirmados.`,
+                cancelLabel: 'Continuar preenchendo',
+                confirmLabel: 'Descartar e sair',
+              }, switchView);
+              return;
+            }
+            switchView();
           }}
           projectName={project.name}
           collapsed={sidebarCollapsed}
@@ -3161,7 +3313,7 @@ export default function Index() {
 
       <main ref={mainScrollRef} className="relative min-h-screen min-w-0 flex-1 overflow-x-clip overflow-y-auto pt-14 lg:pt-0">
         <div className="absolute top-3 right-4 z-20">
-          <SaveStatusIndicator status={Object.keys(dailyReportSaveErrors).length && saveStatus !== 'saving' ? 'error' : saveStatus} confirmedAt={lastCloudConfirmedAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} pendingRemoteAreas={pendingRemoteAreas} />
+          <SaveStatusIndicator status={Object.keys(dailyReportSaveErrors).length && saveStatus !== 'saving' ? 'error' : saveStatus} confirmedAt={lastCloudConfirmedAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} pendingRemoteAreas={pendingRemoteAreas} partialSyncPending={partialSyncIssue?.projectId === rawProject.id} partialSyncDraftProtected={partialSyncIssue?.draftProtected} syncRetrying={partialSyncRetrying} />
         </div>
         {partialSyncIssue?.projectId === rawProject.id && (
           <div
@@ -3241,6 +3393,8 @@ export default function Index() {
           />
         </Suspense>
       )}
+
+      {pendingFormDialog}
 
     </div>
   );

@@ -5,6 +5,7 @@ import * as MC from '@/lib/materialComparisons';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
+import { registerPendingForm } from '@/lib/pendingFormNavigation';
 import { ModulePageHeader } from '@/components/ModulePageHeader';
 import { Input } from '@/components/ui/input';
 import {
@@ -95,6 +96,11 @@ export default function Materials({ project, onProjectChange, onCommitWarehouseS
   const [supplierForm, setSupplierForm] = useState({ name: '', contact: '', deliveryDays: '', rating: '' });
   const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
+  useEffect(() => registerPendingForm(
+    `materials-catalog:${project.id}`,
+    'cadastro de materiais',
+    () => Object.values(supplierForm).some(value => value.trim()) || !!newGroupName.trim(),
+  ), [newGroupName, project.id, supplierForm]);
 
   const summary = useMemo(() => {
     const all = ctl.comparisons;

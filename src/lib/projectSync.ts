@@ -13,6 +13,7 @@
  * Snapshot de "estado salvo" é mantido em memória por projectId para diff.
  */
 import { supabase } from '@/integrations/supabase/client';
+import { recordSyncDiagnostic } from '@/lib/syncDiagnostics';
 import {
   PROJECT_COLLECTION_KEYS,
   normalizeProjectCollections,
@@ -68,6 +69,7 @@ export interface ContractImportPayload {
 
 interface Snapshot {
   loadedCollections: Set<ProjectCollectionKey>;
+  projectData: Project | null;
   movements: Map<string, WarehouseMovement>;
   requisitions: Map<string, WarehouseRequisition>;
   custody: Map<string, CustodyTerm>;
@@ -101,6 +103,7 @@ const pendingProjectHydrations = new WeakMap<Project, PendingProjectHydration>()
 function emptySnapshot(): Snapshot {
   return {
     loadedCollections: new Set(),
+    projectData: null,
     movements: new Map(),
     requisitions: new Map(),
     custody: new Map(),
@@ -151,6 +154,7 @@ function buildSnapshot(
   const loadedCollections = new Set(collections);
   const snap = emptySnapshot();
   snap.loadedCollections = loadedCollections;
+  snap.projectData = stripNormalizedCollections(project);
   if (loadedCollections.has('warehouseMovements')) {
     for (const m of project.warehouse?.movements ?? []) snap.movements.set(m.id, m);
   }
@@ -307,6 +311,7 @@ function mergeCloudSnapshot(
 ) {
   const current = snapshots.get(projectId) ?? emptySnapshot();
   const incoming = buildSnapshot(project, collections);
+  current.projectData = incoming.projectData;
   for (const collection of collections) {
     const mapKey = SNAPSHOT_MAP_BY_COLLECTION[collection];
     // Os mapas possuem tipos específicos, mas a atribuição é sempre feita pelo
@@ -821,6 +826,111 @@ export function mergeHydratedProjectCollections(
   return next;
 }
 
+function mergeRowsById<T>(baseline: Map<string, T>, local: Map<string, T>, remote: Map<string, T>): Map<string, T> | null {
+  const merged = new Map<string, T>();
+  const ids = new Set([...baseline.keys(), ...remote.keys(), ...local.keys()]);
+  for (const id of ids) {
+    const before = baseline.get(id);
+    const edited = local.get(id);
+    const incoming = remote.get(id);
+    const localChanged = !shallowEqualJSON(before, edited);
+    const remoteChanged = !shallowEqualJSON(before, incoming);
+    if (localChanged && remoteChanged && !shallowEqualJSON(edited, incoming)) return null;
+    const chosen = localChanged ? edited : incoming;
+    if (chosen !== undefined) merged.set(id, chosen);
+  }
+  return merged;
+}
+
+/** Mescla alterações de IDs distintos; duas edições do mesmo registro exigem decisão humana. */
+export function mergeProjectRecordsThreeWay(
+  baseline: Project,
+  local: Project,
+  remote: Project,
+  collections: readonly ProjectCollectionKey[],
+): Project | null {
+  const selected = new Set(normalizeProjectCollections(collections));
+  const before = buildSnapshot(baseline, [...selected]);
+  const edited = buildSnapshot(local, [...selected]);
+  const incoming = buildSnapshot(remote, [...selected]);
+  const mergedMaps = new Map<ProjectCollectionKey, Map<string, unknown>>();
+  for (const collection of selected) {
+    const key = SNAPSHOT_MAP_BY_COLLECTION[collection];
+    if (collection === 'warehouseMovements' || collection === 'warehouseRequisitions' || collection === 'warehouseCustody') {
+      // O Almoxarifado só é incorporado pela versão própria de suas RPCs.
+      // Uma edição local nele nunca é conciliada por inferência.
+      if (!shallowEqualJSON([...before[key]], [...edited[key]])) return null;
+    }
+    const rows = mergeRowsById(
+      before[key] as Map<string, unknown>,
+      edited[key] as Map<string, unknown>,
+      incoming[key] as Map<string, unknown>,
+    );
+    if (!rows) return null;
+    mergedMaps.set(collection, rows);
+  }
+  const rows = <T,>(key: ProjectCollectionKey) => [...(mergedMaps.get(key)?.values() ?? [])] as T[];
+  const result = mergeHydratedProjectCollections(local, remote, collections);
+  if (selected.has('dailyReports')) result.dailyReports = rows<DailyReport>('dailyReports');
+  if (selected.has('measurements')) result.measurements = rows<SavedMeasurement>('measurements');
+  if (selected.has('additives')) result.additives = rows<Additive>('additives');
+  if (selected.has('auditLogs')) result.auditLogs = rows<AuditLog>('auditLogs');
+  if (selected.has('stockMovements')) result.stockMovements = rows<StockMovement>('stockMovements');
+  if (selected.has('materialPriceHistory')) result.materialPriceHistory = rows<PriceHistoryEntry>('materialPriceHistory');
+  if (selected.has('budgetItems')) result.budgetItems = rows<BudgetItem>('budgetItems');
+  if (selected.has('materialComparisons')) result.materialComparisons = rows<MaterialComparison>('materialComparisons');
+  if (selected.has('analyticCompositions')) result.analyticCompositions = rows<AdditiveComposition>('analyticCompositions');
+  if (selected.has('subcontracts')) result.subcontracts = rows<Subcontract>('subcontracts');
+
+  if (selected.has('eapChapters') || selected.has('tasks')) {
+    const chapters = mergedMaps.get('eapChapters') as Map<string, ChapterRow>;
+    const tasks = mergedMaps.get('tasks') as Map<string, TaskRow>;
+    const logs = selected.has('taskDailyLogs')
+      ? mergedMaps.get('taskDailyLogs') as Map<string, { taskId: string; log: DailyProductionLog }>
+      : buildSnapshot(local, ['taskDailyLogs']).taskLogs;
+    const logsByTask = new Map<string, DailyProductionLog[]>();
+    for (const { taskId, log } of logs.values()) {
+      const taskLogs = logsByTask.get(taskId) ?? [];
+      taskLogs.push(log);
+      logsByTask.set(taskId, taskLogs);
+    }
+    const buildTask = (id: string, active: Set<string>): Task | null => {
+      const row = tasks.get(id);
+      if (!row || active.has(id)) return null;
+      const lineage = new Set(active).add(id);
+      const children = [...tasks.entries()]
+        .filter(([, candidate]) => candidate.parent_task_id === id)
+        .sort((left, right) => left[1].order_index - right[1].order_index)
+        .map(([childId]) => buildTask(childId, lineage))
+        .filter((child): child is Task => child !== null);
+      return {
+        ...(row.data as Task), id,
+        dailyLogs: logsByTask.get(id) ?? [],
+        ...(children.length ? { children } : {}),
+      };
+    };
+    result.phases = [...chapters.entries()]
+      .sort((left, right) => left[1].order_index - right[1].order_index)
+      .map(([id, row]) => ({
+        ...(row.data as Phase), id,
+        tasks: [...tasks.entries()]
+          .filter(([, candidate]) => candidate.chapter_id === id && !candidate.parent_task_id)
+          .sort((left, right) => left[1].order_index - right[1].order_index)
+          .map(([taskId]) => buildTask(taskId, new Set()))
+          .filter((task): task is Task => task !== null),
+      }));
+  } else if (selected.has('taskDailyLogs')) {
+    const logsByTask = new Map<string, DailyProductionLog[]>();
+    for (const { taskId, log } of mergedMaps.get('taskDailyLogs')!.values() as IterableIterator<{ taskId: string; log: DailyProductionLog }>) {
+      const taskLogs = logsByTask.get(taskId) ?? [];
+      taskLogs.push(log);
+      logsByTask.set(taskId, taskLogs);
+    }
+    result.phases = (local.phases ?? []).map(phase => mapPhaseTasks(phase, logsByTask, true));
+  }
+  return result;
+}
+
 function collectTaskLogs(tasks: Task[], target: Map<string, DailyProductionLog[]>) {
   for (const task of tasks) {
     target.set(task.id, task.dailyLogs ?? []);
@@ -862,6 +972,78 @@ export function stripNormalizedCollections(project: Project): Project {
   return next;
 }
 
+function changedRows<T>(previous: Map<string, T>, current: Map<string, T>) {
+  const upserts: Array<{ id: string; row: T }> = [];
+  const deletes: string[] = [];
+  for (const [id, row] of current) {
+    if (!previous.has(id) || !shallowEqualJSON(previous.get(id), row)) upserts.push({ id, row });
+  }
+  for (const id of previous.keys()) if (!current.has(id)) deletes.push(id);
+  return { upserts, deletes };
+}
+
+/**
+ * Confirma a Produção em uma única transação quando ela é o único domínio
+ * normalizado alterado. `null` sinaliza que o save geral deve seguir o caminho
+ * de compatibilidade, inclusive se a RPC ainda não tiver sido instalada.
+ */
+export async function syncProductionAtomically(
+  project: Project,
+  slim: Project,
+  organizationId: string,
+  expectedUpdatedAt: string,
+): Promise<string | null> {
+  const previous = snapshots.get(project.id);
+  if (!previous?.loadedCollections.has('eapChapters') || !previous.loadedCollections.has('tasks')) return null;
+  const next = buildSnapshot(project, [...previous.loadedCollections]);
+  const productionKeys = new Set(['chapters', 'tasks', 'taskLogs', 'auditLogs']);
+  for (const key of Object.values(SNAPSHOT_MAP_BY_COLLECTION)) {
+    if (productionKeys.has(key)) continue;
+    const before = previous[key];
+    const after = next[key];
+    const changes = changedRows(before as Map<string, unknown>, after as Map<string, unknown>);
+    if (changes.upserts.length > 0 || changes.deletes.length > 0) return null;
+  }
+  const chapters = changedRows(previous.chapters, next.chapters);
+  const tasks = changedRows(previous.tasks, next.tasks);
+  const logs = changedRows(previous.taskLogs, next.taskLogs);
+  const audit = changedRows(previous.auditLogs, next.auditLogs);
+  const metadataChanged = !shallowEqualJSON(previous.projectData, slim);
+  if (audit.deletes.length > 0 || audit.upserts.some(({ id, row }) => previous.auditLogs.has(id) || row.entityType !== 'task')) return null;
+  if (chapters.upserts.length + chapters.deletes.length + tasks.upserts.length + tasks.deletes.length
+    + logs.upserts.length + logs.deletes.length + audit.upserts.length === 0) return null;
+
+  const startedAt = Date.now();
+  const recordCount = chapters.upserts.length + chapters.deletes.length + tasks.upserts.length
+    + tasks.deletes.length + logs.upserts.length + logs.deletes.length + audit.upserts.length;
+  const { data, error } = await supabase.rpc('save_production_domain', {
+    p_project_id: project.id,
+    p_organization_id: organizationId,
+    p_expected_updated_at: expectedUpdatedAt,
+    p_name: slim.name,
+    p_data: metadataChanged ? slim as unknown as Json : null,
+    p_chapters_upsert: chapters.upserts.map(({ id, row }) => ({ id, ...row })) as unknown as Json,
+    p_chapters_delete: chapters.deletes as unknown as Json,
+    p_tasks_upsert: tasks.upserts.map(({ id, row }) => ({ id, ...row })) as unknown as Json,
+    p_tasks_delete: tasks.deletes as unknown as Json,
+    p_logs_upsert: logs.upserts.map(({ id, row }) => ({ id, task_id: row.taskId, log_date: row.log.date, data: row.log })) as unknown as Json,
+    p_logs_delete: logs.deletes as unknown as Json,
+    p_audit_insert: audit.upserts.map(({ id, row }) => ({ id, data: row })) as unknown as Json,
+  });
+  if (error) {
+    // Um app atualizado pode abrir antes de o banco receber a migration.
+    if (error.code === 'PGRST202' || error.code === '42883') return null;
+    recordSyncDiagnostic({ area: 'production', operation: 'save',
+      outcome: error.code === 'P0002' ? 'conflict' : 'failed', durationMs: Date.now() - startedAt, recordCount });
+    throw error;
+  }
+  if (typeof data !== 'string' || !data) throw new Error('A transação da Produção não confirmou a versão salva.');
+  recordSyncDiagnostic({ area: 'production', operation: 'save', outcome: 'confirmed',
+    durationMs: Date.now() - startedAt, recordCount });
+  snapshots.set(project.id, next);
+  return data;
+}
+
 /**
  * Faz diff entre o snapshot salvo e o projeto atual, e aplica
  * upsert/delete por linha nas tabelas normalizadas.
@@ -871,6 +1053,32 @@ export function stripNormalizedCollections(project: Project): Project {
 export interface ProjectCollectionSyncOptions {
   /** Exclusivo para a criação inicial, quando o objeto em memória é a fonte completa. */
   allowCompleteWithoutSnapshot?: boolean;
+}
+
+type CloudOperation = () => Promise<unknown>;
+
+function batches<T>(rows: T[], batchSize = 200): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < rows.length; index += batchSize) {
+    result.push(rows.slice(index, index + batchSize));
+  }
+  return result;
+}
+
+async function runCloudOperations(operations: CloudOperation[], concurrency = 4): Promise<PromiseSettledResult<unknown>[]> {
+  const results: PromiseSettledResult<unknown>[] = new Array(operations.length);
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, operations.length) }, async () => {
+    while (cursor < operations.length) {
+      const index = cursor++;
+      try {
+        results[index] = { status: 'fulfilled', value: await operations[index]() };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  }));
+  return results;
 }
 
 export async function syncCollectionsToCloud(
@@ -888,7 +1096,7 @@ export async function syncCollectionsToCloud(
   const next = buildSnapshot(project, trackedCollections);
   const tracks = (collection: ProjectCollectionKey) => next.loadedCollections.has(collection);
 
-  const ops: Promise<unknown>[] = [];
+  const ops: CloudOperation[] = [];
 
   if (tracks('warehouseMovements')) {
     ops.push(...diffAndSync('warehouse_movements', prev.movements, next.movements, projectId, userId, m => ({
@@ -988,8 +1196,12 @@ export async function syncCollectionsToCloud(
   if (tracks('tasks')) ops.push(...diffAndSyncEAP('tasks', prev.tasks, next.tasks, projectId, userId));
 
 
-  const results = await Promise.allSettled(ops);
+  const startedAt = Date.now();
+  const results = await runCloudOperations(ops);
   const failed = results.filter(r => r.status === 'rejected');
+  if (ops.length > 0) recordSyncDiagnostic({ area: 'collections', operation: 'save',
+    outcome: failed.length > 0 ? 'failed' : 'confirmed', durationMs: Date.now() - startedAt,
+    operationCount: ops.length });
   if (failed.length > 0) {
     const reasons = failed
       .slice(0, 3)
@@ -999,7 +1211,9 @@ export async function syncCollectionsToCloud(
       .filter(Boolean)
       .join('; ');
     console.warn(`[projectSync] ${failed.length}/${results.length} operações normalizadas falharam: ${reasons || 'motivo não informado'}`);
-    throw new Error(`Falha ao persistir a estrutura normalizada da obra${reasons ? `: ${reasons}` : '.'}`);
+    throw Object.assign(new Error(`Falha ao persistir a estrutura normalizada da obra${reasons ? `: ${reasons}` : '.'}`), {
+      cause: failed[0].status === 'rejected' ? failed[0].reason : undefined,
+    });
   }
 
   snapshots.set(projectId, next);
@@ -1013,8 +1227,8 @@ function diffAndSync<T extends { id: string }>(
   userId?: string,
   extraCols?: (item: T) => Record<string, unknown>,
   allowDelete?: (item: T) => boolean,
-): Promise<unknown>[] {
-  const ops: Promise<unknown>[] = [];
+): CloudOperation[] {
+  const ops: CloudOperation[] = [];
 
   // upserts (novos ou modificados)
   const upserts: Record<string, unknown>[] = [];
@@ -1030,11 +1244,11 @@ function diffAndSync<T extends { id: string }>(
       });
     }
   }
-  if (upserts.length > 0) {
-    ops.push((async () => {
-      const r = await supabase.from(table).upsert(upserts as never, { onConflict: 'id' });
-      if (r.error) throw new Error(`${table} upsert: ${r.error.message}`);
-    })());
+  for (const batch of batches(upserts)) {
+    ops.push(async () => {
+      const r = await supabase.from(table).upsert(batch as never, { onConflict: 'id' });
+      if (r.error) throw Object.assign(new Error(`${table} upsert: ${r.error.message}`), { cause: r.error });
+    });
   }
 
   // deletes (presentes antes, ausentes agora)
@@ -1042,11 +1256,11 @@ function diffAndSync<T extends { id: string }>(
   for (const [id, item] of prev) {
     if (!next.has(id) && (allowDelete?.(item) ?? true)) toDelete.push(id);
   }
-  if (toDelete.length > 0) {
-    ops.push((async () => {
-      const r = await supabase.from(table).delete().in('id', toDelete).eq('project_id', projectId);
-      if (r.error) throw new Error(`${table} delete: ${r.error.message}`);
-    })());
+  for (const batch of batches(toDelete)) {
+    ops.push(async () => {
+      const r = await supabase.from(table).delete().in('id', batch).eq('project_id', projectId);
+      if (r.error) throw Object.assign(new Error(`${table} delete: ${r.error.message}`), { cause: r.error });
+    });
   }
 
   return ops;
@@ -1070,8 +1284,8 @@ function diffAndSyncTaskLogs(
   next: Map<string, { taskId: string; log: DailyProductionLog }>,
   projectId: string,
   userId?: string,
-): Promise<unknown>[] {
-  const ops: Promise<unknown>[] = [];
+): CloudOperation[] {
+  const ops: CloudOperation[] = [];
   const upserts: Record<string, unknown>[] = [];
   for (const [id, { taskId, log }] of next) {
     const before = prev.get(id);
@@ -1086,30 +1300,39 @@ function diffAndSyncTaskLogs(
       });
     }
   }
-  if (upserts.length > 0) {
-    ops.push((async () => {
-      const r = await supabase.from('task_daily_logs').upsert(upserts as never, { onConflict: 'id' });
-      if (r.error) throw new Error(`task_daily_logs upsert: ${r.error.message}`);
-    })());
+  for (const batch of batches(upserts)) {
+    ops.push(async () => {
+      const r = await supabase.from('task_daily_logs').upsert(batch as never, { onConflict: 'id' });
+      if (r.error) throw Object.assign(new Error(`task_daily_logs upsert: ${r.error.message}`), { cause: r.error });
+    });
   }
   const toDelete: string[] = [];
   for (const id of prev.keys()) if (!next.has(id)) toDelete.push(id);
-  if (toDelete.length > 0) {
-    ops.push((async () => {
-      const r = await supabase.from('task_daily_logs').delete().in('id', toDelete).eq('project_id', projectId);
-      if (r.error) throw new Error(`task_daily_logs delete: ${r.error.message}`);
-    })());
+  for (const batch of batches(toDelete)) {
+    ops.push(async () => {
+      const r = await supabase.from('task_daily_logs').delete().in('id', batch).eq('project_id', projectId);
+      if (r.error) throw Object.assign(new Error(`task_daily_logs delete: ${r.error.message}`), { cause: r.error });
+    });
   }
   return ops;
 }
 
 function shallowEqualJSON(a: unknown, b: unknown): boolean {
-  // Comparação por serialização: itens são pequenos (KB) e mudam raramente.
-  try {
-    return JSON.stringify(a) === JSON.stringify(b);
-  } catch {
-    return false;
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b)
+      && a.length === b.length
+      && a.every((value, index) => shallowEqualJSON(value, b[index]));
   }
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  // Campos undefined não existem no JSON enviado ao Supabase.
+  const leftKeys = Object.keys(left).filter(key => left[key] !== undefined);
+  const rightKeys = Object.keys(right).filter(key => right[key] !== undefined);
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every(key => Object.prototype.hasOwnProperty.call(right, key)
+      && shallowEqualJSON(left[key], right[key]));
 }
 
 function diffAndSyncEAP(
@@ -1118,8 +1341,8 @@ function diffAndSyncEAP(
   next: Map<string, ChapterRow | TaskRow>,
   projectId: string,
   userId?: string,
-): Promise<unknown>[] {
-  const ops: Promise<unknown>[] = [];
+): CloudOperation[] {
+  const ops: CloudOperation[] = [];
   const upserts: Record<string, unknown>[] = [];
   for (const [id, row] of next) {
     const before = prev.get(id);
@@ -1133,19 +1356,19 @@ function diffAndSyncEAP(
       });
     }
   }
-  if (upserts.length > 0) {
-    ops.push((async () => {
-      const r = await supabase.from(table).upsert(upserts as never, { onConflict: 'project_id,id' });
-      if (r.error) throw new Error(`${table} upsert: ${r.error.message}`);
-    })());
+  for (const batch of batches(upserts)) {
+    ops.push(async () => {
+      const r = await supabase.from(table).upsert(batch as never, { onConflict: 'project_id,id' });
+      if (r.error) throw Object.assign(new Error(`${table} upsert: ${r.error.message}`), { cause: r.error });
+    });
   }
   const toDelete: string[] = [];
   for (const id of prev.keys()) if (!next.has(id)) toDelete.push(id);
-  if (toDelete.length > 0) {
-    ops.push((async () => {
-      const r = await supabase.from(table).delete().in('id', toDelete).eq('project_id', projectId);
-      if (r.error) throw new Error(`${table} delete: ${r.error.message}`);
-    })());
+  for (const batch of batches(toDelete)) {
+    ops.push(async () => {
+      const r = await supabase.from(table).delete().in('id', batch).eq('project_id', projectId);
+      if (r.error) throw Object.assign(new Error(`${table} delete: ${r.error.message}`), { cause: r.error });
+    });
   }
   return ops;
 }

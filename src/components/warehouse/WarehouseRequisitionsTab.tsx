@@ -34,6 +34,7 @@ import {
 } from '@/lib/warehouseCloudCommit';
 import { checkWarehouseWithdrawalAvailability, insufficientWarehouseItems, warehouseOperationWasCommitted, WarehouseAvailabilityUnavailableError, type WarehouseAvailabilityResult } from '@/lib/warehouseAvailability';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
+import { registerPendingForm } from '@/lib/pendingFormNavigation';
 import { flattenPhasesByChapter, getChapterNumbering } from '@/lib/chapters';
 import SignaturePad from './SignaturePad';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
@@ -420,6 +421,11 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
   const hasWithdrawalDraft = Boolean(
     form.chapterId || form.receiverName.trim() || form.notes.trim() || form.items.length || form.signatureReceiver || photos.length,
   );
+  useEffect(() => registerPendingForm(
+    `withdrawal:${project.id}`,
+    'retirada de materiais',
+    () => open && hasWithdrawalDraft,
+  ), [hasWithdrawalDraft, open, project.id]);
   const requestCloseWithdrawal = () => {
     if (saving) return;
     if (!hasWithdrawalDraft) return reset();

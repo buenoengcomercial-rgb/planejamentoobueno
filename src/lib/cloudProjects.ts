@@ -8,6 +8,7 @@ import {
   hydrateProjectFromCloud,
   stripNormalizedCollections,
   syncCollectionsToCloud,
+  syncProductionAtomically,
   clearCloudSnapshot,
   setCloudSnapshot,
   buildContractImportPayload,
@@ -100,12 +101,14 @@ export async function loadCloudProject(id: string): Promise<Project | null> {
 /** O projeto principal foi salvo, mas uma coleção normalizada ficou pendente. */
 export class CloudProjectPartialSyncError extends Error {
   public readonly detail: string;
+  public readonly cause: unknown;
 
   constructor(public readonly updatedAt: string, cause: unknown) {
     const detail = cause instanceof Error ? cause.message : String(cause);
     super(`A cópia de segurança da obra foi salva, mas a sincronização detalhada falhou: ${detail}`);
     this.name = 'CloudProjectPartialSyncError';
     this.detail = detail;
+    this.cause = cause;
   }
 }
 
@@ -210,6 +213,13 @@ export async function upsertCloudProject(project: Project, organizationId: strin
     // Falhar antes do PATCH pai evita afirmar um salvamento parcial quando a
     // fotografia necessária ao diff foi invalidada.
     assertProjectSnapshotAvailable(project.id);
+    try {
+      const productionUpdatedAt = await syncProductionAtomically(project, slim, organizationId, expectedUpdatedAt);
+      if (productionUpdatedAt) return productionUpdatedAt;
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'P0002') throw new CloudProjectConflictError();
+      throw error;
+    }
     const { data, error } = await supabase
       .from('projects')
       .update({

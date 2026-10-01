@@ -1,7 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import DailyLogsPanel from './DailyLogsPanel';
 import type { Task } from '@/types/project';
+import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 
 function buildTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -73,6 +74,30 @@ describe('DailyLogsPanel', () => {
     expect(onChange).toHaveBeenLastCalledWith([
       expect.objectContaining({ id: 'log-1', actualQuantity: 15 }),
     ]);
+  });
+
+  it('recupera a última digitação local após desmontagem sem enviar a obra', () => {
+    const onChange = vi.fn();
+    const task = buildTask({ dailyLogs: [{ id: 'log-1', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 1 }] });
+    const first = render(<DailyLogsPanel projectId="project-1" task={task} onChange={onChange} />);
+    fireEvent.change(first.container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')!, { target: { value: '7' } });
+    expect(onChange).not.toHaveBeenCalled();
+    first.unmount();
+
+    const second = render(<DailyLogsPanel projectId="project-1" task={task} onChange={onChange} />);
+    expect(second.container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')).toHaveValue(7);
+    second.unmount();
+    localStorage.clear();
+  });
+
+  it('confirma o campo pendente antes de uma navegação protegida', () => {
+    const onChange = vi.fn();
+    const task = buildTask({ dailyLogs: [{ id: 'log-1', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 1 }] });
+    const { container } = render(<DailyLogsPanel projectId="project-2" task={task} onChange={onChange} />);
+    fireEvent.change(container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')!, { target: { value: '6' } });
+    act(() => { flushPendingEditCommits(); });
+    expect(onChange).toHaveBeenCalledWith([expect.objectContaining({ actualQuantity: 6 })]);
+    localStorage.clear();
   });
 
   it('confirma no Enter sem duplicar a gravação no blur seguinte', () => {

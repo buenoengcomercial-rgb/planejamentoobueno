@@ -893,6 +893,23 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      save_production_domain: {
+        Args: {
+          p_project_id: string
+          p_organization_id: string
+          p_expected_updated_at: string
+          p_name: string
+          p_data: Json
+          p_chapters_upsert: Json
+          p_chapters_delete: Json
+          p_tasks_upsert: Json
+          p_tasks_delete: Json
+          p_logs_upsert: Json
+          p_logs_delete: Json
+          p_audit_insert: Json
+        }
+        Returns: string
+      }
       backfill_tasks_recursive: {
         Args: {
           _chapter_id: string
