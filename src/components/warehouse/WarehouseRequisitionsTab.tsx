@@ -174,6 +174,15 @@ function buildingLabel(project: Project, chapterId?: string) {
   return { key: building.id, label: `${number ? `${number} · ` : ''}${building.name}`, isMissingBuilding: false };
 }
 
+function requisitionDestination(project: Project, chapterId?: string) {
+  const chapter = project.phases.find(phase => phase.id === chapterId);
+  if (!chapter) return 'Prédio não informado';
+  const building = buildingLabel(project, chapterId);
+  if (building.key === chapter.id) return building.label;
+  const number = getChapterNumbering(project).get(chapter.id);
+  return `${building.label} · ${number ? `${number} · ` : ''}${chapter.name}`;
+}
+
 function rootChapterId(project: Project, chapterId?: string) {
   if (!chapterId) return undefined;
   const phaseById = new Map(project.phases.map(phase => [phase.id, phase]));
@@ -282,6 +291,11 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
   const visibleRequisitions = useMemo(() => wh.requisitions.filter(requisition => (
     historyView === 'cancelled' ? requisition.status === 'cancelada' : requisition.status !== 'cancelada'
   )), [historyView, wh.requisitions]);
+  const dailyRequisitions = useMemo(() => wh.requisitions
+    .filter(requisition => requisition.date === selectedDate)
+    .sort((left, right) => latestRequisitionActivity(right, wh.movements).localeCompare(latestRequisitionActivity(left, wh.movements))
+      || right.number.localeCompare(left.number, 'pt-BR', { numeric: true })),
+  [selectedDate, wh.movements, wh.requisitions]);
   useEffect(() => {
     if (!openRequisitionId) {
       handledOpenRequisitionId.current = null;
@@ -326,6 +340,26 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
       buildingLabel: building.label,
       requisitions: dateGroup.requisitions,
     });
+    if (generated) toast.success(`${generated} PDF(s) de confirmação gerado(s).`);
+    else toast.error('Não há retiradas entregues nesta data para gerar a confirmação.');
+  };
+  const generateSelectedDateConfirmations = async () => {
+    const { generateDailyWithdrawalConfirmationPdfs } = await import('./pdf');
+    const byBuilding = new Map<string, { label: string; requisitions: WarehouseRequisition[] }>();
+    for (const requisition of dailyRequisitions.filter(candidate => candidate.status === 'entregue')) {
+      const building = buildingLabel(project, requisition.chapterId);
+      const group = byBuilding.get(building.key) ?? { label: building.label, requisitions: [] };
+      group.requisitions.push(requisition);
+      byBuilding.set(building.key, group);
+    }
+    let generated = 0;
+    for (const group of byBuilding.values()) {
+      generated += await generateDailyWithdrawalConfirmationPdfs(project, {
+        date: selectedDate,
+        buildingLabel: group.label,
+        requisitions: group.requisitions,
+      });
+    }
     if (generated) toast.success(`${generated} PDF(s) de confirmação gerado(s).`);
     else toast.error('Não há retiradas entregues nesta data para gerar a confirmação.');
   };
@@ -763,7 +797,21 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
           <TabsTrigger value="daily" className="min-h-11 rounded-lg px-2 text-xs font-bold max-[320px]:whitespace-normal data-[state=active]:bg-card data-[state=active]:text-primary sm:text-sm">Movimentações do dia</TabsTrigger>
           <TabsTrigger value="history" className="min-h-11 rounded-lg px-2 text-xs font-bold max-[320px]:whitespace-normal data-[state=active]:bg-card data-[state=active]:text-primary sm:text-sm">Histórico completo</TabsTrigger>
         </TabsList>
-        <TabsContent value="daily" className="mt-0"><WarehouseDailyMovements project={project} date={selectedDate} onDateChange={setSelectedDate} /></TabsContent>
+        <TabsContent value="daily" className="mt-0">
+          <WarehouseDailyMovements date={selectedDate} onDateChange={setSelectedDate} requisitionCount={dailyRequisitions.length} deliveredCount={dailyRequisitions.filter(requisition => requisition.status === 'entregue').length} onGenerate={() => void generateSelectedDateConfirmations()}>
+            {dailyRequisitions.length ? <div className="min-w-0 max-w-full overflow-x-auto rounded-xl border bg-card" tabIndex={0} aria-label="Tabela de requisições; deslize lateralmente para ver todas as colunas">
+              <table aria-label="Requisições da data selecionada" className="withdrawal-records w-full min-w-[980px] table-fixed text-xs">
+                <colgroup><col className="w-10" /><col className="w-[16%]" /><col className="w-[13%]" /><col className="w-[17%]" /><col className="w-[15%]" /><col className="w-12" /><col className="w-24" /><col /></colgroup>
+                <thead><tr><th><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data da operação</th><th className="p-2 text-left">Último registro</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead>
+                <tbody>{dailyRequisitions.map(requisition => (
+                  <WithdrawalHistoryRow key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel} showDestination
+                    onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })}
+                    onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onAction={() => openRequisitionActions(requisition)} onCancel={() => setCancelTarget(requisition)} />
+                ))}</tbody>
+              </table>
+            </div> : <WarehouseEmptyState message="Nenhuma requisição nesta data" hint="Escolha outra data para consultar as retiradas." />}
+          </WarehouseDailyMovements>
+        </TabsContent>
         <TabsContent value="history" className="mt-0">
       <section className="overflow-hidden rounded-xl border bg-card">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-3 py-2 sm:px-4">
@@ -839,6 +887,7 @@ interface WithdrawalHistoryEntryProps {
   canEdit: boolean;
   canSupplement: boolean;
   canCancel: boolean;
+  showDestination?: boolean;
   onToggle: () => void;
   onDelete: () => void;
   onReturn: () => void;
@@ -860,7 +909,7 @@ function WithdrawalHistoryCard({ project, requisition, movements, active, canDel
   </article>;
 }
 
-function WithdrawalHistoryRow({ project, requisition, movements, active, canDelete, canEdit, canSupplement, canCancel, onToggle, onDelete, onReturn, onAction, onCancel }: WithdrawalHistoryEntryProps) {
+function WithdrawalHistoryRow({ project, requisition, movements, active, canDelete, canEdit, canSupplement, canCancel, showDestination = false, onToggle, onDelete, onReturn, onAction, onCancel }: WithdrawalHistoryEntryProps) {
   const latest = latestRequisitionActivity(requisition, movements);
   const materialCount = getRequisitionMaterialSummaries(project, requisition.id).length;
   return <Fragment>
@@ -874,7 +923,7 @@ function WithdrawalHistoryRow({ project, requisition, movements, active, canDele
       <td className="p-2"><WarehouseStatusBadge label={requisition.status === 'cancelada' ? 'Cancelada' : requisition.status === 'rascunho' ? 'Pendente legado' : 'Entregue'} tone={requisition.status === 'cancelada' ? 'neutral' : requisition.status === 'rascunho' ? 'warning' : 'success'} /></td>
       <td className="p-2"><WarehouseAuditIdentity createdBy={requisition.createdBy} updatedBy={requisition.updatedBy} createdAt={requisition.createdAt} updatedAt={requisition.updatedAt} className="space-y-0.5" /></td>
     </tr>
-    {active && <tr data-testid="withdrawal-history-details" className="withdrawal-detail-row"><td colSpan={8} className="!px-0 py-3"><div className="withdrawal-detail withdrawal-branch rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel} onDelete={onDelete} onReturn={onReturn} onAction={onAction} onCancel={onCancel} /></div></td></tr>}
+    {active && <tr data-testid="withdrawal-history-details" className="withdrawal-detail-row"><td colSpan={8} className="!px-0 py-3"><div className="withdrawal-detail withdrawal-branch rounded-r-lg bg-muted/40 p-3"><WithdrawalDetails project={project} requisition={requisition} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel} showDestination={showDestination} onDelete={onDelete} onReturn={onReturn} onAction={onAction} onCancel={onCancel} /></div></td></tr>}
   </Fragment>;
 }
 
@@ -883,7 +932,7 @@ function PhotoPreview({ file, onRemove }: { file: File; onRemove: () => void }) 
   return <div className="relative aspect-square overflow-hidden rounded-md border"><img src={url} alt={file.name} className="h-full w-full object-cover" onLoad={() => URL.revokeObjectURL(url)} /><Button type="button" size="icon" variant="destructive" className="absolute right-1 top-1 h-8 w-8" onClick={onRemove} aria-label={`Remover ${file.name}`}><X className="h-4 w-4" /></Button></div>;
 }
 
-function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupplement, canCancel, onDelete, onReturn, onAction, onCancel }: { project: Project; requisition: WarehouseRequisition; canDelete: boolean; canEdit: boolean; canSupplement: boolean; canCancel: boolean; onDelete: () => void; onReturn: () => void; onAction: () => void; onCancel: () => void }) {
+function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupplement, canCancel, showDestination = false, onDelete, onReturn, onAction, onCancel }: { project: Project; requisition: WarehouseRequisition; canDelete: boolean; canEdit: boolean; canSupplement: boolean; canCancel: boolean; showDestination?: boolean; onDelete: () => void; onReturn: () => void; onAction: () => void; onCancel: () => void }) {
   const [expandedMaterialKeys, setExpandedMaterialKeys] = useState<Set<string>>(new Set());
   const returns = ensureWarehouse(project).warehouse!.movements
     .filter(movement => movement.type === 'devolucao' && movement.originType === 'return' && movement.requisitionId === requisition.id && !movement.reversedById)
@@ -906,6 +955,7 @@ function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupple
     {canDelete && <Button size="sm" variant="destructive" className="h-8 px-2 text-[11px]" onClick={onDelete}><Trash2 className="mr-1 h-3.5 w-3.5" />Excluir</Button>}
   </div>;
   return <div className="space-y-2">
+    {showDestination && <div className="rounded-md border border-muted-foreground/20 bg-background/70 px-3 py-2 text-sm"><span className="mr-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Destino:</span>{requisitionDestination(project, requisition.chapterId)}</div>}
     {canCorrect && returns.length > 0 && <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">Esta retirada possui devolução registrada. Para preservar o histórico, a correção de material ou quantidade está bloqueada.</div>}
     {notes && <div className="rounded-md border border-muted-foreground/20 bg-background/70 px-3 py-2 text-sm"><span className="mr-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Observação:</span>{notes}</div>}
     <div className="overflow-x-auto">
