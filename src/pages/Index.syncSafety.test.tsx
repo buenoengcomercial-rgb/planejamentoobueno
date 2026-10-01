@@ -208,7 +208,11 @@ vi.mock('@/components/DailyProductionWorkspace', async () => {
   };
 });
 
-vi.mock('@/components/SaveStatusIndicator', () => ({ default: () => null }));
+vi.mock('@/components/SaveStatusIndicator', () => ({
+  default: ({ confirmedAt }: { confirmedAt?: string | null }) => (
+    <output data-testid="cloud-confirmed-at">{confirmedAt ?? 'none'}</output>
+  ),
+}));
 vi.mock('@/components/MigrationDialog', () => ({ default: () => null }));
 vi.mock('@/components/ImportSyntheticDialog', () => ({ default: () => null }));
 vi.mock('@/components/CloudDraftConflictDialog', async () => {
@@ -457,6 +461,25 @@ describe('segurança de sincronização da página da obra', () => {
     await waitFor(() => expect(screen.queryByTestId('project-workspace')).not.toBeInTheDocument());
     expect(supabase.channel).toHaveBeenCalledTimes(1);
     expect(supabase.removeChannel).not.toHaveBeenCalled();
+  });
+
+  it('não muda a hora da confirmação ao conferir uma obra sem alterações', async () => {
+    mocks.getCloudProjectVersion.mockResolvedValue({
+      id: 'project-1', updatedAt: 'cloud-v2', warehouseVersion: 1,
+      warehouseUpdatedAt: 'cloud-v2',
+    });
+    renderIndex();
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+    expect(screen.getByTestId('cloud-confirmed-at')).toHaveTextContent('cloud-v2');
+
+    mocks.getCloudProjectVersion.mockClear();
+    vi.useFakeTimers();
+    fireEvent.focus(window);
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+
+    expect(mocks.getCloudProjectVersion).toHaveBeenCalled();
+    expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
+    expect(screen.getByTestId('cloud-confirmed-at')).toHaveTextContent('cloud-v2');
   });
 
   it('pede confirmação antes de desmontar um formulário operacional não confirmado', async () => {

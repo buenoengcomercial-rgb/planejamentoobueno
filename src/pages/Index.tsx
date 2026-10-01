@@ -875,7 +875,7 @@ export default function Index() {
       : (cloudProjectForBaseline ? serializeProject(cloudProjectForBaseline) : null);
     setCurrentProjectUpdatedAt(updatedAt);
     setRawProject(projectForState);
-    setLastCloudConfirmedAt(new Date().toISOString());
+    setLastCloudConfirmedAt(updatedAt);
     if (conflictingDraft) setSaveStatus('conflict');
     else if (repairApplied) setSaveStatus('saving');
     else if (recoverablePartialDraft) setSaveStatus('error');
@@ -974,7 +974,7 @@ export default function Index() {
     currentWarehouseVersionRef.current = record.warehouseVersion;
     lastObservedWarehouseVersionRef.current = record.warehouseVersion;
     setCurrentProjectUpdatedAt(record.updatedAt);
-    setLastCloudConfirmedAt(new Date().toISOString());
+    setLastCloudConfirmedAt(record.updatedAt);
     setRemoteUpdateAt(new Date().toISOString());
     clearRemoteCollections(current.id, requestedCollections);
     clearPendingRealtimeCollections(current.id, requestedCollections);
@@ -1038,7 +1038,6 @@ export default function Index() {
     const pendingPartialSync = !!pendingAtStart;
     if (nextJson === lastSavedProjectJsonRef.current && !pendingPartialSync) {
       if (!options.retainDraftUntilVerified) discardProjectDraft(projectToPersist.id);
-      setLastCloudConfirmedAt(new Date().toISOString());
       setSaveStatus('saved');
       return;
     }
@@ -1133,7 +1132,7 @@ export default function Index() {
           && serializeProject(rawProjectRef.current) === effectiveJson) {
           clearLocalProjectCollections(effectiveProject.id);
         }
-        setLastCloudConfirmedAt(new Date().toISOString());
+        setLastCloudConfirmedAt(updatedAt);
         if (pendingAtRequest && rawProjectRef.current?.id === effectiveProject.id) {
           skipNextAutoSaveRef.current = true;
           rawProjectRef.current = effectiveProject;
@@ -1698,7 +1697,6 @@ export default function Index() {
         knownRemoteCollections,
         remoteVersion,
       )) return;
-      setLastCloudConfirmedAt(new Date().toISOString());
       const hasLocalChanges = projectHasLocalChanges(currentAfterVersionCheck, lastSavedProjectJsonRef.current);
       const action = resolveRemoteVersionAction(remoteVersion.updatedAt, currentProjectUpdatedAtRef.current, hasLocalChanges);
       if (action === 'current') {
@@ -1753,7 +1751,7 @@ export default function Index() {
       currentWarehouseVersionRef.current = record.warehouseVersion;
       lastObservedWarehouseVersionRef.current = record.warehouseVersion;
       setCurrentProjectUpdatedAt(record.updatedAt);
-      setLastCloudConfirmedAt(new Date().toISOString());
+      setLastCloudConfirmedAt(record.updatedAt);
       clearRemoteCollections(current.id, requiredProjectCollections);
       skipNextAutoSaveRef.current = !localChangedDuringRequest;
       rawProjectRef.current = merged;
@@ -1824,7 +1822,7 @@ export default function Index() {
         currentWarehouseVersionRef.current = remoteVersion.warehouseVersion;
         lastObservedWarehouseVersionRef.current = remoteVersion.warehouseVersion;
         setCurrentProjectUpdatedAt(remoteVersion.updatedAt);
-        setLastCloudConfirmedAt(new Date().toISOString());
+        setLastCloudConfirmedAt(remoteVersion.updatedAt);
       }
       return;
     }
@@ -1876,7 +1874,7 @@ export default function Index() {
       currentWarehouseVersionRef.current = record.warehouseVersion;
       lastObservedWarehouseVersionRef.current = record.warehouseVersion;
       setCurrentProjectUpdatedAt(record.updatedAt);
-      setLastCloudConfirmedAt(new Date().toISOString());
+      setLastCloudConfirmedAt(record.updatedAt);
       clearRemoteCollections(current.id, requestCollections);
       setRemoteUpdateAt(new Date().toISOString());
       skipNextAutoSaveRef.current = !localChangedDuringRequest;
