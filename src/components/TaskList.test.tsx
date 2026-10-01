@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import TaskList from './TaskList';
 import type { Project, Task } from '@/types/project';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -33,6 +33,8 @@ const project = {
 } as Project;
 
 describe('TaskList', () => {
+  beforeEach(() => window.localStorage.clear());
+
   it('mostra a descrição completa de uma tarefa longa com quebra de linha', () => {
     const longName = 'PLACA DE SINALIZACAO DE SEGURANCA CONTRA INCENDIO FOTOLUMINESCENTE PARA ORIENTACAO DA ROTA DE FUGA NO PAVIMENTO';
     const longNameProject = {
@@ -73,6 +75,32 @@ describe('TaskList', () => {
     fireEvent.click(header!);
     expect(header).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('Instalar hidrante')).toBeInTheDocument();
+  });
+
+  it('guarda a expansão neste navegador sem salvar a obra ao navegar', () => {
+    const onProjectChange = vi.fn();
+    const first = render(
+      <TooltipProvider>
+        <TaskList project={project} onProjectChange={onProjectChange} />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByTitle('Recolher'));
+    expect(screen.queryByText('Instalar hidrante')).not.toBeInTheDocument();
+    expect(onProjectChange).not.toHaveBeenCalled();
+    expect(project.uiState?.collapsedPhaseIds).toBeUndefined();
+    expect(JSON.parse(window.localStorage.getItem('obraplanner:production:collapsed-phases:project-1') ?? '[]')).toEqual(['phase-1']);
+
+    first.unmount();
+    render(
+      <TooltipProvider>
+        <TaskList project={project} onProjectChange={onProjectChange} />
+      </TooltipProvider>,
+    );
+    expect(screen.queryByText('Instalar hidrante')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTitle('Expandir'));
+    expect(screen.getByText('Instalar hidrante')).toBeInTheDocument();
+    expect(onProjectChange).not.toHaveBeenCalled();
   });
 
   it('carrega o importador de Excel somente depois da ação do usuário', async () => {

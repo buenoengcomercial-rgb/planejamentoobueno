@@ -20,6 +20,18 @@ import { applyDailyProductionLogs, upsertDailyProductionLog } from '@/lib/dailyP
 import { lazyWithReload } from '@/lib/lazyWithReload';
 
 const ImportSyntheticDialog = lazyWithReload(() => import('@/components/ImportSyntheticDialog'));
+const collapsedPhasesStorageKey = (projectId: string) => `obraplanner:production:collapsed-phases:${projectId}`;
+
+function readCollapsedPhases(project: Project): string[] {
+  try {
+    const stored = window.localStorage.getItem(collapsedPhasesStorageKey(project.id));
+    if (stored !== null) {
+      const parsed: unknown = JSON.parse(stored);
+      if (Array.isArray(parsed) && parsed.every(id => typeof id === 'string')) return parsed;
+    }
+  } catch { /* A preferência visual não pode impedir a abertura da Produção. */ }
+  return project.uiState?.collapsedPhaseIds ?? [];
+}
 
 /** Encurta o nome da tarefa para no máximo `maxWords` palavras, adicionando "…" no final. */
 function truncateWords(text: string, maxWords = 4): string {
@@ -106,32 +118,22 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
   const projectTeams: TeamDefinition[] = project.teams ?? DEFAULT_TEAMS;
   const teamDef = useCallback((code?: TeamCode) => getTeamDefinition(code, projectTeams), [projectTeams]);
   const { confirm: confirmDelete, dialog: confirmDialog } = useConfirmDelete();
-  // Estado inicial respeita a persistência (uiState.collapsedPhaseIds).
-  // Se não houver registro, todos os capítulos começam expandidos.
+  // A preferência visual fica neste navegador; registros legados do projeto
+  // servem apenas como ponto de partida na primeira abertura.
   const [expandedPhases, setExpandedPhases] = useState<Set<string>>(() => {
-    const collapsed = new Set(project.uiState?.collapsedPhaseIds ?? []);
+    const collapsed = new Set(readCollapsedPhases(project));
     return new Set(project.phases.filter(p => !collapsed.has(p.id)).map(p => p.id));
   });
 
-  // Persiste no projeto sempre que o conjunto de capítulos minimizados mudar.
-  // Compara antes de propagar para evitar loop com onProjectChange → re-render.
   useEffect(() => {
-    if (readOnly) return;
-    const collapsedNow = project.phases
+    const collapsed = project.phases
       .filter(p => !expandedPhases.has(p.id))
       .map(p => p.id)
       .sort();
-    const collapsedPrev = [...(project.uiState?.collapsedPhaseIds ?? [])].sort();
-    const same =
-      collapsedPrev.length === collapsedNow.length &&
-      collapsedPrev.every((id, i) => id === collapsedNow[i]);
-    if (same) return;
-    onProjectChange({
-      ...project,
-      uiState: { ...(project.uiState ?? {}), collapsedPhaseIds: collapsedNow },
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [expandedPhases, project.phases, readOnly]);
+    try {
+      window.localStorage.setItem(collapsedPhasesStorageKey(project.id), JSON.stringify(collapsed));
+    } catch { /* O estado em memória continua utilizável se o armazenamento estiver cheio. */ }
+  }, [expandedPhases, project.id, project.phases]);
 
   const [expandedRup, setExpandedRup] = useState<string | null>(null);
   const [expandedDaily, setExpandedDaily] = useState<string | null>(null);

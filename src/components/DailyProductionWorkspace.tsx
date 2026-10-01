@@ -53,6 +53,7 @@ export default function DailyProductionWorkspace({
         <Suspense fallback={<div role="status" className="flex min-h-32 items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Carregando área…</div>}>
           {initialTab === 'production' ? (
             <TaskList
+              key={project.id}
               project={project}
               onProjectChange={onProductionChange}
               undoButton={productionUndoButton}
