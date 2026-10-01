@@ -893,6 +893,19 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      save_normalized_domain: {
+        Args: {
+          p_project_id: string
+          p_organization_id: string
+          p_expected_updated_at: string
+          p_domain: string
+          p_name: string
+          p_data: Json
+          p_changes: Json
+          p_audit_insert: Json
+        }
+        Returns: string
+      }
       save_production_domain: {
         Args: {
           p_project_id: string

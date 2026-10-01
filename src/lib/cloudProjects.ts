@@ -9,6 +9,7 @@ import {
   stripNormalizedCollections,
   syncCollectionsToCloud,
   syncProductionAtomically,
+  syncNormalizedDomainAtomically,
   clearCloudSnapshot,
   setCloudSnapshot,
   buildContractImportPayload,
@@ -216,6 +217,8 @@ export async function upsertCloudProject(project: Project, organizationId: strin
     try {
       const productionUpdatedAt = await syncProductionAtomically(project, slim, organizationId, expectedUpdatedAt);
       if (productionUpdatedAt) return productionUpdatedAt;
+      const domainUpdatedAt = await syncNormalizedDomainAtomically(project, slim, organizationId, expectedUpdatedAt);
+      if (domainUpdatedAt) return domainUpdatedAt;
     } catch (error) {
       if ((error as { code?: string })?.code === 'P0002') throw new CloudProjectConflictError();
       throw error;

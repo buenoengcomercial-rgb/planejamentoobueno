@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   })),
   syncCollectionsToCloud: vi.fn(),
   syncProductionAtomically: vi.fn(),
+  syncNormalizedDomainAtomically: vi.fn(),
   clearCloudSnapshot: vi.fn(),
   setCloudSnapshot: vi.fn(),
   buildContractImportPayload: vi.fn(),
@@ -38,6 +39,7 @@ vi.mock('@/lib/projectSync', () => ({
   stripNormalizedCollections: mocks.stripNormalizedCollections,
   syncCollectionsToCloud: mocks.syncCollectionsToCloud,
   syncProductionAtomically: mocks.syncProductionAtomically,
+  syncNormalizedDomainAtomically: mocks.syncNormalizedDomainAtomically,
   clearCloudSnapshot: mocks.clearCloudSnapshot,
   setCloudSnapshot: mocks.setCloudSnapshot,
   buildContractImportPayload: mocks.buildContractImportPayload,
@@ -45,6 +47,7 @@ vi.mock('@/lib/projectSync', () => ({
 }));
 
 import {
+  CloudProjectConflictError,
   CloudProjectPartialSyncError,
   confirmCloudProjectRecord,
   createCloudProject,
@@ -79,9 +82,18 @@ describe('criação inicial segura da obra', () => {
     mocks.getUser.mockResolvedValue({ data: { user: { id: 'user-1' } } });
     mocks.syncCollectionsToCloud.mockResolvedValue(undefined);
     mocks.syncProductionAtomically.mockResolvedValue(null);
+    mocks.syncNormalizedDomainAtomically.mockResolvedValue(null);
     mocks.hydrateProjectFromCloud.mockImplementation(async (project: Project) => project);
     mocks.getHydratedProjectCollections.mockReturnValue([]);
     mocks.confirmHydratedProjectCollections.mockReturnValue([]);
+  });
+
+  it('mantém o conflito otimista da transação de outro domínio', async () => {
+    mocks.syncNormalizedDomainAtomically.mockRejectedValue({ code: 'P0002' });
+    const project = { id: 'project-1', name: 'Obra', phases: [], totalBudget: 0 } as Project;
+    await expect(upsertCloudProject(project, 'org-1', '2026-09-30T23:00:00Z'))
+      .rejects.toBeInstanceOf(CloudProjectConflictError);
+    expect(mocks.from).not.toHaveBeenCalled();
   });
 
   it('não confirma snapshot implicitamente ao apenas ler uma obra', async () => {

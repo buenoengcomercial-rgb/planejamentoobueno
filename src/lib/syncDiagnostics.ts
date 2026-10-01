@@ -1,7 +1,7 @@
 /** Diagnóstico local e limitado, sem IDs, nomes ou conteúdo da obra. */
 export interface SyncDiagnostic {
   at: string;
-  area: 'production' | 'collections' | 'realtime';
+  area: 'production' | 'measurement' | 'additive' | 'materials' | 'costs' | 'collections' | 'realtime';
   operation: 'save' | 'reconnect' | 'channel';
   outcome: 'confirmed' | 'failed' | 'conflict' | 'connected' | 'disconnected';
   durationMs?: number;

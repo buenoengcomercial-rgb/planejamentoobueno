@@ -1016,6 +1016,7 @@ export async function syncProductionAtomically(
   const startedAt = Date.now();
   const recordCount = chapters.upserts.length + chapters.deletes.length + tasks.upserts.length
     + tasks.deletes.length + logs.upserts.length + logs.deletes.length + audit.upserts.length;
+  if (recordCount > 500) return null;
   const { data, error } = await supabase.rpc('save_production_domain', {
     p_project_id: project.id,
     p_organization_id: organizationId,
@@ -1039,6 +1040,103 @@ export async function syncProductionAtomically(
   }
   if (typeof data !== 'string' || !data) throw new Error('A transação da Produção não confirmou a versão salva.');
   recordSyncDiagnostic({ area: 'production', operation: 'save', outcome: 'confirmed',
+    durationMs: Date.now() - startedAt, recordCount });
+  snapshots.set(project.id, next);
+  return data;
+}
+
+type NormalizedDomain = 'measurement' | 'additive' | 'materials' | 'costs';
+type DomainCollection = 'measurements' | 'additives' | 'budgetItems' | 'materialComparisons'
+  | 'analyticCompositions' | 'materialPriceHistory' | 'subcontracts';
+
+const DOMAIN_TABLES: Record<DomainCollection, string> = {
+  measurements: 'measurements', additives: 'additives', budgetItems: 'budget_items',
+  materialComparisons: 'material_comparisons', analyticCompositions: 'analytic_compositions',
+  materialPriceHistory: 'material_price_history', subcontracts: 'subcontracts',
+};
+const DOMAIN_COLLECTIONS: Record<NormalizedDomain, readonly DomainCollection[]> = {
+  measurement: ['measurements'],
+  additive: ['additives', 'budgetItems', 'analyticCompositions', 'materialPriceHistory'],
+  materials: ['budgetItems', 'materialComparisons', 'analyticCompositions', 'materialPriceHistory'],
+  costs: ['subcontracts'],
+};
+const DOMAIN_AUDIT_TYPE: Record<NormalizedDomain, AuditLog['entityType']> = {
+  measurement: 'measurement', additive: 'additive', materials: 'project', costs: 'subcontract',
+};
+
+function domainRow(collection: DomainCollection, id: string, value: unknown): Record<string, unknown> {
+  const data = value as Record<string, unknown>;
+  const common = { id, data };
+  switch (collection) {
+    case 'measurements': return { ...common, number: data.number ?? null, status: data.status ?? null,
+      start_date: data.startDate ?? null, end_date: data.endDate ?? null, issue_date: data.issueDate ?? null };
+    case 'additives': return { ...common, name: data.name ?? null, status: data.status ?? null,
+      version: data.version ?? null, imported_at: data.importedAt ?? null };
+    case 'budgetItems': return { ...common, item: data.item ?? null, code: data.code ?? null,
+      source: data.source ?? null, task_id: data.taskId ?? null, additive_id: data.additiveId ?? null };
+    case 'materialComparisons': return { ...common, name: data.name ?? null, status: data.status ?? null };
+    case 'analyticCompositions': return { ...common, code: data.code ?? null };
+    case 'materialPriceHistory': return { ...common, item_key: data.itemCode ?? null };
+    case 'subcontracts': return { ...common, name: data.name ?? null, contractor_name: data.contractorName ?? null,
+      status: data.status ?? 'draft', contract_date: data.contractDate ?? null,
+      contracted_value: data.contractedValue ?? null };
+  }
+}
+
+/** Confirma Medição, Aditivo, Materiais ou Custos sem salvar outras coleções. */
+export async function syncNormalizedDomainAtomically(
+  project: Project, slim: Project, organizationId: string, expectedUpdatedAt: string,
+): Promise<string | null> {
+  const previous = snapshots.get(project.id);
+  if (!previous) return null;
+  const next = buildSnapshot(project, [...previous.loadedCollections]);
+  const changes = new Map<ProjectCollectionKey, ReturnType<typeof changedRows<unknown>>>();
+  for (const collection of previous.loadedCollections) {
+    const key = SNAPSHOT_MAP_BY_COLLECTION[collection];
+    const diff = changedRows(previous[key] as Map<string, unknown>, next[key] as Map<string, unknown>);
+    if (diff.upserts.length || diff.deletes.length) changes.set(collection, diff);
+  }
+  const audit = changes.get('auditLogs');
+  const changedDomainCollections = [...changes.keys()].filter(key => key !== 'auditLogs');
+  const newAuditTypes = new Set((audit?.upserts ?? []).map(({ row }) => (row as AuditLog).entityType));
+  const domain: NormalizedDomain | null = changedDomainCollections.includes('measurements') || newAuditTypes.has('measurement')
+    ? 'measurement'
+    : changedDomainCollections.includes('subcontracts') || newAuditTypes.has('subcontract')
+      ? 'costs'
+      : changedDomainCollections.includes('additives') || newAuditTypes.has('additive')
+        ? 'additive'
+        : changedDomainCollections.some(key => ['budgetItems', 'materialComparisons', 'analyticCompositions', 'materialPriceHistory'].includes(key))
+          ? 'materials' : null;
+  if (!domain || audit?.deletes.length) return null;
+  const allowed = new Set<ProjectCollectionKey>(DOMAIN_COLLECTIONS[domain]);
+  if (changedDomainCollections.some(collection => !allowed.has(collection))) return null;
+  if (audit?.upserts.some(({ id, row }) => previous.auditLogs.has(id)
+    || (row as AuditLog).entityType !== DOMAIN_AUDIT_TYPE[domain])) return null;
+  const batches = DOMAIN_COLLECTIONS[domain].flatMap(collection => {
+    const diff = changes.get(collection);
+    return diff ? [{ table: DOMAIN_TABLES[collection],
+      upserts: diff.upserts.map(({ id, row }) => domainRow(collection, id, row)), deletes: diff.deletes }] : [];
+  });
+  const recordCount = batches.reduce((sum, batch) => sum + batch.upserts.length + batch.deletes.length, 0)
+    + (audit?.upserts.length ?? 0);
+  if (recordCount === 0 || recordCount > 500) return null;
+
+  const startedAt = Date.now();
+  const { data, error } = await supabase.rpc('save_normalized_domain', {
+    p_project_id: project.id, p_organization_id: organizationId, p_expected_updated_at: expectedUpdatedAt,
+    p_domain: domain, p_name: slim.name,
+    p_data: shallowEqualJSON(previous.projectData, slim) ? null : slim as unknown as Json,
+    p_changes: batches as unknown as Json,
+    p_audit_insert: (audit?.upserts ?? []).map(({ id, row }) => ({ id, data: row })) as unknown as Json,
+  });
+  if (error) {
+    if (error.code === 'PGRST202' || error.code === '42883') return null;
+    recordSyncDiagnostic({ area: domain, operation: 'save', outcome: error.code === 'P0002' ? 'conflict' : 'failed',
+      durationMs: Date.now() - startedAt, recordCount });
+    throw error;
+  }
+  if (typeof data !== 'string' || !data) throw new Error(`A transação de ${domain} não confirmou a versão salva.`);
+  recordSyncDiagnostic({ area: domain, operation: 'save', outcome: 'confirmed',
     durationMs: Date.now() - startedAt, recordCount });
   snapshots.set(project.id, next);
   return data;
@@ -1240,7 +1338,7 @@ function diffAndSync<T extends { id: string }>(
         project_id: projectId,
         data: item as unknown as Json,
         ...(extraCols ? extraCols(item) : {}),
-        ...(before ? {} : { created_by: userId ?? null }),
+        ...(before || table === 'audit_logs' ? {} : { created_by: userId ?? null }),
       });
     }
   }
