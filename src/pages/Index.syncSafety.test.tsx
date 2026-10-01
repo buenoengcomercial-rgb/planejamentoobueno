@@ -238,7 +238,12 @@ vi.mock('@/components/Additive', async () => {
         type: 'button',
         onClick: () => onProjectChange(current => ({
           ...current,
-          additives: [{ id: 'additive-local', title: 'Alteração local no Aditivo' }],
+          additives: [{
+            id: 'additive-local',
+            name: 'Alteração local no Aditivo',
+            importedAt: '2026-09-14T10:00:00.000Z',
+            compositions: [],
+          }],
         })),
       }, 'Alterar Aditivo local'),
     ),
@@ -711,7 +716,16 @@ describe('segurança de sincronização da página da obra', () => {
       warehouse: {
         ...emptyWarehouse(),
         fiscalDuplicateReconciliationVersion: 1,
-        movements: [{ id: 'movimento-remoto', kind: 'entry', quantity: 1 }],
+        movements: [{
+          id: 'movimento-remoto',
+          type: 'entrada',
+          date: '2026-09-14',
+          createdAt: '2026-09-14T10:00:00.000Z',
+          itemKey: 'item-remoto',
+          itemDescription: 'Material remoto',
+          itemUnit: 'un',
+          quantity: 1,
+        }],
       },
     } as Project;
     let warehouseHasAdvanced = false;
@@ -757,8 +771,8 @@ describe('segurança de sincronização da página da obra', () => {
       deferSnapshot: true,
     }));
     expect(mocks.upsertCloudProject.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
-      additives: [{ id: 'additive-local', title: 'Alteração local no Aditivo' }],
-      warehouse: expect.objectContaining({ movements: [{ id: 'movimento-remoto', kind: 'entry', quantity: 1 }] }),
+      additives: [expect.objectContaining({ id: 'additive-local', name: 'Alteração local no Aditivo' })],
+      warehouse: expect.objectContaining({ movements: [expect.objectContaining({ id: 'movimento-remoto', type: 'entrada', quantity: 1 })] }),
     }));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
@@ -814,7 +828,7 @@ describe('segurança de sincronização da página da obra', () => {
       deferSnapshot: true,
     }));
     expect(mocks.upsertCloudProject.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
-      additives: [{ id: 'additive-local', title: 'Alteração local no Aditivo' }],
+      additives: [expect.objectContaining({ id: 'additive-local', name: 'Alteração local no Aditivo' })],
       dailyReports: [{ ...report, observations: 'Atualização remota no Diário' }],
     }));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -843,7 +857,12 @@ describe('segurança de sincronização da página da obra', () => {
   });
 
   it('reconcilia registros diferentes no mesmo Aditivo sem perder a edição local', async () => {
-    const remoteAdditive = { id: 'additive-remote', title: 'Criado em outro aparelho' };
+    const remoteAdditive = {
+      id: 'additive-remote',
+      name: 'Criado em outro aparelho',
+      importedAt: '2026-09-14T10:00:00.000Z',
+      compositions: [],
+    };
     const remoteProject = { ...makeProject(), additives: [remoteAdditive] } as Project;
     let remoteHasAdvanced = false;
     mocks.loadCloudProjectRecord.mockImplementation(async (id: string) => {
@@ -873,7 +892,7 @@ describe('segurança de sincronização da página da obra', () => {
     expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(2);
     expect(mocks.upsertCloudProject.mock.calls[1]?.[0].additives).toEqual([
       remoteAdditive,
-      { id: 'additive-local', title: 'Alteração local no Aditivo' },
+      expect.objectContaining({ id: 'additive-local', name: 'Alteração local no Aditivo' }),
     ]);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });

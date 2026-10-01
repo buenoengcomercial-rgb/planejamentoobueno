@@ -24,10 +24,10 @@ function project(): Project {
 describe('escopo da manutenção de anexos', () => {
   it('identifica uma retirada isolada sem permitir alteração de outra coleção', () => {
     const before = project();
-    before.warehouse!.requisitions = [{ id: 'req-1', number: 'REQ-1', date: '2026-09-17', items: [], attachments: [{ id: 'file-1', name: 'foto.jpg', storagePath: 'old.jpg' }] }] as Project['warehouse']['requisitions'];
+    before.warehouse!.requisitions = [{ id: 'req-1', number: 'REQ-1', date: '2026-09-17', status: 'entregue', items: [], createdAt: '2026-09-17T10:00:00.000Z', deliveryAttachments: [{ id: 'file-1', name: 'foto.jpg', storagePath: 'old.jpg', uploadedAt: '2026-09-17T10:00:00.000Z' }] }];
     const after = structuredClone(before);
-    after.warehouse!.requisitions[0].attachments![0] = {
-      ...after.warehouse!.requisitions[0].attachments![0],
+    after.warehouse!.requisitions[0].deliveryAttachments![0] = {
+      ...after.warehouse!.requisitions[0].deliveryAttachments![0],
       storagePath: 'optimized.jpg',
       optimizedAt: '2026-09-17T10:00:00.000Z',
       optimizationVersion: ATTACHMENT_OPTIMIZATION_VERSION,
@@ -72,7 +72,7 @@ describe('escopo da manutenção de anexos', () => {
 
   it('bloqueia uma tentativa que altere mais de uma coleção', () => {
     const before = project();
-    before.warehouse!.requisitions = [{ id: 'req-1', number: 'REQ-1', date: '2026-09-17', items: [] }] as Project['warehouse']['requisitions'];
+    before.warehouse!.requisitions = [{ id: 'req-1', number: 'REQ-1', date: '2026-09-17', status: 'entregue', items: [], createdAt: '2026-09-17T10:00:00.000Z' }];
     const after = structuredClone(before);
     after.warehouse!.requisitions[0] = { ...after.warehouse!.requisitions[0], notes: 'mudou' };
     after.warehouse!.equipments = [{ id: 'equipment-1', name: 'Furadeira' }] as Project['warehouse']['equipments'];
@@ -82,7 +82,7 @@ describe('escopo da manutenção de anexos', () => {
 
   it('bloqueia alteração incidental fora do anexo', () => {
     const before = project();
-    before.warehouse!.requisitions = [{ id: 'req-1', number: 'REQ-1', date: '2026-09-17', items: [] }] as Project['warehouse']['requisitions'];
+    before.warehouse!.requisitions = [{ id: 'req-1', number: 'REQ-1', date: '2026-09-17', status: 'entregue', items: [], createdAt: '2026-09-17T10:00:00.000Z' }];
     const after = structuredClone(before);
     after.warehouse!.requisitions[0] = { ...after.warehouse!.requisitions[0], notes: 'foto atualizada' };
     after.name = 'Outra obra';
@@ -92,11 +92,11 @@ describe('escopo da manutenção de anexos', () => {
 
   it('registra pendência de limpeza sem alterar a coleção dona do anexo', () => {
     const before = project();
-    before.warehouse!.requisitions = [{ id: 'req-1', number: 'REQ-1', date: '2026-09-17', items: [], attachments: [{ id: 'file-1', name: 'foto.jpg', storagePath: 'optimized.jpg' }] }] as Project['warehouse']['requisitions'];
+    before.warehouse!.requisitions = [{ id: 'req-1', number: 'REQ-1', date: '2026-09-17', status: 'entregue', items: [], createdAt: '2026-09-17T10:00:00.000Z', deliveryAttachments: [{ id: 'file-1', name: 'foto.jpg', storagePath: 'optimized.jpg', uploadedAt: '2026-09-17T10:00:00.000Z' }] }];
 
     const after = markAttachmentCleanupPending(before, 'file-1', 'optimized.jpg', 'original.jpg');
 
     expect(attachmentMigrationScope(before, after).kind).toBe('requisition');
-    expect(after.warehouse!.requisitions[0].attachments![0].cleanupPendingStoragePath).toBe('original.jpg');
+    expect(after.warehouse!.requisitions[0].deliveryAttachments![0].cleanupPendingStoragePath).toBe('original.jpg');
   });
 });
