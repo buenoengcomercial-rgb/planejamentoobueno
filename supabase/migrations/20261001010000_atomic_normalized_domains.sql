@@ -131,7 +131,7 @@ $$;
 
 REVOKE ALL ON FUNCTION public.save_normalized_domain(
   uuid, uuid, timestamptz, text, text, jsonb, jsonb, jsonb
-) FROM PUBLIC;
+) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.save_normalized_domain(
   uuid, uuid, timestamptz, text, text, jsonb, jsonb, jsonb
 ) TO authenticated;
