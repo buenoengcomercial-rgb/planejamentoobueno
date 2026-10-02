@@ -1,17 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { DxfViewer } from 'dxf-viewer';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { Button } from '@/components/ui/button';
-import { Contrast, Layers3, Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
 import type { Point, TakeoffPlan, TakeoffMeasure } from '@/lib/planTakeoff';
 
 interface Props {
   plan: TakeoffPlan; page: number; draft: Point[]; drawing: boolean; selected: string;
   readOnly: boolean; onPoint: (point: Point) => void; onSelect: (id: string) => void;
   onMove: (id: string, index: number, point: Point) => void; onPages: (count: number) => void;
+  onCursor?: (point: Point | null) => void;
+  onLayers?: (layers: string[], hidden: string[]) => void;
+}
+export interface PlanCanvasHandle {
+  zoomIn: () => void;
+  zoomOut: () => void;
+  fit: () => void;
+  toggleLayer: (name: string, visible: boolean) => void;
 }
 type View = { x: number; y: number; width: number };
-export default function PlanCanvas({ plan, page, draft, drawing, selected, readOnly, onPoint, onSelect, onMove, onPages }: Props) {
+const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ plan, page, draft, drawing, selected, readOnly, onPoint, onSelect, onMove, onPages, onCursor, onLayers }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const cadHost = useRef<HTMLDivElement>(null);
   const cad = useRef<DxfViewer>();
@@ -24,9 +30,19 @@ export default function PlanCanvas({ plan, page, draft, drawing, selected, readO
   const [status, setStatus] = useState('Carregando planta…');
   const drag = useRef<{ start: Point; view: View; id?: string; index?: number; moved: boolean }>();
   const [moving, setMoving] = useState<{ id: string; index: number; point: Point }>();
-  const [darkBackground, setDarkBackground] = useState(plan.kind === 'dxf');
   const height = view.width * size.height / size.width;
   const unit = view.width / size.width;
+
+  useImperativeHandle(ref, () => ({
+    zoomIn: () => setView(v => ({ ...v, width: v.width / 1.3 })),
+    zoomOut: () => setView(v => ({ ...v, width: v.width * 1.3 })),
+    fit: () => setView(fit.current),
+    toggleLayer: (name, visible) => {
+      cad.current?.ShowLayer(name, visible);
+      cad.current?.Render();
+      setHidden(previous => visible ? previous.filter(item => item !== name) : [...previous, name]);
+    },
+  }), []);
 
   useEffect(() => {
     const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height }));
@@ -52,6 +68,7 @@ export default function PlanCanvas({ plan, page, draft, drawing, selected, readO
           const { DxfViewer } = await import('dxf-viewer');
           if (disposed || !cadHost.current) return;
           viewer = new DxfViewer(cadHost.current, { autoResize: false, canvasWidth: host.current?.clientWidth || 800, canvasHeight: host.current?.clientHeight || 500 });
+          viewer.SetClearColor('#ffffff');
           await viewer.Load({ url, fonts: [`${import.meta.env.BASE_URL}fonts/NotoSans-Regular.ttf`] });
           if (disposed) return;
           const b = viewer.GetBounds();
@@ -106,9 +123,7 @@ export default function PlanCanvas({ plan, page, draft, drawing, selected, readO
     viewer.Render();
   }, [view, size, status]);
 
-  useEffect(() => {
-    if (cad.current && !status) cad.current.SetClearColor(darkBackground ? '#000000' : '#ffffff');
-  }, [darkBackground, status]);
+  useEffect(() => { onLayers?.(layers, hidden); }, [layers, hidden, onLayers]);
 
   const point = (event: React.PointerEvent<SVGSVGElement>): Point => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -119,36 +134,29 @@ export default function PlanCanvas({ plan, page, draft, drawing, selected, readO
     const points = measure.points.map((p, i) => moving?.id === measure.id && moving.index === i ? moving.point : p);
     const color = selected === measure.id ? '#d97706' : '#0369a1';
     return <g key={measure.id} onPointerDown={e => { if (!drawing) { e.stopPropagation(); onSelect(measure.id); } }}>
-      {measure.kind !== 'count' && <polyline points={[...points, ...(measure.kind === 'area' ? [points[0]] : [])].map(p => `${p.x},${p.y}`).join(' ')} stroke={color} strokeWidth={unit * 3} fill={measure.kind === 'area' ? '#0284c733' : 'none'} style={{ cursor: 'pointer' }} />}
+      {measure.kind !== 'count' && <polyline points={[...points, ...(measure.kind === 'area' ? [points[0]] : [])].map(p => `${p.x},${p.y}`).join(' ')} stroke={color} strokeWidth={unit * 3} fill={measure.kind === 'area' ? '#0284c714' : 'none'} style={{ cursor: 'pointer', pointerEvents: 'stroke' }} />}
       {points.map((p, i) => <g key={i}>
         <circle cx={p.x} cy={p.y} r={unit * 5} fill={color} stroke="white" strokeWidth={unit} style={{ cursor: !readOnly && selected === measure.id ? 'move' : 'pointer' }} onPointerDown={e => {
           if (drawing) return; e.stopPropagation(); onSelect(measure.id);
           if (!readOnly && selected === measure.id) { e.currentTarget.ownerSVGElement?.setPointerCapture(e.pointerId); drag.current = { start: p, view, id: measure.id, index: i, moved: false }; }
         }} />
-        {measure.kind === 'count' && <text x={p.x + unit * 8} y={p.y - unit * 7} fontSize={unit * 13} fill={color} style={{ pointerEvents: 'none' }}>{i + 1}</text>}
+        {measure.kind === 'count' && <text x={p.x + unit * 8} y={p.y - unit * 7} fontSize={unit * 12} fontWeight="600" fill={color} stroke="white" strokeWidth={unit * 2.5} paintOrder="stroke" style={{ pointerEvents: 'none' }}>{i + 1}</text>}
       </g>)}
     </g>;
   };
-  return <div className="min-w-0 space-y-1.5">
-    <div role="toolbar" aria-label="Visualização da planta" className="flex flex-wrap items-center gap-1 rounded-md border bg-card px-2 py-1">
-      <Button title="Ampliar" aria-label="Ampliar" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView(v => ({ ...v, width: v.width / 1.3 }))}><ZoomIn /></Button>
-      <Button title="Reduzir" aria-label="Reduzir" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView(v => ({ ...v, width: v.width * 1.3 }))}><ZoomOut /></Button>
-      <Button title="Enquadrar" aria-label="Enquadrar" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView(fit.current)}><Maximize2 /></Button>
-      {plan.kind === 'dxf' && <Button title="Alternar fundo branco ou preto" aria-label="Alternar cor do fundo" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDarkBackground(v => !v)}><Contrast /></Button>}
-      {layers.length > 0 && <details className="relative ml-1"><summary className="inline-flex h-7 cursor-pointer list-none items-center gap-1 rounded px-2 text-xs hover:bg-muted"><Layers3 className="h-4 w-4" />Layers ({layers.length})</summary><div className="absolute z-20 mt-1 max-h-60 w-64 overflow-auto rounded border bg-background p-3 shadow-lg">{layers.map(name => <label key={name} className="flex gap-2 py-1 text-sm"><input type="checkbox" checked={!hidden.includes(name)} onChange={e => { cad.current?.ShowLayer(name, e.target.checked); cad.current?.Render(); setHidden(h => e.target.checked ? h.filter(n => n !== name) : [...h, name]); }} />{name}</label>)}</div></details>}
-      <span className="ml-auto text-xs text-muted-foreground">{plan.kind.toUpperCase()} • {page}</span>
-    </div>
-    <div ref={host} className="relative h-[52vh] min-h-[320px] overflow-hidden rounded-md border bg-white sm:h-[min(62vh,680px)]" style={{ touchAction: 'none' }}>
+  return <div className="min-w-0">
+    <div ref={host} className="relative h-[58vh] min-h-[360px] overflow-hidden border border-slate-300 bg-white sm:h-[min(69vh,760px)]" style={{ touchAction: 'none' }}>
       <div ref={cadHost} className="absolute inset-0" style={{ pointerEvents: 'none' }} />
       <svg aria-label="Planta e marcações" className="absolute inset-0 h-full w-full" viewBox={`${view.x - view.width / 2} ${view.y - height / 2} ${view.width} ${height}`} onWheel={e => setView(v => ({ ...v, width: Math.max(.00001, v.width * (e.deltaY > 0 ? 1.12 : 1 / 1.12)) }))}
         onPointerDown={e => { if (status) return; e.currentTarget.setPointerCapture(e.pointerId); drag.current = { start: point(e), view, moved: false }; }}
         onPointerMove={e => {
+          onCursor?.(point(e));
           const d = drag.current; if (!d) return;
           const p = point(e);
           if (Math.hypot(p.x - d.start.x, p.y - d.start.y) > unit * 3) d.moved = true;
           if (d.id !== undefined && d.index !== undefined) setMoving({ id: d.id, index: d.index, point: p });
           else if (!drawing) setView({ ...view, x: view.x + d.start.x - p.x, y: view.y + d.start.y - p.y });
-        }} onPointerUp={e => {
+        }} onPointerLeave={() => onCursor?.(null)} onPointerUp={e => {
           const d = drag.current; drag.current = undefined;
           if (d?.id !== undefined && d.index !== undefined && d.moved) onMove(d.id, d.index, point(e));
           else if (d && !d.moved && drawing) onPoint(point(e));
@@ -162,4 +170,5 @@ export default function PlanCanvas({ plan, page, draft, drawing, selected, readO
       {status && <div role="status" className="absolute inset-0 flex items-center justify-center bg-white/90 p-5 text-center text-slate-800">{status}</div>}
     </div>
   </div>;
-}
+});
+export default PlanCanvas;

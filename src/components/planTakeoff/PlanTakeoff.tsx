@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Check, ChevronDown, ChevronUp, CircleDot, Crosshair, FileUp, FolderOpen, MousePointer2, PanelLeftClose, PanelLeftOpen, Ruler, Settings2, Shapes, Undo2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, CircleDot, Crosshair, FileUp, Layers3, Maximize2, MousePointer2, Ruler, Settings2, Shapes, Undo2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { calibration, quantity, readTakeoffs, saveTakeoffs, type MeasureKind, type Point, type TakeoffPlan } from '@/lib/planTakeoff';
-import PlanCanvas from './PlanCanvas';
+import PlanCanvas, { type PlanCanvasHandle } from './PlanCanvas';
 
 const labels = { count: 'Contagem', length: 'Comprimento', area: 'Área' };
 const units = { count: 'un', length: 'm', area: 'm²' };
@@ -23,14 +23,23 @@ export default function PlanTakeoff({ storageKey, readOnly }: { storageKey: stri
   const [distance, setDistance] = useState('');
   const [cadUnit, setCadUnit] = useState('1');
   const [pendingScale, setPendingScale] = useState<number>();
-  const [showPlans, setShowPlans] = useState(true);
+  const [draftName, setDraftName] = useState('');
+  const [cursor, setCursor] = useState<Point | null>(null);
+  const [canvasLayers, setCanvasLayers] = useState<string[]>([]);
+  const [hiddenLayers, setHiddenLayers] = useState<string[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [showDetails, setShowDetails] = useState(true);
   const history = useRef<TakeoffPlan[][]>([]);
   const busy = useRef(false);
+  const canvas = useRef<PlanCanvasHandle>(null);
+  const receiveLayers = useCallback((names: string[], invisible: string[]) => { setCanvasLayers(names); setHiddenLayers(invisible); }, []);
   const plan = plans.find(p => p.id === active);
   const scale = plan?.scales[page] ?? null;
   const locked = readOnly || !ready || saving;
+  const draftResult = tool && tool !== 'calibrate' && draft.length >= (tool === 'count' ? 1 : tool === 'length' ? 2 : 3)
+    ? quantity(tool, draft, scale) : null;
+  const lastPoint = draft.at(-1);
+  const displacement = cursor && lastPoint && scale ? Math.hypot(cursor.x - lastPoint.x, cursor.y - lastPoint.y) * scale : null;
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
       if (busy.current || draft.length) { event.preventDefault(); event.returnValue = ''; }
@@ -58,7 +67,7 @@ export default function PlanTakeoff({ storageKey, readOnly }: { storageKey: stri
     finally { busy.current = false; setSaving(false); }
   }
   const update = (next: TakeoffPlan) => commit(plans.map(p => p.id === next.id ? next : p));
-  const reset = () => { setTool(null); setDraft([]); setPendingScale(undefined); };
+  const reset = () => { setTool(null); setDraft([]); setDraftName(''); setPendingScale(undefined); };
   async function importFile(file?: File) {
     if (!file || locked) return;
     const extension = file.name.split('.').pop()?.toLowerCase();
@@ -75,69 +84,77 @@ export default function PlanTakeoff({ storageKey, readOnly }: { storageKey: stri
     if (tool !== 'count' && !scale) return;
     if (tool === 'area' && !quantity('area', draft, scale)) { setError('O contorno deve ter área maior que zero.'); return; }
     const id = crypto.randomUUID();
-    if (!await update({ ...plan, measures: [...plan.measures, { id, page, name: `${labels[tool]} ${plan.measures.length + 1}`, kind: tool, points: draft }] })) return;
+    if (!await update({ ...plan, measures: [...plan.measures, { id, page, name: draftName.trim() || `${labels[tool]} ${plan.measures.length + 1}`, kind: tool, points: draft }] })) return;
     setSelected(id); reset();
   }
   const fieldKey = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Escape') { event.currentTarget.value = event.currentTarget.defaultValue; event.currentTarget.blur(); }
     if (event.key === 'Enter') event.currentTarget.blur();
   };
-  return <section className="mx-auto flex w-full max-w-[1900px] flex-col gap-2 p-2 sm:p-3" aria-label="Levantamento em planta">
-    <header className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2 shadow-sm">
+  return <section className="mx-auto flex w-full max-w-[2100px] flex-col gap-1 bg-[#f5f6f7] p-1.5 text-slate-800 sm:p-2" aria-label="Levantamento em planta">
+    <header className="flex min-w-0 flex-wrap items-center gap-2 border border-slate-300 bg-white px-3 py-1.5">
       <div className="mr-auto min-w-0">
-        <div className="flex items-center gap-2"><h1 className="truncate text-base font-semibold sm:text-lg">Levantamento em planta</h1><span className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">Experimental</span></div>
+        <div className="flex items-center gap-2"><h1 className="truncate text-sm font-semibold">Levantamento em planta</h1><span className="bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-900">Experimental</span></div>
         <p className="text-xs text-muted-foreground">{plan ? `${plan.name}${plan.floor ? ` • ${plan.floor}` : ''}` : 'Escolha uma planta para começar'}</p>
       </div>
       <span role="status" className="order-last w-full text-xs text-muted-foreground sm:order-none sm:w-auto">{status}</span>
-      <label className={`inline-flex h-9 items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium ${locked ? 'opacity-50' : 'cursor-pointer hover:bg-muted'}`}><FileUp className="h-4 w-4" />Adicionar planta<input aria-label="Adicionar planta" className="sr-only" type="file" accept=".pdf,.png,.jpg,.jpeg,.dxf" disabled={locked} onChange={e => { void importFile(e.target.files?.[0]); e.target.value = ''; }} /></label>
-      <Button title="Desfazer a última alteração desta sessão" aria-label="Desfazer" variant="outline" size="sm" disabled={locked || !history.current.length} onClick={() => { const previous = history.current.at(-1); if (previous) { void commit(previous, true); reset(); } }}><Undo2 className="h-4 w-4" /><span className="hidden sm:inline">Desfazer</span></Button>
+      <label className={`inline-flex h-7 items-center gap-1.5 border border-slate-300 bg-slate-50 px-2 text-xs font-medium ${locked ? 'opacity-50' : 'cursor-pointer hover:bg-slate-100'}`}><FileUp className="h-3.5 w-3.5" />Adicionar planta<input aria-label="Adicionar planta" className="sr-only" type="file" accept=".pdf,.png,.jpg,.jpeg,.dxf" disabled={locked} onChange={e => { void importFile(e.target.files?.[0]); e.target.value = ''; }} /></label>
+      <Button title="Desfazer a última alteração desta sessão" aria-label="Desfazer" variant="outline" size="sm" className="h-7 rounded-none text-xs" disabled={locked || !history.current.length} onClick={() => { const previous = history.current.at(-1); if (previous) { void commit(previous, true); reset(); } }}><Undo2 className="h-3.5 w-3.5" /><span className="hidden sm:inline">Desfazer</span></Button>
     </header>
     {error && <p role="alert" className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">{error}</p>}
     {!plans.length && ready && <div className="rounded border border-dashed bg-card p-10 text-center text-muted-foreground">Adicione uma planta para começar. PDF, imagem ou DXF 2D.</div>}
-    {!!plans.length && <div className={`grid min-w-0 gap-2 ${showPlans ? 'md:grid-cols-[210px_minmax(0,1fr)]' : ''}`}>
-      {showPlans && <aside aria-label="Plantas e pavimentos" className="min-w-0 rounded-lg border bg-card p-2">
-        <div className="mb-2 hidden items-center gap-2 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground md:flex"><FolderOpen className="h-4 w-4" />Plantas e pavimentos</div>
-        <div className="flex gap-2 overflow-x-auto pb-1 md:max-h-[calc(100vh-175px)] md:flex-col md:overflow-y-auto md:overflow-x-hidden">
-          {plans.map(p => <button key={p.id} className={`min-w-[155px] rounded-md border px-3 py-2 text-left text-sm md:min-w-0 ${p.id === active ? 'border-primary bg-primary/10 text-foreground' : 'hover:bg-muted'}`} onClick={() => { setActive(p.id); setPage(1); setPages(1); setSelected(''); reset(); }}><strong className="block truncate" title={p.name}>{p.name}</strong><span className="block truncate text-xs text-muted-foreground">{p.floor || 'Pavimento não informado'}</span></button>)}
+    {!!plans.length && plan && <div className="flex min-w-0 flex-col gap-1">
+        <div role="toolbar" aria-label="Ferramentas de levantamento" className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 border border-slate-300 bg-[#e9ecef] px-1.5 py-1 text-xs xl:flex-nowrap">
+          <div className="flex min-w-0 items-center gap-1 border-r border-slate-300 pr-2 tabular-nums" aria-label="Informações do cursor e da medição">
+            <span className="whitespace-nowrap text-slate-600" title="Coordenadas do cursor em unidades do desenho">{cursor ? `X ${format(cursor.x)} · Y ${format(cursor.y)}` : 'X — · Y —'}</span>
+            {displacement !== null && <span className="whitespace-nowrap text-slate-600" title="Distância do último ponto ao cursor">Δ {format(displacement)} m</span>}
+            {draftResult !== null && tool && tool !== 'calibrate' && <span className="whitespace-nowrap font-medium" title="Resultado do traçado">{tool === 'length' ? 'C' : tool === 'area' ? 'A' : 'Q'} {format(draftResult)} {units[tool]}</span>}
+            <span className="whitespace-nowrap text-slate-600">{scale ? `${format(scale)} m/unid.` : 'Escala pendente'}</span>
+          </div>
+          <div className="flex items-center gap-0.5 border-r border-slate-300 pr-1" aria-label="Navegação">
+            <Button title="Ampliar" aria-label="Ampliar" variant="ghost" size="icon" className="h-7 w-7 rounded-none" onClick={() => canvas.current?.zoomIn()}><ZoomIn className="h-4 w-4" /></Button>
+            <Button title="Reduzir" aria-label="Reduzir" variant="ghost" size="icon" className="h-7 w-7 rounded-none" onClick={() => canvas.current?.zoomOut()}><ZoomOut className="h-4 w-4" /></Button>
+            <Button title="Enquadrar desenho" aria-label="Enquadrar desenho" variant="ghost" size="icon" className="h-7 w-7 rounded-none" onClick={() => canvas.current?.fit()}><Maximize2 className="h-4 w-4" /></Button>
+            <Button title="Selecionar marcação ou deslocar a vista" aria-label="Deslocar vista" aria-pressed={!tool} variant="ghost" size="icon" className={`h-7 w-7 rounded-none ${!tool ? 'bg-sky-100 text-sky-900 ring-1 ring-sky-400' : ''}`} onClick={reset}><MousePointer2 className="h-4 w-4" /></Button>
+          </div>
+          <div className="flex items-center gap-0.5 border-r border-slate-300 pr-1" aria-label="Levantamento">
+            {(['count', 'length', 'area'] as const).map(kind => { const Icon = kind === 'count' ? CircleDot : kind === 'length' ? Ruler : Shapes; return <Button key={kind} title={labels[kind]} aria-label={labels[kind]} aria-pressed={tool === kind} variant="ghost" size="icon" className={`h-7 w-7 rounded-none ${tool === kind ? 'bg-sky-100 text-sky-900 ring-1 ring-sky-400' : ''}`} disabled={locked || kind !== 'count' && !scale} onClick={() => { setError(''); setDraft([]); setDraftName(''); setTool(kind); setPendingScale(undefined); }}><Icon className="h-4 w-4" /></Button>; })}
+            <Button title="Calibrar escala" aria-label="Calibrar escala" aria-pressed={tool === 'calibrate'} variant="ghost" size="icon" className={`h-7 w-7 rounded-none ${tool === 'calibrate' ? 'bg-sky-100 text-sky-900 ring-1 ring-sky-400' : ''}`} disabled={locked} onClick={() => { setError(''); setTool('calibrate'); setDraft([]); setPendingScale(undefined); }}><Crosshair className="h-4 w-4" /></Button>
+          </div>
+          <div className="flex min-w-0 items-center gap-1 border-r border-slate-300 pr-2" aria-label="Desenho">
+            <select aria-label="Planta" title="Selecionar planta" className="h-7 max-w-[190px] border border-slate-300 bg-white px-1 text-xs" value={active} onChange={e => { setActive(e.target.value); setPage(1); setPages(1); setSelected(''); reset(); }}>{plans.map(p => <option key={p.id} value={p.id}>{p.name}{p.floor ? ` · ${p.floor}` : ''}</option>)}</select>
+            {plan.kind === 'pdf' && <select aria-label="Página" title="Página do PDF" className="h-7 border border-slate-300 bg-white px-1 text-xs" value={page} onChange={e => { setPage(Number(e.target.value)); reset(); setSelected(''); }}>{Array.from({ length: pages }, (_, i) => <option key={i} value={i + 1}>Pág. {i + 1}</option>)}</select>}
+            {plan.kind === 'dxf' && <details className="relative"><summary className="flex h-7 cursor-pointer list-none items-center gap-1 border border-slate-300 bg-white px-1.5" title="Visibilidade dos layers"><Layers3 className="h-4 w-4" />Layers ({canvasLayers.length})</summary><div className="absolute left-0 top-7 z-30 max-h-60 w-60 overflow-auto border border-slate-300 bg-white p-2 shadow-md">{canvasLayers.map(name => <label key={name} className="flex items-center gap-2 py-1 text-xs"><input type="checkbox" checked={!hiddenLayers.includes(name)} onChange={e => canvas.current?.toggleLayer(name, e.target.checked)} />{name}</label>)}</div></details>}
+            <Button title="Configurações da planta" aria-label="Configurações da planta" aria-expanded={showSettings} variant="ghost" size="icon" className="h-7 w-7 rounded-none" onClick={() => setShowSettings(v => !v)}><Settings2 className="h-4 w-4" /></Button>
+          </div>
+          <div className="flex min-w-0 items-center gap-1" aria-label="Quantitativo">
+            <Input aria-label="Nome do levantamento" title="Nome do levantamento em curso" className="h-7 w-32 rounded-none border-slate-300 bg-white px-1.5 text-xs" placeholder="Nome do item" value={draftName} disabled={!tool || tool === 'calibrate' || locked} onChange={e => setDraftName(e.target.value)} />
+            <Button title="Concluir traçado" aria-label="Concluir traçado" variant="ghost" size="icon" className="h-7 w-7 rounded-none" disabled={locked || !tool || tool === 'calibrate'} onClick={finish}><Check className="h-4 w-4" /></Button>
+            <Button title="Cancelar traçado" aria-label="Cancelar traçado" variant="ghost" size="icon" className="h-7 w-7 rounded-none" disabled={!tool} onClick={reset}><X className="h-4 w-4" /></Button>
+          </div>
         </div>
-      </aside>}
-      {plan && <div className="flex min-w-0 flex-col gap-2">
-        <div role="toolbar" aria-label="Ferramentas de levantamento" className="flex min-w-0 flex-wrap items-center gap-1 rounded-lg border bg-card px-2 py-1.5 shadow-sm">
-          <Button title={showPlans ? 'Ocultar plantas' : 'Mostrar plantas'} aria-label={showPlans ? 'Ocultar plantas' : 'Mostrar plantas'} size="icon" variant="ghost" className="h-8 w-8" onClick={() => setShowPlans(v => !v)}>{showPlans ? <PanelLeftClose /> : <PanelLeftOpen />}</Button>
-          <span className="mx-1 h-6 border-l" aria-hidden="true" />
-          <Button title="Selecionar marcação ou mover a vista" aria-label="Selecionar / mover vista" aria-pressed={!tool} size="icon" variant={!tool ? 'default' : 'ghost'} className="h-8 w-8" onClick={reset}><MousePointer2 /></Button>
-          {(['count', 'length', 'area'] as const).map(kind => {
-            const Icon = kind === 'count' ? CircleDot : kind === 'length' ? Ruler : Shapes;
-            return <Button key={kind} title={labels[kind]} aria-label={labels[kind]} aria-pressed={tool === kind} size="icon" variant={tool === kind ? 'default' : 'ghost'} className="h-8 w-8" disabled={locked || kind !== 'count' && !scale} onClick={() => { setError(''); setDraft([]); setTool(kind); setPendingScale(undefined); }}><Icon /></Button>;
-          })}
-          <span className="mx-1 h-6 border-l" aria-hidden="true" />
-          <Button title="Calibrar escala por distância conhecida" aria-label="Calibrar escala" aria-pressed={tool === 'calibrate'} size="icon" variant={tool === 'calibrate' ? 'default' : 'ghost'} className="h-8 w-8" disabled={locked} onClick={() => { setError(''); setTool('calibrate'); setDraft([]); setPendingScale(undefined); }}><Crosshair /></Button>
-          <Button title="Configurações da planta" aria-label="Configurações da planta" aria-expanded={showSettings} size="icon" variant={showSettings ? 'secondary' : 'ghost'} className="h-8 w-8" onClick={() => setShowSettings(v => !v)}><Settings2 /></Button>
-          <span className="ml-auto rounded px-2 py-1 text-xs font-medium text-muted-foreground">{scale ? 'Escala confirmada' : 'Escala pendente'}</span>
-          {plan.kind === 'pdf' && <label className="flex items-center gap-1 text-xs">Página<select aria-label="Página" className="h-8 rounded border bg-background px-2" value={page} onChange={e => { setPage(Number(e.target.value)); reset(); setSelected(''); }}>{Array.from({ length: pages }, (_, i) => <option key={i} value={i + 1}>{i + 1}</option>)}</select></label>}
-        </div>
-        {showSettings && <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-card p-3 text-sm">
-          <label className="min-w-[180px] flex-1 text-xs">Nome da planta<Input onKeyDown={fieldKey} key={`${plan.id}-name-${plan.name}`} defaultValue={plan.name} disabled={locked} onBlur={e => { const name = e.target.value.trim(); if (name && name !== plan.name) void update({ ...plan, name }); }} /></label>
-          <label className="min-w-[140px] text-xs">Pavimento<Input onKeyDown={fieldKey} key={`${plan.id}-floor-${plan.floor}`} defaultValue={plan.floor} disabled={locked} placeholder="Ex.: Térreo" onBlur={e => { if (e.target.value !== plan.floor) void update({ ...plan, floor: e.target.value }); }} /></label>
-          {plan.kind === 'dxf' && <label className="text-xs">Unidade do DXF<select aria-label="Unidade do DXF" className="block h-10 rounded border bg-background px-2" value={cadUnit} disabled={locked} onChange={e => setCadUnit(e.target.value)}><option value="1">Metro</option><option value="0.01">Centímetro</option><option value="0.001">Milímetro</option></select></label>}
-          {plan.kind === 'dxf' && <Button size="sm" variant="outline" disabled={locked} onClick={() => setPendingScale(Number(cadUnit))}>Conferir unidade</Button>}
+        {showSettings && <div className="flex flex-wrap items-end gap-2 border border-slate-300 bg-white p-2 text-xs">
+          <label className="min-w-[180px] flex-1">Nome da planta<Input className="h-7 rounded-none text-xs" onKeyDown={fieldKey} key={`${plan.id}-name-${plan.name}`} defaultValue={plan.name} disabled={locked} onBlur={e => { const name = e.target.value.trim(); if (name && name !== plan.name) void update({ ...plan, name }); }} /></label>
+          <label className="min-w-[140px]">Pavimento<Input className="h-7 rounded-none text-xs" onKeyDown={fieldKey} key={`${plan.id}-floor-${plan.floor}`} defaultValue={plan.floor} disabled={locked} placeholder="Ex.: Térreo" onBlur={e => { if (e.target.value !== plan.floor) void update({ ...plan, floor: e.target.value }); }} /></label>
+          {plan.kind === 'dxf' && <label>Unidade do DXF<select aria-label="Unidade do DXF" className="block h-7 border border-slate-300 bg-white px-2" value={cadUnit} disabled={locked} onChange={e => setCadUnit(e.target.value)}><option value="1">Metro</option><option value="0.01">Centímetro</option><option value="0.001">Milímetro</option></select></label>}
+          {plan.kind === 'dxf' && <Button size="sm" variant="outline" className="h-7 rounded-none text-xs" disabled={locked} onClick={() => setPendingScale(Number(cadUnit))}>Conferir unidade</Button>}
           <p className="basis-full text-xs text-muted-foreground">Arquivos e marcações ficam neste navegador, por usuário e obra. {plan.kind === 'dxf' ? 'DXF 2D usa o espaço de modelo; confira textos e entidades especiais antes de medir.' : 'Não lançam produção ou medição.'}</p>
         </div>}
-        {tool && <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
-          <strong className="text-primary">{tool === 'calibrate' ? 'Calibrar escala' : labels[tool]}</strong>
-          <span className="text-muted-foreground">{tool === 'calibrate' ? 'Marque dois pontos com distância conhecida.' : 'Clique na planta para marcar pontos.'} ({draft.length} pontos)</span>
-          {tool === 'calibrate' ? <><Input aria-label="Distância conhecida em metros" className="h-8 w-40" placeholder="Distância em metros" value={distance} onChange={e => setDistance(e.target.value)} /><Button size="sm" disabled={locked || draft.length !== 2} onClick={() => { try { setPendingScale(calibration(draft, Number(distance.replace(',', '.')))); setError(''); } catch (e) { setError((e as Error).message); } }}>Conferir escala</Button></> : <Button size="sm" disabled={locked} onClick={finish}><Check />Concluir traçado</Button>}
-          <Button size="sm" variant="outline" onClick={() => setDraft(d => d.slice(0, -1))}><Undo2 />Retirar último ponto</Button><Button size="sm" variant="ghost" onClick={reset}><X />Cancelar</Button>
+        {tool && <div className="flex min-h-8 flex-wrap items-center gap-2 border-x border-b border-slate-300 bg-[#f2f3f4] px-2 py-0.5 text-xs">
+          <strong>{tool === 'calibrate' ? 'Calibrar escala' : labels[tool]}</strong>
+          <span className="text-slate-500">{draft.length} ponto{draft.length === 1 ? '' : 's'}</span>
+          {tool === 'calibrate' && <><Input aria-label="Distância conhecida em metros" className="h-7 w-36 rounded-none text-xs" placeholder="Distância em metros" value={distance} onChange={e => setDistance(e.target.value)} /><Button size="sm" className="h-7 rounded-none text-xs" disabled={locked || draft.length !== 2} onClick={() => { try { setPendingScale(calibration(draft, Number(distance.replace(',', '.')))); setError(''); } catch (e) { setError((e as Error).message); } }}>Conferir escala</Button></>}
+          <Button size="sm" variant="ghost" className="h-7 rounded-none text-xs" disabled={!draft.length} onClick={() => setDraft(d => d.slice(0, -1))}><Undo2 className="h-3.5 w-3.5" />Retirar último ponto</Button>
         </div>}
         {pendingScale !== undefined && <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-slate-900"><p>Nova escala: {pendingScale.toLocaleString('pt-BR', { maximumSignificantDigits: 8 })} m por unidade do desenho. {plan.measures.filter(m => m.page === page && m.kind !== 'count').length} medidas desta página serão recalculadas.</p>{plan.measures.filter(m => m.page === page && m.kind !== 'count').map(m => <p key={m.id}>{m.name}: {format(quantity(m.kind, m.points, scale))} → {format(quantity(m.kind, m.points, pendingScale))} {units[m.kind]}</p>)}<Button size="sm" disabled={locked} onClick={async () => { if (await update({ ...plan, scales: { ...plan.scales, [page]: pendingScale } })) reset(); }}>Confirmar escala</Button> <Button size="sm" variant="outline" onClick={() => setPendingScale(undefined)}>Voltar</Button></div>}
-        <PlanCanvas plan={plan} page={page} draft={draft} drawing={!!tool && !locked} selected={selected} readOnly={locked} onPages={setPages} onPoint={p => setDraft(d => tool === 'calibrate' && d.length >= 2 ? [p] : [...d, p])} onSelect={setSelected} onMove={(id, index, point) => { void update({ ...plan, measures: plan.measures.map(m => m.id === id ? { ...m, points: m.points.map((p, i) => i === index ? point : p) } : m) }); }} />
-        <section className="min-w-0 overflow-hidden rounded-lg border bg-card" aria-label="Detalhe dos levantamentos">
-          <button className="flex w-full items-center gap-2 border-b px-3 py-2 text-left text-sm font-semibold hover:bg-muted" onClick={() => setShowDetails(v => !v)} aria-expanded={showDetails}>{showDetails ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}Detalhe dos levantamentos <span className="ml-auto rounded bg-muted px-2 py-0.5 text-xs font-normal">{plan.measures.length} registros</span></button>
+        <PlanCanvas ref={canvas} plan={plan} page={page} draft={draft} drawing={!!tool && !locked} selected={selected} readOnly={locked} onPages={setPages} onCursor={setCursor} onLayers={receiveLayers} onPoint={p => setDraft(d => tool === 'calibrate' && d.length >= 2 ? [p] : [...d, p])} onSelect={setSelected} onMove={(id, index, point) => { void update({ ...plan, measures: plan.measures.map(m => m.id === id ? { ...m, points: m.points.map((p, i) => i === index ? point : p) } : m) }); }} />
+        <div role="status" className="flex min-h-7 items-center gap-2 border border-slate-300 bg-[#e9ecef] px-2 text-xs text-slate-700"><strong>{tool === 'calibrate' ? 'Calibração' : tool ? labels[tool] : 'Navegação'}</strong><span className="border-l border-slate-400 pl-2">{tool === 'calibrate' ? 'Marque dois pontos e informe a distância conhecida.' : tool ? 'Clique para marcar pontos; conclua ou cancele na barra superior.' : 'Arraste para deslocar a vista; use a roda do mouse para zoom.'}</span></div>
+        <section className="min-w-0 overflow-hidden border border-slate-300 bg-white" aria-label="Detalhe dos levantamentos">
+          <button className="flex w-full items-center gap-2 border-b border-slate-300 bg-[#e9ecef] px-2 py-1 text-left text-xs font-semibold hover:bg-slate-100" onClick={() => setShowDetails(v => !v)} aria-expanded={showDetails}>{showDetails ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}Detalhe dos levantamentos <span className="ml-auto text-xs font-normal">{plan.measures.length} registros</span></button>
           {showDetails && <div className="h-52 min-h-36 max-h-[55vh] resize-y overflow-auto">
-            <table className="w-full min-w-[600px] text-sm"><thead className="sticky top-0 z-10 bg-muted"><tr><th className="p-2 text-left">Nome</th><th className="p-2 text-left">Página</th><th className="p-2 text-left">Tipo</th><th className="p-2 text-right">Resultado</th><th className="p-2 text-right">Ações</th></tr></thead><tbody>{plan.measures.map(m => <tr key={m.id} className={`cursor-pointer border-t ${selected === m.id ? 'bg-amber-50 text-slate-900' : 'hover:bg-muted/50'}`} onClick={() => { setSelected(m.id); if (m.page !== page) { setPage(m.page); reset(); } }}><td className="min-w-48 p-2"><Input onKeyDown={fieldKey} aria-label={`Nome de ${m.name}`} key={`${m.id}-${m.name}`} defaultValue={m.name} disabled={locked} onBlur={e => { const name = e.target.value.trim(); if (name && name !== m.name) void update({ ...plan, measures: plan.measures.map(row => row.id === m.id ? { ...row, name } : row) }); }} /></td><td className="p-2">{m.page}</td><td className="p-2">{labels[m.kind]}</td><td className="whitespace-nowrap p-2 text-right tabular-nums">{format(quantity(m.kind, m.points, plan.scales[m.page] ?? null))} {units[m.kind]}</td><td className="p-2 text-right"><Button size="sm" variant="ghost" disabled={locked} onClick={e => { e.stopPropagation(); void update({ ...plan, measures: plan.measures.filter(row => row.id !== m.id) }); }}>Excluir</Button></td></tr>)}</tbody></table>{!plan.measures.length && <p className="p-4 text-sm text-muted-foreground">Nenhum levantamento nesta planta.</p>}
+            <table className="w-full min-w-[600px] text-xs"><thead className="sticky top-0 z-10 bg-[#f1f2f3]"><tr><th className="border-r border-slate-300 px-2 py-1 text-left">Nome</th><th className="border-r border-slate-300 px-2 py-1 text-left">Página</th><th className="border-r border-slate-300 px-2 py-1 text-left">Tipo</th><th className="border-r border-slate-300 px-2 py-1 text-right">Resultado</th><th className="px-2 py-1 text-right">Ações</th></tr></thead><tbody>{plan.measures.map(m => <tr key={m.id} className={`cursor-pointer border-t border-slate-200 ${selected === m.id ? 'bg-sky-100 text-slate-900' : 'hover:bg-slate-50'}`} onClick={() => { setSelected(m.id); if (m.page !== page) { setPage(m.page); reset(); } }}><td className="min-w-48 px-2 py-0.5"><Input className="h-7 rounded-none text-xs" onKeyDown={fieldKey} aria-label={`Nome de ${m.name}`} key={`${m.id}-${m.name}`} defaultValue={m.name} disabled={locked} onBlur={e => { const name = e.target.value.trim(); if (name && name !== m.name) void update({ ...plan, measures: plan.measures.map(row => row.id === m.id ? { ...row, name } : row) }); }} /></td><td className="px-2 py-0.5">{m.page}</td><td className="px-2 py-0.5">{labels[m.kind]}</td><td className="whitespace-nowrap px-2 py-0.5 text-right tabular-nums">{format(quantity(m.kind, m.points, plan.scales[m.page] ?? null))} {units[m.kind]}</td><td className="px-2 py-0.5 text-right"><Button size="sm" variant="ghost" className="h-7 text-xs" disabled={locked} onClick={e => { e.stopPropagation(); void update({ ...plan, measures: plan.measures.filter(row => row.id !== m.id) }); }}>Excluir</Button></td></tr>)}</tbody></table>{!plan.measures.length && <p className="p-3 text-xs text-muted-foreground">Nenhum levantamento nesta planta.</p>}
           </div>}
         </section>
-      </div>}
     </div>}
   </section>;
 }

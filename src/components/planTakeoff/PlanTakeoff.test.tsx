@@ -1,11 +1,12 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { forwardRef } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanTakeoff from './PlanTakeoff';
 import { readTakeoffs, saveTakeoffs, type TakeoffPlan } from '@/lib/planTakeoff';
 import { projectCollectionsForView } from '@/lib/projectDataScope';
 import { canAccessAppView } from '@/lib/organizations';
 vi.mock('@/lib/planTakeoff', async importOriginal => ({ ...await importOriginal<object>(), readTakeoffs: vi.fn(), saveTakeoffs: vi.fn() }));
-vi.mock('./PlanCanvas', () => ({ default: ({ onPoint }: { onPoint: (p: { x: number; y: number }) => void }) => <button onClick={() => onPoint({ x: 1, y: 1 })}>Ponto de teste</button> }));
+vi.mock('./PlanCanvas', () => ({ default: forwardRef<HTMLButtonElement, { onPoint: (p: { x: number; y: number }) => void }>(function MockCanvas({ onPoint }, ref) { return <button ref={ref} onClick={() => onPoint({ x: 1, y: 1 })}>Ponto de teste</button>; }) }));
 const example: TakeoffPlan = { id: 'p', name: 'Planta', floor: 'Térreo', file: new Blob(), kind: 'image', scales: {}, measures: [] };
 beforeEach(() => { vi.mocked(readTakeoffs).mockResolvedValue([example]); vi.mocked(saveTakeoffs).mockReset().mockResolvedValue(); });
 describe('teste independente de levantamento', () => {
@@ -22,7 +23,7 @@ describe('teste independente de levantamento', () => {
     expect(screen.getByRole('button', { name: 'Área' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Contagem' }));
     fireEvent.click(screen.getByText('Ponto de teste'));
-    fireEvent.click(screen.getByText('Concluir traçado'));
+    fireEvent.click(screen.getByRole('button', { name: 'Concluir traçado' }));
     await screen.findByText('1 un');
     expect(saveTakeoffs).toHaveBeenCalledWith('user/project', expect.arrayContaining([expect.objectContaining({ measures: [expect.objectContaining({ kind: 'count', points: [{ x: 1, y: 1 }] })] })]));
     fireEvent.click(screen.getByText('Desfazer'));
@@ -34,10 +35,10 @@ describe('teste independente de levantamento', () => {
     await screen.findByText('Nenhum levantamento nesta planta.');
     fireEvent.click(screen.getByRole('button', { name: 'Contagem' }));
     fireEvent.click(screen.getByText('Ponto de teste'));
-    fireEvent.click(screen.getByText('Concluir traçado'));
+    fireEvent.click(screen.getByRole('button', { name: 'Concluir traçado' }));
     await screen.findByRole('alert');
-    expect(screen.getByText('Concluir traçado')).toBeEnabled();
-    fireEvent.click(screen.getByText('Concluir traçado'));
+    expect(screen.getByRole('button', { name: 'Concluir traçado' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Concluir traçado' }));
     await screen.findByText('1 un');
   });
   it('visualizador não grava nem importa', async () => {
