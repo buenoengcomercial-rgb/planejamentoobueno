@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { DxfViewer } from 'dxf-viewer';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { Button } from '@/components/ui/button';
+import { Contrast, Layers3, Maximize2, ZoomIn, ZoomOut } from 'lucide-react';
 import type { Point, TakeoffPlan, TakeoffMeasure } from '@/lib/planTakeoff';
 
 interface Props {
@@ -23,6 +24,7 @@ export default function PlanCanvas({ plan, page, draft, drawing, selected, readO
   const [status, setStatus] = useState('Carregando planta…');
   const drag = useRef<{ start: Point; view: View; id?: string; index?: number; moved: boolean }>();
   const [moving, setMoving] = useState<{ id: string; index: number; point: Point }>();
+  const [darkBackground, setDarkBackground] = useState(plan.kind === 'dxf');
   const height = view.width * size.height / size.width;
   const unit = view.width / size.width;
 
@@ -104,6 +106,10 @@ export default function PlanCanvas({ plan, page, draft, drawing, selected, readO
     viewer.Render();
   }, [view, size, status]);
 
+  useEffect(() => {
+    if (cad.current && !status) cad.current.SetClearColor(darkBackground ? '#000000' : '#ffffff');
+  }, [darkBackground, status]);
+
   const point = (event: React.PointerEvent<SVGSVGElement>): Point => {
     const rect = event.currentTarget.getBoundingClientRect();
     return { x: view.x - view.width / 2 + (event.clientX - rect.left) / rect.width * view.width,
@@ -123,14 +129,16 @@ export default function PlanCanvas({ plan, page, draft, drawing, selected, readO
       </g>)}
     </g>;
   };
-  return <div className="space-y-2">
-    <div className="flex flex-wrap gap-2">
-      <Button variant="outline" size="sm" onClick={() => setView(v => ({ ...v, width: v.width / 1.3 }))}>Ampliar</Button>
-      <Button variant="outline" size="sm" onClick={() => setView(v => ({ ...v, width: v.width * 1.3 }))}>Reduzir</Button>
-      <Button variant="outline" size="sm" onClick={() => setView(fit.current)}>Enquadrar</Button>
-      {layers.length > 0 && <details className="relative"><summary className="cursor-pointer p-2 text-sm">Layers ({layers.length})</summary><div className="absolute z-20 max-h-60 w-64 overflow-auto rounded border bg-background p-3 shadow">{layers.map(name => <label key={name} className="flex gap-2 text-sm"><input type="checkbox" checked={!hidden.includes(name)} onChange={e => { cad.current?.ShowLayer(name, e.target.checked); cad.current?.Render(); setHidden(h => e.target.checked ? h.filter(n => n !== name) : [...h, name]); }} />{name}</label>)}</div></details>}
+  return <div className="min-w-0 space-y-1.5">
+    <div role="toolbar" aria-label="Visualização da planta" className="flex flex-wrap items-center gap-1 rounded-md border bg-card px-2 py-1">
+      <Button title="Ampliar" aria-label="Ampliar" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView(v => ({ ...v, width: v.width / 1.3 }))}><ZoomIn /></Button>
+      <Button title="Reduzir" aria-label="Reduzir" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView(v => ({ ...v, width: v.width * 1.3 }))}><ZoomOut /></Button>
+      <Button title="Enquadrar" aria-label="Enquadrar" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setView(fit.current)}><Maximize2 /></Button>
+      {plan.kind === 'dxf' && <Button title="Alternar fundo branco ou preto" aria-label="Alternar cor do fundo" variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDarkBackground(v => !v)}><Contrast /></Button>}
+      {layers.length > 0 && <details className="relative ml-1"><summary className="inline-flex h-7 cursor-pointer list-none items-center gap-1 rounded px-2 text-xs hover:bg-muted"><Layers3 className="h-4 w-4" />Layers ({layers.length})</summary><div className="absolute z-20 mt-1 max-h-60 w-64 overflow-auto rounded border bg-background p-3 shadow-lg">{layers.map(name => <label key={name} className="flex gap-2 py-1 text-sm"><input type="checkbox" checked={!hidden.includes(name)} onChange={e => { cad.current?.ShowLayer(name, e.target.checked); cad.current?.Render(); setHidden(h => e.target.checked ? h.filter(n => n !== name) : [...h, name]); }} />{name}</label>)}</div></details>}
+      <span className="ml-auto text-xs text-muted-foreground">{plan.kind.toUpperCase()} • {page}</span>
     </div>
-    <div ref={host} className="relative h-[55vh] min-h-80 overflow-hidden rounded border bg-white" style={{ touchAction: 'none' }}>
+    <div ref={host} className="relative h-[52vh] min-h-[320px] overflow-hidden rounded-md border bg-white sm:h-[min(62vh,680px)]" style={{ touchAction: 'none' }}>
       <div ref={cadHost} className="absolute inset-0" style={{ pointerEvents: 'none' }} />
       <svg aria-label="Planta e marcações" className="absolute inset-0 h-full w-full" viewBox={`${view.x - view.width / 2} ${view.y - height / 2} ${view.width} ${height}`} onWheel={e => setView(v => ({ ...v, width: Math.max(.00001, v.width * (e.deltaY > 0 ? 1.12 : 1 / 1.12)) }))}
         onPointerDown={e => { if (status) return; e.currentTarget.setPointerCapture(e.pointerId); drag.current = { start: point(e), view, moved: false }; }}
