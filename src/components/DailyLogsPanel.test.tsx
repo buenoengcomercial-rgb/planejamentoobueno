@@ -1,8 +1,14 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import DailyLogsPanel from './DailyLogsPanel';
 import type { Task } from '@/types/project';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
+
+vi.mock('@/components/planTakeoff/PlanTakeoff', () => ({
+  default: ({ onUseMeasure }: { onUseMeasure: (plan: object, measure: object, result: number) => void }) =>
+    <button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf' }, { id: 'measure-1', name: 'Executadas', kind: 'count', page: 2, points: [{ x: 10, y: 20 }, { x: 30, y: 40 }] }, 2)}>Escolher marcação de teste</button>,
+}));
 
 function buildTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -23,6 +29,42 @@ function buildTask(overrides: Partial<Task> = {}): Task {
 }
 
 describe('DailyLogsPanel', () => {
+  it('mantém a quantidade manual até aplicar o total detalhado e preserva as linhas no lançamento', () => {
+    const initial = buildTask({ dailyLogs: [{ id: 'log-1', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 2 }] });
+    function Harness() {
+      const [task, setTask] = useState(initial);
+      return <DailyLogsPanel task={task} onChange={dailyLogs => setTask(previous => ({ ...previous, dailyLogs }))} />;
+    }
+    const { container } = render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Linha' }));
+    const measure = screen.getByRole('spinbutton', { name: 'Medida da linha 1' });
+    fireEvent.change(measure, { target: { value: '7' } });
+    fireEvent.blur(measure);
+    expect(container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')).toHaveValue(2);
+    expect(screen.getByRole('region', { name: 'Detalhe de quantitativo' })).toHaveTextContent('Detalhe: 7 UND');
+    fireEvent.click(screen.getByRole('button', { name: 'Usar total no realizado do dia' }));
+    expect(container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')).toHaveValue(7);
+    expect(screen.getByRole('region', { name: 'Detalhe de quantitativo' })).toHaveTextContent('Dia: 7 UND');
+  });
+  it('vincula pontos da planta ao dia e impede reutilizar a mesma marcação em outra linha', async () => {
+    window.scrollTo = vi.fn();
+    const initial = buildTask({ dailyLogs: [{ id: 'log-1', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 0 }] });
+    function Harness() {
+      const [task, setTask] = useState(initial);
+      return <DailyLogsPanel task={task} takeoffStorageKey="scope" onChange={dailyLogs => setTask(previous => ({ ...previous, dailyLogs }))} />;
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Linha' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Planta' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Escolher marcação de teste' }));
+    expect(screen.getByRole('region', { name: 'Detalhe de quantitativo' })).toHaveTextContent('Placas.pdf · 2 pt.');
+    fireEvent.click(screen.getByRole('button', { name: 'Linha' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Planta' })[1]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Escolher marcação de teste' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('já está vinculada a outra linha');
+  });
   it('mostra quantidade total e saldo a executar mesmo sem lançamentos', () => {
     render(<DailyLogsPanel task={buildTask()} onChange={vi.fn()} />);
 

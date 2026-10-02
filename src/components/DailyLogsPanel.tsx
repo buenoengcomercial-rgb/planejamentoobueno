@@ -1,17 +1,26 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
-import { Task, DailyProductionLog, DailyLaborEntry } from '@/types/project';
-import { ClipboardList, Plus, Trash2, TrendingUp, TrendingDown, Users } from 'lucide-react';
+import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
+import { Task, DailyProductionLog, DailyLaborEntry, type ProductionQuantityDetail } from '@/types/project';
+import { ClipboardList, ListTree, Plus, Trash2, TrendingUp, TrendingDown, Users } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { getProductionQuantityLimit, maximumActualForDailyLog, validateDailyProductionLogs } from '@/lib/productionQuantityLimit';
 import { registerPendingEditCommit } from '@/lib/pendingEditCommits';
 import { registerPendingForm } from '@/lib/pendingFormNavigation';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import ProductionQuantityDetails from '@/components/ProductionQuantityDetails';
+import { detailTotal, measureMatchesUnit } from '@/lib/productionQuantityDetails';
+import type { TakeoffMeasure, TakeoffPlan } from '@/lib/planTakeoff';
+import { lazyWithReload } from '@/lib/lazyWithReload';
+
+const PlanTakeoff = lazyWithReload(() => import('@/components/planTakeoff/PlanTakeoff'));
 
 interface DailyLogsPanelProps {
   projectId?: string;
   task: Task;
   onChange: (logs: DailyProductionLog[]) => void;
   focusDate?: string;
+  takeoffStorageKey?: string;
+  readOnly?: boolean;
 }
 
 /** Status color por defasagem (planejado - realizado).
@@ -93,12 +102,14 @@ function applyDraftValues(logs: DailyProductionLog[], drafts: DraftValues): { lo
   return { logs: nextLogs, hasInvalidNumber };
 }
 
-export default function DailyLogsPanel({ projectId, task, onChange, focusDate }: DailyLogsPanelProps) {
+export default function DailyLogsPanel({ projectId, task, onChange, focusDate, takeoffStorageKey, readOnly = false }: DailyLogsPanelProps) {
   const logs = task.dailyLogs ?? EMPTY_DAILY_LOGS;
   const storageKey = productionDraftKey(projectId, task.id);
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [productionError, setProductionError] = useState<string | null>(null);
   const [draftProtectionError, setDraftProtectionError] = useState(false);
+  const [expandedDetail, setExpandedDetail] = useState<string | null>(null);
+  const [planTarget, setPlanTarget] = useState<{ logId: string; rowId: string } | null>(null);
   const [drafts, setDrafts] = useState<DraftValues>(() => readProductionDraft(storageKey, logs));
   const draftsRef = useRef<DraftValues>(drafts);
   const baseDuration = task.originalDuration ?? task.duration;
@@ -256,6 +267,51 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate }:
     commitResolvedLogs(currentLogs.map(log => log.id === logId
       ? { ...log, laborEntries: (log.laborEntries ?? []).filter(entry => entry.id !== entryId) }
       : log));
+  };
+
+  const changeDetails = (logId: string, edit: (rows: ProductionQuantityDetail[]) => ProductionQuantityDetail[]) => {
+    if (readOnly) return;
+    const currentLogs = resolveDrafts();
+    if (!currentLogs) return;
+    commitResolvedLogs(currentLogs.map(log => log.id === logId
+      ? { ...log, quantityDetails: edit(log.quantityDetails ?? []), quantityDetailsAppliedTotal: undefined }
+      : log));
+  };
+
+  const addDetail = (logId: string) => changeDetails(logId, rows => [...rows, {
+    id: crypto.randomUUID(), location: '', comment: '', multiplier: 1, measuredQuantity: 0,
+  }]);
+
+  const applyDetail = (logId: string) => {
+    if (readOnly) return;
+    const currentLogs = resolveDrafts();
+    if (!currentLogs) return;
+    const log = currentLogs.find(item => item.id === logId);
+    if (!log?.quantityDetails?.length) return;
+    const total = detailTotal(log.quantityDetails);
+    const nextLogs = currentLogs.map(item => item.id === logId ? { ...item, actualQuantity: total, quantityDetailsAppliedTotal: total } : item);
+    const validation = validateDailyProductionLogs(task, nextLogs);
+    if (!validation.allowed) { setProductionError(validation.message ?? 'O detalhe ultrapassa o saldo da tarefa.'); return; }
+    commitResolvedLogs(nextLogs);
+  };
+
+  const usePlanMeasure = (plan: TakeoffPlan, measure: TakeoffMeasure, result: number) => {
+    if (!planTarget || readOnly) return;
+    if (!measureMatchesUnit(measure.kind, task.unit || 'un')) {
+      setProductionError(`A medição é de ${measure.kind === 'count' ? 'unidades' : measure.kind === 'length' ? 'metros' : 'metros quadrados'}, mas a tarefa usa ${task.unit || 'un'}. Escolha uma medição compatível.`);
+      return;
+    }
+    const alreadyUsed = logs.some(log => log.quantityDetails?.some(row =>
+      row.source?.planId === plan.id && row.source.measureId === measure.id &&
+      (log.id !== planTarget.logId || row.id !== planTarget.rowId)));
+    if (alreadyUsed) { setProductionError('Esta marcação já está vinculada a outra linha da tarefa. Abra ou edite a linha original para evitar contagem duplicada.'); return; }
+    changeDetails(planTarget.logId, rows => rows.map(row => row.id === planTarget.rowId ? {
+      ...row,
+      comment: row.comment || measure.name,
+      measuredQuantity: result,
+      source: { planId: plan.id, planName: plan.name, page: measure.page, measureId: measure.id, measureName: measure.name, kind: measure.kind, points: measure.points.map(point => ({ ...point })) },
+    } : row));
+    setPlanTarget(null);
   };
 
   const localPreview = useMemo(() => applyDraftValues(logs, drafts), [drafts, logs]);
@@ -508,6 +564,15 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate }:
             />
             <div className="text-center flex items-center justify-center gap-1">
               <button
+                type="button"
+                data-daily-log-action
+                onClick={() => setExpandedDetail(current => current === row.id ? null : row.id)}
+                className={`p-1 rounded transition-colors ${expandedDetail === row.id ? 'bg-sky-100 text-sky-800' : 'text-primary hover:bg-primary/20'}`}
+                title="Detalhar quantitativo deste dia"
+                aria-label={`Detalhar quantitativo de ${row.date}`}
+                aria-expanded={expandedDetail === row.id}
+              ><ListTree className="w-3.5 h-3.5" /></button>
+              <button
                 onClick={(e) => {
                   e.stopPropagation();
                   addLaborEntry(row.id);
@@ -549,6 +614,18 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate }:
               </button>
             </div>
             </div>
+            {expandedDetail === row.id && <ProductionQuantityDetails
+              rows={row.quantityDetails ?? []}
+              unit={unit}
+              dailyQuantity={row.actualQuantity}
+              applied={row.quantityDetailsAppliedTotal !== undefined && row.quantityDetailsAppliedTotal === row.actualQuantity && row.quantityDetailsAppliedTotal === detailTotal(row.quantityDetails ?? [])}
+              readOnly={readOnly}
+              onAdd={() => addDetail(row.id)}
+              onEdit={(id, changes) => changeDetails(row.id, details => details.map(detail => detail.id === id ? { ...detail, ...changes } : detail))}
+              onDelete={id => changeDetails(row.id, details => details.filter(detail => detail.id !== id))}
+              onOpenPlan={id => { if (!takeoffStorageKey) { setProductionError('O visualizador requer uma obra e usuário ativos.'); return; } setProductionError(null); setPlanTarget({ logId: row.id, rowId: id }); }}
+              onApply={() => applyDetail(row.id)}
+            />}
             {(row.laborEntries ?? []).length > 0 && (
               <div className="ml-8 mr-2 rounded-md border border-border/60 bg-card/70 p-2 space-y-1.5">
                 <div className="grid grid-cols-[1.2fr_1fr_0.7fr_0.65fr_0.8fr_0.8fr_28px] gap-2 text-[9px] uppercase text-muted-foreground font-semibold">
@@ -643,6 +720,20 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate }:
         )}
       </div>
       {confirmDialog}
+      <Dialog open={!!planTarget} onOpenChange={open => { if (!open) setPlanTarget(null); }}>
+        <DialogContent className="flex h-[94vh] w-[96vw] max-w-[2100px] flex-col gap-2 overflow-hidden p-2 sm:p-3">
+          <DialogHeader className="shrink-0 pr-8 text-left">
+            <DialogTitle className="text-sm">Planta para o detalhe de quantitativo</DialogTitle>
+            <DialogDescription className="text-xs">Marque os pontos executados, conclua o levantamento e use o resultado na linha. Após aplicar o total ao dia, os pontos ficam verdes; a planta permanece neste navegador.</DialogDescription>
+          </DialogHeader>
+          {productionError && <p role="alert" className="shrink-0 border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800">{productionError}</p>}
+          <div className="min-h-0 flex-1 overflow-auto">
+            {planTarget && takeoffStorageKey && <Suspense fallback={<p className="p-4 text-sm">Abrindo visualizador…</p>}>
+              <PlanTakeoff storageKey={takeoffStorageKey} readOnly={readOnly} onUseMeasure={usePlanMeasure} executedMeasureIds={logs.flatMap(log => log.quantityDetailsAppliedTotal === log.actualQuantity && log.actualQuantity > 0 && log.quantityDetailsAppliedTotal === detailTotal(log.quantityDetails ?? []) ? log.quantityDetails?.map(row => row.source?.measureId).filter((id): id is string => !!id) ?? [] : [])} focusMeasure={logs.find(log => log.id === planTarget.logId)?.quantityDetails?.find(row => row.id === planTarget.rowId)?.source} />
+            </Suspense>}
+          </div>
+        </DialogContent>
+      </Dialog>
     </motion.div>
   );
 }

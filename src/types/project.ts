@@ -246,11 +246,33 @@ export interface DailyProductionLog {
   date: string;            // ISO yyyy-mm-dd
   plannedQuantity: number;
   actualQuantity: number;
+  /** Memória de cálculo opcional da quantidade executada neste dia. */
+  quantityDetails?: ProductionQuantityDetail[];
+  /** Total do detalhe usado explicitamente no realizado; divergências posteriores deixam a indicação pendente. */
+  quantityDetailsAppliedTotal?: number;
   notes?: string;
   /** Horas efetivamente apontadas por funcao ou trabalhador. */
   laborEntries?: DailyLaborEntry[];
   /** Produção física da terceirizada, sempre por composição contratada. */
   subcontractExecutions?: DailySubcontractExecution[];
+}
+
+export interface ProductionQuantityDetail {
+  id: string;
+  location: string;
+  comment: string;
+  multiplier: number;
+  measuredQuantity: number;
+  source?: {
+    planId: string;
+    planName: string;
+    page: number;
+    measureId: string;
+    measureName: string;
+    kind: 'count' | 'length' | 'area';
+    /** Cópia dos pontos usados no lançamento; a planta original continua local. */
+    points: Array<{ x: number; y: number }>;
+  };
 }
 
 export interface TaskOperationalReschedule {

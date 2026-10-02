@@ -9,6 +9,7 @@ interface Props {
   onMove: (id: string, index: number, point: Point) => void; onPages: (count: number) => void;
   onCursor?: (point: Point | null) => void;
   onLayers?: (layers: string[], hidden: string[]) => void;
+  executedMeasureIds?: string[];
 }
 export interface PlanCanvasHandle {
   zoomIn: () => void;
@@ -17,7 +18,7 @@ export interface PlanCanvasHandle {
   toggleLayer: (name: string, visible: boolean) => void;
 }
 type View = { x: number; y: number; width: number };
-const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ plan, page, draft, drawing, selected, readOnly, onPoint, onSelect, onMove, onPages, onCursor, onLayers }, ref) {
+const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ plan, page, draft, drawing, selected, readOnly, onPoint, onSelect, onMove, onPages, onCursor, onLayers, executedMeasureIds = [] }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const cadHost = useRef<HTMLDivElement>(null);
   const cad = useRef<DxfViewer>();
@@ -132,7 +133,7 @@ const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ pla
   };
   const shape = (measure: TakeoffMeasure) => {
     const points = measure.points.map((p, i) => moving?.id === measure.id && moving.index === i ? moving.point : p);
-    const color = selected === measure.id ? '#d97706' : '#0369a1';
+    const color = executedMeasureIds.includes(measure.id) ? '#15803d' : selected === measure.id ? '#d97706' : '#0369a1';
     return <g key={measure.id} onPointerDown={e => { if (!drawing) { e.stopPropagation(); onSelect(measure.id); } }}>
       {measure.kind !== 'count' && <polyline points={[...points, ...(measure.kind === 'area' ? [points[0]] : [])].map(p => `${p.x},${p.y}`).join(' ')} stroke={color} strokeWidth={unit * 3} fill={measure.kind === 'area' ? '#0284c714' : 'none'} style={{ cursor: 'pointer', pointerEvents: 'stroke' }} />}
       {points.map((p, i) => <g key={i}>

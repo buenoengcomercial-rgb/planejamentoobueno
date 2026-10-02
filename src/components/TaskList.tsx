@@ -53,6 +53,7 @@ interface TaskListProps {
   focusTaskId?: string;
   focusDate?: string;
   auditActor?: AuditUserInfo;
+  takeoffStorageKey?: string;
 }
 
 const DAILY_HOURS = 8;
@@ -166,7 +167,7 @@ function PercentProgressInput({ task, onCommit, rowTeam }: {
   />;
 }
 
-export default function TaskList({ project, onProjectChange, undoButton, readOnly = false, focusTaskId, focusDate, auditActor }: TaskListProps) {
+export default function TaskList({ project, onProjectChange, undoButton, readOnly = false, focusTaskId, focusDate, auditActor, takeoffStorageKey }: TaskListProps) {
   // Lista de equipes do projeto (com fallback aos defaults).
   const projectTeams: TeamDefinition[] = project.teams ?? DEFAULT_TEAMS;
   const teamDef = useCallback((code?: TeamCode) => getTeamDefinition(code, projectTeams), [projectTeams]);
@@ -1428,6 +1429,8 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                             {expandedDaily === task.id && (
                                 <DailyLogsPanel
                                   projectId={project.id}
+                                  takeoffStorageKey={takeoffStorageKey}
+                                  readOnly={readOnly}
                                   task={task}
                                   onChange={(logs: DailyProductionLog[]) => updateDailyLogs(phase.id, task, logs)}
                                   focusDate={focusTaskId === task.id ? focusDate : undefined}

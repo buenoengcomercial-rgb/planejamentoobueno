@@ -3189,6 +3189,7 @@ export default function Index() {
             {productionRoutineNavigation('production')}
             <DailyProductionWorkspace
               auditActor={auditActor}
+              takeoffStorageKey={user && orgId ? scopeKey(orgId, user.id, project.id) : undefined}
               project={project}
               initialTab={productionWorkspaceInitialTab}
               onProductionChange={tasksSetter}

@@ -10,6 +10,13 @@ vi.mock('./PlanCanvas', () => ({ default: forwardRef<HTMLButtonElement, { onPoin
 const example: TakeoffPlan = { id: 'p', name: 'Planta', floor: 'Térreo', file: new Blob(), kind: 'image', scales: {}, measures: [] };
 beforeEach(() => { vi.mocked(readTakeoffs).mockResolvedValue([example]); vi.mocked(saveTakeoffs).mockReset().mockResolvedValue(); });
 describe('teste independente de levantamento', () => {
+  it('entrega ao detalhe o grupo de pontos concluído e o resultado calculado', async () => {
+    const onUseMeasure = vi.fn();
+    vi.mocked(readTakeoffs).mockResolvedValueOnce([{ ...example, measures: [{ id: 'placas', name: 'Placas executadas', kind: 'count', page: 1, points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] }] }]);
+    render(<PlanTakeoff storageKey="user/project" readOnly={false} onUseMeasure={onUseMeasure} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Usar no detalhe' }));
+    expect(onUseMeasure).toHaveBeenCalledWith(expect.objectContaining({ id: 'p' }), expect.objectContaining({ id: 'placas', points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] }), 2);
+  });
   it('não carrega coleções operacionais e respeita os perfis restritos', () => {
     expect(projectCollectionsForView('planTakeoff')).toEqual([]);
     expect(canAccessAppView('field_user', 'planTakeoff')).toBe(false);

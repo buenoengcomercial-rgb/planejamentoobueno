@@ -2,13 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Check, ChevronDown, ChevronUp, CircleDot, Crosshair, FileUp, Layers3, Maximize2, MousePointer2, Ruler, Settings2, Shapes, Undo2, X, ZoomIn, ZoomOut } from 'lucide-react';
-import { calibration, quantity, readTakeoffs, saveTakeoffs, type MeasureKind, type Point, type TakeoffPlan } from '@/lib/planTakeoff';
+import { calibration, quantity, readTakeoffs, saveTakeoffs, type MeasureKind, type Point, type TakeoffMeasure, type TakeoffPlan } from '@/lib/planTakeoff';
 import PlanCanvas, { type PlanCanvasHandle } from './PlanCanvas';
 
 const labels = { count: 'Contagem', length: 'Comprimento', area: 'Área' };
 const units = { count: 'un', length: 'm', area: 'm²' };
 const format = (value: number | null) => value === null ? 'Escala pendente' : value.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
-export default function PlanTakeoff({ storageKey, readOnly }: { storageKey: string; readOnly: boolean }) {
+export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, executedMeasureIds = [], focusMeasure }: { storageKey: string; readOnly: boolean; onUseMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number) => void; executedMeasureIds?: string[]; focusMeasure?: { planId: string; page: number; measureId: string } }) {
   const [plans, setPlans] = useState<TakeoffPlan[]>([]);
   const [active, setActive] = useState('');
   const [page, setPage] = useState(1);
@@ -29,6 +29,9 @@ export default function PlanTakeoff({ storageKey, readOnly }: { storageKey: stri
   const [hiddenLayers, setHiddenLayers] = useState<string[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [showDetails, setShowDetails] = useState(true);
+  const focusPlanId = focusMeasure?.planId;
+  const focusPage = focusMeasure?.page;
+  const focusMeasureId = focusMeasure?.measureId;
   const history = useRef<TakeoffPlan[][]>([]);
   const busy = useRef(false);
   const canvas = useRef<PlanCanvasHandle>(null);
@@ -50,10 +53,10 @@ export default function PlanTakeoff({ storageKey, readOnly }: { storageKey: stri
   useEffect(() => {
     let alive = true;
     void readTakeoffs(storageKey).then(data => {
-      if (!alive) return; setPlans(data); setActive(data[0]?.id ?? ''); setReady(true); setStatus('Salvo neste navegador');
+      if (!alive) return; setPlans(data); setActive(data.some(plan => plan.id === focusPlanId) ? focusPlanId! : data[0]?.id ?? ''); setPage(focusPage ?? 1); setSelected(focusMeasureId ?? ''); setReady(true); setStatus('Salvo neste navegador');
     }).catch(() => { if (alive) setError('Não foi possível acessar o armazenamento local. Recarregue para tentar novamente.'); });
     return () => { alive = false; };
-  }, [storageKey]);
+  }, [storageKey, focusPlanId, focusPage, focusMeasureId]);
   async function commit(next: TakeoffPlan[], undo = false) {
     if (locked || busy.current) return false;
     busy.current = true; setSaving(true); setError(''); setStatus('Salvando…');
@@ -106,7 +109,7 @@ export default function PlanTakeoff({ storageKey, readOnly }: { storageKey: stri
     {!!plans.length && plan && <div className="flex min-w-0 flex-col gap-1">
         <div role="toolbar" aria-label="Ferramentas de levantamento" className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 border border-slate-300 bg-[#e9ecef] px-1.5 py-1 text-xs xl:flex-nowrap">
           <div className="flex min-w-0 items-center gap-1 border-r border-slate-300 pr-2 tabular-nums" aria-label="Informações do cursor e da medição">
-            <span className="whitespace-nowrap text-slate-600" title="Coordenadas do cursor em unidades do desenho">{cursor ? `X ${format(cursor.x)} · Y ${format(cursor.y)}` : 'X — · Y —'}</span>
+            <span className="hidden whitespace-nowrap text-slate-600 sm:inline" title="Coordenadas do cursor em unidades do desenho">{cursor ? `X ${format(cursor.x)} · Y ${format(cursor.y)}` : 'X — · Y —'}</span>
             {displacement !== null && <span className="whitespace-nowrap text-slate-600" title="Distância do último ponto ao cursor">Δ {format(displacement)} m</span>}
             {draftResult !== null && tool && tool !== 'calibrate' && <span className="whitespace-nowrap font-medium" title="Resultado do traçado">{tool === 'length' ? 'C' : tool === 'area' ? 'A' : 'Q'} {format(draftResult)} {units[tool]}</span>}
             <span className="whitespace-nowrap text-slate-600">{scale ? `${format(scale)} m/unid.` : 'Escala pendente'}</span>
@@ -138,7 +141,7 @@ export default function PlanTakeoff({ storageKey, readOnly }: { storageKey: stri
           <label className="min-w-[140px]">Pavimento<Input className="h-7 rounded-none text-xs" onKeyDown={fieldKey} key={`${plan.id}-floor-${plan.floor}`} defaultValue={plan.floor} disabled={locked} placeholder="Ex.: Térreo" onBlur={e => { if (e.target.value !== plan.floor) void update({ ...plan, floor: e.target.value }); }} /></label>
           {plan.kind === 'dxf' && <label>Unidade do DXF<select aria-label="Unidade do DXF" className="block h-7 border border-slate-300 bg-white px-2" value={cadUnit} disabled={locked} onChange={e => setCadUnit(e.target.value)}><option value="1">Metro</option><option value="0.01">Centímetro</option><option value="0.001">Milímetro</option></select></label>}
           {plan.kind === 'dxf' && <Button size="sm" variant="outline" className="h-7 rounded-none text-xs" disabled={locked} onClick={() => setPendingScale(Number(cadUnit))}>Conferir unidade</Button>}
-          <p className="basis-full text-xs text-muted-foreground">Arquivos e marcações ficam neste navegador, por usuário e obra. {plan.kind === 'dxf' ? 'DXF 2D usa o espaço de modelo; confira textos e entidades especiais antes de medir.' : 'Não lançam produção ou medição.'}</p>
+          <p className="basis-full text-xs text-muted-foreground">Arquivos e marcações ficam neste navegador, por usuário e obra. {plan.kind === 'dxf' ? 'DXF 2D usa o espaço de modelo; confira textos e entidades especiais antes de medir.' : onUseMeasure ? 'O resultado só entra na Produção após usar o levantamento no detalhe e aplicar o total do dia.' : 'Não lançam produção ou medição.'}</p>
         </div>}
         {tool && <div className="flex min-h-8 flex-wrap items-center gap-2 border-x border-b border-slate-300 bg-[#f2f3f4] px-2 py-0.5 text-xs">
           <strong>{tool === 'calibrate' ? 'Calibrar escala' : labels[tool]}</strong>
@@ -147,12 +150,12 @@ export default function PlanTakeoff({ storageKey, readOnly }: { storageKey: stri
           <Button size="sm" variant="ghost" className="h-7 rounded-none text-xs" disabled={!draft.length} onClick={() => setDraft(d => d.slice(0, -1))}><Undo2 className="h-3.5 w-3.5" />Retirar último ponto</Button>
         </div>}
         {pendingScale !== undefined && <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-slate-900"><p>Nova escala: {pendingScale.toLocaleString('pt-BR', { maximumSignificantDigits: 8 })} m por unidade do desenho. {plan.measures.filter(m => m.page === page && m.kind !== 'count').length} medidas desta página serão recalculadas.</p>{plan.measures.filter(m => m.page === page && m.kind !== 'count').map(m => <p key={m.id}>{m.name}: {format(quantity(m.kind, m.points, scale))} → {format(quantity(m.kind, m.points, pendingScale))} {units[m.kind]}</p>)}<Button size="sm" disabled={locked} onClick={async () => { if (await update({ ...plan, scales: { ...plan.scales, [page]: pendingScale } })) reset(); }}>Confirmar escala</Button> <Button size="sm" variant="outline" onClick={() => setPendingScale(undefined)}>Voltar</Button></div>}
-        <PlanCanvas ref={canvas} plan={plan} page={page} draft={draft} drawing={!!tool && !locked} selected={selected} readOnly={locked} onPages={setPages} onCursor={setCursor} onLayers={receiveLayers} onPoint={p => setDraft(d => tool === 'calibrate' && d.length >= 2 ? [p] : [...d, p])} onSelect={setSelected} onMove={(id, index, point) => { void update({ ...plan, measures: plan.measures.map(m => m.id === id ? { ...m, points: m.points.map((p, i) => i === index ? point : p) } : m) }); }} />
+        <PlanCanvas ref={canvas} plan={plan} page={page} draft={draft} drawing={!!tool && !locked} selected={selected} readOnly={locked} executedMeasureIds={executedMeasureIds} onPages={setPages} onCursor={setCursor} onLayers={receiveLayers} onPoint={p => setDraft(d => tool === 'calibrate' && d.length >= 2 ? [p] : [...d, p])} onSelect={setSelected} onMove={(id, index, point) => { void update({ ...plan, measures: plan.measures.map(m => m.id === id ? { ...m, points: m.points.map((p, i) => i === index ? point : p) } : m) }); }} />
         <div role="status" className="flex min-h-7 items-center gap-2 border border-slate-300 bg-[#e9ecef] px-2 text-xs text-slate-700"><strong>{tool === 'calibrate' ? 'Calibração' : tool ? labels[tool] : 'Navegação'}</strong><span className="border-l border-slate-400 pl-2">{tool === 'calibrate' ? 'Marque dois pontos e informe a distância conhecida.' : tool ? 'Clique para marcar pontos; conclua ou cancele na barra superior.' : 'Arraste para deslocar a vista; use a roda do mouse para zoom.'}</span></div>
         <section className="min-w-0 overflow-hidden border border-slate-300 bg-white" aria-label="Detalhe dos levantamentos">
-          <button className="flex w-full items-center gap-2 border-b border-slate-300 bg-[#e9ecef] px-2 py-1 text-left text-xs font-semibold hover:bg-slate-100" onClick={() => setShowDetails(v => !v)} aria-expanded={showDetails}>{showDetails ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}Detalhe dos levantamentos <span className="ml-auto text-xs font-normal">{plan.measures.length} registros</span></button>
+          <button className="flex w-full items-center gap-2 border-b border-slate-300 bg-[#e9ecef] px-2 py-1 text-left text-xs font-semibold hover:bg-slate-100" onClick={() => setShowDetails(v => !v)} aria-expanded={showDetails}>{showDetails ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}Detalhe dos levantamentos <span className="ml-auto text-xs font-normal">{plan.measures.length} {plan.measures.length === 1 ? 'registro' : 'registros'}</span></button>
           {showDetails && <div className="h-52 min-h-36 max-h-[55vh] resize-y overflow-auto">
-            <table className="w-full min-w-[600px] text-xs"><thead className="sticky top-0 z-10 bg-[#f1f2f3]"><tr><th className="border-r border-slate-300 px-2 py-1 text-left">Nome</th><th className="border-r border-slate-300 px-2 py-1 text-left">Página</th><th className="border-r border-slate-300 px-2 py-1 text-left">Tipo</th><th className="border-r border-slate-300 px-2 py-1 text-right">Resultado</th><th className="px-2 py-1 text-right">Ações</th></tr></thead><tbody>{plan.measures.map(m => <tr key={m.id} className={`cursor-pointer border-t border-slate-200 ${selected === m.id ? 'bg-sky-100 text-slate-900' : 'hover:bg-slate-50'}`} onClick={() => { setSelected(m.id); if (m.page !== page) { setPage(m.page); reset(); } }}><td className="min-w-48 px-2 py-0.5"><Input className="h-7 rounded-none text-xs" onKeyDown={fieldKey} aria-label={`Nome de ${m.name}`} key={`${m.id}-${m.name}`} defaultValue={m.name} disabled={locked} onBlur={e => { const name = e.target.value.trim(); if (name && name !== m.name) void update({ ...plan, measures: plan.measures.map(row => row.id === m.id ? { ...row, name } : row) }); }} /></td><td className="px-2 py-0.5">{m.page}</td><td className="px-2 py-0.5">{labels[m.kind]}</td><td className="whitespace-nowrap px-2 py-0.5 text-right tabular-nums">{format(quantity(m.kind, m.points, plan.scales[m.page] ?? null))} {units[m.kind]}</td><td className="px-2 py-0.5 text-right"><Button size="sm" variant="ghost" className="h-7 text-xs" disabled={locked} onClick={e => { e.stopPropagation(); void update({ ...plan, measures: plan.measures.filter(row => row.id !== m.id) }); }}>Excluir</Button></td></tr>)}</tbody></table>{!plan.measures.length && <p className="p-3 text-xs text-muted-foreground">Nenhum levantamento nesta planta.</p>}
+            <table className="w-full min-w-[600px] text-xs"><thead className="sticky top-0 z-10 bg-[#f1f2f3]"><tr><th className="border-r border-slate-300 px-2 py-1 text-left">Nome</th><th className="border-r border-slate-300 px-2 py-1 text-left">Página</th><th className="border-r border-slate-300 px-2 py-1 text-left">Tipo</th><th className="border-r border-slate-300 px-2 py-1 text-right">Resultado</th><th className="px-2 py-1 text-right">Ações</th></tr></thead><tbody>{plan.measures.map(m => <tr key={m.id} className={`cursor-pointer border-t border-slate-200 ${selected === m.id ? 'bg-sky-100 text-slate-900' : 'hover:bg-slate-50'}`} onClick={() => { setSelected(m.id); if (m.page !== page) { setPage(m.page); reset(); } }}><td className="min-w-48 px-2 py-0.5"><Input className="h-7 rounded-none text-xs" onKeyDown={fieldKey} aria-label={`Nome de ${m.name}`} key={`${m.id}-${m.name}`} defaultValue={m.name} disabled={locked} onBlur={e => { const name = e.target.value.trim(); if (name && name !== m.name) void update({ ...plan, measures: plan.measures.map(row => row.id === m.id ? { ...row, name } : row) }); }} /></td><td className="px-2 py-0.5">{m.page}</td><td className="px-2 py-0.5">{labels[m.kind]}</td><td className="whitespace-nowrap px-2 py-0.5 text-right tabular-nums">{format(quantity(m.kind, m.points, plan.scales[m.page] ?? null))} {units[m.kind]}</td><td className="px-2 py-0.5 text-right"><div className="flex justify-end gap-1">{onUseMeasure && <Button size="sm" variant="outline" className="h-7 text-xs" disabled={readOnly || quantity(m.kind, m.points, plan.scales[m.page] ?? null) === null} onClick={e => { e.stopPropagation(); const result = quantity(m.kind, m.points, plan.scales[m.page] ?? null); if (result !== null) onUseMeasure(plan, m, result); }}>Usar no detalhe</Button>}<Button size="sm" variant="ghost" className="h-7 text-xs" disabled={locked} onClick={e => { e.stopPropagation(); void update({ ...plan, measures: plan.measures.filter(row => row.id !== m.id) }); }}>Excluir</Button></div></td></tr>)}</tbody></table>{!plan.measures.length && <p className="p-3 text-xs text-muted-foreground">Nenhum levantamento nesta planta.</p>}
           </div>}
         </section>
     </div>}
