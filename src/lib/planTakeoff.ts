@@ -1,9 +1,18 @@
 export interface Point { x: number; y: number }
 export type MeasureKind = 'count' | 'length' | 'area';
-export interface TakeoffMeasure { id: string; name: string; kind: MeasureKind; page: number; points: Point[] }
+export interface TakeoffMeasure { id: string; name: string; kind: MeasureKind; page: number; points: Point[]; taskId?: string; logId?: string }
 export interface TakeoffPlan {
   id: string; name: string; floor: string; kind: 'pdf' | 'image' | 'dxf'; file: Blob;
   scales: Record<number, number>; measures: TakeoffMeasure[];
+  /** Capítulo principal que representa o prédio. Ausente em plantas locais antigas. */
+  chapterId?: string;
+  building?: string;
+}
+export interface TakeoffContext { taskId: string; logId: string }
+export const TAKEOFF_CATALOG_UPDATED = 'obraplanner:takeoff-catalog-updated';
+export function measuresForContext(measures: TakeoffMeasure[], context?: TakeoffContext): TakeoffMeasure[] {
+  if (!context) return measures;
+  return measures.filter(measure => !measure.taskId && !measure.logId || measure.taskId === context.taskId && measure.logId === context.logId);
 }
 export const scopeKey = (org: string, user: string, project: string) => JSON.stringify([org, user, project]);
 export function quantity(kind: MeasureKind, points: Point[], scale: number | null): number | null {
@@ -43,6 +52,24 @@ export async function saveTakeoffs(key: string, plans: TakeoffPlan[]): Promise<v
     const transaction = database.transaction('scopes', 'readwrite');
     transaction.objectStore('scopes').put(plans, key);
     transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+
+/** Atualiza o catálogo a partir do valor mais recente, sem sobrescrever outra alteração local. */
+export async function updateTakeoffs(key: string, edit: (plans: TakeoffPlan[]) => TakeoffPlan[]): Promise<TakeoffPlan[]> {
+  const database = await db();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction('scopes', 'readwrite');
+    const store = transaction.objectStore('scopes');
+    let next: TakeoffPlan[] = [];
+    const request = store.get(key);
+    request.onsuccess = () => {
+      try { next = edit(request.result ?? []); store.put(next, key); }
+      catch (error) { transaction.abort(); reject(error); }
+    };
+    transaction.oncomplete = () => resolve(next);
     transaction.onerror = () => reject(transaction.error);
     transaction.onabort = () => reject(transaction.error);
   });

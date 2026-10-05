@@ -2,13 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Check, ChevronDown, ChevronUp, CircleDot, Crosshair, FileUp, Layers3, Maximize2, MousePointer2, Ruler, Settings2, Shapes, Trash2, Undo2, X, ZoomIn, ZoomOut } from 'lucide-react';
-import { calibration, quantity, readTakeoffs, saveTakeoffs, type MeasureKind, type Point, type TakeoffMeasure, type TakeoffPlan } from '@/lib/planTakeoff';
+import { calibration, measuresForContext, quantity, readTakeoffs, saveTakeoffs, TAKEOFF_CATALOG_UPDATED, type MeasureKind, type Point, type TakeoffContext, type TakeoffMeasure, type TakeoffPlan } from '@/lib/planTakeoff';
 import PlanCanvas, { type PlanCanvasHandle } from './PlanCanvas';
 
 const labels = { count: 'Contagem', length: 'Comprimento', area: 'Área' };
 const units = { count: 'un', length: 'm', area: 'm²' };
 const format = (value: number | null) => value === null ? 'Escala pendente' : value.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
-export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, executedMeasureIds = [], focusMeasure, embedded = false, allowedKinds = ['count', 'length', 'area'] }: { storageKey: string; readOnly: boolean; onUseMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number) => boolean | void; executedMeasureIds?: string[]; focusMeasure?: { planId: string; page: number; measureId: string }; embedded?: boolean; allowedKinds?: MeasureKind[] }) {
+export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, executedMeasureIds = [], focusMeasure, embedded = false, allowedKinds = ['count', 'length', 'area'], chapterId, measureContext }: { storageKey: string; readOnly: boolean; onUseMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number) => boolean | void; executedMeasureIds?: string[]; focusMeasure?: { planId: string; page: number; measureId: string }; embedded?: boolean; allowedKinds?: MeasureKind[]; chapterId?: string; measureContext?: TakeoffContext }) {
   const [plans, setPlans] = useState<TakeoffPlan[]>([]);
   const [active, setActive] = useState('');
   const [page, setPage] = useState(1);
@@ -36,8 +36,10 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, execut
   const busy = useRef(false);
   const canvas = useRef<PlanCanvasHandle>(null);
   const receiveLayers = useCallback((names: string[], invisible: string[]) => { setCanvasLayers(names); setHiddenLayers(invisible); }, []);
-  const plan = plans.find(p => p.id === active);
-  const selectedMeasure = plan?.measures.find(measure => measure.id === selected);
+  const availablePlans = chapterId ? plans.filter(plan => plan.chapterId === chapterId) : plans;
+  const plan = availablePlans.find(p => p.id === active);
+  const visibleMeasures = measuresForContext(plan?.measures ?? [], measureContext);
+  const selectedMeasure = visibleMeasures.find(measure => measure.id === selected);
   const scale = plan?.scales[page] ?? null;
   const locked = readOnly || !ready || saving;
   const draftResult = tool && tool !== 'calibrate' && draft.length >= (tool === 'count' ? 1 : tool === 'length' ? 2 : 3)
@@ -54,10 +56,10 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, execut
   useEffect(() => {
     let alive = true;
     void readTakeoffs(storageKey).then(data => {
-      if (!alive) return; setPlans(data); setActive(data.some(plan => plan.id === focusPlanId) ? focusPlanId! : data[0]?.id ?? ''); setPage(focusPage ?? 1); setSelected(focusMeasureId ?? ''); setReady(true); setStatus('Salvo neste navegador');
+      if (!alive) return; const available = chapterId ? data.filter(plan => plan.chapterId === chapterId) : data; setPlans(data); setActive(available.some(plan => plan.id === focusPlanId) ? focusPlanId! : available[0]?.id ?? ''); setPage(focusPage ?? 1); setSelected(focusMeasureId ?? ''); setReady(true); setStatus('Salvo neste navegador');
     }).catch(() => { if (alive) setError('Não foi possível acessar o armazenamento local. Recarregue para tentar novamente.'); });
     return () => { alive = false; };
-  }, [storageKey, focusPlanId, focusPage, focusMeasureId]);
+  }, [storageKey, focusPlanId, focusPage, focusMeasureId, chapterId]);
   async function commit(next: TakeoffPlan[], undo = false) {
     if (locked || busy.current) return false;
     busy.current = true; setSaving(true); setError(''); setStatus('Salvando…');
@@ -65,6 +67,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, execut
       await saveTakeoffs(storageKey, next);
       if (undo) history.current.pop(); else history.current = [...history.current.slice(-19), plans];
       setPlans(next);
+      window.dispatchEvent(new CustomEvent(TAKEOFF_CATALOG_UPDATED, { detail: storageKey }));
       if (undo && !next.some(p => p.id === active)) { setActive(next[0]?.id ?? ''); setPage(1); }
       setStatus('Salvo neste navegador'); return true;
     } catch { setError('Não foi possível salvar. Seus dados anteriores foram preservados. Libere espaço e tente novamente.'); setStatus('Alteração não salva'); return false; }
@@ -73,7 +76,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, execut
   const update = (next: TakeoffPlan) => commit(plans.map(p => p.id === next.id ? next : p));
   const reset = () => { setTool(null); setDraft([]); setDraftName(''); setPendingScale(undefined); };
   async function importFile(file?: File) {
-    if (!file || locked) return;
+    if (!file || locked || embedded) return;
     const extension = file.name.split('.').pop()?.toLowerCase();
     const kind = extension === 'pdf' ? 'pdf' : extension === 'dxf' ? 'dxf' : ['png', 'jpg', 'jpeg'].includes(extension ?? '') ? 'image' : null;
     if (!kind) { setError('Escolha PDF, PNG, JPG ou DXF. DWG e DWF ainda não estão disponíveis.'); return; }
@@ -87,13 +90,27 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, execut
     if (draft.length < minimum) { setError(`Marque pelo menos ${minimum} pontos.`); return; }
     if (tool !== 'count' && !scale) return;
     if (tool === 'area' && !quantity('area', draft, scale)) { setError('O contorno deve ter área maior que zero.'); return; }
-    const measure: TakeoffMeasure = { id: crypto.randomUUID(), page, name: draftName.trim() || `${labels[tool]} ${plan.measures.length + 1}`, kind: tool, points: draft };
+    const measure: TakeoffMeasure = { id: crypto.randomUUID(), page, name: draftName.trim() || `${labels[tool]} ${visibleMeasures.length + 1}`, kind: tool, points: draft, ...measureContext };
     if (!await update({ ...plan, measures: [...plan.measures, measure] })) return;
     setSelected(measure.id); reset();
     if (embedded && onUseMeasure) {
       const result = quantity(measure.kind, measure.points, scale);
       if (result !== null) onUseMeasure(plan, measure, result);
     }
+  }
+  async function applyStoredMeasure(measure: TakeoffMeasure) {
+    if (!plan || !onUseMeasure) return;
+    const result = quantity(measure.kind, measure.points, plan.scales[measure.page] ?? null);
+    if (result === null) return;
+    if (measureContext && !measure.taskId && !measure.logId) {
+      const claimed = { ...measure, ...measureContext };
+      if (!await update({ ...plan, measures: plan.measures.map(item => item.id === measure.id ? claimed : item) })) return;
+      if (onUseMeasure(plan, claimed, result) === false) {
+        await commit(plans, true);
+      }
+      return;
+    }
+    onUseMeasure(plan, measure, result);
   }
   const fieldKey = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Escape') { event.currentTarget.value = event.currentTarget.defaultValue; event.currentTarget.blur(); }
@@ -103,18 +120,17 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, execut
     <header className="flex min-w-0 flex-wrap items-center gap-2 border border-slate-300 bg-white px-3 py-1.5">
       <div className="mr-auto min-w-0">
         <div className="flex items-center gap-2"><h1 className="truncate text-sm font-semibold">Levantamento em planta</h1><span className="bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-900">Experimental</span></div>
-        <p className="text-xs text-muted-foreground">{plan ? `${plan.name}${plan.floor ? ` • ${plan.floor}` : ''}` : 'Escolha uma planta para começar'}</p>
+        <p className="text-xs text-muted-foreground">{plan ? `${plan.building ? `${plan.building} · ` : ''}${plan.name}${plan.floor ? ` · ${plan.floor}` : ''}` : 'Escolha uma planta para começar'}</p>
       </div>
       <span role="status" className="order-last w-full text-xs text-muted-foreground sm:order-none sm:w-auto">{status}</span>
-      <label className={`inline-flex h-7 items-center gap-1.5 border border-slate-300 bg-slate-50 px-2 text-xs font-medium ${locked ? 'opacity-50' : 'cursor-pointer hover:bg-slate-100'}`}><FileUp className="h-3.5 w-3.5" />Adicionar planta<input aria-label="Adicionar planta" className="sr-only" type="file" accept=".pdf,.png,.jpg,.jpeg,.dxf" disabled={locked} onChange={e => { void importFile(e.target.files?.[0]); e.target.value = ''; }} /></label>
+      {!embedded && <label className={`inline-flex h-7 items-center gap-1.5 border border-slate-300 bg-slate-50 px-2 text-xs font-medium ${locked ? 'opacity-50' : 'cursor-pointer hover:bg-slate-100'}`}><FileUp className="h-3.5 w-3.5" />Adicionar planta<input aria-label="Adicionar planta" className="sr-only" type="file" accept=".pdf,.png,.jpg,.jpeg,.dxf" disabled={locked} onChange={e => { void importFile(e.target.files?.[0]); e.target.value = ''; }} /></label>}
       <Button title="Desfazer a última alteração desta sessão" aria-label="Desfazer" variant="outline" size="sm" className="h-7 rounded-none text-xs" disabled={locked || !history.current.length} onClick={() => { const previous = history.current.at(-1); if (previous) { void commit(previous, true); reset(); } }}><Undo2 className="h-3.5 w-3.5" /><span className="hidden sm:inline">Desfazer</span></Button>
     </header>
     {error && <p role="alert" className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">{error}</p>}
-    {!plans.length && ready && <div className="rounded border border-dashed bg-card p-10 text-center text-muted-foreground">Adicione uma planta para começar. PDF, imagem ou DXF 2D.</div>}
-    {!!plans.length && plan && <div className="flex min-w-0 flex-col gap-1">
+    {!availablePlans.length && ready && <div className="rounded border border-dashed bg-card p-10 text-center text-muted-foreground">{embedded ? 'Nenhuma planta cadastrada neste prédio. Adicione a planta no capítulo da Produção antes de levantar os pontos.' : 'Adicione uma planta para começar. PDF, imagem ou DXF 2D.'}</div>}
+    {!!availablePlans.length && plan && <div className="flex min-w-0 flex-col gap-1">
         <div role="toolbar" aria-label="Ferramentas de levantamento" className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 border border-slate-300 bg-[#e9ecef] px-1.5 py-1 text-xs xl:flex-nowrap">
           <div className="flex min-w-0 items-center gap-1 border-r border-slate-300 pr-2 tabular-nums" aria-label="Informações do cursor e da medição">
-            <span className="hidden whitespace-nowrap text-slate-600 sm:inline" title="Coordenadas do cursor em unidades do desenho">{cursor ? `X ${format(cursor.x)} · Y ${format(cursor.y)}` : 'X — · Y —'}</span>
             {displacement !== null && <span className="whitespace-nowrap text-slate-600" title="Distância do último ponto ao cursor">Δ {format(displacement)} m</span>}
             {draftResult !== null && tool && tool !== 'calibrate' && <span className="whitespace-nowrap font-medium" title="Resultado do traçado">{tool === 'length' ? 'C' : tool === 'area' ? 'A' : 'Q'} {format(draftResult)} {units[tool]}</span>}
             <span className="whitespace-nowrap text-slate-600">{scale ? `${format(scale)} m/unid.` : 'Escala pendente'}</span>
@@ -130,7 +146,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, execut
             <Button title="Calibrar escala" aria-label="Calibrar escala" aria-pressed={tool === 'calibrate'} variant="ghost" size="icon" className={`h-7 w-7 rounded-none ${tool === 'calibrate' ? 'bg-sky-100 text-sky-900 ring-1 ring-sky-400' : ''}`} disabled={locked} onClick={() => { setError(''); setTool('calibrate'); setDraft([]); setPendingScale(undefined); }}><Crosshair className="h-4 w-4" /></Button>
           </div>
           <div className="flex min-w-0 items-center gap-1 border-r border-slate-300 pr-2" aria-label="Desenho">
-            <select aria-label="Planta" title="Selecionar planta" className="h-7 max-w-[190px] border border-slate-300 bg-white px-1 text-xs" value={active} onChange={e => { setActive(e.target.value); setPage(1); setPages(1); setSelected(''); reset(); }}>{plans.map(p => <option key={p.id} value={p.id}>{p.name}{p.floor ? ` · ${p.floor}` : ''}</option>)}</select>
+            <select aria-label="Planta" title="Selecionar planta" className="h-7 max-w-[190px] border border-slate-300 bg-white px-1 text-xs" value={active} onChange={e => { setActive(e.target.value); setPage(1); setPages(1); setSelected(''); reset(); }}>{availablePlans.map(p => <option key={p.id} value={p.id}>{p.name}{p.floor ? ` · ${p.floor}` : ''}</option>)}</select>
             {plan.kind === 'pdf' && <select aria-label="Página" title="Página do PDF" className="h-7 border border-slate-300 bg-white px-1 text-xs" value={page} onChange={e => { setPage(Number(e.target.value)); reset(); setSelected(''); }}>{Array.from({ length: pages }, (_, i) => <option key={i} value={i + 1}>Pág. {i + 1}</option>)}</select>}
             {plan.kind === 'dxf' && <details className="relative"><summary className="flex h-7 cursor-pointer list-none items-center gap-1 border border-slate-300 bg-white px-1.5" title="Visibilidade dos layers"><Layers3 className="h-4 w-4" />Layers ({canvasLayers.length})</summary><div className="absolute left-0 top-7 z-30 max-h-60 w-60 overflow-auto border border-slate-300 bg-white p-2 shadow-md">{canvasLayers.map(name => <label key={name} className="flex items-center gap-2 py-1 text-xs"><input type="checkbox" checked={!hiddenLayers.includes(name)} onChange={e => canvas.current?.toggleLayer(name, e.target.checked)} />{name}</label>)}</div></details>}
             <Button title="Configurações da planta" aria-label="Configurações da planta" aria-expanded={showSettings} variant="ghost" size="icon" className="h-7 w-7 rounded-none" onClick={() => setShowSettings(v => !v)}><Settings2 className="h-4 w-4" /></Button>
@@ -139,7 +155,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, execut
             {embedded && selectedMeasure && !tool ? <Input key={`${selectedMeasure.id}-${selectedMeasure.name}`} aria-label="Renomear marcação selecionada" title="Renomear marcação selecionada" className="h-7 w-32 rounded-none border-slate-300 bg-white px-1.5 text-xs" defaultValue={selectedMeasure.name} disabled={locked} onKeyDown={fieldKey} onBlur={e => { const name = e.target.value.trim(); if (name && name !== selectedMeasure.name) void update({ ...plan, measures: plan.measures.map(measure => measure.id === selectedMeasure.id ? { ...measure, name } : measure) }); }} /> : <Input aria-label="Nome do levantamento" title="Nome do levantamento em curso" className="h-7 w-32 rounded-none border-slate-300 bg-white px-1.5 text-xs" placeholder="Nome do item" value={draftName} disabled={!tool || tool === 'calibrate' || locked} onChange={e => setDraftName(e.target.value)} />}
             <Button title="Concluir traçado" aria-label="Concluir traçado" variant="ghost" size="icon" className="h-7 w-7 rounded-none" disabled={locked || !tool || tool === 'calibrate'} onClick={finish}><Check className="h-4 w-4" /></Button>
             <Button title="Cancelar traçado" aria-label="Cancelar traçado" variant="ghost" size="icon" className="h-7 w-7 rounded-none" disabled={!tool} onClick={reset}><X className="h-4 w-4" /></Button>
-            {embedded && onUseMeasure && selectedMeasure && !tool && <Button title="Usar a marcação selecionada na célula escolhida" aria-label="Usar marcação selecionada" variant="outline" size="sm" className="h-7 rounded-none px-2 text-xs" disabled={locked || quantity(selectedMeasure.kind, selectedMeasure.points, plan.scales[selectedMeasure.page] ?? null) === null} onClick={() => { const result = quantity(selectedMeasure.kind, selectedMeasure.points, plan.scales[selectedMeasure.page] ?? null); if (result !== null) onUseMeasure(plan, selectedMeasure, result); }}>Usar {format(quantity(selectedMeasure.kind, selectedMeasure.points, plan.scales[selectedMeasure.page] ?? null))} {units[selectedMeasure.kind]}</Button>}
+            {embedded && onUseMeasure && selectedMeasure && !tool && <Button title="Usar a marcação selecionada na célula escolhida" aria-label="Usar marcação selecionada" variant="outline" size="sm" className="h-7 rounded-none px-2 text-xs" disabled={locked || quantity(selectedMeasure.kind, selectedMeasure.points, plan.scales[selectedMeasure.page] ?? null) === null} onClick={() => { void applyStoredMeasure(selectedMeasure); }}>Usar {format(quantity(selectedMeasure.kind, selectedMeasure.points, plan.scales[selectedMeasure.page] ?? null))} {units[selectedMeasure.kind]}</Button>}
             {embedded && selectedMeasure && !tool && <Button title="Excluir marcação selecionada" aria-label="Excluir marcação selecionada" variant="ghost" size="icon" className="h-7 w-7 rounded-none text-red-700" disabled={locked} onClick={async () => { if (await update({ ...plan, measures: plan.measures.filter(measure => measure.id !== selectedMeasure.id) })) setSelected(''); }}><Trash2 className="h-4 w-4" /></Button>}
           </div>
         </div>
@@ -157,12 +173,12 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, execut
           <Button size="sm" variant="ghost" className="h-7 rounded-none text-xs" disabled={!draft.length} onClick={() => setDraft(d => d.slice(0, -1))}><Undo2 className="h-3.5 w-3.5" />Retirar último ponto</Button>
         </div>}
         {pendingScale !== undefined && <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-slate-900"><p>Nova escala: {pendingScale.toLocaleString('pt-BR', { maximumSignificantDigits: 8 })} m por unidade do desenho. {plan.measures.filter(m => m.page === page && m.kind !== 'count').length} medidas desta página serão recalculadas.</p>{plan.measures.filter(m => m.page === page && m.kind !== 'count').map(m => <p key={m.id}>{m.name}: {format(quantity(m.kind, m.points, scale))} → {format(quantity(m.kind, m.points, pendingScale))} {units[m.kind]}</p>)}<Button size="sm" disabled={locked} onClick={async () => { if (await update({ ...plan, scales: { ...plan.scales, [page]: pendingScale } })) reset(); }}>Confirmar escala</Button> <Button size="sm" variant="outline" onClick={() => setPendingScale(undefined)}>Voltar</Button></div>}
-        <PlanCanvas ref={canvas} plan={plan} page={page} draft={draft} drawing={!!tool && !locked} selected={selected} readOnly={locked} executedMeasureIds={executedMeasureIds} onPages={setPages} onCursor={setCursor} onLayers={receiveLayers} onPoint={p => setDraft(d => tool === 'calibrate' && d.length >= 2 ? [p] : [...d, p])} onSelect={setSelected} onMove={(id, index, point) => { void update({ ...plan, measures: plan.measures.map(m => m.id === id ? { ...m, points: m.points.map((p, i) => i === index ? point : p) } : m) }); }} />
+        <PlanCanvas ref={canvas} plan={measureContext ? { ...plan, measures: visibleMeasures } : plan} page={page} draft={draft} drawing={!!tool && !locked} selected={selected} readOnly={locked} executedMeasureIds={executedMeasureIds} onPages={setPages} onCursor={setCursor} onLayers={receiveLayers} onPoint={p => setDraft(d => tool === 'calibrate' && d.length >= 2 ? [p] : [...d, p])} onSelect={setSelected} onMove={(id, index, point) => { void update({ ...plan, measures: plan.measures.map(m => m.id === id ? { ...m, points: m.points.map((p, i) => i === index ? point : p) } : m) }); }} />
         <div role="status" className="flex min-h-7 items-center gap-2 border border-slate-300 bg-[#e9ecef] px-2 text-xs text-slate-700"><strong>{tool === 'calibrate' ? 'Calibração' : tool ? labels[tool] : 'Navegação'}</strong><span className="border-l border-slate-400 pl-2">{tool === 'calibrate' ? 'Marque dois pontos e informe a distância conhecida.' : tool ? 'Clique para marcar pontos; conclua ou cancele na barra superior.' : embedded ? selectedMeasure ? `Marcação ${selectedMeasure.name} selecionada; use o resultado na barra superior.` : 'Clique numa marcação existente para usá-la na célula, ou inicie uma nova contagem.' : 'Arraste para deslocar a vista; use a roda do mouse para zoom.'}</span></div>
         {!embedded && <section className="min-w-0 overflow-hidden border border-slate-300 bg-white" aria-label="Detalhe dos levantamentos">
           <button className="flex w-full items-center gap-2 border-b border-slate-300 bg-[#e9ecef] px-2 py-1 text-left text-xs font-semibold hover:bg-slate-100" onClick={() => setShowDetails(v => !v)} aria-expanded={showDetails}>{showDetails ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}Detalhe dos levantamentos <span className="ml-auto text-xs font-normal">{plan.measures.length} {plan.measures.length === 1 ? 'registro' : 'registros'}</span></button>
           {showDetails && <div className="h-52 min-h-36 max-h-[55vh] resize-y overflow-auto">
-            <table className="w-full min-w-[600px] text-xs"><thead className="sticky top-0 z-10 bg-[#f1f2f3]"><tr><th className="border-r border-slate-300 px-2 py-1 text-left">Nome</th><th className="border-r border-slate-300 px-2 py-1 text-left">Página</th><th className="border-r border-slate-300 px-2 py-1 text-left">Tipo</th><th className="border-r border-slate-300 px-2 py-1 text-right">Resultado</th><th className="px-2 py-1 text-right">Ações</th></tr></thead><tbody>{plan.measures.map(m => <tr key={m.id} className={`cursor-pointer border-t border-slate-200 ${selected === m.id ? 'bg-sky-100 text-slate-900' : 'hover:bg-slate-50'}`} onClick={() => { setSelected(m.id); if (m.page !== page) { setPage(m.page); reset(); } }}><td className="min-w-48 px-2 py-0.5"><Input className="h-7 rounded-none text-xs" onKeyDown={fieldKey} aria-label={`Nome de ${m.name}`} key={`${m.id}-${m.name}`} defaultValue={m.name} disabled={locked} onBlur={e => { const name = e.target.value.trim(); if (name && name !== m.name) void update({ ...plan, measures: plan.measures.map(row => row.id === m.id ? { ...row, name } : row) }); }} /></td><td className="px-2 py-0.5">{m.page}</td><td className="px-2 py-0.5">{labels[m.kind]}</td><td className="whitespace-nowrap px-2 py-0.5 text-right tabular-nums">{format(quantity(m.kind, m.points, plan.scales[m.page] ?? null))} {units[m.kind]}</td><td className="px-2 py-0.5 text-right"><div className="flex justify-end gap-1">{onUseMeasure && <Button size="sm" variant="outline" className="h-7 text-xs" disabled={readOnly || quantity(m.kind, m.points, plan.scales[m.page] ?? null) === null} onClick={e => { e.stopPropagation(); const result = quantity(m.kind, m.points, plan.scales[m.page] ?? null); if (result !== null) onUseMeasure(plan, m, result); }}>Usar no detalhe</Button>}<Button size="sm" variant="ghost" className="h-7 text-xs" disabled={locked} onClick={e => { e.stopPropagation(); void update({ ...plan, measures: plan.measures.filter(row => row.id !== m.id) }); }}>Excluir</Button></div></td></tr>)}</tbody></table>{!plan.measures.length && <p className="p-3 text-xs text-muted-foreground">Nenhum levantamento nesta planta.</p>}
+            <table className="w-full min-w-[600px] text-xs"><thead className="sticky top-0 z-10 bg-[#f1f2f3]"><tr><th className="border-r border-slate-300 px-2 py-1 text-left">Nome</th><th className="border-r border-slate-300 px-2 py-1 text-left">Página</th><th className="border-r border-slate-300 px-2 py-1 text-left">Tipo</th><th className="border-r border-slate-300 px-2 py-1 text-right">Resultado</th><th className="px-2 py-1 text-right">Ações</th></tr></thead><tbody>{plan.measures.map(m => <tr key={m.id} className={`cursor-pointer border-t border-slate-200 ${selected === m.id ? 'bg-sky-100 text-slate-900' : 'hover:bg-slate-50'}`} onClick={() => { setSelected(m.id); if (m.page !== page) { setPage(m.page); reset(); } }}><td className="min-w-48 px-2 py-0.5"><Input className="h-7 rounded-none text-xs" onKeyDown={fieldKey} aria-label={`Nome de ${m.name}`} key={`${m.id}-${m.name}`} defaultValue={m.name} disabled={locked} onBlur={e => { const name = e.target.value.trim(); if (name && name !== m.name) void update({ ...plan, measures: plan.measures.map(row => row.id === m.id ? { ...row, name } : row) }); }} /></td><td className="px-2 py-0.5">{m.page}</td><td className="px-2 py-0.5">{labels[m.kind]}</td><td className="whitespace-nowrap px-2 py-0.5 text-right tabular-nums">{format(quantity(m.kind, m.points, plan.scales[m.page] ?? null))} {units[m.kind]}</td><td className="px-2 py-0.5 text-right"><Button size="sm" variant="ghost" className="h-7 text-xs" disabled={locked} onClick={e => { e.stopPropagation(); void update({ ...plan, measures: plan.measures.filter(row => row.id !== m.id) }); }}>Excluir</Button></td></tr>)}</tbody></table>{!plan.measures.length && <p className="p-3 text-xs text-muted-foreground">Nenhum levantamento nesta planta.</p>}
           </div>}
         </section>}
     </div>}

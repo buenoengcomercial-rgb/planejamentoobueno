@@ -20,6 +20,20 @@ export interface ChapterNode {
   children: ChapterNode[]; // subcapítulos diretos (recursivo)
 }
 
+/** Encontra o prédio (capítulo principal) de uma tarefa, inclusive em subcapítulos aninhados. */
+export function rootChapterId(phases: Phase[], phaseId: string): string | undefined {
+  const byId = new Map(phases.map(phase => [phase.id, phase]));
+  const visited = new Set<string>();
+  let current = byId.get(phaseId);
+  while (current?.parentId && !visited.has(current.id)) {
+    visited.add(current.id);
+    const parent = byId.get(current.parentId);
+    if (!parent) break;
+    current = parent;
+  }
+  return current?.id;
+}
+
 /** Agrupa as phases do projeto em árvore recursiva (N níveis). */
 export function getChapterTree(project: Project): ChapterNode[] {
   const phases = [...project.phases];

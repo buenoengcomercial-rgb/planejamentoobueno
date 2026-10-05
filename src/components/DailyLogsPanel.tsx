@@ -8,7 +8,7 @@ import { registerPendingEditCommit } from '@/lib/pendingEditCommits';
 import { registerPendingForm } from '@/lib/pendingFormNavigation';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import ProductionQuantityDetails from '@/components/ProductionQuantityDetails';
-import { detailTotal, measureMatchesUnit } from '@/lib/productionQuantityDetails';
+import { detailTotal, measureMatchesUnit, withDetailValue } from '@/lib/productionQuantityDetails';
 import type { TakeoffMeasure, TakeoffPlan } from '@/lib/planTakeoff';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 
@@ -20,6 +20,7 @@ interface DailyLogsPanelProps {
   onChange: (logs: DailyProductionLog[]) => void;
   focusDate?: string;
   takeoffStorageKey?: string;
+  chapterId?: string;
   readOnly?: boolean;
 }
 
@@ -83,6 +84,7 @@ function applyDraftValues(logs: DailyProductionLog[], drafts: DraftValues): { lo
       date: hasOwn(drafts, logDraftKey(log.id, 'date')) ? drafts[logDraftKey(log.id, 'date')] : log.date,
       plannedQuantity: planned.value,
       actualQuantity: actual.value,
+      quantityDetailsAppliedTotal: hasOwn(drafts, logDraftKey(log.id, 'actualQuantity')) && actual.value !== log.actualQuantity ? undefined : log.quantityDetailsAppliedTotal,
       notes: hasOwn(drafts, logDraftKey(log.id, 'notes')) ? drafts[logDraftKey(log.id, 'notes')] : log.notes,
       laborEntries: log.laborEntries?.map(entry => {
         const hours = numberDraft(drafts, laborDraftKey(log.id, entry.id, 'hours'), entry.hours);
@@ -102,7 +104,7 @@ function applyDraftValues(logs: DailyProductionLog[], drafts: DraftValues): { lo
   return { logs: nextLogs, hasInvalidNumber };
 }
 
-export default function DailyLogsPanel({ projectId, task, onChange, focusDate, takeoffStorageKey, readOnly = false }: DailyLogsPanelProps) {
+export default function DailyLogsPanel({ projectId, task, onChange, focusDate, takeoffStorageKey, chapterId, readOnly = false }: DailyLogsPanelProps) {
   const logs = task.dailyLogs ?? EMPTY_DAILY_LOGS;
   const storageKey = productionDraftKey(projectId, task.id);
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
@@ -273,14 +275,25 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
     if (readOnly) return false;
     const currentLogs = resolveDrafts();
     if (!currentLogs) return false;
-    commitResolvedLogs(currentLogs.map(log => log.id === logId
-      ? { ...log, quantityDetails: edit(log.quantityDetails ?? []), quantityDetailsAppliedTotal: undefined }
-      : log));
+    const nextLogs = currentLogs.map(log => {
+      if (log.id !== logId) return log;
+      const previousRows = log.quantityDetails ?? [];
+      const nextRows = edit(previousRows);
+      const previousTotal = detailTotal(previousRows);
+      const nextTotal = detailTotal(nextRows);
+      const followDetail = previousTotal > 0 || nextTotal > 0 || log.quantityDetailsAppliedTotal !== undefined;
+      return followDetail
+        ? { ...log, quantityDetails: nextRows, actualQuantity: nextTotal, quantityDetailsAppliedTotal: nextTotal }
+        : { ...log, quantityDetails: nextRows };
+    });
+    const validation = validateDailyProductionLogs(task, nextLogs);
+    if (!validation.allowed) { setProductionError(validation.message ?? 'O detalhe excede o saldo contratado. A alteração não foi gravada.'); return false; }
+    commitResolvedLogs(nextLogs);
     return true;
   };
 
   const addDetail = (logId: string) => changeDetails(logId, rows => [...rows, {
-    id: crypto.randomUUID(), location: '', comment: '', multiplier: 1, measuredQuantity: 0,
+    id: crypto.randomUUID(), location: '', comment: '', multiplier: 0, measuredQuantity: 0,
   }]);
 
   const applyDetail = (logId: string) => {
@@ -298,6 +311,7 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
 
   const usePlanMeasure = (plan: TakeoffPlan, measure: TakeoffMeasure, result: number) => {
     if (!planTarget || readOnly) return false;
+    if (chapterId && plan.chapterId !== chapterId) { setProductionError('Esta planta não pertence ao prédio da tarefa.'); return false; }
     if (planTarget.field === 'multiplier' ? measure.kind !== 'count' : !measureMatchesUnit(measure.kind, task.unit || 'un')) {
       setProductionError(planTarget.field === 'multiplier' ? 'A coluna A recebe apenas contagem de unidades.' : `A medição é de ${measure.kind === 'count' ? 'unidades' : measure.kind === 'length' ? 'metros' : 'metros quadrados'}, mas a tarefa usa ${task.unit || 'un'}. Escolha uma medição compatível.`);
       return false;
@@ -311,10 +325,8 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
       setProductionError('A linha do detalhe não está mais disponível. Abra o detalhe novamente.'); return false;
     }
     const applied = changeDetails(planTarget.logId, rows => rows.map(row => row.id === planTarget.rowId ? {
-      ...row,
+      ...withDetailValue(row, planTarget.field, result),
       comment: row.comment || measure.name,
-      [planTarget.field]: result,
-      ...(planTarget.field === 'multiplier' && row.measuredQuantity === 0 ? { measuredQuantity: 1 } : {}),
       [sourceField]: { planId: plan.id, planName: plan.name, page: measure.page, measureId: measure.id, measureName: measure.name, kind: measure.kind, points: measure.points.map(point => ({ ...point })) },
     } : row));
     if (!applied) return false;
@@ -632,7 +644,7 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
               onAdd={() => addDetail(row.id)}
               onEdit={(id, changes) => changeDetails(row.id, details => details.map(detail => detail.id === id ? { ...detail, ...changes } : detail))}
               onDelete={id => changeDetails(row.id, details => details.filter(detail => detail.id !== id))}
-              onOpenPlan={(id, field) => { if (!takeoffStorageKey) { setProductionError('O visualizador requer uma obra e usuário ativos.'); return; } setProductionError(null); setPlanTarget({ logId: row.id, rowId: id, field }); }}
+              onOpenPlan={(id, field) => { if (!takeoffStorageKey || !chapterId) { setProductionError('Cadastre a planta no capítulo principal do prédio antes de abrir o levantamento.'); return; } setProductionError(null); setPlanTarget({ logId: row.id, rowId: id, field }); }}
               onApply={() => applyDetail(row.id)}
             />}
             {(row.laborEntries ?? []).length > 0 && (
@@ -733,12 +745,12 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
         <DialogContent className="flex h-[94vh] w-[96vw] max-w-[2100px] flex-col gap-2 overflow-hidden p-2 sm:p-3">
           <DialogHeader className="shrink-0 pr-8 text-left">
             <DialogTitle className="text-sm">Planta para o detalhe de quantitativo</DialogTitle>
-            <DialogDescription className="text-xs">Marque os pontos executados e conclua para preencher a coluna {planTarget?.field === 'multiplier' ? 'A' : 'B'} da linha. Depois, use o total do detalhe no realizado do dia. A planta permanece neste navegador.</DialogDescription>
+            <DialogDescription className="text-xs">Escolha uma planta já cadastrada neste prédio. Concluir o traçado preenche a coluna {planTarget?.field === 'multiplier' ? 'A' : 'B'} e atualiza o realizado do dia conforme o total do detalhe.</DialogDescription>
           </DialogHeader>
           {productionError && <p role="alert" className="shrink-0 border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800">{productionError}</p>}
           <div className="min-h-0 flex-1 overflow-auto">
             {planTarget && takeoffStorageKey && <Suspense fallback={<p className="p-4 text-sm">Abrindo visualizador…</p>}>
-              <PlanTakeoff storageKey={takeoffStorageKey} readOnly={readOnly} embedded onUseMeasure={usePlanMeasure} allowedKinds={planTarget.field === 'multiplier' ? ['count'] : (['count', 'length', 'area'] as const).filter(kind => measureMatchesUnit(kind, task.unit || 'un'))} executedMeasureIds={logs.flatMap(log => log.quantityDetailsAppliedTotal === log.actualQuantity && log.actualQuantity > 0 && log.quantityDetailsAppliedTotal === detailTotal(log.quantityDetails ?? []) ? log.quantityDetails?.flatMap(row => [row.multiplierSource?.measureId, row.source?.measureId].filter((id): id is string => !!id)) ?? [] : [])} focusMeasure={logs.find(log => log.id === planTarget.logId)?.quantityDetails?.find(row => row.id === planTarget.rowId)?.[planTarget.field === 'multiplier' ? 'multiplierSource' : 'source']} />
+              <PlanTakeoff storageKey={takeoffStorageKey} readOnly={readOnly} embedded chapterId={chapterId} measureContext={{ taskId: task.id, logId: planTarget.logId }} onUseMeasure={usePlanMeasure} allowedKinds={planTarget.field === 'multiplier' ? ['count'] : (['count', 'length', 'area'] as const).filter(kind => measureMatchesUnit(kind, task.unit || 'un'))} executedMeasureIds={logs.flatMap(log => log.quantityDetailsAppliedTotal === log.actualQuantity && log.actualQuantity > 0 && log.quantityDetailsAppliedTotal === detailTotal(log.quantityDetails ?? []) ? log.quantityDetails?.flatMap(row => [row.multiplierSource?.measureId, row.source?.measureId].filter((id): id is string => !!id)) ?? [] : [])} focusMeasure={logs.find(log => log.id === planTarget.logId)?.quantityDetails?.find(row => row.id === planTarget.rowId)?.[planTarget.field === 'multiplier' ? 'multiplierSource' : 'source']} />
             </Suspense>}
           </div>
         </DialogContent>

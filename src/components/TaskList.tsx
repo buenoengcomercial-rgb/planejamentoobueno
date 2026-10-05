@@ -10,7 +10,8 @@ import DailyLogsPanel from '@/components/DailyLogsPanel';
 import { calculateRupDuration } from '@/lib/calculations';
 import { formatISODateBR } from '@/components/gantt/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { getChapterTree, getChapterNumbering, moveChapter, getChapterTasks, safeMoveChapter, reorderChapter, reorderChapterByNumber } from '@/lib/chapters';
+import { getChapterTree, getChapterNumbering, moveChapter, getChapterTasks, safeMoveChapter, reorderChapter, reorderChapterByNumber, rootChapterId } from '@/lib/chapters';
+import ChapterPlanCatalog from '@/components/planTakeoff/ChapterPlanCatalog';
 import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
@@ -993,6 +994,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
 
               {isExpanded && (
                 <div className="overflow-hidden" data-chapter-body>
+                     {isMainChapter && takeoffStorageKey && <ChapterPlanCatalog storageKey={takeoffStorageKey} chapterId={phase.id} building={phase.name} readOnly={readOnly} />}
                      <div className="border-t border-border overflow-x-auto">
                        <div className="min-w-[1200px]">
                        {phase.tasks.some(task => !taskFilter.active || taskFilter.taskIds.has(task.id)) && (
@@ -1430,6 +1432,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                                 <DailyLogsPanel
                                   projectId={project.id}
                                   takeoffStorageKey={takeoffStorageKey}
+                                  chapterId={rootChapterId(project.phases, task.phase)}
                                   readOnly={readOnly}
                                   task={task}
                                   onChange={(logs: DailyProductionLog[]) => updateDailyLogs(phase.id, task, logs)}

@@ -1,5 +1,5 @@
 import type { ProductionQuantityDetail } from '@/types/project';
-import { detailPartial, detailTotal } from '@/lib/productionQuantityDetails';
+import { detailPartial, detailTotal, withDetailValue } from '@/lib/productionQuantityDetails';
 import { FileSearch2, Plus, Trash2 } from 'lucide-react';
 
 interface Props {
@@ -9,7 +9,7 @@ interface Props {
   applied: boolean;
   readOnly: boolean;
   onAdd: () => void;
-  onEdit: (id: string, changes: Partial<ProductionQuantityDetail>) => void;
+  onEdit: (id: string, changes: Partial<ProductionQuantityDetail>) => boolean;
   onDelete: (id: string) => void;
   onOpenPlan: (id: string, field: 'multiplier' | 'measuredQuantity') => void;
   onApply: () => void;
@@ -28,10 +28,11 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
   const numberField = (row: ProductionQuantityDetail, key: 'multiplier' | 'measuredQuantity', label: string, column: 'A' | 'B') => (
     <div className="flex items-center justify-end gap-0.5">
       <input key={`${row.id}-${key}-${row[key]}`} aria-label={`${label} da linha ${rows.indexOf(row) + 1}`} type="number" min="0" step="any" defaultValue={row[key]}
-        disabled={readOnly} onBlur={event => { const value = Number(event.target.value.replace(',', '.')); if (event.target.value !== '' && Number.isFinite(value) && value >= 0 && value !== row[key]) onEdit(row.id, { [key]: value, [key === 'multiplier' ? 'multiplierSource' : 'source']: undefined }); else if (event.target.value === '' || !Number.isFinite(value) || value < 0) event.target.value = String(row[key]); }}
+        disabled={readOnly} onBlur={event => { const value = Number(event.target.value.replace(',', '.')); if (event.target.value !== '' && Number.isFinite(value) && value >= 0 && value !== row[key]) { const edited = withDetailValue(row, key, value); if (!onEdit(row.id, { ...edited, [key === 'multiplier' ? 'multiplierSource' : 'source']: undefined })) event.target.value = String(row[key]); } else if (event.target.value === '' || !Number.isFinite(value) || value < 0) event.target.value = String(row[key]); }}
         onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}
         className="h-7 w-16 border border-slate-300 bg-white px-1.5 text-right text-xs tabular-nums focus:border-sky-500 focus:outline-none disabled:bg-slate-50" />
       <button type="button" disabled={readOnly} onClick={() => onOpenPlan(row.id, key)} aria-label={`Levantar coluna ${column} da linha ${rows.indexOf(row) + 1} na planta`} title={`Preencher ${column} pela planta`} className="flex h-7 w-7 items-center justify-center border border-slate-300 bg-slate-50 hover:bg-sky-50 disabled:opacity-50"><FileSearch2 className="h-3.5 w-3.5" /></button>
+      {row.neutralFactor === key && <span title="Fator neutro inserido na primeira medição; pode ser editado" className="text-[9px] text-slate-500">1 neutro</span>}
     </div>
   );
 
@@ -61,8 +62,8 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
     </div>
     <div className="flex flex-wrap items-center gap-2 p-2">
       {!readOnly && <button type="button" onClick={onAdd} className="inline-flex h-8 items-center gap-1 border border-slate-300 bg-white px-2 text-xs hover:bg-slate-50"><Plus className="h-3.5 w-3.5" /> Linha</button>}
-      {!readOnly && <button type="button" onClick={onApply} disabled={!rows.length} className="h-8 bg-sky-700 px-3 text-xs font-medium text-white hover:bg-sky-800 disabled:opacity-50">Usar total no realizado do dia</button>}
-      <span className="text-[11px] text-slate-500">A × B = parcial. A quantidade do dia muda somente ao usar o total.</span>
+      {!readOnly && total > 0 && !applied && <button type="button" onClick={onApply} className="h-8 bg-sky-700 px-3 text-xs font-medium text-white hover:bg-sky-800">Atualizar realizado pelo detalhe</button>}
+      <span className="text-[11px] text-slate-500">A × B = parcial. Após a primeira quantidade válida, o realizado acompanha o detalhe. A outra coluna recebe 1 neutro quando estava zerada.</span>
     </div>
   </section>;
 }

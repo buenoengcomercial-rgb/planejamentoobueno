@@ -263,6 +263,8 @@ export interface ProductionQuantityDetail {
   comment: string;
   multiplier: number;
   measuredQuantity: number;
+  /** Coluna preenchida automaticamente com 1 ao receber a primeira medição da linha. */
+  neutralFactor?: 'multiplier' | 'measuredQuantity';
   /** Origem da coluna A, quando suas unidades foram contadas na planta. */
   multiplierSource?: ProductionQuantityDetailSource;
   /** Origem da coluna B; também mantém os vínculos gravados antes da coluna A existir. */

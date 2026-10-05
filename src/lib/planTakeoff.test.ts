@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { quantity, calibration, scopeKey } from './planTakeoff';
+import { quantity, calibration, measuresForContext, scopeKey } from './planTakeoff';
 
 describe('levantamento em coordenadas do documento', () => {
   it('conta sete pontos sem exigir escala', () => {
@@ -20,5 +20,15 @@ describe('levantamento em coordenadas do documento', () => {
   it('isola usuários, organizações e obras sem colisão de delimitadores', () => {
     expect(scopeKey('a:b', 'c', 'd')).not.toBe(scopeKey('a', 'b:c', 'd'));
     expect(scopeKey('a', 'b', 'c')).not.toBe(scopeKey('a', 'b', 'd'));
+  });
+  it('reutiliza o arquivo sem misturar marcações de tarefas e dias diferentes', () => {
+    const measures = [
+      { id: 'legacy', name: 'Legado', kind: 'count' as const, page: 1, points: [] },
+      { id: 'a1', name: 'Tarefa A dia 1', kind: 'count' as const, page: 1, points: [], taskId: 'a', logId: 'dia-1' },
+      { id: 'a2', name: 'Tarefa A dia 2', kind: 'count' as const, page: 1, points: [], taskId: 'a', logId: 'dia-2' },
+      { id: 'b1', name: 'Tarefa B dia 1', kind: 'count' as const, page: 1, points: [], taskId: 'b', logId: 'dia-1' },
+    ];
+    expect(measuresForContext(measures, { taskId: 'a', logId: 'dia-1' }).map(measure => measure.id)).toEqual(['legacy', 'a1']);
+    expect(measuresForContext(measures, { taskId: 'b', logId: 'dia-1' }).map(measure => measure.id)).toEqual(['legacy', 'b1']);
   });
 });
