@@ -17,6 +17,29 @@ describe('teste independente de levantamento', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Usar no detalhe' }));
     expect(onUseMeasure).toHaveBeenCalledWith(expect.objectContaining({ id: 'p' }), expect.objectContaining({ id: 'placas', points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] }), 2);
   });
+  it('no modal da Produção conclui a contagem direto na célula e oculta a tabela inferior', async () => {
+    const onUseMeasure = vi.fn().mockReturnValue(true);
+    render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded allowedKinds={['count']} onUseMeasure={onUseMeasure} />);
+    await screen.findByRole('button', { name: 'Contagem' });
+    expect(screen.queryByRole('region', { name: 'Detalhe dos levantamentos' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Comprimento' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Contagem' }));
+    fireEvent.click(screen.getByText('Ponto de teste'));
+    fireEvent.click(screen.getByText('Ponto de teste'));
+    fireEvent.click(screen.getByText('Ponto de teste'));
+    fireEvent.click(screen.getByRole('button', { name: 'Concluir traçado' }));
+    await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.objectContaining({ id: 'p' }), expect.objectContaining({ kind: 'count', points: [{ x: 1, y: 1 }, { x: 1, y: 1 }, { x: 1, y: 1 }] }), 3));
+    expect(saveTakeoffs).toHaveBeenCalledWith('user/project', expect.arrayContaining([expect.objectContaining({ measures: [expect.objectContaining({ kind: 'count' })] })]));
+  });
+  it('permite reutilizar uma contagem já salva sem reabrir a tabela inferior', async () => {
+    const onUseMeasure = vi.fn().mockReturnValue(true);
+    vi.mocked(readTakeoffs).mockResolvedValueOnce([{ ...example, measures: [{ id: 'placas', name: 'Placas executadas', kind: 'count', page: 1, points: [{ x: 1, y: 2 }, { x: 3, y: 4 }, { x: 5, y: 6 }] }] }]);
+    render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded focusMeasure={{ planId: 'p', page: 1, measureId: 'placas' }} onUseMeasure={onUseMeasure} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Usar marcação selecionada' }));
+    expect(onUseMeasure).toHaveBeenCalledWith(expect.objectContaining({ id: 'p' }), expect.objectContaining({ id: 'placas' }), 3);
+    expect(screen.queryByRole('region', { name: 'Detalhe dos levantamentos' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Excluir marcação selecionada' })).toBeInTheDocument();
+  });
   it('não carrega coleções operacionais e respeita os perfis restritos', () => {
     expect(projectCollectionsForView('planTakeoff')).toEqual([]);
     expect(canAccessAppView('field_user', 'planTakeoff')).toBe(false);

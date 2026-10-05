@@ -263,7 +263,13 @@ export interface ProductionQuantityDetail {
   comment: string;
   multiplier: number;
   measuredQuantity: number;
-  source?: {
+  /** Origem da coluna A, quando suas unidades foram contadas na planta. */
+  multiplierSource?: ProductionQuantityDetailSource;
+  /** Origem da coluna B; também mantém os vínculos gravados antes da coluna A existir. */
+  source?: ProductionQuantityDetailSource;
+}
+
+export interface ProductionQuantityDetailSource {
     planId: string;
     planName: string;
     page: number;
@@ -272,7 +278,6 @@ export interface ProductionQuantityDetail {
     kind: 'count' | 'length' | 'area';
     /** Cópia dos pontos usados no lançamento; a planta original continua local. */
     points: Array<{ x: number; y: number }>;
-  };
 }
 
 export interface TaskOperationalReschedule {

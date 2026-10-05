@@ -109,7 +109,7 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
   const [productionError, setProductionError] = useState<string | null>(null);
   const [draftProtectionError, setDraftProtectionError] = useState(false);
   const [expandedDetail, setExpandedDetail] = useState<string | null>(null);
-  const [planTarget, setPlanTarget] = useState<{ logId: string; rowId: string } | null>(null);
+  const [planTarget, setPlanTarget] = useState<{ logId: string; rowId: string; field: 'multiplier' | 'measuredQuantity' } | null>(null);
   const [drafts, setDrafts] = useState<DraftValues>(() => readProductionDraft(storageKey, logs));
   const draftsRef = useRef<DraftValues>(drafts);
   const baseDuration = task.originalDuration ?? task.duration;
@@ -270,12 +270,13 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
   };
 
   const changeDetails = (logId: string, edit: (rows: ProductionQuantityDetail[]) => ProductionQuantityDetail[]) => {
-    if (readOnly) return;
+    if (readOnly) return false;
     const currentLogs = resolveDrafts();
-    if (!currentLogs) return;
+    if (!currentLogs) return false;
     commitResolvedLogs(currentLogs.map(log => log.id === logId
       ? { ...log, quantityDetails: edit(log.quantityDetails ?? []), quantityDetailsAppliedTotal: undefined }
       : log));
+    return true;
   };
 
   const addDetail = (logId: string) => changeDetails(logId, rows => [...rows, {
@@ -296,22 +297,30 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
   };
 
   const usePlanMeasure = (plan: TakeoffPlan, measure: TakeoffMeasure, result: number) => {
-    if (!planTarget || readOnly) return;
-    if (!measureMatchesUnit(measure.kind, task.unit || 'un')) {
-      setProductionError(`A medição é de ${measure.kind === 'count' ? 'unidades' : measure.kind === 'length' ? 'metros' : 'metros quadrados'}, mas a tarefa usa ${task.unit || 'un'}. Escolha uma medição compatível.`);
-      return;
+    if (!planTarget || readOnly) return false;
+    if (planTarget.field === 'multiplier' ? measure.kind !== 'count' : !measureMatchesUnit(measure.kind, task.unit || 'un')) {
+      setProductionError(planTarget.field === 'multiplier' ? 'A coluna A recebe apenas contagem de unidades.' : `A medição é de ${measure.kind === 'count' ? 'unidades' : measure.kind === 'length' ? 'metros' : 'metros quadrados'}, mas a tarefa usa ${task.unit || 'un'}. Escolha uma medição compatível.`);
+      return false;
     }
+    const sourceField = planTarget.field === 'multiplier' ? 'multiplierSource' : 'source';
     const alreadyUsed = logs.some(log => log.quantityDetails?.some(row =>
-      row.source?.planId === plan.id && row.source.measureId === measure.id &&
-      (log.id !== planTarget.logId || row.id !== planTarget.rowId)));
-    if (alreadyUsed) { setProductionError('Esta marcação já está vinculada a outra linha da tarefa. Abra ou edite a linha original para evitar contagem duplicada.'); return; }
-    changeDetails(planTarget.logId, rows => rows.map(row => row.id === planTarget.rowId ? {
+      (['multiplierSource', 'source'] as const).some(key => row[key]?.planId === plan.id && row[key]?.measureId === measure.id &&
+      (log.id !== planTarget.logId || row.id !== planTarget.rowId || key !== sourceField))));
+    if (alreadyUsed) { setProductionError('Esta marcação já está vinculada a outra célula da tarefa. Abra ou edite a célula original para evitar contagem duplicada.'); return false; }
+    if (!logs.find(log => log.id === planTarget.logId)?.quantityDetails?.some(row => row.id === planTarget.rowId)) {
+      setProductionError('A linha do detalhe não está mais disponível. Abra o detalhe novamente.'); return false;
+    }
+    const applied = changeDetails(planTarget.logId, rows => rows.map(row => row.id === planTarget.rowId ? {
       ...row,
       comment: row.comment || measure.name,
-      measuredQuantity: result,
-      source: { planId: plan.id, planName: plan.name, page: measure.page, measureId: measure.id, measureName: measure.name, kind: measure.kind, points: measure.points.map(point => ({ ...point })) },
+      [planTarget.field]: result,
+      ...(planTarget.field === 'multiplier' && row.measuredQuantity === 0 ? { measuredQuantity: 1 } : {}),
+      [sourceField]: { planId: plan.id, planName: plan.name, page: measure.page, measureId: measure.id, measureName: measure.name, kind: measure.kind, points: measure.points.map(point => ({ ...point })) },
     } : row));
+    if (!applied) return false;
+    setProductionError(null);
     setPlanTarget(null);
+    return true;
   };
 
   const localPreview = useMemo(() => applyDraftValues(logs, drafts), [drafts, logs]);
@@ -623,7 +632,7 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
               onAdd={() => addDetail(row.id)}
               onEdit={(id, changes) => changeDetails(row.id, details => details.map(detail => detail.id === id ? { ...detail, ...changes } : detail))}
               onDelete={id => changeDetails(row.id, details => details.filter(detail => detail.id !== id))}
-              onOpenPlan={id => { if (!takeoffStorageKey) { setProductionError('O visualizador requer uma obra e usuário ativos.'); return; } setProductionError(null); setPlanTarget({ logId: row.id, rowId: id }); }}
+              onOpenPlan={(id, field) => { if (!takeoffStorageKey) { setProductionError('O visualizador requer uma obra e usuário ativos.'); return; } setProductionError(null); setPlanTarget({ logId: row.id, rowId: id, field }); }}
               onApply={() => applyDetail(row.id)}
             />}
             {(row.laborEntries ?? []).length > 0 && (
@@ -724,12 +733,12 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
         <DialogContent className="flex h-[94vh] w-[96vw] max-w-[2100px] flex-col gap-2 overflow-hidden p-2 sm:p-3">
           <DialogHeader className="shrink-0 pr-8 text-left">
             <DialogTitle className="text-sm">Planta para o detalhe de quantitativo</DialogTitle>
-            <DialogDescription className="text-xs">Marque os pontos executados, conclua o levantamento e use o resultado na linha. Após aplicar o total ao dia, os pontos ficam verdes; a planta permanece neste navegador.</DialogDescription>
+            <DialogDescription className="text-xs">Marque os pontos executados e conclua para preencher a coluna {planTarget?.field === 'multiplier' ? 'A' : 'B'} da linha. Depois, use o total do detalhe no realizado do dia. A planta permanece neste navegador.</DialogDescription>
           </DialogHeader>
           {productionError && <p role="alert" className="shrink-0 border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800">{productionError}</p>}
           <div className="min-h-0 flex-1 overflow-auto">
             {planTarget && takeoffStorageKey && <Suspense fallback={<p className="p-4 text-sm">Abrindo visualizador…</p>}>
-              <PlanTakeoff storageKey={takeoffStorageKey} readOnly={readOnly} onUseMeasure={usePlanMeasure} executedMeasureIds={logs.flatMap(log => log.quantityDetailsAppliedTotal === log.actualQuantity && log.actualQuantity > 0 && log.quantityDetailsAppliedTotal === detailTotal(log.quantityDetails ?? []) ? log.quantityDetails?.map(row => row.source?.measureId).filter((id): id is string => !!id) ?? [] : [])} focusMeasure={logs.find(log => log.id === planTarget.logId)?.quantityDetails?.find(row => row.id === planTarget.rowId)?.source} />
+              <PlanTakeoff storageKey={takeoffStorageKey} readOnly={readOnly} embedded onUseMeasure={usePlanMeasure} allowedKinds={planTarget.field === 'multiplier' ? ['count'] : (['count', 'length', 'area'] as const).filter(kind => measureMatchesUnit(kind, task.unit || 'un'))} executedMeasureIds={logs.flatMap(log => log.quantityDetailsAppliedTotal === log.actualQuantity && log.actualQuantity > 0 && log.quantityDetailsAppliedTotal === detailTotal(log.quantityDetails ?? []) ? log.quantityDetails?.flatMap(row => [row.multiplierSource?.measureId, row.source?.measureId].filter((id): id is string => !!id)) ?? [] : [])} focusMeasure={logs.find(log => log.id === planTarget.logId)?.quantityDetails?.find(row => row.id === planTarget.rowId)?.[planTarget.field === 'multiplier' ? 'multiplierSource' : 'source']} />
             </Suspense>}
           </div>
         </DialogContent>

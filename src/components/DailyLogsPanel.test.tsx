@@ -6,8 +6,8 @@ import type { Task } from '@/types/project';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 
 vi.mock('@/components/planTakeoff/PlanTakeoff', () => ({
-  default: ({ onUseMeasure }: { onUseMeasure: (plan: object, measure: object, result: number) => void }) =>
-    <button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf' }, { id: 'measure-1', name: 'Executadas', kind: 'count', page: 2, points: [{ x: 10, y: 20 }, { x: 30, y: 40 }] }, 2)}>Escolher marcação de teste</button>,
+  default: ({ onUseMeasure, embedded }: { onUseMeasure: (plan: object, measure: object, result: number) => boolean; embedded: boolean }) =>
+    <div>{embedded && <span>Visualizador sem tabela de levantamentos</span>}<button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf' }, { id: 'measure-1', name: 'Executadas', kind: 'count', page: 2, points: [{ x: 10, y: 20 }, { x: 30, y: 40 }, { x: 50, y: 60 }] }, 3)}>Concluir contagem de teste</button><button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf' }, { id: 'measure-2', name: 'Segundo grupo', kind: 'count', page: 2, points: [{ x: 70, y: 80 }, { x: 90, y: 100 }] }, 2)}>Concluir outra contagem</button></div>,
 }));
 
 function buildTask(overrides: Partial<Task> = {}): Task {
@@ -57,13 +57,53 @@ describe('DailyLogsPanel', () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
     fireEvent.click(screen.getByRole('button', { name: 'Linha' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Planta' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Escolher marcação de teste' }));
-    expect(screen.getByRole('region', { name: 'Detalhe de quantitativo' })).toHaveTextContent('Placas.pdf · 2 pt.');
+    fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna B da linha 1 na planta' }));
+    expect(await screen.findByText('Visualizador sem tabela de levantamentos')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' }));
+    expect(screen.getByRole('region', { name: 'Detalhe de quantitativo' })).toHaveTextContent('B: Placas.pdf · 3 pt.');
+    expect(screen.getByRole('spinbutton', { name: 'Medida da linha 1' })).toHaveValue(3);
     fireEvent.click(screen.getByRole('button', { name: 'Linha' }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Planta' })[1]);
-    fireEvent.click(await screen.findByRole('button', { name: 'Escolher marcação de teste' }));
-    expect(screen.getByRole('dialog')).toHaveTextContent('já está vinculada a outra linha');
+    fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna A da linha 2 na planta' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('já está vinculada a outra célula');
+  });
+  it('preenche a coluna A pela planta e deixa o realizado pendente até aplicar o total', async () => {
+    window.scrollTo = vi.fn();
+    const initial = buildTask({ dailyLogs: [{ id: 'log-1', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 0 }] });
+    function Harness() {
+      const [task, setTask] = useState(initial);
+      return <DailyLogsPanel task={task} takeoffStorageKey="scope" onChange={dailyLogs => setTask(previous => ({ ...previous, dailyLogs }))} />;
+    }
+    const { container } = render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Linha' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna A da linha 1 na planta' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' }));
+    expect(screen.getByRole('spinbutton', { name: 'Unidades da linha 1' })).toHaveValue(3);
+    expect(screen.getByRole('spinbutton', { name: 'Medida da linha 1' })).toHaveValue(1);
+    expect(screen.getByRole('region', { name: 'Detalhe de quantitativo' })).toHaveTextContent('A: Placas.pdf · 3 pt.');
+    expect(container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')).toHaveValue(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Usar total no realizado do dia' }));
+    expect(container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')).toHaveValue(3);
+  });
+  it('guarda grupos diferentes nas colunas A e B da mesma linha', async () => {
+    window.scrollTo = vi.fn();
+    const initial = buildTask({ dailyLogs: [{ id: 'log-1', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 0 }] });
+    function Harness() {
+      const [task, setTask] = useState(initial);
+      return <DailyLogsPanel task={task} takeoffStorageKey="scope" onChange={dailyLogs => setTask(previous => ({ ...previous, dailyLogs }))} />;
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Linha' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna A da linha 1 na planta' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna B da linha 1 na planta' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Concluir outra contagem' }));
+    const detail = screen.getByRole('region', { name: 'Detalhe de quantitativo' });
+    expect(detail).toHaveTextContent('A: Placas.pdf · 3 pt.');
+    expect(detail).toHaveTextContent('B: Placas.pdf · 2 pt.');
+    expect(detail).toHaveTextContent('Detalhe: 6 UND');
   });
   it('mostra quantidade total e saldo a executar mesmo sem lançamentos', () => {
     render(<DailyLogsPanel task={buildTask()} onChange={vi.fn()} />);

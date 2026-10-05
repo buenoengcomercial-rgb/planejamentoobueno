@@ -11,7 +11,7 @@ interface Props {
   onAdd: () => void;
   onEdit: (id: string, changes: Partial<ProductionQuantityDetail>) => void;
   onDelete: (id: string) => void;
-  onOpenPlan: (id: string) => void;
+  onOpenPlan: (id: string, field: 'multiplier' | 'measuredQuantity') => void;
   onApply: () => void;
 }
 
@@ -25,11 +25,14 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
       onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}
       className="h-7 w-full min-w-24 border border-slate-300 bg-white px-1.5 text-xs focus:border-sky-500 focus:outline-none disabled:bg-slate-50" />
   );
-  const numberField = (row: ProductionQuantityDetail, key: 'multiplier' | 'measuredQuantity', label: string) => (
-    <input key={`${row.id}-${key}-${row[key]}`} aria-label={`${label} da linha ${rows.indexOf(row) + 1}`} type="number" min="0" step="any" defaultValue={row[key]}
-      disabled={readOnly} onBlur={event => { const value = Number(event.target.value.replace(',', '.')); if (event.target.value !== '' && Number.isFinite(value) && value >= 0 && value !== row[key]) onEdit(row.id, { [key]: value, source: key === 'measuredQuantity' ? undefined : row.source }); else if (event.target.value === '' || !Number.isFinite(value) || value < 0) event.target.value = String(row[key]); }}
-      onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-      className="h-7 w-20 border border-slate-300 bg-white px-1.5 text-right text-xs tabular-nums focus:border-sky-500 focus:outline-none disabled:bg-slate-50" />
+  const numberField = (row: ProductionQuantityDetail, key: 'multiplier' | 'measuredQuantity', label: string, column: 'A' | 'B') => (
+    <div className="flex items-center justify-end gap-0.5">
+      <input key={`${row.id}-${key}-${row[key]}`} aria-label={`${label} da linha ${rows.indexOf(row) + 1}`} type="number" min="0" step="any" defaultValue={row[key]}
+        disabled={readOnly} onBlur={event => { const value = Number(event.target.value.replace(',', '.')); if (event.target.value !== '' && Number.isFinite(value) && value >= 0 && value !== row[key]) onEdit(row.id, { [key]: value, [key === 'multiplier' ? 'multiplierSource' : 'source']: undefined }); else if (event.target.value === '' || !Number.isFinite(value) || value < 0) event.target.value = String(row[key]); }}
+        onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+        className="h-7 w-16 border border-slate-300 bg-white px-1.5 text-right text-xs tabular-nums focus:border-sky-500 focus:outline-none disabled:bg-slate-50" />
+      <button type="button" disabled={readOnly} onClick={() => onOpenPlan(row.id, key)} aria-label={`Levantar coluna ${column} da linha ${rows.indexOf(row) + 1} na planta`} title={`Preencher ${column} pela planta`} className="flex h-7 w-7 items-center justify-center border border-slate-300 bg-slate-50 hover:bg-sky-50 disabled:opacity-50"><FileSearch2 className="h-3.5 w-3.5" /></button>
+    </div>
   );
 
   return <section aria-label="Detalhe de quantitativo" className="ml-2 overflow-hidden border border-slate-300 bg-white text-slate-800 sm:ml-8">
@@ -46,11 +49,10 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
         </tr></thead>
         <tbody>{rows.map((row, index) => <tr key={row.id} className="border-b border-slate-200">
           <td className="p-1">{field(row, 'location', 'Local')}</td><td className="p-1">{field(row, 'comment', 'Comentário')}</td>
-          <td className="p-1 text-right">{numberField(row, 'multiplier', 'Unidades')}</td><td className="p-1 text-right">{numberField(row, 'measuredQuantity', 'Medida')}</td>
+          <td className="p-1 text-right">{numberField(row, 'multiplier', 'Unidades', 'A')}</td><td className="p-1 text-right">{numberField(row, 'measuredQuantity', 'Medida', 'B')}</td>
           <td className="px-2 text-right font-medium tabular-nums">{fmt(detailPartial(row))}</td>
           <td className="whitespace-nowrap px-1"><div className="flex items-center gap-1">
-            <button type="button" disabled={readOnly} onClick={() => onOpenPlan(row.id)} title="Abrir planta para esta linha" className="inline-flex h-7 items-center gap-1 border border-slate-300 bg-slate-50 px-2 text-xs hover:bg-slate-100 disabled:opacity-50"><FileSearch2 className="h-3.5 w-3.5" /> Planta</button>
-            {row.source && <span title={`${row.source.planName} · página ${row.source.page} · ${row.source.measureName} · ${row.source.points.length} ponto(s) registrados no lançamento. O arquivo original fica neste navegador.`} className="max-w-36 truncate text-[10px] text-slate-500">{row.source.planName} · {row.source.points.length} pt.</span>}
+            {(['multiplierSource', 'source'] as const).map((key, sourceIndex) => row[key] && <span key={key} title={`${row[key]!.planName} · página ${row[key]!.page} · ${row[key]!.measureName} · ${row[key]!.points.length} ponto(s) registrados na coluna ${sourceIndex === 0 ? 'A' : 'B'}. O arquivo original fica neste navegador.`} className="max-w-36 truncate text-[10px] text-slate-500">{sourceIndex === 0 ? 'A' : 'B'}: {row[key]!.planName} · {row[key]!.points.length} pt.</span>)}
             {!readOnly && <button type="button" onClick={() => onDelete(row.id)} aria-label={`Excluir linha ${index + 1}`} title="Excluir linha" className="p-1 text-red-700 hover:bg-red-50"><Trash2 className="h-3.5 w-3.5" /></button>}
           </div></td>
         </tr>)}</tbody>
