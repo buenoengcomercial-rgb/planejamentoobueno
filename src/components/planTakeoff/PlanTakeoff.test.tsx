@@ -6,7 +6,7 @@ import { readTakeoffs, saveTakeoffs, type TakeoffPlan } from '@/lib/planTakeoff'
 import { projectCollectionsForView } from '@/lib/projectDataScope';
 import { canAccessAppView } from '@/lib/organizations';
 vi.mock('@/lib/planTakeoff', async importOriginal => ({ ...await importOriginal<object>(), readTakeoffs: vi.fn(), saveTakeoffs: vi.fn() }));
-vi.mock('./PlanCanvas', () => ({ default: forwardRef<HTMLButtonElement, { onPoint: (p: { x: number; y: number }) => void; plan: TakeoffPlan }>(function MockCanvas({ onPoint, plan }, ref) { return <><button ref={ref} onClick={() => onPoint({ x: 1, y: 1 })}>Ponto de teste</button><span data-testid="visible-measures">{plan.measures.map(measure => measure.id).join(',')}</span></>; }) }));
+vi.mock('./PlanCanvas', () => ({ default: forwardRef<HTMLButtonElement, { onPoint: (p: { x: number; y: number }) => void; onFinish?: () => void; plan: TakeoffPlan }>(function MockCanvas({ onPoint, onFinish, plan }, ref) { return <><button ref={ref} onClick={() => onPoint({ x: 1, y: 1 })}>Ponto de teste</button><button onClick={onFinish}>Botão direito de teste</button><span data-testid="visible-measures">{plan.measures.map(measure => measure.id).join(',')}</span></>; }) }));
 const example: TakeoffPlan = { id: 'p', name: 'Planta', floor: 'Térreo', chapterId: 'building-1', building: 'Prédio principal', file: new Blob(), kind: 'image', scales: {}, measures: [] };
 beforeEach(() => { vi.mocked(readTakeoffs).mockResolvedValue([example]); vi.mocked(saveTakeoffs).mockReset().mockResolvedValue(); });
 describe('teste independente de levantamento', () => {
@@ -30,6 +30,27 @@ describe('teste independente de levantamento', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Concluir traçado' }));
     await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.objectContaining({ id: 'p' }), expect.objectContaining({ kind: 'count', points: [{ x: 1, y: 1 }, { x: 1, y: 1 }, { x: 1, y: 1 }] }), 3));
     expect(saveTakeoffs).toHaveBeenCalledWith('user/project', expect.arrayContaining([expect.objectContaining({ measures: [expect.objectContaining({ kind: 'count', taskId: 'task-1', logId: 'day-1' })] })]));
+  });
+  it('conclui pelo botão direito e mantém a ferramenta ativa para a próxima linha', async () => {
+    const onUseMeasure = vi.fn().mockReturnValue(true);
+    render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded chapterId="building-1" measureContext={{ taskId: 'task-1', logId: 'day-1' }} allowedKinds={['count']} onUseMeasure={onUseMeasure} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Contagem' }));
+    fireEvent.click(screen.getByText('Ponto de teste'));
+    fireEvent.click(screen.getByText('Ponto de teste'));
+    fireEvent.click(screen.getByText('Botão direito de teste'));
+    await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'count', points: [{ x: 1, y: 1 }, { x: 1, y: 1 }] }), 2));
+    expect(screen.getByRole('button', { name: 'Contagem' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('0 pontos')).toBeInTheDocument();
+  });
+  it('desfaz a nova marcação quando o detalhe recusa a quantidade', async () => {
+    const onUseMeasure = vi.fn().mockReturnValue(false);
+    render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded chapterId="building-1" measureContext={{ taskId: 'task-1', logId: 'day-1' }} allowedKinds={['count']} onUseMeasure={onUseMeasure} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Contagem' }));
+    fireEvent.click(screen.getByText('Ponto de teste'));
+    fireEvent.click(screen.getByText('Botão direito de teste'));
+    await waitFor(() => expect(saveTakeoffs).toHaveBeenCalledTimes(2));
+    expect(saveTakeoffs).toHaveBeenLastCalledWith('user/project', [example]);
+    expect(screen.getByText('1 ponto')).toBeInTheDocument();
   });
   it('permite reutilizar uma contagem já salva sem reabrir a tabela inferior', async () => {
     const onUseMeasure = vi.fn().mockReturnValue(true);

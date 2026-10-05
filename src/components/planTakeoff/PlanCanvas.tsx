@@ -1,11 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import type { DxfViewer } from 'dxf-viewer';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import type { Point, TakeoffPlan, TakeoffMeasure } from '@/lib/planTakeoff';
+import type { MeasureKind, Point, TakeoffPlan, TakeoffMeasure } from '@/lib/planTakeoff';
 
 interface Props {
-  plan: TakeoffPlan; page: number; draft: Point[]; drawing: boolean; selected: string;
+  plan: TakeoffPlan; page: number; draft: Point[]; draftKind?: MeasureKind | 'calibrate' | null; drawing: boolean; selected: string;
   readOnly: boolean; onPoint: (point: Point) => void; onSelect: (id: string) => void;
+  onFinish?: () => void;
   onMove: (id: string, index: number, point: Point) => void; onPages: (count: number) => void;
   onCursor?: (point: Point | null) => void;
   onLayers?: (layers: string[], hidden: string[]) => void;
@@ -18,7 +19,7 @@ export interface PlanCanvasHandle {
   toggleLayer: (name: string, visible: boolean) => void;
 }
 type View = { x: number; y: number; width: number };
-const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ plan, page, draft, drawing, selected, readOnly, onPoint, onSelect, onMove, onPages, onCursor, onLayers, executedMeasureIds = [] }, ref) {
+const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ plan, page, draft, draftKind, drawing, selected, readOnly, onPoint, onSelect, onMove, onPages, onCursor, onLayers, onFinish, executedMeasureIds = [] }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const cadHost = useRef<HTMLDivElement>(null);
   const cad = useRef<DxfViewer>();
@@ -29,7 +30,7 @@ const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ pla
   const [layers, setLayers] = useState<string[]>([]);
   const [hidden, setHidden] = useState<string[]>([]);
   const [status, setStatus] = useState('Carregando planta…');
-  const drag = useRef<{ start: Point; view: View; id?: string; index?: number; moved: boolean }>();
+  const drag = useRef<{ start: Point; view: View; id?: string; index?: number; moved: boolean; panning: boolean; primary: boolean }>();
   const [moving, setMoving] = useState<{ id: string; index: number; point: Point }>();
   const height = view.width * size.height / size.width;
   const unit = view.width / size.width;
@@ -134,12 +135,12 @@ const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ pla
   const shape = (measure: TakeoffMeasure) => {
     const points = measure.points.map((p, i) => moving?.id === measure.id && moving.index === i ? moving.point : p);
     const color = executedMeasureIds.includes(measure.id) ? '#15803d' : selected === measure.id ? '#d97706' : '#0369a1';
-    return <g key={measure.id} onPointerDown={e => { if (!drawing) { e.stopPropagation(); onSelect(measure.id); } }}>
+    return <g key={measure.id} onPointerDown={e => { if (!drawing && e.button === 0) { e.stopPropagation(); onSelect(measure.id); } }}>
       {measure.kind !== 'count' && <polyline points={[...points, ...(measure.kind === 'area' ? [points[0]] : [])].map(p => `${p.x},${p.y}`).join(' ')} stroke={color} strokeWidth={unit * 3} fill={measure.kind === 'area' ? '#0284c714' : 'none'} style={{ cursor: 'pointer', pointerEvents: 'stroke' }} />}
       {points.map((p, i) => <g key={i}>
         <circle cx={p.x} cy={p.y} r={unit * 5} fill={color} stroke="white" strokeWidth={unit} style={{ cursor: !readOnly && selected === measure.id ? 'move' : 'pointer' }} onPointerDown={e => {
-          if (drawing) return; e.stopPropagation(); onSelect(measure.id);
-          if (!readOnly && selected === measure.id) { e.currentTarget.ownerSVGElement?.setPointerCapture(e.pointerId); drag.current = { start: p, view, id: measure.id, index: i, moved: false }; }
+          if (drawing || e.button !== 0) return; e.stopPropagation(); onSelect(measure.id);
+          if (!readOnly && selected === measure.id) { e.currentTarget.ownerSVGElement?.setPointerCapture(e.pointerId); drag.current = { start: p, view, id: measure.id, index: i, moved: false, panning: false, primary: true }; }
         }} />
         {measure.kind === 'count' && <text x={p.x + unit * 8} y={p.y - unit * 7} fontSize={unit * 12} fontWeight="600" fill={color} stroke="white" strokeWidth={unit * 2.5} paintOrder="stroke" style={{ pointerEvents: 'none' }}>{i + 1}</text>}
       </g>)}
@@ -149,24 +150,26 @@ const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ pla
     <div ref={host} className="relative h-[58vh] min-h-[360px] overflow-hidden border border-slate-300 bg-white sm:h-[min(69vh,760px)]" style={{ touchAction: 'none' }}>
       <div ref={cadHost} className="absolute inset-0" style={{ pointerEvents: 'none' }} />
       <svg aria-label="Planta e marcações" className="absolute inset-0 h-full w-full" viewBox={`${view.x - view.width / 2} ${view.y - height / 2} ${view.width} ${height}`} onWheel={e => setView(v => ({ ...v, width: Math.max(.00001, v.width * (e.deltaY > 0 ? 1.12 : 1 / 1.12)) }))}
-        onPointerDown={e => { if (status) return; e.currentTarget.setPointerCapture(e.pointerId); drag.current = { start: point(e), view, moved: false }; }}
+        onMouseDown={e => { if (e.button === 1) e.preventDefault(); }} onAuxClick={e => { if (e.button === 1) e.preventDefault(); }}
+        onContextMenu={e => { if (drawing && draftKind !== 'calibrate') { e.preventDefault(); onFinish?.(); } }}
+        onPointerDown={e => { if (status || e.button !== 0 && e.button !== 1) return; if (e.button === 1) e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); drag.current = { start: point(e), view, moved: false, panning: e.button === 1 || !drawing, primary: e.button === 0 }; }}
         onPointerMove={e => {
           onCursor?.(point(e));
           const d = drag.current; if (!d) return;
           const p = point(e);
           if (Math.hypot(p.x - d.start.x, p.y - d.start.y) > unit * 3) d.moved = true;
           if (d.id !== undefined && d.index !== undefined) setMoving({ id: d.id, index: d.index, point: p });
-          else if (!drawing) setView({ ...view, x: view.x + d.start.x - p.x, y: view.y + d.start.y - p.y });
+          else if (d.panning) setView({ ...view, x: view.x + d.start.x - p.x, y: view.y + d.start.y - p.y });
         }} onPointerLeave={() => onCursor?.(null)} onPointerUp={e => {
           const d = drag.current; drag.current = undefined;
           if (d?.id !== undefined && d.index !== undefined && d.moved) onMove(d.id, d.index, point(e));
-          else if (d && !d.moved && drawing) onPoint(point(e));
+          else if (d?.primary && !d.moved && drawing) onPoint(point(e));
           setMoving(undefined);
         }} onPointerCancel={() => { drag.current = undefined; setMoving(undefined); }}>
         {raster && <image href={raster.url} width={raster.width} height={raster.height} />}
         {plan.measures.filter(m => m.page === page).map(shape)}
-        <polyline points={draft.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#e11d48" strokeWidth={unit * 2} pointerEvents="none" />
-        {draft.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r={unit * 4} fill="#e11d48" pointerEvents="none" />)}
+        {draftKind !== 'count' && draft.length > 1 && <polyline data-draft-line points={draft.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#e11d48" strokeWidth={unit * 2} pointerEvents="none" />}
+        {draft.map((p, i) => <g key={i} pointerEvents="none"><circle data-draft-point cx={p.x} cy={p.y} r={unit * 4} fill="#e11d48" />{draftKind === 'count' && <text x={p.x + unit * 8} y={p.y - unit * 7} fontSize={unit * 12} fontWeight="600" fill="#e11d48" stroke="white" strokeWidth={unit * 2.5} paintOrder="stroke">{i + 1}</text>}</g>)}
       </svg>
       {status && <div role="status" className="absolute inset-0 flex items-center justify-center bg-white/90 p-5 text-center text-slate-800">{status}</div>}
     </div>

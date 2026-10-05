@@ -92,11 +92,16 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, execut
     if (tool === 'area' && !quantity('area', draft, scale)) { setError('O contorno deve ter área maior que zero.'); return; }
     const measure: TakeoffMeasure = { id: crypto.randomUUID(), page, name: draftName.trim() || `${labels[tool]} ${visibleMeasures.length + 1}`, kind: tool, points: draft, ...measureContext };
     if (!await update({ ...plan, measures: [...plan.measures, measure] })) return;
-    setSelected(measure.id); reset();
     if (embedded && onUseMeasure) {
       const result = quantity(measure.kind, measure.points, scale);
-      if (result !== null) onUseMeasure(plan, measure, result);
+      if (result !== null && onUseMeasure(plan, measure, result) === false) {
+        await commit(plans, true);
+        return;
+      }
+      setSelected(''); setDraft([]); setDraftName(''); setPendingScale(undefined);
+      return;
     }
+    setSelected(measure.id); reset();
   }
   async function applyStoredMeasure(measure: TakeoffMeasure) {
     if (!plan || !onUseMeasure) return;
@@ -173,8 +178,8 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, execut
           <Button size="sm" variant="ghost" className="h-7 rounded-none text-xs" disabled={!draft.length} onClick={() => setDraft(d => d.slice(0, -1))}><Undo2 className="h-3.5 w-3.5" />Retirar último ponto</Button>
         </div>}
         {pendingScale !== undefined && <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-slate-900"><p>Nova escala: {pendingScale.toLocaleString('pt-BR', { maximumSignificantDigits: 8 })} m por unidade do desenho. {plan.measures.filter(m => m.page === page && m.kind !== 'count').length} medidas desta página serão recalculadas.</p>{plan.measures.filter(m => m.page === page && m.kind !== 'count').map(m => <p key={m.id}>{m.name}: {format(quantity(m.kind, m.points, scale))} → {format(quantity(m.kind, m.points, pendingScale))} {units[m.kind]}</p>)}<Button size="sm" disabled={locked} onClick={async () => { if (await update({ ...plan, scales: { ...plan.scales, [page]: pendingScale } })) reset(); }}>Confirmar escala</Button> <Button size="sm" variant="outline" onClick={() => setPendingScale(undefined)}>Voltar</Button></div>}
-        <PlanCanvas ref={canvas} plan={measureContext ? { ...plan, measures: visibleMeasures } : plan} page={page} draft={draft} drawing={!!tool && !locked} selected={selected} readOnly={locked} executedMeasureIds={executedMeasureIds} onPages={setPages} onCursor={setCursor} onLayers={receiveLayers} onPoint={p => setDraft(d => tool === 'calibrate' && d.length >= 2 ? [p] : [...d, p])} onSelect={setSelected} onMove={(id, index, point) => { void update({ ...plan, measures: plan.measures.map(m => m.id === id ? { ...m, points: m.points.map((p, i) => i === index ? point : p) } : m) }); }} />
-        <div role="status" className="flex min-h-7 items-center gap-2 border border-slate-300 bg-[#e9ecef] px-2 text-xs text-slate-700"><strong>{tool === 'calibrate' ? 'Calibração' : tool ? labels[tool] : 'Navegação'}</strong><span className="border-l border-slate-400 pl-2">{tool === 'calibrate' ? 'Marque dois pontos e informe a distância conhecida.' : tool ? 'Clique para marcar pontos; conclua ou cancele na barra superior.' : embedded ? selectedMeasure ? `Marcação ${selectedMeasure.name} selecionada; use o resultado na barra superior.` : 'Clique numa marcação existente para usá-la na célula, ou inicie uma nova contagem.' : 'Arraste para deslocar a vista; use a roda do mouse para zoom.'}</span></div>
+        <PlanCanvas ref={canvas} plan={measureContext ? { ...plan, measures: visibleMeasures } : plan} page={page} draft={draft} draftKind={tool} drawing={!!tool && !locked} selected={selected} readOnly={locked} executedMeasureIds={executedMeasureIds} onPages={setPages} onCursor={setCursor} onLayers={receiveLayers} onFinish={() => { void finish(); }} onPoint={p => setDraft(d => tool === 'calibrate' && d.length >= 2 ? [p] : [...d, p])} onSelect={setSelected} onMove={(id, index, point) => { void update({ ...plan, measures: plan.measures.map(m => m.id === id ? { ...m, points: m.points.map((p, i) => i === index ? point : p) } : m) }); }} />
+        <div role="status" className="flex min-h-7 items-center gap-2 border border-slate-300 bg-[#e9ecef] px-2 text-xs text-slate-700"><strong>{tool === 'calibrate' ? 'Calibração' : tool ? labels[tool] : 'Navegação'}</strong><span className="border-l border-slate-400 pl-2">{tool === 'calibrate' ? 'Marque dois pontos e informe a distância conhecida.' : tool ? 'Clique para marcar; botão direito conclui, botão central desloca e a roda amplia ou reduz.' : embedded ? selectedMeasure ? `Marcação ${selectedMeasure.name} selecionada; use o resultado na barra superior.` : 'Clique numa marcação existente para usá-la na célula, ou inicie uma nova contagem.' : 'Arraste ou segure o botão central para deslocar; use a roda do mouse para zoom.'}</span></div>
         {!embedded && <section className="min-w-0 overflow-hidden border border-slate-300 bg-white" aria-label="Detalhe dos levantamentos">
           <button className="flex w-full items-center gap-2 border-b border-slate-300 bg-[#e9ecef] px-2 py-1 text-left text-xs font-semibold hover:bg-slate-100" onClick={() => setShowDetails(v => !v)} aria-expanded={showDetails}>{showDetails ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}Detalhe dos levantamentos <span className="ml-auto text-xs font-normal">{plan.measures.length} {plan.measures.length === 1 ? 'registro' : 'registros'}</span></button>
           {showDetails && <div className="h-52 min-h-36 max-h-[55vh] resize-y overflow-auto">

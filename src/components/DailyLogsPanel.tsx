@@ -324,14 +324,26 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
     if (!logs.find(log => log.id === planTarget.logId)?.quantityDetails?.some(row => row.id === planTarget.rowId)) {
       setProductionError('A linha do detalhe não está mais disponível. Abra o detalhe novamente.'); return false;
     }
-    const applied = changeDetails(planTarget.logId, rows => rows.map(row => row.id === planTarget.rowId ? {
-      ...withDetailValue(row, planTarget.field, result),
-      comment: row.comment || measure.name,
-      [sourceField]: { planId: plan.id, planName: plan.name, page: measure.page, measureId: measure.id, measureName: measure.name, kind: measure.kind, points: measure.points.map(point => ({ ...point })) },
-    } : row));
+    let nextRowId = '';
+    const applied = changeDetails(planTarget.logId, rows => {
+      const index = rows.findIndex(row => row.id === planTarget.rowId);
+      const updated = rows.map(row => row.id === planTarget.rowId ? {
+        ...withDetailValue(row, planTarget.field, result),
+        comment: row.comment || measure.name,
+        [sourceField]: { planId: plan.id, planName: plan.name, page: measure.page, measureId: measure.id, measureName: measure.name, kind: measure.kind, points: measure.points.map(point => ({ ...point })) },
+      } : row);
+      const below = updated[index + 1];
+      if (below?.multiplier === 0 && below.measuredQuantity === 0) {
+        nextRowId = below.id;
+        return updated;
+      }
+      nextRowId = crypto.randomUUID();
+      updated.splice(index + 1, 0, { id: nextRowId, location: '', comment: '', multiplier: 0, measuredQuantity: 0 });
+      return updated;
+    });
     if (!applied) return false;
     setProductionError(null);
-    setPlanTarget(null);
+    setPlanTarget({ ...planTarget, rowId: nextRowId });
     return true;
   };
 
@@ -745,7 +757,7 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
         <DialogContent className="flex h-[94vh] w-[96vw] max-w-[2100px] flex-col gap-2 overflow-hidden p-2 sm:p-3">
           <DialogHeader className="shrink-0 pr-8 text-left">
             <DialogTitle className="text-sm">Planta para o detalhe de quantitativo</DialogTitle>
-            <DialogDescription className="text-xs">Escolha uma planta já cadastrada neste prédio. Concluir o traçado preenche a coluna {planTarget?.field === 'multiplier' ? 'A' : 'B'} e atualiza o realizado do dia conforme o total do detalhe.</DialogDescription>
+            <DialogDescription className="text-xs">Escolha uma planta já cadastrada neste prédio. A captura vai para a linha {planTarget ? (logs.find(log => log.id === planTarget.logId)?.quantityDetails?.findIndex(row => row.id === planTarget.rowId) ?? -1) + 1 : 0}, coluna {planTarget?.field === 'multiplier' ? 'A' : 'B'}. Ao concluir, o realizado é atualizado e a próxima linha fica pronta.</DialogDescription>
           </DialogHeader>
           {productionError && <p role="alert" className="shrink-0 border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800">{productionError}</p>}
           <div className="min-h-0 flex-1 overflow-auto">
