@@ -7,7 +7,7 @@ import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 
 vi.mock('@/components/planTakeoff/PlanTakeoff', () => ({
   default: ({ onUseMeasure, embedded }: { onUseMeasure: (plan: object, measure: object, result: number) => boolean; embedded: boolean }) =>
-    <div>{embedded && <span>Visualizador sem tabela de levantamentos</span>}<button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf', chapterId: 'phase-1' }, { id: 'measure-1', name: 'Executadas', kind: 'count', page: 2, points: [{ x: 10, y: 20 }, { x: 30, y: 40 }, { x: 50, y: 60 }] }, 3)}>Concluir contagem de teste</button><button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf', chapterId: 'phase-1' }, { id: 'measure-2', name: 'Segundo grupo', kind: 'count', page: 2, points: [{ x: 70, y: 80 }, { x: 90, y: 100 }] }, 2)}>Concluir outra contagem</button></div>,
+    <div>{embedded && <span>Visualizador sem tabela de levantamentos</span>}<button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf', chapterId: 'phase-1' }, { id: 'measure-1', name: 'Executadas', kind: 'count', page: 2, points: [{ x: 10, y: 20 }, { x: 30, y: 40 }, { x: 50, y: 60 }] }, 3)}>Concluir contagem de teste</button><button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf', chapterId: 'phase-1' }, { id: 'measure-2', name: 'Segundo grupo', kind: 'count', page: 2, points: [{ x: 70, y: 80 }, { x: 90, y: 100 }] }, 2)}>Concluir outra contagem</button><button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf', chapterId: 'phase-1' }, { id: 'measure-length', name: 'Largura executada', kind: 'length', page: 2, points: [{ x: 10, y: 20 }, { x: 40, y: 20 }] }, 3)}>Concluir comprimento de teste</button></div>,
 }));
 
 function buildTask(overrides: Partial<Task> = {}): Task {
@@ -29,6 +29,63 @@ function buildTask(overrides: Partial<Task> = {}): Task {
 }
 
 describe('DailyLogsPanel', () => {
+  it('mostra a subtabela A-D com fórmula real, parcial e subtotal acumulado', () => {
+    const initial = buildTask({ unit: 'm²', quantity: 100, dailyLogs: [{ id: 'log-1', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 0 }] });
+    function Harness() {
+      const [task, setTask] = useState(initial);
+      return <DailyLogsPanel task={task} onChange={dailyLogs => setTask(previous => ({ ...previous, dailyLogs }))} />;
+    }
+    const { container } = render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Linha' }));
+    const detail = screen.getByRole('region', { name: 'Detalhe de quantitativo' });
+    for (const label of ['Loc.', 'Comentário', 'Fórmula', 'A · Uds.', 'B · Área (m²)', 'C', 'D', 'Parcial (m²)', 'Subtotal (m²)']) {
+      expect(screen.getByRole('columnheader', { name: label })).toBeInTheDocument();
+    }
+    expect(screen.getByRole('spinbutton', { name: 'Unidades da linha 1' })).toHaveValue(0);
+    expect(screen.getByRole('spinbutton', { name: 'Medida da linha 1' })).toHaveValue(0);
+    expect(detail.querySelectorAll('tbody tr')[0]).toHaveTextContent('0');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Fórmula da linha 1' }), { target: { value: 'A*B*C' } });
+    expect(screen.getByRole('columnheader', { name: 'B · Compr. (m)' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'C · Largura (m)' })).toBeInTheDocument();
+    expect(screen.getByRole('spinbutton', { name: 'Largura da linha 1' })).toHaveValue(0);
+    const length = screen.getByRole('spinbutton', { name: 'Medida da linha 1' });
+    fireEvent.change(length, { target: { value: '3' } }); fireEvent.blur(length);
+    expect(screen.getByRole('spinbutton', { name: 'Unidades da linha 1' })).toHaveValue(1);
+    expect(screen.getByRole('spinbutton', { name: 'Largura da linha 1' })).toHaveValue(1);
+    expect(screen.getAllByText('1 neutro')).toHaveLength(2);
+    expect(container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')).toHaveValue(3);
+    const width = screen.getByRole('spinbutton', { name: 'Largura da linha 1' });
+    fireEvent.change(width, { target: { value: '4' } }); fireEvent.blur(width);
+    expect(detail.querySelectorAll('tbody tr')[0]).toHaveTextContent('12');
+    expect(container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')).toHaveValue(12);
+    fireEvent.click(screen.getByRole('button', { name: 'Linha' }));
+    const nextMeasure = screen.getByRole('spinbutton', { name: 'Medida da linha 2' });
+    fireEvent.change(nextMeasure, { target: { value: '2' } }); fireEvent.blur(nextMeasure);
+    expect(detail.querySelectorAll('tbody tr')[1]).toHaveTextContent('14');
+    expect(detail.querySelector('tfoot')).toHaveTextContent('14 m²');
+    expect(container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')).toHaveValue(14);
+  });
+  it('leva comprimento da planta para C e mantém seus pontos no lançamento', async () => {
+    window.scrollTo = vi.fn();
+    const initial = buildTask({ unit: 'm²', quantity: 100, dailyLogs: [{ id: 'log-1', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 0 }] });
+    let saved = initial;
+    function Harness() {
+      const [task, setTask] = useState(initial);
+      return <DailyLogsPanel task={task} chapterId="phase-1" takeoffStorageKey="scope" onChange={dailyLogs => setTask(previous => { saved = { ...previous, dailyLogs }; return saved; })} />;
+    }
+    const { container } = render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Linha' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Fórmula da linha 1' }), { target: { value: 'A*B*C' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna C da linha 1 na planta' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Concluir comprimento de teste' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.getByRole('spinbutton', { name: 'Largura da linha 1' })).toHaveValue(3);
+    expect(screen.getByRole('region', { name: 'Detalhe de quantitativo' })).toHaveTextContent('C: Placas.pdf · 2 pt.');
+    expect(container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')).toHaveValue(3);
+    expect(saved.dailyLogs?.[0].quantityDetails?.[0].dimensionCSource?.points).toEqual([{ x: 10, y: 20 }, { x: 40, y: 20 }]);
+  });
   it('linha zerada preserva o manual; primeiro valor atualiza o realizado automaticamente', () => {
     const initial = buildTask({ dailyLogs: [{ id: 'log-1', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 2 }] });
     function Harness() {
@@ -47,7 +104,7 @@ describe('DailyLogsPanel', () => {
     expect(container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')).toHaveValue(7);
     expect(screen.getByRole('spinbutton', { name: 'Unidades da linha 1' })).toHaveValue(1);
     expect(screen.getByText('1 neutro')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Detalhe de quantitativo' })).toHaveTextContent('Detalhe: 7 UND');
+    expect(screen.getByRole('region', { name: 'Detalhe de quantitativo' })).toHaveTextContent('Subtotal: 7 UND');
     expect(screen.queryByRole('button', { name: 'Atualizar realizado pelo detalhe' })).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Detalhe de quantitativo' })).toHaveTextContent('Dia: 7 UND');
   });
@@ -133,6 +190,30 @@ describe('DailyLogsPanel', () => {
     expect(screen.getByRole('region', { name: 'Detalhe de quantitativo' })).toHaveTextContent('A: Placas.pdf · 3 pt.');
     expect(container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')).toHaveValue(3);
   });
+  it('mantém a contagem de três pontos, subtotal e realizado após remontar o lançamento', async () => {
+    window.scrollTo = vi.fn();
+    let saved = buildTask({ quantity: 16, dailyLogs: [{ id: 'log-1', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 0 }] });
+    function Harness({ initial }: { initial: Task }) {
+      const [task, setTask] = useState(initial);
+      return <DailyLogsPanel task={task} chapterId="phase-1" takeoffStorageKey="scope" onChange={dailyLogs => setTask(previous => { saved = { ...previous, dailyLogs }; return saved; })} />;
+    }
+    const first = render(<Harness initial={saved} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Linha' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna B da linha 1 na planta' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(first.container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')).toHaveValue(3);
+    expect(saved.quantity).toBe(16);
+    first.unmount();
+
+    const second = render(<Harness initial={saved} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
+    expect(screen.getByRole('spinbutton', { name: 'Medida da linha 1' })).toHaveValue(3);
+    expect(screen.getByRole('region', { name: 'Detalhe de quantitativo' })).toHaveTextContent('Subtotal: 3 UND');
+    expect(second.container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')).toHaveValue(3);
+    expect(saved.dailyLogs?.[0].quantityDetails?.[0].source?.points).toEqual([{ x: 10, y: 20 }, { x: 30, y: 40 }, { x: 50, y: 60 }]);
+  });
   it('guarda grupos diferentes nas colunas A e B da mesma linha', async () => {
     window.scrollTo = vi.fn();
     const initial = buildTask({ dailyLogs: [{ id: 'log-1', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 0 }] });
@@ -152,7 +233,7 @@ describe('DailyLogsPanel', () => {
     const detail = screen.getByRole('region', { name: 'Detalhe de quantitativo' });
     expect(detail).toHaveTextContent('A: Placas.pdf · 3 pt.');
     expect(detail).toHaveTextContent('B: Placas.pdf · 2 pt.');
-    expect(detail).toHaveTextContent('Detalhe: 6 UND');
+    expect(detail).toHaveTextContent('Subtotal: 6 UND');
   });
   it('recalcula o realizado após edição, exclusão e remontagem do lançamento', () => {
     let saved = buildTask({ dailyLogs: [{ id: 'log-1', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 0 }] });

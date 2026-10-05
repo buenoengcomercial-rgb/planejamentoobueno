@@ -263,12 +263,19 @@ export interface ProductionQuantityDetail {
   comment: string;
   multiplier: number;
   measuredQuantity: number;
+  /** A × B nos registros existentes; dimensões adicionais são opcionais por linha. */
+  formula?: 'A*B' | 'A*B*C' | 'A*B*C*D';
+  dimensionC?: number;
+  dimensionD?: number;
   /** Coluna preenchida automaticamente com 1 ao receber a primeira medição da linha. */
   neutralFactor?: 'multiplier' | 'measuredQuantity';
+  neutralFactors?: Array<'multiplier' | 'measuredQuantity' | 'dimensionC' | 'dimensionD'>;
   /** Origem da coluna A, quando suas unidades foram contadas na planta. */
   multiplierSource?: ProductionQuantityDetailSource;
   /** Origem da coluna B; também mantém os vínculos gravados antes da coluna A existir. */
   source?: ProductionQuantityDetailSource;
+  dimensionCSource?: ProductionQuantityDetailSource;
+  dimensionDSource?: ProductionQuantityDetailSource;
 }
 
 export interface ProductionQuantityDetailSource {

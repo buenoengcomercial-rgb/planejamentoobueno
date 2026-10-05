@@ -1,8 +1,28 @@
 import type { ProductionQuantityDetail } from '@/types/project';
 import type { MeasureKind } from '@/lib/planTakeoff';
 
+export type DetailField = 'multiplier' | 'measuredQuantity' | 'dimensionC' | 'dimensionD';
+export type DetailFormula = NonNullable<ProductionQuantityDetail['formula']>;
+
+export function detailFormula(row: ProductionQuantityDetail): DetailFormula {
+  return row.formula ?? 'A*B';
+}
+
+export function formulaFields(formula: DetailFormula): DetailField[] {
+  return formula === 'A*B*C*D' ? ['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD']
+    : formula === 'A*B*C' ? ['multiplier', 'measuredQuantity', 'dimensionC']
+      : ['multiplier', 'measuredQuantity'];
+}
+
+export function formulasForUnit(unit: string): DetailFormula[] {
+  const normalized = unit.trim().toLowerCase().replace(/²/g, '2').replace(/³/g, '3').replace(/\s/g, '');
+  if (['m2', 'metroquadrado', 'metrosquadrados'].includes(normalized)) return ['A*B', 'A*B*C'];
+  if (['m3', 'metrocubico', 'metroscubicos', 'metrocúbico', 'metroscúbicos'].includes(normalized)) return ['A*B', 'A*B*C*D'];
+  return ['A*B'];
+}
+
 export function detailPartial(row: ProductionQuantityDetail): number {
-  const value = row.multiplier * row.measuredQuantity;
+  const value = formulaFields(detailFormula(row)).reduce((product, field) => product * (row[field] ?? 0), 1);
   return Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
@@ -10,15 +30,51 @@ export function detailTotal(rows: ProductionQuantityDetail[]): number {
   return rows.reduce((sum, row) => sum + detailPartial(row), 0);
 }
 
-export function withDetailValue(row: ProductionQuantityDetail, field: 'multiplier' | 'measuredQuantity', value: number): ProductionQuantityDetail {
-  const other = field === 'multiplier' ? 'measuredQuantity' : 'multiplier';
-  const firstValue = value > 0 && row.multiplier === 0 && row.measuredQuantity === 0;
+export function withDetailValue(row: ProductionQuantityDetail, field: DetailField, value: number): ProductionQuantityDetail {
+  const fields = formulaFields(detailFormula(row));
+  const firstValue = value > 0 && fields.every(key => (row[key] ?? 0) === 0);
+  const neutralFields = firstValue ? fields.filter(key => key !== field) : (row.neutralFactors ?? (row.neutralFactor ? [row.neutralFactor] : [])).filter(key => key !== field);
+  const neutralsForLegacy = neutralFields.find(key => key === 'multiplier' || key === 'measuredQuantity');
   return {
     ...row,
     [field]: value,
-    ...(firstValue ? { [other]: 1, neutralFactor: other } : {}),
-    ...(row.neutralFactor === field && !firstValue ? { neutralFactor: undefined } : {}),
+    ...(firstValue ? Object.fromEntries(neutralFields.map(key => [key, 1])) : {}),
+    neutralFactor: neutralsForLegacy,
+    neutralFactors: neutralFields,
   };
+}
+
+export function withDetailFormula(row: ProductionQuantityDetail, formula: DetailFormula): ProductionQuantityDetail {
+  const activeBefore = formulaFields(detailFormula(row));
+  const activeAfter = formulaFields(formula);
+  const neutralFields = new Set<DetailField>(row.neutralFactors ?? (row.neutralFactor ? [row.neutralFactor] : []));
+  const additions: Partial<ProductionQuantityDetail> = {};
+  if (detailPartial(row) > 0) for (const field of activeAfter) {
+    if (!activeBefore.includes(field) && (row[field] ?? 0) === 0) {
+      additions[field] = 1;
+      neutralFields.add(field);
+    }
+  }
+  return { ...row, ...additions, formula, neutralFactors: [...neutralFields] };
+}
+
+export function canChangeDetailFormula(row: ProductionQuantityDetail, formula: DetailFormula, unit: string): boolean {
+  const retainedFields = formulaFields(formula);
+  const discardedFields = formulaFields(detailFormula(row)).filter(field => !retainedFields.includes(field));
+  if (discardedFields.some(field => {
+    const sourceKey = field === 'multiplier' ? 'multiplierSource' : field === 'measuredQuantity' ? 'source' : field === 'dimensionC' ? 'dimensionCSource' : 'dimensionDSource';
+    const neutral = row.neutralFactors?.includes(field) || row.neutralFactor === field;
+    return !!row[sourceKey] || ((row[field] ?? 0) !== 0 && !neutral);
+  })) return false;
+  return !row.source || measureMatchesDetailCell(row.source.kind, 'measuredQuantity', { ...row, formula }, unit);
+}
+
+export function measureMatchesDetailCell(kind: MeasureKind, field: DetailField, row: ProductionQuantityDetail, unit: string): boolean {
+  if (!formulaFields(detailFormula(row)).includes(field)) return false;
+  if (field === 'multiplier') return kind === 'count';
+  if (field === 'dimensionC' || field === 'dimensionD') return kind === 'length';
+  if (detailFormula(row) !== 'A*B') return kind === 'length';
+  return measureMatchesUnit(kind, unit);
 }
 
 export function measureMatchesUnit(kind: MeasureKind, unit: string): boolean {
