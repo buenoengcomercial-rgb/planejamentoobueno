@@ -18,6 +18,7 @@ import { getAllTasks } from '@/data/sampleProject';
 import { updateProjectTask } from '@/lib/taskTree';
 import { applyDailyProductionLogs } from '@/lib/dailyProductionLogs';
 import { validateDailyProductionLogs } from '@/lib/productionQuantityLimit';
+import { submitMeasurementForReview } from '@/lib/measurementReview';
 
 export interface UseMeasurementActionsParams {
   project: Project;
@@ -402,6 +403,37 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
     toast({ title: 'Medição reenviada para fiscalização' });
   };
 
+  const sendForReview = () => {
+    if (!activeMeasurement) return;
+    const frozenItems: MeasurementSnapshotItem[] = rows.map(r => ({
+      item: r.item,
+      phaseId: r.phaseId,
+      phaseChain: r.phaseChain,
+      taskId: r.taskId,
+      description: r.description,
+      unit: r.unit,
+      itemCode: r.itemCode,
+      priceBank: r.priceBank,
+      qtyContracted: r.qtyContracted,
+      unitPriceNoBDI: r.unitPriceNoBDI,
+      unitPriceWithBDI: r.unitPriceWithBDI,
+      qtyProposed: r.qtyPeriod,
+      qtyPriorAccum: r.qtyPriorAccum,
+      notes: r.notes,
+    }));
+    const latest = projectRef.current;
+    const updated = submitMeasurementForReview(
+      latest,
+      activeMeasurement.id,
+      frozenItems,
+      buildDailyReportSnapshot(dailyReportsSummary),
+      auditUser,
+    );
+    if (updated === latest) return;
+    projectRef.current = updated;
+    onProjectChange(updated);
+  };
+
   const setStatus = (next: MeasurementStatus) => {
     if (!activeMeasurement) return;
     const previous = activeMeasurement.status;
@@ -476,6 +508,7 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
     generateMeasurement,
     unlockForEdit,
     resendForReview,
+    sendForReview,
     setStatus,
     deleteMeasurement,
     newMeasurementDraft,
