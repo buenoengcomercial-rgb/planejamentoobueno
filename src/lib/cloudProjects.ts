@@ -14,6 +14,7 @@ import {
   setCloudSnapshot,
   buildContractImportPayload,
   assertProjectSnapshotAvailable,
+  assertNoUnsafeCriticalCollectionChanges,
 } from '@/lib/projectSync';
 import type { ProjectCollectionKey } from '@/lib/projectDataScope';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
@@ -223,6 +224,7 @@ export async function upsertCloudProject(project: Project, organizationId: strin
       if ((error as { code?: string })?.code === 'P0002') throw new CloudProjectConflictError();
       throw error;
     }
+    assertNoUnsafeCriticalCollectionChanges(project);
     const { data, error } = await supabase
       .from('projects')
       .update({
@@ -256,6 +258,7 @@ export async function upsertCloudProject(project: Project, organizationId: strin
   if (existingError) throw existingError;
   const isNewProject = !existing;
   if (!isNewProject) assertProjectSnapshotAvailable(project.id);
+  assertNoUnsafeCriticalCollectionChanges(project);
   if (isNewProject && project.contractSchemaVersion === 2) {
     const contractPayload = buildContractImportPayload(project);
     const { data, error } = await (supabase.rpc as unknown as (

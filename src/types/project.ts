@@ -246,6 +246,8 @@ export interface DailyProductionLog {
   date: string;            // ISO yyyy-mm-dd
   plannedQuantity: number;
   actualQuantity: number;
+  /** Identifica o lançamento manual de um período da Medição sem usar um ID inválido no banco. */
+  measurementManualPeriod?: string;
   notes?: string;
   /** Horas efetivamente apontadas por funcao ou trabalhador. */
   laborEntries?: DailyLaborEntry[];

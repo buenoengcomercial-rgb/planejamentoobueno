@@ -87,4 +87,49 @@ describe('transação de Produção', () => {
       p_audit_insert: [expect.objectContaining({ id: 'audit-1' })],
     }));
   });
+
+  it('bloqueia exclusão silenciosa e troca de vínculo de apontamentos existentes', async () => {
+    const original = { ...base, phases: base.phases.map(phase => ({ ...phase,
+      tasks: phase.tasks.map(task => ({ ...task, dailyLogs: [
+        { id: 'log-guarded', date: '2026-09-21', plannedQuantity: 4, actualQuantity: 2 },
+      ] })),
+    })) } as Project;
+    setCloudSnapshot(base.id, original);
+    const erased = { ...original, phases: original.phases.map(phase => ({ ...phase,
+      tasks: phase.tasks.map(task => ({ ...task, dailyLogs: [] })),
+    })) } as Project;
+    await expect(syncProductionAtomically(erased, stripNormalizedCollections(erased), 'org-1', '2026-10-01T00:00:00Z'))
+      .rejects.toThrow('não foi autorizada');
+    const rekeyed = { ...original, phases: original.phases.map(phase => ({ ...phase,
+      tasks: [{ ...phase.tasks[0], id: 'new-task', dailyLogs: phase.tasks[0].dailyLogs }],
+    })) } as Project;
+    await expect(syncProductionAtomically(rekeyed, stripNormalizedCollections(rekeyed), 'org-1', '2026-10-01T00:00:00Z'))
+      .rejects.toThrow('mudou de tarefa');
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('recusa a exclusão de vários apontamentos em um único salvamento', async () => {
+    const original = { ...base, phases: base.phases.map(phase => ({ ...phase,
+      tasks: phase.tasks.map(task => ({ ...task, dailyLogs: [
+        { id: 'log-a', date: '2026-09-21', plannedQuantity: 2, actualQuantity: 1 },
+        { id: 'log-b', date: '2026-09-22', plannedQuantity: 2, actualQuantity: 1 },
+      ] })),
+    })) } as Project;
+    setCloudSnapshot(base.id, original);
+    const removed = { ...original, phases: original.phases.map(phase => ({ ...phase,
+      tasks: phase.tasks.map(task => ({ ...task, dailyLogs: [] })),
+    })) } as Project;
+    await expect(syncProductionAtomically(removed, stripNormalizedCollections(removed), 'org-1', '2026-10-01T00:00:00Z'))
+      .rejects.toThrow('em lote');
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('não confirma o snapshot quando há conflito de versão na transação', async () => {
+    setCloudSnapshot(base.id, base);
+    const revised = { ...base, phases: base.phases.map(phase => ({ ...phase, name: 'Revisado' })) } as Project;
+    rpc.mockResolvedValue({ data: null, error: { code: 'P0002', message: 'Versão antiga' } });
+    await expect(syncProductionAtomically(revised, stripNormalizedCollections(revised), 'org-1', 'versão-antiga'))
+      .rejects.toMatchObject({ code: 'P0002' });
+    expect(rpc).toHaveBeenCalledTimes(1);
+  });
 });

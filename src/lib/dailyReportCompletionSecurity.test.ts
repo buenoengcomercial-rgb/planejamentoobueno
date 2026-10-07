@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const migrationSql = readFileSync(
   resolve(process.cwd(), 'supabase/migrations/20260912200000_harden_daily_reports_and_subcontracts_rls.sql'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 const dailyReportComponent = readFileSync(
   resolve(process.cwd(), 'src/components/DailyReport.tsx'),
   'utf8',

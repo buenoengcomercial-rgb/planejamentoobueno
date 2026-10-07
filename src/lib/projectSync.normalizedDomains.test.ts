@@ -87,7 +87,11 @@ describe('transações por domínio normalizado', () => {
     expect(await save(mixed)).toBeNull();
     expect(rpc).not.toHaveBeenCalled();
 
-    const measurement = { ...base, measurements: [{ ...base.measurements![0], status: 'approved' }] } as Project;
+    const measurement = { ...base,
+      measurements: [{ ...base.measurements![0], status: 'approved' }],
+      auditLogs: [{ id: 'audit-approval', entityType: 'measurement', entityId: 'measurement-1',
+        action: 'approved', at: '2026-09-30T23:00:00Z', title: 'Medição aprovada' }],
+    } as Project;
     rpc.mockResolvedValue({ data: null, error: { code: 'PGRST202' } });
     expect(await save(measurement)).toBeNull();
   });
@@ -98,6 +102,36 @@ describe('transações por domínio normalizado', () => {
       budgetItems: Array.from({ length: 502 }, (_, index) => ({ id: `item-${index}`, item: `Insumo ${index}` })),
     } as Project;
     expect(await save(imported)).toBeNull();
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('exige ação auditada para excluir medição e usa uma transação', async () => {
+    setCloudSnapshot(base.id, base);
+    const removed = { ...base, measurements: [] } as Project;
+    await expect(save(removed)).rejects.toThrow('não foi autorizada');
+    expect(rpc).not.toHaveBeenCalled();
+
+    const explicit = { ...removed, auditLogs: [{ id: 'audit-delete', entityType: 'measurement',
+      entityId: 'measurement-1', action: 'deleted', at: '2026-10-07T00:00:00Z', title: 'Medição excluída' }] } as Project;
+    rpc.mockResolvedValue({ data: '2026-10-07T00:00:01Z', error: null });
+    expect(await save(explicit)).toBe('2026-10-07T00:00:01Z');
+    expect(rpc).toHaveBeenCalledWith('save_normalized_domain', expect.objectContaining({
+      p_domain: 'measurement',
+      p_changes: [{ table: 'measurements', upserts: [], deletes: ['measurement-1'] }],
+    }));
+  });
+
+  it('bloqueia exclusão em lote de medições mesmo se a tela anexar auditoria', async () => {
+    const original = { ...base, measurements: [base.measurements![0],
+      { id: 'measurement-2', number: 2, status: 'generated' }] } as Project;
+    setCloudSnapshot(base.id, original);
+    const removed = { ...original, measurements: [], auditLogs: [
+      { id: 'audit-delete-1', entityType: 'measurement', entityId: 'measurement-1',
+        action: 'deleted', at: '2026-10-07T00:00:00Z', title: 'Exclusão 1' },
+      { id: 'audit-delete-2', entityType: 'measurement', entityId: 'measurement-2',
+        action: 'deleted', at: '2026-10-07T00:00:00Z', title: 'Exclusão 2' },
+    ] } as Project;
+    await expect(save(removed)).rejects.toThrow('em lote');
     expect(rpc).not.toHaveBeenCalled();
   });
 });

@@ -159,7 +159,10 @@ function routineActivityForTask(
   const schedule = taskSchedule(task, calendar);
   const scheduledWeight = schedule.workDays.get(date) ?? 0;
   const completionDate = completionDateForTask(task);
-  if (!includeOutsideSchedule && (completionDate ? completionDate !== date : scheduledWeight <= 0)) return null;
+  // Um apontamento fora do cronograma continua pertencendo ao histórico da
+  // semana. Para tarefas concluídas, conserva-se só o dia da conclusão.
+  const hasRecordedLog = (task.dailyLogs ?? []).some(log => log.date === date);
+  if (!includeOutsideSchedule && (completionDate ? completionDate !== date : scheduledWeight <= 0 && !hasRecordedLog)) return null;
   const chapter = chapterByTask.get(task.id);
   return {
     taskId: task.id,

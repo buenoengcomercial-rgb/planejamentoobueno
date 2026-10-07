@@ -13,6 +13,8 @@ import {
   mergeHydratedProjectCollections,
   ProjectHydrationError,
   syncCollectionsToCloud,
+  setCloudSnapshot,
+  assertNoUnsafeCriticalCollectionChanges,
 } from '@/lib/projectSync';
 import type { Project } from '@/types/project';
 
@@ -51,7 +53,10 @@ beforeEach(() => {
   methodCalls.length = 0;
   fromMock.mockImplementation((table: string) => {
     const result = resultsByTable.get(table) ?? { data: [], error: null };
-    const settled = Promise.resolve(result);
+    const settled = Promise.resolve(result).then(response => ({
+      ...response,
+      count: response.count ?? response.data?.length ?? 0,
+    }));
     const builder = {
       select: vi.fn(),
       eq: vi.fn(),
@@ -87,6 +92,72 @@ beforeEach(() => {
 });
 
 describe('hidratação progressiva da obra', () => {
+  it('paginar Medições até conferir todas as 501 linhas', async () => {
+    const current = project('measurements-complete-page');
+    const measurements = Array.from({ length: 501 }, (_, index) => ({
+      id: `measurement-${String(index).padStart(4, '0')}`,
+      data: { id: `measurement-${String(index).padStart(4, '0')}`, number: index + 1 },
+    }));
+    const seen: Array<string | undefined> = [];
+    fromMock.mockImplementation((table: string) => {
+      expect(table).toBe('measurements');
+      let afterId: string | undefined;
+      const query = {
+        select: vi.fn(), eq: vi.fn(), order: vi.fn(), limit: vi.fn(), gt: vi.fn((_: string, id: string) => {
+          afterId = id; return query;
+        }),
+        then: (resolve: (result: MockQueryResult) => unknown) => {
+          seen.push(afterId);
+          const remaining = measurements.filter(row => !afterId || row.id > afterId);
+          return Promise.resolve(resolve({ data: remaining.slice(0, 500), error: null, count: remaining.length }));
+        },
+      };
+      for (const method of [query.select, query.eq, query.order, query.limit]) method.mockReturnValue(query);
+      return query;
+    });
+    const hydrated = await hydrateProjectFromCloud(current, { collections: ['measurements'], strict: true });
+    expect(hydrated.measurements).toHaveLength(501);
+    expect(seen).toEqual([undefined, 'measurement-0499', undefined]);
+  });
+
+  it('rejeita apontamentos quando a contagem indica carga parcial', async () => {
+    const current = project('logs-partial-page');
+    resultsByTable.set('task_daily_logs', { data: [{ id: 'log-1', task_id: 'task-1', data: {
+      id: 'log-1', date: '2026-09-21', actualQuantity: 1,
+    } }], count: 2, error: null });
+    await expect(hydrateProjectFromCloud(current, { collections: ['taskDailyLogs'], strict: true }))
+      .rejects.toMatchObject({ name: ProjectHydrationError.name, collections: ['taskDailyLogs'] });
+    expect(getLoadedProjectCollections(current.id)).toEqual([]);
+  });
+
+  it('bloqueia o salvamento genérico quando outra tela perdeu listas críticas', async () => {
+    const before = { ...project('critical-generic-guard'),
+      phases: [{ id: 'phase-1', name: 'Capítulo', tasks: [{ id: 'task-1', name: 'Serviço', dailyLogs: [
+        { id: 'log-1', date: '2026-09-21', plannedQuantity: 2, actualQuantity: 1 },
+      ] }] }],
+      measurements: [{ id: 'meas-1', number: 1, status: 'generated' }],
+    } as Project;
+    setCloudSnapshot(before.id, before);
+    const partial = { ...before, phases: [{ ...before.phases[0], tasks: [
+      { ...before.phases[0].tasks[0], dailyLogs: [] },
+    ] }], measurements: [] } as Project;
+    expect(() => assertNoUnsafeCriticalCollectionChanges(partial)).toThrow('transação específica');
+    await expect(syncCollectionsToCloud(partial, 'user-1')).rejects.toThrow('transação específica');
+    expect(methodCalls).toEqual([]);
+  });
+
+  it('não permite que uma importação troque o ID da tarefa de um apontamento', () => {
+    const before = { ...project('critical-task-link'), phases: [{ id: 'phase-1', name: 'Capítulo', tasks: [
+      { id: 'task-1', name: 'Serviço', dailyLogs: [
+        { id: 'log-1', date: '2026-09-21', plannedQuantity: 2, actualQuantity: 1 },
+      ] },
+    ] }] } as Project;
+    setCloudSnapshot(before.id, before);
+    const imported = { ...before, phases: [{ ...before.phases[0], tasks: [
+      { ...before.phases[0].tasks[0], id: 'task-imported', dailyLogs: [] },
+    ] }] } as Project;
+    expect(() => assertNoUnsafeCriticalCollectionChanges(imported)).toThrow('tarefa original');
+  });
   it.each([501, 2001])('carrega %i movimentos antes de confirmar o saldo', async movementCount => {
     const current = project(`warehouse-movements-paginated-${movementCount}`);
     clearCloudSnapshot(current.id);
@@ -228,7 +299,7 @@ describe('hidratação progressiva da obra', () => {
 
     expect(fromMock.mock.calls.map(([table]) => table)).toEqual([
       'daily_reports',
-      'audit_logs',
+      'audit_logs', 'audit_logs',
     ]);
     expect(getLoadedProjectCollections(current.id)).toEqual([]);
     expect(getHydratedProjectCollections(hydrated)).toEqual([
@@ -294,6 +365,41 @@ describe('hidratação progressiva da obra', () => {
     expect(merged.phases).toEqual(current.phases);
     confirmHydratedProjectCollections(hydrated);
     expect(getLoadedProjectCollections(current.id)).toEqual([]);
+  });
+
+  it('preserva apontamentos ao atualizar a EAP sem carregar a tabela de produção', async () => {
+    const log = { id: 'log-1', date: '2026-09-21', plannedQuantity: 2, actualQuantity: 1 };
+    const childLog = { ...log, id: 'log-child' };
+    const current = {
+      ...project('eap-keeps-daily-logs'),
+      phases: [{ id: 'chapter-1', name: 'Capítulo antigo', tasks: [
+        { id: 'task-1', name: 'Tarefa antiga', dailyLogs: [log], children: [
+          { id: 'child-1', name: 'Subtarefa', dailyLogs: [childLog] },
+        ] },
+      ] }],
+    } as Project;
+    clearCloudSnapshot(current.id);
+    resultsByTable.set('eap_chapters', { data: [{
+      id: 'chapter-1', parent_id: null, order_index: 0, data: { name: 'Capítulo atualizado' },
+    }], error: null });
+    resultsByTable.set('tasks', { data: [
+      { id: 'task-1', chapter_id: 'chapter-1', parent_task_id: null, order_index: 0, data: { name: 'Tarefa atualizada' } },
+      { id: 'child-1', chapter_id: 'chapter-1', parent_task_id: 'task-1', order_index: 0, data: { name: 'Subtarefa' } },
+    ], error: null });
+
+    const hydrated = await hydrateProjectFromCloud(current, { collections: ['eapChapters'], strict: true });
+    const merged = mergeHydratedProjectCollections(current, hydrated, getHydratedProjectCollections(hydrated));
+    expect(merged.phases[0].name).toBe('Capítulo atualizado');
+    expect(merged.phases[0].tasks[0].name).toBe('Tarefa atualizada');
+    expect(merged.phases[0].tasks[0].dailyLogs).toEqual([log]);
+    expect(merged.phases[0].tasks[0].children?.[0].dailyLogs).toEqual([childLog]);
+    expect(getChangedProjectCollections(current, merged)).not.toContain('taskDailyLogs');
+
+    const withLogs = await hydrateProjectFromCloud(current, {
+      collections: ['eapChapters', 'taskDailyLogs'], strict: true,
+    });
+    const confirmedEmptyLogs = mergeHydratedProjectCollections(current, withLogs, getHydratedProjectCollections(withLogs));
+    expect(confirmedEmptyLogs.phases[0].tasks[0].dailyLogs).toEqual([]);
   });
 
   it('hidratações sucessivas acumulam somente os escopos confirmados', async () => {
