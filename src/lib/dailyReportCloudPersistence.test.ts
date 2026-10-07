@@ -58,4 +58,17 @@ describe('salvamento realista do Diário normalizado', () => {
     await expect(saveOpenDailyReport('project', base, local)).rejects.toBeInstanceOf(DailyReportLockedError);
     expect(writes).toEqual([]);
   });
+  it('permite encaminhar reabertura explícita do proprietário para validação do banco', async () => {
+    const locked = { ...base, concludedAt: '2026-09-10T12:00:00Z' };
+    const reopened = { ...base, conclusionHistory: [{ action: 'reaberto', at: 'now', by: 'owner' }] } as DailyReport;
+    const writes = mockResponses(response(row(locked)), response({ data: reopened }));
+    await expect(saveOpenDailyReport('project', locked, base)).resolves.toEqual({ report: reopened, conflicts: [] });
+    expect(writes).toEqual(['update']);
+  });
+  it('não apaga um Diário alterado em outro aparelho ao limpar a cópia antiga', async () => {
+    const remote = { ...base, observations: 'Registro novo do outro aparelho' };
+    const writes = mockResponses(response(row(remote, 'v2')));
+    await expect(saveOpenDailyReport('project', base, { ...base, observations: '' })).rejects.toThrow('mudou em outro aparelho');
+    expect(writes).toEqual([]);
+  });
 });

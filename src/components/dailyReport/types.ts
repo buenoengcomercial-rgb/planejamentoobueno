@@ -26,8 +26,9 @@ export interface DailyReportProps {
   undoButton?: React.ReactNode;
   /** Mantém consulta, impressão e navegação disponíveis, sem expor controles de edição. */
   readOnly?: boolean;
-  /** Somente o Proprietário pode concluir ou reabrir um Diário. */
-  canManageConclusion?: boolean;
+  /** Proprietário e Engenheiro podem concluir; somente Proprietário pode reabrir. */
+  canConclude?: boolean;
+  canReopen?: boolean;
   /** Limpar um Diário inteiro remove dados e continua reservado à gestão. */
   canClearDay?: boolean;
   /** Nome da pessoa autenticada, salvo nas novas fotos enviadas ao Diário. */

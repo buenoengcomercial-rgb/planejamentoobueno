@@ -312,6 +312,7 @@ export default function Index() {
   const [partialSyncRetrying, setPartialSyncRetrying] = useState(false);
   const [saveRetryTick, setSaveRetryTick] = useState(0);
   const [draftConflictProjectId, setDraftConflictProjectId] = useState<string | null>(null);
+  const [diaryConflictDismissed, setDiaryConflictDismissed] = useState(false);
   const [draftConflictResolving, setDraftConflictResolving] = useState(false);
   const [recoveredDraftSaveRevision, setRecoveredDraftSaveRevision] = useState(0);
   const { confirm: confirmDiscardPendingForm, dialog: pendingFormDialog } = useConfirmDelete();
@@ -1174,6 +1175,7 @@ export default function Index() {
     const stored = writeProtectedProjectDraft(localProject, baseUpdatedAt);
     conflictingDraftRef.current = { project: localProject, baseUpdatedAt };
     setDraftConflictProjectId(localProject.id);
+    setDiaryConflictDismissed(false);
     setSaveStatus(stored ? 'conflict' : 'error');
     if (stored) {
       toast.error('A obra mudou em outro aparelho. Sua cópia local foi preservada para uma decisão explícita.');
@@ -1238,7 +1240,7 @@ export default function Index() {
   }, [retryPendingPartialSync]);
 
   const downloadConflictingDraft = useCallback(() => {
-    if (!draftConflictProjectId) return;
+    if (!draftConflictProjectId) return false;
     const storedDraft = readStoredProjectDraft(draftConflictProjectId);
     const inMemoryDraft = conflictingDraftRef.current?.project.id === draftConflictProjectId
       ? conflictingDraftRef.current
@@ -1251,7 +1253,7 @@ export default function Index() {
     } : null);
     if (!draft) {
       toast.error('A cópia local não está mais disponível neste navegador.');
-      return;
+      return false;
     }
     const blob = new Blob([JSON.stringify(draft, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1263,6 +1265,7 @@ export default function Index() {
     anchor.remove();
     URL.revokeObjectURL(url);
     toast.success('Cópia local baixada.');
+    return true;
   }, [draftConflictProjectId]);
 
   const discardConflictingDraft = useCallback(async () => {
@@ -1284,6 +1287,7 @@ export default function Index() {
       conflictDetectedRef.current = false;
       conflictingDraftRef.current = null;
       setDraftConflictProjectId(null);
+      setDiaryConflictDismissed(false);
       replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, false, record.warehouseVersion);
       toast.success('A versão confirmada na nuvem foi carregada. A cópia local pendente foi descartada.');
     } catch (error) {
@@ -2261,13 +2265,8 @@ export default function Index() {
         const message = error instanceof Error ? error.message : 'Não foi possível salvar o Diário. Nenhuma alteração foi confirmada.';
         setDailyReportSaveErrors(errors => ({ ...errors, [date]: message }));
         setSaveStatus(navigator.onLine ? 'error' : 'offline');
-        const newPaths = (expectedLocal.attachments ?? [])
-          .filter(attachment => !(base.attachments ?? []).some(previous => previous.id === attachment.id))
-          .map(attachment => attachment.storagePath)
-          .filter((path): path is string => !!path);
-        if (newPaths.length > 0) {
-          await supabase.storage.from('daily-report-photos').remove(newPaths).catch(() => undefined);
-        }
+        // Uma falha da gravação do Diário não autoriza apagar os arquivos já
+        // recebidos pelo Storage: eles podem ser a única cópia das fotos.
         const confirmed = await loadOpenDailyReport(after.id, date).catch(() => null);
         lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, date, confirmed ?? base);
         setRawProject(current => {
@@ -2305,7 +2304,7 @@ export default function Index() {
         toast.error('Conecte-se à internet para editar o Diário de Obra.');
         return;
       }
-      if (conflictDetectedRef.current) {
+      if (conflictDetectedRef.current && view !== 'dailyReport') {
         toast.error('A sincronização com a nuvem ainda não foi concluída. Recarregue a obra antes de editar.');
         return;
       }
@@ -3190,7 +3189,8 @@ export default function Index() {
               onDailyReportChange={dailyReportSetter}
               productionReadOnly={!editor}
               dailyReportReadOnly={!dailyReportEditor}
-              dailyReportCanManageConclusion={role === 'owner'}
+              dailyReportCanConclude={role === 'owner' || role === 'engineer'}
+              dailyReportCanReopen={role === 'owner'}
               dailyReportCanClearDay={editor}
               dailyReportPhotoUploaderName={auditActor.userName}
               productionUndoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />}
@@ -3215,7 +3215,8 @@ export default function Index() {
             onDailyReportChange={dailyReportSetter}
             productionReadOnly={!editor}
             dailyReportReadOnly={!dailyReportEditor}
-            dailyReportCanManageConclusion={role === 'owner'}
+            dailyReportCanConclude={role === 'owner' || role === 'engineer'}
+            dailyReportCanReopen={role === 'owner'}
             dailyReportCanClearDay={editor}
             dailyReportPhotoUploaderName={auditActor.userName}
             productionUndoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />}
@@ -3416,13 +3417,23 @@ export default function Index() {
 
       {orgId && <MigrationDialog organizationId={orgId} onMigrated={async () => { await refreshCloudList(); }} />}
 
-      {draftConflictProjectId === rawProject.id && (
+      {draftConflictProjectId === rawProject.id && diaryConflictDismissed && (
+        <div role="alert" className="fixed bottom-4 left-4 right-4 z-40 flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/50 bg-background p-3 text-sm shadow-lg sm:right-auto sm:max-w-xl">
+          <span>Há uma cópia local pendente. O Diário pode ser salvo separadamente; os demais dados ainda exigem reconciliação.</span>
+          <Button type="button" size="sm" variant="outline" onClick={() => setDiaryConflictDismissed(false)}>Ver cópia pendente</Button>
+        </div>
+      )}
+      {draftConflictProjectId === rawProject.id && !diaryConflictDismissed && (
         <Suspense fallback={null}>
           <CloudDraftConflictDialog
             open
             resolving={draftConflictResolving}
             onDownload={downloadConflictingDraft}
             onDiscard={discardConflictingDraft}
+            onContinueDailyReport={dailyReportEditor ? () => {
+              setCurrentView('dailyReport');
+              setDiaryConflictDismissed(true);
+            } : undefined}
           />
         </Suspense>
       )}
