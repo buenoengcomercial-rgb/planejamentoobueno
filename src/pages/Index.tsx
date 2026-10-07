@@ -718,11 +718,12 @@ export default function Index() {
     };
   }, [currentView, rawProject?.id]);
 
+  const restoreProjectId = rawProject?.id;
   useEffect(() => {
-    if (bootLoading || !rawProject) return;
+    if (bootLoading || !restoreProjectId) return;
     const session = readAppUiSession();
-    if (!session || (session.projectId && session.projectId !== rawProject.id)) return;
-    const restoreKey = `${rawProject.id}:${session.view ?? 'none'}:${session.updatedAt}`;
+    if (!session || (session.projectId && session.projectId !== restoreProjectId)) return;
+    const restoreKey = `${restoreProjectId}:${session.view ?? 'none'}:${session.updatedAt}`;
     if (restoredUiSessionRef.current === restoreKey) return;
 
     if (!routeView && session.view && session.view !== currentView && (!role || canAccessAppView(role, session.view))) {
@@ -744,7 +745,7 @@ export default function Index() {
         });
       }
     });
-  }, [bootLoading, currentView, rawProject, role, routeView]);
+  }, [bootLoading, currentView, restoreProjectId, role, routeView]);
 
   const refreshCloudList = useCallback(async (): Promise<CloudProjectMeta[]> => {
     const list = await listCloudProjects();
