@@ -26,6 +26,7 @@ import { registerPendingForm } from '@/lib/pendingFormNavigation';
 
 const ImportSyntheticDialog = lazyWithReload(() => import('@/components/ImportSyntheticDialog'));
 const collapsedPhasesStorageKey = (projectId: string) => `obraplanner:production:collapsed-phases:${projectId}`;
+const hasDailyLogs = (task: Task): boolean => !!task.dailyLogs?.length || !!task.children?.some(hasDailyLogs);
 
 function readCollapsedPhases(project: Project): string[] {
   try {
@@ -310,6 +311,11 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
   };
 
   const deletePhase = (phaseId: string) => {
+    const phase = project.phases.find(item => item.id === phaseId);
+    if (phase?.tasks.some(hasDailyLogs)) {
+      toast.error('Capítulo com apontamentos: exclua os registros individualmente antes de remover as tarefas.');
+      return;
+    }
     // Ao excluir um capítulo principal, promove os subcapítulos para principais
     onProjectChange({
       ...project,
@@ -601,6 +607,10 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
   const deleteTask = (phaseId: string, taskId: string) => {
     const before = project.phases.find(phase => phase.id === phaseId)?.tasks.find(task => task.id === taskId);
     if (!before) return;
+    if (hasDailyLogs(before)) {
+      toast.error('Tarefa com apontamentos: exclua os registros individualmente antes de remover a tarefa.');
+      return;
+    }
     const updated = {
       ...project,
       phases: project.phases.map(p =>

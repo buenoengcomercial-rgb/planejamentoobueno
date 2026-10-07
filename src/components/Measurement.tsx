@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useMemo, useState, type MouseEvent } from 'react';
 import { Project } from '@/types/project';
 import {
   fmtDateBR,
@@ -16,7 +16,7 @@ import MeasurementTotals from '@/components/measurement/MeasurementTotals';
 import MeasurementTable from '@/components/measurement/MeasurementTable';
 import type { MeasurementDetailSelection } from '@/components/measurement/MeasurementDetailFooter';
 import { useAuth } from '@/hooks/useAuth';
-import { userInfoFromSupabaseUser } from '@/lib/audit';
+import { logToProject, userInfoFromSupabaseUser } from '@/lib/audit';
 import AuditHistoryPanel from '@/components/AuditHistoryPanel';
 import { useMeasurementExports } from '@/hooks/useMeasurementExports';
 import { useMeasurementState } from '@/hooks/useMeasurementState';
@@ -262,7 +262,6 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
 
   // ───────── Sincronização das datas das medições com o Gantt ─────────
   const ganttStart = useMemo(() => getProjectGanttStartDate(project), [project]);
-  const lastSyncedGanttStartRef = useRef<string | undefined>(ganttStart);
   const [confirmForceSync, setConfirmForceSync] = useState(false);
   const [pendingProtectedCount, setPendingProtectedCount] = useState(0);
 
@@ -272,7 +271,19 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
       toast({ title: 'Datas já estão sincronizadas com o Gantt' });
       return;
     }
-    onProjectChange(result.project);
+    let audited = result.project;
+    for (const next of result.project.measurements ?? []) {
+      const before = projectRef.current.measurements?.find(measurement => measurement.id === next.id);
+      if (!before || (before.startDate === next.startDate && before.endDate === next.endDate)) continue;
+      audited = logToProject(audited, {
+        ...auditUser, entityType: 'measurement', entityId: next.id, action: 'updated',
+        title: `Período da Medição nº ${next.number} sincronizado com o Gantt`,
+        before: { startDate: before.startDate, endDate: before.endDate },
+        after: { startDate: next.startDate, endDate: next.endDate },
+      });
+    }
+    projectRef.current = audited;
+    onProjectChange(audited);
     if (activeId === 'live' && result.project.measurementDraft) {
       setStartDate(result.project.measurementDraft.startDate);
       setEndDate(result.project.measurementDraft.endDate);
@@ -295,21 +306,8 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
     applySync(false);
   };
 
-  // Auto-sincronização quando a data inicial do Gantt muda
-  useEffect(() => {
-    if (!ganttStart) return;
-    if (lastSyncedGanttStartRef.current === ganttStart) return;
-    lastSyncedGanttStartRef.current = ganttStart;
-    const result = syncMeasurementDatesWithGantt(projectRef.current, { force: false });
-    if (result.changed) {
-      onProjectChange(result.project);
-      if (activeId === 'live' && result.project.measurementDraft) {
-        setStartDate(result.project.measurementDraft.startDate);
-        setEndDate(result.project.measurementDraft.endDate);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ganttStart]);
+  // Uma alteração no Cronograma não reescreve medições salvas. A sincronização
+  // de períodos permanece disponível exclusivamente pelo botão explícito.
 
   // ───────── EXPORT XLSX / PDF (extraído para useMeasurementExports) ─────────
   const { exportXLSX, handlePrint } = useMeasurementExports({

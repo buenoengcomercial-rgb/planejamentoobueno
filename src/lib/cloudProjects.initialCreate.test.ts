@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   setCloudSnapshot: vi.fn(),
   buildContractImportPayload: vi.fn(),
   assertProjectSnapshotAvailable: vi.fn(),
+  assertNoUnsafeCriticalCollectionChanges: vi.fn(),
 }));
 
 vi.mock('@/integrations/supabase/client', () => ({
@@ -44,6 +45,7 @@ vi.mock('@/lib/projectSync', () => ({
   setCloudSnapshot: mocks.setCloudSnapshot,
   buildContractImportPayload: mocks.buildContractImportPayload,
   assertProjectSnapshotAvailable: mocks.assertProjectSnapshotAvailable,
+  assertNoUnsafeCriticalCollectionChanges: mocks.assertNoUnsafeCriticalCollectionChanges,
 }));
 
 import {

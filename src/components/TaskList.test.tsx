@@ -163,7 +163,7 @@ describe('TaskList', () => {
     });
   });
 
-  it('registra a tarefa e apontamentos anteriores ao excluir', () => {
+  it('impede excluir uma tarefa que ainda tem apontamentos', () => {
     const onProjectChange = vi.fn();
     const existingLog = { id: 'log-1', date: '2026-09-30', plannedQuantity: 1, actualQuantity: 0.5 };
     const withLog = {
@@ -173,13 +173,7 @@ describe('TaskList', () => {
     render(<TooltipProvider><TaskList project={withLog} onProjectChange={onProjectChange} /></TooltipProvider>);
     fireEvent.click(screen.getByTitle('Excluir tarefa'));
     fireEvent.click(screen.getByRole('button', { name: 'Excluir tarefa' }));
-    const saved = onProjectChange.mock.calls[0][0] as Project;
-    expect(saved.phases[0].tasks).toHaveLength(0);
-    expect(saved.auditLogs?.[0]).toMatchObject({
-      entityType: 'task', action: 'deleted',
-      before: expect.objectContaining({ id: 'task-1', dailyLogs: [existingLog] }),
-      metadata: { phaseId: 'phase-1', removedLogIds: ['log-1'] },
-    });
+    expect(onProjectChange).not.toHaveBeenCalled();
   });
 
   it('localiza tarefas dentro de capítulo recolhido sem salvar ou reordenar a EAP', () => {

@@ -70,6 +70,22 @@ describe('weeklyRoutine', () => {
     }]);
   });
 
+  it('mostra na rotina um apontamento real feito fora da data programada', () => {
+    const loggedOutsideSchedule = {
+      ...project,
+      phases: [{ ...project.phases[0], tasks: [{
+        ...project.phases[0].tasks[0],
+        dailyLogs: [{ id: 'late-log', date: '2026-08-20', plannedQuantity: 10, actualQuantity: 4 }],
+      }] }],
+    } as Project;
+
+    const week = buildWeeklyRoutine(loggedOutsideSchedule, '2026-08-17', new Set(), weekdayCalendar);
+    expect(week.find(day => day.date === '2026-08-20')?.activities).toMatchObject([{
+      taskId: 'task-1', actualQuantity: 4, executedQuantity: 4, completed: false,
+    }]);
+    expect(week.filter(day => day.date !== '2026-08-20').flatMap(day => day.activities)).toHaveLength(0);
+  });
+
   it('mostra a atividade concluída somente na data em que atingiu o contratado', () => {
     const completedProject = {
       ...project,

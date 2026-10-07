@@ -551,6 +551,7 @@ type TaskDataRow = DataRow & {
 };
 type QueryError = { message?: string } | null;
 type QueryResult<T> = { data: T[] | null; error: QueryError };
+type CountedQueryResult<T> = QueryResult<T> & { count: number | null };
 
 async function optionalQuery<T>(
   enabled: boolean,
@@ -559,6 +560,51 @@ async function optionalQuery<T>(
   if (!enabled) return { data: null, error: null };
   const result = await query();
   return { data: result.data, error: result.error };
+}
+
+// Uma resposta HTTP bem-sucedida pode conter só a primeira página do PostgREST.
+// Coleções operacionais só são adotadas quando a contagem exata e todos os IDs
+// foram conferidos. Em caso de falha, o chamador conserva a fotografia anterior.
+const VERIFIED_PAGE_SIZE = 500;
+async function loadVerifiedRows<T extends { id: string }>(
+  query: (afterId?: string) => PromiseLike<CountedQueryResult<T>>,
+): Promise<QueryResult<T>> {
+  try {
+    const rows: T[] = [];
+    const ids = new Set<string>();
+    let lastId: string | undefined;
+    let expectedCount: number | null = null;
+    while (true) {
+      const result = await query(lastId);
+      if (result.error) return { data: null, error: result.error };
+      if (!Number.isSafeInteger(result.count) || result.count! < 0 || !Array.isArray(result.data)) {
+        throw new Error('A consulta não confirmou a contagem completa dos registros.');
+      }
+      // A contagem do PostgREST respeita o filtro `id > lastId`: nas páginas
+      // seguintes ela representa somente os registros ainda não lidos.
+      if (expectedCount === null) expectedCount = result.count;
+      if (expectedCount !== rows.length + result.count) {
+        throw new Error('A coleção mudou durante o carregamento.');
+      }
+      const page = result.data;
+      for (const row of page) {
+        if (!row.id || ids.has(row.id) || (lastId && row.id <= lastId)) {
+          throw new Error('A paginação devolveu IDs repetidos ou fora de ordem.');
+        }
+        ids.add(row.id);
+        rows.push(row);
+      }
+      if (rows.length > expectedCount) throw new Error('A consulta retornou mais registros que a contagem confirmada.');
+      if (page.length < VERIFIED_PAGE_SIZE) break;
+      lastId = page[page.length - 1].id;
+    }
+    if (rows.length !== expectedCount) throw new Error('A consulta devolveu uma coleção parcial.');
+    const check = await query(undefined);
+    if (check.error || check.count !== expectedCount) throw new Error('A coleção mudou antes da confirmação da carga.');
+    return { data: rows, error: null };
+  } catch (error) {
+    return { data: null, error: error as Error };
+  }
 }
 
 // O PostgREST limita a quantidade de linhas devolvidas por consulta. Saldo de
@@ -631,18 +677,38 @@ export async function hydrateProjectFromCloud(
     optionalQuery<DataRow>(wants.has('warehouseRequisitions'), () => supabase.from('warehouse_requisitions').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('warehouseCustody'), () => supabase.from('warehouse_custody').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('dailyReports'), () => supabase.from('daily_reports').select('id, data').eq('project_id', projectId)),
-    optionalQuery<TaskLogDataRow>(wants.has('taskDailyLogs'), () => supabase.from('task_daily_logs').select('id, task_id, data').eq('project_id', projectId)),
-    optionalQuery<DataRow>(wants.has('measurements'), () => supabase.from('measurements').select('id, data').eq('project_id', projectId)),
+    optionalQuery<TaskLogDataRow>(wants.has('taskDailyLogs'), () => loadVerifiedRows(lastId => {
+      const query = supabase.from('task_daily_logs').select('id, task_id, data', { count: 'exact' })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
+    optionalQuery<DataRow>(wants.has('measurements'), () => loadVerifiedRows(lastId => {
+      const query = supabase.from('measurements').select('id, data', { count: 'exact' })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
     optionalQuery<DataRow>(wants.has('additives'), () => supabase.from('additives').select('id, data').eq('project_id', projectId)),
-    optionalQuery<DataRow>(wants.has('auditLogs'), () => supabase.from('audit_logs').select('id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('auditLogs'), () => loadVerifiedRows(lastId => {
+      const query = supabase.from('audit_logs').select('id, data', { count: 'exact' })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
     optionalQuery<DataRow>(wants.has('stockMovements'), () => supabase.from('stock_movements').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('materialPriceHistory'), () => supabase.from('material_price_history').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('budgetItems'), () => supabase.from('budget_items').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('materialComparisons'), () => supabase.from('material_comparisons').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('analyticCompositions'), () => supabase.from('analytic_compositions').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('subcontracts'), () => supabase.from('subcontracts').select('id, data').eq('project_id', projectId)),
-    optionalQuery<ChapterDataRow>(wants.has('eapChapters'), () => supabase.from('eap_chapters').select('id, parent_id, order_index, data').eq('project_id', projectId).order('order_index')),
-    optionalQuery<TaskDataRow>(wants.has('tasks'), () => supabase.from('tasks').select('id, chapter_id, parent_task_id, order_index, data').eq('project_id', projectId).order('order_index')),
+    optionalQuery<ChapterDataRow>(wants.has('eapChapters'), () => loadVerifiedRows(lastId => {
+      const query = supabase.from('eap_chapters').select('id, parent_id, order_index, data', { count: 'exact' })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
+    optionalQuery<TaskDataRow>(wants.has('tasks'), () => loadVerifiedRows(lastId => {
+      const query = supabase.from('tasks').select('id, chapter_id, parent_task_id, order_index, data', { count: 'exact' })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
   ]);
 
   const resultByCollection: Record<ProjectCollectionKey, QueryResult<unknown>> = {
@@ -719,6 +785,20 @@ export async function hydrateProjectFromCloud(
 
   const chapterRows = loadedSet.has('eapChapters') ? (chRes.data ?? []) : null;
   const taskRows = loadedSet.has('tasks') ? (tkRes.data ?? []) : null;
+  if (taskLogs !== null) {
+    const knownTaskIds = new Set<string>();
+    if (taskRows !== null) taskRows.forEach(row => knownTaskIds.add(row.id));
+    else {
+      const walk = (tasks: Task[]) => tasks.forEach(task => {
+        knownTaskIds.add(task.id);
+        walk(task.children ?? []);
+      });
+      (project.phases ?? []).forEach(phase => walk(phase.tasks ?? []));
+    }
+    if (taskLogs.some(({ taskId }) => !knownTaskIds.has(taskId))) {
+      throw new ProjectHydrationError(['taskDailyLogs', 'tasks']);
+    }
+  }
   const logsByTask = new Map<string, DailyProductionLog[]>();
   if (taskLogs !== null) {
     for (const { taskId, log } of taskLogs) {
@@ -819,8 +899,16 @@ export function mergeHydratedProjectCollections(
   if (loaded.has('materialComparisons')) next.materialComparisons = hydrated.materialComparisons;
   if (loaded.has('analyticCompositions')) next.analyticCompositions = hydrated.analyticCompositions;
   if (loaded.has('subcontracts')) next.subcontracts = hydrated.subcontracts;
-  if (loaded.has('eapChapters') || loaded.has('tasks')) next.phases = hydrated.phases;
-  else if (loaded.has('taskDailyLogs')) {
+  if (loaded.has('eapChapters') || loaded.has('tasks')) {
+    if (loaded.has('taskDailyLogs')) next.phases = hydrated.phases;
+    else {
+      // A linha normalizada da tarefa não contém dailyLogs. Atualizar só a EAP
+      // não pode transformar apontamentos já carregados em exclusões no save.
+      const logsByTask = new Map<string, DailyProductionLog[]>();
+      for (const phase of current.phases ?? []) collectTaskLogs(phase.tasks ?? [], logsByTask);
+      next.phases = (hydrated.phases ?? []).map(phase => mapPhaseTasks(phase, logsByTask));
+    }
+  } else if (loaded.has('taskDailyLogs')) {
     const logsByTask = new Map<string, DailyProductionLog[]>();
     for (const phase of hydrated.phases ?? []) collectTaskLogs(phase.tasks ?? [], logsByTask);
     next.phases = (current.phases ?? []).map(phase => mapPhaseTasks(phase, logsByTask, true));
@@ -984,6 +1072,61 @@ function changedRows<T>(previous: Map<string, T>, current: Map<string, T>) {
   return { upserts, deletes };
 }
 
+function hasRowChanges<T>(changes: ReturnType<typeof changedRows<T>>): boolean {
+  return changes.upserts.length > 0 || changes.deletes.length > 0;
+}
+
+function assertProductionLogIntent(
+  previous: Snapshot,
+  next: Snapshot,
+  changes: ReturnType<typeof changedRows<{ taskId: string; log: DailyProductionLog }>>,
+  audit: ReturnType<typeof changedRows<AuditLog>>,
+): void {
+  const events = audit.upserts.map(({ row }) => row);
+  const matches = (id: string, taskId: string, action: string) => events.some(event =>
+    event.entityType === 'task' && event.entityId === taskId && event.action === action
+    && (event.metadata as { logId?: string } | undefined)?.logId === id);
+  for (const [id, row] of next.taskLogs) {
+    if (!next.tasks.has(row.taskId)) throw new Error(`O apontamento ${id} perdeu o vínculo com a tarefa. A gravação foi interrompida.`);
+  }
+  for (const { id, row } of changes.upserts) {
+    const before = previous.taskLogs.get(id);
+    if (before && before.taskId !== row.taskId) {
+      throw new Error(`O apontamento ${id} mudou de tarefa sem reconciliação explícita.`);
+    }
+    if (!matches(id, row.taskId, before ? 'updated' : 'created')) {
+      throw new Error(`O apontamento ${id} mudou sem ação auditada. A gravação foi interrompida.`);
+    }
+  }
+  for (const id of changes.deletes) {
+    const before = previous.taskLogs.get(id)!;
+    if (!matches(id, before.taskId, 'deleted')) {
+      throw new Error(`A exclusão do apontamento ${id} não foi autorizada por ação auditada.`);
+    }
+  }
+}
+
+function assertMeasurementIntent(
+  previous: Snapshot,
+  changes: ReturnType<typeof changedRows<SavedMeasurement>>,
+  audit: ReturnType<typeof changedRows<AuditLog>>,
+): void {
+  const events = audit.upserts.map(({ row }) => row);
+  const allowedUpdates = new Set<AuditLog['action']>(['updated', 'approved', 'rejected', 'submitted_for_review']);
+  for (const { id } of changes.upserts) {
+    const before = previous.measurements.has(id);
+    if (!events.some(event => event.entityType === 'measurement' && event.entityId === id
+      && (before ? allowedUpdates.has(event.action) : event.action === 'created'))) {
+      throw new Error(`A medição ${id} mudou sem ação auditada. A gravação foi interrompida.`);
+    }
+  }
+  for (const id of changes.deletes) {
+    if (!events.some(event => event.entityType === 'measurement' && event.entityId === id && event.action === 'deleted')) {
+      throw new Error(`A exclusão da medição ${id} não foi autorizada por ação auditada.`);
+    }
+  }
+}
+
 /**
  * Confirma a Produção em uma única transação quando ela é o único domínio
  * normalizado alterado. `null` sinaliza que o save geral deve seguir o caminho
@@ -1010,6 +1153,8 @@ export async function syncProductionAtomically(
   const tasks = changedRows(previous.tasks, next.tasks);
   const logs = changedRows(previous.taskLogs, next.taskLogs);
   const audit = changedRows(previous.auditLogs, next.auditLogs);
+  if (logs.deletes.length > 1) throw new Error('Exclusão em lote de apontamentos bloqueada.');
+  assertProductionLogIntent(previous, next, logs, audit);
   const metadataChanged = !shallowEqualJSON(previous.projectData, slim);
   if (audit.deletes.length > 0 || audit.upserts.some(({ id, row }) => previous.auditLogs.has(id) || row.entityType !== 'task')) return null;
   if (chapters.upserts.length + chapters.deletes.length + tasks.upserts.length + tasks.deletes.length
@@ -1112,6 +1257,13 @@ export async function syncNormalizedDomainAtomically(
   if (!domain || audit?.deletes.length) return null;
   const allowed = new Set<ProjectCollectionKey>(DOMAIN_COLLECTIONS[domain]);
   if (changedDomainCollections.some(collection => !allowed.has(collection))) return null;
+  if (domain === 'measurement') {
+    const measurementChanges = changedRows(previous.measurements, next.measurements);
+    if (hasRowChanges(measurementChanges)) {
+      if (measurementChanges.deletes.length > 1) throw new Error('Exclusão em lote de medições bloqueada.');
+      assertMeasurementIntent(previous, measurementChanges, changedRows(previous.auditLogs, next.auditLogs));
+    }
+  }
   if (audit?.upserts.some(({ id, row }) => previous.auditLogs.has(id)
     || (row as AuditLog).entityType !== DOMAIN_AUDIT_TYPE[domain])) return null;
   const batches = DOMAIN_COLLECTIONS[domain].flatMap(collection => {
@@ -1195,6 +1347,7 @@ export async function syncCollectionsToCloud(
   const prev = existingSnapshot ?? emptySnapshot();
   const next = buildSnapshot(project, trackedCollections);
   const tracks = (collection: ProjectCollectionKey) => next.loadedCollections.has(collection);
+  assertNoUnsafeCriticalCollectionChanges(project);
 
   const ops: CloudOperation[] = [];
 
@@ -1211,18 +1364,6 @@ export async function syncCollectionsToCloud(
     ops.push(...diffAndSync('daily_reports', prev.dailyReports, next.dailyReports, projectId, userId, d => ({
       report_date: (d as DailyReport).date,
     }), () => false));
-  }
-  if (tracks('measurements')) {
-    ops.push(...diffAndSync('measurements', prev.measurements, next.measurements, projectId, userId, m => {
-      const meas = m as SavedMeasurement;
-      return {
-        number: meas.number ?? null,
-        status: meas.status ?? null,
-        start_date: meas.startDate ?? null,
-        end_date: meas.endDate ?? null,
-        issue_date: meas.issueDate ?? null,
-      };
-    }));
   }
   if (tracks('additives')) {
     ops.push(...diffAndSync('additives', prev.additives, next.additives, projectId, userId, a => {
@@ -1291,7 +1432,6 @@ export async function syncCollectionsToCloud(
       return { name: subcontract.name, contractor_name: subcontract.contractorName, status: subcontract.status, contract_date: subcontract.contractDate, contracted_value: subcontract.contractedValue };
     }));
   }
-  if (tracks('taskDailyLogs')) ops.push(...diffAndSyncTaskLogs(prev.taskLogs, next.taskLogs, projectId, userId));
   if (tracks('eapChapters')) ops.push(...diffAndSyncEAP('eap_chapters', prev.chapters, next.chapters, projectId, userId));
   if (tracks('tasks')) ops.push(...diffAndSyncEAP('tasks', prev.tasks, next.tasks, projectId, userId));
 
@@ -1317,6 +1457,30 @@ export async function syncCollectionsToCloud(
   }
 
   snapshots.set(projectId, next);
+}
+
+/** Deve rodar antes do PATCH da obra, nunca após uma gravação parcial. */
+export function assertNoUnsafeCriticalCollectionChanges(project: Project): void {
+  const previous = snapshots.get(project.id);
+  if (!previous) {
+    const initial = buildSnapshot(project, ['taskDailyLogs', 'measurements']);
+    if (initial.taskLogs.size || initial.measurements.size) {
+      throw new Error('Importação com histórico de Produção ou Medição exige transação própria antes de criar a obra.');
+    }
+    return;
+  }
+  const next = buildSnapshot(project, [...previous.loadedCollections]);
+  if (previous.loadedCollections.has('taskDailyLogs') && previous.loadedCollections.has('tasks')) {
+    for (const [id, row] of previous.taskLogs) {
+      if (!next.tasks.has(row.taskId)) {
+        throw new Error(`A tarefa original do apontamento ${id} desapareceu. A gravação foi interrompida.`);
+      }
+    }
+  }
+  if ((previous.loadedCollections.has('taskDailyLogs') && hasRowChanges(changedRows(previous.taskLogs, next.taskLogs)))
+    || (previous.loadedCollections.has('measurements') && hasRowChanges(changedRows(previous.measurements, next.measurements)))) {
+    throw new Error('Produção diária ou Medição alterada fora da transação específica. Os dados anteriores foram preservados.');
+  }
 }
 
 function diffAndSync<T extends { id: string }>(
@@ -1377,44 +1541,6 @@ export function normalizedDeletePolicy(
 ): boolean {
   if (table === 'warehouse_requisitions' || table === 'daily_reports' || table === 'audit_logs') return false;
   return item.originType !== 'withdrawal' && item.originType !== 'return';
-}
-
-function diffAndSyncTaskLogs(
-  prev: Map<string, { taskId: string; log: DailyProductionLog }>,
-  next: Map<string, { taskId: string; log: DailyProductionLog }>,
-  projectId: string,
-  userId?: string,
-): CloudOperation[] {
-  const ops: CloudOperation[] = [];
-  const upserts: Record<string, unknown>[] = [];
-  for (const [id, { taskId, log }] of next) {
-    const before = prev.get(id);
-    if (!before || before.taskId !== taskId || !shallowEqualJSON(before.log, log)) {
-      upserts.push({
-        id,
-        project_id: projectId,
-        task_id: taskId,
-        log_date: log.date,
-        data: log as unknown as Json,
-        ...(before ? {} : { created_by: userId ?? null }),
-      });
-    }
-  }
-  for (const batch of batches(upserts)) {
-    ops.push(async () => {
-      const r = await supabase.from('task_daily_logs').upsert(batch as never, { onConflict: 'id' });
-      if (r.error) throw Object.assign(new Error(`task_daily_logs upsert: ${r.error.message}`), { cause: r.error });
-    });
-  }
-  const toDelete: string[] = [];
-  for (const id of prev.keys()) if (!next.has(id)) toDelete.push(id);
-  for (const batch of batches(toDelete)) {
-    ops.push(async () => {
-      const r = await supabase.from('task_daily_logs').delete().in('id', batch).eq('project_id', projectId);
-      if (r.error) throw Object.assign(new Error(`task_daily_logs delete: ${r.error.message}`), { cause: r.error });
-    });
-  }
-  return ops;
 }
 
 function shallowEqualJSON(a: unknown, b: unknown): boolean {

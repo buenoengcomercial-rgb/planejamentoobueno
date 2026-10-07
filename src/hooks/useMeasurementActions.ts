@@ -118,12 +118,21 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
   // ───────── Snapshot (medição salva) ─────────
   const updateMeasurement = useCallback(
     (id: string, patch: (m: SavedMeasurement) => SavedMeasurement) => {
-      onProjectChange({
-        ...project,
-        measurements: (project.measurements || []).map(m => (m.id === id ? patch(m) : m)),
+      const latest = projectRef.current;
+      const before = latest.measurements?.find(m => m.id === id);
+      if (!before) return;
+      const after = patch(before);
+      const updated = logToProject({
+        ...latest,
+        measurements: (latest.measurements || []).map(m => (m.id === id ? after : m)),
+      }, {
+        ...auditUser, entityType: 'measurement', entityId: id, action: 'updated',
+        title: `Medição nº ${before.number} corrigida`, before, after,
       });
+      projectRef.current = updated;
+      onProjectChange(updated);
     },
-    [project, onProjectChange],
+    [auditUser, onProjectChange, projectRef],
   );
 
   const extractLogValues = (
@@ -194,9 +203,14 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
   const setManualPeriodQuantity = (taskId: string, value: number) => {
     if (isSnapshotMode) return;
     const safeValue = Math.max(0, Number.isFinite(value) ? value : 0);
-    const manualId = `manual-measurement-${effStart}-${effEnd}`;
-    const currentTask = getAllTasks(project).find(task => task.id === taskId);
+    const manualPeriod = `${effStart}-${effEnd}`;
+    const legacyManualId = `manual-measurement-${manualPeriod}`;
+    const latestProject = projectRef.current;
+    const currentTask = getAllTasks(latestProject).find(task => task.id === taskId);
     if (!currentTask) return;
+    const before = currentTask.dailyLogs?.find(log => log.measurementManualPeriod === manualPeriod
+      || log.id === legacyManualId);
+    const manualId = before?.id ?? crypto.randomUUID();
     const others = (currentTask.dailyLogs || []).filter(log => log.id !== manualId);
     const candidateLogs = safeValue <= 0 ? others : [
       ...others,
@@ -205,6 +219,7 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
         date: effEnd,
         plannedQuantity: 0,
         actualQuantity: safeValue,
+        measurementManualPeriod: manualPeriod,
         notes: 'Lançamento manual via Planilha de Medição',
       },
     ];
@@ -214,15 +229,26 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
       return;
     }
 
-    onProjectChange(updateProjectTask(project, taskId, task => {
+    const after = candidateLogs.find(log => log.id === manualId);
+    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    const changed = updateProjectTask(latestProject, taskId, task => {
       const nextOthers = (task.dailyLogs || []).filter(log => log.id !== manualId);
       const nextLogs = safeValue <= 0 ? nextOthers : [
         ...nextOthers,
-        { id: manualId, date: effEnd, plannedQuantity: 0, actualQuantity: safeValue, notes: 'Lançamento manual via Planilha de Medição' },
+        { id: manualId, date: effEnd, plannedQuantity: 0, actualQuantity: safeValue,
+          measurementManualPeriod: manualPeriod, notes: 'Lançamento manual via Planilha de Medição' },
       ];
       if (!validateDailyProductionLogs(task, nextLogs).allowed) return task;
       return { ...task, ...applyDailyProductionLogs(task, nextLogs) };
-    }));
+    });
+    const audited = logToProject(changed, {
+      ...auditUser, entityType: 'task', entityId: taskId,
+      action: !before ? 'created' : !after ? 'deleted' : 'updated',
+      title: 'Apontamento manual da Medição alterado', before, after,
+      metadata: { logId: manualId, date: effEnd },
+    });
+    projectRef.current = audited;
+    onProjectChange(audited);
   };
 
   // ───────── Gerar nova medição (snapshot a partir do live) ─────────
@@ -428,29 +454,35 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
     };
     const cfg = actionMap[next];
     if (cfg) {
-      onProjectChange(
-        logToProject(projectRef.current, {
-          ...auditUser,
-          entityType: 'measurement',
-          entityId: activeMeasurement.id,
-          action: cfg.action,
-          title: cfg.title,
-          metadata: {
-            number: activeMeasurement.number,
-            previousStatus: previous,
-            nextStatus: next,
-          },
-        }),
-      );
+      const audited = logToProject(projectRef.current, {
+        ...auditUser,
+        entityType: 'measurement',
+        entityId: activeMeasurement.id,
+        action: cfg.action,
+        title: cfg.title,
+        metadata: {
+          number: activeMeasurement.number,
+          previousStatus: previous,
+          nextStatus: next,
+        },
+      });
+      projectRef.current = audited;
+      onProjectChange(audited);
     }
   };
 
   const deleteMeasurement = () => {
     if (!activeMeasurement) return;
-    onProjectChange({
-      ...project,
-      measurements: (project.measurements || []).filter(m => m.id !== activeMeasurement.id),
+    const latest = projectRef.current;
+    const updated = logToProject({
+      ...latest,
+      measurements: (latest.measurements || []).filter(m => m.id !== activeMeasurement.id),
+    }, {
+      ...auditUser, entityType: 'measurement', entityId: activeMeasurement.id, action: 'deleted',
+      title: `Medição nº ${activeMeasurement.number} excluída`, before: activeMeasurement,
     });
+    projectRef.current = updated;
+    onProjectChange(updated);
     setActiveId('live');
     setConfirmDelete(false);
     toast({ title: 'Medição excluída' });
