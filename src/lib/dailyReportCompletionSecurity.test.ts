@@ -6,17 +6,33 @@ const migrationSql = readFileSync(
   resolve(process.cwd(), 'supabase/migrations/20260912200000_harden_daily_reports_and_subcontracts_rls.sql'),
   'utf8',
 );
+const engineerMigrationSql = readFileSync(
+  resolve(process.cwd(), 'supabase/migrations/20261007120000_engineer_daily_report_completion.sql'),
+  'utf8',
+);
+const revisionsSql = readFileSync(
+  resolve(process.cwd(), 'supabase/migrations/20261007121000_daily_report_revisions.sql'),
+  'utf8',
+);
 const dailyReportComponent = readFileSync(
   resolve(process.cwd(), 'src/components/DailyReport.tsx'),
   'utf8',
 );
 
 describe('daily report completion security', () => {
-  it('requires the Owner in the UI and the database before concluding a daily report', () => {
-    expect(dailyReportComponent).toContain(') : !readOnly && canManageConclusion ? (');
-    expect(dailyReportComponent).toContain("completionDialog === 'conclude' && canManageConclusion");
-    expect(migrationSql).toContain('IF v_new_locked AND NOT v_is_owner THEN');
-    expect(migrationSql).toContain('Somente o Proprietário pode concluir um Diário.');
+  it('allows Owner and Engineer to conclude while only Owner may reopen', () => {
+    expect(dailyReportComponent).toContain(') : !readOnly && canConclude ? (');
+    expect(dailyReportComponent).toContain("completionDialog === 'conclude' && canConclude");
+    expect(dailyReportComponent).toContain("completionDialog === 'reopen' && canReopen");
+    expect(engineerMigrationSql).toContain("ARRAY['owner','engineer']::public.org_role[]");
+    expect(engineerMigrationSql).toContain('IF v_new_locked AND NOT v_can_conclude THEN');
+    expect(engineerMigrationSql).toContain('IF NOT v_is_owner THEN');
+  });
+
+  it('archives old report content before a change or deletion', () => {
+    expect(revisionsSql).toContain('AFTER UPDATE OR DELETE ON public.daily_reports');
+    expect(revisionsSql).toContain('OLD.data');
+    expect(revisionsSql).toContain('ENABLE ROW LEVEL SECURITY');
   });
 
   it('keeps field users limited to open daily reports', () => {

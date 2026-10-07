@@ -28,7 +28,7 @@ import { CalendarDays, CheckCircle2, History, LockKeyhole, LockKeyholeOpen } fro
 import { useEffect, useState } from 'react';
 
 
-export default function DailyReport({ project, onProjectChange, undoButton, readOnly = false, canManageConclusion = false, canClearDay = false, photoUploaderName, initialDate, initialMeasurementFilter, navKey }: DailyReportProps) {
+export default function DailyReport({ project, onProjectChange, undoButton, readOnly = false, canConclude = false, canReopen = false, canClearDay = false, photoUploaderName, initialDate, initialMeasurementFilter, navKey }: DailyReportProps) {
   const [activeView, setActiveView] = useState<'day' | 'history'>('day');
   const [completionDialog, setCompletionDialog] = useState<'conclude' | 'reopen' | null>(null);
   const [online, setOnline] = useState(() => navigator.onLine);
@@ -148,7 +148,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
               <p className="text-xs text-muted-foreground">Concluído em {new Date(currentReport.concludedAt!).toLocaleString('pt-BR')}. O conteúdo está protegido contra edições.</p>
             </div>
           </div>
-          {canManageConclusion && (
+          {canReopen && (
             <Button type="button" variant="outline" className="min-h-11 shrink-0" onClick={() => setCompletionDialog('reopen')}>
               <LockKeyholeOpen className="mr-2 h-4 w-4" /> Reabrir para edição
             </Button>
@@ -158,7 +158,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
         <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
           Sem conexão. Conecte-se à internet para inserir fotos, legendas ou editar este Diário.
         </div>
-      ) : !readOnly && canManageConclusion ? (
+      ) : !readOnly && canConclude ? (
         <div className="flex justify-end">
           <Button type="button" className="min-h-11 w-full sm:w-auto" onClick={() => setCompletionDialog('conclude')}>
             <LockKeyhole className="mr-2 h-4 w-4" /> Concluir diário
@@ -332,8 +332,8 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
             <AlertDialogAction
               className={completionDialog === 'conclude' ? 'bg-primary text-primary-foreground hover:bg-primary/90' : undefined}
               onClick={() => {
-                if (completionDialog === 'conclude' && canManageConclusion) concludeDailyReport();
-                if (completionDialog === 'reopen') reopenDailyReport();
+                if (completionDialog === 'conclude' && canConclude) concludeDailyReport();
+                if (completionDialog === 'reopen' && canReopen) reopenDailyReport();
                 setCompletionDialog(null);
               }}
             >
