@@ -16,9 +16,6 @@ import { DailyReportEquipmentCard } from '@/components/dailyReport/DailyReportEq
 import { DailyReportPhotosCard } from '@/components/dailyReport/DailyReportPhotosCard';
 import { DailyReportPhotoLightbox } from '@/components/dailyReport/DailyReportPhotoLightbox';
 import { DailyReportPhotoDeleteDialog } from '@/components/dailyReport/DailyReportPhotoDeleteDialog';
-import { DailyReportProductionSection } from '@/components/dailyReport/DailyReportProductionSection';
-import { DailyReportWarehouseSection } from '@/components/dailyReport/DailyReportWarehouseSection';
-import { warehouseWithdrawalsForDate } from '@/lib/dailyReportWarehouse';
 import { DailyReportMobileSection } from '@/components/dailyReport/DailyReportMobileSection';
 import { PeriodReportsSection } from '@/components/dailyReport/PeriodReportsSection';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -121,7 +118,6 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
     dateMembership,
     measurementFilter,
   });
-  const dailyWarehouseWithdrawals = warehouseWithdrawalsForDate(project, selectedDate);
 
   return (
     <div className="p-0 space-y-4 max-w-[1680px] mx-auto">
@@ -281,27 +277,6 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
               <fieldset disabled={effectiveReadOnly} className="disabled:opacity-80">
                 <DailyReportTextAreas currentReport={currentReport} updateField={updateField} />
               </fieldset>
-            </DailyReportMobileSection>
-
-            <DailyReportMobileSection
-              className="order-5 lg:order-5"
-              title="Produção executada"
-              summary={summary.tasks > 0 ? `${summary.tasks} tarefa(s) com produção apontada.` : 'Nenhuma produção apontada nesta data.'}
-            >
-              <DailyReportProductionSection
-                selectedDate={selectedDate}
-                grouped={grouped}
-                photosByTask={photosByTask}
-                setPhotoFilter={setPhotoFilter}
-              />
-            </DailyReportMobileSection>
-
-            <DailyReportMobileSection
-              className="order-6 lg:order-6"
-              title="Materiais retirados"
-              summary={dailyWarehouseWithdrawals.length > 0 ? `${dailyWarehouseWithdrawals.length} baixa(s) confirmada(s) no Almoxarifado.` : 'Nenhuma retirada confirmada nesta data.'}
-            >
-              <DailyReportWarehouseSection project={project} selectedDate={selectedDate} />
             </DailyReportMobileSection>
           </div>
         </TabsContent>
