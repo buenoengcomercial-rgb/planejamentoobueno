@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readTakeoffs, saveTakeoffs, scopeKey, type TakeoffPlan } from './planTakeoff';
-import { insertCloudPlan, updateCloudPlan } from './planTakeoffCloud';
+import { archiveCloudPlan, insertCloudPlan, updateCloudPlan } from './planTakeoffCloud';
 
 const server = vi.hoisted(() => new Map<string, unknown>());
 vi.mock('./planTakeoffCloud', async original => {
@@ -55,7 +55,7 @@ beforeAll(() => {
     },
   });
 });
-beforeEach(() => { local.clear(); server.clear(); vi.mocked(insertCloudPlan).mockClear(); vi.mocked(updateCloudPlan).mockClear(); });
+beforeEach(() => { local.clear(); server.clear(); vi.mocked(insertCloudPlan).mockClear(); vi.mocked(updateCloudPlan).mockClear(); vi.mocked(archiveCloudPlan).mockClear(); });
 
 const org = '00000000-0000-0000-0000-000000000001';
 const project = '86593327-d5f7-4c9d-81da-6f23c697b6e2';
@@ -95,5 +95,13 @@ describe('plantas na nuvem', () => {
     await expect(saveTakeoffs(key, changed, loaded)).rejects.toThrow('Conflito');
     expect((server.get(planId) as TakeoffPlan).name).toBe('Térreo.dxf');
     expect((local.get(key) as TakeoffPlan[])[0].name).toBe('Térreo.dxf');
+  });
+  it('arquiva a planta removida e retira sua cópia do catálogo local', async () => {
+    const key = scopeKey(org, firstUser, project);
+    local.set(key, [example()]);
+    const loaded = await readTakeoffs(key, { migrateLocal: true });
+    await saveTakeoffs(key, [], loaded);
+    expect(archiveCloudPlan).toHaveBeenCalledWith(expect.anything(), loaded[0]);
+    expect(local.get(key)).toEqual([]);
   });
 });

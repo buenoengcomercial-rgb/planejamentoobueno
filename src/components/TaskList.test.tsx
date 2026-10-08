@@ -8,7 +8,6 @@ vi.mock('@/components/ImportSyntheticDialog', () => ({
   default: ({ open }: { open: boolean }) => open ? <div role="dialog">Importador carregado</div> : null,
 }));
 
-vi.mock('@/components/planTakeoff/ChapterPlanCatalog', () => ({ default: () => null }));
 
 const task: Task = {
   id: 'task-1',

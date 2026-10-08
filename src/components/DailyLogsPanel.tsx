@@ -727,7 +727,7 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
               }}
               sharedTaskNames={sharedTaskNames}
               onOpenHistory={onOpenDetailHistory}
-              onOpenPlan={(id, field) => { if (!takeoffStorageKey || !chapterId) { setProductionError('Cadastre a planta no capítulo principal do prédio antes de abrir o levantamento.'); return; } setProductionError(null); setPlanTarget({ logId: row.id, rowId: id, field }); }}
+              onOpenPlan={(id, field) => { if (!takeoffStorageKey || !chapterId) { setProductionError('Não foi possível identificar o prédio desta tarefa para abrir o levantamento.'); return; } setProductionError(null); setPlanTarget({ logId: row.id, rowId: id, field }); }}
               onApply={() => applyDetail(row.id)}
             />}
             {(row.laborEntries ?? []).length > 0 && (
@@ -828,7 +828,7 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
         <DialogContent className="flex h-[94vh] w-[96vw] max-w-[2100px] flex-col gap-2 overflow-hidden p-2 sm:p-3">
           <DialogHeader className="shrink-0 pr-8 text-left">
             <DialogTitle className="text-sm">Planta para o detalhe de quantitativo</DialogTitle>
-            <DialogDescription className="text-xs">Escolha uma planta já cadastrada neste prédio. A captura vai para a linha {planTarget ? (logs.find(log => log.id === planTarget.logId)?.quantityDetails?.findIndex(row => row.id === planTarget.rowId) ?? -1) + 1 : 0}, coluna {planTarget ? DETAIL_COLUMNS[planTarget.field] : 'A'}. Ao concluir, o realizado é atualizado e a próxima linha fica pronta.</DialogDescription>
+            <DialogDescription className="text-xs">Escolha ou adicione uma planta deste prédio. A captura vai para a linha {planTarget ? (logs.find(log => log.id === planTarget.logId)?.quantityDetails?.findIndex(row => row.id === planTarget.rowId) ?? -1) + 1 : 0}, coluna {planTarget ? DETAIL_COLUMNS[planTarget.field] : 'A'}. Ao concluir, o realizado é atualizado e a próxima linha fica pronta.</DialogDescription>
           </DialogHeader>
           {productionError && <p role="alert" className="shrink-0 border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800">{productionError}</p>}
           <div className="min-h-0 flex-1 overflow-auto">
