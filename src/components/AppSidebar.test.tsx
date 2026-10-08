@@ -3,6 +3,28 @@ import { describe, expect, it, vi } from 'vitest';
 import AppSidebar from './AppSidebar';
 
 describe('AppSidebar para Almoxarife', () => {
+  it('mantém o acesso à planta dentro da Produção, sem aba independente', () => {
+    render(
+      <AppSidebar
+        currentView="tasks"
+        onViewChange={vi.fn()}
+        projectName="Obra teste"
+        collapsed={false}
+        onToggleCollapse={vi.fn()}
+        onSwitchProject={vi.fn()}
+        onCreateProject={vi.fn()}
+        onRenameProject={vi.fn()}
+        onDuplicateProject={vi.fn()}
+        onDeleteProject={vi.fn()}
+        activeProjectId="project-1"
+        projectsList={[{ id: 'project-1', name: 'Obra teste', createdAt: '2026-08-19T10:00:00.000Z', updatedAt: '2026-08-19T10:00:00.000Z' }]}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'Produção e rotina' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Levantamento em planta' })).not.toBeInTheDocument();
+  });
+
   it('mostra somente o Almoxarifado e não oferece gestão ou exclusão de obras', () => {
     render(
       <AppSidebar

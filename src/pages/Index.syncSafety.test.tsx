@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DailyReport, Project } from '@/types/project';
@@ -365,8 +365,13 @@ function cloudRecord(project: Project, updatedAt = 'cloud-v2') {
 }
 
 function renderIndex(routeView = 'producao') {
+  function RoutePath() {
+    const location = useLocation();
+    return <span data-testid="route-path">{location.pathname}</span>;
+  }
   return render(
     <MemoryRouter initialEntries={[`/obras/project-1/${routeView}`]}>
+      <RoutePath />
       <Routes>
         <Route path="/obras/:routeProjectId/:routeView" element={<Index />} />
         <Route path="/team" element={<div data-testid="team-page">Usuários</div>} />
@@ -411,6 +416,12 @@ afterEach(() => {
 });
 
 describe('segurança de sincronização da página da obra', () => {
+  it('direciona o antigo link de levantamento para a Produção', async () => {
+    renderIndex('levantamento');
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('route-path')).toHaveTextContent('/obras/project-1/producao'));
+  });
+
   it('não restaura a rolagem como se a página tivesse reiniciado ao editar o Diário', async () => {
     mocks.saveOpenDailyReport.mockResolvedValue({ report: null, conflicts: [] });
     renderIndex('diario');
