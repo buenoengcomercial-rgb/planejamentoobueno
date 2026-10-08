@@ -17,7 +17,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   const [pages, setPages] = useState(1);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [status, setStatus] = useState('Carregando dados locais…');
+  const [status, setStatus] = useState('Carregando plantas da nuvem…');
   const [error, setError] = useState('');
   const [tool, setTool] = useState<MeasureKind | 'calibrate' | null>(null);
   const [draft, setDraft] = useState<Point[]>([]);
@@ -52,6 +52,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   const focusPage = focusMeasure?.page;
   const focusMeasureId = focusMeasure?.measureId;
   const history = useRef<TakeoffPlan[][]>([]);
+  const lastCommittedPlans = useRef<TakeoffPlan[]>([]);
   const deletedLinkedIds = useRef(new Set<string>());
   const busy = useRef(false);
   const canvas = useRef<PlanCanvasHandle>(null);
@@ -79,22 +80,24 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   }, [draft.length]);
   useEffect(() => {
     let alive = true;
-    void readTakeoffs(storageKey).then(data => {
-      if (!alive) return; const available = chapterId ? data.filter(plan => plan.chapterId === chapterId) : data; setPlans(data); setActive(available.some(plan => plan.id === focusPlanId) ? focusPlanId! : available[0]?.id ?? ''); setPage(focusPage ?? 1); setSelected(focusMeasureId ?? ''); setReady(true); setStatus('Salvo neste navegador');
-    }).catch(() => { if (alive) setError('Não foi possível acessar o armazenamento local. Recarregue para tentar novamente.'); });
+    void readTakeoffs(storageKey, { migrateLocal: !readOnly }).then(data => {
+      if (!alive) return; const available = chapterId ? data.filter(plan => plan.chapterId === chapterId) : data; lastCommittedPlans.current = data; setPlans(data); setActive(available.some(plan => plan.id === focusPlanId) ? focusPlanId! : available[0]?.id ?? ''); setPage(focusPage ?? 1); setSelected(focusMeasureId ?? ''); setReady(true); setStatus('Plantas na nuvem');
+    }).catch(cause => { if (alive) setError(cause instanceof Error ? cause.message : 'Não foi possível acessar as plantas na nuvem. A cópia local foi preservada.'); });
     return () => { alive = false; };
-  }, [storageKey, focusPlanId, focusPage, focusMeasureId, chapterId]);
+  }, [storageKey, focusPlanId, focusPage, focusMeasureId, chapterId, readOnly]);
   async function commit(next: TakeoffPlan[], undo = false) {
     if (locked || busy.current) return false;
     busy.current = true; setSaving(true); setError(''); setStatus('Salvando…');
     try {
-      await saveTakeoffs(storageKey, next);
-      if (undo) history.current.pop(); else history.current = [...history.current.slice(-19), plans];
+      const previous = lastCommittedPlans.current;
+      await saveTakeoffs(storageKey, next, previous);
+      if (undo) history.current.pop(); else history.current = [...history.current.slice(-19), previous];
+      lastCommittedPlans.current = next;
       setPlans(next);
       window.dispatchEvent(new CustomEvent(TAKEOFF_CATALOG_UPDATED, { detail: storageKey }));
       if (undo && !next.some(p => p.id === active)) { setActive(next[0]?.id ?? ''); setPage(1); }
-      setStatus('Salvo neste navegador'); return true;
-    } catch { setError('Não foi possível salvar. Seus dados anteriores foram preservados. Libere espaço e tente novamente.'); setStatus('Alteração não salva'); return false; }
+      setStatus('Salvo na nuvem'); return true;
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Não foi possível salvar na nuvem. O traçado atual foi preservado para tentar novamente.'); setStatus('Alteração não salva'); return false; }
     finally { busy.current = false; setSaving(false); }
   }
   const update = (next: TakeoffPlan) => commit(plans.map(p => p.id === next.id ? next : p));
@@ -323,7 +326,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
           <label className="min-w-[140px]">Pavimento<Input className="h-7 rounded-none text-xs" onKeyDown={fieldKey} key={`${plan.id}-floor-${plan.floor}`} defaultValue={plan.floor} disabled={locked} placeholder="Ex.: Térreo" onBlur={e => { if (e.target.value !== plan.floor) void update({ ...plan, floor: e.target.value }); }} /></label>
           {plan.kind === 'dxf' && <label>Unidade do DXF<select aria-label="Unidade do DXF" className="block h-7 border border-slate-300 bg-white px-2" value={cadUnit} disabled={locked} onChange={e => setCadUnit(e.target.value)}><option value="1">Metro (padrão)</option><option value="0.01">Centímetro</option><option value="0.001">Milímetro</option></select></label>}
           {plan.kind === 'dxf' && <Button size="sm" variant="outline" className="h-7 rounded-none text-xs" disabled={locked} onClick={() => setPendingScale(Number(cadUnit))}>Conferir unidade</Button>}
-          <p className="basis-full text-xs text-muted-foreground">Arquivos e marcações ficam neste navegador, por usuário e obra. {plan.kind === 'dxf' ? 'DXF novo usa metro por padrão; ajuste aqui se o arquivo estiver em centímetros ou milímetros. DXF 2D usa o espaço de modelo.' : embedded ? 'Concluir o traçado preenche a célula escolhida; confirme o total no lançamento do dia.' : 'Não lançam produção ou medição.'}</p>
+          <p className="basis-full text-xs text-muted-foreground">Arquivo e marcações são salvos na nuvem da obra, com cópia local de recuperação. {plan.kind === 'dxf' ? 'DXF novo usa metro por padrão; ajuste aqui se o arquivo estiver em centímetros ou milímetros. DXF 2D usa o espaço de modelo.' : embedded ? 'Concluir o traçado preenche a célula escolhida; confirme o total no lançamento do dia.' : 'Não lançam produção ou medição.'}</p>
         </div>}
         {tool && <div className="flex min-h-8 flex-wrap items-center gap-2 border-x border-b border-slate-300 bg-[#f2f3f4] px-2 py-0.5 text-xs">
           <strong>{tool === 'calibrate' ? 'Calibrar escala' : labels[tool]}</strong>

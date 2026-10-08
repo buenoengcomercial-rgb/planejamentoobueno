@@ -17,9 +17,9 @@ export default function ChapterPlanCatalog({ storageKey, chapterId, building, re
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const load = useCallback(async () => {
-    try { setPlans(await readTakeoffs(storageKey)); setReady(true); }
-    catch { setMessage('Não foi possível ler as plantas salvas neste navegador.'); }
-  }, [storageKey]);
+    try { setPlans(await readTakeoffs(storageKey, { migrateLocal: !readOnly })); setReady(true); }
+    catch (cause) { setMessage(cause instanceof Error ? cause.message : 'Não foi possível consultar as plantas na nuvem. A cópia local foi preservada.'); }
+  }, [storageKey, readOnly]);
 
   useEffect(() => {
     void load();
@@ -41,7 +41,7 @@ export default function ChapterPlanCatalog({ storageKey, chapterId, building, re
     const kind = extension === 'pdf' ? 'pdf' : extension === 'dxf' ? 'dxf' : extension === 'dwf' ? 'dwf' : ['png', 'jpg', 'jpeg'].includes(extension ?? '') ? 'image' : null;
     if (!kind) { setMessage('Escolha PDF, PNG, JPG, DXF ou DWF 2D.'); return; }
     if (file.size > 100 * 1024 * 1024) { setMessage('Neste teste, o limite por arquivo é 100 MB.'); return; }
-    setSaving(true); setMessage('Salvando planta neste navegador…');
+    setSaving(true); setMessage('Enviando planta para a nuvem…');
     try {
       if (kind === 'dwf') await openDwfSheets(file);
       const next = await updateTakeoffs(storageKey, current => {
@@ -50,8 +50,8 @@ export default function ChapterPlanCatalog({ storageKey, chapterId, building, re
         }
         return [...current, { id: crypto.randomUUID(), name: file.name, floor: chosenFloor, building, chapterId, kind, file, scales: kind === 'dxf' ? { 1: 1 } : {}, measures: [] }];
       });
-      announce(next); setFloor(''); setMessage('Planta disponível para as tarefas deste prédio neste navegador.');
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Não foi possível salvar a planta. Verifique o espaço livre.'); }
+      announce(next); setFloor(''); setMessage('Planta salva na nuvem e disponível para as tarefas deste prédio em outros computadores.');
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Não foi possível confirmar a planta na nuvem.'); }
     finally { setSaving(false); }
   }
 
