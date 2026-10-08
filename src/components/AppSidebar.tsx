@@ -88,6 +88,7 @@ const navGroups: Array<{ label: string; items: NavigationItem[] }> = [
     items: [
       { view: 'gantt', label: 'Cronograma', icon: GanttChart },
       { view: 'tasks', label: 'Produção e rotina', icon: ListTodo },
+      { view: 'planTakeoff', label: 'Levantamento em planta', icon: FolderOpen },
       { view: 'dailyReport', label: 'Diário de obra', icon: NotebookPen },
     ],
   },

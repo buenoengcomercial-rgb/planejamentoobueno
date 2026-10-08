@@ -20,6 +20,21 @@ afterEach(() => {
 });
 
 describe('transação de Produção', () => {
+  it('persiste a memória e os pontos do detalhe junto ao log diário, sem alterar outros domínios', async () => {
+    setCloudSnapshot(base.id, base);
+    rpc.mockResolvedValue({ data: '2026-10-02T00:00:00Z', error: null });
+    const next: Project = { ...base, phases: base.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({
+      ...task,
+      dailyLogs: [{ id: 'log-1', date: '2026-10-02', plannedQuantity: 10, actualQuantity: 2, quantityDetailsAppliedTotal: 2,
+        quantityDetails: [{ id: 'detail-1', location: 'Térreo', comment: 'Placas', multiplier: 1, measuredQuantity: 2,
+          source: { planId: 'plan-1', planName: 'Placas.pdf', page: 1, measureId: 'measure-1', measureName: 'Executadas', kind: 'count' as const, points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] } }] }],
+    })) })) } as Project;
+    await syncProductionAtomically(next, stripNormalizedCollections(next), 'org-1', '2026-10-01T00:00:00Z');
+    expect(rpc).toHaveBeenCalledWith('save_production_domain', expect.objectContaining({
+      p_data: null,
+      p_logs_upsert: [expect.objectContaining({ data: expect.objectContaining({ quantityDetails: [expect.objectContaining({ source: expect.objectContaining({ points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] }) })] }) })],
+    }));
+  });
   it('envia apenas as linhas de Produção alteradas e confirma o snapshot depois da RPC', async () => {
     const next = {
       ...base,

@@ -246,11 +246,54 @@ export interface DailyProductionLog {
   date: string;            // ISO yyyy-mm-dd
   plannedQuantity: number;
   actualQuantity: number;
+  /** Memória de cálculo opcional da quantidade executada neste dia. */
+  quantityDetails?: ProductionQuantityDetail[];
+  /** Total do detalhe usado explicitamente no realizado; divergências posteriores deixam a indicação pendente. */
+  quantityDetailsAppliedTotal?: number;
   notes?: string;
   /** Horas efetivamente apontadas por funcao ou trabalhador. */
   laborEntries?: DailyLaborEntry[];
   /** Produção física da terceirizada, sempre por composição contratada. */
   subcontractExecutions?: DailySubcontractExecution[];
+}
+
+export interface ProductionQuantityDetail {
+  id: string;
+  /** Identidade comum das linhas coladas por referência; cada tarefa conserva seu id de linha. */
+  sharedRecordId?: string;
+  location: string;
+  comment: string;
+  multiplier: number;
+  measuredQuantity: number;
+  /** A × B nos registros existentes; dimensões adicionais são opcionais por linha. */
+  /** Ausência preserva A × B dos lançamentos anteriores; novas linhas usam Standard. */
+  formula?: 'STANDARD' | 'A*B' | 'A*B*C' | 'A*B*C*D';
+  dimensionC?: number;
+  dimensionD?: number;
+  /** Coluna preenchida automaticamente com 1 ao receber a primeira medição da linha. */
+  neutralFactor?: 'multiplier' | 'measuredQuantity';
+  neutralFactors?: Array<'multiplier' | 'measuredQuantity' | 'dimensionC' | 'dimensionD'>;
+  /** Origem da coluna A, preenchida por qualquer ferramenta da planta. */
+  multiplierSource?: ProductionQuantityDetailSource;
+  /** Origem da coluna B; também mantém os vínculos gravados antes da coluna A existir. */
+  source?: ProductionQuantityDetailSource;
+  dimensionCSource?: ProductionQuantityDetailSource;
+  dimensionDSource?: ProductionQuantityDetailSource;
+}
+
+export interface ProductionQuantityDetailSource {
+    planId: string;
+    planName: string;
+    floor?: string;
+    page: number;
+    measureId: string;
+    measureName: string;
+    /** Unidade do resultado capturado; u.d. significa unidade do desenho sem conversão para metros. */
+    resultUnit?: string;
+    kind: 'count' | 'length' | 'linearLength' | 'circlePerimeter' | 'area' | 'rectangleArea' | 'circleArea' | 'verticalArea' | 'polygonVolume';
+    heightMeters?: number;
+    /** Cópia dos pontos usados no lançamento; a planta original continua local. */
+    points: Array<{ x: number; y: number }>;
 }
 
 export interface TaskOperationalReschedule {
@@ -2083,4 +2126,4 @@ export interface AuditLog {
 }
 
 export type ViewMode = 'days' | 'weeks' | 'months';
-export type AppView = 'dashboard' | 'management' | 'gantt' | 'tasks' | 'measurement' | 'dailyReport' | 'additive' | 'additiveSchedule' | 'realCost' | 'materials' | 'warehouse';
+export type AppView = 'dashboard' | 'management' | 'gantt' | 'tasks' | 'measurement' | 'dailyReport' | 'additive' | 'additiveSchedule' | 'realCost' | 'materials' | 'warehouse' | 'planTakeoff';

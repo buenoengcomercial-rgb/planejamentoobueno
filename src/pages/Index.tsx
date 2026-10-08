@@ -1,3 +1,4 @@
+import { scopeKey } from '@/lib/planTakeoff';
 import { useState, useMemo, useEffect, useDeferredValue, useCallback, useRef, Suspense } from 'react';
 import { flushSync } from 'react-dom';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -35,6 +36,8 @@ const loadAdditive = () => import('@/components/Additive');
 const loadAdditiveSchedule = () => import('@/components/AdditiveSchedule');
 const loadRealCost = () => import('@/components/RealCost');
 const loadMaterials = () => import('@/components/Materials');
+const loadPlanTakeoff = () => import('@/components/planTakeoff/PlanTakeoff');
+const PlanTakeoff = lazyWithReload(loadPlanTakeoff);
 const loadWarehouse = () => import('@/components/warehouse/Warehouse');
 
 const Dashboard = lazyWithReload(loadDashboard);
@@ -160,9 +163,10 @@ const WAREHOUSE_OPERATION_COLLECTIONS: Record<WarehousePrepareScope, readonly Pr
     'auditLogs',
   ],
 };
-const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse'];
+const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse', 'planTakeoff'];
 
 const NEXT_VIEW_PRELOAD: Record<AppView, { view: AppView; load: () => Promise<unknown> }> = {
+  planTakeoff: { view: 'tasks', load: loadTaskList },
   dashboard: { view: 'management', load: loadManagementRoutine },
   management: { view: 'tasks', load: () => Promise.all([loadDailyProductionWorkspace(), loadTaskList()]) },
   gantt: { view: 'tasks', load: () => Promise.all([loadDailyProductionWorkspace(), loadTaskList()]) },
@@ -177,6 +181,7 @@ const NEXT_VIEW_PRELOAD: Record<AppView, { view: AppView; load: () => Promise<un
 };
 
 const VIEW_ROUTE: Record<AppView, string> = {
+  planTakeoff: 'levantamento',
   dashboard: 'dashboard',
   management: 'rotina',
   gantt: 'cronograma',
@@ -354,7 +359,7 @@ export default function Index() {
     });
   }, [navigate, openAfterPendingFormCheck]);
 
-  const undoStacksRef = useRef<UndoStacks>({ dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] });
+  const undoStacksRef = useRef<UndoStacks>({ dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [], planTakeoff: [] });
   const [undoVersion, setUndoVersion] = useState(0);
   const rawProjectRef = useRef<Project | null>(null);
   const saveTimerRef = useRef<number | null>(null);
@@ -2541,7 +2546,7 @@ export default function Index() {
           const request = dailyReportSaveQueueRef.current
             .catch(() => undefined)
             .then(() => saveOpenDailyReport(confirmation.project.id, beforeReport, afterReport));
-          dailyReportSaveQueueRef.current = request;
+          dailyReportSaveQueueRef.current = request.then(() => undefined);
           try {
             const saved = await request;
             mergeConfirmedDailyReportIntoPartialSync(confirmation.project.id, change.date, saved.report);
@@ -2894,7 +2899,7 @@ export default function Index() {
             }
           }
           replaceProjectWithoutAutoSave(projectToLoad, updatedAt, repairApplied, true, effectiveRecord.warehouseVersion);
-          undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
+          undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [], planTakeoff: [] };
           setUndoVersion(v => v + 1);
         }
       });
@@ -2946,7 +2951,7 @@ export default function Index() {
     const list = await refreshCloudList();
     confirmCloudProjectRecord(persisted);
     replaceProjectWithoutAutoSave(persisted.project, list.find(p => p.id === projectWithName.id)?.updatedAt ?? persisted.updatedAt ?? updatedAt, false, true, persisted.warehouseVersion);
-    undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
+    undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [], planTakeoff: [] };
     setUndoVersion(v => v + 1);
     setCurrentView('dashboard');
     setSidebarOpen(false);
@@ -3019,7 +3024,7 @@ export default function Index() {
             if (record) {
               confirmCloudProjectRecord(record);
               replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, true, record.warehouseVersion);
-              undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
+              undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [], planTakeoff: [] };
             }
           }
         }
@@ -3184,6 +3189,7 @@ export default function Index() {
             {productionRoutineNavigation('production')}
             <DailyProductionWorkspace
               auditActor={auditActor}
+              takeoffStorageKey={user && orgId ? scopeKey(orgId, user.id, project.id) : undefined}
               project={project}
               initialTab={productionWorkspaceInitialTab}
               onProductionChange={tasksSetter}
@@ -3204,6 +3210,8 @@ export default function Index() {
             />
           </>
         );
+      case 'planTakeoff':
+        return user && orgId ? <PlanTakeoff key={scopeKey(orgId, user.id, project.id)} storageKey={scopeKey(orgId, user.id, project.id)} readOnly={!editor} /> : null;
       case 'measurement':
         return <Measurement project={project} onProjectChange={measurementSetter} undoButton={<UndoButton canUndo={canUndo('measurement')} onUndo={() => handleUndo('measurement')} />} onOpenDailyReport={handleOpenDailyReport} />;
       case 'dailyReport':

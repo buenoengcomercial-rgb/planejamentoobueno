@@ -30,6 +30,7 @@ interface DailyProductionWorkspaceProps {
   productionFocusTaskId?: string;
   productionFocusDate?: string;
   auditActor?: AuditUserInfo;
+  takeoffStorageKey?: string;
 }
 
 export default function DailyProductionWorkspace({
@@ -51,6 +52,7 @@ export default function DailyProductionWorkspace({
   productionFocusTaskId,
   productionFocusDate,
   auditActor,
+  takeoffStorageKey,
 }: DailyProductionWorkspaceProps) {
   return (
     <div className="space-y-4 p-3 pt-4 sm:p-4 lg:p-5">
@@ -66,6 +68,7 @@ export default function DailyProductionWorkspace({
               focusTaskId={productionFocusTaskId}
               focusDate={productionFocusDate}
               auditActor={auditActor}
+              takeoffStorageKey={takeoffStorageKey}
             />
           ) : (
             <DailyReport
