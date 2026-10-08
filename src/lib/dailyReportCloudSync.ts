@@ -141,9 +141,14 @@ export async function saveOpenDailyReport(
       if (!remote) throw error ?? new Error('Não foi possível criar o Diário.');
     }
 
-    if (remote.data.concludedAt) throw new DailyReportLockedError();
+    // Uma reabertura explícita parte de uma versão-base já concluída. O banco
+    // valida que apenas o Proprietário pode executá-la.
+    if (remote.data.concludedAt && !base.concludedAt) throw new DailyReportLockedError();
 
     if (isDailyReportEmpty(local)) {
+      if (!same(remote.data, base)) {
+        throw new Error('O Diário mudou em outro aparelho. Releia o registro antes de limpá-lo.');
+      }
       const { data, error } = await supabase
         .from('daily_reports')
         .delete()

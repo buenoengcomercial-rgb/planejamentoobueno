@@ -411,6 +411,35 @@ afterEach(() => {
 });
 
 describe('segurança de sincronização da página da obra', () => {
+  it('não restaura a rolagem como se a página tivesse reiniciado ao editar o Diário', async () => {
+    mocks.saveOpenDailyReport.mockResolvedValue({ report: null, conflicts: [] });
+    renderIndex('diario');
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
+
+    localStorage.setItem('obraplanner:ui-session', JSON.stringify({
+      version: 1,
+      projectId: 'project-1',
+      view: 'dailyReport',
+      mainScrollTop: 500,
+      windowScrollY: 500,
+      updatedAt: '2026-10-07T12:00:00.000Z',
+    }));
+    vi.mocked(window.scrollTo).mockClear();
+    vi.mocked(Element.prototype.scrollTo).mockClear();
+    const draft = screen.getByRole('textbox', { name: 'Rascunho da produção no teste' });
+    fireEvent.change(draft, { target: { value: 'Texto ainda em edição' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Esvaziar diário' }));
+    await waitFor(() => expect(mocks.saveOpenDailyReport).toHaveBeenCalled());
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
+
+    expect(window.scrollTo).not.toHaveBeenCalled();
+    expect(Element.prototype.scrollTo).not.toHaveBeenCalled();
+    expect(screen.getByRole('textbox', { name: 'Rascunho da produção no teste' })).toBe(draft);
+    expect(draft).toHaveValue('Texto ainda em edição');
+  });
+
   it('repete uma falha transitória de autosave sem exigir nova edição', async () => {
     mocks.upsertCloudProject.mockRejectedValueOnce(new Error('Failed to fetch'));
     renderIndex();

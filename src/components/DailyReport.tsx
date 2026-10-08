@@ -16,9 +16,6 @@ import { DailyReportEquipmentCard } from '@/components/dailyReport/DailyReportEq
 import { DailyReportPhotosCard } from '@/components/dailyReport/DailyReportPhotosCard';
 import { DailyReportPhotoLightbox } from '@/components/dailyReport/DailyReportPhotoLightbox';
 import { DailyReportPhotoDeleteDialog } from '@/components/dailyReport/DailyReportPhotoDeleteDialog';
-import { DailyReportProductionSection } from '@/components/dailyReport/DailyReportProductionSection';
-import { DailyReportWarehouseSection } from '@/components/dailyReport/DailyReportWarehouseSection';
-import { warehouseWithdrawalsForDate } from '@/lib/dailyReportWarehouse';
 import { DailyReportMobileSection } from '@/components/dailyReport/DailyReportMobileSection';
 import { PeriodReportsSection } from '@/components/dailyReport/PeriodReportsSection';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -28,7 +25,7 @@ import { CalendarDays, CheckCircle2, History, LockKeyhole, LockKeyholeOpen } fro
 import { useEffect, useState } from 'react';
 
 
-export default function DailyReport({ project, onProjectChange, undoButton, readOnly = false, canManageConclusion = false, canClearDay = false, photoUploaderName, initialDate, initialMeasurementFilter, navKey }: DailyReportProps) {
+export default function DailyReport({ project, onProjectChange, undoButton, readOnly = false, canConclude = false, canReopen = false, canClearDay = false, photoUploaderName, initialDate, initialMeasurementFilter, navKey }: DailyReportProps) {
   const [activeView, setActiveView] = useState<'day' | 'history'>('day');
   const [completionDialog, setCompletionDialog] = useState<'conclude' | 'reopen' | null>(null);
   const [online, setOnline] = useState(() => navigator.onLine);
@@ -121,7 +118,6 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
     dateMembership,
     measurementFilter,
   });
-  const dailyWarehouseWithdrawals = warehouseWithdrawalsForDate(project, selectedDate);
 
   return (
     <div className="p-0 space-y-4 max-w-[1680px] mx-auto">
@@ -148,7 +144,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
               <p className="text-xs text-muted-foreground">Concluído em {new Date(currentReport.concludedAt!).toLocaleString('pt-BR')}. O conteúdo está protegido contra edições.</p>
             </div>
           </div>
-          {canManageConclusion && (
+          {canReopen && (
             <Button type="button" variant="outline" className="min-h-11 shrink-0" onClick={() => setCompletionDialog('reopen')}>
               <LockKeyholeOpen className="mr-2 h-4 w-4" /> Reabrir para edição
             </Button>
@@ -158,7 +154,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
         <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
           Sem conexão. Conecte-se à internet para inserir fotos, legendas ou editar este Diário.
         </div>
-      ) : !readOnly && canManageConclusion ? (
+      ) : !readOnly && canConclude ? (
         <div className="flex justify-end">
           <Button type="button" className="min-h-11 w-full sm:w-auto" onClick={() => setCompletionDialog('conclude')}>
             <LockKeyhole className="mr-2 h-4 w-4" /> Concluir diário
@@ -282,27 +278,6 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
                 <DailyReportTextAreas currentReport={currentReport} updateField={updateField} />
               </fieldset>
             </DailyReportMobileSection>
-
-            <DailyReportMobileSection
-              className="order-5 lg:order-5"
-              title="Produção executada"
-              summary={summary.tasks > 0 ? `${summary.tasks} tarefa(s) com produção apontada.` : 'Nenhuma produção apontada nesta data.'}
-            >
-              <DailyReportProductionSection
-                selectedDate={selectedDate}
-                grouped={grouped}
-                photosByTask={photosByTask}
-                setPhotoFilter={setPhotoFilter}
-              />
-            </DailyReportMobileSection>
-
-            <DailyReportMobileSection
-              className="order-6 lg:order-6"
-              title="Materiais retirados"
-              summary={dailyWarehouseWithdrawals.length > 0 ? `${dailyWarehouseWithdrawals.length} baixa(s) confirmada(s) no Almoxarifado.` : 'Nenhuma retirada confirmada nesta data.'}
-            >
-              <DailyReportWarehouseSection project={project} selectedDate={selectedDate} />
-            </DailyReportMobileSection>
           </div>
         </TabsContent>
       </Tabs>
@@ -332,8 +307,8 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
             <AlertDialogAction
               className={completionDialog === 'conclude' ? 'bg-primary text-primary-foreground hover:bg-primary/90' : undefined}
               onClick={() => {
-                if (completionDialog === 'conclude' && canManageConclusion) concludeDailyReport();
-                if (completionDialog === 'reopen') reopenDailyReport();
+                if (completionDialog === 'conclude' && canConclude) concludeDailyReport();
+                if (completionDialog === 'reopen' && canReopen) reopenDailyReport();
                 setCompletionDialog(null);
               }}
             >

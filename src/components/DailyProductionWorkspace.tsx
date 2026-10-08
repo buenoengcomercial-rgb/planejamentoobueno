@@ -18,7 +18,8 @@ interface DailyProductionWorkspaceProps {
   dailyReportUndoButton?: React.ReactNode;
   productionReadOnly?: boolean;
   dailyReportReadOnly?: boolean;
-  dailyReportCanManageConclusion?: boolean;
+  dailyReportCanConclude?: boolean;
+  dailyReportCanReopen?: boolean;
   dailyReportCanClearDay?: boolean;
   dailyReportPhotoUploaderName?: string;
   onProductionChange: (next: Project | ((prev: Project) => Project)) => void;
@@ -39,7 +40,8 @@ export default function DailyProductionWorkspace({
   dailyReportUndoButton,
   productionReadOnly = false,
   dailyReportReadOnly = false,
-  dailyReportCanManageConclusion = false,
+  dailyReportCanConclude = false,
+  dailyReportCanReopen = false,
   dailyReportCanClearDay = false,
   dailyReportPhotoUploaderName,
   onProductionChange,
@@ -74,7 +76,8 @@ export default function DailyProductionWorkspace({
               onProjectChange={onDailyReportChange}
               undoButton={dailyReportUndoButton}
               readOnly={dailyReportReadOnly}
-              canManageConclusion={dailyReportCanManageConclusion}
+              canConclude={dailyReportCanConclude}
+              canReopen={dailyReportCanReopen}
               canClearDay={dailyReportCanClearDay}
               photoUploaderName={dailyReportPhotoUploaderName}
               initialDate={dailyReportInitialDate}

@@ -151,8 +151,7 @@ export function useDailyReportPhotos({
       }
       if (uploaded.length > 0) {
         if (!navigator.onLine) {
-          await supabase.storage.from(PHOTO_BUCKET).remove(uploaded.map(photo => photo.storagePath).filter(Boolean) as string[]);
-          toast({ variant: 'destructive', title: 'Envio cancelado', description: 'A conexão caiu antes de registrar as fotos no Diário. Nenhuma foto foi salva.' });
+          toast({ variant: 'destructive', title: 'Registro da foto pendente', description: 'A conexão caiu antes de registrar a foto no Diário. O arquivo enviado foi mantido para recuperação; conecte-se e tente registrar novamente.' });
           return;
         }
         persist(r => ({ ...r, attachments: [...(r.attachments || []), ...uploaded] }));
@@ -233,11 +232,10 @@ export function useDailyReportPhotos({
       toast({ variant: 'destructive', title: 'Sem conexão', description: 'Conecte-se à internet para remover uma foto.' });
       return;
     }
-    if (att.storagePath) {
-      try { await supabase.storage.from(PHOTO_BUCKET).remove([att.storagePath]); } catch { /* ignore */ }
-    }
+    // A referência é removida do Diário após a confirmação da nuvem. O arquivo
+    // permanece no Storage para permitir recuperação de versões anteriores.
     persist(r => ({ ...r, attachments: (r.attachments || []).filter(a => a.id !== att.id) }));
-    toast({ title: 'Foto removida' });
+    toast({ title: 'Remoção da foto solicitada' });
   }, [persist]);
 
   return {
