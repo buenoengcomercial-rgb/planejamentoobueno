@@ -167,6 +167,47 @@ export type Database = {
         }
         Relationships: []
       }
+      daily_report_revisions: {
+        Row: {
+          changed_at: string
+          changed_by: string | null
+          data: Json
+          id: number
+          operation: string
+          project_id: string
+          report_date: string
+          report_id: string
+        }
+        Insert: {
+          changed_at?: string
+          changed_by?: string | null
+          data: Json
+          id?: never
+          operation: string
+          project_id: string
+          report_date: string
+          report_id: string
+        }
+        Update: {
+          changed_at?: string
+          changed_by?: string | null
+          data?: Json
+          id?: never
+          operation?: string
+          project_id?: string
+          report_date?: string
+          report_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "daily_report_revisions_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       daily_reports: {
         Row: {
           created_at: string
