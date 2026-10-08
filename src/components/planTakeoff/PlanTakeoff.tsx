@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Box, Check, ChevronDown, ChevronUp, Circle, CircleDot, Crosshair, Eye, EyeOff, FileUp, Layers3, List, Magnet, Maximize2, MousePointer2, Move, Palette, Plus, Route, Ruler, Settings2, Shapes, Square, Trash2, Undo2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { Box, Check, ChevronDown, ChevronUp, Circle, CircleDot, Crosshair, Eye, EyeOff, FileUp, Layers3, Link2, List, Magnet, Maximize2, MousePointer2, Move, Palette, Plus, Route, Ruler, Settings2, Shapes, Square, Trash2, Undo2, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { calibration, fixedPointCount, measureCategory, measureUnit, MEASURE_KINDS, minimumPoints, measuresForContext, quantity, readTakeoffs, requiresHeight, saveTakeoffs, TAKEOFF_CATALOG_UPDATED, type MeasureKind, type Point, type TakeoffContext, type TakeoffMeasure, type TakeoffPlan } from '@/lib/planTakeoff';
 import { openDwfSheets, type DwfSheet } from '@/lib/dwfTakeoff';
 import { CAPTURE_KINDS, CAPTURE_LABELS, type CaptureKind } from '@/lib/dxfSnap';
@@ -45,6 +45,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   const [availableCaptures, setAvailableCaptures] = useState<CaptureKind[]>([]);
   const [sheetInfo, setSheetInfo] = useState<DwfSheet[]>([]);
   const [showDrawings, setShowDrawings] = useState(false);
+  const [pendingDeletePlanId, setPendingDeletePlanId] = useState('');
   const [hiddenPlans, setHiddenPlans] = useState<string[]>([]);
   const [importFloor, setImportFloor] = useState('');
   const [canvasReady, setCanvasReady] = useState(false);
@@ -115,6 +116,27 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
     const next: TakeoffPlan = { id: crypto.randomUUID(), name: file.name, floor: embedded ? importFloor.trim() : '', kind, file, scales: kind === 'dxf' ? { 1: 1 } : {}, measures: [], ...(embedded ? { chapterId, building: plan?.building } : {}) };
     if (!await commit([...plans, next])) return; setActive(next.id); setPage(1); setPages(1); reset();
     setImportFloor(''); setShowDrawings(false);
+  }
+  async function assignLegacy(planId: string) {
+    const legacy = plans.find(item => item.id === planId && !item.chapterId);
+    if (!legacy || !chapterId || locked) return;
+    const floor = importFloor.trim();
+    if (!floor) { setError('Informe o pavimento para vincular a planta antiga.'); return; }
+    if (!await update({ ...legacy, chapterId, building: plan?.building, floor })) return;
+    setActive(legacy.id); setPage(1); setImportFloor(''); setShowDrawings(false);
+  }
+  async function deletePlan(planId: string) {
+    const target = availablePlans.find(item => item.id === planId);
+    if (!target || locked) return;
+    if (active === planId && draft.length) { setError('Conclua ou cancele o traçado antes de apagar esta planta.'); return; }
+    if (target.measures.length) { setError('Esta planta tem marcações. Remova os quantitativos vinculados antes de apagá-la.'); return; }
+    const remaining = plans.filter(item => item.id !== planId);
+    if (!await commit(remaining)) return;
+    // A exclusão arquiva a planta na nuvem. O desfazer desta sessão não deve tentar inseri-la de novo.
+    history.current = [];
+    if (active === planId) { setActive(remaining.find(item => item.chapterId === chapterId)?.id ?? ''); setPage(1); setSelected(''); reset(); }
+    setHiddenPlans(previous => previous.filter(id => id !== planId));
+    setPendingDeletePlanId('');
   }
   async function finish() {
     if (!plan || !drawable || !tool || tool === 'calibrate') return;
@@ -249,10 +271,25 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
         <p className="text-xs text-muted-foreground">{plan ? `${plan.building ? `${plan.building} · ` : ''}${plan.name}${plan.floor ? ` · ${plan.floor}` : ''}` : 'Escolha uma planta para começar'}</p>
       </div>
       <span role="status" className="order-last w-full text-xs text-muted-foreground sm:order-none sm:w-auto">{status}</span>
+      {embedded && <Button title="Gerenciar plantas — adicionar, selecionar ou apagar pranchas deste prédio" aria-label="Gerenciar plantas" aria-expanded={showDrawings} variant="outline" size="sm" className="h-7 rounded-none text-xs" onClick={() => setShowDrawings(value => !value)}><List className="mr-1 h-3.5 w-3.5" />Plantas</Button>}
       {!embedded && <label className={`inline-flex h-7 items-center gap-1.5 border border-slate-300 bg-slate-50 px-2 text-xs font-medium ${locked ? 'opacity-50' : 'cursor-pointer hover:bg-slate-100'}`}><FileUp className="h-3.5 w-3.5" />Adicionar planta<input aria-label="Adicionar planta" className="sr-only" type="file" accept=".pdf,.png,.jpg,.jpeg,.dxf,.dwf" disabled={locked} onChange={e => { void importFile(e.target.files?.[0]); e.target.value = ''; }} /></label>}
     </header>
     {error && <p role="alert" className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">{error}</p>}
-    {!availablePlans.length && ready && <div className="rounded border border-dashed bg-card p-10 text-center text-muted-foreground">{embedded ? 'Nenhuma planta cadastrada neste prédio. Adicione a planta no capítulo da Produção antes de levantar os pontos.' : 'Adicione uma planta para começar. PDF, imagem, DXF ou DWF 2D.'}</div>}
+    {showDrawings && <div className="border border-slate-300 bg-white p-2 text-xs" aria-label="Plantas cadastradas">
+      <div className="flex items-center justify-between gap-2"><strong>Pranchas do prédio</strong><Button aria-label="Fechar lista de plantas" title="Fechar lista de plantas" variant="ghost" size="icon" className="h-6 w-6" onClick={() => setShowDrawings(false)}><X className="h-3.5 w-3.5" /></Button></div>
+      <div className="mt-1 max-h-44 overflow-auto">{availablePlans.length ? availablePlans.map(item => <div key={item.id} className={`flex items-center gap-1 border-t border-slate-100 py-1 ${active === item.id ? 'bg-sky-50' : ''}`}>
+        <button type="button" className="min-w-0 flex-1 truncate text-left" title={`${item.name} · ${item.floor || 'Sem pavimento'}`} onClick={() => { setActive(item.id); setPage(1); setSelected(''); reset(); setShowDrawings(false); }}>{item.name} <span className="text-slate-500">· {item.floor || 'Sem pavimento'}</span></button>
+        <Button title={hiddenPlans.includes(item.id) ? `Mostrar ${item.name}` : `Ocultar ${item.name}`} aria-label={hiddenPlans.includes(item.id) ? `Mostrar ${item.name}` : `Ocultar ${item.name}`} variant="ghost" size="icon" className="h-6 w-6" onClick={() => setHiddenPlans(previous => previous.includes(item.id) ? previous.filter(id => id !== item.id) : [...previous, item.id])}>{hiddenPlans.includes(item.id) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</Button>
+        {!readOnly && <Button title={item.measures.length ? 'Planta com marcações: remova os vínculos antes de apagar' : `Apagar ${item.name}`} aria-label={`Apagar planta ${item.name}`} variant="ghost" size="icon" className="h-6 w-6 text-red-700" disabled={locked || !!item.measures.length} onClick={() => setPendingDeletePlanId(item.id)}><Trash2 className="h-3.5 w-3.5" /></Button>}
+      </div>) : <p className="py-1 text-slate-500">Nenhuma planta cadastrada neste prédio.</p>}</div>
+      {pendingDeletePlanId && <div className="mt-2 flex flex-wrap items-center gap-2 border border-amber-300 bg-amber-50 px-2 py-1" role="group" aria-label="Confirmar exclusão"><span>Apagar {availablePlans.find(item => item.id === pendingDeletePlanId)?.name}? A prancha será arquivada na nuvem.</span><Button size="sm" variant="destructive" className="h-7 text-xs" aria-label="Confirmar exclusão da planta" disabled={locked} onClick={() => { void deletePlan(pendingDeletePlanId); }}>Apagar</Button><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setPendingDeletePlanId('')}>Cancelar</Button></div>}
+      {!readOnly && <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-200 pt-2">
+        {embedded && <Input aria-label="Pavimento da nova prancha" placeholder="Pavimento (ex.: térreo)" className="h-7 w-44 rounded-none text-xs" value={importFloor} onChange={event => setImportFloor(event.target.value)} />}
+        <label className={`inline-flex h-7 items-center gap-1 border border-slate-300 bg-slate-50 px-2 ${locked ? 'opacity-50' : 'cursor-pointer hover:bg-slate-100'}`}><FileUp className="h-3.5 w-3.5" />Adicionar planta<input type="file" aria-label="Adicionar prancha" className="sr-only" accept=".pdf,.png,.jpg,.jpeg,.dxf,.dwf" disabled={locked} onChange={event => { void importFile(event.target.files?.[0]); event.target.value = ''; }} /></label>
+      </div>}
+      {embedded && !readOnly && plans.some(item => !item.chapterId) && <div className="mt-2 border-t border-slate-200 pt-1 text-slate-600">Plantas antigas sem prédio: {plans.filter(item => !item.chapterId).map(item => <Button key={item.id} variant="link" size="sm" className="h-7 px-1 text-xs" aria-label={`Vincular ${item.name} a este prédio`} disabled={locked} onClick={() => { void assignLegacy(item.id); }}><Link2 className="mr-1 h-3 w-3" />Vincular {item.name}</Button>)}</div>}
+    </div>}
+    {!availablePlans.length && ready && <div className="rounded border border-dashed bg-card p-10 text-center text-muted-foreground">{embedded ? showDrawings ? 'A planta escolhida será exibida aqui.' : 'Nenhuma planta cadastrada neste prédio. Abra Plantas acima para adicionar uma prancha.' : 'Adicione uma planta para começar. PDF, imagem, DXF ou DWF 2D.'}</div>}
     {!!availablePlans.length && plan && <div className="flex min-w-0 flex-col gap-1">
         <div role="toolbar" aria-label="Ferramentas de levantamento" className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 border border-slate-300 bg-[#e9ecef] px-1.5 py-1 text-xs">
           <div className="flex shrink-0 items-center gap-1 border-r border-slate-300 pr-2 tabular-nums" aria-label="Informações do cursor e da medição">
@@ -287,20 +324,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
             <Button title="Desfazer — reverte a última alteração da planta nesta sessão" aria-label="Desfazer" variant="ghost" size="icon" className="h-7 w-7 rounded-none" disabled={locked || !history.current.length} onClick={() => { void undoLast(); }}><Undo2 className="h-4 w-4" /></Button>
           </div>
           <div className="flex w-full min-w-0 flex-wrap items-center gap-1 border-r border-slate-300 pr-2 sm:w-auto" aria-label="Desenho">
-            <div className="relative">
-              <Button title="Lista de plantas — selecione a prancha e controle sua visibilidade" aria-label="Lista de plantas" aria-expanded={showDrawings} variant="ghost" size="icon" className="h-7 w-7 rounded-none" onClick={() => setShowDrawings(value => !value)}><List className="h-4 w-4" /></Button>
-              {showDrawings && <div className="absolute left-0 top-8 z-40 w-80 max-w-[85vw] border border-slate-300 bg-white p-2 shadow-lg" aria-label="Plantas cadastradas">
-                <strong className="text-xs">Pranchas do prédio</strong>
-                <div className="mt-1 max-h-52 overflow-auto">{availablePlans.map(item => <div key={item.id} className={`flex items-center gap-1 border-t border-slate-100 py-1 ${active === item.id ? 'bg-sky-50' : ''}`}>
-                  <button type="button" className="min-w-0 flex-1 truncate text-left text-xs" title={`${item.name} · ${item.floor || 'Sem pavimento'}`} onClick={() => { setActive(item.id); setPage(1); setSelected(''); reset(); setShowDrawings(false); }}>{item.name} <span className="text-slate-500">· {item.floor || 'Sem pavimento'}</span></button>
-                  <Button title={hiddenPlans.includes(item.id) ? `Mostrar ${item.name}` : `Ocultar ${item.name}`} aria-label={hiddenPlans.includes(item.id) ? `Mostrar ${item.name}` : `Ocultar ${item.name}`} variant="ghost" size="icon" className="h-6 w-6" onClick={() => setHiddenPlans(previous => previous.includes(item.id) ? previous.filter(id => id !== item.id) : [...previous, item.id])}>{hiddenPlans.includes(item.id) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</Button>
-                </div>)}</div>
-                {!readOnly && <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-200 pt-2">
-                  {embedded && <Input aria-label="Pavimento da nova prancha" placeholder="Pavimento" className="h-7 min-w-24 flex-1 rounded-none text-xs" value={importFloor} onChange={event => setImportFloor(event.target.value)} />}
-                  <label className="inline-flex h-7 cursor-pointer items-center gap-1 border border-slate-300 bg-slate-50 px-2 text-xs hover:bg-slate-100"><FileUp className="h-3.5 w-3.5" />Adicionar planta<input type="file" aria-label="Adicionar prancha" className="sr-only" accept=".pdf,.png,.jpg,.jpeg,.dxf,.dwf" onChange={event => { void importFile(event.target.files?.[0]); event.target.value = ''; }} /></label>
-                </div>}
-              </div>}
-            </div>
+            <Button title="Lista de plantas — selecione, adicione ou apague uma prancha" aria-label="Lista de plantas" aria-expanded={showDrawings} variant="ghost" size="icon" className="h-7 w-7 rounded-none" onClick={() => setShowDrawings(value => !value)}><List className="h-4 w-4" /></Button>
             <select aria-label="Planta" title="Selecionar planta" className="h-7 w-44 max-w-full min-w-0 border border-slate-300 bg-white px-1 text-xs" value={active} onChange={e => { setActive(e.target.value); setPage(1); setPages(1); setSelected(''); reset(); }}>{availablePlans.map(p => <option key={p.id} value={p.id}>{p.name}{p.floor ? ` · ${p.floor}` : ''}</option>)}</select>
             {(plan.kind === 'pdf' || plan.kind === 'dwf') && <select aria-label="Página" title={plan.kind === 'dwf' ? 'Prancha do DWF' : 'Página do PDF'} className="h-7 w-40 max-w-full min-w-0 border border-slate-300 bg-white px-1 text-xs" value={page} onChange={e => { setPage(Number(e.target.value)); reset(); setSelected(''); }}>{Array.from({ length: pages }, (_, i) => <option key={i} value={i + 1}>{plan.kind === 'dwf' ? `${i + 1}. ${sheetInfo[i]?.name ?? 'Prancha'}${sheetInfo[i] && !sheetInfo[i].supported ? ' · indisponível' : ''}` : `Pág. ${i + 1}`}</option>)}</select>}
             {plan.kind === 'dxf' && <details className="relative"><summary className="flex h-7 cursor-pointer list-none items-center gap-1 border border-slate-300 bg-white px-1.5" title="Layers — mostre ou oculte camadas identificadas no DXF"><Layers3 className="h-4 w-4" />Layers ({canvasLayers.length})</summary><div className="absolute left-0 top-7 z-30 max-h-60 w-60 overflow-auto border border-slate-300 bg-white p-2 shadow-md">{canvasLayers.map(name => <label key={name} className="flex items-center gap-2 py-1 text-xs"><input type="checkbox" checked={!hiddenLayers.includes(name)} onChange={e => canvas.current?.toggleLayer(name, e.target.checked)} />{name}</label>)}</div></details>}

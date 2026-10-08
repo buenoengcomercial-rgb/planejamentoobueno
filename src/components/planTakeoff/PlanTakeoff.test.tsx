@@ -20,7 +20,7 @@ describe('teste independente de levantamento', () => {
     await screen.findByRole('button', { name: 'Contagem' });
     expect(screen.getByText('A · Captura livre')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Detalhe dos levantamentos' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Adicionar planta')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Gerenciar plantas' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Comprimento poligonal' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Contagem' }));
     fireEvent.click(screen.getByText('Ponto de teste'));
@@ -76,6 +76,54 @@ describe('teste independente de levantamento', () => {
     await screen.findByRole('button', { name: 'Contagem' });
     expect(screen.getByTestId('visible-measures')).toBeEmptyDOMElement();
     expect(screen.getByRole('combobox', { name: 'Planta' })).toHaveValue('p');
+  });
+  it('cadastra a planta na janela e compartilha o capítulo entre tarefas', async () => {
+    let saved: TakeoffPlan[] = [];
+    vi.mocked(readTakeoffs).mockImplementation(async () => saved);
+    vi.mocked(saveTakeoffs).mockImplementation(async (_key, next) => { saved = next; });
+    const first = render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" measureContext={{ taskId: 'tarefa-a', logId: 'dia-1' }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Pavimento da nova prancha' }), { target: { value: 'Térreo' } });
+    fireEvent.change(screen.getByLabelText('Adicionar prancha'), { target: { files: [new File(['DXF'], 'PPCI.dxf')] } });
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]).toMatchObject({ name: 'PPCI.dxf', chapterId: 'building-1', floor: 'Térreo', measures: [] });
+    first.unmount();
+    render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" measureContext={{ taskId: 'tarefa-b', logId: 'dia-1' }} />);
+    expect(await screen.findByRole('combobox', { name: 'Planta' })).toHaveValue(saved[0].id);
+  });
+  it('apaga planta sem marcações e preserva outra planta do capítulo', async () => {
+    const other = { ...example, id: 'outro', name: 'Cobertura' };
+    vi.mocked(readTakeoffs).mockResolvedValueOnce([example, other]);
+    render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apagar planta Planta' }));
+    expect(saveTakeoffs).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar exclusão da planta' }));
+    await waitFor(() => expect(saveTakeoffs).toHaveBeenCalledWith('obra', [other], [example, other]));
+    expect(screen.getByRole('combobox', { name: 'Planta' })).toHaveValue('outro');
+  });
+  it('não apaga uma planta com marcações usadas na Produção', async () => {
+    vi.mocked(readTakeoffs).mockResolvedValueOnce([{ ...example, measures: [{ id: 'usada', name: 'Placas', kind: 'count', page: 1, points: [{ x: 1, y: 1 }], taskId: 'tarefa-a', logId: 'dia-1' }] }]);
+    render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
+    expect(screen.getByRole('button', { name: 'Apagar planta Planta' })).toBeDisabled();
+    expect(saveTakeoffs).not.toHaveBeenCalled();
+  });
+  it('mantém consulta às plantas sem cadastro nem exclusão para visualizador', async () => {
+    render(<PlanTakeoff storageKey="obra" readOnly embedded chapterId="building-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
+    expect(screen.queryByLabelText('Adicionar prancha')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apagar planta Planta' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Planta · Térreo' })).toBeInTheDocument();
+  });
+  it('permite vincular planta antiga ao capítulo sem perder os pontos', async () => {
+    const legacy = { ...example, id: 'antiga', name: 'Antiga.dxf', chapterId: undefined, measures: [{ id: 'pontos', name: 'Placas', kind: 'count' as const, page: 1, points: [{ x: 1, y: 2 }] }] };
+    vi.mocked(readTakeoffs).mockResolvedValueOnce([legacy]);
+    render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Pavimento da nova prancha' }), { target: { value: '1º pavimento' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Vincular Antiga.dxf a este prédio' }));
+    await waitFor(() => expect(saveTakeoffs).toHaveBeenCalledWith('obra', [expect.objectContaining({ id: 'antiga', chapterId: 'building-1', floor: '1º pavimento', measures: legacy.measures })], [legacy]));
   });
   it('permite contagem, comprimento e área sem escala, com unidade do desenho identificada', async () => {
     render(<PlanTakeoff storageKey="user/project" readOnly={false} />);
