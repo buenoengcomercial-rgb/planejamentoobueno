@@ -259,18 +259,21 @@ export interface DailyProductionLog {
 
 export interface ProductionQuantityDetail {
   id: string;
+  /** Identidade comum das linhas coladas por referência; cada tarefa conserva seu id de linha. */
+  sharedRecordId?: string;
   location: string;
   comment: string;
   multiplier: number;
   measuredQuantity: number;
   /** A × B nos registros existentes; dimensões adicionais são opcionais por linha. */
-  formula?: 'A*B' | 'A*B*C' | 'A*B*C*D';
+  /** Ausência preserva A × B dos lançamentos anteriores; novas linhas usam Standard. */
+  formula?: 'STANDARD' | 'A*B' | 'A*B*C' | 'A*B*C*D';
   dimensionC?: number;
   dimensionD?: number;
   /** Coluna preenchida automaticamente com 1 ao receber a primeira medição da linha. */
   neutralFactor?: 'multiplier' | 'measuredQuantity';
   neutralFactors?: Array<'multiplier' | 'measuredQuantity' | 'dimensionC' | 'dimensionD'>;
-  /** Origem da coluna A, quando suas unidades foram contadas na planta. */
+  /** Origem da coluna A, preenchida por qualquer ferramenta da planta. */
   multiplierSource?: ProductionQuantityDetailSource;
   /** Origem da coluna B; também mantém os vínculos gravados antes da coluna A existir. */
   source?: ProductionQuantityDetailSource;
@@ -281,10 +284,14 @@ export interface ProductionQuantityDetail {
 export interface ProductionQuantityDetailSource {
     planId: string;
     planName: string;
+    floor?: string;
     page: number;
     measureId: string;
     measureName: string;
-    kind: 'count' | 'length' | 'area';
+    /** Unidade do resultado capturado; u.d. significa unidade do desenho sem conversão para metros. */
+    resultUnit?: string;
+    kind: 'count' | 'length' | 'linearLength' | 'circlePerimeter' | 'area' | 'rectangleArea' | 'circleArea' | 'verticalArea' | 'polygonVolume';
+    heightMeters?: number;
     /** Cópia dos pontos usados no lançamento; a planta original continua local. */
     points: Array<{ x: number; y: number }>;
 }

@@ -2546,7 +2546,7 @@ export default function Index() {
           const request = dailyReportSaveQueueRef.current
             .catch(() => undefined)
             .then(() => saveOpenDailyReport(confirmation.project.id, beforeReport, afterReport));
-          dailyReportSaveQueueRef.current = request;
+          dailyReportSaveQueueRef.current = request.then(() => undefined);
           try {
             const saved = await request;
             mergeConfirmedDailyReportIntoPartialSync(confirmation.project.id, change.date, saved.report);

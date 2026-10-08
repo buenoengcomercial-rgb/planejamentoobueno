@@ -1,12 +1,12 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { forwardRef } from 'react';
+import { forwardRef, useEffect } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanTakeoff from './PlanTakeoff';
 import { readTakeoffs, saveTakeoffs, type TakeoffPlan } from '@/lib/planTakeoff';
 import { projectCollectionsForView } from '@/lib/projectDataScope';
 import { canAccessAppView } from '@/lib/organizations';
 vi.mock('@/lib/planTakeoff', async importOriginal => ({ ...await importOriginal<object>(), readTakeoffs: vi.fn(), saveTakeoffs: vi.fn() }));
-vi.mock('./PlanCanvas', () => ({ default: forwardRef<HTMLButtonElement, { onPoint: (p: { x: number; y: number }) => void; onFinish?: () => void; plan: TakeoffPlan }>(function MockCanvas({ onPoint, onFinish, plan }, ref) { return <><button ref={ref} onClick={() => onPoint({ x: 1, y: 1 })}>Ponto de teste</button><button onClick={onFinish}>Botão direito de teste</button><span data-testid="visible-measures">{plan.measures.map(measure => measure.id).join(',')}</span></>; }) }));
+vi.mock('./PlanCanvas', () => ({ default: forwardRef<HTMLButtonElement, { onPoint: (p: { x: number; y: number }) => void; onFinish?: () => void; onReady?: (ready: boolean) => void; plan: TakeoffPlan }>(function MockCanvas({ onPoint, onFinish, onReady, plan }, ref) { useEffect(() => { onReady?.(true); }, [onReady]); return <><button ref={ref} onClick={() => onPoint({ x: 1, y: 1 })}>Ponto de teste</button><button onClick={() => onPoint({ x: 4, y: 5 })}>Segundo ponto de teste</button><button onClick={onFinish}>Botão direito de teste</button><span data-testid="visible-measures">{plan.measures.map(measure => measure.id).join(',')}</span></>; }) }));
 const example: TakeoffPlan = { id: 'p', name: 'Planta', floor: 'Térreo', chapterId: 'building-1', building: 'Prédio principal', file: new Blob(), kind: 'image', scales: {}, measures: [] };
 beforeEach(() => { vi.mocked(readTakeoffs).mockResolvedValue([example]); vi.mocked(saveTakeoffs).mockReset().mockResolvedValue(); });
 describe('teste independente de levantamento', () => {
@@ -18,11 +18,12 @@ describe('teste independente de levantamento', () => {
   });
   it('no modal da Produção conclui a contagem direto na célula e oculta a tabela inferior', async () => {
     const onUseMeasure = vi.fn().mockReturnValue(true);
-    render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded chapterId="building-1" measureContext={{ taskId: 'task-1', logId: 'day-1' }} allowedKinds={['count']} onUseMeasure={onUseMeasure} />);
+    render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded chapterId="building-1" measureContext={{ taskId: 'task-1', logId: 'day-1' }} allowedKinds={['count']} destinationColumn="A" onUseMeasure={onUseMeasure} />);
     await screen.findByRole('button', { name: 'Contagem' });
+    expect(screen.getByText('A · Captura livre')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Detalhe dos levantamentos' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Adicionar planta')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Comprimento' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Comprimento poligonal' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Contagem' }));
     fireEvent.click(screen.getByText('Ponto de teste'));
     fireEvent.click(screen.getByText('Ponto de teste'));
@@ -84,18 +85,31 @@ describe('teste independente de levantamento', () => {
     expect(canAccessAppView('warehouse_operator', 'planTakeoff')).toBe(false);
     expect(canAccessAppView('engineer', 'planTakeoff')).toBe(true);
   });
-  it('exige escala para dimensões mas permite contagem', async () => {
+  it('permite contagem, comprimento e área sem escala, com unidade do desenho identificada', async () => {
     render(<PlanTakeoff storageKey="user/project" readOnly={false} />);
     await screen.findByText('Nenhum levantamento nesta planta.');
-    expect(screen.getByRole('button', { name: 'Comprimento' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Área' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Comprimento poligonal' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Superfície poligonal' })).toBeEnabled();
+    expect(screen.getByText('Unidades do desenho')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Contagem' }));
     fireEvent.click(screen.getByText('Ponto de teste'));
     fireEvent.click(screen.getByRole('button', { name: 'Concluir traçado' }));
     await screen.findByText('1 un');
     expect(saveTakeoffs).toHaveBeenCalledWith('user/project', expect.arrayContaining([expect.objectContaining({ measures: [expect.objectContaining({ kind: 'count', points: [{ x: 1, y: 1 }] })] })]));
-    fireEvent.click(screen.getByText('Desfazer'));
+    fireEvent.click(screen.getByRole('button', { name: 'Desfazer' }));
     await screen.findByText('Nenhum levantamento nesta planta.');
+  });
+  it('lança comprimento sem escala em qualquer coluna escolhida', async () => {
+    const onUseMeasure = vi.fn().mockReturnValue(true);
+    render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded chapterId="building-1" destinationColumn="A" onUseMeasure={onUseMeasure} />);
+    const length = await screen.findByRole('button', { name: 'Comprimento linear' });
+    expect(length).toBeEnabled();
+    expect(screen.getByText('A · Captura livre')).toBeInTheDocument();
+    fireEvent.click(length);
+    fireEvent.click(screen.getByText('Ponto de teste'));
+    fireEvent.click(screen.getByText('Segundo ponto de teste'));
+    fireEvent.click(screen.getByRole('button', { name: 'Concluir traçado' }));
+    await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'linearLength' }), 5));
   });
   it('preserva o traçado quando falha o salvamento e permite nova tentativa', async () => {
     vi.mocked(saveTakeoffs).mockRejectedValueOnce(new Error('quota'));

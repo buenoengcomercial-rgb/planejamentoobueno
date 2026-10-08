@@ -8,9 +8,10 @@ import { registerPendingEditCommit } from '@/lib/pendingEditCommits';
 import { registerPendingForm } from '@/lib/pendingFormNavigation';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import ProductionQuantityDetails from '@/components/ProductionQuantityDetails';
-import { detailFormula, detailTotal, measureMatchesDetailCell, withDetailValue, type DetailField } from '@/lib/productionQuantityDetails';
-import type { TakeoffMeasure, TakeoffPlan } from '@/lib/planTakeoff';
+import { detailTotal, isBlankDetailRow, withDetailValue, type DetailField } from '@/lib/productionQuantityDetails';
+import { measureUnit, MEASURE_KINDS, type TakeoffMeasure, type TakeoffPlan } from '@/lib/planTakeoff';
 import { lazyWithReload } from '@/lib/lazyWithReload';
+import type { QuantityClipboard, QuantityClipboardMode } from '@/lib/productionQuantityReferences';
 
 const PlanTakeoff = lazyWithReload(() => import('@/components/planTakeoff/PlanTakeoff'));
 const DETAIL_SOURCE_FIELDS = { multiplier: 'multiplierSource', measuredQuantity: 'source', dimensionC: 'dimensionCSource', dimensionD: 'dimensionDSource' } as const;
@@ -24,6 +25,13 @@ interface DailyLogsPanelProps {
   takeoffStorageKey?: string;
   chapterId?: string;
   readOnly?: boolean;
+  onDetailChange?: (logId: string, rows: ProductionQuantityDetail[]) => { success: boolean; error?: string };
+  quantityClipboard?: QuantityClipboard | null;
+  onQuantityCopy?: (mode: QuantityClipboardMode, logId: string, row: ProductionQuantityDetail) => void;
+  onQuantityPaste?: (logId: string, afterRowId?: string) => { success: boolean; error?: string };
+  onPlanRecalibrate?: (planId: string, page: number, scale: number | null) => { success: boolean; error?: string };
+  sharedTaskNames?: (recordId: string) => string[];
+  onOpenDetailHistory?: (recordId: string) => void;
 }
 
 /** Status color por defasagem (planejado - realizado).
@@ -106,7 +114,7 @@ function applyDraftValues(logs: DailyProductionLog[], drafts: DraftValues): { lo
   return { logs: nextLogs, hasInvalidNumber };
 }
 
-export default function DailyLogsPanel({ projectId, task, onChange, focusDate, takeoffStorageKey, chapterId, readOnly = false }: DailyLogsPanelProps) {
+export default function DailyLogsPanel({ projectId, task, onChange, focusDate, takeoffStorageKey, chapterId, readOnly = false, onDetailChange, quantityClipboard, onQuantityCopy, onQuantityPaste, onPlanRecalibrate, sharedTaskNames, onOpenDetailHistory }: DailyLogsPanelProps) {
   const logs = task.dailyLogs ?? EMPTY_DAILY_LOGS;
   const storageKey = productionDraftKey(projectId, task.id);
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
@@ -114,6 +122,7 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
   const [draftProtectionError, setDraftProtectionError] = useState(false);
   const [expandedDetail, setExpandedDetail] = useState<string | null>(null);
   const [planTarget, setPlanTarget] = useState<{ logId: string; rowId: string; field: DetailField } | null>(null);
+  const deletedPlanSources = useRef(new Map<string, { logId: string; rowId: string; row: ProductionQuantityDetail }>());
   const [drafts, setDrafts] = useState<DraftValues>(() => readProductionDraft(storageKey, logs));
   const draftsRef = useRef<DraftValues>(drafts);
   const baseDuration = task.originalDuration ?? task.duration;
@@ -277,6 +286,14 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
     if (readOnly) return false;
     const currentLogs = resolveDrafts();
     if (!currentLogs) return false;
+    if (onDetailChange) {
+      if (Object.keys(draftsRef.current).length > 0) { setProductionError('Confirme os campos do lançamento antes de alterar o detalhe.'); return false; }
+      const log = currentLogs.find(item => item.id === logId);
+      if (!log) return false;
+      const outcome = onDetailChange(logId, edit(log.quantityDetails ?? []));
+      setProductionError(outcome.success ? null : outcome.error ?? 'O detalhe não foi alterado.');
+      return outcome.success;
+    }
     const nextLogs = currentLogs.map(log => {
       if (log.id !== logId) return log;
       const previousRows = log.quantityDetails ?? [];
@@ -294,9 +311,13 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
     return true;
   };
 
-  const addDetail = (logId: string) => changeDetails(logId, rows => [...rows, {
-    id: crypto.randomUUID(), location: '', comment: '', formula: 'A*B', multiplier: 0, measuredQuantity: 0, dimensionC: 0, dimensionD: 0,
-  }]);
+  const createDetail = (logId: string, changes: Partial<ProductionQuantityDetail>): string | null => {
+    const id = crypto.randomUUID();
+    return changeDetails(logId, rows => [...rows, {
+      location: '', comment: '', formula: 'STANDARD', multiplier: 0, measuredQuantity: 0, dimensionC: 0, dimensionD: 0,
+      ...changes, id,
+    }]) ? id : null;
+  };
 
   const applyDetail = (logId: string) => {
     if (readOnly) return;
@@ -316,11 +337,9 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
     if (chapterId && plan.chapterId !== chapterId) { setProductionError('Esta planta não pertence ao prédio da tarefa.'); return false; }
     const targetRow = logs.find(log => log.id === planTarget.logId)?.quantityDetails?.find(row => row.id === planTarget.rowId);
     if (!targetRow) { setProductionError('A linha do detalhe não está mais disponível. Abra o detalhe novamente.'); return false; }
-    if (!measureMatchesDetailCell(measure.kind, planTarget.field, targetRow, task.unit || 'un')) {
-      setProductionError(planTarget.field === 'multiplier' ? 'A coluna A recebe apenas contagem de unidades.' : planTarget.field === 'measuredQuantity' && detailFormula(targetRow) === 'A*B' ? `A coluna B exige uma medição compatível com ${task.unit || 'un'}.` : `Nesta fórmula, a coluna ${DETAIL_COLUMNS[planTarget.field]} recebe comprimento em metros.`);
-      return false;
-    }
     const sourceField = DETAIL_SOURCE_FIELDS[planTarget.field];
+    const priorSource = targetRow[sourceField];
+    const updatingSameMark = priorSource?.planId === plan.id && priorSource.measureId === measure.id;
     const alreadyUsed = logs.some(log => log.quantityDetails?.some(row =>
       Object.values(DETAIL_SOURCE_FIELDS).some(key => row[key]?.planId === plan.id && row[key]?.measureId === measure.id &&
       (log.id !== planTarget.logId || row.id !== planTarget.rowId || key !== sourceField))));
@@ -331,21 +350,61 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
       const updated = rows.map(row => row.id === planTarget.rowId ? {
         ...withDetailValue(row, planTarget.field, result),
         comment: row.comment || measure.name,
-        [sourceField]: { planId: plan.id, planName: plan.name, page: measure.page, measureId: measure.id, measureName: measure.name, kind: measure.kind, points: measure.points.map(point => ({ ...point })) },
+        [sourceField]: { planId: plan.id, planName: plan.name, floor: plan.floor, page: measure.page, measureId: measure.id, measureName: measure.name, kind: measure.kind, resultUnit: measureUnit(measure.kind, plan.scales?.[measure.page] ?? null), heightMeters: measure.heightMeters, points: measure.points.map(point => ({ ...point })) },
       } : row);
+      if (updatingSameMark) { nextRowId = planTarget.rowId; return updated; }
       const below = updated[index + 1];
-      if (below?.multiplier === 0 && below.measuredQuantity === 0 && (below.dimensionC ?? 0) === 0 && (below.dimensionD ?? 0) === 0) {
+      if (below && isBlankDetailRow(below)) {
         nextRowId = below.id;
         return updated;
       }
       nextRowId = crypto.randomUUID();
-      updated.splice(index + 1, 0, { id: nextRowId, location: '', comment: '', formula: 'A*B', multiplier: 0, measuredQuantity: 0, dimensionC: 0, dimensionD: 0 });
+      updated.splice(index + 1, 0, { id: nextRowId, location: '', comment: '', formula: 'STANDARD', multiplier: 0, measuredQuantity: 0, dimensionC: 0, dimensionD: 0 });
       return updated;
     });
     if (!applied) return false;
     setProductionError(null);
     setPlanTarget({ ...planTarget, rowId: nextRowId });
     return true;
+  };
+
+  const findPlanSource = (planId: string, measureId: string) => {
+    for (const log of logs) for (const row of log.quantityDetails ?? [])
+      for (const field of Object.keys(DETAIL_SOURCE_FIELDS) as DetailField[]) {
+        const source = row[DETAIL_SOURCE_FIELDS[field]];
+        if (source?.planId === planId && source.measureId === measureId) return { logId: log.id, rowId: row.id, field };
+      }
+    return null;
+  };
+  const updatePlanMeasure = (plan: TakeoffPlan, measure: TakeoffMeasure, result: number) => {
+    const location = findPlanSource(plan.id, measure.id);
+    if (!location) { setProductionError('A célula vinculada a esta marcação não foi encontrada.'); return false; }
+    if (!Number.isFinite(result) || result <= 0) { setProductionError('A medida editada precisa ser positiva.'); return false; }
+    return changeDetails(location.logId, rows => rows.map(row => row.id === location.rowId ? {
+      ...withDetailValue(row, location.field, result),
+      [DETAIL_SOURCE_FIELDS[location.field]]: { ...row[DETAIL_SOURCE_FIELDS[location.field]], points: measure.points.map(point => ({ ...point })), measureName: measure.name, resultUnit: measureUnit(measure.kind, plan.scales?.[measure.page] ?? null), heightMeters: measure.heightMeters },
+    } : row));
+  };
+  const deletePlanMeasure = (plan: TakeoffPlan, measure: TakeoffMeasure) => {
+    const location = findPlanSource(plan.id, measure.id);
+    if (!location) { setProductionError('A célula vinculada a esta marcação não foi encontrada.'); return false; }
+    const before = logs.find(log => log.id === location.logId)?.quantityDetails?.find(row => row.id === location.rowId);
+    const changed = changeDetails(location.logId, rows => rows.map(row => {
+      if (row.id !== location.rowId) return row;
+      const cleared = withDetailValue(row, location.field, 0);
+      const neutralFields = row.neutralFactors ?? (row.neutralFactor ? [row.neutralFactor] : []);
+      for (const field of neutralFields) if (field !== location.field) cleared[field] = 0;
+      return { ...cleared, neutralFactor: undefined, neutralFactors: [], [DETAIL_SOURCE_FIELDS[location.field]]: undefined };
+    }));
+    if (changed && before) deletedPlanSources.current.set(measure.id, { logId: location.logId, rowId: location.rowId, row: before });
+    return changed;
+  };
+  const restorePlanMeasure = (_plan: TakeoffPlan, measure: TakeoffMeasure) => {
+    const saved = deletedPlanSources.current.get(measure.id);
+    if (!saved) { setProductionError('Não foi possível restaurar o vínculo desta marcação.'); return false; }
+    const restored = changeDetails(saved.logId, rows => rows.map(row => row.id === saved.rowId ? saved.row : row));
+    if (restored) deletedPlanSources.current.delete(measure.id);
+    return restored;
   };
 
   const localPreview = useMemo(() => applyDraftValues(logs, drafts), [drafts, logs]);
@@ -567,16 +626,18 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
               />
             <input
               type="number"
+              inputMode="decimal"
               min={0}
               max={maximumActualForDailyLog(previewTask, row.id)}
               step={0.1}
-              value={inputValue(logDraftKey(row.id, 'actualQuantity'), row.actualQuantity)}
+              value={inputValue(logDraftKey(row.id, 'actualQuantity'), row.quantityDetailsAppliedTotal !== undefined ? Number(row.actualQuantity.toFixed(4)) : row.actualQuantity)}
               data-actual-input={row.id}
               data-log-date={row.date}
               onChange={event => updateDraft(logDraftKey(row.id, 'actualQuantity'), event.target.value)}
               onBlur={handleDeferredBlur}
-              onKeyDown={event => handleDeferredKeyDown(event, logDraftKey(row.id, 'actualQuantity'))}
-              className="bg-transparent border border-current/30 rounded px-1 py-0.5 text-[11px] text-center font-bold focus:outline-none focus:border-current"
+              onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') event.preventDefault(); else handleDeferredKeyDown(event, logDraftKey(row.id, 'actualQuantity')); }}
+              onWheel={event => event.currentTarget.blur()}
+              className="no-spinner bg-transparent border border-current/30 rounded px-1 py-0.5 text-[11px] text-center font-bold focus:outline-none focus:border-current"
               title={`Máximo permitido: ${maximumActualForDailyLog(previewTask, row.id).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} ${unit}`}
             />
             <div className="text-center font-bold flex items-center justify-center gap-1">
@@ -654,9 +715,18 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
               dailyQuantity={row.actualQuantity}
               applied={row.quantityDetailsAppliedTotal !== undefined && row.quantityDetailsAppliedTotal === row.actualQuantity && row.quantityDetailsAppliedTotal === detailTotal(row.quantityDetails ?? [])}
               readOnly={readOnly}
-              onAdd={() => addDetail(row.id)}
+              onCreate={changes => createDetail(row.id, changes)}
               onEdit={(id, changes) => changeDetails(row.id, details => details.map(detail => detail.id === id ? { ...detail, ...changes } : detail))}
               onDelete={id => changeDetails(row.id, details => details.filter(detail => detail.id !== id))}
+              canOpenPlan={!!takeoffStorageKey && !!chapterId}
+              clipboard={quantityClipboard}
+              onCopy={(mode, detail) => onQuantityCopy?.(mode, row.id, detail)}
+              onPaste={afterRowId => {
+                const outcome = onQuantityPaste?.(row.id, afterRowId) ?? { success: false, error: 'A área de transferência da Produção não está disponível.' };
+                setProductionError(outcome.success ? null : outcome.error ?? 'Não foi possível colar o quantitativo.');
+              }}
+              sharedTaskNames={sharedTaskNames}
+              onOpenHistory={onOpenDetailHistory}
               onOpenPlan={(id, field) => { if (!takeoffStorageKey || !chapterId) { setProductionError('Cadastre a planta no capítulo principal do prédio antes de abrir o levantamento.'); return; } setProductionError(null); setPlanTarget({ logId: row.id, rowId: id, field }); }}
               onApply={() => applyDetail(row.id)}
             />}
@@ -763,7 +833,7 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
           {productionError && <p role="alert" className="shrink-0 border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800">{productionError}</p>}
           <div className="min-h-0 flex-1 overflow-auto">
             {planTarget && takeoffStorageKey && <Suspense fallback={<p className="p-4 text-sm">Abrindo visualizador…</p>}>
-              <PlanTakeoff storageKey={takeoffStorageKey} readOnly={readOnly} embedded chapterId={chapterId} measureContext={{ taskId: task.id, logId: planTarget.logId }} onUseMeasure={usePlanMeasure} allowedKinds={(['count', 'length', 'area'] as const).filter(kind => { const target = logs.find(log => log.id === planTarget.logId)?.quantityDetails?.find(row => row.id === planTarget.rowId); return !!target && measureMatchesDetailCell(kind, planTarget.field, target, task.unit || 'un'); })} executedMeasureIds={logs.flatMap(log => log.quantityDetailsAppliedTotal === log.actualQuantity && log.actualQuantity > 0 && log.quantityDetailsAppliedTotal === detailTotal(log.quantityDetails ?? []) ? log.quantityDetails?.flatMap(row => Object.values(DETAIL_SOURCE_FIELDS).map(key => row[key]?.measureId).filter((id): id is string => !!id)) ?? [] : [])} focusMeasure={logs.find(log => log.id === planTarget.logId)?.quantityDetails?.find(row => row.id === planTarget.rowId)?.[DETAIL_SOURCE_FIELDS[planTarget.field]]} />
+              <PlanTakeoff storageKey={takeoffStorageKey} readOnly={readOnly} embedded chapterId={chapterId} measureContext={{ taskId: task.id, logId: planTarget.logId }} destinationColumn={DETAIL_COLUMNS[planTarget.field]} onUseMeasure={usePlanMeasure} onUpdateMeasure={updatePlanMeasure} onDeleteMeasure={deletePlanMeasure} onRestoreMeasure={restorePlanMeasure} onRecalibrate={(plan, page, scale) => { const result = onPlanRecalibrate?.(plan.id, page, scale); if (!result?.success) { setProductionError(result?.error ?? 'Não foi possível recalcular os lançamentos vinculados à planta.'); return false; } setProductionError(null); return true; }} allowedKinds={MEASURE_KINDS} linkedMeasureIds={logs.flatMap(log => log.quantityDetails?.flatMap(detail => Object.values(DETAIL_SOURCE_FIELDS).map(key => detail[key]?.measureId).filter((id): id is string => !!id)) ?? [])} executedMeasureIds={logs.flatMap(log => log.quantityDetailsAppliedTotal === log.actualQuantity && log.actualQuantity > 0 && log.quantityDetailsAppliedTotal === detailTotal(log.quantityDetails ?? []) ? log.quantityDetails?.flatMap(row => Object.values(DETAIL_SOURCE_FIELDS).map(key => row[key]?.measureId).filter((id): id is string => !!id)) ?? [] : [])} focusMeasure={logs.find(log => log.id === planTarget.logId)?.quantityDetails?.find(row => row.id === planTarget.rowId)?.[DETAIL_SOURCE_FIELDS[planTarget.field]]} />
             </Suspense>}
           </div>
         </DialogContent>

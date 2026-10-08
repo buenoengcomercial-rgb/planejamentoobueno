@@ -24,6 +24,9 @@ import { todayISO } from '@/lib/weeklyRoutine';
 import { logToProject, type AuditUserInfo } from '@/lib/audit';
 import { registerPendingEditCommit } from '@/lib/pendingEditCommits';
 import { registerPendingForm } from '@/lib/pendingFormNavigation';
+import AuditHistoryPanel from '@/components/AuditHistoryPanel';
+import { changeQuantityRows, makeQuantityClipboard, pasteQuantityRow, recalibrateQuantitySources, sharedTaskNames, type QuantityClipboard, type QuantityClipboardMode, type QuantityRowAddress } from '@/lib/productionQuantityReferences';
+import type { ProductionQuantityDetail } from '@/types/project';
 
 const ImportSyntheticDialog = lazyWithReload(() => import('@/components/ImportSyntheticDialog'));
 const collapsedPhasesStorageKey = (projectId: string) => `obraplanner:production:collapsed-phases:${projectId}`;
@@ -195,6 +198,8 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
   const [statusFilter, setStatusFilter] = useState<ProductionStatusFilter>('all');
   const [teamFilter, setTeamFilter] = useState('');
   const [expandedDaily, setExpandedDaily] = useState<string | null>(null);
+  const [quantityClipboard, setQuantityClipboard] = useState<QuantityClipboard | null>(null);
+  const [historyRecordId, setHistoryRecordId] = useState<string | null>(null);
   const [simulating, setSimulating] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<string | null>(null);
   const [importSyntheticOpen, setImportSyntheticOpen] = useState(false);
@@ -518,6 +523,32 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
     }
     onProjectChange(updated);
   }, [auditActor, onProjectChange, project]);
+
+  const changeDetailRows = useCallback((taskId: string, logId: string, rows: ProductionQuantityDetail[]) => {
+    const result = changeQuantityRows(project, { taskId, logId }, rows, auditActor, readOnly, () => !readOnly);
+    if (result.project) onProjectChange(result.project);
+    return { success: !!result.project, error: result.error };
+  }, [auditActor, onProjectChange, project, readOnly]);
+
+  const copyDetail = useCallback((mode: QuantityClipboardMode, source: QuantityRowAddress, unit: string, row: ProductionQuantityDetail) => {
+    if (!readOnly) setQuantityClipboard(makeQuantityClipboard(project.id, mode, source, unit, row));
+  }, [project.id, readOnly]);
+
+  const pasteDetail = useCallback((destination: { taskId: string; logId: string; afterRowId?: string }) => {
+    if (!quantityClipboard) return { success: false, error: 'Selecione uma linha e use Copiar, Recortar ou Copiar referência primeiro.' };
+    const result = pasteQuantityRow(project, quantityClipboard, destination, auditActor, readOnly, () => !readOnly);
+    if (result.project) {
+      onProjectChange(result.project);
+      if (quantityClipboard.mode === 'cut') setQuantityClipboard(null);
+    }
+    return { success: !!result.project, error: result.error };
+  }, [auditActor, onProjectChange, project, quantityClipboard, readOnly]);
+
+  const recalibratePlan = useCallback((planId: string, page: number, scale: number | null) => {
+    const result = recalibrateQuantitySources(project, planId, page, scale, auditActor, readOnly, () => !readOnly);
+    if (result.project && result.project !== project) onProjectChange(result.project);
+    return { success: !!result.project, error: result.error };
+  }, [auditActor, onProjectChange, project, readOnly]);
 
   const updateLaborComp = (phaseId: string, taskId: string, compId: string, updates: Partial<LaborComposition>) => {
     const updated = {
@@ -865,7 +896,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
           return (
             <div
               key={phase.id}
-              className={isSub ? 'ml-6' : ''}
+              className={isSub ? 'ml-0 sm:ml-6' : ''}
             >
             <div
               onDragOver={e => handleChapterDragOver(e, phase.id)}
@@ -881,7 +912,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                 </div>
               )}
               <div
-                className={`flex items-center relative ${
+                className={`relative flex flex-wrap items-center sm:flex-nowrap ${
                   isDropTarget && dropPosition === 'before' ? 'before:absolute before:top-0 before:left-0 before:right-0 before:h-0.5 before:bg-primary' : ''
                 } ${
                   isDropTarget && dropPosition === 'after' ? 'after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-primary' : ''
@@ -900,7 +931,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                     if (target.closest('button, input, select, textarea, a, [role="button"]')) return;
                     togglePhase(phase.id);
                   }}
-                  className={`flex-1 min-w-0 flex items-center gap-3 px-5 py-3 ${headerBgClass} cursor-pointer text-foreground transition-colors duration-200 ease-out hover:bg-muted/70`}
+                  className={`flex w-full min-w-0 items-center gap-2 px-3 py-3 sm:w-auto sm:flex-1 sm:gap-3 sm:px-5 ${headerBgClass} cursor-pointer text-foreground transition-colors duration-200 ease-out hover:bg-muted/70`}
                   title={readOnly || taskFilter.active ? 'Clique para expandir ou recolher este capítulo' : 'Clique para expandir ou recolher; arraste para mover/reordenar este capítulo'}
                   aria-expanded={isExpanded}
                 >
@@ -964,7 +995,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                     </div>
                   ) : (
                     <span
-                      className="truncate text-foreground"
+                      className="min-w-0 flex-1 whitespace-normal break-words leading-tight text-foreground sm:flex-none sm:truncate sm:whitespace-nowrap"
                       style={{
                         fontSize: isMainChapter ? 17 : 15,
                         fontWeight: isMainChapter ? 800 : 700,
@@ -979,7 +1010,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1 mr-2 flex-shrink-0 min-w-0 max-w-[260px]" onMouseDown={e => e.stopPropagation()}>
+                <div className="ml-auto mr-2 flex min-w-0 max-w-[260px] flex-shrink-0 items-center gap-1 sm:ml-0" onMouseDown={e => e.stopPropagation()}>
                   {renderActionButtons(phase, isSub)}
                 </div>
                 {!readOnly && <button
@@ -1436,6 +1467,13 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                                   readOnly={readOnly}
                                   task={task}
                                   onChange={(logs: DailyProductionLog[]) => updateDailyLogs(phase.id, task, logs)}
+                                  onDetailChange={(logId, rows) => changeDetailRows(task.id, logId, rows)}
+                                  quantityClipboard={quantityClipboard}
+                                  onQuantityCopy={(mode, logId, row) => copyDetail(mode, { taskId: task.id, logId, rowId: row.id }, task.unit || 'un', row)}
+                                  onQuantityPaste={(logId, afterRowId) => pasteDetail({ taskId: task.id, logId, afterRowId })}
+                                  onPlanRecalibrate={recalibratePlan}
+                                  sharedTaskNames={recordId => sharedTaskNames(project, recordId)}
+                                  onOpenDetailHistory={setHistoryRecordId}
                                   focusDate={focusTaskId === task.id ? focusDate : undefined}
                                 />
                             )}
@@ -1590,6 +1628,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
         );
       })()}
       {confirmDialog}
+      {historyRecordId && <AuditHistoryPanel open onOpenChange={open => { if (!open) setHistoryRecordId(null); }} project={project} entityType="task" entityId={historyRecordId} title="Quantitativo vinculado" />}
     </div>
   );
 }

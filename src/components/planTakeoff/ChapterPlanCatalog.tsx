@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { FileUp, Link2 } from 'lucide-react';
 import { readTakeoffs, updateTakeoffs, TAKEOFF_CATALOG_UPDATED, type TakeoffPlan } from '@/lib/planTakeoff';
+import { openDwfSheets } from '@/lib/dwfTakeoff';
 
 interface Props {
   storageKey: string;
@@ -37,16 +38,17 @@ export default function ChapterPlanCatalog({ storageKey, chapterId, building, re
     const chosenFloor = floor.trim();
     if (!chosenFloor) { setMessage('Informe o pavimento antes de adicionar a planta.'); return; }
     const extension = file.name.split('.').pop()?.toLowerCase();
-    const kind = extension === 'pdf' ? 'pdf' : extension === 'dxf' ? 'dxf' : ['png', 'jpg', 'jpeg'].includes(extension ?? '') ? 'image' : null;
-    if (!kind) { setMessage('Escolha PDF, PNG, JPG ou DXF.'); return; }
+    const kind = extension === 'pdf' ? 'pdf' : extension === 'dxf' ? 'dxf' : extension === 'dwf' ? 'dwf' : ['png', 'jpg', 'jpeg'].includes(extension ?? '') ? 'image' : null;
+    if (!kind) { setMessage('Escolha PDF, PNG, JPG, DXF ou DWF 2D.'); return; }
     if (file.size > 100 * 1024 * 1024) { setMessage('Neste teste, o limite por arquivo é 100 MB.'); return; }
     setSaving(true); setMessage('Salvando planta neste navegador…');
     try {
+      if (kind === 'dwf') await openDwfSheets(file);
       const next = await updateTakeoffs(storageKey, current => {
         if (current.some(plan => plan.chapterId === chapterId && plan.floor.toLowerCase() === chosenFloor.toLowerCase() && plan.name.toLowerCase() === file.name.toLowerCase())) {
           throw new Error('Esta planta já está cadastrada neste prédio e pavimento.');
         }
-        return [...current, { id: crypto.randomUUID(), name: file.name, floor: chosenFloor, building, chapterId, kind, file, scales: {}, measures: [] }];
+        return [...current, { id: crypto.randomUUID(), name: file.name, floor: chosenFloor, building, chapterId, kind, file, scales: kind === 'dxf' ? { 1: 1 } : {}, measures: [] }];
       });
       announce(next); setFloor(''); setMessage('Planta disponível para as tarefas deste prédio neste navegador.');
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Não foi possível salvar a planta. Verifique o espaço livre.'); }
@@ -72,7 +74,7 @@ export default function ChapterPlanCatalog({ storageKey, chapterId, building, re
       <strong>Plantas do prédio: {building}</strong>
       <span className="text-slate-500">{chapterPlans.length} cadastrada{chapterPlans.length === 1 ? '' : 's'}</span>
       {!readOnly && <><input aria-label={`Pavimento da planta de ${building}`} value={floor} onChange={event => setFloor(event.target.value)} placeholder="Pavimento (ex.: térreo)" className="h-8 min-w-36 border border-slate-300 bg-white px-2" />
-        <label className={`inline-flex h-8 items-center gap-1 border border-slate-300 bg-white px-2 font-medium ${saving ? 'opacity-50' : 'cursor-pointer hover:bg-sky-50'}`}><FileUp className="h-3.5 w-3.5" />Adicionar planta<input type="file" aria-label={`Adicionar planta ao prédio ${building}`} accept=".pdf,.png,.jpg,.jpeg,.dxf" className="sr-only" disabled={saving || !ready} onChange={event => { void addFile(event.target.files?.[0]); event.target.value = ''; }} /></label></>}
+        <label className={`inline-flex h-8 items-center gap-1 border border-slate-300 bg-white px-2 font-medium ${saving ? 'opacity-50' : 'cursor-pointer hover:bg-sky-50'}`}><FileUp className="h-3.5 w-3.5" />Adicionar planta<input type="file" aria-label={`Adicionar planta ao prédio ${building}`} accept=".pdf,.png,.jpg,.jpeg,.dxf,.dwf" className="sr-only" disabled={saving || !ready} onChange={event => { void addFile(event.target.files?.[0]); event.target.value = ''; }} /></label></>}
     </div>
     {message && <p role="status" className="mt-1 text-amber-800">{message}</p>}
     {chapterPlans.length > 0 && <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1">{chapterPlans.map(plan => <li key={plan.id}>{plan.name} · {plan.floor} <span className="text-slate-500">({(plan.file.size / 1024 / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} MB)</span></li>)}</ul>}

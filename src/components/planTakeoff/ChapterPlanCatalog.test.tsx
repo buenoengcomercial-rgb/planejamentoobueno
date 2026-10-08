@@ -18,7 +18,7 @@ describe('catálogo de plantas do prédio', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Pavimento da planta de Prédio A' }), { target: { value: 'Térreo' } });
     fireEvent.change(screen.getByLabelText('Adicionar planta ao prédio Prédio A'), { target: { files: [new File(['DXF'], 'PPCI.dxf')] } });
     await waitFor(() => expect(stored).toHaveLength(1));
-    expect(stored[0]).toMatchObject({ name: 'PPCI.dxf', chapterId: 'predio', building: 'Prédio A', floor: 'Térreo', measures: [] });
+    expect(stored[0]).toMatchObject({ name: 'PPCI.dxf', chapterId: 'predio', building: 'Prédio A', floor: 'Térreo', scales: { 1: 1 }, measures: [] });
     first.unmount();
     render(<ChapterPlanCatalog storageKey="obra" chapterId="predio" building="Prédio A" readOnly={false} />);
     expect(await screen.findByText(/PPCI\.dxf/)).toBeInTheDocument();
