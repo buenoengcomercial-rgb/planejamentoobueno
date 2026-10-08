@@ -249,11 +249,11 @@ function readAppUiSession(): AppUiSession | null {
   try {
     const raw = localStorage.getItem(APP_UI_SESSION_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as AppUiSession;
+    const parsed = JSON.parse(raw) as Omit<AppUiSession, 'view'> & { view?: unknown };
     if (parsed.version !== UI_SESSION_VERSION) return null;
     if (parsed.view === 'planTakeoff') return { ...parsed, view: 'tasks' };
     if (parsed.view && !isAppView(parsed.view)) return null;
-    return parsed;
+    return { ...parsed, view: isAppView(parsed.view) ? parsed.view : undefined };
   } catch {
     return null;
   }

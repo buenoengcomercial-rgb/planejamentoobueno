@@ -54,7 +54,7 @@ describe('teste independente de levantamento', () => {
   it('permite reutilizar uma contagem já salva sem reabrir a tabela inferior', async () => {
     const onUseMeasure = vi.fn().mockReturnValue(true);
     vi.mocked(readTakeoffs).mockResolvedValueOnce([{ ...example, measures: [{ id: 'placas', name: 'Placas executadas', kind: 'count', page: 1, points: [{ x: 1, y: 2 }, { x: 3, y: 4 }, { x: 5, y: 6 }] }] }]);
-    render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded chapterId="building-1" measureContext={{ taskId: 'task-1', logId: 'day-1' }} focusMeasure={{ planId: 'p', page: 1, measureId: 'placas' }} onUseMeasure={onUseMeasure} />);
+    render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded chapterId="building-1" measureContext={{ taskId: 'task-1', logId: 'day-1' }} linkedMeasureIds={['placas']} focusMeasure={{ planId: 'p', page: 1, measureId: 'placas' }} onUseMeasure={onUseMeasure} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Usar marcação selecionada' }));
     await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.objectContaining({ id: 'p' }), expect.objectContaining({ id: 'placas', taskId: 'task-1', logId: 'day-1' }), 3));
     expect(saveTakeoffs).toHaveBeenCalledWith('user/project', expect.arrayContaining([expect.objectContaining({ measures: [expect.objectContaining({ id: 'placas', taskId: 'task-1', logId: 'day-1' })] })]), expect.any(Array));
@@ -83,6 +83,8 @@ describe('teste independente de levantamento', () => {
     vi.mocked(saveTakeoffs).mockImplementation(async (_key, next) => { saved = next; });
     const first = render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" measureContext={{ taskId: 'tarefa-a', logId: 'dia-1' }} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
+    expect(screen.getByRole('dialog', { name: 'Gestão de desenhos' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Nova planta' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Pavimento da nova prancha' }), { target: { value: 'Térreo' } });
     fireEvent.change(screen.getByLabelText('Adicionar prancha'), { target: { files: [new File(['DXF'], 'PPCI.dxf')] } });
     await waitFor(() => expect(saved).toHaveLength(1));
@@ -100,6 +102,7 @@ describe('teste independente de levantamento', () => {
     expect(saveTakeoffs).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Confirmar exclusão da planta' }));
     await waitFor(() => expect(saveTakeoffs).toHaveBeenCalledWith('obra', [other], [example, other]));
+    fireEvent.click(screen.getByRole('button', { name: 'Aceitar gestão de desenhos' }));
     expect(screen.getByRole('combobox', { name: 'Planta' })).toHaveValue('outro');
   });
   it('não apaga uma planta com marcações usadas na Produção', async () => {
@@ -116,11 +119,49 @@ describe('teste independente de levantamento', () => {
     expect(screen.queryByRole('button', { name: 'Apagar planta Planta' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Planta · Térreo' })).toBeInTheDocument();
   });
+  it('abre uma janela sobre o desenho e só aplica seleção e visibilidade ao aceitar', async () => {
+    vi.mocked(readTakeoffs).mockResolvedValueOnce([example, { ...example, id: 'subsolo', name: 'Subsolo' }]);
+    render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Lista de plantas' }));
+    const dialog = screen.getByRole('dialog', { name: 'Gestão de desenhos' });
+    expect(dialog.closest('section')).toBeNull();
+    expect(screen.getByRole('columnheader', { name: 'Visível' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Eliminável' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Subsolo · Térreo' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Visível Subsolo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar gestão de desenhos' }));
+    expect(screen.getByRole('combobox', { name: 'Planta' })).toHaveValue('p');
+    fireEvent.click(screen.getByRole('button', { name: 'Lista de plantas' }));
+    expect(screen.getByRole('checkbox', { name: 'Visível Subsolo' })).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Subsolo · Térreo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Aceitar gestão de desenhos' }));
+    expect(screen.queryByRole('dialog', { name: 'Gestão de desenhos' })).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Planta' })).toHaveValue('subsolo');
+    expect(saveTakeoffs).not.toHaveBeenCalled();
+  });
+  it('não revela pontos antigos sem vínculo, de outra tarefa ou de outro dia após recarregar', async () => {
+    const saved = [{ ...example, measures: [
+      { id: 'antigo', name: 'Antigo', kind: 'count' as const, page: 1, points: [{ x: 1, y: 1 }] },
+      { id: 'outro', name: 'Outra tarefa', kind: 'count' as const, page: 1, points: [{ x: 2, y: 2 }], taskId: 'outra', logId: 'hoje' },
+      { id: 'ontem', name: 'Outro dia', kind: 'count' as const, page: 1, points: [{ x: 3, y: 3 }], taskId: 'atual', logId: 'ontem' },
+      { id: 'atual', name: 'Atual', kind: 'count' as const, page: 1, points: [{ x: 4, y: 4 }], taskId: 'atual', logId: 'hoje' },
+    ] }];
+    vi.mocked(readTakeoffs).mockResolvedValue(saved);
+    const props = { storageKey: 'obra', readOnly: false, embedded: true, chapterId: 'building-1', measureContext: { taskId: 'atual', logId: 'hoje' } };
+    const first = render(<PlanTakeoff {...props} />);
+    await waitFor(() => expect(screen.getByTestId('visible-measures')).toHaveTextContent(/^atual$/));
+    first.unmount();
+    render(<PlanTakeoff {...props} />);
+    await waitFor(() => expect(screen.getByTestId('visible-measures')).toHaveTextContent(/^atual$/));
+    expect(saveTakeoffs).not.toHaveBeenCalled();
+    expect(saved[0].measures).toHaveLength(4);
+  });
   it('permite vincular planta antiga ao capítulo sem perder os pontos', async () => {
     const legacy = { ...example, id: 'antiga', name: 'Antiga.dxf', chapterId: undefined, measures: [{ id: 'pontos', name: 'Placas', kind: 'count' as const, page: 1, points: [{ x: 1, y: 2 }] }] };
     vi.mocked(readTakeoffs).mockResolvedValueOnce([legacy]);
     render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Nova planta' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Pavimento da nova prancha' }), { target: { value: '1º pavimento' } });
     fireEvent.click(screen.getByRole('button', { name: 'Vincular Antiga.dxf a este prédio' }));
     await waitFor(() => expect(saveTakeoffs).toHaveBeenCalledWith('obra', [expect.objectContaining({ id: 'antiga', chapterId: 'building-1', floor: '1º pavimento', measures: legacy.measures })], [legacy]));

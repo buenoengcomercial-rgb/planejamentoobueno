@@ -6,8 +6,8 @@ import type { Task } from '@/types/project';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 
 vi.mock('@/components/planTakeoff/PlanTakeoff', () => ({
-  default: ({ onUseMeasure, embedded }: { onUseMeasure: (plan: object, measure: object, result: number) => boolean; embedded: boolean }) =>
-    <div>{embedded && <span>Visualizador sem tabela de levantamentos</span>}<button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf', chapterId: 'phase-1' }, { id: 'measure-1', name: 'Executadas', kind: 'count', page: 2, points: [{ x: 10, y: 20 }, { x: 30, y: 40 }, { x: 50, y: 60 }] }, 3)}>Concluir contagem de teste</button><button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf', chapterId: 'phase-1' }, { id: 'measure-2', name: 'Segundo grupo', kind: 'count', page: 2, points: [{ x: 70, y: 80 }, { x: 90, y: 100 }] }, 2)}>Concluir outra contagem</button><button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf', chapterId: 'phase-1' }, { id: 'measure-length', name: 'Largura executada', kind: 'length', page: 2, points: [{ x: 10, y: 20 }, { x: 40, y: 20 }] }, 3)}>Concluir comprimento de teste</button></div>,
+  default: ({ onUseMeasure, embedded, linkedMeasureIds, executedMeasureIds }: { linkedMeasureIds: string[]; executedMeasureIds: string[]; onUseMeasure: (plan: object, measure: object, result: number) => boolean; embedded: boolean }) =>
+    <div><span data-testid="linked-points">{linkedMeasureIds?.join(",")}</span><span data-testid="executed-points">{executedMeasureIds?.join(",")}</span>{embedded && <span>Visualizador sem tabela de levantamentos</span>}<button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf', chapterId: 'phase-1' }, { id: 'measure-1', name: 'Executadas', kind: 'count', page: 2, points: [{ x: 10, y: 20 }, { x: 30, y: 40 }, { x: 50, y: 60 }] }, 3)}>Concluir contagem de teste</button><button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf', chapterId: 'phase-1' }, { id: 'measure-2', name: 'Segundo grupo', kind: 'count', page: 2, points: [{ x: 70, y: 80 }, { x: 90, y: 100 }] }, 2)}>Concluir outra contagem</button><button onClick={() => onUseMeasure({ id: 'plan-1', name: 'Placas.pdf', chapterId: 'phase-1' }, { id: 'measure-length', name: 'Largura executada', kind: 'length', page: 2, points: [{ x: 10, y: 20 }, { x: 40, y: 20 }] }, 3)}>Concluir comprimento de teste</button></div>,
 }));
 
 function buildTask(overrides: Partial<Task> = {}): Task {
@@ -29,6 +29,20 @@ function buildTask(overrides: Partial<Task> = {}): Task {
 }
 
 describe('DailyLogsPanel', () => {
+  it('envia ao visualizador somente as referências e execuções do dia aberto', async () => {
+    const source = (measureId: string) => ({ planId: 'plan-1', planName: 'Placas.pdf', measureId, measureName: 'Placas', page: 1, kind: 'count' as const, points: [{ x: 1, y: 1 }] });
+    const row = (id: string) => ({ id, location: '', comment: '', formula: 'A*B' as const, multiplier: 1, measuredQuantity: 1, source: source(id) });
+    const task = buildTask({ dailyLogs: [
+      { id: 'ontem', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 1, quantityDetailsAppliedTotal: 1, quantityDetails: [row('ponto-ontem')] },
+      { id: 'hoje', date: '2026-09-09', plannedQuantity: 8, actualQuantity: 1, quantityDetailsAppliedTotal: 1, quantityDetails: [row('ponto-hoje')] },
+    ] });
+    render(<DailyLogsPanel task={task} chapterId="phase-1" takeoffStorageKey="scope" onChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-09' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna B da linha 1 na planta' }));
+    expect(await screen.findByTestId('linked-points')).toHaveTextContent(/^ponto-hoje$/);
+    expect(screen.getByTestId('executed-points')).toHaveTextContent(/^ponto-hoje$/);
+  });
+
   it('mostra a subtabela A-D com fórmula real, parcial e subtotal acumulado', () => {
     const initial = buildTask({ unit: 'm²', quantity: 100, dailyLogs: [{ id: 'log-1', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 0 }] });
     function Harness() {
