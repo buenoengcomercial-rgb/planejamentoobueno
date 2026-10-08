@@ -44,8 +44,10 @@ describe('levantamento em coordenadas do documento', () => {
       { id: 'a2', name: 'Tarefa A dia 2', kind: 'count' as const, page: 1, points: [], taskId: 'a', logId: 'dia-2' },
       { id: 'b1', name: 'Tarefa B dia 1', kind: 'count' as const, page: 1, points: [], taskId: 'b', logId: 'dia-1' },
     ];
-    expect(measuresForContext(measures, { taskId: 'a', logId: 'dia-1' }).map(measure => measure.id)).toEqual(['legacy', 'a1']);
-    expect(measuresForContext(measures, { taskId: 'b', logId: 'dia-1' }).map(measure => measure.id)).toEqual(['legacy', 'b1']);
-    expect(measuresForContext(measures, { taskId: 'b', logId: 'dia-1' }, ['a1']).map(measure => measure.id)).toEqual(['legacy', 'a1', 'b1']);
+    expect(measuresForContext(measures, { taskId: 'a', logId: 'dia-1' }).map(measure => measure.id)).toEqual(['a1']);
+    expect(measuresForContext(measures, { taskId: 'b', logId: 'dia-1' }).map(measure => measure.id)).toEqual(['b1']);
+    // Uma referência explícita no lançamento atual também pertence à atividade aberta.
+    expect(measuresForContext(measures, { taskId: 'b', logId: 'dia-1' }, ['a1']).map(measure => measure.id)).toEqual(['a1', 'b1']);
+    expect(measuresForContext(measures, { taskId: 'a', logId: 'dia-1' }, ['legacy']).map(measure => measure.id)).toEqual(['legacy', 'a1']);
   });
 });

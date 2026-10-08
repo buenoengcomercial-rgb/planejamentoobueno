@@ -18,7 +18,7 @@ export const TAKEOFF_CATALOG_UPDATED = 'obraplanner:takeoff-catalog-updated';
 export function measuresForContext(measures: TakeoffMeasure[], context?: TakeoffContext, linkedMeasureIds: string[] = []): TakeoffMeasure[] {
   if (!context) return measures;
   const linked = new Set(linkedMeasureIds);
-  return measures.filter(measure => linked.has(measure.id) || !measure.taskId && !measure.logId || measure.taskId === context.taskId && measure.logId === context.logId);
+  return measures.filter(measure => linked.has(measure.id) || measure.taskId === context.taskId && measure.logId === context.logId);
 }
 export const scopeKey = (org: string, user: string, project: string) => JSON.stringify([org, user, project]);
 export const MEASURE_KINDS: MeasureKind[] = ['count', 'linearLength', 'length', 'circlePerimeter', 'rectangleArea', 'area', 'circleArea', 'verticalArea', 'polygonVolume'];
