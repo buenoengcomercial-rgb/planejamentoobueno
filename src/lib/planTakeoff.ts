@@ -1,3 +1,5 @@
+import { archiveCloudPlan, cloudRowToPlan, cloudTakeoffScope, insertCloudPlan, readCloudPlanRows, updateCloudPlan } from './planTakeoffCloud';
+
 export interface Point { x: number; y: number }
 export type MeasureKind = 'count' | 'length' | 'linearLength' | 'circlePerimeter' | 'area' | 'rectangleArea' | 'circleArea' | 'verticalArea' | 'polygonVolume';
 export interface TakeoffMeasure { id: string; name: string; kind: MeasureKind; page: number; points: Point[]; heightMeters?: number; taskId?: string; logId?: string }
@@ -7,6 +9,9 @@ export interface TakeoffPlan {
   /** Capítulo principal que representa o prédio. Ausente em plantas locais antigas. */
   chapterId?: string;
   building?: string;
+  /** Somente cache: caminho imutavel e versao confirmada pelo servidor. */
+  storagePath?: string;
+  cloudRevision?: number;
 }
 export interface TakeoffContext { taskId: string; logId: string }
 export const TAKEOFF_CATALOG_UPDATED = 'obraplanner:takeoff-catalog-updated';
@@ -64,7 +69,7 @@ function db() {
     request.onerror = () => { database = undefined; reject(request.error); };
   });
 }
-export async function readTakeoffs(key: string): Promise<TakeoffPlan[]> {
+async function readLocalTakeoffs(key: string): Promise<TakeoffPlan[]> {
   const database = await db();
   return new Promise((resolve, reject) => {
     const request = database.transaction('scopes').objectStore('scopes').get(key);
@@ -72,7 +77,7 @@ export async function readTakeoffs(key: string): Promise<TakeoffPlan[]> {
     request.onerror = () => reject(request.error);
   });
 }
-export async function saveTakeoffs(key: string, plans: TakeoffPlan[]): Promise<void> {
+async function saveLocalTakeoffs(key: string, plans: TakeoffPlan[]): Promise<void> {
   const database = await db();
   return new Promise((resolve, reject) => {
     const transaction = database.transaction('scopes', 'readwrite');
@@ -83,8 +88,67 @@ export async function saveTakeoffs(key: string, plans: TakeoffPlan[]): Promise<v
   });
 }
 
-/** Atualiza o catálogo a partir do valor mais recente, sem sobrescrever outra alteração local. */
+const lastCloudRead = new Map<string, TakeoffPlan[]>();
+function planContent(plan: TakeoffPlan): string {
+  return JSON.stringify({ name: plan.name, floor: plan.floor, kind: plan.kind,
+    chapterId: plan.chapterId, building: plan.building, scales: plan.scales, measures: plan.measures });
+}
+
+/** A nuvem e a fonte principal; o IndexedDB continua como cache e copia da migracao. */
+export async function readTakeoffs(key: string, options: { migrateLocal?: boolean } = {}): Promise<TakeoffPlan[]> {
+  const scope = cloudTakeoffScope(key);
+  if (!scope) return readLocalTakeoffs(key);
+  const rows = await readCloudPlanRows(scope);
+  const local = await readLocalTakeoffs(key).catch(() => [] as TakeoffPlan[]);
+  const knownIds = new Set(rows.map(row => row.id));
+  if (options.migrateLocal) {
+    for (const plan of local) {
+      if (knownIds.has(plan.id) || plan.cloudRevision) continue;
+      await insertCloudPlan(scope, plan);
+      knownIds.add(plan.id);
+    }
+  }
+  const currentRows = options.migrateLocal ? await readCloudPlanRows(scope) : rows;
+  const cache = new Map(local.map(plan => [plan.id, plan]));
+  const plans = await Promise.all(currentRows.filter(row => !row.deleted_at)
+    .map(row => cloudRowToPlan(row, cache.get(row.id))));
+  lastCloudRead.set(key, plans);
+  // Falta de espaco local nao invalida a gravacao ja confirmada no servidor.
+  if (options.migrateLocal || local.every(plan => knownIds.has(plan.id) || !!plan.cloudRevision)) {
+    void saveLocalTakeoffs(key, plans).catch(() => undefined);
+  }
+  return plans;
+}
+
+/** Grava so a planta alterada; nunca substitui o catalogo de outro usuario. */
+export async function saveTakeoffs(key: string, plans: TakeoffPlan[], previous = lastCloudRead.get(key) ?? []): Promise<void> {
+  const scope = cloudTakeoffScope(key);
+  if (!scope) return saveLocalTakeoffs(key, plans);
+  const before = new Map(previous.map(plan => [plan.id, plan]));
+  const after = new Map(plans.map(plan => [plan.id, plan]));
+  const changes = [
+    ...plans.filter(plan => !before.has(plan.id) || planContent(plan) !== planContent(before.get(plan.id)!)),
+    ...previous.filter(plan => !after.has(plan.id)),
+  ];
+  if (changes.length > 1) throw new Error('Uma operação alterou várias plantas. Reabra o catálogo e altere uma planta por vez.');
+  const changed = changes[0];
+  if (!changed) return;
+  const old = before.get(changed.id);
+  if (!after.has(changed.id)) await archiveCloudPlan(scope, changed);
+  else if (old) await updateCloudPlan(scope, changed, old);
+  else await insertCloudPlan(scope, changed);
+  lastCloudRead.set(key, plans);
+  await saveLocalTakeoffs(key, plans).catch(() => undefined);
+}
+
+/** Atualiza o catalogo a partir da versao mais recente. */
 export async function updateTakeoffs(key: string, edit: (plans: TakeoffPlan[]) => TakeoffPlan[]): Promise<TakeoffPlan[]> {
+  if (cloudTakeoffScope(key)) {
+    const current = await readTakeoffs(key, { migrateLocal: true });
+    const next = edit(current);
+    await saveTakeoffs(key, next, current);
+    return next;
+  }
   const database = await db();
   return new Promise((resolve, reject) => {
     const transaction = database.transaction('scopes', 'readwrite');

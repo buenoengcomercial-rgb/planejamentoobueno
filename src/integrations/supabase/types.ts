@@ -14,6 +14,66 @@ export type Database = {
   }
   public: {
     Tables: {
+      takeoff_plans: {
+        Row: {
+          id: string
+          project_id: string
+          chapter_id: string | null
+          building: string | null
+          name: string
+          floor: string
+          kind: string
+          file_path: string
+          scales: Json
+          measures: Json
+          revision: number
+          created_by: string
+          created_at: string
+          updated_at: string
+          deleted_at: string | null
+        }
+        Insert: {
+          id: string
+          project_id: string
+          chapter_id?: string | null
+          building?: string | null
+          name: string
+          floor?: string
+          kind: string
+          file_path: string
+          scales?: Json
+          measures?: Json
+          revision?: number
+          created_by?: string
+          created_at?: string
+          updated_at?: string
+          deleted_at?: string | null
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          chapter_id?: string | null
+          building?: string | null
+          name?: string
+          floor?: string
+          kind?: string
+          file_path?: string
+          scales?: Json
+          measures?: Json
+          revision?: number
+          created_by?: string
+          created_at?: string
+          updated_at?: string
+          deleted_at?: string | null
+        }
+        Relationships: [{
+          foreignKeyName: "takeoff_plans_project_id_fkey"
+          columns: ["project_id"]
+          isOneToOne: false
+          referencedRelation: "projects"
+          referencedColumns: ["id"]
+        }]
+      }
       additives: {
         Row: {
           created_at: string
