@@ -2126,4 +2126,4 @@ export interface AuditLog {
 }
 
 export type ViewMode = 'days' | 'weeks' | 'months';
-export type AppView = 'dashboard' | 'management' | 'gantt' | 'tasks' | 'measurement' | 'dailyReport' | 'additive' | 'additiveSchedule' | 'realCost' | 'materials' | 'warehouse' | 'planTakeoff';
+export type AppView = 'dashboard' | 'management' | 'gantt' | 'tasks' | 'measurement' | 'dailyReport' | 'additive' | 'additiveSchedule' | 'realCost' | 'materials' | 'warehouse';

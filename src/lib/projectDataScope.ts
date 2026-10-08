@@ -142,7 +142,6 @@ const WAREHOUSE_PLANNING: ProjectCollectionKey[] = [
 ];
 
 const VIEW_COLLECTIONS: Record<Exclude<AppView, 'warehouse'>, ProjectCollectionKey[]> = {
-  planTakeoff: [],
   dashboard: unique([
     ...EAP,
     ...WORK_START_COLLECTIONS,

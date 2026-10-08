@@ -36,8 +36,6 @@ const loadAdditive = () => import('@/components/Additive');
 const loadAdditiveSchedule = () => import('@/components/AdditiveSchedule');
 const loadRealCost = () => import('@/components/RealCost');
 const loadMaterials = () => import('@/components/Materials');
-const loadPlanTakeoff = () => import('@/components/planTakeoff/PlanTakeoff');
-const PlanTakeoff = lazyWithReload(loadPlanTakeoff);
 const loadWarehouse = () => import('@/components/warehouse/Warehouse');
 
 const Dashboard = lazyWithReload(loadDashboard);
@@ -163,10 +161,9 @@ const WAREHOUSE_OPERATION_COLLECTIONS: Record<WarehousePrepareScope, readonly Pr
     'auditLogs',
   ],
 };
-const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse', 'planTakeoff'];
+const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse'];
 
 const NEXT_VIEW_PRELOAD: Record<AppView, { view: AppView; load: () => Promise<unknown> }> = {
-  planTakeoff: { view: 'tasks', load: loadTaskList },
   dashboard: { view: 'management', load: loadManagementRoutine },
   management: { view: 'tasks', load: () => Promise.all([loadDailyProductionWorkspace(), loadTaskList()]) },
   gantt: { view: 'tasks', load: () => Promise.all([loadDailyProductionWorkspace(), loadTaskList()]) },
@@ -181,7 +178,6 @@ const NEXT_VIEW_PRELOAD: Record<AppView, { view: AppView; load: () => Promise<un
 };
 
 const VIEW_ROUTE: Record<AppView, string> = {
-  planTakeoff: 'levantamento',
   dashboard: 'dashboard',
   management: 'rotina',
   gantt: 'cronograma',
@@ -195,7 +191,11 @@ const VIEW_ROUTE: Record<AppView, string> = {
   warehouse: 'almoxarifado',
 };
 
-const ROUTE_VIEW = Object.fromEntries(Object.entries(VIEW_ROUTE).map(([view, route]) => [route, view])) as Record<string, AppView>;
+const ROUTE_VIEW: Record<string, AppView> = {
+  ...Object.fromEntries(Object.entries(VIEW_ROUTE).map(([view, route]) => [route, view])),
+  // Links antigos da aba independente abrem o lançamento da Produção.
+  levantamento: 'tasks',
+};
 
 type UndoStacks = Record<AppView, Project[]>;
 
@@ -251,6 +251,7 @@ function readAppUiSession(): AppUiSession | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as AppUiSession;
     if (parsed.version !== UI_SESSION_VERSION) return null;
+    if (parsed.view === 'planTakeoff') return { ...parsed, view: 'tasks' };
     if (parsed.view && !isAppView(parsed.view)) return null;
     return parsed;
   } catch {
@@ -359,7 +360,7 @@ export default function Index() {
     });
   }, [navigate, openAfterPendingFormCheck]);
 
-  const undoStacksRef = useRef<UndoStacks>({ dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [], planTakeoff: [] });
+  const undoStacksRef = useRef<UndoStacks>({ dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] });
   const [undoVersion, setUndoVersion] = useState(0);
   const rawProjectRef = useRef<Project | null>(null);
   const saveTimerRef = useRef<number | null>(null);
@@ -2899,7 +2900,7 @@ export default function Index() {
             }
           }
           replaceProjectWithoutAutoSave(projectToLoad, updatedAt, repairApplied, true, effectiveRecord.warehouseVersion);
-          undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [], planTakeoff: [] };
+          undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
           setUndoVersion(v => v + 1);
         }
       });
@@ -2951,7 +2952,7 @@ export default function Index() {
     const list = await refreshCloudList();
     confirmCloudProjectRecord(persisted);
     replaceProjectWithoutAutoSave(persisted.project, list.find(p => p.id === projectWithName.id)?.updatedAt ?? persisted.updatedAt ?? updatedAt, false, true, persisted.warehouseVersion);
-    undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [], planTakeoff: [] };
+    undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
     setUndoVersion(v => v + 1);
     setCurrentView('dashboard');
     setSidebarOpen(false);
@@ -3024,7 +3025,7 @@ export default function Index() {
             if (record) {
               confirmCloudProjectRecord(record);
               replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, true, record.warehouseVersion);
-              undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [], planTakeoff: [] };
+              undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
             }
           }
         }
@@ -3210,8 +3211,6 @@ export default function Index() {
             />
           </>
         );
-      case 'planTakeoff':
-        return user && orgId ? <PlanTakeoff key={scopeKey(orgId, user.id, project.id)} storageKey={scopeKey(orgId, user.id, project.id)} readOnly={!editor} /> : null;
       case 'measurement':
         return <Measurement project={project} onProjectChange={measurementSetter} undoButton={<UndoButton canUndo={canUndo('measurement')} onUndo={() => handleUndo('measurement')} />} onOpenDailyReport={handleOpenDailyReport} />;
       case 'dailyReport':

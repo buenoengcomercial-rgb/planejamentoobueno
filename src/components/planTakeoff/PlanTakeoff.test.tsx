@@ -3,8 +3,6 @@ import { forwardRef, useEffect } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanTakeoff from './PlanTakeoff';
 import { readTakeoffs, saveTakeoffs, type TakeoffPlan } from '@/lib/planTakeoff';
-import { projectCollectionsForView } from '@/lib/projectDataScope';
-import { canAccessAppView } from '@/lib/organizations';
 vi.mock('@/lib/planTakeoff', async importOriginal => ({ ...await importOriginal<object>(), readTakeoffs: vi.fn(), saveTakeoffs: vi.fn() }));
 vi.mock('./PlanCanvas', () => ({ default: forwardRef<HTMLButtonElement, { onPoint: (p: { x: number; y: number }) => void; onFinish?: () => void; onReady?: (ready: boolean) => void; plan: TakeoffPlan }>(function MockCanvas({ onPoint, onFinish, onReady, plan }, ref) { useEffect(() => { onReady?.(true); }, [onReady]); return <><button ref={ref} onClick={() => onPoint({ x: 1, y: 1 })}>Ponto de teste</button><button onClick={() => onPoint({ x: 4, y: 5 })}>Segundo ponto de teste</button><button onClick={onFinish}>Botão direito de teste</button><span data-testid="visible-measures">{plan.measures.map(measure => measure.id).join(',')}</span></>; }) }));
 const example: TakeoffPlan = { id: 'p', name: 'Planta', floor: 'Térreo', chapterId: 'building-1', building: 'Prédio principal', file: new Blob(), kind: 'image', scales: {}, measures: [] };
@@ -78,12 +76,6 @@ describe('teste independente de levantamento', () => {
     await screen.findByRole('button', { name: 'Contagem' });
     expect(screen.getByTestId('visible-measures')).toBeEmptyDOMElement();
     expect(screen.getByRole('combobox', { name: 'Planta' })).toHaveValue('p');
-  });
-  it('não carrega coleções operacionais e respeita os perfis restritos', () => {
-    expect(projectCollectionsForView('planTakeoff')).toEqual([]);
-    expect(canAccessAppView('field_user', 'planTakeoff')).toBe(false);
-    expect(canAccessAppView('warehouse_operator', 'planTakeoff')).toBe(false);
-    expect(canAccessAppView('engineer', 'planTakeoff')).toBe(true);
   });
   it('permite contagem, comprimento e área sem escala, com unidade do desenho identificada', async () => {
     render(<PlanTakeoff storageKey="user/project" readOnly={false} />);
