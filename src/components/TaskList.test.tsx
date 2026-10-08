@@ -8,6 +8,8 @@ vi.mock('@/components/ImportSyntheticDialog', () => ({
   default: ({ open }: { open: boolean }) => open ? <div role="dialog">Importador carregado</div> : null,
 }));
 
+vi.mock('@/components/planTakeoff/ChapterPlanCatalog', () => ({ default: () => null }));
+
 const task: Task = {
   id: 'task-1',
   name: 'Instalar hidrante',
@@ -121,6 +123,28 @@ describe('TaskList', () => {
       entityType: 'task', entityId: 'task-1', action: 'created',
       userId: 'owner-1', after: expect.objectContaining({ date: '2026-09-30' }),
     });
+  });
+
+  it('abre a planta pelo capítulo em que a tarefa está, mesmo com phase legado na tarefa', () => {
+    const nestedProject = {
+      ...project,
+      phases: [
+        { ...project.phases[0], tasks: [] },
+        {
+          id: 'phase-child', name: 'Pavimento térreo', color: '#0ea5e9', parentId: 'phase-1',
+          tasks: [{ ...task, phase: 'legacy-phase', dailyLogs: [{
+            id: 'log-1', date: '2026-09-30', plannedQuantity: 1, actualQuantity: 0,
+            quantityDetails: [{ id: 'row-1', location: '', comment: '', multiplier: 0, measuredQuantity: 0 }],
+          }] }],
+        },
+      ],
+    } as Project;
+    render(<TooltipProvider><TaskList project={nestedProject} onProjectChange={vi.fn()}
+      focusTaskId="task-1" focusDate="2026-09-30" takeoffStorageKey="scope" /></TooltipProvider>);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-30' }));
+    fireEvent.focus(screen.getByRole('spinbutton', { name: 'Medida da linha 1' }));
+    expect(screen.getByRole('button', { name: 'Planta DXF' })).toBeEnabled();
   });
 
   it('registra antes e depois ao corrigir um apontamento existente', () => {

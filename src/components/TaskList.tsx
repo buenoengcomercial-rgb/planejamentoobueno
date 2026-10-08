@@ -1463,7 +1463,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                                 <DailyLogsPanel
                                   projectId={project.id}
                                   takeoffStorageKey={takeoffStorageKey}
-                                  chapterId={rootChapterId(project.phases, task.phase)}
+                                  chapterId={rootChapterId(project.phases, phase.id)}
                                   readOnly={readOnly}
                                   task={task}
                                   onChange={(logs: DailyProductionLog[]) => updateDailyLogs(phase.id, task, logs)}
