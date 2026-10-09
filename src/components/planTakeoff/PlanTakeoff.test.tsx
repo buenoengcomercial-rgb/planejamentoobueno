@@ -111,6 +111,7 @@ describe('teste independente de levantamento', () => {
     render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
     expect(screen.getByRole('button', { name: 'Apagar planta Planta' })).toBeDisabled();
+    expect(screen.getByText(/Exclusão bloqueada: esta prancha possui marcações/)).toBeInTheDocument();
     expect(saveTakeoffs).not.toHaveBeenCalled();
   });
   it('mantém consulta às plantas sem cadastro nem exclusão para visualizador', async () => {

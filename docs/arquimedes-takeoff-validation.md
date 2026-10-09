@@ -60,3 +60,17 @@ Regressão: testes focados em visualizador, Produção, limites, referências, a
 | Permissões | Consulta pode navegar; edição continua limitada às permissões existentes |
 
 Entrega desta rodada em branch de desenvolvimento e prévia local; sem publicação no Lovable.
+
+## Correção de capturas e esclarecimento de exclusão
+
+A verificação posterior ao relato do usuário identificou três problemas: a captura não percorria entidades dentro de blocos INSERT, Perpendicular/Paralelo dependiam indevidamente do rastreamento e não havia guia de alinhamento adquirida. O leitor de captura agora percorre blocos aninhados, respeitando base, posição, rotação, escala e layers dos pais. Arcos e segmentos curvos de polilinhas usam sua geometria real, sem capturar na corda ou fora do arco. Elipses resultantes de escala não uniforme não são anunciadas como círculos.
+
+Perpendicular e Paralelo usam o ponto anterior do traçado, independentemente da ativação do rastreamento. Extensão funciona sem ponto anterior. Rastreamento apresenta guias horizontais/verticais a partir do ponto anterior ou de uma captura adquirida, com tolerância em pixels de tela. As configurações idênticas recebidas após uma atualização da barra não apagam a captura adquirida.
+
+No navegador local, o Drawing1.dxf cadastrado foi aberto pela célula B de uma tarefa de teste: a aproximação à parede produziu a captura Perpendicular e a projeção exata sobre a linha, com guia. Um segundo movimento produziu Rastreamento vertical. Ambos os traçados foram cancelados sem conclusão ou alteração do Realizado. Evidências: `output/captura-perpendicular-dxf.png` e `output/capturas-dxf-corrigidas.png` (fora do commit).
+
+O DXF real `codex.dxf` (17,9 MB) foi analisado pelo parser instalado: 35.470 entidades, 116 blocos, 41.838 segmentos, 225.192 âncoras e 19.059 curvas extraídas. Isso verifica a extração em um arquivo representativo, sem afirmar cobertura de todas as entidades CAD. Os testes específicos também cobrem as onze opções de captura, limites de arcos, curvas de polilinhas, blocos, layers ocultos e coordenadas realmente enviadas pelo clique no visualizador.
+
+A exclusão de planta que possui marcações permanece bloqueada para preservar os quantitativos. Gestão de desenhos passa a informar esse motivo diretamente, além do estado desabilitado do botão. O teste existente verifica exclusão de arquivo sem marcações e bloqueio de arquivo com marcações; nenhum arquivo original do usuário foi apagado.
+
+Validação desta correção: 96 testes em 12 arquivos, TypeScript da aplicação, lint dos arquivos alterados, build e diff. Sem mudança de esquema, salvamento da Produção, limites ou permissões. Integração destinada à prévia conectada do Lovable, conforme solicitação posterior do usuário; publicação do site não é acionada.

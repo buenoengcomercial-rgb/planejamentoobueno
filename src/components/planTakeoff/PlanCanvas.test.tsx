@@ -7,6 +7,14 @@ import type { TakeoffPlan } from '@/lib/planTakeoff';
 const plan: TakeoffPlan = { id: 'plan-1', name: 'Planta.png', floor: 'Térreo', kind: 'image', file: new Blob(['image']), scales: {}, measures: [] };
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
+vi.mock('dxf-viewer', () => ({ DxfViewer: class {
+  async Load() {} Destroy() {} Render() {} SetClearColor() {} SetSize() {} SetView() {} ShowLayer() {}
+  GetBounds() { return { minX: 0, maxX: 10, minY: 0, maxY: 10 }; }
+  GetOrigin() { return { x: 0, y: 0 }; }
+  GetCamera() { return { position: { clone: () => ({ set: () => ({}) }) } }; }
+  GetLayers() { return [{ name: 'PAREDES' }]; }
+  GetDxf() { return { entities: [{ type: 'LINE', layer: 'PAREDES', vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }] }; }
+} }));
 
 beforeEach(() => {
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
@@ -29,6 +37,39 @@ afterEach(async () => {
 });
 
 describe('gestos no desenho', () => {
+  it('mostra captura perpendicular e envia a coordenada ajustada no clique, independentemente do rastreamento', async () => {
+    const onPoint = vi.fn();
+    render(<PlanCanvas plan={{ ...plan, kind: 'dxf' }} page={1} draft={[{ x: 3, y: -4 }]} draftKind="length" drawing selected="" readOnly={false} onPoint={onPoint} onSelect={vi.fn()} onMove={vi.fn()} onPages={vi.fn()} capturesEnabled captureKinds={['perpendicular']} />);
+    await waitFor(() => expect(screen.queryByText('Carregando planta…')).not.toBeInTheDocument());
+    const svg = screen.getByLabelText('Planta e marcações');
+    const [x, y, w, h] = svg.getAttribute('viewBox')!.split(' ').map(Number);
+    const clientX = (3.1 - x) / w * 800, clientY = (-.1 - y) / h * 500;
+    fireEvent(svg, new MouseEvent('pointermove', { bubbles: true, clientX, clientY }));
+    expect(svg.querySelector('[data-capture-kind="perpendicular"]')).not.toBeNull();
+    fireEvent(svg, new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX, clientY }));
+    fireEvent(svg, new MouseEvent('pointerup', { bubbles: true, button: 0, clientX, clientY }));
+    expect(onPoint).toHaveBeenCalledWith({ x: 3, y: 0 });
+    expect(svg.querySelector('[data-capture-guide]')).toBeNull();
+  });
+
+  it('mantém o ponto adquirido após renderização e desenha a guia de rastreamento até o clique', async () => {
+    const onPoint = vi.fn();
+    const props = { plan: { ...plan, kind: 'dxf' as const }, page: 1, draft: [], draftKind: 'length' as const, drawing: true, selected: '', readOnly: false, onPoint, onSelect: vi.fn(), onMove: vi.fn(), onPages: vi.fn(), capturesEnabled: true, trackingEnabled: true };
+    const { rerender } = render(<PlanCanvas {...props} captureKinds={['endpoint']} />);
+    await waitFor(() => expect(screen.queryByText('Carregando planta…')).not.toBeInTheDocument());
+    const svg = screen.getByLabelText('Planta e marcações');
+    const [x, y, w, h] = svg.getAttribute('viewBox')!.split(' ').map(Number);
+    const pointer = (type: string, px: number, py: number) => fireEvent(svg, new MouseEvent(type, { bubbles: true, button: 0, clientX: (px - x) / w * 800, clientY: (py - y) / h * 500 }));
+    pointer('pointermove', .1, -.1);
+    expect(svg.querySelector('[data-capture-kind="endpoint"]')).not.toBeNull();
+    rerender(<PlanCanvas {...props} captureKinds={['endpoint']} />);
+    pointer('pointermove', .1, -4);
+    expect(screen.getByText('Rastreamento vertical')).toBeInTheDocument();
+    expect(svg.querySelector('[data-tracking-guide]')).not.toBeNull();
+    pointer('pointerdown', .1, -4); pointer('pointerup', .1, -4);
+    // Browser pointer coordinates round to screen pixels; only the captured axis is exact.
+    expect(onPoint).toHaveBeenCalledWith({ x: 0, y: expect.closeTo(-4, 1) });
+  });
   it('move por dois cliques sem deslocar a vista e cancela a seleção com Escape', async () => {
     const onMove = vi.fn();
     render(<PlanCanvas plan={{ ...plan, measures: [{ id: 'm', name: 'Percurso', kind: 'length', page: 1, points: [{ x: 0, y: 0 }, { x: 3, y: 4 }] }] }} page={1} draft={[]} drawing={false} selected="m" editMode="movePoint" readOnly={false} onPoint={vi.fn()} onSelect={vi.fn()} onMove={onMove} onPages={vi.fn()} />);

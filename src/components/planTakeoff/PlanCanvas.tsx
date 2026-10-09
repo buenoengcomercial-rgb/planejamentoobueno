@@ -3,7 +3,7 @@ import type { DxfViewer } from 'dxf-viewer';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { measureCategory, measureUnit, quantity, type MeasureKind, type Point, type TakeoffPlan, type TakeoffMeasure } from '@/lib/planTakeoff';
 import { dwfSheets, openDwfSheets, type DwfSheet } from '@/lib/dwfTakeoff';
-import { CAPTURE_LABELS, extractDxfGeometry, snapDxf, type CaptureKind, type DxfGeometry, type SnapHit } from '@/lib/dxfSnap';
+import { CAPTURE_LABELS, extractDxfGeometry, snapDxf, trackAlignment, type CaptureKind, type DxfGeometry, type SnapHit, type TrackingHit } from '@/lib/dxfSnap';
 
 export type CanvasEditMode = 'select' | 'pan' | 'zoomWindow' | 'deleteMeasure' | 'addPoint' | 'deletePoint' | 'movePoint';
 export type CanvasBackground = 'white' | 'gray' | 'black';
@@ -68,6 +68,8 @@ const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ pla
   const [status, setStatus] = useState('Carregando planta…');
   const [geometry, setGeometry] = useState<DxfGeometry>();
   const [snapHit, setSnapHit] = useState<SnapHit | null>(null);
+  const [trackingHit, setTrackingHit] = useState<TrackingHit | null>(null);
+  const acquiredPoint = useRef<Point>();
   const drag = useRef<{ start: Point; view: View; id?: string; index?: number; moved: boolean; panning: boolean; primary: boolean }>();
   const [moving, setMoving] = useState<{ id: string; index: number; point: Point }>();
   const height = view.width * size.height / size.width;
@@ -86,6 +88,8 @@ const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ pla
   }));
 
   useEffect(() => { setMoving(undefined); setWindowCorner(undefined); drag.current = undefined; }, [editMode, selected, drawing, plan.id, page, readOnly]);
+  const captureKey = captureKinds.join('|'), hiddenKey = hidden.join('|');
+  useEffect(() => { acquiredPoint.current = undefined; setSnapHit(null); setTrackingHit(null); }, [plan.id, page, drawing, draftKind, draft.length, capturesEnabled, trackingEnabled, captureKey, hiddenKey]);
 
   useEffect(() => {
     const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height }));
@@ -201,11 +205,20 @@ const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ pla
       y: view.y - height / 2 + (event.clientY - rect.top) / rect.height * height };
   };
   const resolvedPoint = (raw: Point, previous?: Point): Point => {
+    setTrackingHit(null);
     if (capturesEnabled && geometry && captureKinds.length) {
       const hit = snapDxf(raw, geometry, new Set(captureKinds), unit * 12, new Set(hidden), previous, trackingEnabled);
-      if (hit) { setSnapHit(hit); return hit.point; }
+      if (hit) {
+        if (trackingEnabled && ['point', 'endpoint', 'insertion', 'center', 'midpoint', 'intersection', 'quadrant'].includes(hit.kind)) acquiredPoint.current = hit.point;
+        setSnapHit(hit); return hit.point;
+      }
     }
     setSnapHit(null);
+    const origin = acquiredPoint.current ?? previous;
+    if (capturesEnabled && trackingEnabled && geometry && origin) {
+      const tracked = trackAlignment(raw, origin, unit * 8);
+      if (tracked) { setTrackingHit(tracked); return tracked.point; }
+    }
     if (ortho && previous) return Math.abs(raw.x - previous.x) >= Math.abs(raw.y - previous.y)
       ? { x: raw.x, y: previous.y } : { x: previous.x, y: raw.y };
     return raw;
@@ -256,13 +269,14 @@ const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ pla
           const raw = point(e);
           if (windowCorner) setPointerPosition(raw);
           if (moving && !drag.current && editMode === 'movePoint') setMoving({ ...moving, point: resolvedPoint(raw) });
-          onCursor?.(drawing ? resolvedPoint(raw, draft.at(-1)) : raw);
+          const cursor = drawing ? resolvedPoint(raw, draft.at(-1)) : raw;
+          onCursor?.(cursor);
           const d = drag.current; if (!d) return;
           const p = point(e);
           if (!d.moved && Math.hypot(p.x - d.start.x, p.y - d.start.y) > unit * 3) { if (d.panning) rememberView(); d.moved = true; }
           if (d.id !== undefined && d.index !== undefined) setMoving({ id: d.id, index: d.index, point: resolvedPoint(p) });
           else if (d.panning) setView({ ...view, x: view.x + d.start.x - p.x, y: view.y + d.start.y - p.y });
-        }} onPointerLeave={() => onCursor?.(null)} onPointerUp={e => {
+        }} onPointerLeave={() => { onCursor?.(null); setSnapHit(null); setTrackingHit(null); }} onPointerUp={e => {
           const d = drag.current; drag.current = undefined;
           if (e.button === 1 && d && !d.moved) {
             const now = performance.now();
@@ -288,7 +302,8 @@ const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ pla
             <rect data-draft-line x={Math.min(draft[0].x, draft[1].x)} y={Math.min(draft[0].y, draft[1].y)} width={Math.abs(draft[1].x - draft[0].x)} height={Math.abs(draft[1].y - draft[0].y)} fill="#e11d4814" stroke="#e11d48" strokeWidth={unit * 2} pointerEvents="none" /> :
             <polyline data-draft-line points={draft.map(p => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#e11d48" strokeWidth={unit * 2} pointerEvents="none" />)}
         {draft.map((p, i) => <g key={i} pointerEvents="none"><circle data-draft-point cx={p.x} cy={p.y} r={unit * 4} fill="#e11d48" />{draftKind === 'count' && <text x={p.x + unit * 8} y={p.y - unit * 7} fontSize={unit * 12} fontWeight="600" fill="#e11d48" stroke="white" strokeWidth={unit * 2.5} paintOrder="stroke">{i + 1}</text>}</g>)}
-        {snapHit && capturesEnabled && drawing && <g pointerEvents="none"><circle cx={snapHit.point.x} cy={snapHit.point.y} r={unit * 8} stroke="#e11d48" strokeWidth={unit * 1.5} fill="none" /><text x={snapHit.point.x + unit * 10} y={snapHit.point.y - unit * 8} fontSize={unit * 11} fill="#be123c" stroke="white" strokeWidth={unit * 2} paintOrder="stroke">{CAPTURE_LABELS[snapHit.kind]}</text></g>}
+        {snapHit && capturesEnabled && drawing && <g data-capture-kind={snapHit.kind} pointerEvents="none">{snapHit.guide && <line data-capture-guide x1={snapHit.guide.from.x} y1={snapHit.guide.from.y} x2={snapHit.guide.to.x} y2={snapHit.guide.to.y} stroke="#e11d48" strokeWidth={unit} strokeDasharray={`${unit * 5} ${unit * 3}`} />}<circle cx={snapHit.point.x} cy={snapHit.point.y} r={unit * 8} stroke="#e11d48" strokeWidth={unit * 1.5} fill="none" /><text x={snapHit.point.x + unit * 10} y={snapHit.point.y - unit * 8} fontSize={unit * 11} fill="#be123c" stroke="white" strokeWidth={unit * 2} paintOrder="stroke">{CAPTURE_LABELS[snapHit.kind]}</text></g>}
+        {trackingHit && capturesEnabled && trackingEnabled && drawing && <g data-tracking-guide pointerEvents="none"><line x1={trackingHit.from.x} y1={trackingHit.from.y} x2={trackingHit.point.x} y2={trackingHit.point.y} stroke="#0284c7" strokeWidth={unit} strokeDasharray={`${unit * 5} ${unit * 3}`} /><circle cx={trackingHit.point.x} cy={trackingHit.point.y} r={unit * 5} stroke="#0284c7" strokeWidth={unit} fill="none" /><text x={trackingHit.point.x + unit * 10} y={trackingHit.point.y - unit * 8} fontSize={unit * 11} fill="#0369a1" stroke="white" strokeWidth={unit * 2} paintOrder="stroke">Rastreamento {trackingHit.axes.length > 1 ? 'horizontal/vertical' : trackingHit.axes[0] === 'x' ? 'vertical' : 'horizontal'}</text></g>}
       </svg>
       {status && <div role="status" className="absolute inset-0 flex items-center justify-center bg-white/90 p-5 text-center text-slate-800">{status}</div>}
     </div>
