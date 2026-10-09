@@ -17,6 +17,7 @@ export default function PlanCaptureDialog({ available, enabled, tracking, kinds,
     <DialogContent className="z-[70] max-w-[400px] gap-2 rounded-sm border-slate-400 bg-[#f1f2f3] p-3 text-xs" onPointerDownOutside={event => event.preventDefault()}>
       <DialogTitle className="text-sm font-medium">Capturas para máscaras</DialogTitle>
       <DialogDescription className="text-[11px]">{available.length ? 'Escolha as capturas identificadas na geometria DXF.' : 'Esta folha não oferece entidades identificáveis. A marcação livre continua disponível.'}</DialogDescription>
+      {!!available.length && <p className="text-[11px] text-slate-600">Durante o traçado, aproxime o cursor da geometria. Perpendicular e Paralelo usam o último ponto marcado. Rastreamento mostra guias a partir desse ponto ou de uma captura adquirida.</p>}
       <div className="space-y-1 border-b border-slate-300 pb-2">
         <label className="flex items-center gap-2"><input type="checkbox" checked={draftEnabled} disabled={!available.length} onChange={event => setEnabled(event.target.checked)} />Ativar capturas</label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={draftTracking} disabled={!available.length} onChange={event => setTracking(event.target.checked)} />Ativar rastreamento</label>
