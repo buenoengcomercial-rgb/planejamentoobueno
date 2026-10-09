@@ -1,3 +1,4 @@
+import { withReadDeadline } from '@/lib/readDeadline';
 /**
  * Sincronização incremental das coleções de alto volume entre o objeto
  * `Project` (UI) e as tabelas normalizadas no Supabase.
@@ -557,7 +558,7 @@ async function optionalQuery<T>(
   query: () => PromiseLike<{ data: T[] | null; error: QueryError }>,
 ): Promise<QueryResult<T>> {
   if (!enabled) return { data: null, error: null };
-  const result = await query();
+  const result = await withReadDeadline(query());
   return { data: result.data, error: result.error };
 }
 
@@ -984,6 +985,16 @@ function changedRows<T>(previous: Map<string, T>, current: Map<string, T>) {
   return { upserts, deletes };
 }
 
+/** Unloaded history remains append-only: keep acknowledged IDs without claiming a full read. */
+function buildSaveSnapshot(project: Project, previous: Snapshot): Snapshot {
+  const next = buildSnapshot(project, [...previous.loadedCollections]);
+  if (!previous.loadedCollections.has('auditLogs')) {
+    next.auditLogs = new Map(previous.auditLogs);
+    for (const log of project.auditLogs ?? []) next.auditLogs.set(log.id, log);
+  }
+  return next;
+}
+
 /**
  * Confirma a Produção em uma única transação quando ela é o único domínio
  * normalizado alterado. `null` sinaliza que o save geral deve seguir o caminho
@@ -997,7 +1008,7 @@ export async function syncProductionAtomically(
 ): Promise<string | null> {
   const previous = snapshots.get(project.id);
   if (!previous?.loadedCollections.has('eapChapters') || !previous.loadedCollections.has('tasks')) return null;
-  const next = buildSnapshot(project, [...previous.loadedCollections]);
+  const next = buildSaveSnapshot(project, previous);
   const productionKeys = new Set(['chapters', 'tasks', 'taskLogs', 'auditLogs']);
   for (const key of Object.values(SNAPSHOT_MAP_BY_COLLECTION)) {
     if (productionKeys.has(key)) continue;
@@ -1091,9 +1102,9 @@ export async function syncNormalizedDomainAtomically(
 ): Promise<string | null> {
   const previous = snapshots.get(project.id);
   if (!previous) return null;
-  const next = buildSnapshot(project, [...previous.loadedCollections]);
+  const next = buildSaveSnapshot(project, previous);
   const changes = new Map<ProjectCollectionKey, ReturnType<typeof changedRows<unknown>>>();
-  for (const collection of previous.loadedCollections) {
+  for (const collection of new Set<ProjectCollectionKey>([...previous.loadedCollections, 'auditLogs'])) {
     const key = SNAPSHOT_MAP_BY_COLLECTION[collection];
     const diff = changedRows(previous[key] as Map<string, unknown>, next[key] as Map<string, unknown>);
     if (diff.upserts.length || diff.deletes.length) changes.set(collection, diff);
@@ -1193,7 +1204,7 @@ export async function syncCollectionsToCloud(
     ? [...existingSnapshot.loadedCollections]
     : [...PROJECT_COLLECTION_KEYS];
   const prev = existingSnapshot ?? emptySnapshot();
-  const next = buildSnapshot(project, trackedCollections);
+  const next = existingSnapshot ? buildSaveSnapshot(project, existingSnapshot) : buildSnapshot(project, trackedCollections);
   const tracks = (collection: ProjectCollectionKey) => next.loadedCollections.has(collection);
 
   const ops: CloudOperation[] = [];
@@ -1235,7 +1246,7 @@ export async function syncCollectionsToCloud(
       };
     }));
   }
-  if (tracks('auditLogs')) {
+  if (tracks('auditLogs') || next.auditLogs.size > 0) {
     ops.push(...diffAndSync('audit_logs', prev.auditLogs, next.auditLogs, projectId, userId, l => {
       const log = l as AuditLog;
       return {

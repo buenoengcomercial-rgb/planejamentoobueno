@@ -1,3 +1,4 @@
+import { useAuditHistory } from '@/hooks/useAuditHistory';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type TouchEvent, type WheelEvent } from 'react';
 import type { Project, WarehouseAuditActor, WarehouseMovement, WarehouseRequisition, WarehouseRequisitionItem, WarehouseRequisitionSupplement } from '@/types/project';
 import { Button } from '@/components/ui/button';
@@ -944,9 +945,10 @@ function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupple
   const hasReturnable = requisition.status === 'entregue' && returnable.some(item => item.availableQuantity > 0);
   const canCorrect = canEdit || canSupplement;
   const notes = requisition.notes?.trim();
+  const auditHistory = useAuditHistory(project, 'warehouse_requisition', requisition.id, true);
   const history = [
     ...(requisition.supplements ?? []).map(supplement => ({ at: supplement.createdAt, title: 'Complemento adicionado', description: `${supplement.status === 'cancelled' ? 'Complemento posteriormente estornado' : supplement.items.map(item => `${item.description} (${item.quantity.toLocaleString('pt-BR')} ${item.unit})`).join(', ')}${supplement.notes ? ` · ${supplement.notes}` : ''}`, actor: supplement.createdBy })),
-    ...(project.auditLogs ?? []).filter(log => log.entityType === 'warehouse_requisition' && log.entityId === requisition.id && !log.title.startsWith('Complemento registrado')).map(log => ({ at: log.at, title: log.title, description: log.description, actor: { userId: log.userId, userName: log.userName, userEmail: log.userEmail } })),
+    ...auditHistory.logs.filter(log => !log.title.startsWith('Complemento registrado')).map(log => ({ at: log.at, title: log.title, description: log.description, actor: { userId: log.userId, userName: log.userName, userEmail: log.userEmail } })),
   ].sort((left, right) => left.at.localeCompare(right.at));
   const actions = <div className="withdrawal-detail-actions flex flex-wrap justify-end gap-1">
     <Button size="sm" variant="outline" className="h-8 px-2 text-[11px]" onClick={() => void import('./pdf').then(({ generateRequisitionReceipt }) => generateRequisitionReceipt(project, requisition))}><FileDown className="mr-1 h-3.5 w-3.5" />PDF</Button>
@@ -987,6 +989,9 @@ function WithdrawalDetails({ project, requisition, canDelete, canEdit, canSupple
       </table>
     </div>
     {returns.length > 0 && <div className="rounded-lg border border-success/30 bg-success/5 p-3"><div className="mb-2 text-sm font-bold text-success">Devoluções registradas</div><div className="space-y-2 text-sm">{returns.map(movement => <div key={movement.id} className="rounded-md border border-success/20 bg-background/70 p-2"><strong>{movement.returnNumber || 'Devolução'}</strong> · operação: {formatOperationalDate(movement.date)} · registro: {formatRecordedAt(movement, movement.date)} · devolvido por {movement.returnerName || 'Não informado'}<div className="mt-1 font-medium text-success">{movement.itemDescription}: {movement.quantity.toLocaleString('pt-BR')} {movement.itemUnit}</div></div>)}</div></div>}
+    {auditHistory.loading && <p role="status" className="text-sm">Carregando histórico de alterações...</p>}
+    {auditHistory.error && <div role="alert" className="text-sm">Não foi possível carregar o histórico. <Button variant="outline" onClick={auditHistory.retry}>Tentar novamente</Button></div>}
+    {auditHistory.hasMore && <Button variant="outline" onClick={auditHistory.loadMore} disabled={auditHistory.loading}>Carregar mais alterações</Button>}
     {history.length > 0 && <div className="rounded-lg border border-primary/25 bg-primary/5 p-3"><div className="mb-2 text-sm font-bold text-primary">Histórico de alterações</div><div className="space-y-2">{history.map((entry, index) => <div key={`${entry.at}-${index}`} className="rounded-md border bg-background/80 p-2 text-sm"><div className="font-semibold">{entry.title}</div><div className="text-xs text-muted-foreground">{entry.actor?.userName || entry.actor?.userEmail || 'Usuário não identificado'} · {formatRecordedAt({ createdAt: entry.at }, requisition.date)}</div>{entry.description && <div className="mt-1 break-words text-xs">{entry.description}</div>}</div>)}</div></div>}
   </div>;
 }

@@ -140,3 +140,17 @@ PDF, XLSX, PDF.js, importadores e painéis administrativos não fazem parte das 
 | Sobrecarga da política antes do período ocioso | — | 0,64 kB gzip |
 
 O `build:analyze` continua confirmando que os motores de documentos permanecem fora do caminho inicial. Testes específicos protegem as condições de rede, visibilidade, atraso, cancelamento, permissão e as listas permitidas de pré-carga.
+
+## Abertura e histórico sob demanda — 09/10/2026
+
+A auditoria da rota Produção publicada identificou 668 registros de auditoria, 7,25 MB transferidos e 10,66 MB de JSON. O histórico demorou 5,67 s no desktop e 39,23 s na conexão móvel simulada. São amostras anteriores à correção, não percentis de produção.
+
+- As rotas operacionais deixam de exigir a coleção integral `auditLogs`. Histórico da Medição/Aditivo usa resumos em páginas de 25 por obra/entidade; before/after e metadata são lidos somente ao abrir um registro. O detalhe de uma retirada também consulta seus resumos quando expandido. O cabeçalho do Aditivo lê somente o último resumo necessário à apresentação.
+- Leituras de histórico ficam fora do `Project` editável e do snapshot de salvamento. Novas auditorias continuam sendo confirmadas nas RPCs e no fluxo de compatibilidade, sem marcar a coleção inteira como carregada. Histórico existente não é excluído. Rascunhos offline preservam os novos registros e recuperam a união com os registros da nuvem.
+- Recuperação de rascunhos, reconciliação fiscal legada e manutenção conservam a leitura completa quando necessária para decidir com segurança.
+- Sessão, empresa e abertura da obra distinguem falha técnica de ausência válida de vínculo. Leituras têm prazo de 30 s, erro recuperável e nova tentativa; respostas antigas não substituem o resultado de um retry. Escritas continuam aguardando confirmação do servidor.
+- O código da Produção/Diário começa a carregar durante a leitura inicial. Cálculos, permissões e políticas do banco permanecem iguais; não há migration.
+
+Build local da correção: caminho estático do Dashboard 974,46 kB minificado / 299,03 kB gzip. O ganho principal é eliminar o download bloqueante do histórico, não reduzir o JavaScript estático. PDF, XLSX e PDF.js continuam fora do caminho inicial.
+
+Verificação: suíte completa com 827 testes aprovados e 1 ignorado; testes adicionais de recuperação offline e tela de sessão; TypeScript, lint sem erros, build e diff-check. Validação visual local limitada por timeout da conexão de controle do navegador. Os tempos após publicação precisam ser medidos no aplicativo publicado; esta entrega não utiliza chat ou créditos do Lovable.

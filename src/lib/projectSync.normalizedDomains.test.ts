@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
-import { clearCloudSnapshot, setCloudSnapshot, stripNormalizedCollections, syncNormalizedDomainAtomically } from '@/lib/projectSync';
+import { clearCloudSnapshot, confirmProjectCollectionsSnapshot, getLoadedProjectCollections, setCloudSnapshot, stripNormalizedCollections, syncNormalizedDomainAtomically } from '@/lib/projectSync';
 
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock('@/integrations/supabase/client', () => ({ supabase: { rpc } }));
@@ -22,6 +22,15 @@ const save = (project: Project) => syncNormalizedDomainAtomically(
 afterEach(() => { clearCloudSnapshot(base.id); rpc.mockReset(); });
 
 describe('transações por domínio normalizado', () => {
+  it('confirma Medição e auditoria nova com histórico não carregado', async () => {
+    confirmProjectCollectionsSnapshot(base, ['measurements'], { replaceExisting: true });
+    const next = { ...base, measurements: [{ ...base.measurements![0], status: 'approved' }], auditLogs: [{ id: 'new-audit', entityType: 'measurement', entityId: 'measurement-1', action: 'approved', at: '2026-10-09', title: 'Aprovada' }] } as Project;
+    rpc.mockResolvedValue({ data: 'v2', error: null });
+    expect(await save(next)).toBe('v2');
+    expect(rpc).toHaveBeenCalledWith('save_normalized_domain', expect.objectContaining({ p_audit_insert: [expect.objectContaining({ id: 'new-audit' })] }));
+    expect(getLoadedProjectCollections(base.id)).not.toContain('auditLogs');
+    expect(await save(next)).toBeNull();
+  });
   it('envia somente a Medição alterada e sua auditoria em uma RPC', async () => {
     setCloudSnapshot(base.id, base);
     const next = {

@@ -411,6 +411,42 @@ afterEach(() => {
 });
 
 describe('segurança de sincronização da página da obra', () => {
+  it('recupera auditoria offline parcial sem substituir histórico da nuvem no retry', async () => {
+    const oldLog = { id: 'old-audit', entityType: 'task', entityId: 'task-1', action: 'updated', at: '2026-10-08', title: 'Anterior' } as const;
+    const newLog = { ...oldLog, id: 'new-audit', at: '2026-10-09', title: 'Nova alteração' };
+    const cloud = { ...makeProject(), auditLogs: [oldLog] };
+    const draft = { ...makeProject(), auditLogs: [newLog] };
+    mocks.loadCloudProjectRecord.mockResolvedValue(cloudRecord(cloud));
+    writeProjectDraft(draft, 'cloud-v2', undefined, { pendingNormalizedSync: true, loadedCollections: ['tasks', 'auditLogs'] });
+    renderIndex();
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
+    await waitFor(() => expect(mocks.upsertCloudProject).toHaveBeenCalledWith(expect.objectContaining({ auditLogs: expect.arrayContaining([oldLog, newLog]) }), 'org-1', expect.anything()));
+  });
+  it('oferece retry após falha inicial sem apagar dados nem salvar automaticamente', async () => {
+    mocks.loadCloudProjectRecord.mockRejectedValueOnce(new Error('Servidor indisponível'));
+    renderIndex();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Servidor indisponível');
+    expect(screen.queryByText('Acesso pendente')).not.toBeInTheDocument();
+    expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+    expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
+  });
+  it('encerra a espera e ignora resposta tardia após retry', async () => {
+    vi.useFakeTimers();
+    const pending = deferred<ReturnType<typeof cloudRecord>>();
+    mocks.loadCloudProjectRecord.mockReturnValueOnce(pending.promise);
+    renderIndex();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_100); });
+    expect(screen.getByRole('alert')).toHaveTextContent('Tente novamente');
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    expect(screen.getByTestId('project-workspace')).toBeInTheDocument();
+    await act(async () => pending.resolve(cloudRecord({ ...makeProject(), name: 'Resposta velha' })));
+    expect(screen.getByTestId('project-name')).not.toHaveTextContent('Resposta velha');
+    expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
+  });
   it('não restaura a rolagem como se a página tivesse reiniciado ao editar o Diário', async () => {
     mocks.saveOpenDailyReport.mockResolvedValue({ report: null, conflicts: [] });
     renderIndex('diario');
