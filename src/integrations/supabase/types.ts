@@ -721,7 +721,7 @@ export type Database = {
           created_by: string | null
           data: Json
           id: string
-          log_date: string
+          log_date: string | null
           project_id: string
           task_id: string
           updated_at: string
@@ -731,7 +731,7 @@ export type Database = {
           created_by?: string | null
           data?: Json
           id: string
-          log_date: string
+          log_date: string | null
           project_id: string
           task_id: string
           updated_at?: string
@@ -741,7 +741,7 @@ export type Database = {
           created_by?: string | null
           data?: Json
           id?: string
-          log_date?: string
+          log_date?: string | null
           project_id?: string
           task_id?: string
           updated_at?: string
