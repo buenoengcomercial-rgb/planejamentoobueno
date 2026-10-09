@@ -4,6 +4,7 @@ import { applyDailyProductionLogs } from '@/lib/dailyProductionLogs';
 import { detailTotal, formulasForUnit, measureMatchesDetailCell, withDetailValue, type DetailField } from '@/lib/productionQuantityDetails';
 import { measureUnit, quantity } from '@/lib/planTakeoff';
 import { validateDailyProductionLogs } from '@/lib/productionQuantityLimit';
+import { productionRecordBlock } from '@/lib/productionMeasurementPeriods';
 
 export interface QuantityRowAddress { taskId: string; logId: string; rowId: string }
 export type QuantityClipboardMode = 'cut' | 'copy' | 'reference';
@@ -96,6 +97,8 @@ function finishChange(project: Project, changes: RowChanges, actor: AuditUserInf
     const taskChanges = changes.get(task.id);
     if (!taskChanges) return task;
     if (!canEditTask(task)) { failure ||= `A tarefa “${task.name}” impediu a alteração: seu perfil não tem permissão de edição.`; return task; }
+    const lockedRecord = (task.dailyLogs ?? []).find(log => taskChanges.has(log.id) && productionRecordBlock(project, log));
+    if (lockedRecord) { failure ||= `A tarefa “${task.name}” impediu a alteração: ${productionRecordBlock(project, lockedRecord)}`; return task; }
     const logs = (task.dailyLogs ?? []).map(log => taskChanges.has(log.id) ? changedLog(log, taskChanges.get(log.id)!) : log);
     const invalidRows = logs.flatMap(log => log.quantityDetails ?? []).some(row => !rowFitsUnit(row, task.unit || 'un'));
     const validation = validateDailyProductionLogs(task, logs);

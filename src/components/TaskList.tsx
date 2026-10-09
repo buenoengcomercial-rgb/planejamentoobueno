@@ -25,6 +25,7 @@ import { registerPendingEditCommit } from '@/lib/pendingEditCommits';
 import { registerPendingForm } from '@/lib/pendingFormNavigation';
 import AuditHistoryPanel from '@/components/AuditHistoryPanel';
 import { changeQuantityRows, makeQuantityClipboard, pasteQuantityRow, recalibrateQuantitySources, referencedTakeoffMeasureIds, sharedTaskNames, type QuantityClipboard, type QuantityClipboardMode, type QuantityRowAddress } from '@/lib/productionQuantityReferences';
+import { productionMeasurementPeriods } from '@/lib/productionMeasurementPeriods';
 import type { ProductionQuantityDetail } from '@/types/project';
 
 const ImportSyntheticDialog = lazyWithReload(() => import('@/components/ImportSyntheticDialog'));
@@ -172,6 +173,7 @@ function PercentProgressInput({ task, onCommit, rowTeam }: {
 
 export default function TaskList({ project, onProjectChange, undoButton, readOnly = false, focusTaskId, focusDate, auditActor, takeoffStorageKey }: TaskListProps) {
   const protectedTakeoffMeasureIds = useMemo(() => referencedTakeoffMeasureIds(project), [project]);
+  const measurementPeriods = useMemo(() => productionMeasurementPeriods(project), [project]);
   // Lista de equipes do projeto (com fallback aos defaults).
   const projectTeams: TeamDefinition[] = project.teams ?? DEFAULT_TEAMS;
   const teamDef = useCallback((code?: TeamCode) => getTeamDefinition(code, projectTeams), [projectTeams]);
@@ -516,9 +518,9 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
         title: action === 'created' ? 'Apontamento de produção criado'
           : action === 'deleted' ? 'Apontamento de produção excluído'
             : 'Apontamento de produção corrigido',
-        description: `${task.name} · ${after?.date ?? before?.date ?? ''}`,
+        description: `${task.name} · ${(after?.measurementPeriod ?? before?.measurementPeriod)?.number ? `${(after?.measurementPeriod ?? before?.measurementPeriod)!.number}ª medição` : after?.date ?? before?.date ?? ''}`,
         before, after,
-        metadata: { logId: id, date: after?.date ?? before?.date },
+        metadata: { logId: id, date: after?.date ?? before?.date, measurementPeriod: after?.measurementPeriod ?? before?.measurementPeriod },
       });
     }
     onProjectChange(updated);
@@ -1253,7 +1255,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                                   </div>
                                   {readOnly || (task.dailyLogs?.length ?? 0) > 0 ? (
                                     <span className="w-11 text-xs font-bold text-center tabular-nums"
-                                      title={readOnly ? undefined : 'Progresso calculado pelos apontamentos diários'}>{task.percentComplete}%</span>
+                                      title={readOnly ? undefined : 'Progresso calculado pelos quantitativos de produção'}>{task.percentComplete}%</span>
                                   ) : (
                                     <PercentProgressInput task={task} rowTeam={!!rowTeam}
                                       onCommit={percentComplete => updateTask(phase.id, task.id, { percentComplete })} />
@@ -1464,6 +1466,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                                   takeoffStorageKey={takeoffStorageKey}
                                   chapterId={rootChapterId(project.phases, phase.id)}
                                   protectedMeasureIds={protectedTakeoffMeasureIds}
+                                  measurementPeriods={measurementPeriods}
                                   readOnly={readOnly}
                                   task={task}
                                   onChange={(logs: DailyProductionLog[]) => updateDailyLogs(phase.id, task, logs)}

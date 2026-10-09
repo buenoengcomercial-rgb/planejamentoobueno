@@ -16,6 +16,7 @@ import {
 } from '@/components/measurement/measurementFormat';
 import { resolveObraConfig } from '@/lib/obraConfig';
 import { calculateLineTotal } from '@/lib/financialEngine';
+import { quantityForMeasurement } from '@/lib/productionMeasurementPeriods';
 
 export interface UseMeasurementRowsParams {
   project: Project;
@@ -91,6 +92,7 @@ export function useMeasurementRows({
     if (isSnapshotMode) return map;
     measurements.forEach(m => {
       if (m.status === 'draft' || m.status === 'rejected') return;
+      if (m.number >= Number(effNumber)) return;
       // Não dupla-conta a própria medição ativa (que está sendo recalculada ao vivo).
       if (activeMeasurement && m.id === activeMeasurement.id) return;
       m.items.forEach(it => {
@@ -99,7 +101,7 @@ export function useMeasurementRows({
       });
     });
     return map;
-  }, [measurements, isSnapshotMode, activeMeasurement]);
+  }, [measurements, isSnapshotMode, activeMeasurement, effNumber]);
 
   // Mapa rápido taskId → Task (para previsão usar dados atuais do Gantt mesmo em snapshot)
   const taskById = useMemo<Map<string, Task>>(() => {
@@ -202,19 +204,7 @@ export function useMeasurementRows({
       if (!task) return { prior: 0, period: 0, hasNoLogsAtAll: true, hasNoLogsInPeriod: true };
       const logs = task.dailyLogs || [];
       const hasNoLogsAtAll = logs.length === 0;
-      let prior = 0;
-      let period = 0;
-      let hasLogsInPeriod = false;
-      if (!hasNoLogsAtAll) {
-        for (const log of logs) {
-          const d = log.date;
-          if (d < effStart) prior += log.actualQuantity || 0;
-          else if (d >= effStart && d <= effEnd) {
-            period += log.actualQuantity || 0;
-            if ((log.actualQuantity || 0) > 0) hasLogsInPeriod = true;
-          }
-        }
-      }
+      const { prior, period, hasLogsInPeriod } = quantityForMeasurement(logs, effStart, effEnd, Number(effNumber), activeMeasurement?.id);
       return { prior, period, hasNoLogsAtAll, hasNoLogsInPeriod: !hasLogsInPeriod };
     };
 
@@ -463,7 +453,7 @@ export function useMeasurementRows({
     }
 
     return [...eapRows, ...orphanRows];
-  }, [isSnapshotMode, activeMeasurement, orderedTasks, effStart, effEnd, effBdi, effBdiFactor, priorAccumByTask, hasSyntheticBudget, syntheticBudgetItems, taskById, trabalhaSabado]);
+  }, [isSnapshotMode, activeMeasurement, orderedTasks, effStart, effEnd, effNumber, effBdi, effBdiFactor, priorAccumByTask, hasSyntheticBudget, syntheticBudgetItems, taskById, trabalhaSabado]);
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();

@@ -243,7 +243,9 @@ export interface TaskCurrent {
 
 export interface DailyProductionLog {
   id: string;
-  date: string;            // ISO yyyy-mm-dd
+  date: string;            // ISO yyyy-mm-dd; empty for a measurement-period record (no execution day).
+  /** Quantitativo por medição, persistido junto aos registros de Produção, sem execução diária fictícia. */
+  measurementPeriod?: { number: number; startDate: string; endDate: string; measurementId?: string };
   plannedQuantity: number;
   actualQuantity: number;
   /** Memória de cálculo opcional da quantidade executada neste dia. */

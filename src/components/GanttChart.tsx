@@ -1181,7 +1181,7 @@ export default function GanttChart({
 
   // Forecast delay (em dias) baseado no ritmo médio dos apontamentos
   const calcForecastDelay = (task: Task): number | null => {
-    const logs = (task.dailyLogs || []).filter(l => (l.actualQuantity ?? 0) > 0);
+    const logs = (task.dailyLogs || []).filter(l => !l.measurementPeriod && !!l.date && (l.actualQuantity ?? 0) > 0);
     if (logs.length === 0 || !task.quantity || !task.duration) return null;
     const executed = logs.reduce((s, l) => s + (l.actualQuantity || 0), 0);
     const remaining = task.quantity - executed;
@@ -2502,7 +2502,7 @@ export default function GanttChart({
                                 {(() => {
                                   if (statusOnly) return <span className="text-[9px] text-muted-foreground">—</span>;
                                   const plannedDaily = task.quantity && task.duration > 0 ? task.quantity / task.duration : null;
-                                  const logs = (task.dailyLogs || []).filter(log => (log.actualQuantity ?? 0) > 0);
+                                  const logs = (task.dailyLogs || []).filter(log => !log.measurementPeriod && !!log.date && (log.actualQuantity ?? 0) > 0);
                                   const realDaily = logs.length > 0 ? logs.reduce((sum, log) => sum + (log.actualQuantity || 0), 0) / logs.length : null;
                                   if (!plannedDaily) return <span className="text-[9px] text-muted-foreground">—</span>;
                                   const realColor = realDaily === null ? 'text-muted-foreground' : realDaily >= plannedDaily ? 'text-success' : 'text-destructive';
@@ -2922,7 +2922,7 @@ export default function GanttChart({
                                   )}
                                   {/* Indicador de ritmo (faixa direita) — só com apontamentos */}
                                   {(() => {
-                                    const logs = (task.dailyLogs || []).filter(l => (l.actualQuantity ?? 0) > 0);
+                                    const logs = (task.dailyLogs || []).filter(l => !l.measurementPeriod && !!l.date && (l.actualQuantity ?? 0) > 0);
                                     if (!logs.length || !task.quantity || !task.duration) return null;
                                     const planned = task.quantity / task.duration;
                                     const real = logs.reduce((s, l) => s + (l.actualQuantity || 0), 0) / logs.length;
@@ -3030,7 +3030,7 @@ export default function GanttChart({
                                       />
                                       {/* Badge % concluído ancorado no fim do último apontamento (Real → Projeção) */}
                                       {(() => {
-                                        const logs = (task.dailyLogs || []).filter(l => (l.actualQuantity ?? 0) > 0);
+                                        const logs = (task.dailyLogs || []).filter(l => !l.measurementPeriod && !!l.date && (l.actualQuantity ?? 0) > 0);
                                         if (logs.length === 0) return null;
                                         const lastLogISO = logs.reduce((max, l) => l.date > max ? l.date : max, logs[0].date);
                                         const lastLog = parseISODateLocal(lastLogISO);

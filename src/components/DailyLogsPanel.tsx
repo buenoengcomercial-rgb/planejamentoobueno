@@ -8,6 +8,8 @@ import { registerPendingEditCommit } from '@/lib/pendingEditCommits';
 import { registerPendingForm } from '@/lib/pendingFormNavigation';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import ProductionQuantityDetails from '@/components/ProductionQuantityDetails';
+import ProductionMeasurementPanel from '@/components/ProductionMeasurementPanel';
+import { newMeasurementProductionRecord, recordInMeasurement, type ProductionMeasurementPeriod } from '@/lib/productionMeasurementPeriods';
 import { detailTotal, isBlankDetailRow, withDetailValue, type DetailField } from '@/lib/productionQuantityDetails';
 import { measureUnit, MEASURE_KINDS, type TakeoffMeasure, type TakeoffPlan } from '@/lib/planTakeoff';
 import { lazyWithReload } from '@/lib/lazyWithReload';
@@ -25,6 +27,7 @@ interface DailyLogsPanelProps {
   takeoffStorageKey?: string;
   chapterId?: string;
   protectedMeasureIds?: string[];
+  measurementPeriods?: ProductionMeasurementPeriod[];
   readOnly?: boolean;
   onDetailChange?: (logId: string, rows: ProductionQuantityDetail[]) => { success: boolean; error?: string };
   quantityClipboard?: QuantityClipboard | null;
@@ -115,7 +118,7 @@ function applyDraftValues(logs: DailyProductionLog[], drafts: DraftValues): { lo
   return { logs: nextLogs, hasInvalidNumber };
 }
 
-export default function DailyLogsPanel({ projectId, task, onChange, focusDate, takeoffStorageKey, chapterId, protectedMeasureIds, readOnly = false, onDetailChange, quantityClipboard, onQuantityCopy, onQuantityPaste, onPlanRecalibrate, sharedTaskNames, onOpenDetailHistory }: DailyLogsPanelProps) {
+export default function DailyLogsPanel({ projectId, task, onChange, focusDate, takeoffStorageKey, chapterId, protectedMeasureIds, measurementPeriods, readOnly = false, onDetailChange, quantityClipboard, onQuantityCopy, onQuantityPaste, onPlanRecalibrate, sharedTaskNames, onOpenDetailHistory }: DailyLogsPanelProps) {
   const logs = task.dailyLogs ?? EMPTY_DAILY_LOGS;
   const storageKey = productionDraftKey(projectId, task.id);
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
@@ -285,6 +288,11 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
 
   const changeDetails = (logId: string, edit: (rows: ProductionQuantityDetail[]) => ProductionQuantityDetail[]) => {
     if (readOnly) return false;
+    const record = logs.find(log => log.id === logId);
+    if (record?.measurementPeriod && measurementPeriods) {
+      const period = measurementPeriods.find(p => recordInMeasurement(record, p));
+      if (!period || period.blockedReason) { setProductionError(period?.blockedReason ?? 'Período não cadastrado na aba Medição.'); return false; }
+    }
     const currentLogs = resolveDrafts();
     if (!currentLogs) return false;
     if (onDetailChange) {
@@ -420,7 +428,7 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
   let acc = 0;
   let execAcc = 0;
   const totalQty = task.quantity || 0;
-  const sortedLogs = [...previewLogs].sort((a, b) => a.date.localeCompare(b.date));
+  const sortedLogs = previewLogs.filter(log => !log.measurementPeriod && !!log.date).sort((a, b) => a.date.localeCompare(b.date));
   const rows = sortedLogs.map(l => {
     const planned = l.plannedQuantity || 0;
     const actual = l.actualQuantity || 0;
@@ -463,6 +471,26 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
   const accStatus = statusForDelta(task.accumulatedDelayQuantity || 0, plannedDailyProduction);
   const unit = task.unit || 'un';
   const productionLimit = getProductionQuantityLimit(task, previewLogs);
+  const planRecord = logs.find(log => log.id === planTarget?.logId);
+  const planPeriod = measurementPeriods?.find(period => planRecord && recordInMeasurement(planRecord, period));
+  const planReadOnly = readOnly || (!!planRecord?.measurementPeriod && measurementPeriods !== undefined && (!planPeriod || !!planPeriod.blockedReason));
+  const beginPeriod = (period: ProductionMeasurementPeriod) => {
+    if (readOnly || period.blockedReason || logs.some(log => recordInMeasurement(log, period))) return;
+    const current = resolveDrafts();
+    if (current) commitResolvedLogs([...current, newMeasurementProductionRecord(period)]);
+  };
+  const renderDetail = (row: DailyProductionLog, detailReadOnly = readOnly, periodMode = false) => <ProductionQuantityDetails
+    rows={row.quantityDetails ?? []} unit={unit} dailyQuantity={row.actualQuantity} periodMode={periodMode}
+    applied={row.quantityDetailsAppliedTotal === row.actualQuantity && row.actualQuantity === detailTotal(row.quantityDetails ?? [])}
+    readOnly={detailReadOnly} onCreate={changes => detailReadOnly ? null : createDetail(row.id, changes)}
+    onEdit={(id, changes) => !detailReadOnly && changeDetails(row.id, details => details.map(detail => detail.id === id ? { ...detail, ...changes } : detail))}
+    onDelete={id => { if (!detailReadOnly) changeDetails(row.id, details => details.filter(detail => detail.id !== id)); }}
+    canOpenPlan={!!takeoffStorageKey && !!chapterId} clipboard={quantityClipboard}
+    onCopy={(mode, detail) => { if (!detailReadOnly) onQuantityCopy?.(mode, row.id, detail); }}
+    onPaste={afterRowId => { if (detailReadOnly) return; const outcome = onQuantityPaste?.(row.id, afterRowId) ?? { success: false, error: 'Área de transferência indisponível.' }; setProductionError(outcome.success ? null : outcome.error ?? 'Não foi possível colar.'); }}
+    sharedTaskNames={sharedTaskNames} onOpenHistory={onOpenDetailHistory}
+    onOpenPlan={(id, field) => { if (detailReadOnly || !takeoffStorageKey || !chapterId) return; setProductionError(null); setPlanTarget({ logId: row.id, rowId: id, field }); }}
+    onApply={() => { if (!detailReadOnly) applyDetail(row.id); }} />;
 
   return (
     <motion.div
@@ -471,7 +499,7 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
       exit={{ height: 0, opacity: 0 }}
       className="overflow-hidden border-t border-border bg-muted/10"
     >
-      <div className="px-8 py-3 space-y-3">
+      {measurementPeriods !== undefined ? <div className="px-3 py-3 sm:px-8"><ProductionMeasurementPanel periods={measurementPeriods} logs={logs} unit={unit} readOnly={readOnly} onBegin={beginPeriod} renderDetail={renderDetail} />{productionError && <p role="alert" className="mt-2 text-xs text-red-700">{productionError}</p>}</div> : <div className="px-8 py-3 space-y-3">
         {task.baseline && (
           <div className="flex items-center gap-2 flex-wrap text-[10px] bg-card border border-border rounded-md px-2 py-1">
             <span className="font-semibold text-muted-foreground uppercase tracking-wider">Cronograma:</span>
@@ -823,18 +851,18 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
             </button>
           </div>
         )}
-      </div>
+      </div>}
       {confirmDialog}
       <Dialog open={!!planTarget} onOpenChange={open => { if (!open) setPlanTarget(null); }}>
         <DialogContent className="flex h-[94vh] w-[96vw] max-w-[2100px] flex-col gap-2 overflow-hidden p-2 sm:p-3">
           <DialogHeader className="shrink-0 pr-8 text-left">
             <DialogTitle className="text-sm">Planta para o detalhe de quantitativo</DialogTitle>
-            <DialogDescription className="text-xs">Escolha ou adicione uma planta deste prédio. A captura vai para a linha {planTarget ? (logs.find(log => log.id === planTarget.logId)?.quantityDetails?.findIndex(row => row.id === planTarget.rowId) ?? -1) + 1 : 0}, coluna {planTarget ? DETAIL_COLUMNS[planTarget.field] : 'A'}. Ao concluir, o realizado é atualizado e a próxima linha fica pronta.</DialogDescription>
+            <DialogDescription className="text-xs">Escolha ou adicione uma planta deste prédio. A captura vai para a linha {planTarget ? (logs.find(log => log.id === planTarget.logId)?.quantityDetails?.findIndex(row => row.id === planTarget.rowId) ?? -1) + 1 : 0}, coluna {planTarget ? DETAIL_COLUMNS[planTarget.field] : 'A'}. Ao concluir, {measurementPeriods ? "o total da medição" : "o realizado"} é atualizado e a próxima linha fica pronta.</DialogDescription>
           </DialogHeader>
           {productionError && <p role="alert" className="shrink-0 border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800">{productionError}</p>}
           <div className="min-h-0 flex-1 overflow-auto">
             {planTarget && takeoffStorageKey && <Suspense fallback={<p className="p-4 text-sm">Abrindo visualizador…</p>}>
-              <PlanTakeoff storageKey={takeoffStorageKey} protectedMeasureIds={protectedMeasureIds} readOnly={readOnly} embedded chapterId={chapterId} measureContext={{ taskId: task.id, logId: planTarget.logId }} destinationColumn={DETAIL_COLUMNS[planTarget.field]} onUseMeasure={usePlanMeasure} onUpdateMeasure={updatePlanMeasure} onDeleteMeasure={deletePlanMeasure} onRestoreMeasure={restorePlanMeasure} onRecalibrate={(plan, page, scale) => { const result = onPlanRecalibrate?.(plan.id, page, scale); if (!result?.success) { setProductionError(result?.error ?? 'Não foi possível recalcular os lançamentos vinculados à planta.'); return false; } setProductionError(null); return true; }} allowedKinds={MEASURE_KINDS} linkedMeasureIds={logs.filter(log => log.id === planTarget.logId).flatMap(log => log.quantityDetails?.flatMap(detail => Object.values(DETAIL_SOURCE_FIELDS).map(key => detail[key]?.measureId).filter((id): id is string => !!id)) ?? [])} executedMeasureIds={logs.filter(log => log.id === planTarget.logId).flatMap(log => log.quantityDetailsAppliedTotal === log.actualQuantity && log.actualQuantity > 0 && log.quantityDetailsAppliedTotal === detailTotal(log.quantityDetails ?? []) ? log.quantityDetails?.flatMap(row => Object.values(DETAIL_SOURCE_FIELDS).map(key => row[key]?.measureId).filter((id): id is string => !!id)) ?? [] : [])} focusMeasure={logs.find(log => log.id === planTarget.logId)?.quantityDetails?.find(row => row.id === planTarget.rowId)?.[DETAIL_SOURCE_FIELDS[planTarget.field]]} />
+              <PlanTakeoff storageKey={takeoffStorageKey} protectedMeasureIds={protectedMeasureIds} readOnly={planReadOnly} embedded chapterId={chapterId} measureContext={{ taskId: task.id, logId: planTarget.logId }} destinationColumn={DETAIL_COLUMNS[planTarget.field]} onUseMeasure={usePlanMeasure} onUpdateMeasure={updatePlanMeasure} onDeleteMeasure={deletePlanMeasure} onRestoreMeasure={restorePlanMeasure} onRecalibrate={(plan, page, scale) => { const result = onPlanRecalibrate?.(plan.id, page, scale); if (!result?.success) { setProductionError(result?.error ?? 'Não foi possível recalcular os lançamentos vinculados à planta.'); return false; } setProductionError(null); return true; }} allowedKinds={MEASURE_KINDS} linkedMeasureIds={logs.filter(log => log.id === planTarget.logId).flatMap(log => log.quantityDetails?.flatMap(detail => Object.values(DETAIL_SOURCE_FIELDS).map(key => detail[key]?.measureId).filter((id): id is string => !!id)) ?? [])} executedMeasureIds={logs.filter(log => log.id === planTarget.logId).flatMap(log => log.quantityDetailsAppliedTotal === log.actualQuantity && log.actualQuantity > 0 && log.quantityDetailsAppliedTotal === detailTotal(log.quantityDetails ?? []) ? log.quantityDetails?.flatMap(row => Object.values(DETAIL_SOURCE_FIELDS).map(key => row[key]?.measureId).filter((id): id is string => !!id)) ?? [] : [])} focusMeasure={logs.find(log => log.id === planTarget.logId)?.quantityDetails?.find(row => row.id === planTarget.rowId)?.[DETAIL_SOURCE_FIELDS[planTarget.field]]} />
             </Suspense>}
           </div>
         </DialogContent>

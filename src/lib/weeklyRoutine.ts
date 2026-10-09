@@ -110,7 +110,7 @@ function completionDateForTask(task: Task): string | undefined {
 
   let accumulated = 0;
   const logs = [...(task.dailyLogs ?? [])]
-    .filter(log => (Number(log.actualQuantity) || 0) > 0)
+    .filter(log => !log.measurementPeriod && !!log.date && (Number(log.actualQuantity) || 0) > 0)
     .sort((left, right) => left.date.localeCompare(right.date));
   for (const log of logs) {
     accumulated += Number(log.actualQuantity) || 0;
@@ -207,7 +207,7 @@ export function buildRoutineSearchActivities(
 }
 
 function quantityForDay(task: Task, date: string, kind: 'planned' | 'actual', workDayWeight = 0): number {
-  const logs = (task.dailyLogs ?? []).filter(log => log.date === date);
+  const logs = (task.dailyLogs ?? []).filter(log => !log.measurementPeriod && log.date === date);
   const logged = logs.reduce((sum, log) => sum + Number(kind === 'planned' ? log.plannedQuantity : log.actualQuantity || 0), 0);
   if (logged > 0 || kind === 'actual') return Math.round(logged * 100) / 100;
 

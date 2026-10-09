@@ -1029,7 +1029,7 @@ export async function syncProductionAtomically(
     p_chapters_delete: chapters.deletes as unknown as Json,
     p_tasks_upsert: tasks.upserts.map(({ id, row }) => ({ id, ...row })) as unknown as Json,
     p_tasks_delete: tasks.deletes as unknown as Json,
-    p_logs_upsert: logs.upserts.map(({ id, row }) => ({ id, task_id: row.taskId, log_date: row.log.date, data: row.log })) as unknown as Json,
+    p_logs_upsert: logs.upserts.map(({ id, row }) => ({ id, task_id: row.taskId, log_date: row.log.measurementPeriod ? null : row.log.date, data: row.log })) as unknown as Json,
     p_logs_delete: logs.deletes as unknown as Json,
     p_audit_insert: audit.upserts.map(({ id, row }) => ({ id, data: row })) as unknown as Json,
   });
@@ -1394,7 +1394,7 @@ function diffAndSyncTaskLogs(
         id,
         project_id: projectId,
         task_id: taskId,
-        log_date: log.date,
+        log_date: log.measurementPeriod ? null : log.date,
         data: log as unknown as Json,
         ...(before ? {} : { created_by: userId ?? null }),
       });
