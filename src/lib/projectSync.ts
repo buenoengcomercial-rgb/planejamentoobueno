@@ -14,6 +14,7 @@
  */
 import { supabase } from '@/integrations/supabase/client';
 import { recordSyncDiagnostic } from '@/lib/syncDiagnostics';
+import { assertProductionDeletionSafe, type ProductionDeletionState } from '@/lib/productionDeletionSafety';
 import {
   PROJECT_COLLECTION_KEYS,
   normalizeProjectCollections,
@@ -89,6 +90,42 @@ interface Snapshot {
 }
 
 const snapshots = new Map<string, Snapshot>();
+
+function deletionState(snapshot: Snapshot): ProductionDeletionState {
+  return {
+    tasks: new Map([...snapshot.tasks].map(([id, row]) => [id, { ...(row.data as Task), id, percentComplete: row.percent_complete ?? 0 }])),
+    chapters: new Set(snapshot.chapters.keys()), logs: snapshot.taskLogs, audits: snapshot.auditLogs,
+  };
+}
+
+/** Must run before the parent PATCH too, not only before normalized deletes. */
+export function assertProjectDeletionSafety(project: Project): void {
+  const previous = snapshots.get(project.id);
+  if (!previous) return;
+  const next = buildSnapshot(project, [...previous.loadedCollections]);
+  const removesTask = [...previous.tasks.keys()].some(id => !next.tasks.has(id));
+  if (removesTask && PROJECT_COLLECTION_KEYS.some(collection => !previous.loadedCollections.has(collection))) {
+    throw new Error('Exclusão bloqueada: os vínculos de todas as áreas ainda não foram conferidos. Nenhum registro foi removido.');
+  }
+  const source: Project = {
+    ...(previous.projectData ? { ...project, ...previous.projectData } : project),
+    measurements: [...previous.measurements.values()],
+    additives: [...previous.additives.values()],
+    budgetItems: [...previous.budgetItems.values()],
+    subcontracts: [...previous.subcontracts.values()],
+    dailyReports: [...previous.dailyReports.values()],
+    stockMovements: [...previous.stockMovements.values()],
+    materialComparisons: [...previous.materialComparisons.values()],
+    analyticCompositions: [...previous.analyticCompositions.values()],
+    warehouse: {
+      ...project.warehouse,
+      movements: [...previous.movements.values()],
+      requisitions: [...previous.requisitions.values()],
+      custodyTerms: [...previous.custody.values()],
+    } as Project['warehouse'],
+  };
+  assertProductionDeletionSafe(deletionState(previous), deletionState(next), source);
+}
 
 interface PendingProjectHydration {
   projectId: string;
@@ -995,6 +1032,7 @@ export async function syncProductionAtomically(
   organizationId: string,
   expectedUpdatedAt: string,
 ): Promise<string | null> {
+  assertProjectDeletionSafety(project);
   const previous = snapshots.get(project.id);
   if (!previous?.loadedCollections.has('eapChapters') || !previous.loadedCollections.has('tasks')) return null;
   const next = buildSnapshot(project, [...previous.loadedCollections]);
@@ -1089,6 +1127,7 @@ function domainRow(collection: DomainCollection, id: string, value: unknown): Re
 export async function syncNormalizedDomainAtomically(
   project: Project, slim: Project, organizationId: string, expectedUpdatedAt: string,
 ): Promise<string | null> {
+  assertProjectDeletionSafety(project);
   const previous = snapshots.get(project.id);
   if (!previous) return null;
   const next = buildSnapshot(project, [...previous.loadedCollections]);
@@ -1186,6 +1225,7 @@ export async function syncCollectionsToCloud(
   userId?: string,
   options: ProjectCollectionSyncOptions = {},
 ): Promise<void> {
+  assertProjectDeletionSafety(project);
   const projectId = project.id;
   const existingSnapshot = snapshots.get(projectId);
   if (!options.allowCompleteWithoutSnapshot) assertProjectSnapshotAvailable(projectId);

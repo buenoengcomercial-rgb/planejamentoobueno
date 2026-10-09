@@ -14,6 +14,7 @@ import {
   setCloudSnapshot,
   buildContractImportPayload,
   assertProjectSnapshotAvailable,
+  assertProjectDeletionSafety,
 } from '@/lib/projectSync';
 import type { ProjectCollectionKey } from '@/lib/projectDataScope';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
@@ -205,6 +206,7 @@ async function getCurrentUserId(): Promise<string | undefined> {
 }
 
 export async function upsertCloudProject(project: Project, organizationId: string, expectedUpdatedAt?: string): Promise<string> {
+  assertProjectDeletionSafety(project);
   const userId = await getCurrentUserId();
   // A cópia dos terceirizados permanece no payload do pai; assim uma falha
   // posterior da tabela normalizada não consegue apagar o pacote criado.

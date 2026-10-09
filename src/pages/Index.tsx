@@ -18,6 +18,10 @@ import { cloudRetryDelay, isTransientCloudError } from '@/lib/cloudRetry';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { scheduleIdlePreload } from '@/lib/idlePreload';
+import { applyUndoOperation, createUndoOperation, type UndoOperation } from '@/lib/operationUndo';
+import { assertProductionDeletionSafe, productionDeletionState } from '@/lib/productionDeletionSafety';
+import { protectDailyReportDraft, readDailyReportDrafts, clearDailyReportDraft, type DailyReportDraft } from '@/lib/dailyReportDrafts';
+import DailyReportDraftRecovery from '@/components/DailyReportDraftRecovery';
 import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
 import { logToProject, userInfoFromSupabaseUser } from '@/lib/audit';
@@ -197,7 +201,7 @@ const ROUTE_VIEW: Record<string, AppView> = {
   levantamento: 'tasks',
 };
 
-type UndoStacks = Record<AppView, Project[]>;
+type UndoStacks = Record<AppView, UndoOperation[]>;
 
 function reportForDate(project: Project, date: string): DailyReport | undefined {
   return (project.dailyReports ?? []).find(report => report.date === date);
@@ -294,6 +298,9 @@ export default function Index() {
   const [bootLoading, setBootLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [dailyReportSaveErrors, setDailyReportSaveErrors] = useState<Record<string, string>>({});
+  const [dailyReportDrafts, setDailyReportDrafts] = useState<Record<string, DailyReportDraft>>({});
+  const dailyReportDraftsRef = useRef<Record<string, DailyReportDraft>>({});
+  const [dailyReportRecoveryBusy, setDailyReportRecoveryBusy] = useState(false);
   const [currentProjectUpdatedAt, setCurrentProjectUpdatedAt] = useState<string | null>(null);
   const [lastCloudConfirmedAt, setLastCloudConfirmedAt] = useState<string | null>(null);
   const [lastRemoteCheckAt, setLastRemoteCheckAt] = useState<string | null>(null);
@@ -2219,7 +2226,25 @@ export default function Index() {
     return scheduleIdlePreload(candidate.load);
   }, [bootLoading, idlePreloadProjectId, role, safeCurrentView]);
 
+  useEffect(() => {
+    let active = true;
+    setDailyReportDrafts({});
+    setDailyReportSaveErrors({});
+    dailyReportDraftsRef.current = {};
+    if (rawProject?.id && user?.id) {
+      void readDailyReportDrafts(rawProject.id, user.id).then(drafts => {
+        if (!active) return;
+        const merged = { ...drafts, ...dailyReportDraftsRef.current };
+        dailyReportDraftsRef.current = merged;
+        setDailyReportDrafts(merged);
+      }).catch(() => undefined);
+    }
+    return () => { active = false; };
+  }, [rawProject?.id, user?.id]);
+
   const saveDailyReportDirectly = useCallback((before: Project, after: Project) => {
+    if (!user?.id) return;
+    const actorId = user.id;
     const dates = new Set([
       ...(before.dailyReports ?? []).map(report => report.date),
       ...(after.dailyReports ?? []).map(report => report.date),
@@ -2242,10 +2267,24 @@ export default function Index() {
       pendingDailyReportSavesRef.current += 1;
       setSaveStatus('saving');
       const expectedLocal = local;
+      const recovery: DailyReportDraft = { revision: crypto.randomUUID(), base, local: expectedLocal };
+      dailyReportDraftsRef.current = { ...dailyReportDraftsRef.current, [date]: recovery };
+      setDailyReportDrafts(dailyReportDraftsRef.current);
+      // Start protecting immediately, before waiting for earlier cloud saves.
+      const protectedDraft = protectDailyReportDraft(after.id, actorId, recovery);
+      void protectedDraft.catch(() => undefined);
       const request = dailyReportSaveQueueRef.current.catch(() => undefined).then(async () => {
+        await protectedDraft;
         const result = await saveOpenDailyReport(after.id, base, expectedLocal);
+        if (result.conflicts.length === 0) await clearDailyReportDraft(after.id, actorId, date, recovery.revision);
+        if (result.conflicts.length === 0 && rawProjectRef.current?.id === after.id && dailyReportDraftsRef.current[date]?.revision === recovery.revision) {
+          const remaining = { ...dailyReportDraftsRef.current };
+          delete remaining[date];
+          dailyReportDraftsRef.current = remaining;
+          setDailyReportDrafts(remaining);
+        }
         mergeConfirmedDailyReportIntoPartialSync(after.id, date, result.report);
-        setDailyReportSaveErrors(errors => {
+        if (result.conflicts.length === 0) setDailyReportSaveErrors(errors => {
           const next = { ...errors };
           delete next[date];
           return next;
@@ -2263,11 +2302,13 @@ export default function Index() {
           return next;
         });
         if (result.conflicts.length > 0) {
-          toast.warning('A legenda ou campo já havia sido alterado em outro aparelho. Foi mantida a primeira edição salva.');
+          setDailyReportSaveErrors(errors => ({ ...errors, [date]: 'Há campos divergentes. Compare a versão confirmada com o rascunho preservado.' }));
+          toast.warning('A legenda ou campo já havia sido alterado em outro aparelho. Foi mantida a primeira edição salva e o rascunho foi preservado.');
         }
       });
       dailyReportSaveQueueRef.current = request;
       void request.catch(async error => {
+        if (rawProjectRef.current?.id !== after.id) return;
         console.warn('Falha ao salvar o Diário diretamente.', error);
         const message = error instanceof Error ? error.message : 'Não foi possível salvar o Diário. Nenhuma alteração foi confirmada.';
         setDailyReportSaveErrors(errors => ({ ...errors, [date]: message }));
@@ -2292,11 +2333,63 @@ export default function Index() {
             ? 'conflict'
             : partialSyncPendingRef.current?.projectId === after.id
               ? 'error'
-              : 'saved');
+              : Object.keys(dailyReportDraftsRef.current).length > 0 ? 'error' : 'saved');
         }
       });
     });
-  }, [clearLocalProjectCollections, mergeConfirmedDailyReportIntoPartialSync]);
+  }, [clearLocalProjectCollections, mergeConfirmedDailyReportIntoPartialSync, user?.id]);
+
+  const recoverDailyReport = async (date: string, discard: boolean, discardConfirmed = false) => {
+    const current = rawProjectRef.current;
+    const draft = dailyReportDraftsRef.current[date];
+    if (!current || !draft || !user?.id || dailyReportRecoveryBusy || pendingDailyReportSavesRef.current > 0) return;
+    if (discard && !discardConfirmed) {
+      confirmDiscardPendingForm({ title: 'Descartar rascunho do Diário?', description: 'Somente a edição local pendente será descartada. O Diário confirmado e seus arquivos permanecem preservados.', confirmLabel: 'Descartar rascunho' }, () => void recoverDailyReport(date, true, true));
+      return;
+    }
+    setDailyReportRecoveryBusy(true);
+    try {
+      const confirmed = await loadOpenDailyReport(current.id, date);
+      if (rawProjectRef.current?.id !== current.id) return;
+      if (discard) {
+        await clearDailyReportDraft(current.id, user.id, date, draft.revision);
+        if (dailyReportDraftsRef.current[date]?.revision === draft.revision) {
+          const latest = rawProjectRef.current;
+          if (latest?.id === current.id) {
+            const next = replaceReportForDate(latest, date, confirmed);
+            rawProjectRef.current = next; setRawProject(next);
+          }
+          const next = { ...dailyReportDraftsRef.current }; delete next[date];
+          dailyReportDraftsRef.current = next; setDailyReportDrafts(next);
+          setDailyReportSaveErrors(errors => { const next = { ...errors }; delete next[date]; return next; });
+        }
+      } else {
+        const result = await saveOpenDailyReport(current.id, draft.base, draft.local);
+        if (rawProjectRef.current?.id !== current.id) return;
+        if (result.conflicts.length > 0) {
+          const latest = rawProjectRef.current;
+          if (latest?.id === current.id) {
+            const next = replaceReportForDate(latest, date, result.report);
+            rawProjectRef.current = next; setRawProject(next);
+          }
+          toast.warning('Há campos divergentes. A versão confirmada foi preservada; compare o rascunho antes de descartá-lo.');
+          return;
+        }
+        await clearDailyReportDraft(current.id, user.id, date, draft.revision);
+        const latest = rawProjectRef.current;
+        if (!latest || latest.id !== current.id) return;
+        if (dailyReportDraftsRef.current[date]?.revision !== draft.revision) return;
+        const next = replaceReportForDate(latest, date, result.report);
+        rawProjectRef.current = next; setRawProject(next);
+        lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, date, result.report);
+        const remaining = { ...dailyReportDraftsRef.current }; delete remaining[date];
+        dailyReportDraftsRef.current = remaining; setDailyReportDrafts(remaining);
+        setDailyReportSaveErrors(errors => { const next = { ...errors }; delete next[date]; return next; });
+        toast.success('Diário confirmado.');
+      }
+    } catch (error) { toast.error(error instanceof Error ? error.message : 'Não foi possível recuperar o Diário.'); }
+    finally { setDailyReportRecoveryBusy(false); }
+  };
 
   const makeViewSetter = useCallback((view: AppView) => {
     return (next: Project | ((prev: Project) => Project)) => {
@@ -2333,9 +2426,11 @@ export default function Index() {
         // não gera novo estado (evitava o autosave reiniciar para sempre).
         const synchronizedJson = serializeProject(synchronized);
         if (synchronizedJson === serializeProject(prev)) return prev;
+        try { assertProductionDeletionSafe(productionDeletionState(prev), productionDeletionState(synchronized), prev); }
+        catch (error) { toast.error(error instanceof Error ? error.message : 'Exclusão bloqueada.'); return prev; }
         markLocalProjectChanges(prev, synchronized);
         const stack = undoStacksRef.current[view];
-        stack.push(prev);
+        stack.push(createUndoOperation(prev, synchronized));
         if (stack.length > UNDO_LIMIT) stack.shift();
         rawProjectRef.current = synchronized;
         if (view === 'dailyReport') {
@@ -2404,7 +2499,7 @@ export default function Index() {
     const previous = rawProjectRef.current;
     if (previous) {
       const stack = undoStacksRef.current.warehouse;
-      stack.push(previous);
+      stack.push(createUndoOperation(previous, synchronized));
       if (stack.length > UNDO_LIMIT) stack.shift();
     }
     skipNextAutoSaveRef.current = true;
@@ -2832,15 +2927,27 @@ export default function Index() {
     }
     const stack = undoStacksRef.current[view];
     if (stack.length === 0) { toast.message('Nada para desfazer'); return; }
-    const prev = stack.pop()!;
-    writeProtectedProjectDraft(prev, currentProjectUpdatedAtRef.current);
-    rawProjectRef.current = prev;
-    setRawProject(prev);
-    setUndoVersion(v => v + 1);
-    toast.success('Alteração desfeita');
-  }, [writeProtectedProjectDraft]);
+    const operation = stack[stack.length - 1];
+    const current = rawProjectRef.current;
+    if (!operation || !current) return;
+    // Warehouse reversals must use their specialized audited operations.
+    if (view === 'warehouse' || view === 'dailyReport') {
+      toast.warning('Use a correção ou o cancelamento específico desta área para preservar o histórico.');
+      return;
+    }
+    try {
+      let next = applyUndoOperation(current, operation);
+      next = logToProject(next, { ...auditActor, entityType: 'project', entityId: current.id, action: 'updated', title: 'Operação desfeita', metadata: { view, changedFields: operation.changes.map(change => change.path) } });
+      assertProductionDeletionSafe(productionDeletionState(current), productionDeletionState(next), current);
+      markLocalProjectChanges(current, next);
+      writeProtectedProjectDraft(next, currentProjectUpdatedAtRef.current);
+      stack.pop(); rawProjectRef.current = next; setRawProject(next);
+      setUndoVersion(v => v + 1);
+      toast.success('Alteração desfeita');
+    } catch (error) { toast.error(error instanceof Error ? error.message : 'Não foi possível desfazer com segurança.'); }
+  }, [writeProtectedProjectDraft, auditActor, markLocalProjectChanges]);
 
-  const canUndo = (view: AppView) => undoStacksRef.current[view].length > 0;
+  const canUndo = (view: AppView) => view !== 'warehouse' && view !== 'dailyReport' && undoStacksRef.current[view].length > 0;
   void undoVersion;
 
   const handleSwitchProject = async (id: string) => {
@@ -3390,10 +3497,8 @@ export default function Index() {
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
           </div>
         }>
-          {Object.entries(dailyReportSaveErrors).map(([date, message]) => (
-            <div key={date} role="alert" className="mx-4 mt-16 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm break-words">
-              <strong>Diário de {date.split('-').reverse().join('/')} não salvo.</strong> {message}
-            </div>
+          {Object.entries(dailyReportDrafts).map(([date, draft]) => (
+            <DailyReportDraftRecovery key={date} draft={draft} confirmed={reportForDate(rawProject, date)} message={dailyReportSaveErrors[date]} busy={dailyReportRecoveryBusy || saveStatus === 'saving'} onRetry={() => void recoverDailyReport(date, false)} onDiscard={() => void recoverDailyReport(date, true)} />
           ))}
           {renderView()}
         </Suspense>
