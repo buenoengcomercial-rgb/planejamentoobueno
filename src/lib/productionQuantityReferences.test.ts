@@ -18,6 +18,20 @@ const getRows = (p: Project, taskId: string) => getTask(p, taskId).dailyLogs![0]
 const actor = { userId: 'engineer-1', userName: 'Engenheira' };
 
 describe('registro de quantitativos compartilhados', () => {
+  it('bloqueia atomicamente a edição se uma referência pertence a medição em fiscalização', () => {
+    let current = project();
+    const source = { taskId: 'task-a', logId: 'day-a', rowId: 'row-29' };
+    current = pasteQuantityRow(current, makeQuantityClipboard(current.id, 'reference', source, 'UND', getRows(current, 'task-a')[0]), { taskId: 'task-b', logId: 'day-b' }, actor).project!;
+    current.measurements = [{ id: 'measurement-1', number: 1, startDate: '2026-09-01', endDate: '2026-09-30', status: 'in_review', items: [] }] as Project['measurements'];
+    getTask(current, 'task-b').dailyLogs![0].measurementPeriod = { measurementId: 'measurement-1', number: 1, startDate: '2026-09-01', endDate: '2026-09-30' };
+    getTask(current, 'task-b').dailyLogs![0].date = '';
+    const before = JSON.stringify(current);
+    const result = changeQuantityRows(current, source, [{ ...getRows(current, 'task-a')[0], measuredQuantity: 30 }], actor);
+    expect(result.project).toBeUndefined();
+    expect(result.error).toContain('Conferência');
+    expect(result.error).toContain('fiscalização');
+    expect(JSON.stringify(current)).toBe(before);
+  });
   it('protege fontes de todas as colunas e dias, inclusive referências de outra tarefa', () => {
     const p = project();
     const source = (id: string) => ({ planId: 'plan', planName: 'Planta', page: 1, measureId: id, measureName: id, kind: 'count' as const, points: [{ x: 1, y: 1 }] });

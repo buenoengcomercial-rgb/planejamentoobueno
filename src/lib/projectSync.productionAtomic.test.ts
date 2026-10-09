@@ -20,6 +20,16 @@ afterEach(() => {
 });
 
 describe('transação de Produção', () => {
+  it('persiste o vínculo de medição sem data de execução e sem alterar os apontamentos antigos', async () => {
+    const legacy = { id: 'legacy', date: '2026-10-01', plannedQuantity: 10, actualQuantity: 2 };
+    const existing = { ...base, phases: base.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task, dailyLogs: [legacy] })) })) };
+    setCloudSnapshot(base.id, existing);
+    rpc.mockResolvedValue({ data: '2026-10-09T00:00:00Z', error: null });
+    const record = { id: 'period-record', date: '', plannedQuantity: 0, actualQuantity: 3, measurementPeriod: { number: 1, startDate: '2026-10-01', endDate: '2026-10-31' } };
+    const next = { ...existing, phases: existing.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task, dailyLogs: [...task.dailyLogs, record] })) })) };
+    await syncProductionAtomically(next, stripNormalizedCollections(next), 'org-1', '2026-10-01T00:00:00Z');
+    expect(rpc).toHaveBeenCalledWith('save_production_domain', expect.objectContaining({ p_logs_upsert: [expect.objectContaining({ id: 'period-record', log_date: null, data: record })], p_logs_delete: [], p_data: null }));
+  });
   it('persiste a memória e os pontos do detalhe junto ao log diário, sem alterar outros domínios', async () => {
     setCloudSnapshot(base.id, base);
     rpc.mockResolvedValue({ data: '2026-10-02T00:00:00Z', error: null });

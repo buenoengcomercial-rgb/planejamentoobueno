@@ -15,7 +15,7 @@ export function upsertDailyProductionLog(
   actualQuantity: number,
 ): DailyProductionLog[] {
   const existing = task.dailyLogs ?? [];
-  const matchingLog = existing.find(log => log.date === date);
+  const matchingLog = existing.find(log => !log.measurementPeriod && log.date === date);
   if (matchingLog) {
     return existing.map(log => log.id === matchingLog.id ? { ...log, actualQuantity } : log);
   }
@@ -52,15 +52,21 @@ export function applyDailyProductionLogs(task: Task, logs: DailyProductionLog[])
     };
   }
 
-  const sorted = [...logsWithQuantity].sort((left, right) => left.date.localeCompare(right.date));
+  const periodQuantity = logsWithQuantity.filter(log => !!log.measurementPeriod).reduce((sum, log) => sum + log.actualQuantity, 0);
+  const sorted = logsWithQuantity.filter(log => !log.measurementPeriod && !!log.date).sort((left, right) => left.date.localeCompare(right.date));
+  if (!sorted.length) {
+    const physicalProgress = task.quantity ? Math.min(100, periodQuantity / task.quantity * 100) : 0;
+    return { dailyLogs: logs, executedQuantityTotal: periodQuantity, remainingQuantity: Math.max(0, (task.quantity || 0) - periodQuantity), physicalProgress, percentComplete: Math.round(physicalProgress), current: undefined };
+  }
   const realStartDate = sorted[0].date;
   const lastLogDate = sorted[sorted.length - 1].date;
-  const executedQuantityTotal = sorted.reduce((sum, log) => sum + log.actualQuantity, 0);
+  const dailyTotal = sorted.reduce((sum, log) => sum + log.actualQuantity, 0);
+  const executedQuantityTotal = dailyTotal + periodQuantity;
   const remainingQuantity = Math.max(0, (task.quantity || 0) - executedQuantityTotal);
   const physicalProgress = task.quantity
     ? Math.min(100, (executedQuantityTotal / task.quantity) * 100)
     : 0;
-  const averageDaily = executedQuantityTotal / sorted.length;
+  const averageDaily = dailyTotal / sorted.length;
   const daysRemaining = averageDaily > 0 ? Math.ceil(remainingQuantity / averageDaily) : 0;
   const [lastYear, lastMonth, lastDay] = lastLogDate.split('-').map(Number);
   const forecastEndDate = toISODate(new Date(lastYear, lastMonth - 1, lastDay + daysRemaining));

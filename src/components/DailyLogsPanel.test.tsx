@@ -29,6 +29,48 @@ function buildTask(overrides: Partial<Task> = {}): Task {
 }
 
 describe('DailyLogsPanel', () => {
+  it('lança três pontos por medição, edita, exclui e recupera após recarga sem inventar uma data', async () => {
+    const periods = [{ key: 'draft-1', number: 1, startDate: '2026-09-01', endDate: '2026-09-30' }];
+    const legacy = { id: 'old', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 2, notes: 'Preservar' };
+    let saved = buildTask({ dailyLogs: [legacy] });
+    function Harness() {
+      const [task, setTask] = useState(saved);
+      return <DailyLogsPanel task={task} measurementPeriods={periods} chapterId="phase-1" takeoffStorageKey="scope" onChange={dailyLogs => { saved = { ...task, dailyLogs }; setTask(saved); }} />;
+    }
+    const first = render(<Harness />);
+    expect(screen.queryByText(/Apontamento Diário — meta/)).not.toBeInTheDocument();
+    expect(screen.queryByText('SALDO DIA')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Total da 1ª medição')).toHaveTextContent('2 UND');
+    fireEvent.click(screen.getByText('Abrir detalhe de quantitativos'));
+    fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna A da linha 1 na planta' }));
+    fireEvent.click(await screen.findByText('Concluir contagem de teste'));
+    expect(saved.dailyLogs![0]).toEqual(legacy);
+    expect(saved.dailyLogs![1]).toMatchObject({ date: '', actualQuantity: 3, quantityDetailsAppliedTotal: 3, measurementPeriod: { number: 1 } });
+    expect(saved.dailyLogs![1].quantityDetails![0].multiplierSource?.points).toHaveLength(3);
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.getByLabelText('Total da 1ª medição')).toHaveTextContent('5 UND');
+    first.unmount();
+    saved = JSON.parse(JSON.stringify(saved));
+    render(<Harness />);
+    expect(screen.getByLabelText('Total da 1ª medição')).toHaveTextContent('5 UND');
+    expect(screen.getByRole('img', { name: 'Origem na planta da linha 1' })).toBeInTheDocument();
+    const value = screen.getByRole('spinbutton', { name: 'Unidades da linha 1' });
+    fireEvent.change(value, { target: { value: '4' } }); fireEvent.blur(value);
+    expect(screen.getByLabelText('Total da 1ª medição')).toHaveTextContent('6 UND');
+    fireEvent.click(screen.getByRole('button', { name: 'Excluir linha 1' }));
+    expect(saved.dailyLogs![1].actualQuantity).toBe(0);
+    expect(saved.dailyLogs![0]).toEqual(legacy);
+    expect(screen.getByLabelText('Total da 1ª medição')).toHaveTextContent('2 UND');
+  });
+  it('não permite novos quantitativos em medição aprovada ou sem período definido', () => {
+    const onChange = vi.fn();
+    const view = render(<DailyLogsPanel task={buildTask()} onChange={onChange} measurementPeriods={[{ key: 'm1', number: 1, startDate: '2026-09-01', endDate: '2026-09-30', blockedReason: 'Medição aprovada: somente consulta.' }]} />);
+    expect(screen.queryByText('Abrir detalhe de quantitativos')).not.toBeInTheDocument();
+    expect(screen.getByText(/Medição aprovada/)).toBeInTheDocument();
+    view.rerender(<DailyLogsPanel task={buildTask()} onChange={onChange} measurementPeriods={[]} />);
+    expect(screen.getByText(/Defina o número e as datas/)).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
   it('envia ao visualizador somente as referências e execuções do dia aberto', async () => {
     const source = (measureId: string) => ({ planId: 'plan-1', planName: 'Placas.pdf', measureId, measureName: 'Placas', page: 1, kind: 'count' as const, points: [{ x: 1, y: 1 }] });
     const row = (id: string) => ({ id, location: '', comment: '', formula: 'A*B' as const, multiplier: 1, measuredQuantity: 1, source: source(id) });

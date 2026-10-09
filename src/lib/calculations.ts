@@ -3,6 +3,7 @@ import { getAllTasks } from '@/data/sampleProject';
 import { mapTaskTree, replaceProjectTasksById } from '@/lib/taskTree';
 import { parseISODateLocal, toISODateLocal } from '@/components/gantt/utils';
 import { scheduleWorkdayWeight } from '@/lib/scheduleCalendar';
+import { applyDailyProductionLogs } from './dailyProductionLogs';
 
 /** Calendário de trabalho usado pelo motor de dependências. */
 export interface WorkCalendar {
@@ -232,6 +233,7 @@ export function applyDailyLogsToProject(project: Project): Project {
       ...p,
       tasks: mapTaskTree(p.tasks, t => {
         const logs = t.dailyLogs || [];
+        if (logs.some(log => !!log.measurementPeriod)) return { ...t, ...applyDailyProductionLogs(t, logs) };
 
         // Build "current" mirror of baseline by default
         const buildCurrent = (overrides: Partial<NonNullable<Task['current']>> = {}): NonNullable<Task['current']> => {

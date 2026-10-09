@@ -104,35 +104,29 @@ describe('TaskList', () => {
     expect(onProjectChange).not.toHaveBeenCalled();
   });
 
-  it('abre a data vinda da Rotina sem criar apontamento até a ação do usuário', () => {
+  it('abre a tarefa vinda da Rotina sem criar uma data de execução para a medição', () => {
     const onProjectChange = vi.fn();
     render(<TooltipProvider>
       <TaskList project={project} onProjectChange={onProjectChange}
         focusTaskId="task-1" focusDate="2026-09-30" auditActor={{ userId: 'owner-1', userName: 'Proprietário' }} />
     </TooltipProvider>);
 
-    expect(screen.getByRole('button', { name: 'Lançar em 30/09/2026' })).toBeInTheDocument();
+    expect(screen.getByText(/Defina o número e as datas do período na aba Medição/)).toBeInTheDocument();
     expect(onProjectChange).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Lançar em 30/09/2026' }));
-    expect(onProjectChange).toHaveBeenCalledTimes(1);
-    const saved = onProjectChange.mock.calls[0][0] as Project;
-    expect(saved.phases[0].tasks[0].dailyLogs?.[0].date).toBe('2026-09-30');
-    expect(saved.auditLogs?.[0]).toMatchObject({
-      entityType: 'task', entityId: 'task-1', action: 'created',
-      userId: 'owner-1', after: expect.objectContaining({ date: '2026-09-30' }),
-    });
+    expect(screen.queryByRole('button', { name: 'Lançar em 30/09/2026' })).not.toBeInTheDocument();
   });
 
   it('abre a planta pelo capítulo em que a tarefa está, mesmo com phase legado na tarefa', () => {
     const nestedProject = {
       ...project,
+      measurementDraft: { number: 1, startDate: '2026-09-01', endDate: '2026-09-30' },
       phases: [
         { ...project.phases[0], tasks: [] },
         {
           id: 'phase-child', name: 'Pavimento térreo', color: '#0ea5e9', parentId: 'phase-1',
           tasks: [{ ...task, phase: 'legacy-phase', dailyLogs: [{
-            id: 'log-1', date: '2026-09-30', plannedQuantity: 1, actualQuantity: 0,
+            id: 'log-1', date: '', plannedQuantity: 0, actualQuantity: 0,
+            measurementPeriod: { number: 1, startDate: '2026-09-01', endDate: '2026-09-30' },
             quantityDetails: [{ id: 'row-1', location: '', comment: '', multiplier: 0, measuredQuantity: 0 }],
           }] }],
         },
@@ -141,32 +135,24 @@ describe('TaskList', () => {
     render(<TooltipProvider><TaskList project={nestedProject} onProjectChange={vi.fn()}
       focusTaskId="task-1" focusDate="2026-09-30" takeoffStorageKey="scope" /></TooltipProvider>);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-30' }));
     fireEvent.focus(screen.getByRole('spinbutton', { name: 'Medida da linha 1' }));
     expect(screen.getByRole('button', { name: 'Planta DXF' })).toBeEnabled();
   });
 
-  it('registra antes e depois ao corrigir um apontamento existente', () => {
+  it('preserva o apontamento diário existente para consulta sem convertê-lo em período', () => {
     const onProjectChange = vi.fn();
     const existing = { id: 'log-1', date: '2026-09-30', plannedQuantity: 1, actualQuantity: 0.5 };
     const withLog = {
       ...project,
       phases: [{ ...project.phases[0], tasks: [{ ...task, dailyLogs: [existing] }] }],
     } as Project;
-    const { container } = render(<TooltipProvider>
+    render(<TooltipProvider>
       <TaskList project={withLog} onProjectChange={onProjectChange}
         focusTaskId="task-1" focusDate="2026-09-30" auditActor={{ userId: 'owner-1' }} />
     </TooltipProvider>);
-    const actual = container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')!;
-    fireEvent.change(actual, { target: { value: '1' } });
-    fireEvent.blur(actual);
-
-    const saved = onProjectChange.mock.calls[0][0] as Project;
-    expect(saved.auditLogs?.[0]).toMatchObject({
-      action: 'updated', title: 'Apontamento de produção corrigido',
-      userId: 'owner-1', before: existing,
-      after: expect.objectContaining({ actualQuantity: 1 }),
-    });
+    expect(screen.getByText(/30\/09\/2026 · 0,5 UN/)).toBeInTheDocument();
+    expect(onProjectChange).not.toHaveBeenCalled();
+    expect(withLog.phases[0].tasks[0].dailyLogs).toEqual([existing]);
   });
 
   it('mantém o progresso manual como rascunho até sair do campo', () => {

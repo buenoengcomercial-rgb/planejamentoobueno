@@ -13,7 +13,7 @@ export function collectProductionForDate(project: Project, dateISO: string): Pro
     const phase = node.phase;
     const visitTask = (task: Project['phases'][number]['tasks'][number]) => {
       (task.dailyLogs || []).forEach(log => {
-        if (log.date !== dateISO) return;
+        if (log.measurementPeriod || log.date !== dateISO) return;
         // O Diário é o registro do que foi efetivamente executado. Planejamento
         // ou observação sem produção não devem gerar uma linha no relatório do dia.
         if ((log.actualQuantity ?? 0) <= 0) return;
