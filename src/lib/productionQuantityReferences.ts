@@ -2,7 +2,7 @@ import { getAllTasks } from '@/data/sampleProject';
 import type { DailyProductionLog, ProductionQuantityDetail, Project, Task } from '@/types/project';
 import { logToProject, type AuditUserInfo } from '@/lib/audit';
 import { applyDailyProductionLogs } from '@/lib/dailyProductionLogs';
-import { detailTotal, formulasForUnit, measureMatchesDetailCell, withDetailValue, type DetailField } from '@/lib/productionQuantityDetails';
+import { detailTotal, editableQuantityRows, formulasForUnit, measureMatchesDetailCell, withDetailValue, type DetailField } from '@/lib/productionQuantityDetails';
 import { measureUnit, quantity } from '@/lib/planTakeoff';
 import { validateDailyProductionLogs } from '@/lib/productionQuantityLimit';
 import { productionRecordBlock } from '@/lib/productionMeasurementPeriods';
@@ -44,7 +44,8 @@ function getTask(project: Project, id: string): Task | undefined {
 }
 
 function getRow(project: Project, address: QuantityRowAddress): ProductionQuantityDetail | undefined {
-  return getTask(project, address.taskId)?.dailyLogs?.find(log => log.id === address.logId)?.quantityDetails?.find(row => row.id === address.rowId);
+  const log = getTask(project, address.taskId)?.dailyLogs?.find(log => log.id === address.logId);
+  return log && editableQuantityRows(log).find(row => row.id === address.rowId);
 }
 
 function sharedContent(row: ProductionQuantityDetail): Omit<ProductionQuantityDetail, 'id' | 'location' | 'sharedRecordId'> {
@@ -73,7 +74,7 @@ function rowFitsUnit(row: ProductionQuantityDetail, unit: string): boolean {
 }
 
 function changedLog(log: DailyProductionLog, rows: ProductionQuantityDetail[]): DailyProductionLog {
-  const before = detailTotal(log.quantityDetails ?? []);
+  const before = detailTotal(editableQuantityRows(log));
   const after = detailTotal(rows);
   const followDetail = before > 0 || after > 0 || log.quantityDetailsAppliedTotal !== undefined;
   return followDetail
@@ -88,7 +89,10 @@ function setRows(changes: RowChanges, taskId: string, logId: string, rows: Produ
   changes.set(taskId, taskChanges);
 }
 function currentRows(project: Project, changes: RowChanges, taskId: string, logId: string): ProductionQuantityDetail[] {
-  return changes.get(taskId)?.get(logId) ?? getTask(project, taskId)?.dailyLogs?.find(log => log.id === logId)?.quantityDetails ?? [];
+  const changed = changes.get(taskId)?.get(logId);
+  if (changed) return changed;
+  const log = getTask(project, taskId)?.dailyLogs?.find(log => log.id === logId);
+  return log ? editableQuantityRows(log) : [];
 }
 
 function finishChange(project: Project, changes: RowChanges, actor: AuditUserInfo, title: string, before: unknown, after: unknown, recordId?: string, canEditTask: (task: Task) => boolean = () => true): QuantityChangeResult {
@@ -140,7 +144,7 @@ export function changeQuantityRows(project: Project, address: Pick<QuantityRowAd
   const task = getTask(project, address.taskId);
   const log = task?.dailyLogs?.find(item => item.id === address.logId);
   if (!task || !log) return { error: 'Lançamento não encontrado. Reabra a tarefa.' };
-  const beforeRows = log.quantityDetails ?? [];
+  const beforeRows = editableQuantityRows(log);
   const beforeById = new Map(beforeRows.map(row => [row.id, row]));
   const sharedUpdates = new Map<string, ProductionQuantityDetail>();
   for (const row of rows) {

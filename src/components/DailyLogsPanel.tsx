@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import ProductionQuantityDetails from '@/components/ProductionQuantityDetails';
 import ProductionMeasurementPanel from '@/components/ProductionMeasurementPanel';
 import { newMeasurementProductionRecord, recordInMeasurement, type ProductionMeasurementPeriod } from '@/lib/productionMeasurementPeriods';
-import { detailTotal, isBlankDetailRow, withDetailValue, type DetailField } from '@/lib/productionQuantityDetails';
+import { detailTotal, editableQuantityRows, isBlankDetailRow, withDetailValue, type DetailField } from '@/lib/productionQuantityDetails';
 import { measureUnit, MEASURE_KINDS, type TakeoffMeasure, type TakeoffPlan } from '@/lib/planTakeoff';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import type { QuantityClipboard, QuantityClipboardMode } from '@/lib/productionQuantityReferences';
@@ -123,6 +123,13 @@ function applyDraftValues(logs: DailyProductionLog[], drafts: DraftValues): { lo
 
 export default function DailyLogsPanel({ projectId, task, onChange, focusDate, takeoffStorageKey, chapterId, protectedMeasureIds, measurementPeriods, readOnly = false, onDetailChange, onAtomicDetailChange, onAtomicRecalibrate, quantityClipboard, onQuantityCopy, onQuantityPaste, onPlanRecalibrate, sharedTaskNames, onOpenDetailHistory }: DailyLogsPanelProps) {
   const logs = task.dailyLogs ?? EMPTY_DAILY_LOGS;
+  const detailRows = (log: DailyProductionLog) => measurementPeriods !== undefined ? editableQuantityRows(log) : log.quantityDetails ?? [];
+  const recordBlocked = (record: DailyProductionLog) => {
+    if (measurementPeriods === undefined) return undefined;
+    if (!record.measurementPeriod) return measurementPeriods.find(period => record.date >= period.startDate && record.date <= period.endDate && period.blockedReason)?.blockedReason;
+    const period = measurementPeriods.find(period => recordInMeasurement(record, period));
+    return period ? period.blockedReason : 'Período não cadastrado na aba Medição.';
+  };
   const storageKey = productionDraftKey(projectId, task.id);
   const { confirm, dialog: confirmDialog } = useConfirmDelete();
   const [productionError, setProductionError] = useState<string | null>(null);
@@ -301,23 +308,21 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
   const changeDetails = (logId: string, edit: (rows: ProductionQuantityDetail[]) => ProductionQuantityDetail[]) => {
     if (readOnly) return false;
     const record = logs.find(log => log.id === logId);
-    if (record?.measurementPeriod && measurementPeriods) {
-      const period = measurementPeriods.find(p => recordInMeasurement(record, p));
-      if (!period || period.blockedReason) { setProductionError(period?.blockedReason ?? 'Período não cadastrado na aba Medição.'); return false; }
-    }
+    const block = record && recordBlocked(record);
+    if (block) { setProductionError(block); return false; }
     const currentLogs = resolveDrafts();
     if (!currentLogs) return false;
     if (onDetailChange) {
       if (Object.keys(draftsRef.current).length > 0) { setProductionError('Confirme os campos do lançamento antes de alterar o detalhe.'); return false; }
       const log = currentLogs.find(item => item.id === logId);
       if (!log) return false;
-      const outcome = onDetailChange(logId, edit(log.quantityDetails ?? []));
+      const outcome = onDetailChange(logId, edit(detailRows(log)));
       setProductionError(outcome.success ? null : outcome.error ?? 'O detalhe não foi alterado.');
       return outcome.success;
     }
     const nextLogs = currentLogs.map(log => {
       if (log.id !== logId) return log;
-      const previousRows = log.quantityDetails ?? [];
+      const previousRows = detailRows(log);
       const nextRows = edit(previousRows);
       const previousTotal = detailTotal(previousRows);
       const nextTotal = detailTotal(nextRows);
@@ -354,9 +359,13 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
   };
 
   const captureDetails = async (logId: string, edit: (rows: ProductionQuantityDetail[]) => ProductionQuantityDetail[], plan: TakeoffPlan, nextPlan?: TakeoffPlan) => {
+    const record = logs.find(log => log.id === logId);
+    if (!record || readOnly) return false;
+    const block = recordBlocked(record);
+    if (block) { setProductionError(block); return false; }
     if (!takeoffStorageKey || !cloudTakeoffScope(takeoffStorageKey)) return changeDetails(logId, edit);
     if (!nextPlan || !onAtomicDetailChange) { setProductionError('A captura exige salvamento transacional com a Produção.'); return false; }
-    const rows = logs.find(log => log.id === logId)?.quantityDetails ?? [];
+    const rows = detailRows(record);
     const result = await onAtomicDetailChange(logId, edit(rows), { before: plan, after: nextPlan });
     setProductionError(result.success ? null : result.error ?? 'Captura não salva; tente novamente.');
     return result.success;
@@ -365,7 +374,8 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
   const usePlanMeasure = async (plan: TakeoffPlan, measure: TakeoffMeasure, result: number, nextPlan?: TakeoffPlan) => {
     if (!planTarget || readOnly) return false;
     if (chapterId && plan.chapterId !== chapterId) { setProductionError('Esta planta não pertence ao prédio da tarefa.'); return false; }
-    const targetRow = logs.find(log => log.id === planTarget.logId)?.quantityDetails?.find(row => row.id === planTarget.rowId);
+    const targetRecord = logs.find(log => log.id === planTarget.logId);
+    const targetRow = targetRecord && detailRows(targetRecord).find(row => row.id === planTarget.rowId);
     if (!targetRow) { setProductionError('A linha do detalhe não está mais disponível. Abra o detalhe novamente.'); return false; }
     const sourceField = DETAIL_SOURCE_FIELDS[planTarget.field];
     const priorSource = targetRow[sourceField];
@@ -493,16 +503,15 @@ export default function DailyLogsPanel({ projectId, task, onChange, focusDate, t
   const unit = task.unit || 'un';
   const productionLimit = getProductionQuantityLimit(task, previewLogs);
   const planRecord = logs.find(log => log.id === planTarget?.logId);
-  const planPeriod = measurementPeriods?.find(period => planRecord && recordInMeasurement(planRecord, period));
-  const planReadOnly = readOnly || (!!planRecord?.measurementPeriod && measurementPeriods !== undefined && (!planPeriod || !!planPeriod.blockedReason));
+  const planReadOnly = readOnly || (!!planRecord && !!recordBlocked(planRecord));
   const beginPeriod = (period: ProductionMeasurementPeriod) => {
     if (readOnly || period.blockedReason || logs.some(log => recordInMeasurement(log, period))) return;
     const current = resolveDrafts();
     if (current) commitResolvedLogs([...current, newMeasurementProductionRecord(period)]);
   };
   const renderDetail = (row: DailyProductionLog, detailReadOnly = readOnly, periodMode = false) => <ProductionQuantityDetails
-    rows={row.quantityDetails ?? []} unit={unit} dailyQuantity={row.actualQuantity} periodMode={periodMode}
-    applied={row.quantityDetailsAppliedTotal === row.actualQuantity && row.actualQuantity === detailTotal(row.quantityDetails ?? [])}
+    rows={detailRows(row)} unit={unit} dailyQuantity={row.actualQuantity} periodMode={periodMode}
+    applied={(row.quantityDetailsAppliedTotal === row.actualQuantity || (row.actualQuantity > 0 && detailRows(row) !== row.quantityDetails)) && row.actualQuantity === detailTotal(detailRows(row))}
     readOnly={detailReadOnly} onCreate={changes => detailReadOnly ? null : createDetail(row.id, changes)}
     onEdit={(id, changes) => !detailReadOnly && changeDetails(row.id, details => details.map(detail => detail.id === id ? { ...detail, ...changes } : detail))}
     onDelete={id => { if (!detailReadOnly) changeDetails(row.id, details => details.filter(detail => detail.id !== id)); }}

@@ -51,6 +51,18 @@ afterEach(async () => { await db.close(); });
 
 const log = (id: string, qty: number, number = 1) => ({ id, task_id: 't', log_date: null, data: { id, date: '', plannedQuantity: 0, actualQuantity: qty, measurementPeriod: { number, startDate: `2026-${number + 9}-01`, endDate: `2026-${number + 9}-${number === 2 ? 30 : 31}` } } });
 describe('PostgreSQL isolado: proteções de execução', () => {
+  it('grava edição e exclusão do detalhe preservado no mesmo lançamento diário com auditoria', async () => {
+    const original = { id: 'old-daily', task_id: 't', log_date: '2026-10-02', data: { id: 'old-daily', date: '2026-10-02', plannedQuantity: 15, actualQuantity: 29, notes: 'Nota original' } };
+    await save([original]);
+    const edited = { ...original, data: { ...original.data, actualQuantity: 30, quantityDetailsAppliedTotal: 30, quantityDetails: [{ id: 'preserved-old-daily', location: '', comment: 'Dado preservado · 02/10/2026', formula: 'STANDARD', multiplier: 30, measuredQuantity: 0, dimensionC: 0, dimensionD: 0 }] } };
+    await save([edited], [], audit(original.id, 'updated'));
+    expect(await snapshot()).toEqual([{ id: original.id, data: edited.data }]);
+    const cleared = { ...edited, data: { ...edited.data, actualQuantity: 0, quantityDetailsAppliedTotal: 0, quantityDetails: [] } };
+    await save([cleared], [], audit(original.id, 'updated'));
+    expect(await snapshot()).toEqual([{ id: original.id, data: cleared.data }]);
+    expect((await db.query<{ count: number }>('select count(*)::integer count from audit_logs')).rows[0].count).toBe(3);
+    expect((await db.query<{ log_date: string }>('select log_date::text from task_daily_logs')).rows[0].log_date).toBe('2026-10-02');
+  });
   it('bloqueia alterações de marcação em período fiscal fechado mesmo sem mudar a célula', async () => {
     await save([log('l1',3)]);
     // Install the original mark and lock as fixture setup, never via a production bypass.

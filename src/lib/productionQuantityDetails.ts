@@ -1,4 +1,4 @@
-import type { ProductionQuantityDetail } from '@/types/project';
+import type { DailyProductionLog, ProductionQuantityDetail } from '@/types/project';
 import { measureCategory, type MeasureKind } from '@/lib/planTakeoff';
 
 export type DetailField = 'multiplier' | 'measuredQuantity' | 'dimensionC' | 'dimensionD';
@@ -39,6 +39,21 @@ export function isBlankDetailRow(row: ProductionQuantityDetail): boolean {
   return !(row.location ?? '').trim() && !(row.comment ?? '').trim()
     && ALL_FIELDS.every(field => (row[field] ?? 0) === 0)
     && !row.multiplierSource && !row.source && !row.dimensionCSource && !row.dimensionDSource;
+}
+
+/** Present an undetailed daily quantity without migrating or saving on render.
+ * The first explicit edit materializes it on the same log, through normal audits.
+ */
+export function editableQuantityRows(log: DailyProductionLog): ProductionQuantityDetail[] {
+  const rows = log.quantityDetails ?? [];
+  if (log.measurementPeriod || log.quantityDetailsAppliedTotal !== undefined
+    || !Number.isFinite(log.actualQuantity) || log.actualQuantity <= 0
+    || rows.some(row => !isBlankDetailRow(row))) return rows;
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(log.date) ? log.date.split('-').reverse().join('/') : log.date;
+  return [{
+    id: `preserved-${log.id}`, location: '', comment: `Dado preservado · ${date}`,
+    formula: 'STANDARD', multiplier: log.actualQuantity, measuredQuantity: 0, dimensionC: 0, dimensionD: 0,
+  }, ...rows];
 }
 
 export function withDetailValue(row: ProductionQuantityDetail, field: DetailField, value: number): ProductionQuantityDetail {

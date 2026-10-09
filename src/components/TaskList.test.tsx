@@ -139,7 +139,7 @@ describe('TaskList', () => {
     expect(screen.getByRole('button', { name: 'Planta DXF' })).toBeEnabled();
   });
 
-  it('preserva o apontamento diário existente para consulta sem convertê-lo em período', () => {
+  it('apresenta o apontamento diário existente como detalhe sem gravar nem convertê-lo em período', () => {
     const onProjectChange = vi.fn();
     const existing = { id: 'log-1', date: '2026-09-30', plannedQuantity: 1, actualQuantity: 0.5 };
     const withLog = {
@@ -150,7 +150,9 @@ describe('TaskList', () => {
       <TaskList project={withLog} onProjectChange={onProjectChange}
         focusTaskId="task-1" focusDate="2026-09-30" auditActor={{ userId: 'owner-1' }} />
     </TooltipProvider>);
-    expect(screen.getByText(/30\/09\/2026 · 0,5 UN/)).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Comentário da linha 1' })).toHaveValue('Dado preservado · 30/09/2026');
+    expect(screen.getByRole('spinbutton', { name: 'Unidades da linha 1' })).toHaveValue(0.5);
+    expect(screen.queryByText(/Histórico preservado/)).not.toBeInTheDocument();
     expect(onProjectChange).not.toHaveBeenCalled();
     expect(withLog.phases[0].tasks[0].dailyLogs).toEqual([existing]);
   });
