@@ -164,3 +164,11 @@ export async function updateTakeoffs(key: string, edit: (plans: TakeoffPlan[]) =
     transaction.onabort = () => reject(transaction.error);
   });
 }
+
+/** Adopt only an acknowledged plan/production transaction; never send a second plan write. */
+export async function confirmAtomicTakeoffCache(key: string, plans: TakeoffPlan[]): Promise<void> {
+  lastCloudRead.set(key, plans);
+  await saveLocalTakeoffs(key, plans).catch(() => undefined);
+}
+export interface ProductionCaptureChange { before: TakeoffPlan; after: TakeoffPlan; baseProject?: import('@/types/project').Project; recovering?: boolean; captureId?: string; rpcArgs?: Record<string, unknown> }
+export type CommitProductionCapture = (candidate: import('@/types/project').Project, change: ProductionCaptureChange) => Promise<void>;

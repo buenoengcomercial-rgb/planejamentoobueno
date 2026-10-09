@@ -1,3 +1,5 @@
+import { readCaptureDraft, writeCaptureDraft, CAPTURE_DRAFT_CHANGED, type ProductionCaptureDraft } from '@/lib/productionCaptureDraft';
+import type { CommitProductionCapture, ProductionCaptureChange } from '@/lib/planTakeoff';
 import { Project, Task, LaborComposition, DailyProductionLog, Phase } from '@/types/project';
 import { getTeamDefinition, DEFAULT_TEAMS, TeamCode, TeamDefinition } from '@/lib/teams';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -58,6 +60,7 @@ interface TaskListProps {
   focusDate?: string;
   auditActor?: AuditUserInfo;
   takeoffStorageKey?: string;
+  onCommitProductionCapture?: CommitProductionCapture;
 }
 
 const DAILY_HOURS = 8;
@@ -171,7 +174,23 @@ function PercentProgressInput({ task, onCommit, rowTeam }: {
   />;
 }
 
-export default function TaskList({ project, onProjectChange, undoButton, readOnly = false, focusTaskId, focusDate, auditActor, takeoffStorageKey }: TaskListProps) {
+export default function TaskList({ project, onProjectChange, undoButton, readOnly = false, focusTaskId, focusDate, auditActor, takeoffStorageKey, onCommitProductionCapture }: TaskListProps) {
+  const [pendingCapture, setPendingCapture] = useState<ProductionCaptureDraft | null>(null);
+  const [recoveringCapture, setRecoveringCapture] = useState(false);
+  useEffect(() => {
+    if (!takeoffStorageKey || !onCommitProductionCapture) return;
+    let alive = true;
+    const read = () => { void readCaptureDraft(takeoffStorageKey).then(value => { if (alive) setPendingCapture(value); }).catch(() => undefined); };
+    read(); window.addEventListener(CAPTURE_DRAFT_CHANGED, read);
+    return () => { alive = false; window.removeEventListener(CAPTURE_DRAFT_CHANGED, read); };
+  }, [takeoffStorageKey, onCommitProductionCapture]);
+  const recoverCapture = async () => {
+    if (!pendingCapture || !onCommitProductionCapture) return;
+    setRecoveringCapture(true);
+    try { await onCommitProductionCapture(pendingCapture.candidate, { ...pendingCapture.change, baseProject: pendingCapture.before, recovering: true }); }
+    catch (error) { toast.error(error instanceof Error ? error.message : 'Não foi possível recuperar a captura.'); }
+    finally { setRecoveringCapture(false); }
+  };
   const protectedTakeoffMeasureIds = useMemo(() => referencedTakeoffMeasureIds(project), [project]);
   const measurementPeriods = useMemo(() => productionMeasurementPeriods(project), [project]);
   // Lista de equipes do projeto (com fallback aos defaults).
@@ -745,6 +764,11 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
       className="p-0 space-y-4 overflow-x-auto w-full max-w-full"
       onDragOver={e => { if (dragChapterId) e.preventDefault(); }}
     >
+      {pendingCapture && <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+        Uma captura não confirmada foi preservada neste computador. A planta e a Produção anteriores continuam intactas.
+        <button type="button" disabled={readOnly || recoveringCapture} onClick={() => void recoverCapture()} className="rounded border px-2 py-1">Recuperar captura</button>
+        <button type="button" disabled={readOnly || recoveringCapture} onClick={() => { if (takeoffStorageKey) void writeCaptureDraft(takeoffStorageKey, null).catch(() => toast.error('Não foi possível descartar o rascunho.')); }} className="rounded border px-2 py-1">Descartar somente o rascunho</button>
+      </div>}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-2xl font-bold text-foreground">Estrutura Analítica (EAP)</h2>
@@ -1470,6 +1494,20 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                                   readOnly={readOnly}
                                   task={task}
                                   onChange={(logs: DailyProductionLog[]) => updateDailyLogs(phase.id, task, logs)}
+                                  onAtomicDetailChange={async (logId, rows, change) => {
+                                    if (!onCommitProductionCapture) return { success: false, error: 'A transação de planta e Produção não está disponível.' };
+                                    const candidate = changeQuantityRows(project, { taskId: task.id, logId }, rows, auditActor, readOnly);
+                                    if (!candidate.project) return { success: false, error: candidate.error };
+                                    try { await onCommitProductionCapture(candidate.project, change); return { success: true }; }
+                                    catch (error) { return { success: false, error: error instanceof Error ? error.message : 'Captura não salva. Tente novamente.' }; }
+                                  }}
+                                  onAtomicRecalibrate={async (page, scale, change) => {
+                                    if (!onCommitProductionCapture) return { success: false, error: 'Transação indisponível.' };
+                                    const candidate = recalibrateQuantitySources(project, change.before.id, page, scale, auditActor, readOnly);
+                                    if (!candidate.project) return { success: false, error: candidate.error };
+                                    try { await onCommitProductionCapture(candidate.project, change); return { success: true }; }
+                                    catch (error) { return { success: false, error: error instanceof Error ? error.message : 'Escala não salva.' }; }
+                                  }}
                                   onDetailChange={(logId, rows) => changeDetailRows(task.id, logId, rows)}
                                   quantityClipboard={quantityClipboard}
                                   onQuantityCopy={(mode, logId, row) => copyDetail(mode, { taskId: task.id, logId, rowId: row.id }, task.unit || 'un', row)}

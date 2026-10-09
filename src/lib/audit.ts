@@ -29,9 +29,6 @@ export interface CreateAuditLogParams extends AuditUserInfo {
   metadata?: Record<string, unknown>;
 }
 
-/** Cap defensivo para impedir crescimento ilimitado em projetos antigos. */
-const MAX_AUDIT_LOGS = 5000;
-
 function genId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
     return crypto.randomUUID();
@@ -56,11 +53,7 @@ export function createAuditLog(params: CreateAuditLogParams): AuditLog {
 export function appendAuditLog(project: Project, log: AuditLog): Project {
   const current = project.auditLogs ?? [];
   const next = [...current, log];
-  // Mantém apenas os últimos MAX_AUDIT_LOGS para evitar crescimento ilimitado.
-  const trimmed = next.length > MAX_AUDIT_LOGS
-    ? next.slice(next.length - MAX_AUDIT_LOGS)
-    : next;
-  return { ...project, auditLogs: trimmed };
+  return { ...project, auditLogs: next };
 }
 
 /** Atalho: cria + anexa em uma chamada. */

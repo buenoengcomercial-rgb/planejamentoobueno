@@ -1,3 +1,4 @@
+import { getAllTasks } from '@/data/sampleProject';
 import type { DailyProductionLog, ProductionQuantityDetail, Project, Task } from '@/types/project';
 import { logToProject, type AuditUserInfo } from '@/lib/audit';
 import { applyDailyProductionLogs } from '@/lib/dailyProductionLogs';
@@ -21,11 +22,11 @@ const sourceFields = { multiplier: 'multiplierSource', measuredQuantity: 'source
 const fields = Object.keys(sourceFields) as DetailField[];
 /** Include every task/day and reference copy, even legacy sources without ownership tags. */
 export function referencedTakeoffMeasureIds(project: Project): string[] {
-  return [...new Set(project.phases.flatMap(phase => phase.tasks.flatMap(task =>
+  return [...new Set(getAllTasks(project).flatMap(task =>
     (task.dailyLogs ?? []).flatMap(log => (log.quantityDetails ?? []).flatMap(row =>
       Object.values(sourceFields).flatMap(field => row[field]?.measureId ? [row[field]!.measureId] : []),
     )),
-  )))];
+  ))];
 }
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
@@ -39,7 +40,7 @@ function normalizedUnit(unit: string): string {
 }
 
 function getTask(project: Project, id: string): Task | undefined {
-  return project.phases.flatMap(phase => phase.tasks).find(task => task.id === id);
+  return getAllTasks(project).find(task => task.id === id);
 }
 
 function getRow(project: Project, address: QuantityRowAddress): ProductionQuantityDetail | undefined {
@@ -93,7 +94,8 @@ function currentRows(project: Project, changes: RowChanges, taskId: string, logI
 function finishChange(project: Project, changes: RowChanges, actor: AuditUserInfo, title: string, before: unknown, after: unknown, recordId?: string, canEditTask: (task: Task) => boolean = () => true): QuantityChangeResult {
   const touchedNames: string[] = [];
   let failure = '';
-  const phases = project.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => {
+  const visit = (originalTask: Task): Task => {
+    const task = originalTask.children?.length ? { ...originalTask, children: originalTask.children.map(visit) } : originalTask;
     const taskChanges = changes.get(task.id);
     if (!taskChanges) return task;
     if (!canEditTask(task)) { failure ||= `A tarefa “${task.name}” impediu a alteração: seu perfil não tem permissão de edição.`; return task; }
@@ -108,14 +110,23 @@ function finishChange(project: Project, changes: RowChanges, actor: AuditUserInf
     }
     touchedNames.push(task.name);
     return { ...task, ...applyDailyProductionLogs(task, logs) };
-  }) }));
+  };
+  const phases = project.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(visit) }));
   if (failure) return { error: failure };
   const changed = { ...project, phases };
-  const audited = logToProject(changed, {
-    ...actor, entityType: 'task', entityId: recordId ?? [...changes.keys()][0], action: 'updated', title,
-    description: touchedNames.join(' · '), before, after,
-    metadata: { recordId, affectedTaskIds: [...changes.keys()], affectedTaskNames: touchedNames },
-  });
+  let audited = changed;
+  const operationId = crypto.randomUUID();
+  for (const [taskId, logs] of changes) {
+    for (const logId of logs.keys()) {
+      const oldLog = getTask(project, taskId)?.dailyLogs?.find(log => log.id === logId);
+      const newLog = getTask(changed, taskId)?.dailyLogs?.find(log => log.id === logId);
+      audited = logToProject(audited, {
+        ...actor, entityType: 'task', entityId: taskId, action: 'updated', title,
+        description: touchedNames.join(' · '), before: oldLog, after: newLog,
+        metadata: { logId, operationId, recordId, affectedTaskIds: [...changes.keys()], affectedTaskNames: touchedNames, beforeRows: before, afterRows: after },
+      });
+    }
+  }
   return { project: audited, affectedTaskNames: touchedNames };
 }
 
@@ -144,7 +155,7 @@ export function changeQuantityRows(project: Project, address: Pick<QuantityRowAd
   const changes: RowChanges = new Map();
   setRows(changes, task.id, log.id, rows);
   for (const [recordId, updated] of sharedUpdates) {
-    for (const otherTask of project.phases.flatMap(phase => phase.tasks)) {
+    for (const otherTask of getAllTasks(project)) {
       for (const otherLog of otherTask.dailyLogs ?? []) {
         if (otherTask.id === task.id && otherLog.id === log.id) continue;
         const oldRows = currentRows(project, changes, otherTask.id, otherLog.id);
@@ -155,7 +166,7 @@ export function changeQuantityRows(project: Project, address: Pick<QuantityRowAd
     }
   }
   for (const recordId of sharedUpdates.keys()) {
-    const referenceUnits = project.phases.flatMap(phase => phase.tasks).filter(item => item.dailyLogs?.some(day => day.quantityDetails?.some(row => row.sharedRecordId === recordId))).map(item => normalizedUnit(item.unit || 'un'));
+    const referenceUnits = getAllTasks(project).filter(item => item.dailyLogs?.some(day => day.quantityDetails?.some(row => row.sharedRecordId === recordId))).map(item => normalizedUnit(item.unit || 'un'));
     if (referenceUnits.some(unit => unit !== normalizedUnit(task.unit || 'un'))) return { error: `O registro vinculado tem tarefas com unidades diferentes; nenhuma alteração foi gravada.` };
   }
   const removedShared = beforeRows.find(row => row.sharedRecordId && !rows.some(next => next.id === row.id));
@@ -201,7 +212,7 @@ export function pasteQuantityRow(project: Project, clipboard: QuantityClipboard,
 }
 
 export function sharedTaskNames(project: Project, recordId: string): string[] {
-  return project.phases.flatMap(phase => phase.tasks).filter(task => task.dailyLogs?.some(log => log.quantityDetails?.some(row => row.sharedRecordId === recordId))).map(task => task.name);
+  return getAllTasks(project).filter(task => task.dailyLogs?.some(log => log.quantityDetails?.some(row => row.sharedRecordId === recordId))).map(task => task.name);
 }
 
 /** Recalibra todas as células ligadas à prancha, com validação única de todos os dias e tarefas. */
@@ -211,7 +222,7 @@ export function recalibrateQuantitySources(project: Project, planId: string, pag
   const changes: RowChanges = new Map();
   const before: unknown[] = [], after: unknown[] = [];
   let failure = '';
-  for (const task of project.phases.flatMap(phase => phase.tasks)) for (const log of task.dailyLogs ?? []) {
+  for (const task of getAllTasks(project)) for (const log of task.dailyLogs ?? []) {
     let affected = false;
     const rows = (log.quantityDetails ?? []).map(row => {
       let updated = row;

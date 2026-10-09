@@ -14,10 +14,6 @@ import { toast } from '@/hooks/use-toast';
 import { isoAddDays, suggestPeriodForNext, getProjectStartDate } from '@/components/measurement/measurementFormat';
 import { buildDailyReportSnapshot, type DailyReportPeriodSummary } from '@/lib/dailyReportSummary';
 import type { Row } from '@/components/measurement/types';
-import { getAllTasks } from '@/data/sampleProject';
-import { updateProjectTask } from '@/lib/taskTree';
-import { applyDailyProductionLogs } from '@/lib/dailyProductionLogs';
-import { validateDailyProductionLogs } from '@/lib/productionQuantityLimit';
 
 export interface UseMeasurementActionsParams {
   project: Project;
@@ -117,13 +113,19 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
 
   // ───────── Snapshot (medição salva) ─────────
   const updateMeasurement = useCallback(
-    (id: string, patch: (m: SavedMeasurement) => SavedMeasurement) => {
-      onProjectChange({
-        ...project,
-        measurements: (project.measurements || []).map(m => (m.id === id ? patch(m) : m)),
+    (id: string, patch: (m: SavedMeasurement) => SavedMeasurement, action: Parameters<typeof logToProject>[1]['action'] = 'updated') => {
+      const latest = projectRef.current;
+      const before = latest.measurements?.find(m => m.id === id);
+      if (!before) return;
+      const after = patch(before);
+      const next = logToProject({ ...latest, measurements: latest.measurements!.map(m => m.id === id ? after : m) }, {
+        ...auditUser, entityType: 'measurement', entityId: id, action,
+        title: `Medição nº ${before.number}: ${action}`, before, after,
       });
+      projectRef.current = next;
+      onProjectChange(next);
     },
-    [project, onProjectChange],
+    [projectRef, onProjectChange, auditUser],
   );
 
   const extractLogValues = (
@@ -145,6 +147,10 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
   ) => {
     if (!activeMeasurement) return;
     if (isLocked) return;
+    if ('qtyProposed' in patch || 'qtyPriorAccum' in patch) {
+      toast({ title: 'Quantitativos são registrados na Produção', description: 'Abra o detalhe da tarefa para corrigir a quantidade e suas marcações.' });
+      return;
+    }
     const existing = activeMeasurement.items.find(i => i.taskId === taskId);
     const log: MeasurementChangeLog = {
       at: new Date().toISOString(),
@@ -191,38 +197,8 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
   };
 
   // ───────── Edição manual de quantidade do período (live) ─────────
-  const setManualPeriodQuantity = (taskId: string, value: number) => {
-    if (isSnapshotMode) return;
-    const safeValue = Math.max(0, Number.isFinite(value) ? value : 0);
-    const manualId = `manual-measurement-${effStart}-${effEnd}`;
-    const currentTask = getAllTasks(project).find(task => task.id === taskId);
-    if (!currentTask) return;
-    const others = (currentTask.dailyLogs || []).filter(log => log.id !== manualId);
-    const candidateLogs = safeValue <= 0 ? others : [
-      ...others,
-      {
-        id: manualId,
-        date: effEnd,
-        plannedQuantity: 0,
-        actualQuantity: safeValue,
-        notes: 'Lançamento manual via Planilha de Medição',
-      },
-    ];
-    const validation = validateDailyProductionLogs(currentTask, candidateLogs);
-    if (!validation.allowed) {
-      toast({ variant: 'destructive', title: 'Quantidade acima do contrato', description: validation.message });
-      return;
-    }
-
-    onProjectChange(updateProjectTask(project, taskId, task => {
-      const nextOthers = (task.dailyLogs || []).filter(log => log.id !== manualId);
-      const nextLogs = safeValue <= 0 ? nextOthers : [
-        ...nextOthers,
-        { id: manualId, date: effEnd, plannedQuantity: 0, actualQuantity: safeValue, notes: 'Lançamento manual via Planilha de Medição' },
-      ];
-      if (!validateDailyProductionLogs(task, nextLogs).allowed) return task;
-      return { ...task, ...applyDailyProductionLogs(task, nextLogs) };
-    }));
+  const setManualPeriodQuantity = (_taskId: string, _value: number) => {
+    toast({ title: 'Quantitativos são lançados na Produção', description: 'Abra o detalhe da tarefa no período correspondente.' });
   };
 
   // ───────── Gerar nova medição (snapshot a partir do live) ─────────
@@ -398,62 +374,32 @@ export function useMeasurementActions(params: UseMeasurementActionsParams) {
           reason: 'Reenviada para fiscalização após ajustes',
         },
       ],
-    }));
+    }), 'submitted_for_review');
     toast({ title: 'Medição reenviada para fiscalização' });
   };
 
   const setStatus = (next: MeasurementStatus) => {
     if (!activeMeasurement) return;
-    const previous = activeMeasurement.status;
+    if (next === 'in_review') { resendForReview(); return; }
     updateMeasurement(activeMeasurement.id, m => ({
-      ...m,
-      status: next,
-      // Ao reprovar a partir do fiscal, mantém snapshot congelado (editUnlocked=false)
-      // até que o usuário clique em "Editar Medição".
-      editUnlocked: next === 'rejected' ? false : m.editUnlocked,
-      history: [
-        ...(m.history || []),
-        { at: new Date().toISOString(), field: 'status', previous: m.status, next },
-      ],
-    }));
-    const actionMap: Record<
-      MeasurementStatus,
-      { action: Parameters<typeof logToProject>[1]['action']; title: string } | null
-    > = {
-      draft: null,
-      generated: { action: 'created', title: 'Medição gerada' },
-      in_review: { action: 'submitted_for_review', title: 'Medição enviada para análise fiscal' },
-      approved: { action: 'approved', title: 'Medição aprovada' },
-      rejected: { action: 'rejected', title: 'Medição reprovada — liberada para ajuste' },
-    };
-    const cfg = actionMap[next];
-    if (cfg) {
-      onProjectChange(
-        logToProject(projectRef.current, {
-          ...auditUser,
-          entityType: 'measurement',
-          entityId: activeMeasurement.id,
-          action: cfg.action,
-          title: cfg.title,
-          metadata: {
-            number: activeMeasurement.number,
-            previousStatus: previous,
-            nextStatus: next,
-          },
-        }),
-      );
-    }
+      ...m, status: next, editUnlocked: next === 'rejected' ? false : m.editUnlocked,
+      history: [...(m.history || []), { at: new Date().toISOString(), field: 'status', previous: m.status, next }],
+    }), next === 'approved' ? 'approved' : next === 'rejected' ? 'rejected' : 'updated');
   };
 
   const deleteMeasurement = () => {
     if (!activeMeasurement) return;
-    onProjectChange({
-      ...project,
-      measurements: (project.measurements || []).filter(m => m.id !== activeMeasurement.id),
+    const latest = projectRef.current;
+    const before = latest.measurements?.find(m => m.id === activeMeasurement.id);
+    if (!before) return;
+    const next = logToProject({ ...latest, measurements: latest.measurements!.filter(m => m.id !== before.id) }, {
+      ...auditUser, entityType: 'measurement', entityId: before.id, action: 'deleted',
+      title: `Medição nº ${before.number} excluída`, before,
     });
-    setActiveId('live');
-    setConfirmDelete(false);
-    toast({ title: 'Medição excluída' });
+    projectRef.current = next;
+    onProjectChange(next);
+    setActiveId('live'); setConfirmDelete(false);
+    toast({ title: 'Medição excluída; conteúdo anterior preservado no histórico' });
   };
 
   const newMeasurementDraft = () => {

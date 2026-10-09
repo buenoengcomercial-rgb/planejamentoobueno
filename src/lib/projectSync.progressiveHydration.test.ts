@@ -51,7 +51,7 @@ beforeEach(() => {
   methodCalls.length = 0;
   fromMock.mockImplementation((table: string) => {
     const result = resultsByTable.get(table) ?? { data: [], error: null };
-    const settled = Promise.resolve(result);
+    const settled = Promise.resolve(result).then(value => ({ ...value, count: value.count ?? value.data?.length ?? 0 }));
     const builder = {
       select: vi.fn(),
       eq: vi.fn(),
@@ -226,10 +226,7 @@ describe('hidratação progressiva da obra', () => {
       strict: true,
     });
 
-    expect(fromMock.mock.calls.map(([table]) => table)).toEqual([
-      'daily_reports',
-      'audit_logs',
-    ]);
+    expect([...new Set(fromMock.mock.calls.map(([table]) => table))]).toEqual(['daily_reports', 'audit_logs']);
     expect(getLoadedProjectCollections(current.id)).toEqual([]);
     expect(getHydratedProjectCollections(hydrated)).toEqual([
       'dailyReports',

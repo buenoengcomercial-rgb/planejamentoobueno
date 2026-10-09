@@ -1,3 +1,4 @@
+import type { CommitProductionCapture } from '@/lib/planTakeoff';
 import { Suspense } from 'react';
 import { Loader2 } from 'lucide-react';
 import type { Project } from '@/types/project';
@@ -31,6 +32,7 @@ interface DailyProductionWorkspaceProps {
   productionFocusDate?: string;
   auditActor?: AuditUserInfo;
   takeoffStorageKey?: string;
+  onCommitProductionCapture?: CommitProductionCapture;
 }
 
 export default function DailyProductionWorkspace({
@@ -53,6 +55,7 @@ export default function DailyProductionWorkspace({
   productionFocusDate,
   auditActor,
   takeoffStorageKey,
+  onCommitProductionCapture,
 }: DailyProductionWorkspaceProps) {
   return (
     <div className="space-y-4 p-3 pt-4 sm:p-4 lg:p-5">
@@ -69,6 +72,7 @@ export default function DailyProductionWorkspace({
               focusDate={productionFocusDate}
               auditActor={auditActor}
               takeoffStorageKey={takeoffStorageKey}
+              onCommitProductionCapture={onCommitProductionCapture}
             />
           ) : (
             <DailyReport

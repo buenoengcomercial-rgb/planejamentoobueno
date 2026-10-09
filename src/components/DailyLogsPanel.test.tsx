@@ -29,6 +29,19 @@ function buildTask(overrides: Partial<Task> = {}): Task {
 }
 
 describe('DailyLogsPanel', () => {
+  it('recupera um rascunho antigo e bloqueia confirmação automática se a origem mudou', () => {
+    const saved = buildTask({dailyLogs:[{id:'l',date:'2026-10-01',actualQuantity:4,plannedQuantity:8}]});
+    const key = 'obraplanner:production-field-draft:draft-protection:task-1';
+    localStorage.setItem(key, JSON.stringify({base:'[]',savedAt:0,drafts:{'log:l:actualQuantity':'5'}}));
+    const onChange = vi.fn();
+    render(<DailyLogsPanel projectId="draft-protection" task={saved} onChange={onChange} />);
+    expect(screen.getByRole('button',{name:'Revisar valores recuperados'})).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(localStorage.getItem(key)).toContain('log:l:actualQuantity');
+    fireEvent.click(screen.getByRole('button',{name:'Descartar somente rascunho'}));
+    expect(localStorage.getItem(key)).toBeNull();
+    expect(saved.dailyLogs![0].actualQuantity).toBe(4);
+  });
   it('lança três pontos por medição, edita, exclui e recupera após recarga sem inventar uma data', async () => {
     const periods = [{ key: 'draft-1', number: 1, startDate: '2026-09-01', endDate: '2026-09-30' }];
     const legacy = { id: 'old', date: '2026-09-08', plannedQuantity: 8, actualQuantity: 2, notes: 'Preservar' };
@@ -220,7 +233,7 @@ describe('DailyLogsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
     fireEvent.change(screen.getByRole('combobox', { name: 'Fórmula da linha 1' }), { target: { value: 'A*B*C' } });
     fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna C da linha 1 na planta' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Concluir comprimento de teste' }));
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Concluir comprimento de teste' })); });
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.getByRole('spinbutton', { name: 'Largura da linha 1' })).toHaveValue(3);
     expect(screen.getByRole('img', { name: 'Origem na planta da linha 1' })).toHaveAttribute('title', expect.stringContaining('C: Placas.pdf'));
@@ -260,14 +273,14 @@ describe('DailyLogsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
     fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna B da linha 1 na planta' }));
     expect(await screen.findByText('Visualizador sem tabela de levantamentos')).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' }));
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' })); });
     expect(screen.getByRole('dialog')).toHaveTextContent('linha 2, coluna B');
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.getByRole('img', { name: 'Origem na planta da linha 1' })).toHaveAttribute('title', expect.stringContaining('B: Placas.pdf'));
     expect(screen.getByRole('spinbutton', { name: 'Medida da linha 1' })).toHaveValue(3);
     expect(screen.getByRole('spinbutton', { name: 'Medida da linha 2' })).toHaveValue(0);
     fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna A da linha 2 na planta' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' }));
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' })); });
     expect(screen.getByRole('dialog')).toHaveTextContent('já está vinculada a outra célula');
   });
   it('avança pela mesma coluna após cada grupo sem sobrescrever outra linha', async () => {
@@ -280,9 +293,9 @@ describe('DailyLogsPanel', () => {
     const { container } = render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
     fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna B da linha 1 na planta' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' }));
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' })); });
     expect(screen.getByRole('dialog')).toHaveTextContent('linha 2, coluna B');
-    fireEvent.click(screen.getByRole('button', { name: 'Concluir outra contagem' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Concluir outra contagem' })); });
     expect(screen.getByRole('dialog')).toHaveTextContent('linha 3, coluna B');
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.getByRole('spinbutton', { name: 'Medida da linha 1' })).toHaveValue(3);
@@ -303,7 +316,7 @@ describe('DailyLogsPanel', () => {
     const { container } = render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
     fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna B da linha 1 na planta' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' }));
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' })); });
     expect(screen.getByRole('dialog')).toHaveTextContent('linha 2, coluna B');
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.getByRole('spinbutton', { name: 'Medida da linha 2' })).toHaveValue(0);
@@ -322,7 +335,7 @@ describe('DailyLogsPanel', () => {
     const { container } = render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
     fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna A da linha 1 na planta' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' }));
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' })); });
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.getByRole('spinbutton', { name: 'Unidades da linha 1' })).toHaveValue(3);
     expect(screen.getByRole('spinbutton', { name: 'Medida da linha 1' })).toHaveValue(0);
@@ -339,7 +352,7 @@ describe('DailyLogsPanel', () => {
     const { container } = render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
     fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna A da linha 1 na planta' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Concluir comprimento de teste' }));
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Concluir comprimento de teste' })); });
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.getByRole('spinbutton', { name: 'Unidades da linha 1' })).toHaveValue(3);
     expect(screen.getByText('u.d.')).toBeInTheDocument();
@@ -360,7 +373,7 @@ describe('DailyLogsPanel', () => {
     const first = render(<Harness initial={saved} />);
     fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
     fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna B da linha 1 na planta' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' }));
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' })); });
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(first.container.querySelector<HTMLInputElement>('[data-actual-input="log-1"]')).toHaveValue(3);
     expect(saved.quantity).toBe(16);
@@ -383,10 +396,10 @@ describe('DailyLogsPanel', () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: 'Detalhar quantitativo de 2026-09-08' }));
     fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna A da linha 1 na planta' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' }));
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Concluir contagem de teste' })); });
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna B da linha 1 na planta' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Concluir outra contagem' }));
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Concluir outra contagem' })); });
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     const detail = screen.getByRole('region', { name: 'Detalhe de quantitativo' });
     expect(screen.getByRole('img', { name: 'Origem na planta da linha 1' })).toHaveAttribute('title', expect.stringContaining('A: Placas.pdf'));

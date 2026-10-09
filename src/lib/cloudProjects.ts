@@ -1,3 +1,4 @@
+import { assertNoUnsafeCriticalCollectionChanges } from '@/lib/projectSync';
 import { supabase } from '@/integrations/supabase/client';
 import { Project } from '@/types/project';
 import { sampleProject } from '@/data/sampleProject';
@@ -172,6 +173,11 @@ export async function loadCloudProjectRecord(
   // Hidrata apenas as coleções necessárias para a rota atual. Sem escopo
   // explícito, mantém o carregamento completo usado por importação e backup.
   const hydrated = await hydrateProjectFromCloud(base, options);
+  const versionAfter = await getCloudProjectVersion(id);
+  if (!versionAfter || versionAfter.updatedAt !== data.updated_at) {
+    discardHydratedProjectCollections(hydrated);
+    throw new CloudProjectConflictError();
+  }
   const loadedCollections = getHydratedProjectCollections(hydrated);
   const loaded = new Set(loadedCollections);
   const canRepairAnalyticLinks = loaded.has('budgetItems')
@@ -223,6 +229,7 @@ export async function upsertCloudProject(project: Project, organizationId: strin
       if ((error as { code?: string })?.code === 'P0002') throw new CloudProjectConflictError();
       throw error;
     }
+    assertNoUnsafeCriticalCollectionChanges(project);
     const { data, error } = await supabase
       .from('projects')
       .update({
