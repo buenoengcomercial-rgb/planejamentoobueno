@@ -10,11 +10,18 @@ export default function DailyReportDraftRecovery({ draft, confirmed, message, bu
 }) {
   const [compare, setCompare] = useState(false);
   const date = draft.local.date.split('-').reverse().join('/');
+  const download = () => {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(draft, null, 2)], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url; link.download = `rascunho-diario-${draft.local.date}.json`; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
   return <section role="alert" className="mx-4 mt-4 space-y-3 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
     <p><strong>Diário de {date}: edição pendente.</strong> {message}</p>
     <div className="flex flex-wrap gap-2">
       <Button size="sm" variant="outline" disabled={busy} onClick={onRetry}>{busy ? 'Aguardando confirmação…' : 'Reenviar'}</Button>
       <Button size="sm" variant="outline" onClick={() => setCompare(value => !value)}>{compare ? 'Fechar comparação' : 'Comparar'}</Button>
+      <Button size="sm" variant="outline" onClick={download}>Baixar rascunho</Button>
       <Button size="sm" variant="ghost" disabled={busy} onClick={onDiscard}>Descartar rascunho</Button>
     </div>
     {compare && <div className="overflow-x-auto"><table className="w-full table-fixed border-collapse text-left">

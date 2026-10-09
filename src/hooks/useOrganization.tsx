@@ -1,54 +1,43 @@
-import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, ReactNode, useCallback } from 'react';
 import { useAuth } from '@/hooks/useAuth';
 import { getCurrentMembership, OrgMembership } from '@/lib/organizations';
+import { withReadDeadline } from '@/lib/readDeadline';
 
 interface OrgContextValue {
   membership: OrgMembership | null;
   loading: boolean;
+  error: string | null;
   reload: () => Promise<void>;
 }
-
 const OrgContext = createContext<OrgContextValue | undefined>(undefined);
 
 export function OrganizationProvider({ children }: { children: ReactNode }) {
   const { user, loading: authLoading } = useAuth();
-  const [membership, setMembership] = useState<OrgMembership | null>(null);
-  const [loading, setLoading] = useState(true);
-  const hasLoadedRef = (typeof window !== 'undefined') ? (window as any) : null;
-
+  const [state, setState] = useState<{ userId?: string; membership: OrgMembership | null; loading: boolean; error: string | null }>({ membership: null, loading: true, error: null });
+  const sequence = useRef(0);
+  const userId = user?.id;
   const reload = useCallback(async () => {
-    if (!user) {
-      setMembership(null);
-      setLoading(false);
+    const request = ++sequence.current;
+    if (!userId) {
+      setState({ membership: null, loading: false, error: null });
       return;
     }
-    // Only show loading on the FIRST fetch — silent refresh afterwards
-    // so returning to the tab doesn't blank the screen.
-    setLoading(prev => (membership ? false : prev));
+    setState(previous => ({ userId, membership: previous.userId === userId ? previous.membership : null, loading: true, error: null }));
     try {
-      const m = await getCurrentMembership();
-      setMembership(m);
-    } catch (e) {
-      console.error('[org] erro ao carregar empresa', e);
-      // Keep previous membership on error to avoid losing UI state.
-    } finally {
-      setLoading(false);
+      const membership = await withReadDeadline(getCurrentMembership());
+      if (request === sequence.current) setState({ userId, membership, loading: false, error: null });
+    } catch {
+      if (request === sequence.current) setState(previous => ({ ...previous, loading: false, error: 'Não foi possível verificar o acesso à empresa. Confira sua conexão e tente novamente.' }));
     }
-  }, [user, membership]);
-
+  }, [userId]);
   useEffect(() => {
-    if (authLoading) return;
-    void reload();
-    // Intentionally depend only on user identity, not on the reload callback
-    // (which would re-fire on every membership change).
+    if (!authLoading) void reload();
+    // Request version ref: discard reads resolving after cleanup.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, user?.id]);
-
-  return (
-    <OrgContext.Provider value={{ membership, loading, reload }}>
-      {children}
-    </OrgContext.Provider>
-  );
+    return () => { sequence.current++; };
+  }, [authLoading, reload]);
+  const sameUser = state.userId === userId;
+  return <OrgContext.Provider value={{ membership: sameUser ? state.membership : null, loading: authLoading || !sameUser || (state.loading && !state.membership), error: sameUser ? state.error : null, reload }}>{children}</OrgContext.Provider>;
 }
 
 export function useOrganization() {

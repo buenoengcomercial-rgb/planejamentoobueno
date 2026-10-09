@@ -149,9 +149,9 @@ const VIEW_COLLECTIONS: Record<Exclude<AppView, 'warehouse'>, ProjectCollectionK
     'materialComparisons',
     'analyticCompositions',
   ]),
-  management: unique([...SCHEDULE, 'dailyReports', 'auditLogs']),
-  gantt: unique([...SCHEDULE, 'budgetItems', 'auditLogs']),
-  tasks: unique([...SCHEDULE, 'auditLogs']),
+  management: unique([...SCHEDULE, 'dailyReports']),
+  gantt: unique([...SCHEDULE, 'budgetItems']),
+  tasks: unique([...SCHEDULE]),
   dailyReport: unique([
     ...SCHEDULE,
     'warehouseMovements',
@@ -164,7 +164,6 @@ const VIEW_COLLECTIONS: Record<Exclude<AppView, 'warehouse'>, ProjectCollectionK
     'measurements',
     'budgetItems',
     'analyticCompositions',
-    'auditLogs',
   ]),
   additive: unique([
     ...EAP,
@@ -172,9 +171,8 @@ const VIEW_COLLECTIONS: Record<Exclude<AppView, 'warehouse'>, ProjectCollectionK
     'budgetItems',
     'analyticCompositions',
     'additives',
-    'auditLogs',
   ]),
-  additiveSchedule: unique([...SCHEDULE, 'auditLogs']),
+  additiveSchedule: unique([...SCHEDULE]),
   realCost: unique([
     ...SCHEDULE,
     'warehouseMovements',
@@ -182,7 +180,6 @@ const VIEW_COLLECTIONS: Record<Exclude<AppView, 'warehouse'>, ProjectCollectionK
     'analyticCompositions',
     'materialComparisons',
     'subcontracts',
-    'auditLogs',
   ]),
   materials: unique([
     ...EAP,
@@ -210,7 +207,6 @@ const WAREHOUSE_TAB_COLLECTIONS: Record<WarehouseTab, ProjectCollectionKey[]> = 
     ...WAREHOUSE_PLANNING,
     'materialComparisons',
     'dailyReports',
-    'auditLogs',
   ]),
   requisicoes: unique([
     ...WAREHOUSE_LEGACY_GUARD,
@@ -219,7 +215,6 @@ const WAREHOUSE_TAB_COLLECTIONS: Record<WarehouseTab, ProjectCollectionKey[]> = 
     'warehouseCustody',
     ...EAP,
     'dailyReports',
-    'auditLogs',
   ]),
   'materiais-retirados': unique([
     ...WAREHOUSE_LEGACY_GUARD,

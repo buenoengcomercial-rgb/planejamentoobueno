@@ -1,4 +1,6 @@
 import { scopeKey } from '@/lib/planTakeoff';
+import { OpeningError } from '@/components/OpeningError';
+import { withReadDeadline } from '@/lib/readDeadline';
 import { useState, useMemo, useEffect, useDeferredValue, useCallback, useRef, Suspense } from 'react';
 import { flushSync } from 'react-dom';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -19,7 +21,7 @@ import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { scheduleIdlePreload } from '@/lib/idlePreload';
 import { applyUndoOperation, createUndoOperation, type UndoOperation } from '@/lib/operationUndo';
-import { assertProductionDeletionSafe, productionDeletionState } from '@/lib/productionDeletionSafety';
+import { auditUndoProductionDeletions, assertProductionDeletionSafe, productionDeletionState } from '@/lib/productionDeletionSafety';
 import { protectDailyReportDraft, readDailyReportDrafts, clearDailyReportDraft, type DailyReportDraft } from '@/lib/dailyReportDrafts';
 import DailyReportDraftRecovery from '@/components/DailyReportDraftRecovery';
 import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
@@ -146,7 +148,7 @@ function includePendingDraftCollections(
 ): ProjectCollectionKey[] {
   const stored = readStoredProjectDraft(projectId);
   if (!stored?.loadedCollections?.length) return [...requested];
-  const pending = PROJECT_COLLECTION_KEYS.filter(key => stored.loadedCollections?.includes(key));
+  const pending = PROJECT_COLLECTION_KEYS.filter(key => key !== 'auditLogs' && stored.loadedCollections?.includes(key));
   return [...new Set([...requested, ...pending])];
 }
 
@@ -162,7 +164,6 @@ const WAREHOUSE_OPERATION_COLLECTIONS: Record<WarehousePrepareScope, readonly Pr
     'warehouseRequisitions',
     'stockMovements',
     'dailyReports',
-    'auditLogs',
   ],
 };
 const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse'];
@@ -283,9 +284,9 @@ function readInitialView(routeView?: string): AppView {
 }
 
 export default function Index() {
-  const { user, loading: authLoading, signOut } = useAuth();
+  const { user, loading: authLoading, error: authError, reload: reloadAuth, signOut } = useAuth();
   const auditActor = useMemo(() => userInfoFromSupabaseUser(user), [user]);
-  const { membership, loading: orgLoading } = useOrganization();
+  const { membership, loading: orgLoading, error: orgError, reload: reloadOrganization } = useOrganization();
   const navigate = useNavigate();
   const location = useLocation();
   const { routeProjectId, routeView } = useParams<{ routeProjectId: string; routeView: string }>();
@@ -296,6 +297,8 @@ export default function Index() {
   const [rawProject, setRawProject] = useState<Project | null>(null);
   const [cloudList, setCloudList] = useState<CloudProjectMeta[]>([]);
   const [bootLoading, setBootLoading] = useState(true);
+  const [bootError, setBootError] = useState<string | null>(null);
+  const [bootRetry, setBootRetry] = useState(0);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [dailyReportSaveErrors, setDailyReportSaveErrors] = useState<Record<string, string>>({});
   const [dailyReportDrafts, setDailyReportDrafts] = useState<Record<string, DailyReportDraft>>({});
@@ -633,8 +636,8 @@ export default function Index() {
   ), []);
 
   useEffect(() => {
-    if (!authLoading && !user) navigate('/auth', { replace: true });
-  }, [authLoading, user, navigate]);
+    if (!authLoading && !authError && !user) navigate('/auth', { replace: true });
+  }, [authLoading, authError, user, navigate]);
 
   useEffect(() => {
     const requestedView = routeView ? ROUTE_VIEW[routeView] : undefined;
@@ -872,6 +875,17 @@ export default function Index() {
         toast.info('Os dados locais desta obra foram descartados; a versão da nuvem foi carregada.');
       }
     }
+    if (projectForState && projectToLoad && recoverableDraft) {
+      // A partial offline draft may contain only newly appended audit records.
+      // Restore those without removing any historical records read from cloud.
+      projectForState = { ...projectForState, auditLogs: [...new Map([
+        ...(projectToLoad.auditLogs ?? []).map(log => [log.id, log] as const),
+        ...(projectForState.auditLogs ?? []).map(log => [log.id, log] as const),
+      ]).values()] };
+      if (recoverablePartialDraft && partialSyncPendingRef.current?.projectId === projectForState.id) {
+        partialSyncPendingRef.current = { ...partialSyncPendingRef.current, project: projectForState };
+      }
+    }
     if (!recoverablePartialDraft && projectToLoad && partialSyncPendingRef.current?.projectId === projectToLoad.id) {
       partialSyncPendingRef.current = null;
       setPartialSyncIssue(null);
@@ -912,7 +926,8 @@ export default function Index() {
     const current = rawProjectRef.current;
     if (!current || current.id !== projectToRebase.id || conflictDetectedRef.current) return null;
 
-    const requestedCollections = normalizeProjectCollections(collections);
+    const requestedCollections = normalizeProjectCollections(collections).filter(collection =>
+      collection !== 'auditLogs' || getLoadedProjectCollections(current.id).includes('auditLogs'));
     if (requestedCollections.length === 0) return null;
 
     let remoteVersion = knownRemoteVersion;
@@ -1453,8 +1468,10 @@ export default function Index() {
     let cancelled = false;
     (async () => {
       setBootLoading(true);
+      setBootError(null);
       try {
-        let list = await refreshCloudList();
+        let list = await withReadDeadline(refreshCloudList());
+        if (cancelled) return;
         if (list.length === 0 && creator) {
           const name = await generateUniqueCloudName('Minha primeira obra');
           const created = await createCloudProject(name, orgId, getSampleSeed());
@@ -1465,78 +1482,46 @@ export default function Index() {
           const rememberedProjectId = readAppUiSession()?.projectId;
           const preferredProjectId = [initialRouteProjectIdRef.current, rememberedProjectId, list[0].id]
             .find(id => !!id && list.some(projectMeta => projectMeta.id === id)) ?? list[0].id;
-          await preloadIndexedDbProjectDraft(preferredProjectId);
+          await withReadDeadline(preloadIndexedDbProjectDraft(preferredProjectId));
+          if (cancelled) return;
           const initialWarehouseTab = readWarehouseTab(preferredProjectId, canViewWarehousePanel, role === 'owner');
           setWarehouseTab(initialWarehouseTab);
           const initialView = role && !canAccessAppView(role, initialViewRef.current)
             ? restrictedFallbackView
             : initialViewRef.current;
+          const routeCode = initialView === 'tasks' ? Promise.all([loadDailyProductionWorkspace(), loadTaskList()])
+            : initialView === 'dailyReport' ? loadDailyReport() : null;
+          void routeCode?.catch(() => undefined);
           const initialCollections = includePendingDraftCollections(
             preferredProjectId,
             projectCollectionsForView(initialView, initialWarehouseTab),
           );
-          const record = await loadCloudProjectRecord(preferredProjectId, {
+          const record = await withReadDeadline(loadCloudProjectRecord(preferredProjectId, {
             collections: initialCollections,
             strict: true,
             deferSnapshot: true,
-          });
+          }));
           if (cancelled) {
             if (record) discardCloudProjectRecord(record);
             return;
           }
-          if (record) {
-            let effectiveRecord = record;
-            if (role === 'owner' && (record.project.warehouse?.fiscalDuplicateReconciliationVersion ?? 0) < 1) {
-              // Esta manutenção legada compara documentos, movimentos e
-              // auditoria. Ela nunca pode concluir sobre uma fotografia parcial.
-              const completeRecord = await loadCloudProjectRecord(preferredProjectId, {
-                collections: PROJECT_COLLECTION_KEYS,
-                strict: true,
-                deferSnapshot: true,
-              });
-              if (!completeRecord) throw new Error('A obra não foi encontrada durante a reconciliação fiscal.');
-              if (cancelled) {
-                discardCloudProjectRecord(record);
-                discardCloudProjectRecord(completeRecord);
-                return;
-              }
-              discardCloudProjectRecord(record);
-              effectiveRecord = completeRecord;
-            }
-            confirmCloudProjectRecord(effectiveRecord);
-            let projectToLoad = effectiveRecord.project;
-            let updatedAt = effectiveRecord.updatedAt;
-            let repairApplied = effectiveRecord.repairApplied;
-            if (role === 'owner' && (effectiveRecord.project.warehouse?.fiscalDuplicateReconciliationVersion ?? 0) < 1) {
-              const { reconcileFiscalNoteDuplicates } = await import('@/lib/warehouse');
-              const reconciliation = reconcileFiscalNoteDuplicates(effectiveRecord.project, auditActor);
-              if (!reconciliation.alreadyReconciled) {
-                updatedAt = await upsertCloudProject(reconciliation.project, orgId, effectiveRecord.updatedAt);
-                projectToLoad = reconciliation.project;
-                repairApplied = false;
-                if (reconciliation.canceledNoteIds.length) {
-                  toast.warning(`${reconciliation.canceledNoteIds.length} entrada(s) fiscal(is) duplicada(s) foram canceladas automaticamente.`);
-                }
-                if (reconciliation.pendingNoteIds.length) {
-                  toast.warning(`${reconciliation.pendingNoteIds.length} duplicidade(s) possuem consumo posterior e exigem ajuste/conferência.`);
-                }
-              }
-            }
-            replaceProjectWithoutAutoSave(projectToLoad, updatedAt, repairApplied, true, effectiveRecord.warehouseVersion);
-          }
+          if (!record) throw new Error('A obra não foi encontrada. Tente novamente ou confira o acesso com a administração.');
+          confirmCloudProjectRecord(record);
+          // Opening an area never runs warehouse maintenance or downloads its history.
+          replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, true, record.warehouseVersion);
         } else {
-          replaceProjectWithoutAutoSave(null);
+          throw new Error('Não há obras disponíveis para sua conta. Confira com a administração da empresa.');
         }
         initialLoadRef.current = true;
       } catch (e) {
         console.warn(e);
-        toast.error('Erro ao carregar obras da empresa');
+        if (!cancelled) setBootError(e instanceof Error ? e.message : 'Não foi possível carregar as obras. Confira sua conexão e tente novamente.');
       } finally {
         if (!cancelled) setBootLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [user, orgId, creator, refreshCloudList, replaceProjectWithoutAutoSave, role, auditActor, canViewWarehousePanel, restrictedFallbackView]);
+  }, [user, orgId, creator, refreshCloudList, replaceProjectWithoutAutoSave, role, auditActor, canViewWarehousePanel, restrictedFallbackView, bootRetry]);
 
   useEffect(() => {
     if (bootLoading || !rawProject?.id || collectionsToHydrate.length === 0) {
@@ -2179,6 +2164,8 @@ export default function Index() {
         && !warehouseClientOperationInFlightRef.current
         && !warehouseOperationInFlightRef.current
         && !warehouseScopedOperationInFlightRef.current
+        && pendingDailyReportSavesRef.current === 0
+        && Object.keys(dailyReportDraftsRef.current).length === 0
         && !partialSyncPending
         && !conflictDetectedRef.current) return;
       event.preventDefault();
@@ -2237,7 +2224,7 @@ export default function Index() {
         const merged = { ...drafts, ...dailyReportDraftsRef.current };
         dailyReportDraftsRef.current = merged;
         setDailyReportDrafts(merged);
-      }).catch(() => undefined);
+      }).catch(() => { if (active) toast.warning('Não foi possível consultar os rascunhos deste aparelho. Mantenha esta aba aberta até confirmar suas edições.'); });
     }
     return () => { active = false; };
   }, [rawProject?.id, user?.id]);
@@ -2271,12 +2258,21 @@ export default function Index() {
       dailyReportDraftsRef.current = { ...dailyReportDraftsRef.current, [date]: recovery };
       setDailyReportDrafts(dailyReportDraftsRef.current);
       // Start protecting immediately, before waiting for earlier cloud saves.
+      let draftProtected = true;
       const protectedDraft = protectDailyReportDraft(after.id, actorId, recovery);
       void protectedDraft.catch(() => undefined);
       const request = dailyReportSaveQueueRef.current.catch(() => undefined).then(async () => {
-        await protectedDraft;
+        await protectedDraft.catch(() => {
+          draftProtected = false;
+          if (rawProjectRef.current?.id !== after.id) return;
+          const message = 'A edição está somente nesta aba até a confirmação da nuvem. Baixe o rascunho antes de fechar se a gravação falhar.';
+          setDailyReportSaveErrors(errors => ({ ...errors, [date]: message }));
+          toast.warning(message);
+        });
         const result = await saveOpenDailyReport(after.id, base, expectedLocal);
-        if (result.conflicts.length === 0) await clearDailyReportDraft(after.id, actorId, date, recovery.revision);
+        if (result.conflicts.length === 0) await clearDailyReportDraft(after.id, actorId, date, recovery.revision).catch(() => {
+          toast.warning('Diário confirmado na nuvem. A limpeza da cópia local ainda precisa ser repetida.');
+        });
         if (result.conflicts.length === 0 && rawProjectRef.current?.id === after.id && dailyReportDraftsRef.current[date]?.revision === recovery.revision) {
           const remaining = { ...dailyReportDraftsRef.current };
           delete remaining[date];
@@ -2311,7 +2307,7 @@ export default function Index() {
         if (rawProjectRef.current?.id !== after.id) return;
         console.warn('Falha ao salvar o Diário diretamente.', error);
         const message = error instanceof Error ? error.message : 'Não foi possível salvar o Diário. Nenhuma alteração foi confirmada.';
-        setDailyReportSaveErrors(errors => ({ ...errors, [date]: message }));
+        setDailyReportSaveErrors(errors => ({ ...errors, [date]: draftProtected ? message : `${message} A cópia está somente nesta aba. Baixe o rascunho antes de fechar.` }));
         setSaveStatus(navigator.onLine ? 'error' : 'offline');
         // Uma falha da gravação do Diário não autoriza apagar os arquivos já
         // recebidos pelo Storage: eles podem ser a única cópia das fotos.
@@ -2936,7 +2932,7 @@ export default function Index() {
       return;
     }
     try {
-      let next = applyUndoOperation(current, operation);
+      let next = auditUndoProductionDeletions(current, applyUndoOperation(current, operation), auditActor);
       next = logToProject(next, { ...auditActor, entityType: 'project', entityId: current.id, action: 'updated', title: 'Operação desfeita', metadata: { view, changedFields: operation.changes.map(change => change.path) } });
       assertProductionDeletionSafe(productionDeletionState(current), productionDeletionState(next), current);
       markLocalProjectChanges(current, next);
@@ -2971,44 +2967,8 @@ export default function Index() {
           return;
         }
         if (record) {
-          let effectiveRecord = record;
-          if (role === 'owner' && (record.project.warehouse?.fiscalDuplicateReconciliationVersion ?? 0) < 1) {
-            const completeRecord = await loadCloudProjectRecord(id, {
-              collections: PROJECT_COLLECTION_KEYS,
-              strict: true,
-              deferSnapshot: true,
-            });
-            if (!completeRecord) throw new Error('A obra não foi encontrada durante a reconciliação fiscal.');
-            if (openSequence !== projectOpenSequenceRef.current) {
-              discardCloudProjectRecord(record);
-              discardCloudProjectRecord(completeRecord);
-              return;
-            }
-            discardCloudProjectRecord(record);
-            effectiveRecord = completeRecord;
-          }
-          confirmCloudProjectRecord(effectiveRecord);
-          let projectToLoad = effectiveRecord.project;
-          let updatedAt = effectiveRecord.updatedAt;
-          let repairApplied = effectiveRecord.repairApplied;
-          if (role === 'owner' && (effectiveRecord.project.warehouse?.fiscalDuplicateReconciliationVersion ?? 0) < 1) {
-            const { reconcileFiscalNoteDuplicates } = await import('@/lib/warehouse');
-            const reconciliation = reconcileFiscalNoteDuplicates(effectiveRecord.project, auditActor);
-            if (!reconciliation.alreadyReconciled) {
-              updatedAt = await upsertCloudProject(reconciliation.project, orgId!, effectiveRecord.updatedAt);
-              projectToLoad = reconciliation.project;
-              repairApplied = false;
-              if (reconciliation.canceledNoteIds.length) {
-                toast.warning(`${reconciliation.canceledNoteIds.length} entrada(s) fiscal(is) duplicada(s) foram canceladas automaticamente.`);
-              }
-              if (reconciliation.pendingNoteIds.length) {
-                toast.warning(`${reconciliation.pendingNoteIds.length} duplicidade(s) possuem consumo posterior e exigem ajuste/conferência.`);
-              }
-            }
-          }
-          replaceProjectWithoutAutoSave(projectToLoad, updatedAt, repairApplied, true, effectiveRecord.warehouseVersion);
-          undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
-          setUndoVersion(v => v + 1);
+          confirmCloudProjectRecord(record);
+          replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, true, record.warehouseVersion);
         }
       });
     } catch {
@@ -3165,6 +3125,9 @@ export default function Index() {
     [cloudList]
   );
 
+  if (authError) return <OpeningError message={authError} onRetry={() => void reloadAuth()} />;
+  if (orgError && !membership) return <OpeningError message={orgError} onRetry={() => void reloadOrganization()} onExit={handleLogout} />;
+
   // Tela de espera enquanto carrega auth/org
   if (authLoading || orgLoading) {
     return (
@@ -3192,6 +3155,8 @@ export default function Index() {
       </div>
     );
   }
+
+  if (bootError) return <OpeningError message={bootError} onRetry={() => setBootRetry(value => value + 1)} onExit={handleLogout} />;
 
   if (bootLoading || !project || !rawProject) {
     return (

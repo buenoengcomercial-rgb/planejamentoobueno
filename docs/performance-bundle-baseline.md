@@ -140,3 +140,29 @@ PDF, XLSX, PDF.js, importadores e painéis administrativos não fazem parte das 
 | Sobrecarga da política antes do período ocioso | — | 0,64 kB gzip |
 
 O `build:analyze` continua confirmando que os motores de documentos permanecem fora do caminho inicial. Testes específicos protegem as condições de rede, visibilidade, atraso, cancelamento, permissão e as listas permitidas de pré-carga.
+
+## Correção anterior preparada de abertura e histórico — 09/10/2026
+
+A auditoria da rota Produção publicada identificou 668 registros de auditoria, 7,25 MB transferidos e 10,66 MB de JSON. O histórico demorou 5,67 s no desktop e 39,23 s na conexão móvel simulada. São amostras anteriores à correção, não percentis de produção.
+
+- As rotas operacionais deixam de exigir a coleção integral `auditLogs`. Histórico da Medição/Aditivo usa resumos em páginas de 25 por obra/entidade; before/after e metadata são lidos somente ao abrir um registro. O detalhe de uma retirada também consulta seus resumos quando expandido. O cabeçalho do Aditivo lê somente o último resumo necessário à apresentação.
+- Leituras de histórico ficam fora do `Project` editável e do snapshot de salvamento. Novas auditorias continuam sendo confirmadas nas RPCs e no fluxo de compatibilidade, sem marcar a coleção inteira como carregada. Histórico existente não é excluído. Rascunhos offline preservam os novos registros e recuperam a união com os registros da nuvem.
+- Recuperação de rascunhos, reconciliação fiscal legada e manutenção conservam a leitura completa quando necessária para decidir com segurança.
+- Sessão, empresa e abertura da obra distinguem falha técnica de ausência válida de vínculo. Leituras têm prazo de 30 s, erro recuperável e nova tentativa; respostas antigas não substituem o resultado de um retry. Escritas continuam aguardando confirmação do servidor.
+- O código da Produção/Diário começa a carregar durante a leitura inicial. Cálculos, permissões e políticas do banco permanecem iguais; não há migration.
+
+Build local da correção: caminho estático do Dashboard 974,46 kB minificado / 299,03 kB gzip. O ganho principal é eliminar o download bloqueante do histórico, não reduzir o JavaScript estático. PDF, XLSX e PDF.js continuam fora do caminho inicial.
+
+Verificação: suíte completa com 827 testes aprovados e 1 ignorado; testes adicionais de recuperação offline e tela de sessão; TypeScript, lint sem erros, build e diff-check. Validação visual local limitada por timeout da conexão de controle do navegador. Os tempos após publicação precisam ser medidos no aplicativo publicado; esta entrega não utiliza chat ou créditos do Lovable.
+
+## Correções integradas de abertura, integridade e Rotina — 09/10/2026
+
+Esta entrega integra a correção anterior ao `d4802cc`, preserva o Desfazer por operação e acrescenta as proteções do servidor. Detalhes e limites em [platform-startup-data-safety.md](platform-startup-data-safety.md).
+
+- A abertura e a troca de obra não executam reconciliação fiscal automática nem leem auditoria integral para essa manutenção. A análise/estorno de documentos arquivados continua disponível no Almoxarifado. Rascunhos antigos preservam auditorias pendentes sem exigir leitura do histórico remoto completo.
+- A Rotina usa o cálculo completo já otimizado pelo Lovable em um Worker cancelável, com recuperação de erro/prazo de 30 s. Resultados de outra obra/semana são ignorados. Não há cache de resultados entre cálculos.
+- Ensaio sintético comparável: 500 tarefas, 60 dias, 2 aquecimentos e 7 amostras alternadas. Mediana anterior 1663,01 ms; atual 398,59 ms; redução 76,03%. Saídas idênticas nas semanas, calendários e correções conferidas. Não é medida de abertura ou de aparelho físico. Reproduzir: `node scripts/benchmark-weekly-routine.mjs`.
+- As três migrações de integridade/índices foram aplicadas no Cloud e conferidas por leitura; contagens e políticas de acesso idênticas antes/depois. Não houve INSERT/UPDATE/DELETE de registros reais nos testes.
+- A versão e a data do build ficam nos atributos do indicador de salvamento para diagnóstico. Ambientes sem Git usam assinatura das fontes.
+
+Verificação final: 955 testes aprovados, 1 ignorado; 10 testes de Postgres isolado; TypeScript e lint sem erros; build aprovado. A comparação completa de desktop/celular, com cache frio/quente, deve ser repetida após publicar a interface. Não há evidência de aparelho físico nesta entrega.

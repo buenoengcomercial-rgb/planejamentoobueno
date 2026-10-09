@@ -1,9 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import type { Project } from '@/types/project';
 import { applyUndoOperation, createUndoOperation } from './operationUndo';
+import { auditUndoProductionDeletions, assertProductionDeletionSafe, productionDeletionState } from './productionDeletionSafety';
 
 const base = () => ({ id: 'fictional', name: 'Teste', phases: [{ id: 'p', tasks: [{ id: 't', name: 'Original', duration: 2, dailyLogs: [] }] }], measurements: [], auditLogs: [] } as unknown as Project);
 describe('operation-scoped undo', () => {
+  it('audits the inverse of a newly created empty task without replacing another area', () => {
+    const before = base(), after = structuredClone(before);
+    after.phases[0].tasks.push({ ...after.phases[0].tasks[0], id: 'new', percentComplete: 0 });
+    const current = { ...after, name: 'Edição posterior' };
+    const next = auditUndoProductionDeletions(current, applyUndoOperation(current, createUndoOperation(before, after)), {});
+    expect(() => assertProductionDeletionSafe(productionDeletionState(current), productionDeletionState(next), current)).not.toThrow();
+    expect(next.name).toBe('Edição posterior');
+    expect(next.auditLogs).toEqual([expect.objectContaining({ entityType: 'task', entityId: 'new', action: 'deleted', metadata: { undo: true } })]);
+  });
   it('preserves later changes to another field, another area and audit', () => {
     const before = base();
     const after = structuredClone(before);

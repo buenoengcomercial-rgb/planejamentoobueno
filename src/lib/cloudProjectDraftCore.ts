@@ -101,7 +101,7 @@ export function createProjectDraft(
     project: sanitizeProjectDraft(project),
     pendingNormalizedSync: options.pendingNormalizedSync === true || undefined,
     loadedCollections: options.loadedCollections?.length
-      ? [...new Set(options.loadedCollections)]
+      ? [...new Set<ProjectCollectionKey>([...options.loadedCollections, ...(project.auditLogs?.length ? ['auditLogs' as const] : [])])]
       : undefined,
   };
 }

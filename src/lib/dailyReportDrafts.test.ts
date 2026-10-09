@@ -1,10 +1,20 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installIndexedDbMock } from '@/test/indexedDbMock';
 import type { DailyReport } from '@/types/project';
 import { protectDailyReportDraft, readDailyReportDrafts, clearDailyReportDraft } from './dailyReportDrafts';
-beforeAll(installIndexedDbMock);
+beforeEach(installIndexedDbMock);
+afterEach(() => vi.unstubAllGlobals());
 const report: DailyReport = { id: 'r', date: '2026-10-09', observations: 'Texto fictício', createdAt: 'now', updatedAt: 'now' };
 describe('daily report durable drafts', () => {
+  it('recovers the in-memory copy when durable storage is unavailable and clears only its revision', async () => {
+    vi.stubGlobal('indexedDB', undefined);
+    await expect(protectDailyReportDraft('no-storage', 'u', { revision: 'one', base: report, local: report })).rejects.toThrow('armazenamento');
+    expect((await readDailyReportDrafts('no-storage', 'u'))[report.date].revision).toBe('one');
+    await expect(protectDailyReportDraft('no-storage', 'u', { revision: 'two', base: report, local: { ...report, observations: 'Mais recente' } })).rejects.toThrow();
+    expect(await clearDailyReportDraft('no-storage', 'u', report.date, 'one')).toBe(false);
+    expect(await clearDailyReportDraft('no-storage', 'u', report.date, 'two')).toBe(true);
+    expect(await readDailyReportDrafts('no-storage', 'u')).toEqual({});
+  });
   it('recovers exactly the attempted fields and attachment references', async () => {
     const local = { ...report, attachments: [{ id: 'file', storagePath: 'fake/path.jpg' }] } as DailyReport;
     await protectDailyReportDraft('p', 'u', { revision: 'one', base: report, local });
