@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DailyProductionLog, ProductionQuantityDetail, Project, Task } from '@/types/project';
-import { changeQuantityRows, makeQuantityClipboard, pasteQuantityRow, recalibrateQuantitySources, sharedTaskNames } from './productionQuantityReferences';
+import { changeQuantityRows, makeQuantityClipboard, pasteQuantityRow, recalibrateQuantitySources, referencedTakeoffMeasureIds, sharedTaskNames } from './productionQuantityReferences';
 
 const row = (id: string, amount: number): ProductionQuantityDetail => ({ id, location: '', comment: 'Placas', formula: 'STANDARD', multiplier: 0, measuredQuantity: amount, dimensionC: 0, dimensionD: 0 });
 const day = (id: string, actual: number, rows: ProductionQuantityDetail[] = []): DailyProductionLog => ({ id, date: '2026-10-02', plannedQuantity: 40, actualQuantity: actual, quantityDetails: rows, ...(rows.length ? { quantityDetailsAppliedTotal: actual } : {}) });
@@ -18,6 +18,13 @@ const getRows = (p: Project, taskId: string) => getTask(p, taskId).dailyLogs![0]
 const actor = { userId: 'engineer-1', userName: 'Engenheira' };
 
 describe('registro de quantitativos compartilhados', () => {
+  it('protege fontes de todas as colunas e dias, inclusive referências de outra tarefa', () => {
+    const p = project();
+    const source = (id: string) => ({ planId: 'plan', planName: 'Planta', page: 1, measureId: id, measureName: id, kind: 'count' as const, points: [{ x: 1, y: 1 }] });
+    getRows(p, 'task-a')[0] = { ...row('all-columns', 1), multiplierSource: source('a'), source: source('b'), dimensionCSource: source('c'), dimensionDSource: source('d') };
+    getTask(p, 'task-b').dailyLogs!.push(day('old-day', 1, [{ ...row('reference-copy', 1), sharedRecordId: 'shared', source: source('b') }, { ...row('legacy', 1), source: source('legacy') }]));
+    expect(referencedTakeoffMeasureIds(JSON.parse(JSON.stringify(p)))).toEqual(['a', 'b', 'c', 'd', 'legacy']);
+  });
   it('cópia normal de 29 é independente, enquanto cópia por referência acompanha 30, inclusive após recarga', () => {
     let current = project();
     const source = { taskId: 'task-a', logId: 'day-a', rowId: 'row-29' };

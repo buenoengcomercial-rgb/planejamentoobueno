@@ -4,7 +4,7 @@ import { Content, Close } from '@radix-ui/react-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogPortal, DialogOverlay, DialogDescription, DialogTitle } from '@/components/ui/dialog';
-import type { TakeoffPlan } from '@/lib/planTakeoff';
+import type { TakeoffMeasure, TakeoffPlan } from '@/lib/planTakeoff';
 
 interface Props {
   plans: TakeoffPlan[]; legacyPlans: TakeoffPlan[]; activeId: string; hiddenIds: string[];
@@ -13,15 +13,18 @@ interface Props {
   onImport: (file: File, floor: string) => Promise<string | undefined>;
   onAssignLegacy: (id: string, floor: string) => Promise<string | undefined>;
   onDelete: (id: string) => Promise<boolean>;
+  removableOrphan: (measure: TakeoffMeasure) => boolean;
+  onRemoveUnassigned: (planId: string, measureId: string) => Promise<boolean>;
 }
 
-export default function PlanDrawingManager({ plans, legacyPlans, activeId, hiddenIds, readOnly, locked, error, onClose, onAccept, onImport, onAssignLegacy, onDelete }: Props) {
+export default function PlanDrawingManager({ plans, legacyPlans, activeId, hiddenIds, readOnly, locked, error, removableOrphan, onRemoveUnassigned, onClose, onAccept, onImport, onAssignLegacy, onDelete }: Props) {
   const [selected, setSelected] = useState(activeId);
   const [hidden, setHidden] = useState(hiddenIds);
   const [adding, setAdding] = useState(false);
   const [floor, setFloor] = useState('');
   const [deleting, setDeleting] = useState('');
   const current = plans.find(plan => plan.id === selected);
+  const unassigned = current?.measures.filter(removableOrphan) ?? [];
   const accept = () => onAccept(current?.id ?? plans[0]?.id ?? '', hidden);
   const imported = (id?: string) => { if (id) { setSelected(id); setFloor(''); setAdding(false); } };
   const deleteSelected = async () => {
@@ -38,14 +41,16 @@ export default function PlanDrawingManager({ plans, legacyPlans, activeId, hidde
         <Button aria-label="Abrir planta selecionada" title="Abrir — aceitar e visualizar a prancha selecionada" variant="ghost" size="icon" className="h-6 w-6 rounded-none" disabled={!current || locked} onClick={accept}><FolderOpen className="h-3.5 w-3.5" /></Button>
         {!readOnly && <><span className="mx-1 h-4 border-l border-slate-300" /><Button aria-label={`Apagar planta ${current?.name ?? 'selecionada'}`} title={current?.measures.length ? 'Planta com marcações: exclusão indisponível para preservar os quantitativos' : 'Apagar — excluir a prancha selecionada'} variant="ghost" size="icon" className="h-6 w-6 rounded-none" disabled={!current || locked || !!current.measures.length} onClick={() => setDeleting(current!.id)}><Trash2 className="h-3.5 w-3.5" /></Button></>}
       </div>
-      {!!current?.measures.length && <p role="status" className="border border-amber-300 bg-amber-50 p-2 text-amber-900">Exclusão bloqueada: esta prancha possui marcações. Remova as marcações e seus quantitativos nas tarefas correspondentes antes de apagar a planta. As outras tarefas deste prédio também podem usar este arquivo.</p>}
+      {!!current?.measures.length && <div role="status" className="space-y-1 border border-amber-300 bg-amber-50 p-2 text-amber-900">
+        {unassigned.length ? <><p>Esta prancha possui ocorrências antigas sem tarefa nem dia. A remoção preserva o arquivo e pode ser desfeita nesta sessão.</p>{unassigned.map(measure => <div key={measure.id} className="flex items-center justify-between gap-2"><span>{measure.name} · {measure.points.length} pontos · Sem tarefa/dia</span>{!readOnly && <Button aria-label={`Remover ocorrência ${measure.name}`} title="Remover somente esta ocorrência sem vínculo; preserve a planta" variant="outline" className="h-6 px-2 text-[11px]" disabled={locked} onClick={() => { void onRemoveUnassigned(current!.id, measure.id); }}>Remover</Button>}</div>)}{current.measures.length > unassigned.length && <p>As demais marcações estão protegidas por seus vínculos com a Produção.</p>}</> : <p>Exclusão bloqueada: esta prancha possui marcações. Remova as marcações e seus quantitativos nas tarefas correspondentes antes de apagar a planta. As outras tarefas deste prédio também podem usar este arquivo.</p>}
+      </div>}
       <div className="h-64 overflow-auto border border-slate-400 bg-white">
         <table className="w-full table-fixed border-collapse text-[11px]" aria-label="Plantas cadastradas">
           <thead className="sticky top-0 bg-[#e9ecef]"><tr><th className="w-14 border-b border-r border-slate-300 px-1 py-1 font-normal">Visível</th><th className="border-b border-r border-slate-300 px-1 py-1 text-left font-normal">Nome do desenho / Pavimento</th><th className="w-[70px] border-b border-slate-300 px-1 py-1 font-normal">Eliminável</th></tr></thead>
           <tbody>{plans.map(plan => <tr key={plan.id} aria-selected={selected === plan.id} className={selected === plan.id ? 'bg-sky-100' : 'hover:bg-slate-50'}>
             <td className="border-r border-slate-200 text-center"><input type="checkbox" aria-label={`Visível ${plan.name}`} checked={!hidden.includes(plan.id)} disabled={locked} onChange={event => setHidden(ids => event.target.checked ? ids.filter(id => id !== plan.id) : [...ids, plan.id])} /></td>
             <td className="border-r border-slate-200"><button type="button" disabled={locked} className="block w-full truncate px-1 py-1 text-left focus-visible:outline focus-visible:outline-sky-600" title={`${plan.name} · ${plan.floor || 'Sem pavimento'}`} onClick={() => { setSelected(plan.id); setDeleting(''); }} onDoubleClick={() => onAccept(plan.id, hidden)}>{plan.name} · {plan.floor || 'Sem pavimento'}</button></td>
-            <td className="text-center" title={plan.measures.length ? 'Não: existem marcações vinculadas a esta prancha' : 'Sim: prancha sem marcações'}><input type="checkbox" aria-label={`Eliminável ${plan.name}`} checked={!plan.measures.length} disabled /></td>
+            <td className="text-center" title={plan.measures.length ? 'Não: existem marcações nesta prancha' : 'Sim: prancha sem marcações'}><input type="checkbox" aria-label={`Eliminável ${plan.name}`} checked={!plan.measures.length} disabled /></td>
           </tr>)}</tbody>
         </table>
         {!plans.length && <p className="p-3 text-slate-500">Nenhuma planta cadastrada neste prédio.</p>}

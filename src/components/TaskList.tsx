@@ -24,7 +24,7 @@ import { logToProject, type AuditUserInfo } from '@/lib/audit';
 import { registerPendingEditCommit } from '@/lib/pendingEditCommits';
 import { registerPendingForm } from '@/lib/pendingFormNavigation';
 import AuditHistoryPanel from '@/components/AuditHistoryPanel';
-import { changeQuantityRows, makeQuantityClipboard, pasteQuantityRow, recalibrateQuantitySources, sharedTaskNames, type QuantityClipboard, type QuantityClipboardMode, type QuantityRowAddress } from '@/lib/productionQuantityReferences';
+import { changeQuantityRows, makeQuantityClipboard, pasteQuantityRow, recalibrateQuantitySources, referencedTakeoffMeasureIds, sharedTaskNames, type QuantityClipboard, type QuantityClipboardMode, type QuantityRowAddress } from '@/lib/productionQuantityReferences';
 import type { ProductionQuantityDetail } from '@/types/project';
 
 const ImportSyntheticDialog = lazyWithReload(() => import('@/components/ImportSyntheticDialog'));
@@ -171,6 +171,7 @@ function PercentProgressInput({ task, onCommit, rowTeam }: {
 }
 
 export default function TaskList({ project, onProjectChange, undoButton, readOnly = false, focusTaskId, focusDate, auditActor, takeoffStorageKey }: TaskListProps) {
+  const protectedTakeoffMeasureIds = useMemo(() => referencedTakeoffMeasureIds(project), [project]);
   // Lista de equipes do projeto (com fallback aos defaults).
   const projectTeams: TeamDefinition[] = project.teams ?? DEFAULT_TEAMS;
   const teamDef = useCallback((code?: TeamCode) => getTeamDefinition(code, projectTeams), [projectTeams]);
@@ -1462,6 +1463,7 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
                                   projectId={project.id}
                                   takeoffStorageKey={takeoffStorageKey}
                                   chapterId={rootChapterId(project.phases, phase.id)}
+                                  protectedMeasureIds={protectedTakeoffMeasureIds}
                                   readOnly={readOnly}
                                   task={task}
                                   onChange={(logs: DailyProductionLog[]) => updateDailyLogs(phase.id, task, logs)}

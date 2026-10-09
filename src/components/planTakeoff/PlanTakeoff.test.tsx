@@ -8,6 +8,51 @@ vi.mock('./PlanCanvas', () => ({ default: forwardRef<HTMLButtonElement, { onPoin
 const example: TakeoffPlan = { id: 'p', name: 'Planta', floor: 'Térreo', chapterId: 'building-1', building: 'Prédio principal', file: new Blob(), kind: 'image', scales: {}, measures: [] };
 beforeEach(() => { vi.mocked(readTakeoffs).mockResolvedValue([example]); vi.mocked(saveTakeoffs).mockReset().mockResolvedValue(); });
 describe('teste independente de levantamento', () => {
+  it('remove somente a ocorrência sem tarefa, preserva planta e referências e permite desfazer', async () => {
+    const orphan = { id: 'orphan', name: 'Contagem antiga', kind: 'count' as const, page: 1, points: [{ x: 1, y: 1 }, { x: 2, y: 2 }] };
+    const linked = { ...orphan, id: 'linked', name: 'Referência antiga' };
+    const assigned = { ...orphan, id: 'assigned', name: 'Outra tarefa', taskId: 'other', logId: 'yesterday' };
+    let saved = [{ ...example, measures: [orphan, linked, assigned] }];
+    vi.mocked(readTakeoffs).mockImplementation(async () => saved);
+    vi.mocked(saveTakeoffs).mockImplementation(async (_key, next) => { saved = next as typeof saved; });
+    const onDeleteMeasure = vi.fn();
+    const props = { storageKey: 'obra', readOnly: false, embedded: true, chapterId: 'building-1', protectedMeasureIds: ['linked'], measureContext: { taskId: 'current', logId: 'today' }, onDeleteMeasure };
+    const view = render(<PlanTakeoff {...props} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
+    expect(screen.queryByRole('button', { name: 'Remover ocorrência Referência antiga' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Outra tarefa')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remover ocorrência Contagem antiga' }));
+    await waitFor(() => expect(saved[0].measures).toEqual([linked, assigned]));
+    expect(saved[0].file).toBe(example.file);
+    expect(onDeleteMeasure).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Aceitar gestão de desenhos' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Desfazer' }));
+    await waitFor(() => expect(saved[0].measures).toEqual([orphan, linked, assigned]));
+    fireEvent.click(screen.getByRole('button', { name: 'Gerenciar plantas' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remover ocorrência Contagem antiga' }));
+    await waitFor(() => expect(saved[0].measures).toEqual([linked, assigned]));
+    view.unmount();
+    render(<PlanTakeoff {...props} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
+    expect(screen.queryByRole('button', { name: 'Remover ocorrência Contagem antiga' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apagar planta Planta' })).toBeDisabled();
+  });
+  it('não permite limpar ocorrências no modo de consulta', async () => {
+    vi.mocked(readTakeoffs).mockResolvedValue([{ ...example, measures: [{ id: 'orphan', name: 'Antiga', kind: 'count', page: 1, points: [{ x: 1, y: 1 }] }] }]);
+    render(<PlanTakeoff storageKey="obra" readOnly embedded chapterId="building-1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
+    expect(screen.queryByRole('button', { name: 'Remover ocorrência Antiga' })).not.toBeInTheDocument();
+    expect(saveTakeoffs).not.toHaveBeenCalled();
+  });
+  it('bloqueia a gravação de captura na Produção sem tarefa e dia', async () => {
+    render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" onUseMeasure={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Contagem' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Contagem' }));
+    fireEvent.click(screen.getByText('Ponto de teste'));
+    fireEvent.click(screen.getByRole('button', { name: 'Concluir traçado' }));
+    expect(await screen.findByText(/Abra a planta pela célula de um lançamento/)).toBeInTheDocument();
+    expect(saveTakeoffs).not.toHaveBeenCalled();
+  });
   it('retira o comando antigo de uso no detalhe da tabela independente', async () => {
     vi.mocked(readTakeoffs).mockResolvedValueOnce([{ ...example, measures: [{ id: 'placas', name: 'Placas executadas', kind: 'count', page: 1, points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] }] }]);
     render(<PlanTakeoff storageKey="user/project" readOnly={false} />);
@@ -184,7 +229,7 @@ describe('teste independente de levantamento', () => {
   });
   it('lança comprimento sem escala em qualquer coluna escolhida', async () => {
     const onUseMeasure = vi.fn().mockReturnValue(true);
-    render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded chapterId="building-1" destinationColumn="A" onUseMeasure={onUseMeasure} />);
+    render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded chapterId="building-1" measureContext={{ taskId: 'task-1', logId: 'day-1' }} destinationColumn="A" onUseMeasure={onUseMeasure} />);
     const length = await screen.findByRole('button', { name: 'Comprimento linear' });
     expect(length).toBeEnabled();
     expect(screen.getByText('A · Captura livre')).toBeInTheDocument();
@@ -200,7 +245,7 @@ describe('teste independente de levantamento', () => {
   });
   it('não descarta dois pontos recusados pelo saldo nem duplica a conclusão', async () => {
     const onUseMeasure = vi.fn().mockReturnValue(false);
-    render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded chapterId="building-1" onUseMeasure={onUseMeasure} />);
+    render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded chapterId="building-1" measureContext={{ taskId: 'task-1', logId: 'day-1' }} onUseMeasure={onUseMeasure} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Comprimento linear' }));
     fireEvent.click(screen.getByText('Ponto de teste'));
     fireEvent.click(screen.getByText('Segundo ponto de teste'));

@@ -13,7 +13,7 @@ import PlanCanvas, { type CanvasBackground, type CanvasEditMode, type PlanCanvas
 const labels: Record<MeasureKind, string> = { count: 'Contagem', linearLength: 'Comprimento linear', length: 'Comprimento poligonal', circlePerimeter: 'Perímetro circular', rectangleArea: 'Superfície retangular', area: 'Superfície poligonal', circleArea: 'Superfície circular', verticalArea: 'Superfície vertical', polygonVolume: 'Volume de planta poligonal' };
 const toolIcons = { count: CircleDot, linearLength: Ruler, length: Route, circlePerimeter: Circle, rectangleArea: Square, area: Shapes, circleArea: CircleDot, verticalArea: Maximize2, polygonVolume: Box };
 const format = (value: number | null) => value === null ? '—' : value.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
-export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpdateMeasure, onDeleteMeasure, onRestoreMeasure, onRecalibrate, executedMeasureIds = [], linkedMeasureIds = [], focusMeasure, embedded = false, allowedKinds = MEASURE_KINDS, destinationColumn, chapterId, measureContext }: { storageKey: string; readOnly: boolean; onUseMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number) => boolean | void; onUpdateMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number) => boolean | void; onDeleteMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure) => boolean | void; onRestoreMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure) => boolean | void; onRecalibrate?: (plan: TakeoffPlan, page: number, scale: number | null) => boolean | void; executedMeasureIds?: string[]; linkedMeasureIds?: string[]; focusMeasure?: { planId: string; page: number; measureId: string }; embedded?: boolean; allowedKinds?: MeasureKind[]; destinationColumn?: string; chapterId?: string; measureContext?: TakeoffContext }) {
+export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpdateMeasure, onDeleteMeasure, onRestoreMeasure, onRecalibrate, executedMeasureIds = [], linkedMeasureIds = [], protectedMeasureIds = [], focusMeasure, embedded = false, allowedKinds = MEASURE_KINDS, destinationColumn, chapterId, measureContext }: { storageKey: string; readOnly: boolean; onUseMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number) => boolean | void; onUpdateMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number) => boolean | void; onDeleteMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure) => boolean | void; onRestoreMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure) => boolean | void; onRecalibrate?: (plan: TakeoffPlan, page: number, scale: number | null) => boolean | void; executedMeasureIds?: string[]; linkedMeasureIds?: string[]; protectedMeasureIds?: string[]; focusMeasure?: { planId: string; page: number; measureId: string }; embedded?: boolean; allowedKinds?: MeasureKind[]; destinationColumn?: string; chapterId?: string; measureContext?: TakeoffContext }) {
   const isCloud = !!cloudTakeoffScope(storageKey);
   const [plans, setPlans] = useState<TakeoffPlan[]>([]);
   const [active, setActive] = useState('');
@@ -64,6 +64,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   const availablePlans = chapterId ? plans.filter(plan => plan.chapterId === chapterId) : plans;
   const plan = availablePlans.find(p => p.id === active);
   const visibleMeasures = embedded && !measureContext ? [] : measuresForContext(plan?.measures ?? [], measureContext, linkedMeasureIds);
+  const removableOrphan = (measure: TakeoffMeasure) => !measure.taskId && !measure.logId && !protectedMeasureIds.includes(measure.id) && !linkedMeasureIds.includes(measure.id);
   const selectedMeasure = visibleMeasures.find(measure => measure.id === selected);
   const scale = plan?.scales[page] ?? null;
   const destinationHint = destinationColumn ? `Coluna ${destinationColumn}: qualquer ferramenta pode preencher esta célula. Sem escala, o resultado usa unidades do desenho.` : '';
@@ -142,9 +143,21 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
     setHiddenPlans(previous => previous.filter(id => id !== planId));
     return true;
   }
+  async function removeUnassignedMeasure(planId: string, measureId: string) {
+    const target = availablePlans.find(item => item.id === planId);
+    const measure = target?.measures.find(item => item.id === measureId);
+    if (!target || !measure || locked) return false;
+    if (!removableOrphan(measure)) { setError('Esta marcação possui vínculo com a Produção. Remova-a pela tarefa correspondente.'); return false; }
+    if (draft.length) { setError('Conclua ou cancele o traçado antes de remover a ocorrência antiga.'); return false; }
+    // Use the normal save/undo flow; never change production logs or the drawing file.
+    return update({ ...target, measures: target.measures.filter(item => item.id !== measureId) });
+  }
   async function finish(points = draft) {
     if (finishing.current) return;
     if (!plan || !drawable || !tool || tool === 'calibrate') return;
+    if (embedded && (!measureContext?.taskId || !measureContext?.logId || !onUseMeasure)) {
+      setError('Abra a planta pela célula de um lançamento da Produção para vincular a captura à tarefa e ao dia.'); return;
+    }
     const minimum = minimumPoints(tool);
     if (points.length < minimum) { setError(`Marque pelo menos ${minimum} pontos.`); return; }
     const height = Number(heightMeters.replace(',', '.'));
@@ -281,7 +294,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
       {!embedded && <label className={`inline-flex h-7 items-center gap-1.5 border border-slate-300 bg-slate-50 px-2 text-xs font-medium ${locked ? 'opacity-50' : 'cursor-pointer hover:bg-slate-100'}`}><FileUp className="h-3.5 w-3.5" />Adicionar planta<input aria-label="Adicionar planta" className="sr-only" type="file" accept=".pdf,.png,.jpg,.jpeg,.dxf,.dwf" disabled={locked} onChange={e => { void importFile(e.target.files?.[0]); e.target.value = ''; }} /></label>}
     </header>
     {error && <p role="alert" className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">{error}</p>}
-    {showDrawings && <PlanDrawingManager plans={availablePlans} legacyPlans={embedded ? plans.filter(item => !item.chapterId) : []} activeId={active} hiddenIds={hiddenPlans} readOnly={readOnly} locked={!ready || saving} error={error} onClose={() => setShowDrawings(false)} onAccept={(id, hidden) => { setHiddenPlans(hidden); if (id !== active) { setActive(id); setPage(1); setPages(1); setSelected(''); reset(); } setShowDrawings(false); }} onImport={importFile} onAssignLegacy={assignLegacy} onDelete={deletePlan} />}
+    {showDrawings && <PlanDrawingManager plans={availablePlans} legacyPlans={embedded ? plans.filter(item => !item.chapterId) : []} activeId={active} hiddenIds={hiddenPlans} readOnly={readOnly} locked={!ready || saving} error={error} removableOrphan={removableOrphan} onRemoveUnassigned={removeUnassignedMeasure} onClose={() => setShowDrawings(false)} onAccept={(id, hidden) => { setHiddenPlans(hidden); if (id !== active) { setActive(id); setPage(1); setPages(1); setSelected(''); reset(); } setShowDrawings(false); }} onImport={importFile} onAssignLegacy={assignLegacy} onDelete={deletePlan} />}
     {!availablePlans.length && ready && <div className="rounded border border-dashed bg-card p-10 text-center text-muted-foreground">{embedded ? showDrawings ? 'A planta escolhida será exibida aqui.' : 'Nenhuma planta cadastrada neste prédio. Abra Plantas acima para adicionar uma prancha.' : 'Adicione uma planta para começar. PDF, imagem, DXF ou DWF 2D.'}</div>}
     {!!availablePlans.length && plan && <div className="flex min-w-0 flex-col gap-1">
         <div role="toolbar" aria-label="Ferramentas de levantamento" className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 border border-slate-300 bg-[#e9ecef] px-1.5 py-1 text-xs">
