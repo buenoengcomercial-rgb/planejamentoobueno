@@ -1,3 +1,4 @@
+import { useAuditHistory } from '@/hooks/useAuditHistory';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -46,9 +47,8 @@ export default function AdditiveHeader({
   onExportPackageExcel, onExportPackagePdf,
   onOpenHistory,
 }: Props) {
-  const lastLog = active ? (project.auditLogs ?? [])
-    .filter(l => l.entityType === 'additive' && l.entityId === active.id)
-    .sort((a, b) => (a.at < b.at ? 1 : -1))[0] : undefined;
+  const { logs } = useAuditHistory(project, 'additive', active?.id ?? '', !!active, 1);
+  const lastLog = logs[0];
 
   return (
     <header className="flex flex-wrap items-start justify-between gap-3">

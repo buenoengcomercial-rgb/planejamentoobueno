@@ -39,7 +39,10 @@ async function enqueue<T>(key: string, operation: () => Promise<T>): Promise<T> 
 export async function readDailyReportDrafts(projectId: string, userId: string): Promise<Drafts> {
   const key = scopeKey(projectId, userId);
   return enqueue(key, async () => {
-    const drafts = { ...await transaction(key), ...memory.get(key) };
+    let stored: Drafts;
+    try { stored = await transaction(key); }
+    catch (error) { if (!memory.has(key)) throw error; stored = {}; }
+    const drafts = { ...stored, ...memory.get(key) };
     memory.set(key, drafts);
     return drafts;
   });
@@ -56,7 +59,18 @@ export async function protectDailyReportDraft(projectId: string, userId: string,
 export async function clearDailyReportDraft(projectId: string, userId: string, date: string, revision: string): Promise<boolean> {
   const key = scopeKey(projectId, userId);
   return enqueue(key, async () => {
-    const stored = await transaction(key);
+    let stored: Drafts;
+    try { stored = await transaction(key); }
+    catch (error) {
+      if (!memory.has(key)) throw error;
+      const cached = { ...memory.get(key) };
+      if (cached[date]?.revision !== revision) return false;
+      // Nothing durable can be removed while storage is unavailable. Keep
+      // an empty memory entry so a failed read cannot erase a newer edit.
+      delete cached[date];
+      memory.set(key, cached);
+      return true;
+    }
     if (stored[date]?.revision !== revision) return false;
     delete stored[date];
     await transaction(key, stored);

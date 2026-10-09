@@ -99,8 +99,9 @@ export function canDeleteProject(role: OrgRole): boolean {
 
 /** Carrega a primeira organização ativa do usuário autenticado. */
 export async function getCurrentMembership(): Promise<OrgMembership | null> {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError) throw authError;
+  if (!user) throw new Error('Não foi possível validar sua sessão. Entre novamente ou tente mais tarde.');
 
   const { data, error } = await supabase
     .from('organization_members')

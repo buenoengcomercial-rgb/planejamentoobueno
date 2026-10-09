@@ -1,3 +1,4 @@
+import { withReadDeadline } from '@/lib/readDeadline';
 /**
  * Sincronização incremental das coleções de alto volume entre o objeto
  * `Project` (UI) e as tabelas normalizadas no Supabase.
@@ -102,10 +103,10 @@ function deletionState(snapshot: Snapshot): ProductionDeletionState {
 export function assertProjectDeletionSafety(project: Project): void {
   const previous = snapshots.get(project.id);
   if (!previous) return;
-  const next = buildSnapshot(project, [...previous.loadedCollections]);
+  const next = buildSaveSnapshot(project, previous);
   const removesTask = [...previous.tasks.keys()].some(id => !next.tasks.has(id));
-  if (removesTask && PROJECT_COLLECTION_KEYS.some(collection => !previous.loadedCollections.has(collection))) {
-    throw new Error('Exclusão bloqueada: os vínculos de todas as áreas ainda não foram conferidos. Nenhum registro foi removido.');
+  if (removesTask && ['tasks', 'eapChapters', 'taskDailyLogs'].some(collection => !previous.loadedCollections.has(collection as ProjectCollectionKey))) {
+    throw new Error('Exclusão bloqueada: tarefas e produção ainda não foram conferidas. Nenhum registro foi removido.');
   }
   const source: Project = {
     ...(previous.projectData ? { ...project, ...previous.projectData } : project),
@@ -125,6 +126,30 @@ export function assertProjectDeletionSafety(project: Project): void {
     } as Project['warehouse'],
   };
   assertProductionDeletionSafe(deletionState(previous), deletionState(next), source);
+}
+
+export function hasProductionDeletions(project: Project): boolean {
+  const previous = snapshots.get(project.id);
+  if (!previous) return false;
+  const next = buildSaveSnapshot(project, previous);
+  return changedRows(previous.tasks, next.tasks).deletes.length > 0
+    || changedRows(previous.chapters, next.chapters).deletes.length > 0
+    || changedRows(previous.taskLogs, next.taskLogs).deletes.length > 0;
+}
+
+/** Check authoritative links before any parent write; the transaction checks them again. */
+export async function verifyProductionDeletions(project: Project, expectedUpdatedAt?: string): Promise<void> {
+  if (!hasProductionDeletions(project)) return;
+  if (!expectedUpdatedAt) throw new Error('A exclusão precisa da versão confirmada da obra. Recarregue e tente novamente.');
+  const previous = snapshots.get(project.id)!;
+  const next = buildSaveSnapshot(project, previous);
+  const { data, error } = await (supabase.rpc as unknown as (name: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>)('check_production_deletions', {
+    p_project_id: project.id, p_expected_updated_at: expectedUpdatedAt,
+    p_tasks_delete: changedRows(previous.tasks, next.tasks).deletes,
+    p_logs_delete: changedRows(previous.taskLogs, next.taskLogs).deletes,
+  });
+  if (error) throw error;
+  if (data !== true) throw new Error('Os vínculos da exclusão não foram confirmados no servidor.');
 }
 
 interface PendingProjectHydration {
@@ -594,7 +619,7 @@ async function optionalQuery<T>(
   query: () => PromiseLike<{ data: T[] | null; error: QueryError }>,
 ): Promise<QueryResult<T>> {
   if (!enabled) return { data: null, error: null };
-  const result = await query();
+  const result = await withReadDeadline(query());
   return { data: result.data, error: result.error };
 }
 
@@ -1021,6 +1046,32 @@ function changedRows<T>(previous: Map<string, T>, current: Map<string, T>) {
   return { upserts, deletes };
 }
 
+/** Unloaded history remains append-only: keep acknowledged IDs without claiming a full read. */
+function buildSaveSnapshot(project: Project, previous: Snapshot): Snapshot {
+  const next = buildSnapshot(project, [...previous.loadedCollections]);
+  next.auditLogs = new Map(previous.auditLogs);
+  for (const log of project.auditLogs ?? []) if (!next.auditLogs.has(log.id)) next.auditLogs.set(log.id, log);
+  return next;
+}
+
+/** A recovered draft may contain already confirmed audits. Read IDs only,
+ * never their historical payload or permission to reuse an old deletion intent. */
+export async function acknowledgeExistingProjectAudits(project: Project): Promise<void> {
+  const previous = snapshots.get(project.id);
+  if (!previous) return;
+  const candidates = (project.auditLogs ?? []).filter(log => !previous.auditLogs.has(log.id));
+  for (let offset = 0; offset < candidates.length; offset += 200) {
+    const batch = candidates.slice(offset, offset + 200);
+    const { data, error } = await withReadDeadline(supabase.from('audit_logs').select('id')
+      .eq('project_id', project.id).in('id', batch.map(log => log.id)));
+    if (error) throw error;
+    const confirmed = new Set((data ?? []).map(row => row.id));
+    // A project switch/hydration invalidating this baseline cannot acknowledge another one.
+    if (snapshots.get(project.id) !== previous) throw new Error('A fotografia da obra mudou antes da conferência da auditoria.');
+    for (const log of batch) if (confirmed.has(log.id)) previous.auditLogs.set(log.id, log);
+  }
+}
+
 /**
  * Confirma a Produção em uma única transação quando ela é o único domínio
  * normalizado alterado. `null` sinaliza que o save geral deve seguir o caminho
@@ -1035,28 +1086,35 @@ export async function syncProductionAtomically(
   assertProjectDeletionSafety(project);
   const previous = snapshots.get(project.id);
   if (!previous?.loadedCollections.has('eapChapters') || !previous.loadedCollections.has('tasks')) return null;
-  const next = buildSnapshot(project, [...previous.loadedCollections]);
+  const next = buildSaveSnapshot(project, previous);
+  const deleting = hasProductionDeletions(project);
   const productionKeys = new Set(['chapters', 'tasks', 'taskLogs', 'auditLogs']);
   for (const key of Object.values(SNAPSHOT_MAP_BY_COLLECTION)) {
     if (productionKeys.has(key)) continue;
     const before = previous[key];
     const after = next[key];
     const changes = changedRows(before as Map<string, unknown>, after as Map<string, unknown>);
-    if (changes.upserts.length > 0 || changes.deletes.length > 0) return null;
+    if (changes.upserts.length > 0 || changes.deletes.length > 0) {
+      if (deleting) throw new Error('Confirme as alterações desta área antes de excluir uma tarefa ou capítulo.');
+      return null;
+    }
   }
   const chapters = changedRows(previous.chapters, next.chapters);
   const tasks = changedRows(previous.tasks, next.tasks);
   const logs = changedRows(previous.taskLogs, next.taskLogs);
   const audit = changedRows(previous.auditLogs, next.auditLogs);
   const metadataChanged = !shallowEqualJSON(previous.projectData, slim);
-  if (audit.deletes.length > 0 || audit.upserts.some(({ id, row }) => previous.auditLogs.has(id) || row.entityType !== 'task')) return null;
+  if (audit.deletes.length > 0 || audit.upserts.some(({ id, row }) => previous.auditLogs.has(id) || !['task', 'project'].includes(row.entityType))) {
+    if (deleting) throw new Error('A exclusão precisa de uma auditoria nova da operação.');
+    return null;
+  }
   if (chapters.upserts.length + chapters.deletes.length + tasks.upserts.length + tasks.deletes.length
     + logs.upserts.length + logs.deletes.length + audit.upserts.length === 0) return null;
 
   const startedAt = Date.now();
   const recordCount = chapters.upserts.length + chapters.deletes.length + tasks.upserts.length
     + tasks.deletes.length + logs.upserts.length + logs.deletes.length + audit.upserts.length;
-  if (recordCount > 500) return null;
+  if (recordCount > 500 && !deleting) return null;
   const { data, error } = await supabase.rpc('save_production_domain', {
     p_project_id: project.id,
     p_organization_id: organizationId,
@@ -1073,7 +1131,10 @@ export async function syncProductionAtomically(
   });
   if (error) {
     // Um app atualizado pode abrir antes de o banco receber a migration.
-    if (error.code === 'PGRST202' || error.code === '42883') return null;
+    if (error.code === 'PGRST202' || error.code === '42883') {
+      if (deleting) throw new Error('A proteção de exclusão ainda não está disponível no servidor. Nenhum registro foi removido.');
+      return null;
+    }
     recordSyncDiagnostic({ area: 'production', operation: 'save',
       outcome: error.code === 'P0002' ? 'conflict' : 'failed', durationMs: Date.now() - startedAt, recordCount });
     throw error;
@@ -1130,9 +1191,9 @@ export async function syncNormalizedDomainAtomically(
   assertProjectDeletionSafety(project);
   const previous = snapshots.get(project.id);
   if (!previous) return null;
-  const next = buildSnapshot(project, [...previous.loadedCollections]);
+  const next = buildSaveSnapshot(project, previous);
   const changes = new Map<ProjectCollectionKey, ReturnType<typeof changedRows<unknown>>>();
-  for (const collection of previous.loadedCollections) {
+  for (const collection of new Set<ProjectCollectionKey>([...previous.loadedCollections, 'auditLogs'])) {
     const key = SNAPSHOT_MAP_BY_COLLECTION[collection];
     const diff = changedRows(previous[key] as Map<string, unknown>, next[key] as Map<string, unknown>);
     if (diff.upserts.length || diff.deletes.length) changes.set(collection, diff);
@@ -1226,6 +1287,7 @@ export async function syncCollectionsToCloud(
   options: ProjectCollectionSyncOptions = {},
 ): Promise<void> {
   assertProjectDeletionSafety(project);
+  if (hasProductionDeletions(project)) throw new Error('Exclusões da Produção precisam de confirmação atômica com a auditoria.');
   const projectId = project.id;
   const existingSnapshot = snapshots.get(projectId);
   if (!options.allowCompleteWithoutSnapshot) assertProjectSnapshotAvailable(projectId);
@@ -1233,7 +1295,7 @@ export async function syncCollectionsToCloud(
     ? [...existingSnapshot.loadedCollections]
     : [...PROJECT_COLLECTION_KEYS];
   const prev = existingSnapshot ?? emptySnapshot();
-  const next = buildSnapshot(project, trackedCollections);
+  const next = existingSnapshot ? buildSaveSnapshot(project, existingSnapshot) : buildSnapshot(project, trackedCollections);
   const tracks = (collection: ProjectCollectionKey) => next.loadedCollections.has(collection);
 
   const ops: CloudOperation[] = [];
@@ -1275,7 +1337,7 @@ export async function syncCollectionsToCloud(
       };
     }));
   }
-  if (tracks('auditLogs')) {
+  if (tracks('auditLogs') || next.auditLogs.size > 0) {
     ops.push(...diffAndSync('audit_logs', prev.auditLogs, next.auditLogs, projectId, userId, l => {
       const log = l as AuditLog;
       return {

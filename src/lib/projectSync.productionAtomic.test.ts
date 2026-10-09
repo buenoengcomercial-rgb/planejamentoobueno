@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
-import { clearCloudSnapshot, setCloudSnapshot, stripNormalizedCollections, syncProductionAtomically } from '@/lib/projectSync';
+import { clearCloudSnapshot, confirmProjectCollectionsSnapshot, getLoadedProjectCollections, setCloudSnapshot, stripNormalizedCollections, syncProductionAtomically } from '@/lib/projectSync';
 
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock('@/integrations/supabase/client', () => ({ supabase: { rpc } }));
@@ -20,6 +20,20 @@ afterEach(() => {
 });
 
 describe('transação de Produção', () => {
+  it('confirma exclusão auditada com produção carregada, sem baixar as outras áreas ou histórico', async () => {
+    confirmProjectCollectionsSnapshot(base, ['eapChapters', 'tasks', 'taskDailyLogs'], { replaceExisting: true });
+    rpc.mockResolvedValue({ data: 'v2', error: null });
+    const next = { ...base, phases: [{ ...base.phases[0], tasks: [] }], auditLogs: [{ id: 'delete-empty', entityType: 'task', entityId: 'task-1', action: 'deleted', at: '2026-10-09', title: 'Exclusão' }] } as Project;
+    expect(await syncProductionAtomically(next, stripNormalizedCollections(next), 'org-1', 'v1')).toBe('v2');
+    expect(rpc).toHaveBeenCalledWith('save_production_domain', expect.objectContaining({ p_tasks_delete: ['task-1'], p_audit_insert: [expect.objectContaining({ id: 'delete-empty' })] }));
+    expect(getLoadedProjectCollections(base.id)).not.toContain('measurements');
+  });
+  it('never falls back to separate deletion writes if the transaction is unavailable', async () => {
+    setCloudSnapshot(base.id, base);
+    rpc.mockResolvedValue({ error: { code: 'PGRST202' } });
+    const next = { ...base, phases: [{ ...base.phases[0], tasks: [] }], auditLogs: [{ id: 'delete-empty', entityType: 'task', entityId: 'task-1', action: 'deleted', at: '2026-10-09', title: 'Exclusão' }] } as Project;
+    await expect(syncProductionAtomically(next, stripNormalizedCollections(next), 'org-1', 'v1')).rejects.toThrow('proteção de exclusão');
+  });
   it('blocks a missing task/log before any atomic write, even with deletion audit', async () => {
     const log = { id: 'protected', date: '2026-10-01', plannedQuantity: 0, actualQuantity: 2 };
     const existing = { ...base, phases: base.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task, dailyLogs: [log] })) })) };
@@ -52,6 +66,16 @@ describe('transação de Produção', () => {
       p_data: null,
       p_logs_upsert: [expect.objectContaining({ data: expect.objectContaining({ quantityDetails: [expect.objectContaining({ source: expect.objectContaining({ points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] }) })] }) })],
     }));
+  });
+  it('salva auditoria nova sem baixar histórico e não a repete após confirmação', async () => {
+    confirmProjectCollectionsSnapshot(base, ['eapChapters', 'tasks', 'taskDailyLogs'], { replaceExisting: true });
+    const next = { ...base, auditLogs: [{ id: 'new-audit', entityType: 'task', entityId: 'task-1', action: 'updated', at: '2026-10-09', title: 'Atualização', before: { quantity: 1 }, after: { quantity: 2 } }] } as Project;
+    rpc.mockResolvedValue({ data: 'v2', error: null });
+    expect(await syncProductionAtomically(next, stripNormalizedCollections(next), 'org-1', 'v1')).toBe('v2');
+    expect(rpc).toHaveBeenCalledWith('save_production_domain', expect.objectContaining({ p_audit_insert: [expect.objectContaining({ id: 'new-audit', data: expect.objectContaining({ before: { quantity: 1 }, after: { quantity: 2 } }) })] }));
+    expect(getLoadedProjectCollections(base.id)).not.toContain('auditLogs');
+    expect(await syncProductionAtomically(next, stripNormalizedCollections(next), 'org-1', 'v2')).toBeNull();
+    expect(rpc).toHaveBeenCalledTimes(1);
   });
   it('envia apenas as linhas de Produção alteradas e confirma o snapshot depois da RPC', async () => {
     const next = {

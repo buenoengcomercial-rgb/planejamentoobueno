@@ -1,3 +1,4 @@
+import { withReadDeadline } from '@/lib/readDeadline';
 import { supabase } from '@/integrations/supabase/client';
 import { Project } from '@/types/project';
 import { sampleProject } from '@/data/sampleProject';
@@ -15,6 +16,8 @@ import {
   buildContractImportPayload,
   assertProjectSnapshotAvailable,
   assertProjectDeletionSafety,
+  verifyProductionDeletions,
+  acknowledgeExistingProjectAudits,
 } from '@/lib/projectSync';
 import type { ProjectCollectionKey } from '@/lib/projectDataScope';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
@@ -77,10 +80,10 @@ export class CloudProjectConflictError extends Error {
 }
 
 export async function listCloudProjects(): Promise<CloudProjectMeta[]> {
-  const { data, error } = await supabase
+  const { data, error } = await withReadDeadline(supabase
     .from('projects')
     .select('id, name, created_at, updated_at')
-    .order('updated_at', { ascending: false });
+    .order('updated_at', { ascending: false }));
   if (error) throw error;
   return (data ?? []).map(r => ({
     id: r.id,
@@ -121,14 +124,14 @@ const isMissingWarehouseVersionColumn = (error: { code?: string; message?: strin
 
 /** Consulta leve usada para detectar alterações feitas em outro aparelho. */
 export async function getCloudProjectVersion(id: string): Promise<CloudProjectVersion | null> {
-  const current = await supabase
+  const current = await withReadDeadline(supabase
     .from('projects')
     .select('id, updated_at, warehouse_version, warehouse_updated_at')
     .eq('id', id)
-    .maybeSingle();
+    .maybeSingle());
   if (current.error && !isMissingWarehouseVersionColumn(current.error)) throw current.error;
   if (current.error) {
-    const legacy = await supabase.from('projects').select('id, updated_at').eq('id', id).maybeSingle();
+    const legacy = await withReadDeadline(supabase.from('projects').select('id, updated_at').eq('id', id).maybeSingle());
     if (legacy.error) throw legacy.error;
     if (!legacy.data) return null;
     return {
@@ -151,17 +154,17 @@ export async function loadCloudProjectRecord(
   id: string,
   options: CloudProjectLoadOptions = {},
 ): Promise<CloudProjectRecord | null> {
-  const current = await supabase
+  const current = await withReadDeadline(supabase
     .from('projects')
     .select('id, name, data_json, updated_at, warehouse_version, warehouse_updated_at')
     .eq('id', id)
-    .maybeSingle();
+    .maybeSingle());
   if (current.error && !isMissingWarehouseVersionColumn(current.error)) throw current.error;
   let data = current.data;
   let warehouseVersion: number | null = current.data?.warehouse_version ?? null;
   let warehouseUpdatedAt: string | null = current.data?.warehouse_updated_at ?? null;
   if (current.error) {
-    const legacy = await supabase.from('projects').select('id, name, data_json, updated_at').eq('id', id).maybeSingle();
+    const legacy = await withReadDeadline(supabase.from('projects').select('id, name, data_json, updated_at').eq('id', id).maybeSingle());
     if (legacy.error) throw legacy.error;
     data = legacy.data ? { ...legacy.data, warehouse_version: 0, warehouse_updated_at: legacy.data.updated_at } : null;
     warehouseVersion = null;
@@ -206,6 +209,13 @@ async function getCurrentUserId(): Promise<string | undefined> {
 }
 
 export async function upsertCloudProject(project: Project, organizationId: string, expectedUpdatedAt?: string): Promise<string> {
+  assertProjectDeletionSafety(project);
+  try { await verifyProductionDeletions(project, expectedUpdatedAt); }
+  catch (error) {
+    if ((error as { code?: string })?.code === 'P0002') throw new CloudProjectConflictError();
+    throw error;
+  }
+  await acknowledgeExistingProjectAudits(project);
   assertProjectDeletionSafety(project);
   const userId = await getCurrentUserId();
   // A cópia dos terceirizados permanece no payload do pai; assim uma falha

@@ -1,4 +1,5 @@
 import type { AuditLog, DailyProductionLog, Project, Task } from '@/types/project';
+import { logToProject, type AuditUserInfo } from '@/lib/audit';
 
 export class ProductionDeletionBlockedError extends Error {
   constructor() {
@@ -24,6 +25,25 @@ export function productionDeletionState(project: Project): ProductionDeletionSta
   };
   for (const phase of project.phases) for (const task of phase.tasks) visit(task);
   return { tasks, logs, chapters: new Set(project.phases.map(phase => phase.id)), audits: new Map((project.auditLogs ?? []).map(log => [log.id, log])) };
+}
+
+/** The inverse is a new audited operation, never a restoration of old audit history. */
+export function auditUndoProductionDeletions(before: Project, after: Project, actor: AuditUserInfo): Project {
+  const original = productionDeletionState(before), restored = productionDeletionState(after);
+  let next = after;
+  for (const [id, task] of original.tasks) {
+    if (!restored.tasks.has(id)) next = logToProject(next, { ...actor, entityType: 'task', entityId: id,
+      action: 'deleted', title: 'Criação de tarefa desfeita', before: task, metadata: { undo: true } });
+  }
+  for (const id of original.chapters) {
+    if (!restored.chapters.has(id)) next = logToProject(next, { ...actor, entityType: 'project', entityId: before.id,
+      action: 'deleted', title: 'Criação de capítulo desfeita', metadata: { chapterId: id, undo: true } });
+  }
+  for (const [id, row] of original.logs) {
+    if (!restored.logs.has(id)) next = logToProject(next, { ...actor, entityType: 'task', entityId: row.taskId,
+      action: 'deleted', title: 'Criação de apontamento desfeita', before: row.log, metadata: { logId: id, undo: true } });
+  }
+  return next;
 }
 
 /** Follow identity references, not arbitrary text, and never use audit snapshots as live links. */

@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   warehouseUpload: vi.fn(),
   saveOpenDailyReport: vi.fn(),
   loadOpenDailyReport: vi.fn(),
+  protectDailyReportDraft: vi.fn(async () => undefined),
   signOut: vi.fn(),
   toastError: vi.fn(),
   toastMessage: vi.fn(),
@@ -94,7 +95,7 @@ vi.mock('@/lib/dailyReportCloudSync', () => ({
 
 vi.mock('@/lib/dailyReportDrafts', () => ({
   readDailyReportDrafts: vi.fn(async () => ({})),
-  protectDailyReportDraft: vi.fn(async () => undefined),
+  protectDailyReportDraft: mocks.protectDailyReportDraft,
   clearDailyReportDraft: vi.fn(async () => true),
 }));
 
@@ -422,12 +423,67 @@ afterEach(() => {
 });
 
 describe('segurança de sincronização da página da obra', () => {
+  it('opens legacy warehouse data without running maintenance or downloading full audit history', async () => {
+    const legacy = { ...makeProject(), warehouse: { ...emptyWarehouse(), fiscalDuplicateReconciliationVersion: 0 } } as Project;
+    mocks.loadCloudProjectRecord.mockResolvedValue(cloudRecord(legacy));
+    renderIndex('producao');
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+    expect(mocks.loadCloudProjectRecord).toHaveBeenCalledTimes(1);
+    expect(mocks.loadCloudProjectRecord.mock.calls[0][1].collections).not.toContain('auditLogs');
+    expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
+  });
+  it('tries the specific cloud save even when draft storage fails', async () => {
+    mocks.protectDailyReportDraft.mockRejectedValueOnce(new Error('Quota exceeded'));
+    mocks.saveOpenDailyReport.mockResolvedValueOnce({ report: null, conflicts: [] });
+    renderIndex();
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Esvaziar diário' }));
+    await waitFor(() => expect(mocks.saveOpenDailyReport).toHaveBeenCalledTimes(1));
+    expect(mocks.toastWarning).toHaveBeenCalledWith(expect.stringContaining('somente nesta aba'));
+    expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
+  });
   it('direciona o antigo link de levantamento para a Produção', async () => {
     renderIndex('levantamento');
     expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId('route-path')).toHaveTextContent('/obras/project-1/producao'));
   });
 
+  it('recupera auditoria offline parcial sem substituir histórico da nuvem no retry', async () => {
+    const oldLog = { id: 'old-audit', entityType: 'task', entityId: 'task-1', action: 'updated', at: '2026-10-08', title: 'Anterior' } as const;
+    const newLog = { ...oldLog, id: 'new-audit', at: '2026-10-09', title: 'Nova alteração' };
+    const cloud = { ...makeProject(), auditLogs: [oldLog] };
+    const draft = { ...makeProject(), auditLogs: [newLog] };
+    mocks.loadCloudProjectRecord.mockResolvedValue(cloudRecord(cloud));
+    writeProjectDraft(draft, 'cloud-v2', undefined, { pendingNormalizedSync: true, loadedCollections: ['tasks', 'auditLogs'] });
+    renderIndex();
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
+    await waitFor(() => expect(mocks.upsertCloudProject).toHaveBeenCalledWith(expect.objectContaining({ auditLogs: expect.arrayContaining([oldLog, newLog]) }), 'org-1', expect.anything()));
+  });
+  it('oferece retry após falha inicial sem apagar dados nem salvar automaticamente', async () => {
+    mocks.loadCloudProjectRecord.mockRejectedValueOnce(new Error('Servidor indisponível'));
+    renderIndex();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Servidor indisponível');
+    expect(screen.queryByText('Acesso pendente')).not.toBeInTheDocument();
+    expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+    expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
+  });
+  it('encerra a espera e ignora resposta tardia após retry', async () => {
+    vi.useFakeTimers();
+    const pending = deferred<ReturnType<typeof cloudRecord>>();
+    mocks.loadCloudProjectRecord.mockReturnValueOnce(pending.promise);
+    renderIndex();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_100); });
+    expect(screen.getByRole('alert')).toHaveTextContent('Tente novamente');
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    expect(screen.getByTestId('project-workspace')).toBeInTheDocument();
+    await act(async () => pending.resolve(cloudRecord({ ...makeProject(), name: 'Resposta velha' })));
+    expect(screen.getByTestId('project-name')).not.toHaveTextContent('Resposta velha');
+    expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
+  });
   it('não restaura a rolagem como se a página tivesse reiniciado ao editar o Diário', async () => {
     mocks.saveOpenDailyReport.mockResolvedValue({ report: null, conflicts: [] });
     renderIndex('diario');

@@ -1,6 +1,7 @@
 import { Cloud, CloudOff, Loader2, Check, RefreshCw, TriangleAlert, WifiOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useEffect, useState } from 'react';
+import { APP_BUILD } from '@/lib/buildIdentity';
 
 export type SaveStatus = 'idle' | 'pending' | 'saving' | 'updating' | 'saved' | 'conflict' | 'offline' | 'error';
 
@@ -61,7 +62,7 @@ export default function SaveStatusIndicator({ status, className, confirmedAt, la
       : `Dados podem estar desatualizados${elapsed ? ` · última conferência ${elapsed}` : ''}`;
   const shortProjectId = projectId?.slice(0, 8);
   return (
-    <div className={cn('flex max-w-[65vw] flex-col items-end text-right text-[11px] leading-tight', cfg.color, className)}>
+    <div data-app-revision={APP_BUILD.revision} data-app-built-at={APP_BUILD.builtAt} className={cn('flex max-w-[65vw] flex-col items-end text-right text-[11px] leading-tight', cfg.color, className)}>
       <div className="flex items-center gap-1.5 font-medium">
         <Icon className={cn('h-3.5 w-3.5 shrink-0', 'spin' in cfg && cfg.spin && 'animate-spin')} />
         <span>{cfg.text}</span>
