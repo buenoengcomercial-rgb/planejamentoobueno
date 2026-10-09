@@ -18,6 +18,14 @@ export interface QuantityChangeResult { project?: Project; error?: string; affec
 
 const sourceFields = { multiplier: 'multiplierSource', measuredQuantity: 'source', dimensionC: 'dimensionCSource', dimensionD: 'dimensionDSource' } as const;
 const fields = Object.keys(sourceFields) as DetailField[];
+/** Include every task/day and reference copy, even legacy sources without ownership tags. */
+export function referencedTakeoffMeasureIds(project: Project): string[] {
+  return [...new Set(project.phases.flatMap(phase => phase.tasks.flatMap(task =>
+    (task.dailyLogs ?? []).flatMap(log => (log.quantityDetails ?? []).flatMap(row =>
+      Object.values(sourceFields).flatMap(field => row[field]?.measureId ? [row[field]!.measureId] : []),
+    )),
+  )))];
+}
 const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 function normalizedUnit(unit: string): string {
