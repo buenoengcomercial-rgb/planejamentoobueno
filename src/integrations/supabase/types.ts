@@ -14,66 +14,6 @@ export type Database = {
   }
   public: {
     Tables: {
-      takeoff_plans: {
-        Row: {
-          id: string
-          project_id: string
-          chapter_id: string | null
-          building: string | null
-          name: string
-          floor: string
-          kind: string
-          file_path: string
-          scales: Json
-          measures: Json
-          revision: number
-          created_by: string
-          created_at: string
-          updated_at: string
-          deleted_at: string | null
-        }
-        Insert: {
-          id: string
-          project_id: string
-          chapter_id?: string | null
-          building?: string | null
-          name: string
-          floor?: string
-          kind: string
-          file_path: string
-          scales?: Json
-          measures?: Json
-          revision?: number
-          created_by?: string
-          created_at?: string
-          updated_at?: string
-          deleted_at?: string | null
-        }
-        Update: {
-          id?: string
-          project_id?: string
-          chapter_id?: string | null
-          building?: string | null
-          name?: string
-          floor?: string
-          kind?: string
-          file_path?: string
-          scales?: Json
-          measures?: Json
-          revision?: number
-          created_by?: string
-          created_at?: string
-          updated_at?: string
-          deleted_at?: string | null
-        }
-        Relationships: [{
-          foreignKeyName: "takeoff_plans_project_id_fkey"
-          columns: ["project_id"]
-          isOneToOne: false
-          referencedRelation: "projects"
-          referencedColumns: ["id"]
-        }]
-      }
       additives: {
         Row: {
           created_at: string
@@ -713,13 +653,75 @@ export type Database = {
           },
         ]
       }
+      takeoff_plans: {
+        Row: {
+          building: string | null
+          chapter_id: string | null
+          created_at: string
+          created_by: string
+          deleted_at: string | null
+          file_path: string
+          floor: string
+          id: string
+          kind: string
+          measures: Json
+          name: string
+          project_id: string
+          revision: number
+          scales: Json
+          updated_at: string
+        }
+        Insert: {
+          building?: string | null
+          chapter_id?: string | null
+          created_at?: string
+          created_by?: string
+          deleted_at?: string | null
+          file_path: string
+          floor?: string
+          id: string
+          kind: string
+          measures?: Json
+          name: string
+          project_id: string
+          revision?: number
+          scales?: Json
+          updated_at?: string
+        }
+        Update: {
+          building?: string | null
+          chapter_id?: string | null
+          created_at?: string
+          created_by?: string
+          deleted_at?: string | null
+          file_path?: string
+          floor?: string
+          id?: string
+          kind?: string
+          measures?: Json
+          name?: string
+          project_id?: string
+          revision?: number
+          scales?: Json
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "takeoff_plans_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       task_daily_logs: {
         Row: {
           created_at: string
           created_by: string | null
           data: Json
           id: string
-          log_date: string | null
+          log_date: string
           project_id: string
           task_id: string
           updated_at: string
@@ -729,7 +731,7 @@ export type Database = {
           created_by?: string | null
           data?: Json
           id: string
-          log_date: string | null
+          log_date: string
           project_id: string
           task_id: string
           updated_at?: string
@@ -739,7 +741,7 @@ export type Database = {
           created_by?: string | null
           data?: Json
           id?: string
-          log_date?: string | null
+          log_date?: string
           project_id?: string
           task_id?: string
           updated_at?: string
