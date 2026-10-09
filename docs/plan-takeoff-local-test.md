@@ -1,39 +1,34 @@
-# Levantamento em planta — teste local
+# Levantamento na Produção
 
-Abra uma obra e selecione **Levantamento em planta**, abaixo de Produção e rotina, ou abra **Produção**, expanda uma tarefa e clique no ícone de detalhe ao lado do lançamento diário.
-A rota independente é `/obras/:id/levantamento` (`planTakeoff`).
+O acesso acontece em **Produção e rotina**, no detalhe do lançamento diário. Não existe uma aba independente de levantamento na navegação.
 
-## Uso
+## Fluxo
 
-1. Importe PDF, PNG/JPG ou DXF 2D (até 100 MB por arquivo).
-2. Informe nome e pavimento e selecione a página do PDF.
-3. Calibre por dois pontos e uma distância em metros. Em DXF também é possível confirmar metro, centímetro ou milímetro como unidade original.
-4. Selecione Contagem, Comprimento ou Área, marque os pontos e conclua o traçado.
-5. Selecione uma linha para destacar sua geometria. No modo Selecionar, arraste vértices para corrigir. Excluir remove a marcação e sua linha; Desfazer recupera a última operação desta sessão.
-6. Recalibrar mostra os valores anteriores e novos antes da confirmação. A escala é independente em cada página.
+1. Expanda a tarefa e o detalhe do dia. As linhas têm Loc., Comentário, Fórmula, A, B, C, D, Parcial e Subtotal. Loc. indica a hierarquia; uma nova linha começa zerada.
+2. Selecione a célula que receberá a quantidade e abra a planta. Digitação manual continua disponível, sem setas numéricas para aumentar/diminuir valores.
+3. Abra **Plantas** para cadastrar, escolher ou arquivar uma prancha. Os arquivos pertencem ao capítulo do prédio e são reutilizados por suas tarefas. O modal aplica seleção e visibilidade ao aceitar; cadastro e exclusão têm confirmação própria. Plantas com marcações não podem ser apagadas.
+4. Escolha a ferramenta. Contagem registra pontos numerados sem uni-los. Comprimento linear, perímetro circular, retângulo, círculo e superfície vertical terminam no segundo ponto. Percurso, polígono e volume terminam por Concluir ou botão direito.
+5. O resultado preenche diretamente a célula e a próxima linha fica pronta. Não há uma segunda tabela dentro da planta nem ação “Usar no detalhe”. Após o primeiro lançamento válido, o subtotal acompanha o Realizado do dia. Uma linha zerada não apaga o lançamento manual anterior.
+6. As fórmulas e fatores neutros ficam identificados na subtabela. O limite da tarefa é validado; uma recusa preserva o traçado para correção ou cancelamento.
 
-## Detalhe do lançamento em Produção
+## Visualização e edição
 
-No dia escolhido, o campo **Realizado** continua aceitando número direto. O botão **Detalhar quantitativo** abre uma subtabela com local, comentário, fator A, medida B e parcial A × B. Cada linha pode receber um resultado manual ou abrir a planta. Na planta, conclua um grupo de pontos executados e clique em **Usar no detalhe**; a quantidade e uma cópia das coordenadas entram na linha. O mesmo grupo não pode alimentar duas linhas da mesma tarefa.
+- A roda controla zoom; segurar o botão central desloca. Duplo clique central enquadra. Zoom por janela usa dois cantos; Vista anterior retorna ao enquadramento anterior.
+- Os valores e segmentos aparecem sobre a geometria com tamanho constante na tela. Visualizar/ocultar medidas altera os textos, preservando os pontos. Hachura alterna o preenchimento de superfícies.
+- Mover ponto aceita clicar no vértice e na nova posição, ou arrastar. Escape cancela o movimento ainda não confirmado. Adicionar ponto acrescenta ao fim do percurso. Medidas de dois pontos não aceitam um terceiro vértice.
+- Edição, exclusão, renomeação, recalibração e Desfazer passam pelas validações dos lançamentos vinculados. O histórico de Desfazer tem até 20 alterações por sessão.
+- Capturas para máscaras abre uma janela compacta. Só habilita opções cuja geometria foi reconhecida no DXF. Cancelar descarta as preferências em edição; Desmarcar todas limpa a seleção sem desativar o modo.
 
-O detalhe fica **pendente** até clicar em **Usar total no realizado do dia**. Essa ação passa pela validação normal da Produção e não permite exceder a quantidade da tarefa. Depois, os pontos do grupo aplicado aparecem verdes ao reabrir a planta. Se o detalhe mudar, precisa ser aplicado novamente.
+## Dados, unidades e formatos
 
-## Dados e compatibilidade
+No sistema autenticado, arquivos e metadados usam `takeoff_plans` e o bucket privado `plan-takeoff`, com controle de revisão. A prévia local usa IndexedDB. A indicação de salvamento distingue navegador e nuvem.
 
-O banco IndexedDB `obraplanner-plan-takeoff` guarda arquivos e levantamentos com chave composta por organização, usuário e obra. A confirmação de salvamento ocorre ao concluir a transação. Falha de gravação preserva os dados anteriores e o traçado em andamento.
+Arquivos são compartilhados pelo capítulo. Marcações permanecem filtradas pela tarefa e pelo dia; vínculos explícitos continuam sujeitos às validações das referências da Produção. Os pontos também acompanham a célula do lançamento diário. Não se modifica orçamento, quantidade contratada ou Almoxarifado.
 
-O visualizador independente não exige coleções operacionais remotas. No fluxo novo da Produção, a subtabela e a cópia dos pontos passam a integrar o `dailyLog` da tarefa e seguem a persistência já existente da Produção; não há tabela/RPC nova nem gravação direta em Medição, Diário ou Almoxarifado. Os perfis de campo e almoxarife continuam sem acesso; Visualizador não edita.
+DXF começa em 1 metro por unidade e permite conferir/calibrar a conversão. PDF e imagem sem escala usam unidades do desenho, identificadas assim. Nenhuma ferramenta é bloqueada só pela unidade da célula ou ausência de calibração.
 
-Arquivos e geometrias editáveis da planta não sincronizam entre dispositivos, não participam do backup geral da obra e são removidos ao limpar os dados do navegador. As coordenadas copiadas para o lançamento acompanham o registro de Produção, mas sem o arquivo original não se reabre a planta em outro aparelho. Use uma aba por vez para o mesmo usuário/obra. O histórico de desfazer é limitado a 20 operações e termina ao recarregar.
+São preservados PDF multipágina, PNG/JPG, DXF 2D e o leitor DWF já existente. Não há leitor DWG. Capturas CAD só ficam disponíveis quando o leitor fornece entidades reconhecidas; PDF, imagem e folhas DWF sem entidades permitem marcação livre.
 
-DXF usa `dxf-viewer` (MPL-2.0), com fonte Noto Sans distribuída sob OFL em `public/fonts`. Layouts/paper space, estilos e entidades especiais podem não reproduzir o CAD original. Pontos são manuais: não há snap nem reconhecimento automático. DWG/DWF, volumes e descontos ficam fora deste teste.
+## Verificação de 08/10/2026
 
-## Verificação
-
-- Testes de cálculo: 7 pontos, percurso de 3 + 4 m, área de 3 × 4 m, escala quadrática e rejeição de calibração inválida.
-- Testes de interface: escala obrigatória, contagem, desfazer, falha de armazenamento com nova tentativa, consulta sem edição e ausência de coleções remotas.
-- Navegador: imagem, DXF com layer, PDF com duas páginas, 7 un / 7 m / 12 m², zoom, renomeação, reabertura, mover vértice, excluir e desfazer.
-- Integração com Produção: edição manual do detalhe, aplicação explícita ao dia, validação do saldo, vínculo dos pontos e rejeição da reutilização do mesmo grupo na tarefa.
-- Teste da transação de Produção confirma que pontos e detalhe são enviados dentro do log diário, sem payload de outro domínio.
-
-Entrega local, sem publicação ou alteração na nuvem.
+O teste real do Arquimedes e sua correspondência estão registrados em [Validação das interações](arquimedes-takeoff-validation.md). A implementação desta rodada foi verificada primeiro na prévia local, sem publicar no Lovable.

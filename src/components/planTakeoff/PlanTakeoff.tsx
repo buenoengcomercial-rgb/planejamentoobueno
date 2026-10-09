@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Box, Check, ChevronDown, ChevronUp, Circle, CircleDot, Crosshair, FileUp, Layers3, List, Magnet, Maximize2, MousePointer2, Move, Palette, Plus, Route, Ruler, Settings2, Shapes, Square, Trash2, Undo2, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { Box, Check, ChevronDown, ChevronUp, Circle, CircleDot, Crosshair, FileUp, Layers3, List, Magnet, Maximize2, MousePointer2, Move, Palette, Plus, Route, Ruler, Settings2, Shapes, Square, Trash2, Undo2, X, ZoomIn, ZoomOut, Scan, RotateCcw, Eye, Hash } from 'lucide-react';
 import { calibration, fixedPointCount, measureCategory, measureUnit, MEASURE_KINDS, minimumPoints, measuresForContext, quantity, readTakeoffs, requiresHeight, saveTakeoffs, TAKEOFF_CATALOG_UPDATED, type MeasureKind, type Point, type TakeoffContext, type TakeoffMeasure, type TakeoffPlan } from '@/lib/planTakeoff';
 import { openDwfSheets, type DwfSheet } from '@/lib/dwfTakeoff';
-import { CAPTURE_KINDS, CAPTURE_LABELS, type CaptureKind } from '@/lib/dxfSnap';
+import { type CaptureKind } from '@/lib/dxfSnap';
+import { cloudTakeoffScope } from '@/lib/planTakeoffCloud';
+import PlanCaptureDialog from './PlanCaptureDialog';
 import PlanDrawingManager from './PlanDrawingManager';
 import PlanCanvas, { type CanvasBackground, type CanvasEditMode, type PlanCanvasHandle } from './PlanCanvas';
 
@@ -12,13 +14,14 @@ const labels: Record<MeasureKind, string> = { count: 'Contagem', linearLength: '
 const toolIcons = { count: CircleDot, linearLength: Ruler, length: Route, circlePerimeter: Circle, rectangleArea: Square, area: Shapes, circleArea: CircleDot, verticalArea: Maximize2, polygonVolume: Box };
 const format = (value: number | null) => value === null ? '—' : value.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpdateMeasure, onDeleteMeasure, onRestoreMeasure, onRecalibrate, executedMeasureIds = [], linkedMeasureIds = [], focusMeasure, embedded = false, allowedKinds = MEASURE_KINDS, destinationColumn, chapterId, measureContext }: { storageKey: string; readOnly: boolean; onUseMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number) => boolean | void; onUpdateMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number) => boolean | void; onDeleteMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure) => boolean | void; onRestoreMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure) => boolean | void; onRecalibrate?: (plan: TakeoffPlan, page: number, scale: number | null) => boolean | void; executedMeasureIds?: string[]; linkedMeasureIds?: string[]; focusMeasure?: { planId: string; page: number; measureId: string }; embedded?: boolean; allowedKinds?: MeasureKind[]; destinationColumn?: string; chapterId?: string; measureContext?: TakeoffContext }) {
+  const isCloud = !!cloudTakeoffScope(storageKey);
   const [plans, setPlans] = useState<TakeoffPlan[]>([]);
   const [active, setActive] = useState('');
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [status, setStatus] = useState('Carregando plantas da nuvem…');
+  const [status, setStatus] = useState(isCloud ? 'Carregando plantas da nuvem…' : 'Carregando plantas deste navegador…');
   const [error, setError] = useState('');
   const [tool, setTool] = useState<MeasureKind | 'calibrate' | null>(null);
   const [draft, setDraft] = useState<Point[]>([]);
@@ -35,14 +38,14 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   const [showDetails, setShowDetails] = useState(true);
   const [background, setBackground] = useState<CanvasBackground>('white');
   const [ortho, setOrtho] = useState(false);
+  const [showMeasureValues, setShowMeasureValues] = useState(true);
+  const [showHatching, setShowHatching] = useState(true);
+  const [canPreviousView, setCanPreviousView] = useState(false);
   const [editMode, setEditMode] = useState<CanvasEditMode>('select');
   const [captureDialog, setCaptureDialog] = useState(false);
   const [capturesEnabled, setCapturesEnabled] = useState(false);
   const [trackingEnabled, setTrackingEnabled] = useState(false);
-  const [pendingCapturesEnabled, setPendingCapturesEnabled] = useState(false);
-  const [pendingTrackingEnabled, setPendingTrackingEnabled] = useState(false);
   const [captureKinds, setCaptureKinds] = useState<CaptureKind[]>([]);
-  const [pendingCaptures, setPendingCaptures] = useState<CaptureKind[]>([]);
   const [availableCaptures, setAvailableCaptures] = useState<CaptureKind[]>([]);
   const [sheetInfo, setSheetInfo] = useState<DwfSheet[]>([]);
   const [showDrawings, setShowDrawings] = useState(false);
@@ -55,6 +58,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   const lastCommittedPlans = useRef<TakeoffPlan[]>([]);
   const deletedLinkedIds = useRef(new Set<string>());
   const busy = useRef(false);
+  const finishing = useRef(false);
   const canvas = useRef<PlanCanvasHandle>(null);
   const receiveLayers = useCallback((names: string[], invisible: string[]) => { setCanvasLayers(names); setHiddenLayers(invisible); }, []);
   const availablePlans = chapterId ? plans.filter(plan => plan.chapterId === chapterId) : plans;
@@ -81,10 +85,10 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   useEffect(() => {
     let alive = true;
     void readTakeoffs(storageKey, { migrateLocal: !readOnly }).then(data => {
-      if (!alive) return; const available = chapterId ? data.filter(plan => plan.chapterId === chapterId) : data; lastCommittedPlans.current = data; setPlans(data); setActive(available.some(plan => plan.id === focusPlanId) ? focusPlanId! : available[0]?.id ?? ''); setPage(focusPage ?? 1); setSelected(focusMeasureId ?? ''); setReady(true); setStatus('Plantas na nuvem');
+      if (!alive) return; const available = chapterId ? data.filter(plan => plan.chapterId === chapterId) : data; lastCommittedPlans.current = data; setPlans(data); setActive(available.some(plan => plan.id === focusPlanId) ? focusPlanId! : available[0]?.id ?? ''); setPage(focusPage ?? 1); setSelected(focusMeasureId ?? ''); setReady(true); setStatus(isCloud ? 'Plantas na nuvem' : 'Plantas neste navegador');
     }).catch(cause => { if (alive) setError(cause instanceof Error ? cause.message : 'Não foi possível acessar as plantas na nuvem. A cópia local foi preservada.'); });
     return () => { alive = false; };
-  }, [storageKey, focusPlanId, focusPage, focusMeasureId, chapterId, readOnly]);
+  }, [storageKey, focusPlanId, focusPage, focusMeasureId, chapterId, readOnly, isCloud]);
   async function commit(next: TakeoffPlan[], undo = false) {
     if (locked || busy.current) return false;
     busy.current = true; setSaving(true); setError(''); setStatus('Salvando…');
@@ -96,7 +100,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
       setPlans(next);
       window.dispatchEvent(new CustomEvent(TAKEOFF_CATALOG_UPDATED, { detail: storageKey }));
       if (undo && !next.some(p => p.id === active)) { setActive(next[0]?.id ?? ''); setPage(1); }
-      setStatus('Salvo na nuvem'); return true;
+      setStatus(isCloud ? 'Salvo na nuvem' : 'Salvo no navegador'); return true;
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Não foi possível salvar na nuvem. O traçado atual foi preservado para tentar novamente.'); setStatus('Alteração não salva'); return false; }
     finally { busy.current = false; setSaving(false); }
   }
@@ -138,24 +142,37 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
     setHiddenPlans(previous => previous.filter(id => id !== planId));
     return true;
   }
-  async function finish() {
+  async function finish(points = draft) {
+    if (finishing.current) return;
     if (!plan || !drawable || !tool || tool === 'calibrate') return;
     const minimum = minimumPoints(tool);
-    if (draft.length < minimum) { setError(`Marque pelo menos ${minimum} pontos.`); return; }
+    if (points.length < minimum) { setError(`Marque pelo menos ${minimum} pontos.`); return; }
     const height = Number(heightMeters.replace(',', '.'));
-    const result = quantity(tool, draft, scale, height);
+    const result = quantity(tool, points, scale, height);
     if (result === null || result <= 0) { setError(requiresHeight(tool) ? 'Informe uma altura positiva e confira o traçado.' : 'A medição deve ser maior que zero.'); return; }
-    const measure: TakeoffMeasure = { id: crypto.randomUUID(), page, name: draftName.trim() || `${labels[tool]} ${visibleMeasures.length + 1}`, kind: tool, points: draft, ...(requiresHeight(tool) ? { heightMeters: height } : {}), ...measureContext };
-    if (!await update({ ...plan, measures: [...plan.measures, measure] })) return;
-    if (embedded && onUseMeasure) {
-      if (onUseMeasure(plan, measure, result) === false) {
-        await commit(plans, true);
+    finishing.current = true;
+    try {
+      const measure: TakeoffMeasure = { id: crypto.randomUUID(), page, name: draftName.trim() || `${labels[tool]} ${visibleMeasures.length + 1}`, kind: tool, points, ...(requiresHeight(tool) ? { heightMeters: height } : {}), ...measureContext };
+      if (!await update({ ...plan, measures: [...plan.measures, measure] })) return;
+      if (embedded && onUseMeasure) {
+        if (onUseMeasure(plan, measure, result) === false) {
+          await commit(plans, true);
+          return;
+        }
+        setSelected(''); setDraft([]); setDraftName(''); setPendingScale(undefined);
         return;
       }
-      setSelected(''); setDraft([]); setDraftName(''); setPendingScale(undefined);
-      return;
+      setSelected(measure.id); reset();
+    } finally { finishing.current = false; }
+  }
+  function addDraftPoint(point: Point) {
+    if (!tool || locked || finishing.current) return;
+    if (tool !== 'calibrate' && fixedPointCount(tool) && draft.length >= 2) {
+      setError('Conclua ou cancele a medida pendente antes de iniciar outra.'); return;
     }
-    setSelected(measure.id); reset();
+    const next = tool === 'calibrate' && draft.length >= 2 ? [point] : [...draft, point];
+    setDraft(next);
+    if (tool !== 'calibrate' && fixedPointCount(tool) === next.length) void finish(next);
   }
   async function applyStoredMeasure(measure: TakeoffMeasure) {
     if (!plan || !onUseMeasure) return;
@@ -201,18 +218,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   async function addMeasurePoint(id: string, point: Point) {
     const measure = plan?.measures.find(item => item.id === id);
     if (!measure || fixedPointCount(measure.kind)) { setError('Esta medida usa exatamente dois pontos. Selecione Mover ponto.'); return; }
-    if (measure.kind === 'count') { await reviseMeasure({ ...measure, points: [...measure.points, point] }); return; }
-    const edges = measure.kind === 'area' || measure.kind === 'polygonVolume' ? measure.points.length : measure.points.length - 1;
-    let best = Number.POSITIVE_INFINITY, insertion = measure.points.length;
-    for (let i = 0; i < edges; i++) {
-      const a = measure.points[i], b = measure.points[(i + 1) % measure.points.length];
-      const dx = b.x - a.x, dy = b.y - a.y;
-      const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
-      const gap = Math.hypot(point.x - a.x - t * dx, point.y - a.y - t * dy);
-      if (gap < best) { best = gap; insertion = i + 1; }
-    }
-    const points = [...measure.points]; points.splice(insertion, 0, point);
-    await reviseMeasure({ ...measure, points });
+    await reviseMeasure({ ...measure, points: [...measure.points, point] });
   }
   async function deleteMeasurePoint(id: string, index: number) {
     const measure = plan?.measures.find(item => item.id === id);
@@ -291,10 +297,14 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
             <Button title="Ampliar — aproxima o desenho; a roda também controla o zoom" aria-label="Ampliar" variant="ghost" size="icon" className="h-7 w-7 rounded-none" onClick={() => canvas.current?.zoomIn()}><ZoomIn className="h-4 w-4" /></Button>
             <Button title="Reduzir — afasta o desenho" aria-label="Reduzir" variant="ghost" size="icon" className="h-7 w-7 rounded-none" onClick={() => canvas.current?.zoomOut()}><ZoomOut className="h-4 w-4" /></Button>
             <Button title="Enquadrar — mostra toda a prancha na janela" aria-label="Enquadrar desenho" variant="ghost" size="icon" className="h-7 w-7 rounded-none" onClick={() => canvas.current?.fit()}><Maximize2 className="h-4 w-4" /></Button>
+            <Button title="Vista anterior — retorna ao enquadramento anterior" aria-label="Vista anterior" variant="ghost" size="icon" className="h-7 w-7 rounded-none" disabled={!canPreviousView} onClick={() => canvas.current?.previousView()}><RotateCcw className="h-4 w-4" /></Button>
+            <Button title="Zoom por janela — clique em dois cantos da região desejada" aria-label="Zoom por janela" aria-pressed={!tool && editMode === 'zoomWindow'} variant="ghost" size="icon" className={`h-7 w-7 rounded-none ${!tool && editMode === 'zoomWindow' ? 'bg-sky-100 text-sky-900 ring-1 ring-sky-400' : ''}`} onClick={() => { reset(); setEditMode('zoomWindow'); }}><Scan className="h-4 w-4" /></Button>
+            <Button title="Visualizar/ocultar medidas — alterna os textos; mantém as marcações" aria-label="Visualizar/ocultar medidas" aria-pressed={showMeasureValues} variant="ghost" size="icon" className={`h-7 w-7 rounded-none ${showMeasureValues ? 'bg-sky-100 text-sky-900' : ''}`} onClick={() => setShowMeasureValues(value => !value)}><Eye className="h-4 w-4" /></Button>
+            <Button title="Hachura das superfícies — alterna o preenchimento das áreas" aria-label="Hachura das superfícies" aria-pressed={showHatching} variant="ghost" size="icon" className={`h-7 w-7 rounded-none ${showHatching ? 'bg-sky-100 text-sky-900' : ''}`} onClick={() => setShowHatching(value => !value)}><Hash className="h-4 w-4" /></Button>
             <Button title="Deslocar vista — arraste o desenho; o botão central também desloca" aria-label="Deslocar vista" aria-pressed={!tool && editMode === 'pan'} variant="ghost" size="icon" className={`h-7 w-7 rounded-none ${!tool && editMode === 'pan' ? 'bg-sky-100 text-sky-900 ring-1 ring-sky-400' : ''}`} onClick={() => { reset(); setEditMode('pan'); }}><Move className="h-4 w-4" /></Button>
           </div>
           <div className="flex items-center gap-0.5 border-r border-slate-300 pr-1" aria-label="Capturas para máscaras">
-            <Button title="Capturas para máscaras — escolha pontos geométricos identificados no DXF" aria-label="Capturas para máscaras" aria-pressed={captureDialog || capturesEnabled} variant="ghost" size="icon" className={`h-7 w-7 rounded-none ${captureDialog || capturesEnabled ? 'bg-sky-100 text-sky-900 ring-1 ring-sky-400' : ''}`} onClick={() => { setPendingCaptures(captureKinds); setPendingCapturesEnabled(capturesEnabled); setPendingTrackingEnabled(trackingEnabled); setCaptureDialog(true); }}><Magnet className="h-4 w-4" /></Button>
+            <Button title="Capturas para máscaras — escolha pontos geométricos identificados no DXF" aria-label="Capturas para máscaras" aria-pressed={captureDialog || capturesEnabled} variant="ghost" size="icon" className={`h-7 w-7 rounded-none ${captureDialog || capturesEnabled ? 'bg-sky-100 text-sky-900 ring-1 ring-sky-400' : ''}`} onClick={() => { setCaptureDialog(true); }}><Magnet className="h-4 w-4" /></Button>
           </div>
           <div className="flex items-center gap-0.5 border-r border-slate-300 pr-1" aria-label="Levantamento">
              {MEASURE_KINDS.map(kind => {
@@ -307,31 +317,26 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
             <Button title="Calibrar escala — marque dois pontos e informe a distância em metros" aria-label="Calibrar escala" aria-pressed={tool === 'calibrate'} variant="ghost" size="icon" className={`h-7 w-7 rounded-none ${tool === 'calibrate' ? 'bg-sky-100 text-sky-900 ring-1 ring-sky-400' : ''}`} disabled={locked || !drawable} onClick={() => { setError(''); setTool('calibrate'); setDraft([]); setPendingScale(undefined); }}><Crosshair className="h-4 w-4" /></Button>
           </div>
           <div className="flex items-center gap-0.5 border-r border-slate-300 pr-1" aria-label="Edição das marcações">
-            {([['select', MousePointer2, 'Selecionar/Editar medida', 'selecione uma marcação para conferir ou editar'], ['deleteMeasure', Trash2, 'Apagar medida', 'remove a marcação e limpa a célula vinculada'], ['addPoint', Plus, 'Adicionar ponto', 'insere um ponto na medida selecionada'], ['deletePoint', X, 'Apagar ponto', 'clique no ponto de uma medida existente'], ['movePoint', Move, 'Mover ponto', 'arraste um vértice da medida selecionada']] as const).map(([mode, Icon, name, description]) => <Button key={mode} title={`${name} — ${description}`} aria-label={name} aria-pressed={!tool && editMode === mode} variant="ghost" size="icon" className={`h-7 w-7 rounded-none ${!tool && editMode === mode ? 'bg-sky-100 text-sky-900 ring-1 ring-sky-400' : ''}`} disabled={locked && mode !== 'select' || (mode === 'addPoint' || mode === 'deletePoint' || mode === 'movePoint') && !selectedMeasure} onClick={() => { reset(); setEditMode(mode); }}><Icon className="h-4 w-4" /></Button>)}
+            {([['select', MousePointer2, 'Selecionar/Editar medida', 'selecione uma marcação para conferir ou editar'], ['deleteMeasure', Trash2, 'Apagar medida', 'remove a marcação e limpa a célula vinculada'], ['addPoint', Plus, 'Adicionar ponto', 'acrescenta um ponto ao final da medida selecionada'], ['deletePoint', X, 'Apagar ponto', 'clique no ponto de uma medida existente'], ['movePoint', Move, 'Mover ponto', 'clique no vértice e na nova posição, ou arraste']] as const).map(([mode, Icon, name, description]) => <Button key={mode} title={`${name} — ${description}`} aria-label={name} aria-pressed={!tool && editMode === mode} variant="ghost" size="icon" className={`h-7 w-7 rounded-none ${!tool && editMode === mode ? 'bg-sky-100 text-sky-900 ring-1 ring-sky-400' : ''}`} disabled={locked && mode !== 'select' || (mode === 'addPoint' || mode === 'deletePoint' || mode === 'movePoint') && !selectedMeasure || mode === 'addPoint' && !!selectedMeasure && !!fixedPointCount(selectedMeasure.kind)} onClick={() => { reset(); setEditMode(mode); }}><Icon className="h-4 w-4" /></Button>)}
             <Button title="Desfazer — reverte a última alteração da planta nesta sessão" aria-label="Desfazer" variant="ghost" size="icon" className="h-7 w-7 rounded-none" disabled={locked || !history.current.length} onClick={() => { void undoLast(); }}><Undo2 className="h-4 w-4" /></Button>
           </div>
           <div className="flex w-full min-w-0 flex-wrap items-center gap-1 border-r border-slate-300 pr-2 sm:w-auto" aria-label="Desenho">
             <Button title="Lista de plantas — selecione, adicione ou apague uma prancha" aria-label="Lista de plantas" aria-expanded={showDrawings} variant="ghost" size="icon" className="h-7 w-7 rounded-none" onClick={() => { setError(''); setShowDrawings(true); }}><List className="h-4 w-4" /></Button>
             <select aria-label="Planta" title="Selecionar planta" className="h-7 w-44 max-w-full min-w-0 border border-slate-300 bg-white px-1 text-xs" value={active} onChange={e => { setActive(e.target.value); setPage(1); setPages(1); setSelected(''); reset(); }}>{availablePlans.map(p => <option key={p.id} value={p.id}>{p.name}{p.floor ? ` · ${p.floor}` : ''}</option>)}</select>
             {(plan.kind === 'pdf' || plan.kind === 'dwf') && <select aria-label="Página" title={plan.kind === 'dwf' ? 'Prancha do DWF' : 'Página do PDF'} className="h-7 w-40 max-w-full min-w-0 border border-slate-300 bg-white px-1 text-xs" value={page} onChange={e => { setPage(Number(e.target.value)); reset(); setSelected(''); }}>{Array.from({ length: pages }, (_, i) => <option key={i} value={i + 1}>{plan.kind === 'dwf' ? `${i + 1}. ${sheetInfo[i]?.name ?? 'Prancha'}${sheetInfo[i] && !sheetInfo[i].supported ? ' · indisponível' : ''}` : `Pág. ${i + 1}`}</option>)}</select>}
-            {plan.kind === 'dxf' && <details className="relative"><summary className="flex h-7 cursor-pointer list-none items-center gap-1 border border-slate-300 bg-white px-1.5" title="Layers — mostre ou oculte camadas identificadas no DXF"><Layers3 className="h-4 w-4" />Layers ({canvasLayers.length})</summary><div className="absolute left-0 top-7 z-30 max-h-60 w-60 overflow-auto border border-slate-300 bg-white p-2 shadow-md">{canvasLayers.map(name => <label key={name} className="flex items-center gap-2 py-1 text-xs"><input type="checkbox" checked={!hiddenLayers.includes(name)} onChange={e => canvas.current?.toggleLayer(name, e.target.checked)} />{name}</label>)}</div></details>}
+            {plan.kind === 'dxf' && <details className="relative"><summary className="flex h-7 cursor-pointer list-none items-center gap-1 border border-slate-300 bg-white px-1.5" title="Layers — mostre ou oculte camadas identificadas no DXF"><Layers3 className="h-4 w-4" />Layers ({canvasLayers.length})</summary><div className="absolute left-0 top-7 z-30 max-h-60 w-60 overflow-auto border border-slate-300 bg-white p-2 shadow-md">{canvasLayers.map(name => <label key={name} className="flex items-center gap-2 py-1 text-xs"><input type="checkbox" checked={!hiddenLayers.includes(name)} onChange={e => { const visible = e.target.checked; canvas.current?.toggleLayer(name, visible); setHiddenLayers(previous => visible ? previous.filter(item => item !== name) : [...previous.filter(item => item !== name), name]); }} />{name}</label>)}</div></details>}
             {plan.kind === 'dwf' && <span title="Layers indisponíveis: este leitor DWF não fornece entidades de layer confiáveis para esta prancha." className="flex h-7 items-center gap-1 border border-slate-300 px-1.5 text-slate-400"><Layers3 className="h-4 w-4" />Layers</span>}
             <Button title="Configurações da planta — nome, pavimento e unidade do DXF" aria-label="Configurações da planta" aria-expanded={showSettings} variant="ghost" size="icon" className="h-7 w-7 rounded-none" onClick={() => setShowSettings(v => !v)}><Settings2 className="h-4 w-4" /></Button>
           </div>
           <div className="flex shrink-0 items-center gap-1" aria-label="Quantitativo">
-            {embedded && selectedMeasure && !tool ? <Input key={`${selectedMeasure.id}-${selectedMeasure.name}`} aria-label="Renomear marcação selecionada" title="Renomear marcação selecionada" className="h-7 w-32 rounded-none border-slate-300 bg-white px-1.5 text-xs" defaultValue={selectedMeasure.name} disabled={locked} onKeyDown={fieldKey} onBlur={e => { const name = e.target.value.trim(); if (name && name !== selectedMeasure.name) void update({ ...plan, measures: plan.measures.map(measure => measure.id === selectedMeasure.id ? { ...measure, name } : measure) }); }} /> : <Input aria-label="Nome do levantamento" title="Nome do levantamento em curso" className="h-7 w-32 rounded-none border-slate-300 bg-white px-1.5 text-xs" placeholder="Nome do item" value={draftName} disabled={!tool || tool === 'calibrate' || locked} onChange={e => setDraftName(e.target.value)} />}
-             <Button title="Concluir traçado — grava a medida na célula escolhida" aria-label="Concluir traçado" variant="ghost" size="icon" className="h-7 w-7 rounded-none" disabled={locked || !drawable || !tool || tool === 'calibrate' || draft.length < minimumPoints(tool)} onClick={finish}><Check className="h-4 w-4" /></Button>
+            {embedded && selectedMeasure && !tool ? <Input key={`${selectedMeasure.id}-${selectedMeasure.name}`} aria-label="Renomear marcação selecionada" title="Renomear marcação selecionada" className="h-7 w-32 rounded-none border-slate-300 bg-white px-1.5 text-xs" defaultValue={selectedMeasure.name} disabled={locked} onKeyDown={fieldKey} onBlur={e => { const name = e.target.value.trim(); if (name && name !== selectedMeasure.name) void reviseMeasure({ ...selectedMeasure, name }); }} /> : <Input aria-label="Nome do levantamento" title="Nome do levantamento em curso" className="h-7 w-32 rounded-none border-slate-300 bg-white px-1.5 text-xs" placeholder="Nome do item" value={draftName} disabled={!tool || tool === 'calibrate' || locked} onChange={e => setDraftName(e.target.value)} />}
+             <Button title="Concluir traçado — grava a medida na célula escolhida" aria-label="Concluir traçado" variant="ghost" size="icon" className="h-7 w-7 rounded-none" disabled={locked || !drawable || !tool || tool === 'calibrate' || draft.length < minimumPoints(tool)} onClick={() => { void finish(); }}><Check className="h-4 w-4" /></Button>
              <Button title="Cancelar traçado — descarta os pontos ainda não concluídos" aria-label="Cancelar traçado" variant="ghost" size="icon" className="h-7 w-7 rounded-none" disabled={!tool} onClick={reset}><X className="h-4 w-4" /></Button>
              {embedded && onUseMeasure && selectedMeasure && !tool && <Button title="Usar a marcação selecionada na célula escolhida" aria-label="Usar marcação selecionada" variant="outline" size="sm" className="h-7 rounded-none px-2 text-xs" disabled={locked || quantity(selectedMeasure.kind, selectedMeasure.points, plan.scales[selectedMeasure.page] ?? null, selectedMeasure.heightMeters) === null} onClick={() => { void applyStoredMeasure(selectedMeasure); }}>Usar {format(quantity(selectedMeasure.kind, selectedMeasure.points, plan.scales[selectedMeasure.page] ?? null, selectedMeasure.heightMeters))} {measureUnit(selectedMeasure.kind, plan.scales[selectedMeasure.page] ?? null)}</Button>}
               {embedded && selectedMeasure && !tool && <Button title="Apagar marcação selecionada — limpa a célula vinculada após validar o saldo" aria-label="Excluir marcação selecionada" variant="ghost" size="icon" className="h-7 w-7 rounded-none text-red-700" disabled={locked} onClick={() => { void removeMeasure(selectedMeasure.id); }}><Trash2 className="h-4 w-4" /></Button>}
           </div>
         </div>
-        {captureDialog && <div role="dialog" aria-label="Capturas para máscaras" className="relative z-20 w-full border border-slate-400 bg-white p-3 text-xs shadow-md">
-          <div className="flex items-center gap-2"><strong>Capturas para máscaras</strong><span className="text-slate-500">{plan.kind === 'dxf' ? 'Geometria identificada no espaço de modelo DXF.' : 'Esta folha não oferece entidades identificáveis; marque livremente.'}</span></div>
-          <div className="mt-2 flex flex-wrap gap-4"><label className="flex items-center gap-1"><input type="checkbox" checked={pendingCapturesEnabled} disabled={plan.kind !== 'dxf' || !availableCaptures.length} onChange={event => setPendingCapturesEnabled(event.target.checked)} />Ativar capturas</label><label className="flex items-center gap-1"><input type="checkbox" checked={pendingTrackingEnabled} disabled={plan.kind !== 'dxf' || !availableCaptures.length} onChange={event => setPendingTrackingEnabled(event.target.checked)} />Ativar rastreamento</label></div>
-          <div className="mt-2 grid gap-x-4 gap-y-1 sm:grid-cols-2 lg:grid-cols-4">{CAPTURE_KINDS.map(kind => { const enabled = plan.kind === 'dxf' && availableCaptures.includes(kind); return <label key={kind} className={`flex items-center gap-1 ${enabled ? '' : 'text-slate-400'}`} title={enabled ? `${CAPTURE_LABELS[kind]} — capturar na geometria reconhecida` : `${CAPTURE_LABELS[kind]} — geometria não identificada nesta planta`}><input type="checkbox" checked={pendingCaptures.includes(kind) && enabled} disabled={!enabled} onChange={event => setPendingCaptures(previous => event.target.checked ? [...previous, kind] : previous.filter(item => item !== kind))} />{CAPTURE_LABELS[kind]}</label>; })}</div>
-          <div className="mt-3 flex items-center gap-2"><Button size="sm" className="h-7 text-xs" onClick={() => { setCaptureKinds(pendingCaptures.filter(kind => availableCaptures.includes(kind))); setCapturesEnabled(pendingCapturesEnabled); setTrackingEnabled(pendingTrackingEnabled); setCaptureDialog(false); }}>Confirmar</Button><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setPendingCaptures([]); setPendingCapturesEnabled(false); setPendingTrackingEnabled(false); }}>Desmarcar todas</Button><Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setCaptureDialog(false)}>Cancelar</Button></div>
-        </div>}
+        {captureDialog && <PlanCaptureDialog available={plan.kind === 'dxf' ? availableCaptures : []} enabled={capturesEnabled} tracking={trackingEnabled} kinds={captureKinds} onClose={() => setCaptureDialog(false)} onAccept={(enabled, tracking, kinds) => { setCapturesEnabled(enabled); setTrackingEnabled(tracking); setCaptureKinds(kinds); setCaptureDialog(false); }} />}
         {showSettings && <div className="flex flex-wrap items-end gap-2 border border-slate-300 bg-white p-2 text-xs">
           <label className="min-w-[180px] flex-1">Nome da planta<Input className="h-7 rounded-none text-xs" onKeyDown={fieldKey} key={`${plan.id}-name-${plan.name}`} defaultValue={plan.name} disabled={locked} onBlur={e => { const name = e.target.value.trim(); if (name && name !== plan.name) void update({ ...plan, name }); }} /></label>
           <label className="min-w-[140px]">Pavimento<Input className="h-7 rounded-none text-xs" onKeyDown={fieldKey} key={`${plan.id}-floor-${plan.floor}`} defaultValue={plan.floor} disabled={locked} placeholder="Ex.: Térreo" onBlur={e => { if (e.target.value !== plan.floor) void update({ ...plan, floor: e.target.value }); }} /></label>
@@ -347,8 +352,8 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
           <Button size="sm" variant="ghost" className="h-7 rounded-none text-xs" disabled={!draft.length} onClick={() => setDraft(d => d.slice(0, -1))}><Undo2 className="h-3.5 w-3.5" />Retirar último ponto</Button>
         </div>}
          {pendingScale !== undefined && <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-slate-900"><p>Nova escala: {pendingScale.toLocaleString('pt-BR', { maximumSignificantDigits: 8 })} m por unidade do desenho. A escala pertence à prancha; os lançamentos vinculados serão validados antes da atualização.</p>{visibleMeasures.filter(m => m.page === page && m.kind !== 'count').map(m => <p key={m.id}>{m.name}: {format(quantity(m.kind, m.points, scale, m.heightMeters))} {measureUnit(m.kind, scale)} → {format(quantity(m.kind, m.points, pendingScale, m.heightMeters))} {measureUnit(m.kind, pendingScale)}</p>)}<Button size="sm" disabled={locked} onClick={() => { void confirmScale(); }}>Confirmar escala</Button> <Button size="sm" variant="outline" onClick={() => setPendingScale(undefined)}>Voltar</Button></div>}
-        <PlanCanvas ref={canvas} plan={{ ...plan, measures: visibleMeasures }} page={page} draft={draft} draftKind={tool} drawing={!!tool && !locked && drawable} selected={selected} readOnly={locked} executedMeasureIds={executedMeasureIds} onPages={setPages} onSheets={setSheetInfo} onReady={setCanvasReady} onCursor={setCursor} onLayers={receiveLayers} onCaptureAvailable={setAvailableCaptures} background={background} ortho={ortho} capturesEnabled={capturesEnabled && plan.kind === 'dxf'} trackingEnabled={trackingEnabled} captureKinds={captureKinds.filter(kind => availableCaptures.includes(kind))} editMode={editMode} visible={!hiddenPlans.includes(plan.id)} onFinish={() => { void finish(); }} onPoint={p => setDraft(d => tool === 'calibrate' && d.length >= 2 ? [p] : tool && tool !== 'calibrate' && fixedPointCount(tool) && d.length >= 2 ? [p] : [...d, p])} onSelect={setSelected} onMove={(id, index, point) => { void moveMeasurePoint(id, index, point); }} onDeleteMeasure={id => { void removeMeasure(id); }} onAddPoint={(id, point) => { void addMeasurePoint(id, point); }} onDeletePoint={(id, index) => { void deleteMeasurePoint(id, index); }} />
-        <div role="status" className="flex min-h-7 items-center gap-2 border border-slate-300 bg-[#e9ecef] px-2 text-xs text-slate-700"><strong>{tool === 'calibrate' ? 'Calibração' : tool ? labels[tool] : editMode === 'pan' ? 'Deslocamento' : editMode === 'deleteMeasure' ? 'Apagar medida' : editMode === 'addPoint' ? 'Adicionar ponto' : editMode === 'deletePoint' ? 'Apagar ponto' : editMode === 'movePoint' ? 'Mover ponto' : 'Seleção'}</strong><span className="border-l border-slate-400 pl-2">{!drawable ? 'Aguarde a renderização ou mostre uma prancha compatível.' : tool === 'calibrate' ? 'Marque dois pontos e informe a distância conhecida.' : tool ? 'Clique para marcar; botão direito conclui, botão central desloca e a roda amplia ou reduz.' : editMode === 'addPoint' ? 'Selecione uma medida e clique onde deseja inserir o ponto.' : editMode === 'deletePoint' ? 'Clique no ponto que deseja remover.' : editMode === 'movePoint' ? 'Selecione a medida e arraste um ponto.' : editMode === 'deleteMeasure' ? 'Clique na marcação que deseja excluir; o subtotal será validado.' : embedded ? selectedMeasure ? `Marcação ${selectedMeasure.name} selecionada; use o resultado na barra superior.` : 'Clique numa marcação existente para usá-la na célula, ou inicie uma nova contagem.' : 'Arraste ou segure o botão central para deslocar; use a roda do mouse para zoom.'}</span></div>
+        <PlanCanvas ref={canvas} plan={{ ...plan, measures: visibleMeasures }} page={page} draft={draft} draftKind={tool} drawing={!!tool && !locked && drawable} selected={selected} readOnly={locked} executedMeasureIds={executedMeasureIds} onPages={setPages} onSheets={setSheetInfo} onReady={setCanvasReady} onCursor={setCursor} onLayers={receiveLayers} onCaptureAvailable={setAvailableCaptures} background={background} ortho={ortho} capturesEnabled={capturesEnabled && plan.kind === 'dxf'} trackingEnabled={trackingEnabled} captureKinds={captureKinds.filter(kind => availableCaptures.includes(kind))} editMode={editMode} visible={!hiddenPlans.includes(plan.id)} onFinish={() => { void finish(); }} onPoint={addDraftPoint} showMeasureValues={showMeasureValues} showHatching={showHatching} onViewHistory={setCanPreviousView} onSelect={setSelected} onMove={(id, index, point) => { void moveMeasurePoint(id, index, point); }} onDeleteMeasure={id => { void removeMeasure(id); }} onAddPoint={(id, point) => { void addMeasurePoint(id, point); }} onDeletePoint={(id, index) => { void deleteMeasurePoint(id, index); }} />
+        <div role="status" className="flex min-h-7 items-center gap-2 border border-slate-300 bg-[#e9ecef] px-2 text-xs text-slate-700"><strong>{tool === 'calibrate' ? 'Calibração' : tool ? labels[tool] : editMode === 'pan' ? 'Deslocamento' : editMode === 'zoomWindow' ? 'Zoom por janela' : editMode === 'deleteMeasure' ? 'Apagar medida' : editMode === 'addPoint' ? 'Adicionar ponto' : editMode === 'deletePoint' ? 'Apagar ponto' : editMode === 'movePoint' ? 'Mover ponto' : 'Seleção'}</strong><span className="border-l border-slate-400 pl-2">{!drawable ? 'Aguarde a renderização ou mostre uma prancha compatível.' : tool === 'calibrate' ? 'Marque dois pontos e informe a distância conhecida.' : tool ? fixedPointCount(tool) ? 'Clique em dois pontos; o segundo conclui. Botão central desloca e a roda controla o zoom.' : 'Clique para marcar; botão direito conclui, botão central desloca e a roda amplia ou reduz.' : editMode === 'addPoint' ? 'Selecione uma medida e clique onde deseja inserir o ponto.' : editMode === 'deletePoint' ? 'Clique no ponto que deseja remover.' : editMode === 'movePoint' ? 'Clique no vértice e na nova posição, ou arraste. Escape cancela o movimento.' : editMode === 'zoomWindow' ? 'Clique em dois cantos para enquadrar a região; Escape cancela.' : editMode === 'deleteMeasure' ? 'Clique na marcação que deseja excluir; o subtotal será validado.' : embedded ? selectedMeasure ? `Marcação ${selectedMeasure.name} selecionada; use o resultado na barra superior.` : 'Clique numa marcação existente para usá-la na célula, ou inicie uma nova contagem.' : 'Arraste ou segure o botão central para deslocar; use a roda do mouse para zoom.'}</span></div>
         {!embedded && <section className="min-w-0 overflow-hidden border border-slate-300 bg-white" aria-label="Detalhe dos levantamentos">
           <button className="flex w-full items-center gap-2 border-b border-slate-300 bg-[#e9ecef] px-2 py-1 text-left text-xs font-semibold hover:bg-slate-100" onClick={() => setShowDetails(v => !v)} aria-expanded={showDetails}>{showDetails ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}Detalhe dos levantamentos <span className="ml-auto text-xs font-normal">{plan.measures.length} {plan.measures.length === 1 ? 'registro' : 'registros'}</span></button>
           {showDetails && <div className="h-52 min-h-36 max-h-[55vh] resize-y overflow-auto">

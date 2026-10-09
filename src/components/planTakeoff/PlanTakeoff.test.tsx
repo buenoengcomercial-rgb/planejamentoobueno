@@ -28,6 +28,7 @@ describe('teste independente de levantamento', () => {
     fireEvent.click(screen.getByText('Ponto de teste'));
     fireEvent.click(screen.getByRole('button', { name: 'Concluir traçado' }));
     await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.objectContaining({ id: 'p' }), expect.objectContaining({ kind: 'count', points: [{ x: 1, y: 1 }, { x: 1, y: 1 }, { x: 1, y: 1 }] }), 3));
+    expect(screen.getByText('Salvo no navegador')).toBeInTheDocument();
     expect(saveTakeoffs).toHaveBeenCalledWith('user/project', expect.arrayContaining([expect.objectContaining({ measures: [expect.objectContaining({ kind: 'count', taskId: 'task-1', logId: 'day-1' })] })]), [example]);
   });
   it('conclui pelo botão direito e mantém a ferramenta ativa para a próxima linha', async () => {
@@ -189,8 +190,26 @@ describe('teste independente de levantamento', () => {
     fireEvent.click(length);
     fireEvent.click(screen.getByText('Ponto de teste'));
     fireEvent.click(screen.getByText('Segundo ponto de teste'));
-    fireEvent.click(screen.getByRole('button', { name: 'Concluir traçado' }));
     await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'linearLength' }), 5));
+    expect(screen.getByRole('button', { name: 'Comprimento linear' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('0 pontos')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Ponto de teste'));
+    fireEvent.click(screen.getByText('Segundo ponto de teste'));
+    await waitFor(() => expect(onUseMeasure).toHaveBeenCalledTimes(2));
+  });
+  it('não descarta dois pontos recusados pelo saldo nem duplica a conclusão', async () => {
+    const onUseMeasure = vi.fn().mockReturnValue(false);
+    render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded chapterId="building-1" onUseMeasure={onUseMeasure} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Comprimento linear' }));
+    fireEvent.click(screen.getByText('Ponto de teste'));
+    fireEvent.click(screen.getByText('Segundo ponto de teste'));
+    fireEvent.click(screen.getByText('Botão direito de teste'));
+    await waitFor(() => expect(saveTakeoffs).toHaveBeenCalledTimes(2));
+    expect(onUseMeasure).toHaveBeenCalledOnce();
+    expect(screen.getByText('2 pontos')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Ponto de teste'));
+    expect(screen.getByText('2 pontos')).toBeInTheDocument();
+    expect(onUseMeasure).toHaveBeenCalledOnce();
   });
   it('preserva o traçado quando falha o salvamento e permite nova tentativa', async () => {
     vi.mocked(saveTakeoffs).mockRejectedValueOnce(new Error('quota'));
@@ -203,6 +222,20 @@ describe('teste independente de levantamento', () => {
     expect(screen.getByRole('button', { name: 'Concluir traçado' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Concluir traçado' }));
     await screen.findByText('1 un');
+  });
+  it('renomeia pela mesma validação da célula vinculada e reverte uma recusa', async () => {
+    const measure = { id: 'placas', name: 'Placas executadas', kind: 'count' as const, page: 1, points: [{ x: 1, y: 2 }], taskId: 'task-1', logId: 'day-1' };
+    const original = { ...example, measures: [measure] };
+    vi.mocked(readTakeoffs).mockResolvedValueOnce([original]);
+    const update = vi.fn().mockReturnValue(false);
+    render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" measureContext={{ taskId: 'task-1', logId: 'day-1' }} linkedMeasureIds={['placas']} focusMeasure={{ planId: 'p', page: 1, measureId: 'placas' }} onUpdateMeasure={update} />);
+    const name = await screen.findByRole('textbox', { name: 'Renomear marcação selecionada' });
+    fireEvent.change(name, { target: { value: 'Novo nome' } });
+    expect(saveTakeoffs).not.toHaveBeenCalled();
+    fireEvent.blur(name);
+    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: 'p' }), expect.objectContaining({ name: 'Novo nome' }), 1));
+    await waitFor(() => expect(saveTakeoffs).toHaveBeenLastCalledWith('obra', [original], expect.any(Array)));
+    expect(screen.getByRole('textbox', { name: 'Renomear marcação selecionada' })).toHaveValue('Placas executadas');
   });
   it('visualizador não grava nem importa', async () => {
     render(<PlanTakeoff storageKey="viewer" readOnly />);

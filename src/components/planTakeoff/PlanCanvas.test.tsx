@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import PlanCanvas from './PlanCanvas';
+import PlanCanvas, { type PlanCanvasHandle } from './PlanCanvas';
 import type { TakeoffPlan } from '@/lib/planTakeoff';
 
 const plan: TakeoffPlan = { id: 'plan-1', name: 'Planta.png', floor: 'Térreo', kind: 'image', file: new Blob(['image']), scales: {}, measures: [] };
@@ -16,7 +17,9 @@ beforeEach(() => {
   vi.spyOn(SVGElement.prototype, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 800, height: 500, right: 800, bottom: 500, x: 0, y: 0, toJSON: () => ({}) });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  cleanup();
+  await act(async () => {});
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   if (originalCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL });
@@ -26,6 +29,74 @@ afterEach(() => {
 });
 
 describe('gestos no desenho', () => {
+  it('move por dois cliques sem deslocar a vista e cancela a seleção com Escape', async () => {
+    const onMove = vi.fn();
+    render(<PlanCanvas plan={{ ...plan, measures: [{ id: 'm', name: 'Percurso', kind: 'length', page: 1, points: [{ x: 0, y: 0 }, { x: 3, y: 4 }] }] }} page={1} draft={[]} drawing={false} selected="m" editMode="movePoint" readOnly={false} onPoint={vi.fn()} onSelect={vi.fn()} onMove={onMove} onPages={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByText('Carregando planta…')).not.toBeInTheDocument());
+    const svg = screen.getByLabelText('Planta e marcações');
+    const vertex = svg.querySelector('[data-measure-point="m:0"]')!;
+    const pointer = (target: Element, type: string, x: number, y: number) => fireEvent(target, new MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y }));
+    const before = svg.getAttribute('viewBox');
+    pointer(vertex, 'pointerdown', 100, 100); pointer(svg, 'pointerup', 100, 100);
+    expect(onMove).not.toHaveBeenCalled();
+    pointer(svg, 'pointermove', 150, 150);
+    pointer(svg, 'pointerdown', 150, 150); pointer(svg, 'pointerup', 150, 150);
+    expect(onMove).toHaveBeenCalledOnce();
+    expect(onMove).toHaveBeenCalledWith('m', 0, expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) }));
+    expect(svg.getAttribute('viewBox')).toBe(before);
+    pointer(vertex, 'pointerdown', 100, 100); pointer(svg, 'pointerup', 100, 100);
+    fireEvent.keyDown(svg, { key: 'Escape' });
+    pointer(svg, 'pointerdown', 200, 200); pointer(svg, 'pointerup', 200, 200);
+    expect(onMove).toHaveBeenCalledOnce();
+  });
+  it('mostra total e segmentos, mantém tamanho no zoom e oculta só os valores', async () => {
+    const data = { ...plan, scales: { 1: 1 }, measures: [{ id: 'm', name: 'Percurso', kind: 'length' as const, page: 1, points: [{ x: 0, y: 0 }, { x: 3, y: 0 }, { x: 3, y: 4 }] }] };
+    const props = { plan: data, page: 1, draft: [], drawing: false, selected: '', readOnly: false, onPoint: vi.fn(), onSelect: vi.fn(), onMove: vi.fn(), onPages: vi.fn() };
+    const { rerender } = render(<PlanCanvas {...props} />);
+    await waitFor(() => expect(screen.queryByText('Carregando planta…')).not.toBeInTheDocument());
+    const svg = screen.getByLabelText('Planta e marcações');
+    expect(screen.getByText('7 m')).toBeInTheDocument();
+    expect(screen.getByText('3 m')).toBeInTheDocument();
+    expect(screen.getByText('4 m')).toBeInTheDocument();
+    const width = Number(svg.getAttribute('viewBox')!.split(' ')[2]);
+    const font = Number(screen.getByText('7 m').getAttribute('font-size'));
+    fireEvent.wheel(svg, { deltaY: -100 });
+    expect(Number(screen.getByText('7 m').getAttribute('font-size')) / Number(svg.getAttribute('viewBox')!.split(' ')[2])).toBeCloseTo(font / width);
+    rerender(<PlanCanvas {...props} showMeasureValues={false} />);
+    expect(screen.queryByText('7 m')).not.toBeInTheDocument();
+    expect(svg.querySelector('polyline')).not.toBeNull();
+  });
+  it('enquadra por dois cantos e retorna à vista anterior sem alterar pontos', async () => {
+    const ref = createRef<PlanCanvasHandle>();
+    const onPoint = vi.fn();
+    render(<PlanCanvas ref={ref} plan={plan} page={1} draft={[]} drawing={false} selected="" editMode="zoomWindow" readOnly={false} onPoint={onPoint} onSelect={vi.fn()} onMove={vi.fn()} onPages={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByText('Carregando planta…')).not.toBeInTheDocument());
+    const svg = screen.getByLabelText('Planta e marcações');
+    const before = svg.getAttribute('viewBox');
+    for (const [x, y] of [[100, 100], [300, 250]]) {
+      fireEvent(svg, new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: x, clientY: y }));
+      fireEvent(svg, new MouseEvent('pointerup', { bubbles: true, button: 0, clientX: x, clientY: y }));
+    }
+    expect(svg.getAttribute('viewBox')).not.toBe(before);
+    expect(onPoint).not.toHaveBeenCalled();
+    act(() => ref.current!.previousView());
+    await waitFor(() => expect(svg.getAttribute('viewBox')).toBe(before));
+  });
+  it('enquadra no duplo clique central sem lançar pontos', async () => {
+    const onPoint = vi.fn();
+    render(<PlanCanvas plan={plan} page={1} draft={[]} draftKind="count" drawing selected="" readOnly={false} onPoint={onPoint} onSelect={vi.fn()} onMove={vi.fn()} onPages={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByText('Carregando planta…')).not.toBeInTheDocument());
+    const svg = screen.getByLabelText('Planta e marcações');
+    const fitted = svg.getAttribute('viewBox');
+    fireEvent.wheel(svg, { deltaY: -100 });
+    expect(svg.getAttribute('viewBox')).not.toBe(fitted);
+    for (let i = 0; i < 2; i++) {
+      fireEvent(svg, new MouseEvent('pointerdown', { bubbles: true, button: 1, clientX: 100, clientY: 100 }));
+      fireEvent(svg, new MouseEvent('pointerup', { bubbles: true, button: 1, clientX: 100, clientY: 100 }));
+    }
+    expect(svg.getAttribute('viewBox')).toBe(fitted);
+    expect(onPoint).not.toHaveBeenCalled();
+  });
   it('mostra pontos sem linha na contagem, desloca com botão central e conclui com direito', async () => {
     const onPoint = vi.fn();
     const onFinish = vi.fn();
