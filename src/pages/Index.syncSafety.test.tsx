@@ -92,6 +92,12 @@ vi.mock('@/lib/dailyReportCloudSync', () => ({
   loadOpenDailyReport: mocks.loadOpenDailyReport,
 }));
 
+vi.mock('@/lib/dailyReportDrafts', () => ({
+  readDailyReportDrafts: vi.fn(async () => ({})),
+  protectDailyReportDraft: vi.fn(async () => undefined),
+  clearDailyReportDraft: vi.fn(async () => true),
+}));
+
 vi.mock('@/lib/warehouseCloudCommit', async importOriginal => {
   const actual = await importOriginal<typeof import('@/lib/warehouseCloudCommit')>();
   return {
@@ -665,6 +671,16 @@ describe('segurança de sincronização da página da obra', () => {
     );
     expect(mocks.toastMessage).not.toHaveBeenCalledWith('Nada para desfazer');
     expect(readStoredProjectDraft(local.id)?.project.name).toBe('Alteração local não confirmada');
+  });
+
+  it('desfaz somente a operação local e mantém histórico posterior', async () => {
+    renderIndex();
+    await screen.findByTestId('project-workspace');
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar projeto' }));
+    expect(screen.getByTestId('project-name')).toHaveTextContent('Alteração geral pendente');
+    fireEvent.click(screen.getByRole('button', { name: 'Desfazer no teste' }));
+    expect(screen.getByTestId('project-name')).toHaveTextContent(makeProject().name);
+    expect(mocks.toastError).not.toHaveBeenCalled();
   });
 
   it('remove do projeto parcial um Diário cuja exclusão já foi confirmada', async () => {

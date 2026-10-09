@@ -155,10 +155,11 @@ function routineActivityForTask(
   chapterByTask: Map<string, { name: string; number?: string; path: WeeklyRoutineChapterPathItem[] }>,
   calendar: WeeklyRoutineCalendar,
   includeOutsideSchedule = false,
+  prepared?: { schedule: ReturnType<typeof taskSchedule>; completionDate: string | undefined; summary: ReturnType<typeof executionSummary> },
 ): WeeklyRoutineActivity | null {
-  const schedule = taskSchedule(task, calendar);
+  const schedule = prepared?.schedule ?? taskSchedule(task, calendar);
   const scheduledWeight = schedule.workDays.get(date) ?? 0;
-  const completionDate = completionDateForTask(task);
+  const completionDate = prepared ? prepared.completionDate : completionDateForTask(task);
   if (!includeOutsideSchedule && (completionDate ? completionDate !== date : scheduledWeight <= 0)) return null;
   const chapter = chapterByTask.get(task.id);
   return {
@@ -172,7 +173,7 @@ function routineActivityForTask(
     endDate: schedule.endDate,
     plannedQuantity: quantityForDay(task, date, 'planned', scheduledWeight || workDayWeight(date, calendar)),
     actualQuantity: quantityForDay(task, date, 'actual'),
-    ...executionSummary(task),
+    ...(prepared?.summary ?? executionSummary(task)),
     unit: task.unit || 'un',
     teamCode: task.team,
     responsible: task.responsible,
@@ -290,10 +291,17 @@ export function buildWeeklyRoutine(
   const reports = latestReportByDate(project);
   const chapterByTask = buildChapterByTask(project);
   const tasks = getAllTasks(project).filter(task => activeTask(task, excludedTaskIds));
+  // Compute each task's full calendar once per call, not once for every day.
+  // Call-local state avoids stale results after quantity/calendar corrections.
+  const prepared = new Map(tasks.map(task => [task, {
+    schedule: taskSchedule(task, calendar),
+    completionDate: completionDateForTask(task),
+    summary: executionSummary(task),
+  }]));
 
   return dates.map(date => {
     const activities = tasks
-      .map(task => routineActivityForTask(task, date, chapterByTask, calendar))
+      .map(task => routineActivityForTask(task, date, chapterByTask, calendar, false, prepared.get(task)))
       .filter((activity): activity is NonNullable<typeof activity> => activity !== null)
       .sort((a, b) => compareChapterPaths(a, b) || a.taskName.localeCompare(b.taskName, 'pt-BR', { sensitivity: 'base' }));
 

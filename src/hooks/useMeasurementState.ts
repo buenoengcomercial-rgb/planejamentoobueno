@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { registerPendingForm } from '@/lib/pendingFormNavigation';
 import type { ContractInfo, Project, SavedMeasurement } from '@/types/project';
 import { isoAddDays, suggestPeriodForNext, getProjectStartDate } from '@/components/measurement/measurementFormat';
 
@@ -128,6 +129,9 @@ export function useMeasurementState({ project, onProjectChange }: UseMeasurement
   const [editReason, setEditReason] = useState('');
   const [editingPriceTaskId, setEditingPriceTaskId] = useState<string | null>(null);
   const [editingPriceValue, setEditingPriceValue] = useState<string>('');
+  useEffect(() => registerPendingForm(`measurement:${project.id}`, 'Medição: correção em preenchimento', () =>
+    !!editingPriceTaskId || !!editReason.trim() || confirmGenerate || confirmEdit || confirmDelete),
+  [project.id, editingPriceTaskId, editReason, confirmGenerate, confirmEdit, confirmDelete]);
 
   // Recarrega cabeçalho + rascunho ao trocar de obra
   useEffect(() => {

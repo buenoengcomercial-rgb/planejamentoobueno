@@ -21,6 +21,7 @@ import { lazyWithReload } from '@/lib/lazyWithReload';
 import { filterProductionTasks, type ProductionStatusFilter } from '@/lib/productionTaskFilter';
 import { todayISO } from '@/lib/weeklyRoutine';
 import { logToProject, type AuditUserInfo } from '@/lib/audit';
+import { taskHasProtectedFacts } from '@/lib/productionDeletionSafety';
 import { registerPendingEditCommit } from '@/lib/pendingEditCommits';
 import { registerPendingForm } from '@/lib/pendingFormNavigation';
 import AuditHistoryPanel from '@/components/AuditHistoryPanel';
@@ -319,13 +320,25 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
   };
 
   const deletePhase = (phaseId: string) => {
+    const phase = project.phases.find(current => current.id === phaseId);
+    if (!phase) return;
+    if (phase.tasks.some(task => taskHasProtectedFacts(project, task))) {
+      toast.error('Este capítulo possui produção ou vínculos protegidos e não pode ser excluído.');
+      return;
+    }
     // Ao excluir um capítulo principal, promove os subcapítulos para principais
-    onProjectChange({
+    let updated: Project = {
       ...project,
       phases: project.phases
         .filter(p => p.id !== phaseId)
         .map(p => p.parentId === phaseId ? { ...p, parentId: undefined } : p),
-    });
+    };
+    const auditTasks = (task: Task) => {
+      updated = logToProject(updated, { ...auditActor, entityType: 'task', entityId: task.id, action: 'deleted', title: 'Tarefa excluída com capítulo', before: task, metadata: { phaseId } });
+      (task.children ?? []).forEach(auditTasks);
+    };
+    phase.tasks.forEach(auditTasks);
+    onProjectChange(logToProject(updated, { ...auditActor, entityType: 'project', entityId: project.id, action: 'deleted', title: 'Capítulo excluído', before: phase, metadata: { chapterId: phaseId } }));
   };
 
   /** Move um capítulo/subcapítulo para outro pai (ou promove a principal se newParentId === null). */
@@ -636,6 +649,10 @@ export default function TaskList({ project, onProjectChange, undoButton, readOnl
   const deleteTask = (phaseId: string, taskId: string) => {
     const before = project.phases.find(phase => phase.id === phaseId)?.tasks.find(task => task.id === taskId);
     if (!before) return;
+    if (taskHasProtectedFacts(project, before) || (before.children?.length ?? 0) > 0) {
+      toast.error('Esta tarefa possui produção, subtarefas ou vínculos protegidos e não pode ser excluída.');
+      return;
+    }
     const updated = {
       ...project,
       phases: project.phases.map(p =>

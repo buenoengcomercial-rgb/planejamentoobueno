@@ -20,6 +20,14 @@ afterEach(() => {
 });
 
 describe('transação de Produção', () => {
+  it('blocks a missing task/log before any atomic write, even with deletion audit', async () => {
+    const log = { id: 'protected', date: '2026-10-01', plannedQuantity: 0, actualQuantity: 2 };
+    const existing = { ...base, phases: base.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task, dailyLogs: [log] })) })) };
+    setCloudSnapshot(base.id, existing);
+    const next: Project = { ...existing, phases: [{ ...existing.phases[0], tasks: [] }], auditLogs: [{ id: 'delete', entityType: 'task', entityId: 'task-1', action: 'deleted', title: 'Fictício', at: '2026-10-09T00:00:00Z' }] };
+    await expect(syncProductionAtomically(next, stripNormalizedCollections(next), 'org-1', 'v1')).rejects.toThrow('Exclusão bloqueada');
+    expect(rpc).not.toHaveBeenCalled();
+  });
   it('persiste o vínculo de medição sem data de execução e sem alterar os apontamentos antigos', async () => {
     const legacy = { id: 'legacy', date: '2026-10-01', plannedQuantity: 10, actualQuantity: 2 };
     const existing = { ...base, phases: base.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task, dailyLogs: [legacy] })) })) };
