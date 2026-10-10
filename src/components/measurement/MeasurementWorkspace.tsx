@@ -26,6 +26,7 @@ import { nextMeasurementPeriod } from '@/lib/measurementPeriodSequence';
 import { rememberMeasurement, selectedMeasurement } from '@/lib/measurementSelection';
 import MeasurementLifecycleHistory from './MeasurementLifecycleHistory';
 import MeasurementLifecycleDialog, { type LifecycleSelection } from './MeasurementLifecycleDialog';
+import { periodDeletionBlock } from '@/lib/measurementLifecycle';
 const button = 'inline-flex h-8 items-center gap-1.5 rounded border border-slate-200 bg-white px-2.5 text-xs hover:bg-slate-50 disabled:opacity-40';
 
 /** Real workspace UI, with an explicitly injected persistence boundary. No Project setter. */
@@ -72,11 +73,18 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     try {
       const saved = await repository.commit(candidate, base.revision);
       if (saved.revision !== candidate.revision || saved.projectId !== candidate.projectId) throw new Error('Resposta de salvamento inválida.');
-      adopt(saved); setStatus(repository.savedLabel ?? 'Salvo neste navegador');
+      adopt(saved);
+      setActive(previous => {
+        if (saved.periods.some(p => p.id === previous)) return previous;
+        const remaining = saved.periods.at(-1)?.id ?? '';
+        if (remaining) rememberMeasurement(actor.id, saved.projectId, remaining);
+        return remaining;
+      });
+      setStatus(candidate.audit.at(-1)?.lifecycle?.kind === 'delete' ? 'Medição excluída · restaurável no Histórico' : repository.savedLabel ?? 'Salvo neste navegador');
       return true;
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setStatus('Não salvo · rascunho preservado'); setRecovery(true); return false; }
     finally { busy.current = false; setSaving(false); }
-  }, [repository, adopt]);
+  }, [repository, adopt, actor.id]);
   const apply = (edit: (w: Workspace) => Workspace, after?: () => void): boolean => {
     if (!current.current || busy.current || recovery) { setError('Resolva o salvamento pendente antes de continuar.'); return false; }
     try { const candidate = edit(current.current); void persist(candidate).then(ok => { if (ok) after?.(); }); return true; }
@@ -132,6 +140,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     {plan && <><dl className="grid grid-cols-3 gap-3 text-sm"><div>Serviços: <b>{plan.inventory.services}</b></div><div>Lançamentos antigos: <b>{plan.inventory.dailyLogs + plan.inventory.periodLogs}</b></div><div>Medições: <b>{plan.inventory.periods}</b></div><div>Plantas: <b>{plan.inventory.plans}</b></div><div>Marcações: <b>{plan.inventory.marks}</b></div><div>Divergências: <b>{plan.issues.length}</b></div></dl><div className="my-4 max-h-72 overflow-auto text-sm">{plan.issues.length ? plan.issues.map((i, n) => <p key={n} className="mb-1 text-amber-800">{i.message}</p>) : <p className="text-emerald-700">Quantidades conciliadas. Nenhuma diferença encontrada.</p>}</div><button className={button} disabled={saving || !actor.canEdit || plan.issues.length > 0} onClick={() => void initialize()}>Confirmar incorporação</button></>}
     {!plan && <p>Ativação aguardando inventário, backup e validação do servidor. Nenhum dado operacional foi migrado.</p>}{error && <p role="alert" className="mt-3 text-red-700">{error}</p>}</section>;
   const period = workspace.periods.find(p => p.id === active);
+  const deletionBlock = period ? periodDeletionBlock(workspace, period) : 'Selecione uma medição.';
   const locked = !actor.canEdit || !period || isPeriodLocked(period) || saving || recovery;
   const lines = period ? monthlyLines(workspace, active) : [];
   const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -165,7 +174,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       }}>{workspace.periods.map(p => <option key={p.id} value={p.id}>{p.number}ª medição</option>)}</select>
         <span className="text-xs text-muted-foreground">{period && `${fmtDateBR(period.startDate)} a ${fmtDateBR(period.endDate)}`}</span><span className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[10px]">{period && states[period.status]}</span>
         <button className={button} disabled={saving || recovery || !actor.canEdit} onClick={() => setPeriodOpen(true)}><Plus className="h-3.5 w-3.5"/>Nova medição</button>
-        <button className={button} disabled={saving || recovery || !actor.canEdit || !period} onClick={() => { setError(''); setLifecycle({ kind: 'delete', id: active }); }}>Excluir medição</button>
+        <button className={button} disabled={saving || recovery || !actor.canEdit || !!deletionBlock} title={deletionBlock ?? 'Excluir a última medição e manter cópia no Histórico'} onClick={() => { setError(''); setLifecycle({ kind: 'delete', id: active }); }}>Excluir medição</button>
 
         {approvedAdditives.filter(a => ['aprovado', 'contratado', 'aditivo_contratado'].includes(a.status ?? '') && !a.editUnlocked).map(additive => <button key={additive.id} className={button} disabled={!!locked} onClick={() => apply(w => { const result = incorporateApprovedAdditive(w, actor, additive, period!.number); if (result.warnings.length) setError(result.warnings.join(' ')); return result.workspace; })}>Incorporar novos serviços · {additive.name}</button>)}
         <button className={`${button} ml-auto`} disabled={locked || !actor.canReview} onClick={() => apply(w => freezeMeasuredPeriod(w, actor, active))}><FileCheck2 className="h-3.5 w-3.5"/>Enviar para fiscalização</button>
@@ -178,7 +187,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         setLifecycle(null); setExpanded(null); setClipboard(null);
         selectPeriod(current.current!.periods.some(p => p.id === id) ? id : current.current!.periods.at(-1)!.id);
       })}/>}
-    {recovery && <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm">Há um salvamento pendente. A troca de medição está bloqueada até a conferência. <button className={button} onClick={async () => { const pending = await repository.pending(); const latest = await repository.load(); if (!pending || !latest) return; if (latest.audit.some(a => a.id === pending.candidate.audit.at(-1)?.id)) { await repository.removePending?.(pending.candidate.audit.at(-1)!.id); adopt(latest); setRecovery(!!await repository.pending()); setError(''); setStatus(repository.savedLabel ?? 'Salvo neste navegador'); return; } if (latest.revision !== pending.baseRevision) { adopt(latest); setError('Conflito preservado. Exporte o rascunho para conferir as diferenças; nenhum valor será reaplicado automaticamente.'); return; } adopt(latest); if (await persist(pending.candidate)) setRecovery(false); }}>Tentar salvar novamente</button><button className={button} onClick={async () => { const p = await repository.pending(); const url = URL.createObjectURL(new Blob([JSON.stringify(p, null, 2)], { type: 'application/json' })); const a = document.createElement('a'); a.href = url; a.download = 'rascunho-medicao.json'; a.click(); URL.revokeObjectURL(url); }}>Baixar rascunho</button><button className={button} onClick={async () => { const p = await repository.pending(); if (p) await repository.archivePending(p.candidate.audit.at(-1)!.id); const latest = await repository.load(); if (latest) adopt(latest); setRecovery(!!await repository.pending()); setStatus('Versão salva carregada · rascunho arquivado'); setError(''); }}>Arquivar rascunho e usar versão salva</button></div>}
+    {recovery && <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm">Há um salvamento pendente. A troca de medição está bloqueada até a conferência. <button className={button} onClick={async () => { const pending = await repository.pending(); const latest = await repository.load(); if (!pending || !latest) return; if (latest.audit.some(a => a.id === pending.candidate.audit.at(-1)?.id)) { await repository.removePending?.(pending.candidate.audit.at(-1)!.id); adopt(latest); if (!latest.periods.some(p => p.id === active) && latest.periods.length) selectPeriod(latest.periods.at(-1)!.id); setLifecycle(null); setExpanded(null); setRecovery(!!await repository.pending()); setError(''); setStatus(pending.candidate.audit.at(-1)?.lifecycle?.kind === 'delete' ? 'Medição excluída · restaurável no Histórico' : repository.savedLabel ?? 'Salvo neste navegador'); return; } if (latest.revision !== pending.baseRevision) { adopt(latest); setError('Conflito preservado. Exporte o rascunho para conferir as diferenças; nenhum valor será reaplicado automaticamente.'); return; } adopt(latest); if (await persist(pending.candidate)) { setRecovery(false); setLifecycle(null); setExpanded(null); } }}>Tentar salvar novamente</button><button className={button} onClick={async () => { const p = await repository.pending(); const url = URL.createObjectURL(new Blob([JSON.stringify(p, null, 2)], { type: 'application/json' })); const a = document.createElement('a'); a.href = url; a.download = 'rascunho-medicao.json'; a.click(); URL.revokeObjectURL(url); }}>Baixar rascunho</button><button className={button} onClick={async () => { const p = await repository.pending(); if (p) await repository.archivePending(p.candidate.audit.at(-1)!.id); const latest = await repository.load(); if (latest) { adopt(latest); if (!latest.periods.some(period => period.id === active) && latest.periods.length) selectPeriod(latest.periods.at(-1)!.id); } setLifecycle(null); setExpanded(null); setRecovery(!!await repository.pending()); setStatus('Versão salva carregada · rascunho arquivado'); setError(''); }}>Arquivar rascunho e usar versão salva</button></div>}
     {drafts.filter(d => d.measurementId === active && d.serviceId !== bulletinDraftKey && !d.changes.takeoffDraft).length > 0 && <div className="text-xs text-amber-800">Rascunhos desta medição preservados. <button className="underline" onClick={() => {
       const d = drafts.find(d => d.measurementId === active && d.serviceId !== bulletinDraftKey && !d.changes.takeoffDraft); if (!d) return;
       apply(w => { let row = { ...(entryFor(w, active, d.serviceId).rows.find(r => r.id === d.rowId) ?? newMeasuredRow()), ...('comment' in d.changes ? { comment: String(d.changes.comment) } : {}) };
