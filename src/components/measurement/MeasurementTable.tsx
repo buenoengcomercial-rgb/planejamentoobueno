@@ -17,7 +17,8 @@ interface MeasurementTableProps extends RowHandlers {
   groupTree: GroupNode[];
   totals: GroupTotals;
   collapsed: Set<string>;
-  setCollapsed: React.Dispatch<React.SetStateAction<Set<string>>>;
+  setCollapsed?: React.Dispatch<React.SetStateAction<Set<string>>>;
+  onToggleCollapsed?: (id: string) => void;
   isLocked: boolean;
   selectedDetail?: MeasurementDetailSelection | null;
   onSelectDetail?: (selection: MeasurementDetailSelection | null) => void;
@@ -59,7 +60,7 @@ const headerStyleByDepth = (depth: number) => {
 export default function MeasurementTable(props: MeasurementTableProps) {
   const {
     filteredRows, groupTree, totals,
-    collapsed, setCollapsed, isLocked, showForecast = true, detailPlacement = 'inline', summary, beforeSheet,
+    collapsed, setCollapsed, onToggleCollapsed, isLocked, showForecast = true, detailPlacement = 'inline', summary, beforeSheet,
     ...rowHandlers
   } = props;
 
@@ -86,7 +87,8 @@ export default function MeasurementTable(props: MeasurementTableProps) {
   const selectedRow = rowHandlers.selectedDetail?.mode === 'quantity'
     ? filteredRows.find(row => row.taskId === rowHandlers.selectedDetail?.taskId) : undefined;
   const toggleCollapsed = (id: string) => {
-    setCollapsed(prev => {
+    if (onToggleCollapsed) { onToggleCollapsed(id); return; }
+    setCollapsed?.(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
