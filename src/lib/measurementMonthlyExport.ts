@@ -1,11 +1,22 @@
-import { measurementStatusLabels, monthlyLines, monthlyTotal, type MeasurementWorkspace } from './measurementWorkspace';
+import { measurementBulletin, measurementStatusLabels, monthlyLines, monthlyTotal, type MeasurementWorkspace } from './measurementWorkspace';
 import { fmtBRL, fmtDateBR, fmtNum } from '@/components/measurement/measurementFormat';
 
-export function monthlyExportRows(w: MeasurementWorkspace, id: string): (string | number)[][] {
+export function monthlyBulletinRows(w: MeasurementWorkspace, id: string): (string | number)[][] {
   const p = w.periods.find(p => p.id === id)!;
+  const b = measurementBulletin(w, id), c = b.contract;
+  return [
+    ['Contratante', c.contractor ?? '', 'Contratada', c.contracted ?? ''],
+    ['Obra', b.projectName, 'Local / Município', c.location ?? ''],
+    ['Objeto', c.contractObject ?? '', 'Nº do contrato', c.contractNumber ?? ''],
+    ['Nº da ART', c.artNumber ?? '', 'Medição nº', p.number],
+    ['Período da Medição', `${fmtDateBR(p.startDate)} a ${fmtDateBR(p.endDate)}`, 'Data de Emissão', fmtDateBR(b.issueDate)],
+    ['Fonte de Orçamento', c.budgetSource ?? '', 'BDI %', c.bdiPercent ?? 0],
+    ['Situação', measurementStatusLabels[p.status], '', ''],
+  ];
+}
+export function monthlyExportRows(w: MeasurementWorkspace, id: string): (string | number)[][] {
   const rows: (string | number)[][] = [
-    ['BOLETIM DE MEDIÇÃO'], ['Obra', w.projectName], ['Medição', p.number, 'Período', fmtDateBR(p.startDate), fmtDateBR(p.endDate)],
-    ['Contrato', w.contract?.contractNumber ?? '', 'Situação', measurementStatusLabels[p.status]],
+    ['BOLETIM DE MEDIÇÃO PARA PAGAMENTO'], ...monthlyBulletinRows(w, id),
     ['Acumulado inclui a medição selecionada'], [],
     ['Item', 'Descrição', 'Un.', 'Qtd. contratada', 'Qtd. medição', 'Preço s/ BDI', 'Preço c/ BDI', 'Valor medição', 'Qtd. acumulada', 'Valor acumulado', 'Saldo qtd.', 'Saldo valor'],
   ];
@@ -28,10 +39,14 @@ export async function exportMonthlyMeasurement(w: MeasurementWorkspace, id: stri
   }
   const [{ jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  doc.setFontSize(14); doc.text(w.projectName, 12, 15);
-  doc.setFontSize(10); doc.text(`${p.number}ª MEDIÇÃO · ${fmtDateBR(p.startDate)} a ${fmtDateBR(p.endDate)} · ${measurementStatusLabels[p.status]}`, 12, 23);
-  doc.setFontSize(8); doc.text('Acumulado inclui a medição selecionada. Preços com BDI.', 12, 29);
-  autoTable(doc, { startY: 34, styles: { fontSize: 7, cellPadding: 2 }, head: [['Item', 'Serviço', 'Un.', 'Contratado', 'Medição', 'Preço unit.', 'Valor', 'Acumulado', 'Saldo']],
+  doc.setFontSize(14); doc.text('BOLETIM DE MEDIÇÃO PARA PAGAMENTO', 12, 15);
+  let headerEnd = 22;
+  autoTable(doc, { startY: headerEnd, margin: { left: 12, right: 12 }, theme: 'grid', body: monthlyBulletinRows(w, id),
+    styles: { fontSize: 8, cellPadding: 2 }, columnStyles: { 0: { cellWidth: 32, fontStyle: 'bold' }, 1: { cellWidth: 115 }, 2: { cellWidth: 32, fontStyle: 'bold' } },
+    didDrawPage: data => { headerEnd = data.cursor?.y ?? headerEnd; },
+  });
+  doc.setFontSize(8); doc.text('Acumulado inclui a medição selecionada. Preços com BDI.', 12, headerEnd + 5);
+  autoTable(doc, { startY: headerEnd + 9, styles: { fontSize: 7, cellPadding: 2 }, head: [['Item', 'Serviço', 'Un.', 'Contratado', 'Medição', 'Preço unit.', 'Valor', 'Acumulado', 'Saldo']],
     body: monthlyLines(w, id).map(l => [l.service.item, `${l.service.path}\n${l.service.description}`, l.service.unit, fmtNum(l.service.contracted), fmtNum(l.qty), fmtBRL(l.financial.unitPriceWithBDI), fmtBRL(l.financial.totalPeriod), fmtNum(l.accumulated), fmtNum(l.balance)]),
     foot: [['', 'TOTAL', '', '', '', '', fmtBRL(monthlyTotal(w, id)), '', '']], columnStyles: { 1: { cellWidth: 88 }, 3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'right' }, 7: { halign: 'right' }, 8: { halign: 'right' } },
   });

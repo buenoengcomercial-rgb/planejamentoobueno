@@ -13,6 +13,80 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('reintegra o boletim acima dos painéis e salva somente ao sair do campo', async () => {
+    const { w, repository } = fixture();
+    w.contract = { contractor: 'Cliente', contracted: 'Empresa', artNumber: 'Original', bdiPercent: 25 };
+    const view = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const field = await screen.findByLabelText('Nº da ART');
+    const bulletin = screen.getByRole('region', { name: 'Boletim de medição para pagamento' });
+    const sheet = screen.getByRole('region', { name: 'Planilha da medição atual' });
+    expect(bulletin.compareDocumentPosition(sheet) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    for (const label of ['Contratante', 'Contratada', 'Obra', 'Local / Município', 'Objeto', 'Nº do contrato', 'Fonte de Orçamento', 'BDI %', 'Medição nº']) expect(within(bulletin).getByLabelText(label)).toBeEnabled();
+    expect(bulletin).toHaveTextContent('Período da Medição');
+    expect(bulletin).toHaveTextContent('Data de Emissão');
+    fireEvent.change(field, { target: { value: 'ART revisada' } });
+    expect(repository.commit).not.toHaveBeenCalled();
+    fireEvent.blur(field);
+    await waitFor(() => expect(repository.clearDraft).toHaveBeenCalledWith('m1', '__bulletin__', 'artNumber'));
+    const saved = vi.mocked(repository.commit).mock.calls.at(-1)![0];
+    expect(saved.periods[0].bulletin?.contract.artNumber).toBe('ART revisada');
+    expect(saved.entries).toEqual(w.entries);
+    expect(saved.services).toEqual(w.services);
+    fireEvent.change(screen.getByLabelText('Medição selecionada'), { target: { value: 'm2' } });
+    expect(screen.getByLabelText('Nº da ART')).toHaveValue('Original');
+    fireEvent.change(screen.getByLabelText('Medição selecionada'), { target: { value: 'm1' } });
+    expect(screen.getByLabelText('Nº da ART')).toHaveValue('ART revisada');
+    vi.mocked(repository.load).mockResolvedValue(saved);
+    view.unmount();
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    expect(await screen.findByLabelText('Nº da ART')).toHaveValue('ART revisada');
+    fireEvent.click(screen.getByRole('button', { name: /Histórico/ }));
+    expect(await screen.findByText('Editar boletim · 1ª medição', { exact: false })).toBeInTheDocument();
+  });
+  it('mantém rascunho do boletim na falha e recupera o campo após recarga', async () => {
+    const { repository } = fixture();
+    vi.mocked(repository.commit).mockRejectedValue(new Error('Falha simulada'));
+    const view = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const field = await screen.findByLabelText('Objeto');
+    fireEvent.change(field, { target: { value: 'Escopo pendente' } }); fireEvent.blur(field);
+    await screen.findByText('Não salvo · rascunho preservado');
+    expect(repository.clearDraft).not.toHaveBeenCalled();
+    expect(field).toHaveValue('Escopo pendente');
+    vi.mocked(repository.drafts).mockResolvedValue([{ projectId: 'p', measurementId: 'm1', serviceId: '__bulletin__', rowId: 'contractObject', changes: { value: 'Escopo pendente' } }]);
+    view.unmount(); render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    expect(await screen.findByLabelText('Objeto')).toHaveValue('Escopo pendente');
+    expect(screen.queryByRole('button', { name: 'Recuperar rascunho' })).not.toBeInTheDocument();
+  });
+  it('reserva a gravação no blur mesmo com rascunho lento e não permite congelar o cabeçalho antigo', async () => {
+    const { repository } = fixture(); let finishDraft!: () => void, finishSave!: (w: Workspace) => void;
+    vi.mocked(repository.writeDraft).mockImplementation(() => new Promise(resolve => { finishDraft = resolve; }));
+    vi.mocked(repository.commit).mockImplementation(() => new Promise(resolve => { finishSave = resolve; }));
+    render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canReview: true }}/>);
+    const field = await screen.findByLabelText('Nº da ART');
+    fireEvent.change(field, { target: { value: 'ART pendente' } });
+    await waitFor(() => expect(repository.writeDraft).toHaveBeenCalled());
+    fireEvent.blur(field);
+    expect(screen.getByRole('button', { name: 'Enviar para fiscalização' })).toBeDisabled();
+    expect(screen.getByLabelText('Medição selecionada')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar para fiscalização' }));
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+    const candidate = vi.mocked(repository.commit).mock.calls[0][0];
+    expect(candidate.periods[0].status).toBe('draft');
+    expect(candidate.periods[0].bulletin?.contract.artNumber).toBe('ART pendente');
+    await act(async () => { finishSave(candidate); });
+    expect(repository.clearDraft).not.toHaveBeenCalled();
+    await act(async () => { finishDraft(); });
+    await waitFor(() => expect(repository.clearDraft).toHaveBeenCalledWith('m1', '__bulletin__', 'artNumber'));
+  });
+  it('boletim de período fiscal fica legível sem permitir alterações', async () => {
+    const { w, repository } = fixture(); w.periods[0].status = 'in_review';
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    expect(await screen.findByLabelText('Obra')).toBeDisabled();
+    expect(screen.getByLabelText('Nº da ART')).toBeDisabled();
+    expect(screen.getByLabelText('BDI %')).toBeDisabled();
+    expect(repository.commit).not.toHaveBeenCalled();
+  });
+
   it('mantém os resumos no final da planilha e a comparação do planejamento somente em leitura', async () => {
     const { w, repository } = fixture();
     w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'kept', location: '', comment: 'Registro preservado', formula: 'STANDARD', multiplier: 20, measuredQuantity: 0 }] }];

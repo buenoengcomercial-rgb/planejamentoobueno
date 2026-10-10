@@ -17,9 +17,11 @@ export interface MeasuredRow extends ProductionQuantityDetail {
   origin?: { logId?: string; date?: string; kind: 'daily' | 'period' | 'snapshot' | 'manual'; originalRowId?: string };
 }
 export interface MeasuredEntry { projectId: string; measurementId: string; serviceId: string; rows: MeasuredRow[] }
+export interface MeasuredBulletin { projectName: string; contract: ContractInfo; issueDate: string }
 export interface MeasuredPeriod {
   id: string; number: number; startDate: string; endDate: string; status: MeasurementStatus; editUnlocked?: boolean;
   originalSnapshot?: SavedMeasurement; frozen?: MonthlyLine[];
+  bulletin?: MeasuredBulletin;
 }
 export interface MonthlyLine {
   service: MeasuredService; qty: number; prior: number; accumulated: number; balance: number;
@@ -32,6 +34,7 @@ export interface MeasurementAudit {
   beforePlans?: TakeoffPlan[]; afterPlans?: TakeoffPlan[];
   beforePeriods?: MeasuredPeriod[]; afterPeriods?: MeasuredPeriod[];
   beforeServices?: MeasuredService[]; afterServices?: MeasuredService[];
+  bulletinChange?: { measurementId: string; before: { number: number; bulletin: MeasuredBulletin }; after: { number: number; bulletin: MeasuredBulletin } };
 }
 export interface MeasurementWorkspace {
   schema: 1; projectId: string; projectName: string; revision: number;
@@ -74,6 +77,42 @@ export function monthlyLines(w: MeasurementWorkspace, measurementId: string): Mo
   });
 }
 export const monthlyTotal = (w: MeasurementWorkspace, id: string) => sumMoney(monthlyLines(w, id).map(l => l.financial.totalPeriod));
+
+export function measurementBulletin(w: MeasurementWorkspace, id: string): MeasuredBulletin {
+  const p = w.periods.find(p => p.id === id);
+  if (!p) throw new Error('Medição não encontrada.');
+  if (p.bulletin) return structuredClone(p.bulletin);
+  const contract = structuredClone(p.originalSnapshot?.contractSnapshot ?? w.contract ?? {});
+  contract.bdiPercent ??= p.originalSnapshot?.bdiPercent ?? w.services[0]?.bdi ?? 0;
+  const now = new Date();
+  return { projectName: w.projectName, contract, issueDate: p.originalSnapshot?.issueDate ?? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}` };
+}
+
+/** Header edits belong to one period and never reprice the imported contract. */
+export function editMeasuredBulletin(w: MeasurementWorkspace, actor: MeasurementActor, id: string, patch: Partial<Omit<MeasuredBulletin, 'contract'>> & { contract?: Partial<ContractInfo>; number?: number }) {
+  return reviseMeasuredBulletin(w, actor, id, patch);
+}
+function reviseMeasuredBulletin(w: MeasurementWorkspace, actor: MeasurementActor, id: string, patch: Parameters<typeof editMeasuredBulletin>[3], replaceContract = false): MeasurementWorkspace {
+  const period = w.periods.find(p => p.id === id);
+  if (!period || isPeriodLocked(period)) throw new Error('Boletim bloqueado pela fiscalização.');
+  const before = { number: period.number, bulletin: measurementBulletin(w, id) };
+  const { number: _number, contract, ...fields } = patch;
+  const bulletin = { ...before.bulletin, ...fields, contract: replaceContract ? structuredClone(contract ?? {}) : { ...before.bulletin.contract, ...contract } };
+  const number = patch.number ?? period.number;
+  if (!Number.isSafeInteger(number) || number < 1 || w.periods.some(p => p.id !== id && (p.number === number || (p.number < period.number) !== (p.number < number)))) throw new Error('Número de medição inválido, repetido ou fora da sequência.');
+  if (w.services.some(s => (s.availableFromNumber <= period.number) !== (s.availableFromNumber <= number))) throw new Error('Esse número mudaria os serviços disponíveis na medição.');
+  if (!bulletin.projectName.trim()) throw new Error('Informe o nome da obra.');
+  if (!Number.isFinite(bulletin.contract.bdiPercent) || bulletin.contract.bdiPercent! < 0) throw new Error('BDI inválido.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(bulletin.issueDate) || !Number.isFinite(Date.parse(bulletin.issueDate))) throw new Error('Data de emissão inválida.');
+  const after = { number, bulletin };
+  const next = transactMeasurement(w, actor, `Editar boletim · ${period.number}ª medição`, draft => {
+    if (json(before) === json(after)) return;
+    const p = draft.periods.find(p => p.id === id)!;
+    p.bulletin = bulletin; p.number = number;
+  });
+  if (next !== w) next.audit.at(-1)!.bulletinChange = { measurementId: id, before, after: structuredClone(after) };
+  return next;
+}
 
 function assertDestination(w: MeasurementWorkspace, mid: string, sid: string, actor: MeasurementActor) {
   if (!actor.canEdit || !actor.id) throw new Error('Seu perfil não permite editar a Medição.');
@@ -205,18 +244,29 @@ export function addMeasuredPeriod(w: MeasurementWorkspace, actor: MeasurementAct
   return transactMeasurement(w, actor, 'Criar medição', next => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || startDate > endDate) throw new Error('Período inválido.');
     if (next.periods.some(p => startDate <= p.endDate && endDate >= p.startDate)) throw new Error('O período sobrepõe outra medição.');
-    next.periods.push({ id: crypto.randomUUID(), number: Math.max(0, ...next.periods.map(p => p.number)) + 1, startDate, endDate, status: 'draft' });
+    const previous = [...next.periods].sort((a, b) => b.number - a.number)[0];
+    const bulletin = previous ? measurementBulletin(next, previous.id) : undefined;
+    if (bulletin) { const now = new Date(); bulletin.issueDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`; }
+    next.periods.push({ id: crypto.randomUUID(), number: Math.max(0, ...next.periods.map(p => p.number)) + 1, startDate, endDate, status: 'draft', ...(bulletin ? { bulletin } : {}) });
   });
 }
 export function freezeMeasuredPeriod(w: MeasurementWorkspace, actor: MeasurementActor, id: string) {
   if (!actor.canReview) throw new Error('Sem permissão para envio fiscal.');
   return transactMeasurement(w, actor, 'Enviar para fiscalização', next => {
     const p = next.periods.find(p => p.id === id); if (!p || isPeriodLocked(p)) throw new Error('Medição indisponível.');
+    p.bulletin = measurementBulletin(next, id);
     p.frozen = monthlyLines(next, id); p.status = 'in_review';
   });
 }
 export function undoMeasuredOperation(w: MeasurementWorkspace, actor: MeasurementActor, auditId: string) {
   const audit = w.audit.find(a => a.id === auditId); if (!audit) throw new Error('Operação não encontrada.');
+  if (audit.bulletinChange) {
+    const change = audit.bulletinChange, p = w.periods.find(p => p.id === change.measurementId);
+    if (!p || json({ number: p.number, bulletin: measurementBulletin(w, p.id) }) !== json(change.after)) throw new Error('Há edição posterior no boletim. A restauração foi bloqueada.');
+    const next = reviseMeasuredBulletin(w, actor, p.id, { ...change.before.bulletin, number: change.before.number }, true);
+    if (next !== w) next.audit.at(-1)!.action = `Restaurar boletim · ${p.number}ª medição`;
+    return next;
+  }
   return transactMeasurement(w, actor, `Restaurar ${audit.id}`, next => {
     if (audit.beforePeriods || audit.beforeServices) throw new Error('Mudanças de período, contratuais ou fiscais exigem revisão específica.');
     for (const after of audit.after) if (json(entryFor(next, after.measurementId, after.serviceId)) !== json(after)) throw new Error('Há edição posterior. A restauração foi bloqueada.');
