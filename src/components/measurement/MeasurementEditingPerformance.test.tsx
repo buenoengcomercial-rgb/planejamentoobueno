@@ -138,6 +138,49 @@ it('fila A→B→C: timeout na primeira tarefa, continua editando e confirma cad
   for (const [index, value] of [[0, 1], [1, 2], [2, 3]] as const) expect(await screen.findByLabelText(`Quantidade de Serviço ${index}`)).toHaveValue(value);
 });
 
+it('A→B→C recarregado antes da resposta mantém os três rascunhos recuperáveis', async () => {
+  const { repository, drafts, saved } = setup(3);
+  let pending: { baseRevision: number; candidate: Workspace } | null = null;
+  vi.mocked(repository.pending).mockImplementation(async () => pending);
+  vi.mocked(repository.commit).mockImplementationOnce(() => new Promise(() => undefined));
+  const first = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  await screen.findByLabelText('Quantidade de Serviço 0');
+  for (const [index, value] of [[0, '1'], [1, '2'], [2, '3']] as const) {
+    const input = screen.getByLabelText(`Quantidade de Serviço ${index}`);
+    fireEvent.focus(input); fireEvent.change(input, { target: { value } }); fireEvent.blur(input);
+  }
+  await waitFor(() => expect(drafts()).toHaveLength(3));
+  expect(repository.commit).toHaveBeenCalledTimes(1);
+  pending = { baseRevision: 0, candidate: vi.mocked(repository.commit).mock.calls[0][0] };
+  const leave = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(leave);
+  expect(leave.defaultPrevented).toBe(true);
+  first.unmount();
+  vi.mocked(repository.commit).mockImplementation(async candidate => {
+    const current = saved();
+    if (candidate.revision !== current.revision + 1) throw new Error('Revisão duplicada');
+    // The in-memory mock models a confirmed cloud write after reopening.
+    Object.assign(current, candidate);
+    pending = null;
+    return candidate;
+  });
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  await screen.findByLabelText('Quantidade de Serviço 0');
+  expect(screen.getByText(/Rascunhos desta medição preservados \(3\)/)).toHaveTextContent('Próxima tarefa: 1.1 — Serviço 0');
+  fireEvent.click(screen.getByRole('button', { name: 'Tentar salvar novamente' }));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
+  for (const remaining of [2, 1, 0]) {
+    fireEvent.click(screen.getByRole('button', { name: 'Recuperar rascunho' }));
+    await waitFor(() => expect(drafts()).toHaveLength(remaining));
+    if (remaining > 0) {
+      expect(screen.getByText(new RegExp(`Rascunhos desta medição preservados \\(${remaining}\\)`))).toHaveTextContent(`Próxima tarefa: 1.${4 - remaining} — Serviço ${3 - remaining}`);
+    } else {
+      expect(screen.queryByText(/Rascunhos desta medição preservados/)).not.toBeInTheDocument();
+    }
+  }
+  expect(saved().entries.map(entry => [entry.serviceId, entry.rows[0].multiplier])).toEqual([['s0', 1], ['s1', 2], ['s2', 3]]);
+});
+
 it('mantém todos os campos em rascunho se a primeira confirmação falhar e não envia os seguintes', async () => {
   const { repository, drafts } = setup(1);
   let fail!: (error: Error) => void;

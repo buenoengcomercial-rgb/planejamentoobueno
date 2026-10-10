@@ -331,6 +331,9 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     {plan && <><dl className="grid grid-cols-3 gap-3 text-sm"><div>Serviços: <b>{plan.inventory.services}</b></div><div>Lançamentos antigos: <b>{plan.inventory.dailyLogs + plan.inventory.periodLogs}</b></div><div>Medições: <b>{plan.inventory.periods}</b></div><div>Plantas: <b>{plan.inventory.plans}</b></div><div>Marcações: <b>{plan.inventory.marks}</b></div><div>Divergências: <b>{plan.issues.length}</b></div></dl><div className="my-4 max-h-72 overflow-auto text-sm">{plan.issues.length ? plan.issues.map((i, n) => <p key={n} className="mb-1 text-amber-800">{i.message}</p>) : <p className="text-emerald-700">Quantidades conciliadas. Nenhuma diferença encontrada.</p>}</div><button className={button} disabled={saving || !actor.canEdit || plan.issues.length > 0} onClick={() => void initialize()}>Confirmar incorporação</button></>}
     {!plan && <p>Ativação aguardando inventário, backup e validação do servidor. Nenhum dado operacional foi migrado.</p>}{error && <p role="alert" className="mt-3 text-red-700">{error}</p>}</section>;
   const period = workspace.periods.find(p => p.id === active);
+  const recoverableDrafts = drafts.filter(d => d.measurementId === active && d.serviceId !== bulletinDraftKey && !d.changes.takeoffDraft);
+  const nextDraft = recoverableDrafts[0];
+  const nextDraftService = nextDraft ? workspace.services.find(service => service.id === nextDraft.serviceId) : undefined;
   const deletionBlock = period ? periodDeletionBlock(workspace, period) : 'Selecione uma medição.';
   const locked = !actor.canEdit || !period || isPeriodLocked(period) || saving || recovery;
   const quantityLocked = !actor.canEdit || !period || isPeriodLocked(period)
@@ -372,8 +375,8 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         selectPeriod(current.current!.periods.some(p => p.id === id) ? id : current.current!.periods.at(-1)!.id);
       })}/>}
     {recovery && <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm">Há um salvamento pendente. {detailQueue.current.length ? 'Os lançamentos permanecem visíveis e em rascunho local; confirme a fila antes de sair desta medição.' : 'A troca de medição está bloqueada até a conferência.'} <button className={button} onClick={() => void retryPendingSave()}>Tentar salvar novamente</button><button className={button} onClick={() => void downloadPendingSave().catch(cause => setError(cause instanceof Error ? cause.message : String(cause)))}>Baixar rascunho</button><button className={button} onClick={() => void archivePendingSave()}>Arquivar rascunho e usar versão salva</button></div>}
-    {drafts.filter(d => d.measurementId === active && d.serviceId !== bulletinDraftKey && !d.changes.takeoffDraft).length > 0 && <div className="text-xs text-amber-800">Rascunhos desta medição preservados. <button className="underline" onClick={() => {
-      const d = drafts.find(d => d.measurementId === active && d.serviceId !== bulletinDraftKey && !d.changes.takeoffDraft); if (!d) return;
+    {nextDraft && <div className="text-xs text-amber-800">Rascunhos desta medição preservados ({recoverableDrafts.length}). Próxima tarefa: {nextDraftService ? `${nextDraftService.item} — ${nextDraftService.description}` : nextDraft.serviceId}. <button className="underline" onClick={() => {
+      const d = nextDraft;
       const rowId = typeof d.changes.createdRowId === 'string' ? d.changes.createdRowId : d.rowId.startsWith('__') ? undefined : d.rowId;
       apply(w => { let row = { ...(entryFor(w, active, d.serviceId).rows.find(r => r.id === rowId) ?? newMeasuredRow(rowId)), ...('comment' in d.changes ? { comment: String(d.changes.comment) } : {}) };
         for (const f of ['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD'] as const) if (f in d.changes) row = withDetailValue(row, f, Number(String(d.changes[f]).replace(',', '.')));

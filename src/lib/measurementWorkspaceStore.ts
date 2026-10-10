@@ -1,13 +1,23 @@
-import type { MeasurementWorkspace } from './measurementWorkspace';
+import type { MeasuredEntry, MeasurementAudit, MeasurementWorkspace } from './measurementWorkspace';
 import { prepareIncorporation, verifyIncorporationBackup, type IncorporationBackup } from './measurementIncorporation';
 
 export interface WorkspaceDraft { projectId: string; measurementId: string; serviceId: string; rowId: string; changes: Record<string, unknown> }
-export interface PendingMeasurementSave { baseRevision: number; candidate: MeasurementWorkspace; archivedAt?: string }
+export interface PendingMeasurementSave { baseRevision: number; candidate: MeasurementWorkspace; archivedAt?: string; compact?: PendingMeasurementEntrySave }
+export interface PendingMeasurementEntrySave {
+  format: 'entry-patch-v1'; projectId: string; baseRevision: number; operationId: string;
+  patch: { entries: MeasuredEntry[]; event: MeasurementAudit }; archivedAt?: string;
+}
+export type StoredMeasurementPending = PendingMeasurementSave | PendingMeasurementEntrySave;
+const pendingOperationId = (pending: StoredMeasurementPending) => 'operationId' in pending
+  ? pending.operationId : pending.candidate.audit.at(-1)?.id;
 export interface MeasurementRepository {
   savedLabel?: string;
   remoteRevision?(): Promise<number>;
   watch?(onRevision: (revision: number) => void, onConnection: (connected: boolean) => void): () => void;
   preservePending?(pending: PendingMeasurementSave): Promise<void>;
+  preserveEntryPending?(pending: PendingMeasurementEntrySave): Promise<void>;
+  removeEntryPending?(operationId: string): Promise<void>;
+  storedPendingSaves?(): Promise<StoredMeasurementPending[]>;
   removePending?(operationId: string): Promise<void>;
   load(): Promise<MeasurementWorkspace | null>;
   initialize(backup: IncorporationBackup): Promise<MeasurementWorkspace>;
@@ -28,8 +38,9 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
   if (scope.environment !== 'isolated' || !scope.userId || !scope.projectId) throw new Error('Ativação operacional indisponível até validar o servidor e a incorporação.');
   const key = JSON.stringify([scope.userId, scope.projectId]);
   const open = () => new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open('measurement-workspace-v1', 1);
-    request.onupgradeneeded = () => ['workspaces', 'backups', 'pending', 'drafts'].forEach(name => request.result.createObjectStore(name));
+    const request = indexedDB.open('measurement-workspace-v1', 2);
+    request.onupgradeneeded = () => ['workspaces', 'backups', 'pending', 'drafts', 'pending_entry_patches']
+      .forEach(name => { if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name); });
     request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
   });
   const read = async <T>(name: string): Promise<T | null> => {
@@ -49,17 +60,34 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
     });
   };
   return {
-    preservePending: pending => update<PendingMeasurementSave[]>('pending', rows => [...(rows ?? []).filter(p => p.candidate.audit.at(-1)?.id !== pending.candidate.audit.at(-1)?.id), pending]),
-    removePending: operationId => update<PendingMeasurementSave[]>('pending', rows => (rows ?? []).filter(p => p.candidate.audit.at(-1)?.id !== operationId)),
+    preservePending: pending => update<StoredMeasurementPending[]>('pending', rows => [...(rows ?? []).filter(p => pendingOperationId(p) !== pendingOperationId(pending)), pending]),
+    preserveEntryPending: pending => update<PendingMeasurementEntrySave[]>('pending_entry_patches', rows => [...(rows ?? []).filter(p => p.operationId !== pending.operationId), pending]),
+    removeEntryPending: operationId => update<PendingMeasurementEntrySave[]>('pending_entry_patches', rows => (rows ?? []).filter(p => p.operationId !== operationId)),
+    storedPendingSaves: async () => {
+      const [legacy, compact] = await Promise.all([read<StoredMeasurementPending[]>('pending'), read<PendingMeasurementEntrySave[]>('pending_entry_patches')]);
+      return [...(legacy ?? []), ...(compact ?? [])];
+    },
+    removePending: async operationId => {
+      await Promise.all([
+        update<StoredMeasurementPending[]>('pending', rows => (rows ?? []).filter(p => pendingOperationId(p) !== operationId)),
+        update<PendingMeasurementEntrySave[]>('pending_entry_patches', rows => (rows ?? []).filter(p => p.operationId !== operationId)),
+      ]);
+    },
     load: async () => {
       const value = await read<MeasurementWorkspace>('workspaces');
       if (value && (value.schema !== 1 || value.projectId !== scope.projectId || !Array.isArray(value.entries) || !Array.isArray(value.periods) || !Array.isArray(value.plans))) throw new Error('Base incompleta ou incompatível. Edição bloqueada.');
       return value;
     },
     backup: () => read<IncorporationBackup>('backups'),
-    pending: async () => (await read<PendingMeasurementSave[]>('pending'))?.find(p => !p.archivedAt) ?? null,
-    pendingSaves: async () => await read<PendingMeasurementSave[]>('pending') ?? [],
-    archivePending: operationId => update<PendingMeasurementSave[]>('pending', rows => (rows ?? []).map(p => p.candidate.audit.at(-1)?.id === operationId ? { ...p, archivedAt: new Date().toISOString() } : p)),
+    pending: async () => (await read<StoredMeasurementPending[]>('pending'))?.find((p): p is PendingMeasurementSave => !p.archivedAt && 'candidate' in p) ?? null,
+    pendingSaves: async () => (await read<StoredMeasurementPending[]>('pending') ?? []).filter((p): p is PendingMeasurementSave => 'candidate' in p),
+    archivePending: async operationId => {
+      const archivedAt = new Date().toISOString();
+      await Promise.all([
+        update<StoredMeasurementPending[]>('pending', rows => (rows ?? []).map(p => pendingOperationId(p) === operationId ? { ...p, archivedAt } : p)),
+        update<PendingMeasurementEntrySave[]>('pending_entry_patches', rows => (rows ?? []).map(p => p.operationId === operationId ? { ...p, archivedAt } : p)),
+      ]);
+    },
     drafts: async () => await read<WorkspaceDraft[]>('drafts') ?? [],
     writeDraft: draft => {
       if (draft.projectId !== scope.projectId) return Promise.reject(new Error('Rascunho pertence a outra obra.'));
@@ -94,7 +122,7 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
       if (candidate.projectId !== scope.projectId || candidate.revision !== baseRevision + 1) throw new Error('Revisão ou obra inválida.');
       // A durable recovery record precedes the atomic aggregate write.
       const operationId = candidate.audit.at(-1)!.id;
-      await update<PendingMeasurementSave[]>('pending', rows => [...(rows ?? []).filter(r => r.candidate.audit.at(-1)?.id !== operationId), { baseRevision, candidate }]);
+      await update<StoredMeasurementPending[]>('pending', rows => [...(rows ?? []).filter(r => pendingOperationId(r) !== operationId), { baseRevision, candidate }]);
       const db = await open();
       return new Promise((resolve, reject) => {
         const tx = db.transaction(['workspaces', 'pending'], 'readwrite');
@@ -106,7 +134,7 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
           try {
             store.put(candidate, key);
             const pendingStore = tx.objectStore('pending'), pendingRequest = pendingStore.get(key);
-            pendingRequest.onsuccess = () => pendingStore.put((pendingRequest.result as PendingMeasurementSave[] ?? []).filter(r => r.candidate.audit.at(-1)?.id !== operationId), key);
+            pendingRequest.onsuccess = () => pendingStore.put((pendingRequest.result as StoredMeasurementPending[] ?? []).filter(r => pendingOperationId(r) !== operationId), key);
           } catch (error) { tx.abort(); reject(error); }
         };
         tx.oncomplete = () => { db.close(); resolve(candidate); };
