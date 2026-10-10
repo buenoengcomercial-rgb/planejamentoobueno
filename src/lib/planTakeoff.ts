@@ -14,8 +14,8 @@ export interface TakeoffPlan {
   cloudRevision?: number;
 }
 export type TakeoffContext = { taskId: string; logId: string; projectId?: never; measurementId?: never; serviceId?: never } | { projectId: string; measurementId: string; serviceId: string; taskId?: never; logId?: never };
-export interface TakeoffRepository { load(): Promise<TakeoffPlan[]>; save(next: TakeoffPlan[], previous: TakeoffPlan[]): Promise<void> }
-export interface TakeoffDraft { planId: string; page: number; kind: MeasureKind; points: Point[]; name: string; heightMeters: string }
+export interface TakeoffRepository { storage?: 'cloud' | 'local'; load(): Promise<TakeoffPlan[]>; save(next: TakeoffPlan[], previous: TakeoffPlan[]): Promise<void> }
+export interface TakeoffDraft { planId: string; page: number; kind: MeasureKind | 'calibrate'; points: Point[]; name: string; heightMeters: string; distance?: string }
 export const TAKEOFF_CATALOG_UPDATED = 'obraplanner:takeoff-catalog-updated';
 export function measuresForContext(measures: TakeoffMeasure[], context?: TakeoffContext, linkedMeasureIds: string[] = []): TakeoffMeasure[] {
   if (!context) return measures;

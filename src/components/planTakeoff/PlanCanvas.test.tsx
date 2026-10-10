@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanCanvas, { type PlanCanvasHandle } from './PlanCanvas';
 import type { TakeoffPlan } from '@/lib/planTakeoff';
 
-const plan: TakeoffPlan = { id: 'plan-1', name: 'Planta.png', floor: 'Térreo', kind: 'image', file: new Blob(['image']), scales: {}, measures: [] };
+const plan: TakeoffPlan = { id: 'plan-1', name: 'Planta.png', floor: 'Térreo', kind: 'image', file: Object.assign(new Blob(['image']), { text: async () => '0\nSECTION\n2\nENTITIES\n0\nLINE\n8\nPAREDES\n10\n0\n20\n0\n11\n10\n21\n0\n0\nENDSEC\n0\nEOF\n' }), scales: {}, measures: [] };
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
 vi.mock('dxf-viewer', () => ({ DxfViewer: class {
@@ -17,6 +17,11 @@ vi.mock('dxf-viewer', () => ({ DxfViewer: class {
 } }));
 
 beforeEach(() => {
+  vi.stubGlobal('Worker', class {
+    onmessage?: (event: { data: { file: Blob } }) => void;
+    terminate() {}
+    postMessage(file: Blob) { queueMicrotask(() => this.onmessage?.({ data: { file } })); }
+  });
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   vi.stubGlobal('Image', class { src = ''; naturalWidth = 1000; naturalHeight = 600; decode = async () => {}; });
   Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:planta') });
@@ -37,6 +42,16 @@ afterEach(async () => {
 });
 
 describe('gestos no desenho', () => {
+  it('permite desmontar durante a preparação do Model e encerra o worker sem publicar uma planta pronta', async () => {
+    const terminate = vi.fn(), posted = vi.fn(), ready = vi.fn();
+    vi.stubGlobal('Worker', class { terminate = terminate; postMessage = posted; });
+    const { unmount } = render(<PlanCanvas plan={{ ...plan, kind: 'dxf' }} page={1} draft={[]} drawing={false} selected="" readOnly={false} onPoint={vi.fn()} onSelect={vi.fn()} onMove={vi.fn()} onPages={vi.fn()} onReady={ready}/>);
+    await waitFor(() => expect(posted).toHaveBeenCalledWith(plan.file));
+    expect(screen.getByText('Carregando planta…')).toBeVisible();
+    unmount(); await act(async () => {});
+    expect(terminate).toHaveBeenCalledOnce();
+    expect(ready).not.toHaveBeenCalledWith(true);
+  });
   it('não desloca o modal ao focar o desenho antes de registrar a coordenada', async () => {
     const onPoint = vi.fn();
     render(<PlanCanvas plan={plan} page={1} draft={[]} draftKind="count" drawing selected="" readOnly={false} onPoint={onPoint} onSelect={vi.fn()} onMove={vi.fn()} onPages={vi.fn()} />);

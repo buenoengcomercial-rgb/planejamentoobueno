@@ -15,7 +15,7 @@ const labels: Record<MeasureKind, string> = { count: 'Contagem', linearLength: '
 const toolIcons = { count: CircleDot, linearLength: Ruler, length: Route, circlePerimeter: Circle, rectangleArea: Square, area: Shapes, circleArea: CircleDot, verticalArea: Maximize2, polygonVolume: Box };
 const format = (value: number | null) => value === null ? '—' : value.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpdateMeasure, onDeleteMeasure, onRestoreMeasure, onRecalibrate, executedMeasureIds = [], linkedMeasureIds = [], protectedMeasureIds = [], focusMeasure, embedded = false, allowedKinds = MEASURE_KINDS, destinationColumn, chapterId, measureContext, repository, initialDraft, onDraftChange }: { storageKey: string; readOnly: boolean; onUseMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onUpdateMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onDeleteMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onRestoreMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onRecalibrate?: (plan: TakeoffPlan, page: number, scale: number | null, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; executedMeasureIds?: string[]; linkedMeasureIds?: string[]; protectedMeasureIds?: string[]; focusMeasure?: { planId: string; page: number; measureId: string }; embedded?: boolean; allowedKinds?: MeasureKind[]; destinationColumn?: string; chapterId?: string; measureContext?: TakeoffContext; repository?: TakeoffRepository; initialDraft?: TakeoffDraft; onDraftChange?: (draft: TakeoffDraft | null) => void }) {
-  const isCloud = !!cloudTakeoffScope(storageKey);
+  const isCloud = repository?.storage === 'cloud' || !!cloudTakeoffScope(storageKey);
   const [plans, setPlans] = useState<TakeoffPlan[]>([]);
   const [active, setActive] = useState('');
   const [page, setPage] = useState(initialDraft?.page ?? 1);
@@ -28,7 +28,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   const [tool, setTool] = useState<MeasureKind | 'calibrate' | null>(initialDraft?.kind ?? null);
   const [draft, setDraft] = useState<Point[]>(initialDraft?.points ?? []);
   const [selected, setSelected] = useState('');
-  const [distance, setDistance] = useState('');
+  const [distance, setDistance] = useState(initialDraft?.distance ?? '');
   const [cadUnit, setCadUnit] = useState('1');
   const [pendingScale, setPendingScale] = useState<number>();
   const [draftName, setDraftName] = useState(initialDraft?.name ?? '');
@@ -95,8 +95,8 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   }, [storageKey, focusPlanId, focusPage, focusMeasureId, chapterId, readOnly, isCloud, repository]);
   useEffect(() => {
     if (!ready || !onDraftChange) return;
-    onDraftChange(plan && tool && tool !== 'calibrate' && draft.length ? { planId: plan.id, page, kind: tool, points: draft, name: draftName, heightMeters } : null);
-  }, [ready, plan, tool, page, draft, draftName, heightMeters, onDraftChange]);
+    onDraftChange(plan && tool && draft.length ? { planId: plan.id, page, kind: tool, points: draft, name: draftName, heightMeters, ...(tool === 'calibrate' ? { distance } : {}) } : null);
+  }, [ready, plan, tool, page, draft, draftName, heightMeters, distance, onDraftChange]);
   async function commit(next: TakeoffPlan[], undo = false) {
     if (locked || busy.current) return false;
     busy.current = true; setSaving(true); setError(''); setStatus('Salvando…');
@@ -128,7 +128,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
       lastCommittedPlans.current = next; setPlans(next);
       if (!repository) await confirmAtomicTakeoffCache(storageKey, next);
       window.dispatchEvent(new CustomEvent(TAKEOFF_CATALOG_UPDATED, { detail: storageKey }));
-      setStatus(repository ? 'Planta e quantitativo salvos no navegador' : 'Planta e quantitativo confirmados na nuvem'); return true;
+      setStatus(isCloud ? 'Planta e quantitativo confirmados na nuvem' : 'Planta e quantitativo salvos no navegador'); return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Captura não salva. O traçado foi preservado.');
       setStatus('Alteração não salva'); return false;
@@ -309,7 +309,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
     <header className="flex min-w-0 flex-wrap items-center gap-2 border border-slate-300 bg-white px-3 py-1.5">
       <div className="mr-auto min-w-0">
         <div className="flex items-center gap-2"><h1 className="truncate text-sm font-semibold">Levantamento em planta</h1><span className="bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-900">Experimental</span></div>
-        <p className="text-xs text-muted-foreground">{plan ? `${plan.building ? `${plan.building} · ` : ''}${plan.name}${plan.floor ? ` · ${plan.floor}` : ''}` : 'Escolha uma planta para começar'}</p>
+        <p className="text-xs text-muted-foreground">{plan ? `${plan.building ? `${plan.building} · ` : ''}${plan.name}${plan.floor ? ` · ${plan.floor}` : ''}${plan.kind === 'dxf' ? ' · Model' : ''}` : 'Escolha uma planta para começar'}</p>
       </div>
       <span role="status" className="order-last w-full text-xs text-muted-foreground sm:order-none sm:w-auto">{status}</span>
       {embedded && <Button title="Gerenciar plantas — adicionar, selecionar ou apagar pranchas deste prédio" aria-label="Gerenciar plantas" aria-expanded={showDrawings} variant="outline" size="sm" className="h-7 rounded-none text-xs" onClick={() => { setError(''); setShowDrawings(true); }}><List className="mr-1 h-3.5 w-3.5" />Plantas</Button>}
