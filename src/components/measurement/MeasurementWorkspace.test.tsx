@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, cleanup } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, cleanup, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import MeasurementWorkspace from './MeasurementWorkspace';
 import type { MeasurementRepository } from '@/lib/measurementWorkspaceStore';
@@ -12,6 +12,38 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('abre o detalhe somente pela medição atual e soma períodos sem editar o contrato ou o acumulado', async () => {
+    const { w, repository } = fixture();
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'original', location: '', comment: 'Primeira medição', formula: 'STANDARD', multiplier: 7, measuredQuantity: 0, origin: { kind: 'manual' } }] }];
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const selector = await screen.findByLabelText('Medição selecionada');
+    fireEvent.change(selector, { target: { value: 'm2' } });
+    const row = screen.getByTestId('service-s');
+    const cells = within(row).getAllByRole('cell');
+    expect(cells[5]).toHaveTextContent('100');
+    expect(cells[11]).toHaveTextContent('7');
+    for (const index of [3, 5, 6, 7, 8, 10, 11, 12, 13, 14]) {
+      if (index !== 3) expect(within(cells[index]).queryByRole('button')).not.toBeInTheDocument();
+      fireEvent.click(cells[index]);
+      expect(screen.queryByLabelText('Unidades da linha 1')).not.toBeInTheDocument();
+    }
+    const detail = within(cells[9]).getByRole('button', { name: 'Detalhar quantidade da 2ª medição: Placas' });
+    fireEvent.click(detail);
+    expect(screen.getByText('Detalhe de quantitativos · 2ª medição')).toBeVisible();
+    const a = screen.getByLabelText('Unidades da linha 1');
+    fireEvent.change(a, { target: { value: '3' } }); fireEvent.blur(a);
+    await waitFor(() => expect(screen.getByLabelText('Quantidade de Placas')).toHaveValue(3));
+    expect(cells[5]).toHaveTextContent('100');
+    expect(cells[11]).toHaveTextContent('10');
+    expect(screen.getByTestId('monthly-value')).toHaveTextContent('37,50');
+    const saved = vi.mocked(repository.commit).mock.calls.at(-1)![0];
+    expect(saved.entries.find(e => e.measurementId === 'm1')?.rows[0].multiplier).toBe(7);
+    expect(saved.entries.find(e => e.measurementId === 'm2')?.rows[0].multiplier).toBe(3);
+    expect(saved.services[0].contracted).toBe(100);
+    expect(saved.entries.find(e => e.measurementId === 'm2')?.rows[0].id).not.toBe('__new__');
+    fireEvent.change(selector, { target: { value: 'm1' } });
+    expect(screen.getByLabelText('Quantidade de Placas')).toHaveValue(7);
+  });
   it('preserva digitação até blur e bloqueia troca de período enquanto a gravação está pendente', async () => {
     const { repository } = fixture(); let confirm!: (w: Workspace) => void;
     vi.mocked(repository.commit).mockImplementation(() => new Promise(resolve => { confirm = resolve; }));

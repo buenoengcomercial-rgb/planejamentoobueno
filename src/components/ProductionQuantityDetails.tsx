@@ -13,6 +13,7 @@ interface Props {
   readOnly: boolean;
   periodMode?: boolean;
   referenceLabel?: string;
+  heading?: string;
   onCreate: (changes: Partial<ProductionQuantityDetail>) => string | null;
   onEdit: (id: string, changes: Partial<ProductionQuantityDetail>) => boolean;
   onDelete: (id: string) => void;
@@ -40,7 +41,7 @@ function formulaMeaning(formula: DetailFormula, unit: string): string {
   return `A uds. · B ${measure} (${unit})`;
 }
 
-export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, applied, readOnly, periodMode = false, onCreate, onEdit, onDelete, onOpenPlan, onApply, canOpenPlan = false, clipboard, onCopy, onPaste, sharedTaskNames, onOpenHistory, onDraftChange, referenceLabel = 'Tarefas' }: Props) {
+export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, applied, readOnly, periodMode = false, onCreate, onEdit, onDelete, onOpenPlan, onApply, canOpenPlan = false, clipboard, onCopy, onPaste, sharedTaskNames, onOpenHistory, onDraftChange, referenceLabel = 'Tarefas', heading = 'Detalhe de quantitativos' }: Props) {
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [selectedField, setSelectedField] = useState<DetailField | null>(null);
   const [linkedInfo, setLinkedInfo] = useState<string | null>(null);
@@ -118,7 +119,7 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
 
   return <section aria-label="Detalhe de quantitativo" className="ml-2 overflow-hidden border border-slate-300 bg-white text-slate-800 sm:ml-8">
     <div className="flex min-h-6 flex-wrap items-center justify-between gap-x-2 border-b border-slate-300 bg-slate-100 px-2 py-0.5">
-      <strong className="text-[11px]">Detalhe de quantitativos</strong>
+      <strong className="text-[11px]">{heading}</strong>
       <span className="text-[11px] text-slate-600">{periodMode ? `Total registrado no período: ${fmt(dailyQuantity)} ${unit}` : <>Dia: {fmt(dailyQuantity)} {unit} · Subtotal: {fmt(total)} {unit} {rows.length > 0 && <strong className={applied ? 'text-green-700' : 'text-amber-700'}>· {applied ? 'Aplicado ao dia' : 'Pendente de aplicação'}</strong>}</>}</span>
     </div>
     <div role="toolbar" aria-label="Ações do detalhe de quantitativos" className="flex min-h-7 flex-wrap items-center gap-0.5 border-b border-slate-300 bg-slate-50 px-1.5 py-0.5">

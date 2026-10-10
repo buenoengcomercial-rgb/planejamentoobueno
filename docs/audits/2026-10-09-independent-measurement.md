@@ -135,3 +135,17 @@ Validação após a correção: 50 testes focados, TypeScript do projeto da apli
 lint e build aprovados. No navegador: captura de três pontos, valores, recarga,
 edição/exclusão/restauração, períodos, filtros, expansão de capítulos e rolagem
 restrita à tabela em 390 × 844. Nenhuma migração ou publicação no Lovable.
+
+## Acesso restrito à quantidade da medição atual
+
+Na base independente, contrato, preços, subtotais, acumulado e saldo são campos
+de consulta; seus cliques não abrem o editor. O detalhe e a planta são acessados
+somente na célula Quant. Medição, no grupo Medição atual. O título do detalhe
+identifica o período selecionado. Os valores acumulados continuam calculados
+pelo motor já existente, incluindo os períodos anteriores e o selecionado.
+
+Teste de regressão e navegador: 7 na primeira medição, captura de 3 pontos na
+segunda, acumulado 10, contrato 400 inalterado e marcas recuperadas após recarga.
+O detalhe continua usando A–D, com geração de ID próprio ao confirmar a linha
+nova (sem persistir o identificador temporário da interface). Fluxo completo
+e 48 testes focados aprovados, além de TypeScript, lint, build e diff.

@@ -68,10 +68,12 @@ export default function MeasurementItemRow({
   };
   const selectClassification = (valueScope: MeasurementValueScope) => onSelectDetail?.({ taskId: r.taskId, mode: 'classification', valueScope });
   const handleRowClick = (event: MouseEvent<HTMLTableRowElement>) => {
+    // Independent measurements open their editor only from the current-quantity cell.
+    if (renderDetail) return;
     const target = event.target as HTMLElement | null;
     if (!target) return;
     if (target.closest('button, input, textarea, select, [role="button"], [data-detail-cell="true"], [data-detail-panel="true"]')) return;
-    if (renderDetail) selectQuantity(); else selectAnalytic();
+    selectAnalytic();
   };
 
   return (
@@ -79,7 +81,7 @@ export default function MeasurementItemRow({
     <tr
       data-measurement-row="true"
       data-testid={`service-${r.taskId}`}
-      className={`cursor-pointer border-b border-border/60 hover:bg-muted/30 ${baseBg} ${isSelected ? 'ring-2 ring-primary/40 ring-inset' : ''}`}
+      className={`${renderDetail ? '' : 'cursor-pointer'} border-b border-border/60 hover:bg-muted/30 ${baseBg} ${isSelected ? 'ring-2 ring-primary/40 ring-inset' : ''}`}
       onClick={handleRowClick}
     >
       {/* Identificação */}
@@ -124,7 +126,7 @@ export default function MeasurementItemRow({
               </Tooltip>
             </TooltipProvider>
           )}
-          <span className="leading-snug break-words">{renderDetail ? <button type="button" className="text-left" aria-label={`${r.item}${r.description}`} aria-expanded={isSelected} onClick={selectQuantity}>{r.description}</button> : r.description}</span>
+          <span className="leading-snug break-words">{r.description}</span>
           <AdditiveBadge
             originAdditiveId={r.originAdditiveId}
             originAdditiveName={r.originAdditiveName}
@@ -142,31 +144,31 @@ export default function MeasurementItemRow({
 
       {/* Contrato */}
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${BORDER_L} ${G_BG.contract}`}>
-        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyContracted)}</button>
+        {renderDetail ? <span className="px-1">{fmtNum(r.qtyContracted)}</span> : <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyContracted)}</button>}
       </td>
       <td className={`px-2 py-1.5 text-right align-top ${G_BG.contract}`}>
         <div className="flex items-center justify-end gap-1">
-          <button
+          {renderDetail ? <span className="px-1 tabular-nums">{fmtBRL(r.unitPriceNoBDI || 0)}</span> : <button
             type="button"
             data-detail-cell="true"
             className={`rounded px-1 hover:bg-primary/10 tabular-nums text-[11px] ${r.unitPriceIsEstimated ? 'italic text-muted-foreground' : ''}`}
             onClick={selectAnalytic}
           >
             {fmtBRL(r.unitPriceNoBDI || 0)}
-          </button>
+          </button>}
           {isLocked && (
             <Lock className="h-3 w-3 text-muted-foreground print:hidden" aria-label="Medição bloqueada" />
           )}
         </div>
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${G_BG.contract}`}>
-        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectAnalytic}>{fmtBRL(r.unitPriceWithBDI || 0)}</button>
+        {renderDetail ? <span className="px-1">{fmtBRL(r.unitPriceWithBDI || 0)}</span> : <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectAnalytic}>{fmtBRL(r.unitPriceWithBDI || 0)}</button>}
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${G_BG.contract}`}>
-        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('contracted')}>{fmtBRL(r.valueContracted)}</button>
+        {renderDetail ? <span className="px-1">{fmtBRL(r.valueContracted)}</span> : <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('contracted')}>{fmtBRL(r.valueContracted)}</button>}
       </td>
 
-      {/* Medição atual — somente leitura, vem dos apontamentos da EAP/Diário */}
+      {/* The current-period cell owns the independent entry/detail controls. */}
       <td
         className={`px-2 py-1.5 text-right tabular-nums align-top ${BORDER_L} ${G_BG.period} ${
           r.hasNoLogsInPeriod ? 'text-muted-foreground' : 'font-semibold text-foreground'
@@ -176,7 +178,7 @@ export default function MeasurementItemRow({
         {renderQuantity ? renderQuantity(r) : <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyPeriod || 0)}</button>}
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums font-semibold text-foreground align-top ${G_BG.period}`}>
-        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('period')}>{fmtBRL(r.valuePeriod)}</button>
+        {renderDetail ? <span className="px-1">{fmtBRL(r.valuePeriod)}</span> : <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('period')}>{fmtBRL(r.valuePeriod)}</button>}
       </td>
 
       {showForecast && <>
@@ -198,18 +200,18 @@ export default function MeasurementItemRow({
       </>}
       {/* Acumulado */}
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${BORDER_L} ${G_BG.accum}`}>
-        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyCurrentAccum)}</button>
+        {renderDetail ? <span className="px-1">{fmtNum(r.qtyCurrentAccum)}</span> : <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyCurrentAccum)}</button>}
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${G_BG.accum}`}>
-        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('accum')}>{fmtBRL(r.valueAccum)}</button>
+        {renderDetail ? <span className="px-1">{fmtBRL(r.valueAccum)}</span> : <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('accum')}>{fmtBRL(r.valueAccum)}</button>}
       </td>
 
       {/* Saldo */}
       <td className={`px-2 py-1.5 text-right tabular-nums text-muted-foreground align-top ${BORDER_L} ${G_BG.balance}`}>
-        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyBalance)}</button>
+        {renderDetail ? <span className="px-1">{fmtNum(r.qtyBalance)}</span> : <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyBalance)}</button>}
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums text-muted-foreground align-top ${G_BG.balance}`}>
-        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('balance')}>{fmtBRL(r.valueBalance)}</button>
+        {renderDetail ? <span className="px-1">{fmtBRL(r.valueBalance)}</span> : <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('balance')}>{fmtBRL(r.valueBalance)}</button>}
       </td>
     </tr>
     {isSelected && renderDetail && <tr><td colSpan={detailColSpan} className="border-b border-border bg-muted/10 px-1 py-2"><div className="measurement-inline-detail">{renderDetail(r)}</div></td></tr>}
