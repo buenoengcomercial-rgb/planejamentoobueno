@@ -37,11 +37,27 @@ beforeAll(async()=>{
  await db.exec('GRANT TRUNCATE, REFERENCES, TRIGGER ON measurement_workspaces, measurement_workspace_backups, measurement_workspace_events TO authenticated, anon');
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010150000_measurement_select_only_access.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010160000_measurement_entry_patch.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261010170000_measurement_unchanged_catalog_fast_path.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
 afterAll(async()=>{await db.close();});
 describe('transação da Medição na nuvem',()=>{
+ it('catálogo inalterado usa igualdade exata; alterações continuam sujeitas à aprovação',async()=>{
+  await seed(); const original=JSON.parse(wire(base));
+  await db.query('SELECT validate_measurement_catalog($1,$2)',[JSON.stringify(original),JSON.stringify(original)]);
+  for (const mutate of [
+   (w:typeof original)=>{ w.services[0].contracted+=1; },
+   (w:typeof original)=>{ w.services[0].description+=' adulterada'; },
+   (w:typeof original)=>{ w.services.splice(0,1); },
+   (w:typeof original)=>{ w.importedKeys.push('origem-inexistente'); },
+   (w:typeof original)=>{ w.importedKeys=[]; },
+  ]) {
+   const changed=structuredClone(original); mutate(changed);
+   await expect(db.query('SELECT validate_measurement_catalog($1,$2)',[JSON.stringify(original),JSON.stringify(changed)])).rejects.toThrow();
+  }
+  expect((await db.query<{data:unknown}>('SELECT data FROM measurement_workspaces')).rows[0].data).toEqual(original);
+ });
  it('patch mantém todas as outras entradas, períodos, plantas e contrato, e rejeita replay adulterado',async()=>{
   await seed(); const next=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('patch'),multiplier:3});
   const patch=measurementEntryPatch(base,next)!;
