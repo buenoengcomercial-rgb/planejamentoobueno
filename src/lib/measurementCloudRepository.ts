@@ -24,6 +24,38 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
   return {
     ...local,
     savedLabel: 'Salvo na nuvem',
+    remoteRevision: async () => {
+      const { data, error } = await supabase.from('measurement_workspace_versions' as never).select('revision').eq('project_id', scope.projectId).maybeSingle();
+      const revision = Number((data as { revision?: number } | null)?.revision);
+      if (error || !data || !Number.isSafeInteger(revision) || revision < 0) throw new Error('Não foi possível conferir a atualização da Medição.');
+      return revision;
+    },
+    watch: (onRevision, onConnection) => {
+      let disposed = false, generation = 0, retry: ReturnType<typeof setTimeout> | undefined;
+      let channel: ReturnType<typeof supabase.channel>;
+      const connect = () => {
+        if (disposed) return;
+        const ownGeneration = ++generation;
+        channel = supabase.channel(`measurement-live:${scope.projectId}`)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'measurement_workspace_versions', filter: `project_id=eq.${scope.projectId}` }, payload => {
+            const row = payload.new as { project_id?: string; revision?: number };
+            const revision = Number(row.revision);
+            if (!disposed && row.project_id === scope.projectId && Number.isSafeInteger(revision) && revision >= 0) onRevision(revision);
+          }).subscribe(state => {
+            if (disposed || generation !== ownGeneration) return;
+            onConnection(state === 'SUBSCRIBED');
+            if (state === 'SUBSCRIBED' && retry) { clearTimeout(retry); retry = undefined; }
+            if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(state) && !retry) retry = setTimeout(() => {
+              retry = undefined;
+              generation++;
+              const previous = channel;
+              void supabase.removeChannel(previous).then(connect);
+            }, 3000);
+          });
+      };
+      connect();
+      return () => { disposed = true; if (retry) clearTimeout(retry); void supabase.removeChannel(channel); };
+    },
     load: async () => {
       const { data, error } = await supabase.rpc('load_measurement_workspace' as never, { p_project_id: scope.projectId } as never);
       if (error) throw new Error(`Medição não carregada: ${error.message}`);

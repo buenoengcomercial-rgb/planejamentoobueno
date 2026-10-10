@@ -19,8 +19,9 @@ beforeAll(async()=>{
  await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE SCHEMA auth; CREATE SCHEMA storage;
  CREATE TYPE org_role AS ENUM('owner','admin','engineer','viewer');
  CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$ SELECT '${userId}'::uuid $$;
- CREATE FUNCTION has_org_role(uuid,uuid,org_role[]) RETURNS boolean LANGUAGE sql AS $$ SELECT coalesce(current_setting('test.role',true),'owner')::public.org_role=ANY($3) $$;
+ CREATE FUNCTION has_org_role(uuid,uuid,org_role[]) RETURNS boolean LANGUAGE sql AS $$ SELECT $2='${projectId}'::uuid AND coalesce(current_setting('test.role',true),'owner')::public.org_role=ANY($3) $$;
  CREATE TABLE projects(id uuid PRIMARY KEY,organization_id uuid);
+ GRANT SELECT ON projects TO authenticated;
  CREATE TABLE additives(project_id uuid,id text,data jsonb);
  CREATE TABLE storage.objects(bucket_id text,name text);
  CREATE TABLE takeoff_plans(id uuid PRIMARY KEY,project_id uuid,chapter_id text,building text,name text,floor text,kind text,file_path text,created_by uuid,deleted_at timestamptz);
@@ -39,11 +40,32 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010160000_measurement_entry_patch.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010170000_measurement_unchanged_catalog_fast_path.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010180000_measurement_validation_collection_cache.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261010190000_measurement_realtime_versions.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
 afterAll(async()=>{await db.close();});
 describe('transação da Medição na nuvem',()=>{
+ it('publica somente a revisão confirmada na mesma transação, respeitando RLS e rollback',async()=>{
+  await seed();
+  const before=(await db.query<{data:unknown}>('SELECT data FROM measurement_workspaces WHERE project_id=$1',[projectId])).rows[0].data;
+  expect((await db.query<{revision:number}>('SELECT revision FROM measurement_workspace_versions WHERE project_id=$1',[projectId])).rows[0].revision).toBe(base.revision);
+  const next=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('realtime'),multiplier:29});
+  await commit(next);
+  expect((await db.query<{revision:number}>('SELECT revision FROM measurement_workspace_versions WHERE project_id=$1',[projectId])).rows[0].revision).toBe(next.revision);
+  const stale=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('stale'),multiplier:3});
+  await expect(commit(stale)).rejects.toThrow('Conflito');
+  expect((await db.query<{revision:number}>('SELECT revision FROM measurement_workspace_versions WHERE project_id=$1',[projectId])).rows[0].revision).toBe(next.revision);
+  await db.exec('BEGIN'); await db.query('UPDATE measurement_workspaces SET revision=revision+1 WHERE project_id=$1',[projectId]); await db.exec('ROLLBACK');
+  expect((await db.query<{revision:number}>('SELECT revision FROM measurement_workspace_versions WHERE project_id=$1',[projectId])).rows[0].revision).toBe(next.revision);
+  const other='00000000-0000-4000-8000-000000000099';
+  await db.query('INSERT INTO projects VALUES($1,$1)',[other]);
+  await db.query('INSERT INTO measurement_workspaces(project_id,revision,data) VALUES($1,0,$2)',[other,JSON.stringify(before)]);
+  await db.exec("SET ROLE authenticated; SET test.role='viewer'");
+  expect((await db.query('SELECT * FROM measurement_workspace_versions')).rows).toEqual([{project_id:projectId,revision:next.revision}]);
+  await expect(db.query('UPDATE measurement_workspace_versions SET revision=999')).rejects.toThrow('permission denied');
+  await db.exec('RESET ROLE'); await db.query('DELETE FROM measurement_workspaces WHERE project_id=$1',[other]); await db.query('DELETE FROM projects WHERE id=$1',[other]);
+ });
  it('catálogo inalterado usa igualdade exata; alterações continuam sujeitas à aprovação',async()=>{
   await seed(); const original=JSON.parse(wire(base));
   await db.query('SELECT validate_measurement_catalog($1,$2)',[JSON.stringify(original),JSON.stringify(original)]);

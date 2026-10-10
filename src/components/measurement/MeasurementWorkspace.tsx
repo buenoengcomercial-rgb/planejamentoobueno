@@ -27,6 +27,7 @@ import { rememberMeasurement, selectedMeasurement } from '@/lib/measurementSelec
 import MeasurementLifecycleHistory from './MeasurementLifecycleHistory';
 import MeasurementLifecycleDialog, { type LifecycleSelection } from './MeasurementLifecycleDialog';
 import { periodDeletionBlock } from '@/lib/measurementLifecycle';
+import { useMeasurementRealtime } from './useMeasurementRealtime';
 const button = 'inline-flex h-8 items-center gap-1.5 rounded border border-slate-200 bg-white px-2.5 text-xs hover:bg-slate-50 disabled:opacity-40';
 
 /** Real workspace UI, with an explicitly injected persistence boundary. No Project setter. */
@@ -56,6 +57,22 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const [search, setSearch] = useState(''), [chapterFilter, setChapterFilter] = useState('all');
   const plan = useMemo(() => incorporationBackup ? prepareIncorporation(incorporationBackup) : null, [incorporationBackup]);
   const adopt = useCallback((w: Workspace) => { current.current = w; setWorkspace(w); }, []);
+  const realtime = useMeasurementRealtime({ repository, projectId: workspace?.projectId, revision: workspace?.revision,
+    canRefresh: () => !busy.current && !recovery && !destinationRef.current && !lifecycle && !periodOpen
+      && !writingDrafts.current && !draftChanges.current.size && !drafts.length
+      && !document.activeElement?.closest('.measurement-workspace input, .measurement-workspace textarea, .measurement-workspace select'),
+    onRefresh: next => {
+      adopt(next);
+      setActive(previous => {
+        if (next.periods.some(p => p.id === previous)) return previous;
+        const remaining = next.periods.at(-1)?.id ?? '';
+        if (remaining) rememberMeasurement(actor.id, next.projectId, remaining);
+        return remaining;
+      });
+      setExpanded(previous => previous && next.services.some(s => s.id === previous.taskId) ? previous : null);
+      setStatus(repository.savedLabel ?? 'Salvo neste navegador');
+    },
+  });
   useEffect(() => {
     let alive = true;
     void Promise.all([repository.load(), repository.drafts(), repository.pending()]).then(([w, d, p]) => {
@@ -256,7 +273,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const pageHeader = <>
     <MeasurementHeader compact onExportXLSX={() => { if (busy.current || recovery) { setError('Aguarde a confirmação do salvamento antes de exportar.'); return; } void exportMonthlyMeasurement(current.current!, active, 'xlsx').catch(e => setError(e.message)); }} onPrint={() => { if (busy.current || recovery) { setError('Aguarde a confirmação do salvamento antes de exportar.'); return; } void exportMonthlyMeasurement(current.current!, active, 'pdf').catch(e => setError(e.message)); }} showHistory onOpenHistory={() => setHistoryOpen(true)}/>
     <section className="rounded border border-border bg-card p-2">
-      <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"><strong>{workspace.projectName}</strong><div className="flex flex-wrap items-center gap-4"><span>Valor desta medição: <strong data-testid="monthly-value">{period ? fmtBRL(allTotals.period) : '—'}</strong></span><span role="status" className={saving ? 'text-amber-700' : 'text-emerald-700'}>{status}</span></div></div>
+      <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"><strong>{workspace.projectName}</strong><div className="flex flex-wrap items-center gap-4"><span>Valor desta medição: <strong data-testid="monthly-value">{period ? fmtBRL(allTotals.period) : '—'}</strong></span><div className="flex flex-col items-end"><span role="status" className={saving ? 'text-amber-700' : 'text-emerald-700'}>{status}</span>{realtime.available && <span className="text-[10px] text-muted-foreground">{realtime.pending ? 'Atualização recebida · rascunho preservado' : realtime.failed ? 'Atualização não conferida · tentando reconectar' : realtime.connected ? 'Atualizado · Tempo real ativo' : 'Reconectando · tempo real da Medição'}</span>}</div></div></div>
       <div className="flex flex-wrap items-center gap-2"><label className="text-[11px] font-semibold uppercase text-muted-foreground" htmlFor="measurement-period">Medições</label><select id="measurement-period" aria-label="Medição selecionada" value={active} className="h-8 rounded-md border border-primary bg-primary px-2.5 text-xs font-medium text-primary-foreground" disabled={saving || !!destination || recovery} onChange={e => {
         if (busy.current || recovery) { setError('Aguarde a confirmação do salvamento antes de trocar a medição.'); return; }
         selectPeriod(e.target.value); setExpanded(null); setError('');
@@ -287,10 +304,12 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     }}>Recuperar rascunho</button></div>}
     {period && <MeasurementBulletin key={active} workspace={workspace} measurementId={active} readOnly={!!locked} drafts={drafts}
       onDraft={async (field, value) => {
+        writingDrafts.current++;
         try {
           await repository.writeDraft({ projectId: workspace.projectId, measurementId: active, serviceId: bulletinDraftKey, rowId: field, changes: { value } });
           setDrafts(await repository.drafts());
         } catch (e) { setError(`Falha ao preservar rascunho do boletim: ${e instanceof Error ? e.message : String(e)}`); throw e; }
+        finally { writingDrafts.current--; }
       }}
       onCommit={async (field, patch, draftWritten) => {
         if (!current.current || busy.current || recovery) { setError('Aguarde a confirmação do salvamento antes de finalizar outro campo. Seu rascunho está preservado.'); return false; }
