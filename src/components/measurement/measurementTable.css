@@ -23,11 +23,12 @@
 .measurement-table--ledger { min-width: 0; width: 100%; }
 .measurement-table--ledger col.col-item { width: 4.2%; }
 .measurement-table--ledger col.col-code { width: 4.8%; }
-.measurement-table--ledger col.col-bank { width: 5.3%; }
-.measurement-table--ledger col.col-desc { width: 19.7%; min-width: 0; max-width: none; }
+.measurement-table--ledger col.col-bank { width: 5%; }
+.measurement-table--ledger col.col-desc { width: 17.6%; min-width: 0; max-width: none; }
 .measurement-table--ledger col.col-und { width: 4%; }
-.measurement-table--ledger col.col-qty { width: 4.4%; }
+.measurement-table--ledger col.col-qty { width: 4.2%; }
 .measurement-table--ledger col.col-val { width: 7.4%; }
+.measurement-table--ledger col:is(:nth-child(9), :nth-child(11), :nth-child(13), :nth-child(15)) { width: 8.2%; }
 .measurement-table--ledger > :is(thead, tbody, tfoot) > tr > :is(th, td) { padding-inline: 4px; text-align: center; overflow-wrap: normal; word-break: normal; }
 .measurement-table--ledger > thead > tr:last-child > th { padding-inline: 2px; }
 .measurement-table--ledger > tbody > tr > td:first-child[colspan] { text-align: left; }
@@ -48,8 +49,8 @@
 .measurement-analytic-table col.col-val { width: 11%; }
 .measurement-analytic-table :is(th, td) { text-align: center; overflow-wrap: normal; word-break: normal; }
 .measurement-analytic-table :is(th, td):nth-child(3) { text-align: left; }
-@container (max-width: 1119px) {
-  .measurement-table--ledger { min-width: 1120px; }
+@container (max-width: 1199px) {
+  .measurement-table--ledger { min-width: 1200px; }
 }
 
 /* Override the app-wide 12px minimum only in this dense, on-screen ledger. */
@@ -57,6 +58,7 @@
   .measurement-table--ledger,
   .measurement-table--ledger :is(th, td, button, input, span) { font-size: 11px; line-height: 1.45; }
   .measurement-table--ledger > :is(thead, tbody, tfoot) > tr > :is(th, td) { padding-inline: 6px; }
+  .measurement-table--ledger > :is(tbody, tfoot) > tr > td.tabular-nums { padding-inline: 4px; }
   .measurement-table--ledger > tbody > [data-measurement-row] > td {
     padding-block: 6px;
     vertical-align: middle;
