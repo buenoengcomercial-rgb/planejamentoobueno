@@ -67,7 +67,11 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       const operationId = candidate.audit.at(-1)?.id;
       if (!operationId || candidate.projectId !== scope.projectId || candidate.revision !== baseRevision + 1) throw new Error('Operação de Medição inválida.');
       // A failed upload or lost response retains the complete candidate, including files.
-      const next = structuredClone(candidate);
+      const latestEvent = candidate.audit.at(-1);
+      const needsPlanPaths = candidate.plans.some(plan => !plan.storagePath)
+        || [latestEvent?.beforePlans, latestEvent?.afterPlans]
+          .some(plans => plans?.some(plan => !plan.storagePath));
+      const next = needsPlanPaths ? structuredClone(candidate) : candidate;
       const preserve = () => local.preservePending!({ baseRevision, candidate: next } satisfies PendingMeasurementSave);
       await preserve();
       for (const plan of next.plans) {
@@ -80,17 +84,39 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         }
       }
       // History shares the same immutable file identities; geometry remains transactional.
-      const paths = new Map(next.plans.map(p => [p.id, p.storagePath]));
-      for (const event of next.audit) for (const plans of [event.beforePlans, event.afterPlans]) for (const p of plans ?? []) p.storagePath ??= paths.get(p.id);
+      if (needsPlanPaths) {
+        const paths = new Map(next.plans.map(p => [p.id, p.storagePath]));
+        for (const event of next.audit) for (const plans of [event.beforePlans, event.afterPlans]) for (const p of plans ?? []) p.storagePath ??= paths.get(p.id);
+      }
       if (next.plans.some((p, i) => p.storagePath !== candidate.plans[i]?.storagePath)) await preserve();
       const patch = confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
-      const { data, error } = patch
-        ? await supabase.rpc('patch_measurement_entries' as never, {
+      const send = () => patch
+        ? supabase.rpc('patch_measurement_entries' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: patch,
         } as never)
-        : await supabase.rpc('commit_measurement_workspace' as never, {
+        : supabase.rpc('commit_measurement_workspace' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_candidate: encodeMeasurementWorkspace(next),
         } as never);
+      let { data, error } = await send();
+      if (error && /57014|statement timeout|canceling statement|timeout|failed to fetch/i.test(`${error.code ?? ''} ${error.message}`)) {
+        // A timeout may arrive after PostgreSQL committed. Check the immutable
+        // operation ID before retrying the same candidate; never generate a new
+        // audit event or assume that a missing HTTP response means failure.
+        const event = await supabase.from('measurement_workspace_events' as never)
+          .select('revision').eq('project_id', scope.projectId).eq('operation_id', operationId).maybeSingle();
+        const version = await supabase.from('measurement_workspace_versions' as never)
+          .select('revision').eq('project_id', scope.projectId).maybeSingle();
+        const remoteRevision = Number((version.data as { revision?: number } | null)?.revision);
+        if (event.error || version.error || !version.data || !Number.isSafeInteger(remoteRevision)) throw new Error(`${error.message}. Não foi possível conferir a revisão; rascunho preservado.`);
+        const savedRevision = Number((event.data as { revision?: number } | null)?.revision);
+        if (savedRevision === next.revision && remoteRevision === next.revision) {
+          await local.removePending!(operationId);
+          confirmed = next;
+          return next;
+        }
+        if (remoteRevision === baseRevision && !event.data) ({ data, error } = await send());
+        else throw new Error('A Medição mudou durante a gravação. O rascunho foi preservado para conferência.');
+      }
       if (error) throw new Error(error.message);
       let saved: MeasurementWorkspace;
       if (patch) {

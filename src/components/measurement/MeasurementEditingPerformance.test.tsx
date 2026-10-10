@@ -14,11 +14,11 @@ function setup(size = 402) {
     periods: [{ id: 'm', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }],
     entries: [{ projectId: 'performance', measurementId: 'm', serviceId: 's0', rows: [newMeasuredRow('r')] }], plans: [], audit: [], importedKeys: [], backupId: 'b' };
   let drafts: WorkspaceDraft[] = [];
-  const repository: MeasurementRepository = { load: vi.fn(async () => w), initialize: vi.fn(async () => w), commit: vi.fn(async candidate => { w = candidate; return candidate; }), pending: vi.fn(async () => null), pendingSaves: vi.fn(async () => []), archivePending: vi.fn(async () => undefined), backup: vi.fn(async () => null), drafts: vi.fn(async () => drafts), writeDraft: vi.fn(async d => { const old = drafts.find(x => x.rowId === d.rowId); drafts = [...drafts.filter(x => x.rowId !== d.rowId), { ...d, changes: { ...old?.changes, ...d.changes } }]; }), clearDraft: vi.fn(async (_m, _s, rid) => { drafts = drafts.filter(d => d.rowId !== rid); }) };
+  const repository: MeasurementRepository = { load: vi.fn(async () => w), initialize: vi.fn(async () => w), commit: vi.fn(async candidate => { w = candidate; return candidate; }), pending: vi.fn(async () => null), pendingSaves: vi.fn(async () => []), archivePending: vi.fn(async () => undefined), backup: vi.fn(async () => null), drafts: vi.fn(async () => drafts), writeDraft: vi.fn(async d => { const same = (x: WorkspaceDraft) => x.measurementId === d.measurementId && x.serviceId === d.serviceId && x.rowId === d.rowId; const old = drafts.find(same); drafts = [...drafts.filter(x => !same(x)), { ...d, changes: { ...old?.changes, ...d.changes } }]; }), clearDraft: vi.fn(async (mid, sid, rid) => { drafts = drafts.filter(d => d.measurementId !== mid || d.serviceId !== sid || d.rowId !== rid); }) };
   return { repository, saved: () => w, drafts: () => drafts };
 }
 
-it('mantém a tarefa atual até confirmar e inicia o boletim recolhido após recarga', async () => {
+it('permite a tarefa seguinte enquanto a primeira salva e inicia o boletim recolhido após recarga', async () => {
   const { repository } = setup(2);
   let confirm!: (candidate: Workspace) => void;
   vi.mocked(repository.commit).mockImplementationOnce(() => new Promise(resolve => { confirm = resolve; }));
@@ -29,10 +29,10 @@ it('mantém a tarefa atual até confirmar e inicia o boletim recolhido após rec
   const a = screen.getByLabelText('Unidades da linha 1');
   fireEvent.change(a, { target: { value: '2' } }); fireEvent.blur(a);
   const next = screen.getByLabelText('Quantidade de Serviço 1');
-  expect(next).toBeDisabled();
+  expect(next).toBeEnabled();
   fireEvent.click(next);
-  expect(screen.getByLabelText('Unidades da linha 1')).toHaveValue(2);
-  expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByLabelText('Unidades da linha 1')).toHaveValue(0);
+  expect(screen.getByLabelText('Quantidade de Serviço 1')).toHaveAttribute('aria-expanded', 'true');
   await act(async () => confirm(vi.mocked(repository.commit).mock.calls[0][0]));
   await waitFor(() => expect(screen.getByLabelText('Quantidade de Serviço 1')).toBeEnabled());
   fireEvent.click(screen.getByLabelText('Quantidade de Serviço 1'));
@@ -45,7 +45,8 @@ it('mantém a tarefa atual até confirmar e inicia o boletim recolhido após rec
 it('mede edição com a base completa de 402 serviços e confirmação atrasada', async () => {
   const { repository } = setup();
   let renders = 0;
-  render(<Profiler id="measurement" onRender={() => renders++}><MeasurementWorkspace repository={repository} actor={actor}/></Profiler>);
+  let reactRenderMs = 0;
+  render(<Profiler id="measurement" onRender={(_id, _phase, actualDuration) => { renders++; reactRenderMs += actualDuration; }}><MeasurementWorkspace repository={repository} actor={actor}/></Profiler>);
   fireEvent.click(await screen.findByLabelText('Quantidade de Serviço 0'));
   const input = screen.getByLabelText('Unidades da linha 1');
   fireEvent.focus(input);
@@ -57,15 +58,27 @@ it('mede edição com a base completa de 402 serviços e confirmação atrasada'
   const typingRenders = renders - before;
   let confirm!: (candidate: Workspace) => void;
   vi.mocked(repository.commit).mockImplementationOnce(() => new Promise(resolve => { confirm = resolve; }));
+  reactRenderMs = 0;
   const started = performance.now();
   fireEvent.blur(input);
-  const immediatelyUpdated = screen.getByLabelText('Quantidade de Serviço 0').getAttribute('value') === '12345';
   const elapsed = performance.now() - started;
-  console.info(JSON.stringify({ services: 402, typingRenders, immediatelyUpdated, blurRenderMs: Math.round(elapsed) }));
+  const immediatelyUpdated = screen.getByLabelText('Quantidade de Serviço 0').getAttribute('value') === '12345';
+  console.info(JSON.stringify({ services: 402, typingRenders, immediatelyUpdated, blurRenderMs: Math.round(elapsed), reactRenderMs: Math.round(reactRenderMs) }));
   expect(typingRenders).toBe(0);
   expect(immediatelyUpdated).toBe(true);
+  const next = screen.getByLabelText('Quantidade de Serviço 1');
+  act(() => next.focus()); fireEvent.change(next, { target: { value: '2' } });
   await act(async () => confirm(vi.mocked(repository.commit).mock.calls[0][0]));
   await waitFor(() => expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(12345));
+  // The first RPC may finish while the operator is typing into another task.
+  expect(screen.getByLabelText('Quantidade de Serviço 1')).toBe(next);
+  expect(next).toHaveFocus(); expect(next).toHaveValue(2);
+  fireEvent.blur(next);
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+  const third = screen.getByLabelText('Quantidade de Serviço 2');
+  act(() => third.focus()); fireEvent.change(third, { target: { value: '3' } }); fireEvent.blur(third);
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(3));
+  expect((await repository.load())?.entries.map(entry => [entry.serviceId, entry.rows[0].multiplier])).toEqual([['s0', 12345], ['s1', 2], ['s2', 3]]);
 }, 30000);
 
 
@@ -93,6 +106,38 @@ it('atualiza imediatamente e salva A/B em sequência sem bloquear foco ou apagar
   expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador');
 });
 
+it('fila A→B→C: timeout na primeira tarefa, continua editando e confirma cada tarefa uma vez após retry', async () => {
+  const { repository, drafts } = setup(3);
+  let confirmed = (await repository.load())!;
+  let failFirst!: (cause: Error) => void;
+  vi.mocked(repository.load).mockImplementation(async () => confirmed);
+  vi.mocked(repository.commit).mockImplementationOnce(() => new Promise((_resolve, reject) => { failFirst = reject; }))
+    .mockImplementation(async candidate => { confirmed = candidate; return candidate; });
+  const mounted = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  await screen.findByLabelText('Quantidade de Serviço 0');
+  for (const [index, value] of [[0, '1'], [1, '2'], [2, '3']] as const) {
+    fireEvent.click(screen.getByLabelText(`Quantidade de Serviço ${index}`));
+    const cell = screen.getByLabelText('Unidades da linha 1');
+    fireEvent.focus(cell); fireEvent.change(cell, { target: { value } }); fireEvent.blur(cell);
+    expect(screen.getByLabelText(`Quantidade de Serviço ${index}`)).toHaveValue(Number(value));
+  }
+  expect(repository.commit).toHaveBeenCalledTimes(1);
+  await act(async () => failFirst(new Error('canceling statement due to statement timeout')));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Não salvo'));
+  expect(drafts().map(d => d.serviceId).sort()).toEqual(['s0', 's1', 's2']);
+  expect(screen.getByLabelText('Quantidade de Serviço 2')).toHaveValue(3);
+  fireEvent.click(screen.getByRole('button', { name: 'Tentar salvar novamente' }));
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(4));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
+  const calls = vi.mocked(repository.commit).mock.calls;
+  expect(calls[0][0].audit.at(-1)?.id).toBe(calls[1][0].audit.at(-1)?.id);
+  expect(calls.slice(1).map(([candidate]) => candidate.audit.length)).toEqual([1, 2, 3]);
+  expect(confirmed.entries.map(entry => [entry.serviceId, entry.rows[0].multiplier])).toEqual([['s0', 1], ['s1', 2], ['s2', 3]]);
+  await waitFor(() => expect(drafts()).toHaveLength(0));
+  mounted.unmount(); render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  for (const [index, value] of [[0, 1], [1, 2], [2, 3]] as const) expect(await screen.findByLabelText(`Quantidade de Serviço ${index}`)).toHaveValue(value);
+});
+
 it('mantém todos os campos em rascunho se a primeira confirmação falhar e não envia os seguintes', async () => {
   const { repository, drafts } = setup(1);
   let fail!: (error: Error) => void;
@@ -106,7 +151,7 @@ it('mantém todos os campos em rascunho se a primeira confirmação falhar e nã
   expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(12);
   await act(async () => fail(new Error('Sem conexão')));
   await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Não salvo'));
-  expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(0);
+  expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(12);
   expect(drafts()[0].changes).toMatchObject({ multiplier: '3', measuredQuantity: '4' });
   expect(repository.commit).toHaveBeenCalledTimes(1); expect(repository.clearDraft).not.toHaveBeenCalled();
 });
