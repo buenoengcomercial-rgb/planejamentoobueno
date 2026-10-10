@@ -105,6 +105,15 @@
 .measurement-detail-pane { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .measurement-detail-pane > section { margin-left: 0; border: 0; }
 .measurement-financial-summary { padding: 12px; display: grid; gap: 12px; background: hsl(var(--background)); }
+.measurement-upper-scroll { position: relative; height: 100%; overflow: auto; overscroll-behavior: contain; scroll-padding-block: 72px 40px; }
+.measurement-page-header { display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
+.measurement-upper-scroll .measurement-sheet-region { height: auto; min-height: 100%; }
+.measurement-upper-scroll .measurement-table-pane--page-scroll { display: block; height: auto; min-height: inherit; overflow: visible; }
+.measurement-upper-scroll .measurement-table-pane--page-scroll > :last-child { display: block; overflow: visible; }
+.measurement-table-pane--page-scroll .measurement-table-scroll { overflow: visible; }
+.measurement-table-pane--page-scroll .measurement-table-scroll > table { height: auto; min-height: 100%; }
+.measurement-upper-scroll .measurement-table-space { height: 0; }
+.measurement-table-pane--page-scroll tfoot { position: sticky; bottom: 0; z-index: 10; }
 @media (max-width: 767px) {
   .measurement-split-workspace .measurement-split-handle { height: 20px; }
 }

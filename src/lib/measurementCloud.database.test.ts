@@ -6,6 +6,7 @@ import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation, incorporateApprovedAdditive } from './measurementIncorporation';
 import { approveMeasuredPeriod, editMeasuredRow, editMeasuredBulletin, deleteMeasuredRow, entryFor, newMeasuredRow, pasteMeasuredRow, freezeMeasuredPeriod, captureMeasurement, monthlyLines, addMeasuredPeriod, type MeasurementWorkspace } from './measurementWorkspace';
 import { encodeMeasurementWorkspace } from './measurementCloudCodec';
+import { measurementEntryPatch } from './measurementEntryPatch';
 import { deleteMeasuredPeriod, restoreMeasuredPeriod } from './measurementLifecycle';
 const projectId='00000000-0000-4000-8000-000000000001', userId='00000000-0000-4000-8000-000000000002', planId='00000000-0000-4000-8000-000000000003';
 const actor={id:userId,name:'Teste',canEdit:true,canReview:true};
@@ -35,11 +36,39 @@ beforeAll(async()=>{
  // Reproduce the additional default grants present in the real Cloud database.
  await db.exec('GRANT TRUNCATE, REFERENCES, TRIGGER ON measurement_workspaces, measurement_workspace_backups, measurement_workspace_events TO authenticated, anon');
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010150000_measurement_select_only_access.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261010160000_measurement_entry_patch.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
 afterAll(async()=>{await db.close();});
 describe('transação da Medição na nuvem',()=>{
+ it('patch mantém todas as outras entradas, períodos, plantas e contrato, e rejeita replay adulterado',async()=>{
+  await seed(); const next=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('patch'),multiplier:3});
+  const patch=measurementEntryPatch(base,next)!;
+  const send=async(p=patch,r=base.revision)=>(await db.query<{value:unknown}>('SELECT patch_measurement_entries($1,$2,$3) value',[projectId,r,JSON.stringify(p)])).rows[0].value;
+  expect(await send()).toEqual({projectId,revision:next.revision,patch});
+  expect((await db.query<{data:unknown}>('SELECT data FROM measurement_workspaces')).rows[0].data).toEqual(JSON.parse(wire(next)));
+  const later=editMeasuredRow(next,actor,'m1','signs',{...newMeasuredRow('patch'),multiplier:4}); await commit(later);
+  expect(await send()).toEqual({projectId,revision:next.revision,patch});
+  const changed=structuredClone(patch); changed.entries[0].rows[0].multiplier=2;
+  await expect(send(changed)).rejects.toThrow('conteúdo diferente');
+  const stale=measurementEntryPatch(base,editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('stale'),multiplier:2}))!;
+  await expect(send(stale)).rejects.toThrow('Conflito');
+  expect((await db.query<{data:unknown}>('SELECT data FROM measurement_workspaces')).rows[0].data).toEqual(JSON.parse(wire(later)));
+ });
+ it('patch preserva permissões, limite contratado e bloqueio fiscal',async()=>{
+  await seed(); const next=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('patch'),multiplier:3});
+  const patch=measurementEntryPatch(base,next)!;
+  const send=()=>db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,base.revision,JSON.stringify(patch)]);
+  await db.exec("SET test.role='viewer'"); await expect(send()).rejects.toThrow('perfil'); await db.exec("SET test.role='owner'");
+  patch.entries[0].rows[0].multiplier=401; patch.event.after[0].rows[0].multiplier=401;
+  await expect(send()).rejects.toThrow();
+  const approved=await commit(approveMeasuredPeriod(await commit(freezeMeasuredPeriod(base,actor,'m1')),actor,'m1'));
+  const fake=structuredClone(approved); fake.periods[0].status='draft'; delete fake.periods[0].frozen;
+  const edit=editMeasuredRow(fake,actor,'m1','detectors',{...entryFor(fake,'m1','detectors').rows[0],multiplier:220}); edit.periods=approved.periods;
+  const forbidden=measurementEntryPatch(approved,edit)!;
+  await expect(db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,approved.revision,JSON.stringify(forbidden)])).rejects.toThrow('bloqueada');
+ });
  it('não permite esvaziar tabelas nem criar gatilhos por privilégios residuais',async()=>{
   await seed();
   for(const role of ['authenticated','anon']) for(const table of ['measurement_workspaces','measurement_workspace_backups','measurement_workspace_events']) {
