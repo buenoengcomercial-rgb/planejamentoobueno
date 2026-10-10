@@ -44,7 +44,7 @@ export function prepareIncorporation(backup: IncorporationBackup): Incorporation
   }
   const candidate: MeasurementWorkspace = { schema: 1, projectId: project.id, projectName: project.name, revision: 0, contract: structuredClone(project.contractInfo), services: [], periods, entries: [], plans: plans.map(p => ({ ...structuredClone(p), measures: [] })), audit: [], importedKeys: [], backupId: backup.id };
   const logs = tasks.flatMap(t => t.task.dailyLogs ?? []);
-  const inventory: Inventory = { services: tasks.length, dailyLogs: logs.filter(l => !l.measurementPeriod).length, periodLogs: logs.filter(l => l.measurementPeriod).length, detailRows: logs.reduce((n, l) => n + (l.quantityDetails?.length ?? 0), 0), references: new Set(logs.flatMap(l => l.quantityDetails?.flatMap(r => r.sharedRecordId ? [r.sharedRecordId] : []) ?? [])).size, plans: plans.length, marks: plans.reduce((n, p) => n + p.measures.length, 0), filesBytes: plans.reduce((n, p) => n + p.file.size, 0), periods: periods.length, fiscalPeriods: periods.filter(isPeriodLocked).length, audits: project.auditLogs?.length ?? 0, drafts: drafts.length + (project.measurementDraft ? 1 : 0) };
+  const inventory: Inventory = { services: tasks.length, dailyLogs: logs.filter(l => !l.measurementPeriod).length, periodLogs: logs.filter(l => l.measurementPeriod).length, detailRows: logs.reduce((n, l) => n + (l.quantityDetails?.length ?? 0), 0), references: new Set(logs.flatMap(l => l.quantityDetails?.flatMap(r => r.sharedRecordId ? [r.sharedRecordId] : []) ?? [])).size, plans: plans.length, marks: plans.reduce((n, p) => n + p.measures.length, 0), filesBytes: plans.reduce((n, p) => n + p.file.size, 0), periods: periods.length, fiscalPeriods: periods.filter(p => p.status === 'in_review' || isPeriodLocked(p)).length, audits: project.auditLogs?.length ?? 0, drafts: drafts.length + (project.measurementDraft ? 1 : 0) };
   if (drafts.length) issue('pending-drafts', project.id, 'Existem rascunhos não confirmados. Conferir antes da incorporação.');
   for (const p of periods) if (periods.some(other => other.id !== p.id && (other.number === p.number || other.startDate <= p.endDate && other.endDate >= p.startDate))) issue('period-overlap', p.id, `${p.number}ª medição: número repetido ou período sobreposto.`);
   const phasePath = (id: string, visited: string[] = []): string[] => {
@@ -118,7 +118,7 @@ export function prepareIncorporation(backup: IncorporationBackup): Incorporation
       reconciliation.push({ measurementId: period.id, number: period.number, serviceId: service.id, before: expected, after, difference });
       if (Math.abs(difference) > 1e-8) issue('snapshot-difference', `${period.id}:${service.id}`, `${period.number}ª medição · ${service.description}: snapshot ${expected} e lançamentos ${after}; conferir a origem válida.`);
     }
-    if (isPeriodLocked(period)) {
+    if (period.status === 'in_review' || isPeriodLocked(period)) {
       const frozen = monthlyLines(candidate, period.id);
       for (const line of frozen) {
         const snap = period.originalSnapshot!.items.find(i => i.taskId === line.service.sourceTaskId);
