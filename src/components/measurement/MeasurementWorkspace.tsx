@@ -42,7 +42,10 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const [historyOpen, setHistoryOpen] = useState(false), [periodOpen, setPeriodOpen] = useState(false);
   const [lifecycle, setLifecycle] = useState<LifecycleSelection | null>(null);
   const [drafts, setDrafts] = useState<WorkspaceDraft[]>([]), [recovery, setRecovery] = useState(false);
-  const pendingCapture = useRef(false);
+  const captureDraftWrite = useRef<Promise<boolean>>(Promise.resolve(true));
+  const latestCaptureDraft = useRef<TakeoffDraft | null>(null);
+  const pendingOperation = useRef<Promise<boolean>>(Promise.resolve(true));
+  const closingCapture = useRef(false);
   const [loading, setLoading] = useState(true), [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [search, setSearch] = useState(''), [chapterFilter, setChapterFilter] = useState('all');
   const plan = useMemo(() => incorporationBackup ? prepareIncorporation(incorporationBackup) : null, [incorporationBackup]);
@@ -87,10 +90,11 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   }, [repository, adopt, actor.id]);
   const apply = (edit: (w: Workspace) => Workspace, after?: () => void): boolean => {
     if (!current.current || busy.current || recovery) { setError('Resolva o salvamento pendente antes de continuar.'); return false; }
-    try { const candidate = edit(current.current); void persist(candidate).then(ok => { if (ok) after?.(); }); return true; }
+    try { const candidate = edit(current.current); pendingOperation.current = persist(candidate).then(ok => { if (ok) after?.(); return ok; }); return true; }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); return false; }
   };
   const planRepository = useMemo<TakeoffRepository>(() => ({
+    storage: repository.savedLabel === 'Salvo na nuvem' ? 'cloud' : 'local',
     load: async () => structuredClone(current.current?.plans ?? []),
     save: async (next, previous) => {
       const w = current.current; if (!w || busy.current) throw new Error('Aguarde o salvamento da Medição.');
@@ -101,19 +105,42 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       });
       if (!await persist(candidate)) throw new Error('Planta não salva.');
     },
-  }), [actor, persist]);
+  }), [actor, persist, repository.savedLabel]);
   const clearDraft = (mid: string, sid: string, rid?: string) => { void repository.clearDraft(mid, sid, rid).then(() => repository.drafts()).then(setDrafts).catch(e => setError(e.message)); };
   const saveDraft = (mid: string, sid: string, rid: string, changes: Record<string, unknown>) => {
     if (!current.current) return;
     const d: WorkspaceDraft = { projectId: current.current.projectId, measurementId: mid, serviceId: sid, rowId: rid, changes };
     void repository.writeDraft(d).then(() => repository.drafts()).then(setDrafts).catch(e => { setError(`Falha ao preservar rascunho: ${e.message}`); });
   };
+  const captureDraftFor = (target: Destination) => drafts.find(d => d.measurementId === target.measurementId && d.serviceId === target.serviceId &&
+    (d.rowId === `__capture__${target.rowId}:${target.field}` || d.rowId === `__capture__${target.rowId}` && d.changes.field === target.field))?.changes.takeoffDraft as TakeoffDraft | undefined;
   const saveCaptureDraft = useCallback((draft: TakeoffDraft | null) => {
-    const d = destinationRef.current, w = current.current; pendingCapture.current = !!draft;
+    latestCaptureDraft.current = draft;
+    const d = destinationRef.current, w = current.current;
     if (!d || !w) return;
-    const save = draft ? repository.writeDraft({ projectId: w.projectId, measurementId: d.measurementId, serviceId: d.serviceId, rowId: `__capture__${d.rowId}`, changes: { takeoffDraft: draft, field: d.field } }) : repository.clearDraft(d.measurementId, d.serviceId, `__capture__${d.rowId}`);
-    void save.then(() => repository.drafts()).then(setDrafts).catch(e => setError(`Rascunho do traçado não salvo: ${e.message}`));
+    // Serialize writes: an older point list must not replace the final draft.
+    captureDraftWrite.current = captureDraftWrite.current.then(async () => {
+      try {
+        const key = `__capture__${d.rowId}:${d.field}`;
+        if (draft) await repository.writeDraft({ projectId: w.projectId, measurementId: d.measurementId, serviceId: d.serviceId, rowId: key, changes: { takeoffDraft: draft, field: d.field } });
+        else await repository.clearDraft(d.measurementId, d.serviceId, key);
+        setDrafts(await repository.drafts()); return true;
+      } catch (e) { setError(`Rascunho do traçado não salvo: ${e instanceof Error ? e.message : String(e)}`); return false; }
+    });
   }, [repository]);
+  const closeCapture = async () => {
+    if (closingCapture.current) return;
+    if (busy.current) { setError('Aguarde a confirmação do salvamento antes de fechar a planta.'); return; }
+    closingCapture.current = true;
+    try {
+      // Retry a failed durable write, then drain any points added while it was pending.
+      saveCaptureDraft(latestCaptureDraft.current);
+      let written: Promise<boolean>;
+      do { written = captureDraftWrite.current; if (!await written) return; } while (written !== captureDraftWrite.current);
+      if (busy.current) return;
+      setDestination(null); destinationRef.current = null;
+    } finally { closingCapture.current = false; }
+  };
   const capture = async (_plan: TakeoffPlan, mark: TakeoffMeasure, _result: number, nextPlan?: TakeoffPlan, remove = false) => {
     const target = destinationRef.current, w = current.current; if (!target || !w || !nextPlan) return false;
     try {
@@ -127,6 +154,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         nextTarget = { ...target, rowId: row.id };
       }
       if (!await persist(candidate)) return false;
+      saveCaptureDraft(null);
       destinationRef.current = nextTarget; setDestination(nextTarget); clearDraft(target.measurementId, target.serviceId, target.rowId); clearDraft(target.measurementId, target.serviceId, `__capture__${target.rowId}`); return true;
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); return false; }
   };
@@ -238,11 +266,15 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
             onCreate={changes => { const fresh = newMeasuredRow(); const row = { ...fresh, ...changes, id: fresh.id }; return apply(w => editMeasuredRow(w, actor, active, s.id, row), () => clearDraft(active, s.id, '__new__')) ? row.id : null; }}
             onEdit={(id, changes) => apply(w => { const row = entryFor(w, active, s.id).rows.find(r => r.id === id); if (!row) throw new Error('Linha não encontrada.'); return editMeasuredRow(w, actor, active, s.id, { ...row, ...changes }); }, () => clearDraft(active, s.id, id))}
             onDelete={id => apply(w => deleteMeasuredRow(w, actor, active, s.id, id))}
-            onOpenPlan={(rowId, field) => { const d = { measurementId: active, serviceId: s.id, rowId, field }; destinationRef.current = d; setDestination(d); }}
+            onOpenPlan={(rowId, field) => { void (async () => {
+              if (!await pendingOperation.current) return;
+              if (!current.current || !entryFor(current.current, active, s.id).rows.some(r => r.id === rowId)) { setError('A linha ainda não foi confirmada. Confira o salvamento antes de abrir a planta.'); return; }
+              const d = { measurementId: active, serviceId: s.id, rowId, field }; latestCaptureDraft.current = captureDraftFor(d) ?? null; destinationRef.current = d; setDestination(d);
+            })(); }}
             clipboard={clipboard} onCopy={(mode, row) => setClipboard({ mode, projectId: workspace.projectId, unit: s.unit, source: { measurementId: active, serviceId: s.id, rowId: row.id }, snapshot: structuredClone(row) })} onPaste={() => clipboard && apply(w => pasteMeasuredRow(w, actor, active, s.id, clipboard), () => { if (clipboard.mode === 'cut') setClipboard(null); })}
             sharedTaskNames={record => workspace.entries.filter(e => e.rows.some(r => r.sharedRecordId === record)).map(e => `${workspace.periods.find(p => p.id === e.measurementId)?.number}ª medição · ${workspace.services.find(s => s.id === e.serviceId)?.description}`)} onOpenHistory={() => setHistoryOpen(true)}/>; }}/>
-    <Dialog open={!!destination} onOpenChange={open => { if (!open && pendingCapture.current) { setError('Conclua ou cancele o traçado antes de fechar. O rascunho pertence a esta medição e serviço.'); return; } if (!open && !busy.current) { setDestination(null); destinationRef.current = null; } }}><DialogContent className="max-w-[98vw] max-h-[97vh] overflow-auto p-3 data-[state=closed]:hidden"><DialogTitle className="pr-8 text-sm">{period?.number}ª medição · {targetService?.description}</DialogTitle><DialogDescription className="text-xs">{workspace.projectName} · {targetService?.path} · Linha {rowIndex + 1}, coluna {destination ? { multiplier: 'A', measuredQuantity: 'B', dimensionC: 'C', dimensionD: 'D' }[destination.field] : ''}. Concluir preenche a célula e atualiza o valor desta medição.</DialogDescription>
-      {destination && targetService && <Suspense fallback={<p>Carregando visualizador…</p>}><PlanTakeoff storageKey={`measurement:${workspace.projectId}`} repository={planRepository} initialDraft={drafts.find(d => d.measurementId === destination.measurementId && d.serviceId === destination.serviceId && d.rowId === `__capture__${destination.rowId}`)?.changes.takeoffDraft as TakeoffDraft | undefined} onDraftChange={saveCaptureDraft} readOnly={!actor.canEdit || !!period && isPeriodLocked(period) || recovery} embedded chapterId={targetService.chapterId} measureContext={{ projectId: workspace.projectId, measurementId: destination.measurementId, serviceId: destination.serviceId }} destinationColumn={{ multiplier: 'A', measuredQuantity: 'B', dimensionC: 'C', dimensionD: 'D' }[destination.field]} linkedMeasureIds={marks} executedMeasureIds={marks}
+    <Dialog open={!!destination} onOpenChange={open => { if (!open) void closeCapture(); }}><DialogContent className="max-w-[98vw] max-h-[97vh] overflow-auto p-3 data-[state=closed]:hidden"><div className="flex items-center justify-between gap-3 pr-8"><DialogTitle className="text-sm">{period?.number}ª medição · {targetService?.description}</DialogTitle><button className={`${button} shrink-0`} disabled={saving} onClick={() => void closeCapture()}>Fechar página</button></div><DialogDescription className="text-xs">{workspace.projectName} · {targetService?.path} · Linha {rowIndex + 1}, coluna {destination ? { multiplier: 'A', measuredQuantity: 'B', dimensionC: 'C', dimensionD: 'D' }[destination.field] : ''}. Concluir preenche a célula e atualiza o valor desta medição. Ao fechar, o traçado em andamento fica preservado nesta célula.</DialogDescription>
+      {destination && targetService && <Suspense fallback={<p>Carregando visualizador…</p>}><PlanTakeoff storageKey={`measurement:${workspace.projectId}`} repository={planRepository} initialDraft={captureDraftFor(destination)} onDraftChange={saveCaptureDraft} readOnly={!actor.canEdit || !!period && isPeriodLocked(period) || recovery} embedded chapterId={targetService.chapterId} measureContext={{ projectId: workspace.projectId, measurementId: destination.measurementId, serviceId: destination.serviceId }} destinationColumn={{ multiplier: 'A', measuredQuantity: 'B', dimensionC: 'C', dimensionD: 'D' }[destination.field]} linkedMeasureIds={marks} executedMeasureIds={marks}
         onUseMeasure={capture} onUpdateMeasure={capture} onDeleteMeasure={(p, m, next) => capture(p, m, 0, next, true)}
         onRestoreMeasure={async (_p, m) => { const w = current.current; if (!w) return false; const a = [...w.audit].reverse().find(a => a.before.some(e => e.rows.some(r => sourceFields.some(f => r[f]?.measureId === m.id))) && a.action === 'Apagar captura'); if (!a) return false; try { return await persist(undoMeasuredOperation(w, actor, a.id)); } catch (e) { setError(String(e)); return false; } }}
         onRecalibrate={async (_p, page, _scale, next) => { const w = current.current, target = destinationRef.current; if (!w || !next || !target) return false; try {

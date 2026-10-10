@@ -11,6 +11,17 @@ vi.mock('@/integrations/supabase/client',()=>({supabase:{rpc:mocks.rpc,storage:{
 vi.mock('./measurementWorkspaceStore',()=>({measurementRepository:()=>({preservePending:async(p:PendingMeasurementSave)=>{mocks.pending=structuredClone(p);},removePending:async()=>{mocks.pending=null;}})}));
 beforeEach(()=>{vi.clearAllMocks();mocks.pending=null;});
 describe('confirmação cloud e recuperação',()=>{
+ it('carrega por RPC todas as 1.200 entradas, sem limite de página REST',async()=>{
+  const f=measurementFixture(); f.plans=[];
+  const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
+  const service=base.services[0];
+  base.services=Array.from({length:1200},(_,i)=>({...service,id:`service-${i}`,item:`1.${i+1}`}));
+  base.entries=base.services.map((s,i)=>({projectId:base.projectId,measurementId:'m1',serviceId:s.id,rows:[{...newMeasuredRow(`row-${i}`),multiplier:i%10}]}));
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(base),error:null});
+  const loaded=await cloudMeasurementRepository({userId:'user',projectId:base.projectId}).load();
+  expect(loaded?.services).toHaveLength(1200); expect(loaded?.entries).toEqual(base.entries);
+  expect(mocks.rpc).toHaveBeenCalledWith('load_measurement_workspace',{p_project_id:base.projectId});
+ });
  it('falha ou resposta inválida mantém candidato; somente recibo válido limpa',async()=>{
   const f=measurementFixture(); f.plans=[]; const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
   const next=editMeasuredRow(base,{id:'user',name:'Teste',canEdit:true},'m1','signs',{...newMeasuredRow('row'),multiplier:29});

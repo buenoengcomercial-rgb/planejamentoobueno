@@ -32,11 +32,25 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010120000_measurement_recoverable_lifecycle.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010130000_measurement_lifecycle_fast_delete.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010140000_measurement_lifecycle_single_validation.sql',import.meta.url),'utf8'));
+ // Reproduce the additional default grants present in the real Cloud database.
+ await db.exec('GRANT TRUNCATE, REFERENCES, TRIGGER ON measurement_workspaces, measurement_workspace_backups, measurement_workspace_events TO authenticated, anon');
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261010150000_measurement_select_only_access.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
 afterAll(async()=>{await db.close();});
 describe('transação da Medição na nuvem',()=>{
+ it('não permite esvaziar tabelas nem criar gatilhos por privilégios residuais',async()=>{
+  await seed();
+  for(const role of ['authenticated','anon']) for(const table of ['measurement_workspaces','measurement_workspace_backups','measurement_workspace_events']) {
+   const access=await db.query<{truncate:boolean;trigger:boolean;references:boolean}>(`SELECT has_table_privilege($1,$2,'TRUNCATE') truncate,has_table_privilege($1,$2,'TRIGGER') trigger,has_table_privilege($1,$2,'REFERENCES') references`,[role,table]);
+   expect(access.rows).toEqual([{truncate:false,trigger:false,references:false}]);
+   await db.exec(`SET ROLE ${role}`);
+   await expect(db.exec(`TRUNCATE ${table} CASCADE`)).rejects.toThrow('permission denied');
+   await db.exec('RESET ROLE');
+  }
+  expect((await db.query<{data:MeasurementWorkspace}>('SELECT data FROM measurement_workspaces')).rows[0].data).toEqual(JSON.parse(wire(base)));
+ });
  it('envio mantém análise editável e aprovação preserva proposta e congela quantidade aceita',async()=>{
   await seed(); const sent=await commit(freezeMeasuredPeriod(base,actor,'m1'));
   let w=await commit(editMeasuredRow(sent,actor,'m1','detectors',{...entryFor(sent,'m1','detectors').rows[0],multiplier:220}));

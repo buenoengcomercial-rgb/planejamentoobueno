@@ -1,4 +1,5 @@
 import type { Point } from './planTakeoff';
+import { isDxfModelEntity } from './dxfModel';
 
 export const CAPTURE_KINDS = ['point', 'endpoint', 'insertion', 'center', 'perpendicular', 'parallel', 'midpoint', 'intersection', 'quadrant', 'nearest', 'extension'] as const;
 export type CaptureKind = typeof CAPTURE_KINDS[number];
@@ -65,6 +66,7 @@ export function extractDxfGeometry(parsed: unknown): DxfGeometry {
   const visit = (items: unknown[], transform: Transform, parents: string[], path: string[]) => { for (const item of items) {
     if (!item || typeof item !== 'object') continue;
     const entity = item as Record<string, unknown>;
+    if (!isDxfModelEntity(entity)) continue;
     const rawLayer = typeof entity.layer === 'string' ? entity.layer : '0';
     const layer = rawLayer === '0' && parents.length ? parents.at(-1)! : rawLayer;
     const visibility = { layer, parentLayers: parents };

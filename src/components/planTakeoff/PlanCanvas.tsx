@@ -103,6 +103,8 @@ const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ pla
     const container = cadHost.current;
     let destroyPdf: (() => void) | undefined;
     const url = URL.createObjectURL(plan.file);
+    let modelUrl: string | undefined;
+    let cancelModel: (() => void) | undefined;
     setStatus('Carregando planta…'); onReady?.(false); setRaster(undefined); setLayers([]); setHidden([]); setGeometry(undefined); onSheets?.([]);
     viewHistory.current = []; onViewHistory?.(false);
     const frame = (minX: number, minY: number, width: number, h: number) => {
@@ -115,9 +117,23 @@ const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ pla
         if (plan.kind === 'dxf') {
           const { DxfViewer } = await import('dxf-viewer');
           if (disposed || !cadHost.current) return;
-          viewer = new DxfViewer(cadHost.current, { autoResize: false, retainParsedDxf: true, canvasWidth: host.current?.clientWidth || 800, canvasHeight: host.current?.clientHeight || 500 });
+          const model = await new Promise<Blob>((resolve, reject) => {
+            const worker = new Worker(new URL('./dxfModel.worker.ts', import.meta.url), { type: 'module' });
+            const fail = (message: string) => { worker.terminate(); reject(new Error(message)); };
+            cancelModel = () => fail('Carregamento cancelado.');
+            worker.onerror = () => fail('Não foi possível preparar o Model do DXF.');
+            worker.onmessage = (event: MessageEvent<{ file?: Blob; error?: string }>) => {
+              worker.terminate(); cancelModel = undefined;
+              if (event.data.file) resolve(event.data.file);
+              else reject(new Error(event.data.error || 'DXF sem Model válido.'));
+            };
+            worker.postMessage(plan.file);
+          });
+          if (disposed) return;
+          modelUrl = URL.createObjectURL(model);
+          viewer = new DxfViewer(cadHost.current, { autoResize: false, retainParsedDxf: true, sceneOptions: { suppressPaperSpace: true }, canvasWidth: host.current?.clientWidth || 800, canvasHeight: host.current?.clientHeight || 500 });
           viewer.SetClearColor(backgroundRef.current === 'black' ? '#111827' : backgroundRef.current === 'gray' ? '#d1d5db' : '#ffffff');
-          await viewer.Load({ url, fonts: [`${import.meta.env.BASE_URL}fonts/NotoSans-Regular.ttf`] });
+          await viewer.Load({ url: modelUrl, fonts: [`${import.meta.env.BASE_URL}fonts/NotoSans-Regular.ttf`], workerFactory: () => new Worker(new URL('./dxfRender.worker.ts', import.meta.url), { type: 'module' }) });
           if (disposed) return;
           const b = viewer.GetBounds();
           if (!b || ![b.minX, b.maxX, b.minY, b.maxY].every(Number.isFinite)) throw new Error('DXF sem geometria 2D válida.');
@@ -175,11 +191,12 @@ const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ pla
     }
     const loading = load();
     return () => {
-      disposed = true; cad.current = undefined; destroyPdf?.();
+      disposed = true; cad.current = undefined; destroyPdf?.(); cancelModel?.();
       // Load may still be pending: defer destruction until it has settled.
       void loading.finally(() => {
         if (viewer) { try { viewer.Destroy(); } catch { /* renderer already released */ } }
         URL.revokeObjectURL(url);
+        if (modelUrl) URL.revokeObjectURL(modelUrl);
       });
       container?.replaceChildren();
     };
