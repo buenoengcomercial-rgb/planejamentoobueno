@@ -16,6 +16,25 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('só monta os eventos do Histórico quando o diálogo é aberto', async () => {
+    const { w, repository } = fixture();
+    const readAffected = vi.fn();
+    const event: Workspace['audit'][number] = {
+      id: 'history-event', at: '2026-10-10T12:00:00.000Z', actor: { id: 'u', name: 'Engenheiro' },
+      action: 'Editar detalhe', affected: [], before: [], after: [],
+    };
+    Object.defineProperty(event, 'affected', { get: () => { readAffected(); return []; } });
+    w.audit = [event];
+
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    expect(await screen.findByRole('heading', { name: 'Planilha de medição (1 itens)' })).toBeVisible();
+    expect(readAffected).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Histórico' }));
+    expect(screen.getByRole('dialog')).toBeVisible();
+    expect(screen.getByText(/Engenheiro · Editar detalhe/)).toBeVisible();
+    expect(readAffected).toHaveBeenCalled();
+  });
   it('mostra a falha de carregamento sem sugerir nova incorporação e permite tentar novamente', async () => {
     const { w, repository } = fixture();
     vi.mocked(repository.load).mockRejectedValueOnce(new Error('canceling statement due to statement timeout')).mockResolvedValue(w);
