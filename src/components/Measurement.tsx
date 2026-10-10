@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useState, useEffect, type MouseEvent } from 'react';
+import { lazy, Suspense, useMemo, useState, useEffect, useRef, type MouseEvent } from 'react';
 import { cloudMeasurementRepository } from '@/lib/measurementCloudRepository';
 import { supabase } from '@/integrations/supabase/client';
 import { useOrganization } from '@/hooks/useOrganization';
@@ -44,6 +44,8 @@ import { toast } from '@/hooks/use-toast';
 interface MeasurementProps {
   /** Explicit activation only after independent incorporation; never inferred from Project. */
   independentWorkspace?: MeasurementWorkspaceProps;
+  /** The project boot already confirmed the independent workspace in the cloud. */
+  independentConfirmed?: boolean;
   onIndependentReady?: (projectId: string) => void;
   project: Project;
   onProjectChange: (project: Project) => void;
@@ -62,7 +64,14 @@ export default function Measurement(props: MeasurementProps) {
 function CloudMeasurement(props: MeasurementProps) {
   const { user } = useAuth();
   const { membership } = useOrganization();
-  const [enabled, setEnabled] = useState<boolean | null>(null), [failure, setFailure] = useState(''), [retry, setRetry] = useState(0);
+  const [verified, setVerified] = useState<{ version: number; enabled: boolean } | null>(null), [failure, setFailure] = useState(''), [retry, setRetry] = useState(0);
+  const confirmationKey = `${props.project.id}:${!!props.independentConfirmed}`;
+  const confirmation = useRef({ key: confirmationKey, version: 0 });
+  if (confirmation.current.key !== confirmationKey) {
+    confirmation.current = { key: confirmationKey, version: confirmation.current.version + 1 };
+  }
+  const enabled = props.independentConfirmed ? true
+    : verified?.version === confirmation.current.version ? verified.enabled : null;
   const userId = user?.id;
   const repository = useMemo(() => userId ? cloudMeasurementRepository({ projectId: props.project.id, userId }) : null, [props.project.id, userId]);
   const onIndependentReady = props.onIndependentReady;
@@ -70,15 +79,19 @@ function CloudMeasurement(props: MeasurementProps) {
   const editor = ['owner', 'admin', 'engineer'].includes(membership?.role ?? '');
   const actor = useMemo(() => ({ id: user?.id ?? '', name: user?.user_metadata?.name ?? user?.email ?? '', canEdit: editor, canReview: editor }), [user, editor]);
   useEffect(() => {
+    // Index confirmed this same project during boot. Repeating the check here
+    // adds a serial network roundtrip before the sheet can even start loading.
+    if (props.independentConfirmed) { setFailure(''); return; }
     let alive = true;
+    const version = confirmation.current.version;
     setFailure('');
     void supabase.from('measurement_workspaces' as never).select('project_id').eq('project_id', props.project.id).maybeSingle().then(({ data, error }) => {
       if (!alive) return;
       if (error) setFailure('Não foi possível confirmar a base da Medição na nuvem. Tente novamente; nenhum lançamento foi alterado.');
-      else setEnabled(!!data);
+      else setVerified({ version, enabled: !!data });
     });
     return () => { alive = false; };
-  }, [props.project.id, retry]);
+  }, [props.project.id, props.independentConfirmed, retry]);
   if (failure) return <div role="alert" className="rounded border p-4 text-sm">{failure} <button onClick={() => setRetry(n => n + 1)} className="underline">Tentar novamente</button></div>;
   if (enabled === null || !repository) return <p className="p-6">Conferindo a Medição na nuvem…</p>;
   return enabled ? <Suspense fallback={<p>Carregando Medição…</p>}><IndependentMeasurement repository={repository} actor={actor} analyticProject={props.project} approvedAdditives={props.project.additives}/></Suspense> : <LegacyMeasurement {...props}/>;

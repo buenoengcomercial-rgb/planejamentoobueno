@@ -1510,7 +1510,6 @@ export default function Index() {
               .select('project_id').eq('project_id', preferredProjectId).maybeSingle();
             if (cancelled) return;
             independentMeasurement = !error && !!data;
-            if (independentMeasurement) setIndependentMeasurementProjectId(preferredProjectId);
           }
           const routeCode = initialView === 'tasks' ? Promise.all([loadDailyProductionWorkspace(), loadTaskList()])
             : initialView === 'dailyReport' ? loadDailyReport() : null;
@@ -1530,6 +1529,9 @@ export default function Index() {
           }
           if (!record) throw new Error('A obra não foi encontrada. Tente novamente ou confira o acesso com a administração.');
           confirmCloudProjectRecord(record);
+          // An existence check alone is not an opened project. Publish the
+          // confirmation only after its matching Project record is adopted.
+          setIndependentMeasurementProjectId(independentMeasurement ? preferredProjectId : null);
           // Opening an area never runs warehouse maintenance or downloads its history.
           replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, true, record.warehouseVersion);
         } else {
@@ -3368,7 +3370,7 @@ export default function Index() {
           </>
         );
       case 'measurement':
-        return <Measurement onIndependentReady={setIndependentMeasurementProjectId} project={project} onProjectChange={measurementSetter} undoButton={<UndoButton canUndo={canUndo('measurement')} onUndo={() => handleUndo('measurement')} />} onOpenDailyReport={handleOpenDailyReport} />;
+        return <Measurement independentConfirmed={independentMeasurementProjectId === project.id} onIndependentReady={setIndependentMeasurementProjectId} project={project} onProjectChange={measurementSetter} undoButton={<UndoButton canUndo={canUndo('measurement')} onUndo={() => handleUndo('measurement')} />} onOpenDailyReport={handleOpenDailyReport} />;
       case 'dailyReport':
         return (
           <DailyProductionWorkspace

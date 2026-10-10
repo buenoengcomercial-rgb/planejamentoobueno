@@ -242,10 +242,10 @@ vi.mock('@/components/OperationalGanttChart', () => ({ default: () => null }));
 vi.mock('@/components/Measurement', async () => {
   const { createElement } = await import('react');
   return {
-    default: ({ onOpenDailyReport }: { onOpenDailyReport?: (dateISO: string, filter?: string) => void }) => createElement(
-      'button',
-      { type: 'button', onClick: () => onOpenDailyReport?.('2026-08-24', 'draft') },
-      'Abrir Diário pela Medição de teste',
+    default: ({ onOpenDailyReport, independentConfirmed }: { onOpenDailyReport?: (dateISO: string, filter?: string) => void; independentConfirmed?: boolean }) => createElement(
+      'div', null,
+      createElement('output', { 'data-testid': 'independent-measurement-confirmed' }, String(!!independentConfirmed)),
+      createElement('button', { type: 'button', onClick: () => onOpenDailyReport?.('2026-08-24', 'draft') }, 'Abrir Diário pela Medição de teste'),
     ),
   };
 });
@@ -482,6 +482,7 @@ describe('segurança de sincronização da página da obra', () => {
     mocks.independentMeasurementExists = true;
     renderIndex('medicao');
     expect(await screen.findByRole('button', { name: 'Abrir Diário pela Medição de teste' })).toBeVisible();
+    expect(screen.getByTestId('independent-measurement-confirmed')).toHaveTextContent('true');
     expect(mocks.loadCloudProjectRecord).toHaveBeenCalledWith('project-1', expect.objectContaining({
       collections: ['additives', 'budgetItems', 'analyticCompositions'],
     }));
