@@ -425,7 +425,7 @@ describe('Tela própria de Medição', () => {
     fireEvent.change(input, { target: { value: '3' } }); fireEvent.blur(input);
     await screen.findByText('Não salvo · rascunho preservado');
     expect(screen.getByLabelText('Medição selecionada')).toBeDisabled();
-    expect(screen.getByTestId('monthly-value')).toHaveTextContent('0,00');
+    expect(screen.getByTestId('monthly-value')).toHaveTextContent('37,50');
     expect(screen.getByText('Tentar salvar novamente')).toBeVisible();
   });
   it('perfil de consulta não permite editar ou criar período', async () => {

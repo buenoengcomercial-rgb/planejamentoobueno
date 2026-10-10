@@ -7,10 +7,15 @@ import { measurementEntryPatch } from './measurementEntryPatch';
 import { encodeMeasurementWorkspace, decodeMeasurementWorkspace } from './measurementCloudCodec';
 import { cloudMeasurementRepository } from './measurementCloudRepository';
 import type { PendingMeasurementSave } from './measurementWorkspaceStore';
-const mocks=vi.hoisted(()=>({rpc:vi.fn(),download:vi.fn(),upload:vi.fn(),pending:null as PendingMeasurementSave|null}));
-vi.mock('@/integrations/supabase/client',()=>({supabase:{rpc:mocks.rpc,storage:{from:()=>({download:mocks.download,upload:mocks.upload})}}}));
+const mocks=vi.hoisted(()=>({rpc:vi.fn(),from:vi.fn(),download:vi.fn(),upload:vi.fn(),pending:null as PendingMeasurementSave|null,eventRevision:null as number|null,remoteRevision:0,missingVersion:false}));
+vi.mock('@/integrations/supabase/client',()=>({supabase:{rpc:mocks.rpc,from:mocks.from,storage:{from:()=>({download:mocks.download,upload:mocks.upload})}}}));
 vi.mock('./measurementWorkspaceStore',()=>({measurementRepository:()=>({preservePending:async(p:PendingMeasurementSave)=>{mocks.pending=structuredClone(p);},removePending:async()=>{mocks.pending=null;}})}));
-beforeEach(()=>{vi.clearAllMocks();mocks.pending=null;});
+beforeEach(()=>{vi.clearAllMocks();mocks.pending=null;mocks.eventRevision=null;mocks.remoteRevision=0;mocks.missingVersion=false;
+ mocks.from.mockImplementation((table:string)=>({select:()=>({eq:()=>({
+   eq:()=>({maybeSingle:async()=>({data:mocks.eventRevision===null?null:{revision:mocks.eventRevision},error:null})}),
+   maybeSingle:async()=>({data:table==='measurement_workspace_versions'&&!mocks.missingVersion?{revision:mocks.remoteRevision}:null,error:null}),
+ })})}));
+});
 describe('confirmação cloud e recuperação',()=>{
  it('envia somente os lançamentos afetados, conserva a base e exige recibo íntegro',async()=>{
   const f=measurementFixture(); f.plans=[]; const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
@@ -59,6 +64,48 @@ describe('confirmação cloud e recuperação',()=>{
   await expect(repo.commit(next,0)).rejects.toThrow('não confirmou'); expect(mocks.pending).not.toBeNull();
   mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(next),error:null});
   expect((await repo.commit(next,0)).revision).toBe(1); expect(mocks.pending).toBeNull();
+ });
+ it('timeout após commit é conciliado pelo ID da operação sem criar nova auditoria',async()=>{
+  const f=measurementFixture(); f.plans=[]; const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
+  const repo=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(base),error:null}); await repo.load();
+  const next=editMeasuredRow(base,{id:'user',name:'Teste',canEdit:true},'m1','signs',{...newMeasuredRow('row'),multiplier:29});
+  mocks.eventRevision=next.revision; mocks.remoteRevision=next.revision;
+  mocks.rpc.mockResolvedValueOnce({data:null,error:{code:'57014',message:'canceling statement due to statement timeout'}});
+  expect(await repo.commit(next,base.revision)).toEqual(next);
+  expect(mocks.rpc).toHaveBeenCalledTimes(2); expect(mocks.pending).toBeNull();
+  expect(mocks.from).toHaveBeenCalledWith('measurement_workspace_events');
+ });
+ it('timeout abortado repete o mesmo patch uma vez; revisão concorrente mantém rascunho',async()=>{
+  const f=measurementFixture(); f.plans=[]; const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
+  const repo=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(base),error:null}); await repo.load();
+  const next=editMeasuredRow(base,{id:'user',name:'Teste',canEdit:true},'m1','signs',{...newMeasuredRow('row'),multiplier:29});
+  const patch=measurementEntryPatch(base,next)!;
+  mocks.remoteRevision=base.revision;
+  mocks.rpc.mockResolvedValueOnce({data:null,error:{code:'57014',message:'statement timeout'}})
+    .mockResolvedValueOnce({data:{projectId:base.projectId,revision:next.revision,patch},error:null});
+  expect(await repo.commit(next,base.revision)).toEqual(next);
+  expect(mocks.rpc.mock.calls.slice(-2).map(call=>call[1])).toEqual([
+   {p_project_id:base.projectId,p_expected_revision:base.revision,p_patch:patch},
+   {p_project_id:base.projectId,p_expected_revision:base.revision,p_patch:patch},
+  ]);
+  mocks.remoteRevision=next.revision+1;
+  const later=editMeasuredRow(next,{id:'user',name:'Teste',canEdit:true},'m1','signs',{...newMeasuredRow('row'),multiplier:30});
+  mocks.rpc.mockResolvedValueOnce({data:null,error:{code:'57014',message:'statement timeout'}});
+  await expect(repo.commit(later,next.revision)).rejects.toThrow('mudou durante');
+  expect(mocks.pending?.candidate.audit.at(-1)?.id).toBe(later.audit.at(-1)?.id);
+ });
+ it('timeout sem linha de versão não interpreta ausência como revisão zero',async()=>{
+  const f=measurementFixture(); f.plans=[]; const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
+  const repo=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(base),error:null}); await repo.load();
+  const next=editMeasuredRow(base,{id:'user',name:'Teste',canEdit:true},'m1','signs',{...newMeasuredRow('row'),multiplier:29});
+  mocks.missingVersion=true;
+  mocks.rpc.mockResolvedValueOnce({data:null,error:{code:'57014',message:'statement timeout'}});
+  await expect(repo.commit(next,base.revision)).rejects.toThrow('Não foi possível conferir a revisão');
+  expect(mocks.rpc).toHaveBeenCalledTimes(2);
+  expect(mocks.pending?.candidate.audit.at(-1)?.id).toBe(next.audit.at(-1)?.id);
  });
  it('carga parcial e arquivos de outra obra nunca são adotados',async()=>{
   const f=measurementFixture(),base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;

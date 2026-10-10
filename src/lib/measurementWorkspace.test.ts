@@ -11,6 +11,21 @@ import { monthlyExportRows } from './measurementMonthlyExport';
 const actor: MeasurementActor = { id: 'tester', name: 'Teste isolado', canEdit: true, canReview: true };
 const setup = async () => { const f = measurementFixture(); const backup = await createIncorporationBackup(f.project, f.plans, []); return { ...f, backup, plan: prepareIncorporation(backup) }; };
 describe('Medição independente', () => {
+  it('edita linha manual sem copiar o histórico fiscal e os demais serviços', async () => {
+    const before = (await setup()).plan.candidate;
+    const priorAudit = before.audit[0];
+    const otherEntry = before.entries[0];
+    const next = editMeasuredRow(before, actor, 'm1', 'signs', { ...newMeasuredRow('manual-fast'), multiplier: 2 });
+    expect(next).not.toBe(before);
+    expect(next.periods).toBe(before.periods);
+    expect(next.services).toBe(before.services);
+    expect(next.plans).toBe(before.plans);
+    if (priorAudit) expect(next.audit[0]).toBe(priorAudit);
+    expect(next.entries[0]).toBe(otherEntry);
+    expect(entryFor(next, 'm1', 'signs').rows[0].multiplier).toBe(2);
+    expect(entryFor(before, 'm1', 'signs').rows).toEqual([]);
+    expect(next.audit.at(-1)).toMatchObject({ action: 'Editar detalhe', affected: [{ measurementId: 'm1', serviceId: 'signs' }] });
+  });
   it('bloqueia alterações retroativas, exclusão e desfazer que afetariam acumulado fiscal posterior', async () => {
     let w = (await setup()).plan.candidate;
     const row = w.entries[0].rows[0];

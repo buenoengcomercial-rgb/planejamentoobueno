@@ -46,7 +46,7 @@ describe('payload restrito aos quantitativos', () => {
     const removal = structuredClone(next); removal.entries = removal.entries.filter(e => e.serviceId === 'signs');
     expect(measurementEntryPatch(base, removal)).toBeNull();
     const history = editMeasuredRow(next, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 4 });
-    history.audit[0].action = 'Histórico alterado';
+    history.audit[0] = { ...history.audit[0], action: 'Histórico alterado' };
     expect(measurementEntryPatch(next, history)).toBeNull();
   });
 });

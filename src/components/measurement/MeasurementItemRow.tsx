@@ -1,4 +1,4 @@
-import { Fragment, type MouseEvent, type ReactNode } from 'react';
+import { Fragment, memo, type MouseEvent, type ReactNode } from 'react';
 import { Lock } from 'lucide-react';
 import type { Project } from '@/types/project';
 import type { Row } from '@/components/measurement/types';
@@ -35,11 +35,14 @@ export interface MeasurementItemRowProps {
   renderDetail?: (row: Row) => ReactNode;
   renderAnalytic?: (row: Row) => ReactNode;
   detailPlacement?: 'inline' | 'split';
+  /** Stable identity of each period entry, for the independent split editor. */
+  rowRevisionByTaskId?: ReadonlyMap<string, unknown>;
+  interactionVersion?: string;
   G_BG: { id: string; contract: string; period: string; forecast?: string; accum: string; balance: string };
   BORDER_L: string;
 }
 
-export default function MeasurementItemRow({
+function MeasurementItemRow({
   row: r,
   indentPx,
   isLocked,
@@ -54,6 +57,8 @@ export default function MeasurementItemRow({
   renderDetail,
   renderAnalytic,
   detailPlacement = 'inline',
+  rowRevisionByTaskId: _rowRevisionByTaskId,
+  interactionVersion: _interactionVersion,
   G_BG,
   BORDER_L,
 }: MeasurementItemRowProps) {
@@ -210,3 +215,26 @@ export default function MeasurementItemRow({
     </Fragment>
   );
 }
+
+const sameRow = (a: Row, b: Row) => {
+  const keys = Object.keys(a) as (keyof Row)[];
+  return keys.length === Object.keys(b).length && keys.every(key => Object.is(a[key], b[key]));
+};
+const selectedMode = (props: MeasurementItemRowProps) => props.selectedDetail?.taskId === props.row.taskId
+  ? `${props.selectedDetail.mode}:${props.selectedDetail.valueScope ?? ''}` : '';
+
+// On a cell commit the workspace header and totals change, but the other 401
+// task rows do not. Preserve their native inputs/focus and skip DOM work.
+export default memo(MeasurementItemRow, (before, after) => {
+  if (!before.renderDetail || !after.renderDetail || before.detailPlacement !== 'split' || after.detailPlacement !== 'split') return false;
+  return before.row.taskId === after.row.taskId
+    && sameRow(before.row, after.row)
+    && before.rowRevisionByTaskId?.get(before.row.taskId) === after.rowRevisionByTaskId?.get(after.row.taskId)
+    && before.interactionVersion === after.interactionVersion
+    && selectedMode(before) === selectedMode(after)
+    && before.isLocked === after.isLocked
+    && before.isSnapshotMode === after.isSnapshotMode
+    && before.indentPx === after.indentPx
+    && before.project === after.project
+    && before.bdi === after.bdi;
+});

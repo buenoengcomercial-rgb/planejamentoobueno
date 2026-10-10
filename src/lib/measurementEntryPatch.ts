@@ -5,6 +5,28 @@ import { encodeMeasurementWorkspace } from './measurementCloudCodec';
  * travel through this path or get reconstructed from a partial local copy. */
 export function measurementEntryPatch(previous: MeasurementWorkspace | null, candidate: MeasurementWorkspace) {
   if (!previous || previous.revision + 1 !== candidate.revision) return null;
+  // Point edits keep the immutable catalog, plans, periods and older audit
+  // events by reference. In this common path encode only the changed entries
+  // and one event; serializing the whole 5 MB workspace on every cell blur is
+  // unnecessary and blocks the next task in the browser main thread.
+  if (candidate.schema === previous.schema && candidate.projectId === previous.projectId
+    && candidate.projectName === previous.projectName && candidate.backupId === previous.backupId
+    && candidate.contract === previous.contract && candidate.services === previous.services
+    && candidate.periods === previous.periods && candidate.plans === previous.plans
+    && candidate.importedKeys === previous.importedKeys
+    && candidate.audit.length === previous.audit.length + 1
+    && previous.audit.every((event, index) => candidate.audit[index] === event)) {
+    const key = (entry: typeof previous.entries[number]) => `${entry.measurementId}:${entry.serviceId}`;
+    const prior = new Map(previous.entries.map(entry => [key(entry), entry]));
+    if (previous.entries.some(entry => !candidate.entries.some(next => next.measurementId === entry.measurementId && next.serviceId === entry.serviceId))) return null;
+    const changed = candidate.entries.filter(entry => entry !== prior.get(key(entry)));
+    if (changed.length && candidate.entries.length === previous.entries.length + changed.filter(entry => !prior.has(`${entry.measurementId}:${entry.serviceId}`)).length
+      && new Set(candidate.entries.map(key)).size === candidate.entries.length
+      && previous.entries.every((entry, index) => key(candidate.entries[index]) === key(entry))
+      && candidate.entries.slice(previous.entries.length).every(entry => !prior.has(key(entry)))) {
+      return { entries: JSON.parse(JSON.stringify(changed)), event: JSON.parse(JSON.stringify(candidate.audit.at(-1)!)) };
+    }
+  }
   const before = encodeMeasurementWorkspace(previous) as Record<string, unknown>;
   const after = encodeMeasurementWorkspace(candidate) as Record<string, unknown>;
   // JSONB sorts object keys on reload. Ordering of arrays is meaningful; ordering

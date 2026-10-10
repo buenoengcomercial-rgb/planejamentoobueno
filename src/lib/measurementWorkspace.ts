@@ -187,7 +187,50 @@ function propagate(w: MeasurementWorkspace, entry: MeasuredEntry, row: MeasuredR
     });
   }
 }
+
+/** A manual row only changes one entry. Keep the large immutable fiscal history
+ * by reference while validating the same period and contract boundaries. DXF
+ * captures and shared rows continue through the full transaction below. */
+function editIndependentManualRow(w: MeasurementWorkspace, actor: MeasurementActor, mid: string, sid: string, row: MeasuredRow): MeasurementWorkspace | null {
+  const before = entryFor(w, mid, sid);
+  const original = before.rows.find(r => r.id === row.id);
+  if (row.sharedRecordId || original?.sharedRecordId ||
+    row.origin?.kind && row.origin.kind !== 'manual' || original?.origin?.kind && original.origin.kind !== 'manual' ||
+    sourceFields.some(field => row[field] || original?.[field])) return null;
+
+  assertDestination(w, mid, sid, actor);
+  for (const field of ['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD'] as const) {
+    if (!Number.isFinite(row[field] ?? 0) || (row[field] ?? 0) < 0) throw new Error('Quantidade inválida.');
+  }
+  const savedRow = structuredClone(row);
+  const after: MeasuredEntry = {
+    ...before,
+    rows: original ? before.rows.map(r => r.id === row.id ? savedRow : r) : [...before.rows, savedRow],
+  };
+  if (json(before) === json(after)) return w;
+
+  const period = w.periods.find(p => p.id === mid)!;
+  const service = w.services.find(s => s.id === sid)!;
+  if (detailTotal(before.rows) !== detailTotal(after.rows)) {
+    const laterFiscal = w.periods.find(p => p.number > period.number && isPeriodLocked(p));
+    if (laterFiscal) throw new Error(`Alteração bloqueada: afetaria o acumulado da ${laterFiscal.number}ª medição já aprovada pela fiscalização.`);
+  }
+  const total = w.periods.reduce((sum, p) => sum + (p.id === mid ? detailTotal(after.rows) : entryQuantity(w, p.id, sid)), 0);
+  if (total > service.contracted + 1e-8) throw new Error(`${service.description}: total ${total} excede o contratado de ${service.contracted} ${service.unit}. Operação inteira bloqueada.`);
+
+  const index = w.entries.findIndex(e => e.measurementId === mid && e.serviceId === sid);
+  const entries = [...w.entries];
+  if (index < 0) entries.push(after); else entries[index] = after;
+  const event: MeasurementAudit = {
+    id: crypto.randomUUID(), at: new Date().toISOString(), actor: { id: actor.id, name: actor.name }, action: 'Editar detalhe',
+    affected: [{ measurementId: mid, serviceId: sid }],
+    before: [structuredClone(before)], after: [structuredClone(after)],
+  };
+  return { ...w, revision: w.revision + 1, entries, audit: [...w.audit, event] };
+}
 export function editMeasuredRow(w: MeasurementWorkspace, actor: MeasurementActor, mid: string, sid: string, row: MeasuredRow) {
+  const quick = editIndependentManualRow(w, actor, mid, sid, row);
+  if (quick) return quick;
   return transactMeasurement(w, actor, 'Editar detalhe', next => {
     const old = entryFor(next, mid, sid).rows.find(r => r.id === row.id);
     propagate(next, entryFor(next, mid, sid), row);
