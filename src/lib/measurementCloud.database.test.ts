@@ -48,6 +48,7 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010220000_measurement_entry_projection.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010225000_measurement_fiscal_lines_linear.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010235000_measurement_history_compaction.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261011000000_measurement_history_fiscal_marker.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -69,7 +70,8 @@ describe('transação da Medição na nuvem',()=>{
   expect(result).toMatchObject({revision:withDelta.revision+1,auditEventsBefore:4,auditEventsAfter:2,eventRowsDeleted:4,compactReceiptsAdded:4});
   const loadedAfter=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
   expect({...loadedAfter,revision:withDelta.revision,audit:loadedBefore.audit}).toEqual(loadedBefore);
-  expect(loadedAfter.audit.map(event=>event.action)).toEqual(['Enviar para fiscalização','Editar detalhe']);
+  expect(loadedAfter.audit.map(event=>event.action)).toEqual(['Enviar para fiscalização','Alteração fiscal posterior ao envio']);
+  expect(loadedAfter.audit[1]).toMatchObject({affected:[{measurementId:'m1',serviceId:'__fiscal_state__'}],before:[],after:[]});
   expect(fiscalSubmissionCurrent(loadedAfter,'m1')).toBe(false);
   expect((await db.query('SELECT * FROM measurement_workspace_events WHERE project_id=$1',[projectId])).rows).toHaveLength(0);
   expect((await db.query('SELECT * FROM measurement_workspace_compacted_receipts WHERE project_id=$1',[projectId])).rows).toHaveLength(4);
@@ -81,6 +83,27 @@ describe('transação da Medição na nuvem',()=>{
   const reloaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
   expect(reloaded.entries).toEqual(afterEdit.entries);
   expect(fiscalSubmissionCurrent(reloaded,'m1')).toBe(false);
+ });
+ it('substitui a edição preservada em checkpoint 59 sem eventos por marcador fiscal mínimo',async()=>{
+  const edited=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('prior'),multiplier:2});
+  const sent=freezeMeasuredPeriod(edited,actor,'m1');
+  const dirty=editMeasuredRow(sent,actor,'m1','signs',{...newMeasuredRow('prior'),multiplier:3});
+  const checkpoint={...dirty,revision:59,audit:[sent.audit.at(-1)!,dirty.audit.at(-1)!]};
+  await seed(checkpoint);
+  expect((await db.query('SELECT * FROM measurement_workspace_events')).rows).toHaveLength(0);
+  const before=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(fiscalSubmissionCurrent(before,'m1')).toBe(false);
+  const result=(await compactHistory(59)).rows[0].value;
+  expect(result).toMatchObject({revision:60,eventRowsDeleted:0,auditEventsBefore:2,auditEventsAfter:2});
+  const after=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(after.audit.map(event=>event.action)).toEqual(['Enviar para fiscalização','Alteração fiscal posterior ao envio']);
+  expect(after.audit[1]).toMatchObject({affected:[{measurementId:'m1',serviceId:'__fiscal_state__'}],before:[],after:[]});
+  expect({...after,revision:59,audit:before.audit}).toEqual(before);
+  expect(fiscalSubmissionCurrent(after,'m1')).toBe(false);
+  expect((await db.query('SELECT * FROM measurement_workspace_events')).rows).toHaveLength(0);
+  expect((await db.query('SELECT * FROM measurement_workspace_compacted_receipts')).rows).toHaveLength(0);
+  const repeated=(await compactHistory(60)).rows[0].value;
+  expect(repeated).toMatchObject({revision:60,eventRowsDeleted:0});
  });
  it('preserva o último envio fiscal limpo e rejeita compactação com revisão desatualizada',async()=>{
   await seed();
