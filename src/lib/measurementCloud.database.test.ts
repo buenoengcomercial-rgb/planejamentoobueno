@@ -30,6 +30,8 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010030000_measurement_thirty_day_sequence.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010040000_measurement_fiscal_history_guard.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010120000_measurement_recoverable_lifecycle.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261010130000_measurement_lifecycle_fast_delete.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261010140000_measurement_lifecycle_single_validation.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -68,6 +70,18 @@ describe('transação da Medição na nuvem',()=>{
   const restored=await commit(candidate); expect(await commit(candidate)).toEqual(restored);
   expect(restored.entries).toEqual(original.entries); expect(restored.periods).toEqual(original.periods); expect(restored.plans).toEqual(original.plans);
  });
+ it('exclui a última medição vazia de uma obra com 402 serviços sem revalidar toda a planilha',async()=>{
+  const large=addMeasuredPeriod(base,actor);
+  for(let n=large.services.length;n<402;n++) large.services.push({...large.services[0],id:`extra-${n}`,item:`9.${n}`,description:`Serviço ${n}`});
+  const originalEntries=structuredClone(large.entries);
+  await seed(large);
+  const candidate=deleteMeasuredPeriod(large,actor,large.periods.at(-1)!.id,'Remover medição de teste');
+  const saved=await commit(candidate);
+  expect(saved.periods).toHaveLength(large.periods.length-1);
+  expect(saved.entries).toEqual(originalEntries);
+  expect(saved.services).toEqual(large.services);
+  expect(saved.audit.at(-1)?.lifecycle?.kind).toBe('delete');
+ },20000);
  it('rejeita revisão adulterada, auditoria incompleta e usuário sem permissão',async()=>{
   await seed(); const sent=await commit(addMeasuredPeriod(base,actor));
   const valid=deleteMeasuredPeriod(sent,actor,sent.periods.at(-1)!.id,'Período de teste');

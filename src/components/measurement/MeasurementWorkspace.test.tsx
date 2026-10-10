@@ -5,6 +5,7 @@ import type { MeasurementRepository } from '@/lib/measurementWorkspaceStore';
 import type { MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { addMeasuredPeriod, freezeMeasuredPeriod } from '@/lib/measurementWorkspace';
+import { deleteMeasuredPeriod } from '@/lib/measurementLifecycle';
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
@@ -15,6 +16,20 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('recupera exclusão pendente e seleciona uma medição que ainda existe', async () => {
+    const { w, repository } = fixture();
+    const view = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.change(await screen.findByLabelText('Medição selecionada'), { target: { value: 'm3' } });
+    view.unmount();
+    const candidate = deleteMeasuredPeriod(w, actor, 'm3', 'Remover teste');
+    vi.mocked(repository.pending).mockResolvedValue({ baseRevision: w.revision, candidate });
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    expect(await screen.findByLabelText('Medição selecionada')).toHaveValue('m3');
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar salvar novamente' }));
+    await waitFor(() => expect(screen.getByLabelText('Medição selecionada')).toHaveValue('m2'));
+    expect(screen.getByText('Medição excluída · restaurável no Histórico')).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Planilha de medição (1 itens)' })).toBeVisible();
+  });
   it('permite excluir a medição de teste, restaurar pelo histórico e editar a primeira até registrar aprovação', async () => {
     const { w, repository } = fixture(); const reviewer = { ...actor, canReview: true };
     w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
@@ -30,6 +45,7 @@ describe('Tela própria de Medição', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Excluir medição' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(screen.getByLabelText('Medição selecionada')).toHaveValue('m1');
+    expect(screen.getByRole('button', { name: 'Excluir medição' })).toBeDisabled();
     let saved = vi.mocked(repository.commit).mock.calls.at(-1)![0];
     expect(saved.entries).toEqual(base.entries); expect(saved.periods[0]).toEqual(base.periods[0]);
     fireEvent.click(screen.getByRole('button', { name: 'Histórico' }));
