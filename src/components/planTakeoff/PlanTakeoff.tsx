@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Box, Check, ChevronDown, ChevronUp, Circle, CircleDot, Crosshair, FileUp, Layers3, List, Magnet, Maximize2, MousePointer2, Move, Palette, Plus, Route, Ruler, Settings2, Shapes, Square, Trash2, Undo2, X, ZoomIn, ZoomOut, Scan, RotateCcw, Eye, Hash } from 'lucide-react';
-import { calibration, fixedPointCount, measureCategory, measureUnit, MEASURE_KINDS, minimumPoints, measuresForContext, quantity, readTakeoffs, requiresHeight, saveTakeoffs, TAKEOFF_CATALOG_UPDATED, type MeasureKind, type Point, type TakeoffContext, type TakeoffMeasure, type TakeoffPlan } from '@/lib/planTakeoff';
+import { calibration, fixedPointCount, measureCategory, measureUnit, MEASURE_KINDS, minimumPoints, measuresForContext, quantity, readTakeoffs, requiresHeight, saveTakeoffs, TAKEOFF_CATALOG_UPDATED, type MeasureKind, type Point, type TakeoffContext, type TakeoffMeasure, type TakeoffPlan, type TakeoffRepository, type TakeoffDraft } from '@/lib/planTakeoff';
 import { openDwfSheets, type DwfSheet } from '@/lib/dwfTakeoff';
 import { type CaptureKind } from '@/lib/dxfSnap';
 import { cloudTakeoffScope } from '@/lib/planTakeoffCloud';
@@ -14,24 +14,25 @@ import PlanCanvas, { type CanvasBackground, type CanvasEditMode, type PlanCanvas
 const labels: Record<MeasureKind, string> = { count: 'Contagem', linearLength: 'Comprimento linear', length: 'Comprimento poligonal', circlePerimeter: 'Perímetro circular', rectangleArea: 'Superfície retangular', area: 'Superfície poligonal', circleArea: 'Superfície circular', verticalArea: 'Superfície vertical', polygonVolume: 'Volume de planta poligonal' };
 const toolIcons = { count: CircleDot, linearLength: Ruler, length: Route, circlePerimeter: Circle, rectangleArea: Square, area: Shapes, circleArea: CircleDot, verticalArea: Maximize2, polygonVolume: Box };
 const format = (value: number | null) => value === null ? '—' : value.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
-export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpdateMeasure, onDeleteMeasure, onRestoreMeasure, onRecalibrate, executedMeasureIds = [], linkedMeasureIds = [], protectedMeasureIds = [], focusMeasure, embedded = false, allowedKinds = MEASURE_KINDS, destinationColumn, chapterId, measureContext }: { storageKey: string; readOnly: boolean; onUseMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onUpdateMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onDeleteMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onRestoreMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onRecalibrate?: (plan: TakeoffPlan, page: number, scale: number | null, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; executedMeasureIds?: string[]; linkedMeasureIds?: string[]; protectedMeasureIds?: string[]; focusMeasure?: { planId: string; page: number; measureId: string }; embedded?: boolean; allowedKinds?: MeasureKind[]; destinationColumn?: string; chapterId?: string; measureContext?: TakeoffContext }) {
+export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpdateMeasure, onDeleteMeasure, onRestoreMeasure, onRecalibrate, executedMeasureIds = [], linkedMeasureIds = [], protectedMeasureIds = [], focusMeasure, embedded = false, allowedKinds = MEASURE_KINDS, destinationColumn, chapterId, measureContext, repository, initialDraft, onDraftChange }: { storageKey: string; readOnly: boolean; onUseMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onUpdateMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onDeleteMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onRestoreMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onRecalibrate?: (plan: TakeoffPlan, page: number, scale: number | null, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; executedMeasureIds?: string[]; linkedMeasureIds?: string[]; protectedMeasureIds?: string[]; focusMeasure?: { planId: string; page: number; measureId: string }; embedded?: boolean; allowedKinds?: MeasureKind[]; destinationColumn?: string; chapterId?: string; measureContext?: TakeoffContext; repository?: TakeoffRepository; initialDraft?: TakeoffDraft; onDraftChange?: (draft: TakeoffDraft | null) => void }) {
   const isCloud = !!cloudTakeoffScope(storageKey);
   const [plans, setPlans] = useState<TakeoffPlan[]>([]);
   const [active, setActive] = useState('');
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(initialDraft?.page ?? 1);
+  const recoveredDraft = useRef(initialDraft);
   const [pages, setPages] = useState(1);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState(isCloud ? 'Carregando plantas da nuvem…' : 'Carregando plantas deste navegador…');
   const [error, setError] = useState('');
-  const [tool, setTool] = useState<MeasureKind | 'calibrate' | null>(null);
-  const [draft, setDraft] = useState<Point[]>([]);
+  const [tool, setTool] = useState<MeasureKind | 'calibrate' | null>(initialDraft?.kind ?? null);
+  const [draft, setDraft] = useState<Point[]>(initialDraft?.points ?? []);
   const [selected, setSelected] = useState('');
   const [distance, setDistance] = useState('');
   const [cadUnit, setCadUnit] = useState('1');
   const [pendingScale, setPendingScale] = useState<number>();
-  const [draftName, setDraftName] = useState('');
-  const [heightMeters, setHeightMeters] = useState('3');
+  const [draftName, setDraftName] = useState(initialDraft?.name ?? '');
+  const [heightMeters, setHeightMeters] = useState(initialDraft?.heightMeters ?? '3');
   const [cursor, setCursor] = useState<Point | null>(null);
   const [canvasLayers, setCanvasLayers] = useState<string[]>([]);
   const [hiddenLayers, setHiddenLayers] = useState<string[]>([]);
@@ -64,8 +65,9 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   const receiveLayers = useCallback((names: string[], invisible: string[]) => { setCanvasLayers(names); setHiddenLayers(invisible); }, []);
   const availablePlans = chapterId ? plans.filter(plan => plan.chapterId === chapterId) : plans;
   const plan = availablePlans.find(p => p.id === active);
-  const visibleMeasures = embedded && !measureContext ? [] : measuresForContext(plan?.measures ?? [], measureContext, linkedMeasureIds);
-  const removableOrphan = (measure: TakeoffMeasure) => !measure.taskId && !measure.logId && !protectedMeasureIds.includes(measure.id) && !linkedMeasureIds.includes(measure.id);
+  const visibleMeasures = embedded && !measureContext ? [] : measuresForContext(plan?.measures ?? [], measureContext, linkedMeasureIds)
+    .filter(measure => !measureContext?.measurementId || linkedMeasureIds.includes(measure.id));
+  const removableOrphan = (measure: TakeoffMeasure) => !measure.taskId && !measure.logId && !measure.measurementId && !protectedMeasureIds.includes(measure.id) && !linkedMeasureIds.includes(measure.id);
   const selectedMeasure = visibleMeasures.find(measure => measure.id === selected);
   const scale = plan?.scales[page] ?? null;
   const destinationHint = destinationColumn ? `Coluna ${destinationColumn}: qualquer ferramenta pode preencher esta célula. Sem escala, o resultado usa unidades do desenho.` : '';
@@ -86,17 +88,21 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   }, [draft.length]);
   useEffect(() => {
     let alive = true;
-    void readTakeoffs(storageKey, { migrateLocal: !readOnly }).then(data => {
-      if (!alive) return; const available = chapterId ? data.filter(plan => plan.chapterId === chapterId) : data; lastCommittedPlans.current = data; setPlans(data); setActive(available.some(plan => plan.id === focusPlanId) ? focusPlanId! : available[0]?.id ?? ''); setPage(focusPage ?? 1); setSelected(focusMeasureId ?? ''); setReady(true); setStatus(isCloud ? 'Plantas na nuvem' : 'Plantas neste navegador');
+    void (repository ? repository.load() : readTakeoffs(storageKey, { migrateLocal: !readOnly })).then(data => {
+      if (!alive) return; const available = chapterId ? data.filter(plan => plan.chapterId === chapterId) : data; lastCommittedPlans.current = data; setPlans(data); setActive(available.some(plan => plan.id === recoveredDraft.current?.planId) ? recoveredDraft.current!.planId : available.some(plan => plan.id === focusPlanId) ? focusPlanId! : available[0]?.id ?? ''); setPage(recoveredDraft.current?.page ?? focusPage ?? 1); setSelected(focusMeasureId ?? ''); setReady(true); setStatus(isCloud ? 'Plantas na nuvem' : 'Plantas neste navegador');
     }).catch(cause => { if (alive) setError(cause instanceof Error ? cause.message : 'Não foi possível acessar as plantas na nuvem. A cópia local foi preservada.'); });
     return () => { alive = false; };
-  }, [storageKey, focusPlanId, focusPage, focusMeasureId, chapterId, readOnly, isCloud]);
+  }, [storageKey, focusPlanId, focusPage, focusMeasureId, chapterId, readOnly, isCloud, repository]);
+  useEffect(() => {
+    if (!ready || !onDraftChange) return;
+    onDraftChange(plan && tool && tool !== 'calibrate' && draft.length ? { planId: plan.id, page, kind: tool, points: draft, name: draftName, heightMeters } : null);
+  }, [ready, plan, tool, page, draft, draftName, heightMeters, onDraftChange]);
   async function commit(next: TakeoffPlan[], undo = false) {
     if (locked || busy.current) return false;
     busy.current = true; setSaving(true); setError(''); setStatus('Salvando…');
     try {
       const previous = lastCommittedPlans.current;
-      await saveTakeoffs(storageKey, next, previous);
+      if (repository) await repository.save(next, previous); else await saveTakeoffs(storageKey, next, previous);
       if (undo) history.current.pop(); else history.current = [...history.current.slice(-19), previous];
       lastCommittedPlans.current = next;
       setPlans(next);
@@ -108,21 +114,21 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   }
   async function captureCommit(nextPlan: TakeoffPlan, apply: (next: TakeoffPlan) => boolean | void | Promise<boolean | void>, undo = false) {
     if (locked || busy.current) return false;
-    if (!isCloud || !embedded) {
+    if ((!isCloud && !repository) || !embedded) {
       if (!await commit(plans.map(p => p.id === nextPlan.id ? nextPlan : p), undo)) return false;
       if (await apply(nextPlan) === false) { await commit(plans, true); return false; }
       return true;
     }
     busy.current = true; setSaving(true); setError(''); setStatus('Salvando planta e quantitativo…');
     try {
-      if (await apply(nextPlan) === false) throw new Error('A Produção bloqueou a captura. Confira o aviso no detalhe; o traçado foi preservado.');
+      if (await apply(nextPlan) === false) throw new Error('A captura foi bloqueada. Confira o aviso no detalhe; o traçado foi preservado.');
       const previous = lastCommittedPlans.current;
       const next = previous.map(p => p.id === nextPlan.id ? nextPlan : p);
       if (undo) history.current.pop(); else history.current = [...history.current.slice(-19), previous];
       lastCommittedPlans.current = next; setPlans(next);
-      await confirmAtomicTakeoffCache(storageKey, next);
+      if (!repository) await confirmAtomicTakeoffCache(storageKey, next);
       window.dispatchEvent(new CustomEvent(TAKEOFF_CATALOG_UPDATED, { detail: storageKey }));
-      setStatus('Planta e quantitativo confirmados na nuvem'); return true;
+      setStatus(repository ? 'Planta e quantitativo salvos no navegador' : 'Planta e quantitativo confirmados na nuvem'); return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Captura não salva. O traçado foi preservado.');
       setStatus('Alteração não salva'); return false;
@@ -178,7 +184,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   async function finish(points = draft) {
     if (finishing.current) return;
     if (!plan || !drawable || !tool || tool === 'calibrate') return;
-    if (embedded && (!measureContext?.taskId || !measureContext?.logId || !onUseMeasure)) {
+    if (embedded && (!measureContext || !(measureContext.measurementId ? measureContext.projectId && measureContext.serviceId : measureContext.taskId && measureContext.logId) || !onUseMeasure)) {
       setError('Abra a planta pela célula de um lançamento da Produção para vincular a captura à tarefa e ao dia.'); return;
     }
     const minimum = minimumPoints(tool);
@@ -211,7 +217,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
     if (!plan || !onUseMeasure) return;
     const result = quantity(measure.kind, measure.points, plan.scales[measure.page] ?? null, measure.heightMeters);
     if (result === null) return;
-    const claimed = measureContext && !measure.taskId && !measure.logId ? { ...measure, ...measureContext } : measure;
+    const claimed = measureContext && !measure.taskId && !measure.logId && !measure.measurementId ? { ...measure, ...measureContext } : measure;
     await captureCommit({ ...plan, measures: plan.measures.map(item => item.id === measure.id ? claimed : item) }, next => onUseMeasure(plan, claimed, result, next));
   }
   async function moveMeasurePoint(id: string, index: number, point: Point) {

@@ -1,4 +1,7 @@
-import { useMemo, useState, type MouseEvent } from 'react';
+import { lazy, Suspense, useMemo, useState, type MouseEvent } from 'react';
+import type { MeasurementWorkspaceProps } from './measurement/MeasurementWorkspace';
+const IndependentMeasurement = lazy(() => import('./measurement/MeasurementWorkspace'));
+
 import { Project } from '@/types/project';
 import {
   fmtDateBR,
@@ -36,6 +39,8 @@ import { summarizeDailyReportsForPeriod } from '@/lib/dailyReportSummary';
 import { toast } from '@/hooks/use-toast';
 
 interface MeasurementProps {
+  /** Explicit activation only after independent incorporation; never inferred from Project. */
+  independentWorkspace?: MeasurementWorkspaceProps;
   project: Project;
   onProjectChange: (project: Project) => void;
   undoButton?: React.ReactNode;
@@ -44,7 +49,12 @@ interface MeasurementProps {
 }
 
 // ───────────────────────── Componente principal ─────────────────────────
-export default function Measurement({ project, onProjectChange, undoButton, onOpenDailyReport }: MeasurementProps) {
+export default function Measurement(props: MeasurementProps) {
+  if (props.independentWorkspace) return <Suspense fallback={<p>Carregando Medição…</p>}><IndependentMeasurement {...props.independentWorkspace}/></Suspense>;
+  return <LegacyMeasurement {...props}/>;
+}
+
+function LegacyMeasurement({ project, onProjectChange, undoButton, onOpenDailyReport }: MeasurementProps) {
   const { user } = useAuth();
   const auditUser = useMemo(() => userInfoFromSupabaseUser(user), [user]);
   const [detailSelection, setDetailSelection] = useState<MeasurementDetailSelection | null>(null);

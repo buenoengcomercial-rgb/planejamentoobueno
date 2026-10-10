@@ -2,7 +2,7 @@ import { archiveCloudPlan, cloudRowToPlan, cloudTakeoffScope, insertCloudPlan, r
 
 export interface Point { x: number; y: number }
 export type MeasureKind = 'count' | 'length' | 'linearLength' | 'circlePerimeter' | 'area' | 'rectangleArea' | 'circleArea' | 'verticalArea' | 'polygonVolume';
-export interface TakeoffMeasure { id: string; name: string; kind: MeasureKind; page: number; points: Point[]; heightMeters?: number; taskId?: string; logId?: string }
+export interface TakeoffMeasure { id: string; name: string; kind: MeasureKind; page: number; points: Point[]; heightMeters?: number; taskId?: string; logId?: string; projectId?: string; measurementId?: string; serviceId?: string }
 export interface TakeoffPlan {
   id: string; name: string; floor: string; kind: 'pdf' | 'image' | 'dxf' | 'dwf'; file: Blob;
   scales: Record<number, number>; measures: TakeoffMeasure[];
@@ -13,12 +13,14 @@ export interface TakeoffPlan {
   storagePath?: string;
   cloudRevision?: number;
 }
-export interface TakeoffContext { taskId: string; logId: string }
+export type TakeoffContext = { taskId: string; logId: string; projectId?: never; measurementId?: never; serviceId?: never } | { projectId: string; measurementId: string; serviceId: string; taskId?: never; logId?: never };
+export interface TakeoffRepository { load(): Promise<TakeoffPlan[]>; save(next: TakeoffPlan[], previous: TakeoffPlan[]): Promise<void> }
+export interface TakeoffDraft { planId: string; page: number; kind: MeasureKind; points: Point[]; name: string; heightMeters: string }
 export const TAKEOFF_CATALOG_UPDATED = 'obraplanner:takeoff-catalog-updated';
 export function measuresForContext(measures: TakeoffMeasure[], context?: TakeoffContext, linkedMeasureIds: string[] = []): TakeoffMeasure[] {
   if (!context) return measures;
   const linked = new Set(linkedMeasureIds);
-  return measures.filter(measure => linked.has(measure.id) || measure.taskId === context.taskId && measure.logId === context.logId);
+  return measures.filter(measure => linked.has(measure.id) || (context.measurementId ? measure.projectId === context.projectId && measure.measurementId === context.measurementId && measure.serviceId === context.serviceId : !measure.measurementId && measure.taskId === context.taskId && measure.logId === context.logId));
 }
 export const scopeKey = (org: string, user: string, project: string) => JSON.stringify([org, user, project]);
 export const MEASURE_KINDS: MeasureKind[] = ['count', 'linearLength', 'length', 'circlePerimeter', 'rectangleArea', 'area', 'circleArea', 'verticalArea', 'polygonVolume'];

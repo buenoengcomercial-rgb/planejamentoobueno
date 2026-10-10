@@ -1,0 +1,14 @@
+import {createRoot} from 'react-dom/client';
+import {TooltipProvider} from '../../src/components/ui/tooltip';
+import Measurement from '../../src/components/Measurement';
+import {measurementFixture} from '../../src/test/measurementWorkspaceFixture';
+import {measurementRepository} from '../../src/lib/measurementWorkspaceStore';
+import {createIncorporationBackup} from '../../src/lib/measurementIncorporation';
+import '../../src/index.css';
+const fixture=measurementFixture();
+const testScope=new URLSearchParams(location.search).get('test');
+if(testScope && /^[a-zA-Z0-9-]+$/.test(testScope)) fixture.project.id += '-'+testScope;
+const repository=measurementRepository({environment:'isolated',userId:'local-test',projectId:fixture.project.id});
+const actor={id:'local-test',name:'Teste local',canEdit:true,canReview:true};
+const backup=await createIncorporationBackup(fixture.project,fixture.plans,[]);
+createRoot(document.getElementById('root')!).render(<TooltipProvider><div className="min-h-screen bg-slate-100 p-4 lg:p-7"><div className="mx-auto max-w-[1550px]"><p className="mb-3 text-xs text-slate-500">Prévia local · dados isolados · nenhuma alteração na obra real</p><Measurement project={fixture.project} onProjectChange={()=>{throw new Error("A prévia não grava no projeto operacional");}} independentWorkspace={{repository,actor,incorporationBackup:backup}}/></div></div></TooltipProvider>);
