@@ -4,6 +4,7 @@ import MeasurementWorkspace from './MeasurementWorkspace';
 import type { MeasurementRepository } from '@/lib/measurementWorkspaceStore';
 import type { MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
+import { addMeasuredPeriod, freezeMeasuredPeriod } from '@/lib/measurementWorkspace';
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
@@ -14,6 +15,61 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('permite excluir a medição de teste, restaurar pelo histórico e editar a primeira até registrar aprovação', async () => {
+    const { w, repository } = fixture(); const reviewer = { ...actor, canReview: true };
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'r', location: '', comment: 'Preservado', formula: 'STANDARD', multiplier: 29, measuredQuantity: 0 }] }];
+    const base = addMeasuredPeriod(freezeMeasuredPeriod(w, reviewer, 'm1'), reviewer), second = base.periods[1].id;
+    vi.mocked(repository.load).mockResolvedValue(base);
+    render(<MeasurementWorkspace repository={repository} actor={reviewer}/>);
+    fireEvent.change(await screen.findByLabelText('Medição selecionada'), { target: { value: second } });
+    fireEvent.click(screen.getByRole('button', { name: 'Excluir medição' }));
+    let dialog = screen.getByRole('dialog');
+    expect(repository.commit).not.toHaveBeenCalled();
+    fireEvent.change(within(dialog).getByLabelText('Motivo da operação'), { target: { value: 'Medição criada para teste' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Excluir medição' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByLabelText('Medição selecionada')).toHaveValue('m1');
+    let saved = vi.mocked(repository.commit).mock.calls.at(-1)![0];
+    expect(saved.entries).toEqual(base.entries); expect(saved.periods[0]).toEqual(base.periods[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Histórico' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restaurar medição' }));
+    dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Motivo da operação'), { target: { value: 'Recuperar período' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Restaurar medição' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByLabelText('Medição selecionada')).toHaveValue(second);
+    fireEvent.change(screen.getByLabelText('Medição selecionada'), { target: { value: 'm1' } });
+    expect(screen.getByRole('spinbutton', { name: 'Quantidade de Placas' })).toBeEnabled();
+    expect(screen.getByRole('textbox', { name: 'Nº da ART' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Aprovado pela fiscalização' }));
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }));
+    expect(screen.getByRole('spinbutton', { name: 'Quantidade de Placas' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Aprovado pela fiscalização' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Aprovado pela fiscalização' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    saved = vi.mocked(repository.commit).mock.calls.at(-1)![0];
+    expect(saved.entries).toEqual(base.entries); expect(saved.periods[0].status).toBe('approved');
+    expect(screen.getByRole('spinbutton', { name: 'Quantidade de Placas' })).toHaveAttribute('readonly');
+    expect(screen.getByRole('textbox', { name: 'Nº da ART' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Reabrir para correção' })).not.toBeInTheDocument();
+  });
+  it('cancelar exclusão não grava; falha de confirmação mantém período e rascunho', async () => {
+    const { repository } = fixture(); render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.change(await screen.findByLabelText('Medição selecionada'), { target: { value: 'm3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Excluir medição' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancelar' }));
+    expect(repository.commit).not.toHaveBeenCalled();
+    vi.mocked(repository.commit).mockRejectedValue(new Error('Sem conexão'));
+    fireEvent.click(screen.getByRole('button', { name: 'Excluir medição' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Motivo da operação'), { target: { value: 'Teste' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Excluir medição' }));
+    await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent('Sem conexão'));
+    expect(screen.getByLabelText('Medição selecionada')).toHaveValue('m3');
+    expect(repository.clearDraft).not.toHaveBeenCalled();
+  });
   it('reabre a medição selecionada após recarga sem salvar a obra e isola a preferência por usuário', async () => {
     const { repository } = fixture();
     let view = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
@@ -129,7 +185,7 @@ describe('Tela própria de Medição', () => {
     await waitFor(() => expect(repository.clearDraft).toHaveBeenCalledWith('m1', '__bulletin__', 'artNumber'));
   });
   it('boletim de período fiscal fica legível sem permitir alterações', async () => {
-    const { w, repository } = fixture(); w.periods[0].status = 'in_review';
+    const { w, repository } = fixture(); w.periods[0].status = 'approved';
     render(<MeasurementWorkspace repository={repository} actor={actor}/>);
     expect(await screen.findByLabelText('Obra')).toBeDisabled();
     expect(screen.getByLabelText('Nº da ART')).toBeDisabled();

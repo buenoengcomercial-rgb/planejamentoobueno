@@ -4,8 +4,9 @@ import { readFile } from 'node:fs/promises';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation, incorporateApprovedAdditive } from './measurementIncorporation';
-import { editMeasuredRow, editMeasuredBulletin, deleteMeasuredRow, entryFor, newMeasuredRow, pasteMeasuredRow, freezeMeasuredPeriod, captureMeasurement, monthlyLines, addMeasuredPeriod, type MeasurementWorkspace } from './measurementWorkspace';
+import { approveMeasuredPeriod, editMeasuredRow, editMeasuredBulletin, deleteMeasuredRow, entryFor, newMeasuredRow, pasteMeasuredRow, freezeMeasuredPeriod, captureMeasurement, monthlyLines, addMeasuredPeriod, type MeasurementWorkspace } from './measurementWorkspace';
 import { encodeMeasurementWorkspace } from './measurementCloudCodec';
+import { deleteMeasuredPeriod, restoreMeasuredPeriod } from './measurementLifecycle';
 const projectId='00000000-0000-4000-8000-000000000001', userId='00000000-0000-4000-8000-000000000002', planId='00000000-0000-4000-8000-000000000003';
 const actor={id:userId,name:'Teste',canEdit:true,canReview:true};
 let db:PGlite, base:MeasurementWorkspace;
@@ -28,13 +29,74 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010020000_independent_measurement_workspace.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010030000_measurement_thirty_day_sequence.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010040000_measurement_fiscal_history_guard.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261010120000_measurement_recoverable_lifecycle.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
 afterAll(async()=>{await db.close();});
 describe('transação da Medição na nuvem',()=>{
+ it('envio mantém análise editável e aprovação preserva proposta e congela quantidade aceita',async()=>{
+  await seed(); const sent=await commit(freezeMeasuredPeriod(base,actor,'m1'));
+  let w=await commit(editMeasuredRow(sent,actor,'m1','detectors',{...entryFor(sent,'m1','detectors').rows[0],multiplier:220}));
+  expect(monthlyLines(w,'m1')[0].qty).toBe(220); expect(monthlyLines(w,'m2')[0].prior).toBe(220);
+  w=await commit(approveMeasuredPeriod(w,actor,'m1')); expect(w.periods[0].frozen![0].qty).toBe(220);
+  expect(w.audit.find(a=>a.id===sent.audit.at(-1)!.id)!.afterPeriods![0].frozen![0].qty).toBe(221);
+  const fake=structuredClone(w); fake.periods[0].status='draft'; delete fake.periods[0].frozen;
+  const bypass=editMeasuredRow(fake,actor,'m1','detectors',{...entryFor(w,'m1','detectors').rows[0],multiplier:219});
+  bypass.periods=structuredClone(w.periods);
+  await expect(commit(bypass)).rejects.toThrow('bloqueada');
+ });
+ it('aprovação recalcula valores, exige envio e rejeita snapshot ou histórico adulterado',async()=>{
+  await seed(); let w=await commit(freezeMeasuredPeriod(base,actor,'m1'));
+  w=await commit(editMeasuredRow(w,actor,'m1','detectors',{...entryFor(w,'m1','detectors').rows[0],multiplier:220}));
+  const approval=approveMeasuredPeriod(w,actor,'m1');
+  const stale=structuredClone(approval); stale.periods[0].frozen=structuredClone(w.periods[0].frozen); stale.audit.at(-1)!.afterPeriods=structuredClone(stale.periods);
+  await expect(commit(stale)).rejects.toThrow('snapshot');
+  const missing=structuredClone(approval); missing.audit.at(-1)!.beforePeriods=[];
+  await expect(commit(missing)).rejects.toThrow('Histórico fiscal');
+  const resend=await commit(freezeMeasuredPeriod(w,actor,'m1'));
+  expect(resend.periods[0].status).toBe('in_review'); expect(resend.periods[0].frozen![0].qty).toBe(220);
+  const approved=await commit(approveMeasuredPeriod(resend,actor,'m1'));
+  expect(approved.periods[0].status).toBe('approved');
+ });
+ it('exclui e restaura período de teste sem alterar outras medições, arquivos ou contrato',async()=>{
+  await seed(); let w=await commit(addMeasuredPeriod(base,actor)); const id=w.periods.at(-1)!.id;
+  w=await commit(editMeasuredRow(w,actor,id,'signs',{...newMeasuredRow('teste'),multiplier:3}));
+  const original=structuredClone(w), removed=await commit(deleteMeasuredPeriod(w,actor,id,'Período de teste'));
+  expect(removed.entries).toEqual(base.entries); expect(removed.services).toEqual(base.services);
+  const candidate=restoreMeasuredPeriod(removed,actor,removed.audit.at(-1)!.id,'Recuperar teste');
+  const restored=await commit(candidate); expect(await commit(candidate)).toEqual(restored);
+  expect(restored.entries).toEqual(original.entries); expect(restored.periods).toEqual(original.periods); expect(restored.plans).toEqual(original.plans);
+ });
+ it('rejeita revisão adulterada, auditoria incompleta e usuário sem permissão',async()=>{
+  await seed(); const sent=await commit(addMeasuredPeriod(base,actor));
+  const valid=deleteMeasuredPeriod(sent,actor,sent.periods.at(-1)!.id,'Período de teste');
+  for(const mutate of [(w:MeasurementWorkspace)=>{w.entries[0].rows[0].multiplier=1;},(w:MeasurementWorkspace)=>{w.audit.at(-1)!.beforePeriods=[];},(w:MeasurementWorkspace)=>{w.periods[0].number=7;},(w:MeasurementWorkspace)=>{w.audit.at(-1)!.lifecycle!.reason='';}]){
+   const bad=structuredClone(valid); mutate(bad); await expect(commit(bad)).rejects.toThrow();
+  }
+  await db.exec("SET test.role='viewer'"); await expect(commit(valid)).rejects.toThrow('perfil'); await db.exec("SET test.role='owner'");
+  expect((await db.query<{data:MeasurementWorkspace}>('SELECT data FROM measurement_workspaces')).rows[0].data).toEqual(JSON.parse(wire(sent)));
+ });
+ it('restauração valida saldo atual e não ressuscita quantidades acima do contrato',async()=>{
+  await seed(); let w=await commit(addMeasuredPeriod(base,actor)); const id=w.periods.at(-1)!.id;
+  w=await commit(editMeasuredRow(w,actor,id,'signs',{...newMeasuredRow('teste'),multiplier:10}));
+  w=await commit(deleteMeasuredPeriod(w,actor,id,'Excluir teste')); const eventId=w.audit.at(-1)!.id;
+  w=await commit(editMeasuredRow(w,actor,'m1','signs',{...newMeasuredRow('real'),multiplier:395}));
+  expect(()=>restoreMeasuredPeriod(w,actor,eventId,'Recuperar')).toThrow('contratado');
+  const fake=structuredClone(w); fake.entries.find(e=>e.serviceId==='signs')!.rows[0].multiplier=390;
+  const restore=restoreMeasuredPeriod(fake,actor,eventId,'Recuperar');
+  restore.entries.find(e=>e.serviceId==='signs')!.rows[0].multiplier=395;
+  await expect(commit(restore)).rejects.toThrow('contratado');
+  expect((await db.query<{data:MeasurementWorkspace}>('SELECT data FROM measurement_workspaces')).rows[0].data).toEqual(JSON.parse(wire(w)));
+ });
+ it('nova medição simultânea impede excluir com estado antigo',async()=>{
+  await seed(); let w=await commit(addMeasuredPeriod(base,actor));
+  const deletion=deleteMeasuredPeriod(w,actor,w.periods.at(-1)!.id,'Excluir teste');
+  w=await commit(addMeasuredPeriod(w,actor)); await expect(commit(deletion)).rejects.toThrow('Conflito');
+
+ });
  it('servidor impede edição e exclusão retroativas, inclusive com cliente antigo, sem gravar parte da operação',async()=>{
-  await seed(); const w=await commit(freezeMeasuredPeriod(base,actor,'m2'));
+  await seed(); const sent=await commit(freezeMeasuredPeriod(base,actor,'m2')); const w=await commit(approveMeasuredPeriod(sent,actor,'m2'));
   const client=structuredClone(w); client.periods[1].status='draft'; delete client.periods[1].frozen;
   const row=entryFor(client,'m1','detectors').rows[0];
   const candidates=[
@@ -47,7 +109,7 @@ describe('transação da Medição na nuvem',()=>{
    await expect(commit(candidate)).rejects.toThrow('acumulado da 2ª medição');
   }
   expect((await db.query<{data:MeasurementWorkspace}>('SELECT data FROM measurement_workspaces')).rows[0].data).toEqual(JSON.parse(wire(w)));
-  expect((await db.query('SELECT * FROM measurement_workspace_events')).rows).toHaveLength(1);
+  expect((await db.query('SELECT * FROM measurement_workspace_events')).rows).toHaveLength(2);
   const commented=await commit(editMeasuredRow(w,actor,'m1','detectors',{...row,comment:'Conferido'}));
   const future=await commit(editMeasuredRow(commented,actor,'m3','detectors',{...newMeasuredRow('future'),multiplier:5}));
   expect(future.periods[1]).toEqual(w.periods[1]);
@@ -77,7 +139,7 @@ describe('transação da Medição na nuvem',()=>{
   first.entries=first.entries.filter(e=>e.measurementId===first.periods[0].id);
   await seed(first); const second=addMeasuredPeriod(first,actor);
   for(const changes of [{startDate:'2026-10-01'},{endDate:'2026-10-30'},{number:3}]) {
-   const bad=structuredClone(second); Object.assign(bad.periods[1],changes);
+   const bad=structuredClone(second); Object.assign(bad.periods[1],changes); bad.audit.at(-1)!.afterPeriods=structuredClone(bad.periods);
    await expect(commit(bad)).rejects.toThrow('30 dias');
   }
   const saved=await commit(second);
@@ -119,7 +181,7 @@ describe('transação da Medição na nuvem',()=>{
   w=await commit(pasteMeasuredRow(w,actor,'m3','signs',{...clip,mode:'reference'}));
   w=await commit(editMeasuredRow(w,actor,'m1','signs',{...w.entries.find(e=>e.measurementId==='m1'&&e.serviceId==='signs')!.rows[0],multiplier:30}));
   expect(w.entries.filter(e=>e.serviceId==='signs').map(e=>e.rows[0].multiplier)).toEqual([30,29,30]);
-  w=await commit(freezeMeasuredPeriod(w,actor,'m3'));
+  w=await commit(freezeMeasuredPeriod(w,actor,'m3')); w=await commit(approveMeasuredPeriod(w,actor,'m3'));
   const bad=structuredClone(w); bad.periods.find(p=>p.id==='m3')!.status='draft'; bad.revision++; bad.audit.push({...bad.audit.at(-1)!,id:crypto.randomUUID()});
   await expect(commit(bad)).rejects.toThrow('bloqueada');
  });

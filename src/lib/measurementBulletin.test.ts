@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation } from './measurementIncorporation';
-import { addMeasuredPeriod, editMeasuredBulletin, editMeasuredRow, freezeMeasuredPeriod, measurementBulletin, monthlyLines, newMeasuredRow, undoMeasuredOperation } from './measurementWorkspace';
+import { addMeasuredPeriod, approveMeasuredPeriod, editMeasuredBulletin, editMeasuredRow, freezeMeasuredPeriod, measurementBulletin, monthlyLines, newMeasuredRow, undoMeasuredOperation } from './measurementWorkspace';
 import { monthlyExportRows } from './measurementMonthlyExport';
 const actor = { id: 'test', name: 'Teste', canEdit: true, canReview: true };
 async function fixture() {
@@ -36,7 +36,9 @@ describe('Boletim por medição', () => {
     for (const number of [0, 1.5, 2, 4]) expect(() => editMeasuredBulletin(w, actor, 'm1', { number })).toThrow('Número');
     expect(() => editMeasuredBulletin(w, actor, 'm1', { contract: { bdiPercent: NaN } })).toThrow('BDI');
     expect(() => editMeasuredBulletin(w, actor, 'm1', { projectName: '' })).toThrow('nome');
-    const closed = freezeMeasuredPeriod(w, actor, 'm1');
+    const sent = freezeMeasuredPeriod(w, actor, 'm1');
+    expect(() => editMeasuredBulletin(sent, actor, 'm1', { projectName: 'Conferência fiscal' })).not.toThrow();
+    const closed = approveMeasuredPeriod(sent, actor, 'm1');
     expect(closed.periods[0].bulletin).toEqual(measurementBulletin(w, 'm1'));
     expect(() => editMeasuredBulletin(closed, actor, 'm1', { projectName: 'Teste' })).toThrow('bloqueado');
     w.services.push({ ...w.services[0], id: 'aditivo', availableFromNumber: 4 });

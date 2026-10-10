@@ -29,6 +29,7 @@ export interface MonthlyLine {
   financial: ReturnType<typeof calculateMeasurementLine>;
 }
 export interface MeasurementAudit {
+  lifecycle?: { kind: 'delete' | 'restore'; measurementId: string; reason: string; sourceAuditId?: string };
   id: string; at: string; actor: { id: string; name: string }; action: string;
   affected: { measurementId: string; serviceId: string }[];
   before: MeasuredEntry[]; after: MeasuredEntry[];
@@ -53,7 +54,7 @@ export interface MeasurementClipboard {
 export const sourceFields = ['multiplierSource', 'source', 'dimensionCSource', 'dimensionDSource'] as const;
 export const sourceField = (field: DetailField) => sourceFields[['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD'].indexOf(field)];
 const json = (value: unknown) => JSON.stringify(value);
-export const isPeriodLocked = (p: MeasuredPeriod) => p.status === 'in_review' || p.status === 'approved' || p.status === 'rejected' && !p.editUnlocked;
+export const isPeriodLocked = (p: MeasuredPeriod) => p.status === 'approved' || p.status === 'rejected' && !p.editUnlocked;
 export const entryFor = (w: MeasurementWorkspace, measurementId: string, serviceId: string): MeasuredEntry =>
   w.entries.find(e => e.measurementId === measurementId && e.serviceId === serviceId) ?? { projectId: w.projectId, measurementId, serviceId, rows: [] };
 export const newMeasuredRow = (id: string = crypto.randomUUID()): MeasuredRow => ({ id, comment: '', location: '', formula: 'STANDARD', multiplier: 0, measuredQuantity: 0, dimensionC: 0, dimensionD: 0 });
@@ -62,10 +63,11 @@ export const entryQuantity = (w: MeasurementWorkspace, measurementId: string, se
 export function monthlyLines(w: MeasurementWorkspace, measurementId: string): MonthlyLine[] {
   const period = w.periods.find(p => p.id === measurementId);
   if (!period) throw new Error('Medição não encontrada.');
-  if (period.frozen) return structuredClone(period.frozen);
+  // A submission is an archived proposal. Only fiscal approval freezes the working sheet.
+  if (period.status === 'approved' && period.frozen) return structuredClone(period.frozen);
   return w.services.filter(s => s.availableFromNumber <= period.number).map(service => {
     const qty = entryQuantity(w, measurementId, service.id);
-    const prior = w.periods.filter(p => p.number < period.number).reduce((sum, p) => sum + (p.frozen?.find(l => l.service.id === service.id)?.qty ?? entryQuantity(w, p.id, service.id)), 0);
+    const prior = w.periods.filter(p => p.number < period.number).reduce((sum, p) => sum + (p.status === 'approved' ? p.frozen?.find(l => l.service.id === service.id)?.qty ?? entryQuantity(w, p.id, service.id) : entryQuantity(w, p.id, service.id)), 0);
     const financial = calculateMeasurementLine({ quantityContracted: service.contracted, quantityPeriod: qty, quantityPriorAccum: prior, unitPriceNoBDI: service.priceNoBDI, bdiPercent: service.bdi });
     // Imported contractual prices/totals follow the existing synthetic-budget branch.
     if (service.importedPrice) {
@@ -146,8 +148,8 @@ export function transactMeasurement(before: MeasurementWorkspace, actor: Measure
     const s = next.services.find(s => s.id === e.serviceId)!;
     if (entryQuantity(before, e.measurementId, e.serviceId) !== detailTotal(e.rows)) {
       const number = next.periods.find(p => p.id === e.measurementId)!.number;
-      const laterFiscal = before.periods.find(p => p.number > number && (p.frozen || isPeriodLocked(p)));
-      if (laterFiscal) throw new Error(`Alteração bloqueada: afetaria o acumulado da ${laterFiscal.number}ª medição já enviada à fiscalização. Revise os períodos envolvidos antes de alterar esta quantidade.`);
+      const laterFiscal = before.periods.find(p => p.number > number && isPeriodLocked(p));
+      if (laterFiscal) throw new Error(`Alteração bloqueada: afetaria o acumulado da ${laterFiscal.number}ª medição já aprovada pela fiscalização.`);
     }
     const total = next.periods.reduce((sum, p) => sum + entryQuantity(next, p.id, s.id), 0);
     if (total > s.contracted + 1e-8) throw new Error(`${s.description}: total ${total} excede o contratado de ${s.contracted} ${s.unit}. Operação inteira bloqueada.`);
@@ -277,6 +279,15 @@ export function freezeMeasuredPeriod(w: MeasurementWorkspace, actor: Measurement
     const p = next.periods.find(p => p.id === id); if (!p || isPeriodLocked(p)) throw new Error('Medição indisponível.');
     p.bulletin = measurementBulletin(next, id);
     p.frozen = monthlyLines(next, id); p.status = 'in_review';
+  });
+}
+export function approveMeasuredPeriod(w: MeasurementWorkspace, actor: MeasurementActor, id: string) {
+  if (!actor.canReview) throw new Error('Sem permissão para aprovação fiscal.');
+  return transactMeasurement(w, actor, 'Aprovado pela fiscalização', next => {
+    const p = next.periods.find(p => p.id === id);
+    if (!p || p.status !== 'in_review') throw new Error('Envie a medição para análise antes de registrar a aprovação.');
+    p.bulletin = measurementBulletin(next, id);
+    p.frozen = monthlyLines(next, id); p.status = 'approved';
   });
 }
 export function undoMeasuredOperation(w: MeasurementWorkspace, actor: MeasurementActor, auditId: string) {

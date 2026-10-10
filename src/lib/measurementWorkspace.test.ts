@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation, verifyIncorporationBackup, incorporateApprovedAdditive } from './measurementIncorporation';
-import { addMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, entryFor, freezeMeasuredPeriod, monthlyLines, monthlyTotal, newMeasuredRow, pasteMeasuredRow, undoMeasuredOperation, type MeasurementActor, type MeasurementClipboard } from './measurementWorkspace';
+import { addMeasuredPeriod, approveMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, entryFor, freezeMeasuredPeriod, monthlyLines, monthlyTotal, newMeasuredRow, pasteMeasuredRow, undoMeasuredOperation, type MeasurementActor, type MeasurementClipboard } from './measurementWorkspace';
 import { withDetailValue } from './productionQuantityDetails';
 import { calculateMeasurementLine } from './measurementCalculations';
 import type { Additive } from '@/types/project';
@@ -16,7 +16,7 @@ describe('Medição independente', () => {
     const row = w.entries[0].rows[0];
     w = editMeasuredRow(w, actor, 'm1', 'detectors', { ...row, multiplier: 220 });
     const editId = w.audit.at(-1)!.id;
-    w = freezeMeasuredPeriod(w, actor, 'm2');
+    w = approveMeasuredPeriod(freezeMeasuredPeriod(w, actor, 'm2'), actor, 'm2');
     const before = structuredClone(w);
     expect(() => editMeasuredRow(w, actor, 'm1', 'detectors', { ...row, multiplier: 200 })).toThrow('acumulado da 2ª medição');
     expect(() => deleteMeasuredRow(w, actor, 'm1', 'detectors', row.id)).toThrow('acumulado da 2ª medição');
@@ -28,8 +28,8 @@ describe('Medição independente', () => {
     expect(w.periods[1]).toEqual(before.periods[1]);
     expect(monthlyLines(w, 'm3').find(l => l.service.id === 'detectors')?.accumulated).toBe(225);
   });
-  it('não inclui quantidade retroativa em serviço antes zerado após envio posterior', async () => {
-    const w = freezeMeasuredPeriod((await setup()).plan.candidate, actor, 'm3');
+  it('não inclui quantidade retroativa em serviço antes zerado após aprovação posterior', async () => {
+    const w = approveMeasuredPeriod(freezeMeasuredPeriod((await setup()).plan.candidate, actor, 'm3'), actor, 'm3');
     expect(() => editMeasuredRow(w, actor, 'm1', 'signs', { ...newMeasuredRow(), multiplier: 1 })).toThrow('acumulado da 3ª medição');
   });
   it('incorpora diariamente/período sem duplicar e verifica todos os arquivos do backup', async () => {
@@ -91,7 +91,7 @@ describe('Medição independente', () => {
     w = pasteMeasuredRow(w, actor, 'm2', 'signs', { ...clipboard, mode: 'reference' });
     w = editMeasuredRow(w, actor, 'm1', 'signs', { ...entryFor(w, 'm1', 'signs').rows[0], multiplier: 30 });
     expect(entryFor(w, 'm1', 'repeaters').rows[0].multiplier).toBe(29); expect(entryFor(w, 'm2', 'signs').rows[0].multiplier).toBe(30);
-    w = freezeMeasuredPeriod(w, actor, 'm2'); const before = JSON.stringify(w);
+    w = approveMeasuredPeriod(freezeMeasuredPeriod(w, actor, 'm2'), actor, 'm2'); const before = JSON.stringify(w);
     expect(() => editMeasuredRow(w, actor, 'm1', 'signs', { ...entryFor(w, 'm1', 'signs').rows[0], multiplier: 31 })).toThrow('2ª medição');
     expect(JSON.stringify(w)).toBe(before);
     expect(() => deleteMeasuredRow(w, actor, 'm1', 'signs', row.id)).toThrow('acumulado da 2ª medição');
