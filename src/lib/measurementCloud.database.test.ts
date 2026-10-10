@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation, incorporateApprovedAdditive } from './measurementIncorporation';
-import { approveMeasuredPeriod, editMeasuredRow, editMeasuredBulletin, deleteMeasuredRow, entryFor, newMeasuredRow, pasteMeasuredRow, freezeMeasuredPeriod, captureMeasurement, monthlyLines, addMeasuredPeriod, type MeasurementWorkspace } from './measurementWorkspace';
+import { approveMeasuredPeriod, editMeasuredRow, editMeasuredBulletin, deleteMeasuredRow, entryFor, newMeasuredRow, pasteMeasuredRow, freezeMeasuredPeriod, captureMeasurement, monthlyLines, addMeasuredPeriod, fiscalSubmissionCurrent, type MeasurementWorkspace } from './measurementWorkspace';
 import { encodeMeasurementWorkspace } from './measurementCloudCodec';
 import { measurementEntryPatch } from './measurementEntryPatch';
 import { deleteMeasuredPeriod, restoreMeasuredPeriod } from './measurementLifecycle';
@@ -14,6 +14,9 @@ let db:PGlite, base:MeasurementWorkspace;
 const wire=(w:MeasurementWorkspace)=>JSON.stringify(encodeMeasurementWorkspace(w));
 async function seed(w=base) { await db.exec("RESET ROLE; SET test.role='owner'"); await db.query('DELETE FROM measurement_workspace_events'); await db.query('DELETE FROM measurement_workspaces'); await db.query('INSERT INTO measurement_workspaces(project_id,revision,data) VALUES($1,$2,$3)',[projectId,w.revision,wire(w)]); }
 async function commit(w:MeasurementWorkspace,revision=w.revision-1) { return (await db.query<{value:MeasurementWorkspace}>('SELECT commit_measurement_workspace($1,$2,$3) value',[projectId,revision,wire(w)])).rows[0].value; }
+async function currentDataHash() { return (await db.query<{hash:string}>('SELECT md5(load_measurement_workspace($1)::text) hash',[projectId])).rows[0].hash; }
+async function compactHistory(revision:number,hash?:string) { return db.query<{value:{revision:number;auditEventsBefore:number;auditEventsAfter:number;eventRowsDeleted:number;compactReceiptsAdded:number}}>(
+ 'SELECT compact_measurement_history($1,$2,$3) value',[projectId,revision,hash??await currentDataHash()]); }
 beforeAll(async()=>{
  db=new PGlite();
  await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE SCHEMA auth; CREATE SCHEMA storage;
@@ -44,11 +47,132 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010210000_measurement_entry_delta.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010220000_measurement_entry_projection.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010225000_measurement_fiscal_lines_linear.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261010235000_measurement_history_compaction.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
 afterAll(async()=>{await db.close();});
 describe('transação da Medição na nuvem',()=>{
+ it('compacta eventos antigos sem perder quantitativos, períodos, snapshot fiscal ou próximo salvamento',async()=>{
+  await seed();
+  const first=await commit(editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('r'),multiplier:2}));
+  const sent=await commit(freezeMeasuredPeriod(first,actor,'m1'));
+  expect(fiscalSubmissionCurrent(sent,'m1')).toBe(true);
+  const dirty=await commit(editMeasuredRow(sent,actor,'m1','signs',{...newMeasuredRow('r'),multiplier:3}));
+  expect(fiscalSubmissionCurrent(dirty,'m1')).toBe(false);
+  const withDelta=editMeasuredRow(dirty,actor,'m2','signs',{...newMeasuredRow('other'),multiplier:1});
+  const patch=measurementEntryPatch(dirty,withDelta)!;
+  await db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,dirty.revision,JSON.stringify(patch)]);
+  const loadedBefore=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(loadedBefore).toEqual(JSON.parse(wire(withDelta)));
+  const result=(await compactHistory(withDelta.revision)).rows[0].value;
+  expect(result).toMatchObject({revision:withDelta.revision+1,auditEventsBefore:4,auditEventsAfter:2,eventRowsDeleted:4,compactReceiptsAdded:4});
+  const loadedAfter=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect({...loadedAfter,revision:withDelta.revision,audit:loadedBefore.audit}).toEqual(loadedBefore);
+  expect(loadedAfter.audit.map(event=>event.action)).toEqual(['Enviar para fiscalização','Editar detalhe']);
+  expect(fiscalSubmissionCurrent(loadedAfter,'m1')).toBe(false);
+  expect((await db.query('SELECT * FROM measurement_workspace_events WHERE project_id=$1',[projectId])).rows).toHaveLength(0);
+  expect((await db.query('SELECT * FROM measurement_workspace_compacted_receipts WHERE project_id=$1',[projectId])).rows).toHaveLength(4);
+  const repeated=(await compactHistory(loadedAfter.revision)).rows[0].value;
+  expect(repeated).toMatchObject({revision:loadedAfter.revision,eventRowsDeleted:0});
+  const afterEdit=editMeasuredRow(loadedAfter,actor,'m2','signs',{...newMeasuredRow('other'),multiplier:2});
+  const nextPatch=measurementEntryPatch(loadedAfter,afterEdit)!;
+  await db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,loadedAfter.revision,JSON.stringify(nextPatch)]);
+  const reloaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(reloaded.entries).toEqual(afterEdit.entries);
+  expect(fiscalSubmissionCurrent(reloaded,'m1')).toBe(false);
+ });
+ it('preserva o último envio fiscal limpo e rejeita compactação com revisão desatualizada',async()=>{
+  await seed();
+  const sent=await commit(freezeMeasuredPeriod(base,actor,'m1'));
+  expect(fiscalSubmissionCurrent(sent,'m1')).toBe(true);
+  await expect(compactHistory(base.revision)).rejects.toThrow('mudou');
+  await expect(compactHistory(sent.revision,'incorrect-backup')).rejects.toThrow('backup conferido');
+  expect((await db.query('SELECT * FROM measurement_workspace_events')).rows).toHaveLength(1);
+  await compactHistory(sent.revision);
+  const loaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(fiscalSubmissionCurrent(loaded,'m1')).toBe(true);
+  expect(loaded.periods[0].frozen).toEqual(sent.periods[0].frozen);
+ });
+ it('restringe limpeza de histórico ao proprietário sem modificar a planilha',async()=>{
+  await seed();
+  const next=await commit(editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('r'),multiplier:1}));
+  await db.exec("SET ROLE authenticated; SET test.role='engineer'");
+  await expect(compactHistory(next.revision)).rejects.toThrow('proprietário');
+  await db.exec('RESET ROLE');
+  expect((await db.query('SELECT * FROM measurement_workspace_events')).rows).toHaveLength(1);
+  expect((await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value.entries).toEqual(next.entries);
+ });
+ it('mantém o aviso de reenvio para período fiscal legado com edição posterior',async()=>{
+  const legacy=structuredClone(base);
+  legacy.periods[0].status='in_review';
+  legacy.periods[0].originalSnapshot!.status='in_review';
+  legacy.periods[0].frozen=monthlyLines(legacy,'m1');
+  await seed(legacy);
+  expect(fiscalSubmissionCurrent(legacy,'m1')).toBe(true);
+  const oldRow=entryFor(legacy,'m1','detectors').rows[0];
+  const changed=await commit(editMeasuredRow(legacy,actor,'m1','detectors',{...oldRow,comment:'Conferência posterior'}));
+  expect(fiscalSubmissionCurrent(changed,'m1')).toBe(false);
+  await compactHistory(changed.revision);
+  const loaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(loaded.audit).toHaveLength(1);
+  expect(loaded.entries).toEqual(changed.entries);
+  expect(fiscalSubmissionCurrent(loaded,'m1')).toBe(false);
+ });
+ it('preserva a exclusão recuperável de período sem conservar edições antigas',async()=>{
+  const w=structuredClone(base); w.periods=w.periods.slice(0,2);
+  await seed(w);
+  const added=await commit(addMeasuredPeriod(w,actor));
+  const lastId=added.periods.at(-1)!.id;
+  const edited=await commit(editMeasuredRow(added,actor,'m1','signs',{...newMeasuredRow('old'),multiplier:1}));
+  const removed=await commit(deleteMeasuredPeriod(edited,actor,lastId,'Limpeza de teste'));
+  await compactHistory(removed.revision);
+  const loaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(loaded.audit).toHaveLength(1);
+  expect(loaded.audit[0].lifecycle?.kind).toBe('delete');
+  const restored=restoreMeasuredPeriod(loaded,actor,loaded.audit[0].id,'Recuperar período');
+  const saved=await commit(restored);
+  expect(saved.periods.some(period=>period.id===lastId)).toBe(true);
+  expect(saved.entries).toEqual(edited.entries);
+ });
+ it('materializa 17 deltas após checkpoint 41 antes de remover 58 eventos antigos',async()=>{
+  const checkpoint=structuredClone(base);
+  checkpoint.revision=41;
+  checkpoint.audit=Array.from({length:41},(_,i)=>({
+    id:`old-${i+1}`,at:'2026-10-10T12:00:00Z',actor:{id:userId,name:'Teste'},
+    action:'Edição anterior',affected:[],before:[],after:[],
+  }));
+  await seed(checkpoint);
+  const oldData=wire(checkpoint);
+  for(let revision=1;revision<=41;revision++) await db.query(
+    'INSERT INTO measurement_workspace_events(project_id,operation_id,revision,actor_id,request_hash,before_data,after_data) VALUES($1,$2,$3,$4,$5,$6,$6)',
+    [projectId,`old-${revision}`,revision,userId,'historical',oldData]);
+  let current=checkpoint;
+  for(let index=0;index<17;index++){
+    const next=editMeasuredRow(current,actor,'m1','signs',{...newMeasuredRow('stress'),multiplier:index+1});
+    await db.query('SELECT patch_measurement_entries($1,$2,$3)',
+      [projectId,current.revision,JSON.stringify(measurementEntryPatch(current,next))]);
+    current=next;
+  }
+  expect(current.revision).toBe(58);
+  const before=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(before.entries).toEqual(current.entries);
+  const result=(await compactHistory(58)).rows[0].value;
+  expect(result).toMatchObject({revision:59,eventRowsDeleted:58,auditEventsBefore:58,auditEventsAfter:0});
+  const after=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect({...after,revision:before.revision,audit:before.audit}).toEqual(before);
+  expect((await db.query('SELECT * FROM measurement_workspace_events')).rows).toHaveLength(0);
+  expect((await db.query('SELECT * FROM measurement_workspace_compacted_receipts')).rows).toHaveLength(58);
+  const next=editMeasuredRow(after,actor,'m1','signs',{...newMeasuredRow('stress'),multiplier:29});
+  const nextPatch=measurementEntryPatch(after,next)!;
+  await db.query('SELECT patch_measurement_entries($1,$2,$3)',
+    [projectId,after.revision,JSON.stringify(nextPatch)]);
+  const reloaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(reloaded.revision).toBe(60);
+  expect(reloaded.entries).toEqual(next.entries);
+  expect(reloaded.periods).toEqual(before.periods);
+  expect((await db.query('SELECT * FROM measurement_workspace_events')).rows).toHaveLength(1);
+ });
  it('publica somente a revisão confirmada na mesma transação, respeitando RLS e rollback',async()=>{
   await seed();
   const before=(await db.query<{data:unknown}>('SELECT data FROM measurement_workspaces WHERE project_id=$1',[projectId])).rows[0].data;

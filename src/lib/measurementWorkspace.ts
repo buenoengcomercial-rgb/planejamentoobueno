@@ -54,6 +54,17 @@ export interface MeasurementClipboard {
 export const sourceFields = ['multiplierSource', 'source', 'dimensionCSource', 'dimensionDSource'] as const;
 export const sourceField = (field: DetailField) => sourceFields[['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD'].indexOf(field)];
 const json = (value: unknown) => JSON.stringify(value);
+// PostgreSQL jsonb reorders object keys. Fiscal snapshots are compared by
+// value so a confirmed cloud reload does not look like a fresh proposal.
+const sameData = (left: unknown, right: unknown): boolean => {
+  if (left === right) return true;
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) || Array.isArray(right)) return Array.isArray(left) && Array.isArray(right)
+    && left.length === right.length && left.every((item, index) => sameData(item, right[index]));
+  const a = left as Record<string, unknown>, b = right as Record<string, unknown>;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every(key => Object.prototype.hasOwnProperty.call(b, key) && sameData(a[key], b[key]));
+};
 export const isPeriodLocked = (p: MeasuredPeriod) => p.status === 'approved' || p.status === 'rejected' && !p.editUnlocked;
 export const entryFor = (w: MeasurementWorkspace, measurementId: string, serviceId: string): MeasuredEntry =>
   w.entries.find(e => e.measurementId === measurementId && e.serviceId === serviceId) ?? { projectId: w.projectId, measurementId, serviceId, rows: [] };
@@ -88,7 +99,7 @@ export function fiscalSubmissionCurrent(w: MeasurementWorkspace, id: string): bo
   const changedAfter = (event: MeasurementAudit) => event.affected.some(target => target.measurementId === id)
     || event.bulletinChange?.measurementId === id || !!event.beforePlans || !!event.afterPlans
     || !!event.beforeServices || !!event.afterServices
-    || (!!event.beforePeriods && json(event.beforePeriods.find(p => p.id === id)) !== json(event.afterPeriods?.find(p => p.id === id)));
+    || (!!event.beforePeriods && !sameData(event.beforePeriods.find(p => p.id === id), event.afterPeriods?.find(p => p.id === id)));
   const index = w.audit.findLastIndex(event => event.action === 'Enviar para fiscalização' && event.afterPeriods?.some(p => p.id === id && p.status === 'in_review'));
   if (index < 0) {
     // An already-submitted legacy period can be incorporated without a new
@@ -105,8 +116,8 @@ export function fiscalSubmissionCurrent(w: MeasurementWorkspace, id: string): bo
   }
   const sent = w.audit[index].afterPeriods!.find(p => p.id === id)!;
   if (sent.startDate !== period.startDate || sent.endDate !== period.endDate
-    || json(sent.bulletin) !== json(measurementBulletin(w, id))
-    || json(sent.frozen) !== json(monthlyLines(w, id))) return false;
+    || !sameData(sent.bulletin, measurementBulletin(w, id))
+    || !sameData(sent.frozen, monthlyLines(w, id))) return false;
   return !w.audit.slice(index + 1).some(changedAfter);
 }
 

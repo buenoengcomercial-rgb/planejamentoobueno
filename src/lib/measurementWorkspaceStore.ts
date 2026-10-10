@@ -13,6 +13,7 @@ const pendingOperationId = (pending: StoredMeasurementPending) => 'operationId' 
 export interface MeasurementRepository {
   savedLabel?: string;
   remoteRevision?(): Promise<number>;
+  confirmedOperation?(operationId: string, revision: number): Promise<boolean>;
   watch?(onRevision: (revision: number) => void, onConnection: (connected: boolean) => void): () => void;
   preservePending?(pending: PendingMeasurementSave): Promise<void>;
   preserveEntryPending?(pending: PendingMeasurementEntrySave): Promise<void>;
