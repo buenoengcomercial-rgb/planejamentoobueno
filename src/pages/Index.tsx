@@ -546,8 +546,9 @@ export default function Index() {
   const safeCurrentView: AppView = role && !canAccessAppView(role, currentView) ? restrictedFallbackView : currentView;
   const allowedViews = role ? APP_VIEWS.filter(view => canAccessAppView(role, view)) : undefined;
   const requiredProjectCollections = useMemo(
-    () => projectCollectionsForView(safeCurrentView, warehouseTab),
-    [safeCurrentView, warehouseTab],
+    () => projectCollectionsForView(safeCurrentView, warehouseTab,
+      safeCurrentView === 'measurement' && independentMeasurementProjectId === rawProject?.id),
+    [safeCurrentView, warehouseTab, independentMeasurementProjectId, rawProject?.id],
   );
   const requiredProjectCollectionsKey = requiredProjectCollections.join('|');
   activeDataScopeKeyRef.current = requiredProjectCollectionsKey;
@@ -1500,12 +1501,23 @@ export default function Index() {
           const initialView = role && !canAccessAppView(role, initialViewRef.current)
             ? restrictedFallbackView
             : initialViewRef.current;
+          // Confirm the independent sheet before choosing the initial Project
+          // collections. Its 5 MB audit is loaded by its own repository, while
+          // unrelated daily logs and schedule rows wait for their own tabs.
+          let independentMeasurement = false;
+          if (initialView === 'measurement') {
+            const { data, error } = await supabase.from('measurement_workspaces' as never)
+              .select('project_id').eq('project_id', preferredProjectId).maybeSingle();
+            if (cancelled) return;
+            independentMeasurement = !error && !!data;
+            if (independentMeasurement) setIndependentMeasurementProjectId(preferredProjectId);
+          }
           const routeCode = initialView === 'tasks' ? Promise.all([loadDailyProductionWorkspace(), loadTaskList()])
             : initialView === 'dailyReport' ? loadDailyReport() : null;
           void routeCode?.catch(() => undefined);
           const initialCollections = includePendingDraftCollections(
             preferredProjectId,
-            projectCollectionsForView(initialView, initialWarehouseTab),
+            projectCollectionsForView(initialView, initialWarehouseTab, independentMeasurement),
           );
           const record = await withReadDeadline(loadCloudProjectRecord(preferredProjectId, {
             collections: initialCollections,
