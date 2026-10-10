@@ -100,6 +100,7 @@ function reviseMeasuredBulletin(w: MeasurementWorkspace, actor: MeasurementActor
   const { number: _number, contract, ...fields } = patch;
   const bulletin = { ...before.bulletin, ...fields, contract: replaceContract ? structuredClone(contract ?? {}) : { ...before.bulletin.contract, ...contract } };
   const number = patch.number ?? period.number;
+  if (number !== period.number) throw new Error('Número da medição é automático e não pode ser alterado. Use Nova medição para continuar a sequência.');
   if (!Number.isSafeInteger(number) || number < 1 || w.periods.some(p => p.id !== id && (p.number === number || (p.number < period.number) !== (p.number < number)))) throw new Error('Número de medição inválido, repetido ou fora da sequência.');
   if (w.services.some(s => (s.availableFromNumber <= period.number) !== (s.availableFromNumber <= number))) throw new Error('Esse número mudaria os serviços disponíveis na medição.');
   if (!bulletin.projectName.trim()) throw new Error('Informe o nome da obra.');
@@ -131,6 +132,9 @@ export function transactMeasurement(before: MeasurementWorkspace, actor: Measure
   if (!actor.canEdit || !actor.id) throw new Error('Seu perfil não permite editar a Medição.');
   const next = structuredClone(before); edit(next);
   if (next.projectId !== before.projectId) throw new Error('Vínculo da obra não pode ser alterado.');
+  for (const p of before.periods) {
+    if (next.periods.find(n => n.id === p.id)?.number !== p.number) throw new Error('Número da medição é automático e não pode ser alterado.');
+  }
   const affected = next.entries.filter(e => json(e) !== json(entryFor(before, e.measurementId, e.serviceId)));
   if (before.entries.some(e => !next.entries.some(n => e.measurementId === n.measurementId && e.serviceId === n.serviceId))) throw new Error('Exclusão implícita de lançamento bloqueada.');
   for (const e of affected) {
@@ -140,6 +144,11 @@ export function transactMeasurement(before: MeasurementWorkspace, actor: Measure
       if (!Number.isFinite(r[f] ?? 0) || (r[f] ?? 0) < 0) throw new Error('Quantidade inválida.');
     }
     const s = next.services.find(s => s.id === e.serviceId)!;
+    if (entryQuantity(before, e.measurementId, e.serviceId) !== detailTotal(e.rows)) {
+      const number = next.periods.find(p => p.id === e.measurementId)!.number;
+      const laterFiscal = before.periods.find(p => p.number > number && (p.frozen || isPeriodLocked(p)));
+      if (laterFiscal) throw new Error(`Alteração bloqueada: afetaria o acumulado da ${laterFiscal.number}ª medição já enviada à fiscalização. Revise os períodos envolvidos antes de alterar esta quantidade.`);
+    }
     const total = next.periods.reduce((sum, p) => sum + entryQuantity(next, p.id, s.id), 0);
     if (total > s.contracted + 1e-8) throw new Error(`${s.description}: total ${total} excede o contratado de ${s.contracted} ${s.unit}. Operação inteira bloqueada.`);
   }

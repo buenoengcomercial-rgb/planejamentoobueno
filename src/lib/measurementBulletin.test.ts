@@ -10,6 +10,13 @@ async function fixture() {
   return prepareIncorporation(await createIncorporationBackup(f.project, f.plans, [])).candidate;
 }
 describe('Boletim por medição', () => {
+  it('não renumera um período existente nem permite saltar para a quinta medição', async () => {
+    const w = await fixture();
+    expect(() => editMeasuredBulletin(w, actor, 'm3', { number: 5 })).toThrow('Número');
+    w.periods = w.periods.slice(0, 1);
+    expect(() => editMeasuredBulletin(w, actor, 'm1', { number: 5 })).toThrow('Número');
+    expect(editMeasuredBulletin(w, actor, 'm1', { number: 1 })).toBe(w);
+  });
   it('edita todos os campos somente no período selecionado, preservando contrato, quantitativos e preços', async () => {
     const w = await fixture(), before = structuredClone(w);
     const patch = { projectName: 'Obra revisada', contract: { contractor: 'Contratante', contracted: 'Empresa', contractNumber: '123', contractObject: 'Objeto', location: 'Município', budgetSource: 'SINAPI', artNumber: '456', bdiPercent: 30 } };
@@ -33,7 +40,7 @@ describe('Boletim por medição', () => {
     expect(closed.periods[0].bulletin).toEqual(measurementBulletin(w, 'm1'));
     expect(() => editMeasuredBulletin(closed, actor, 'm1', { projectName: 'Teste' })).toThrow('bloqueado');
     w.services.push({ ...w.services[0], id: 'aditivo', availableFromNumber: 4 });
-    expect(() => editMeasuredBulletin(w, actor, 'm3', { number: 4 })).toThrow('serviços disponíveis');
+    expect(() => editMeasuredBulletin(w, actor, 'm3', { number: 4 })).toThrow('Número');
   });
   it('herda o cabeçalho na próxima medição sem compartilhar a edição ou substituir snapshots', async () => {
     let w = await fixture();

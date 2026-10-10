@@ -1,11 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, cleanup, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import MeasurementWorkspace from './MeasurementWorkspace';
 import type { MeasurementRepository } from '@/lib/measurementWorkspaceStore';
 import type { MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 
 afterEach(cleanup);
+beforeEach(() => localStorage.clear());
 const actor = { id: 'u', name: 'Engenheiro', canEdit: true };
 function fixture() {
   const w: Workspace = { schema: 1, projectId: 'p', projectName: 'Obra isolada', revision: 0, services: [{ id: 's', item: '1.1', description: 'Placas', unit: 'UN', contracted: 100, priceNoBDI: 10, priceWithBDI: 12.5, bdi: 25, importedPrice: true, chapterId: 'c', chapter: 'Prédio', path: 'Prédio › Sinalização', availableFromNumber: 1 }], periods: [1, 2, 3].map(n => ({ id: `m${n}`, number: n, startDate: `2026-0${n}-01`, endDate: `2026-0${n}-28`, status: 'draft' })), entries: [], plans: [], audit: [], importedKeys: [], backupId: 'backup' };
@@ -13,12 +14,37 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('reabre a medição selecionada após recarga sem salvar a obra e isola a preferência por usuário', async () => {
+    const { repository } = fixture();
+    let view = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.change(await screen.findByLabelText('Medição selecionada'), { target: { value: 'm2' } });
+    view.unmount();
+    view = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    expect(await screen.findByLabelText('Medição selecionada')).toHaveValue('m2');
+    expect(screen.getByLabelText('Medição nº')).toHaveValue('2');
+    expect(screen.getByRole('region', { name: 'Painel inferior de quantitativos' })).toHaveTextContent(/^$/);
+    expect(repository.commit).not.toHaveBeenCalled();
+    view.unmount();
+    render(<MeasurementWorkspace repository={repository} actor={{ ...actor, id: 'outro-usuario' }}/>);
+    expect(await screen.findByLabelText('Medição selecionada')).toHaveValue('m1');
+  });
+  it('mantém o número do boletim somente para leitura e ignora rascunho antigo de renumeração', async () => {
+    const { repository } = fixture();
+    vi.mocked(repository.drafts).mockResolvedValue([{ projectId: 'p', measurementId: 'm1', serviceId: '__bulletin__', rowId: 'number', changes: { value: '5' } }]);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const number = await screen.findByRole('textbox', { name: 'Medição nº' });
+    expect(number).toHaveValue('1');
+    expect(number).toHaveAttribute('readonly');
+    fireEvent.blur(number);
+    expect(repository.commit).not.toHaveBeenCalled();
+    expect(repository.clearDraft).not.toHaveBeenCalled();
+  });
   it('calcula a segunda medição sem datas manuais e identifica o novo boletim sem copiar quantidades', async () => {
     const { w, repository } = fixture();
     w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
     w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'row1', location: '', comment: 'Preservado', formula: 'STANDARD', multiplier: 29, measuredQuantity: 0 }] }];
     const before = structuredClone(w);
-    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const view = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
     fireEvent.click(await screen.findByRole('button', { name: 'Nova medição' }));
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByText('30/09/2026 a 29/10/2026')).toBeVisible();
@@ -33,6 +59,9 @@ describe('Tela própria de Medição', () => {
     expect(screen.getByRole('spinbutton', { name: 'Quantidade de Placas' })).toHaveValue(0);
     fireEvent.click(screen.getByRole('spinbutton', { name: 'Quantidade de Placas' }));
     expect(screen.getByText('Detalhe de quantitativos · 2ª medição')).toBeVisible();
+    vi.mocked(repository.load).mockResolvedValue(saved);
+    view.unmount(); render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    expect(await screen.findByLabelText('Medição selecionada')).toHaveValue(saved.periods[1].id);
   });
   it('reintegra o boletim acima dos painéis e salva somente ao sair do campo', async () => {
     const { w, repository } = fixture();

@@ -10,6 +10,7 @@ interface MeasurementContractInfoProps {
   project: Pick<Project, 'name'>;
   setProjectName?: (name: string) => void;
   onMeasurementNumberCommit?: () => void;
+  measurementNumberReadOnly?: boolean;
   defaultOpen?: boolean;
   isSnapshotMode: boolean;
   effStart: string;
@@ -47,7 +48,7 @@ export default function MeasurementContractInfo({
   measurementNumber, setMeasurementNumber,
   persistContractInfo,
   onProjectNameChange,
-  setProjectName, onMeasurementNumberCommit, defaultOpen = false,
+  setProjectName, onMeasurementNumberCommit, measurementNumberReadOnly = false, defaultOpen = false,
 }: MeasurementContractInfoProps) {
   const [detailsOpen, setDetailsOpen] = useState(defaultOpen);
   const compactBdi = Number.isFinite(effBdi) ? effBdi.toLocaleString('pt-BR') : '0';
@@ -214,8 +215,10 @@ export default function MeasurementContractInfo({
               className="h-7 text-xs border-0 px-0 focus-visible:ring-0 bg-transparent tabular-nums font-semibold"
               value={effNumber}
               disabled={isSnapshotMode}
+              readOnly={measurementNumberReadOnly}
+              title={measurementNumberReadOnly ? 'Número automático da medição' : undefined}
               onChange={e => setMeasurementNumber(e.target.value)}
-              onBlur={() => onMeasurementNumberCommit ? onMeasurementNumberCommit() : persistContractInfo({ nextMeasurementNumber: Number(measurementNumber) || 1 })}
+              onBlur={() => { if (!measurementNumberReadOnly) { if (onMeasurementNumberCommit) onMeasurementNumberCommit(); else persistContractInfo({ nextMeasurementNumber: Number(measurementNumber) || 1 }); } }}
             />
           </FormField>
           <div className="hidden md:block col-span-9 border-t border-border" />

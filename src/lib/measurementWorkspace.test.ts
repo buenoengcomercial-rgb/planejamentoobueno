@@ -11,6 +11,27 @@ import { monthlyExportRows } from './measurementMonthlyExport';
 const actor: MeasurementActor = { id: 'tester', name: 'Teste isolado', canEdit: true, canReview: true };
 const setup = async () => { const f = measurementFixture(); const backup = await createIncorporationBackup(f.project, f.plans, []); return { ...f, backup, plan: prepareIncorporation(backup) }; };
 describe('Medição independente', () => {
+  it('bloqueia alterações retroativas, exclusão e desfazer que afetariam acumulado fiscal posterior', async () => {
+    let w = (await setup()).plan.candidate;
+    const row = w.entries[0].rows[0];
+    w = editMeasuredRow(w, actor, 'm1', 'detectors', { ...row, multiplier: 220 });
+    const editId = w.audit.at(-1)!.id;
+    w = freezeMeasuredPeriod(w, actor, 'm2');
+    const before = structuredClone(w);
+    expect(() => editMeasuredRow(w, actor, 'm1', 'detectors', { ...row, multiplier: 200 })).toThrow('acumulado da 2ª medição');
+    expect(() => deleteMeasuredRow(w, actor, 'm1', 'detectors', row.id)).toThrow('acumulado da 2ª medição');
+    expect(() => undoMeasuredOperation(w, actor, editId)).toThrow('acumulado da 2ª medição');
+    expect(w).toEqual(before);
+    // Comment corrections and future quantities do not change the fiscal accumulation.
+    w = editMeasuredRow(w, actor, 'm1', 'detectors', { ...entryFor(w, 'm1', 'detectors').rows[0], comment: 'Conferido' });
+    w = editMeasuredRow(w, actor, 'm3', 'detectors', { ...newMeasuredRow(), multiplier: 5 });
+    expect(w.periods[1]).toEqual(before.periods[1]);
+    expect(monthlyLines(w, 'm3').find(l => l.service.id === 'detectors')?.accumulated).toBe(225);
+  });
+  it('não inclui quantidade retroativa em serviço antes zerado após envio posterior', async () => {
+    const w = freezeMeasuredPeriod((await setup()).plan.candidate, actor, 'm3');
+    expect(() => editMeasuredRow(w, actor, 'm1', 'signs', { ...newMeasuredRow(), multiplier: 1 })).toThrow('acumulado da 3ª medição');
+  });
   it('incorpora diariamente/período sem duplicar e verifica todos os arquivos do backup', async () => {
     const { backup, plan } = await setup(); await verifyIncorporationBackup(backup);
     expect(plan.issues).toEqual([]); expect(plan.reconciliation.every(r => r.difference === 0)).toBe(true);
@@ -73,7 +94,7 @@ describe('Medição independente', () => {
     w = freezeMeasuredPeriod(w, actor, 'm2'); const before = JSON.stringify(w);
     expect(() => editMeasuredRow(w, actor, 'm1', 'signs', { ...entryFor(w, 'm1', 'signs').rows[0], multiplier: 31 })).toThrow('2ª medição');
     expect(JSON.stringify(w)).toBe(before);
-    w = deleteMeasuredRow(w, actor, 'm1', 'signs', row.id);
+    expect(() => deleteMeasuredRow(w, actor, 'm1', 'signs', row.id)).toThrow('acumulado da 2ª medição');
     expect(entryFor(w, 'm2', 'signs').rows[0].multiplier).toBe(30);
   });
   it('valida saldo, perfil e fator neutro', async () => {

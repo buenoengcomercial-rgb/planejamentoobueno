@@ -25,3 +25,9 @@ Cada incorporação operacional conserva backup no servidor e fora dele e verifi
 A primeira medição conserva o intervalo explicitamente definido para a obra. Por definição do usuário, no Palácio Rio Madeira ela vai de 24/08/2026 a 29/09/2026. Cada nova medição começa no dia seguinte à última e inclui exatamente 30 dias corridos: 2ª de 30/09 a 29/10; 3ª de 30/10 a 28/11. A interface mostra o intervalo calculado para confirmação, sem campos manuais; o servidor rejeita datas e numeração fora da sequência.
 
 A correção do período inicial é pontual, com cópia anterior verificável, revisão esperada e histórico antes/depois; preserva identificadores, quantitativos, contrato e plantas. Não reclassifica lançamentos antigos por data nem altera os cronogramas. Cobertura: measurementPeriodSequence, measurementWorkspace, MeasurementWorkspace e measurementCloud.database.
+
+## Proteção do acumulado e identificação
+
+A migração `20261010040000` acrescenta validações sem reescrever registros: o número de um período existente é imutável e alterações de quantidade em períodos anteriores a um snapshot fiscal são bloqueadas. A mesma validação roda no cliente e no servidor e abrange exclusões, referências, capturas e desfazer. Comentários sem mudança de total e lançamentos em períodos posteriores continuam permitidos. Snapshots enviados não são recalculados silenciosamente.
+
+O número do boletim é somente leitura na base independente. A seleção usa o identificador estável do período, lembrado neste navegador por usuário e obra, separado dos dados operacionais. Ao recarregar, a seleção só é restaurada se o período existir na carga confirmada; o painel inferior permanece vazio até selecionar uma quantidade. Um período novo só vira a preferência após confirmação do salvamento. Falhas no armazenamento de preferências não bloqueiam os quantitativos.
