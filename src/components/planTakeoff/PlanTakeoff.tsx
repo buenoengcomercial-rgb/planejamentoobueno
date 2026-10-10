@@ -6,6 +6,7 @@ import { Box, Check, ChevronDown, ChevronUp, Circle, CircleDot, Crosshair, FileU
 import { calibration, fixedPointCount, measureCategory, measureUnit, MEASURE_KINDS, minimumPoints, measuresForContext, quantity, readTakeoffs, requiresHeight, saveTakeoffs, TAKEOFF_CATALOG_UPDATED, type MeasureKind, type Point, type TakeoffContext, type TakeoffMeasure, type TakeoffPlan, type TakeoffRepository, type TakeoffDraft } from '@/lib/planTakeoff';
 import { openDwfSheets, type DwfSheet } from '@/lib/dwfTakeoff';
 import { type CaptureKind } from '@/lib/dxfSnap';
+import { readCapturePreferences, saveCapturePreferences } from '@/lib/takeoffCapturePreferences';
 import { cloudTakeoffScope } from '@/lib/planTakeoffCloud';
 import PlanCaptureDialog from './PlanCaptureDialog';
 import PlanDrawingManager from './PlanDrawingManager';
@@ -45,9 +46,9 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   const [canPreviousView, setCanPreviousView] = useState(false);
   const [editMode, setEditMode] = useState<CanvasEditMode>('select');
   const [captureDialog, setCaptureDialog] = useState(false);
-  const [capturesEnabled, setCapturesEnabled] = useState(false);
-  const [trackingEnabled, setTrackingEnabled] = useState(false);
-  const [captureKinds, setCaptureKinds] = useState<CaptureKind[]>([]);
+  const [capturePreferences, setCapturePreferences] = useState(() => readCapturePreferences(storageKey));
+  const { enabled: capturesEnabled, tracking: trackingEnabled, kinds: captureKinds } = capturePreferences;
+  useEffect(() => { setCapturePreferences(readCapturePreferences(storageKey)); }, [storageKey]);
   const [availableCaptures, setAvailableCaptures] = useState<CaptureKind[]>([]);
   const [sheetInfo, setSheetInfo] = useState<DwfSheet[]>([]);
   const [showDrawings, setShowDrawings] = useState(false);
@@ -308,7 +309,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   return <section className="mx-auto flex w-full max-w-[2100px] flex-col gap-1 bg-[#f5f6f7] p-1.5 text-slate-800 sm:p-2" aria-label="Levantamento em planta">
     <header className="flex min-w-0 flex-wrap items-center gap-2 border border-slate-300 bg-white px-3 py-1.5">
       <div className="mr-auto min-w-0">
-        <div className="flex items-center gap-2"><h1 className="truncate text-sm font-semibold">Levantamento em planta</h1><span className="bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-900">Experimental</span></div>
+        <div className="flex items-center gap-2"><h1 className="truncate text-sm font-semibold">Levantamento em planta</h1></div>
         <p className="text-xs text-muted-foreground">{plan ? `${plan.building ? `${plan.building} · ` : ''}${plan.name}${plan.floor ? ` · ${plan.floor}` : ''}${plan.kind === 'dxf' ? ' · Model' : ''}` : 'Escolha uma planta para começar'}</p>
       </div>
       <span role="status" className="order-last w-full text-xs text-muted-foreground sm:order-none sm:w-auto">{status}</span>
@@ -371,7 +372,12 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
               {embedded && selectedMeasure && !tool && <Button title="Apagar marcação selecionada — limpa a célula vinculada após validar o saldo" aria-label="Excluir marcação selecionada" variant="ghost" size="icon" className="h-7 w-7 rounded-none text-red-700" disabled={locked} onClick={() => { void removeMeasure(selectedMeasure.id); }}><Trash2 className="h-4 w-4" /></Button>}
           </div>
         </div>
-        {captureDialog && <PlanCaptureDialog available={plan.kind === 'dxf' ? availableCaptures : []} enabled={capturesEnabled} tracking={trackingEnabled} kinds={captureKinds} onClose={() => setCaptureDialog(false)} onAccept={(enabled, tracking, kinds) => { setCapturesEnabled(enabled); setTrackingEnabled(tracking); setCaptureKinds(kinds); setCaptureDialog(false); }} />}
+        {captureDialog && <PlanCaptureDialog available={plan.kind === 'dxf' ? availableCaptures : []} enabled={capturesEnabled} tracking={trackingEnabled} kinds={captureKinds} onClose={() => setCaptureDialog(false)} onAccept={(enabled, tracking, kinds) => {
+          const preferences = { enabled, tracking, kinds };
+          setCapturePreferences(preferences);
+          if (!saveCapturePreferences(storageKey, preferences)) setError('Opções do ímã aplicadas, mas o navegador não permitiu salvá-las para a próxima abertura.');
+          setCaptureDialog(false);
+        }} />}
         {showSettings && <div className="flex flex-wrap items-end gap-2 border border-slate-300 bg-white p-2 text-xs">
           <label className="min-w-[180px] flex-1">Nome da planta<Input className="h-7 rounded-none text-xs" onKeyDown={fieldKey} key={`${plan.id}-name-${plan.name}`} defaultValue={plan.name} disabled={locked} onBlur={e => { const name = e.target.value.trim(); if (name && name !== plan.name) void update({ ...plan, name }); }} /></label>
           <label className="min-w-[140px]">Pavimento<Input className="h-7 rounded-none text-xs" onKeyDown={fieldKey} key={`${plan.id}-floor-${plan.floor}`} defaultValue={plan.floor} disabled={locked} placeholder="Ex.: Térreo" onBlur={e => { if (e.target.value !== plan.floor) void update({ ...plan, floor: e.target.value }); }} /></label>

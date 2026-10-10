@@ -3,6 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import PlanCaptureDialog from './PlanCaptureDialog';
 
 describe('capturas geométricas', () => {
+  it('mantém preferências de capturas que outra planta não oferece, sem habilitar a geometria ausente', () => {
+    const accept = vi.fn();
+    render(<PlanCaptureDialog available={['endpoint']} enabled tracking kinds={['endpoint', 'center']} onClose={vi.fn()} onAccept={accept} />);
+    expect(screen.getByRole('checkbox', { name: 'Centro' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }));
+    expect(accept).toHaveBeenCalledWith(true, true, ['endpoint', 'center']);
+  });
   it('só habilita geometria reconhecida e desmarcar todas preserva a ativação', () => {
     const accept = vi.fn();
     render(<PlanCaptureDialog available={['endpoint', 'midpoint']} enabled tracking={false} kinds={['endpoint']} onClose={vi.fn()} onAccept={accept} />);

@@ -29,7 +29,7 @@ export default function PlanCaptureDialog({ available, enabled, tracking, kinds,
         </label>;
       })}</div>
       <div className="flex items-center justify-between gap-1 border-t border-slate-300 pt-2">
-        <Button className="h-7 rounded-sm px-2 text-xs" variant="outline" onClick={() => onAccept(draftEnabled, draftTracking, draftKinds.filter(kind => available.includes(kind)))}>Confirmar</Button>
+        <Button className="h-7 rounded-sm px-2 text-xs" variant="outline" onClick={() => onAccept(draftEnabled, draftTracking, draftKinds)}>Confirmar</Button>
         <Button className="h-7 rounded-sm px-2 text-xs" variant="outline" onClick={() => setKinds([])}>Desmarcar todas</Button>
         <Button className="h-7 rounded-sm px-2 text-xs" variant="outline" onClick={onClose}>Cancelar</Button>
       </div>
