@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation, incorporateApprovedAdditive } from './measurementIncorporation';
-import { editMeasuredRow, newMeasuredRow, pasteMeasuredRow, freezeMeasuredPeriod, captureMeasurement, monthlyLines, addMeasuredPeriod, type MeasurementWorkspace } from './measurementWorkspace';
+import { editMeasuredRow, editMeasuredBulletin, deleteMeasuredRow, entryFor, newMeasuredRow, pasteMeasuredRow, freezeMeasuredPeriod, captureMeasurement, monthlyLines, addMeasuredPeriod, type MeasurementWorkspace } from './measurementWorkspace';
 import { encodeMeasurementWorkspace } from './measurementCloudCodec';
 const projectId='00000000-0000-4000-8000-000000000001', userId='00000000-0000-4000-8000-000000000002', planId='00000000-0000-4000-8000-000000000003';
 const actor={id:userId,name:'Teste',canEdit:true,canReview:true};
@@ -27,11 +27,40 @@ beforeAll(async()=>{
  INSERT INTO takeoff_plans(id,project_id,file_path) VALUES('${planId}','${projectId}','${projectId}/${planId}/drawing.png');`);
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010020000_independent_measurement_workspace.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010030000_measurement_thirty_day_sequence.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261010040000_measurement_fiscal_history_guard.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
 afterAll(async()=>{await db.close();});
 describe('transação da Medição na nuvem',()=>{
+ it('servidor impede edição e exclusão retroativas, inclusive com cliente antigo, sem gravar parte da operação',async()=>{
+  await seed(); const w=await commit(freezeMeasuredPeriod(base,actor,'m2'));
+  const client=structuredClone(w); client.periods[1].status='draft'; delete client.periods[1].frozen;
+  const row=entryFor(client,'m1','detectors').rows[0];
+  const candidates=[
+   editMeasuredRow(client,actor,'m1','detectors',{...row,multiplier:200}),
+   deleteMeasuredRow(client,actor,'m1','detectors',row.id),
+   editMeasuredRow(client,actor,'m1','signs',{...newMeasuredRow('retro'),multiplier:1}),
+  ];
+  for(const candidate of candidates){
+   candidate.periods=structuredClone(w.periods);
+   await expect(commit(candidate)).rejects.toThrow('acumulado da 2ª medição');
+  }
+  expect((await db.query<{data:MeasurementWorkspace}>('SELECT data FROM measurement_workspaces')).rows[0].data).toEqual(JSON.parse(wire(w)));
+  expect((await db.query('SELECT * FROM measurement_workspace_events')).rows).toHaveLength(1);
+  const commented=await commit(editMeasuredRow(w,actor,'m1','detectors',{...row,comment:'Conferido'}));
+  const future=await commit(editMeasuredRow(commented,actor,'m3','detectors',{...newMeasuredRow('future'),multiplier:5}));
+  expect(future.periods[1]).toEqual(w.periods[1]);
+ });
+ it('servidor bloqueia renumeração sem reescrever períodos ou auditoria',async()=>{
+  await seed(); const candidate=editMeasuredBulletin(base,actor,'m3',{contract:{artNumber:'teste'}});
+  candidate.periods[2].number=5;
+  candidate.audit.at(-1)!.afterPeriods=structuredClone(candidate.periods);
+  candidate.audit.at(-1)!.bulletinChange!.after.number=5;
+  await expect(commit(candidate)).rejects.toThrow('Número da medição é automático');
+  expect((await db.query<{data:MeasurementWorkspace}>('SELECT data FROM measurement_workspaces')).rows[0].data).toEqual(JSON.parse(wire(base)));
+  expect((await db.query('SELECT * FROM measurement_workspace_events')).rows).toHaveLength(0);
+ });
  it('valida valores fiscais contra o motor financeiro e rejeita adulteração',async()=>{
   await seed(); const next=freezeMeasuredPeriod(base,actor,'m1');
   const bad=structuredClone(next); bad.periods[0].frozen![0].financial.totalPeriod=999;

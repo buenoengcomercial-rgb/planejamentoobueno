@@ -18,7 +18,7 @@ export default function MeasurementBulletin({ workspace, measurementId, readOnly
   const bulletin = measurementBulletin(workspace, measurementId);
   const period = workspace.periods.find(p => p.id === measurementId)!;
   const [edits, setEdits] = useState<Record<string, string>>(() => Object.fromEntries(drafts
-    .filter(d => d.measurementId === measurementId && d.serviceId === bulletinDraftKey)
+    .filter(d => d.measurementId === measurementId && d.serviceId === bulletinDraftKey && d.rowId !== 'number')
     .map(d => [d.rowId, String(d.changes.value ?? '')])));
   const pendingDraft = useRef(Promise.resolve());
   const value = (field: string, saved: string | number | undefined) => edits[field] ?? String(saved ?? '');
@@ -40,7 +40,7 @@ export default function MeasurementBulletin({ workspace, measurementId, readOnly
   };
   const textContract = (field: 'contractor' | 'contracted' | 'contractNumber' | 'contractObject' | 'location' | 'budgetSource' | 'artNumber') => value(field, bulletin.contract[field]);
   const bdi = value('bdiPercent', bulletin.contract.bdiPercent);
-  const number = value('number', period.number);
+  const number = String(period.number);
   return <section aria-label="Boletim de medição para pagamento">
     <MeasurementContractInfo defaultOpen project={{ name: value('projectName', bulletin.projectName) }}
       setProjectName={v => change('projectName', v)} onProjectNameChange={name => void commit('projectName', { projectName: name })}
@@ -54,8 +54,7 @@ export default function MeasurementBulletin({ workspace, measurementId, readOnly
       budgetSource={textContract('budgetSource')} setBudgetSource={v => change('budgetSource', v)}
       artNumber={textContract('artNumber')} setArtNumber={v => change('artNumber', v)}
       bdiInput={bdi} setBdiInput={v => change('bdiPercent', v)} bdiPercent={numeric(bdi)}
-      measurementNumber={number} setMeasurementNumber={v => change('number', v)}
-      onMeasurementNumberCommit={() => void commit('number', { number: numeric(number) })}
+      measurementNumber={number} setMeasurementNumber={() => undefined} measurementNumberReadOnly
       persistContractInfo={contract => void commit(Object.keys(contract)[0], { contract })}/>
     {Object.keys(edits).length > 0 && <p role="status" className="px-3 py-1 text-xs text-amber-800">Boletim com rascunho preservado. Finalize o campo para confirmar o salvamento.</p>}
   </section>;
