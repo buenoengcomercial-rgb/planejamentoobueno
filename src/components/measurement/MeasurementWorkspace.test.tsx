@@ -519,6 +519,37 @@ describe('Tela própria de Medição', () => {
     expect(screen.getByLabelText('Quantidade de Placas')).toHaveValue(0);
     expect(screen.getByTestId('monthly-value')).toHaveTextContent('0,00');
   });
+  it('permite alternar tarefas durante salvamentos lentos e confirma cada quantitativo em ordem', async () => {
+    const { w, repository } = fixture();
+    w.services.push({ ...w.services[0], id: 's2', item: '1.2', description: 'Detectores' });
+    const confirmations: Array<(saved: Workspace) => void> = [];
+    vi.mocked(repository.commit).mockImplementation(candidate => new Promise(resolve => {
+      confirmations.push(() => resolve(candidate));
+    }));
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const plates = await screen.findByRole('spinbutton', { name: 'Quantidade de Placas' });
+    const detectors = screen.getByRole('spinbutton', { name: 'Quantidade de Detectores' });
+    fireEvent.change(plates, { target: { value: '3' } });
+    fireEvent.blur(plates);
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('Salvando…')).toBeVisible();
+
+    // Navigation and the next local edit must not wait for the first HTTP reply.
+    fireEvent.click(detectors);
+    expect(screen.getByText('Detalhe de quantitativos · 1ª medição')).toBeVisible();
+    fireEvent.change(detectors, { target: { value: '5' } });
+    fireEvent.blur(detectors);
+    expect(detectors).toHaveValue(5);
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+
+    await act(async () => confirmations.shift()!());
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+    await act(async () => confirmations.shift()!());
+    await waitFor(() => expect(screen.getByText('Salvo neste navegador')).toBeVisible());
+    const saved = vi.mocked(repository.commit).mock.calls.at(-1)![0];
+    expect(saved.entries.find(e => e.serviceId === 's')?.rows[0].multiplier).toBe(3);
+    expect(saved.entries.find(e => e.serviceId === 's2')?.rows[0].multiplier).toBe(5);
+  });
   it('não anuncia confirmação quando o repositório falha e mantém a troca bloqueada', async () => {
     const { repository } = fixture(); vi.mocked(repository.commit).mockRejectedValue(new Error('Sem conexão: rascunho preservado'));
     render(<MeasurementWorkspace repository={repository} actor={actor}/>);
