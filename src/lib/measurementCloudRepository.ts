@@ -1,5 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
-import { measurementRepository, type MeasurementRepository, type PendingMeasurementSave } from './measurementWorkspaceStore';
+import { measurementRepository, type MeasurementRepository, type PendingMeasurementSave, type PendingMeasurementEntrySave, type StoredMeasurementPending } from './measurementWorkspaceStore';
 import { decodeMeasurementWorkspace, encodeMeasurementWorkspace } from './measurementCloudCodec';
 import { TAKEOFF_BUCKET } from './planTakeoffCloud';
 import { measurementEntryPatch } from './measurementEntryPatch';
@@ -9,6 +9,7 @@ import type { MeasurementWorkspace } from './measurementWorkspace';
 export function cloudMeasurementRepository(scope: { userId: string; projectId: string }): MeasurementRepository {
   const local = measurementRepository({ ...scope, userId: `cloud:${scope.userId}`, environment: 'isolated' });
   let confirmed: MeasurementWorkspace | null = null;
+  let loading: Promise<MeasurementWorkspace | null> | null = null;
   // Storage objects are immutable and keyed by operation. Reuse their bytes,
   // including historic/deleted drawings, until this repository is disposed.
   const files = new Map<string, Promise<Blob>>();
@@ -21,9 +22,40 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     try { return await files.get(path)!; }
     catch (error) { files.delete(path); throw error; }
   });
+  const loadRemote = () => {
+    if (loading) return loading;
+    loading = (async () => {
+      const { data, error } = await supabase.rpc('load_measurement_workspace' as never, { p_project_id: scope.projectId } as never);
+      if (error) throw new Error(`Medição não carregada: ${error.message}`);
+      confirmed = data ? await read(data) : null;
+      return confirmed;
+    })().finally(() => { loading = null; });
+    return loading;
+  };
+  const restorePending = async (stored: StoredMeasurementPending): Promise<PendingMeasurementSave> => {
+    if ('candidate' in stored) return stored;
+    if (stored.projectId !== scope.projectId || stored.patch.event.id !== stored.operationId) throw new Error('Rascunho de Medição incompatível com esta obra.');
+    const base = confirmed ?? await loadRemote();
+    if (!base) throw new Error('A base da Medição não está disponível para reconstruir o rascunho.');
+    const key = (entry: typeof base.entries[number]) => `${entry.measurementId}:${entry.serviceId}`;
+    const replacements = new Map(stored.patch.entries.map(entry => [key(entry), entry]));
+    if (replacements.size !== stored.patch.entries.length || stored.patch.entries.some(entry => entry.projectId !== scope.projectId)) throw new Error('Rascunho de Medição inconsistente.');
+    const existing = new Set(base.entries.map(key));
+    const entries = base.entries.map(entry => replacements.get(key(entry)) ?? entry);
+    entries.push(...stored.patch.entries.filter(entry => !existing.has(key(entry))));
+    // If the remote revision advanced, the candidate is only for conflict
+    // inspection/export. The UI compares baseRevision before any retry.
+    const candidate: MeasurementWorkspace = { ...base, revision: stored.baseRevision + 1, entries, audit: [...base.audit, stored.patch.event] };
+    return { baseRevision: stored.baseRevision, candidate, archivedAt: stored.archivedAt, compact: stored };
+  };
   return {
     ...local,
     savedLabel: 'Salvo na nuvem',
+    pending: async () => {
+      const record = (await local.storedPendingSaves!()).find(row => !row.archivedAt);
+      return record ? restorePending(record) : null;
+    },
+    pendingSaves: async () => Promise.all((await local.storedPendingSaves!()).map(restorePending)),
     remoteRevision: async () => {
       const { data, error } = await supabase.from('measurement_workspace_versions' as never).select('revision').eq('project_id', scope.projectId).maybeSingle();
       const revision = Number((data as { revision?: number } | null)?.revision);
@@ -56,12 +88,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       connect();
       return () => { disposed = true; if (retry) clearTimeout(retry); void supabase.removeChannel(channel); };
     },
-    load: async () => {
-      const { data, error } = await supabase.rpc('load_measurement_workspace' as never, { p_project_id: scope.projectId } as never);
-      if (error) throw new Error(`Medição não carregada: ${error.message}`);
-      confirmed = data ? await read(data) : null;
-      return confirmed;
-    },
+    load: loadRemote,
     initialize: async () => { throw new Error('Esta obra ainda precisa da incorporação conferida dos dados da nuvem.'); },
     commit: async (candidate, baseRevision) => {
       const operationId = candidate.audit.at(-1)?.id;
@@ -72,7 +99,11 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         || [latestEvent?.beforePlans, latestEvent?.afterPlans]
           .some(plans => plans?.some(plan => !plan.storagePath));
       const next = needsPlanPaths ? structuredClone(candidate) : candidate;
-      const preserve = () => local.preservePending!({ baseRevision, candidate: next } satisfies PendingMeasurementSave);
+      const entryPatch = !needsPlanPaths && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
+      const compact: PendingMeasurementEntrySave | null = entryPatch ? {
+        format: 'entry-patch-v1', projectId: scope.projectId, baseRevision, operationId, patch: entryPatch,
+      } : null;
+      const preserve = () => compact ? local.preserveEntryPending!(compact) : local.preservePending!({ baseRevision, candidate: next } satisfies PendingMeasurementSave);
       await preserve();
       for (const plan of next.plans) {
         if (!plan.storagePath) {
@@ -89,7 +120,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         for (const event of next.audit) for (const plans of [event.beforePlans, event.afterPlans]) for (const p of plans ?? []) p.storagePath ??= paths.get(p.id);
       }
       if (next.plans.some((p, i) => p.storagePath !== candidate.plans[i]?.storagePath)) await preserve();
-      const patch = confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
+      const patch = entryPatch ?? (confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null);
       const send = () => patch
         ? supabase.rpc('patch_measurement_entries' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: patch,

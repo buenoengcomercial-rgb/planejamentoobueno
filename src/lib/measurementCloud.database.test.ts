@@ -42,6 +42,7 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010180000_measurement_validation_collection_cache.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010190000_measurement_realtime_versions.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010210000_measurement_entry_delta.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261010220000_measurement_entry_projection.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -138,7 +139,7 @@ describe('transação da Medição na nuvem',()=>{
   expect(stored).toMatchObject({revision:third.revision,data:{revision:base.revision}});
   const deltas=(await db.query<{revision:number;before_data:{kind:string;entries:unknown[]};after_data:{kind:string;entries:unknown[];event:{id:string}}}>('SELECT revision,before_data,after_data FROM measurement_workspace_events ORDER BY revision')).rows;
   expect(deltas).toHaveLength(3);
-  expect(deltas.every(e=>e.before_data.kind==='entry_patch_v1' && e.after_data.kind==='entry_patch_v1' && e.after_data.entries.length===1)).toBe(true);
+  expect(deltas.every(e=>e.before_data.kind==='entry_patch_v2' && e.after_data.kind==='entry_patch_v2' && e.after_data.entries.length===1)).toBe(true);
   expect(deltas.map(e=>e.after_data.event.id)).toEqual(third.audit.slice(-3).map(e=>e.id));
   expect((await db.query<{revision:number}>('SELECT revision FROM measurement_workspace_versions WHERE project_id=$1',[projectId])).rows[0].revision).toBe(third.revision);
   const fourth=addMeasuredPeriod(third,actor);
@@ -147,10 +148,68 @@ describe('transação da Medição na nuvem',()=>{
   expect(full.before_data).toEqual(JSON.parse(wire(third)));
   expect(full.after_data).toEqual(JSON.parse(wire(fourth)));
   expect((await db.query<{data:unknown}>('SELECT data FROM measurement_workspaces')).rows[0].data).toEqual(JSON.parse(wire(fourth)));
+  const index=(await db.query<{revision:number;entries:unknown}>('SELECT revision,entries FROM measurement_workspace_entry_state WHERE project_id=$1',[projectId])).rows[0];
+  expect(index).toEqual({revision:fourth.revision,entries:JSON.parse(wire(fourth)).entries});
   const originalPatch=measurementEntryPatch(base,first)!;
   expect((await db.query<{value:unknown}>('SELECT patch_measurement_entries($1,$2,$3) value',[projectId,base.revision,JSON.stringify(originalPatch)])).rows[0].value).toEqual({projectId,revision:first.revision,patch:originalPatch});
   expect(await commit(first,base.revision)).toEqual(JSON.parse(wire(first)));
+  const forged=structuredClone(first); forged.projectName+=' adulterado';
+  await expect(commit(forged,base.revision)).rejects.toThrow('conteúdo diferente');
   expect((await db.query<{data:unknown}>('SELECT load_measurement_workspace($1) data',[projectId])).rows[0].data).toEqual(JSON.parse(wire(fourth)));
+ });
+ it('migração repetida reconstrói a projeção de um delta v1 pendente sem mudar dados',async()=>{
+  await seed();
+  const first=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('legacy-delta'),multiplier:3});
+  const patch=measurementEntryPatch(base,first)!;
+  const before={kind:'entry_patch_v1',revision:base.revision,entries:patch.event.before,
+    existed:patch.entries.map(e=>base.entries.some(old=>old.measurementId===e.measurementId&&old.serviceId===e.serviceId))};
+  const after={kind:'entry_patch_v1',revision:first.revision,entries:patch.entries,event:patch.event,patch};
+  await db.query('INSERT INTO measurement_workspace_events(project_id,operation_id,revision,actor_id,request_hash,before_data,after_data) VALUES($1,$2,$3,$4,md5($5::jsonb::text),$6,$7)',
+   [projectId,patch.event.id,first.revision,userId,wire(first),JSON.stringify(before),JSON.stringify(after)]);
+  await db.query('UPDATE measurement_workspaces SET revision=$2 WHERE project_id=$1',[projectId,first.revision]);
+  const rawBefore=(await db.query<{revision:number;data:unknown}>('SELECT revision,data FROM measurement_workspaces WHERE project_id=$1',[projectId])).rows[0];
+  const eventsBefore=(await db.query<{count:number}>('SELECT count(*)::int count FROM measurement_workspace_events WHERE project_id=$1',[projectId])).rows[0].count;
+  const migration=await readFile(new URL('../../supabase/migrations/20261010220000_measurement_entry_projection.sql',import.meta.url),'utf8');
+  await db.exec(migration);
+  await db.exec(migration);
+  expect((await db.query<{revision:number;data:unknown}>('SELECT revision,data FROM measurement_workspaces WHERE project_id=$1',[projectId])).rows[0]).toEqual(rawBefore);
+  expect((await db.query<{count:number}>('SELECT count(*)::int count FROM measurement_workspace_events WHERE project_id=$1',[projectId])).rows[0].count).toBe(eventsBefore);
+  expect((await db.query<{data:unknown}>('SELECT load_measurement_workspace($1) data',[projectId])).rows[0].data).toEqual(JSON.parse(wire(first)));
+  expect((await db.query<{revision:number;entries:unknown}>('SELECT revision,entries FROM measurement_workspace_entry_state WHERE project_id=$1',[projectId])).rows[0]).toEqual({revision:first.revision,entries:JSON.parse(wire(first)).entries});
+  const second=editMeasuredRow(first,actor,'m1','signs',{...newMeasuredRow('legacy-delta'),multiplier:4});
+  await db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,first.revision,JSON.stringify(measurementEntryPatch(first,second))]);
+  expect((await db.query<{data:unknown}>('SELECT load_measurement_workspace($1) data',[projectId])).rows[0].data).toEqual(JSON.parse(wire(second)));
+ });
+ it('bloqueia projeção adulterada e não expõe seu acesso direto ao cliente',async()=>{
+  await seed();
+  const first=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('guard'),multiplier:3});
+  const patch=measurementEntryPatch(base,first)!;
+  await db.exec('BEGIN');
+  await db.query('UPDATE measurement_workspace_entry_state SET entries=$2 WHERE project_id=$1',[projectId,'[]']);
+  await expect(db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,base.revision,JSON.stringify(patch)])).rejects.toThrow('Índice da Medição inconsistente');
+  await db.exec('ROLLBACK');
+  for(const role of ['authenticated','anon']){
+   await db.exec(`SET ROLE ${role}`);
+   await expect(db.query('SELECT * FROM measurement_workspace_entry_state')).rejects.toThrow('permission denied');
+   await db.exec('RESET ROLE');
+  }
+  await db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,base.revision,JSON.stringify(patch)]);
+  expect((await db.query<{data:unknown}>('SELECT load_measurement_workspace($1) data',[projectId])).rows[0].data).toEqual(JSON.parse(wire(first)));
+ });
+ it('autor autenticado pode lançar após commit geral; observador permanece sem escrita',async()=>{
+  await seed();
+  const first=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('authenticated'),multiplier:3});
+  await db.exec("SET ROLE authenticated; SET test.role='owner'");
+  await db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,base.revision,JSON.stringify(measurementEntryPatch(base,first))]);
+  expect(await commit(first,base.revision)).toEqual(JSON.parse(wire(first)));
+  await db.exec('RESET ROLE');
+  const period=addMeasuredPeriod(first,actor);
+  await commit(period);
+  const second=editMeasuredRow(period,actor,period.periods.at(-1)!.id,'signs',{...newMeasuredRow('after-full'),multiplier:1});
+  await db.exec("SET ROLE authenticated; SET test.role='owner'");
+  await db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,period.revision,JSON.stringify(measurementEntryPatch(period,second))]);
+  await db.exec('RESET ROLE');
+  expect((await db.query<{data:unknown}>('SELECT load_measurement_workspace($1) data',[projectId])).rows[0].data).toEqual(JSON.parse(wire(second)));
  });
  it('mantém a operação inteira após rollback, bloqueia cliente concorrente e recusa histórico incompleto',async()=>{
   await seed();
