@@ -1,0 +1,28 @@
+        .measurement-table { table-layout: fixed; min-width: 1400px; }
+        .measurement-table col.col-item { width: 70px; }
+        .measurement-table col.col-code { width: 90px; }
+        .measurement-table col.col-bank { width: 70px; }
+        .measurement-table col.col-desc { width: 360px; min-width: 280px; max-width: 460px; }
+        .measurement-table col.col-und  { width: 70px; }
+        .measurement-table col.col-qty  { width: 100px; }
+        .measurement-table col.col-val  { width: 120px; }
+        .measurement-table th, .measurement-table td { vertical-align: top; }
+        .measurement-table .cell-desc {
+          overflow-wrap: anywhere;
+          word-break: break-word;
+          white-space: normal;
+          line-height: 1.25;
+        }
+        .measurement-table .cell-und {
+          text-align: center;
+          white-space: nowrap;
+          border-left: 1px solid hsl(var(--border));
+        }
+.measurement-table-scroll { container-type: inline-size; }
+.measurement-inline-detail { position: sticky; left: 4px; width: calc(100cqw - 12px); max-width: 100%; }
+.measurement-table--ledger col.col-item { width: 64px; }
+.measurement-table--ledger col.col-code { width: 75px; }
+.measurement-table--ledger col.col-bank { width: 76px; }
+.measurement-table--ledger col.col-desc { width: 320px; }
+.measurement-table--ledger col.col-und { width: 64px; }
+.measurement-table--ledger col.col-val { width: 112px; }

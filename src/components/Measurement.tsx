@@ -309,26 +309,6 @@ function LegacyMeasurement({ project, onProjectChange, undoButton, onOpenDailyRe
   return (
     <div className="measurement-print-root p-4 lg:p-5 pb-56 space-y-4 print:p-0 print:space-y-3" onClickCapture={handleDetailClickCapture}>
       <style>{`
-        .measurement-table { table-layout: fixed; min-width: 1400px; }
-        .measurement-table col.col-item { width: 70px; }
-        .measurement-table col.col-code { width: 90px; }
-        .measurement-table col.col-bank { width: 70px; }
-        .measurement-table col.col-desc { width: 360px; min-width: 280px; max-width: 460px; }
-        .measurement-table col.col-und  { width: 70px; }
-        .measurement-table col.col-qty  { width: 100px; }
-        .measurement-table col.col-val  { width: 120px; }
-        .measurement-table th, .measurement-table td { vertical-align: top; }
-        .measurement-table .cell-desc {
-          overflow-wrap: anywhere;
-          word-break: break-word;
-          white-space: normal;
-          line-height: 1.25;
-        }
-        .measurement-table .cell-und {
-          text-align: center;
-          white-space: nowrap;
-          border-left: 1px solid hsl(var(--border));
-        }
         @media print {
           @page { size: A4 landscape; margin: 8mm; }
           html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: white !important; }

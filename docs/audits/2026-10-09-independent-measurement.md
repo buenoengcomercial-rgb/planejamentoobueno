@@ -120,3 +120,18 @@ Essa alteração contratual requer uma decisão adicional, fora da exceção aut
 Não foi criada uma migração SQL incompleta que pudesse ser aplicada automaticamente.
 O preflight é somente leitura. Testes locais, inclusive permissões simuladas, não
 substituem validação das políticas efetivamente instaladas.
+
+## Correção da apresentação conforme a tela já aprovada
+
+A prévia passou a reutilizar `MeasurementHeader`, `MeasurementFilters`,
+`MeasurementTable`, `MeasurementGroupRow` e `MeasurementItemRow`. Os grupos de
+colunas, cores, tipografia, capítulos e subcapítulos são os da Medição existente.
+O detalhe A–D entra na linha expandida e mantém sua largura dentro da área visível.
+O adaptador de apresentação lê somente a base independente; não consulta Produção
+nem o Cronograma. Código e banco passam a integrar o inventário inicial quando
+disponíveis; registros anteriores sem esses campos continuam legíveis.
+
+Validação após a correção: 50 testes focados, TypeScript do projeto da aplicação,
+lint e build aprovados. No navegador: captura de três pontos, valores, recarga,
+edição/exclusão/restauração, períodos, filtros, expansão de capítulos e rolagem
+restrita à tabela em 390 × 844. Nenhuma migração ou publicação no Lovable.

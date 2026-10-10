@@ -1,4 +1,4 @@
-import { Fragment, type MouseEvent } from 'react';
+import { Fragment, type MouseEvent, type ReactNode } from 'react';
 import { AlertCircle, Lock } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import type { Project } from '@/types/project';
@@ -31,6 +31,9 @@ export interface MeasurementItemRowProps {
   project?: Project;
   bdi?: number;
   detailColSpan?: number;
+  showForecast?: boolean;
+  renderQuantity?: (row: Row) => ReactNode;
+  renderDetail?: (row: Row) => ReactNode;
   G_BG: { id: string; contract: string; period: string; forecast?: string; accum: string; balance: string };
   BORDER_L: string;
 }
@@ -45,13 +48,16 @@ export default function MeasurementItemRow({
   project,
   bdi = 0,
   detailColSpan = 18,
+  showForecast = true,
+  renderQuantity,
+  renderDetail,
   G_BG,
   BORDER_L,
 }: MeasurementItemRowProps) {
   const baseBg = r.hasNoLogsInPeriod ? 'bg-warning/5' : 'bg-background';
   const stickyBg = r.hasNoLogsInPeriod ? 'bg-warning/5' : 'bg-background';
   const isSelected = selectedDetail?.taskId === r.taskId;
-  const selectQuantity = () => onSelectDetail?.({ taskId: r.taskId, mode: 'quantity' });
+  const selectQuantity = () => onSelectDetail?.(renderDetail && isSelected ? null : { taskId: r.taskId, mode: 'quantity' });
   const isAnalyticSelected = selectedDetail?.taskId === r.taskId && selectedDetail.mode === 'analytic';
   const selectAnalytic = () => {
     if (onToggleAnalyticDetail) {
@@ -65,13 +71,14 @@ export default function MeasurementItemRow({
     const target = event.target as HTMLElement | null;
     if (!target) return;
     if (target.closest('button, input, textarea, select, [role="button"], [data-detail-cell="true"], [data-detail-panel="true"]')) return;
-    selectAnalytic();
+    if (renderDetail) selectQuantity(); else selectAnalytic();
   };
 
   return (
     <Fragment>
     <tr
       data-measurement-row="true"
+      data-testid={`service-${r.taskId}`}
       className={`cursor-pointer border-b border-border/60 hover:bg-muted/30 ${baseBg} ${isSelected ? 'ring-2 ring-primary/40 ring-inset' : ''}`}
       onClick={handleRowClick}
     >
@@ -83,12 +90,12 @@ export default function MeasurementItemRow({
         {r.item}
       </td>
       <td className={`px-1 py-1 align-top text-center ${stickyBg}`}>
-        <span className="block text-[11px] font-mono tabular-nums text-foreground">
+        <span className="block break-words text-[11px] font-mono tabular-nums text-foreground">
           {r.itemCode || '—'}
         </span>
       </td>
       <td className={`px-1 py-1 align-top text-center ${stickyBg}`}>
-        <span className="block text-[11px] font-mono tabular-nums text-foreground">
+        <span className="block break-words text-[11px] font-mono tabular-nums text-foreground">
           {r.priceBank || '—'}
         </span>
       </td>
@@ -111,15 +118,13 @@ export default function MeasurementItemRow({
                 <TooltipContent side="top" className="max-w-xs text-xs">
                   <p className="font-semibold mb-0.5">Sem apontamento no período</p>
                   <p className="text-muted-foreground">
-                    Este item consta no contrato, mas não possui apontamento de produção
-                    (Diário de Obra / EAP) dentro do período selecionado desta medição.
-                    Verifique se a produção foi lançada nas datas corretas.
+                    Este item consta no contrato, mas não possui {renderDetail ? 'quantitativo nesta medição. Preencha a quantidade ou abra o detalhe do serviço.' : 'apontamento de produção (Diário de Obra / EAP) dentro do período selecionado desta medição. Verifique se a produção foi lançada nas datas corretas.'}
                   </p>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
-          <span className="leading-snug break-words">{r.description}</span>
+          <span className="leading-snug break-words">{renderDetail ? <button type="button" className="text-left" aria-label={`${r.item}${r.description}`} aria-expanded={isSelected} onClick={selectQuantity}>{r.description}</button> : r.description}</span>
           <AdditiveBadge
             originAdditiveId={r.originAdditiveId}
             originAdditiveName={r.originAdditiveName}
@@ -166,14 +171,15 @@ export default function MeasurementItemRow({
         className={`px-2 py-1.5 text-right tabular-nums align-top ${BORDER_L} ${G_BG.period} ${
           r.hasNoLogsInPeriod ? 'text-muted-foreground' : 'font-semibold text-foreground'
         }`}
-        title={r.hasNoLogsInPeriod ? 'Sem apontamento no período — lance produção em Tarefas/EAP/Diário de Obra' : undefined}
+        title={r.hasNoLogsInPeriod ? (renderDetail ? 'Preencha a quantidade ou abra o detalhe deste serviço' : 'Sem apontamento no período — lance produção em Tarefas/EAP/Diário de Obra') : undefined}
       >
-        <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyPeriod || 0)}</button>
+        {renderQuantity ? renderQuantity(r) : <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyPeriod || 0)}</button>}
       </td>
       <td className={`px-2 py-1.5 text-right tabular-nums font-semibold text-foreground align-top ${G_BG.period}`}>
         <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('period')}>{fmtBRL(r.valuePeriod)}</button>
       </td>
 
+      {showForecast && <>
       {/* Previsão (Gantt) — somente leitura, recalcula com mudanças no cronograma */}
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${BORDER_L} ${G_BG.forecast || 'bg-accent/20'}`}>
         <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyForecast || 0)}</button>
@@ -189,6 +195,7 @@ export default function MeasurementItemRow({
         {fmtBRL(r.diffForecastVsReal || 0)}
       </td>
 
+      </>}
       {/* Acumulado */}
       <td className={`px-2 py-1.5 text-right tabular-nums text-foreground align-top ${BORDER_L} ${G_BG.accum}`}>
         <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={selectQuantity}>{fmtNum(r.qtyCurrentAccum)}</button>
@@ -205,7 +212,8 @@ export default function MeasurementItemRow({
         <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('balance')}>{fmtBRL(r.valueBalance)}</button>
       </td>
     </tr>
-    {isSelected && project && (
+    {isSelected && renderDetail && <tr><td colSpan={detailColSpan} className="border-b border-border bg-muted/10 px-1 py-2"><div className="measurement-inline-detail">{renderDetail(r)}</div></td></tr>}
+    {isSelected && !renderDetail && project && (
       <MeasurementDetailInline
         project={project}
         selection={selectedDetail}

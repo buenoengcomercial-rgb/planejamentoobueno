@@ -23,6 +23,7 @@ export default function MeasurementGroupRow(props: MeasurementGroupRowProps) {
     G_BG,
     BORDER_L,
     headerStyleByDepth,
+    showForecast = true,
     ...rowHandlers
   } = props;
 
@@ -59,11 +60,13 @@ export default function MeasurementGroupRow(props: MeasurementGroupRowProps) {
         <td className="px-2 py-1.5 text-right tabular-nums text-foreground">{fmtBRL(g.totals.contracted)}</td>
         <td className={`px-2 py-1.5 text-right tabular-nums text-foreground ${BORDER_L}`}>-</td>
         <td className="px-2 py-1.5 text-right tabular-nums text-foreground">{fmtBRL(g.totals.period)}</td>
+        {showForecast && <>
         <td className={`px-2 py-1.5 text-right tabular-nums text-foreground ${BORDER_L}`}>-</td>
         <td className="px-2 py-1.5 text-right tabular-nums text-foreground">{fmtBRL(g.totals.forecast)}</td>
         <td className={`px-2 py-1.5 text-right tabular-nums ${g.totals.diffForecast > 0 ? 'text-success' : g.totals.diffForecast < 0 ? 'text-destructive' : 'text-foreground'}`}>
           {fmtBRL(g.totals.diffForecast)}
         </td>
+        </>}
         <td className={`px-2 py-1.5 text-right tabular-nums text-foreground ${BORDER_L}`}>-</td>
         <td className="px-2 py-1.5 text-right tabular-nums text-foreground">{fmtBRL(g.totals.accum)}</td>
         <td className={`px-2 py-1.5 text-right tabular-nums text-foreground ${BORDER_L}`}>-</td>
@@ -79,6 +82,7 @@ export default function MeasurementGroupRow(props: MeasurementGroupRowProps) {
               indentPx={indentPx}
               G_BG={G_BG}
               BORDER_L={BORDER_L}
+              showForecast={showForecast}
               {...rowHandlers}
             />
           ))}
@@ -91,6 +95,7 @@ export default function MeasurementGroupRow(props: MeasurementGroupRowProps) {
               G_BG={G_BG}
               BORDER_L={BORDER_L}
               headerStyleByDepth={headerStyleByDepth}
+              showForecast={showForecast}
               {...rowHandlers}
             />
           ))}

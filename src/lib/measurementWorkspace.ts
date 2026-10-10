@@ -8,6 +8,7 @@ import { calculateLineTotal, money2, sumMoney } from './financialEngine';
 /** This aggregate is deliberately outside Project and its global autosave/undo. */
 export interface MeasuredService {
   id: string; item: string; description: string; unit: string; contracted: number;
+  code?: string; bank?: string;
   priceNoBDI: number; priceWithBDI: number; bdi: number; importedPrice: boolean;
   chapterId: string; chapter: string; path: string; sourceTaskId?: string; sourceBudgetId?: string;
   additiveId?: string; additiveVersion?: number; availableFromNumber: number;
