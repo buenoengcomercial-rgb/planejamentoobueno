@@ -55,6 +55,9 @@
 .measurement-table-pane { display: flex; flex-direction: column; height: 100%; border-radius: 2px; box-shadow: none; }
 .measurement-table-pane > :last-child { display: flex; flex: 1; min-height: 0; }
 .measurement-table-pane .measurement-table-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.measurement-table-pane .measurement-table-scroll > table { height: 100%; }
+.measurement-table-space { height: 100%; }
+.measurement-table-pane .measurement-table-space > td { padding: 0; border: 0; background: white; }
 .measurement-table-pane thead tr:last-child th { background: hsl(var(--muted)); }
 .measurement-split-workspace .measurement-split-handle { height: 10px; flex-shrink: 0; cursor: row-resize; background: hsl(var(--muted)); border-block: 1px solid hsl(var(--border)); }
 .measurement-split-handle:hover, .measurement-split-handle:focus-visible { background: hsl(var(--primary) / 0.15); }

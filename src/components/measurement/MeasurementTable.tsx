@@ -180,6 +180,7 @@ export default function MeasurementTable(props: MeasurementTableProps) {
                   />
                 ))
               )}
+              {split && <tr className="measurement-table-space" aria-hidden="true"><td colSpan={columnCount} /></tr>}
             </tbody>
             {groupTree.length > 0 && (
               <tfoot className="sticky bottom-0 z-10">

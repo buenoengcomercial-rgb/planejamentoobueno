@@ -13,6 +13,29 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('mantém os dois painéis ao recolher capítulos e reabre o detalhe sem alterar os quantitativos', async () => {
+    const { w, repository } = fixture();
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'kept', location: '', comment: 'Registro preservado', formula: 'STANDARD', multiplier: 7, measuredQuantity: 0, origin: { kind: 'manual' } }] }];
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const quantity = await screen.findByLabelText('Quantidade de Placas');
+    fireEvent.click(quantity);
+    const sheet = screen.getByRole('region', { name: 'Planilha da medição atual' });
+    const detail = screen.getByRole('region', { name: 'Painel inferior de quantitativos' });
+    const divider = screen.getByRole('separator', { name: 'Ajustar altura da planilha e do detalhe' });
+    const chapter = within(sheet).getByRole('button', { name: /Prédio/ });
+    fireEvent.click(chapter);
+    expect(sheet).toBeInTheDocument();
+    expect(divider).toBeInTheDocument();
+    expect(detail).toHaveTextContent(/^$/);
+    expect(screen.queryByLabelText('Quantidade de Placas')).not.toBeInTheDocument();
+    expect(within(sheet).getByText('Total Geral')).toBeVisible();
+    fireEvent.click(chapter);
+    const restoredQuantity = screen.getByLabelText('Quantidade de Placas');
+    expect(restoredQuantity).toHaveValue(7);
+    fireEvent.click(restoredQuantity);
+    expect(within(detail).getByLabelText('Comentário da linha 1')).toHaveValue('Registro preservado');
+    expect(repository.commit).not.toHaveBeenCalled();
+  });
   it('limpa o painel ao clicar fora da quantidade, preservando cliques e rascunhos dentro do editor', async () => {
     const { w, repository } = fixture();
     w.services.push({ ...w.services[0], id: 's2', description: 'Outra tarefa' });
