@@ -41,6 +41,7 @@ import SignaturePad from './SignaturePad';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
 import WarehouseCustodyTab from './WarehouseCustodyTab';
 import WarehouseDailyMovements from './WarehouseDailyMovements';
+import useStableDisclosureScroll from './useStableDisclosureScroll';
 import {
   WarehouseEmptyState,
   WarehouseField,
@@ -262,6 +263,12 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
   );
   const [open, setOpen] = useState(false);
   const [expandedRequisitionIds, setExpandedRequisitionIds] = useState<Set<string>>(() => new Set());
+  const { reserveHeight, toggle: toggleDisclosure, clearReserve } = useStableDisclosureScroll(expandedRequisitionIds);
+  const toggleRequisition = (id: string, target: HTMLElement) => toggleDisclosure(target, () => setExpandedRequisitionIds(current => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  }));
   const [dateExpansionOverrides, setDateExpansionOverrides] = useState<Map<string, boolean>>(() => new Map());
   const [form, setForm] = useState<WithdrawalForm>(initialForm);
   const [receiverOpen, setReceiverOpen] = useState(false);
@@ -793,20 +800,20 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
         </DialogContent>
       </Dialog>
 
-      <Tabs value={materialView} onValueChange={value => setMaterialView(value as 'daily' | 'history')} className="space-y-3">
+      <Tabs value={materialView} onValueChange={value => { clearReserve(); setMaterialView(value as 'daily' | 'history'); }} className="space-y-3">
         <TabsList className="grid h-auto min-h-12 w-full grid-cols-2 rounded-xl border bg-muted/70 p-1 shadow-sm max-[320px]:grid-cols-1 sm:w-fit sm:min-w-[390px]" aria-label="Consulta de materiais">
           <TabsTrigger value="daily" className="min-h-11 rounded-lg px-2 text-xs font-bold max-[320px]:whitespace-normal data-[state=active]:bg-card data-[state=active]:text-primary sm:text-sm">Movimentações do dia</TabsTrigger>
           <TabsTrigger value="history" className="min-h-11 rounded-lg px-2 text-xs font-bold max-[320px]:whitespace-normal data-[state=active]:bg-card data-[state=active]:text-primary sm:text-sm">Histórico completo</TabsTrigger>
         </TabsList>
         <TabsContent value="daily" className="mt-0">
-          <WarehouseDailyMovements date={selectedDate} onDateChange={setSelectedDate} requisitionCount={dailyRequisitions.length} deliveredCount={dailyRequisitions.filter(requisition => requisition.status === 'entregue').length} onGenerate={() => void generateSelectedDateConfirmations()}>
+          <WarehouseDailyMovements date={selectedDate} onDateChange={date => { clearReserve(); setSelectedDate(date); }} requisitionCount={dailyRequisitions.length} deliveredCount={dailyRequisitions.filter(requisition => requisition.status === 'entregue').length} onGenerate={() => void generateSelectedDateConfirmations()}>
             {dailyRequisitions.length ? <div className="min-w-0 max-w-full overflow-x-auto rounded-xl border bg-card" tabIndex={0} aria-label="Tabela de requisições; deslize lateralmente para ver todas as colunas">
               <table aria-label="Requisições da data selecionada" className="withdrawal-records w-full min-w-[1180px] table-fixed text-xs">
                 <colgroup><col className="w-10" /><col className="w-36" /><col className="w-28" /><col className="w-40" /><col className="w-28" /><col className="w-56" /><col className="w-12" /><col className="w-24" /><col className="w-[220px]" /></colgroup>
                 <thead><tr><th><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data da operação</th><th className="p-2 text-left">Último registro</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-left">Destino</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead>
                 <tbody>{dailyRequisitions.map(requisition => (
                   <WithdrawalHistoryRow key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel} showDestination
-                    onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })}
+                    onToggle={target => toggleRequisition(requisition.id, target)}
                     onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onAction={() => openRequisitionActions(requisition)} onCancel={() => setCancelTarget(requisition)} />
                 ))}</tbody>
               </table>
@@ -837,7 +844,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
                       {isDateGroupExpanded(dateGroup) && <div className="withdrawal-branch min-w-0 pt-3">
                         <div className="space-y-3 md:hidden">{dateGroup.requisitions.map(requisition => (
                           <WithdrawalHistoryCard key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel}
-                            onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })}
+                            onToggle={target => toggleRequisition(requisition.id, target)}
                             onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onAction={() => openRequisitionActions(requisition)} onCancel={() => setCancelTarget(requisition)} />
                         ))}</div>
                         <div className="hidden min-w-0 overflow-x-auto md:block">
@@ -846,7 +853,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
                             <thead><tr><th><span className="sr-only">Detalhes</span></th><th className="p-2 text-left">Nº</th><th className="p-2 text-left">Data da operação</th><th className="p-2 text-left">Último registro</th><th className="p-2 text-left">Recebedor</th><th className="p-2 text-center">Itens</th><th className="p-2 text-left">Status</th><th className="p-2 text-left">Incluído / alterado por</th></tr></thead>
                             <tbody>{dateGroup.requisitions.map(requisition => (
                               <WithdrawalHistoryRow key={requisition.id} project={project} requisition={requisition} movements={wh.movements} active={expandedRequisitionIds.has(requisition.id)} canDelete={canDelete} canEdit={canEdit} canSupplement={canSupplement} canCancel={canCancel}
-                                onToggle={() => setExpandedRequisitionIds(current => { const next = new Set(current); if (next.has(requisition.id)) next.delete(requisition.id); else next.add(requisition.id); return next; })}
+                                onToggle={target => toggleRequisition(requisition.id, target)}
                                 onDelete={() => deleteRequisition(requisition)} onReturn={() => setReturnTarget(requisition)} onAction={() => openRequisitionActions(requisition)} onCancel={() => setCancelTarget(requisition)} />
                             ))}</tbody>
                           </table>
@@ -862,6 +869,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
       </section>
         </TabsContent>
       </Tabs>
+      {reserveHeight > 0 && <div aria-hidden="true" style={{ height: reserveHeight }} />}
       <MaterialReturnDialog project={project} requisition={returnTarget} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onClose={() => setReturnTarget(null)} />
       <CancelRequisitionDialog project={project} requisition={cancelTarget} auditActor={auditActor} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onRunCriticalCloudOperation={onRunCriticalCloudOperation} onClose={() => setCancelTarget(null)} />
       <RequisitionActionDialog project={project} requisition={actionTarget} auditActor={auditActor} canEditOriginal={canEdit} canEditSupplements={canSupplement} onProjectChange={onProjectChange} onCloudOperationConfirmed={onCloudOperationConfirmed} onPrepareCloudOperation={onPrepareCloudOperation} onCommitCloudOperation={onCommitCloudOperation} onRunCriticalCloudOperation={onRunCriticalCloudOperation} onStartReturn={() => { setReturnTarget(actionTarget); setActionTarget(null); }} onClose={() => setActionTarget(null)} />
@@ -889,7 +897,7 @@ interface WithdrawalHistoryEntryProps {
   canSupplement: boolean;
   canCancel: boolean;
   showDestination?: boolean;
-  onToggle: () => void;
+  onToggle: (target: HTMLElement) => void;
   onDelete: () => void;
   onReturn: () => void;
   onAction: () => void;
@@ -900,7 +908,7 @@ function WithdrawalHistoryCard({ project, requisition, movements, active, canDel
   const latest = latestRequisitionActivity(requisition, movements);
   const materialCount = getRequisitionMaterialSummaries(project, requisition.id).length;
   return <article data-expanded={active} className={`withdrawal-record overflow-hidden rounded-lg border bg-card ${active ? 'border-primary/60' : 'border-border'}`}>
-    <button type="button" className="min-h-11 w-full p-3 text-left hover:bg-muted/30" onClick={onToggle} aria-expanded={active}>
+    <button type="button" className="min-h-11 w-full p-3 text-left hover:bg-muted/30" onClick={event => onToggle(event.currentTarget)} aria-expanded={active}>
       <div className="flex items-center justify-between gap-2"><strong>{requisition.number}</strong><ChevronDown className={`h-4 w-4 shrink-0 ${active ? 'rotate-180 text-primary' : ''}`} /></div>
       <div className="mt-1 break-words font-semibold">{requisition.receiverName || requisition.requesterName || '—'}</div>
       <div className="mt-1 text-xs text-muted-foreground">{materialCount} item(ns) · Operação: {formatOperationalDate(requisition.date)}</div>
@@ -914,7 +922,7 @@ function WithdrawalHistoryRow({ project, requisition, movements, active, canDele
   const latest = latestRequisitionActivity(requisition, movements);
   const materialCount = getRequisitionMaterialSummaries(project, requisition.id).length;
   return <Fragment>
-    <tr data-testid="withdrawal-history-row" aria-expanded={active} tabIndex={0} aria-label={`Retirada ${requisition.number}`} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggle(); } }} className={`withdrawal-record cursor-pointer border-y bg-card ${active ? 'border-primary/60' : 'border-border'}`} onClick={onToggle}>
+    <tr data-testid="withdrawal-history-row" aria-expanded={active} tabIndex={0} aria-label={`Retirada ${requisition.number}`} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggle(event.currentTarget); } }} className={`withdrawal-record cursor-pointer border-y bg-card ${active ? 'border-primary/60' : 'border-border'}`} onClick={event => onToggle(event.currentTarget)}>
       <td className="p-2"><ChevronDown className={`h-4 w-4 ${active ? 'rotate-180 text-primary' : ''}`} /></td>
       <td className="p-2 font-mono font-semibold">{requisition.number}</td>
       <td className="p-2">{formatOperationalDate(requisition.date)}</td>
