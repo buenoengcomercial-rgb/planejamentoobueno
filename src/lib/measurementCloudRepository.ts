@@ -48,14 +48,47 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     const candidate: MeasurementWorkspace = { ...base, revision: stored.baseRevision + 1, entries, audit: [...base.audit, stored.patch.event] };
     return { baseRevision: stored.baseRevision, candidate, archivedAt: stored.archivedAt, compact: stored };
   };
+  const discardConfirmedPending = (operationId: string) => {
+    // IndexedDB cleanup must not turn a confirmed cloud write into a failed
+    // write, or hold the editor while a second local transaction completes.
+    void local.removePending!(operationId).catch(() => undefined);
+  };
+  const compactedReceiptRevision = async (operationId: string): Promise<number | null> => {
+    // Older operation payloads may have been compacted after a verified
+    // checkpoint. Only a matching server receipt proves that a local pending
+    // write reached the cloud; a missing table/network response proves nothing.
+    const { data, error } = await supabase.from('measurement_workspace_compacted_receipts' as never)
+      .select('revision,actor_id').eq('project_id', scope.projectId).eq('operation_id', operationId).maybeSingle();
+    const receipt = data as { revision?: number; actor_id?: string } | null;
+    const revision = Number(receipt?.revision);
+    return !error && receipt?.actor_id === scope.userId && Number.isSafeInteger(revision) && revision >= 0 ? revision : null;
+  };
   return {
     ...local,
     savedLabel: 'Salvo na nuvem',
     pending: async () => {
-      const record = (await local.storedPendingSaves!()).find(row => !row.archivedAt);
-      return record ? restorePending(record) : null;
+      const rows = await local.storedPendingSaves!();
+      if (!rows.some(row => !row.archivedAt)) return null;
+      const remote = confirmed ?? await loadRemote();
+      for (const row of rows) {
+        if (row.archivedAt) continue;
+        const operationId = 'operationId' in row ? row.operationId : row.candidate.audit.at(-1)?.id;
+        if (operationId && remote && remote.revision >= row.baseRevision + 1) {
+          const applied = remote.audit.some(event => event.id === operationId)
+            || await compactedReceiptRevision(operationId) === row.baseRevision + 1;
+          if (applied) { discardConfirmedPending(operationId); continue; }
+        }
+        return restorePending(row);
+      }
+      return null;
     },
     pendingSaves: async () => Promise.all((await local.storedPendingSaves!()).map(restorePending)),
+    confirmedOperation: async (operationId, revision) => {
+      const remote = confirmed ?? await loadRemote();
+      if (!remote || remote.revision < revision) return false;
+      return remote.audit.some(event => event.id === operationId)
+        || await compactedReceiptRevision(operationId) === revision;
+    },
     remoteRevision: async () => {
       const { data, error } = await supabase.from('measurement_workspace_versions' as never).select('revision').eq('project_id', scope.projectId).maybeSingle();
       const revision = Number((data as { revision?: number } | null)?.revision);
@@ -139,13 +172,17 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           .select('revision').eq('project_id', scope.projectId).maybeSingle();
         const remoteRevision = Number((version.data as { revision?: number } | null)?.revision);
         if (event.error || version.error || !version.data || !Number.isSafeInteger(remoteRevision)) throw new Error(`${error.message}. Não foi possível conferir a revisão; rascunho preservado.`);
-        const savedRevision = Number((event.data as { revision?: number } | null)?.revision);
-        if (savedRevision === next.revision && remoteRevision === next.revision) {
-          await local.removePending!(operationId);
-          confirmed = next;
-          return next;
+        const savedRevision = event.data
+          ? Number((event.data as { revision?: number }).revision)
+          : remoteRevision >= next.revision ? await compactedReceiptRevision(operationId) : null;
+        if (savedRevision === next.revision && remoteRevision >= next.revision) {
+          const latest = remoteRevision === next.revision ? next : await loadRemote();
+          if (!latest || latest.revision < remoteRevision) throw new Error('A operação foi confirmada, mas a versão mais recente não pôde ser carregada. Rascunho preservado.');
+          confirmed = latest;
+          discardConfirmedPending(operationId);
+          return latest;
         }
-        if (remoteRevision === baseRevision && !event.data) ({ data, error } = await send());
+        if (remoteRevision === baseRevision && savedRevision === null) ({ data, error } = await send());
         else throw new Error('A Medição mudou durante a gravação. O rascunho foi preservado para conferência.');
       }
       if (error) throw new Error(error.message);
@@ -160,8 +197,8 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         saved = next;
       } else saved = await read(data);
       if (saved.revision !== next.revision || saved.audit.at(-1)?.id !== operationId) throw new Error('A nuvem não confirmou esta operação. Rascunho preservado.');
-      await local.removePending!(operationId);
       confirmed = saved;
+      discardConfirmedPending(operationId);
       return saved;
     },
   };

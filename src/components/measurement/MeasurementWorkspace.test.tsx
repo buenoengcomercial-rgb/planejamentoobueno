@@ -16,7 +16,7 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
-  it('só monta os eventos do Histórico quando o diálogo é aberto', async () => {
+  it('remove o Histórico da tela sem descartar a auditoria armazenada', async () => {
     const { w, repository } = fixture();
     const readAffected = vi.fn();
     const event: Workspace['audit'][number] = {
@@ -30,10 +30,9 @@ describe('Tela própria de Medição', () => {
     expect(await screen.findByRole('heading', { name: 'Planilha de medição (1 itens)' })).toBeVisible();
     expect(readAffected).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Histórico' }));
-    expect(screen.getByRole('dialog')).toBeVisible();
-    expect(screen.getByText(/Engenheiro · Editar detalhe/)).toBeVisible();
-    expect(readAffected).toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Histórico' })).not.toBeInTheDocument();
+    expect(readAffected).not.toHaveBeenCalled();
+    expect(w.audit).toHaveLength(1);
   });
   it('mostra a falha de carregamento sem sugerir nova incorporação e permite tentar novamente', async () => {
     const { w, repository } = fixture();
@@ -114,7 +113,7 @@ describe('Tela própria de Medição', () => {
     expect(within(dialog).getByRole('button', { name: 'Confirmar envio' })).toBeDisabled();
     expect(repository.commit).not.toHaveBeenCalled();
   });
-  it('impede envio apenas da medição com rascunhos locais e mantém troca de tarefa e criação de período livres', async () => {
+  it('deixa abrir o envio e trocar de período, mas não omite rascunhos na confirmação fiscal', async () => {
     const { w, repository } = fixture();
     w.periods = [
       { id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' },
@@ -124,10 +123,13 @@ describe('Tela própria de Medição', () => {
     vi.mocked(repository.drafts).mockResolvedValue([{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: 'm1-row', changes: { multiplier: '3' } }]);
     render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canReview: true }}/>);
     const send = await screen.findByRole('button', { name: 'Enviar para fiscalização' });
-    expect(send).toBeDisabled();
-    expect(screen.getByText(/Finalize ou recupere os campos antes de enviar para fiscalização/)).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Ir para o rascunho' }));
-    expect(screen.getByText('Detalhe de quantitativos · 1ª medição')).toBeVisible();
+    expect(send).toBeEnabled();
+    expect(screen.queryByText(/Finalize ou recupere os campos antes de enviar para fiscalização/)).not.toBeInTheDocument();
+    fireEvent.click(send);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Confirmar envio' }));
+    expect((await screen.findAllByText(/nenhum quantitativo será omitido/))[0]).toBeVisible();
+    expect(repository.commit).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancelar' }));
     fireEvent.click(screen.getByRole('button', { name: 'Nova medição' }));
     expect(within(screen.getByRole('dialog')).getByText('30/10/2026 a 28/11/2026')).toBeVisible();
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancelar' }));
@@ -168,7 +170,7 @@ describe('Tela própria de Medição', () => {
     act(() => quantity.blur()); await screen.findByText('Não salvo · rascunho preservado');
     expect(repository.clearDraft).not.toHaveBeenCalled();
     expect(repository.writeDraft).toHaveBeenCalledWith(expect.objectContaining({ changes: { multiplier: '3' } }));
-    expect(screen.getByLabelText('Medição selecionada')).toBeDisabled();
+    expect(screen.getByLabelText('Medição selecionada')).toBeEnabled();
   });
   it('recupera exclusão pendente e seleciona uma medição que ainda existe', async () => {
     const { w, repository } = fixture();
@@ -179,12 +181,11 @@ describe('Tela própria de Medição', () => {
     vi.mocked(repository.pending).mockResolvedValue({ baseRevision: w.revision, candidate });
     render(<MeasurementWorkspace repository={repository} actor={actor}/>);
     expect(await screen.findByLabelText('Medição selecionada')).toHaveValue('m3');
-    fireEvent.click(screen.getByRole('button', { name: 'Tentar salvar novamente' }));
     await waitFor(() => expect(screen.getByLabelText('Medição selecionada')).toHaveValue('m2'));
-    expect(screen.getByText('Medição excluída · restaurável no Histórico')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Restaurar medição excluída' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Planilha de medição (1 itens)' })).toBeVisible();
   });
-  it('permite excluir a medição de teste, restaurar pelo histórico e editar a primeira até registrar aprovação', async () => {
+  it('permite excluir e restaurar pelo controle contextual e editar a primeira até registrar aprovação', async () => {
     const { w, repository } = fixture(); const reviewer = { ...actor, canReview: true };
     w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
     w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'r', location: '', comment: 'Preservado', formula: 'STANDARD', multiplier: 29, measuredQuantity: 0 }] }];
@@ -202,8 +203,7 @@ describe('Tela própria de Medição', () => {
     expect(screen.getByRole('button', { name: 'Excluir medição' })).toBeDisabled();
     let saved = vi.mocked(repository.commit).mock.calls.at(-1)![0];
     expect(saved.entries).toEqual(base.entries); expect(saved.periods[0]).toEqual(base.periods[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Histórico' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Restaurar medição' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restaurar medição excluída' }));
     dialog = screen.getByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText('Motivo da operação'), { target: { value: 'Recuperar período' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Restaurar medição' }));
@@ -316,8 +316,8 @@ describe('Tela própria de Medição', () => {
     view.unmount();
     render(<MeasurementWorkspace repository={repository} actor={actor}/>);
     expect(await screen.findByLabelText('Nº da ART')).toHaveValue('ART revisada');
-    fireEvent.click(screen.getByRole('button', { name: /Histórico/ }));
-    expect(await screen.findByText('Editar boletim · 1ª medição', { exact: false })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Histórico/ })).not.toBeInTheDocument();
+    expect(saved.audit.some(event => event.action.includes('Editar boletim'))).toBe(true);
   });
   it('mantém rascunho do boletim na falha e recupera o campo após recarga', async () => {
     const { repository } = fixture();
@@ -342,10 +342,10 @@ describe('Tela própria de Medição', () => {
     fireEvent.change(field, { target: { value: 'ART pendente' } });
     await waitFor(() => expect(repository.writeDraft).toHaveBeenCalled());
     fireEvent.blur(field);
-    expect(screen.getByRole('button', { name: 'Enviar para fiscalização' })).toBeDisabled();
-    expect(screen.getByLabelText('Medição selecionada')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Enviar para fiscalização' })).toBeEnabled();
+    expect(screen.getByLabelText('Medição selecionada')).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Enviar para fiscalização' }));
-    expect(repository.commit).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
     const candidate = vi.mocked(repository.commit).mock.calls[0][0];
     expect(candidate.periods[0].status).toBe('draft');
     expect(candidate.periods[0].bulletin?.contract.artNumber).toBe('ART pendente');
@@ -516,7 +516,7 @@ describe('Tela própria de Medição', () => {
     fireEvent.change(selector, { target: { value: 'm1' } });
     expect(screen.getByLabelText('Quantidade de Placas')).toHaveValue(7);
   });
-  it('preserva digitação até blur e bloqueia troca de período enquanto a gravação está pendente', async () => {
+  it('preserva digitação até blur e permite trocar de período durante a gravação', async () => {
     const { repository } = fixture(); let confirm!: (w: Workspace) => void;
     vi.mocked(repository.commit).mockImplementation(() => new Promise(resolve => { confirm = resolve; }));
     render(<MeasurementWorkspace repository={repository} actor={actor}/>);
@@ -526,13 +526,15 @@ describe('Tela própria de Medição', () => {
     await waitFor(() => expect(repository.writeDraft).toHaveBeenCalledWith(expect.objectContaining({ measurementId: 'm1', serviceId: 's', changes: { multiplier: '3' } })));
     fireEvent.blur(input);
     const selector = screen.getByLabelText('Medição selecionada');
-    expect(selector).toBeDisabled();
+    expect(selector).toBeEnabled();
     fireEvent.change(selector, { target: { value: 'm2' } });
-    expect(selector).toHaveValue('m1');
+    expect(selector).toHaveValue('m2');
     const candidate = vi.mocked(repository.commit).mock.calls[0][0];
     expect(candidate.entries[0]).toMatchObject({ projectId: 'p', measurementId: 'm1', serviceId: 's' });
     await act(async () => confirm(candidate));
-    await waitFor(() => expect(selector).not.toBeDisabled());
+    await waitFor(() => expect(selector).toBeEnabled());
+    expect(screen.getByTestId('monthly-value')).toHaveTextContent('0,00');
+    fireEvent.change(selector, { target: { value: 'm1' } });
     expect(screen.getByTestId('monthly-value')).toHaveTextContent('37,50');
     fireEvent.change(selector, { target: { value: 'm2' } });
     expect(screen.getByLabelText('Quantidade de Placas')).toHaveValue(0);
@@ -569,15 +571,68 @@ describe('Tela própria de Medição', () => {
     expect(saved.entries.find(e => e.serviceId === 's')?.rows[0].multiplier).toBe(3);
     expect(saved.entries.find(e => e.serviceId === 's2')?.rows[0].multiplier).toBe(5);
   });
-  it('não anuncia confirmação quando o repositório falha e mantém a troca bloqueada', async () => {
+  it('confirma boletim, detalhe e nova medição em sequência mesmo quando o primeiro salvamento demora', async () => {
+    const { w, repository } = fixture();
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'r', location: '', comment: '', formula: 'STANDARD', multiplier: 1, measuredQuantity: 0 }] }];
+    const confirmations: Array<() => void> = [];
+    vi.mocked(repository.commit).mockImplementation(candidate => new Promise(resolve => confirmations.push(() => resolve(candidate))));
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const bulletin = await screen.findByRole('button', { name: /Boletim de Medição para Pagamento/ });
+    fireEvent.click(bulletin);
+    const art = screen.getByLabelText('Nº da ART');
+    fireEvent.change(art, { target: { value: 'ART confirmada' } }); fireEvent.blur(art);
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+    const quantity = screen.getByLabelText('Quantidade de Placas');
+    fireEvent.change(quantity, { target: { value: '3' } }); fireEvent.blur(quantity);
+    fireEvent.click(screen.getByRole('button', { name: 'Nova medição' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Criar medição' }));
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+    await act(async () => confirmations.shift()!());
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+    await act(async () => confirmations.shift()!());
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(3));
+    await act(async () => confirmations.shift()!());
+    const saved = vi.mocked(repository.commit).mock.calls.at(-1)![0];
+    expect(saved.periods).toHaveLength(2);
+    expect(saved.entries[0].rows[0].multiplier).toBe(3);
+    expect(saved.periods[0].bulletin?.contract.artNumber).toBe('ART confirmada');
+  });
+  it('serializa detalhe, boletim e criação de medição sem perder nenhuma alteração', async () => {
+    const { w, repository } = fixture();
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    const confirmations: Array<() => void> = [];
+    vi.mocked(repository.commit).mockImplementation(candidate => new Promise(resolve => confirmations.push(() => resolve(candidate))));
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const quantity = await screen.findByLabelText('Quantidade de Placas');
+    fireEvent.change(quantity, { target: { value: '3' } }); fireEvent.blur(quantity);
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: /Boletim de Medição para Pagamento/ }));
+    const art = screen.getByLabelText('Nº da ART');
+    fireEvent.change(art, { target: { value: 'ART após fila' } }); fireEvent.blur(art);
+    fireEvent.click(screen.getByRole('button', { name: 'Nova medição' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Criar medição' }));
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+    await act(async () => confirmations.shift()!());
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+    await act(async () => confirmations.shift()!());
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(3));
+    await act(async () => confirmations.shift()!());
+    const saved = vi.mocked(repository.commit).mock.calls[2][0];
+    expect(saved.periods).toHaveLength(2);
+    expect(saved.entries.find(entry => entry.measurementId === 'm1')?.rows[0].multiplier).toBe(3);
+    expect(saved.periods[0].bulletin?.contract.artNumber).toBe('ART após fila');
+    expect(vi.mocked(repository.commit).mock.calls.map(([, revision]) => revision)).toEqual([0, 1, 2]);
+  });
+  it('não anuncia confirmação quando o repositório falha e mantém a troca livre', async () => {
     const { repository } = fixture(); vi.mocked(repository.commit).mockRejectedValue(new Error('Sem conexão: rascunho preservado'));
     render(<MeasurementWorkspace repository={repository} actor={actor}/>);
     const input = await screen.findByLabelText('Quantidade de Placas');
     fireEvent.change(input, { target: { value: '3' } }); fireEvent.blur(input);
     await screen.findByText('Não salvo · rascunho preservado');
-    expect(screen.getByLabelText('Medição selecionada')).toBeDisabled();
+    expect(screen.getByLabelText('Medição selecionada')).toBeEnabled();
     expect(screen.getByTestId('monthly-value')).toHaveTextContent('37,50');
-    expect(screen.getByText('Tentar salvar novamente')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Tentar salvar' })).toBeVisible();
   });
   it('perfil de consulta não permite editar ou criar período', async () => {
     const { repository } = fixture(); render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canEdit: false }}/>);

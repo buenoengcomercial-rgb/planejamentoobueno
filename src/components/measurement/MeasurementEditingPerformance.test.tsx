@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import MeasurementWorkspace from './MeasurementWorkspace';
 import { newMeasuredRow, type MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
 import type { MeasurementRepository, WorkspaceDraft } from '@/lib/measurementWorkspaceStore';
+vi.mock('@/components/planTakeoff/PlanTakeoff', () => ({ default: () => <div>Visualizador de teste</div> }));
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
@@ -126,7 +127,6 @@ it('fila A→B→C: timeout na primeira tarefa, continua editando e confirma cad
   await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Não salvo'));
   expect(drafts().map(d => d.serviceId).sort()).toEqual(['s0', 's1', 's2']);
   expect(screen.getByLabelText('Quantidade de Serviço 2')).toHaveValue(3);
-  fireEvent.click(screen.getByRole('button', { name: 'Tentar salvar novamente' }));
   await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(4));
   await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
   const calls = vi.mocked(repository.commit).mock.calls;
@@ -166,16 +166,17 @@ it('A→B→C recarregado antes da resposta mantém os três rascunhos recuperá
   });
   render(<MeasurementWorkspace repository={repository} actor={actor}/>);
   await screen.findByLabelText('Quantidade de Serviço 0');
-  expect(screen.getByText(/Rascunhos desta medição preservados \(3\)/)).toHaveTextContent('Próxima tarefa: 1.1 — Serviço 0');
-  fireEvent.click(screen.getByRole('button', { name: 'Tentar salvar novamente' }));
+  fireEvent.click(screen.getByText('Rascunhos locais (3)'));
+  expect(screen.getByText(/Próxima tarefa: 1.1 — Serviço 0/)).toBeVisible();
   await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
   for (const remaining of [2, 1, 0]) {
     fireEvent.click(screen.getByRole('button', { name: 'Recuperar rascunho' }));
     await waitFor(() => expect(drafts()).toHaveLength(remaining));
     if (remaining > 0) {
-      expect(screen.getByText(new RegExp(`Rascunhos desta medição preservados \\(${remaining}\\)`))).toHaveTextContent(`Próxima tarefa: 1.${4 - remaining} — Serviço ${3 - remaining}`);
+      expect(screen.getByText(`Rascunhos locais (${remaining})`)).toBeVisible();
+      expect(screen.getByText(new RegExp(`Próxima tarefa: 1\\.${4 - remaining} — Serviço ${3 - remaining}`))).toBeVisible();
     } else {
-      expect(screen.queryByText(/Rascunhos desta medição preservados/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Rascunhos locais/)).not.toBeInTheDocument();
     }
   }
   expect(saved().entries.map(entry => [entry.serviceId, entry.rows[0].multiplier])).toEqual([['s0', 1], ['s1', 2], ['s2', 3]]);
@@ -221,6 +222,101 @@ it('preserva os mesmos inputs ao confirmar comentário de uma nova linha e segui
   expect(screen.queryByRole('button', { name: /Levantar coluna/ })).not.toBeInTheDocument();
 });
 
+it('aceita a revisão materializada mais recente após recibo e continua salvando sobre ela', async () => {
+  const { repository } = setup(1);
+  repository.confirmedOperation = vi.fn(async () => true);
+  vi.mocked(repository.commit).mockImplementationOnce(async candidate => ({ ...candidate, revision: candidate.revision + 1, audit: [] }));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  fireEvent.click(await screen.findByLabelText('Quantidade de Serviço 0'));
+  const a = screen.getByLabelText('Unidades da linha 1');
+  fireEvent.change(a, { target: { value: '2' } }); fireEvent.blur(a);
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
+  expect(repository.confirmedOperation).toHaveBeenCalledWith(vi.mocked(repository.commit).mock.calls[0][0].audit.at(-1)?.id, 1);
+  fireEvent.change(a, { target: { value: '3' } }); fireEvent.blur(a);
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(repository.commit).mock.calls[1][1]).toBe(2);
+  await waitFor(() => expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(3));
+});
+
+it('confirma criação de medição com resposta perdida e rebate a célula seguinte na versão salva', async () => {
+  const { repository } = setup(1);
+  let remote = (await repository.load())!;
+  let loseResponse!: (cause: Error) => void;
+  repository.confirmedOperation = vi.fn(async (operationId, revision) => remote.audit.some(event => event.id === operationId && remote.revision >= revision));
+  vi.mocked(repository.load).mockImplementation(async () => remote);
+  vi.mocked(repository.commit).mockImplementationOnce(candidate => new Promise((_resolve, reject) => {
+    remote = candidate; loseResponse = reject;
+  })).mockImplementation(async candidate => { remote = candidate; return candidate; });
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  await screen.findByLabelText('Quantidade de Serviço 0');
+  fireEvent.click(screen.getByRole('button', { name: 'Nova medição' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Criar medição' }));
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByLabelText('Quantidade de Serviço 0'));
+  const cell = screen.getByLabelText('Unidades da linha 1');
+  fireEvent.change(cell, { target: { value: '2' } }); fireEvent.blur(cell);
+  await act(async () => loseResponse(new Error('Resposta perdida após confirmar na nuvem')));
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+  const [rebased, baseRevision] = vi.mocked(repository.commit).mock.calls[1];
+  expect(baseRevision).toBe(1);
+  expect(rebased.periods).toHaveLength(2);
+  expect(rebased.entries[0].rows[0].multiplier).toBe(2);
+  await waitFor(() => expect(document.querySelector('main [role="status"]')).toHaveTextContent('Salvo neste navegador'));
+  expect(remote.entries[0].rows[0].multiplier).toBe(2);
+});
+
+it('não rebate célula sobre alteração concorrente da mesma entrada após resposta perdida', async () => {
+  const { repository, drafts } = setup(1);
+  let remote = (await repository.load())!;
+  let loseResponse!: (cause: Error) => void;
+  repository.confirmedOperation = vi.fn(async () => true);
+  vi.mocked(repository.load).mockImplementation(async () => remote);
+  vi.mocked(repository.commit).mockImplementationOnce(candidate => new Promise((_resolve, reject) => {
+    remote = candidate; loseResponse = reject;
+  })).mockImplementation(async candidate => { remote = candidate; return candidate; });
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  await screen.findByLabelText('Quantidade de Serviço 0');
+  fireEvent.click(screen.getByRole('button', { name: 'Nova medição' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Criar medição' }));
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByLabelText('Quantidade de Serviço 0'));
+  const cell = screen.getByLabelText('Unidades da linha 1');
+  fireEvent.change(cell, { target: { value: '2' } }); fireEvent.blur(cell);
+  remote = { ...remote, revision: remote.revision + 1, entries: [{ ...remote.entries[0], rows: [{ ...remote.entries[0].rows[0], multiplier: 7 }] }] };
+  await act(async () => loseResponse(new Error('Resposta perdida após confirmar na nuvem')));
+  await waitFor(() => expect(document.querySelector('main [role="status"]')).toHaveTextContent('Não salvo'));
+  expect(repository.commit).toHaveBeenCalledTimes(1);
+  expect(remote.entries[0].rows[0].multiplier).toBe(7);
+  expect(drafts()).toHaveLength(1);
+});
+
+it('não declara salvo um período quando a resposta falha sem operação confirmada', async () => {
+  const { repository } = setup(1);
+  repository.confirmedOperation = vi.fn(async () => false);
+  vi.mocked(repository.commit).mockRejectedValueOnce(new Error('Sem conexão'));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  await screen.findByLabelText('Quantidade de Serviço 0');
+  fireEvent.click(screen.getByRole('button', { name: 'Nova medição' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Criar medição' }));
+  await waitFor(() => expect(repository.load).toHaveBeenCalledTimes(2));
+  expect(document.querySelector('main [role="status"]')).toHaveTextContent('Não salvo');
+  expect(repository.commit).toHaveBeenCalledTimes(1);
+});
+
+it('abre o levantamento depois de recuperar uma falha anterior sem bloquear pelo resultado antigo', async () => {
+  const { repository } = setup(1);
+  vi.mocked(repository.commit).mockRejectedValueOnce(new Error('Falha temporária'));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  fireEvent.click(await screen.findByLabelText('Quantidade de Serviço 0'));
+  const a = screen.getByLabelText('Unidades da linha 1');
+  fireEvent.change(a, { target: { value: '2' } }); fireEvent.blur(a);
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
+  fireEvent.focus(screen.getByLabelText('Unidades da linha 1'));
+  fireEvent.click(screen.getByRole('button', { name: 'Planta DXF' }));
+  expect(await screen.findByText('Visualizador de teste')).toBeVisible();
+});
+
 it('rejeita quantidade acima do contrato antes de alterar a planilha', async () => {
   const { repository } = setup(1);
   render(<MeasurementWorkspace repository={repository} actor={actor}/>);
@@ -244,11 +340,7 @@ it('recupera comentário e quantidade da mesma nova linha após falha, sem dupli
   fireEvent.change(a, { target: { value: '3' } }); fireEvent.blur(a);
   const originalId = vi.mocked(repository.commit).mock.calls[0][0].entries[0].rows[0].id;
   await act(async () => fail(new Error('Sem conexão')));
-  fireEvent.click(await screen.findByText('Arquivar rascunho e usar versão salva'));
-  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Versão salva carregada'));
-  fireEvent.click(screen.getByText('Recuperar rascunho'));
-  await waitFor(() => expect(repository.clearDraft).toHaveBeenCalledTimes(1));
-  fireEvent.click(screen.getByText('Recuperar rascunho'));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
   await waitFor(() => expect(repository.clearDraft).toHaveBeenCalledTimes(2));
   expect(saved().entries[0].rows).toHaveLength(1);
   expect(saved().entries[0].rows[0]).toMatchObject({ id: originalId, comment: 'Térreo', multiplier: 3 });
