@@ -4,6 +4,9 @@ import { prepareIncorporation, verifyIncorporationBackup, type IncorporationBack
 export interface WorkspaceDraft { projectId: string; measurementId: string; serviceId: string; rowId: string; changes: Record<string, unknown> }
 export interface PendingMeasurementSave { baseRevision: number; candidate: MeasurementWorkspace; archivedAt?: string }
 export interface MeasurementRepository {
+  savedLabel?: string;
+  preservePending?(pending: PendingMeasurementSave): Promise<void>;
+  removePending?(operationId: string): Promise<void>;
   load(): Promise<MeasurementWorkspace | null>;
   initialize(backup: IncorporationBackup): Promise<MeasurementWorkspace>;
   commit(candidate: MeasurementWorkspace, baseRevision: number): Promise<MeasurementWorkspace>;
@@ -17,7 +20,7 @@ export interface MeasurementRepository {
 }
 
 /** Independent database; Project persistence and its undo cannot address these stores.
- * In this delivery local-isolated scopes ONLY. Never silently fall back from cloud.
+ * Used by isolated previews and, separately, as durable recovery for cloud saves.
  */
 export function measurementRepository(scope: { environment: 'isolated'; userId: string; projectId: string }): MeasurementRepository {
   if (scope.environment !== 'isolated' || !scope.userId || !scope.projectId) throw new Error('Ativação operacional indisponível até validar o servidor e a incorporação.');
@@ -44,6 +47,8 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
     });
   };
   return {
+    preservePending: pending => update<PendingMeasurementSave[]>('pending', rows => [...(rows ?? []).filter(p => p.candidate.audit.at(-1)?.id !== pending.candidate.audit.at(-1)?.id), pending]),
+    removePending: operationId => update<PendingMeasurementSave[]>('pending', rows => (rows ?? []).filter(p => p.candidate.audit.at(-1)?.id !== operationId)),
     load: async () => {
       const value = await read<MeasurementWorkspace>('workspaces');
       if (value && (value.schema !== 1 || value.projectId !== scope.projectId || !Array.isArray(value.entries) || !Array.isArray(value.periods) || !Array.isArray(value.plans))) throw new Error('Base incompleta ou incompatível. Edição bloqueada.');

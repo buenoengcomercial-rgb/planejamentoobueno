@@ -87,6 +87,19 @@ beforeEach(() => {
 });
 
 describe('hidratação progressiva da obra', () => {
+  it('persiste auditoria append-only sem carregar ou excluir histórico anterior', async () => {
+    const current = project('append-only-history');
+    clearCloudSnapshot(current.id);
+    confirmProjectCollectionsSnapshot(current, ['measurements'], { replaceExisting: true });
+    const next = { ...current, auditLogs: [{ id: 'new-event', entityType: 'measurement', entityId: 'measurement-1', action: 'updated', at: '2026-10-09', title: 'Evento novo', before: 1, after: 2 }] } as Project;
+    await syncCollectionsToCloud(next);
+    expect(methodCalls).toContainEqual({ table: 'audit_logs', method: 'upsert' });
+    expect(methodCalls.some(call => call.table === 'audit_logs' && call.method === 'delete')).toBe(false);
+    expect(getLoadedProjectCollections(current.id)).not.toContain('auditLogs');
+    methodCalls.length = 0;
+    await syncCollectionsToCloud(next);
+    expect(methodCalls).not.toContainEqual({ table: 'audit_logs', method: 'upsert' });
+  });
   it.each([501, 2001])('carrega %i movimentos antes de confirmar o saldo', async movementCount => {
     const current = project(`warehouse-movements-paginated-${movementCount}`);
     clearCloudSnapshot(current.id);

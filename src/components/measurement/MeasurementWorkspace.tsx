@@ -47,7 +47,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     void Promise.all([repository.load(), repository.drafts(), repository.pending()]).then(([w, d, p]) => {
       if (!alive) return;
       if (w) { adopt(w); setActive(w.periods[0]?.id ?? ''); }
-      setDrafts(d); setRecovery(!!p); setStatus(w ? 'Salvo neste navegador' : 'Aguardando incorporação');
+      setDrafts(d); setRecovery(!!p); setStatus(w ? repository.savedLabel ?? 'Salvo neste navegador' : 'Aguardando incorporação');
     }).catch(e => { if (alive) { setError(String(e.message)); setStatus('Carga não confirmada'); } }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [repository, adopt]);
@@ -62,7 +62,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     try {
       const saved = await repository.commit(candidate, base.revision);
       if (saved.revision !== candidate.revision || saved.projectId !== candidate.projectId) throw new Error('Resposta de salvamento inválida.');
-      adopt(saved); setStatus('Salvo neste navegador');
+      adopt(saved); setStatus(repository.savedLabel ?? 'Salvo neste navegador');
       return true;
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setStatus('Não salvo · rascunho preservado'); setRecovery(true); return false; }
     finally { busy.current = false; setSaving(false); }
@@ -159,7 +159,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       </div>
     </section>
     {error && <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
-    {recovery && <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm">Há um salvamento pendente. A troca de medição está bloqueada até a conferência. <button className={button} onClick={async () => { const pending = await repository.pending(); const latest = await repository.load(); if (!pending || !latest) return; if (latest.revision !== pending.baseRevision) { adopt(latest); setError('Conflito preservado. Exporte o rascunho para conferir as diferenças; nenhum valor será reaplicado automaticamente.'); return; } adopt(latest); if (await persist(pending.candidate)) setRecovery(false); }}>Tentar salvar novamente</button><button className={button} onClick={async () => { const p = await repository.pending(); const url = URL.createObjectURL(new Blob([JSON.stringify(p, null, 2)], { type: 'application/json' })); const a = document.createElement('a'); a.href = url; a.download = 'rascunho-medicao.json'; a.click(); URL.revokeObjectURL(url); }}>Baixar rascunho</button><button className={button} onClick={async () => { const p = await repository.pending(); if (p) await repository.archivePending(p.candidate.audit.at(-1)!.id); const latest = await repository.load(); if (latest) adopt(latest); setRecovery(!!await repository.pending()); setStatus('Versão salva carregada · rascunho arquivado'); setError(''); }}>Arquivar rascunho e usar versão salva</button></div>}
+    {recovery && <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm">Há um salvamento pendente. A troca de medição está bloqueada até a conferência. <button className={button} onClick={async () => { const pending = await repository.pending(); const latest = await repository.load(); if (!pending || !latest) return; if (latest.audit.some(a => a.id === pending.candidate.audit.at(-1)?.id)) { await repository.removePending?.(pending.candidate.audit.at(-1)!.id); adopt(latest); setRecovery(!!await repository.pending()); setError(''); setStatus(repository.savedLabel ?? 'Salvo neste navegador'); return; } if (latest.revision !== pending.baseRevision) { adopt(latest); setError('Conflito preservado. Exporte o rascunho para conferir as diferenças; nenhum valor será reaplicado automaticamente.'); return; } adopt(latest); if (await persist(pending.candidate)) setRecovery(false); }}>Tentar salvar novamente</button><button className={button} onClick={async () => { const p = await repository.pending(); const url = URL.createObjectURL(new Blob([JSON.stringify(p, null, 2)], { type: 'application/json' })); const a = document.createElement('a'); a.href = url; a.download = 'rascunho-medicao.json'; a.click(); URL.revokeObjectURL(url); }}>Baixar rascunho</button><button className={button} onClick={async () => { const p = await repository.pending(); if (p) await repository.archivePending(p.candidate.audit.at(-1)!.id); const latest = await repository.load(); if (latest) adopt(latest); setRecovery(!!await repository.pending()); setStatus('Versão salva carregada · rascunho arquivado'); setError(''); }}>Arquivar rascunho e usar versão salva</button></div>}
     {drafts.filter(d => d.measurementId === active && d.serviceId !== bulletinDraftKey && !d.changes.takeoffDraft).length > 0 && <div className="text-xs text-amber-800">Rascunhos desta medição preservados. <button className="underline" onClick={() => {
       const d = drafts.find(d => d.measurementId === active && d.serviceId !== bulletinDraftKey && !d.changes.takeoffDraft); if (!d) return;
       apply(w => { let row = { ...(entryFor(w, active, d.serviceId).rows.find(r => r.id === d.rowId) ?? newMeasuredRow()), ...('comment' in d.changes ? { comment: String(d.changes.comment) } : {}) };

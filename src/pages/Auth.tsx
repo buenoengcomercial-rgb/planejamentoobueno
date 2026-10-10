@@ -1,3 +1,4 @@
+import { OpeningError } from '@/components/OpeningError';
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
@@ -13,7 +14,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { company } from '@/lib/companyBranding';
 
 export default function Auth() {
-  const { user, loading, signIn, signUp } = useAuth();
+  const { user, loading, error: authError, reload: reloadAuth, signIn, signUp } = useAuth();
   const navigate = useNavigate();
   const [submitting, setSubmitting] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
@@ -27,8 +28,8 @@ export default function Auth() {
   const [signupPassword, setSignupPassword] = useState('');
 
   useEffect(() => {
-    if (!loading && user) navigate('/', { replace: true });
-  }, [user, loading, navigate]);
+    if (!loading && !authError && user) navigate('/', { replace: true });
+  }, [user, loading, authError, navigate]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,6 +70,8 @@ export default function Auth() {
     setForgotOpen(false);
     setForgotEmail('');
   };
+
+  if (authError) return <OpeningError message={authError} onRetry={() => void reloadAuth()} />;
 
   if (loading) {
     return (

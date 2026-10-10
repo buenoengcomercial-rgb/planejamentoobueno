@@ -176,7 +176,13 @@ function propagate(w: MeasurementWorkspace, entry: MeasuredEntry, row: MeasuredR
   }
 }
 export function editMeasuredRow(w: MeasurementWorkspace, actor: MeasurementActor, mid: string, sid: string, row: MeasuredRow) {
-  return transactMeasurement(w, actor, 'Editar detalhe', next => propagate(next, entryFor(next, mid, sid), row));
+  return transactMeasurement(w, actor, 'Editar detalhe', next => {
+    const old = entryFor(next, mid, sid).rows.find(r => r.id === row.id);
+    propagate(next, entryFor(next, mid, sid), row);
+    const used = new Set(next.entries.flatMap(e => e.rows.flatMap(r => sourceFields.flatMap(f => r[f] ? [`${r[f]!.planId}:${r[f]!.measureId}`] : []))));
+    const detached = new Set(old ? sourceFields.flatMap(f => old[f] ? [`${old[f]!.planId}:${old[f]!.measureId}`] : []) : []);
+    next.plans = next.plans.map(p => ({ ...p, measures: p.measures.filter(m => !detached.has(`${p.id}:${m.id}`) || used.has(`${p.id}:${m.id}`)) }));
+  });
 }
 export function deleteMeasuredRow(w: MeasurementWorkspace, actor: MeasurementActor, mid: string, sid: string, rid: string) {
   return transactMeasurement(w, actor, 'Excluir linha / desvincular referência', next => {
@@ -201,6 +207,10 @@ export function pasteMeasuredRow(w: MeasurementWorkspace, actor: MeasurementActo
       propagate(next, original, { ...current!, sharedRecordId }); row.sharedRecordId = sharedRecordId;
     } else if (clip.mode === 'cut') {
       putEntry(next, { ...original, rows: original.rows.filter(r => r.id !== current!.id) });
+      if (!row.sharedRecordId) for (const f of sourceFields) if (row[f]) {
+        const mark = next.plans.find(p => p.id === row[f]!.planId)?.measures.find(m => m.id === row[f]!.measureId);
+        if (mark) { mark.measurementId = mid; mark.serviceId = sid; }
+      }
     } else {
       row.sharedRecordId = undefined;
       // Copy geometry too: an independent copy must never mutate the original marks.

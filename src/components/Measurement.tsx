@@ -1,4 +1,7 @@
-import { lazy, Suspense, useMemo, useState, type MouseEvent } from 'react';
+import { lazy, Suspense, useMemo, useState, useEffect, type MouseEvent } from 'react';
+import { cloudMeasurementRepository } from '@/lib/measurementCloudRepository';
+import { supabase } from '@/integrations/supabase/client';
+import { useOrganization } from '@/hooks/useOrganization';
 import type { MeasurementWorkspaceProps } from './measurement/MeasurementWorkspace';
 const IndependentMeasurement = lazy(() => import('./measurement/MeasurementWorkspace'));
 
@@ -51,7 +54,31 @@ interface MeasurementProps {
 // ───────────────────────── Componente principal ─────────────────────────
 export default function Measurement(props: MeasurementProps) {
   if (props.independentWorkspace) return <Suspense fallback={<p>Carregando Medição…</p>}><IndependentMeasurement {...props.independentWorkspace} analyticProject={props.project}/></Suspense>;
-  return <LegacyMeasurement {...props}/>;
+  return <CloudMeasurement key={props.project.id} {...props}/>;
+}
+
+/** Activation is recorded in the cloud, never inferred from a browser draft. */
+function CloudMeasurement(props: MeasurementProps) {
+  const { user } = useAuth();
+  const { membership } = useOrganization();
+  const [enabled, setEnabled] = useState<boolean | null>(null), [failure, setFailure] = useState(''), [retry, setRetry] = useState(0);
+  const userId = user?.id;
+  const repository = useMemo(() => userId ? cloudMeasurementRepository({ projectId: props.project.id, userId }) : null, [props.project.id, userId]);
+  const editor = ['owner', 'admin', 'engineer'].includes(membership?.role ?? '');
+  const actor = useMemo(() => ({ id: user?.id ?? '', name: user?.user_metadata?.name ?? user?.email ?? '', canEdit: editor, canReview: editor }), [user, editor]);
+  useEffect(() => {
+    let alive = true;
+    setFailure('');
+    void supabase.from('measurement_workspaces' as never).select('project_id').eq('project_id', props.project.id).maybeSingle().then(({ data, error }) => {
+      if (!alive) return;
+      if (error) setFailure('Não foi possível confirmar a base da Medição na nuvem. Tente novamente; nenhum lançamento foi alterado.');
+      else setEnabled(!!data);
+    });
+    return () => { alive = false; };
+  }, [props.project.id, retry]);
+  if (failure) return <div role="alert" className="rounded border p-4 text-sm">{failure} <button onClick={() => setRetry(n => n + 1)} className="underline">Tentar novamente</button></div>;
+  if (enabled === null || !repository) return <p className="p-6">Conferindo a Medição na nuvem…</p>;
+  return enabled ? <Suspense fallback={<p>Carregando Medição…</p>}><IndependentMeasurement repository={repository} actor={actor} analyticProject={props.project} approvedAdditives={props.project.additives}/></Suspense> : <LegacyMeasurement {...props}/>;
 }
 
 function LegacyMeasurement({ project, onProjectChange, undoButton, onOpenDailyReport }: MeasurementProps) {

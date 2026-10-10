@@ -38,6 +38,7 @@ import { allocateSubcontractValue, freezeSubcontractPayments, subcontractBalance
 import { makeAttachments } from '@/lib/warehouse';
 import { downloadWarehouseAttachment, openWarehouseAttachment, warehouseAttachmentErrorMessage } from '@/lib/warehouseAttachments';
 import { toast } from 'sonner';
+import { registerPendingForm } from '@/lib/pendingFormNavigation';
 
 interface Props {
   project: Project;
@@ -526,6 +527,11 @@ export function SubcontractsTab({ project, analysis, canManage, canDeleteHistory
   const [editingPaymentFiles, setEditingPaymentFiles] = useState<File[]>([]);
   const [savingEditedPayment, setSavingEditedPayment] = useState(false);
   const [simulationDrafts, setSimulationDrafts] = useState<Record<string, string>>({});
+  useEffect(() => registerPendingForm(`costs:${project.id}`, 'Custos: contrato ou pagamento em edição', () =>
+    (showForm && !!(name || contractor || value || selected.length || amendmentReason))
+    || !!(paymentFor && (paymentValue || paymentNotes || paymentFiles.length))
+    || !!editingPayment || Object.keys(simulationDrafts).length > 0),
+  [project.id, showForm, name, contractor, value, selected, amendmentReason, paymentFor, paymentValue, paymentNotes, paymentFiles, editingPayment, simulationDrafts]);
   const editingContract = (project.subcontracts ?? []).find(contract => contract.id === editingContractId);
   const compositionById = useMemo(() => new Map(analysis.compositions.map(row => [row.id, row])), [analysis.compositions]);
   const blockedBy = useMemo(() => new Map(

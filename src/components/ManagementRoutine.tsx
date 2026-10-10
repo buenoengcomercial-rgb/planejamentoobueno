@@ -9,7 +9,6 @@ import { DEFAULT_TEAMS, getTeamDefinition } from '@/lib/teams';
 import {
   addDaysISO,
   buildRoutineSearchActivities,
-  buildWeeklyRoutine,
   groupWeeklyRoutineActivities,
   startOfWeekISO,
   taskSchedule,
@@ -17,6 +16,7 @@ import {
   type WeeklyRoutineActivityGroup,
 } from '@/lib/weeklyRoutine';
 import { buildPendingAdditiveSuspensionMap, isStatusOnlySuspension } from '@/lib/additiveSchedule';
+import { useWeeklyRoutine } from '@/hooks/useWeeklyRoutine';
 import { getAllTasks } from '@/data/sampleProject';
 import { updateProjectTask } from '@/lib/taskTree';
 import { resolveObraConfig } from '@/lib/obraConfig';
@@ -307,10 +307,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
       .filter(([, suspension]) => isStatusOnlySuspension(suspension))
       .map(([taskId]) => taskId),
   ), [project]);
-  const week = useMemo(
-    () => buildWeeklyRoutine(project, selectedWeekStart, pendingAdditiveTaskIds, obraCalendar),
-    [obraCalendar, pendingAdditiveTaskIds, project, selectedWeekStart],
-  );
+  const { week, loading: weekLoading, error: weekError, reload: reloadWeek } = useWeeklyRoutine(project, selectedWeekStart, pendingAdditiveTaskIds, obraCalendar);
   const rootChapters = useMemo(() => project.phases.filter(phase => !phase.parentId), [project.phases]);
   const activeRootChapterIds = useMemo(() => new Set(
     week.flatMap(day => day.activities.map(activity => activity.chapterPath[0]?.id).filter((id): id is string => !!id)),
@@ -405,6 +402,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
   }, [initialWeek]);
 
   useEffect(() => {
+    if (weekLoading || weekError) return;
     const storageKey = `obraplanner:routine-chapter:${project.id}`;
     let storedChapterId = '';
     try {
@@ -415,7 +413,7 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
     const storedExists = rootChapters.some(chapter => chapter.id === storedChapterId);
     const firstActive = rootChapters.find(chapter => activeRootChapterIds.has(chapter.id));
     setSelectedChapterId(storedExists ? storedChapterId : (firstActive?.id ?? rootChapters[0]?.id ?? ''));
-  }, [activeRootChapterIds, project.id, rootChapters]);
+  }, [activeRootChapterIds, project.id, rootChapters, weekLoading, weekError]);
 
   useEffect(() => {
     if (!selectedChapterId) return;
@@ -443,6 +441,14 @@ export default function ManagementRoutine({ project, onProjectChange, onOpenDail
     setSearchQuery('');
     setSearchOpen(true);
   };
+
+  if (weekLoading || weekError) return (
+    <section className="p-6" role={weekError ? 'alert' : 'status'}>
+      <h1 className="text-xl font-semibold">Rotina semanal</h1>
+      <p className="my-3">{weekError ?? 'Calculando a programação completa…'}</p>
+      {weekError && <Button variant="outline" onClick={reloadWeek}>Tentar novamente</Button>}
+    </section>
+  );
 
   return (
     <div className="mx-auto max-w-[1800px] space-y-5 p-4 lg:p-6">

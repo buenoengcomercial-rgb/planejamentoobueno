@@ -3,7 +3,7 @@ import type { TakeoffPlan } from './planTakeoff';
 import { calculateMeasurementLine } from './measurementCalculations';
 import { calculateLineTotal, money2, sumMoney } from './financialEngine';
 import { computeAdditiveRow, resolveAdditivePricingRule } from './additiveImport';
-import { detailTotal, editableQuantityRows } from './productionQuantityDetails';
+import { detailTotal, editableQuantityRows, isBlankDetailRow } from './productionQuantityDetails';
 import { entryFor, isPeriodLocked, monthlyLines, newMeasuredRow, sourceFields, transactMeasurement, type MeasuredService, type MeasurementActor, type MeasurementWorkspace } from './measurementWorkspace';
 
 export interface IncorporationIssue { code: string; sourceId: string; message: string }
@@ -35,6 +35,13 @@ export function prepareIncorporation(backup: IncorporationBackup): Incorporation
   const issue = (code: string, sourceId: string, message: string) => issues.push({ code, sourceId, message });
   const tasks = project.phases.flatMap(p => p.tasks.map(t => ({ task: t, phase: p })));
   const periods = (project.measurements ?? []).map(m => ({ id: m.id, number: m.number, startDate: m.startDate, endDate: m.endDate, status: m.status, editUnlocked: m.editUnlocked, originalSnapshot: structuredClone(m) }));
+  const draft = project.measurementDraft;
+  if (draft?.number && draft.startDate && draft.endDate && !periods.some(p => p.number === draft.number && p.startDate === draft.startDate && p.endDate === draft.endDate)) {
+    // The configured Medição draft is an explicit period, not a date inferred from Gantt.
+    const id = `draft:${draft.number}:${draft.startDate}:${draft.endDate}`;
+    periods.push({ id, number: draft.number, startDate: draft.startDate, endDate: draft.endDate, status: 'draft', editUnlocked: undefined,
+      originalSnapshot: { id, number: draft.number, startDate: draft.startDate, endDate: draft.endDate, status: 'draft', issueDate: backup.createdAt.slice(0, 10), bdiPercent: project.contractInfo?.bdiPercent ?? project.syntheticBdiPercent ?? 0, items: [], contractSnapshot: structuredClone(project.contractInfo) } });
+  }
   const candidate: MeasurementWorkspace = { schema: 1, projectId: project.id, projectName: project.name, revision: 0, contract: structuredClone(project.contractInfo), services: [], periods, entries: [], plans: plans.map(p => ({ ...structuredClone(p), measures: [] })), audit: [], importedKeys: [], backupId: backup.id };
   const logs = tasks.flatMap(t => t.task.dailyLogs ?? []);
   const inventory: Inventory = { services: tasks.length, dailyLogs: logs.filter(l => !l.measurementPeriod).length, periodLogs: logs.filter(l => l.measurementPeriod).length, detailRows: logs.reduce((n, l) => n + (l.quantityDetails?.length ?? 0), 0), references: new Set(logs.flatMap(l => l.quantityDetails?.flatMap(r => r.sharedRecordId ? [r.sharedRecordId] : []) ?? [])).size, plans: plans.length, marks: plans.reduce((n, p) => n + p.measures.length, 0), filesBytes: plans.reduce((n, p) => n + p.file.size, 0), periods: periods.length, fiscalPeriods: periods.filter(isPeriodLocked).length, audits: project.auditLogs?.length ?? 0, drafts: drafts.length + (project.measurementDraft ? 1 : 0) };
@@ -61,6 +68,11 @@ export function prepareIncorporation(backup: IncorporationBackup): Incorporation
     for (const log of task.dailyLogs ?? []) {
       const key = `log:${task.id}:${log.id}`;
       if (candidate.importedKeys.includes(key)) { issue('duplicate-log', log.id, 'Identificador de lançamento duplicado.'); continue; }
+      // Empty placeholders have no measured content to allocate. Keep their complete
+      // originals in the immutable backup and record their IDs without inventing a period.
+      if (log.actualQuantity === 0 && !log.notes?.trim() && (log.quantityDetails ?? []).every(isBlankDetailRow)) {
+        candidate.importedKeys.push(`empty-${key}`); continue;
+      }
       const matches = log.measurementPeriod
         ? periods.filter(p => log.measurementPeriod!.measurementId ? p.id === log.measurementPeriod!.measurementId : p.number === log.measurementPeriod!.number && p.startDate === log.measurementPeriod!.startDate && p.endDate === log.measurementPeriod!.endDate)
         : periods.filter(p => log.date >= p.startDate && log.date <= p.endDate);

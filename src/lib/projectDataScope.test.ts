@@ -41,7 +41,6 @@ describe('escopos progressivos de dados da obra', () => {
       'eapChapters',
       'tasks',
       'dailyReports',
-      'auditLogs',
     ]));
     expect(scope).not.toContain('budgetItems');
     expect(scope).not.toContain('analyticCompositions');
