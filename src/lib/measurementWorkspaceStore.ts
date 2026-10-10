@@ -5,6 +5,8 @@ export interface WorkspaceDraft { projectId: string; measurementId: string; serv
 export interface PendingMeasurementSave { baseRevision: number; candidate: MeasurementWorkspace; archivedAt?: string }
 export interface MeasurementRepository {
   savedLabel?: string;
+  remoteRevision?(): Promise<number>;
+  watch?(onRevision: (revision: number) => void, onConnection: (connected: boolean) => void): () => void;
   preservePending?(pending: PendingMeasurementSave): Promise<void>;
   removePending?(operationId: string): Promise<void>;
   load(): Promise<MeasurementWorkspace | null>;

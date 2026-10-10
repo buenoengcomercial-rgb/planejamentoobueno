@@ -16,6 +16,40 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('recebe tempo real, preserva medição e painel selecionados e espera sair da célula', async () => {
+    const { w, repository } = fixture(); let notice!: (revision: number) => void;
+    repository.remoteRevision = vi.fn(async () => 0);
+    repository.watch = (n, c) => { notice = n; c(true); return vi.fn(); };
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.change(await screen.findByLabelText('Medição selecionada'), { target: { value: 'm2' } });
+    const quantity = screen.getByLabelText('Quantidade de Placas');
+    act(() => quantity.focus()); fireEvent.click(quantity);
+    const remote = { ...structuredClone(w), revision: 1, entries: [{ projectId: 'p', measurementId: 'm2', serviceId: 's', rows: [{ id: 'remote', location: '', comment: 'Outro computador', formula: 'STANDARD' as const, multiplier: 5, measuredQuantity: 0 }] }] };
+    vi.mocked(repository.load).mockResolvedValue(remote);
+    act(() => notice(1)); await screen.findByText('Atualização recebida · rascunho preservado');
+    expect(quantity).toHaveValue(0); expect(repository.load).toHaveBeenCalledOnce();
+    act(() => quantity.blur());
+    await waitFor(() => expect(screen.getByLabelText('Quantidade de Placas')).toHaveValue(5));
+    expect(screen.getByLabelText('Medição selecionada')).toHaveValue('m2');
+    expect(screen.getByText('Detalhe de quantitativos · 2ª medição')).toBeVisible();
+    expect(repository.commit).not.toHaveBeenCalled();
+    expect(await screen.findByText('Atualizado · Tempo real ativo')).toBeVisible();
+  });
+  it('aviso remoto não apaga o número em digitação nem seu rascunho e mantém proteção de conflito', async () => {
+    const { repository } = fixture(); let notice!: (revision: number) => void;
+    repository.remoteRevision = vi.fn(async () => 0);
+    repository.watch = (n, c) => { notice = n; c(true); return vi.fn(); };
+    vi.mocked(repository.commit).mockRejectedValue(new Error('Conflito de revisão'));
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const quantity = await screen.findByLabelText('Quantidade de Placas');
+    act(() => quantity.focus()); fireEvent.change(quantity, { target: { value: '3' } });
+    act(() => notice(1)); await screen.findByText('Atualização recebida · rascunho preservado');
+    expect(quantity).toHaveValue(3); expect(repository.load).toHaveBeenCalledOnce();
+    act(() => quantity.blur()); await screen.findByText('Não salvo · rascunho preservado');
+    expect(repository.clearDraft).not.toHaveBeenCalled();
+    expect(repository.writeDraft).toHaveBeenCalledWith(expect.objectContaining({ changes: { multiplier: '3' } }));
+    expect(screen.getByLabelText('Medição selecionada')).toBeDisabled();
+  });
   it('recupera exclusão pendente e seleciona uma medição que ainda existe', async () => {
     const { w, repository } = fixture();
     const view = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
