@@ -12,6 +12,10 @@ describe('períodos consecutivos de 30 dias', () => {
     expect(nextMeasurementPeriod([...periods, second, third])).toEqual({ number: 4, startDate: '2026-11-29', endDate: '2026-12-28' });
     expect(periods).toEqual(original);
   });
+  it('usa as datas corrigidas do período, mesmo que o identificador legado contenha a data antiga', () => {
+    const periods = [{ id: 'draft:1:2026-08-24:2026-09-22', number: 1, startDate: '2026-08-24', endDate: '2026-09-29' }];
+    expect(nextMeasurementPeriod(periods)).toEqual({ number: 2, startDate: '2026-09-30', endDate: '2026-10-29' });
+  });
   it.each([
     ['2026-12-19', '2026-12-20', '2027-01-18'],
     ['2028-01-30', '2028-01-31', '2028-02-29'],

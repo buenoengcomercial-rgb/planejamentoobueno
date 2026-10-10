@@ -16,6 +16,107 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('mostra a falha de carregamento sem sugerir nova incorporação e permite tentar novamente', async () => {
+    const { w, repository } = fixture();
+    vi.mocked(repository.load).mockRejectedValueOnce(new Error('canceling statement due to statement timeout')).mockResolvedValue(w);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    expect(await screen.findByRole('alert')).toHaveTextContent('canceling statement due to statement timeout');
+    expect(screen.getByRole('heading', { name: 'Não foi possível carregar a Medição' })).toBeVisible();
+    expect(screen.queryByText('Incorporar a base de Medição')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar carregar novamente' }));
+    expect(await screen.findByRole('heading', { name: 'Planilha de medição (1 itens)' })).toBeVisible();
+    expect(repository.load).toHaveBeenCalledTimes(2);
+    expect(repository.commit).not.toHaveBeenCalled();
+  });
+  it('evita reenvio fiscal duplicado e libera novo envio após uma correção', async () => {
+    const { w, repository } = fixture();
+    const sent = freezeMeasuredPeriod(w, { ...actor, canReview: true }, 'm1');
+    vi.mocked(repository.load).mockResolvedValue(sent);
+    render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canReview: true }}/>);
+    const resend = await screen.findByRole('button', { name: 'Reenviar para fiscalização' });
+    expect(resend).toBeDisabled();
+    expect(repository.commit).not.toHaveBeenCalled();
+    const quantity = screen.getByRole('spinbutton', { name: 'Quantidade de Placas' });
+    fireEvent.change(quantity, { target: { value: '1' } }); fireEvent.blur(quantity);
+    await waitFor(() => expect(resend).toBeEnabled());
+    fireEvent.click(resend);
+    let dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Esta medição possui avisos antes do envio')).toBeVisible();
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }));
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+    fireEvent.click(resend);
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirmar envio' }));
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+    const updated = vi.mocked(repository.commit).mock.calls.at(-1)![0];
+    expect(updated.periods[0].status).toBe('in_review');
+    expect(updated.periods[0].frozen?.[0].qty).toBe(1);
+    expect(resend).toBeDisabled();
+  });
+  it('confirma o período antes do primeiro envio e cancelar não altera a medição', async () => {
+    const { w, repository } = fixture();
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'first', location: '', comment: '', formula: 'STANDARD', multiplier: 1, measuredQuantity: 0 }] }];
+    render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canReview: true }}/>);
+    const send = await screen.findByRole('button', { name: 'Enviar para fiscalização' });
+    fireEvent.click(send);
+    let dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Esta medição possui avisos antes do envio')).toBeVisible();
+    expect(within(dialog).getByText(/24\/08\/2026 a 29\/09\/2026/)).toBeVisible();
+    expect(within(dialog).getByText(/Ao confirmar, você envia a medição mesmo com estes avisos/)).toBeVisible();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancelar' }));
+    expect(repository.commit).not.toHaveBeenCalled();
+    fireEvent.click(send);
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirmar envio' }));
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(repository.commit).mock.calls[0][0].periods[0].status).toBe('in_review');
+    expect(w.periods[0].status).toBe('draft');
+  });
+  it('bloqueia envio sem quantitativos e não grava o período', async () => {
+    const { repository } = fixture();
+    render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canReview: true }}/>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Enviar para fiscalização' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Não é possível enviar para fiscalização')).toBeVisible();
+    expect(within(dialog).getByText(/Não há itens medidos neste período/)).toBeVisible();
+    expect(within(dialog).getByRole('button', { name: 'Confirmar envio' })).toBeDisabled();
+    expect(repository.commit).not.toHaveBeenCalled();
+  });
+  it('valida somente a medição selecionada antes do envio, sem reaproveitar a anterior', async () => {
+    const { w, repository } = fixture();
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'first', location: '', comment: '', formula: 'STANDARD', multiplier: 5, measuredQuantity: 0 }] }];
+    render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canReview: true }}/>);
+    fireEvent.change(await screen.findByLabelText('Medição selecionada'), { target: { value: 'm2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar para fiscalização' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(/Não há itens medidos neste período/)).toBeVisible();
+    expect(within(dialog).getByRole('button', { name: 'Confirmar envio' })).toBeDisabled();
+    expect(repository.commit).not.toHaveBeenCalled();
+  });
+  it('impede envio apenas da medição com rascunhos locais e mantém troca de tarefa e criação de período livres', async () => {
+    const { w, repository } = fixture();
+    w.periods = [
+      { id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' },
+      { id: 'm2', number: 2, startDate: '2026-09-30', endDate: '2026-10-29', status: 'draft' },
+    ];
+    w.entries = ['m1', 'm2'].map(measurementId => ({ projectId: 'p', measurementId, serviceId: 's', rows: [{ id: `${measurementId}-row`, location: '', comment: '', formula: 'STANDARD' as const, multiplier: 1, measuredQuantity: 0 }] }));
+    vi.mocked(repository.drafts).mockResolvedValue([{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: 'm1-row', changes: { multiplier: '3' } }]);
+    render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canReview: true }}/>);
+    const send = await screen.findByRole('button', { name: 'Enviar para fiscalização' });
+    expect(send).toBeDisabled();
+    expect(screen.getByText(/Finalize ou recupere os campos antes de enviar para fiscalização/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Ir para o rascunho' }));
+    expect(screen.getByText('Detalhe de quantitativos · 1ª medição')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Nova medição' }));
+    expect(within(screen.getByRole('dialog')).getByText('30/10/2026 a 28/11/2026')).toBeVisible();
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancelar' }));
+    fireEvent.change(screen.getByLabelText('Medição selecionada'), { target: { value: 'm2' } });
+    expect(send).toBeEnabled();
+    expect(screen.queryByText(/Finalize ou recupere os campos antes de enviar para fiscalização/)).not.toBeInTheDocument();
+    expect(repository.commit).not.toHaveBeenCalled();
+  });
   it('recebe tempo real, preserva medição e painel selecionados e espera sair da célula', async () => {
     const { w, repository } = fixture(); let notice!: (revision: number) => void;
     repository.remoteRevision = vi.fn(async () => 0);

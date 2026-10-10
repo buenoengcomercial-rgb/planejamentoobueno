@@ -81,6 +81,35 @@ export function monthlyLines(w: MeasurementWorkspace, measurementId: string): Mo
 }
 export const monthlyTotal = (w: MeasurementWorkspace, id: string) => sumMoney(monthlyLines(w, id).map(l => l.financial.totalPeriod));
 
+/** A second send is useful only after the proposal or its evidence changed. */
+export function fiscalSubmissionCurrent(w: MeasurementWorkspace, id: string): boolean {
+  const period = w.periods.find(p => p.id === id);
+  if (period?.status !== 'in_review') return false;
+  const changedAfter = (event: MeasurementAudit) => event.affected.some(target => target.measurementId === id)
+    || event.bulletinChange?.measurementId === id || !!event.beforePlans || !!event.afterPlans
+    || !!event.beforeServices || !!event.afterServices
+    || (!!event.beforePeriods && json(event.beforePeriods.find(p => p.id === id)) !== json(event.afterPeriods?.find(p => p.id === id)));
+  const index = w.audit.findLastIndex(event => event.action === 'Enviar para fiscalização' && event.afterPeriods?.some(p => p.id === id && p.status === 'in_review'));
+  if (index < 0) {
+    // An already-submitted legacy period can be incorporated without a new
+    // workspace send event. Imported prices may differ from today's contract;
+    // only new quantities or edits justify replacing the fiscal proposal.
+    const original = period.originalSnapshot;
+    const quantities = monthlyLines(w, id);
+    const importedQuantities = new Map(period.frozen?.map(line => [line.service.id, line.qty]) ?? []);
+    return original?.status === 'in_review' && original.startDate === period.startDate
+      && original.endDate === period.endDate && !!period.frozen
+      && quantities.length === importedQuantities.size
+      && quantities.every(line => Math.abs(line.qty - (importedQuantities.get(line.service.id) ?? Number.NaN)) <= 1e-8)
+      && !w.audit.some(changedAfter);
+  }
+  const sent = w.audit[index].afterPeriods!.find(p => p.id === id)!;
+  if (sent.startDate !== period.startDate || sent.endDate !== period.endDate
+    || json(sent.bulletin) !== json(measurementBulletin(w, id))
+    || json(sent.frozen) !== json(monthlyLines(w, id))) return false;
+  return !w.audit.slice(index + 1).some(changedAfter);
+}
+
 export function measurementBulletin(w: MeasurementWorkspace, id: string): MeasuredBulletin {
   const p = w.periods.find(p => p.id === id);
   if (!p) throw new Error('Medição não encontrada.');
@@ -318,6 +347,7 @@ export function addMeasuredPeriod(w: MeasurementWorkspace, actor: MeasurementAct
 }
 export function freezeMeasuredPeriod(w: MeasurementWorkspace, actor: MeasurementActor, id: string) {
   if (!actor.canReview) throw new Error('Sem permissão para envio fiscal.');
+  if (fiscalSubmissionCurrent(w, id)) return w;
   return transactMeasurement(w, actor, 'Enviar para fiscalização', next => {
     const p = next.periods.find(p => p.id === id); if (!p || isPeriodLocked(p)) throw new Error('Medição indisponível.');
     p.bulletin = measurementBulletin(next, id);

@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { FileCheck2, Plus } from 'lucide-react';
 import ProductionQuantityDetails from '@/components/ProductionQuantityDetails';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { addMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, editMeasuredBulletin, entryFor, isPeriodLocked, monthlyLines, newMeasuredRow, pasteMeasuredRow, sourceFields, transactMeasurement, undoMeasuredOperation, freezeMeasuredPeriod, type Destination, type MeasurementActor, type MeasurementClipboard, type MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
+import { addMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, editMeasuredBulletin, entryFor, fiscalSubmissionCurrent, isPeriodLocked, monthlyLines, newMeasuredRow, pasteMeasuredRow, sourceFields, transactMeasurement, undoMeasuredOperation, freezeMeasuredPeriod, type Destination, type MeasurementActor, type MeasurementClipboard, type MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
 import type { MeasurementRepository, WorkspaceDraft } from '@/lib/measurementWorkspaceStore';
 import type { IncorporationBackup } from '@/lib/measurementIncorporation';
 import { prepareIncorporation, incorporateApprovedAdditive } from '@/lib/measurementIncorporation';
@@ -23,6 +23,7 @@ import MeasurementSummaryCards from './MeasurementSummaryCards';
 import { measurementPresentation } from './measurementWorkspacePresentation';
 import { measurementStatusLabels as states } from '@/lib/measurementWorkspace';
 import { nextMeasurementPeriod } from '@/lib/measurementPeriodSequence';
+import { fiscalReviewIssuesForWorkspace } from '@/lib/measurementFiscalReview';
 import { rememberMeasurement, selectedMeasurement } from '@/lib/measurementSelection';
 import MeasurementLifecycleHistory from './MeasurementLifecycleHistory';
 import MeasurementLifecycleDialog, { type LifecycleSelection } from './MeasurementLifecycleDialog';
@@ -40,9 +41,10 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const [error, setError] = useState(''), [status, setStatus] = useState('Carregando…');
   const [destination, setDestination] = useState<Destination | null>(null), destinationRef = useRef<Destination | null>(null);
   const [clipboard, setClipboard] = useState<MeasurementClipboard | null>(null);
-  const [historyOpen, setHistoryOpen] = useState(false), [periodOpen, setPeriodOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false), [periodOpen, setPeriodOpen] = useState(false), [fiscalOpen, setFiscalOpen] = useState(false);
   const [lifecycle, setLifecycle] = useState<LifecycleSelection | null>(null);
   const [drafts, setDrafts] = useState<WorkspaceDraft[]>([]), [recovery, setRecovery] = useState(false);
+  const [, markDraftChange] = useState(0);
   const captureDraftWrite = useRef<Promise<boolean>>(Promise.resolve(true));
   const latestCaptureDraft = useRef<TakeoffDraft | null>(null);
   const pendingOperation = useRef<Promise<boolean>>(Promise.resolve(true));
@@ -55,6 +57,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const writingDrafts = useRef(0);
   const closingCapture = useRef(false);
   const [loading, setLoading] = useState(true), [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [search, setSearch] = useState(''), [chapterFilter, setChapterFilter] = useState('all');
   const plan = useMemo(() => incorporationBackup ? prepareIncorporation(incorporationBackup) : null, [incorporationBackup]);
   const adopt = useCallback((w: Workspace) => { current.current = w; setWorkspace(w); }, []);
@@ -82,7 +85,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       setDrafts(d); setRecovery(!!p); setStatus(w ? repository.savedLabel ?? 'Salvo neste navegador' : 'Aguardando incorporação');
     }).catch(e => { if (alive) { setError(String(e.message)); setStatus('Carga não confirmada'); } }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [repository, adopt, actor.id]);
+  }, [repository, adopt, actor.id, loadAttempt]);
   const selectPeriod = (id: string) => {
     const w = current.current;
     if (!w?.periods.some(p => p.id === id)) return;
@@ -171,13 +174,15 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     },
   }), [actor, persist, repository.savedLabel]);
   const draftKey = (mid: string, sid: string, rid: string) => JSON.stringify([mid, sid, rid]);
+  const hasPendingFiscalDraft = (measurementId: string) => drafts.some(d => d.measurementId === measurementId && !(d.serviceId === bulletinDraftKey && d.rowId === 'number'))
+    || [...draftChanges.current.keys()].some(key => key.startsWith(`[${JSON.stringify(measurementId)},`));
   const clearDraft = (mid: string, sid: string, rid?: string, expectedVersion?: number) => {
     const key = draftKey(mid, sid, rid ?? ''), version = expectedVersion ?? draftVersions.current.get(key) ?? 0;
     const write = (draftWrites.current.get(key) ?? Promise.resolve()).catch(() => undefined).then(async () => {
       if ((draftVersions.current.get(key) ?? 0) !== version) return;
       await repository.clearDraft(mid, sid, rid);
       // A new edit may have arrived while clearDraft was awaiting IndexedDB.
-      if ((draftVersions.current.get(key) ?? 0) === version) draftChanges.current.delete(key);
+      if ((draftVersions.current.get(key) ?? 0) === version) { draftChanges.current.delete(key); markDraftChange(value => value + 1); }
       setDrafts(previous => previous.some(d => d.measurementId === mid && d.serviceId === sid && (rid === undefined || d.rowId === rid)) ? previous.filter(d => !(d.measurementId === mid && d.serviceId === sid && (rid === undefined || d.rowId === rid))) : previous);
     }).catch(e => setError(`Falha ao finalizar rascunho: ${e.message}`));
     draftWrites.current.set(key, write);
@@ -249,6 +254,11 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setSaving(false); }
   };
   const calculatedLines = useMemo(() => workspace && workspace.periods.some(p => p.id === active) ? monthlyLines(workspace, active) : [], [workspace, active]);
+  const fiscalCurrent = useMemo(() => !!workspace && !!active && fiscalSubmissionCurrent(workspace, active), [workspace, active]);
+  const fiscalIssues = useMemo(() => fiscalOpen && workspace && workspace.periods.some(p => p.id === active)
+    ? fiscalReviewIssuesForWorkspace(workspace, active) : [], [fiscalOpen, workspace, active]);
+  const fiscalErrors = fiscalIssues.filter(issue => issue.level === 'error');
+  const fiscalWarnings = fiscalIssues.filter(issue => issue.level !== 'error');
   const lineByTaskId = useMemo(() => new Map(calculatedLines.map(line => [line.service.id, line])), [calculatedLines]);
   const entryByTaskId = useMemo(() => new Map(workspace?.entries.filter(entry => entry.measurementId === active).map(entry => [entry.serviceId, entry]) ?? []), [workspace, active]);
   const calculatedPresentation = useMemo(() => {
@@ -327,10 +337,31 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     const link = document.createElement('a'); link.href = url; link.download = 'rascunho-medicao.json'; link.click(); URL.revokeObjectURL(url);
   };
   if (loading) return <p className="p-6">Carregando a base de Medição…</p>;
+  if (!workspace && error) return <section className="mx-auto max-w-5xl rounded-lg border border-red-200 bg-white p-6" role="alert">
+    <h1 className="text-xl font-semibold">Não foi possível carregar a Medição</h1>
+    <p className="my-3 text-sm text-red-700">{error}</p>
+    <p className="mb-4 text-sm text-slate-600">A carga não foi confirmada. Tente novamente e confira a versão salva antes de fazer lançamentos.</p>
+    <button className={button} onClick={() => { setError(''); setLoading(true); setLoadAttempt(attempt => attempt + 1); }}>Tentar carregar novamente</button>
+  </section>;
   if (!workspace) return <section className="mx-auto max-w-5xl rounded-lg border bg-white p-6"><h1 className="text-xl font-semibold">Incorporar a base de Medição</h1><p className="my-3 text-sm text-slate-600">Confira o inventário antes de iniciar. O backup preserva os registros originais e os arquivos das plantas.</p>
     {plan && <><dl className="grid grid-cols-3 gap-3 text-sm"><div>Serviços: <b>{plan.inventory.services}</b></div><div>Lançamentos antigos: <b>{plan.inventory.dailyLogs + plan.inventory.periodLogs}</b></div><div>Medições: <b>{plan.inventory.periods}</b></div><div>Plantas: <b>{plan.inventory.plans}</b></div><div>Marcações: <b>{plan.inventory.marks}</b></div><div>Divergências: <b>{plan.issues.length}</b></div></dl><div className="my-4 max-h-72 overflow-auto text-sm">{plan.issues.length ? plan.issues.map((i, n) => <p key={n} className="mb-1 text-amber-800">{i.message}</p>) : <p className="text-emerald-700">Quantidades conciliadas. Nenhuma diferença encontrada.</p>}</div><button className={button} disabled={saving || !actor.canEdit || plan.issues.length > 0} onClick={() => void initialize()}>Confirmar incorporação</button></>}
     {!plan && <p>Ativação aguardando inventário, backup e validação do servidor. Nenhum dado operacional foi migrado.</p>}{error && <p role="alert" className="mt-3 text-red-700">{error}</p>}</section>;
   const period = workspace.periods.find(p => p.id === active);
+  const fiscalDrafts = drafts.filter(d => d.measurementId === active && !(d.serviceId === bulletinDraftKey && d.rowId === 'number'));
+  const hasFiscalDrafts = hasPendingFiscalDraft(active);
+  const focusFiscalDraft = () => {
+    const draft = fiscalDrafts[0];
+    const pendingKey = [...draftChanges.current.keys()].find(key => key.startsWith(`[${JSON.stringify(active)},`));
+    const serviceId = draft?.serviceId ?? (pendingKey ? JSON.parse(pendingKey)[1] as string : undefined);
+    if (serviceId === bulletinDraftKey) {
+      const bulletin = document.querySelector<HTMLElement>('section[aria-label="Boletim de medição para pagamento"]');
+      const toggle = bulletin?.querySelector<HTMLButtonElement>('button[aria-expanded]');
+      if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+      bulletin?.scrollIntoView?.({ block: 'start' });
+    } else if (serviceId) {
+      setExpanded({ taskId: serviceId, mode: 'quantity' });
+    }
+  };
   const recoverableDrafts = drafts.filter(d => d.measurementId === active && d.serviceId !== bulletinDraftKey && !d.changes.takeoffDraft);
   const nextDraft = recoverableDrafts[0];
   const nextDraftService = nextDraft ? workspace.services.find(service => service.id === nextDraft.serviceId) : undefined;
@@ -364,10 +395,11 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         <button className={button} disabled={saving || recovery || !actor.canEdit || !!deletionBlock} title={deletionBlock ?? 'Excluir a última medição e manter cópia no Histórico'} onClick={() => { setError(''); setLifecycle({ kind: 'delete', id: active }); }}>Excluir medição</button>
 
         {approvedAdditives.filter(a => ['aprovado', 'contratado', 'aditivo_contratado'].includes(a.status ?? '') && !a.editUnlocked).map(additive => <button key={additive.id} className={button} disabled={!!locked} onClick={() => apply(w => { const result = incorporateApprovedAdditive(w, actor, additive, period!.number); if (result.warnings.length) setError(result.warnings.join(' ')); return result.workspace; })}>Incorporar novos serviços · {additive.name}</button>)}
-        <button className={`${button} ml-auto`} disabled={locked || !actor.canReview} onClick={() => apply(w => freezeMeasuredPeriod(w, actor, active))}><FileCheck2 className="h-3.5 w-3.5"/>Enviar para fiscalização</button>
+        <button className={`${button} ml-auto`} disabled={locked || !actor.canReview || fiscalCurrent || hasFiscalDrafts} title={hasFiscalDrafts ? 'Finalize os rascunhos desta medição antes do envio' : fiscalCurrent ? 'Nenhuma alteração desde o último envio à fiscalização' : undefined} onClick={() => { if (hasPendingFiscalDraft(active)) return; setError(''); setFiscalOpen(true); }}><FileCheck2 className="h-3.5 w-3.5"/>{period?.status === 'in_review' ? 'Reenviar para fiscalização' : 'Enviar para fiscalização'}</button>
         {period?.status === 'in_review' && <button className={button} disabled={locked || !actor.canReview} onClick={() => { setError(''); setLifecycle({ kind: 'approve', id: active }); }}>Aprovado pela fiscalização</button>}
       </div>
     </section>
+    {hasFiscalDrafts && <div role="note" className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">Há rascunhos locais nesta medição. Finalize ou recupere os campos antes de enviar para fiscalização. <button className="ml-1 underline" onClick={focusFiscalDraft}>Ir para o rascunho</button></div>}
     {error && <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
     {lifecycle && <MeasurementLifecycleDialog key={`${lifecycle.kind}:${lifecycle.id}`} selection={lifecycle} workspace={workspace} actor={actor} busy={saving || recovery} error={error}
       hasDraft={drafts.some(d => d.measurementId === lifecycle.id)} onClose={() => setLifecycle(null)} onConfirm={(edit, id) => apply(edit, () => {
@@ -385,6 +417,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     }}>Recuperar rascunho</button></div>}
     {period && <MeasurementBulletin key={active} workspace={workspace} measurementId={active} readOnly={!!locked} drafts={drafts}
       onDraft={async (field, value) => {
+        draftChanges.current.set(draftKey(active, bulletinDraftKey, field), { value });
         writingDrafts.current++;
         try {
           await repository.writeDraft({ projectId: workspace.projectId, measurementId: active, serviceId: bulletinDraftKey, rowId: field, changes: { value } });
@@ -398,6 +431,8 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
           if (!await persist(editMeasuredBulletin(current.current, actor, active, patch))) return false;
           await draftWritten.catch(() => undefined);
           await repository.clearDraft(active, bulletinDraftKey, field);
+          draftChanges.current.delete(draftKey(active, bulletinDraftKey, field));
+          markDraftChange(value => value + 1);
           setDrafts(await repository.drafts()); return true;
         } catch (e) { setError(e instanceof Error ? e.message : String(e)); return false; }
       }}/>
@@ -462,6 +497,14 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
           return await persist(candidate);
         } catch (e) { setError(String(e)); return false; } }}/></Suspense>}
       {error && <p role="alert" className="text-xs text-red-700">{error}</p>}
+    </DialogContent></Dialog>
+    <Dialog open={fiscalOpen} onOpenChange={open => { if (!busy.current) setFiscalOpen(open); }}><DialogContent>
+      <DialogTitle>{fiscalErrors.length ? 'Não é possível enviar para fiscalização' : fiscalWarnings.length ? 'Esta medição possui avisos antes do envio' : `${period?.status === 'in_review' ? 'Reenviar' : 'Enviar'} ${period?.number}ª medição para fiscalização?`}</DialogTitle>
+      <DialogDescription>Período {period && `${fmtDateBR(period.startDate)} a ${fmtDateBR(period.endDate)}`}. A versão enviada ficará registrada no Histórico. Os quantitativos poderão ser corrigidos durante a análise; somente a aprovação fiscal bloqueará a medição.</DialogDescription>
+      {fiscalErrors.length > 0 && <div role="alert" className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-800"><strong>Erros bloqueantes ({fiscalErrors.length}):</strong><ul className="mt-1 list-disc pl-5">{fiscalErrors.map(issue => <li key={issue.code}>{issue.message}</li>)}</ul></div>}
+      {fiscalWarnings.length > 0 && <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900"><strong>Avisos ({fiscalWarnings.length}):</strong><ul className="mt-1 list-disc pl-5">{fiscalWarnings.map(issue => <li key={issue.code}>{issue.message}</li>)}</ul>{!fiscalErrors.length && <p className="mt-2">Ao confirmar, você envia a medição mesmo com estes avisos.</p>}</div>}
+      <div className="flex justify-end gap-2"><button className={button} disabled={saving} onClick={() => setFiscalOpen(false)}>Cancelar</button><button className={button} disabled={saving || recovery || !period || fiscalCurrent || fiscalErrors.length > 0 || hasFiscalDrafts} onClick={() => { if (hasPendingFiscalDraft(active)) { setError('Finalize os rascunhos desta medição antes de enviar para fiscalização.'); return; } apply(w => freezeMeasuredPeriod(w, actor, active), () => setFiscalOpen(false)); }}>Confirmar envio</button></div>
+      {error && <p role="alert" className="text-red-700">{error}</p>}
     </DialogContent></Dialog>
     <Dialog open={periodOpen} onOpenChange={setPeriodOpen}><DialogContent><DialogTitle>Nova medição</DialogTitle><DialogDescription>O próximo período começa no dia seguinte ao encerramento anterior e inclui 30 dias corridos.</DialogDescription>{nextPeriod ? <div className="rounded border bg-slate-50 p-3 text-sm"><strong>{nextPeriod.number}ª medição</strong><p>{fmtDateBR(nextPeriod.startDate)} a {fmtDateBR(nextPeriod.endDate)}</p></div> : <p>Configure a primeira medição antes de criar a próxima.</p>}<div className="flex justify-end gap-2"><button className={button} disabled={saving} onClick={() => setPeriodOpen(false)}>Cancelar</button><button className={button} disabled={saving || recovery || !actor.canEdit || !nextPeriod} onClick={() => apply(w => addMeasuredPeriod(w, actor), () => { setPeriodOpen(false); selectPeriod(current.current!.periods.at(-1)!.id); setExpanded(null); })}>Criar medição</button></div>{error && <p role="alert" className="text-red-700">{error}</p>}</DialogContent></Dialog>
     <Dialog open={historyOpen} onOpenChange={setHistoryOpen}><DialogContent className="max-w-3xl"><DialogTitle>Histórico da Medição</DialogTitle><DialogDescription>Alterações da base própria. Restaurar valida todas as ocorrências e bloqueios atuais.</DialogDescription><button className={button} onClick={async () => { const drafts = await repository.pendingSaves(); const url = URL.createObjectURL(new Blob([JSON.stringify(drafts, null, 2)], { type: 'application/json' })); const a = document.createElement('a'); a.href = url; a.download = 'rascunhos-medicao-preservados.json'; a.click(); URL.revokeObjectURL(url); }}>Baixar rascunhos arquivados</button><div className="max-h-[65vh] space-y-2 overflow-y-auto">{[...workspace.audit].reverse().map(a => <details key={a.id} className="rounded border p-3 text-xs"><summary>{new Date(a.at).toLocaleString('pt-BR')} · {a.actor.name} · {a.action}</summary><p className="my-2">{a.affected.map(x => `${workspace.periods.find(p => p.id === x.measurementId)?.number}ª medição: ${workspace.services.find(s => s.id === x.serviceId)?.description}`).join(' · ')}</p>{a.bulletinChange && <div className="my-2 grid grid-cols-1 gap-3 sm:grid-cols-2">{[{ name: 'Boletim anterior', data: a.bulletinChange.before }, { name: 'Boletim confirmado', data: a.bulletinChange.after }].map(side => <div key={side.name} className="rounded bg-slate-50 p-2"><strong>{side.name}</strong><p>{side.data.number}ª medição · {side.data.bulletin.projectName}</p>{Object.entries({ Contratante: side.data.bulletin.contract.contractor, Contratada: side.data.bulletin.contract.contracted, Contrato: side.data.bulletin.contract.contractNumber, Objeto: side.data.bulletin.contract.contractObject, Local: side.data.bulletin.contract.location, 'Fonte de orçamento': side.data.bulletin.contract.budgetSource, ART: side.data.bulletin.contract.artNumber, BDI: side.data.bulletin.contract.bdiPercent }).map(([label, value]) => <p key={label} className="break-words">{label}: {value ?? '—'}</p>)}</div>)}</div>}{a.beforePeriods && <div className="my-2 grid grid-cols-2 gap-3">{[{ name: "Períodos anteriores", periods: a.beforePeriods }, { name: "Períodos confirmados", periods: a.afterPeriods ?? [] }].map(side => <div key={side.name} className="rounded bg-slate-50 p-2"><strong>{side.name}</strong>{side.periods.map(p => <p key={p.id}>{p.number}ª medição · {fmtDateBR(p.startDate)} a {fmtDateBR(p.endDate)}</p>)}</div>)}</div>}{!a.bulletinChange && !a.beforePeriods && <div className="my-2 grid grid-cols-2 gap-3">{[{name:'Antes',entries:a.before},{name:'Depois',entries:a.after}].map(side => <div key={side.name} className="rounded bg-slate-50 p-2"><strong>{side.name}</strong>{side.entries.map(e => <div key={`${e.measurementId}:${e.serviceId}`} className="mt-1"><span>Total: {fmtNum(detailTotal(e.rows))}</span>{e.rows.map(r => <p key={r.id} className="mt-1 text-slate-600">{r.comment || 'Sem comentário'} · A {fmtNum(r.multiplier)} · B {fmtNum(r.measuredQuantity)} · C {fmtNum(r.dimensionC ?? 0)} · D {fmtNum(r.dimensionD ?? 0)} · {r.formula === 'STANDARD' ? 'Padrão' : r.formula}</p>)}</div>)}</div>)}</div>}{a.beforePeriods && <MeasurementLifecycleHistory event={a}/> }{a.lifecycle?.kind === 'delete' ? <button className={button} disabled={!actor.canEdit || saving || workspace.periods.some(p => p.id === a.lifecycle!.measurementId)} onClick={() => { setHistoryOpen(false); setError(''); setLifecycle({ kind: 'restore', id: a.id }); }}>Restaurar medição</button> : !a.lifecycle && !a.beforePeriods && !a.beforeServices && <button className={button} disabled={!actor.canEdit || saving} onClick={() => apply(w => undoMeasuredOperation(w, actor, a.id))}>Restaurar conteúdo anterior</button>}</details>)}</div></DialogContent></Dialog>

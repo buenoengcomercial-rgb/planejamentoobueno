@@ -663,6 +663,10 @@ export default function Index() {
       if (date) {
         setDailyReportInitialDate(date);
         setDailyReportNavKey(key => key + 1);
+      } else {
+        // Um acesso comum ao Diário não deve herdar o filtro de uma visita
+        // anterior feita pelo atalho da Medição.
+        setDailyReportInitialFilter(undefined);
       }
       setProductionWorkspaceInitialTab('dailyReport');
     }
@@ -3454,7 +3458,10 @@ export default function Index() {
             }
             const switchView = () => {
               if (v === 'tasks') setProductionWorkspaceInitialTab('production');
-              if (v === 'dailyReport') setProductionWorkspaceInitialTab('dailyReport');
+              if (v === 'dailyReport') {
+                setProductionWorkspaceInitialTab('dailyReport');
+                setDailyReportInitialFilter(undefined);
+              }
               setCurrentView(v);
               setSidebarOpen(false);
             };
