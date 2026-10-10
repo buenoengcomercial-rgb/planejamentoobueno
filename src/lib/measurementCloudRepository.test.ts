@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation } from './measurementIncorporation';
-import { editMeasuredRow, newMeasuredRow, addMeasuredPeriod } from './measurementWorkspace';
+import { editMeasuredRow, newMeasuredRow, addMeasuredPeriod, freezeMeasuredPeriod } from './measurementWorkspace';
 import { measurementEntryPatch } from './measurementEntryPatch';
 import { encodeMeasurementWorkspace, decodeMeasurementWorkspace } from './measurementCloudCodec';
 import { cloudMeasurementRepository } from './measurementCloudRepository';
@@ -104,6 +104,35 @@ describe('confirmação cloud e recuperação',()=>{
   await expect(repo.commit(later,next.revision)).rejects.toThrow('mudou durante');
   expect(mocks.compact?.operationId).toBe(later.audit.at(-1)?.id);
   expect((await repo.pending())?.candidate.audit.at(-1)?.id).toBe(later.audit.at(-1)?.id);
+ });
+ it('envio fiscal completo concilia timeout após commit, repete se não gravou e preserva conflito',async()=>{
+  const f=measurementFixture(); f.plans=[]; const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
+  const actor={id:'user',name:'Teste',canEdit:true,canReview:true};
+  const fiscal=freezeMeasuredPeriod(base,actor,'m1');
+  const repo=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(base),error:null}); await repo.load();
+  mocks.eventRevision=fiscal.revision; mocks.remoteRevision=fiscal.revision;
+  mocks.rpc.mockResolvedValueOnce({data:null,error:{code:'57014',message:'statement timeout'}});
+  expect(await repo.commit(fiscal,base.revision)).toEqual(fiscal);
+  expect(mocks.rpc).toHaveBeenLastCalledWith('commit_measurement_workspace',{
+   p_project_id:base.projectId,p_expected_revision:base.revision,p_candidate:encodeMeasurementWorkspace(fiscal),
+  });
+  expect(await repo.pending()).toBeNull();
+
+  const following=addMeasuredPeriod(fiscal,actor);
+  mocks.eventRevision=null; mocks.remoteRevision=fiscal.revision;
+  mocks.rpc.mockResolvedValueOnce({data:null,error:{code:'57014',message:'statement timeout'}})
+   .mockResolvedValueOnce({data:encodeMeasurementWorkspace(following),error:null});
+  expect(await repo.commit(following,fiscal.revision)).toEqual(following);
+  const retryCalls=mocks.rpc.mock.calls.slice(-2);
+  expect(retryCalls[0]).toEqual(retryCalls[1]);
+  expect(await repo.pending()).toBeNull();
+
+  const concurrent=addMeasuredPeriod(following,actor);
+  mocks.remoteRevision=following.revision+2;
+  mocks.rpc.mockResolvedValueOnce({data:null,error:{code:'57014',message:'statement timeout'}});
+  await expect(repo.commit(concurrent,following.revision)).rejects.toThrow('mudou durante');
+  expect((await repo.pending())?.candidate).toEqual(concurrent);
  });
  it('timeout sem linha de versão não interpreta ausência como revisão zero',async()=>{
   const f=measurementFixture(); f.plans=[]; const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;

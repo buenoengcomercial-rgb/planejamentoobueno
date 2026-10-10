@@ -37,7 +37,7 @@ export interface UseDailyReportPdfArgs {
   project: Project;
   selectedDate: string;
   currentReport: DailyReportEntry;
-  activePeriod: { id: string; label: string; startDate: string; endDate: string } | null | undefined;
+  activePeriod: { id: string; label: string; startDate: string; endDate: string; status?: string } | null | undefined;
   periodDates: string[];
   periodSummary: unknown;
   production: ProductionEntry[];
@@ -160,7 +160,7 @@ export function useDailyReportPdf(args: UseDailyReportPdfArgs) {
 
     if (mode === 'period' && activePeriod && periodDates.length > 0) {
       dates = periodDates;
-      const isDraft = activePeriod.id === 'draft';
+      const isDraft = activePeriod.status === 'draft' || activePeriod.id === 'draft';
       scopeTitle = isDraft
         ? 'DIÁRIO DE OBRA — MEDIÇÃO EM PREPARAÇÃO'
         : `DIÁRIO DE OBRA — ${activePeriod.label.toUpperCase()}`;

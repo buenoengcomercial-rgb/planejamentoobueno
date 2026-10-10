@@ -43,6 +43,7 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010190000_measurement_realtime_versions.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010210000_measurement_entry_delta.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010220000_measurement_entry_projection.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261010225000_measurement_fiscal_lines_linear.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -157,6 +158,75 @@ describe('transação da Medição na nuvem',()=>{
   await expect(commit(forged,base.revision)).rejects.toThrow('conteúdo diferente');
   expect((await db.query<{data:unknown}>('SELECT load_measurement_workspace($1) data',[projectId])).rows[0].data).toEqual(JSON.parse(wire(fourth)));
  });
+ it('carrega uma medição com mais de 50 deltas e preserva o envio fiscal',async()=>{
+  let randomSeed=1;
+  const auditPadding=Array.from({length:2_000_000},()=>{
+   randomSeed=(Math.imul(randomSeed,1664525)+1013904223)|0;
+   return String.fromCharCode(33+((randomSeed>>>0)%90));
+  }).join('');
+  const extraServices=Array.from({length:402-base.services.length},(_,index)=>({
+   ...base.services[0],id:`stress-${index}`,item:`${index+1000}`,description:`Stress ${index}`,
+   availableFromNumber:1,
+  }));
+  const expandedBase={...base,services:[...base.services,...extraServices],
+   entries:[...base.entries,...extraServices.slice(0,33).map(service=>({
+    projectId:base.projectId,measurementId:'m1',serviceId:service.id,rows:[],
+   }))]} as MeasurementWorkspace;
+  const initial=editMeasuredRow(expandedBase,actor,'m1','signs',{...newMeasuredRow('load-stress'),multiplier:1});
+  const large={...initial,audit:initial.audit.map((event,index)=>index===0
+    ? {...event,actor:{...event.actor,name:auditPadding}} : event)} as MeasurementWorkspace;
+  await seed(large);
+  let current=large;
+  for(let n=2;n<=56;n++){
+   const next=editMeasuredRow(current,actor,'m1','signs',{...newMeasuredRow('load-stress'),multiplier:n});
+   const patch=measurementEntryPatch(current,next)!;
+   await db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,current.revision,JSON.stringify(patch)]);
+   current=next;
+  }
+  const started=performance.now();
+  const loaded=(await db.query<{data:unknown}>('SELECT load_measurement_workspace($1) data',[projectId])).rows[0].data;
+  const loadMs=performance.now()-started;
+  console.info(`measurement load 55 deltas, 2 MB audit: ${loadMs.toFixed(1)} ms`);
+  expect(loaded).toEqual(JSON.parse(wire(current)));
+  await db.exec("SET ROLE authenticated; SET test.role='owner'");
+  const authenticatedStart=performance.now();
+  const authenticatedLoad=(await db.query<{data:unknown}>('SELECT load_measurement_workspace($1) data',[projectId])).rows[0].data;
+  console.info(`measurement authenticated RLS load: ${(performance.now()-authenticatedStart).toFixed(1)} ms`);
+  await db.exec('RESET ROLE');
+  expect(authenticatedLoad).toEqual(loaded);
+  const freezeStart=performance.now();
+  const fiscal=freezeMeasuredPeriod(current,actor,'m1');
+  const clientFreezeMs=performance.now()-freezeStart;
+  const legacySource=await readFile(new URL('../../supabase/migrations/20261010120000_measurement_recoverable_lifecycle.sql',import.meta.url),'utf8');
+  const legacyDefinition=legacySource.match(/CREATE OR REPLACE FUNCTION public\.measurement_fiscal_lines\([\s\S]*?END; \$\$;/)?.[0];
+  expect(legacyDefinition).toBeTruthy();
+  await db.exec(legacyDefinition!.replace('public.measurement_fiscal_lines(', 'public.measurement_fiscal_lines_legacy('));
+  for(const [sample,periodId] of [[fiscal,'m1'],[approveMeasuredPeriod(fiscal,actor,'m1'),'m2']] as const){
+   const target=sample.periods.find(p=>p.id===periodId)!;
+   const params=[wire(sample),JSON.stringify(target)];
+   const modern=(await db.query<{value:unknown}>('SELECT measurement_fiscal_lines($1,$2) value',params)).rows[0].value;
+   const legacy=(await db.query<{value:unknown}>('SELECT measurement_fiscal_lines_legacy($1,$2) value',params)).rows[0].value;
+   expect(modern).toEqual(legacy);
+  }
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261010225000_measurement_fiscal_lines_linear.sql',import.meta.url),'utf8'));
+  await db.exec('SET ROLE authenticated');
+  expect((await db.query<{value:unknown}>('SELECT measurement_fiscal_lines($1,$2) value',
+   [wire(fiscal),JSON.stringify(fiscal.periods.find(p=>p.id==='m1'))])).rows[0].value).toEqual(fiscal.periods.find(p=>p.id==='m1')?.frozen);
+  await expect(db.query('SELECT * FROM measurement_fiscal_line_rows($1,$2)',
+   [wire(fiscal),JSON.stringify(fiscal.periods.find(p=>p.id==='m1'))])).rejects.toThrow('permission denied');
+  await db.exec('RESET ROLE');
+  const linesStart=performance.now();
+  await db.query('SELECT measurement_fiscal_lines($1,$2)',[wire(fiscal),JSON.stringify(fiscal.periods.find(period=>period.id==='m1'))]);
+  console.info(`measurement fiscal lines alone: ${(performance.now()-linesStart).toFixed(1)} ms`);
+  const validationStart=performance.now();
+  await db.query('SELECT validate_measurement_workspace($1,$2)',[JSON.stringify(loaded),wire(fiscal)]);
+  console.info(`measurement fiscal server validation alone: ${(performance.now()-validationStart).toFixed(1)} ms`);
+  const commitStart=performance.now();
+  await commit(fiscal);
+  console.info(`measurement fiscal 402 services, 33 entries: client ${clientFreezeMs.toFixed(1)} ms, SQL ${ (performance.now()-commitStart).toFixed(1)} ms`);
+  expect((await db.query<{data:unknown}>('SELECT load_measurement_workspace($1) data',[projectId])).rows[0].data)
+   .toEqual(JSON.parse(wire(fiscal)));
+ },180000);
  it('migração repetida reconstrói a projeção de um delta v1 pendente sem mudar dados',async()=>{
   await seed();
   const first=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('legacy-delta'),multiplier:3});

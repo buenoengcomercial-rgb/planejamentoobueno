@@ -71,7 +71,7 @@ export interface ValidationContext {
   endDate: string;
   measurementNumber: string | number;
   rows: MinimalRow[];
-  measurements: SavedMeasurement[];
+  measurements: Pick<SavedMeasurement, 'id' | 'number' | 'startDate' | 'endDate'>[];
   contract: {
     contractor?: string;
     contracted?: string;

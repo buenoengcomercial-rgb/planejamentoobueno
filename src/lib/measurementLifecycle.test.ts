@@ -2,11 +2,43 @@
 import { describe, expect, it } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation } from './measurementIncorporation';
-import { addMeasuredPeriod, approveMeasuredPeriod, editMeasuredRow, entryFor, freezeMeasuredPeriod, monthlyLines, newMeasuredRow } from './measurementWorkspace';
+import { addMeasuredPeriod, approveMeasuredPeriod, editMeasuredBulletin, editMeasuredRow, entryFor, fiscalSubmissionCurrent, freezeMeasuredPeriod, monthlyLines, newMeasuredRow } from './measurementWorkspace';
 import { deleteMeasuredPeriod, restoreMeasuredPeriod } from './measurementLifecycle';
 const actor = { id: 'tester', name: 'Teste', canEdit: true, canReview: true };
 async function setup() { const f = measurementFixture(); return prepareIncorporation(await createIncorporationBackup(f.project, f.plans, [])).candidate; }
 describe('Revisão e exclusão recuperável de medições', () => {
+  it('reconhece um envio legado incorporado sem evento novo e libera reenvio após alteração', async () => {
+    const sent = freezeMeasuredPeriod(await setup(), actor, 'm1');
+    const imported = structuredClone(sent);
+    imported.revision = 0;
+    imported.audit = [];
+    imported.periods[0].originalSnapshot = {
+      ...imported.periods[0].originalSnapshot!, status: 'in_review',
+      startDate: imported.periods[0].startDate, endDate: imported.periods[0].endDate,
+    };
+    // O preço congelado pelo fiscal pode ser diferente do contrato atual.
+    imported.periods[0].frozen![0].service.priceWithBDI += 123;
+    imported.periods[0].frozen![0].financial.totalPeriod += 123;
+    expect(fiscalSubmissionCurrent(imported, 'm1')).toBe(true);
+    expect(freezeMeasuredPeriod(imported, actor, 'm1')).toBe(imported);
+    const corrected = editMeasuredRow(imported, actor, 'm1', 'detectors', { ...entryFor(imported, 'm1', 'detectors').rows[0], multiplier: 220 });
+    expect(fiscalSubmissionCurrent(corrected, 'm1')).toBe(false);
+    const oldDate = structuredClone(imported);
+    oldDate.periods[0].endDate = '2026-09-29';
+    expect(fiscalSubmissionCurrent(oldDate, 'm1')).toBe(false);
+  });
+  it('não reenvia proposta idêntica e permite novo envio após corrigir a quantidade', async () => {
+    const sent = freezeMeasuredPeriod(await setup(), actor, 'm1');
+    expect(fiscalSubmissionCurrent(sent, 'm1')).toBe(true);
+    expect(freezeMeasuredPeriod(sent, actor, 'm1')).toBe(sent);
+    expect(fiscalSubmissionCurrent(editMeasuredBulletin(sent, actor, 'm1', { contract: { artNumber: 'ART corrigida' } }), 'm1')).toBe(false);
+    const corrected = editMeasuredRow(sent, actor, 'm1', 'detectors', { ...entryFor(sent, 'm1', 'detectors').rows[0], multiplier: 220 });
+    expect(fiscalSubmissionCurrent(corrected, 'm1')).toBe(false);
+    const resent = freezeMeasuredPeriod(corrected, actor, 'm1');
+    expect(resent.revision).toBe(corrected.revision + 1);
+    expect(resent.periods[0].frozen![0].qty).toBe(220);
+    expect(sent.periods[0].frozen![0].qty).toBe(221);
+  });
   it('permite corrigir durante a análise, preserva envio e congela somente ao aprovar', async () => {
     const original = await setup(), sent = freezeMeasuredPeriod(original, actor, 'm1');
     const sentEvent = structuredClone(sent.audit.at(-1));

@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DailyReport, Project } from '@/types/project';
+import type { AppView, DailyReport, Project } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
 import { supabase } from '@/integrations/supabase/client';
 import { registerPendingForm } from '@/lib/pendingFormNavigation';
@@ -147,11 +147,13 @@ vi.mock('@/integrations/supabase/client', () => {
 vi.mock('@/components/AppSidebar', async () => {
   const { createElement } = await import('react');
   return {
-    default: ({ onSwitchProject, onViewChange, onOpenTeam }: { onSwitchProject: (id: string) => void; onViewChange: (view: 'dashboard') => void; onOpenTeam?: () => void }) => createElement(
+    default: ({ onSwitchProject, onViewChange, onOpenTeam }: { onSwitchProject: (id: string) => void; onViewChange: (view: AppView) => void; onOpenTeam?: () => void }) => createElement(
       'div',
       null,
       createElement('button', { type: 'button', onClick: () => onSwitchProject('project-2') }, 'Trocar obra de teste'),
       createElement('button', { type: 'button', onClick: () => onViewChange('dashboard') }, 'Abrir Dashboard de teste'),
+      createElement('button', { type: 'button', onClick: () => onViewChange('measurement') }, 'Abrir Medição de teste'),
+      createElement('button', { type: 'button', onClick: () => onViewChange('dailyReport') }, 'Abrir Diário de teste'),
       createElement('button', { type: 'button', onClick: onOpenTeam }, 'Abrir usuários de teste'),
     ),
   };
@@ -184,12 +186,14 @@ vi.mock('@/components/DailyProductionWorkspace', async () => {
     onProductionChange: Setter;
     onDailyReportChange: Setter;
     productionUndoButton?: ReactNode;
+    dailyReportInitialFilter?: string;
   }
   return {
-    default: ({ project, onProductionChange, onDailyReportChange, productionUndoButton }: Props) => createElement(
+    default: ({ project, onProductionChange, onDailyReportChange, productionUndoButton, dailyReportInitialFilter }: Props) => createElement(
       'div',
       { 'data-testid': 'project-workspace' },
       createElement('span', { 'data-testid': 'project-name' }, project.name),
+      createElement('output', { 'data-testid': 'diary-initial-filter' }, dailyReportInitialFilter ?? 'all'),
       createElement(DraftInput),
       createElement('button', {
         type: 'button',
@@ -230,7 +234,16 @@ vi.mock('@/components/CloudDraftConflictDialog', async () => {
 vi.mock('@/components/Dashboard', () => ({ default: () => null }));
 vi.mock('@/components/OperationalManagementRoutine', () => ({ default: () => null }));
 vi.mock('@/components/OperationalGanttChart', () => ({ default: () => null }));
-vi.mock('@/components/Measurement', () => ({ default: () => null }));
+vi.mock('@/components/Measurement', async () => {
+  const { createElement } = await import('react');
+  return {
+    default: ({ onOpenDailyReport }: { onOpenDailyReport?: (dateISO: string, filter?: string) => void }) => createElement(
+      'button',
+      { type: 'button', onClick: () => onOpenDailyReport?.('2026-08-24', 'draft') },
+      'Abrir Diário pela Medição de teste',
+    ),
+  };
+});
 vi.mock('@/components/TaskList', () => ({ default: () => null }));
 vi.mock('@/components/DailyReport', () => ({ default: () => null }));
 vi.mock('@/components/Additive', async () => {
@@ -446,6 +459,17 @@ describe('segurança de sincronização da página da obra', () => {
     renderIndex('levantamento');
     expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId('route-path')).toHaveTextContent('/obras/project-1/producao'));
+  });
+
+  it('limpa o filtro da Medição ao voltar ao Diário pela barra lateral', async () => {
+    renderIndex('medicao');
+    fireEvent.click(await screen.findByRole('button', { name: 'Abrir Diário pela Medição de teste' }));
+    expect(await screen.findByTestId('diary-initial-filter')).toHaveTextContent('draft');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Medição de teste' }));
+    expect(await screen.findByRole('button', { name: 'Abrir Diário pela Medição de teste' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Diário de teste' }));
+    expect(await screen.findByTestId('diary-initial-filter')).toHaveTextContent('all');
   });
 
   it('recupera auditoria offline parcial sem substituir histórico da nuvem no retry', async () => {

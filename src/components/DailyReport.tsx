@@ -54,7 +54,7 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
   const concluded = !!currentReport.concludedAt;
   const effectiveReadOnly = readOnly || concluded || !online;
 
-  const { measurementPeriods, activePeriod, periodDates, dateMembership, periodSummary } =
+  const { measurementPeriods, activePeriod, periodDates, dateMembership, periodSummary, periodLoadError } =
     useDailyReportPeriods({ project, selectedDate, measurementFilter });
 
   const { production, grouped, summary } = useDailyReportProduction({
@@ -124,16 +124,20 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
       {/* Header */}
       <DailyReportHeader
         undoButton={undoButton}
-        measurementFilter={measurementFilter}
         setMeasurementFilter={setMeasurementFilter}
         measurementPeriods={measurementPeriods}
         activePeriod={activePeriod}
-        periodDates={periodDates}
         selectedDate={selectedDate}
         setSelectedDate={setSelectedDate}
         handlePrintDay={handlePrintDay}
         handlePrintPeriod={handlePrintPeriod}
       />
+
+      {periodLoadError && (
+        <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+          {periodLoadError} Os registros diários continuam acessíveis pelo campo de data.
+        </div>
+      )}
 
       {concluded ? (
         <div role="status" className="flex flex-col gap-3 rounded-xl border border-success/30 bg-success/5 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">

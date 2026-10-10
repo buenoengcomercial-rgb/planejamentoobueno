@@ -44,30 +44,25 @@ export function useDailyReportState({
   initialMeasurementFilter,
   navKey,
 }: UseDailyReportStateArgs): UseDailyReportStateResult {
-  // Default inteligente: se nada veio externo, mas existe medição em preparação, abrir já filtrado por ela.
-  const hasDraft = !!(project.measurementDraft?.startDate && project.measurementDraft?.endDate);
-  const defaultFilter = initialMeasurementFilter || (hasDraft ? 'draft' : 'all');
-
   const [selectedDate, setSelectedDate] = useState<string>(initialDate || todayISO());
-  const [measurementFilter, setMeasurementFilter] = useState<string>(defaultFilter);
+  // O Diário deve abrir com acesso a todas as datas, mesmo que exista uma
+  // medição em preparação com um período antigo no projeto.
+  const [measurementFilter, setMeasurementFilter] = useState<string>(initialMeasurementFilter || 'all');
 
   // Sincroniza filtro/data vindos da Medição. Depende de navKey para re-aplicar mesmo
   // quando os mesmos valores são enviados de novo (ex.: clicar 2x em "Ver no Diário").
   useEffect(() => {
     if (initialMeasurementFilter) setMeasurementFilter(initialMeasurementFilter);
     if (initialDate) setSelectedDate(initialDate);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialMeasurementFilter, initialDate, navKey]);
 
-  const reports = project.dailyReports || [];
-
   const currentReport: DailyReportEntry = useMemo(() => {
-    const found = reports
+    const found = (project.dailyReports || [])
       .filter(r => r.date === selectedDate)
       .reduce<DailyReportEntry | undefined>((latest, report) => pickLatestDailyReport(latest, report), undefined);
     if (found) return found;
     return createBlankDailyReport(selectedDate);
-  }, [reports, selectedDate]);
+  }, [project.dailyReports, selectedDate]);
 
   const persist = useCallback((mutator: (r: DailyReportEntry) => DailyReportEntry) => {
     onProjectChange(prev => {
