@@ -274,6 +274,8 @@ describe('Tela própria de Medição', () => {
     fireEvent.blur(a);
     fireEvent.click(cells[11]);
     await waitFor(() => expect(screen.getByLabelText('Quantidade de Placas')).toHaveValue(3));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
+    fireEvent.click(cells[11]);
     expect(panel).toHaveTextContent(/^$/);
     const saved = vi.mocked(repository.commit).mock.calls.at(-1)![0];
     expect(saved.entries[0]).toMatchObject({ measurementId: 'm1', serviceId: 's' });

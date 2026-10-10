@@ -11,6 +11,19 @@ async function fixture() {
 }
 const actor = { id: 'test', name: 'Teste', canEdit: true };
 describe('payload restrito aos quantitativos', () => {
+  it('recarregar JSONB com chaves reordenadas mantém o envio restrito e protege o histórico', async () => {
+    const base = await fixture();
+    const confirmed = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 3 });
+    const pending = editMeasuredRow(confirmed, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 4 });
+    const reloaded = JSON.parse(JSON.stringify(confirmed, (_key, value) =>
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.fromEntries(Object.keys(value).sort().map(k => [k, value[k]])) : value));
+    expect(measurementEntryPatch(reloaded, pending)?.entries).toEqual(pending.audit.at(-1)!.after);
+    const tampered = structuredClone(pending); tampered.audit[0].action += ' adulterada';
+    expect(measurementEntryPatch(reloaded, tampered)).toBeNull();
+    const reordered = structuredClone(pending); reordered.entries.reverse();
+    expect(measurementEntryPatch(reloaded, reordered)).toBeNull();
+  });
   it('uma edição transmite somente a ocorrência, sem os 1.200 serviços ou o histórico anterior', async () => {
     const base = await fixture();
     base.services.push(...Array.from({ length: 1200 - base.services.length }, (_, i) => ({ ...base.services[0], id: `extra-${i}`, item: `9.${i}` })));

@@ -42,7 +42,7 @@ export default function MeasurementBulletin({ workspace, measurementId, readOnly
   const bdi = value('bdiPercent', bulletin.contract.bdiPercent);
   const number = String(period.number);
   return <section aria-label="Boletim de medição para pagamento">
-    <MeasurementContractInfo defaultOpen project={{ name: value('projectName', bulletin.projectName) }}
+    <MeasurementContractInfo defaultOpen={false} project={{ name: value('projectName', bulletin.projectName) }}
       setProjectName={v => change('projectName', v)} onProjectNameChange={name => void commit('projectName', { projectName: name })}
       isSnapshotMode={readOnly} effStart={period.startDate} effEnd={period.endDate} effIssue={bulletin.issueDate}
       effBdi={bulletin.contract.bdiPercent ?? 0} effNumber={readOnly ? String(period.number) : number}

@@ -7,7 +7,12 @@ export function measurementEntryPatch(previous: MeasurementWorkspace | null, can
   if (!previous || previous.revision + 1 !== candidate.revision) return null;
   const before = encodeMeasurementWorkspace(previous) as Record<string, unknown>;
   const after = encodeMeasurementWorkspace(candidate) as Record<string, unknown>;
-  const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  // JSONB sorts object keys on reload. Ordering of arrays is meaningful; ordering
+  // of object keys is not. A JSON round trip also omits optional undefined fields.
+  const canonical = (value: unknown) => JSON.stringify(value, (_key, v) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+  const equal = (a: unknown, b: unknown) => canonical(a) === canonical(b);
   if (Object.keys({ ...before, ...after }).some(k => !['revision', 'entries', 'audit'].includes(k) && !equal(before[k], after[k]))) return null;
   if (candidate.audit.length !== previous.audit.length + 1 || !equal(previous.audit, candidate.audit.slice(0, -1))) return null;
   if (previous.entries.some(e => !candidate.entries.some(n => n.measurementId === e.measurementId && n.serviceId === e.serviceId))) return null;

@@ -18,6 +18,30 @@ function setup(size = 402) {
   return { repository, saved: () => w, drafts: () => drafts };
 }
 
+it('mantém a tarefa atual até confirmar e inicia o boletim recolhido após recarga', async () => {
+  const { repository } = setup(2);
+  let confirm!: (candidate: Workspace) => void;
+  vi.mocked(repository.commit).mockImplementationOnce(() => new Promise(resolve => { confirm = resolve; }));
+  const mounted = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  const current = await screen.findByLabelText('Quantidade de Serviço 0');
+  expect(screen.getByRole('button', { name: /Boletim de Medição para Pagamento/ })).toHaveAttribute('aria-expanded', 'false');
+  fireEvent.click(current);
+  const a = screen.getByLabelText('Unidades da linha 1');
+  fireEvent.change(a, { target: { value: '2' } }); fireEvent.blur(a);
+  const next = screen.getByLabelText('Quantidade de Serviço 1');
+  expect(next).toBeDisabled();
+  fireEvent.click(next);
+  expect(screen.getByLabelText('Unidades da linha 1')).toHaveValue(2);
+  expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveAttribute('aria-expanded', 'true');
+  await act(async () => confirm(vi.mocked(repository.commit).mock.calls[0][0]));
+  await waitFor(() => expect(screen.getByLabelText('Quantidade de Serviço 1')).toBeEnabled());
+  fireEvent.click(screen.getByLabelText('Quantidade de Serviço 1'));
+  expect(screen.getByLabelText('Unidades da linha 1')).toHaveValue(0);
+  mounted.unmount(); render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  await screen.findByLabelText('Quantidade de Serviço 0');
+  expect(screen.getByRole('button', { name: /Boletim de Medição para Pagamento/ })).toHaveAttribute('aria-expanded', 'false');
+});
+
 it('mede edição com a base completa de 402 serviços e confirmação atrasada', async () => {
   const { repository } = setup();
   let renders = 0;
