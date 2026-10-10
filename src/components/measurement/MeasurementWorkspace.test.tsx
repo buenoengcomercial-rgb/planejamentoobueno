@@ -12,6 +12,30 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('troca o detalhe no painel inferior sem inserir linhas na planilha ou gravar a seleção', async () => {
+    const { w, repository } = fixture();
+    w.services.push({ ...w.services[0], id: 's2', item: '1.2', description: 'Detectores' });
+    w.entries = [
+      { projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'plates', location: '', comment: 'Placas no térreo', formula: 'STANDARD', multiplier: 3, measuredQuantity: 0, origin: { kind: 'manual' } }] },
+      { projectId: 'p', measurementId: 'm1', serviceId: 's2', rows: [{ id: 'detectors', location: '', comment: 'Detectores na cobertura', formula: 'STANDARD', multiplier: 5, measuredQuantity: 0, origin: { kind: 'manual' } }] },
+    ];
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const sheet = await screen.findByRole('region', { name: 'Planilha da medição atual' });
+    const detail = screen.getByRole('region', { name: 'Painel inferior de quantitativos' });
+    const rowCount = within(sheet).getAllByRole('row').length;
+    expect(detail).toHaveTextContent('Clique em uma quantidade');
+    expect(screen.getByRole('separator', { name: 'Ajustar altura da planilha e do detalhe' })).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByLabelText('Quantidade de Placas')); });
+    expect(within(detail).getByLabelText('Comentário da linha 1')).toHaveValue('Placas no térreo');
+    expect(within(sheet).queryByLabelText('Unidades da linha 1')).not.toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByLabelText('Quantidade de Detectores')); });
+    expect(within(detail).getByLabelText('Comentário da linha 1')).toHaveValue('Detectores na cobertura');
+    expect(within(detail).getByLabelText('Unidades da linha 1')).toHaveValue(5);
+    expect(within(sheet).getAllByRole('row')).toHaveLength(rowCount);
+    fireEvent.change(screen.getByLabelText('Medição selecionada'), { target: { value: 'm2' } });
+    expect(detail).toHaveTextContent('Clique em uma quantidade');
+    expect(repository.commit).not.toHaveBeenCalled();
+  });
   it('abre o detalhe somente pela medição atual e soma períodos sem editar o contrato ou o acumulado', async () => {
     const { w, repository } = fixture();
     w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'original', location: '', comment: 'Primeira medição', formula: 'STANDARD', multiplier: 7, measuredQuantity: 0, origin: { kind: 'manual' } }] }];

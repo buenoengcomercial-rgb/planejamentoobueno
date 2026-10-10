@@ -34,6 +34,7 @@ export interface MeasurementItemRowProps {
   showForecast?: boolean;
   renderQuantity?: (row: Row) => ReactNode;
   renderDetail?: (row: Row) => ReactNode;
+  detailPlacement?: 'inline' | 'split';
   G_BG: { id: string; contract: string; period: string; forecast?: string; accum: string; balance: string };
   BORDER_L: string;
 }
@@ -51,6 +52,7 @@ export default function MeasurementItemRow({
   showForecast = true,
   renderQuantity,
   renderDetail,
+  detailPlacement = 'inline',
   G_BG,
   BORDER_L,
 }: MeasurementItemRowProps) {
@@ -214,7 +216,7 @@ export default function MeasurementItemRow({
         {renderDetail ? <span className="px-1">{fmtBRL(r.valueBalance)}</span> : <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('balance')}>{fmtBRL(r.valueBalance)}</button>}
       </td>
     </tr>
-    {isSelected && renderDetail && <tr><td colSpan={detailColSpan} className="border-b border-border bg-muted/10 px-1 py-2"><div className="measurement-inline-detail">{renderDetail(r)}</div></td></tr>}
+    {isSelected && renderDetail && detailPlacement === 'inline' && <tr><td colSpan={detailColSpan} className="border-b border-border bg-muted/10 px-1 py-2"><div className="measurement-inline-detail">{renderDetail(r)}</div></td></tr>}
     {isSelected && !renderDetail && project && (
       <MeasurementDetailInline
         project={project}

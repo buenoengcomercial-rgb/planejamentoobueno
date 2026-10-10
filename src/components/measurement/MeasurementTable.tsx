@@ -1,6 +1,7 @@
 import './measurementTable.css';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Lock } from 'lucide-react';
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import type { Project } from '@/types/project';
 import type { Row, GroupNode, GroupTotals } from '@/components/measurement/types';
 import { fmtBRL } from '@/components/measurement/measurementFormat';
@@ -55,11 +56,13 @@ const headerStyleByDepth = (depth: number) => {
 export default function MeasurementTable(props: MeasurementTableProps) {
   const {
     filteredRows, groupTree, totals,
-    collapsed, setCollapsed, isLocked, showForecast = true,
+    collapsed, setCollapsed, isLocked, showForecast = true, detailPlacement = 'inline',
     ...rowHandlers
   } = props;
 
   const columnCount = showForecast ? COLSPAN : 15;
+  const split = detailPlacement === 'split' && !!rowHandlers.renderDetail;
+  const selectedRow = filteredRows.find(row => row.taskId === rowHandlers.selectedDetail?.taskId);
   const toggleCollapsed = (id: string) => {
     setCollapsed(prev => {
       const next = new Set(prev);
@@ -68,8 +71,8 @@ export default function MeasurementTable(props: MeasurementTableProps) {
     });
   };
 
-  return (
-    <Card className="overflow-hidden border border-border bg-card shadow-sm">
+  const table = (
+    <Card className={`${split ? 'measurement-table-pane' : ''} overflow-hidden border border-border bg-card shadow-sm`}>
       <CardHeader className="border-b border-border bg-muted/20 px-3 py-2 print:hidden">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
           Planilha de medição ({filteredRows.length} itens)
@@ -171,6 +174,7 @@ export default function MeasurementTable(props: MeasurementTableProps) {
                     isLocked={isLocked}
                     showForecast={showForecast}
                     detailColSpan={columnCount}
+                    detailPlacement={detailPlacement}
                     {...rowHandlers}
                   />
                 ))
@@ -200,4 +204,25 @@ export default function MeasurementTable(props: MeasurementTableProps) {
       </CardContent>
     </Card>
   );
+
+  if (!split) return table;
+
+  return <div className="measurement-split-workspace">
+    <ResizablePanelGroup direction="vertical" autoSaveId="measurement-quantity-panel-layout">
+      <ResizablePanel id="measurement-sheet" order={1} defaultSize={65} minSize={25}>
+        <section aria-label="Planilha da medição atual" className="h-full min-h-0">{table}</section>
+      </ResizablePanel>
+      <ResizableHandle withHandle className="measurement-split-handle" aria-label="Ajustar altura da planilha e do detalhe" title="Arraste para ajustar a altura; use as setas para ajustar pelo teclado" />
+      <ResizablePanel id="measurement-detail" order={2} defaultSize={35} minSize={20}>
+        <section aria-label="Painel inferior de quantitativos" className="measurement-detail-panel">
+          <div className="measurement-detail-selection">
+            {selectedRow ? <><strong className="shrink-0">{selectedRow.item}</strong><span title={selectedRow.description}>{selectedRow.description}</span><span className="ml-auto shrink-0">{selectedRow.unit}</span></> : <strong>Detalhe de quantitativos</strong>}
+          </div>
+          <div className="measurement-detail-pane">
+            {selectedRow ? rowHandlers.renderDetail!(selectedRow) : <p className="px-3 py-4 text-xs text-muted-foreground">Clique em uma quantidade na coluna Medição atual para ver e preencher o detalhe.</p>}
+          </div>
+        </section>
+      </ResizablePanel>
+    </ResizablePanelGroup>
+  </div>;
 }
