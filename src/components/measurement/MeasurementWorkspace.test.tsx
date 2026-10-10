@@ -13,6 +13,27 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('calcula a segunda medição sem datas manuais e identifica o novo boletim sem copiar quantidades', async () => {
+    const { w, repository } = fixture();
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'row1', location: '', comment: 'Preservado', formula: 'STANDARD', multiplier: 29, measuredQuantity: 0 }] }];
+    const before = structuredClone(w);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Nova medição' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('30/09/2026 a 29/10/2026')).toBeVisible();
+    expect(dialog.querySelector('input')).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Criar medição' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    const saved = vi.mocked(repository.commit).mock.calls[0][0];
+    expect(saved.periods[0]).toEqual(before.periods[0]);
+    expect(saved.entries).toEqual(before.entries);
+    expect(screen.getByRole('combobox', { name: 'Medição selecionada' })).toHaveValue(saved.periods[1].id);
+    expect(screen.getByRole('textbox', { name: 'Medição nº' })).toHaveValue('2');
+    expect(screen.getByRole('spinbutton', { name: 'Quantidade de Placas' })).toHaveValue(0);
+    fireEvent.click(screen.getByRole('spinbutton', { name: 'Quantidade de Placas' }));
+    expect(screen.getByText('Detalhe de quantitativos · 2ª medição')).toBeVisible();
+  });
   it('reintegra o boletim acima dos painéis e salva somente ao sair do campo', async () => {
     const { w, repository } = fixture();
     w.contract = { contractor: 'Cliente', contracted: 'Empresa', artNumber: 'Original', bdiPercent: 25 };

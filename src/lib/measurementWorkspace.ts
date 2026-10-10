@@ -4,6 +4,7 @@ import { measureUnit, quantity } from './planTakeoff';
 import { detailTotal, withDetailValue, type DetailField } from './productionQuantityDetails';
 import { calculateMeasurementLine } from './measurementCalculations';
 import { calculateLineTotal, money2, sumMoney } from './financialEngine';
+import { nextMeasurementPeriod } from './measurementPeriodSequence';
 
 /** This aggregate is deliberately outside Project and its global autosave/undo. */
 export interface MeasuredService {
@@ -250,14 +251,15 @@ export function captureMeasurement(w: MeasurementWorkspace, actor: MeasurementAc
     }
   });
 }
-export function addMeasuredPeriod(w: MeasurementWorkspace, actor: MeasurementActor, startDate: string, endDate: string) {
+export function addMeasuredPeriod(w: MeasurementWorkspace, actor: MeasurementActor) {
+  const dates = nextMeasurementPeriod(w.periods);
+  if (!dates) throw new Error('Configure a primeira medição antes de criar a próxima.');
   return transactMeasurement(w, actor, 'Criar medição', next => {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || startDate > endDate) throw new Error('Período inválido.');
-    if (next.periods.some(p => startDate <= p.endDate && endDate >= p.startDate)) throw new Error('O período sobrepõe outra medição.');
+    if (next.periods.some(p => dates.startDate <= p.endDate && dates.endDate >= p.startDate)) throw new Error('O período sobrepõe outra medição. Confira a sequência existente.');
     const previous = [...next.periods].sort((a, b) => b.number - a.number)[0];
     const bulletin = previous ? measurementBulletin(next, previous.id) : undefined;
     if (bulletin) { const now = new Date(); bulletin.issueDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`; }
-    next.periods.push({ id: crypto.randomUUID(), number: Math.max(0, ...next.periods.map(p => p.number)) + 1, startDate, endDate, status: 'draft', ...(bulletin ? { bulletin } : {}) });
+    next.periods.push({ id: crypto.randomUUID(), ...dates, status: 'draft', ...(bulletin ? { bulletin } : {}) });
   });
 }
 export function freezeMeasuredPeriod(w: MeasurementWorkspace, actor: MeasurementActor, id: string) {

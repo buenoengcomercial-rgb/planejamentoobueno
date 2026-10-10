@@ -26,6 +26,7 @@ beforeAll(async()=>{
  INSERT INTO storage.objects VALUES('plan-takeoff','${projectId}/${planId}/drawing.png');
  INSERT INTO takeoff_plans(id,project_id,file_path) VALUES('${planId}','${projectId}','${projectId}/${planId}/drawing.png');`);
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010020000_independent_measurement_workspace.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261010030000_measurement_thirty_day_sequence.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -38,9 +39,22 @@ describe('transação da Medição na nuvem',()=>{
   const ok=await commit(next); expect(ok.periods[0].frozen).toEqual(monthlyLines(base,'m1'));
  });
  it('nova medição preserva 1ª, 2ª e 3ª, e cliente incompleto não substitui a base',async()=>{
-  await seed(); const next=addMeasuredPeriod(base,actor,'2027-01-01','2027-01-31');
+  await seed(); const next=addMeasuredPeriod(base,actor);
   const incomplete=structuredClone(next); incomplete.periods.shift(); await expect(commit(incomplete)).rejects.toThrow('Exclusão');
   expect((await commit(next)).periods.slice(0,3)).toEqual(base.periods);
+ });
+ it('rejeita datas ou número adulterados e aceita a sequência após a primeira excepcional',async()=>{
+  const first=structuredClone(base); first.periods=first.periods.slice(0,1); first.periods[0].endDate='2026-09-29';
+  first.entries=first.entries.filter(e=>e.measurementId===first.periods[0].id);
+  await seed(first); const second=addMeasuredPeriod(first,actor);
+  for(const changes of [{startDate:'2026-10-01'},{endDate:'2026-10-30'},{number:3}]) {
+   const bad=structuredClone(second); Object.assign(bad.periods[1],changes);
+   await expect(commit(bad)).rejects.toThrow('30 dias');
+  }
+  const saved=await commit(second);
+  expect(saved.periods[1]).toMatchObject({number:2,startDate:'2026-09-30',endDate:'2026-10-29'});
+  expect(saved.entries).toEqual(first.entries);
+  expect((await commit(addMeasuredPeriod(saved,actor))).periods[2]).toMatchObject({number:3,startDate:'2026-10-30',endDate:'2026-11-28'});
  });
  it('aceita somente serviços novos do snapshot aprovado do aditivo',async()=>{
   await seed(); const additive={id:'ad1',name:'Aditivo',importedAt:'',compositions:[],status:'aprovado' as const,version:1,approvalSnapshots:[{version:1,approvedAt:'2026-10-09',bdiPercent:25,globalDiscountPercent:0,totals:{},issues:[],compositions:[{id:'c1',item:'2.1',code:'',bank:'',description:'Novo serviço',quantity:20,unit:'UN',unitPriceNoBDI:10,unitPriceWithBDI:12.5,total:250,inputs:[],isNewService:true}]}]};

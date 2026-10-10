@@ -40,7 +40,7 @@ describe('Boletim por medição', () => {
     w = editMeasuredBulletin(w, actor, 'm3', { contract: { artNumber: 'ART-3' } });
     w = freezeMeasuredPeriod(w, actor, 'm3');
     const closed = structuredClone(w.periods[2]);
-    w = addMeasuredPeriod(w, actor, '2026-11-23', '2026-12-22');
+    w = addMeasuredPeriod(w, actor);
     const id = w.periods.at(-1)!.id;
     expect(measurementBulletin(w, id).contract.artNumber).toBe('ART-3');
     w = editMeasuredBulletin(w, actor, id, { contract: { artNumber: 'ART-4' } });

@@ -87,10 +87,13 @@ describe('Medição independente', () => {
     const p = prepareIncorporation(await createIncorporationBackup(f.project, f.plans, []));
     expect(p.issues.map(i => i.code)).toContain('ambiguous-period');
   });
-  it('nova medição é definida aqui e não pode sobrepor um período', async () => {
+  it('nova medição é consecutiva, dura 30 dias e preserva os dados anteriores', async () => {
     const w = (await setup()).plan.candidate;
-    expect(() => addMeasuredPeriod(w, actor, '2026-09-01', '2026-09-30')).toThrow('sobrepõe');
-    expect(addMeasuredPeriod(w, actor, '2026-11-23', '2026-12-22').periods.at(-1)?.number).toBe(4);
+    const next = addMeasuredPeriod(w, actor);
+    expect(next.periods.at(-1)).toMatchObject({ number: 4, startDate: '2026-11-23', endDate: '2026-12-22' });
+    expect(next.periods.slice(0, 3)).toEqual(w.periods);
+    expect(next.entries).toEqual(w.entries);
+    expect(next.plans).toEqual(w.plans);
   });
   it('aditivo aprovado entra uma vez, sem substituir serviços existentes ou períodos fechados', async () => {
     let w = (await setup()).plan.candidate;

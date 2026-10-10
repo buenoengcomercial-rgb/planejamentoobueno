@@ -5,6 +5,7 @@ import {TooltipProvider} from '../../src/components/ui/tooltip';
 import Measurement from '../../src/components/Measurement';
 import {measurementFixture} from '../../src/test/measurementWorkspaceFixture';
 import {measurementRepository} from '../../src/lib/measurementWorkspaceStore';
+import {isPeriodLocked, transactMeasurement} from '../../src/lib/measurementWorkspace';
 import {createIncorporationBackup} from '../../src/lib/measurementIncorporation';
 import '../../src/index.css';
 import {lovableSheetPreview} from './lovableSnapshot';
@@ -27,7 +28,7 @@ async function loadCopiedSheet() {
   if (result.itemCount !== manifest.itemCount) throw new Error('A quantidade de itens difere da página original. Carga bloqueada.');
   const forecastByPeriod: MeasurementForecast[] = manifest.forecastByPeriod ?? [];
   if (!Array.isArray(forecastByPeriod) || forecastByPeriod.some(p => !Number.isInteger(p.number) || !/^\d{4}-\d{2}-\d{2}$/.test(p.startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(p.endDate) || !Number.isFinite(p.value) || p.value < 0)) throw new Error('Referência do planejamento inválida.');
-  return {...result, forecastByPeriod};
+  return {...result, forecastByPeriod, periodCorrection: manifest.periodCorrection as undefined | { expectedEnd: string; startDate: string; endDate: string }};
 }
 let loadingError = '';
 const fixture = await (copiedSheet ? loadCopiedSheet() : Promise.resolve(measurementFixture())).catch(error => {
@@ -46,6 +47,21 @@ const actor={id:'local-test',name:'Teste local',canEdit:true,canReview:true};
 const backup=await createIncorporationBackup(fixture.project,fixture.plans,[]);
 // Initializes a separate dev-only copy once; reload never overwrites local edits.
 if (copiedSheet && !await repository.load()) await repository.initialize(backup);
+// An explicit correction recorded in the private manifest preserves existing local edits.
+if ('periodCorrection' in fixture && fixture.periodCorrection) {
+  const correction = fixture.periodCorrection;
+  const saved = await repository.load();
+  if (saved) {
+    const first = saved.periods.find(p => p.number === 1);
+    if (first?.startDate === correction.startDate && first.endDate === correction.expectedEnd) {
+      if (isPeriodLocked(first) || saved.periods.some(p => p.id !== first.id && p.startDate <= correction.endDate)) throw new Error('Confira os períodos da cópia local antes de corrigir a primeira medição.');
+      const corrected = transactMeasurement(saved, actor, 'Corrigir período inicial conforme definição do usuário', next => {
+        next.periods.find(p => p.id === first.id)!.endDate = correction.endDate;
+      });
+      await repository.commit(corrected, saved.revision);
+    }
+  }
+}
 const projects = [{id: fixture.project.id, name: fixture.project.name, createdAt: '2026-10-09', updatedAt: '2026-10-09'}];
 export function Preview() {
   const [collapsed, setCollapsed] = useState(false);
