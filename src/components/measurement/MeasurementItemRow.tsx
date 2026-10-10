@@ -3,7 +3,7 @@ import { AlertCircle, Lock } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import type { Project } from '@/types/project';
 import type { Row } from '@/components/measurement/types';
-import { fmtBRL, fmtNum } from '@/components/measurement/measurementFormat';
+import { fmtTableBRL as fmtBRL, fmtNum } from '@/components/measurement/measurementFormat';
 import { AdditiveBadge } from '@/components/shared/AdditiveBadge';
 import { MeasurementDetailInline, type MeasurementDetailSelection, type MeasurementValueScope } from './MeasurementDetailFooter';
 
@@ -34,6 +34,7 @@ export interface MeasurementItemRowProps {
   showForecast?: boolean;
   renderQuantity?: (row: Row) => ReactNode;
   renderDetail?: (row: Row) => ReactNode;
+  renderAnalytic?: (row: Row) => ReactNode;
   detailPlacement?: 'inline' | 'split';
   G_BG: { id: string; contract: string; period: string; forecast?: string; accum: string; balance: string };
   BORDER_L: string;
@@ -52,6 +53,7 @@ export default function MeasurementItemRow({
   showForecast = true,
   renderQuantity,
   renderDetail,
+  renderAnalytic,
   detailPlacement = 'inline',
   G_BG,
   BORDER_L,
@@ -94,12 +96,12 @@ export default function MeasurementItemRow({
         {r.item}
       </td>
       <td className={`px-1 py-1 align-top text-center ${stickyBg}`}>
-        <span className="block break-words text-[11px] font-mono tabular-nums text-foreground">
+        <span title={r.itemCode || undefined} className="block break-words text-[11px] font-mono tabular-nums text-foreground">
           {r.itemCode || '—'}
         </span>
       </td>
       <td className={`px-1 py-1 align-top text-center ${stickyBg}`}>
-        <span className="block break-words text-[11px] font-mono tabular-nums text-foreground">
+        <span title={r.priceBank || undefined} className="block break-words text-[11px] font-mono tabular-nums text-foreground">
           {r.priceBank || '—'}
         </span>
       </td>
@@ -128,7 +130,7 @@ export default function MeasurementItemRow({
               </Tooltip>
             </TooltipProvider>
           )}
-          <span className="leading-snug break-words">{r.description}</span>
+          {renderAnalytic ? <button type="button" className="min-w-0 text-left leading-snug break-words hover:underline focus-visible:ring-2 focus-visible:ring-primary" aria-label={`Ver composição analítica de ${r.description}`} aria-expanded={isAnalyticSelected} onClick={selectAnalytic}>{r.description}</button> : <span className="leading-snug break-words">{r.description}</span>}
           <AdditiveBadge
             originAdditiveId={r.originAdditiveId}
             originAdditiveName={r.originAdditiveName}
@@ -172,6 +174,8 @@ export default function MeasurementItemRow({
 
       {/* The current-period cell owns the independent entry/detail controls. */}
       <td
+        data-quantity-cell={renderQuantity ? true : undefined}
+        onClick={renderQuantity ? () => onSelectDetail?.({ taskId: r.taskId, mode: 'quantity' }) : undefined}
         className={`px-2 py-1.5 text-right tabular-nums align-top ${BORDER_L} ${G_BG.period} ${
           r.hasNoLogsInPeriod ? 'text-muted-foreground' : 'font-semibold text-foreground'
         }`}
@@ -216,7 +220,8 @@ export default function MeasurementItemRow({
         {renderDetail ? <span className="px-1">{fmtBRL(r.valueBalance)}</span> : <button type="button" data-detail-cell="true" className="rounded px-1 hover:bg-primary/10" onClick={() => selectClassification('balance')}>{fmtBRL(r.valueBalance)}</button>}
       </td>
     </tr>
-    {isSelected && renderDetail && detailPlacement === 'inline' && <tr><td colSpan={detailColSpan} className="border-b border-border bg-muted/10 px-1 py-2"><div className="measurement-inline-detail">{renderDetail(r)}</div></td></tr>}
+    {isSelected && selectedDetail.mode === 'quantity' && renderDetail && detailPlacement === 'inline' && <tr><td colSpan={detailColSpan} className="border-b border-border bg-muted/10 px-1 py-2"><div className="measurement-inline-detail">{renderDetail(r)}</div></td></tr>}
+    {isAnalyticSelected && renderAnalytic && <tr data-detail-panel="true"><td colSpan={detailColSpan} className="border-b border-border bg-muted/10 px-2 py-2"><section aria-label={`Composição analítica de ${r.description}`}>{renderAnalytic(r)}</section></td></tr>}
     {isSelected && !renderDetail && project && (
       <MeasurementDetailInline
         project={project}

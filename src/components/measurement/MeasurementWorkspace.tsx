@@ -6,7 +6,9 @@ import { addMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredR
 import type { MeasurementRepository, WorkspaceDraft } from '@/lib/measurementWorkspaceStore';
 import type { IncorporationBackup } from '@/lib/measurementIncorporation';
 import { prepareIncorporation, incorporateApprovedAdditive } from '@/lib/measurementIncorporation';
-import type { Additive } from '@/types/project';
+import type { Additive, Project } from '@/types/project';
+import { resolveAnalyticComposition } from '@/lib/analyticLinks';
+import { AnalyticView, type MeasurementDetailSelection } from './MeasurementDetailFooter';
 import { detailTotal, withDetailValue } from '@/lib/productionQuantityDetails';
 import type { TakeoffPlan, TakeoffMeasure, TakeoffRepository, TakeoffDraft } from '@/lib/planTakeoff';
 import { exportMonthlyMeasurement } from '@/lib/measurementMonthlyExport';
@@ -20,10 +22,10 @@ import { measurementStatusLabels as states } from '@/lib/measurementWorkspace';
 const button = 'inline-flex h-8 items-center gap-1.5 rounded border border-slate-200 bg-white px-2.5 text-xs hover:bg-slate-50 disabled:opacity-40';
 
 /** Real workspace UI, with an explicitly injected persistence boundary. No Project setter. */
-export interface MeasurementWorkspaceProps { repository: MeasurementRepository; actor: MeasurementActor; incorporationBackup?: IncorporationBackup; approvedAdditives?: Additive[] }
-export default function MeasurementWorkspace({ repository, actor, incorporationBackup, approvedAdditives = [] }: MeasurementWorkspaceProps) {
+export interface MeasurementWorkspaceProps { repository: MeasurementRepository; actor: MeasurementActor; incorporationBackup?: IncorporationBackup; approvedAdditives?: Additive[]; analyticProject?: Project }
+export default function MeasurementWorkspace({ repository, actor, incorporationBackup, approvedAdditives = [], analyticProject }: MeasurementWorkspaceProps) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null), current = useRef<Workspace | null>(null);
-  const [active, setActive] = useState(''), [expanded, setExpanded] = useState<string | null>(null);
+  const [active, setActive] = useState(''), [expanded, setExpanded] = useState<MeasurementDetailSelection | null>(null);
   const [saving, setSaving] = useState(false), busy = useRef(false);
   const [error, setError] = useState(''), [status, setStatus] = useState('Carregando…');
   const [destination, setDestination] = useState<Destination | null>(null), destinationRef = useRef<Destination | null>(null);
@@ -127,7 +129,13 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const targetEntry = destination ? entryFor(workspace, destination.measurementId, destination.serviceId) : null;
   const marks = targetEntry?.rows.flatMap(r => sourceFields.flatMap(f => r[f] ? [r[f]!.measureId] : [])) ?? [];
   const rowIndex = targetEntry?.rows.findIndex(r => r.id === destination?.rowId) ?? -1;
-  return <main className="measurement-workspace min-w-0 text-foreground">
+  return <main className="measurement-workspace min-w-0 text-foreground" onClickCapture={event => {
+    const target = event.target as HTMLElement;
+    // Keep editing within the detail, splitter and portal dialogs. A click elsewhere
+    // clears the selected quantity after blur has committed/preserved its draft.
+    if (!event.currentTarget.contains(target) || target.closest('[data-quantity-cell], [data-quantity-detail], .measurement-split-handle')) return;
+    setExpanded(selection => selection?.mode === 'quantity' ? null : selection);
+  }}>
     <MeasurementHeader compact onExportXLSX={() => void exportMonthlyMeasurement(workspace, active, 'xlsx').catch(e => setError(e.message))} onPrint={() => void exportMonthlyMeasurement(workspace, active, 'pdf').catch(e => setError(e.message))} showHistory onOpenHistory={() => setHistoryOpen(true)}/>
     <section className="rounded border border-border bg-card p-2">
       <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"><strong>{workspace.projectName}</strong><div className="flex flex-wrap items-center gap-4"><span>Valor desta medição: <strong data-testid="monthly-value">{period ? fmtBRL(monthlyTotal(workspace, active)) : '—'}</strong></span><span role="status" className={saving ? 'text-amber-700' : 'text-emerald-700'}>{status}</span></div></div>
@@ -155,8 +163,14 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       <MeasurementFilters chapters={chapters} numbering={numbering} isSnapshotMode={false} datesReadOnly effStart={period?.startDate ?? ''} effEnd={period?.endDate ?? ''} setStartDate={() => undefined} setEndDate={() => undefined} chapterFilter={chapterFilter} setChapterFilter={setChapterFilter} search={search} setSearch={setSearch}/>
     </details>
     <MeasurementTable filteredRows={presentation.rows} groupTree={presentation.groupTree} totals={presentation.totals} collapsed={collapsed} setCollapsed={setCollapsed} isLocked={!!locked} isSnapshotMode={false} showForecast={false} detailPlacement="split"
-      selectedDetail={expanded ? { taskId: expanded, mode: 'quantity' } : null} onSelectDetail={selection => { if (!selection || selection.mode === 'quantity') setExpanded(selection?.taskId ?? null); }}
-      renderQuantity={row => { const l = lines.find(l => l.service.id === row.taskId)!; const s = l.service, e = entryFor(workspace, active, s.id); return <input key={`${active}-${s.id}-${l.qty}`} aria-label={`Quantidade de ${s.description}`} className="no-spinner h-6 w-full min-w-0 rounded border border-transparent bg-transparent px-1 text-right text-[11px] tabular-nums hover:border-primary/30 focus:border-primary disabled:bg-transparent" type="number" inputMode="decimal" min="0" step="any" title={`Clique para abrir o detalhe da ${period!.number}ª medição`} aria-expanded={expanded === s.id} onClick={() => setExpanded(s.id)} disabled={saving || recovery} readOnly={!!locked || e.rows.length > 1 || e.rows.some(r => r.origin?.kind !== 'manual' || sourceFields.some(f => r[f]) || r.sharedRecordId || r.measuredQuantity || r.dimensionC || r.dimensionD)} defaultValue={l.qty} onChange={event => saveDraft(active, s.id, '__manual__', { multiplier: event.target.value })} onKeyDown={event => { if (['ArrowUp', 'ArrowDown'].includes(event.key)) event.preventDefault(); if (event.key === 'Enter') event.currentTarget.blur(); }} onWheel={event => event.currentTarget.blur()} onBlur={event => {
+      selectedDetail={expanded} onSelectDetail={setExpanded}
+      renderAnalytic={row => {
+        const service = lines.find(l => l.service.id === row.taskId)!.service;
+        const project = analyticProject ?? incorporationBackup?.project;
+        const composition = project ? resolveAnalyticComposition(project, { taskId: service.sourceTaskId ?? service.id, baseBudgetItemId: service.sourceBudgetId, item: service.item, code: service.code, bank: service.bank, description: service.description }).composition : undefined;
+        return <AnalyticView compact composition={composition} bdi={service.bdi}/>;
+      }}
+      renderQuantity={row => { const l = lines.find(l => l.service.id === row.taskId)!; const s = l.service, e = entryFor(workspace, active, s.id); return <input key={`${active}-${s.id}-${l.qty}`} aria-label={`Quantidade de ${s.description}`} className="no-spinner h-6 w-full min-w-0 rounded border border-transparent bg-transparent px-1 text-right text-[11px] tabular-nums hover:border-primary/30 focus:border-primary disabled:bg-transparent" type="number" inputMode="decimal" min="0" step="any" title={`Clique para abrir o detalhe da ${period!.number}ª medição`} aria-expanded={expanded?.taskId === s.id && expanded.mode === 'quantity'} onClick={() => setExpanded({ taskId: s.id, mode: 'quantity' })} disabled={saving || recovery} readOnly={!!locked || e.rows.length > 1 || e.rows.some(r => r.origin?.kind !== 'manual' || sourceFields.some(f => r[f]) || r.sharedRecordId || r.measuredQuantity || r.dimensionC || r.dimensionD)} defaultValue={l.qty} onChange={event => saveDraft(active, s.id, '__manual__', { multiplier: event.target.value })} onKeyDown={event => { if (['ArrowUp', 'ArrowDown'].includes(event.key)) event.preventDefault(); if (event.key === 'Enter') event.currentTarget.blur(); }} onWheel={event => event.currentTarget.blur()} onBlur={event => {
             const value = Number(event.currentTarget.value.replace(',', '.')); if (value === l.qty) { clearDraft(active, s.id, '__manual__'); return; }
             if (!Number.isFinite(value) || value < 0) { event.currentTarget.value = String(l.qty); return; }
             const row = e.rows[0] ?? newMeasuredRow(); if (!apply(w => editMeasuredRow(w, actor, active, s.id, { ...newMeasuredRow(row.id), comment: row.comment || 'Quantidade informada', origin: row.origin ?? { kind: 'manual' }, multiplier: value }), () => clearDraft(active, s.id, '__manual__'))) event.currentTarget.value = String(l.qty);

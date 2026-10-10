@@ -42,7 +42,7 @@ function scopeValues(row: Row, scope: MeasurementValueScope | undefined) {
   return { label: 'Total contratado', withBdi: row.valueContracted, noBdi: row.valueContractedNoBDI };
 }
 
-function AnalyticView({ composition, bdi }: { composition?: AdditiveComposition; bdi: number }) {
+export function AnalyticView({ composition, bdi, compact = false }: { composition?: AdditiveComposition; bdi: number; compact?: boolean }) {
   if (!composition?.inputs?.length) {
     return <p className="text-sm text-muted-foreground">Esta linha ainda nao possui composicao analitica vinculada.</p>;
   }
@@ -51,9 +51,9 @@ function AnalyticView({ composition, bdi }: { composition?: AdditiveComposition;
 
   return (
     <div className="overflow-x-auto rounded-md border border-border/70">
-      <table className="measurement-table w-full table-fixed text-[11px]">
+      <table className={`${compact ? 'measurement-analytic-table' : 'measurement-table'} w-full table-fixed text-[11px]`}>
         <colgroup>
-          <col className="col-item" />
+          {!compact && <col className="col-item" />}
           <col className="col-code" />
           <col className="col-bank" />
           <col className="col-desc" />
@@ -62,6 +62,7 @@ function AnalyticView({ composition, bdi }: { composition?: AdditiveComposition;
           <col className="col-val" />
           <col className="col-val" />
           <col className="col-val" />
+          {!compact && <>
           <col className="col-qty" />
           <col className="col-val" />
           <col className="col-qty" />
@@ -71,10 +72,11 @@ function AnalyticView({ composition, bdi }: { composition?: AdditiveComposition;
           <col className="col-val" />
           <col className="col-qty" />
           <col className="col-val" />
+          </>}
         </colgroup>
         <thead className="bg-muted/60">
           <tr className="border-b border-border">
-            <th className="px-2 py-1.5 text-left" />
+            {!compact && <th className="px-2 py-1.5 text-left" />}
             <th className="px-2 py-1.5 text-center">Codigo</th>
             <th className="px-2 py-1.5 text-center">Banco</th>
             <th className="px-2 py-1.5 text-left">Descricao</th>
@@ -83,7 +85,7 @@ function AnalyticView({ composition, bdi }: { composition?: AdditiveComposition;
             <th className="px-2 py-1.5 text-right">V. Unit. s/ BDI</th>
             <th className="px-2 py-1.5 text-right">V. Unit. c/ BDI</th>
             <th className="px-2 py-1.5 text-right">Total c/ BDI</th>
-            <th colSpan={9} />
+            {!compact && <th colSpan={9} />}
           </tr>
         </thead>
         <tbody>
@@ -94,7 +96,7 @@ function AnalyticView({ composition, bdi }: { composition?: AdditiveComposition;
             const totalWithBdi = coef * unitWithBdi;
             return (
               <tr key={input.id} className="border-t border-border">
-                <td className="px-2 py-1.5 align-top" />
+                {!compact && <td className="px-2 py-1.5 align-top" />}
                 <td className="px-2 py-1.5 align-top text-center font-mono text-[10px]">{input.code || '-'}</td>
                 <td className="px-2 py-1.5 align-top text-center text-muted-foreground">{input.bank || '-'}</td>
                 <td className="px-2 py-1.5 align-top font-medium leading-snug break-words">{input.description}</td>
@@ -103,7 +105,7 @@ function AnalyticView({ composition, bdi }: { composition?: AdditiveComposition;
                 <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtBRL(unitNoBdi)}</td>
                 <td className="px-2 py-1.5 text-right tabular-nums align-top">{fmtBRL(unitWithBdi)}</td>
                 <td className="px-2 py-1.5 text-right tabular-nums align-top font-medium">{fmtBRL(totalWithBdi)}</td>
-                <td colSpan={9} />
+                {!compact && <td colSpan={9} />}
               </tr>
             );
           })}

@@ -1,7 +1,7 @@
 import { Fragment } from 'react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import type { GroupNode } from '@/components/measurement/types';
-import { fmtBRL } from '@/components/measurement/measurementFormat';
+import { fmtTableBRL as fmtBRL } from '@/components/measurement/measurementFormat';
 import MeasurementItemRow, { type MeasurementItemRowProps } from './MeasurementItemRow';
 
 type RowHandlers = Omit<MeasurementItemRowProps, 'row' | 'indentPx' | 'G_BG' | 'BORDER_L'>;

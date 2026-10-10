@@ -50,7 +50,7 @@ interface MeasurementProps {
 
 // ───────────────────────── Componente principal ─────────────────────────
 export default function Measurement(props: MeasurementProps) {
-  if (props.independentWorkspace) return <Suspense fallback={<p>Carregando Medição…</p>}><IndependentMeasurement {...props.independentWorkspace}/></Suspense>;
+  if (props.independentWorkspace) return <Suspense fallback={<p>Carregando Medição…</p>}><IndependentMeasurement {...props.independentWorkspace} analyticProject={props.project}/></Suspense>;
   return <LegacyMeasurement {...props}/>;
 }
 

@@ -4,7 +4,7 @@ import { Lock } from 'lucide-react';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import type { Project } from '@/types/project';
 import type { Row, GroupNode, GroupTotals } from '@/components/measurement/types';
-import { fmtBRL } from '@/components/measurement/measurementFormat';
+import { fmtTableBRL as fmtBRL } from '@/components/measurement/measurementFormat';
 import MeasurementGroupRow from './MeasurementGroupRow';
 import type { MeasurementItemRowProps } from './MeasurementItemRow';
 import type { MeasurementDetailSelection } from './MeasurementDetailFooter';
@@ -62,7 +62,8 @@ export default function MeasurementTable(props: MeasurementTableProps) {
 
   const columnCount = showForecast ? COLSPAN : 15;
   const split = detailPlacement === 'split' && !!rowHandlers.renderDetail;
-  const selectedRow = filteredRows.find(row => row.taskId === rowHandlers.selectedDetail?.taskId);
+  const selectedRow = rowHandlers.selectedDetail?.mode === 'quantity'
+    ? filteredRows.find(row => row.taskId === rowHandlers.selectedDetail?.taskId) : undefined;
   const toggleCollapsed = (id: string) => {
     setCollapsed(prev => {
       const next = new Set(prev);
@@ -214,12 +215,9 @@ export default function MeasurementTable(props: MeasurementTableProps) {
       </ResizablePanel>
       <ResizableHandle withHandle className="measurement-split-handle" aria-label="Ajustar altura da planilha e do detalhe" title="Arraste para ajustar a altura; use as setas para ajustar pelo teclado" />
       <ResizablePanel id="measurement-detail" order={2} defaultSize={35} minSize={20}>
-        <section aria-label="Painel inferior de quantitativos" className="measurement-detail-panel">
-          <div className="measurement-detail-selection">
-            {selectedRow ? <><strong className="shrink-0">{selectedRow.item}</strong><span title={selectedRow.description}>{selectedRow.description}</span><span className="ml-auto shrink-0">{selectedRow.unit}</span></> : <strong>Detalhe de quantitativos</strong>}
-          </div>
+        <section aria-label="Painel inferior de quantitativos" className="measurement-detail-panel" data-quantity-detail>
           <div className="measurement-detail-pane">
-            {selectedRow ? rowHandlers.renderDetail!(selectedRow) : <p className="px-3 py-4 text-xs text-muted-foreground">Clique em uma quantidade na coluna Medição atual para ver e preencher o detalhe.</p>}
+            {selectedRow && rowHandlers.renderDetail!(selectedRow)}
           </div>
         </section>
       </ResizablePanel>

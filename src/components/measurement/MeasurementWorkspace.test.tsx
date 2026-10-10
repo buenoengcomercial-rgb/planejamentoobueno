@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import MeasurementWorkspace from './MeasurementWorkspace';
 import type { MeasurementRepository } from '@/lib/measurementWorkspaceStore';
 import type { MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
+import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 
 afterEach(cleanup);
 const actor = { id: 'u', name: 'Engenheiro', canEdit: true };
@@ -12,6 +13,57 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('limpa o painel ao clicar fora da quantidade, preservando cliques e rascunhos dentro do editor', async () => {
+    const { w, repository } = fixture();
+    w.services.push({ ...w.services[0], id: 's2', description: 'Outra tarefa' });
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const quantity = await screen.findByLabelText('Quantidade de Placas');
+    const panel = screen.getByRole('region', { name: 'Painel inferior de quantitativos' });
+    const cells = within(screen.getByTestId('service-s2')).getAllByRole('cell');
+    for (const index of [0, 3, 5, 8, 10, 11, 12, 13, 14]) {
+      fireEvent.click(quantity);
+      expect(within(panel).getByLabelText('Unidades da linha 1')).toBeVisible();
+      fireEvent.click(cells[index]);
+      expect(panel).toHaveTextContent(/^$/);
+    }
+    fireEvent.click(quantity);
+    expect(within(panel).queryByText('Placas', { exact: true })).not.toBeInTheDocument();
+    const a = within(panel).getByLabelText('Unidades da linha 1');
+    fireEvent.click(a);
+    fireEvent.change(a, { target: { value: '3' } });
+    expect(repository.commit).not.toHaveBeenCalled();
+    fireEvent.blur(a);
+    fireEvent.click(cells[11]);
+    await waitFor(() => expect(screen.getByLabelText('Quantidade de Placas')).toHaveValue(3));
+    expect(panel).toHaveTextContent(/^$/);
+    const saved = vi.mocked(repository.commit).mock.calls.at(-1)![0];
+    expect(saved.entries[0]).toMatchObject({ measurementId: 'm1', serviceId: 's' });
+    expect(saved.services.map(s => s.contracted)).toEqual([100, 100]);
+    fireEvent.click(screen.getByLabelText('Quantidade de Placas'));
+    expect(within(panel).getByLabelText('Unidades da linha 1')).toHaveValue(3);
+    fireEvent.click(within(panel).getByLabelText('Comentário da linha 1'));
+    expect(within(panel).getByLabelText('Unidades da linha 1')).toBeVisible();
+  });
+  it('abre a composição pela descrição em leitura e mantém o painel de quantitativos vazio', async () => {
+    const { w, repository } = fixture();
+    const { project } = measurementFixture();
+    w.services[0].sourceTaskId = 'signs';
+    w.services[0].sourceBudgetId = 'budget-signs';
+    const before = structuredClone(project);
+    render(<MeasurementWorkspace repository={repository} actor={actor} analyticProject={project}/>);
+    fireEvent.click(await screen.findByLabelText('Quantidade de Placas'));
+    fireEvent.click(screen.getByRole('button', { name: 'Ver composição analítica de Placas' }));
+    const analytic = screen.getByRole('region', { name: 'Composição analítica de Placas' });
+    expect(analytic).toHaveTextContent('Placa de sinalização · insumo fictício');
+    expect(within(analytic).getAllByRole('columnheader')).toHaveLength(8);
+    expect(within(analytic).queryByRole('spinbutton')).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Painel inferior de quantitativos' })).toHaveTextContent(/^$/);
+    expect(repository.commit).not.toHaveBeenCalled();
+    expect(project).toEqual(before);
+    fireEvent.click(screen.getByLabelText('Quantidade de Placas'));
+    expect(screen.queryByRole('region', { name: 'Composição analítica de Placas' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Unidades da linha 1')).toBeVisible();
+  });
   it('troca o detalhe no painel inferior sem inserir linhas na planilha ou gravar a seleção', async () => {
     const { w, repository } = fixture();
     w.services.push({ ...w.services[0], id: 's2', item: '1.2', description: 'Detectores' });
@@ -23,7 +75,7 @@ describe('Tela própria de Medição', () => {
     const sheet = await screen.findByRole('region', { name: 'Planilha da medição atual' });
     const detail = screen.getByRole('region', { name: 'Painel inferior de quantitativos' });
     const rowCount = within(sheet).getAllByRole('row').length;
-    expect(detail).toHaveTextContent('Clique em uma quantidade');
+    expect(detail).toHaveTextContent(/^$/);
     expect(screen.getByRole('separator', { name: 'Ajustar altura da planilha e do detalhe' })).toBeInTheDocument();
     await act(async () => { fireEvent.click(screen.getByLabelText('Quantidade de Placas')); });
     expect(within(detail).getByLabelText('Comentário da linha 1')).toHaveValue('Placas no térreo');
@@ -33,7 +85,7 @@ describe('Tela própria de Medição', () => {
     expect(within(detail).getByLabelText('Unidades da linha 1')).toHaveValue(5);
     expect(within(sheet).getAllByRole('row')).toHaveLength(rowCount);
     fireEvent.change(screen.getByLabelText('Medição selecionada'), { target: { value: 'm2' } });
-    expect(detail).toHaveTextContent('Clique em uma quantidade');
+    expect(detail).toHaveTextContent(/^$/);
     expect(repository.commit).not.toHaveBeenCalled();
   });
   it('abre o detalhe somente pela medição atual e soma períodos sem editar o contrato ou o acumulado', async () => {

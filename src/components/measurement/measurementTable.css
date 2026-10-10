@@ -20,12 +20,33 @@
         }
 .measurement-table-scroll { container-type: inline-size; }
 .measurement-inline-detail { position: sticky; left: 4px; width: calc(100cqw - 12px); max-width: 100%; }
-.measurement-table--ledger col.col-item { width: 64px; }
-.measurement-table--ledger col.col-code { width: 75px; }
-.measurement-table--ledger col.col-bank { width: 76px; }
-.measurement-table--ledger col.col-desc { width: 320px; }
-.measurement-table--ledger col.col-und { width: 64px; }
-.measurement-table--ledger col.col-val { width: 112px; }
+.measurement-table--ledger { min-width: 0; width: 100%; }
+.measurement-table--ledger col.col-item { width: 4%; }
+.measurement-table--ledger col.col-code { width: 5%; }
+.measurement-table--ledger col.col-bank { width: 7%; }
+.measurement-table--ledger col.col-desc { width: 16.4%; min-width: 0; max-width: none; }
+.measurement-table--ledger col.col-und { width: 3%; }
+.measurement-table--ledger col.col-qty { width: 5.4%; }
+.measurement-table--ledger col.col-val { width: calc(43% / 6); }
+.measurement-table--ledger > :is(thead, tbody, tfoot) > tr > :is(th, td) { padding-inline: 4px; text-align: center; overflow-wrap: normal; word-break: normal; }
+.measurement-table--ledger > thead > tr:last-child > th { padding-inline: 2px; }
+.measurement-table--ledger > tbody > tr > td:first-child[colspan] { text-align: left; }
+.measurement-table--ledger [data-measurement-row] > td:first-child { padding-left: 4px !important; }
+.measurement-table--ledger .cell-desc button, .measurement-table--ledger input { text-align: center; overflow-wrap: normal; word-break: normal; }
+.measurement-table--ledger .cell-desc > div, .measurement-table--ledger [data-measurement-row] > td > div { justify-content: center; }
+.measurement-table--ledger [data-measurement-row] > td:nth-child(2) > span,
+.measurement-table--ledger [data-measurement-row] > td:nth-child(3) > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.measurement-table--ledger > tbody > tr > td > span { padding-inline: 0; }
+.measurement-table--ledger > tbody > tr > td > div > span.tabular-nums { padding-inline: 0; }
+.measurement-analytic-table col.col-code, .measurement-analytic-table col.col-bank { width: 8%; }
+.measurement-analytic-table col.col-desc { width: 36%; }
+.measurement-analytic-table col.col-und { width: 6%; }
+.measurement-analytic-table col.col-qty { width: 9%; }
+.measurement-analytic-table col.col-val { width: 11%; }
+.measurement-analytic-table :is(th, td) { text-align: center; overflow-wrap: normal; word-break: normal; }
+@container (max-width: 999px) {
+  .measurement-table--ledger { min-width: 1000px; }
+}
 
 /* Screen-only workspace: the exported measurement keeps its existing layout. */
 .measurement-workspace { display: flex; flex-direction: column; gap: 8px; height: calc(100dvh - 4.25rem); min-height: 42rem; }
@@ -38,8 +59,6 @@
 .measurement-split-workspace .measurement-split-handle { height: 10px; flex-shrink: 0; cursor: row-resize; background: hsl(var(--muted)); border-block: 1px solid hsl(var(--border)); }
 .measurement-split-handle:hover, .measurement-split-handle:focus-visible { background: hsl(var(--primary) / 0.15); }
 .measurement-detail-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; border: 1px solid hsl(var(--border)); background: white; }
-.measurement-detail-selection { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 4px 8px; border-bottom: 1px solid hsl(var(--border)); background: hsl(var(--muted)); font-size: 11px; }
-.measurement-detail-selection > span[title] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .measurement-detail-pane { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .measurement-detail-pane > section { margin-left: 0; border: 0; }
 @media (max-width: 767px) {

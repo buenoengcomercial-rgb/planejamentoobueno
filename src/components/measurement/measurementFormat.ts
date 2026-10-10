@@ -15,6 +15,9 @@ export const fmtBRL = (n: number) => {
     maximumFractionDigits: 2,
   });
 };
+// Dense on-screen tables may wrap before the amount, never through its digits.
+// Export formatting keeps the nonbreaking currency space in fmtBRL.
+export const fmtTableBRL = (n: number) => fmtBRL(n).replace(/\u00a0/g, ' ');
 export const fmtNum = (n: number) => n.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 export const fmtCoefficient = (n: number) => n.toLocaleString('pt-BR', {
   minimumFractionDigits: 7,
