@@ -11,13 +11,18 @@ vi.mock('@/components/planTakeoff/PlanTakeoff', () => ({ default: ({ onDraftChan
 </div> }));
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
+function openPlanCell(column: string) {
+  const labels: Record<string, string> = { A: 'Unidades', B: 'Medida', C: 'Largura', D: 'Altura' };
+  fireEvent.focus(screen.getByLabelText(`${labels[column]} da linha 1`));
+  fireEvent.click(screen.getByRole('button', { name: 'Planta DXF' }));
+}
 const actor = { id: 'actor', name: 'Engenheiro', canEdit: true };
 function setup(empty = false) {
   let w: Workspace = { schema: 1, projectId: 'p', projectName: 'Teste', revision: 0, services: [{ id: 's', item: '1.1', description: 'Placas', unit: 'UN', contracted: 100, priceNoBDI: 1, priceWithBDI: 1, bdi: 0, importedPrice: true, chapterId: 'c', chapter: 'Prédio', path: 'Prédio', availableFromNumber: 1 }], periods: [{ id: 'm', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }], entries: empty ? [] : [{ projectId: 'p', measurementId: 'm', serviceId: 's', rows: [newMeasuredRow('r')] }], plans: [], audit: [], importedKeys: [], backupId: 'b' };
   let drafts: WorkspaceDraft[] = [];
   const repository: MeasurementRepository = { load: vi.fn(async () => w), initialize: vi.fn(async () => w), commit: vi.fn(async candidate => { w = candidate; return w; }), pending: vi.fn(async () => null), pendingSaves: vi.fn(async () => []), archivePending: vi.fn(async () => undefined), backup: vi.fn(async () => null), drafts: vi.fn(async () => drafts), writeDraft: vi.fn(async d => { drafts = [...drafts.filter(x => x.rowId !== d.rowId), d]; }), clearDraft: vi.fn(async (_m, _s, rid) => { drafts = drafts.filter(d => d.rowId !== rid); }) };
   render(<MeasurementWorkspace repository={repository} actor={actor}/>);
-  const open = async (column = 'A') => { fireEvent.click(await screen.findByLabelText('Quantidade de Placas')); fireEvent.click(screen.getByRole('button', { name: `Levantar coluna ${column} da linha 1 na planta` })); await screen.findByText('Traçar dois pontos'); };
+  const open = async (column = 'A') => { fireEvent.click(await screen.findByLabelText('Quantidade de Placas')); openPlanCell(column); await screen.findByText('Traçar dois pontos'); };
   return { repository, open };
 }
 describe('saída segura do levantamento na Medição', () => {
@@ -51,7 +56,7 @@ describe('saída segura do levantamento na Medição', () => {
     let confirm!: (candidate: Workspace) => void;
     vi.mocked(repository.commit).mockImplementationOnce(() => new Promise(resolve => { confirm = resolve; }));
     fireEvent.click(await screen.findByLabelText('Quantidade de Placas'));
-    fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna A da linha 1 na planta' }));
+    openPlanCell('A');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     await act(async () => confirm(vi.mocked(repository.commit).mock.calls[0][0]));
     expect(await screen.findByRole('dialog')).toHaveTextContent('Linha 1, coluna A');
@@ -59,7 +64,7 @@ describe('saída segura do levantamento na Medição', () => {
   it('falha ao criar a linha mantém rascunho e não abre uma célula inexistente', async () => {
     const { repository } = setup(true); vi.mocked(repository.commit).mockRejectedValue(new Error('Sem conexão'));
     fireEvent.click(await screen.findByLabelText('Quantidade de Placas'));
-    fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna A da linha 1 na planta' }));
+    openPlanCell('A');
     await screen.findByText('Sem conexão'); expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(repository.clearDraft).not.toHaveBeenCalled();
   });
