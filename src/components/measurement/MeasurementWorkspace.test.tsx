@@ -13,6 +13,26 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('mantém os resumos no final da planilha e a comparação do planejamento somente em leitura', async () => {
+    const { w, repository } = fixture();
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'kept', location: '', comment: 'Registro preservado', formula: 'STANDARD', multiplier: 20, measuredQuantity: 0 }] }];
+    render(<MeasurementWorkspace repository={repository} actor={actor} forecastByPeriod={[{ number: 1, startDate: '2026-01-01', endDate: '2026-01-28', value: 500 }]}/>);
+    const summary = await screen.findByRole('region', { name: 'Resumo financeiro da medição completa' });
+    const sheet = screen.getByRole('region', { name: 'Planilha da medição atual' });
+    expect(sheet).toContainElement(summary);
+    expect(within(summary).getByRole('heading', { name: 'Sem BDI' })).toBeInTheDocument();
+    expect(within(summary).getByRole('heading', { name: 'BDI (25.00%)' })).toBeInTheDocument();
+    expect(within(summary).getByRole('heading', { name: 'Com BDI' })).toBeInTheDocument();
+    expect(summary).toHaveTextContent('20.00%');
+    expect(within(summary).getByTestId('forecast-period')).toHaveTextContent('500,00');
+    expect(within(summary).getByTestId('forecast-difference')).toHaveTextContent('-R$ 250,00');
+    fireEvent.click(screen.getByRole('button', { name: /Prédio/ }));
+    expect(summary).toHaveTextContent('20.00%');
+    fireEvent.change(screen.getByLabelText('Medição selecionada'), { target: { value: 'm2' } });
+    expect(within(summary).getByTestId('forecast-period')).toHaveTextContent('Não disponível');
+    expect(within(summary).getByTestId('forecast-difference')).toHaveTextContent('Não disponível');
+    expect(repository.commit).not.toHaveBeenCalled();
+  });
   it('mantém os dois painéis ao recolher capítulos e reabre o detalhe sem alterar os quantitativos', async () => {
     const { w, repository } = fixture();
     w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'kept', location: '', comment: 'Registro preservado', formula: 'STANDARD', multiplier: 7, measuredQuantity: 0, origin: { kind: 'manual' } }] }];

@@ -4,10 +4,13 @@ import type { GroupTotals } from '@/components/measurement/types';
 
 interface MeasurementSummaryCardsProps {
   totals: GroupTotals;
+  /** Null means unavailable; never invent zero planning for a copied ledger. */
+  forecastTotal?: number | null;
 }
 
-export default function MeasurementSummaryCards({ totals }: MeasurementSummaryCardsProps) {
-  const diff = totals.diffForecast || 0;
+export default function MeasurementSummaryCards({ totals, forecastTotal }: MeasurementSummaryCardsProps) {
+  const forecast = forecastTotal === undefined ? totals.forecast : forecastTotal;
+  const diff = forecastTotal === undefined ? totals.diffForecast || 0 : forecast === null ? null : totals.period - forecast;
   const diffTone = diff > 0 ? 'text-success' : diff < 0 ? 'text-destructive' : 'text-foreground';
   return (
     <div className="space-y-3">
@@ -23,7 +26,7 @@ export default function MeasurementSummaryCards({ totals }: MeasurementSummaryCa
         <Card className="border-info/40 bg-info/5">
           <CardContent className="p-3">
             <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Previsto no período (Gantt)</p>
-            <p className="text-sm font-bold mt-1 tabular-nums text-info">{fmtBRL(totals.forecast)}</p>
+            <p data-testid="forecast-period" className="text-sm font-bold mt-1 tabular-nums text-info">{forecast === null ? 'Não disponível' : fmtBRL(forecast)}</p>
           </CardContent>
         </Card>
         <Card>
@@ -35,7 +38,7 @@ export default function MeasurementSummaryCards({ totals }: MeasurementSummaryCa
         <Card>
           <CardContent className="p-3">
             <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider">Diferença Real x Previsto</p>
-            <p className={`text-sm font-bold mt-1 tabular-nums ${diffTone}`}>{fmtBRL(diff)}</p>
+            <p data-testid="forecast-difference" className={`text-sm font-bold mt-1 tabular-nums ${diffTone}`}>{diff === null ? 'Não disponível' : fmtBRL(diff)}</p>
           </CardContent>
         </Card>
       </div>

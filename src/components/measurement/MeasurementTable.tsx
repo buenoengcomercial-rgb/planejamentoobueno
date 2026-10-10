@@ -1,4 +1,5 @@
 import './measurementTable.css';
+import { useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Lock } from 'lucide-react';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
@@ -23,6 +24,7 @@ interface MeasurementTableProps extends RowHandlers {
   onToggleAnalyticDetail?: (taskId: string) => void;
   project?: Project;
   bdi?: number;
+  summary?: React.ReactNode;
 }
 
 const COLSPAN = 18;
@@ -56,12 +58,17 @@ const headerStyleByDepth = (depth: number) => {
 export default function MeasurementTable(props: MeasurementTableProps) {
   const {
     filteredRows, groupTree, totals,
-    collapsed, setCollapsed, isLocked, showForecast = true, detailPlacement = 'inline',
+    collapsed, setCollapsed, isLocked, showForecast = true, detailPlacement = 'inline', summary,
     ...rowHandlers
   } = props;
 
   const columnCount = showForecast ? COLSPAN : 15;
   const split = detailPlacement === 'split' && !!rowHandlers.renderDetail;
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // Start in the full-height sheet; scrolling upwards still reveals the header.
+    if (split) workspaceRef.current?.scrollIntoView?.({ block: 'start' });
+  }, [split]);
   const selectedRow = rowHandlers.selectedDetail?.mode === 'quantity'
     ? filteredRows.find(row => row.taskId === rowHandlers.selectedDetail?.taskId) : undefined;
   const toggleCollapsed = (id: string) => {
@@ -85,7 +92,7 @@ export default function MeasurementTable(props: MeasurementTableProps) {
         </CardTitle>
       </CardHeader>
       <CardContent className="p-0 overflow-hidden">
-        <div className="measurement-table-scroll max-w-full overflow-x-auto overflow-y-visible print:overflow-visible">
+        <div className="measurement-table-scroll max-w-full overflow-x-auto overflow-y-visible print:overflow-visible" tabIndex={split ? 0 : undefined} aria-label={split ? 'Rolagem da planilha e dos resumos' : undefined}>
           <table className={`measurement-table ${!showForecast ? 'measurement-table--ledger' : ''} w-full text-[11px] border-separate border-spacing-0 print:min-w-0`}>
             <colgroup>
               <col className="col-item" />
@@ -202,6 +209,7 @@ export default function MeasurementTable(props: MeasurementTableProps) {
               </tfoot>
             )}
           </table>
+          {summary}
         </div>
       </CardContent>
     </Card>
@@ -209,13 +217,13 @@ export default function MeasurementTable(props: MeasurementTableProps) {
 
   if (!split) return table;
 
-  return <div className="measurement-split-workspace">
-    <ResizablePanelGroup direction="vertical" autoSaveId="measurement-quantity-panel-layout">
-      <ResizablePanel id="measurement-sheet" order={1} defaultSize={65} minSize={25}>
+  return <div className="measurement-split-workspace" ref={workspaceRef}>
+    <ResizablePanelGroup direction="vertical" autoSaveId="measurement-quantity-fullscreen-layout">
+      <ResizablePanel id="measurement-sheet" order={1} defaultSize={75} minSize={25}>
         <section aria-label="Planilha da medição atual" className="h-full min-h-0">{table}</section>
       </ResizablePanel>
       <ResizableHandle withHandle className="measurement-split-handle" aria-label="Ajustar altura da planilha e do detalhe" title="Arraste para ajustar a altura; use as setas para ajustar pelo teclado" />
-      <ResizablePanel id="measurement-detail" order={2} defaultSize={35} minSize={20}>
+      <ResizablePanel id="measurement-detail" order={2} defaultSize={25} minSize={15}>
         <section aria-label="Painel inferior de quantitativos" className="measurement-detail-panel" data-quantity-detail>
           <div className="measurement-detail-pane">
             {selectedRow && rowHandlers.renderDetail!(selectedRow)}

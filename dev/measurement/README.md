@@ -27,6 +27,11 @@ comentário “Dado preservado · 1ª medição”. Não inventa datas diárias,
 composições analíticas, plantas, geometria ou histórico: esses dados não constam
 da planilha. Não é um backup completo nem um caminho de migração operacional.
 
+O manifesto pode conter `forecastByPeriod` (`number`, `startDate`, `endDate`, `value`)
+quando a previsão tiver sido conferida separadamente na tela original. Essa referência
+alimenta somente os cartões comparativos no final da rolagem. Não escreve datas ou
+quantidades e não é reutilizada em outro período. Sem fonte, exibe “Não disponível”.
+
 Os dados de demonstração pertencem ao usuário `local-test`, em um banco IndexedDB
 exclusivo. O parâmetro opcional `?test=<identificador>` cria um escopo separado para
 validação. Não se conecta à obra real nem reutiliza o armazenamento de Produção.

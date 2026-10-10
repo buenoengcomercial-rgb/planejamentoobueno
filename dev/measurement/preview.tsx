@@ -8,6 +8,7 @@ import {measurementRepository} from '../../src/lib/measurementWorkspaceStore';
 import {createIncorporationBackup} from '../../src/lib/measurementIncorporation';
 import '../../src/index.css';
 import {lovableSheetPreview} from './lovableSnapshot';
+import type {MeasurementForecast} from '../../src/components/measurement/MeasurementWorkspace';
 const params = new URLSearchParams(location.search);
 const copiedSheet = params.get('source') === 'lovable';
 async function loadCopiedSheet() {
@@ -24,7 +25,9 @@ async function loadCopiedSheet() {
   if (workbook.SheetNames.length !== 1) throw new Error('Confirme qual planilha deve ser simulada.');
   const result = await lovableSheetPreview(XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], {header:1,defval:null}), hash);
   if (result.itemCount !== manifest.itemCount) throw new Error('A quantidade de itens difere da página original. Carga bloqueada.');
-  return result;
+  const forecastByPeriod: MeasurementForecast[] = manifest.forecastByPeriod ?? [];
+  if (!Array.isArray(forecastByPeriod) || forecastByPeriod.some(p => !Number.isInteger(p.number) || !/^\d{4}-\d{2}-\d{2}$/.test(p.startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(p.endDate) || !Number.isFinite(p.value) || p.value < 0)) throw new Error('Referência do planejamento inválida.');
+  return {...result, forecastByPeriod};
 }
 let loadingError = '';
 const fixture = await (copiedSheet ? loadCopiedSheet() : Promise.resolve(measurementFixture())).catch(error => {
@@ -53,7 +56,7 @@ export function Preview() {
       orgName={copiedSheet ? fixture.project.contractInfo?.contracted : 'BUENO Engenharia'} roleLabel="Prévia local" canManageProjects={false} canDeleteProjects={false}
       onSwitchProject={() => undefined} onCreateProject={() => undefined} onRenameProject={() => undefined} onDuplicateProject={() => undefined} onDeleteProject={() => false}/></div>
     <div className="min-w-0 flex-1 overflow-y-auto p-3 lg:p-4"><p className="mb-3 text-[11px] text-muted-foreground">{copiedSheet ? 'Cópia local da planilha do Lovable · alterações salvas somente neste navegador' : 'Prévia local · dados isolados · nenhuma alteração na obra real'}</p>{notice && <p role="status" className="mb-3 text-xs text-muted-foreground">{notice}</p>}
-      <Measurement project={fixture.project} onProjectChange={()=>{throw new Error("A prévia não grava no projeto operacional");}} independentWorkspace={{repository,actor,incorporationBackup:backup}}/>
+      <Measurement project={fixture.project} onProjectChange={()=>{throw new Error("A prévia não grava no projeto operacional");}} independentWorkspace={{repository,actor,incorporationBackup:backup,forecastByPeriod:'forecastByPeriod' in fixture ? fixture.forecastByPeriod : undefined}}/>
     </div>
   </div></TooltipProvider>;
 }

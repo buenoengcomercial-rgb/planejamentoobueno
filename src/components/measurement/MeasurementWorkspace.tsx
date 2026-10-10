@@ -17,13 +17,16 @@ const PlanTakeoff = lazy(() => import('@/components/planTakeoff/PlanTakeoff'));
 import MeasurementHeader from './MeasurementHeader';
 import MeasurementFilters from './MeasurementFilters';
 import MeasurementTable from './MeasurementTable';
+import MeasurementTotals from './MeasurementTotals';
+import MeasurementSummaryCards from './MeasurementSummaryCards';
 import { measurementPresentation } from './measurementWorkspacePresentation';
 import { measurementStatusLabels as states } from '@/lib/measurementWorkspace';
 const button = 'inline-flex h-8 items-center gap-1.5 rounded border border-slate-200 bg-white px-2.5 text-xs hover:bg-slate-50 disabled:opacity-40';
 
 /** Real workspace UI, with an explicitly injected persistence boundary. No Project setter. */
-export interface MeasurementWorkspaceProps { repository: MeasurementRepository; actor: MeasurementActor; incorporationBackup?: IncorporationBackup; approvedAdditives?: Additive[]; analyticProject?: Project }
-export default function MeasurementWorkspace({ repository, actor, incorporationBackup, approvedAdditives = [], analyticProject }: MeasurementWorkspaceProps) {
+export interface MeasurementForecast { number: number; startDate: string; endDate: string; value: number }
+export interface MeasurementWorkspaceProps { repository: MeasurementRepository; actor: MeasurementActor; incorporationBackup?: IncorporationBackup; approvedAdditives?: Additive[]; analyticProject?: Project; forecastByPeriod?: MeasurementForecast[] }
+export default function MeasurementWorkspace({ repository, actor, incorporationBackup, approvedAdditives = [], analyticProject, forecastByPeriod = [] }: MeasurementWorkspaceProps) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null), current = useRef<Workspace | null>(null);
   const [active, setActive] = useState(''), [expanded, setExpanded] = useState<MeasurementDetailSelection | null>(null);
   const [saving, setSaving] = useState(false), busy = useRef(false);
@@ -123,6 +126,11 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const visibleLines = lines.filter(l => (chapterFilter === 'all' || l.service.chapterId === chapterFilter) && normalize([l.service.item, l.service.code, l.service.bank, l.service.description, l.service.path].join(' ')).includes(normalize(search)));
   const presentation = measurementPresentation(visibleLines);
+  const allTotals = visibleLines.length === lines.length ? presentation.totals : measurementPresentation(lines).totals;
+  const percentage = (value: number) => allTotals.contracted > 0 ? value / allTotals.contracted * 100 : 0;
+  const summaryTotals = { ...allTotals, pctPeriod: percentage(allTotals.period), pctAccum: percentage(allTotals.accum), pctBalance: percentage(allTotals.balance) };
+  const summaryBdi = workspace.contract?.bdiPercent ?? period?.originalSnapshot?.bdiPercent ?? (allTotals.contractedNoBDI > 0 ? (allTotals.contracted / allTotals.contractedNoBDI - 1) * 100 : 0);
+  const forecast = forecastByPeriod.find(p => p.number === period?.number && p.startDate === period.startDate && p.endDate === period.endDate);
   const chapters = [...new Map(lines.map(l => [l.service.chapterId, { id: l.service.chapterId, name: l.service.chapter }])).values()];
   const numbering = new Map(lines.map(l => [l.service.chapterId, l.service.item.split('.')[0]]));
   const targetService = workspace.services.find(s => s.id === destination?.serviceId);
@@ -163,6 +171,10 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       <MeasurementFilters chapters={chapters} numbering={numbering} isSnapshotMode={false} datesReadOnly effStart={period?.startDate ?? ''} effEnd={period?.endDate ?? ''} setStartDate={() => undefined} setEndDate={() => undefined} chapterFilter={chapterFilter} setChapterFilter={setChapterFilter} search={search} setSearch={setSearch}/>
     </details>
     <MeasurementTable filteredRows={presentation.rows} groupTree={presentation.groupTree} totals={presentation.totals} collapsed={collapsed} setCollapsed={setCollapsed} isLocked={!!locked} isSnapshotMode={false} showForecast={false} detailPlacement="split"
+      summary={<section aria-label="Resumo financeiro da medição completa" className="measurement-financial-summary">
+        <MeasurementTotals totals={summaryTotals} effBdi={summaryBdi}/>
+        <MeasurementSummaryCards totals={summaryTotals} forecastTotal={forecast?.value ?? null}/>
+      </section>}
       selectedDetail={expanded} onSelectDetail={setExpanded}
       renderAnalytic={row => {
         const service = lines.find(l => l.service.id === row.taskId)!.service;
