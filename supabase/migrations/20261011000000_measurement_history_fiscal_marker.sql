@@ -1,0 +1,171 @@
+-- Follow-up: compact the remaining post-submission edit into a tiny fiscal marker.
+-- Keep recoverable deletion snapshots and the original fiscal submission intact.
+CREATE OR REPLACE FUNCTION public.compact_measurement_history(
+  p_project_id uuid, p_expected_revision bigint, p_expected_data_md5 text
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path='' AS $$
+DECLARE
+  v_workspace public.measurement_workspaces;
+  v_state public.measurement_workspace_entry_state;
+  v_current jsonb;
+  v_compacted jsonb;
+  v_audit jsonb;
+  v_period jsonb;
+  v_deleted_id text;
+  v_lifecycle_event jsonb;
+  v_sent_ord bigint;
+  v_dirty_ord bigint;
+  v_deleted_ord bigint;
+  v_keep bigint[]:=ARRAY[]::bigint[];
+  v_dirty_targets jsonb:='{}'::jsonb;
+  v_event_count integer;
+  v_receipt_count integer;
+  v_event_bytes bigint;
+  v_actor uuid:=auth.uid();
+  v_org uuid;
+BEGIN
+  SELECT organization_id INTO v_org FROM public.projects WHERE id=p_project_id;
+  IF v_actor IS NULL OR NOT coalesce(public.has_org_role(v_actor,v_org,
+      ARRAY['owner']::public.org_role[]),false) THEN
+    RAISE EXCEPTION 'Somente o proprietário pode compactar o histórico da Medição' USING ERRCODE='42501';
+  END IF;
+  SELECT * INTO v_workspace FROM public.measurement_workspaces
+    WHERE project_id=p_project_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Base de Medição não encontrada'; END IF;
+  IF v_workspace.revision IS DISTINCT FROM p_expected_revision THEN
+    RAISE EXCEPTION 'A Medição mudou. Confira a revisão e refaça o backup antes da limpeza'
+      USING ERRCODE='P0002';
+  END IF;
+  v_current:=public.materialize_measurement_workspace(p_project_id);
+  IF (v_current->>'revision')::bigint IS DISTINCT FROM v_workspace.revision THEN
+    RAISE EXCEPTION 'Carregamento da Medição incompleto; limpeza bloqueada';
+  END IF;
+  IF coalesce(p_expected_data_md5,'')='' OR md5(v_current::text) IS DISTINCT FROM p_expected_data_md5 THEN
+    RAISE EXCEPTION 'O conteúdo da Medição diverge do backup conferido; limpeza bloqueada';
+  END IF;
+  SELECT * INTO v_state FROM public.measurement_workspace_entry_state
+    WHERE project_id=p_project_id FOR UPDATE;
+  IF NOT FOUND OR v_state.revision IS DISTINCT FROM v_workspace.revision
+    OR v_state.entries IS DISTINCT FROM v_current->'entries'
+    OR v_state.audit_digest IS DISTINCT FROM
+      public.measurement_workspace_audit_digest(v_current->'audit') THEN
+    RAISE EXCEPTION 'Índice da Medição inconsistente; limpeza bloqueada';
+  END IF;
+  v_audit:=v_current->'audit';
+
+  -- In-review periods need only the last fiscal submission and at most one
+  -- subsequent relevant change. fiscalSubmissionCurrent uses their order to
+  -- decide whether another submission is required. All routine detail edits
+  -- before that point can be removed without changing this decision.
+  FOR v_period IN SELECT value FROM jsonb_array_elements(v_current->'periods')
+    WHERE value->>'status'='in_review' LOOP
+    SELECT max(e.ord) INTO v_sent_ord
+      FROM jsonb_array_elements(v_audit) WITH ORDINALITY AS e(value,ord)
+      WHERE e.value->>'action'='Enviar para fiscalização'
+        AND EXISTS (SELECT 1 FROM jsonb_array_elements(
+          CASE WHEN jsonb_typeof(e.value->'afterPeriods')='array'
+            THEN e.value->'afterPeriods' ELSE '[]'::jsonb END) p
+          WHERE p.value->>'id'=v_period->>'id' AND p.value->>'status'='in_review');
+    IF v_sent_ord IS NOT NULL THEN v_keep:=array_append(v_keep,v_sent_ord); END IF;
+    SELECT max(e.ord) INTO v_dirty_ord
+      FROM jsonb_array_elements(v_audit) WITH ORDINALITY AS e(value,ord)
+      WHERE e.ord>coalesce(v_sent_ord,0)
+        AND (
+          EXISTS (SELECT 1 FROM jsonb_array_elements(
+            CASE WHEN jsonb_typeof(e.value->'affected')='array'
+              THEN e.value->'affected' ELSE '[]'::jsonb END) a
+            WHERE a.value->>'measurementId'=v_period->>'id')
+          OR e.value->'bulletinChange'->>'measurementId'=v_period->>'id'
+          OR e.value ? 'beforePlans' OR e.value ? 'afterPlans'
+          OR e.value ? 'beforeServices' OR e.value ? 'afterServices'
+          OR (e.value ? 'beforePeriods' AND
+            (SELECT p.value FROM jsonb_array_elements(e.value->'beforePeriods') p
+              WHERE p.value->>'id'=v_period->>'id') IS DISTINCT FROM
+            (SELECT p.value FROM jsonb_array_elements(e.value->'afterPeriods') p
+              WHERE p.value->>'id'=v_period->>'id'))
+        );
+    IF v_dirty_ord IS NOT NULL THEN
+      v_keep:=array_append(v_keep,v_dirty_ord);
+      v_dirty_targets:=jsonb_set(v_dirty_targets,ARRAY[v_dirty_ord::text],
+        coalesce(v_dirty_targets->(v_dirty_ord::text),'[]'::jsonb) ||
+          jsonb_build_array(jsonb_build_object('measurementId',v_period->>'id',
+            'serviceId','__fiscal_state__')),true);
+    END IF;
+  END LOOP;
+
+  -- A removed period is absent from the current sheet. Retain only its last
+  -- delete event while it is still eligible for restoration with the same IDs.
+  FOR v_deleted_id IN SELECT DISTINCT e.value->'lifecycle'->>'measurementId'
+    FROM jsonb_array_elements(v_audit) e
+    WHERE e.value->'lifecycle'->>'kind'='delete' LOOP
+    SELECT e.value,e.ord INTO v_lifecycle_event,v_deleted_ord
+      FROM jsonb_array_elements(v_audit) WITH ORDINALITY AS e(value,ord)
+      WHERE e.value->'lifecycle'->>'measurementId'=v_deleted_id
+      ORDER BY e.ord DESC LIMIT 1;
+    IF v_lifecycle_event->'lifecycle'->>'kind'='delete'
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_current->'periods') p
+        WHERE p.value->>'id'=v_deleted_id) THEN
+      v_keep:=array_append(v_keep,v_deleted_ord);
+    END IF;
+  END LOOP;
+
+  -- A post-send change must remain detectable by fiscalSubmissionCurrent, but
+  -- its former entry snapshots are unnecessary. A small affected marker keeps
+  -- the decision and sequence without retaining an "Editar detalhe" record.
+  -- Lifecycle and fiscal events keep their original payloads, including
+  -- deleted-period restoration snapshots and submitted fiscal lines.
+  SELECT coalesce(jsonb_agg(
+    CASE WHEN v_dirty_targets ? e.ord::text THEN
+      CASE WHEN e.value->>'action'='Enviar para fiscalização' OR e.value ? 'lifecycle'
+        THEN e.value
+        ELSE jsonb_build_object('id',e.value->>'id','at',e.value->>'at',
+          'actor',e.value->'actor','action','Alteração fiscal posterior ao envio',
+          'affected',v_dirty_targets->(e.ord::text),
+          'before','[]'::jsonb,'after','[]'::jsonb)
+      END
+    ELSE e.value END ORDER BY e.ord),'[]'::jsonb)
+    INTO v_audit FROM jsonb_array_elements(v_audit) WITH ORDINALITY AS e(value,ord)
+    WHERE e.ord=ANY(v_keep);
+  v_compacted:=jsonb_set(jsonb_set(v_current,'{audit}',v_audit),
+    '{revision}',to_jsonb(v_workspace.revision+1));
+  IF (v_compacted-'audit'-'revision') IS DISTINCT FROM
+      (v_current-'audit'-'revision') THEN
+    RAISE EXCEPTION 'A limpeza alteraria dados operacionais; operação cancelada';
+  END IF;
+  SELECT count(*),coalesce(sum(pg_column_size(before_data)+pg_column_size(after_data)),0)
+    INTO v_event_count,v_event_bytes FROM public.measurement_workspace_events
+    WHERE project_id=p_project_id;
+  IF v_event_count=0 AND v_audit IS NOT DISTINCT FROM v_current->'audit' THEN
+    RETURN jsonb_build_object('projectId',p_project_id,'revision',v_workspace.revision,
+      'auditEventsBefore',jsonb_array_length(v_audit),
+      'auditEventsAfter',jsonb_array_length(v_audit),
+      'eventRowsDeleted',0,'eventPayloadBytesRemoved',0,
+      'compactReceiptsAdded',0,
+      'workspaceAuditBytesBefore',pg_column_size(v_audit),
+      'workspaceAuditBytesAfter',pg_column_size(v_audit));
+  END IF;
+  -- Tiny receipts let browsers distinguish an already-confirmed pending edit
+  -- from a genuinely unsaved one after its large event payload is removed.
+  INSERT INTO public.measurement_workspace_compacted_receipts
+    (project_id,operation_id,revision,actor_id,request_hash)
+    SELECT project_id,operation_id,revision,actor_id,request_hash
+    FROM public.measurement_workspace_events WHERE project_id=p_project_id
+    ON CONFLICT (project_id,operation_id) DO NOTHING;
+  GET DIAGNOSTICS v_receipt_count=ROW_COUNT;
+  UPDATE public.measurement_workspaces SET data=v_compacted,
+    revision=v_workspace.revision+1,updated_at=clock_timestamp(),updated_by=v_actor
+    WHERE project_id=p_project_id;
+  DELETE FROM public.measurement_workspace_events WHERE project_id=p_project_id;
+  -- All statements above share one transaction. A failed update/trigger/delete
+  -- restores the former checkpoint and its complete event chain.
+  RETURN jsonb_build_object('projectId',p_project_id,
+    'revision',v_workspace.revision+1,
+    'auditEventsBefore',jsonb_array_length(v_current->'audit'),
+    'auditEventsAfter',jsonb_array_length(v_audit),
+    'eventRowsDeleted',v_event_count,
+    'eventPayloadBytesRemoved',v_event_bytes,
+    'compactReceiptsAdded',v_receipt_count,
+    'workspaceAuditBytesBefore',pg_column_size(v_current->'audit'),
+    'workspaceAuditBytesAfter',pg_column_size(v_audit));
+END; $$;
+REVOKE ALL ON FUNCTION public.compact_measurement_history(uuid,bigint,text) FROM PUBLIC,anon;
+GRANT EXECUTE ON FUNCTION public.compact_measurement_history(uuid,bigint,text) TO authenticated;
