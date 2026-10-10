@@ -54,8 +54,9 @@ describe('barra do detalhe de quantitativos', () => {
     expect(screen.getByText('u.d.')).toBeInTheDocument();
     fireEvent.focus(b); fireEvent.blur(b);
     expect(onEdit).not.toHaveBeenCalled();
-    for (const column of ['A', 'B', 'C', 'D']) expect(screen.getByRole('button', { name: `Levantar coluna ${column} da linha 1 na planta` })).toBeEnabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Levantar coluna D da linha 1 na planta' }));
+    expect(screen.queryByRole('button', { name: /Levantar coluna/ })).not.toBeInTheDocument();
+    fireEvent.focus(screen.getByLabelText('Altura da linha 1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Planta DXF' }));
     expect(onOpenPlan).toHaveBeenCalledWith('row', 'dimensionD');
     const d = screen.getByRole('spinbutton', { name: 'Altura da linha 1' });
     fireEvent.change(d, { target: { value: '2' } }); fireEvent.blur(d);

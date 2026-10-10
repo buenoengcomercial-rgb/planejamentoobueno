@@ -1,8 +1,7 @@
 import type { ProductionQuantityDetail } from '@/types/project';
-import { canChangeDetailFormula, detailFormula, detailPartial, detailTotal, formulasForUnit, formulaFields, isBlankDetailRow, measureMatchesDetailCell, withDetailFormula, withDetailValue, type DetailField, type DetailFormula } from '@/lib/productionQuantityDetails';
-import { MEASURE_KINDS } from '@/lib/planTakeoff';
+import { canChangeDetailFormula, detailFormula, detailPartial, detailTotal, formulasForUnit, formulaFields, isBlankDetailRow, withDetailFormula, withDetailValue, type DetailField, type DetailFormula } from '@/lib/productionQuantityDetails';
 import type { QuantityClipboard, QuantityClipboardMode } from '@/lib/productionQuantityReferences';
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState, type InputHTMLAttributes } from 'react';
 import { ClipboardPaste, Copy, FileSearch2, Link2, Scissors, Trash2 } from 'lucide-react';
 
 interface Props {
@@ -32,6 +31,15 @@ const fmt = (value: number) => value.toLocaleString('pt-BR', { maximumFractionDi
 const formulaLabel: Record<DetailFormula, string> = { STANDARD: 'Padrão', 'A*B': 'A × B', 'A*B*C': 'A × B × C', 'A*B*C*D': 'A × B × C × D' };
 const blankRow: ProductionQuantityDetail = { id: '__new__', location: '', comment: '', formula: 'STANDARD', multiplier: 0, measuredQuantity: 0, dimensionC: 0, dimensionD: 0 };
 
+/** Keep the native draft and focus intact when another cell is confirmed. */
+function DetailInput({ storedValue, ...props }: InputHTMLAttributes<HTMLInputElement> & { storedValue: string | number }) {
+  const input = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => {
+    if (input.current && document.activeElement !== input.current) input.current.value = String(storedValue);
+  }, [storedValue]);
+  return <input {...props} ref={input} defaultValue={storedValue}/>;
+}
+
 function formulaMeaning(formula: DetailFormula, unit: string): string {
   if (formula === 'STANDARD') return 'Standard: multiplica os valores informados em A, B, C e D; campos zerados não entram no parcial';
   if (formula === 'A*B*C') return 'A uds. · B comprimento (m) · C largura (m)';
@@ -45,6 +53,13 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [selectedField, setSelectedField] = useState<DetailField | null>(null);
   const [linkedInfo, setLinkedInfo] = useState<string | null>(null);
+  const rowKeys = useRef(new Map<string, string>());
+  const newKey = useRef(0);
+  const createRow = (changes: Partial<ProductionQuantityDetail>) => {
+    const id = onCreate(changes);
+    if (id) { rowKeys.current.set(id, `new-${newKey.current++}`); setSelectedRowId(id); }
+    return id;
+  };
   const total = detailTotal(rows);
   const displayRows = !readOnly && (rows.length === 0 || !isBlankDetailRow(rows[rows.length - 1])) ? [...rows, blankRow] : rows;
   const formulas = formulasForUnit(unit);
@@ -67,21 +82,20 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
 
   const openSelectedPlan = () => {
     if (!selectedRow || !selectedField || !canOpenPlan || readOnly) return;
-    const id = selectedRow.id === blankRow.id ? onCreate({}) : selectedRow.id;
+    const id = selectedRow.id === blankRow.id ? createRow({}) : selectedRow.id;
     if (id) { setSelectedRowId(id); onOpenPlan(id, selectedField); }
   };
 
   const saveRow = (row: ProductionQuantityDetail, changes: Partial<ProductionQuantityDetail>): boolean => {
     if (row.id !== blankRow.id) return onEdit(row.id, changes);
-    const id = onCreate(changes);
-    if (id) setSelectedRowId(id);
+    const id = createRow(changes);
     return id !== null;
   };
 
   const textField = (row: ProductionQuantityDetail, index: number) => (
-    <input key={`${row.id}-comment-${row.comment}`} aria-label={`Comentário da linha ${index + 1}`} defaultValue={row.comment} onChange={event => onDraftChange?.(row.id, { comment: event.target.value })}
+    <DetailInput aria-label={`Comentário da linha ${index + 1}`} storedValue={row.comment} onChange={event => onDraftChange?.(row.id, { comment: event.target.value })}
       disabled={readOnly} onFocus={() => setSelectedRowId(row.id)} onBlur={event => { if (event.target.value !== row.comment && !saveRow(row, { comment: event.target.value })) event.target.value = row.comment; }}
-      onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+      onKeyDown={event => { if (event.key === 'Escape') { event.currentTarget.value = row.comment; onDraftChange?.(row.id, { comment: row.comment }); } if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur(); }}
       className="h-5 w-full min-w-0 border border-slate-300 bg-white px-1 text-[11px] focus:border-sky-500 focus:outline-none disabled:bg-slate-50" />
   );
 
@@ -90,28 +104,29 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
     const column = key === 'multiplier' ? 'A' : key === 'measuredQuantity' ? 'B' : key === 'dimensionC' ? 'C' : 'D';
     const label = key === 'multiplier' ? 'Unidades' : key === 'measuredQuantity' ? 'Medida' : key === 'dimensionC' ? 'Largura' : 'Altura';
     const neutral = row.neutralFactors?.includes(key) || row.neutralFactor === key;
-    const canUsePlan = MEASURE_KINDS.some(kind => measureMatchesDetailCell(kind, key, row, unit));
     const source = key === 'multiplier' ? row.multiplierSource : key === 'measuredQuantity' ? row.source : key === 'dimensionC' ? row.dimensionCSource : row.dimensionDSource;
     const drawingUnit = source?.resultUnit?.startsWith('u.d.') ? source.resultUnit : null;
     const shownValue = Number((row[key] ?? 0).toFixed(4));
     return <div className="flex items-center justify-end gap-0.5 whitespace-nowrap">
-      <input key={`${row.id}-${key}-${row[key] ?? 0}`} aria-label={`${label} da linha ${index + 1}`} type="number" inputMode="decimal" min="0" step="any" defaultValue={shownValue} onChange={event => onDraftChange?.(row.id, { [key]: event.target.value })}
+      <DetailInput aria-label={`${label} da linha ${index + 1}`} type="number" inputMode="decimal" min="0" step="any" storedValue={shownValue} placeholder="0" onChange={event => { event.currentTarget.dataset.edited = 'true'; onDraftChange?.(row.id, { [key]: event.target.value }); }}
         title={activeInFormula ? `Coluna ${column} participa de ${formulaLabel[detailFormula(row)]}` : `Coluna ${column} fora de ${formulaLabel[detailFormula(row)]}: o valor fica registrado, mas não altera o parcial`}
-        disabled={readOnly} onFocus={() => { setSelectedRowId(row.id); setSelectedField(key); }} onBlur={event => {
+        disabled={readOnly} onFocus={event => { if (event.currentTarget.value === '0') event.currentTarget.value = ''; else event.currentTarget.select(); setSelectedRowId(row.id); setSelectedField(key); }} onBlur={event => {
           const value = Number(event.target.value.replace(',', '.'));
           if (event.target.value !== '' && Number.isFinite(value) && value >= 0 && value !== shownValue) {
             const edited = withDetailValue(row, key, value);
             const sourceField = key === 'multiplier' ? 'multiplierSource' : key === 'measuredQuantity' ? 'source' : key === 'dimensionC' ? 'dimensionCSource' : 'dimensionDSource';
-            if (!saveRow(row, { ...edited, [sourceField]: undefined })) event.target.value = String(shownValue);
-          } else if (event.target.value === '' || !Number.isFinite(value) || value < 0) event.target.value = String(shownValue);
+            const changes: Partial<ProductionQuantityDetail> = { [key]: value, neutralFactor: edited.neutralFactor, neutralFactors: edited.neutralFactors, [sourceField]: undefined };
+            for (const field of formulaFields(detailFormula(row))) if (field !== key && edited[field] !== row[field]) changes[field] = edited[field];
+            if (!saveRow(row, changes)) event.target.value = String(shownValue);
+          } else {
+            if (event.target.value === '' || !Number.isFinite(value) || value < 0) event.target.value = String(shownValue);
+            if (event.currentTarget.dataset.edited) onDraftChange?.(row.id, { [key]: row[key] ?? 0 });
+          }
+          delete event.currentTarget.dataset.edited;
         }}
-        onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') event.preventDefault(); else if (event.key === 'Enter') event.currentTarget.blur(); }}
+        onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') event.preventDefault(); else if (event.key === 'Escape') { event.currentTarget.value = String(shownValue); onDraftChange?.(row.id, { [key]: shownValue }); event.currentTarget.blur(); } else if (event.key === 'Enter') event.currentTarget.blur(); }}
         onWheel={event => event.currentTarget.blur()}
-        className={`no-spinner h-5 min-w-0 border border-slate-300 bg-white px-1 text-right text-[11px] tabular-nums focus:border-sky-500 focus:outline-none disabled:bg-slate-50 ${canUsePlan ? 'w-[50px]' : 'w-full'}`} />
-      {canUsePlan && <button type="button" disabled={readOnly} onClick={() => {
-        const rowId = row.id === blankRow.id ? onCreate({}) : row.id;
-        if (rowId) { setSelectedRowId(rowId); setSelectedField(key); onOpenPlan(rowId, key); }
-      }} aria-label={`Levantar coluna ${column} da linha ${index + 1} na planta`} title={`Preencher ${column} pela planta`} className="flex h-5 w-5 shrink-0 items-center justify-center border border-slate-300 bg-slate-50 hover:bg-sky-50 disabled:opacity-50"><FileSearch2 className="h-3 w-3" /></button>}
+        className="no-spinner h-5 w-full min-w-0 border border-slate-300 bg-white px-1 text-right text-[11px] tabular-nums focus:border-sky-500 focus:outline-none disabled:bg-slate-50" />
       {drawingUnit && <span title="Valor em unidades do desenho; a planta não tem escala em metros definida" className="text-[9px] font-medium text-amber-800">{drawingUnit}</span>}
       {neutral && <span title="Fator neutro inserido automaticamente; pode ser editado" className="text-[9px] text-slate-500">1 neutro</span>}
     </div>;
@@ -141,9 +156,9 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
           <tr className="bg-slate-200"><th className="border-b border-r border-slate-300 px-1 py-0.5 text-left font-normal">Loc.</th><th className="border-b border-r border-slate-300 px-1 py-0.5 text-left font-normal">Comentário</th><th className="border-b border-r border-slate-300 px-1 py-0.5 text-left font-normal">Fórmula</th><th className="border-b border-r border-slate-300 px-1 py-0.5 text-center font-normal">A</th><th className="border-b border-r border-slate-300 px-1 py-0.5 text-center font-normal">B</th><th className="border-b border-r border-slate-300 px-1 py-0.5 text-center font-normal">C</th><th className="border-b border-r border-slate-300 px-1 py-0.5 text-center font-normal">D</th><th className="border-b border-r border-slate-300 px-1 py-0.5 text-center font-normal">Parcial</th><th className="border-b border-slate-300 px-1 py-0.5 text-center font-normal">Subtotal</th></tr>
           <tr className="bg-green-100 text-[10px]"><th colSpan={3} className="border-b border-r border-slate-300" /><th className="border-b border-r border-slate-300 px-0.5 py-0.5 text-center font-normal">Uds.</th><th className="border-b border-r border-slate-300 px-0.5 py-0.5 text-center font-normal">{bHeading}</th><th className="border-b border-r border-slate-300 px-0.5 py-0.5 text-center font-normal">{hasC ? 'Largura (m)' : ''}</th><th className="border-b border-r border-slate-300 px-0.5 py-0.5 text-center font-normal">{hasD ? 'Altura (m)' : ''}</th><th colSpan={2} className="border-b border-slate-300" /></tr>
         </thead>
-        <tbody>{displayRows.map((row, index) => { const rowFormulas = formulas.includes(detailFormula(row)) ? formulas : [detailFormula(row), ...formulas]; const blank = index === displayRows.length - 1 && isBlankDetailRow(row); const sources = (['multiplierSource', 'source', 'dimensionCSource', 'dimensionDSource'] as const).flatMap((key, sourceIndex) => row[key] ? [`${'ABCD'[sourceIndex]}: ${row[key]!.planName} · página ${row[key]!.page} · ${row[key]!.measureName} · ${row[key]!.points.length} ponto(s)`] : []); const peers = row.sharedRecordId ? sharedTaskNames?.(row.sharedRecordId) ?? [] : []; return <tr key={row.id === blankRow.id ? `new-${rows.length}` : row.id} onClick={() => setSelectedRowId(row.id)} className={`cursor-pointer border-b border-slate-200 align-top hover:bg-slate-50 ${selectedRowId === row.id ? 'bg-sky-50' : 'bg-white'}`}>
-          <td className="border-r border-slate-200 px-0.5 py-0.5"><div className="flex items-center justify-between gap-0.5"><span title={row.location ? `Local registrado anteriormente: ${row.location}` : blank ? 'Nova linha' : `Linha ${index + 1}`} className="min-w-3 text-center tabular-nums text-slate-600">{blank ? '' : index + 1}</span>{!readOnly && row.id !== blankRow.id && !blank && <button type="button" onClick={() => onDelete(row.id)} aria-label={`Excluir linha ${index + 1}`} title="Excluir linha" className="flex h-5 w-4 shrink-0 items-center justify-center text-red-700 hover:bg-red-50"><Trash2 className="h-3 w-3" /></button>}</div></td>
-          <td className="border-r border-slate-200 px-1 py-0.5"><div className="flex items-center gap-1">{textField(row, index)}{sources.length > 0 && <span role="img" aria-label={`Origem na planta da linha ${index + 1}`} title={sources.join('\n')} className="shrink-0 text-slate-500"><Link2 className="h-3 w-3" /></span>}{row.sharedRecordId && <button type="button" aria-label={`Vinculado: ${peers.join(', ')}`} title={`Vinculado a: ${peers.join(', ')}`} onClick={event => { event.stopPropagation(); setLinkedInfo(linkedInfo === row.sharedRecordId ? null : row.sharedRecordId!); }} className="shrink-0 border border-sky-300 bg-sky-50 px-1 text-[9px] text-sky-800">Vinculado</button>}</div>{row.sharedRecordId && linkedInfo === row.sharedRecordId && <div className="mt-0.5 text-[10px] text-slate-600">{referenceLabel}: {peers.join(' · ')}{onOpenHistory && <button type="button" className="ml-2 text-sky-700 underline" onClick={event => { event.stopPropagation(); onOpenHistory(row.sharedRecordId!); }}>Histórico</button>}</div>}</td>
+        <tbody>{displayRows.map((row, index) => { const rowFormulas = formulas.includes(detailFormula(row)) ? formulas : [detailFormula(row), ...formulas]; const blank = index === displayRows.length - 1 && isBlankDetailRow(row); const sources = (['multiplierSource', 'source', 'dimensionCSource', 'dimensionDSource'] as const).flatMap((key, sourceIndex) => row[key] ? [`${'ABCD'[sourceIndex]}: ${row[key]!.planName} · página ${row[key]!.page} · ${row[key]!.measureName} · ${row[key]!.points.length} ponto(s)`] : []); const peers = row.sharedRecordId ? sharedTaskNames?.(row.sharedRecordId) ?? [] : []; return <tr key={row.id === blankRow.id ? `new-${newKey.current}` : rowKeys.current.get(row.id) ?? row.id} onClick={() => setSelectedRowId(row.id)} className={`cursor-pointer border-b border-slate-200 align-top hover:bg-slate-50 ${selectedRowId === row.id ? 'bg-sky-50' : 'bg-white'}`}>
+          <td className="border-r border-slate-200 px-0.5 py-0.5"><div className="flex items-center justify-between gap-0.5"><span title={row.location ? `Local registrado anteriormente: ${row.location}` : blank ? 'Nova linha' : `Linha ${index + 1}`} className="min-w-3 text-center tabular-nums text-slate-600">{blank ? '' : index + 1}</span>{!readOnly && row.id !== blankRow.id && !blank && <button type="button" tabIndex={-1} onClick={() => onDelete(row.id)} aria-label={`Excluir linha ${index + 1}`} title="Excluir linha" className="flex h-5 w-4 shrink-0 items-center justify-center text-red-700 hover:bg-red-50"><Trash2 className="h-3 w-3" /></button>}</div></td>
+          <td className="border-r border-slate-200 px-1 py-0.5"><div className="flex items-center gap-1">{textField(row, index)}{sources.length > 0 && <span role="img" aria-label={`Origem na planta da linha ${index + 1}`} title={sources.join('\n')} className="shrink-0 text-slate-500"><Link2 className="h-3 w-3" /></span>}{row.sharedRecordId && <button type="button" tabIndex={-1} aria-label={`Vinculado: ${peers.join(', ')}`} title={`Vinculado a: ${peers.join(', ')}`} onClick={event => { event.stopPropagation(); setLinkedInfo(linkedInfo === row.sharedRecordId ? null : row.sharedRecordId!); }} className="shrink-0 border border-sky-300 bg-sky-50 px-1 text-[9px] text-sky-800">Vinculado</button>}</div>{row.sharedRecordId && linkedInfo === row.sharedRecordId && <div className="mt-0.5 text-[10px] text-slate-600">{referenceLabel}: {peers.join(' · ')}{onOpenHistory && <button type="button" tabIndex={-1} className="ml-2 text-sky-700 underline" onClick={event => { event.stopPropagation(); onOpenHistory(row.sharedRecordId!); }}>Histórico</button>}</div>}</td>
           <td className="border-r border-slate-200 px-0.5 py-0.5"><select aria-label={`Fórmula da linha ${index + 1}`} title={formulaMeaning(detailFormula(row), unit)} value={detailFormula(row)} disabled={readOnly || rowFormulas.length === 1} onChange={event => { if (!saveRow(row, withDetailFormula(row, event.target.value as DetailFormula))) event.target.value = detailFormula(row); }} className="h-5 w-full border border-slate-300 bg-white px-0.5 text-[11px] disabled:bg-slate-50">{rowFormulas.map(formula => <option key={formula} value={formula} disabled={!canChangeDetailFormula(row, formula, unit)}>{formulaLabel[formula]}</option>)}</select></td>
           <td className="border-r border-slate-200 px-0.5 py-0.5 text-right">{numberField(row, index, 'multiplier')}</td><td className="border-r border-slate-200 px-0.5 py-0.5 text-right">{numberField(row, index, 'measuredQuantity')}</td>
           <td className="border-r border-slate-200 px-0.5 py-0.5 text-right">{numberField(row, index, 'dimensionC')}</td><td className="border-r border-slate-200 px-0.5 py-0.5 text-right">{numberField(row, index, 'dimensionD')}</td>

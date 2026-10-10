@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { FileCheck2, Plus } from 'lucide-react';
 import ProductionQuantityDetails from '@/components/ProductionQuantityDetails';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { addMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, editMeasuredBulletin, entryFor, isPeriodLocked, monthlyLines, monthlyTotal, newMeasuredRow, pasteMeasuredRow, sourceFields, transactMeasurement, undoMeasuredOperation, freezeMeasuredPeriod, type Destination, type MeasurementActor, type MeasurementClipboard, type MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
+import { addMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, editMeasuredBulletin, entryFor, isPeriodLocked, monthlyLines, newMeasuredRow, pasteMeasuredRow, sourceFields, transactMeasurement, undoMeasuredOperation, freezeMeasuredPeriod, type Destination, type MeasurementActor, type MeasurementClipboard, type MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
 import type { MeasurementRepository, WorkspaceDraft } from '@/lib/measurementWorkspaceStore';
 import type { IncorporationBackup } from '@/lib/measurementIncorporation';
 import { prepareIncorporation, incorporateApprovedAdditive } from '@/lib/measurementIncorporation';
@@ -45,6 +45,12 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const captureDraftWrite = useRef<Promise<boolean>>(Promise.resolve(true));
   const latestCaptureDraft = useRef<TakeoffDraft | null>(null);
   const pendingOperation = useRef<Promise<boolean>>(Promise.resolve(true));
+  const detailQueue = useRef<Array<{ edit: (w: Workspace) => Workspace; after?: () => void }>>([]);
+  const detailPreview = useRef<Workspace | null>(null);
+  const draftWrites = useRef(new Map<string, Promise<void>>());
+  const draftVersions = useRef(new Map<string, number>());
+  const draftChanges = useRef(new Map<string, Record<string, unknown>>());
+  const writingDrafts = useRef(0);
   const closingCapture = useRef(false);
   const [loading, setLoading] = useState(true), [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [search, setSearch] = useState(''), [chapterFilter, setChapterFilter] = useState('all');
@@ -66,7 +72,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     rememberMeasurement(actor.id, w.projectId, id);
   };
   useEffect(() => {
-    const warn = (e: BeforeUnloadEvent) => { if (busy.current) { e.preventDefault(); e.returnValue = ''; } };
+    const warn = (e: BeforeUnloadEvent) => { if (busy.current || writingDrafts.current) { e.preventDefault(); e.returnValue = ''; } };
     window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn);
   }, []);
   const persist = useCallback(async (candidate: Workspace): Promise<boolean> => {
@@ -93,6 +99,42 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     try { const candidate = edit(current.current); pendingOperation.current = persist(candidate).then(ok => { if (ok) after?.(); return ok; }); return true; }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); return false; }
   };
+  const applyDetail = (edit: (w: Workspace) => Workspace, after?: () => void): boolean => {
+    if (!current.current || recovery || busy.current && !detailQueue.current.length) { setError('Resolva o salvamento pendente antes de continuar.'); return false; }
+    try {
+      const base = detailPreview.current ?? current.current;
+      const preview = edit(base); // Run all permission, period and balance checks before displaying.
+      if (preview === base) { after?.(); return true; }
+      detailQueue.current.push({ edit, after }); detailPreview.current = preview; setWorkspace(preview);
+      if (busy.current) return true;
+      busy.current = true; setSaving(true); setError(''); setStatus('Salvando…');
+      pendingOperation.current = (async () => {
+        try {
+          while (detailQueue.current.length) {
+            const operation = detailQueue.current[0], confirmed = current.current!;
+            // Rebase each field delta onto the last confirmed revision, never a stale snapshot.
+            const candidate = operation.edit(confirmed);
+            const saved = candidate === confirmed ? confirmed : await repository.commit(candidate, confirmed.revision);
+            if (saved.revision !== candidate.revision || saved.projectId !== candidate.projectId) throw new Error('Resposta de salvamento inválida.');
+            current.current = saved; detailQueue.current.shift();
+            let next = saved;
+            for (const queued of detailQueue.current) next = queued.edit(next);
+            detailPreview.current = detailQueue.current.length ? next : null; setWorkspace(next);
+            operation.after?.();
+          }
+          setStatus(repository.savedLabel ?? 'Salvo neste navegador'); return true;
+        } catch (cause) {
+          // Later cells remain durable drafts; never clear them or replay across a conflict.
+          detailQueue.current = []; detailPreview.current = null; setWorkspace(current.current);
+          setError(cause instanceof Error ? cause.message : String(cause)); setStatus('Não salvo · rascunho preservado'); setRecovery(true);
+          await Promise.allSettled(draftWrites.current.values());
+          try { setDrafts(await repository.drafts()); } catch { setError(previous => `${previous} · Não foi possível ler os rascunhos locais.`); }
+          return false;
+        } finally { busy.current = false; setSaving(false); }
+      })();
+      return true;
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); return false; }
+  };
   const planRepository = useMemo<TakeoffRepository>(() => ({
     storage: repository.savedLabel === 'Salvo na nuvem' ? 'cloud' : 'local',
     load: async () => structuredClone(current.current?.plans ?? []),
@@ -106,11 +148,32 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       if (!await persist(candidate)) throw new Error('Planta não salva.');
     },
   }), [actor, persist, repository.savedLabel]);
-  const clearDraft = (mid: string, sid: string, rid?: string) => { void repository.clearDraft(mid, sid, rid).then(() => repository.drafts()).then(setDrafts).catch(e => setError(e.message)); };
+  const draftKey = (mid: string, sid: string, rid: string) => JSON.stringify([mid, sid, rid]);
+  const clearDraft = (mid: string, sid: string, rid?: string, expectedVersion?: number) => {
+    const key = draftKey(mid, sid, rid ?? ''), version = expectedVersion ?? draftVersions.current.get(key) ?? 0;
+    const write = (draftWrites.current.get(key) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+      if ((draftVersions.current.get(key) ?? 0) !== version) return;
+      await repository.clearDraft(mid, sid, rid);
+      // A new edit may have arrived while clearDraft was awaiting IndexedDB.
+      if ((draftVersions.current.get(key) ?? 0) === version) draftChanges.current.delete(key);
+      setDrafts(previous => previous.some(d => d.measurementId === mid && d.serviceId === sid && (rid === undefined || d.rowId === rid)) ? previous.filter(d => !(d.measurementId === mid && d.serviceId === sid && (rid === undefined || d.rowId === rid))) : previous);
+    }).catch(e => setError(`Falha ao finalizar rascunho: ${e.message}`));
+    draftWrites.current.set(key, write);
+  };
+  const clearCommittedDraft = (mid: string, sid: string, rid: string) => {
+    const version = draftVersions.current.get(draftKey(mid, sid, rid)) ?? 0;
+    return () => clearDraft(mid, sid, rid, version);
+  };
   const saveDraft = (mid: string, sid: string, rid: string, changes: Record<string, unknown>) => {
     if (!current.current) return;
     const d: WorkspaceDraft = { projectId: current.current.projectId, measurementId: mid, serviceId: sid, rowId: rid, changes };
-    void repository.writeDraft(d).then(() => repository.drafts()).then(setDrafts).catch(e => { setError(`Falha ao preservar rascunho: ${e.message}`); });
+    const key = draftKey(mid, sid, rid);
+    const merged = { ...draftChanges.current.get(key), ...changes }; draftChanges.current.set(key, merged); d.changes = merged;
+    draftVersions.current.set(key, (draftVersions.current.get(key) ?? 0) + 1);
+    writingDrafts.current++;
+    const write = (draftWrites.current.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => repository.writeDraft(d)).catch(e => { setError(`Falha ao preservar rascunho: ${e.message}`); throw e; }).finally(() => { writingDrafts.current--; });
+    draftWrites.current.set(key, write);
+    void write.catch(() => undefined);
   };
   const captureDraftFor = (target: Destination) => drafts.find(d => d.measurementId === target.measurementId && d.serviceId === target.serviceId &&
     (d.rowId === `__capture__${target.rowId}:${target.field}` || d.rowId === `__capture__${target.rowId}` && d.changes.field === target.field))?.changes.takeoffDraft as TakeoffDraft | undefined;
@@ -163,6 +226,13 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     try { const w = await repository.initialize(incorporationBackup); adopt(w); setActive(w.periods[0]?.id ?? ''); setStatus('Backup verificado · base incorporada'); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setSaving(false); }
   };
+  const calculatedLines = useMemo(() => workspace && workspace.periods.some(p => p.id === active) ? monthlyLines(workspace, active) : [], [workspace, active]);
+  const calculatedPresentation = useMemo(() => {
+    const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const visible = calculatedLines.filter(l => (chapterFilter === 'all' || l.service.chapterId === chapterFilter) && normalize([l.service.item, l.service.code, l.service.bank, l.service.description, l.service.path].join(' ')).includes(normalize(search)));
+    const presentation = measurementPresentation(visible);
+    return { presentation, allTotals: visible.length === calculatedLines.length ? presentation.totals : measurementPresentation(calculatedLines).totals };
+  }, [calculatedLines, chapterFilter, search]);
   if (loading) return <p className="p-6">Carregando a base de Medição…</p>;
   if (!workspace) return <section className="mx-auto max-w-5xl rounded-lg border bg-white p-6"><h1 className="text-xl font-semibold">Incorporar a base de Medição</h1><p className="my-3 text-sm text-slate-600">Confira o inventário antes de iniciar. O backup preserva os registros originais e os arquivos das plantas.</p>
     {plan && <><dl className="grid grid-cols-3 gap-3 text-sm"><div>Serviços: <b>{plan.inventory.services}</b></div><div>Lançamentos antigos: <b>{plan.inventory.dailyLogs + plan.inventory.periodLogs}</b></div><div>Medições: <b>{plan.inventory.periods}</b></div><div>Plantas: <b>{plan.inventory.plans}</b></div><div>Marcações: <b>{plan.inventory.marks}</b></div><div>Divergências: <b>{plan.issues.length}</b></div></dl><div className="my-4 max-h-72 overflow-auto text-sm">{plan.issues.length ? plan.issues.map((i, n) => <p key={n} className="mb-1 text-amber-800">{i.message}</p>) : <p className="text-emerald-700">Quantidades conciliadas. Nenhuma diferença encontrada.</p>}</div><button className={button} disabled={saving || !actor.canEdit || plan.issues.length > 0} onClick={() => void initialize()}>Confirmar incorporação</button></>}
@@ -170,11 +240,8 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const period = workspace.periods.find(p => p.id === active);
   const deletionBlock = period ? periodDeletionBlock(workspace, period) : 'Selecione uma medição.';
   const locked = !actor.canEdit || !period || isPeriodLocked(period) || saving || recovery;
-  const lines = period ? monthlyLines(workspace, active) : [];
-  const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  const visibleLines = lines.filter(l => (chapterFilter === 'all' || l.service.chapterId === chapterFilter) && normalize([l.service.item, l.service.code, l.service.bank, l.service.description, l.service.path].join(' ')).includes(normalize(search)));
-  const presentation = measurementPresentation(visibleLines);
-  const allTotals = visibleLines.length === lines.length ? presentation.totals : measurementPresentation(lines).totals;
+  const lines = calculatedLines;
+  const { presentation, allTotals } = calculatedPresentation;
   const percentage = (value: number) => allTotals.contracted > 0 ? value / allTotals.contracted * 100 : 0;
   const summaryTotals = { ...allTotals, pctPeriod: percentage(allTotals.period), pctAccum: percentage(allTotals.accum), pctBalance: percentage(allTotals.balance) };
   const summaryBdi = workspace.contract?.bdiPercent ?? period?.originalSnapshot?.bdiPercent ?? (allTotals.contractedNoBDI > 0 ? (allTotals.contracted / allTotals.contractedNoBDI - 1) * 100 : 0);
@@ -195,7 +262,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   }}>
     <MeasurementHeader compact onExportXLSX={() => { if (busy.current || recovery) { setError('Aguarde a confirmação do salvamento antes de exportar.'); return; } void exportMonthlyMeasurement(current.current!, active, 'xlsx').catch(e => setError(e.message)); }} onPrint={() => { if (busy.current || recovery) { setError('Aguarde a confirmação do salvamento antes de exportar.'); return; } void exportMonthlyMeasurement(current.current!, active, 'pdf').catch(e => setError(e.message)); }} showHistory onOpenHistory={() => setHistoryOpen(true)}/>
     <section className="rounded border border-border bg-card p-2">
-      <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"><strong>{workspace.projectName}</strong><div className="flex flex-wrap items-center gap-4"><span>Valor desta medição: <strong data-testid="monthly-value">{period ? fmtBRL(monthlyTotal(workspace, active)) : '—'}</strong></span><span role="status" className={saving ? 'text-amber-700' : 'text-emerald-700'}>{status}</span></div></div>
+      <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"><strong>{workspace.projectName}</strong><div className="flex flex-wrap items-center gap-4"><span>Valor desta medição: <strong data-testid="monthly-value">{period ? fmtBRL(allTotals.period) : '—'}</strong></span><span role="status" className={saving ? 'text-amber-700' : 'text-emerald-700'}>{status}</span></div></div>
       <div className="flex flex-wrap items-center gap-2"><label className="text-[11px] font-semibold uppercase text-muted-foreground" htmlFor="measurement-period">Medições</label><select id="measurement-period" aria-label="Medição selecionada" value={active} className="h-8 rounded-md border border-primary bg-primary px-2.5 text-xs font-medium text-primary-foreground" disabled={saving || !!destination || recovery} onChange={e => {
         if (busy.current || recovery) { setError('Aguarde a confirmação do salvamento antes de trocar a medição.'); return; }
         selectPeriod(e.target.value); setExpanded(null); setError('');
@@ -218,7 +285,8 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     {recovery && <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm">Há um salvamento pendente. A troca de medição está bloqueada até a conferência. <button className={button} onClick={async () => { const pending = await repository.pending(); const latest = await repository.load(); if (!pending || !latest) return; if (latest.audit.some(a => a.id === pending.candidate.audit.at(-1)?.id)) { await repository.removePending?.(pending.candidate.audit.at(-1)!.id); adopt(latest); if (!latest.periods.some(p => p.id === active) && latest.periods.length) selectPeriod(latest.periods.at(-1)!.id); setLifecycle(null); setExpanded(null); setRecovery(!!await repository.pending()); setError(''); setStatus(pending.candidate.audit.at(-1)?.lifecycle?.kind === 'delete' ? 'Medição excluída · restaurável no Histórico' : repository.savedLabel ?? 'Salvo neste navegador'); return; } if (latest.revision !== pending.baseRevision) { adopt(latest); setError('Conflito preservado. Exporte o rascunho para conferir as diferenças; nenhum valor será reaplicado automaticamente.'); return; } adopt(latest); if (await persist(pending.candidate)) { setRecovery(false); setLifecycle(null); setExpanded(null); } }}>Tentar salvar novamente</button><button className={button} onClick={async () => { const p = await repository.pending(); const url = URL.createObjectURL(new Blob([JSON.stringify(p, null, 2)], { type: 'application/json' })); const a = document.createElement('a'); a.href = url; a.download = 'rascunho-medicao.json'; a.click(); URL.revokeObjectURL(url); }}>Baixar rascunho</button><button className={button} onClick={async () => { const p = await repository.pending(); if (p) await repository.archivePending(p.candidate.audit.at(-1)!.id); const latest = await repository.load(); if (latest) { adopt(latest); if (!latest.periods.some(period => period.id === active) && latest.periods.length) selectPeriod(latest.periods.at(-1)!.id); } setLifecycle(null); setExpanded(null); setRecovery(!!await repository.pending()); setStatus('Versão salva carregada · rascunho arquivado'); setError(''); }}>Arquivar rascunho e usar versão salva</button></div>}
     {drafts.filter(d => d.measurementId === active && d.serviceId !== bulletinDraftKey && !d.changes.takeoffDraft).length > 0 && <div className="text-xs text-amber-800">Rascunhos desta medição preservados. <button className="underline" onClick={() => {
       const d = drafts.find(d => d.measurementId === active && d.serviceId !== bulletinDraftKey && !d.changes.takeoffDraft); if (!d) return;
-      apply(w => { let row = { ...(entryFor(w, active, d.serviceId).rows.find(r => r.id === d.rowId) ?? newMeasuredRow()), ...('comment' in d.changes ? { comment: String(d.changes.comment) } : {}) };
+      const rowId = typeof d.changes.createdRowId === 'string' ? d.changes.createdRowId : d.rowId.startsWith('__') ? undefined : d.rowId;
+      apply(w => { let row = { ...(entryFor(w, active, d.serviceId).rows.find(r => r.id === rowId) ?? newMeasuredRow(rowId)), ...('comment' in d.changes ? { comment: String(d.changes.comment) } : {}) };
         for (const f of ['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD'] as const) if (f in d.changes) row = withDetailValue(row, f, Number(String(d.changes[f]).replace(',', '.')));
         return editMeasuredRow(w, actor, active, d.serviceId, row);
       }, () => clearDraft(active, d.serviceId, d.rowId));
@@ -261,10 +329,10 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
             if (!Number.isFinite(value) || value < 0) { event.currentTarget.value = String(l.qty); return; }
             const row = e.rows[0] ?? newMeasuredRow(); if (!apply(w => editMeasuredRow(w, actor, active, s.id, { ...newMeasuredRow(row.id), comment: row.comment || 'Quantidade informada', origin: row.origin ?? { kind: 'manual' }, multiplier: value }), () => clearDraft(active, s.id, '__manual__'))) event.currentTarget.value = String(l.qty);
           }}/>; }}
-      renderDetail={row => { const l = lines.find(l => l.service.id === row.taskId)!; const s = l.service, e = entryFor(workspace, active, s.id); return <ProductionQuantityDetails key={`${active}-${s.id}`} heading={`Detalhe de quantitativos · ${period!.number}ª medição`} rows={e.rows} unit={s.unit} dailyQuantity={l.qty} applied readOnly={!!locked} periodMode referenceLabel="Serviços / medições" canOpenPlan onApply={() => undefined}
+      renderDetail={row => { const l = lines.find(l => l.service.id === row.taskId)!; const s = l.service, e = entryFor(workspace, active, s.id); return <ProductionQuantityDetails key={`${active}-${s.id}`} heading={`Detalhe de quantitativos · ${period!.number}ª medição`} rows={e.rows} unit={s.unit} dailyQuantity={l.qty} applied readOnly={!actor.canEdit || !period || isPeriodLocked(period) || recovery || saving && !detailQueue.current.length} periodMode referenceLabel="Serviços / medições" canOpenPlan onApply={() => undefined}
             onDraftChange={(rid, changes) => saveDraft(active, s.id, rid, changes)}
-            onCreate={changes => { const fresh = newMeasuredRow(); const row = { ...fresh, ...changes, id: fresh.id }; return apply(w => editMeasuredRow(w, actor, active, s.id, row), () => clearDraft(active, s.id, '__new__')) ? row.id : null; }}
-            onEdit={(id, changes) => apply(w => { const row = entryFor(w, active, s.id).rows.find(r => r.id === id); if (!row) throw new Error('Linha não encontrada.'); return editMeasuredRow(w, actor, active, s.id, { ...row, ...changes }); }, () => clearDraft(active, s.id, id))}
+            onCreate={changes => { const fresh = newMeasuredRow(); const row = { ...fresh, ...changes, id: fresh.id }; saveDraft(active, s.id, '__new__', { ...changes, createdRowId: fresh.id }); return applyDetail(w => editMeasuredRow(w, actor, active, s.id, row), clearCommittedDraft(active, s.id, '__new__')) ? row.id : null; }}
+            onEdit={(id, changes) => applyDetail(w => { const row = entryFor(w, active, s.id).rows.find(r => r.id === id); if (!row) throw new Error('Linha não encontrada.'); return editMeasuredRow(w, actor, active, s.id, { ...row, ...changes }); }, clearCommittedDraft(active, s.id, id))}
             onDelete={id => apply(w => deleteMeasuredRow(w, actor, active, s.id, id))}
             onOpenPlan={(rowId, field) => { void (async () => {
               if (!await pendingOperation.current) return;
