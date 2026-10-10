@@ -309,6 +309,14 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   </>;
   return <main className="measurement-workspace min-w-0 text-foreground" onClickCapture={event => {
     const target = event.target as HTMLElement;
+    // Blur starts saving before the click in another task. Keep the current
+    // detail open until the server confirms, including a failed pending save.
+    if (busy.current || recovery) {
+      if (target.closest('[data-quantity-cell], [aria-label^="Ver composição analítica"]')) {
+        event.preventDefault(); event.stopPropagation();
+      }
+      return;
+    }
     if (!event.currentTarget.contains(target) || target.closest('[data-quantity-cell], [data-quantity-detail], .measurement-split-handle')) return;
     setExpanded(selection => selection?.mode === 'quantity' ? null : selection);
   }}>
@@ -317,7 +325,10 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         <MeasurementTotals totals={summaryTotals} effBdi={summaryBdi}/>
         <MeasurementSummaryCards totals={summaryTotals} forecastTotal={forecast?.value ?? null}/>
       </section>}
-      selectedDetail={expanded} onSelectDetail={setExpanded}
+      selectedDetail={expanded} onSelectDetail={selection => {
+        if (busy.current || recovery) return;
+        setExpanded(selection);
+      }}
       renderAnalytic={row => {
         const service = lines.find(l => l.service.id === row.taskId)!.service;
         const project = analyticProject ?? incorporationBackup?.project;
