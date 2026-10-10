@@ -406,6 +406,54 @@ describe('Tela própria de Medição', () => {
     expect(within(detail).getByLabelText('Comentário da linha 1')).toHaveValue('Registro preservado');
     expect(repository.commit).not.toHaveBeenCalled();
   });
+  it('mantém capítulo e subcapítulo recolhidos ao trocar de medição e voltar à página', async () => {
+    const { w, repository } = fixture();
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'kept', location: '', comment: 'Registro preservado', formula: 'STANDARD', multiplier: 7, measuredQuantity: 0, origin: { kind: 'manual' } }] }];
+    const originalEntries = structuredClone(w.entries);
+    let view = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+
+    const sheet = await screen.findByRole('region', { name: 'Planilha da medição atual' });
+    fireEvent.click(within(sheet).getByRole('button', { name: /Sinalização/ }));
+    expect(screen.queryByLabelText('Quantidade de Placas')).not.toBeInTheDocument();
+    fireEvent.click(within(sheet).getByRole('button', { name: /Prédio/ }));
+    expect(within(sheet).queryByRole('button', { name: /Sinalização/ })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Medição selecionada'), { target: { value: 'm2' } });
+    expect(within(sheet).queryByRole('button', { name: /Sinalização/ })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Medição selecionada'), { target: { value: 'm1' } });
+    expect(within(sheet).queryByRole('button', { name: /Sinalização/ })).not.toBeInTheDocument();
+
+    view.unmount();
+    view = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const reopenedSheet = await screen.findByRole('region', { name: 'Planilha da medição atual' });
+    expect(within(reopenedSheet).queryByRole('button', { name: /Sinalização/ })).not.toBeInTheDocument();
+    fireEvent.click(within(reopenedSheet).getByRole('button', { name: /Prédio/ }));
+    expect(within(reopenedSheet).getByRole('button', { name: /Sinalização/ })).toBeVisible();
+    expect(screen.queryByLabelText('Quantidade de Placas')).not.toBeInTheDocument();
+    fireEvent.click(within(reopenedSheet).getByRole('button', { name: /Sinalização/ }));
+    expect(screen.getByLabelText('Quantidade de Placas')).toHaveValue(7);
+    expect(w.entries).toEqual(originalEntries);
+    expect(repository.commit).not.toHaveBeenCalled();
+    view.unmount();
+  });
+  it('isola capítulos recolhidos por usuário e obra sem salvar essa preferência na nuvem', async () => {
+    const { w, repository } = fixture();
+    let view = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const sheet = await screen.findByRole('region', { name: 'Planilha da medição atual' });
+    fireEvent.click(within(sheet).getByRole('button', { name: /Prédio/ }));
+    expect(screen.queryByLabelText('Quantidade de Placas')).not.toBeInTheDocument();
+    view.unmount();
+
+    view = render(<MeasurementWorkspace repository={repository} actor={{ ...actor, id: 'outro-usuario' }}/>);
+    expect(await screen.findByLabelText('Quantidade de Placas')).toBeInTheDocument();
+    view.unmount();
+
+    vi.mocked(repository.load).mockResolvedValue({ ...w, projectId: 'outra-obra', projectName: 'Outra obra' });
+    view = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    expect(await screen.findByLabelText('Quantidade de Placas')).toBeInTheDocument();
+    expect(repository.commit).not.toHaveBeenCalled();
+    view.unmount();
+  });
   it('limpa o painel ao clicar fora da quantidade, preservando cliques e rascunhos dentro do editor', async () => {
     const { w, repository } = fixture();
     w.services.push({ ...w.services[0], id: 's2', description: 'Outra tarefa' });

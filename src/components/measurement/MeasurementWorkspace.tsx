@@ -24,7 +24,7 @@ import { measurementPresentation } from './measurementWorkspacePresentation';
 import { measurementStatusLabels as states } from '@/lib/measurementWorkspace';
 import { nextMeasurementPeriod } from '@/lib/measurementPeriodSequence';
 import { fiscalReviewIssuesForWorkspace } from '@/lib/measurementFiscalReview';
-import { rememberMeasurement, selectedMeasurement } from '@/lib/measurementSelection';
+import { collapsedMeasurementGroups, rememberCollapsedMeasurementGroups, rememberMeasurement, selectedMeasurement } from '@/lib/measurementSelection';
 import MeasurementLifecycleDialog, { type LifecycleSelection } from './MeasurementLifecycleDialog';
 import { periodDeletionBlock } from '@/lib/measurementLifecycle';
 import { useMeasurementRealtime } from './useMeasurementRealtime';
@@ -78,9 +78,23 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const draftChanges = useRef(new Map<string, Record<string, unknown>>());
   const writingDrafts = useRef(0);
   const closingCapture = useRef(false);
-  const [loading, setLoading] = useState(true), [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [loading, setLoading] = useState(true);
+  const [collapsedPreference, setCollapsedPreference] = useState<{ scope: string; groups: Set<string> } | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [search, setSearch] = useState(''), [chapterFilter, setChapterFilter] = useState('all');
+  const collapseProjectId = workspace?.projectId;
+  const collapseScope = collapseProjectId ? JSON.stringify([actor.id, collapseProjectId]) : '';
+  const collapsed = useMemo(() => {
+    if (!collapseProjectId) return new Set<string>();
+    return collapsedPreference?.scope === collapseScope ? collapsedPreference.groups : collapsedMeasurementGroups(actor.id, collapseProjectId);
+  }, [actor.id, collapseScope, collapsedPreference, collapseProjectId]);
+  const toggleCollapsed = (id: string) => {
+    if (!collapseProjectId) return;
+    const next = new Set(collapsed);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setCollapsedPreference({ scope: collapseScope, groups: next });
+    rememberCollapsedMeasurementGroups(actor.id, collapseProjectId, next);
+  };
   const plan = useMemo(() => incorporationBackup ? prepareIncorporation(incorporationBackup) : null, [incorporationBackup]);
   const adopt = useCallback((w: Workspace) => { current.current = w; setWorkspace(w); }, []);
   const realtime = useMeasurementRealtime({ repository, projectId: workspace?.projectId, revision: workspace?.revision,
@@ -553,7 +567,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     if (!event.currentTarget.contains(target) || target.closest('[data-quantity-cell], [data-quantity-detail], .measurement-split-handle')) return;
     setExpanded(selection => selection?.mode === 'quantity' ? null : selection);
   }}>
-    <MeasurementTable beforeSheet={pageHeader} filteredRows={presentation.rows} groupTree={presentation.groupTree} totals={presentation.totals} collapsed={collapsed} setCollapsed={setCollapsed} isLocked={!!quantityLocked} isSnapshotMode={false} showForecast={false} detailPlacement="split" rowRevisionByTaskId={entryByTaskId} interactionVersion={active}
+    <MeasurementTable beforeSheet={pageHeader} filteredRows={presentation.rows} groupTree={presentation.groupTree} totals={presentation.totals} collapsed={collapsed} onToggleCollapsed={toggleCollapsed} isLocked={!!quantityLocked} isSnapshotMode={false} showForecast={false} detailPlacement="split" rowRevisionByTaskId={entryByTaskId} interactionVersion={active}
       summary={<section aria-label="Resumo financeiro da medição completa" className="measurement-financial-summary">
         <MeasurementTotals totals={summaryTotals} effBdi={summaryBdi}/>
         <MeasurementSummaryCards totals={summaryTotals} forecastTotal={forecast?.value ?? null}/>
