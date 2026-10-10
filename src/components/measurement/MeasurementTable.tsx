@@ -1,8 +1,11 @@
+import './measurementTable.css';
+import { useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Lock } from 'lucide-react';
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import type { Project } from '@/types/project';
 import type { Row, GroupNode, GroupTotals } from '@/components/measurement/types';
-import { fmtBRL } from '@/components/measurement/measurementFormat';
+import { fmtTableBRL as fmtBRL } from '@/components/measurement/measurementFormat';
 import MeasurementGroupRow from './MeasurementGroupRow';
 import type { MeasurementItemRowProps } from './MeasurementItemRow';
 import type { MeasurementDetailSelection } from './MeasurementDetailFooter';
@@ -19,8 +22,9 @@ interface MeasurementTableProps extends RowHandlers {
   selectedDetail?: MeasurementDetailSelection | null;
   onSelectDetail?: (selection: MeasurementDetailSelection | null) => void;
   onToggleAnalyticDetail?: (taskId: string) => void;
-  project: Project;
-  bdi: number;
+  project?: Project;
+  bdi?: number;
+  summary?: React.ReactNode;
 }
 
 const COLSPAN = 18;
@@ -54,10 +58,19 @@ const headerStyleByDepth = (depth: number) => {
 export default function MeasurementTable(props: MeasurementTableProps) {
   const {
     filteredRows, groupTree, totals,
-    collapsed, setCollapsed, isLocked,
+    collapsed, setCollapsed, isLocked, showForecast = true, detailPlacement = 'inline', summary,
     ...rowHandlers
   } = props;
 
+  const columnCount = showForecast ? COLSPAN : 15;
+  const split = detailPlacement === 'split' && !!rowHandlers.renderDetail;
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // Start in the full-height sheet; scrolling upwards still reveals the header.
+    if (split) workspaceRef.current?.scrollIntoView?.({ block: 'start' });
+  }, [split]);
+  const selectedRow = rowHandlers.selectedDetail?.mode === 'quantity'
+    ? filteredRows.find(row => row.taskId === rowHandlers.selectedDetail?.taskId) : undefined;
   const toggleCollapsed = (id: string) => {
     setCollapsed(prev => {
       const next = new Set(prev);
@@ -66,8 +79,8 @@ export default function MeasurementTable(props: MeasurementTableProps) {
     });
   };
 
-  return (
-    <Card className="overflow-hidden border border-border bg-card shadow-sm">
+  const table = (
+    <Card className={`${split ? 'measurement-table-pane' : ''} overflow-hidden border border-border bg-card shadow-sm`}>
       <CardHeader className="border-b border-border bg-muted/20 px-3 py-2 print:hidden">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
           Planilha de medição ({filteredRows.length} itens)
@@ -79,8 +92,8 @@ export default function MeasurementTable(props: MeasurementTableProps) {
         </CardTitle>
       </CardHeader>
       <CardContent className="p-0 overflow-hidden">
-        <div className="max-w-full overflow-x-auto overflow-y-visible print:overflow-visible">
-          <table className="measurement-table w-full text-[11px] border-separate border-spacing-0 print:min-w-0">
+        <div className="measurement-table-scroll max-w-full overflow-x-auto overflow-y-visible print:overflow-visible" tabIndex={split ? 0 : undefined} aria-label={split ? 'Rolagem da planilha e dos resumos' : undefined}>
+          <table className={`measurement-table ${!showForecast ? 'measurement-table--ledger' : ''} w-full text-[11px] border-separate border-spacing-0 print:min-w-0`}>
             <colgroup>
               <col className="col-item" />
               <col className="col-code" />
@@ -93,9 +106,11 @@ export default function MeasurementTable(props: MeasurementTableProps) {
               <col className="col-val" />
               <col className="col-qty" />
               <col className="col-val" />
+              {showForecast && <>
               <col className="col-qty" />
               <col className="col-val" />
               <col className="col-val" />
+              </>}
               <col className="col-qty" />
               <col className="col-val" />
               <col className="col-qty" />
@@ -112,9 +127,11 @@ export default function MeasurementTable(props: MeasurementTableProps) {
                 <th colSpan={2} className={`px-2 py-1 text-[10px] uppercase tracking-wider font-bold text-center border-b border-border ${G_HEAD.period} ${BORDER_L}`}>
                   Medição Atual
                 </th>
+                {showForecast && <>
                 <th colSpan={3} className={`px-2 py-1 text-[10px] uppercase tracking-wider font-bold text-center border-b border-border ${G_HEAD.forecast} ${BORDER_L}`}>
                   Previsão (Gantt)
                 </th>
+                </>}
                 <th colSpan={2} className={`px-2 py-1 text-[10px] uppercase tracking-wider font-bold text-center border-b border-border ${G_HEAD.accum} ${BORDER_L}`}>
                   Acumulado
                 </th>
@@ -134,9 +151,11 @@ export default function MeasurementTable(props: MeasurementTableProps) {
                 <th className="px-2 py-1.5 text-right font-semibold border-b border-border">Total Contratado</th>
                 <th className={`px-2 py-1.5 text-right font-semibold border-b border-border ${BORDER_L}`}>Quant. Medição</th>
                 <th className="px-2 py-1.5 text-right font-semibold border-b border-border">Subtotal Medição</th>
+                {showForecast && <>
                 <th className={`px-2 py-1.5 text-right font-semibold border-b border-border ${BORDER_L}`}>Quant. Prevista</th>
                 <th className="px-2 py-1.5 text-right font-semibold border-b border-border">Subtotal Previsto</th>
                 <th className="px-2 py-1.5 text-right font-semibold border-b border-border">Dif. Real x Prev.</th>
+                </>}
                 <th className={`px-2 py-1.5 text-right font-semibold border-b border-border ${BORDER_L}`}>Quant. Acum.</th>
                 <th className="px-2 py-1.5 text-right font-semibold border-b border-border">Subtotal Acumulado</th>
                 <th className={`px-2 py-1.5 text-right font-semibold border-b border-border ${BORDER_L}`}>Quant. a Executar</th>
@@ -146,7 +165,7 @@ export default function MeasurementTable(props: MeasurementTableProps) {
             <tbody>
               {groupTree.length === 0 ? (
                 <tr>
-                  <td colSpan={COLSPAN} className="text-center py-8 text-muted-foreground">
+                  <td colSpan={columnCount} className="text-center py-8 text-muted-foreground">
                     Nenhum item encontrado para os filtros selecionados.
                   </td>
                 </tr>
@@ -161,10 +180,14 @@ export default function MeasurementTable(props: MeasurementTableProps) {
                     BORDER_L={BORDER_L}
                     headerStyleByDepth={headerStyleByDepth}
                     isLocked={isLocked}
+                    showForecast={showForecast}
+                    detailColSpan={columnCount}
+                    detailPlacement={detailPlacement}
                     {...rowHandlers}
                   />
                 ))
               )}
+              {split && <tr className="measurement-table-space" aria-hidden="true"><td colSpan={columnCount} /></tr>}
             </tbody>
             {groupTree.length > 0 && (
               <tfoot className="sticky bottom-0 z-10">
@@ -173,9 +196,11 @@ export default function MeasurementTable(props: MeasurementTableProps) {
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(totals.contracted)}</td>
                   <td className={`px-2 py-2 text-right ${BORDER_L}`}>—</td>
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(totals.period)}</td>
+                  {showForecast && <>
                   <td className={`px-2 py-2 text-right ${BORDER_L}`}>—</td>
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(totals.forecast)}</td>
                   <td className={`px-2 py-2 text-right tabular-nums ${totals.diffForecast > 0 ? 'text-emerald-300' : totals.diffForecast < 0 ? 'text-rose-300' : ''}`}>{fmtBRL(totals.diffForecast)}</td>
+                  </>}
                   <td className={`px-2 py-2 text-right ${BORDER_L}`}>—</td>
                   <td className="px-2 py-2 text-right tabular-nums">{fmtBRL(totals.accum)}</td>
                   <td className={`px-2 py-2 text-right ${BORDER_L}`}>—</td>
@@ -184,8 +209,27 @@ export default function MeasurementTable(props: MeasurementTableProps) {
               </tfoot>
             )}
           </table>
+          {summary}
         </div>
       </CardContent>
     </Card>
   );
+
+  if (!split) return table;
+
+  return <div className="measurement-split-workspace" ref={workspaceRef}>
+    <ResizablePanelGroup direction="vertical" autoSaveId="measurement-quantity-fullscreen-layout">
+      <ResizablePanel id="measurement-sheet" order={1} defaultSize={75} minSize={25}>
+        <section aria-label="Planilha da medição atual" className="h-full min-h-0">{table}</section>
+      </ResizablePanel>
+      <ResizableHandle withHandle className="measurement-split-handle" aria-label="Ajustar altura da planilha e do detalhe" title="Arraste para ajustar a altura; use as setas para ajustar pelo teclado" />
+      <ResizablePanel id="measurement-detail" order={2} defaultSize={25} minSize={15}>
+        <section aria-label="Painel inferior de quantitativos" className="measurement-detail-panel" data-quantity-detail>
+          <div className="measurement-detail-pane">
+            {selectedRow && rowHandlers.renderDetail!(selectedRow)}
+          </div>
+        </section>
+      </ResizablePanel>
+    </ResizablePanelGroup>
+  </div>;
 }

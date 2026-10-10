@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   setCloudSnapshot: vi.fn(),
   buildContractImportPayload: vi.fn(),
   assertProjectSnapshotAvailable: vi.fn(),
+  assertNoUnsafeCriticalCollectionChanges: vi.fn(),
   assertProjectDeletionSafety: vi.fn(),
   verifyProductionDeletions: vi.fn(async () => undefined),
   acknowledgeExistingProjectAudits: vi.fn(async () => undefined),
@@ -47,6 +48,7 @@ vi.mock('@/lib/projectSync', () => ({
   setCloudSnapshot: mocks.setCloudSnapshot,
   buildContractImportPayload: mocks.buildContractImportPayload,
   assertProjectSnapshotAvailable: mocks.assertProjectSnapshotAvailable,
+  assertNoUnsafeCriticalCollectionChanges: mocks.assertNoUnsafeCriticalCollectionChanges,
   assertProjectDeletionSafety: mocks.assertProjectDeletionSafety,
   verifyProductionDeletions: mocks.verifyProductionDeletions,
   acknowledgeExistingProjectAudits: mocks.acknowledgeExistingProjectAudits,
@@ -85,6 +87,7 @@ function queryBuilder(result: unknown) {
 describe('criação inicial segura da obra', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.assertNoUnsafeCriticalCollectionChanges.mockReset();
     mocks.getUser.mockResolvedValue({ data: { user: { id: 'user-1' } } });
     mocks.syncCollectionsToCloud.mockResolvedValue(undefined);
     mocks.syncProductionAtomically.mockResolvedValue(null);
@@ -92,6 +95,19 @@ describe('criação inicial segura da obra', () => {
     mocks.hydrateProjectFromCloud.mockImplementation(async (project: Project) => project);
     mocks.getHydratedProjectCollections.mockReturnValue([]);
     mocks.confirmHydratedProjectCollections.mockReturnValue([]);
+  });
+  it('bloqueia uma gravação crítica fora da transação antes de atualizar o pai', async () => {
+    mocks.assertNoUnsafeCriticalCollectionChanges.mockImplementationOnce(() => { throw new Error('Transação específica exigida'); });
+    await expect(upsertCloudProject({id:'p',name:'Obra',phases:[]} as Project,'org','version')).rejects.toThrow('Transação específica');
+    expect(mocks.from).not.toHaveBeenCalled();
+    expect(mocks.syncCollectionsToCloud).not.toHaveBeenCalled();
+  });
+  it('não adota uma coleção que mudou durante a hidratação', async () => {
+    mocks.from.mockReturnValueOnce(queryBuilder({data:{id:'p',name:'Obra',data_json:{phases:[]},updated_at:'v1'},error:null}))
+      .mockReturnValueOnce(queryBuilder({data:{id:'p',updated_at:'v2'},error:null}));
+    await expect(loadCloudProjectRecord('p',{strict:true})).rejects.toBeInstanceOf(CloudProjectConflictError);
+    expect(mocks.discardHydratedProjectCollections).toHaveBeenCalled();
+    expect(mocks.confirmHydratedProjectCollections).not.toHaveBeenCalled();
   });
 
   it('mantém o conflito otimista da transação de outro domínio', async () => {
@@ -114,7 +130,7 @@ describe('criação inicial segura da obra', () => {
       },
       error: null,
     });
-    mocks.from.mockReturnValueOnce(query);
+    mocks.from.mockReturnValue(query);
     mocks.getHydratedProjectCollections.mockReturnValueOnce(['dailyReports']);
 
     const record = await loadCloudProjectRecord('project-read');
@@ -140,7 +156,7 @@ describe('criação inicial segura da obra', () => {
       },
       error: null,
     });
-    mocks.from.mockReturnValueOnce(query);
+    mocks.from.mockReturnValue(query);
 
     const project = await loadCloudProject('project-inspection');
 

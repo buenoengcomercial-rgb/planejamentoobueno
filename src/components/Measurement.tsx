@@ -1,9 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { lazy, Suspense, useMemo, useState, useEffect, type MouseEvent } from 'react';
+import { cloudMeasurementRepository } from '@/lib/measurementCloudRepository';
+import { supabase } from '@/integrations/supabase/client';
+import { useOrganization } from '@/hooks/useOrganization';
+import type { MeasurementWorkspaceProps } from './measurement/MeasurementWorkspace';
+const IndependentMeasurement = lazy(() => import('./measurement/MeasurementWorkspace'));
+
 import { Project } from '@/types/project';
 import {
   fmtDateBR,
-  getProjectGanttStartDate,
-  syncMeasurementDatesWithGantt,
 } from '@/components/measurement/measurementFormat';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -34,10 +38,12 @@ import {
 } from '@/components/ui/alert-dialog';
 import { validateMeasurement, summarizeIssues, type ValidationIssue } from '@/lib/measurementValidation';
 import MeasurementValidationPanel from '@/components/MeasurementValidationPanel';
-import { summarizeDailyReportsForPeriod, buildDailyReportSnapshot } from '@/lib/dailyReportSummary';
+import { summarizeDailyReportsForPeriod } from '@/lib/dailyReportSummary';
 import { toast } from '@/hooks/use-toast';
 
 interface MeasurementProps {
+  /** Explicit activation only after independent incorporation; never inferred from Project. */
+  independentWorkspace?: MeasurementWorkspaceProps;
   project: Project;
   onProjectChange: (project: Project) => void;
   undoButton?: React.ReactNode;
@@ -46,7 +52,36 @@ interface MeasurementProps {
 }
 
 // ───────────────────────── Componente principal ─────────────────────────
-export default function Measurement({ project, onProjectChange, undoButton, onOpenDailyReport }: MeasurementProps) {
+export default function Measurement(props: MeasurementProps) {
+  if (props.independentWorkspace) return <Suspense fallback={<p>Carregando Medição…</p>}><IndependentMeasurement {...props.independentWorkspace} analyticProject={props.project}/></Suspense>;
+  return <CloudMeasurement key={props.project.id} {...props}/>;
+}
+
+/** Activation is recorded in the cloud, never inferred from a browser draft. */
+function CloudMeasurement(props: MeasurementProps) {
+  const { user } = useAuth();
+  const { membership } = useOrganization();
+  const [enabled, setEnabled] = useState<boolean | null>(null), [failure, setFailure] = useState(''), [retry, setRetry] = useState(0);
+  const userId = user?.id;
+  const repository = useMemo(() => userId ? cloudMeasurementRepository({ projectId: props.project.id, userId }) : null, [props.project.id, userId]);
+  const editor = ['owner', 'admin', 'engineer'].includes(membership?.role ?? '');
+  const actor = useMemo(() => ({ id: user?.id ?? '', name: user?.user_metadata?.name ?? user?.email ?? '', canEdit: editor, canReview: editor }), [user, editor]);
+  useEffect(() => {
+    let alive = true;
+    setFailure('');
+    void supabase.from('measurement_workspaces' as never).select('project_id').eq('project_id', props.project.id).maybeSingle().then(({ data, error }) => {
+      if (!alive) return;
+      if (error) setFailure('Não foi possível confirmar a base da Medição na nuvem. Tente novamente; nenhum lançamento foi alterado.');
+      else setEnabled(!!data);
+    });
+    return () => { alive = false; };
+  }, [props.project.id, retry]);
+  if (failure) return <div role="alert" className="rounded border p-4 text-sm">{failure} <button onClick={() => setRetry(n => n + 1)} className="underline">Tentar novamente</button></div>;
+  if (enabled === null || !repository) return <p className="p-6">Conferindo a Medição na nuvem…</p>;
+  return enabled ? <Suspense fallback={<p>Carregando Medição…</p>}><IndependentMeasurement repository={repository} actor={actor} analyticProject={props.project} approvedAdditives={props.project.additives}/></Suspense> : <LegacyMeasurement {...props}/>;
+}
+
+function LegacyMeasurement({ project, onProjectChange, undoButton, onOpenDailyReport }: MeasurementProps) {
   const { user } = useAuth();
   const auditUser = useMemo(() => userInfoFromSupabaseUser(user), [user]);
   const [detailSelection, setDetailSelection] = useState<MeasurementDetailSelection | null>(null);
@@ -260,57 +295,6 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
     setEditReason,
   });
 
-  // ───────── Sincronização das datas das medições com o Gantt ─────────
-  const ganttStart = useMemo(() => getProjectGanttStartDate(project), [project]);
-  const lastSyncedGanttStartRef = useRef<string | undefined>(ganttStart);
-  const [confirmForceSync, setConfirmForceSync] = useState(false);
-  const [pendingProtectedCount, setPendingProtectedCount] = useState(0);
-
-  const applySync = (force: boolean) => {
-    const result = syncMeasurementDatesWithGantt(projectRef.current, { force });
-    if (!result.changed) {
-      toast({ title: 'Datas já estão sincronizadas com o Gantt' });
-      return;
-    }
-    onProjectChange(result.project);
-    if (activeId === 'live' && result.project.measurementDraft) {
-      setStartDate(result.project.measurementDraft.startDate);
-      setEndDate(result.project.measurementDraft.endDate);
-    }
-    toast({
-      title: 'Medições sincronizadas',
-      description: result.ganttStart ? `Reprogramadas a partir de ${fmtDateBR(result.ganttStart)}.` : undefined,
-    });
-  };
-
-  const handleManualSync = () => {
-    const protectedCount = (project.measurements || []).filter(
-      m => m.status === 'in_review' || m.status === 'approved',
-    ).length;
-    if (protectedCount > 0) {
-      setPendingProtectedCount(protectedCount);
-      setConfirmForceSync(true);
-      return;
-    }
-    applySync(false);
-  };
-
-  // Auto-sincronização quando a data inicial do Gantt muda
-  useEffect(() => {
-    if (!ganttStart) return;
-    if (lastSyncedGanttStartRef.current === ganttStart) return;
-    lastSyncedGanttStartRef.current = ganttStart;
-    const result = syncMeasurementDatesWithGantt(projectRef.current, { force: false });
-    if (result.changed) {
-      onProjectChange(result.project);
-      if (activeId === 'live' && result.project.measurementDraft) {
-        setStartDate(result.project.measurementDraft.startDate);
-        setEndDate(result.project.measurementDraft.endDate);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ganttStart]);
-
   // ───────── EXPORT XLSX / PDF (extraído para useMeasurementExports) ─────────
   const { exportXLSX, handlePrint } = useMeasurementExports({
     project,
@@ -352,26 +336,6 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
   return (
     <div className="measurement-print-root p-4 lg:p-5 pb-56 space-y-4 print:p-0 print:space-y-3" onClickCapture={handleDetailClickCapture}>
       <style>{`
-        .measurement-table { table-layout: fixed; min-width: 1400px; }
-        .measurement-table col.col-item { width: 70px; }
-        .measurement-table col.col-code { width: 90px; }
-        .measurement-table col.col-bank { width: 70px; }
-        .measurement-table col.col-desc { width: 360px; min-width: 280px; max-width: 460px; }
-        .measurement-table col.col-und  { width: 70px; }
-        .measurement-table col.col-qty  { width: 100px; }
-        .measurement-table col.col-val  { width: 120px; }
-        .measurement-table th, .measurement-table td { vertical-align: top; }
-        .measurement-table .cell-desc {
-          overflow-wrap: anywhere;
-          word-break: break-word;
-          white-space: normal;
-          line-height: 1.25;
-        }
-        .measurement-table .cell-und {
-          text-align: center;
-          white-space: nowrap;
-          border-left: 1px solid hsl(var(--border));
-        }
         @media print {
           @page { size: A4 landscape; margin: 8mm; }
           html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; background: white !important; }
@@ -449,7 +413,6 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
         onPrint={handlePrint}
         showHistory={!!activeMeasurement}
         onOpenHistory={() => setHistoryOpen(true)}
-        onSyncWithGantt={ganttStart ? handleManualSync : undefined}
       />
 
       {/* Seletor de medições salvas + status */}
@@ -712,38 +675,7 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
             {!fiscalReviewSummary.hasBlocking && (
               <AlertDialogAction
                 onClick={() => {
-                  // Congela o snapshot a partir das linhas vivas atuais antes de enviar.
-                  if (activeMeasurement) {
-                    const frozenItems = rows.map(r => ({
-                      item: r.item,
-                      phaseId: r.phaseId,
-                      phaseChain: r.phaseChain,
-                      taskId: r.taskId,
-                      description: r.description,
-                      unit: r.unit,
-                      itemCode: r.itemCode,
-                      priceBank: r.priceBank,
-                      qtyContracted: r.qtyContracted,
-                      unitPriceNoBDI: r.unitPriceNoBDI,
-                      unitPriceWithBDI: r.unitPriceWithBDI,
-                      qtyProposed: r.qtyPeriod,
-                      qtyPriorAccum: r.qtyPriorAccum,
-                      notes: r.notes,
-                    }));
-                    onProjectChange({
-                      ...projectRef.current,
-                      measurements: (projectRef.current.measurements || []).map(m =>
-                        m.id === activeMeasurement.id
-                          ? {
-                              ...m,
-                              items: frozenItems,
-                              dailyReportSnapshot: buildDailyReportSnapshot(dailyReportsSummary),
-                            }
-                          : m,
-                      ),
-                    });
-                  }
-                  setStatus('in_review');
+                  resendForReview();
                   setConfirmSendToReview(false);
                 }}
               >
@@ -756,38 +688,12 @@ export default function Measurement({ project, onProjectChange, undoButton, onOp
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Diálogo: Forçar sincronização (medições enviadas/aprovadas) */}
-      <AlertDialog open={confirmForceSync} onOpenChange={setConfirmForceSync}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Existem medições já enviadas ou aprovadas. Deseja reprogramar as datas mesmo assim?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {pendingProtectedCount} medição(ões) em análise ou aprovadas terão suas datas reprogramadas em sequência
-              a partir da data inicial do Cronograma/Gantt. Quantidades, valores e snapshots não serão alterados.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setConfirmForceSync(false);
-                applySync(true);
-              }}
-            >
-              Reprogramar mesmo assim
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Excluir medição nº {activeMeasurement?.number}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Esta ação remove o snapshot e seu histórico permanentemente. A EAP e os apontamentos diários não são afetados.
+              O conteúdo anterior ficará preservado no histórico de exclusão. A EAP e os apontamentos diários não são afetados.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

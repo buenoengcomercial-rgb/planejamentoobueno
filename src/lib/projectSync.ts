@@ -1,3 +1,5 @@
+import { projectWriteOrigin } from '@/lib/projectOperations';
+import type { ProductionCaptureChange } from '@/lib/planTakeoff';
 import { withReadDeadline } from '@/lib/readDeadline';
 /**
  * Sincronização incremental das coleções de alto volume entre o objeto
@@ -215,6 +217,10 @@ function buildSnapshot(
 ): Snapshot {
   const loadedCollections = new Set(collections);
   const snap = emptySnapshot();
+  const uniqueSet = <T,>(map: Map<string, T>, id: string, value: T) => {
+    if (!id || map.has(id)) throw new Error(`Identificador ausente ou duplicado: ${id}. A fotografia anterior foi preservada.`);
+    map.set(id, value);
+  };
   snap.loadedCollections = loadedCollections;
   snap.projectData = stripNormalizedCollections(project);
   if (loadedCollections.has('warehouseMovements')) {
@@ -230,13 +236,13 @@ function buildSnapshot(
     for (const d of project.dailyReports ?? []) snap.dailyReports.set(d.id, d);
   }
   if (loadedCollections.has('measurements')) {
-    for (const m of project.measurements ?? []) snap.measurements.set(m.id, m);
+    for (const m of project.measurements ?? []) uniqueSet(snap.measurements, m.id, m);
   }
   if (loadedCollections.has('additives')) {
     for (const a of project.additives ?? []) snap.additives.set(a.id, a);
   }
   if (loadedCollections.has('auditLogs')) {
-    for (const l of project.auditLogs ?? []) snap.auditLogs.set(l.id, l);
+    for (const l of project.auditLogs ?? []) uniqueSet(snap.auditLogs, l.id, l);
   }
   if (loadedCollections.has('stockMovements')) {
     for (const s of project.stockMovements ?? []) snap.stockMovements.set(s.id, s);
@@ -259,13 +265,13 @@ function buildSnapshot(
 
   const phases = project.phases ?? [];
   phases.forEach((phase, idx) => {
-    if (loadedCollections.has('eapChapters')) snap.chapters.set(phase.id, phaseToChapterRow(phase, idx));
+    if (loadedCollections.has('eapChapters')) uniqueSet(snap.chapters, phase.id, phaseToChapterRow(phase, idx));
     const walkTasksWithOrder = (tasks: Task[], parentTaskId: string | null) => {
       tasks.forEach((t, tIdx) => {
-        if (loadedCollections.has('tasks')) snap.tasks.set(t.id, taskToTaskRow(t, phase.id, parentTaskId, tIdx));
+        if (loadedCollections.has('tasks')) uniqueSet(snap.tasks, t.id, taskToTaskRow(t, phase.id, parentTaskId, tIdx));
         if (loadedCollections.has('taskDailyLogs')) {
           for (const log of t.dailyLogs ?? []) {
-            snap.taskLogs.set(log.id, { taskId: t.id, log });
+            uniqueSet(snap.taskLogs, log.id, { taskId: t.id, log });
           }
         }
         if (t.children?.length) walkTasksWithOrder(t.children, t.id);
@@ -614,6 +620,8 @@ type TaskDataRow = DataRow & {
 type QueryError = { message?: string } | null;
 type QueryResult<T> = { data: T[] | null; error: QueryError };
 
+type CountedQueryResult<T> = QueryResult<T> & { count: number | null };
+
 async function optionalQuery<T>(
   enabled: boolean,
   query: () => PromiseLike<{ data: T[] | null; error: QueryError }>,
@@ -621,6 +629,51 @@ async function optionalQuery<T>(
   if (!enabled) return { data: null, error: null };
   const result = await withReadDeadline(query());
   return { data: result.data, error: result.error };
+}
+
+// Uma resposta HTTP bem-sucedida pode conter só a primeira página do PostgREST.
+// Coleções operacionais só são adotadas quando a contagem exata e todos os IDs
+// foram conferidos. Em caso de falha, o chamador conserva a fotografia anterior.
+const VERIFIED_PAGE_SIZE = 500;
+export async function loadVerifiedRows<T extends { id: string }>(
+  query: (afterId?: string) => PromiseLike<CountedQueryResult<T>>,
+): Promise<QueryResult<T>> {
+  try {
+    const rows: T[] = [];
+    const ids = new Set<string>();
+    let lastId: string | undefined;
+    let expectedCount: number | null = null;
+    while (true) {
+      const result = await query(lastId);
+      if (result.error) return { data: null, error: result.error };
+      if (!Number.isSafeInteger(result.count) || result.count! < 0 || !Array.isArray(result.data)) {
+        throw new Error('A consulta não confirmou a contagem completa dos registros.');
+      }
+      // A contagem do PostgREST respeita o filtro `id > lastId`: nas páginas
+      // seguintes ela representa somente os registros ainda não lidos.
+      if (expectedCount === null) expectedCount = result.count;
+      if (expectedCount !== rows.length + result.count) {
+        throw new Error('A coleção mudou durante o carregamento.');
+      }
+      const page = result.data;
+      for (const row of page) {
+        if (!row.id || ids.has(row.id) || (lastId && row.id <= lastId)) {
+          throw new Error('A paginação devolveu IDs repetidos ou fora de ordem.');
+        }
+        ids.add(row.id);
+        rows.push(row);
+      }
+      if (rows.length > expectedCount) throw new Error('A consulta retornou mais registros que a contagem confirmada.');
+      if (page.length < VERIFIED_PAGE_SIZE) break;
+      lastId = page[page.length - 1].id;
+    }
+    if (rows.length !== expectedCount) throw new Error('A consulta devolveu uma coleção parcial.');
+    const check = await query(undefined);
+    if (check.error || check.count !== expectedCount) throw new Error('A coleção mudou antes da confirmação da carga.');
+    return { data: rows, error: null };
+  } catch (error) {
+    return { data: null, error: error as Error };
+  }
 }
 
 // O PostgREST limita a quantidade de linhas devolvidas por consulta. Saldo de
@@ -693,18 +746,38 @@ export async function hydrateProjectFromCloud(
     optionalQuery<DataRow>(wants.has('warehouseRequisitions'), () => supabase.from('warehouse_requisitions').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('warehouseCustody'), () => supabase.from('warehouse_custody').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('dailyReports'), () => supabase.from('daily_reports').select('id, data').eq('project_id', projectId)),
-    optionalQuery<TaskLogDataRow>(wants.has('taskDailyLogs'), () => supabase.from('task_daily_logs').select('id, task_id, data').eq('project_id', projectId)),
-    optionalQuery<DataRow>(wants.has('measurements'), () => supabase.from('measurements').select('id, data').eq('project_id', projectId)),
+    optionalQuery<TaskLogDataRow>(wants.has('taskDailyLogs'), () => loadVerifiedRows(lastId => {
+      const query = supabase.from('task_daily_logs').select('id, task_id, data', { count: 'exact' })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
+    optionalQuery<DataRow>(wants.has('measurements'), () => loadVerifiedRows(lastId => {
+      const query = supabase.from('measurements').select('id, data', { count: 'exact' })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
     optionalQuery<DataRow>(wants.has('additives'), () => supabase.from('additives').select('id, data').eq('project_id', projectId)),
-    optionalQuery<DataRow>(wants.has('auditLogs'), () => supabase.from('audit_logs').select('id, data').eq('project_id', projectId)),
+    optionalQuery<DataRow>(wants.has('auditLogs'), () => loadVerifiedRows(lastId => {
+      const query = supabase.from('audit_logs').select('id, data', { count: 'exact' })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
     optionalQuery<DataRow>(wants.has('stockMovements'), () => supabase.from('stock_movements').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('materialPriceHistory'), () => supabase.from('material_price_history').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('budgetItems'), () => supabase.from('budget_items').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('materialComparisons'), () => supabase.from('material_comparisons').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('analyticCompositions'), () => supabase.from('analytic_compositions').select('id, data').eq('project_id', projectId)),
     optionalQuery<DataRow>(wants.has('subcontracts'), () => supabase.from('subcontracts').select('id, data').eq('project_id', projectId)),
-    optionalQuery<ChapterDataRow>(wants.has('eapChapters'), () => supabase.from('eap_chapters').select('id, parent_id, order_index, data').eq('project_id', projectId).order('order_index')),
-    optionalQuery<TaskDataRow>(wants.has('tasks'), () => supabase.from('tasks').select('id, chapter_id, parent_task_id, order_index, data').eq('project_id', projectId).order('order_index')),
+    optionalQuery<ChapterDataRow>(wants.has('eapChapters'), () => loadVerifiedRows(lastId => {
+      const query = supabase.from('eap_chapters').select('id, parent_id, order_index, data', { count: 'exact' })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
+    optionalQuery<TaskDataRow>(wants.has('tasks'), () => loadVerifiedRows(lastId => {
+      const query = supabase.from('tasks').select('id, chapter_id, parent_task_id, order_index, data', { count: 'exact' })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
   ]);
 
   const resultByCollection: Record<ProjectCollectionKey, QueryResult<unknown>> = {
@@ -781,6 +854,25 @@ export async function hydrateProjectFromCloud(
 
   const chapterRows = loadedSet.has('eapChapters') ? (chRes.data ?? []) : null;
   const taskRows = loadedSet.has('tasks') ? (tkRes.data ?? []) : null;
+  const knownTasks = taskRows !== null ? new Set(taskRows.map(row => row.id)) : new Set(buildSnapshot(project, ['tasks']).tasks.keys());
+  if (taskLogs?.some(row => !knownTasks.has(row.taskId))) throw new ProjectHydrationError(['taskDailyLogs']);
+  if (chapterRows !== null && taskRows !== null) {
+    const chapterIds = new Set(chapterRows.map(row => row.id));
+    if (taskRows.some(row => !chapterIds.has(row.chapter_id) || (row.parent_task_id && !knownTasks.has(row.parent_task_id)))) {
+      throw new ProjectHydrationError(['tasks', 'eapChapters']);
+    }
+    const parents = new Map(taskRows.map(row => [row.id, row.parent_task_id]));
+    const checked = new Set<string>();
+    for (const row of taskRows) {
+      const path = new Set<string>();
+      let id: string | null = row.id;
+      while (id && !checked.has(id)) {
+        if (path.has(id)) throw new ProjectHydrationError(['tasks']);
+        path.add(id); id = parents.get(id) ?? null;
+      }
+      path.forEach(id => checked.add(id));
+    }
+  }
   const logsByTask = new Map<string, DailyProductionLog[]>();
   if (taskLogs !== null) {
     for (const { taskId, log } of taskLogs) {
@@ -1046,6 +1138,57 @@ function changedRows<T>(previous: Map<string, T>, current: Map<string, T>) {
   return { upserts, deletes };
 }
 
+function assertProductionLogIntent(
+  previous: Snapshot,
+  next: Snapshot,
+  changes: ReturnType<typeof changedRows<{ taskId: string; log: DailyProductionLog }>>,
+  audit: ReturnType<typeof changedRows<AuditLog>>,
+): void {
+  const events = audit.upserts.map(({ row }) => row);
+  const matches = (id: string, taskId: string, action: string) => events.some(event =>
+    event.entityType === 'task' && event.entityId === taskId && event.action === action
+    && (event.metadata as { logId?: string } | undefined)?.logId === id);
+  for (const [id, row] of next.taskLogs) {
+    if (!next.tasks.has(row.taskId)) throw new Error(`O apontamento ${id} perdeu o vínculo com a tarefa. A gravação foi interrompida.`);
+  }
+  for (const { id, row } of changes.upserts) {
+    const before = previous.taskLogs.get(id);
+    if (before && before.taskId !== row.taskId) {
+      throw new Error(`O apontamento ${id} mudou de tarefa sem reconciliação explícita.`);
+    }
+    if (!matches(id, row.taskId, before ? 'updated' : 'created')) {
+      throw new Error(`O apontamento ${id} mudou sem ação auditada. A gravação foi interrompida.`);
+    }
+  }
+  for (const id of changes.deletes) {
+    const before = previous.taskLogs.get(id)!;
+    if (!matches(id, before.taskId, 'deleted')) {
+      throw new Error(`A exclusão do apontamento ${id} não foi autorizada por ação auditada.`);
+    }
+  }
+}
+
+function assertMeasurementIntent(
+  previous: Snapshot,
+  changes: ReturnType<typeof changedRows<SavedMeasurement>>,
+  audit: ReturnType<typeof changedRows<AuditLog>>,
+): void {
+  const events = audit.upserts.map(({ row }) => row);
+  const allowedUpdates = new Set<AuditLog['action']>(['updated', 'approved', 'rejected', 'submitted_for_review']);
+  for (const { id } of changes.upserts) {
+    const before = previous.measurements.has(id);
+    if (!events.some(event => event.entityType === 'measurement' && event.entityId === id
+      && (before ? allowedUpdates.has(event.action) : event.action === 'created'))) {
+      throw new Error(`A medição ${id} mudou sem ação auditada. A gravação foi interrompida.`);
+    }
+  }
+  for (const id of changes.deletes) {
+    if (!events.some(event => event.entityType === 'measurement' && event.entityId === id && event.action === 'deleted')) {
+      throw new Error(`A exclusão da medição ${id} não foi autorizada por ação auditada.`);
+    }
+  }
+}
+
 /** Unloaded history remains append-only: keep acknowledged IDs without claiming a full read. */
 function buildSaveSnapshot(project: Project, previous: Snapshot): Snapshot {
   const next = buildSnapshot(project, [...previous.loadedCollections]);
@@ -1075,13 +1218,16 @@ export async function acknowledgeExistingProjectAudits(project: Project): Promis
 /**
  * Confirma a Produção em uma única transação quando ela é o único domínio
  * normalizado alterado. `null` sinaliza que o save geral deve seguir o caminho
- * de compatibilidade, inclusive se a RPC ainda não tiver sido instalada.
+ * de compatibilidade apenas para alterações sem dados críticos. Uma RPC
+ * ausente nunca autoriza salvar quantitativos em etapas separadas.
  */
 export async function syncProductionAtomically(
   project: Project,
   slim: Project,
   organizationId: string,
   expectedUpdatedAt: string,
+  capture?: ProductionCaptureChange,
+  onPrepared?: (args: Record<string, unknown>) => Promise<void>,
 ): Promise<string | null> {
   assertProjectDeletionSafety(project);
   const previous = snapshots.get(project.id);
@@ -1103,19 +1249,21 @@ export async function syncProductionAtomically(
   const tasks = changedRows(previous.tasks, next.tasks);
   const logs = changedRows(previous.taskLogs, next.taskLogs);
   const audit = changedRows(previous.auditLogs, next.auditLogs);
+  assertProductionLogIntent(previous, next, logs, audit);
   const metadataChanged = !shallowEqualJSON(previous.projectData, slim);
   if (audit.deletes.length > 0 || audit.upserts.some(({ id, row }) => previous.auditLogs.has(id) || !['task', 'project'].includes(row.entityType))) {
     if (deleting) throw new Error('A exclusão precisa de uma auditoria nova da operação.');
     return null;
   }
   if (chapters.upserts.length + chapters.deletes.length + tasks.upserts.length + tasks.deletes.length
-    + logs.upserts.length + logs.deletes.length + audit.upserts.length === 0) return null;
+    + logs.upserts.length + logs.deletes.length + audit.upserts.length === 0 && !capture
+    && !(metadataChanged && projectWriteOrigin(project) === 'gantt')) return null;
 
   const startedAt = Date.now();
   const recordCount = chapters.upserts.length + chapters.deletes.length + tasks.upserts.length
     + tasks.deletes.length + logs.upserts.length + logs.deletes.length + audit.upserts.length;
   if (recordCount > 500 && !deleting) return null;
-  const { data, error } = await supabase.rpc('save_production_domain', {
+  const args = capture?.recovering && capture.rpcArgs ? capture.rpcArgs : {
     p_project_id: project.id,
     p_organization_id: organizationId,
     p_expected_updated_at: expectedUpdatedAt,
@@ -1128,22 +1276,31 @@ export async function syncProductionAtomically(
     p_logs_upsert: logs.upserts.map(({ id, row }) => ({ id, task_id: row.taskId, log_date: row.log.measurementPeriod ? null : row.log.date, data: row.log })) as unknown as Json,
     p_logs_delete: logs.deletes as unknown as Json,
     p_audit_insert: audit.upserts.map(({ id, row }) => ({ id, data: row })) as unknown as Json,
-  });
+  };
+  if (capture && onPrepared) await onPrepared(args);
+  const response = capture
+    ? await supabase.rpc('commit_production_capture' as never, {
+        ...args, p_capture_id: capture.captureId, p_plan_id: capture.before.id, p_plan_revision: capture.before.cloudRevision,
+        p_measures: capture.after.measures, p_scales: capture.after.scales,
+      } as never)
+    : await supabase.rpc((projectWriteOrigin(project) === 'gantt' ? 'save_planning_domain' : 'save_production_domain') as never, args as never);
+  const { data, error } = response;
   if (error) {
-    // Um app atualizado pode abrir antes de o banco receber a migration.
-    if (error.code === 'PGRST202' || error.code === '42883') {
-      if (deleting) throw new Error('A proteção de exclusão ainda não está disponível no servidor. Nenhum registro foi removido.');
-      return null;
-    }
-    recordSyncDiagnostic({ area: 'production', operation: 'save',
-      outcome: error.code === 'P0002' ? 'conflict' : 'failed', durationMs: Date.now() - startedAt, recordCount });
+    recordSyncDiagnostic({ area: 'production', operation: 'save', outcome: error.code === 'P0002' ? 'conflict' : 'failed', durationMs: Date.now() - startedAt, recordCount });
+    if (error.code === 'PGRST202' || error.code === '42883') throw Object.assign(new Error('A proteção de exclusão e gravação ainda não está disponível no servidor. Nenhum registro foi removido.'), { code: error.code });
     throw error;
   }
-  if (typeof data !== 'string' || !data) throw new Error('A transação da Produção não confirmou a versão salva.');
+  const confirmed = capture ? (data as unknown as { updatedAt?: string; revision?: number })?.updatedAt : data;
+  if (typeof confirmed !== 'string' || !confirmed) throw new Error('A transação da Produção não confirmou a versão salva.');
+  if (capture) {
+    const revision = (data as unknown as { revision?: number })?.revision;
+    if (!Number.isSafeInteger(revision) || revision !== capture.before.cloudRevision! + 1) throw new Error('A revisão da planta não foi confirmada.');
+    capture.after.cloudRevision = revision;
+  }
   recordSyncDiagnostic({ area: 'production', operation: 'save', outcome: 'confirmed',
     durationMs: Date.now() - startedAt, recordCount });
   snapshots.set(project.id, next);
-  return data;
+  return confirmed;
 }
 
 type NormalizedDomain = 'measurement' | 'additive' | 'materials' | 'costs';
@@ -1201,7 +1358,7 @@ export async function syncNormalizedDomainAtomically(
   const audit = changes.get('auditLogs');
   const changedDomainCollections = [...changes.keys()].filter(key => key !== 'auditLogs');
   const newAuditTypes = new Set((audit?.upserts ?? []).map(({ row }) => (row as AuditLog).entityType));
-  const domain: NormalizedDomain | null = changedDomainCollections.includes('measurements') || newAuditTypes.has('measurement')
+  const domain: NormalizedDomain | null = changedDomainCollections.includes('measurements') || newAuditTypes.has('measurement') || !shallowEqualJSON(previous.projectData?.measurementDraft, slim.measurementDraft) || !shallowEqualJSON(previous.projectData?.contractInfo, slim.contractInfo)
     ? 'measurement'
     : changedDomainCollections.includes('subcontracts') || newAuditTypes.has('subcontract')
       ? 'costs'
@@ -1221,18 +1378,19 @@ export async function syncNormalizedDomainAtomically(
   });
   const recordCount = batches.reduce((sum, batch) => sum + batch.upserts.length + batch.deletes.length, 0)
     + (audit?.upserts.length ?? 0);
-  if (recordCount === 0 || recordCount > 500) return null;
+  if ((recordCount === 0 && shallowEqualJSON(previous.projectData, slim)) || recordCount > 500) return null;
 
+  if (domain === 'measurement') assertMeasurementIntent(previous, changedRows(previous.measurements, next.measurements), changedRows(previous.auditLogs, next.auditLogs));
   const startedAt = Date.now();
-  const { data, error } = await supabase.rpc('save_normalized_domain', {
+  const { data, error } = await supabase.rpc((projectWriteOrigin(project) === 'additiveSchedule' ? 'save_additive_planning_domain' : 'save_normalized_domain') as never, {
     p_project_id: project.id, p_organization_id: organizationId, p_expected_updated_at: expectedUpdatedAt,
     p_domain: domain, p_name: slim.name,
     p_data: shallowEqualJSON(previous.projectData, slim) ? null : slim as unknown as Json,
     p_changes: batches as unknown as Json,
     p_audit_insert: (audit?.upserts ?? []).map(({ id, row }) => ({ id, data: row })) as unknown as Json,
-  });
+  } as never);
   if (error) {
-    if (error.code === 'PGRST202' || error.code === '42883') return null;
+    if ((error.code === 'PGRST202' || error.code === '42883') && domain !== 'measurement' && projectWriteOrigin(project) !== 'additiveSchedule') return null;
     recordSyncDiagnostic({ area: domain, operation: 'save', outcome: error.code === 'P0002' ? 'conflict' : 'failed',
       durationMs: Date.now() - startedAt, recordCount });
     throw error;
@@ -1286,6 +1444,7 @@ export async function syncCollectionsToCloud(
   userId?: string,
   options: ProjectCollectionSyncOptions = {},
 ): Promise<void> {
+  assertNoUnsafeCriticalCollectionChanges(project);
   assertProjectDeletionSafety(project);
   if (hasProductionDeletions(project)) throw new Error('Exclusões da Produção precisam de confirmação atômica com a auditoria.');
   const projectId = project.id;
@@ -1419,6 +1578,30 @@ export async function syncCollectionsToCloud(
   }
 
   snapshots.set(projectId, next);
+}
+
+/** Deve rodar antes do PATCH da obra, nunca após uma gravação parcial. */
+export function assertNoUnsafeCriticalCollectionChanges(project: Project): void {
+  const previous = snapshots.get(project.id);
+  if (!previous) {
+    const initial = buildSnapshot(project, ['taskDailyLogs', 'measurements']);
+    if (initial.taskLogs.size || initial.measurements.size) {
+      throw new Error('Importação com histórico de Produção ou Medição exige transação própria antes de criar a obra.');
+    }
+    return;
+  }
+  const next = buildSnapshot(project, [...previous.loadedCollections]);
+  if (previous.loadedCollections.has('taskDailyLogs') && previous.loadedCollections.has('tasks')) {
+    for (const [id, row] of previous.taskLogs) {
+      if (!next.tasks.has(row.taskId)) {
+        throw new Error(`A tarefa original do apontamento ${id} desapareceu. A gravação foi interrompida.`);
+      }
+    }
+  }
+  if ((previous.loadedCollections.has('taskDailyLogs') && (changedRows(previous.taskLogs, next.taskLogs).upserts.length + changedRows(previous.taskLogs, next.taskLogs).deletes.length > 0))
+    || (previous.loadedCollections.has('measurements') && (changedRows(previous.measurements, next.measurements).upserts.length + changedRows(previous.measurements, next.measurements).deletes.length > 0))) {
+    throw new Error('Produção diária ou Medição alterada fora da transação específica. Os dados anteriores foram preservados.');
+  }
 }
 
 function diffAndSync<T extends { id: string }>(

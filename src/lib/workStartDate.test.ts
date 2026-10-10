@@ -88,7 +88,7 @@ describe('getWorkStartDate', () => {
     expect(shifted.phases[0].tasks[0]).toMatchObject({
       duration: 2,
       baseline: { startDate: '2026-08-24', endDate: '2026-08-25' },
-      current: { startDate: '2026-08-24', endDate: '2026-08-25' },
+      current: { startDate: '2026-07-31', endDate: '2026-08-01' },
     });
     expect(shifted.phases[0].tasks[1].dependencyDetails).toEqual([{ taskId: 'a', type: 'TI' }]);
     expect(shifted.additives?.[0].scheduleDraft?.plannedTasks[0].startDate).toBe('2026-08-24');

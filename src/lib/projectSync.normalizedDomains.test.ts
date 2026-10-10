@@ -98,7 +98,7 @@ describe('transações por domínio normalizado', () => {
 
     const measurement = { ...base, measurements: [{ ...base.measurements![0], status: 'approved' }] } as Project;
     rpc.mockResolvedValue({ data: null, error: { code: 'PGRST202' } });
-    expect(await save(measurement)).toBeNull();
+    await expect(save(measurement)).rejects.toThrow('sem ação auditada');
   });
 
   it('usa os lotes controlados do fluxo geral em importações acima do limite transacional', async () => {

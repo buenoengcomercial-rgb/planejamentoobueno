@@ -12,13 +12,16 @@ interface Props {
   applied: boolean;
   readOnly: boolean;
   periodMode?: boolean;
+  referenceLabel?: string;
+  heading?: string;
   onCreate: (changes: Partial<ProductionQuantityDetail>) => string | null;
   onEdit: (id: string, changes: Partial<ProductionQuantityDetail>) => boolean;
   onDelete: (id: string) => void;
   onOpenPlan: (id: string, field: DetailField) => void;
   onApply: () => void;
   canOpenPlan?: boolean;
-  clipboard?: QuantityClipboard | null;
+  clipboard?: Pick<QuantityClipboard, 'mode'> & { source: { rowId: string } } | null;
+  onDraftChange?: (rowId: string, changes: Partial<ProductionQuantityDetail>) => void;
   onCopy?: (mode: QuantityClipboardMode, row: ProductionQuantityDetail) => void;
   onPaste?: (afterRowId?: string) => void;
   sharedTaskNames?: (recordId: string) => string[];
@@ -38,7 +41,7 @@ function formulaMeaning(formula: DetailFormula, unit: string): string {
   return `A uds. · B ${measure} (${unit})`;
 }
 
-export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, applied, readOnly, periodMode = false, onCreate, onEdit, onDelete, onOpenPlan, onApply, canOpenPlan = false, clipboard, onCopy, onPaste, sharedTaskNames, onOpenHistory }: Props) {
+export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, applied, readOnly, periodMode = false, onCreate, onEdit, onDelete, onOpenPlan, onApply, canOpenPlan = false, clipboard, onCopy, onPaste, sharedTaskNames, onOpenHistory, onDraftChange, referenceLabel = 'Tarefas', heading = 'Detalhe de quantitativos' }: Props) {
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [selectedField, setSelectedField] = useState<DetailField | null>(null);
   const [linkedInfo, setLinkedInfo] = useState<string | null>(null);
@@ -76,7 +79,7 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
   };
 
   const textField = (row: ProductionQuantityDetail, index: number) => (
-    <input key={`${row.id}-comment-${row.comment}`} aria-label={`Comentário da linha ${index + 1}`} defaultValue={row.comment}
+    <input key={`${row.id}-comment-${row.comment}`} aria-label={`Comentário da linha ${index + 1}`} defaultValue={row.comment} onChange={event => onDraftChange?.(row.id, { comment: event.target.value })}
       disabled={readOnly} onFocus={() => setSelectedRowId(row.id)} onBlur={event => { if (event.target.value !== row.comment && !saveRow(row, { comment: event.target.value })) event.target.value = row.comment; }}
       onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}
       className="h-5 w-full min-w-0 border border-slate-300 bg-white px-1 text-[11px] focus:border-sky-500 focus:outline-none disabled:bg-slate-50" />
@@ -92,7 +95,7 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
     const drawingUnit = source?.resultUnit?.startsWith('u.d.') ? source.resultUnit : null;
     const shownValue = Number((row[key] ?? 0).toFixed(4));
     return <div className="flex items-center justify-end gap-0.5 whitespace-nowrap">
-      <input key={`${row.id}-${key}-${row[key] ?? 0}`} aria-label={`${label} da linha ${index + 1}`} type="number" inputMode="decimal" min="0" step="any" defaultValue={shownValue}
+      <input key={`${row.id}-${key}-${row[key] ?? 0}`} aria-label={`${label} da linha ${index + 1}`} type="number" inputMode="decimal" min="0" step="any" defaultValue={shownValue} onChange={event => onDraftChange?.(row.id, { [key]: event.target.value })}
         title={activeInFormula ? `Coluna ${column} participa de ${formulaLabel[detailFormula(row)]}` : `Coluna ${column} fora de ${formulaLabel[detailFormula(row)]}: o valor fica registrado, mas não altera o parcial`}
         disabled={readOnly} onFocus={() => { setSelectedRowId(row.id); setSelectedField(key); }} onBlur={event => {
           const value = Number(event.target.value.replace(',', '.'));
@@ -116,7 +119,7 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
 
   return <section aria-label="Detalhe de quantitativo" className="ml-2 overflow-hidden border border-slate-300 bg-white text-slate-800 sm:ml-8">
     <div className="flex min-h-6 flex-wrap items-center justify-between gap-x-2 border-b border-slate-300 bg-slate-100 px-2 py-0.5">
-      <strong className="text-[11px]">Detalhe de quantitativos</strong>
+      <strong className="text-[11px]">{heading}</strong>
       <span className="text-[11px] text-slate-600">{periodMode ? `Total registrado no período: ${fmt(dailyQuantity)} ${unit}` : <>Dia: {fmt(dailyQuantity)} {unit} · Subtotal: {fmt(total)} {unit} {rows.length > 0 && <strong className={applied ? 'text-green-700' : 'text-amber-700'}>· {applied ? 'Aplicado ao dia' : 'Pendente de aplicação'}</strong>}</>}</span>
     </div>
     <div role="toolbar" aria-label="Ações do detalhe de quantitativos" className="flex min-h-7 flex-wrap items-center gap-0.5 border-b border-slate-300 bg-slate-50 px-1.5 py-0.5">
@@ -127,7 +130,7 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
       <button type="button" className={buttonStyle} title="Colar linha independente ou mover linha recortada" aria-label="Colar" disabled={readOnly || !onPaste || !clipboard || clipboard.mode === 'reference'} onClick={() => onPaste?.(selectedExisting?.id)}><ClipboardPaste className="h-3.5 w-3.5" /></button>
       <span aria-hidden="true" className="mx-1 h-4 border-l border-slate-300" />
       <button type="button" className={`${buttonStyle} ${clipboard?.mode === 'reference' && clipboard.source.rowId === selectedRowId ? 'border-sky-300 bg-sky-100' : ''}`} title="Copiar referência viva a este registro" aria-label="Copiar referência" aria-pressed={clipboard?.mode === 'reference' && clipboard.source.rowId === selectedRowId} disabled={readOnly || !selectedExisting || !onCopy} onClick={() => selectedExisting && onCopy?.('reference', selectedExisting)}><Copy className="h-3.5 w-3.5" /><Link2 className="absolute bottom-0 right-0 h-2 w-2 bg-slate-50" /></button>
-      <button type="button" className={buttonStyle} title="Colar referência compartilhada nesta tarefa" aria-label="Colar referência" disabled={readOnly || !onPaste || clipboard?.mode !== 'reference'} onClick={() => onPaste?.(selectedExisting?.id)}><ClipboardPaste className="h-3.5 w-3.5" /><Link2 className="absolute bottom-0 right-0 h-2 w-2 bg-slate-50" /></button>
+      <button type="button" className={buttonStyle} title="Colar referência compartilhada nesta linha" aria-label="Colar referência" disabled={readOnly || !onPaste || clipboard?.mode !== 'reference'} onClick={() => onPaste?.(selectedExisting?.id)}><ClipboardPaste className="h-3.5 w-3.5" /><Link2 className="absolute bottom-0 right-0 h-2 w-2 bg-slate-50" /></button>
       {!readOnly && total > 0 && !applied && <button type="button" onClick={onApply} className="h-5 bg-sky-700 px-2 text-[11px] font-medium text-white hover:bg-sky-800">Atualizar realizado pelo detalhe</button>}
       <span className="ml-auto text-[10px] text-slate-500">{selectedRow ? `Linha ${selectedRow.id === blankRow.id ? 'nova' : rows.findIndex(row => row.id === selectedRow.id) + 1}${selectedField ? ` · ${selectedField === 'multiplier' ? 'A' : selectedField === 'measuredQuantity' ? 'B' : selectedField === 'dimensionC' ? 'C' : 'D'}` : ''}` : hasNeutralFactor ? 'Selecione uma linha · 1 neutro nas fórmulas explícitas' : 'Selecione uma linha e a célula da planta'}</span>
     </div>
@@ -140,7 +143,7 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
         </thead>
         <tbody>{displayRows.map((row, index) => { const rowFormulas = formulas.includes(detailFormula(row)) ? formulas : [detailFormula(row), ...formulas]; const blank = index === displayRows.length - 1 && isBlankDetailRow(row); const sources = (['multiplierSource', 'source', 'dimensionCSource', 'dimensionDSource'] as const).flatMap((key, sourceIndex) => row[key] ? [`${'ABCD'[sourceIndex]}: ${row[key]!.planName} · página ${row[key]!.page} · ${row[key]!.measureName} · ${row[key]!.points.length} ponto(s)`] : []); const peers = row.sharedRecordId ? sharedTaskNames?.(row.sharedRecordId) ?? [] : []; return <tr key={row.id === blankRow.id ? `new-${rows.length}` : row.id} onClick={() => setSelectedRowId(row.id)} className={`cursor-pointer border-b border-slate-200 align-top hover:bg-slate-50 ${selectedRowId === row.id ? 'bg-sky-50' : 'bg-white'}`}>
           <td className="border-r border-slate-200 px-0.5 py-0.5"><div className="flex items-center justify-between gap-0.5"><span title={row.location ? `Local registrado anteriormente: ${row.location}` : blank ? 'Nova linha' : `Linha ${index + 1}`} className="min-w-3 text-center tabular-nums text-slate-600">{blank ? '' : index + 1}</span>{!readOnly && row.id !== blankRow.id && !blank && <button type="button" onClick={() => onDelete(row.id)} aria-label={`Excluir linha ${index + 1}`} title="Excluir linha" className="flex h-5 w-4 shrink-0 items-center justify-center text-red-700 hover:bg-red-50"><Trash2 className="h-3 w-3" /></button>}</div></td>
-          <td className="border-r border-slate-200 px-1 py-0.5"><div className="flex items-center gap-1">{textField(row, index)}{sources.length > 0 && <span role="img" aria-label={`Origem na planta da linha ${index + 1}`} title={sources.join('\n')} className="shrink-0 text-slate-500"><Link2 className="h-3 w-3" /></span>}{row.sharedRecordId && <button type="button" aria-label={`Vinculado: ${peers.join(', ')}`} title={`Vinculado a: ${peers.join(', ')}`} onClick={event => { event.stopPropagation(); setLinkedInfo(linkedInfo === row.sharedRecordId ? null : row.sharedRecordId!); }} className="shrink-0 border border-sky-300 bg-sky-50 px-1 text-[9px] text-sky-800">Vinculado</button>}</div>{row.sharedRecordId && linkedInfo === row.sharedRecordId && <div className="mt-0.5 text-[10px] text-slate-600">Tarefas: {peers.join(' · ')}{onOpenHistory && <button type="button" className="ml-2 text-sky-700 underline" onClick={event => { event.stopPropagation(); onOpenHistory(row.sharedRecordId!); }}>Histórico</button>}</div>}</td>
+          <td className="border-r border-slate-200 px-1 py-0.5"><div className="flex items-center gap-1">{textField(row, index)}{sources.length > 0 && <span role="img" aria-label={`Origem na planta da linha ${index + 1}`} title={sources.join('\n')} className="shrink-0 text-slate-500"><Link2 className="h-3 w-3" /></span>}{row.sharedRecordId && <button type="button" aria-label={`Vinculado: ${peers.join(', ')}`} title={`Vinculado a: ${peers.join(', ')}`} onClick={event => { event.stopPropagation(); setLinkedInfo(linkedInfo === row.sharedRecordId ? null : row.sharedRecordId!); }} className="shrink-0 border border-sky-300 bg-sky-50 px-1 text-[9px] text-sky-800">Vinculado</button>}</div>{row.sharedRecordId && linkedInfo === row.sharedRecordId && <div className="mt-0.5 text-[10px] text-slate-600">{referenceLabel}: {peers.join(' · ')}{onOpenHistory && <button type="button" className="ml-2 text-sky-700 underline" onClick={event => { event.stopPropagation(); onOpenHistory(row.sharedRecordId!); }}>Histórico</button>}</div>}</td>
           <td className="border-r border-slate-200 px-0.5 py-0.5"><select aria-label={`Fórmula da linha ${index + 1}`} title={formulaMeaning(detailFormula(row), unit)} value={detailFormula(row)} disabled={readOnly || rowFormulas.length === 1} onChange={event => { if (!saveRow(row, withDetailFormula(row, event.target.value as DetailFormula))) event.target.value = detailFormula(row); }} className="h-5 w-full border border-slate-300 bg-white px-0.5 text-[11px] disabled:bg-slate-50">{rowFormulas.map(formula => <option key={formula} value={formula} disabled={!canChangeDetailFormula(row, formula, unit)}>{formulaLabel[formula]}</option>)}</select></td>
           <td className="border-r border-slate-200 px-0.5 py-0.5 text-right">{numberField(row, index, 'multiplier')}</td><td className="border-r border-slate-200 px-0.5 py-0.5 text-right">{numberField(row, index, 'measuredQuantity')}</td>
           <td className="border-r border-slate-200 px-0.5 py-0.5 text-right">{numberField(row, index, 'dimensionC')}</td><td className="border-r border-slate-200 px-0.5 py-0.5 text-right">{numberField(row, index, 'dimensionD')}</td>

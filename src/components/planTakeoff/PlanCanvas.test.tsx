@@ -37,6 +37,19 @@ afterEach(async () => {
 });
 
 describe('gestos no desenho', () => {
+  it('não desloca o modal ao focar o desenho antes de registrar a coordenada', async () => {
+    const onPoint = vi.fn();
+    render(<PlanCanvas plan={plan} page={1} draft={[]} draftKind="count" drawing selected="" readOnly={false} onPoint={onPoint} onSelect={vi.fn()} onMove={vi.fn()} onPages={vi.fn()} />);
+    await waitFor(() => expect(screen.queryByText('Carregando planta…')).not.toBeInTheDocument());
+    const svg = screen.getByLabelText('Planta e marcações');
+    const [x,y,w,h] = svg.getAttribute('viewBox')!.split(' ').map(Number);
+    vi.spyOn(svg,'focus').mockImplementation(options => {
+      if (!options?.preventScroll) vi.mocked(SVGElement.prototype.getBoundingClientRect).mockReturnValue({left:0,top:100,width:800,height:500,right:800,bottom:600,x:0,y:100,toJSON:()=>({})});
+    });
+    fireEvent(svg,new MouseEvent('pointerdown',{bubbles:true,button:0,clientX:400,clientY:250}));
+    fireEvent(svg,new MouseEvent('pointerup',{bubbles:true,button:0,clientX:400,clientY:250}));
+    expect(onPoint).toHaveBeenCalledWith({x:x+w/2,y:y+h/2});
+  });
   it('mostra captura perpendicular e envia a coordenada ajustada no clique, independentemente do rastreamento', async () => {
     const onPoint = vi.fn();
     render(<PlanCanvas plan={{ ...plan, kind: 'dxf' }} page={1} draft={[{ x: 3, y: -4 }]} draftKind="length" drawing selected="" readOnly={false} onPoint={onPoint} onSelect={vi.fn()} onMove={vi.fn()} onPages={vi.fn()} capturesEnabled captureKinds={['perpendicular']} />);

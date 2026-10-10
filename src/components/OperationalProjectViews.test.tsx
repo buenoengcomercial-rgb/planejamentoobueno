@@ -20,7 +20,7 @@ vi.mock('./ManagementRoutine', () => ({
 vi.mock('./GanttChart', () => ({
   default: (props: { project: Project; onProjectChange: (next: (project: Project) => Project) => void }) => {
     captured.ganttProject = props.project;
-    return <button onClick={() => props.onProjectChange(project => ({ ...project, name: 'Cronograma editado' }))}>Editar cronograma</button>;
+    return <button onClick={() => props.onProjectChange(project => ({ ...project, name: 'Renomeação indevida', startDate: '2026-10-01' }))}>Editar cronograma</button>;
   },
 }));
 
@@ -63,6 +63,7 @@ describe('projeções operacionais sob demanda', () => {
     expect(captured.ganttProject?.id).toBe(project.id);
     fireEvent.click(screen.getByRole('button', { name: 'Editar cronograma' }));
     const updater = onProjectChange.mock.calls[0][0] as (previous: Project) => Project;
-    expect(updater(project).name).toBe('Cronograma editado');
+    expect(updater(project).name).toBe('Obra original');
+    expect(updater(project).startDate).toBe('2026-10-01');
   });
 });

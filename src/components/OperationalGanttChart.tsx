@@ -1,3 +1,4 @@
+import { applyProjectOperation } from '@/lib/projectOperations';
 import { useCallback, useMemo, type ComponentProps } from 'react';
 
 import { buildOperationalProjectFromPendingAdditives, getPendingAdditiveScheduleControls } from '@/lib/additiveSchedule';
@@ -21,9 +22,9 @@ export default function OperationalGanttChart({ project, onProjectChange, ...pro
     onProjectChange(previous => {
       const previousOperational = buildOperationalProjectFromPendingAdditives(previous);
       const nextOperational = typeof next === 'function' ? next(previousOperational) : next;
-      return mergeOperationalProjectIntoRaw(previous, nextOperational);
+      return mergeOperationalProjectIntoRaw(previous, applyProjectOperation('gantt', previousOperational, operationalProject, nextOperational));
     });
-  }, [onProjectChange]);
+  }, [onProjectChange, operationalProject]);
 
   return (
     <GanttChart

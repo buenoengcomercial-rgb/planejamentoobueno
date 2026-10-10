@@ -57,12 +57,6 @@ function shiftTask(task: Task, days: number): Task {
       startDate: shiftISODate(task.baseline.startDate, days) ?? task.baseline.startDate,
       endDate: shiftISODate(task.baseline.endDate, days) ?? task.baseline.endDate,
     } : task.baseline,
-    current: task.current ? {
-      ...task.current,
-      startDate: shiftISODate(task.current.startDate, days) ?? task.current.startDate,
-      endDate: shiftISODate(task.current.endDate, days) ?? task.current.endDate,
-      forecastEndDate: shiftISODate(task.current.forecastEndDate, days),
-    } : task.current,
   };
 }
 

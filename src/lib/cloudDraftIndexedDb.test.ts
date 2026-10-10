@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import { createProjectDraft, readStoredProjectDraft } from '@/lib/cloudProjectDraftCore';
+import { readCaptureDraft, writeCaptureDraft, type ProductionCaptureDraft } from '@/lib/productionCaptureDraft';
 import {
   clearIndexedDbProjectDraft,
   getCachedIndexedDbProjectDraft,
@@ -48,6 +49,19 @@ beforeAll(() => {
 });
 
 describe('rascunho grande no IndexedDB', () => {
+  it('preserva captura com arquivo e pedido idempotente, separada por usuário e obra', async () => {
+    const project = {id:'capture-project',name:'Obra',phases:[],totalBudget:0} as Project;
+    const plan = {id:'plan',name:'Planta',floor:'Térreo',kind:'image' as const,file:new Blob(['arquivo']),measures:[],scales:{}};
+    const draft: ProductionCaptureDraft = {before:project,candidate:project,savedAt:'2026-10-09',change:{before:plan,after:plan,captureId:'receipt-id',rpcArgs:{p_expected_updated_at:'old-version'}}};
+    await writeCaptureDraft('org:user:project',draft);
+    expect(await readCaptureDraft('org:other-user:project')).toBeNull();
+    expect(await readCaptureDraft('org:user:other-project')).toBeNull();
+    const restored = await readCaptureDraft('org:user:project');
+    expect(restored?.change.rpcArgs).toEqual(draft.change.rpcArgs);
+    expect(restored?.change.after.file.size).toBe(7);
+    await writeCaptureDraft('org:user:project',null);
+    expect(await readCaptureDraft('org:user:project')).toBeNull();
+  });
   it('recupera o rascunho confirmado e o remove após confirmação na nuvem', async () => {
     const project = { id: 'indexed-project-1', name: 'Obra', phases: [], totalBudget: 0 } as Project;
     const draft = createProjectDraft(project, '2026-09-30T10:00:00Z', { loadedCollections: ['tasks'] });

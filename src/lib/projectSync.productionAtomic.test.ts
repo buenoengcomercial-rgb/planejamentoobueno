@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import { clearCloudSnapshot, confirmProjectCollectionsSnapshot, getLoadedProjectCollections, setCloudSnapshot, stripNormalizedCollections, syncProductionAtomically } from '@/lib/projectSync';
+import { applyProjectOperation } from '@/lib/projectOperations';
+import type { TakeoffPlan } from '@/lib/planTakeoff';
 
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock('@/integrations/supabase/client', () => ({ supabase: { rpc } }));
@@ -20,6 +22,34 @@ afterEach(() => {
 });
 
 describe('transação de Produção', () => {
+  it('exclusão implícita e identificadores duplicados não chegam ao servidor', async () => {
+    const log = { id:'old',date:'2026-10-01',plannedQuantity:0,actualQuantity:3 };
+    const existing = { ...base, phases: [{...base.phases[0],tasks:[{...base.phases[0].tasks[0],dailyLogs:[log]}]}] };
+    setCloudSnapshot(base.id,existing);
+    await expect(syncProductionAtomically(base,stripNormalizedCollections(base),'org','version')).rejects.toThrow(/exclusão/i);
+    const duplicate = {...existing,phases:[{...existing.phases[0],tasks:[{...existing.phases[0].tasks[0],dailyLogs:[log,log]}]}]};
+    await expect(syncProductionAtomically(duplicate,stripNormalizedCollections(duplicate),'org','version')).rejects.toThrow('duplicado');
+    expect(rpc).not.toHaveBeenCalled();
+  });
+  it('calendário e auditoria do Cronograma usam a transação restrita de planejamento', async () => {
+    setCloudSnapshot(base.id,base);
+    const candidate = {...base,startDate:'2026-12-01',auditLogs:[{id:'calendar-audit',entityType:'project' as const,entityId:base.id,action:'updated' as const,at:'2026-10-09',title:'Calendário'}]};
+    const next = applyProjectOperation('gantt',base,base,candidate);
+    rpc.mockResolvedValue({data:'confirmed',error:null});
+    expect(await syncProductionAtomically(next,stripNormalizedCollections(next),'org','version')).toBe('confirmed');
+    expect(rpc).toHaveBeenCalledWith('save_planning_domain',expect.objectContaining({p_logs_upsert:[],p_logs_delete:[],p_data:expect.objectContaining({startDate:'2026-12-01'})}));
+  });
+  it('resposta inválida não confirma captura; nova tentativa conserva o mesmo estado anterior', async () => {
+    setCloudSnapshot(base.id,base);
+    const before = {id:'plan',cloudRevision:1,scales:{},measures:[]} as unknown as TakeoffPlan;
+    const change = {before,after:{...before,measures:[]},captureId:'capture'};
+    rpc.mockResolvedValueOnce({data:{updatedAt:'v2',revision:3},error:null});
+    await expect(syncProductionAtomically(base,stripNormalizedCollections(base),'org','v1',change)).rejects.toThrow('revisão');
+    rpc.mockResolvedValueOnce({data:{updatedAt:'v2',revision:2},error:null});
+    expect(await syncProductionAtomically(base,stripNormalizedCollections(base),'org','v1',change)).toBe('v2');
+    expect(change.after.cloudRevision).toBe(2);
+    expect(rpc).toHaveBeenLastCalledWith('commit_production_capture',expect.objectContaining({p_plan_revision:1,p_capture_id:'capture'}));
+  });
   it('confirma exclusão auditada com produção carregada, sem baixar as outras áreas ou histórico', async () => {
     confirmProjectCollectionsSnapshot(base, ['eapChapters', 'tasks', 'taskDailyLogs'], { replaceExisting: true });
     rpc.mockResolvedValue({ data: 'v2', error: null });
@@ -48,14 +78,14 @@ describe('transação de Produção', () => {
     setCloudSnapshot(base.id, existing);
     rpc.mockResolvedValue({ data: '2026-10-09T00:00:00Z', error: null });
     const record = { id: 'period-record', date: '', plannedQuantity: 0, actualQuantity: 3, measurementPeriod: { number: 1, startDate: '2026-10-01', endDate: '2026-10-31' } };
-    const next = { ...existing, phases: existing.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task, dailyLogs: [...task.dailyLogs, record] })) })) };
-    await syncProductionAtomically(next, stripNormalizedCollections(next), 'org-1', '2026-10-01T00:00:00Z');
+    const next = { ...existing, auditLogs: [{ id: 'audit-period', entityType: 'task' as const, entityId: 'task-1', action: 'created' as const, at: '2026-10-09', title: 'Período', metadata: { logId: 'period-record' } }], phases: existing.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({ ...task, dailyLogs: [...task.dailyLogs, record] })) })) };
+    await syncProductionAtomically(next as Project, stripNormalizedCollections(next as Project), 'org-1', '2026-10-01T00:00:00Z');
     expect(rpc).toHaveBeenCalledWith('save_production_domain', expect.objectContaining({ p_logs_upsert: [expect.objectContaining({ id: 'period-record', log_date: null, data: record })], p_logs_delete: [], p_data: null }));
   });
   it('persiste a memória e os pontos do detalhe junto ao log diário, sem alterar outros domínios', async () => {
     setCloudSnapshot(base.id, base);
     rpc.mockResolvedValue({ data: '2026-10-02T00:00:00Z', error: null });
-    const next: Project = { ...base, phases: base.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({
+    const next: Project = { ...base, auditLogs: [{ id: 'audit-capture', entityType: 'task', entityId: 'task-1', action: 'created', at: '2026-10-02', title: 'Captura', metadata: { logId: 'log-1' } }], phases: base.phases.map(phase => ({ ...phase, tasks: phase.tasks.map(task => ({
       ...task,
       dailyLogs: [{ id: 'log-1', date: '2026-10-02', plannedQuantity: 10, actualQuantity: 2, quantityDetailsAppliedTotal: 2,
         quantityDetails: [{ id: 'detail-1', location: 'Térreo', comment: 'Placas', multiplier: 1, measuredQuantity: 2,
@@ -110,8 +140,8 @@ describe('transação de Produção', () => {
     rpc.mockResolvedValueOnce({ data: null, error: { code: 'PGRST202' } })
       .mockResolvedValueOnce({ data: '2026-10-01T00:00:00Z', error: null });
 
-    expect(await syncProductionAtomically(next, stripNormalizedCollections(next), 'org-1', '2026-09-30T23:00:00Z'))
-      .toBeNull();
+    await expect(syncProductionAtomically(next, stripNormalizedCollections(next), 'org-1', '2026-09-30T23:00:00Z'))
+      .rejects.toMatchObject({ code: 'PGRST202' });
     expect(await syncProductionAtomically(next, stripNormalizedCollections(next), 'org-1', '2026-09-30T23:00:00Z'))
       .toBe('2026-10-01T00:00:00Z');
     expect(rpc).toHaveBeenCalledTimes(2);

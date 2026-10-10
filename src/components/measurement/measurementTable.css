@@ -1,0 +1,110 @@
+        .measurement-table { table-layout: fixed; min-width: 1400px; }
+        .measurement-table col.col-item { width: 70px; }
+        .measurement-table col.col-code { width: 90px; }
+        .measurement-table col.col-bank { width: 70px; }
+        .measurement-table col.col-desc { width: 360px; min-width: 280px; max-width: 460px; }
+        .measurement-table col.col-und  { width: 70px; }
+        .measurement-table col.col-qty  { width: 100px; }
+        .measurement-table col.col-val  { width: 120px; }
+        .measurement-table th, .measurement-table td { vertical-align: top; }
+        .measurement-table .cell-desc {
+          overflow-wrap: anywhere;
+          word-break: break-word;
+          white-space: normal;
+          line-height: 1.25;
+        }
+        .measurement-table .cell-und {
+          text-align: center;
+          white-space: nowrap;
+          border-left: 1px solid hsl(var(--border));
+        }
+.measurement-table-scroll { container-type: inline-size; }
+.measurement-inline-detail { position: sticky; left: 4px; width: calc(100cqw - 12px); max-width: 100%; }
+.measurement-table--ledger { min-width: 0; width: 100%; }
+.measurement-table--ledger col.col-item { width: 4.2%; }
+.measurement-table--ledger col.col-code { width: 4.8%; }
+.measurement-table--ledger col.col-bank { width: 5%; }
+.measurement-table--ledger col.col-desc { width: 17.6%; min-width: 0; max-width: none; }
+.measurement-table--ledger col.col-und { width: 4%; }
+.measurement-table--ledger col.col-qty { width: 4.2%; }
+.measurement-table--ledger col.col-val { width: 7.4%; }
+.measurement-table--ledger col:is(:nth-child(9), :nth-child(11), :nth-child(13), :nth-child(15)) { width: 8.2%; }
+.measurement-table--ledger > :is(thead, tbody, tfoot) > tr > :is(th, td) { padding-inline: 4px; text-align: center; overflow-wrap: normal; word-break: normal; }
+.measurement-table--ledger > thead > tr:last-child > th { padding-inline: 2px; }
+.measurement-table--ledger > tbody > tr > td:first-child[colspan] { text-align: left; }
+.measurement-table--ledger [data-measurement-row] > td:first-child { padding-left: 4px !important; }
+.measurement-table--ledger input { text-align: center; overflow-wrap: normal; word-break: normal; }
+.measurement-table--ledger > thead > tr:last-child > th:nth-child(4),
+.measurement-table--ledger .cell-desc, .measurement-table--ledger .cell-desc button { text-align: left; overflow-wrap: normal; word-break: normal; }
+.measurement-table--ledger [data-measurement-row] > td > div { justify-content: center; }
+.measurement-table--ledger [data-measurement-row] > td.cell-desc > div { justify-content: flex-start; }
+.measurement-table--ledger [data-measurement-row] > td:nth-child(2) > span,
+.measurement-table--ledger [data-measurement-row] > td:nth-child(3) > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.measurement-table--ledger > tbody > tr > td > span { padding-inline: 0; }
+.measurement-table--ledger > tbody > tr > td > div > span.tabular-nums { padding-inline: 0; }
+.measurement-analytic-table col.col-code, .measurement-analytic-table col.col-bank { width: 8%; }
+.measurement-analytic-table col.col-desc { width: 36%; }
+.measurement-analytic-table col.col-und { width: 6%; }
+.measurement-analytic-table col.col-qty { width: 9%; }
+.measurement-analytic-table col.col-val { width: 11%; }
+.measurement-analytic-table :is(th, td) { text-align: center; overflow-wrap: normal; word-break: normal; }
+.measurement-analytic-table :is(th, td):nth-child(3) { text-align: left; }
+@container (max-width: 1199px) {
+  .measurement-table--ledger { min-width: 1200px; }
+}
+
+/* Override the app-wide 12px minimum only in this dense, on-screen ledger. */
+@media screen {
+  .measurement-table--ledger,
+  .measurement-table--ledger :is(th, td, button, input, span) { font-size: 11px; line-height: 1.45; }
+  .measurement-table--ledger > :is(thead, tbody, tfoot) > tr > :is(th, td) { padding-inline: 6px; }
+  .measurement-table--ledger > :is(tbody, tfoot) > tr > td.tabular-nums { padding-inline: 4px; }
+  .measurement-table--ledger > tbody > [data-measurement-row] > td {
+    padding-block: 6px;
+    vertical-align: middle;
+    border-bottom: 1px solid hsl(var(--border) / 0.65);
+  }
+  .measurement-table--ledger > tbody > [data-measurement-row] > .cell-desc { padding-inline: 10px; }
+  .measurement-table--ledger > tbody > [data-measurement-row] > .cell-und { padding-inline: 2px; }
+  .measurement-table--ledger > tbody > [data-measurement-row] > [data-quantity-cell] { padding-inline: 2px; }
+  .measurement-table--ledger [data-quantity-cell] input { padding-inline: 1px; }
+  .measurement-table--ledger > thead > tr:last-child > th:nth-child(4) { padding-inline: 10px; }
+  .measurement-table--ledger .cell-desc :is(button, span) { line-height: 1.5; }
+  .measurement-table--ledger .chapter-row button { text-align: left; }
+  .measurement-table--ledger .chapter-row button > svg { flex-shrink: 0; }
+  .measurement-table--ledger > tbody > [data-measurement-row]:hover > td { box-shadow: inset 0 0 0 999px hsl(var(--primary) / 0.035); }
+  .measurement-table--ledger > tbody > [data-measurement-row].ring-2 > td { border-block: 1px solid hsl(var(--primary) / 0.45); }
+  .measurement-table--ledger > tbody > [data-measurement-row].ring-2 > [data-quantity-cell] {
+    background: hsl(var(--primary) / 0.12);
+    box-shadow: inset 0 0 0 1px hsl(var(--primary) / 0.7);
+  }
+  .measurement-table--ledger :is(button, input):focus-visible { outline: 2px solid hsl(var(--primary)); outline-offset: 1px; }
+  .measurement-table-pane .measurement-table-scroll { scroll-padding-block: 76px 42px; }
+  @container (max-width: 1100px) {
+    .measurement-table--ledger > :is(thead, tbody, tfoot) > tr > :is(th, td) { padding-inline: 3px; }
+  }
+}
+@media screen and (max-width: 639px) {
+  .measurement-table--ledger input { font-size: 16px; }
+}
+
+/* Screen-only workspace: the exported measurement keeps its existing layout. */
+.measurement-workspace { display: flex; flex-direction: column; gap: 8px; }
+.measurement-workspace > * { flex-shrink: 0; }
+.measurement-split-workspace { height: calc(100dvh - 2rem); min-height: 32rem; min-width: 0; }
+.measurement-table-pane { display: flex; flex-direction: column; height: 100%; border-radius: 2px; box-shadow: none; }
+.measurement-table-pane > :last-child { display: flex; flex: 1; min-height: 0; }
+.measurement-table-pane .measurement-table-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior-x: contain; overscroll-behavior-y: auto; }
+.measurement-table-pane .measurement-table-scroll > table { height: 100%; }
+.measurement-table-space { height: 100%; }
+.measurement-table-pane .measurement-table-space > td { padding: 0; border: 0; background: white; }
+.measurement-table-pane thead tr:last-child th { background: hsl(var(--muted)); }
+.measurement-split-workspace .measurement-split-handle { height: 10px; flex-shrink: 0; cursor: row-resize; background: hsl(var(--muted)); border-block: 1px solid hsl(var(--border)); }
+.measurement-split-handle:hover, .measurement-split-handle:focus-visible { background: hsl(var(--primary) / 0.15); }
+.measurement-detail-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; border: 1px solid hsl(var(--border)); background: white; }
+.measurement-detail-pane { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.measurement-detail-pane > section { margin-left: 0; border: 0; }
+.measurement-financial-summary { padding: 12px; display: grid; gap: 12px; background: hsl(var(--background)); }
+@media (max-width: 767px) {
+  .measurement-split-workspace .measurement-split-handle { height: 20px; }
+}

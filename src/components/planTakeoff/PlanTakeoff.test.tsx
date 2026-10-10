@@ -3,11 +3,23 @@ import { forwardRef, useEffect } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanTakeoff from './PlanTakeoff';
 import { readTakeoffs, saveTakeoffs, type TakeoffPlan } from '@/lib/planTakeoff';
-vi.mock('@/lib/planTakeoff', async importOriginal => ({ ...await importOriginal<object>(), readTakeoffs: vi.fn(), saveTakeoffs: vi.fn() }));
+vi.mock('@/lib/planTakeoff', async importOriginal => ({ ...await importOriginal<object>(), readTakeoffs: vi.fn(), saveTakeoffs: vi.fn(), confirmAtomicTakeoffCache: vi.fn() }));
 vi.mock('./PlanCanvas', () => ({ default: forwardRef<HTMLButtonElement, { onPoint: (p: { x: number; y: number }) => void; onFinish?: () => void; onReady?: (ready: boolean) => void; plan: TakeoffPlan }>(function MockCanvas({ onPoint, onFinish, onReady, plan }, ref) { useEffect(() => { onReady?.(true); }, [onReady]); return <><button ref={ref} onClick={() => onPoint({ x: 1, y: 1 })}>Ponto de teste</button><button onClick={() => onPoint({ x: 4, y: 5 })}>Segundo ponto de teste</button><button onClick={onFinish}>Botão direito de teste</button><span data-testid="visible-measures">{plan.measures.map(measure => measure.id).join(',')}</span></>; }) }));
 const example: TakeoffPlan = { id: 'p', name: 'Planta', floor: 'Térreo', chapterId: 'building-1', building: 'Prédio principal', file: new Blob(), kind: 'image', scales: {}, measures: [] };
 beforeEach(() => { vi.mocked(readTakeoffs).mockResolvedValue([example]); vi.mocked(saveTakeoffs).mockReset().mockResolvedValue(); });
 describe('teste independente de levantamento', () => {
+  it('preserva os três pontos quando a transação da Produção falha, sem salvar a planta separadamente', async () => {
+    const onUseMeasure = vi.fn().mockResolvedValue(false);
+    const key = JSON.stringify(Array.from({length:3}, (_, i) => `00000000-0000-4000-8000-00000000000${i+1}`));
+    render(<PlanTakeoff storageKey={key} readOnly={false} embedded chapterId="building-1" measureContext={{taskId:'t',logId:'l'}} onUseMeasure={onUseMeasure} />);
+    fireEvent.click(await screen.findByRole('button', {name:'Contagem'}));
+    for (let i = 0; i < 3; i++) fireEvent.click(screen.getByText('Ponto de teste'));
+    fireEvent.click(screen.getByRole('button', {name:'Concluir traçado'}));
+    await waitFor(() => expect(onUseMeasure).toHaveBeenCalled());
+    expect(saveTakeoffs).not.toHaveBeenCalled();
+    expect(screen.getByText('3 pontos')).toBeInTheDocument();
+    expect(screen.getByRole('button', {name:'Concluir traçado'})).toBeEnabled();
+  });
   it('remove somente a ocorrência sem tarefa, preserva planta e referências e permite desfazer', async () => {
     const orphan = { id: 'orphan', name: 'Contagem antiga', kind: 'count' as const, page: 1, points: [{ x: 1, y: 1 }, { x: 2, y: 2 }] };
     const linked = { ...orphan, id: 'linked', name: 'Referência antiga' };
@@ -72,7 +84,7 @@ describe('teste independente de levantamento', () => {
     fireEvent.click(screen.getByText('Ponto de teste'));
     fireEvent.click(screen.getByText('Ponto de teste'));
     fireEvent.click(screen.getByRole('button', { name: 'Concluir traçado' }));
-    await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.objectContaining({ id: 'p' }), expect.objectContaining({ kind: 'count', points: [{ x: 1, y: 1 }, { x: 1, y: 1 }, { x: 1, y: 1 }] }), 3));
+    await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.objectContaining({ id: 'p' }), expect.objectContaining({ kind: 'count', points: [{ x: 1, y: 1 }, { x: 1, y: 1 }, { x: 1, y: 1 }] }), 3, expect.objectContaining({ id: 'p' })));
     expect(screen.getByText('Salvo no navegador')).toBeInTheDocument();
     expect(saveTakeoffs).toHaveBeenCalledWith('user/project', expect.arrayContaining([expect.objectContaining({ measures: [expect.objectContaining({ kind: 'count', taskId: 'task-1', logId: 'day-1' })] })]), [example]);
   });
@@ -83,7 +95,7 @@ describe('teste independente de levantamento', () => {
     fireEvent.click(screen.getByText('Ponto de teste'));
     fireEvent.click(screen.getByText('Ponto de teste'));
     fireEvent.click(screen.getByText('Botão direito de teste'));
-    await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'count', points: [{ x: 1, y: 1 }, { x: 1, y: 1 }] }), 2));
+    await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'count', points: [{ x: 1, y: 1 }, { x: 1, y: 1 }] }), 2, expect.objectContaining({ id: 'p' })));
     expect(screen.getByRole('button', { name: 'Contagem' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('0 pontos')).toBeInTheDocument();
   });
@@ -102,7 +114,7 @@ describe('teste independente de levantamento', () => {
     vi.mocked(readTakeoffs).mockResolvedValueOnce([{ ...example, measures: [{ id: 'placas', name: 'Placas executadas', kind: 'count', page: 1, points: [{ x: 1, y: 2 }, { x: 3, y: 4 }, { x: 5, y: 6 }] }] }]);
     render(<PlanTakeoff storageKey="user/project" readOnly={false} embedded chapterId="building-1" measureContext={{ taskId: 'task-1', logId: 'day-1' }} linkedMeasureIds={['placas']} focusMeasure={{ planId: 'p', page: 1, measureId: 'placas' }} onUseMeasure={onUseMeasure} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Usar marcação selecionada' }));
-    await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.objectContaining({ id: 'p' }), expect.objectContaining({ id: 'placas', taskId: 'task-1', logId: 'day-1' }), 3));
+    await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.objectContaining({ id: 'p' }), expect.objectContaining({ id: 'placas', taskId: 'task-1', logId: 'day-1' }), 3, expect.objectContaining({ id: 'p' })));
     expect(saveTakeoffs).toHaveBeenCalledWith('user/project', expect.arrayContaining([expect.objectContaining({ measures: [expect.objectContaining({ id: 'placas', taskId: 'task-1', logId: 'day-1' })] })]), expect.any(Array));
     expect(screen.queryByRole('region', { name: 'Detalhe dos levantamentos' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Excluir marcação selecionada' })).toBeInTheDocument();
@@ -236,7 +248,7 @@ describe('teste independente de levantamento', () => {
     fireEvent.click(length);
     fireEvent.click(screen.getByText('Ponto de teste'));
     fireEvent.click(screen.getByText('Segundo ponto de teste'));
-    await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'linearLength' }), 5));
+    await waitFor(() => expect(onUseMeasure).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'linearLength' }), 5, expect.objectContaining({ id: 'p' })));
     expect(screen.getByRole('button', { name: 'Comprimento linear' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('0 pontos')).toBeInTheDocument();
     fireEvent.click(screen.getByText('Ponto de teste'));
@@ -279,7 +291,7 @@ describe('teste independente de levantamento', () => {
     fireEvent.change(name, { target: { value: 'Novo nome' } });
     expect(saveTakeoffs).not.toHaveBeenCalled();
     fireEvent.blur(name);
-    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: 'p' }), expect.objectContaining({ name: 'Novo nome' }), 1));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: 'p' }), expect.objectContaining({ name: 'Novo nome' }), 1, expect.objectContaining({ id: 'p' })));
     await waitFor(() => expect(saveTakeoffs).toHaveBeenLastCalledWith('obra', [original], expect.any(Array)));
     expect(screen.getByRole('textbox', { name: 'Renomear marcação selecionada' })).toHaveValue('Placas executadas');
   });

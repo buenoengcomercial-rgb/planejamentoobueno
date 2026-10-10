@@ -1,7 +1,6 @@
-import type { Project, Task, Phase, SavedMeasurement } from '@/types/project';
+import type { Project, Task, Phase } from '@/types/project';
 import { getChapterTree, getChapterNumbering, type ChapterNode } from '@/lib/chapters';
 import { sortTasksForContract } from '@/lib/taskOrdering';
-import { buildDailyReportSnapshot, summarizeDailyReportsForPeriod } from '@/lib/dailyReportSummary';
 import type { GroupTotals } from './types';
 
 // ───────────────────────── Helpers de formatação ─────────────────────────
@@ -16,6 +15,8 @@ export const fmtBRL = (n: number) => {
     maximumFractionDigits: 2,
   });
 };
+// Keep the currency symbol and amount together, including table/group totals.
+export const fmtTableBRL = fmtBRL;
 export const fmtNum = (n: number) => n.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 export const fmtCoefficient = (n: number) => n.toLocaleString('pt-BR', {
   minimumFractionDigits: 7,
@@ -174,8 +175,6 @@ export function buildMeasurementPeriodsFromStart(
   return out;
 }
 
-const PROTECTED_STATUSES = new Set(['in_review', 'approved']);
-
 export interface SyncMeasurementsResult {
   project: Project;
   changed: boolean;
@@ -183,95 +182,7 @@ export interface SyncMeasurementsResult {
   ganttStart?: string;
 }
 
-/**
- * Ressincroniza as datas das medições e do rascunho com a data inicial do Gantt.
- * - Cada medição passa a ter 30 dias corridos.
- * - Medições com status `in_review` ou `approved` NÃO são alteradas a menos que `force=true`.
- * - Atualiza `dailyReportSnapshot` quando o período for de fato modificado.
- * - Atualiza `measurementDraft` para a próxima medição em preparação.
- */
-export function syncMeasurementDatesWithGantt(
-  project: Project,
-  opts: { force?: boolean } = {},
-): SyncMeasurementsResult {
-  const ganttStart = getProjectGanttStartDate(project);
-  if (!ganttStart) {
-    return { project, changed: false, protectedCount: 0, ganttStart: undefined };
-  }
-
-  const sorted = (project.measurements || []).slice().sort((a, b) => a.number - b.number);
-  let cursor = ganttStart;
-  let changed = false;
-  let protectedCount = 0;
-
-  const updated: SavedMeasurement[] = sorted.map(m => {
-    const isProtected = PROTECTED_STATUSES.has(m.status);
-    if (isProtected && !opts.force) {
-      protectedCount++;
-      cursor = isoAddDays(m.endDate, 1);
-      return m;
-    }
-    const newStart = cursor;
-    const newEnd = isoAddDays(newStart, 29);
-    cursor = isoAddDays(newEnd, 1);
-    if (m.startDate === newStart && m.endDate === newEnd) return m;
-    changed = true;
-    const summary = summarizeDailyReportsForPeriod(project, newStart, newEnd);
-    return {
-      ...m,
-      startDate: newStart,
-      endDate: newEnd,
-      dailyReportSnapshot: buildDailyReportSnapshot(summary),
-    };
-  });
-
-  // Rascunho
-  const lastNum = sorted[sorted.length - 1]?.number || 0;
-  const draftNumber = lastNum + 1;
-  const draftStart = cursor;
-  const draftEnd = isoAddDays(draftStart, 29);
-  const cur = project.measurementDraft;
-  let nextDraft = cur;
-  if (
-    !cur ||
-    cur.number !== draftNumber ||
-    cur.startDate !== draftStart ||
-    cur.endDate !== draftEnd
-  ) {
-    nextDraft = {
-      number: draftNumber,
-      startDate: draftStart,
-      endDate: draftEnd,
-      chapterFilter: cur?.chapterFilter || 'all',
-      search: cur?.search || '',
-    };
-    changed = true;
-  }
-
-  // A sincronização manual Gantt -> Medição já parte do cronograma atual.
-  // Marcar a data como aplicada evita deslocar o mesmo intervalo uma segunda vez.
-  const authoritativeStart = updated[0]?.startDate ?? nextDraft?.startDate;
-  const markGanttStartAsApplied = authoritativeStart === ganttStart;
-  if (markGanttStartAsApplied && project.uiState?.ganttWorkStartDateApplied !== ganttStart) {
-    changed = true;
-  }
-
-  if (!changed) {
-    return { project, changed: false, protectedCount, ganttStart };
-  }
-
-  return {
-    project: {
-      ...project,
-      measurements: updated,
-      measurementDraft: nextDraft,
-      uiState: markGanttStartAsApplied ? {
-        ...(project.uiState ?? {}),
-        ganttWorkStartDateApplied: ganttStart,
-      } : project.uiState,
-    },
-    changed: true,
-    protectedCount,
-    ganttStart,
-  };
+/** @deprecated Measurement periods are owned exclusively by Medição. Compatibility no-op. */
+export function syncMeasurementDatesWithGantt(project: Project, _opts: { force?: boolean } = {}): SyncMeasurementsResult {
+  return { project, changed: false, protectedCount: 0, ganttStart: getProjectGanttStartDate(project) };
 }

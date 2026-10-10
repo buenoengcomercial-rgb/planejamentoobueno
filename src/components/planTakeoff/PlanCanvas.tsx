@@ -251,7 +251,7 @@ const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ pla
           if (editMode === 'deleteMeasure' && !readOnly) { onDeleteMeasure?.(measure.id); return; }
           if (editMode === 'deletePoint' && !readOnly) { onDeletePoint?.(measure.id, i); return; }
           onSelect(measure.id);
-          if (!readOnly && selected === measure.id && editMode === 'movePoint') { e.currentTarget.ownerSVGElement?.focus(); e.currentTarget.ownerSVGElement?.setPointerCapture(e.pointerId); setMoving({ id: measure.id, index: i, point: p }); drag.current = { start: p, view, id: measure.id, index: i, moved: false, panning: false, primary: true }; }
+          if (!readOnly && selected === measure.id && editMode === 'movePoint') { e.currentTarget.ownerSVGElement?.focus({ preventScroll: true }); e.currentTarget.ownerSVGElement?.setPointerCapture(e.pointerId); setMoving({ id: measure.id, index: i, point: p }); drag.current = { start: p, view, id: measure.id, index: i, moved: false, panning: false, primary: true }; }
         }} />
         {measure.kind === 'count' && <text x={p.x + unit * 8} y={p.y - unit * 7} fontSize={unit * 12} fontWeight="600" fill={color} stroke="white" strokeWidth={unit * 2.5} paintOrder="stroke" style={{ pointerEvents: 'none' }}>{i + 1}</text>}
       </g>)}
@@ -264,7 +264,7 @@ const PlanCanvas = forwardRef<PlanCanvasHandle, Props>(function PlanCanvas({ pla
         onKeyDown={e => { if (e.key === 'Escape') { setMoving(undefined); setWindowCorner(undefined); drag.current = undefined; } }}
         onMouseDown={e => { if (e.button === 1) e.preventDefault(); }} onAuxClick={e => { if (e.button === 1) e.preventDefault(); }}
         onContextMenu={e => { if (drawing && draftKind !== 'calibrate') { e.preventDefault(); onFinish?.(); } }}
-        onPointerDown={e => { if (status || e.button !== 0 && e.button !== 1) return; if (e.button === 1) e.preventDefault(); e.currentTarget.focus(); e.currentTarget.setPointerCapture(e.pointerId); const panning = e.button === 1 || !drawing && !moving && (editMode === 'pan' || editMode === 'select'); drag.current = { start: point(e), view, moved: false, panning, primary: e.button === 0 }; }}
+        onPointerDown={e => { if (status || e.button !== 0 && e.button !== 1) return; if (e.button === 1) e.preventDefault(); e.currentTarget.focus({ preventScroll: true }); e.currentTarget.setPointerCapture(e.pointerId); const panning = e.button === 1 || !drawing && !moving && (editMode === 'pan' || editMode === 'select'); drag.current = { start: point(e), view, moved: false, panning, primary: e.button === 0 }; }}
         onPointerMove={e => {
           const raw = point(e);
           if (windowCorner) setPointerPosition(raw);

@@ -5,7 +5,9 @@ import { CalendarDays, Search } from 'lucide-react';
 import type { Project } from '@/types/project';
 
 interface MeasurementFiltersProps {
-  project: Project;
+  project?: Project;
+  chapters?: { id: string; name: string }[];
+  datesReadOnly?: boolean;
   isSnapshotMode: boolean;
   effStart: string;
   effEnd: string;
@@ -20,6 +22,8 @@ interface MeasurementFiltersProps {
 
 export default function MeasurementFilters({
   project,
+  chapters,
+  datesReadOnly = false,
   isSnapshotMode,
   effStart,
   effEnd,
@@ -42,6 +46,7 @@ export default function MeasurementFilters({
             type="date"
             value={effStart}
             disabled={isSnapshotMode}
+            readOnly={datesReadOnly}
             onChange={e => setStartDate(e.target.value)}
           />
         </FilterField>
@@ -52,6 +57,7 @@ export default function MeasurementFilters({
             type="date"
             value={effEnd}
             disabled={isSnapshotMode}
+            readOnly={datesReadOnly}
             onChange={e => setEndDate(e.target.value)}
           />
         </FilterField>
@@ -63,7 +69,7 @@ export default function MeasurementFilters({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Todos os capitulos</SelectItem>
-              {project.phases.map(p => (
+              {(chapters ?? project?.phases ?? []).map(p => (
                 <SelectItem key={p.id} value={p.id}>
                   {numbering.get(p.id)} - {p.name}
                 </SelectItem>

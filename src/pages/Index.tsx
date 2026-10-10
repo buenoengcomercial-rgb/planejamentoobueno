@@ -1,3 +1,7 @@
+import { readCaptureDraft, writeCaptureDraft } from '@/lib/productionCaptureDraft';
+import type { ProductionCaptureChange } from '@/lib/planTakeoff';
+import { syncProductionAtomically, stripNormalizedCollections } from '@/lib/projectSync';
+import { applyProjectOperation, auditProjectReversal } from '@/lib/projectOperations';
 import { scopeKey } from '@/lib/planTakeoff';
 import { OpeningError } from '@/components/OpeningError';
 import { withReadDeadline } from '@/lib/readDeadline';
@@ -373,6 +377,7 @@ export default function Index() {
   const undoStacksRef = useRef<UndoStacks>({ dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] });
   const [undoVersion, setUndoVersion] = useState(0);
   const rawProjectRef = useRef<Project | null>(null);
+  const productionCaptureBusyRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
   const saveRetryTimerRef = useRef<number | null>(null);
   const saveRetryAttemptRef = useRef(0);
@@ -924,7 +929,7 @@ export default function Index() {
     knownRemoteVersion?: CloudProjectVersion,
   ): Promise<Project | null> => {
     const current = rawProjectRef.current;
-    if (!current || current.id !== projectToRebase.id || conflictDetectedRef.current) return null;
+    if (productionCaptureBusyRef.current || !current || current.id !== projectToRebase.id || conflictDetectedRef.current) return null;
 
     const requestedCollections = normalizeProjectCollections(collections).filter(collection =>
       collection !== 'auditLogs' || getLoadedProjectCollections(current.id).includes('auditLogs'));
@@ -960,7 +965,7 @@ export default function Index() {
     const latest = rawProjectRef.current;
     // A leitura só é adotada se ainda descreve exatamente a versão que foi
     // classificada. Uma nova alteração remota volta ao fluxo normal do realtime.
-    if (!latest
+    if (productionCaptureBusyRef.current || !latest
       || latest.id !== current.id
       || record.updatedAt !== remoteVersion.updatedAt
       || conflictDetectedRef.current) {
@@ -1339,7 +1344,7 @@ export default function Index() {
     : undefined;
   const appliedWorkStart = rawProject?.uiState?.ganttWorkStartDateApplied;
   useEffect(() => {
-    if (!editor || !measurementWorkStart) return;
+    if (productionCaptureBusyRef.current || !editor || !measurementWorkStart) return;
     if (conflictDetectedRef.current || partialSyncPendingRef.current?.projectId === rawProjectRef.current?.id) return;
     setRawProject(previous => {
       if (!previous) return previous;
@@ -1356,6 +1361,7 @@ export default function Index() {
   }, [appliedWorkStart, editor, measurementWorkStart, partialSyncIssue, rawProject?.id, scheduleProjectDraft, synchronizeLoadedProjectSchedule]);
 
   const flushPendingSave = useCallback(async () => {
+    if (productionCaptureBusyRef.current) { toast.warning('Aguarde a confirmação conjunta da captura antes de sair desta área.'); return false; }
     if (!user || !orgId || !rawProject || !initialLoadRef.current || !canPersistProject) return true;
     if (conflictDetectedRef.current) {
       setSaveStatus('conflict');
@@ -1540,11 +1546,18 @@ export default function Index() {
         if (!(await flushPendingSave())) throw new Error('A alteração pendente precisa ser salva antes de abrir outra área.');
         const source = rawProjectRef.current;
         if (!source || source.id !== projectId) return;
+        const beforeLoad = await getCloudProjectVersion(projectId);
+        if (!beforeLoad) throw new Error('A versão da obra não pôde ser conferida.');
         const hydrated = await hydrateProjectFromCloud(source, {
           collections: requestCollections,
           strict: true,
         });
-        if (dataLoadSequenceRef.current !== sequence) {
+        const afterLoad = await getCloudProjectVersion(projectId);
+        if (!afterLoad || afterLoad.updatedAt !== beforeLoad.updatedAt) {
+          discardHydratedProjectCollections(hydrated);
+          throw new Error('A obra mudou durante o carregamento. Atualize a área antes de editar.');
+        }
+        if (productionCaptureBusyRef.current || dataLoadSequenceRef.current !== sequence) {
           discardHydratedProjectCollections(hydrated);
           return;
         }
@@ -1669,7 +1682,7 @@ export default function Index() {
       setSaveStatus('offline');
       return;
     }
-    if (remoteCheckInFlightRef.current || conflictDetectedRef.current || saveTimerRef.current || inFlightSaveRef.current) return;
+    if (productionCaptureBusyRef.current || remoteCheckInFlightRef.current || conflictDetectedRef.current || saveTimerRef.current || inFlightSaveRef.current) return;
 
     remoteCheckInFlightRef.current = true;
     const dataScopeAtRequest = activeDataScopeKeyRef.current;
@@ -1688,7 +1701,7 @@ export default function Index() {
         || activeDataScopeKeyRef.current !== dataScopeAtRequest
         || conflictDetectedRef.current
         || saveTimerRef.current
-        || inFlightSaveRef.current) return;
+        || inFlightSaveRef.current || productionCaptureBusyRef.current) return;
       setLastRemoteCheckAt(new Date().toISOString());
       if (await refreshRemoteWarehouseInBackground(currentAfterVersionCheck, remoteVersion)) return;
       const knownRemoteCollections = [
@@ -1725,7 +1738,7 @@ export default function Index() {
       });
       if (!record) throw new Error('A obra não foi encontrada na nuvem.');
       const latestLocal = rawProjectRef.current;
-      if (!latestLocal || latestLocal.id !== current.id || activeDataScopeKeyRef.current !== dataScopeAtRequest) {
+      if (productionCaptureBusyRef.current || !latestLocal || latestLocal.id !== current.id || activeDataScopeKeyRef.current !== dataScopeAtRequest) {
         discardCloudProjectRecord(record);
         return;
       }
@@ -1784,7 +1797,7 @@ export default function Index() {
       realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(sources), 600);
       return;
     }
-    if (saveTimerRef.current || inFlightSaveRef.current) {
+    if (productionCaptureBusyRef.current || saveTimerRef.current || inFlightSaveRef.current) {
       if (realtimeRefreshTimerRef.current) window.clearTimeout(realtimeRefreshTimerRef.current);
       realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(sources), 1200);
       return;
@@ -1845,7 +1858,7 @@ export default function Index() {
       });
       if (!record) return;
       const localAfterRequest = rawProjectRef.current;
-      if (!localAfterRequest || localAfterRequest.id !== current.id) {
+      if (productionCaptureBusyRef.current || !localAfterRequest || localAfterRequest.id !== current.id) {
         discardCloudProjectRecord(record);
         return;
       }
@@ -2160,6 +2173,7 @@ export default function Index() {
       const partialSyncPending = !!currentId && partialSyncPendingRef.current?.projectId === currentId;
       if (!saveTimerRef.current
         && !inFlightSaveRef.current
+        && !productionCaptureBusyRef.current
         && getPendingFormNames().length === 0
         && !warehouseClientOperationInFlightRef.current
         && !warehouseOperationInFlightRef.current
@@ -2388,6 +2402,7 @@ export default function Index() {
   };
 
   const makeViewSetter = useCallback((view: AppView) => {
+    const renderedBase = project ?? rawProjectRef.current;
     return (next: Project | ((prev: Project) => Project)) => {
       const mayEditView = editor
         || (view === 'dailyReport' && dailyReportEditor)
@@ -2404,6 +2419,7 @@ export default function Index() {
         toast.error('A sincronização com a nuvem ainda não foi concluída. Recarregue a obra antes de editar.');
         return;
       }
+      if (productionCaptureBusyRef.current) { toast.error('Aguarde a confirmação conjunta da planta e do quantitativo.'); return; }
       if (partialSyncPendingRef.current?.projectId === rawProjectRef.current?.id) {
         toast.error('A sincronização detalhada ainda está pendente. Aguarde a confirmação antes de fazer outra alteração.');
         return;
@@ -2411,12 +2427,16 @@ export default function Index() {
       setRawProject(prev => {
         if (!prev) return prev;
         const candidate = typeof next === 'function' ? (next as (p: Project) => Project)(prev) : next;
-        const resolved = role === 'warehouse_operator' && view === 'warehouse'
-          ? { ...prev, warehouse: candidate.warehouse }
-          : candidate;
-        const synchronized = view === 'dailyReport' || (role === 'warehouse_operator' && view === 'warehouse')
-          ? resolved
-          : synchronizeLoadedProjectSchedule(resolved);
+        let resolved: Project;
+        try {
+          resolved = role === 'warehouse_operator' && view === 'warehouse'
+            ? { ...prev, warehouse: candidate.warehouse }
+            : applyProjectOperation(view, prev, typeof next === 'function' ? prev : (renderedBase ?? prev), candidate);
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : 'A alteração conflita com o estado atual.');
+          return prev;
+        }
+        const synchronized = resolved;
         if (synchronized === prev) return prev;
         // Trava contra laço de atualização: objeto novo com conteúdo idêntico
         // não gera novo estado (evitava o autosave reiniciar para sempre).
@@ -2440,7 +2460,7 @@ export default function Index() {
         return synchronized;
       });
     };
-  }, [dailyReportEditor, discardProjectDraft, editor, markLocalProjectChanges, role, saveDailyReportDirectly, scheduleProjectDraft, synchronizeLoadedProjectSchedule, warehouseEditor]);
+  }, [project, dailyReportEditor, discardProjectDraft, editor, markLocalProjectChanges, role, saveDailyReportDirectly, scheduleProjectDraft, warehouseEditor]);
 
   const ganttSetter = useMemo(() => makeViewSetter('gantt'), [makeViewSetter]);
   const managementSetter = useMemo(() => makeViewSetter('management'), [makeViewSetter]);
@@ -2504,7 +2524,51 @@ export default function Index() {
     setUndoVersion(value => value + 1);
   }, [canPersistProject, handleCloudConflict, orgId, persistProject, role, synchronizeLoadedProjectSchedule, user, writeProtectedProjectDraft]);
 
+  const commitProductionCapture = useCallback(async (candidate: Project, change: ProductionCaptureChange) => {
+    if (!editor || !orgId || !user || !navigator.onLine) throw new Error('Conecte-se à internet com um perfil autorizado para salvar a captura.');
+    if (conflictDetectedRef.current || partialSyncPendingRef.current) throw new Error('Resolva a sincronização pendente antes de salvar a captura.');
+    const renderedBase = change.baseProject ?? project;
+    if (!renderedBase) throw new Error('Nenhuma obra está aberta.');
+    if (productionCaptureBusyRef.current) throw new Error('Aguarde a captura em andamento.');
+    productionCaptureBusyRef.current = true;
+    try {
+    if (saveTimerRef.current) { window.clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
+    if (inFlightSaveRef.current) await inFlightSaveRef.current;
+    const previous = rawProjectRef.current;
+    if (!previous || previous.id !== candidate.id) throw new Error('A obra ativa mudou. Reabra o detalhe.');
+    const next = applyProjectOperation('tasks', previous, renderedBase, candidate);
+    // Confirm any preceding manual edits first; the capture itself is a single RPC.
+    if (serializeProject(previous) !== lastSavedProjectJsonRef.current) await persistProject(previous, orgId);
+    if (partialSyncPendingRef.current || conflictDetectedRef.current) throw new Error('A alteração anterior ainda não foi confirmada.');
+    const draftKey = scopeKey(orgId, user.id, previous.id);
+    const existingDraft = await readCaptureDraft(draftKey);
+    if (existingDraft && !change.recovering) throw new Error('Existe uma captura pendente. Recupere-a ou descarte seu rascunho antes de lançar outra.');
+    change.captureId ??= crypto.randomUUID();
+    await writeCaptureDraft(draftKey, { before: previous, candidate: next, change, savedAt: new Date().toISOString() });
+    setSaveStatus('saving');
+    try {
+      const confirmedAt = await syncProductionAtomically(next, stripNormalizedCollections(next), orgId, currentProjectUpdatedAtRef.current!, change, async args => {
+        change.rpcArgs = args;
+        await writeCaptureDraft(draftKey, { before: previous, candidate: next, change, savedAt: new Date().toISOString() });
+      });
+      if (!confirmedAt) throw new Error('A captura não confirmou a transação. Os registros anteriores foram preservados.');
+      currentProjectUpdatedAtRef.current = confirmedAt;
+      setCurrentProjectUpdatedAt(confirmedAt);
+      setLastCloudConfirmedAt(confirmedAt);
+      lastSavedProjectJsonRef.current = serializeProject(next);
+      skipNextAutoSaveRef.current = true;
+      rawProjectRef.current = next; setRawProject(next);
+      discardProjectDraft(next.id); setSaveStatus('saved');
+      await writeCaptureDraft(draftKey, null).catch(() => toast.message('Captura salva; o aviso de rascunho será reconciliado na próxima abertura.'));
+    } catch (error) {
+      setSaveStatus('error');
+      throw new Error((error as { message?: string }).message || 'A captura falhou; o rascunho foi preservado.');
+    }
+    } finally { productionCaptureBusyRef.current = false; }
+  }, [editor, orgId, user, project, persistProject, discardProjectDraft]);
+
   const prepareWarehouseCloudOperation = useCallback(async (scope: WarehousePrepareScope) => {
+    if (productionCaptureBusyRef.current) throw new Error('Aguarde a captura em andamento antes de salvar outra operação.');
     if (!user || !orgId || !warehouseEditor) throw new Error('Você não tem permissão para salvar o Almoxarifado.');
     if (conflictDetectedRef.current) throw new Error('Atualize a obra antes de salvar o Almoxarifado.');
     const active = rawProjectRef.current;
@@ -2913,6 +2977,7 @@ export default function Index() {
   }, [commitWarehouseScopedNow, prepareWarehouseCloudOperation, role, runCriticalWarehouseClientOperation]);
 
   const handleUndo = useCallback((view: AppView) => {
+    if (productionCaptureBusyRef.current) { toast.error('Aguarde a captura em andamento antes de desfazer.'); return; }
     if (conflictDetectedRef.current) {
       toast.error('Resolva a divergência entre a cópia local e a nuvem antes de desfazer.');
       return;
@@ -2933,6 +2998,7 @@ export default function Index() {
     }
     try {
       let next = auditUndoProductionDeletions(current, applyUndoOperation(current, operation), auditActor);
+      next = auditProjectReversal(current, next, auditActor);
       next = logToProject(next, { ...auditActor, entityType: 'project', entityId: current.id, action: 'updated', title: 'Operação desfeita', metadata: { view, changedFields: operation.changes.map(change => change.path) } });
       assertProductionDeletionSafe(productionDeletionState(current), productionDeletionState(next), current);
       markLocalProjectChanges(current, next);
@@ -3266,6 +3332,7 @@ export default function Index() {
               project={project}
               initialTab={productionWorkspaceInitialTab}
               onProductionChange={tasksSetter}
+              onCommitProductionCapture={commitProductionCapture}
               onDailyReportChange={dailyReportSetter}
               productionReadOnly={!editor}
               dailyReportReadOnly={!dailyReportEditor}

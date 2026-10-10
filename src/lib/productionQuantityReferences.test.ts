@@ -60,7 +60,7 @@ describe('registro de quantitativos compartilhados', () => {
     expect(getTask(current, 'task-b').dailyLogs![0].actualQuantity).toBe(59);
     const history = current.auditLogs!.at(-1)!;
     expect(history.userName).toBe('Engenheira');
-    expect(history.before).toEqual(expect.arrayContaining([expect.objectContaining({ measuredQuantity: 29 })]));
+    expect(history.before).toMatchObject({ quantityDetails: expect.arrayContaining([expect.objectContaining({ measuredQuantity: 29 })]) });
     expect(history.metadata?.affectedTaskNames).toEqual(['Instalação', 'Conferência']);
   });
 

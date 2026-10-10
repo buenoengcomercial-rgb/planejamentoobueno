@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { CommitOnBlurInput } from '@/components/dailyReport/CommitOnBlurField';
@@ -7,7 +7,10 @@ import type { Project, ContractInfo } from '@/types/project';
 import { fmtDateBR } from '@/components/measurement/measurementFormat';
 
 interface MeasurementContractInfoProps {
-  project: Project;
+  project: Pick<Project, 'name'>;
+  setProjectName?: (name: string) => void;
+  onMeasurementNumberCommit?: () => void;
+  defaultOpen?: boolean;
   isSnapshotMode: boolean;
   effStart: string;
   effEnd: string;
@@ -44,8 +47,9 @@ export default function MeasurementContractInfo({
   measurementNumber, setMeasurementNumber,
   persistContractInfo,
   onProjectNameChange,
+  setProjectName, onMeasurementNumberCommit, defaultOpen = false,
 }: MeasurementContractInfoProps) {
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(defaultOpen);
   const compactBdi = Number.isFinite(effBdi) ? effBdi.toLocaleString('pt-BR') : '0';
 
   return (
@@ -53,6 +57,7 @@ export default function MeasurementContractInfo({
       <CardContent className="p-0">
         <button
           type="button"
+          aria-expanded={detailsOpen}
           className="w-full bg-muted/35 px-4 py-2 border-b border-foreground/15 flex items-center justify-between gap-3 text-left print:hidden"
           onClick={() => setDetailsOpen(v => !v)}
         >
@@ -60,11 +65,11 @@ export default function MeasurementContractInfo({
             <Building2 className="w-5 h-5 shrink-0 text-foreground" />
             <div className="min-w-0">
               <h2 className="text-sm font-bold tracking-widest uppercase text-foreground">
-                Boletim de Medicao para Pagamento
+                Boletim de Medição para Pagamento
               </h2>
               <div className="mt-1 hidden lg:flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                 <span>Medição nº <strong className="text-foreground">{effNumber || '-'}</strong></span>
-                <span>Periodo <strong className="text-foreground">{fmtDateBR(effStart)} a {fmtDateBR(effEnd)}</strong></span>
+                <span>Período <strong className="text-foreground">{fmtDateBR(effStart)} a {fmtDateBR(effEnd)}</strong></span>
                 <span className="truncate">Contratada <strong className="text-foreground">{contracted || '-'}</strong></span>
                 <span>Contrato <strong className="text-foreground">{contractNumber || '-'}</strong></span>
                 <span>BDI <strong className="text-foreground">{compactBdi}%</strong></span>
@@ -86,7 +91,7 @@ export default function MeasurementContractInfo({
           <div className="flex items-center gap-3">
             <Building2 className="w-5 h-5 text-foreground" />
             <h2 className="text-sm font-bold tracking-widest uppercase text-foreground">
-              Boletim de Medicao para Pagamento
+              Boletim de Medição para Pagamento
             </h2>
           </div>
           <div className="text-right">
@@ -119,15 +124,20 @@ export default function MeasurementContractInfo({
             />
           </FormField>
           <FormField label="Obra" colSpan={8}>
-            <CommitOnBlurInput
+            {setProjectName ? <Input
+              className="h-7 text-xs border-0 px-0 font-semibold focus-visible:ring-0 bg-transparent"
+              value={project.name || ''} disabled={isSnapshotMode}
+              onChange={e => setProjectName(e.target.value)} onBlur={() => onProjectNameChange(project.name)}
+              placeholder="Nome da obra"
+            /> : <CommitOnBlurInput
               className="h-7 text-xs border-0 px-0 font-semibold focus-visible:ring-0 bg-transparent"
               value={project.name || ''}
               disabled={isSnapshotMode}
               onCommit={onProjectNameChange}
               placeholder="Nome da obra"
-            />
+            />}
           </FormField>
-          <FormField label="Local / Municipio" colSpan={4}>
+          <FormField label="Local / Município" colSpan={4}>
             <Input
               className="h-7 text-xs border-0 px-0 focus-visible:ring-0 bg-transparent"
               value={location}
@@ -167,17 +177,17 @@ export default function MeasurementContractInfo({
               placeholder="Ex.: BR20240000000"
             />
           </FormField>
-          <FormField label="Periodo da Medicao" colSpan={4}>
+          <FormField label="Período da Medição" colSpan={4}>
             <p className="text-xs font-semibold text-foreground py-1 tabular-nums">
               {fmtDateBR(effStart)} a {fmtDateBR(effEnd)}
             </p>
           </FormField>
-          <FormField label="Data de Emissao" colSpan={2}>
+          <FormField label="Data de Emissão" colSpan={2}>
             <p className="text-xs font-semibold text-foreground py-1 tabular-nums">
               {fmtDateBR(effIssue)}
             </p>
           </FormField>
-          <FormField label="Fonte de Orcamento" colSpan={4}>
+          <FormField label="Fonte de Orçamento" colSpan={4}>
             <Input
               className="h-7 text-xs border-0 px-0 focus-visible:ring-0 bg-transparent"
               value={budgetSource}
@@ -205,10 +215,10 @@ export default function MeasurementContractInfo({
               value={effNumber}
               disabled={isSnapshotMode}
               onChange={e => setMeasurementNumber(e.target.value)}
-              onBlur={() => persistContractInfo({ nextMeasurementNumber: Number(measurementNumber) || 1 })}
+              onBlur={() => onMeasurementNumberCommit ? onMeasurementNumberCommit() : persistContractInfo({ nextMeasurementNumber: Number(measurementNumber) || 1 })}
             />
           </FormField>
-          <div className="col-span-9 border-t border-border" />
+          <div className="hidden md:block col-span-9 border-t border-border" />
         </div>
       </CardContent>
     </Card>
@@ -221,12 +231,12 @@ function FormField({
   label: string; colSpan: number; children: React.ReactNode; last?: boolean; bottom?: boolean;
 }) {
   return (
-    <div
-      className={`col-span-${colSpan} px-3 py-1.5 border-border ${last ? '' : 'border-r'} ${bottom ? '' : 'border-b'}`}
-      style={{ gridColumn: `span ${colSpan} / span ${colSpan}` }}
+    <label
+      className={`min-w-0 col-span-12 md:[grid-column:span_var(--field-span)] px-3 py-1.5 border-border ${last ? '' : 'border-r'} ${bottom ? '' : 'border-b'}`}
+      style={{ '--field-span': colSpan } as CSSProperties}
     >
-      <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
+      <span className="block text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
       {children}
-    </div>
+    </label>
   );
 }
