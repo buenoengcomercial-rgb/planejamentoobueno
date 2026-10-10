@@ -32,8 +32,11 @@
 .measurement-table--ledger > thead > tr:last-child > th { padding-inline: 2px; }
 .measurement-table--ledger > tbody > tr > td:first-child[colspan] { text-align: left; }
 .measurement-table--ledger [data-measurement-row] > td:first-child { padding-left: 4px !important; }
-.measurement-table--ledger .cell-desc button, .measurement-table--ledger input { text-align: center; overflow-wrap: normal; word-break: normal; }
-.measurement-table--ledger .cell-desc > div, .measurement-table--ledger [data-measurement-row] > td > div { justify-content: center; }
+.measurement-table--ledger input { text-align: center; overflow-wrap: normal; word-break: normal; }
+.measurement-table--ledger > thead > tr:last-child > th:nth-child(4),
+.measurement-table--ledger .cell-desc, .measurement-table--ledger .cell-desc button { text-align: left; overflow-wrap: normal; word-break: normal; }
+.measurement-table--ledger [data-measurement-row] > td > div { justify-content: center; }
+.measurement-table--ledger [data-measurement-row] > td.cell-desc > div { justify-content: flex-start; }
 .measurement-table--ledger [data-measurement-row] > td:nth-child(2) > span,
 .measurement-table--ledger [data-measurement-row] > td:nth-child(3) > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .measurement-table--ledger > tbody > tr > td > span { padding-inline: 0; }
@@ -44,6 +47,7 @@
 .measurement-analytic-table col.col-qty { width: 9%; }
 .measurement-analytic-table col.col-val { width: 11%; }
 .measurement-analytic-table :is(th, td) { text-align: center; overflow-wrap: normal; word-break: normal; }
+.measurement-analytic-table :is(th, td):nth-child(3) { text-align: left; }
 @container (max-width: 999px) {
   .measurement-table--ledger { min-width: 1000px; }
 }
