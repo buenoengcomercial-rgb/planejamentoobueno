@@ -2,7 +2,7 @@ async page => {
 await page.goto('http://127.0.0.1:5181/dev/measurement/index.html?test=acceptance-'+Date.now());
 await page.setViewportSize({width:1600,height:1000});
 await page.getByRole('button',{name:'Confirmar incorporação'}).click();
-await page.getByRole('button',{name:'Detalhar quantidade da 1ª medição: Instalação de placas de sinalização'}).click();
+await page.getByLabel('Quantidade de Instalação de placas de sinalização',{exact:true}).click();
 await page.getByRole('button',{name:'Levantar coluna A da linha 1 na planta',exact:true}).click();
 await page.getByRole('img',{name:'Planta e marcações'}).waitFor();
 await page.getByRole('button',{name:'Contagem',exact:true}).click();
@@ -15,7 +15,7 @@ await page.screenshot({path:'output/playwright/measurement-capture.png'});
 await page.getByRole('button',{name:'Close',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
 if(await page.getByLabel('Unidades da linha 1',{exact:true}).inputValue()!=='3') throw new Error('A != 3');
 if(!(await page.getByTestId('service-signs').innerText()).includes('37,50'))throw new Error('Incorrect monetary value');
-await page.reload();await page.getByRole('button',{name:'Detalhar quantidade da 1ª medição: Instalação de placas de sinalização'}).click();
+await page.reload();await page.getByLabel('Quantidade de Instalação de placas de sinalização',{exact:true}).click();
 if(await page.getByLabel('Unidades da linha 1',{exact:true}).inputValue()!=='3') throw new Error('Reload quantity lost');
 await page.getByRole('button',{name:'Levantar coluna A da linha 1 na planta',exact:true}).click();
 await page.waitForFunction(()=>document.querySelectorAll('[data-measure-point]').length===3);
@@ -33,7 +33,7 @@ await page.getByLabel('Medição selecionada').selectOption('m3');await quantity
 assert((await page.getByTestId('service-repeaters').innerText()).includes('34'),'accumulated includes selected');
 await page.getByLabel('Medição selecionada').selectOption('m1');
 assert(await quantity.inputValue()==='29','lost first measurement');
-await page.getByRole('button',{name:'Detalhar quantidade da 1ª medição: Detector de fumaça óptico endereçável'}).click();
+await page.getByLabel('Quantidade de Detector de fumaça óptico endereçável',{exact:true}).click();
 await page.getByLabel('Unidades da linha 1',{exact:true}).fill('220');await page.getByLabel('Unidades da linha 1',{exact:true}).press('Enter');await ready();
 assert((await page.getByTestId('service-detectors').innerText()).includes('2.750,00'),'preserved edit');
 await page.getByRole('button',{name:'Excluir linha 1',exact:true}).click();await ready();
@@ -44,14 +44,14 @@ assert((await record.innerText()).includes('Dado preservado'),'recoverable befor
 await record.getByRole('button',{name:'Restaurar conteúdo anterior'}).click();await ready();
 await page.getByRole('button',{name:'Close',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});await page.getByRole('dialog').waitFor({state:'hidden'});
 assert(await page.getByLabel('Quantidade de Detector de fumaça óptico endereçável',{exact:true}).inputValue()==='220','restore failed');
-await page.getByRole('button',{name:'Detalhar quantidade da 1ª medição: Repetidores de eventos para linhas endereçáveis'}).click();
+await page.getByLabel('Quantidade de Repetidores de eventos para linhas endereçáveis',{exact:true}).click();
 await page.getByRole('button',{name:'Levantar coluna B da linha 1 na planta',exact:true}).click();
 await page.getByRole('img',{name:'Planta e marcações'}).waitFor();
 assert(await page.locator('[data-measure-point]').count()===0,'foreign service marks leaked');
 await page.getByRole('button',{name:'Close',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});await page.getByRole('dialog').waitFor({state:'hidden'});
 const xlsx=page.waitForEvent('download');await page.getByRole('button',{name:'Excel',exact:true}).click();await (await xlsx).saveAs('output/playwright/measurement-monthly.xlsx');
 const pdf=page.waitForEvent('download');await page.getByRole('button',{name:'PDF',exact:true}).click();await (await pdf).saveAs('output/playwright/measurement-monthly.pdf');
-await page.getByRole('button',{name:'Detalhar quantidade da 1ª medição: Instalação de placas de sinalização'}).click();
+await page.getByLabel('Quantidade de Instalação de placas de sinalização',{exact:true}).click();
 await page.screenshot({path:'output/playwright/measurement-workspace.png',fullPage:true});
 return 'PASS capture, reload, monthly values, periods 1/2/3, preserved edit/delete/restore, isolation, PDF/XLSX';
 }

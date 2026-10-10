@@ -16,7 +16,7 @@ async page => {
   await cells.nth(i).click();
   assert(await page.getByLabel('Unidades da linha 1',{exact:true}).count()===0,'Wrong cell opened detail: '+i);
  }
- const action=cells.nth(9).getByRole('button',{name:'Detalhar quantidade da 2ª medição: Instalação de placas de sinalização'});
+ const action=cells.nth(9).getByLabel('Quantidade de Instalação de placas de sinalização',{exact:true});
  await action.click();
  await page.getByText('Detalhe de quantitativos · 2ª medição',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Levantar coluna A da linha 1 na planta',exact:true}).click();

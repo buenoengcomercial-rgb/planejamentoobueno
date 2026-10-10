@@ -27,7 +27,8 @@ describe('Tela própria de Medição', () => {
       fireEvent.click(cells[index]);
       expect(screen.queryByLabelText('Unidades da linha 1')).not.toBeInTheDocument();
     }
-    const detail = within(cells[9]).getByRole('button', { name: 'Detalhar quantidade da 2ª medição: Placas' });
+    expect(within(cells[9]).queryByRole('button')).not.toBeInTheDocument();
+    const detail = within(cells[9]).getByLabelText('Quantidade de Placas');
     fireEvent.click(detail);
     expect(screen.getByText('Detalhe de quantitativos · 2ª medição')).toBeVisible();
     const a = screen.getByLabelText('Unidades da linha 1');
@@ -78,7 +79,11 @@ describe('Tela própria de Medição', () => {
   });
   it('perfil de consulta não permite editar ou criar período', async () => {
     const { repository } = fixture(); render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canEdit: false }}/>);
-    expect(await screen.findByLabelText('Quantidade de Placas')).toBeDisabled();
+    const quantity = await screen.findByLabelText('Quantidade de Placas');
+    expect(quantity).toHaveAttribute('readonly');
+    await act(async () => { fireEvent.click(quantity); });
+    expect(screen.getByText('Detalhe de quantitativos · 1ª medição')).toBeVisible();
+    await act(async () => { fireEvent.blur(quantity); });
     expect(screen.getByRole('button', { name: 'Nova medição' })).toBeDisabled();
     expect(repository.commit).not.toHaveBeenCalled();
   });
