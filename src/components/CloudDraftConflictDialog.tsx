@@ -17,6 +17,7 @@ interface CloudDraftConflictDialogProps {
   onDownload: () => boolean;
   onDiscard: () => Promise<void>;
   onContinueDailyReport?: () => void;
+  onContinueMeasurement?: () => void;
 }
 
 export default function CloudDraftConflictDialog({
@@ -25,6 +26,7 @@ export default function CloudDraftConflictDialog({
   onDownload,
   onDiscard,
   onContinueDailyReport,
+  onContinueMeasurement,
 }: CloudDraftConflictDialogProps) {
   const [backupRequested, setBackupRequested] = useState(false);
   return (
@@ -34,6 +36,7 @@ export default function CloudDraftConflictDialog({
           <AlertDialogTitle>Cópia local e nuvem estão diferentes</AlertDialogTitle>
           <AlertDialogDescription>
             A obra mudou em outro aparelho enquanto havia uma alteração local. A cópia pendente foi preservada. Baixe-a antes de descartar. O Diário pode continuar a ser preenchido separadamente, sem resolver este conflito da obra.
+            {onContinueMeasurement && " A Medição também possui base independente e pode ser acessada sem descartar esta cópia."}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter className="gap-2 sm:space-x-0">
@@ -45,6 +48,7 @@ export default function CloudDraftConflictDialog({
               Continuar no Diário
             </Button>
           )}
+          {onContinueMeasurement && <Button type="button" variant="outline" disabled={resolving} onClick={onContinueMeasurement}>Continuar na Medição</Button>}
           <AlertDialogAction
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             disabled={resolving || !backupRequested}

@@ -44,6 +44,7 @@ import { toast } from '@/hooks/use-toast';
 interface MeasurementProps {
   /** Explicit activation only after independent incorporation; never inferred from Project. */
   independentWorkspace?: MeasurementWorkspaceProps;
+  onIndependentReady?: (projectId: string) => void;
   project: Project;
   onProjectChange: (project: Project) => void;
   undoButton?: React.ReactNode;
@@ -64,6 +65,8 @@ function CloudMeasurement(props: MeasurementProps) {
   const [enabled, setEnabled] = useState<boolean | null>(null), [failure, setFailure] = useState(''), [retry, setRetry] = useState(0);
   const userId = user?.id;
   const repository = useMemo(() => userId ? cloudMeasurementRepository({ projectId: props.project.id, userId }) : null, [props.project.id, userId]);
+  const onIndependentReady = props.onIndependentReady;
+  useEffect(() => { if (enabled) onIndependentReady?.(props.project.id); }, [enabled, props.project.id, onIndependentReady]);
   const editor = ['owner', 'admin', 'engineer'].includes(membership?.role ?? '');
   const actor = useMemo(() => ({ id: user?.id ?? '', name: user?.user_metadata?.name ?? user?.email ?? '', canEdit: editor, canReview: editor }), [user, editor]);
   useEffect(() => {

@@ -332,6 +332,7 @@ export default function Index() {
   const [partialSyncRetrying, setPartialSyncRetrying] = useState(false);
   const [saveRetryTick, setSaveRetryTick] = useState(0);
   const [draftConflictProjectId, setDraftConflictProjectId] = useState<string | null>(null);
+  const [independentMeasurementProjectId, setIndependentMeasurementProjectId] = useState<string | null>(null);
   const [diaryConflictDismissed, setDiaryConflictDismissed] = useState(false);
   const [draftConflictResolving, setDraftConflictResolving] = useState(false);
   const [recoveredDraftSaveRevision, setRecoveredDraftSaveRevision] = useState(0);
@@ -3351,7 +3352,7 @@ export default function Index() {
           </>
         );
       case 'measurement':
-        return <Measurement project={project} onProjectChange={measurementSetter} undoButton={<UndoButton canUndo={canUndo('measurement')} onUndo={() => handleUndo('measurement')} />} onOpenDailyReport={handleOpenDailyReport} />;
+        return <Measurement onIndependentReady={setIndependentMeasurementProjectId} project={project} onProjectChange={measurementSetter} undoButton={<UndoButton canUndo={canUndo('measurement')} onUndo={() => handleUndo('measurement')} />} onOpenDailyReport={handleOpenDailyReport} />;
       case 'dailyReport':
         return (
           <DailyProductionWorkspace
@@ -3564,7 +3565,7 @@ export default function Index() {
 
       {draftConflictProjectId === rawProject.id && diaryConflictDismissed && (
         <div role="alert" className="fixed bottom-4 left-4 right-4 z-40 flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/50 bg-background p-3 text-sm shadow-lg sm:right-auto sm:max-w-xl">
-          <span>Há uma cópia local pendente. O Diário pode ser salvo separadamente; os demais dados ainda exigem reconciliação.</span>
+          <span>Há uma cópia local pendente. {currentView === 'measurement' && independentMeasurementProjectId === rawProject.id ? 'A Medição é salva separadamente; o rascunho da obra continua preservado.' : 'O Diário pode ser salvo separadamente; os demais dados ainda exigem reconciliação.'}</span>
           <Button type="button" size="sm" variant="outline" onClick={() => setDiaryConflictDismissed(false)}>Ver cópia pendente</Button>
         </div>
       )}
@@ -3575,6 +3576,7 @@ export default function Index() {
             resolving={draftConflictResolving}
             onDownload={downloadConflictingDraft}
             onDiscard={discardConflictingDraft}
+            onContinueMeasurement={currentView === 'measurement' && independentMeasurementProjectId === rawProject.id ? () => setDiaryConflictDismissed(true) : undefined}
             onContinueDailyReport={dailyReportEditor ? () => {
               setCurrentView('dailyReport');
               setDiaryConflictDismissed(true);

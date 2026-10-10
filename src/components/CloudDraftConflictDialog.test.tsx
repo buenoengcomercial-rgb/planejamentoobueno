@@ -3,6 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 import CloudDraftConflictDialog from './CloudDraftConflictDialog';
 
 describe('cópia local pendente', () => {
+  it('abre a Medição independente sem descartar ou reaplicar a cópia da obra', () => {
+    const onDiscard=vi.fn(async()=>undefined), onContinueMeasurement=vi.fn();
+    render(<CloudDraftConflictDialog open resolving={false} onDownload={()=>true} onDiscard={onDiscard} onContinueMeasurement={onContinueMeasurement}/>);
+    fireEvent.click(screen.getByRole('button',{name:'Continuar na Medição'}));
+    expect(onContinueMeasurement).toHaveBeenCalledOnce(); expect(onDiscard).not.toHaveBeenCalled();
+    expect(screen.getByRole('button',{name:'Descartar cópia e usar nuvem'})).toBeDisabled();
+  });
+
   it('permite continuar no Diário sem descartar a cópia e exige solicitar backup antes do descarte', () => {
     const onDownload = vi.fn(() => true);
     const onDiscard = vi.fn(async () => undefined);
