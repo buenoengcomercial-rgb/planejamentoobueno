@@ -25,6 +25,7 @@ interface MeasurementTableProps extends RowHandlers {
   project?: Project;
   bdi?: number;
   summary?: React.ReactNode;
+  beforeSheet?: React.ReactNode;
 }
 
 const COLSPAN = 18;
@@ -58,17 +59,30 @@ const headerStyleByDepth = (depth: number) => {
 export default function MeasurementTable(props: MeasurementTableProps) {
   const {
     filteredRows, groupTree, totals,
-    collapsed, setCollapsed, isLocked, showForecast = true, detailPlacement = 'inline', summary,
+    collapsed, setCollapsed, isLocked, showForecast = true, detailPlacement = 'inline', summary, beforeSheet,
     ...rowHandlers
   } = props;
 
   const columnCount = showForecast ? COLSPAN : 15;
   const split = detailPlacement === 'split' && !!rowHandlers.renderDetail;
+  const hasHeader = !!beforeSheet;
   const workspaceRef = useRef<HTMLDivElement>(null);
+  const upperRef = useRef<HTMLDivElement>(null);
+  const sheetRef = useRef<HTMLElement>(null);
   useEffect(() => {
-    // Start in the full-height sheet; scrolling upwards still reveals the header.
-    if (split) workspaceRef.current?.scrollIntoView?.({ block: 'start' });
-  }, [split]);
+    if (!split || !workspaceRef.current) return;
+    // Reserve the visible viewport once, rather than letting the outer page
+    // carry the lower pane away. Both scrolling directions belong to the top.
+    const resize = () => {
+      const node = workspaceRef.current!;
+      const top = Math.max(0, node.getBoundingClientRect().top);
+      node.style.height = `${Math.max(240, window.innerHeight - top - 8)}px`;
+    };
+    resize();
+    if (hasHeader && upperRef.current && sheetRef.current) upperRef.current.scrollTop = sheetRef.current.offsetTop - upperRef.current.offsetTop;
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, [split, hasHeader]);
   const selectedRow = rowHandlers.selectedDetail?.mode === 'quantity'
     ? filteredRows.find(row => row.taskId === rowHandlers.selectedDetail?.taskId) : undefined;
   const toggleCollapsed = (id: string) => {
@@ -80,7 +94,7 @@ export default function MeasurementTable(props: MeasurementTableProps) {
   };
 
   const table = (
-    <Card className={`${split ? 'measurement-table-pane' : ''} overflow-hidden border border-border bg-card shadow-sm`}>
+    <Card className={`${split ? 'measurement-table-pane' : ''} ${beforeSheet ? 'measurement-table-pane--page-scroll' : ''} overflow-hidden border border-border bg-card shadow-sm`}>
       <CardHeader className="border-b border-border bg-muted/20 px-3 py-2 print:hidden">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
           Planilha de medição ({filteredRows.length} itens)
@@ -220,7 +234,10 @@ export default function MeasurementTable(props: MeasurementTableProps) {
   return <div className="measurement-split-workspace" ref={workspaceRef}>
     <ResizablePanelGroup direction="vertical" autoSaveId="measurement-quantity-fullscreen-layout">
       <ResizablePanel id="measurement-sheet" order={1} defaultSize={75} minSize={25}>
-        <section aria-label="Planilha da medição atual" className="h-full min-h-0">{table}</section>
+        <div ref={upperRef} className={beforeSheet ? 'measurement-upper-scroll' : 'h-full min-h-0'} aria-label={beforeSheet ? 'Rolagem do cabeçalho, planilha e resumos' : undefined} tabIndex={beforeSheet ? 0 : undefined}>
+          {beforeSheet && <div className="measurement-page-header">{beforeSheet}</div>}
+          <section ref={sheetRef} aria-label="Planilha da medição atual" className="measurement-sheet-region h-full min-h-0">{table}</section>
+        </div>
       </ResizablePanel>
       <ResizableHandle withHandle className="measurement-split-handle" aria-label="Ajustar altura da planilha e do detalhe" title="Arraste para ajustar a altura; use as setas para ajustar pelo teclado" />
       <ResizablePanel id="measurement-detail" order={2} defaultSize={25} minSize={15}>

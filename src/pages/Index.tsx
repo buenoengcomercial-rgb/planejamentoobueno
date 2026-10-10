@@ -3494,9 +3494,10 @@ export default function Index() {
       </div>
 
       <main ref={mainScrollRef} className="relative min-h-screen min-w-0 flex-1 overflow-x-clip overflow-y-auto pt-14 lg:pt-0">
-        <div className="absolute top-3 right-4 z-20">
+        {(currentView !== 'measurement' || independentMeasurementProjectId !== rawProject.id || !['idle', 'saved'].includes(saveStatus) || Object.keys(dailyReportSaveErrors).length > 0 || partialSyncIssue?.projectId === rawProject.id) && <div className="absolute top-3 right-4 z-20">
+          {currentView === 'measurement' && independentMeasurementProjectId === rawProject.id && <span className="block text-right text-[10px] text-muted-foreground">Outras áreas da obra</span>}
           <SaveStatusIndicator status={Object.keys(dailyReportSaveErrors).length && saveStatus !== 'saving' ? 'error' : saveStatus} confirmedAt={lastCloudConfirmedAt} lastCheckedAt={lastRemoteCheckAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} pendingRemoteAreas={pendingRemoteAreas} partialSyncPending={partialSyncIssue?.projectId === rawProject.id} partialSyncDraftProtected={partialSyncIssue?.draftProtected} syncRetrying={partialSyncRetrying} />
-        </div>
+        </div>}
         {partialSyncIssue?.projectId === rawProject.id && (
           <div
             role="alert"

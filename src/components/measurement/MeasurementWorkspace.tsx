@@ -253,13 +253,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const marks = targetEntry?.rows.flatMap(r => sourceFields.flatMap(f => r[f] ? [r[f]!.measureId] : [])) ?? [];
   const rowIndex = targetEntry?.rows.findIndex(r => r.id === destination?.rowId) ?? -1;
   const nextPeriod = nextMeasurementPeriod(workspace.periods);
-  return <main className="measurement-workspace min-w-0 text-foreground" onClickCapture={event => {
-    const target = event.target as HTMLElement;
-    // Keep editing within the detail, splitter and portal dialogs. A click elsewhere
-    // clears the selected quantity after blur has committed/preserved its draft.
-    if (!event.currentTarget.contains(target) || target.closest('[data-quantity-cell], [data-quantity-detail], .measurement-split-handle')) return;
-    setExpanded(selection => selection?.mode === 'quantity' ? null : selection);
-  }}>
+  const pageHeader = <>
     <MeasurementHeader compact onExportXLSX={() => { if (busy.current || recovery) { setError('Aguarde a confirmação do salvamento antes de exportar.'); return; } void exportMonthlyMeasurement(current.current!, active, 'xlsx').catch(e => setError(e.message)); }} onPrint={() => { if (busy.current || recovery) { setError('Aguarde a confirmação do salvamento antes de exportar.'); return; } void exportMonthlyMeasurement(current.current!, active, 'pdf').catch(e => setError(e.message)); }} showHistory onOpenHistory={() => setHistoryOpen(true)}/>
     <section className="rounded border border-border bg-card p-2">
       <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"><strong>{workspace.projectName}</strong><div className="flex flex-wrap items-center gap-4"><span>Valor desta medição: <strong data-testid="monthly-value">{period ? fmtBRL(allTotals.period) : '—'}</strong></span><span role="status" className={saving ? 'text-amber-700' : 'text-emerald-700'}>{status}</span></div></div>
@@ -312,7 +306,13 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       <summary className="cursor-pointer px-2 py-1 text-xs font-medium">Filtros{(search || chapterFilter !== 'all') && <span className="ml-2 font-normal text-muted-foreground">Ativos{search ? ` · ${search}` : ''}{chapterFilter !== 'all' ? ` · ${chapters.find(c => c.id === chapterFilter)?.name}` : ''}</span>}</summary>
       <MeasurementFilters chapters={chapters} numbering={numbering} isSnapshotMode={false} datesReadOnly effStart={period?.startDate ?? ''} effEnd={period?.endDate ?? ''} setStartDate={() => undefined} setEndDate={() => undefined} chapterFilter={chapterFilter} setChapterFilter={setChapterFilter} search={search} setSearch={setSearch}/>
     </details>
-    <MeasurementTable filteredRows={presentation.rows} groupTree={presentation.groupTree} totals={presentation.totals} collapsed={collapsed} setCollapsed={setCollapsed} isLocked={!!locked} isSnapshotMode={false} showForecast={false} detailPlacement="split"
+  </>;
+  return <main className="measurement-workspace min-w-0 text-foreground" onClickCapture={event => {
+    const target = event.target as HTMLElement;
+    if (!event.currentTarget.contains(target) || target.closest('[data-quantity-cell], [data-quantity-detail], .measurement-split-handle')) return;
+    setExpanded(selection => selection?.mode === 'quantity' ? null : selection);
+  }}>
+    <MeasurementTable beforeSheet={pageHeader} filteredRows={presentation.rows} groupTree={presentation.groupTree} totals={presentation.totals} collapsed={collapsed} setCollapsed={setCollapsed} isLocked={!!locked} isSnapshotMode={false} showForecast={false} detailPlacement="split"
       summary={<section aria-label="Resumo financeiro da medição completa" className="measurement-financial-summary">
         <MeasurementTotals totals={summaryTotals} effBdi={summaryBdi}/>
         <MeasurementSummaryCards totals={summaryTotals} forecastTotal={forecast?.value ?? null}/>

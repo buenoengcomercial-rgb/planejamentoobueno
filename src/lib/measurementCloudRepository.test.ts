@@ -2,7 +2,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation } from './measurementIncorporation';
-import { editMeasuredRow, newMeasuredRow } from './measurementWorkspace';
+import { editMeasuredRow, newMeasuredRow, addMeasuredPeriod } from './measurementWorkspace';
+import { measurementEntryPatch } from './measurementEntryPatch';
 import { encodeMeasurementWorkspace, decodeMeasurementWorkspace } from './measurementCloudCodec';
 import { cloudMeasurementRepository } from './measurementCloudRepository';
 import type { PendingMeasurementSave } from './measurementWorkspaceStore';
@@ -11,6 +12,32 @@ vi.mock('@/integrations/supabase/client',()=>({supabase:{rpc:mocks.rpc,storage:{
 vi.mock('./measurementWorkspaceStore',()=>({measurementRepository:()=>({preservePending:async(p:PendingMeasurementSave)=>{mocks.pending=structuredClone(p);},removePending:async()=>{mocks.pending=null;}})}));
 beforeEach(()=>{vi.clearAllMocks();mocks.pending=null;});
 describe('confirmação cloud e recuperação',()=>{
+ it('envia somente os lançamentos afetados, conserva a base e exige recibo íntegro',async()=>{
+  const f=measurementFixture(); f.plans=[]; const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
+  const repo=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(base),error:null}); await repo.load();
+  const next=editMeasuredRow(base,{id:'user',name:'Teste',canEdit:true},'m1','signs',{...newMeasuredRow('row'),multiplier:29});
+  const patch=measurementEntryPatch(base,next)!;
+  mocks.rpc.mockResolvedValueOnce({data:{projectId:base.projectId,revision:next.revision,patch:{event:patch.event,entries:patch.entries}},error:null});
+  expect(await repo.commit(next,base.revision)).toEqual(next);
+  expect(mocks.rpc).toHaveBeenLastCalledWith('patch_measurement_entries',{p_project_id:base.projectId,p_expected_revision:base.revision,p_patch:patch});
+  const later=editMeasuredRow(next,{id:'user',name:'Teste',canEdit:true},'m1','signs',{...newMeasuredRow('row'),multiplier:30});
+  mocks.rpc.mockResolvedValueOnce({data:{projectId:base.projectId,revision:later.revision,patch},error:null});
+  await expect(repo.commit(later,next.revision)).rejects.toThrow('não confirmou'); expect(mocks.pending).not.toBeNull();
+  expect(measurementEntryPatch(next,addMeasuredPeriod(next,{id:'user',name:'Teste',canEdit:true}))).toBeNull();
+ });
+ it('não baixa novamente arquivos imutáveis após cada confirmação e permite repetir download que falhou',async()=>{
+  const f=measurementFixture(),base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
+  base.plans[0].storagePath=`${base.projectId}/${base.plans[0].id}/drawing.png`;
+  const repo=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValue({data:encodeMeasurementWorkspace(base),error:null});
+  mocks.download.mockResolvedValueOnce({data:null,error:{message:'Falhou'}}).mockResolvedValue({data:base.plans[0].file,error:null});
+  await expect(repo.load()).rejects.toThrow('Falhou'); await repo.load(); await repo.load();
+  expect(mocks.download).toHaveBeenCalledTimes(2);
+  const next=addMeasuredPeriod(base,{id:'user',name:'Teste',canEdit:true});
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(next),error:null}); await repo.commit(next,base.revision);
+  expect(mocks.download).toHaveBeenCalledTimes(2);
+ });
  it('carrega por RPC todas as 1.200 entradas, sem limite de página REST',async()=>{
   const f=measurementFixture(); f.plans=[];
   const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
