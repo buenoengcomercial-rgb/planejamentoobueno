@@ -261,8 +261,12 @@ const WAREHOUSE_TAB_COLLECTIONS: Record<WarehouseTab, ProjectCollectionKey[]> = 
 export function projectCollectionsForView(
   view: AppView,
   warehouseTab: WarehouseTab = 'painel',
+  independentMeasurement = false,
 ): ProjectCollectionKey[] {
   if (view === 'warehouse') return WAREHOUSE_TAB_COLLECTIONS[warehouseTab];
+  // The incorporated sheet owns its quantities and periods. It only needs the
+  // legacy project's analytic catalog and approved additives for its UI.
+  if (view === 'measurement' && independentMeasurement) return ['additives', 'budgetItems', 'analyticCompositions'];
   return VIEW_COLLECTIONS[view];
 }
 

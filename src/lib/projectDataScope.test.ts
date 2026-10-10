@@ -48,6 +48,15 @@ describe('escopos progressivos de dados da obra', () => {
     expect(scope.length).toBeLessThanOrEqual(PROJECT_COLLECTION_KEYS.length / 2);
   });
 
+  it('abre a Medição incorporada sem carregar Produção, Diário ou medições legadas', () => {
+    expect(projectCollectionsForView('measurement', 'painel', true)).toEqual([
+      'additives', 'budgetItems', 'analyticCompositions',
+    ]);
+    expect(projectCollectionsForView('measurement')).toEqual(expect.arrayContaining([
+      'taskDailyLogs', 'dailyReports', 'measurements', 'eapChapters', 'tasks',
+    ]));
+  });
+
   it('mantém capítulos e tarefas como uma fotografia indivisível', () => {
     expect(normalizeProjectCollections(['tasks'])).toEqual(['eapChapters', 'tasks']);
     expect(normalizeProjectCollections(['eapChapters'])).toEqual(['eapChapters', 'tasks']);

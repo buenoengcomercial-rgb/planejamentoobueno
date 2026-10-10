@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   loadCloudProjectRecord: vi.fn(),
   upsertCloudProject: vi.fn(),
   getCloudProjectVersion: vi.fn(),
+  independentMeasurementExists: false,
   realtimeHandlers: [] as Array<{
     table: string;
     callback: (payload: { new?: Record<string, unknown> | null; old?: Record<string, unknown> | null }) => void;
@@ -137,6 +138,10 @@ vi.mock('@/integrations/supabase/client', () => {
   };
   return {
     supabase: {
+      from: vi.fn(() => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({
+        data: mocks.independentMeasurementExists ? { project_id: 'project-1' } : null,
+        error: null,
+      }) }) }) })),
       channel: vi.fn(() => channel),
       removeChannel: vi.fn(),
       storage: { from: vi.fn(() => ({ remove: vi.fn().mockResolvedValue(undefined) })) },
@@ -416,6 +421,7 @@ beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
   mocks.realtimeHandlers.length = 0;
+  mocks.independentMeasurementExists = false;
   vi.useRealTimers();
   const first = makeProject();
   const second = makeProject('project-2');
@@ -470,6 +476,15 @@ describe('segurança de sincronização da página da obra', () => {
     expect(await screen.findByRole('button', { name: 'Abrir Diário pela Medição de teste' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Abrir Diário de teste' }));
     expect(await screen.findByTestId('diary-initial-filter')).toHaveTextContent('all');
+  });
+
+  it('abre a Medição incorporada sem buscar Diário e Produção na carga inicial', async () => {
+    mocks.independentMeasurementExists = true;
+    renderIndex('medicao');
+    expect(await screen.findByRole('button', { name: 'Abrir Diário pela Medição de teste' })).toBeVisible();
+    expect(mocks.loadCloudProjectRecord).toHaveBeenCalledWith('project-1', expect.objectContaining({
+      collections: ['additives', 'budgetItems', 'analyticCompositions'],
+    }));
   });
 
   it('recupera auditoria offline parcial sem substituir histórico da nuvem no retry', async () => {
