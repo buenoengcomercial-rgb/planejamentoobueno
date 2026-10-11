@@ -835,7 +835,12 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       const priorEvent = failed.operation.candidate?.audit.at(-1);
       if (priorEvent && await repository.confirmedOperation?.(priorEvent.id, failed.operation.candidate!.revision)) {
         for (const taskKey of groupKeys) failedTaskEdits.current.delete(taskKey);
-        markFailedTaskChange(value => value + 1); adopt(latest); return true;
+        failed.operation.after?.();
+        markFailedTaskChange(value => value + 1);
+        adopt(latest);
+        setStatus('Confirmado');
+        if (repository.savedLabel === 'Salvo na nuvem') setConfirmedAt(new Date().toISOString());
+        return true;
       }
       for (const task of affected) {
         const before = priorEvent?.before.find(entry => entry.measurementId === task.measurementId && entry.serviceId === task.serviceId);
@@ -892,7 +897,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const rowIndex = targetEntry?.rows.findIndex(r => r.id === destination?.rowId) ?? -1;
   const nextPeriod = nextMeasurementPeriod(workspace.periods);
   const localPending = !!bufferedDetail.current || localStagePending.current > 0 || localStageFailed.current || detailQueue.current.length > 0 || failedTaskEdits.current.size > 0 || drafts.length > 0
-    || draftChanges.current.size > 0 || writingDrafts.current > 0 || status === 'Aguardando nuvem';
+    || draftChanges.current.size > 0 || writingDrafts.current > 0;
   const cloudStatus: SaveStatus = repository.loadedOffline?.() ? 'offline'
     : recovery || status === 'Precisa resolver conflito' ? 'conflict'
       : localPending && !saving ? 'pending'
