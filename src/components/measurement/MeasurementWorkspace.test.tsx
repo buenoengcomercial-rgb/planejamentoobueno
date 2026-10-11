@@ -48,6 +48,85 @@ describe('Tela própria de Medição', () => {
     expect(second.plans[0].measures).toHaveLength(0);
     expect(second.entries.find(entry => entry.serviceId === 's')?.rows).toEqual([]);
   });
+  it('preserva duas exclusões da mesma tarefa após falha da primeira e salva outra tarefa', async () => {
+    const { w, repository } = fixture();
+    w.services.push({ ...w.services[0], id: 'other', item: '1.2', description: 'Extintores' });
+    w.plans = [{ ...measurementFixture().plans[0], projectId: w.projectId, measures: [] }];
+    w.entries = [{ projectId: w.projectId, measurementId: 'm1', serviceId: 's', rows: [newMeasuredRow('first'), newMeasuredRow('second')] }];
+    let remote = w;
+    for (const [rowId, count] of [['first', 19], ['second', 22]] as const) {
+      const mark = { id: `mark-${rowId}`, name: 'Térreo', kind: 'count' as const, page: 1,
+        points: Array.from({ length: count }, (_, index) => ({ x: index, y: 1 })),
+        projectId: w.projectId, measurementId: 'm1', serviceId: 's' };
+      remote = captureMeasurement(remote, actor, { measurementId: 'm1', serviceId: 's', rowId, field: 'measuredQuantity' },
+        { ...remote.plans[0], measures: [...remote.plans[0].measures, mark] }, mark);
+    }
+    repository.savedLabel = 'Salvo na nuvem';
+    vi.mocked(repository.load).mockImplementation(async () => remote);
+    let rejectFirst!: (cause: Error) => void;
+    vi.mocked(repository.commit).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }))
+      .mockImplementation(async candidate => { remote = candidate; return candidate; });
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+
+    fireEvent.click(await screen.findByRole('spinbutton', { name: 'Quantidade de Placas' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Excluir linha 1' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Excluir linha 1' }));
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+    const other = screen.getByRole('spinbutton', { name: 'Quantidade de Extintores' });
+    fireEvent.change(other, { target: { value: '3' } });
+    fireEvent.blur(other);
+    fireEvent.click(screen.getByRole('spinbutton', { name: 'Quantidade de Placas' }));
+    await act(async () => rejectFirst(new Error('Falha temporária')));
+
+    await waitFor(() => expect(remote.entries.find(entry => entry.serviceId === 'other')?.rows[0].multiplier).toBe(3));
+    expect(repository.commit).toHaveBeenCalledTimes(2);
+    expect(remote.entries.find(entry => entry.serviceId === 's')?.rows).toHaveLength(2);
+    expect(screen.getByRole('spinbutton', { name: 'Quantidade de Placas' })).toHaveValue(0);
+    expect(screen.getByText('Aguardando envio à nuvem')).toBeVisible();
+    expect(screen.queryByText('Salvo e conferido na nuvem')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reenviar 1.1' }));
+    await waitFor(() => expect(remote.entries.find(entry => entry.serviceId === 's')?.rows).toHaveLength(0));
+    expect(remote.plans[0].measures).toHaveLength(0);
+    expect(repository.commit).toHaveBeenCalledTimes(4);
+    expect(screen.queryByRole('button', { name: 'Reenviar 1.1' })).not.toBeInTheDocument();
+  });
+  it('reexecuta as exclusões pendentes antes de aceitar uma nova edição na tarefa falha', async () => {
+    const { w, repository } = fixture();
+    w.services.push({ ...w.services[0], id: 'other', item: '1.2', description: 'Extintores' });
+    w.plans = [{ ...measurementFixture().plans[0], projectId: w.projectId, measures: [] }];
+    w.entries = [{ projectId: w.projectId, measurementId: 'm1', serviceId: 's', rows: [newMeasuredRow('first'), newMeasuredRow('second')] }];
+    let remote = w;
+    for (const [rowId, count] of [['first', 19], ['second', 22]] as const) {
+      const mark = { id: `mark-${rowId}`, name: 'Térreo', kind: 'count' as const, page: 1,
+        points: Array.from({ length: count }, (_, index) => ({ x: index, y: 1 })),
+        projectId: w.projectId, measurementId: 'm1', serviceId: 's' };
+      remote = captureMeasurement(remote, actor, { measurementId: 'm1', serviceId: 's', rowId, field: 'measuredQuantity' },
+        { ...remote.plans[0], measures: [...remote.plans[0].measures, mark] }, mark);
+    }
+    repository.savedLabel = 'Salvo na nuvem';
+    vi.mocked(repository.load).mockImplementation(async () => remote);
+    let rejectFirst!: (cause: Error) => void;
+    vi.mocked(repository.commit).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }))
+      .mockImplementation(async candidate => { remote = candidate; return candidate; });
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByRole('spinbutton', { name: 'Quantidade de Placas' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Excluir linha 1' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Excluir linha 1' }));
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+    await act(async () => rejectFirst(new Error('Falha temporária')));
+    await screen.findByRole('button', { name: 'Reenviar 1.1' });
+    expect(screen.getByRole('spinbutton', { name: 'Quantidade de Placas' })).toHaveValue(0);
+
+    const newMeasure = screen.getByRole('spinbutton', { name: 'Medida da linha 1' });
+    fireEvent.change(newMeasure, { target: { value: '5' } });
+    fireEvent.blur(newMeasure);
+    fireEvent.click(screen.getByRole('spinbutton', { name: 'Quantidade de Extintores' }));
+    await waitFor(() => expect(remote.entries.find(entry => entry.serviceId === 's')?.rows).toHaveLength(1));
+    expect(remote.entries.find(entry => entry.serviceId === 's')?.rows[0].measuredQuantity).toBe(5);
+    expect(remote.plans[0].measures).toHaveLength(0);
+    expect(repository.commit).toHaveBeenCalledTimes(4);
+    expect(screen.queryByRole('button', { name: 'Reenviar 1.1' })).not.toBeInTheDocument();
+  });
   it('remove o Histórico da tela sem descartar a auditoria armazenada', async () => {
     const { w, repository } = fixture();
     const readAffected = vi.fn();
