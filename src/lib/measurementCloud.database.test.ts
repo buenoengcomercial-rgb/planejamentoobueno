@@ -8,6 +8,7 @@ import { approveMeasuredPeriod, editMeasuredRow, editMeasuredBulletin, deleteMea
 import { encodeMeasurementWorkspace } from './measurementCloudCodec';
 import { measurementEntryPatch } from './measurementEntryPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
+import { measurementDeletionPatch } from './measurementDeletionPatch';
 import { deleteMeasuredPeriod, restoreMeasuredPeriod } from './measurementLifecycle';
 const projectId='00000000-0000-4000-8000-000000000001', userId='00000000-0000-4000-8000-000000000002', planId='00000000-0000-4000-8000-000000000003';
 const actor={id:userId,name:'Teste',canEdit:true,canReview:true};
@@ -53,6 +54,7 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011010000_measurement_capture_delta.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011150000_measurement_excess_warning.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011170000_measurement_capture_targeted_commit.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261011180000_measurement_row_deletion_patch.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -730,6 +732,72 @@ describe('transação da Medição na nuvem',()=>{
   expect(w.plans[0].measures.map(mark=>mark.id)).toEqual(['mark-19','mark-22']);
   expect(w.entries.find(entry=>entry.measurementId==='m1'&&entry.serviceId==='signs')?.rows.map(row=>row.multiplier)).toEqual([19,22]);
   expect(w.entries.find(entry=>entry.measurementId==='m1'&&entry.serviceId==='signs')?.rows.reduce((total,row)=>total+row.multiplier,0)).toBe(41);
+ });
+ it('exclui duas linhas capturadas e suas marcas em uma só revisão sem tocar em outras tarefas',async()=>{
+  await seed(); let w=await commit(editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('first')));
+  w=await commit(editMeasuredRow(w,actor,'m1','signs',newMeasuredRow('second')));
+  w.plans[0].file=base.plans[0].file;
+  for(const [id,rowId,count] of [['mark-19','first',19],['mark-22','second',22]] as const){
+   const mark={id,name:id,kind:'count' as const,page:1,
+    points:Array.from({length:count},(_,i)=>({x:i,y:1})),projectId,measurementId:'m1',serviceId:'signs'};
+   const next=captureMeasurement(w,actor,{measurementId:'m1',serviceId:'signs',rowId,field:'multiplier'},
+    {...w.plans[0],measures:[...w.plans[0].measures,mark]},mark);
+   await db.query('SELECT patch_measurement_capture($1,$2,$3)',
+    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(measurementCapturePatch(w,next)!))]);
+   w=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+   w.plans[0].file=base.plans[0].file;
+  }
+  const unaffected=entryFor(w,'m1','detectors');
+  const once=deleteMeasuredRow(w,actor,'m1','signs','first');
+  const twice=deleteMeasuredRow(once,actor,'m1','signs','second');
+  const combined={...twice,revision:w.revision+1,audit:[...w.audit,{
+   ...twice.audit.at(-1)!,id:crypto.randomUUID(),before:[entryFor(w,'m1','signs')],
+   after:[entryFor(twice,'m1','signs')],beforePlans:w.plans,afterPlans:twice.plans,
+  }]};
+  const patch=measurementDeletionPatch(w,combined);
+  expect(patch).toBeTruthy();
+  expect(patch?.plans).toHaveLength(1);
+  expect(patch?.plans[0].measures).toHaveLength(0);
+  const receipt=(await db.query<{value:{revision:number;patch:unknown}}>('SELECT patch_measurement_row_deletion($1,$2,$3) value',
+   [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows[0].value;
+  expect(receipt).toMatchObject({revision:combined.revision,patch:encodeMeasurementWorkspace(patch)});
+  const loaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(loaded).toEqual(JSON.parse(wire(combined)));
+  expect(entryFor(loaded,'m1','signs').rows).toEqual([]);
+  expect(entryFor(loaded,'m1','detectors')).toEqual(unaffected);
+  expect((await db.query('SELECT patch_measurement_row_deletion($1,$2,$3)',
+   [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows).toHaveLength(1);
+ });
+ it('exclui uma linha com capturas A e B em plantas diferentes sem alterar outros lançamentos',async()=>{
+  const otherPlanId='00000000-0000-4000-8000-000000000004';
+  const otherPath=`${projectId}/${otherPlanId}/drawing.png`;
+  await db.query('INSERT INTO storage.objects(bucket_id,name) VALUES($1,$2)', ['plan-takeoff',otherPath]);
+  await db.query('INSERT INTO takeoff_plans(id,project_id,file_path) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+   [otherPlanId,projectId,otherPath]);
+  const secondPlan={...structuredClone(base.plans[0]),id:otherPlanId,storagePath:otherPath,measures:[]};
+  let w={...base,plans:[base.plans[0],secondPlan]};
+  await seed(w);
+  w=await commit(editMeasuredRow(w,actor,'m1','signs',newMeasuredRow('both')));
+  for(const [drawingId,field,id] of [[planId,'multiplier','mark-a'],[otherPlanId,'measuredQuantity','mark-b']] as const){
+   const plan=w.plans.find(value=>value.id===drawingId)!;
+   const mark={id,name:id,kind:'count' as const,page:1,points:[{x:1,y:1},{x:2,y:2}],
+    projectId,measurementId:'m1',serviceId:'signs'};
+   const next=captureMeasurement(w,actor,{measurementId:'m1',serviceId:'signs',rowId:'both',field},
+    {...plan,measures:[mark]},mark);
+   await db.query('SELECT patch_measurement_capture($1,$2,$3)',
+    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(measurementCapturePatch(w,next)!))]);
+   w=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  }
+  const otherEntry=entryFor(w,'m1','detectors');
+  const deleted=deleteMeasuredRow(w,actor,'m1','signs','both');
+  const patch=measurementDeletionPatch(w,deleted);
+  expect(patch?.plans.map(plan=>plan.id).sort()).toEqual([planId,otherPlanId].sort());
+  await db.query('SELECT patch_measurement_row_deletion($1,$2,$3)',
+   [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))]);
+  const loaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(loaded.plans.every(plan=>plan.measures.length===0)).toBe(true);
+  expect(entryFor(loaded,'m1','signs').rows).toEqual([]);
+  expect(entryFor(loaded,'m1','detectors')).toEqual(otherEntry);
  });
  it('captura DXF excedente permanece atômica e impede envio fiscal até correção',async()=>{
   await seed(); const ready=await commit(editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('excess-capture')));

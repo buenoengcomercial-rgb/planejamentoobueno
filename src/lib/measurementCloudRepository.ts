@@ -3,6 +3,7 @@ import { measurementRepository, type MeasurementRepository, type PendingMeasurem
 import { decodeMeasurementWorkspace, encodeMeasurementWorkspace } from './measurementCloudCodec';
 import { TAKEOFF_BUCKET } from './planTakeoffCloud';
 import { measurementEntryPatch } from './measurementEntryPatch';
+import { measurementDeletionPatch } from './measurementDeletionPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
 import type { MeasurementWorkspace } from './measurementWorkspace';
 
@@ -265,7 +266,6 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           .some(plans => plans?.some(plan => !plan.storagePath));
       const next = needsPlanPaths ? structuredClone(candidate) : candidate;
       const entryPatch = !needsPlanPaths && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
-      const earlyCapture = !needsPlanPaths && !entryPatch && confirmed?.revision === baseRevision ? measurementCapturePatch(confirmed, next) : null;
       for (const plan of next.plans) {
         if (!plan.storagePath) {
           const extension = plan.kind === 'image' ? 'image' : plan.kind;
@@ -281,10 +281,14 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         for (const event of next.audit) for (const plans of [event.beforePlans, event.afterPlans]) for (const p of plans ?? []) p.storagePath ??= paths.get(p.id);
       }
       const patch = entryPatch ?? (confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null);
-      const capturePatch = !patch && confirmed?.revision === baseRevision ? measurementCapturePatch(confirmed, next) : null;
+      const deletionPatch = !patch && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null;
+      const capturePatch = !patch && !deletionPatch && confirmed?.revision === baseRevision ? measurementCapturePatch(confirmed, next) : null;
       const send = () => patch
         ? supabase.rpc('patch_measurement_entries' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: patch,
+        } as never)
+        : deletionPatch ? supabase.rpc('patch_measurement_row_deletion' as never, {
+          p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: encodeMeasurementWorkspace(deletionPatch),
         } as never)
         : capturePatch ? supabase.rpc('patch_measurement_capture' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: encodeMeasurementWorkspace(capturePatch),
@@ -318,9 +322,9 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       }
       if (error) throw new Error(error.message);
       let saved: MeasurementWorkspace;
-      if (patch || capturePatch) {
+      if (patch || deletionPatch || capturePatch) {
         const receipt = data as { projectId?: string; revision?: number; patch?: unknown } | null;
-        const expected = patch ?? encodeMeasurementWorkspace(capturePatch);
+        const expected = patch ?? encodeMeasurementWorkspace(deletionPatch ?? capturePatch);
         if (receipt?.projectId !== scope.projectId || receipt.revision !== next.revision || JSON.stringify(receipt.patch) !== JSON.stringify(expected)) {
           // JSONB key order is not significant; compare using the canonical encoder below.
           const canonical = (value: unknown): string => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);

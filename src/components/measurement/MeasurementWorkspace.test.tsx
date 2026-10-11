@@ -4,7 +4,7 @@ import MeasurementWorkspace from './MeasurementWorkspace';
 import type { MeasurementRepository } from '@/lib/measurementWorkspaceStore';
 import type { MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
-import { addMeasuredPeriod, freezeMeasuredPeriod } from '@/lib/measurementWorkspace';
+import { addMeasuredPeriod, captureMeasurement, freezeMeasuredPeriod, newMeasuredRow } from '@/lib/measurementWorkspace';
 import { deleteMeasuredPeriod } from '@/lib/measurementLifecycle';
 
 afterEach(cleanup);
@@ -16,6 +16,38 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('permite excluir duas linhas de planta rapidamente sem agrupar as marcas em edição genérica', async () => {
+    const { w, repository } = fixture();
+    w.plans = [{ ...measurementFixture().plans[0], projectId: w.projectId, measures: [] }];
+    w.entries = [{ projectId: w.projectId, measurementId: 'm1', serviceId: 's', rows: [newMeasuredRow('first'), newMeasuredRow('second')] }];
+    let loaded = w;
+    for (const [rowId, count] of [['first', 19], ['second', 22]] as const) {
+      const mark = { id: `mark-${rowId}`, name: 'Térreo', kind: 'count' as const, page: 1,
+        points: Array.from({ length: count }, (_, index) => ({ x: index, y: 1 })),
+        projectId: w.projectId, measurementId: 'm1', serviceId: 's' };
+      loaded = captureMeasurement(loaded, actor, { measurementId: 'm1', serviceId: 's', rowId, field: 'measuredQuantity' },
+        { ...loaded.plans[0], measures: [...loaded.plans[0].measures, mark] }, mark);
+    }
+    repository.savedLabel = 'Salvo na nuvem';
+    vi.mocked(repository.load).mockResolvedValue(loaded);
+    let confirmFirst!: () => void;
+    vi.mocked(repository.commit).mockImplementationOnce(next => new Promise(resolve => { confirmFirst = () => resolve(next); }))
+      .mockImplementation(async next => next);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByRole('spinbutton', { name: 'Quantidade de Placas' }));
+    const firstDelete = await screen.findByRole('button', { name: 'Excluir linha 1' });
+    fireEvent.click(firstDelete);
+    fireEvent.click(await screen.findByRole('button', { name: 'Excluir linha 1' }));
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+    await act(async () => { confirmFirst(); });
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+    const [first, second] = vi.mocked(repository.commit).mock.calls.map(call => call[0]);
+    expect(first.audit.at(-1)?.action).toBe('Excluir linha / desvincular referência');
+    expect(second.audit.at(-1)?.action).toBe('Excluir linha / desvincular referência');
+    expect(first.plans[0].measures).toHaveLength(1);
+    expect(second.plans[0].measures).toHaveLength(0);
+    expect(second.entries.find(entry => entry.serviceId === 's')?.rows).toEqual([]);
+  });
   it('remove o Histórico da tela sem descartar a auditoria armazenada', async () => {
     const { w, repository } = fixture();
     const readAffected = vi.fn();

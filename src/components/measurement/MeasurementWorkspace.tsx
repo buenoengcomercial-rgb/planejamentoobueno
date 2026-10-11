@@ -988,7 +988,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
             onCreate={changes => { const fresh = newMeasuredRow(); const row = { ...fresh, ...changes, id: fresh.id }; saveDraft(active, s.id, '__new__', { ...changes, createdRowId: fresh.id }); return bufferDetail(s.id, w => editMeasuredRow(w, actor, active, s.id, row), clearCommittedDraft(active, s.id, '__new__')) ? row.id : null; }}
             onEdit={(id, changes) => bufferDetail(s.id, w => { const row = entryFor(w, active, s.id).rows.find(r => r.id === id); if (!row) throw new Error('Linha não encontrada.'); return editMeasuredRow(w, actor, active, s.id, { ...row, ...changes }); }, clearCommittedDraft(active, s.id, id))}
             onDelete={id => repository.savedLabel === 'Salvo na nuvem'
-              ? bufferDetail(s.id, w => deleteMeasuredRow(w, actor, active, s.id, id))
+              ? flushBufferedDetail() && applyDetail(w => deleteMeasuredRow(w, actor, active, s.id, id))
               : apply(w => deleteMeasuredRow(w, actor, active, s.id, id))}
             onOpenPlan={(rowId, field) => { void (async () => {
               if (!flushBufferedDetail() || !resumeFailedTaskEdit(s.id)) return;
