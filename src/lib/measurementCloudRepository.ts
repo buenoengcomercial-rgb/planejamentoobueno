@@ -5,6 +5,7 @@ import { TAKEOFF_BUCKET } from './planTakeoffCloud';
 import { measurementEntryPatch } from './measurementEntryPatch';
 import { measurementDeletionPatch } from './measurementDeletionPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
+import { applyMeasurementLifecycleReceipt, measurementLifecyclePatch } from './measurementLifecyclePatch';
 import type { MeasurementWorkspace } from './measurementWorkspace';
 
 /** Only confirmed snapshots are cached; new unconfirmed edits stay in memory. */
@@ -266,7 +267,13 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         || [latestEvent?.beforePlans, latestEvent?.afterPlans]
           .some(plans => plans?.some(plan => !plan.storagePath));
       const next = needsPlanPaths ? structuredClone(candidate) : candidate;
-      const entryPatch = !needsPlanPaths && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
+      // Lifecycle commands are period-only operations. Detect them before the
+      // generic entry-patch fallback, which serializes the entire workspace.
+      const lifecyclePatch = !needsPlanPaths && confirmed?.revision === baseRevision
+        ? measurementLifecyclePatch(confirmed, next) : null;
+      const isLifecycleCommand = !!latestEvent && (['Criar medição', 'Enviar para fiscalização', 'Aprovado pela fiscalização'].includes(latestEvent.action)
+        || latestEvent.lifecycle?.kind === 'delete' || latestEvent.lifecycle?.kind === 'restore');
+      if (isLifecycleCommand && !lifecyclePatch) throw new MeasurementCommitRejectedError('O ciclo da medição contém outras alterações ou uma revisão desatualizada. Confira a medição antes de repetir.');
       for (const plan of next.plans) {
         if (!plan.storagePath) {
           const extension = plan.kind === 'image' ? 'image' : plan.kind;
@@ -288,10 +295,14 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         const paths = new Map(next.plans.map(p => [p.id, p.storagePath]));
         for (const event of next.audit) for (const plans of [event.beforePlans, event.afterPlans]) for (const p of plans ?? []) p.storagePath ??= paths.get(p.id);
       }
-      const patch = entryPatch ?? (confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null);
-      const deletionPatch = !patch && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null;
-      const capturePatch = !patch && !deletionPatch && confirmed?.revision === baseRevision ? measurementCapturePatch(confirmed, next) : null;
-      const send = () => patch
+      const patch = !lifecyclePatch && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
+      const deletionPatch = !lifecyclePatch && !patch && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null;
+      const capturePatch = !lifecyclePatch && !patch && !deletionPatch && confirmed?.revision === baseRevision ? measurementCapturePatch(confirmed, next) : null;
+      const send = () => lifecyclePatch
+        ? supabase.rpc('commit_measurement_lifecycle' as never, {
+          p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: encodeMeasurementWorkspace(lifecyclePatch),
+        } as never)
+        : patch
         ? supabase.rpc('patch_measurement_entries' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: patch,
         } as never)
@@ -320,7 +331,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           ? Number(eventData.revision)
           : remoteRevision >= next.revision ? await compactedReceiptRevision(operationId) : null;
         if (savedRevision === next.revision && remoteRevision >= next.revision) {
-          const latest = remoteRevision === next.revision ? next : await loadRemote();
+          const latest = lifecyclePatch || remoteRevision !== next.revision ? await loadRemote() : next;
           if (!latest || latest.revision < remoteRevision) throw new Error('A operação foi confirmada, mas a versão mais recente não pôde ser carregada. Mantenha esta página aberta.');
           confirmed = latest;
           return latest;
@@ -336,7 +347,11 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         throw new Error(`${error.message}. A resposta da nuvem é incerta; confira esta operação antes de sair.`);
       }
       let saved: MeasurementWorkspace;
-      if (patch || deletionPatch || capturePatch) {
+      if (lifecyclePatch) {
+        const applied = applyMeasurementLifecycleReceipt(confirmed!, next, lifecyclePatch, data, scope.userId);
+        if (!applied) throw new Error('A nuvem não confirmou o ciclo da medição. Mantenha esta página aberta.');
+        saved = applied;
+      } else if (patch || deletionPatch || capturePatch) {
         const receipt = data as { projectId?: string; revision?: number; patch?: unknown } | null;
         const expected = patch ?? encodeMeasurementWorkspace(deletionPatch ?? capturePatch);
         if (receipt?.projectId !== scope.projectId || receipt.revision !== next.revision || JSON.stringify(receipt.patch) !== JSON.stringify(expected)) {

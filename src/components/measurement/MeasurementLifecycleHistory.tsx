@@ -2,7 +2,8 @@ import type { MeasurementAudit } from '@/lib/measurementWorkspace';
 import { detailTotal } from '@/lib/productionQuantityDetails';
 import { fmtNum } from './measurementFormat';
 export default function MeasurementLifecycleHistory({ event }: { event: MeasurementAudit }) {
-  const snapshots = event.lifecycle ? event.beforePeriods?.filter(p => p.id === event.lifecycle?.measurementId && p.frozen) ?? [] : event.afterPeriods?.filter(p => p.frozen && JSON.stringify(p) !== JSON.stringify(event.beforePeriods?.find(old => old.id === p.id))) ?? [];
+  const snapshots = event.lifecycle ? event.periodDelta?.beforePeriod?.frozen ? [event.periodDelta.beforePeriod] : event.beforePeriods?.filter(p => p.id === event.lifecycle?.measurementId && p.frozen) ?? []
+    : event.periodDelta?.afterPeriod?.frozen ? [event.periodDelta.afterPeriod] : event.afterPeriods?.filter(p => p.frozen && JSON.stringify(p) !== JSON.stringify(event.beforePeriods?.find(old => old.id === p.id))) ?? [];
   return <div className="my-2">
     {event.lifecycle && <p>Motivo: {event.lifecycle.reason}</p>}
     {snapshots.map(period => <details key={period.id} className="mt-2"><summary>Versão {period.status === 'approved' ? 'aprovada' : 'enviada'} preservada · {period.number}ª medição</summary>
