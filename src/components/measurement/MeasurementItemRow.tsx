@@ -62,8 +62,9 @@ function MeasurementItemRow({
   G_BG,
   BORDER_L,
 }: MeasurementItemRowProps) {
-  const baseBg = r.hasNoLogsInPeriod ? 'bg-warning/5' : 'bg-background';
-  const stickyBg = r.hasNoLogsInPeriod ? 'bg-warning/5' : 'bg-background';
+  const excess = renderDetail ? Math.max(0, r.qtyCurrentAccum - r.qtyContracted) : 0;
+  const baseBg = excess > 1e-9 ? 'bg-amber-100' : r.hasNoLogsInPeriod ? 'bg-warning/5' : 'bg-background';
+  const stickyBg = baseBg;
   const isSelected = selectedDetail?.taskId === r.taskId;
   const selectQuantity = () => onSelectDetail?.(renderDetail && isSelected ? null : { taskId: r.taskId, mode: 'quantity' });
   const isAnalyticSelected = selectedDetail?.taskId === r.taskId && selectedDetail.mode === 'analytic';
@@ -88,6 +89,7 @@ function MeasurementItemRow({
     <Fragment>
     <tr
       data-measurement-row="true"
+      data-over-limit={excess > 1e-9 ? 'true' : undefined}
       data-testid={`service-${r.taskId}`}
       className={`${renderDetail ? '' : 'cursor-pointer'} border-b border-border/60 hover:bg-muted/30 ${baseBg} ${isSelected ? 'ring-2 ring-primary/40 ring-inset' : ''}`}
       onClick={handleRowClick}
@@ -122,6 +124,7 @@ function MeasurementItemRow({
             className="shrink-0 mt-0.5"
           />
         </div>
+        {excess > 1e-9 && <div role="note" className="mt-0.5 text-[10px] font-semibold text-amber-900">Ultrapassou o limite contratado · excedente: {fmtNum(excess)} {r.unit}</div>}
       </td>
       <td className={`px-2 py-1.5 text-muted-foreground align-top cell-und ${G_BG.id}`}>
         {r.unit}

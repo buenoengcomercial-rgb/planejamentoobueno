@@ -33,6 +33,7 @@
 .measurement-table--ledger > thead > tr:last-child > th { padding-inline: 2px; }
 .measurement-table--ledger > tbody > tr > td:first-child[colspan] { text-align: left; }
 .measurement-table--ledger [data-measurement-row] > td:first-child { padding-left: 4px !important; }
+.measurement-table--ledger [data-measurement-row][data-over-limit="true"] > td { background-color: #fef3c7; }
 .measurement-table--ledger input { text-align: center; overflow-wrap: normal; word-break: normal; }
 .measurement-table--ledger > thead > tr:last-child > th:nth-child(4),
 .measurement-table--ledger .cell-desc, .measurement-table--ledger .cell-desc button { text-align: left; overflow-wrap: normal; word-break: normal; }

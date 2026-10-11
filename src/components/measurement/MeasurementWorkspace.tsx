@@ -8,8 +8,8 @@ import type { IncorporationBackup } from '@/lib/measurementIncorporation';
 import { prepareIncorporation, incorporateApprovedAdditive } from '@/lib/measurementIncorporation';
 import type { Additive, Project } from '@/types/project';
 import { resolveAnalyticComposition } from '@/lib/analyticLinks';
+import { detailTotal } from '@/lib/productionQuantityDetails';
 import { AnalyticView, type MeasurementDetailSelection } from './MeasurementDetailFooter';
-import { withDetailValue } from '@/lib/productionQuantityDetails';
 import type { TakeoffPlan, TakeoffMeasure, TakeoffRepository, TakeoffDraft } from '@/lib/planTakeoff';
 import { reconcileDrawingCatalog } from '@/lib/measurementDrawingCatalog';
 import { exportMonthlyMeasurement } from '@/lib/measurementMonthlyExport';
@@ -66,6 +66,14 @@ interface BufferedDetail {
   durable?: Promise<void>;
   timer?: ReturnType<typeof setTimeout>;
 }
+interface DetailOperation {
+  edit: DetailEdit;
+  after?: () => void;
+  base?: Workspace;
+  candidate?: Workspace;
+  durable?: Promise<void>;
+}
+interface FailedTaskEdit { operation: DetailOperation; measurementId: string; serviceId: string; message: string }
 /** Several validated cell edits become one auditable task operation. */
 function coalesceTaskEdits(base: Workspace, edits: DetailEdit[], actor: MeasurementActor, operationId: string, createdAt: string): Workspace {
   const final = edits.reduce((state, edit) => edit(state), base);
@@ -95,9 +103,9 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const [destination, setDestination] = useState<Destination | null>(null), destinationRef = useRef<Destination | null>(null);
   const [clipboard, setClipboard] = useState<MeasurementClipboard | null>(null);
   const [periodOpen, setPeriodOpen] = useState(false), [fiscalOpen, setFiscalOpen] = useState(false);
-  const [draftRecoveryOpen, setDraftRecoveryOpen] = useState(false);
   const [lifecycle, setLifecycle] = useState<LifecycleSelection | null>(null);
   const [drafts, setDrafts] = useState<WorkspaceDraft[]>([]), [recovery, setRecovery] = useState(false);
+  const [legacyRemaining, setLegacyRemaining] = useState<string[]>([]);
   const [, markDraftChange] = useState(0);
   const captureDraftWrite = useRef<Promise<boolean>>(Promise.resolve(true));
   const latestCaptureDraft = useRef<TakeoffDraft | null>(null);
@@ -111,7 +119,9 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const retryPendingSaveRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
   const recoveryAction = useRef(false);
   const automaticRecoveryAttempted = useRef(false);
-  const detailQueue = useRef<Array<{ edit: (w: Workspace) => Workspace; after?: () => void; base?: Workspace; candidate?: Workspace; durable?: Promise<void> }>>([]);
+  const detailQueue = useRef<DetailOperation[]>([]);
+  const failedTaskEdits = useRef(new Map<string, FailedTaskEdit>());
+  const [, markFailedTaskChange] = useState(0);
   const latestLocalStage = useRef<Promise<void>>(Promise.resolve());
   const localStagePending = useRef(0);
   const localStageFailed = useRef(false);
@@ -146,7 +156,16 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     rememberCollapsedMeasurementGroups(actor.id, collapseProjectId, next);
   };
   const plan = useMemo(() => incorporationBackup ? prepareIncorporation(incorporationBackup) : null, [incorporationBackup]);
-  const adopt = useCallback((w: Workspace) => { current.current = w; setWorkspace(rebaseBufferedDetailRef.current(w)); }, []);
+  const displayWithFailedTasks = useCallback((base: Workspace) => {
+    let entries = base.entries;
+    for (const failed of failedTaskEdits.current.values()) {
+      const entry = failed.operation.candidate?.entries.find(value => value.measurementId === failed.measurementId && value.serviceId === failed.serviceId);
+      if (!entry) continue;
+      entries = entries.filter(value => value.measurementId !== failed.measurementId || value.serviceId !== failed.serviceId).concat(entry);
+    }
+    return entries === base.entries ? base : { ...base, entries };
+  }, []);
+  const adopt = useCallback((w: Workspace) => { current.current = w; setWorkspace(displayWithFailedTasks(rebaseBufferedDetailRef.current(w))); }, [displayWithFailedTasks]);
   const realtime = useMeasurementRealtime({ repository, projectId: workspace?.projectId, revision: workspace?.revision,
     canRefresh: () => !busy.current && !recovery && !detailQueue.current.length && !bufferedDetail.current && !destinationRef.current && !lifecycle && !periodOpen
       && !writingDrafts.current && !draftChanges.current.size && !drafts.length
@@ -170,10 +189,14 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       if (!alive) return;
       let queued: Awaited<ReturnType<NonNullable<typeof repository.queued>>> = [];
       let pendingError = '';
-      try { queued = await repository.queued?.(w) ?? []; }
+      try { queued = repository.savedLabel === 'Salvo na nuvem' ? [] : await repository.queued?.(w) ?? []; }
       catch (cause) { pendingError = cause instanceof Error ? cause.message : String(cause); }
       if (!alive) return;
       if (w) {
+        if (repository.savedLabel === 'Salvo na nuvem' && !repository.loadedOffline?.() && repository.discardLegacyTask) {
+          try { const legacy = await repository.discardLegacyTask(w, '4.3.2'); if (alive) setLegacyRemaining(legacy.remaining); }
+          catch (cause) { if (alive) setError(`Não foi possível conferir o registro antigo 4.3.2: ${cause instanceof Error ? cause.message : String(cause)}`); }
+        }
         current.current = w;
         if (queued.length) {
           let previous = w;
@@ -190,10 +213,10 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         } else adopt(w);
         setActive(selectedMeasurement(actor.id, w.projectId, w.periods)); setExpanded(null);
       }
-      const legacyPending = !queued.length && !pendingError ? await repository.pending() : null;
+      const legacyPending = repository.savedLabel === 'Salvo na nuvem' || queued.length || pendingError ? null : await repository.pending();
       if (!alive) return;
       const offline = repository.loadedOffline?.() ?? false;
-      setDrafts(d); setRecovery(!!legacyPending || !!pendingError || offline);
+      setDrafts(d); setRecovery(!!legacyPending || !!pendingError);
       if (pendingError) setError(pendingError);
       setStatus(pendingError ? 'Precisa resolver conflito' : queued.length || legacyPending || offline ? 'Aguardando nuvem' : w ? 'Confirmado' : 'Aguardando incorporação');
       if (w && !offline && repository.savedLabel === 'Salvo na nuvem') setConfirmedAt(new Date().toISOString());
@@ -205,13 +228,13 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     if (!w?.periods.some(p => p.id === id)) return;
     if (!flushBufferedDetailRef.current()) return;
     const commitSelection = () => { setActive(id); rememberMeasurement(actor.id, w.projectId, id); };
-    if (!localStagePending.current && !localStageFailed.current) { commitSelection(); return; }
+    if (repository.savedLabel === 'Salvo na nuvem' || !localStagePending.current && !localStageFailed.current) { commitSelection(); return; }
     void latestLocalStage.current.then(commitSelection).catch(cause => {
       setError(`O lançamento ainda não foi guardado neste navegador: ${cause instanceof Error ? cause.message : String(cause)}`);
     });
   };
   useEffect(() => {
-    const warn = (e: BeforeUnloadEvent) => { if ((busy.current && !detailQueue.current.length) || localStagePending.current || localStageFailed.current || writingDrafts.current || failedDraftWrites.current.size || failedCaptureDraft.current) { e.preventDefault(); e.returnValue = ''; } };
+    const warn = (e: BeforeUnloadEvent) => { if (bufferedDetail.current || detailQueue.current.length || failedTaskEdits.current.size || draftChanges.current.size || latestCaptureDraft.current || busy.current || localStagePending.current || localStageFailed.current || writingDrafts.current || failedDraftWrites.current.size || failedCaptureDraft.current) { e.preventDefault(); e.returnValue = ''; } };
     window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn);
   }, []);
   const persist = useCallback(async (candidate: Workspace): Promise<boolean> => {
@@ -242,7 +265,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
           detailQueue.current[0].candidate = undefined;
           let preview = current.current;
           for (const queued of detailQueue.current) preview = queued.edit(preview);
-          detailPreview.current = preview; setWorkspace(rebaseBufferedDetailRef.current(preview));
+          detailPreview.current = preview; setWorkspace(displayWithFailedTasks(rebaseBufferedDetailRef.current(preview)));
           detailDrain.current = drainDetailQueueRef.current();
           pendingOperation.current = detailDrain.current;
         } catch (cause) {
@@ -251,7 +274,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         }
       }
     }
-  }, [repository, adopt, actor.id]);
+  }, [repository, adopt, actor.id, displayWithFailedTasks]);
   const apply = (edit: (w: Workspace) => Workspace, after?: () => void): boolean => {
     if (!current.current) return false;
     if (!flushBufferedDetailRef.current()) return false;
@@ -288,26 +311,47 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     try {
       while (detailQueue.current.length) {
         const operation = detailQueue.current[0], confirmed = current.current!;
-        await operation.durable;
-        setStatus('Sincronizando');
-        // Keep the same audit ID when retrying an uncertain response. Each queued
-        // field is rebased on the last confirmed revision before its first send.
-        const candidate = operation.candidate ??= operation.edit(confirmed);
-        const saved = candidate === confirmed ? confirmed : await repository.commit(candidate, confirmed.revision);
-        if (!await confirmedCommitResponse(repository, candidate, saved)) throw new Error('Resposta de salvamento inválida.');
-        current.current = saved; detailQueue.current.shift();
-        let next = saved;
-        for (const queued of detailQueue.current) next = queued.candidate ?? queued.edit(next);
-        detailPreview.current = detailQueue.current.length ? next : null; setWorkspace(rebaseBufferedDetailRef.current(next));
-        operation.after?.();
+        try {
+          await operation.durable;
+          setStatus('Sincronizando');
+          const candidate = operation.candidate ??= operation.edit(confirmed);
+          const saved = candidate === confirmed ? confirmed : await repository.commit(candidate, confirmed.revision);
+          if (!await confirmedCommitResponse(repository, candidate, saved)) throw new Error('Resposta de salvamento inválida.');
+          current.current = saved; detailQueue.current.shift();
+          for (const affected of candidate.audit.at(-1)?.affected ?? [])
+            failedTaskEdits.current.delete(`${affected.measurementId}:${affected.serviceId}`);
+          let next = saved;
+          for (const queued of detailQueue.current) next = queued.candidate ?? queued.edit(next);
+          detailPreview.current = detailQueue.current.length ? next : null; setWorkspace(displayWithFailedTasks(rebaseBufferedDetailRef.current(next)));
+          operation.after?.();
+        } catch (cause) {
+          const affected = operation.candidate?.audit.at(-1)?.affected;
+          if (repository.savedLabel !== 'Salvo na nuvem' || !affected?.length) throw cause;
+          detailQueue.current.shift();
+          for (const task of affected) failedTaskEdits.current.set(`${task.measurementId}:${task.serviceId}`, {
+            operation, measurementId: task.measurementId, serviceId: task.serviceId,
+            message: cause instanceof Error ? cause.message : String(cause),
+          });
+          markFailedTaskChange(value => value + 1);
+          // Later tasks are rebuilt against the last confirmed revision. A
+          // failed task stays visible, but never becomes the base of another.
+          try {
+            const latest = await repository.load();
+            if (latest && !repository.loadedOffline?.()) current.current = latest;
+          } catch { /* Keep the confirmed copy until the next task can retry. */ }
+          for (const queued of detailQueue.current) queued.candidate = undefined;
+          detailPreview.current = null;
+          setWorkspace(displayWithFailedTasks(rebaseBufferedDetailRef.current(current.current!)));
+          setStatus('Aguardando nuvem');
+        }
       }
       setRecovery(false);
-      setStatus('Confirmado');
+      setStatus(failedTaskEdits.current.size ? 'Aguardando nuvem' : 'Confirmado');
       if (repository.savedLabel === 'Salvo na nuvem') setConfirmedAt(new Date().toISOString());
-      return true;
+      return failedTaskEdits.current.size === 0;
     } catch (cause) {
-      // Keep every optimistic edit and its durable cell draft visible. The user
-      // may continue to another task; retry always begins with the same audit ID.
+      // Keep the optimistic edit visible in memory. A cloud error never claims
+      // the edit was saved, and retry uses the same audit ID.
       setError(cause instanceof Error ? cause.message : String(cause)); setStatus('Precisa resolver conflito'); setRecovery(true);
       await Promise.allSettled(draftWrites.current.values());
       try { setDrafts(await repository.drafts()); } catch { setError(previous => `${previous} · Não foi possível ler os rascunhos locais.`); }
@@ -330,10 +374,10 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       }
       latestLocalStage.current = durable;
       detailQueue.current.push({ edit, after, base, candidate: preview, durable });
-      detailPreview.current = preview; setWorkspace(preview);
+      detailPreview.current = preview; setWorkspace(displayWithFailedTasks(preview));
       setStatus('Aguardando nuvem');
       if (!busy.current) {
-        detailDrain.current = recovery ? retryPendingSave() : drainDetailQueue();
+        detailDrain.current = recovery && repository.savedLabel !== 'Salvo na nuvem' ? retryPendingSave() : drainDetailQueue();
         pendingOperation.current = detailDrain.current;
       }
       return true;
@@ -365,7 +409,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     const after = () => buffered.after.forEach(callback => callback());
     if (candidate === buffered.base) {
       detailPreview.current = buffered.base;
-      setWorkspace(buffered.base);
+      setWorkspace(displayWithFailedTasks(buffered.base));
       void latestLocalStage.current.then(() => {
         after();
         if (!detailQueue.current.length && !bufferedDetail.current) setStatus('Confirmado');
@@ -378,12 +422,13 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     if (applyDetail(base => base === buffered.base ? candidate : build(base), after, buffered.durable)) return true;
     bufferedDetail.current = buffered;
     detailPreview.current = buffered.preview;
-    setWorkspace(buffered.preview);
+    setWorkspace(displayWithFailedTasks(buffered.preview));
     scheduleBufferedDetail(buffered);
     return false;
   };
   flushBufferedDetailRef.current = flushBufferedDetail;
   const scheduleBufferedDetail = (buffered: BufferedDetail) => {
+    if (repository.savedLabel === 'Salvo na nuvem') return;
     if (buffered.timer) clearTimeout(buffered.timer);
     buffered.timer = setTimeout(() => {
       if (bufferedDetail.current === buffered) flushBufferedDetail();
@@ -391,6 +436,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   };
   const bufferDetail = (serviceId: string, edit: DetailEdit, after?: () => void): boolean => {
     if (!current.current) return false;
+    if (failedTaskEdits.current.has(`${active}:${serviceId}`)) { setError('Confira ou tente salvar esta tarefa antes de alterá-la novamente.'); return false; }
     if (bufferedDetail.current && (bufferedDetail.current.serviceId !== serviceId || bufferedDetail.current.measurementId !== active)
       && !flushBufferedDetail()) return false;
     const prior = bufferedDetail.current;
@@ -405,7 +451,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       buffered.preview = preview;
       bufferedDetail.current = buffered;
       detailPreview.current = preview;
-      setWorkspace(preview);
+      setWorkspace(displayWithFailedTasks(preview));
       setStatus('Aguardando nuvem');
       stageBufferedDetail(buffered);
       scheduleBufferedDetail(buffered);
@@ -436,7 +482,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     if (bufferedDetail.current && (selection?.taskId !== bufferedDetail.current.serviceId || selection.mode !== 'quantity')
       && !flushBufferedDetail()) return;
     const request = ++selectionRequest.current;
-    if (!localStagePending.current && !localStageFailed.current) { setExpanded(selection); return; }
+    if (repository.savedLabel === 'Salvo na nuvem' || !localStagePending.current && !localStageFailed.current) { setExpanded(selection); return; }
     void latestLocalStage.current.then(() => {
       if (request === selectionRequest.current) setExpanded(selection);
     }).catch(cause => {
@@ -477,6 +523,13 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     || [...draftChanges.current.keys()].some(key => key.startsWith(`[${JSON.stringify(measurementId)},`));
   const clearDraft = (mid: string, sid: string, rid?: string, expectedVersion?: number) => {
     const key = draftKey(mid, sid, rid ?? ''), version = expectedVersion ?? draftVersions.current.get(key) ?? 0;
+    if (repository.savedLabel === 'Salvo na nuvem') {
+      if ((draftVersions.current.get(key) ?? 0) === version) {
+        draftChanges.current.delete(key);
+        markDraftChange(value => value + 1);
+      }
+      return;
+    }
     const write = (draftWrites.current.get(key) ?? Promise.resolve()).catch(() => undefined).then(async () => {
       if ((draftVersions.current.get(key) ?? 0) !== version) return;
       await repository.clearDraft(mid, sid, rid);
@@ -500,6 +553,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     if (bufferedDetail.current?.measurementId === mid && bufferedDetail.current.serviceId === sid)
       scheduleBufferedDetail(bufferedDetail.current);
     draftVersions.current.set(key, (draftVersions.current.get(key) ?? 0) + 1);
+    if (repository.savedLabel === 'Salvo na nuvem') return;
     writingDrafts.current++;
     const write = (draftWrites.current.get(key) ?? Promise.resolve()).catch(() => undefined).then(async () => {
       await repository.writeDraft(d);
@@ -512,6 +566,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     (d.rowId === `__capture__${target.rowId}:${target.field}` || d.rowId === `__capture__${target.rowId}` && d.changes.field === target.field))?.changes.takeoffDraft as TakeoffDraft | undefined;
   const saveCaptureDraft = useCallback((draft: TakeoffDraft | null) => {
     latestCaptureDraft.current = draft;
+    if (repository.savedLabel === 'Salvo na nuvem') return;
     const d = destinationRef.current, w = current.current;
     if (!d || !w) return;
     // Serialize writes: an older point list must not replace the final draft.
@@ -528,6 +583,11 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     if (closingCapture.current) return;
     closingCapture.current = true;
     try {
+      if (repository.savedLabel === 'Salvo na nuvem') {
+        latestCaptureDraft.current = null;
+        setDestination(null); destinationRef.current = null;
+        return;
+      }
       await latestLocalStage.current;
       // Retry a failed durable write, then drain any points added while it was pending.
       saveCaptureDraft(latestCaptureDraft.current);
@@ -621,7 +681,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         });
         current.current = latest;
         detailPreview.current = staged.at(-1)?.candidate ?? null;
-        setWorkspace(detailPreview.current ?? latest);
+        setWorkspace(displayWithFailedTasks(rebaseBufferedDetailRef.current(detailPreview.current ?? latest)));
         setRecovery(false); setError('');
         if (detailQueue.current.length) { detailDrain.current = drainDetailQueue(); pendingOperation.current = detailDrain.current; return await detailDrain.current; }
         setStatus('Confirmado');
@@ -671,7 +731,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         let preview = latest;
         for (const queued of detailQueue.current) preview = queued.candidate ?? queued.edit(preview);
         detailPreview.current = detailQueue.current.length ? preview : null;
-        setWorkspace(rebaseBufferedDetailRef.current(preview));
+        setWorkspace(displayWithFailedTasks(rebaseBufferedDetailRef.current(preview)));
         uncertainCommit.current = null;
         setRecovery(false); setError('');
         if (detailQueue.current.length) { detailDrain.current = drainDetailQueue(); return await detailDrain.current; }
@@ -725,14 +785,50 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       if (inFlight === pendingOperation.current && !busy.current) break;
     }
     await Promise.allSettled(draftWrites.current.values());
-    if (busy.current || detailQueue.current.length || await repository.pending()) {
+    const legacyPending = repository.savedLabel === 'Salvo na nuvem' ? null : await repository.pending();
+    if (busy.current || detailQueue.current.length || legacyPending) {
       if (!await retryPendingSave()) return false;
     }
-    if (busy.current || detailQueue.current.length || await repository.pending()) {
-      setError('Não foi possível confirmar os lançamentos desta medição. Os rascunhos permanecem neste navegador.');
+    if (busy.current || detailQueue.current.length || repository.savedLabel !== 'Salvo na nuvem' && await repository.pending()) {
+      setError('Não foi possível confirmar os lançamentos desta medição na nuvem.');
       return false;
     }
     return true;
+  };
+  const retryFailedTask = async (key: string): Promise<boolean> => {
+    const failed = failedTaskEdits.current.get(key);
+    if (!failed || busy.current) return false;
+    const affected = failed.operation.candidate?.audit.at(-1)?.affected ?? [];
+    const groupKeys = affected.map(task => `${task.measurementId}:${task.serviceId}`);
+    try {
+      const latest = await repository.load();
+      if (!latest || repository.loadedOffline?.()) throw new Error('Sem conexão com a nuvem. Tente novamente quando ela voltar.');
+      const priorEvent = failed.operation.candidate?.audit.at(-1);
+      if (priorEvent && await repository.confirmedOperation?.(priorEvent.id, failed.operation.candidate!.revision)) {
+        for (const taskKey of groupKeys) failedTaskEdits.current.delete(taskKey);
+        markFailedTaskChange(value => value + 1); adopt(latest); return true;
+      }
+      for (const task of affected) {
+        const before = priorEvent?.before.find(entry => entry.measurementId === task.measurementId && entry.serviceId === task.serviceId);
+        if (before && JSON.stringify(entryFor(latest, task.measurementId, task.serviceId)) !== JSON.stringify(before))
+          throw new Error('Esta tarefa mudou em outro computador. Confira os dois valores antes de repetir o lançamento.');
+      }
+      for (const taskKey of groupKeys) failedTaskEdits.current.delete(taskKey);
+      markFailedTaskChange(value => value + 1);
+      current.current = latest;
+      failed.operation.candidate = undefined;
+      detailQueue.current.push(failed.operation);
+      detailDrain.current = drainDetailQueue(); pendingOperation.current = detailDrain.current;
+      await detailDrain.current;
+      return !failedTaskEdits.current.has(key);
+    } catch (cause) {
+      for (const task of affected) failedTaskEdits.current.set(`${task.measurementId}:${task.serviceId}`, {
+        ...failed, measurementId: task.measurementId, serviceId: task.serviceId,
+        message: cause instanceof Error ? cause.message : String(cause),
+      });
+      markFailedTaskChange(value => value + 1);
+      return false;
+    }
   };
   if (loading) return <p className="p-6">Carregando a base de Medição…</p>;
   if (!workspace && error) return <section className="mx-auto max-w-5xl rounded-lg border border-red-200 bg-white p-6" role="alert">
@@ -745,31 +841,14 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     {plan && <><dl className="grid grid-cols-3 gap-3 text-sm"><div>Serviços: <b>{plan.inventory.services}</b></div><div>Lançamentos antigos: <b>{plan.inventory.dailyLogs + plan.inventory.periodLogs}</b></div><div>Medições: <b>{plan.inventory.periods}</b></div><div>Plantas: <b>{plan.inventory.plans}</b></div><div>Marcações: <b>{plan.inventory.marks}</b></div><div>Divergências: <b>{plan.issues.length}</b></div></dl><div className="my-4 max-h-72 overflow-auto text-sm">{plan.issues.length ? plan.issues.map((i, n) => <p key={n} className="mb-1 text-amber-800">{i.message}</p>) : <p className="text-emerald-700">Quantidades conciliadas. Nenhuma diferença encontrada.</p>}</div><button className={button} disabled={saving || !actor.canEdit || plan.issues.length > 0} onClick={() => void initialize()}>Confirmar incorporação</button></>}
     {!plan && <p>Ativação aguardando inventário, backup e validação do servidor. Nenhum dado operacional foi migrado.</p>}{error && <p role="alert" className="mt-3 text-red-700">{error}</p>}</section>;
   const period = workspace.periods.find(p => p.id === active);
-  const fiscalDrafts = drafts.filter(d => d.measurementId === active && !(d.serviceId === bulletinDraftKey && d.rowId === 'number'));
+  const failedVisible = [...failedTaskEdits.current].filter(([, failed]) => failed.measurementId === active);
   const hasFiscalDrafts = hasPendingFiscalDraft(active);
-  const fiscalPending = saving || recovery || localStagePending.current > 0 || localStageFailed.current
-    || detailQueue.current.length > 0 || !!bufferedDetail.current || hasFiscalDrafts;
-  const focusFiscalDraft = () => {
-    const draft = fiscalDrafts[0];
-    const pendingKey = [...draftChanges.current.keys()].find(key => key.startsWith(`[${JSON.stringify(active)},`));
-    const serviceId = draft?.serviceId ?? (pendingKey ? JSON.parse(pendingKey)[1] as string : undefined);
-    if (serviceId === bulletinDraftKey) {
-      const bulletin = document.querySelector<HTMLElement>('section[aria-label="Boletim de medição para pagamento"]');
-      const toggle = bulletin?.querySelector<HTMLButtonElement>('button[aria-expanded]');
-      if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
-      bulletin?.scrollIntoView?.({ block: 'start' });
-    } else if (serviceId) {
-      setExpanded({ taskId: serviceId, mode: 'quantity' });
-    }
-  };
-  const recoverableDrafts = drafts.filter(d => d.measurementId === active && d.serviceId !== bulletinDraftKey && !d.changes.takeoffDraft);
-  const nextDraft = recoverableDrafts[0];
-  const nextDraftService = nextDraft ? workspace.services.find(service => service.id === nextDraft.serviceId) : undefined;
+  const fiscalPending = saving || recovery || detailQueue.current.length > 0 || !!bufferedDetail.current || failedVisible.length > 0 || hasFiscalDrafts;
   const deletionBlock = period ? periodDeletionBlock(workspace, period) : 'Selecione uma medição.';
   const lastDeleted = [...workspace.audit].reverse().find(event => event.lifecycle?.kind === 'delete'
     && !workspace.periods.some(existing => existing.id === event.lifecycle!.measurementId));
   const locked = !actor.canEdit || !period || isPeriodLocked(period);
-  const quantityLocked = locked || saving && detailQueue.current.length === 0;
+  const quantityLocked = locked;
   const lines = calculatedLines;
   const { presentation, allTotals } = calculatedPresentation;
   const percentage = (value: number) => allTotals.contracted > 0 ? value / allTotals.contracted * 100 : 0;
@@ -783,7 +862,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const marks = targetEntry?.rows.flatMap(r => sourceFields.flatMap(f => r[f] ? [r[f]!.measureId] : [])) ?? [];
   const rowIndex = targetEntry?.rows.findIndex(r => r.id === destination?.rowId) ?? -1;
   const nextPeriod = nextMeasurementPeriod(workspace.periods);
-  const localPending = !!bufferedDetail.current || localStagePending.current > 0 || localStageFailed.current || detailQueue.current.length > 0 || drafts.length > 0
+  const localPending = !!bufferedDetail.current || localStagePending.current > 0 || localStageFailed.current || detailQueue.current.length > 0 || failedTaskEdits.current.size > 0 || drafts.length > 0
     || draftChanges.current.size > 0 || writingDrafts.current > 0 || status === 'Aguardando nuvem';
   const cloudStatus: SaveStatus = repository.loadedOffline?.() ? 'offline'
     : recovery || status === 'Precisa resolver conflito' ? 'conflict'
@@ -806,24 +885,18 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         {lastDeleted && <button className={button} disabled={!actor.canEdit} onClick={() => { setError(''); setLifecycle({ kind: 'restore', id: lastDeleted.id }); }}>Restaurar medição excluída</button>}
 
         {approvedAdditives.filter(a => ['aprovado', 'contratado', 'aditivo_contratado'].includes(a.status ?? '') && !a.editUnlocked).map(additive => <button key={additive.id} className={button} disabled={!!locked} onClick={() => apply(w => { const result = incorporateApprovedAdditive(w, actor, additive, period!.number); if (result.warnings.length) setError(result.warnings.join(' ')); return result.workspace; })}>Incorporar novos serviços · {additive.name}</button>)}
-        <button className={`${button} ml-auto`} disabled={locked || !actor.canReview || fiscalPending || fiscalCurrent} title={fiscalPending ? 'Confirme todos os lançamentos desta medição na nuvem antes do envio' : fiscalCurrent ? 'Nenhuma alteração desde o último envio à fiscalização' : undefined} onClick={() => { setError(''); setFiscalOpen(true); }}><FileCheck2 className="h-3.5 w-3.5"/>{period?.status === 'in_review' ? 'Reenviar para fiscalização' : 'Enviar para fiscalização'}</button>
+        <button className={`${button} ml-auto`} disabled={locked || !actor.canReview || fiscalCurrent && !fiscalPending} title={fiscalCurrent && !fiscalPending ? 'Nenhuma alteração desde o último envio à fiscalização' : undefined} onClick={() => { setError(''); setFiscalOpen(true); }}><FileCheck2 className="h-3.5 w-3.5"/>{period?.status === 'in_review' ? 'Reenviar para fiscalização' : 'Enviar para fiscalização'}</button>
         {period?.status === 'in_review' && <button className={button} disabled={locked || !actor.canReview || fiscalPending} title={fiscalPending ? 'Confirme todos os lançamentos desta medição na nuvem antes da aprovação' : undefined} onClick={() => { setError(''); setLifecycle({ kind: 'approve', id: active }); }}>Aprovado pela fiscalização</button>}
       </div>
     </section>
     {error && <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
+    {failedVisible.map(([key, failed]) => { const service = workspace.services.find(value => value.id === failed.serviceId); const entry = failed.operation.candidate?.entries.find(value => value.measurementId === failed.measurementId && value.serviceId === failed.serviceId); return <div key={key} role="alert" className="flex flex-wrap items-center gap-2 border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-950"><strong>{service?.item ?? failed.serviceId} · não confirmado na nuvem</strong><span>Quantidade nesta página: {entry ? String(detailTotal(entry.rows)) : 'confira o detalhe'} {service?.unit}</span><span>{failed.message}</span><button className="underline" onClick={() => void retryFailedTask(key)}>Tentar salvar esta tarefa</button></div>; })}
     {lifecycle && <MeasurementLifecycleDialog key={`${lifecycle.kind}:${lifecycle.id}`} selection={lifecycle} workspace={workspace} actor={actor} busy={saving} error={error}
       hasDraft={drafts.some(d => d.measurementId === lifecycle.id)} onClose={() => setLifecycle(null)} onConfirm={(edit, id) => { if (lifecycle.kind === 'approve' && fiscalPending) { setError('Aguarde a confirmação dos lançamentos na nuvem antes da aprovação.'); return; } apply(edit, () => {
         setLifecycle(null); setExpanded(null); setClipboard(null);
         selectPeriod(current.current!.periods.some(p => p.id === id) ? id : current.current!.periods.at(-1)!.id);
       }); }}/>}
-    {nextDraft && <details className="text-xs text-muted-foreground" open={draftRecoveryOpen} onToggle={event => setDraftRecoveryOpen(event.currentTarget.open)}><summary className="cursor-pointer">Rascunhos locais ({recoverableDrafts.length})</summary><div>Próxima tarefa: {nextDraftService ? `${nextDraftService.item} — ${nextDraftService.description}` : nextDraft.serviceId}. <button className="underline" onClick={() => {
-      const d = nextDraft;
-      const rowId = typeof d.changes.createdRowId === 'string' ? d.changes.createdRowId : d.rowId.startsWith('__') ? undefined : d.rowId;
-      apply(w => { let row = { ...(entryFor(w, active, d.serviceId).rows.find(r => r.id === rowId) ?? newMeasuredRow(rowId)), ...('comment' in d.changes ? { comment: String(d.changes.comment) } : {}) };
-        for (const f of ['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD'] as const) if (f in d.changes) row = withDetailValue(row, f, Number(String(d.changes[f]).replace(',', '.')));
-        return editMeasuredRow(w, actor, active, d.serviceId, row);
-      }, () => clearDraft(active, d.serviceId, d.rowId));
-    }}>Recuperar rascunho</button></div></details>}
+    {legacyRemaining.length > 0 && <p role="status" className="border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">Há registros locais antigos de outras tarefas ({legacyRemaining.join(', ')}). Eles não foram apagados nem enviados automaticamente.</p>}
     {period && <MeasurementBulletin key={active} workspace={workspace} measurementId={active} readOnly={!!locked} drafts={drafts}
       onDraft={async (field, value) => {
         draftChanges.current.set(draftKey(active, bulletinDraftKey, field), { value });
@@ -871,16 +944,18 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         const composition = project ? resolveAnalyticComposition(project, { taskId: service.sourceTaskId ?? service.id, baseBudgetItemId: service.sourceBudgetId, item: service.item, code: service.code, bank: service.bank, description: service.description }).composition : undefined;
         return <AnalyticView compact composition={composition} bdi={service.bdi}/>;
       }}
-      renderQuantity={row => { const l = lineByTaskId.get(row.taskId)!; const s = l.service, e = entryByTaskId.get(s.id) ?? entryFor(workspace, active, s.id); return <input key={`${active}-${s.id}`} ref={input => { if (input && document.activeElement !== input && input.value !== String(l.qty)) input.value = String(l.qty); }} aria-label={`Quantidade de ${s.description}`} className="no-spinner h-6 w-full min-w-0 rounded border border-transparent bg-transparent px-1 text-right text-[11px] tabular-nums hover:border-primary/30 focus:border-primary disabled:bg-transparent" type="number" inputMode="decimal" min="0" step="any" title={`Clique para abrir o detalhe da ${period!.number}ª medição`} aria-expanded={expanded?.taskId === s.id && expanded.mode === 'quantity'} onClick={() => selectDetailAfterLocalSave({ taskId: s.id, mode: 'quantity' })} readOnly={quantityLocked || e.rows.length > 1 || e.rows.some(r => r.origin?.kind !== 'manual' || sourceFields.some(f => r[f]) || r.sharedRecordId || r.measuredQuantity || r.dimensionC || r.dimensionD)} defaultValue={l.qty} onChange={event => saveDraft(active, s.id, '__manual__', { multiplier: event.target.value })} onKeyDown={event => { if (['ArrowUp', 'ArrowDown'].includes(event.key)) event.preventDefault(); if (event.key === 'Enter') event.currentTarget.blur(); }} onWheel={event => event.currentTarget.blur()} onBlur={event => {
+       renderQuantity={row => { const l = lineByTaskId.get(row.taskId)!; const s = l.service, e = entryByTaskId.get(s.id) ?? entryFor(workspace, active, s.id); return <input key={`${active}-${s.id}`} ref={input => { if (input && document.activeElement !== input && input.value !== String(l.qty)) input.value = String(l.qty); }} aria-label={`Quantidade de ${s.description}`} className="no-spinner h-6 w-full min-w-0 rounded border border-transparent bg-transparent px-1 text-right text-[11px] tabular-nums hover:border-primary/30 focus:border-primary disabled:bg-transparent" type="number" inputMode="decimal" min="0" step="any" title={`Clique para abrir o detalhe da ${period!.number}ª medição`} aria-expanded={expanded?.taskId === s.id && expanded.mode === 'quantity'} onClick={() => selectDetailAfterLocalSave({ taskId: s.id, mode: 'quantity' })} readOnly={quantityLocked || failedTaskEdits.current.has(`${active}:${s.id}`) || e.rows.length > 1 || e.rows.some(r => r.origin?.kind !== 'manual' || sourceFields.some(f => r[f]) || r.sharedRecordId || r.measuredQuantity || r.dimensionC || r.dimensionD)} defaultValue={l.qty} onChange={event => saveDraft(active, s.id, '__manual__', { multiplier: event.target.value })} onKeyDown={event => { if (['ArrowUp', 'ArrowDown'].includes(event.key)) event.preventDefault(); if (event.key === 'Enter') event.currentTarget.blur(); }} onWheel={event => event.currentTarget.blur()} onBlur={event => {
             const value = Number(event.currentTarget.value.replace(',', '.')); if (value === l.qty) { if (!busy.current && !recovery && !detailQueue.current.length) clearDraft(active, s.id, '__manual__'); return; }
             if (!Number.isFinite(value) || value < 0) { event.currentTarget.value = String(l.qty); return; }
             const row = e.rows[0] ?? newMeasuredRow(); if (!bufferDetail(s.id, w => editMeasuredRow(w, actor, active, s.id, { ...newMeasuredRow(row.id), comment: row.comment || 'Quantidade informada', origin: row.origin ?? { kind: 'manual' }, multiplier: value }), clearCommittedDraft(active, s.id, '__manual__'))) event.currentTarget.value = String(l.qty);
           }}/>; }}
-      renderDetail={row => { const l = lineByTaskId.get(row.taskId)!; const s = l.service, e = entryByTaskId.get(s.id) ?? entryFor(workspace, active, s.id); return <ProductionQuantityDetails key={`${active}-${s.id}`} heading={`Detalhe de quantitativos · ${period!.number}ª medição`} rows={e.rows} unit={s.unit} dailyQuantity={l.qty} applied readOnly={quantityLocked} periodMode referenceLabel="Serviços / medições" canOpenPlan onApply={() => undefined}
+       renderDetail={row => { const l = lineByTaskId.get(row.taskId)!; const s = l.service, e = entryByTaskId.get(s.id) ?? entryFor(workspace, active, s.id); return <ProductionQuantityDetails key={`${active}-${s.id}`} heading={`Detalhe de quantitativos · ${period!.number}ª medição`} rows={e.rows} unit={s.unit} dailyQuantity={l.qty} applied readOnly={quantityLocked || failedTaskEdits.current.has(`${active}:${s.id}`)} periodMode referenceLabel="Serviços / medições" canOpenPlan onApply={() => undefined}
             onDraftChange={(rid, changes) => saveDraft(active, s.id, rid, changes)}
             onCreate={changes => { const fresh = newMeasuredRow(); const row = { ...fresh, ...changes, id: fresh.id }; saveDraft(active, s.id, '__new__', { ...changes, createdRowId: fresh.id }); return bufferDetail(s.id, w => editMeasuredRow(w, actor, active, s.id, row), clearCommittedDraft(active, s.id, '__new__')) ? row.id : null; }}
             onEdit={(id, changes) => bufferDetail(s.id, w => { const row = entryFor(w, active, s.id).rows.find(r => r.id === id); if (!row) throw new Error('Linha não encontrada.'); return editMeasuredRow(w, actor, active, s.id, { ...row, ...changes }); }, clearCommittedDraft(active, s.id, id))}
-            onDelete={id => apply(w => deleteMeasuredRow(w, actor, active, s.id, id))}
+            onDelete={id => repository.savedLabel === 'Salvo na nuvem'
+              ? bufferDetail(s.id, w => deleteMeasuredRow(w, actor, active, s.id, id))
+              : apply(w => deleteMeasuredRow(w, actor, active, s.id, id))}
             onOpenPlan={(rowId, field) => { void (async () => {
               if (!flushBufferedDetail()) return;
               try { await Promise.all(detailQueue.current.map(operation => operation.durable)); }
@@ -889,9 +964,11 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
               if (!visible || !entryFor(visible, active, s.id).rows.some(r => r.id === rowId)) { setError('A linha não está disponível. Confira o detalhe antes de abrir a planta.'); return; }
               const d = { measurementId: active, serviceId: s.id, rowId, field }; latestCaptureDraft.current = captureDraftFor(d) ?? null; destinationRef.current = d; setDestination(d);
             })(); }}
-            clipboard={clipboard} onCopy={(mode, row) => setClipboard({ mode, projectId: workspace.projectId, unit: s.unit, source: { measurementId: active, serviceId: s.id, rowId: row.id }, snapshot: structuredClone(row) })} onPaste={() => clipboard && apply(w => pasteMeasuredRow(w, actor, active, s.id, clipboard), () => { if (clipboard.mode === 'cut') setClipboard(null); })}
+            clipboard={clipboard} onCopy={(mode, row) => setClipboard({ mode, projectId: workspace.projectId, unit: s.unit, source: { measurementId: active, serviceId: s.id, rowId: row.id }, snapshot: structuredClone(row) })} onPaste={() => clipboard && (repository.savedLabel === 'Salvo na nuvem'
+              ? bufferDetail(s.id, w => pasteMeasuredRow(w, actor, active, s.id, clipboard), () => { if (clipboard.mode === 'cut') setClipboard(null); })
+              : apply(w => pasteMeasuredRow(w, actor, active, s.id, clipboard), () => { if (clipboard.mode === 'cut') setClipboard(null); }))}
             sharedTaskNames={record => workspace.entries.filter(e => e.rows.some(r => r.sharedRecordId === record)).map(e => `${workspace.periods.find(p => p.id === e.measurementId)?.number}ª medição · ${workspace.services.find(s => s.id === e.serviceId)?.description}`)}/>; }}/>
-    <Dialog open={!!destination} onOpenChange={open => { if (!open) void closeCapture(); }}><DialogContent className="max-w-[98vw] max-h-[97vh] overflow-auto p-3 data-[state=closed]:hidden"><div className="flex items-center justify-between gap-3 pr-8"><DialogTitle className="text-sm">{period?.number}ª medição · {targetService?.description}</DialogTitle><button className={`${button} shrink-0`} onClick={() => void closeCapture()}>Fechar página</button></div><DialogDescription className="text-xs">{workspace.projectName} · {targetService?.path} · Linha {rowIndex + 1}, coluna {destination ? { multiplier: 'A', measuredQuantity: 'B', dimensionC: 'C', dimensionD: 'D' }[destination.field] : ''}. Concluir preenche a célula e atualiza o valor desta medição. Ao fechar, o traçado em andamento fica preservado nesta célula.</DialogDescription>
+     <Dialog open={!!destination} onOpenChange={open => { if (!open) void closeCapture(); }}><DialogContent className="max-w-[98vw] max-h-[97vh] overflow-auto p-3 data-[state=closed]:hidden"><div className="flex items-center justify-between gap-3 pr-8"><DialogTitle className="text-sm">{period?.number}ª medição · {targetService?.description}</DialogTitle><button className={`${button} shrink-0`} onClick={() => void closeCapture()}>Fechar página</button></div><DialogDescription className="text-xs">{workspace.projectName} · {targetService?.path} · Linha {rowIndex + 1}, coluna {destination ? { multiplier: 'A', measuredQuantity: 'B', dimensionC: 'C', dimensionD: 'D' }[destination.field] : ''}. Concluir preenche a célula e envia a captura com a quantidade. Um traçado não concluído será descartado ao fechar.</DialogDescription>
       {destination && targetService && <Suspense fallback={<p>Carregando visualizador…</p>}><PlanTakeoff storageKey={`measurement:${workspace.projectId}`} repository={planRepository} initialDraft={captureDraftFor(destination)} onDraftChange={saveCaptureDraft} readOnly={!actor.canEdit || !!period && isPeriodLocked(period)} embedded deferredCloudConfirmation externalSaveStatus={status} chapterId={targetService.chapterId} measureContext={{ projectId: workspace.projectId, measurementId: destination.measurementId, serviceId: destination.serviceId }} destinationColumn={{ multiplier: 'A', measuredQuantity: 'B', dimensionC: 'C', dimensionD: 'D' }[destination.field]} linkedMeasureIds={marks} executedMeasureIds={marks}
         onUseMeasure={capture} onUpdateMeasure={capture} onDeleteMeasure={(p, m, next) => capture(p, m, 0, next, true)}
         onRestoreMeasure={async (_p, m) => { const w = current.current; if (!w) return false; const a = [...w.audit].reverse().find(a => a.before.some(e => e.rows.some(r => sourceFields.some(f => r[f]?.measureId === m.id))) && a.action === 'Apagar captura'); if (!a) return false; try { return await persist(undoMeasuredOperation(w, actor, a.id)); } catch (e) { setError(String(e)); return false; } }}
@@ -907,12 +984,17 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       <DialogDescription>Período {period && `${fmtDateBR(period.startDate)} a ${fmtDateBR(period.endDate)}`}. Os quantitativos poderão ser corrigidos durante a análise; somente a aprovação fiscal bloqueará a medição.</DialogDescription>
       {fiscalErrors.length > 0 && <div role="alert" className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-800"><strong>Erros bloqueantes ({fiscalErrors.length}):</strong><ul className="mt-1 list-disc pl-5">{fiscalErrors.map(issue => <li key={issue.code}>{issue.message}</li>)}</ul></div>}
       {fiscalWarnings.length > 0 && <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900"><strong>Avisos ({fiscalWarnings.length}):</strong><ul className="mt-1 list-disc pl-5">{fiscalWarnings.map(issue => <li key={issue.code}>{issue.message}</li>)}</ul>{!fiscalErrors.length && <p className="mt-2">Ao confirmar, você envia a medição mesmo com estes avisos.</p>}</div>}
-      <div className="flex justify-end gap-2"><button className={button} disabled={saving} onClick={() => setFiscalOpen(false)}>Cancelar</button><button className={button} disabled={!period || fiscalCurrent && !hasFiscalDrafts && !recovery || fiscalErrors.length > 0} onClick={() => { void (async () => {
+      <div className="flex justify-end gap-2"><button className={button} disabled={saving} onClick={() => setFiscalOpen(false)}>Cancelar</button><button className={button} disabled={!period || fiscalCurrent && !hasFiscalDrafts && !recovery && !fiscalPending || fiscalErrors.length > 0 && !fiscalPending} onClick={() => { void (async () => {
         if (!await flushConfirmedEdits() || !current.current) return;
+        if (repository.savedLabel === 'Salvo na nuvem') {
+          for (const [key, failed] of [...failedTaskEdits.current]) if (failed.measurementId === active) await retryFailedTask(key);
+          if ([...failedTaskEdits.current.values()].some(failed => failed.measurementId === active)) {
+            setError('Uma ou mais tarefas desta medição não foram confirmadas na nuvem. Confira a tarefa indicada e tente novamente.'); return;
+          }
+        }
         const remaining = await repository.drafts(); setDrafts(remaining);
         if (remaining.some(d => d.measurementId === active && !(d.serviceId === bulletinDraftKey && d.rowId === 'number')) || hasPendingFiscalDraft(active)) {
-          setError('Existem campos desta medição ainda não confirmados. Confira os rascunhos antes de enviar; nenhum quantitativo será omitido.');
-          setDraftRecoveryOpen(true); focusFiscalDraft(); return;
+          setError('Finalize o campo em edição antes de enviar; nenhum quantitativo será omitido.'); return;
         }
         const issues = fiscalReviewIssuesForWorkspace(current.current, active);
         if (issues.some(issue => issue.level === 'error')) { setError(issues.filter(issue => issue.level === 'error').map(issue => issue.message).join(' ')); return; }

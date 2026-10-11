@@ -112,9 +112,9 @@ describe('Medição independente', () => {
     expect(() => deleteMeasuredRow(w, actor, 'm1', 'signs', row.id)).toThrow('acumulado da 2ª medição');
     expect(entryFor(w, 'm2', 'signs').rows[0].multiplier).toBe(30);
   });
-  it('valida saldo, perfil e fator neutro', async () => {
+  it('aceita excedente, preserva perfil e fator neutro', async () => {
     const w = (await setup()).plan.candidate;
-    expect(() => editMeasuredRow(w, actor, 'm1', 'signs', { ...newMeasuredRow(), multiplier: 401 })).toThrow('excede');
+    expect(entryFor(editMeasuredRow(w, actor, 'm1', 'signs', { ...newMeasuredRow(), multiplier: 401 }), 'm1', 'signs').rows[0].multiplier).toBe(401);
     expect(() => editMeasuredRow(w, { ...actor, canEdit: false }, 'm1', 'signs', newMeasuredRow())).toThrow('perfil');
     expect(withDetailValue({ ...newMeasuredRow(), formula: 'A*B' }, 'measuredQuantity', 3)).toMatchObject({ multiplier: 1, measuredQuantity: 3, neutralFactor: 'multiplier' });
   });
@@ -152,14 +152,16 @@ describe('Medição independente', () => {
     expect(measuresForContext([mark], { taskId: 's', logId: 'm1' })).toEqual([]);
     expect(measuresForContext([mark], { projectId: 'p', measurementId: 'm2', serviceId: 's' }, ['m'])).toEqual([mark]);
   });
-  it('bloqueia toda referência quando uma tarefa excede seu limite', async () => {
+  it('mantém a referência compartilhada editável quando excede o contrato', async () => {
     let w = (await setup()).plan.candidate;
     w.services.find(s => s.id === 'repeaters')!.contracted = 29;
     const row = { ...newMeasuredRow('original'), multiplier: 29 };
     w = editMeasuredRow(w, actor, 'm1', 'signs', row);
     w = pasteMeasuredRow(w, actor, 'm1', 'repeaters', { mode: 'reference', projectId: w.projectId, unit: 'UN', source: { measurementId: 'm1', serviceId: 'signs', rowId: row.id }, snapshot: row });
-    expect(() => editMeasuredRow(w, actor, 'm1', 'signs', { ...entryFor(w, 'm1', 'signs').rows[0], multiplier: 30 })).toThrow('Repetidores');
-    expect(entryFor(w, 'm1', 'signs').rows[0].multiplier).toBe(29);
+    const next = editMeasuredRow(w, actor, 'm1', 'signs', { ...entryFor(w, 'm1', 'signs').rows[0], multiplier: 30 });
+    expect(entryFor(next, 'm1', 'signs').rows[0].multiplier).toBe(30);
+    expect(entryFor(next, 'm1', 'repeaters').rows[0].multiplier).toBe(30);
+    expect(monthlyLines(next, 'm1').find(line => line.service.id === 'repeaters')?.accumulated).toBe(30);
   });
   it('recorta sem duplicar e impede restauração sobre edição posterior', async () => {
     let w = (await setup()).plan.candidate;
