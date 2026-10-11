@@ -56,6 +56,6 @@ export default function MeasurementBulletin({ workspace, measurementId, readOnly
       bdiInput={bdi} setBdiInput={v => change('bdiPercent', v)} bdiPercent={numeric(bdi)}
       measurementNumber={number} setMeasurementNumber={() => undefined} measurementNumberReadOnly
       persistContractInfo={contract => void commit(Object.keys(contract)[0], { contract })}/>
-    {Object.keys(edits).length > 0 && <p role="status" className="px-3 py-1 text-xs text-amber-800">Boletim com rascunho preservado. Finalize o campo para confirmar o salvamento.</p>}
+    {Object.keys(edits).length > 0 && <p role="status" className="px-3 py-1 text-xs text-amber-800">Alteração do boletim ainda nesta página. Saia do campo para enviar à nuvem.</p>}
   </section>;
 }

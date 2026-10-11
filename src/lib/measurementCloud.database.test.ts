@@ -51,6 +51,7 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010235000_measurement_history_compaction.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011000000_measurement_history_fiscal_marker.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011010000_measurement_capture_delta.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261011150000_measurement_excess_warning.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -260,13 +261,16 @@ describe('transação da Medição na nuvem',()=>{
   expect(replay).toEqual({projectId,revision:first.revision,patch});
   expect((await db.query<{data:unknown}>('SELECT load_measurement_workspace($1) data',[projectId])).rows[0].data).toEqual(JSON.parse(wire(first)));
  });
- it('patch preserva permissões, limite contratado e bloqueio fiscal',async()=>{
+ it('patch preserva permissões, aceita excedente e bloqueia envio fiscal',async()=>{
   await seed(); const next=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('patch'),multiplier:3});
   const patch=measurementEntryPatch(base,next)!;
   const send=()=>db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,base.revision,JSON.stringify(patch)]);
   await db.exec("SET test.role='viewer'"); await expect(send()).rejects.toThrow('perfil'); await db.exec("SET test.role='owner'");
   patch.entries[0].rows[0].multiplier=401; patch.event.after[0].rows[0].multiplier=401;
-  await expect(send()).rejects.toThrow();
+  await send();
+  const exceeded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  await expect(commit(freezeMeasuredPeriod(exceeded,actor,'m1'))).rejects.toThrow('Ultrapassou o limite contratado');
+  await seed();
   const approved=await commit(approveMeasuredPeriod(await commit(freezeMeasuredPeriod(base,actor,'m1')),actor,'m1'));
   const fake=structuredClone(approved); fake.periods[0].status='draft'; delete fake.periods[0].frozen;
   const edit=editMeasuredRow(fake,actor,'m1','detectors',{...entryFor(fake,'m1','detectors').rows[0],multiplier:220}); edit.periods=approved.periods;
@@ -561,17 +565,15 @@ describe('transação da Medição na nuvem',()=>{
   await db.exec("SET test.role='viewer'"); await expect(commit(valid)).rejects.toThrow('perfil'); await db.exec("SET test.role='owner'");
   expect((await db.query<{data:MeasurementWorkspace}>('SELECT data FROM measurement_workspaces')).rows[0].data).toEqual(JSON.parse(wire(sent)));
  });
- it('restauração valida saldo atual e não ressuscita quantidades acima do contrato',async()=>{
+ it('restauração mantém o excedente visível e impede somente o envio fiscal',async()=>{
   await seed(); let w=await commit(addMeasuredPeriod(base,actor)); const id=w.periods.at(-1)!.id;
   w=await commit(editMeasuredRow(w,actor,id,'signs',{...newMeasuredRow('teste'),multiplier:10}));
   w=await commit(deleteMeasuredPeriod(w,actor,id,'Excluir teste')); const eventId=w.audit.at(-1)!.id;
   w=await commit(editMeasuredRow(w,actor,'m1','signs',{...newMeasuredRow('real'),multiplier:395}));
-  expect(()=>restoreMeasuredPeriod(w,actor,eventId,'Recuperar')).toThrow('contratado');
-  const fake=structuredClone(w); fake.entries.find(e=>e.serviceId==='signs')!.rows[0].multiplier=390;
-  const restore=restoreMeasuredPeriod(fake,actor,eventId,'Recuperar');
-  restore.entries.find(e=>e.serviceId==='signs')!.rows[0].multiplier=395;
-  await expect(commit(restore)).rejects.toThrow('contratado');
-  expect((await db.query<{data:MeasurementWorkspace}>('SELECT data FROM measurement_workspaces')).rows[0].data).toEqual(JSON.parse(wire(w)));
+  const restored=await commit(restoreMeasuredPeriod(w,actor,eventId,'Recuperar'));
+  expect(restored.periods.some(p=>p.id===id)).toBe(true);
+  await expect(commit(freezeMeasuredPeriod(restored,actor,id))).rejects.toThrow('Ultrapassou o limite contratado');
+  expect((await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value).toEqual(JSON.parse(wire(restored)));
  });
  it('nova medição simultânea impede excluir com estado antigo',async()=>{
   await seed(); let w=await commit(addMeasuredPeriod(base,actor));
@@ -645,10 +647,12 @@ describe('transação da Medição na nuvem',()=>{
   await expect(commit(other)).rejects.toThrow('Conflito');
   expect((await db.query('SELECT * FROM measurement_workspace_events')).rows).toHaveLength(1);
  });
- it('servidor bloqueia limite, contrato alterado e exclusão implícita mesmo com cliente adulterado',async()=>{
+ it('servidor aceita excedente, mas bloqueia contrato alterado e exclusão implícita',async()=>{
   await seed(); const a=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('a'),multiplier:29});
   const excess=structuredClone(a); excess.entries.at(-1)!.rows[0].multiplier=401; excess.audit.at(-1)!.after=structuredClone(excess.entries.slice(-1));
-  await expect(commit(excess)).rejects.toThrow('contratado');
+  await commit(excess);
+  await expect(commit(freezeMeasuredPeriod(excess,actor,'m1'))).rejects.toThrow('Ultrapassou o limite contratado');
+  await seed();
   const contract=structuredClone(a); contract.services[0].contracted=999; await expect(commit(contract)).rejects.toThrow('Catálogo');
   const missing=structuredClone(a); missing.entries.shift(); await expect(commit(missing)).rejects.toThrow('implícita');
   expect((await db.query('SELECT revision FROM measurement_workspaces')).rows).toEqual([{revision:0}]);
@@ -706,5 +710,19 @@ describe('transação da Medição na nuvem',()=>{
     [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(tampered))])).rejects.toThrow();
   expect(await currentDataHash()).not.toBe(before);
   expect((await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value).toEqual(loaded);
+ });
+ it('captura DXF excedente permanece atômica e impede envio fiscal até correção',async()=>{
+  await seed(); const ready=await commit(editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('excess-capture')));
+  ready.plans[0].file=base.plans[0].file;
+  const mark={id:'excess-mark',name:'Placas',kind:'count' as const,page:1,
+   points:Array.from({length:401},(_,i)=>({x:i,y:1})),projectId,measurementId:'m1',serviceId:'signs'};
+  const excess=captureMeasurement(ready,actor,{measurementId:'m1',serviceId:'signs',rowId:'excess-capture',field:'multiplier'},
+   {...ready.plans[0],measures:[mark]},mark);
+  const patch=measurementCapturePatch(ready,excess)!;
+  await db.query('SELECT patch_measurement_capture($1,$2,$3)',[projectId,ready.revision,JSON.stringify(encodeMeasurementWorkspace(patch))]);
+  const loaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(loaded.entries.find(e=>e.serviceId==='signs'&&e.measurementId==='m1')?.rows[0].multiplier).toBe(401);
+  expect(loaded.plans[0].measures.some(m=>m.id==='excess-mark')).toBe(true);
+  await expect(commit(freezeMeasuredPeriod(excess,actor,'m1'))).rejects.toThrow('Ultrapassou o limite contratado');
  });
 });

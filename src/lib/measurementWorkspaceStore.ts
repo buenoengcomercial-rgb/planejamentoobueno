@@ -42,6 +42,10 @@ export interface MeasurementRepository {
   pendingSaves(): Promise<PendingMeasurementSave[]>;
   archivePending(operationId: string): Promise<void>;
   drafts(): Promise<WorkspaceDraft[]>;
+  /** Read only, for reviewing drafts created by older cloud clients. */
+  legacyDrafts?(): Promise<WorkspaceDraft[]>;
+  /** One-time cleanup of a specifically authorized legacy task, after a cloud read. */
+  discardLegacyTask?(workspace: MeasurementWorkspace, item: string): Promise<{ removed: number; remaining: string[] }>;
   writeDraft(draft: WorkspaceDraft): Promise<void>;
   clearDraft(measurementId: string, serviceId: string, rowId?: string): Promise<void>;
   backup(): Promise<IncorporationBackup | null>;

@@ -19,40 +19,25 @@ function setup(size = 402) {
   return { repository, saved: () => w, drafts: () => drafts };
 }
 
-it('retoma três tarefas guardadas localmente sem esperar a primeira resposta cloud', async () => {
+it('não cria rascunhos persistentes no modo nuvem e avisa antes de fechar com gravação pendente', async () => {
   const { repository } = setup(3);
-  let cloud = (await repository.load())!;
-  vi.mocked(repository.load).mockImplementation(async () => cloud);
-  const staged: Array<{ baseRevision: number; candidate: Workspace }> = [];
-  repository.stage = vi.fn(async (candidate, base) => {
-    staged.push({ baseRevision: base.revision, candidate });
-  });
-  repository.queued = vi.fn(async () => staged.slice());
-  vi.mocked(repository.commit).mockImplementationOnce(() => new Promise(() => undefined))
-    .mockImplementation(async candidate => {
-      cloud = candidate;
-      staged.splice(staged.findIndex(row => row.candidate.audit.at(-1)?.id === candidate.audit.at(-1)?.id), 1);
-      return candidate;
-    });
-  const first = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
-  await screen.findByLabelText('Quantidade de Serviço 0');
-  for (const [index, value] of [[0, '1'], [1, '2'], [2, '3']] as const) {
-    const cell = screen.getByLabelText(`Quantidade de Serviço ${index}`);
-    fireEvent.change(cell, { target: { value } }); fireEvent.blur(cell);
-  }
-  await waitFor(() => expect(staged).toHaveLength(3));
-  expect(screen.getByRole('button', { name: /Enviar para fiscalização/ })).toBeDisabled();
-  await waitFor(() => {
-    const leave = new Event('beforeunload', { cancelable: true });
-    window.dispatchEvent(leave);
-    expect(leave.defaultPrevented).toBe(false);
-  });
-  first.unmount();
+  repository.savedLabel = 'Salvo na nuvem';
+  repository.stage = undefined;
+  repository.drafts = vi.fn(async () => []);
+  repository.writeDraft = vi.fn(async () => undefined);
+  repository.clearDraft = vi.fn(async () => undefined);
+  vi.mocked(repository.commit).mockImplementation(() => new Promise(() => undefined));
   render(<MeasurementWorkspace repository={repository} actor={actor}/>);
-  for (const [index, value] of [[0, 1], [1, 2], [2, 3]] as const)
-    expect(await screen.findByLabelText(`Quantidade de Serviço ${index}`)).toHaveValue(value);
-  await waitFor(() => expect(staged).toHaveLength(0));
-  expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador');
+  await screen.findByLabelText('Quantidade de Serviço 0');
+  const first = screen.getByLabelText('Quantidade de Serviço 0');
+  fireEvent.change(first, { target: { value: '1' } }); fireEvent.blur(first);
+  fireEvent.click(screen.getByLabelText('Quantidade de Serviço 1'));
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+  expect(repository.stage).toBeUndefined();
+  expect(await repository.drafts()).toEqual([]);
+  const leave = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(leave);
+  expect(leave.defaultPrevented).toBe(true);
 });
 
 it('retoma após recarga a tarefa em edição antes dos dois segundos de espera', async () => {
@@ -222,51 +207,26 @@ it('fila A→B→C: timeout na primeira tarefa, continua editando e confirma cad
   for (const [index, value] of [[0, 1], [1, 2], [2, 3]] as const) expect(await screen.findByLabelText(`Quantidade de Serviço ${index}`)).toHaveValue(value);
 });
 
-it('A→B→C recarregado antes da resposta mantém os três rascunhos recuperáveis', async () => {
-  const { repository, drafts, saved } = setup(3);
-  let pending: { baseRevision: number; candidate: Workspace } | null = null;
-  vi.mocked(repository.pending).mockImplementation(async () => pending);
+it('no modo nuvem, recarga durante falha exige aviso e reabre só o último valor confirmado', async () => {
+  const { repository, saved } = setup(3);
+  repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+  repository.drafts = vi.fn(async () => []);
+  repository.writeDraft = vi.fn(async () => undefined);
+  repository.clearDraft = vi.fn(async () => undefined);
   vi.mocked(repository.commit).mockImplementationOnce(() => new Promise(() => undefined));
   const first = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
   await screen.findByLabelText('Quantidade de Serviço 0');
-  for (const [index, value] of [[0, '1'], [1, '2'], [2, '3']] as const) {
-    const input = screen.getByLabelText(`Quantidade de Serviço ${index}`);
-    fireEvent.focus(input); fireEvent.change(input, { target: { value } }); fireEvent.blur(input);
-  }
-  await waitFor(() => expect(drafts()).toHaveLength(3));
-  expect(repository.commit).toHaveBeenCalledTimes(1);
-  pending = { baseRevision: 0, candidate: vi.mocked(repository.commit).mock.calls[0][0] };
-  // A durable local queue permits closing while the cloud is still pending.
-  await waitFor(() => {
-    const leave = new Event('beforeunload', { cancelable: true });
-    window.dispatchEvent(leave);
-    expect(leave.defaultPrevented).toBe(false);
-  });
+  const input = screen.getByLabelText('Quantidade de Serviço 0');
+  fireEvent.change(input, { target: { value: '1' } }); fireEvent.blur(input);
+  fireEvent.click(screen.getByLabelText('Quantidade de Serviço 1'));
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+  const leave = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(leave); expect(leave.defaultPrevented).toBe(true);
   first.unmount();
-  vi.mocked(repository.commit).mockImplementation(async candidate => {
-    const current = saved();
-    if (candidate.revision !== current.revision + 1) throw new Error('Revisão duplicada');
-    // The in-memory mock models a confirmed cloud write after reopening.
-    Object.assign(current, candidate);
-    pending = null;
-    return candidate;
-  });
   render(<MeasurementWorkspace repository={repository} actor={actor}/>);
-  await screen.findByLabelText('Quantidade de Serviço 0');
-  fireEvent.click(screen.getByText('Rascunhos locais (3)'));
-  expect(screen.getByText(/Próxima tarefa: 1.1 — Serviço 0/)).toBeVisible();
-  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
-  for (const remaining of [2, 1, 0]) {
-    fireEvent.click(screen.getByRole('button', { name: 'Recuperar rascunho' }));
-    await waitFor(() => expect(drafts()).toHaveLength(remaining));
-    if (remaining > 0) {
-      expect(screen.getByText(`Rascunhos locais (${remaining})`)).toBeVisible();
-      expect(screen.getByText(new RegExp(`Próxima tarefa: 1\\.${4 - remaining} — Serviço ${3 - remaining}`))).toBeVisible();
-    } else {
-      expect(screen.queryByText(/Rascunhos locais/)).not.toBeInTheDocument();
-    }
-  }
-  expect(saved().entries.map(entry => [entry.serviceId, entry.rows[0].multiplier])).toEqual([['s0', 1], ['s1', 2], ['s2', 3]]);
+  expect(await screen.findByLabelText('Quantidade de Serviço 0')).toHaveValue(0);
+  expect(saved().entries[0].rows[0].multiplier).toBe(0);
+  expect(screen.queryByText(/Rascunhos locais/)).not.toBeInTheDocument();
 });
 
 it('mantém todos os campos em rascunho se a primeira confirmação falhar e não envia os seguintes', async () => {
@@ -406,14 +366,41 @@ it('abre o levantamento depois de recuperar uma falha anterior sem bloquear pelo
   expect(await screen.findByText('Visualizador de teste')).toBeVisible();
 });
 
-it('rejeita quantidade acima do contrato antes de alterar a planilha', async () => {
+it('aceita quantidade acima do contrato e sinaliza somente a linha excedida', async () => {
   const { repository } = setup(1);
   render(<MeasurementWorkspace repository={repository} actor={actor}/>);
   fireEvent.click(await screen.findByLabelText('Quantidade de Serviço 0'));
   const a = screen.getByLabelText('Unidades da linha 1');
   fireEvent.change(a, { target: { value: '100001' } }); fireEvent.blur(a);
-  expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(0);
-  expect(repository.commit).not.toHaveBeenCalled(); expect(a).toHaveValue(0);
+  expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(100001);
+  expect(screen.getByTestId('service-s0')).toHaveAttribute('data-over-limit', 'true');
+  expect(screen.getByTestId('service-s0')).toHaveTextContent('Ultrapassou o limite contratado');
+  fireEvent.click(screen.getByLabelText('Quantidade de Serviço 0'));
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1), { timeout: 3000 });
+});
+
+it('falha de uma tarefa não bloqueia outra, e a repetição conserva os dois lançamentos', async () => {
+  const { repository, saved } = setup(2);
+  repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+  repository.drafts = vi.fn(async () => []);
+  repository.writeDraft = vi.fn(async () => undefined);
+  repository.clearDraft = vi.fn(async () => undefined);
+  vi.mocked(repository.commit).mockRejectedValueOnce(new Error('Falha de rede'));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  const first = await screen.findByLabelText('Quantidade de Serviço 0');
+  fireEvent.change(first, { target: { value: '3' } }); fireEvent.blur(first);
+  fireEvent.click(screen.getByLabelText('Quantidade de Serviço 1'));
+  expect(await screen.findByText('1.1 · não confirmado na nuvem')).toBeVisible();
+  const second = screen.getByLabelText('Quantidade de Serviço 1');
+  fireEvent.change(second, { target: { value: '5' } }); fireEvent.blur(second);
+  expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(3);
+  fireEvent.click(screen.getByLabelText('Quantidade de Serviço 0'));
+  await waitFor(() => expect(saved().entries.find(entry => entry.serviceId === 's1')?.rows[0].multiplier).toBe(5));
+  expect(saved().entries.find(entry => entry.serviceId === 's0')?.rows[0].multiplier).toBe(0);
+  fireEvent.click(screen.getByRole('button', { name: 'Tentar salvar esta tarefa' }));
+  await waitFor(() => expect(saved().entries.find(entry => entry.serviceId === 's0')?.rows[0].multiplier).toBe(3));
+  expect(screen.queryByText('1.1 · não confirmado na nuvem')).not.toBeInTheDocument();
+  expect(repository.commit).toHaveBeenCalledTimes(3);
 });
 
 it('recupera comentário e quantidade da mesma nova linha após falha, sem duplicar o registro', async () => {

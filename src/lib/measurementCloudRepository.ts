@@ -1,12 +1,12 @@
 import { supabase } from '@/integrations/supabase/client';
-import { measurementRepository, type MeasurementRepository, type PendingMeasurementSave, type PendingMeasurementEntrySave, type PendingMeasurementCaptureSave, type StoredMeasurementPending } from './measurementWorkspaceStore';
+import { measurementRepository, type MeasurementRepository, type PendingMeasurementSave, type StoredMeasurementPending } from './measurementWorkspaceStore';
 import { decodeMeasurementWorkspace, encodeMeasurementWorkspace } from './measurementCloudCodec';
 import { TAKEOFF_BUCKET } from './planTakeoffCloud';
 import { measurementEntryPatch } from './measurementEntryPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
 import type { MeasurementWorkspace } from './measurementWorkspace';
 
-/** Local storage is recovery only; cloud absence/failure never confirms a save. */
+/** Only confirmed snapshots are cached; new unconfirmed edits stay in memory. */
 export function cloudMeasurementRepository(scope: { userId: string; projectId: string }): MeasurementRepository {
   const local = measurementRepository({ ...scope, userId: `cloud:${scope.userId}`, environment: 'isolated' });
   let confirmed: MeasurementWorkspace | null = null;
@@ -100,24 +100,6 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     const revision = Number(receipt?.revision);
     return !error && receipt?.actor_id === scope.userId && Number.isSafeInteger(revision) && revision >= 0 ? revision : null;
   };
-  const stage = async (candidate: MeasurementWorkspace, base: MeasurementWorkspace) => {
-    const operationId = candidate.audit.at(-1)?.id;
-    if (!operationId || candidate.projectId !== scope.projectId || candidate.revision !== base.revision + 1)
-      throw new Error('Lançamento local inválido.');
-    await cacheChain;
-    if (cachedRevision < base.revision) await checkpoint(base);
-    const patch = measurementEntryPatch(base, candidate);
-    if (patch) await local.preserveEntryPending!({ format: 'entry-patch-v1', projectId: scope.projectId,
-      baseRevision: base.revision, operationId, patch });
-    else {
-      const capture = measurementCapturePatch(base, candidate);
-      if (capture) {
-        const { file: _file, ...plan } = capture.plan;
-        await local.preserveCapturePending!({ format: 'capture-patch-v1', projectId: scope.projectId,
-          baseRevision: base.revision, operationId, patch: { ...capture, plan } });
-      } else await local.preservePending!({ baseRevision: base.revision, candidate });
-    }
-  };
   const queued = async (knownRemote?: MeasurementWorkspace | null): Promise<PendingMeasurementSave[]> => {
     const remote = knownRemote ?? await loadRemote();
     if (!remote) return [];
@@ -179,7 +161,41 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     ...local,
     savedLabel: 'Salvo na nuvem',
     loadedOffline: () => loadedOffline,
-    stage,
+    stage: undefined,
+    // New cloud edits stay in memory until sent. Legacy records remain readable
+    // only for a one-time, explicitly scoped review; no new local drafts exist.
+    drafts: async () => [],
+    legacyDrafts: local.drafts,
+    writeDraft: async () => undefined,
+    clearDraft: async () => undefined,
+    discardLegacyTask: async (workspace, item) => {
+      if (loadedOffline || !confirmed || confirmed.revision !== workspace.revision) throw new Error('Confira a base da nuvem antes de limpar registros locais antigos.');
+      const service = workspace.services.find(value => value.item === item);
+      const firstPeriod = workspace.periods.find(value => value.number === 1);
+      if (!service || !firstPeriod) return { removed: 0, remaining: [] };
+      let removed = 0;
+      const oldDrafts = await local.drafts();
+      for (const draft of oldDrafts.filter(value => value.serviceId === service.id && value.measurementId === firstPeriod.id)) {
+        await local.clearDraft(draft.measurementId, draft.serviceId, draft.rowId);
+        removed++;
+      }
+      const stored = await local.storedPendingSaves!();
+      for (const record of stored) {
+        const event = 'candidate' in record ? record.candidate.audit.at(-1) : record.patch.event;
+        const operationId = 'candidate' in record ? event?.id : record.operationId;
+        if (operationId && event?.affected.length && event.affected.every(value => value.serviceId === service.id && value.measurementId === firstPeriod.id)) {
+          await local.removePending!(operationId);
+          removed++;
+        }
+      }
+      const remainingDrafts = (await local.drafts()).map(value => value.serviceId);
+      const remainingPending = (await local.storedPendingSaves!()).flatMap(record => {
+        const event = 'candidate' in record ? record.candidate.audit.at(-1) : record.patch.event;
+        return event?.affected.map(value => value.serviceId) ?? ['Operação não identificada'];
+      });
+      return { removed, remaining: [...new Set([...remainingDrafts, ...remainingPending])].map(id =>
+        workspace.services.find(value => value.id === id)?.item ?? id) };
+    },
     queued,
     pending: async () => {
       const rows = await local.storedPendingSaves!();
@@ -241,26 +257,14 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     commit: async (candidate, baseRevision) => {
       const operationId = candidate.audit.at(-1)?.id;
       if (!operationId || candidate.projectId !== scope.projectId || candidate.revision !== baseRevision + 1) throw new Error('Operação de Medição inválida.');
-      // A failed upload or lost response retains the complete candidate, including files.
+      // The caller keeps an unconfirmed candidate in memory until cloud acknowledgement.
       const latestEvent = candidate.audit.at(-1);
       const needsPlanPaths = candidate.plans.some(plan => !plan.storagePath)
         || [latestEvent?.beforePlans, latestEvent?.afterPlans]
           .some(plans => plans?.some(plan => !plan.storagePath));
       const next = needsPlanPaths ? structuredClone(candidate) : candidate;
       const entryPatch = !needsPlanPaths && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
-      const compact: PendingMeasurementEntrySave | null = entryPatch ? {
-        format: 'entry-patch-v1', projectId: scope.projectId, baseRevision, operationId, patch: entryPatch,
-      } : null;
       const earlyCapture = !needsPlanPaths && !entryPatch && confirmed?.revision === baseRevision ? measurementCapturePatch(confirmed, next) : null;
-      const compactCapture: PendingMeasurementCaptureSave | null = earlyCapture ? (() => {
-        const { file: _file, ...plan } = earlyCapture.plan;
-        return { format: 'capture-patch-v1', projectId: scope.projectId, baseRevision, operationId,
-          patch: { ...earlyCapture, plan } };
-      })() : null;
-      const preserve = () => compact ? local.preserveEntryPending!(compact)
-        : compactCapture ? local.preserveCapturePending!(compactCapture)
-          : local.preservePending!({ baseRevision, candidate: next } satisfies PendingMeasurementSave);
-      await preserve();
       for (const plan of next.plans) {
         if (!plan.storagePath) {
           const extension = plan.kind === 'image' ? 'image' : plan.kind;
@@ -275,7 +279,6 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         const paths = new Map(next.plans.map(p => [p.id, p.storagePath]));
         for (const event of next.audit) for (const plans of [event.beforePlans, event.afterPlans]) for (const p of plans ?? []) p.storagePath ??= paths.get(p.id);
       }
-      if (next.plans.some((p, i) => p.storagePath !== candidate.plans[i]?.storagePath)) await preserve();
       const patch = entryPatch ?? (confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null);
       const capturePatch = !patch && confirmed?.revision === baseRevision ? measurementCapturePatch(confirmed, next) : null;
       const send = () => patch
@@ -298,19 +301,18 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         const version = await supabase.from('measurement_workspace_versions' as never)
           .select('revision').eq('project_id', scope.projectId).maybeSingle();
         const remoteRevision = Number((version.data as { revision?: number } | null)?.revision);
-        if (event.error || version.error || !version.data || !Number.isSafeInteger(remoteRevision)) throw new Error(`${error.message}. Não foi possível conferir a revisão; rascunho preservado.`);
+        if (event.error || version.error || !version.data || !Number.isSafeInteger(remoteRevision)) throw new Error(`${error.message}. Não foi possível conferir a revisão; mantenha esta página aberta.`);
         const savedRevision = event.data
           ? Number((event.data as { revision?: number }).revision)
           : remoteRevision >= next.revision ? await compactedReceiptRevision(operationId) : null;
         if (savedRevision === next.revision && remoteRevision >= next.revision) {
           const latest = remoteRevision === next.revision ? next : await loadRemote();
-          if (!latest || latest.revision < remoteRevision) throw new Error('A operação foi confirmada, mas a versão mais recente não pôde ser carregada. Rascunho preservado.');
+          if (!latest || latest.revision < remoteRevision) throw new Error('A operação foi confirmada, mas a versão mais recente não pôde ser carregada. Mantenha esta página aberta.');
           confirmed = latest;
-          discardConfirmedPending(operationId, latest);
           return latest;
         }
         if (remoteRevision === baseRevision && savedRevision === null) ({ data, error } = await send());
-        else throw new Error('A Medição mudou durante a gravação. O rascunho foi preservado para conferência.');
+        else throw new Error('A Medição mudou durante a gravação. Confira esta tarefa antes de tentar novamente.');
       }
       if (error) throw new Error(error.message);
       let saved: MeasurementWorkspace;
@@ -320,13 +322,12 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         if (receipt?.projectId !== scope.projectId || receipt.revision !== next.revision || JSON.stringify(receipt.patch) !== JSON.stringify(expected)) {
           // JSONB key order is not significant; compare using the canonical encoder below.
           const canonical = (value: unknown): string => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
-          if (receipt?.projectId !== scope.projectId || receipt?.revision !== next.revision || canonical(receipt.patch) !== canonical(expected)) throw new Error('A nuvem não confirmou esta operação. Rascunho preservado.');
+          if (receipt?.projectId !== scope.projectId || receipt?.revision !== next.revision || canonical(receipt.patch) !== canonical(expected)) throw new Error('A nuvem não confirmou esta operação. Mantenha esta página aberta.');
         }
         saved = next;
       } else saved = await read(data);
-      if (saved.revision !== next.revision || saved.audit.at(-1)?.id !== operationId) throw new Error('A nuvem não confirmou esta operação. Rascunho preservado.');
+      if (saved.revision !== next.revision || saved.audit.at(-1)?.id !== operationId) throw new Error('A nuvem não confirmou esta operação. Mantenha esta página aberta.');
       confirmed = saved;
-      discardConfirmedPending(operationId, saved);
       return saved;
     },
   };

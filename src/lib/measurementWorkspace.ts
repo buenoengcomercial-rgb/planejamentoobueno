@@ -185,14 +185,11 @@ export function transactMeasurement(before: MeasurementWorkspace, actor: Measure
     for (const r of e.rows) for (const f of ['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD'] as const) {
       if (!Number.isFinite(r[f] ?? 0) || (r[f] ?? 0) < 0) throw new Error('Quantidade inválida.');
     }
-    const s = next.services.find(s => s.id === e.serviceId)!;
     if (entryQuantity(before, e.measurementId, e.serviceId) !== detailTotal(e.rows)) {
       const number = next.periods.find(p => p.id === e.measurementId)!.number;
       const laterFiscal = before.periods.find(p => p.number > number && isPeriodLocked(p));
       if (laterFiscal) throw new Error(`Alteração bloqueada: afetaria o acumulado da ${laterFiscal.number}ª medição já aprovada pela fiscalização.`);
     }
-    const total = next.periods.reduce((sum, p) => sum + entryQuantity(next, p.id, s.id), 0);
-    if (total > s.contracted + 1e-8) throw new Error(`${s.description}: total ${total} excede o contratado de ${s.contracted} ${s.unit}. Operação inteira bloqueada.`);
   }
   for (const p of before.periods.filter(isPeriodLocked)) {
     if (json(p) !== json(next.periods.find(n => n.id === p.id))) throw new Error(`${p.number}ª medição bloqueada: snapshot imutável.`);
@@ -250,13 +247,10 @@ function editIndependentManualRow(w: MeasurementWorkspace, actor: MeasurementAct
   if (json(before) === json(after)) return w;
 
   const period = w.periods.find(p => p.id === mid)!;
-  const service = w.services.find(s => s.id === sid)!;
   if (detailTotal(before.rows) !== detailTotal(after.rows)) {
     const laterFiscal = w.periods.find(p => p.number > period.number && isPeriodLocked(p));
     if (laterFiscal) throw new Error(`Alteração bloqueada: afetaria o acumulado da ${laterFiscal.number}ª medição já aprovada pela fiscalização.`);
   }
-  const total = w.periods.reduce((sum, p) => sum + (p.id === mid ? detailTotal(after.rows) : entryQuantity(w, p.id, sid)), 0);
-  if (total > service.contracted + 1e-8) throw new Error(`${service.description}: total ${total} excede o contratado de ${service.contracted} ${service.unit}. Operação inteira bloqueada.`);
 
   const index = w.entries.findIndex(e => e.measurementId === mid && e.serviceId === sid);
   const entries = [...w.entries];

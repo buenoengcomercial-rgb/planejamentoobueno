@@ -57,6 +57,7 @@ describe('Tela própria de Medição', () => {
     const quantity = screen.getByRole('spinbutton', { name: 'Quantidade de Placas' });
     fireEvent.change(quantity, { target: { value: '1' } }); fireEvent.blur(quantity);
     await waitFor(() => expect(resend).toBeEnabled(), { timeout: 3000 });
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1), { timeout: 3000 });
     fireEvent.click(resend);
     let dialog = screen.getByRole('dialog');
     expect(within(dialog).getByText('Esta medição possui avisos antes do envio')).toBeVisible();
@@ -92,6 +93,28 @@ describe('Tela própria de Medição', () => {
     expect(vi.mocked(repository.commit).mock.calls[0][0].periods[0].status).toBe('in_review');
     expect(w.periods[0].status).toBe('draft');
   });
+  it('clique fiscal durante a gravação espera a nuvem e envia automaticamente depois da confirmação', async () => {
+    const { w, repository } = fixture();
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'r', location: '', comment: '', formula: 'STANDARD', multiplier: 1, measuredQuantity: 0 }] }];
+    repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+    let remote = w; let confirm!: (value: Workspace) => void;
+    vi.mocked(repository.load).mockImplementation(async () => remote);
+    vi.mocked(repository.commit).mockImplementationOnce(next => new Promise(resolve => { confirm = value => { remote = value; resolve(value); }; }))
+      .mockImplementation(async next => { remote = next; return next; });
+    render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canReview: true }}/>);
+    const quantity = await screen.findByLabelText('Quantidade de Placas');
+    fireEvent.change(quantity, { target: { value: '2' } }); fireEvent.blur(quantity);
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar para fiscalização' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirmar envio' }));
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(repository.commit).mock.calls[0][0].periods[0].status).toBe('draft');
+    await act(async () => { confirm(vi.mocked(repository.commit).mock.calls[0][0]); });
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(repository.commit).mock.calls[1][0].periods[0].status).toBe('in_review');
+    expect(remote.entries[0].rows[0].multiplier).toBe(2);
+  });
   it('bloqueia envio sem quantitativos e não grava o período', async () => {
     const { repository } = fixture();
     render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canReview: true }}/>);
@@ -123,8 +146,7 @@ describe('Tela própria de Medição', () => {
     vi.mocked(repository.drafts).mockResolvedValue([{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: 'm1-row', changes: { multiplier: '3' } }]);
     render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canReview: true }}/>);
     const send = await screen.findByRole('button', { name: 'Enviar para fiscalização' });
-    expect(send).toBeDisabled();
-    expect(send).toHaveAttribute('title', expect.stringMatching(/Confirme todos os lançamentos/));
+    expect(send).toBeEnabled();
     expect(repository.commit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Nova medição' }));
     expect(within(screen.getByRole('dialog')).getByText('30/10/2026 a 28/11/2026')).toBeVisible();
@@ -649,10 +671,10 @@ describe('Tela própria de Medição', () => {
     expect(saved.audit[0].affected).toEqual([{ measurementId: 'm1', serviceId: 's' }]);
     expect(saved.services.map(service => service.contracted)).toEqual([100, 100]);
   });
-  it('mantém uma única operação local recuperável e confirma na nuvem após dois segundos sem edição', async () => {
+  it('agrupa células da mesma tarefa em memória e envia ao sair da tarefa', async () => {
     const { repository } = fixture();
     repository.savedLabel = 'Salvo na nuvem';
-    repository.stage = vi.fn(async () => undefined);
+    repository.stage = undefined;
     repository.remoteRevision = vi.fn(async () => 0);
     repository.watch = (_notice, connection) => { connection(true); return vi.fn(); };
     render(<MeasurementWorkspace repository={repository} actor={actor}/>);
@@ -664,11 +686,10 @@ describe('Tela própria de Medição', () => {
     expect(repository.commit).not.toHaveBeenCalled();
     expect(screen.getByRole('status')).toHaveTextContent('Aguardando envio à nuvem');
     expect(screen.getByRole('status')).toHaveTextContent('Tempo real ativo');
-    await waitFor(() => expect(repository.stage).toHaveBeenCalledTimes(2));
-    const stages = vi.mocked(repository.stage).mock.calls;
-    expect(stages[0][0].audit.at(-1)?.id).toBe(stages[1][0].audit.at(-1)?.id);
-    expect(stages[1][0].entries[0].rows[0]).toMatchObject({ multiplier: 2, comment: 'Conferido' });
+    expect(repository.stage).toBeUndefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Ver composição analítica de Placas' }));
     await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    expect(vi.mocked(repository.commit).mock.calls[0][0].entries[0].rows[0]).toMatchObject({ multiplier: 2, comment: 'Conferido' });
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo e conferido na nuvem'));
     expect(screen.getByRole('status')).toHaveTextContent(/Confirmado \d{2}:\d{2} · Obra p/);
     expect(repository.commit).toHaveBeenCalledTimes(1);
