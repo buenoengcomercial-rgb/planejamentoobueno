@@ -15,6 +15,13 @@
       "when": 1791734733799,
       "tag": "0001_20261011150000_measurement_excess_warning",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791739637707,
+      "tag": "0002_measurement_capture_targeted_commit",
+      "breakpoints": true
     }
   ]
 }
