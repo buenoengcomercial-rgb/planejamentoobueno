@@ -28,6 +28,23 @@ beforeEach(()=>{vi.clearAllMocks();mocks.pending=null;mocks.compact=null;mocks.s
  })})}));
 });
 describe('confirmação cloud e recuperação',()=>{
+ it('atualiza o mesmo lançamento local consolidado sem duplicar operações após recarga',async()=>{
+  const f=measurementFixture(); f.plans=[];
+  const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
+  const actor={id:'user',name:'Teste',canEdit:true};
+  const first=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('same-row'),multiplier:1});
+  const next=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('same-row'),multiplier:2,comment:'Conferido'});
+  const consolidated={...next,audit:[{...next.audit.at(-1)!,id:first.audit.at(-1)!.id}]};
+  const repo=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(base),error:null}); await repo.load();
+  await repo.stage!(first,base); await repo.stage!(consolidated,base);
+  expect(mocks.stored).toHaveLength(1);
+  expect(mocks.stored[0]).toMatchObject({format:'entry-patch-v1',operationId:first.audit.at(-1)?.id});
+  const reopened=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(base),error:null});
+  expect((await reopened.queued!(await reopened.load()))[0].candidate.entries.find(entry=>entry.serviceId==='signs')?.rows[0])
+   .toMatchObject({multiplier:2,comment:'Conferido'});
+ });
  it('reabre sem rede a última base confirmada e os lançamentos ainda na fila',async()=>{
   const f=measurementFixture(); f.plans=[];
   const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
