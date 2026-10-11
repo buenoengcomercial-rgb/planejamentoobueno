@@ -14,7 +14,18 @@ export interface TakeoffPlan {
   cloudRevision?: number;
 }
 export type TakeoffContext = { taskId: string; logId: string; projectId?: never; measurementId?: never; serviceId?: never } | { projectId: string; measurementId: string; serviceId: string; taskId?: never; logId?: never };
-export interface TakeoffRepository { storage?: 'cloud' | 'local'; load(): Promise<TakeoffPlan[]>; save(next: TakeoffPlan[], previous: TakeoffPlan[]): Promise<void> }
+export interface TakeoffRepository { storage?: 'cloud' | 'local'; load(): Promise<TakeoffPlan[]>; save(next: TakeoffPlan[], previous: TakeoffPlan[]): Promise<TakeoffPlan[] | void> }
+/** The filename is the label; a recognizable floor is optional metadata. */
+export function floorFromPlanFilename(filename: string): string {
+  const name = filename.replace(/\.[^.]+$/, '');
+  const numbered = name.match(/(?:^|[^\d])(\d+)\s*[º°ª]?\s*(andar|pavimento)\b/i);
+  if (numbered) return `${Number(numbered[1])}º ${numbered[2].toLowerCase()}`;
+  if (/(?:^|\W)t[eé]rreo(?:\W|$)/i.test(name)) return 'Térreo';
+  const subsolo = name.match(/(?:^|\W)subsolo(?:\s*(\d+))?(?:\W|$)/i);
+  if (subsolo) return subsolo[1] ? `Subsolo ${subsolo[1]}` : 'Subsolo';
+  if (/(?:^|\W)cobertura(?:\W|$)/i.test(name)) return 'Cobertura';
+  return '';
+}
 export interface TakeoffDraft { planId: string; page: number; kind: MeasureKind | 'calibrate'; points: Point[]; name: string; heightMeters: string; distance?: string }
 export const TAKEOFF_CATALOG_UPDATED = 'obraplanner:takeoff-catalog-updated';
 export function measuresForContext(measures: TakeoffMeasure[], context?: TakeoffContext, linkedMeasureIds: string[] = []): TakeoffMeasure[] {

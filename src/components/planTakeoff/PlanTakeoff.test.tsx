@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { forwardRef, useEffect } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanTakeoff from './PlanTakeoff';
-import { readTakeoffs, saveTakeoffs, type TakeoffPlan } from '@/lib/planTakeoff';
+import { readTakeoffs, saveTakeoffs, type TakeoffPlan, type TakeoffRepository } from '@/lib/planTakeoff';
 vi.mock('@/lib/planTakeoff', async importOriginal => ({ ...await importOriginal<object>(), readTakeoffs: vi.fn(), saveTakeoffs: vi.fn(), confirmAtomicTakeoffCache: vi.fn() }));
 vi.mock('./PlanCanvas', () => ({ default: forwardRef<HTMLButtonElement, { onPoint: (p: { x: number; y: number }) => void; onFinish?: () => void; onReady?: (ready: boolean) => void; plan: TakeoffPlan }>(function MockCanvas({ onPoint, onFinish, onReady, plan }, ref) { useEffect(() => { onReady?.(true); }, [onReady]); return <><button ref={ref} onClick={() => onPoint({ x: 1, y: 1 })}>Ponto de teste</button><button onClick={() => onPoint({ x: 4, y: 5 })}>Segundo ponto de teste</button><button onClick={onFinish}>Botão direito de teste</button><span data-testid="visible-measures">{plan.measures.map(measure => measure.id).join(',')}</span></>; }) }));
 const example: TakeoffPlan = { id: 'p', name: 'Planta', floor: 'Térreo', chapterId: 'building-1', building: 'Prédio principal', file: new Blob(), kind: 'image', scales: {}, measures: [] };
@@ -143,13 +143,37 @@ describe('teste independente de levantamento', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
     expect(screen.getByRole('dialog', { name: 'Gestão de desenhos' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Nova planta' }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Pavimento da nova prancha' }), { target: { value: 'Térreo' } });
-    fireEvent.change(screen.getByLabelText('Adicionar prancha'), { target: { files: [new File(['DXF'], 'PPCI.dxf')] } });
+    expect(screen.queryByRole('textbox', { name: 'Pavimento da nova prancha' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Selecionar plantas'), { target: { files: [new File(['DXF'], 'PPCI - TÉRREO.dxf')] } });
     await waitFor(() => expect(saved).toHaveLength(1));
-    expect(saved[0]).toMatchObject({ name: 'PPCI.dxf', chapterId: 'building-1', floor: 'Térreo', measures: [] });
+    expect(saved[0]).toMatchObject({ name: 'PPCI - TÉRREO.dxf', chapterId: 'building-1', floor: 'Térreo', measures: [] });
     first.unmount();
     render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" measureContext={{ taskId: 'tarefa-b', logId: 'dia-1' }} />);
     expect(await screen.findByRole('combobox', { name: 'Planta' })).toHaveValue(saved[0].id);
+  });
+  it('insere cinco DXFs sem reabrir o visualizador e usa a versão confirmada após cada envio', async () => {
+    let remote: TakeoffPlan[] = [];
+    const save = vi.fn(async (next: TakeoffPlan[], previous: TakeoffPlan[]) => {
+      expect(previous).toEqual(remote);
+      remote = next.map(plan => ({ ...plan, storagePath: `p/${plan.id}.dxf`, cloudRevision: remote.length + 1 }));
+      return remote;
+    });
+    const repository: TakeoffRepository = { storage: 'cloud', load: async () => remote, save };
+    render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" repository={repository} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Nova planta' }));
+    fireEvent.change(screen.getByLabelText('Selecionar plantas'), { target: { files: [
+      new File(['0'], 'PPCIP - R1 - RIO GUAPORÉ - 0º ANDAR.dxf'),
+      new File(['1'], 'PPCIP - R1 - RIO GUAPORÉ - 1º ANDAR.dxf'),
+      new File(['2'], 'PPCIP - R1 - RIO GUAPORÉ - 2º ANDAR.dxf'),
+      new File(['3'], 'PPCIP - R1 - RIO GUAPORÉ - 3º ANDAR.dxf'),
+      new File(['4'], 'PPCIP - R1 - RIO GUAPORÉ - 4º ANDAR.dxf'),
+    ] } });
+    await waitFor(() => expect(remote).toHaveLength(5));
+    expect(remote.map(plan => plan.floor)).toEqual(['0º andar', '1º andar', '2º andar', '3º andar', '4º andar']);
+    expect(save).toHaveBeenCalledTimes(5);
+    expect(screen.queryByText('As plantas mudaram. Reabra o visualizador.')).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Gestão de desenhos' })).toBeInTheDocument();
   });
   it('apaga planta sem marcações e preserva outra planta do capítulo', async () => {
     const other = { ...example, id: 'outro', name: 'Cobertura' };
@@ -174,7 +198,7 @@ describe('teste independente de levantamento', () => {
   it('mantém consulta às plantas sem cadastro nem exclusão para visualizador', async () => {
     render(<PlanTakeoff storageKey="obra" readOnly embedded chapterId="building-1" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
-    expect(screen.queryByLabelText('Adicionar prancha')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Selecionar plantas')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Apagar planta Planta' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Planta · Térreo' })).toBeInTheDocument();
   });
@@ -216,14 +240,12 @@ describe('teste independente de levantamento', () => {
     expect(saved[0].measures).toHaveLength(4);
   });
   it('permite vincular planta antiga ao capítulo sem perder os pontos', async () => {
-    const legacy = { ...example, id: 'antiga', name: 'Antiga.dxf', chapterId: undefined, measures: [{ id: 'pontos', name: 'Placas', kind: 'count' as const, page: 1, points: [{ x: 1, y: 2 }] }] };
+    const legacy = { ...example, id: 'antiga', name: 'Antiga - 1º ANDAR.dxf', floor: '', chapterId: undefined, measures: [{ id: 'pontos', name: 'Placas', kind: 'count' as const, page: 1, points: [{ x: 1, y: 2 }] }] };
     vi.mocked(readTakeoffs).mockResolvedValueOnce([legacy]);
     render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Nova planta' }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Pavimento da nova prancha' }), { target: { value: '1º pavimento' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Vincular Antiga.dxf a este prédio' }));
-    await waitFor(() => expect(saveTakeoffs).toHaveBeenCalledWith('obra', [expect.objectContaining({ id: 'antiga', chapterId: 'building-1', floor: '1º pavimento', measures: legacy.measures })], [legacy]));
+    fireEvent.click(screen.getByRole('button', { name: 'Vincular Antiga - 1º ANDAR.dxf a este prédio' }));
+    await waitFor(() => expect(saveTakeoffs).toHaveBeenCalledWith('obra', [expect.objectContaining({ id: 'antiga', chapterId: 'building-1', floor: '1º andar', measures: legacy.measures })], [legacy]));
   });
   it('permite contagem, comprimento e área sem escala, com unidade do desenho identificada', async () => {
     render(<PlanTakeoff storageKey="user/project" readOnly={false} />);

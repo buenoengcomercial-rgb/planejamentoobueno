@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Box, Check, ChevronDown, ChevronUp, Circle, CircleDot, Crosshair, FileUp, Layers3, List, Magnet, Maximize2, MousePointer2, Move, Palette, Plus, Route, Ruler, Settings2, Shapes, Square, Trash2, Undo2, X, ZoomIn, ZoomOut, Scan, RotateCcw, Eye, Hash } from 'lucide-react';
-import { calibration, fixedPointCount, measureCategory, measureUnit, MEASURE_KINDS, minimumPoints, measuresForContext, quantity, readTakeoffs, requiresHeight, saveTakeoffs, TAKEOFF_CATALOG_UPDATED, type MeasureKind, type Point, type TakeoffContext, type TakeoffMeasure, type TakeoffPlan, type TakeoffRepository, type TakeoffDraft } from '@/lib/planTakeoff';
+import { calibration, fixedPointCount, floorFromPlanFilename, measureCategory, measureUnit, MEASURE_KINDS, minimumPoints, measuresForContext, quantity, readTakeoffs, requiresHeight, saveTakeoffs, TAKEOFF_CATALOG_UPDATED, type MeasureKind, type Point, type TakeoffContext, type TakeoffMeasure, type TakeoffPlan, type TakeoffRepository, type TakeoffDraft } from '@/lib/planTakeoff';
 import { openDwfSheets, type DwfSheet } from '@/lib/dwfTakeoff';
 import { type CaptureKind } from '@/lib/dxfSnap';
 import { readCapturePreferences, saveCapturePreferences } from '@/lib/takeoffCapturePreferences';
@@ -103,12 +103,13 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
     busy.current = true; setSaving(true); setError(''); setStatus('Salvando…');
     try {
       const previous = lastCommittedPlans.current;
-      if (repository) await repository.save(next, previous); else await saveTakeoffs(storageKey, next, previous);
+      const confirmed = repository ? await repository.save(next, previous) : (await saveTakeoffs(storageKey, next, previous), undefined);
+      const savedPlans = confirmed ?? next;
       if (undo) history.current.pop(); else history.current = [...history.current.slice(-19), previous];
-      lastCommittedPlans.current = next;
-      setPlans(next);
+      lastCommittedPlans.current = savedPlans;
+      setPlans(savedPlans);
       window.dispatchEvent(new CustomEvent(TAKEOFF_CATALOG_UPDATED, { detail: storageKey }));
-      if (undo && !next.some(p => p.id === active)) { setActive(next[0]?.id ?? ''); setPage(1); }
+      if (undo && !savedPlans.some(p => p.id === active)) { setActive(savedPlans[0]?.id ?? ''); setPage(1); }
       setStatus(isCloud ? 'Salvo na nuvem' : 'Salvo no navegador'); return true;
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Não foi possível salvar na nuvem. O traçado atual foi preservado para tentar novamente.'); setStatus('Alteração não salva'); return false; }
     finally { busy.current = false; setSaving(false); }
@@ -143,20 +144,20 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
     const kind = extension === 'pdf' ? 'pdf' : extension === 'dxf' ? 'dxf' : extension === 'dwf' ? 'dwf' : ['png', 'jpg', 'jpeg'].includes(extension ?? '') ? 'image' : null;
     if (!kind) { setError('Escolha PDF, PNG, JPG, DXF ou DWF 2D. DWG ainda não está disponível.'); return; }
     if (file.size > 100 * 1024 * 1024) { setError('Neste teste, o limite por arquivo é 100 MB.'); return; }
-    if (embedded && (!chapterId || !importFloor.trim())) { setError('Informe o pavimento para cadastrar a prancha neste prédio.'); return; }
-    if (plans.some(item => item.chapterId === chapterId && item.floor.toLowerCase() === importFloor.trim().toLowerCase() && item.name.toLowerCase() === file.name.toLowerCase())) { setError('Esta prancha já está cadastrada neste prédio e pavimento.'); return; }
+    if (embedded && !chapterId) { setError('Escolha o capítulo do prédio antes de cadastrar a planta.'); return; }
+    const currentPlans = lastCommittedPlans.current;
+    if (currentPlans.some(item => item.chapterId === chapterId && item.name.toLowerCase() === file.name.toLowerCase())) { setError('Esta prancha já está cadastrada neste prédio.'); return; }
     try { if (kind === 'dwf') await openDwfSheets(file); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'DWF inválido ou sem folha 2D compatível.'); return; }
-    const next: TakeoffPlan = { id: crypto.randomUUID(), name: file.name, floor: embedded ? importFloor.trim() : '', kind, file, scales: kind === 'dxf' ? { 1: 1 } : {}, measures: [], ...(embedded ? { chapterId, building: plan?.building } : {}) };
-    if (!await commit([...plans, next])) return;
+    const next: TakeoffPlan = { id: crypto.randomUUID(), name: file.name, floor: importFloor.trim() || floorFromPlanFilename(file.name), kind, file, scales: kind === 'dxf' ? { 1: 1 } : {}, measures: [], ...(embedded ? { chapterId, building: plan?.building } : {}) };
+    if (!await commit([...currentPlans, next])) return;
     if (!showDrawings) { setActive(next.id); setPage(1); setPages(1); reset(); }
     return next.id;
   }
   async function assignLegacy(planId: string, importFloor: string) {
     const legacy = plans.find(item => item.id === planId && !item.chapterId);
     if (!legacy || !chapterId || locked) return;
-    const floor = importFloor.trim();
-    if (!floor) { setError('Informe o pavimento para vincular a planta antiga.'); return; }
+    const floor = importFloor.trim() || legacy.floor || floorFromPlanFilename(legacy.name);
     if (!await update({ ...legacy, chapterId, building: plan?.building, floor })) return;
     return legacy.id;
   }
