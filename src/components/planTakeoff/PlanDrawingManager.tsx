@@ -30,15 +30,19 @@ export default function PlanDrawingManager({ plans, legacyPlans, activeId, hidde
     if (!files.length || importing) return;
     setImporting(true);
     let completed = 0;
+    let failed = '';
     try {
       for (let index = 0; index < files.length; index++) {
         setImportProgress(`Enviando ${index + 1} de ${files.length}: ${files[index].name}`);
         try {
           const id = await onImport(files[index], '');
-          if (id) { setSelected(id); completed++; }
-        } catch { /* The viewer shows the import error and retains earlier files. */ }
+          if (!id) { failed = files[index].name; break; }
+          setSelected(id); completed++;
+        } catch { failed = files[index].name; break; }
       }
-      setImportProgress(`${completed} de ${files.length} planta${files.length === 1 ? '' : 's'} cadastrada${files.length === 1 ? '' : 's'}.`);
+      setImportProgress(failed
+        ? `${completed} de ${files.length} planta${files.length === 1 ? '' : 's'} confirmada${files.length === 1 ? '' : 's'}. Cadastro interrompido em ${failed}; confira o erro abaixo.`
+        : `${completed} de ${files.length} planta${files.length === 1 ? '' : 's'} cadastrada${files.length === 1 ? '' : 's'}.`);
     } finally { setImporting(false); }
   };
   const deleteSelected = async () => {

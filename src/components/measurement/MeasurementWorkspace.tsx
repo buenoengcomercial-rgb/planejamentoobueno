@@ -11,6 +11,7 @@ import { resolveAnalyticComposition } from '@/lib/analyticLinks';
 import { AnalyticView, type MeasurementDetailSelection } from './MeasurementDetailFooter';
 import { withDetailValue } from '@/lib/productionQuantityDetails';
 import type { TakeoffPlan, TakeoffMeasure, TakeoffRepository, TakeoffDraft } from '@/lib/planTakeoff';
+import { reconcileDrawingCatalog } from '@/lib/measurementDrawingCatalog';
 import { exportMonthlyMeasurement } from '@/lib/measurementMonthlyExport';
 import { fmtBRL, fmtDateBR } from './measurementFormat';
 const PlanTakeoff = lazy(() => import('@/components/planTakeoff/PlanTakeoff'));
@@ -102,6 +103,9 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const latestCaptureDraft = useRef<TakeoffDraft | null>(null);
   const pendingOperation = useRef<Promise<boolean>>(Promise.resolve(true));
   const uncertainCommit = useRef<Workspace | null>(null);
+  const lastSaveFailure = useRef('');
+  const recoveryRef = useRef(recovery);
+  recoveryRef.current = recovery;
   const detailDrain = useRef<Promise<boolean>>(Promise.resolve(true));
   const drainDetailQueueRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
   const retryPendingSaveRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
@@ -213,7 +217,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const persist = useCallback(async (candidate: Workspace): Promise<boolean> => {
     if (!current.current || busy.current) return false;
     if (candidate === current.current) return true;
-    const base = current.current; busy.current = true; setSaving(true); setError(''); setStatus('Sincronizando');
+    const base = current.current; busy.current = true; setSaving(true); setError(''); setStatus('Sincronizando'); lastSaveFailure.current = '';
     let confirmed = false;
     try {
       const saved = await repository.commit(candidate, base.revision);
@@ -230,7 +234,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       uncertainCommit.current = null;
       confirmed = true;
       return true;
-    } catch (cause) { uncertainCommit.current = candidate; setError(cause instanceof Error ? cause.message : String(cause)); setStatus('Precisa resolver conflito'); setRecovery(true); return false; }
+    } catch (cause) { uncertainCommit.current = candidate; lastSaveFailure.current = cause instanceof Error ? cause.message : String(cause); setError(lastSaveFailure.current); setStatus('Precisa resolver conflito'); setRecovery(true); return false; }
     finally {
       busy.current = false; setSaving(false);
       if (confirmed && detailQueue.current.length && current.current) {
@@ -444,13 +448,25 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     storage: repository.savedLabel === 'Salvo na nuvem' ? 'cloud' : 'local',
     load: async () => structuredClone((detailPreview.current ?? current.current)?.plans ?? []),
     save: async (next, previous) => {
-      const w = current.current; if (!w || busy.current) throw new Error('Aguarde o salvamento da Medição.');
-      if (JSON.stringify(w.plans) !== JSON.stringify(previous)) throw new Error('As plantas mudaram. Reabra o visualizador.');
+      const w = current.current; if (!w || busy.current || detailQueue.current.length || recoveryRef.current) throw new Error('Há um salvamento pendente na Medição. Confirme-o antes de cadastrar outra planta.');
+      const reconciled = reconcileDrawingCatalog(w.plans, previous, next);
+      if (reconciled === w.plans) return structuredClone(w.plans);
       const candidate = transactMeasurement(w, actor, 'Gerir desenhos', draft => {
-        for (const p of w.plans) if (!next.some(n => n.id === p.id) && p.measures.length) throw new Error('Desenho com quantitativos vinculados não pode ser apagado.');
-        draft.plans = next;
+        for (const p of w.plans) if (!reconciled.some(n => n.id === p.id) && p.measures.length) throw new Error('Desenho com quantitativos vinculados não pode ser apagado.');
+        draft.plans = reconciled;
       });
-      if (!await persist(candidate)) throw new Error('Planta não salva.');
+      if (!await persist(candidate)) {
+        const firstFailure = lastSaveFailure.current;
+        // Retry the same durable operation ID. The first response may have been
+        // lost after upload or commit; creating a new plan would risk a duplicate.
+        if (repository.savedLabel === 'Salvo na nuvem' && await retryPendingSaveRef.current()) {
+          const confirmed = current.current?.plans;
+          if (confirmed && reconciled.every(plan => confirmed.some(saved => saved.id === plan.id))) return structuredClone(confirmed);
+        }
+        const cause = firstFailure || lastSaveFailure.current || 'a nuvem não confirmou o cadastro.';
+        const followUp = lastSaveFailure.current && lastSaveFailure.current !== cause ? ` Nova conferência: ${lastSaveFailure.current}` : '';
+        throw new Error(`Planta não salva: ${cause}.${followUp}`);
+      }
       // The cloud may add a storage path to the uploaded file. Reuse the
       // confirmed catalog when another drawing is selected in this dialog.
       return structuredClone(current.current?.plans ?? next);
@@ -681,7 +697,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       setRecovery(false); setError(''); setStatus('Confirmado');
       if (repository.savedLabel === 'Salvo na nuvem') setConfirmedAt(new Date().toISOString());
       return true;
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setStatus('Precisa resolver conflito'); return false; }
+    } catch (cause) { lastSaveFailure.current = cause instanceof Error ? cause.message : String(cause); setError(lastSaveFailure.current); setStatus('Precisa resolver conflito'); return false; }
     finally { recoveryAction.current = false; }
   };
   retryPendingSaveRef.current = retryPendingSave;
