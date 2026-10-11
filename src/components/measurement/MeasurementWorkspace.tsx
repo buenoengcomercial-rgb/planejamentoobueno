@@ -434,9 +434,24 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       if (bufferedDetail.current === buffered) flushBufferedDetail();
     }, 2000);
   };
-  const bufferDetail = (serviceId: string, edit: DetailEdit, after?: () => void): boolean => {
+  const resumeFailedTaskEdit = (serviceId: string): boolean => {
     if (!current.current) return false;
-    if (failedTaskEdits.current.has(`${active}:${serviceId}`)) { setError('Confira ou tente salvar esta tarefa antes de alterá-la novamente.'); return false; }
+    const failed = failedTaskEdits.current.get(`${active}:${serviceId}`);
+    if (!failed) return true;
+    try {
+      const base = detailPreview.current ?? current.current;
+      const preview = failed.operation.edit(base);
+      for (const task of preview.audit.at(-1)?.affected ?? []) failedTaskEdits.current.delete(`${task.measurementId}:${task.serviceId}`);
+      detailQueue.current.push({ ...failed.operation, base, candidate: preview });
+      detailPreview.current = preview;
+      setWorkspace(displayWithFailedTasks(preview));
+      markFailedTaskChange(value => value + 1);
+      if (!busy.current) { detailDrain.current = drainDetailQueue(); pendingOperation.current = detailDrain.current; }
+      return true;
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); return false; }
+  };
+  const bufferDetail = (serviceId: string, edit: DetailEdit, after?: () => void): boolean => {
+    if (!current.current || !resumeFailedTaskEdit(serviceId)) return false;
     if (bufferedDetail.current && (bufferedDetail.current.serviceId !== serviceId || bufferedDetail.current.measurementId !== active)
       && !flushBufferedDetail()) return false;
     const prior = bufferedDetail.current;
@@ -609,7 +624,21 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         const audit = candidate.audit.at(-1)!; audit.after = audit.after.map(a => a.measurementId === e.measurementId && a.serviceId === e.serviceId ? structuredClone(e) : a);
         nextTarget = { ...target, rowId: row.id };
       }
-      if (!applyDetail(() => candidate)) return false;
+      const event = candidate.audit.at(-1)!;
+      const edit: DetailEdit = base => {
+        if (base === w) return candidate;
+        const rebased = captureMeasurement(base, actor, target, nextPlan, mark, remove);
+        if (!remove && !wasLinked) {
+          const entry = entryFor(rebased, target.measurementId, target.serviceId);
+          const newRow = entryFor(candidate, target.measurementId, target.serviceId).rows.at(-1)!;
+          if (!entry.rows.some(row => row.id === newRow.id)) entry.rows.push(structuredClone(newRow));
+          rebased.audit.at(-1)!.after = rebased.audit.at(-1)!.after.map(after => after.measurementId === entry.measurementId && after.serviceId === entry.serviceId ? structuredClone(entry) : after);
+        }
+        rebased.audit.at(-1)!.id = event.id;
+        rebased.audit.at(-1)!.at = event.at;
+        return rebased;
+      };
+      if (!applyDetail(edit)) return false;
       await latestLocalStage.current;
       saveCaptureDraft(null);
       destinationRef.current = nextTarget; setDestination(nextTarget); clearDraft(target.measurementId, target.serviceId, target.rowId); clearDraft(target.measurementId, target.serviceId, `__capture__${target.rowId}`); return true;
@@ -813,11 +842,11 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         if (before && JSON.stringify(entryFor(latest, task.measurementId, task.serviceId)) !== JSON.stringify(before))
           throw new Error('Esta tarefa mudou em outro computador. Confira os dois valores antes de repetir o lançamento.');
       }
+      const candidate = failed.operation.edit(latest);
       for (const taskKey of groupKeys) failedTaskEdits.current.delete(taskKey);
       markFailedTaskChange(value => value + 1);
       current.current = latest;
-      failed.operation.candidate = undefined;
-      detailQueue.current.push(failed.operation);
+      detailQueue.current.push({ ...failed.operation, base: latest, candidate });
       detailDrain.current = drainDetailQueue(); pendingOperation.current = detailDrain.current;
       await detailDrain.current;
       return !failedTaskEdits.current.has(key);
@@ -890,7 +919,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       </div>
     </section>
     {error && <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
-    {failedVisible.map(([key, failed]) => { const service = workspace.services.find(value => value.id === failed.serviceId); const entry = failed.operation.candidate?.entries.find(value => value.measurementId === failed.measurementId && value.serviceId === failed.serviceId); return <div key={key} role="alert" className="flex flex-wrap items-center gap-2 border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-950"><strong>{service?.item ?? failed.serviceId} · não confirmado na nuvem</strong><span>Quantidade nesta página: {entry ? String(detailTotal(entry.rows)) : 'confira o detalhe'} {service?.unit}</span><span>{failed.message}</span><button className="underline" onClick={() => void retryFailedTask(key)}>Tentar salvar esta tarefa</button></div>; })}
+    {failedVisible.length > 0 && <div role="status" className="flex flex-wrap items-center gap-2 px-2 text-[11px] text-muted-foreground">{failedVisible.map(([key, failed]) => <button key={key} className="underline" onClick={() => void retryFailedTask(key)}>Reenviar {workspace.services.find(service => service.id === failed.serviceId)?.item ?? 'tarefa'}</button>)}</div>}
     {lifecycle && <MeasurementLifecycleDialog key={`${lifecycle.kind}:${lifecycle.id}`} selection={lifecycle} workspace={workspace} actor={actor} busy={saving} error={error}
       hasDraft={drafts.some(d => d.measurementId === lifecycle.id)} onClose={() => setLifecycle(null)} onConfirm={(edit, id) => { if (lifecycle.kind === 'approve' && fiscalPending) { setError('Aguarde a confirmação dos lançamentos na nuvem antes da aprovação.'); return; } apply(edit, () => {
         setLifecycle(null); setExpanded(null); setClipboard(null);
@@ -944,12 +973,12 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         const composition = project ? resolveAnalyticComposition(project, { taskId: service.sourceTaskId ?? service.id, baseBudgetItemId: service.sourceBudgetId, item: service.item, code: service.code, bank: service.bank, description: service.description }).composition : undefined;
         return <AnalyticView compact composition={composition} bdi={service.bdi}/>;
       }}
-       renderQuantity={row => { const l = lineByTaskId.get(row.taskId)!; const s = l.service, e = entryByTaskId.get(s.id) ?? entryFor(workspace, active, s.id); return <input key={`${active}-${s.id}`} ref={input => { if (input && document.activeElement !== input && input.value !== String(l.qty)) input.value = String(l.qty); }} aria-label={`Quantidade de ${s.description}`} className="no-spinner h-6 w-full min-w-0 rounded border border-transparent bg-transparent px-1 text-right text-[11px] tabular-nums hover:border-primary/30 focus:border-primary disabled:bg-transparent" type="number" inputMode="decimal" min="0" step="any" title={`Clique para abrir o detalhe da ${period!.number}ª medição`} aria-expanded={expanded?.taskId === s.id && expanded.mode === 'quantity'} onClick={() => selectDetailAfterLocalSave({ taskId: s.id, mode: 'quantity' })} readOnly={quantityLocked || failedTaskEdits.current.has(`${active}:${s.id}`) || e.rows.length > 1 || e.rows.some(r => r.origin?.kind !== 'manual' || sourceFields.some(f => r[f]) || r.sharedRecordId || r.measuredQuantity || r.dimensionC || r.dimensionD)} defaultValue={l.qty} onChange={event => saveDraft(active, s.id, '__manual__', { multiplier: event.target.value })} onKeyDown={event => { if (['ArrowUp', 'ArrowDown'].includes(event.key)) event.preventDefault(); if (event.key === 'Enter') event.currentTarget.blur(); }} onWheel={event => event.currentTarget.blur()} onBlur={event => {
+       renderQuantity={row => { const l = lineByTaskId.get(row.taskId)!; const s = l.service, e = entryByTaskId.get(s.id) ?? entryFor(workspace, active, s.id); return <input key={`${active}-${s.id}`} ref={input => { if (input && document.activeElement !== input && input.value !== String(l.qty)) input.value = String(l.qty); }} aria-label={`Quantidade de ${s.description}`} className="no-spinner h-6 w-full min-w-0 rounded border border-transparent bg-transparent px-1 text-right text-[11px] tabular-nums hover:border-primary/30 focus:border-primary disabled:bg-transparent" type="number" inputMode="decimal" min="0" step="any" title={`Clique para abrir o detalhe da ${period!.number}ª medição`} aria-expanded={expanded?.taskId === s.id && expanded.mode === 'quantity'} onClick={() => selectDetailAfterLocalSave({ taskId: s.id, mode: 'quantity' })} readOnly={quantityLocked || e.rows.length > 1 || e.rows.some(r => r.origin?.kind !== 'manual' || sourceFields.some(f => r[f]) || r.sharedRecordId || r.measuredQuantity || r.dimensionC || r.dimensionD)} defaultValue={l.qty} onChange={event => saveDraft(active, s.id, '__manual__', { multiplier: event.target.value })} onKeyDown={event => { if (['ArrowUp', 'ArrowDown'].includes(event.key)) event.preventDefault(); if (event.key === 'Enter') event.currentTarget.blur(); }} onWheel={event => event.currentTarget.blur()} onBlur={event => {
             const value = Number(event.currentTarget.value.replace(',', '.')); if (value === l.qty) { if (!busy.current && !recovery && !detailQueue.current.length) clearDraft(active, s.id, '__manual__'); return; }
             if (!Number.isFinite(value) || value < 0) { event.currentTarget.value = String(l.qty); return; }
             const row = e.rows[0] ?? newMeasuredRow(); if (!bufferDetail(s.id, w => editMeasuredRow(w, actor, active, s.id, { ...newMeasuredRow(row.id), comment: row.comment || 'Quantidade informada', origin: row.origin ?? { kind: 'manual' }, multiplier: value }), clearCommittedDraft(active, s.id, '__manual__'))) event.currentTarget.value = String(l.qty);
           }}/>; }}
-       renderDetail={row => { const l = lineByTaskId.get(row.taskId)!; const s = l.service, e = entryByTaskId.get(s.id) ?? entryFor(workspace, active, s.id); return <ProductionQuantityDetails key={`${active}-${s.id}`} heading={`Detalhe de quantitativos · ${period!.number}ª medição`} rows={e.rows} unit={s.unit} dailyQuantity={l.qty} applied readOnly={quantityLocked || failedTaskEdits.current.has(`${active}:${s.id}`)} periodMode referenceLabel="Serviços / medições" canOpenPlan onApply={() => undefined}
+       renderDetail={row => { const l = lineByTaskId.get(row.taskId)!; const s = l.service, e = entryByTaskId.get(s.id) ?? entryFor(workspace, active, s.id); return <ProductionQuantityDetails key={`${active}-${s.id}`} heading={`Detalhe de quantitativos · ${period!.number}ª medição`} rows={e.rows} unit={s.unit} dailyQuantity={l.qty} applied readOnly={quantityLocked} periodMode referenceLabel="Serviços / medições" canOpenPlan onApply={() => undefined}
             onDraftChange={(rid, changes) => saveDraft(active, s.id, rid, changes)}
             onCreate={changes => { const fresh = newMeasuredRow(); const row = { ...fresh, ...changes, id: fresh.id }; saveDraft(active, s.id, '__new__', { ...changes, createdRowId: fresh.id }); return bufferDetail(s.id, w => editMeasuredRow(w, actor, active, s.id, row), clearCommittedDraft(active, s.id, '__new__')) ? row.id : null; }}
             onEdit={(id, changes) => bufferDetail(s.id, w => { const row = entryFor(w, active, s.id).rows.find(r => r.id === id); if (!row) throw new Error('Linha não encontrada.'); return editMeasuredRow(w, actor, active, s.id, { ...row, ...changes }); }, clearCommittedDraft(active, s.id, id))}
@@ -957,7 +986,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
               ? bufferDetail(s.id, w => deleteMeasuredRow(w, actor, active, s.id, id))
               : apply(w => deleteMeasuredRow(w, actor, active, s.id, id))}
             onOpenPlan={(rowId, field) => { void (async () => {
-              if (!flushBufferedDetail()) return;
+              if (!flushBufferedDetail() || !resumeFailedTaskEdit(s.id)) return;
               try { await Promise.all(detailQueue.current.map(operation => operation.durable)); }
               catch { setError('A linha ainda não foi guardada neste navegador. Confira o salvamento antes de abrir a planta.'); return; }
               const visible = detailPreview.current ?? current.current;

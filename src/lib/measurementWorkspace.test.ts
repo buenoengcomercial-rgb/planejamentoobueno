@@ -78,6 +78,24 @@ describe('Medição independente', () => {
     w = captureMeasurement(w, actor, dest, { ...w.plans[0], measures: [] }, modified, true);
     expect(entryFor(w, 'm1', 'signs').rows[0].measuredQuantity).toBe(0);
   });
+  it('preserva a primeira marcação ao receber outra captura de uma cópia antiga da planta', async () => {
+    let w = (await setup()).plan.candidate;
+    w = editMeasuredRow(w, actor, 'm1', 'signs', newMeasuredRow('capture-a'));
+    w = editMeasuredRow(w, actor, 'm1', 'signs', newMeasuredRow('capture-b'));
+    const oldPlan = structuredClone(w.plans[0]);
+    const first = { id: 'capture-19', name: 'Térreo', kind: 'count' as const, page: 1,
+      points: Array.from({ length: 19 }, (_, x) => ({ x, y: 1 })), projectId: w.projectId, measurementId: 'm1', serviceId: 'signs' };
+    const second = { ...first, id: 'capture-22', points: Array.from({ length: 22 }, (_, x) => ({ x, y: 2 })) };
+    w = captureMeasurement(w, actor, { measurementId: 'm1', serviceId: 'signs', rowId: 'capture-a', field: 'measuredQuantity' }, { ...oldPlan, measures: [first] }, first);
+    w = captureMeasurement(w, actor, { measurementId: 'm1', serviceId: 'signs', rowId: 'capture-b', field: 'measuredQuantity' }, { ...oldPlan, measures: [second] }, second);
+    expect(w.plans[0].measures.map(mark => mark.id)).toEqual(['capture-19', 'capture-22']);
+    expect(entryFor(w, 'm1', 'signs').rows.map(row => row.measuredQuantity)).toEqual([19, 22]);
+    expect(monthlyLines(w, 'm1').find(line => line.service.id === 'signs')?.qty).toBe(41);
+    for (const row of entryFor(w, 'm1', 'signs').rows) {
+      const source = row.source!;
+      expect(w.plans[0].measures.find(mark => mark.id === source.measureId)?.points).toEqual(source.points);
+    }
+  });
   it('edita, exclui e restaura preservado com conteúdo anterior e autor', async () => {
     let w = (await setup()).plan.candidate; const row = w.entries[0].rows[0];
     w = editMeasuredRow(w, actor, 'm1', 'detectors', { ...row, multiplier: 220 });

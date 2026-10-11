@@ -390,17 +390,40 @@ it('falha de uma tarefa não bloqueia outra, e a repetição conserva os dois la
   const first = await screen.findByLabelText('Quantidade de Serviço 0');
   fireEvent.change(first, { target: { value: '3' } }); fireEvent.blur(first);
   fireEvent.click(screen.getByLabelText('Quantidade de Serviço 1'));
-  expect(await screen.findByText('1.1 · não confirmado na nuvem')).toBeVisible();
+  expect(await screen.findByRole('button', { name: 'Reenviar 1.1' })).toBeVisible();
   const second = screen.getByLabelText('Quantidade de Serviço 1');
   fireEvent.change(second, { target: { value: '5' } }); fireEvent.blur(second);
   expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(3);
   fireEvent.click(screen.getByLabelText('Quantidade de Serviço 0'));
   await waitFor(() => expect(saved().entries.find(entry => entry.serviceId === 's1')?.rows[0].multiplier).toBe(5));
   expect(saved().entries.find(entry => entry.serviceId === 's0')?.rows[0].multiplier).toBe(0);
-  fireEvent.click(screen.getByRole('button', { name: 'Tentar salvar esta tarefa' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Reenviar 1.1' }));
   await waitFor(() => expect(saved().entries.find(entry => entry.serviceId === 's0')?.rows[0].multiplier).toBe(3));
-  expect(screen.queryByText('1.1 · não confirmado na nuvem')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Reenviar 1.1' })).not.toBeInTheDocument();
   expect(repository.commit).toHaveBeenCalledTimes(3);
+});
+
+it('permite corrigir a própria tarefa após falha, sem painel bloqueante', async () => {
+  const { repository, saved } = setup(2);
+  repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+  repository.drafts = vi.fn(async () => []);
+  repository.writeDraft = vi.fn(async () => undefined);
+  repository.clearDraft = vi.fn(async () => undefined);
+  vi.mocked(repository.commit).mockRejectedValueOnce(new Error('Falha de rede'));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  fireEvent.click(await screen.findByLabelText('Quantidade de Serviço 0'));
+  const a = screen.getByLabelText('Unidades da linha 1');
+  fireEvent.change(a, { target: { value: '3' } }); fireEvent.blur(a);
+  fireEvent.click(screen.getByLabelText('Quantidade de Serviço 1'));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Reenviar 1.1' })).toBeVisible(), { timeout: 3500 });
+  expect(screen.queryByText(/Confira ou tente salvar esta tarefa/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByLabelText('Quantidade de Serviço 0'));
+  const retryInput = screen.getByLabelText('Unidades da linha 1');
+  expect(retryInput).toBeEnabled();
+  fireEvent.change(retryInput, { target: { value: '4' } }); fireEvent.blur(retryInput);
+  fireEvent.click(screen.getByLabelText('Quantidade de Serviço 1'));
+  await waitFor(() => expect(saved().entries[0].rows[0].multiplier).toBe(4), { timeout: 4000 });
+  expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(4);
 });
 
 it('recupera comentário e quantidade da mesma nova linha após falha, sem duplicar o registro', async () => {
