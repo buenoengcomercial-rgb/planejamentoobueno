@@ -18,7 +18,7 @@ let db:PGlite, base:MeasurementWorkspace;
 const wire=(w:MeasurementWorkspace)=>JSON.stringify(encodeMeasurementWorkspace(w));
 async function seed(w=base) { await db.exec("RESET ROLE; SET test.role='owner'"); await db.query('DELETE FROM measurement_workspace_events'); await db.query('DELETE FROM measurement_workspaces'); await db.query('INSERT INTO measurement_workspaces(project_id,revision,data) VALUES($1,$2,$3)',[projectId,w.revision,wire(w)]); }
 async function commit(w:MeasurementWorkspace,revision=w.revision-1) { return (await db.query<{value:MeasurementWorkspace}>('SELECT commit_measurement_workspace($1,$2,$3) value',[projectId,revision,wire(w)])).rows[0].value; }
-async function commitLifecycle(revision:number,patch:Record<string,unknown>) { return (await db.query<{value:{projectId:string;revision:number;patch:{kind:string;periodId:string;period:unknown;entries:unknown[];event:MeasurementWorkspace['audit'][number]}}}>('SELECT commit_measurement_lifecycle($1,$2,$3) value',[projectId,revision,JSON.stringify(patch)])).rows[0].value; }
+async function commitLifecycle(revision:number,patch:Record<string,unknown>) { return (await db.query<{value:{projectId:string;revision:number;replayed?:boolean;currentRevision?:number;patch:{kind:string;periodId:string;period:unknown;entries:unknown[];event:MeasurementWorkspace['audit'][number]}}}>('SELECT commit_measurement_lifecycle($1,$2,$3) value',[projectId,revision,JSON.stringify(patch)])).rows[0].value; }
 async function currentDataHash() { return (await db.query<{hash:string}>('SELECT md5(load_measurement_workspace($1)::text) hash',[projectId])).rows[0].hash; }
 async function compactHistory(revision:number,hash?:string) { return db.query<{value:{revision:number;auditEventsBefore:number;auditEventsAfter:number;eventRowsDeleted:number;compactReceiptsAdded:number}}>(
  'SELECT compact_measurement_history($1,$2,$3) value',[projectId,revision,hash??await currentDataHash()]); }
@@ -74,7 +74,10 @@ describe('transação da Medição na nuvem',()=>{
     const createPatch={kind:'create',operationId:createEvent.id,at:createEvent.at,actorName:actor.name,periodId:id,period:created.periods.at(-1)};
     const first=await commitLifecycle(base.revision,createPatch);
     expect(first.revision).toBe(base.revision+1);
-    expect((await commitLifecycle(base.revision,createPatch)).patch.event.id).toBe(createEvent.id);
+    expect(await commitLifecycle(base.revision,createPatch)).toMatchObject({
+      replayed:true,currentRevision:first.revision,revision:first.revision,
+      patch:{event:{id:createEvent.id}},
+    });
     let materialized=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
     expect(materialized.periods).toHaveLength(base.periods.length+1);
     expect(materialized.entries).toEqual(base.entries);
@@ -97,6 +100,9 @@ describe('transação da Medição na nuvem',()=>{
       'SELECT after_data value FROM measurement_workspace_events WHERE operation_id=$1',
       [removePatch.operationId])).rows[0].value.patch.event.before).toEqual([]);
     expect((await commitLifecycle(first.revision,removePatch)).revision).toBe(removed.revision);
+    expect(await commitLifecycle(base.revision,createPatch)).toMatchObject({
+      replayed:true,currentRevision:removed.revision,revision:first.revision,
+    });
     materialized=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
     expect(materialized.periods).toHaveLength(base.periods.length);
     expect(materialized.entries).toEqual(base.entries);
@@ -164,8 +170,9 @@ describe('transação da Medição na nuvem',()=>{
   it('restaura lançamento excluído depois da compactação sem depender dos eventos antigos',async()=>{
     await seed();
     const created=addMeasuredPeriod(base,actor), id=created.periods.at(-1)!.id, event=created.audit.at(-1)!;
-    await commitLifecycle(base.revision,{kind:'create',operationId:event.id,at:event.at,
-      actorName:actor.name,periodId:id,period:created.periods.at(-1)});
+    const createPatch={kind:'create',operationId:event.id,at:event.at,
+      actorName:actor.name,periodId:id,period:created.periods.at(-1)};
+    await commitLifecycle(base.revision,createPatch);
     const current=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
     const edited=editMeasuredRow(current,actor,id,current.services[0].id,{...newMeasuredRow('archived-entry'),multiplier:1});
     await db.query('SELECT patch_measurement_entries($1,$2,$3)',[
@@ -175,6 +182,10 @@ describe('transação da Medição na nuvem',()=>{
     const compacted=(await compactQuantityHistory(removed.revision)).rows[0].value;
     expect(compacted.quantityEventsRemoved).toBe(1);
     expect((await db.query('SELECT * FROM measurement_workspace_events')).rows).toHaveLength(0);
+    expect(await commitLifecycle(base.revision,createPatch)).toMatchObject({
+      replayed:true,currentRevision:compacted.revision,revision:base.revision+1,
+      patch:{kind:'compacted_receipt',operationId:event.id},
+    });
     const restored=await commitLifecycle(compacted.revision,{kind:'restore',operationId:crypto.randomUUID(),
       at:new Date().toISOString(),actorName:actor.name,periodId:id,
       sourceAuditId:removed.patch.event.id,reason:'Recuperar lançamento'});

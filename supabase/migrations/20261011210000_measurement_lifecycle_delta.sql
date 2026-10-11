@@ -266,6 +266,7 @@ BEGIN
       RAISE EXCEPTION 'Identificador de operação reutilizado com conteúdo diferente';
     END IF;
     RETURN jsonb_build_object('projectId',p_project_id,'revision',receipt.revision,
+      'replayed',true,'currentRevision',current_revision,
       'patch',public.measurement_lifecycle_hydrate_patch(receipt.after_data->'patch'));
   END IF;
   SELECT * INTO compacted FROM public.measurement_workspace_compacted_receipts
@@ -277,6 +278,7 @@ BEGIN
       RAISE EXCEPTION 'Identificador de operação reutilizado com conteúdo diferente';
     END IF;
     RETURN jsonb_build_object('projectId',p_project_id,'revision',compacted.revision,
+      'replayed',true,'currentRevision',current_revision,
       'patch',jsonb_build_object('kind','compacted_receipt','operationId',op));
   END IF;
   IF current_revision IS DISTINCT FROM p_expected_revision THEN
