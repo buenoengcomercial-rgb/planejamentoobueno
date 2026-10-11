@@ -56,7 +56,7 @@ describe('Tela própria de Medição', () => {
     expect(repository.commit).not.toHaveBeenCalled();
     const quantity = screen.getByRole('spinbutton', { name: 'Quantidade de Placas' });
     fireEvent.change(quantity, { target: { value: '1' } }); fireEvent.blur(quantity);
-    await waitFor(() => expect(resend).toBeEnabled());
+    await waitFor(() => expect(resend).toBeEnabled(), { timeout: 3000 });
     fireEvent.click(resend);
     let dialog = screen.getByRole('dialog');
     expect(within(dialog).getByText('Esta medição possui avisos antes do envio')).toBeVisible();
@@ -151,7 +151,7 @@ describe('Tela própria de Medição', () => {
     expect(screen.getByLabelText('Medição selecionada')).toHaveValue('m2');
     expect(screen.getByText('Detalhe de quantitativos · 2ª medição')).toBeVisible();
     expect(repository.commit).not.toHaveBeenCalled();
-    expect(screen.getByRole('status')).toHaveTextContent('Confirmado');
+    expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador');
   });
   it('aviso remoto não apaga o número em digitação nem seu rascunho e mantém proteção de conflito', async () => {
     const { repository } = fixture(); let notice!: (revision: number) => void;
@@ -163,7 +163,7 @@ describe('Tela própria de Medição', () => {
     act(() => quantity.focus()); fireEvent.change(quantity, { target: { value: '3' } });
     act(() => notice(1)); await waitFor(() => expect(repository.load).toHaveBeenCalledOnce());
     expect(quantity).toHaveValue(3); expect(repository.load).toHaveBeenCalledOnce();
-    act(() => quantity.blur()); await screen.findByText('Precisa resolver conflito');
+    act(() => quantity.blur()); await screen.findByText('Precisa resolver conflito', {}, { timeout: 3000 });
     expect(repository.clearDraft).not.toHaveBeenCalled();
     expect(repository.writeDraft).toHaveBeenCalledWith(expect.objectContaining({ changes: { multiplier: '3' } }));
     expect(screen.getByLabelText('Medição selecionada')).toBeEnabled();
@@ -472,9 +472,10 @@ describe('Tela própria de Medição', () => {
     fireEvent.blur(a);
     fireEvent.click(cells[11]);
     await waitFor(() => expect(screen.getByLabelText('Quantidade de Placas')).toHaveValue(3));
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Confirmado'));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
     fireEvent.click(cells[11]);
     expect(panel).toHaveTextContent(/^$/);
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1), { timeout: 3000 });
     const saved = vi.mocked(repository.commit).mock.calls.at(-1)![0];
     expect(saved.entries[0]).toMatchObject({ measurementId: 'm1', serviceId: 's' });
     expect(saved.services.map(s => s.contracted)).toEqual([100, 100]);
@@ -552,6 +553,8 @@ describe('Tela própria de Medição', () => {
     expect(cells[5]).toHaveTextContent('100');
     expect(cells[11]).toHaveTextContent('10');
     expect(screen.getByTestId('monthly-value')).toHaveTextContent('37,50');
+    fireEvent.change(selector, { target: { value: 'm1' } });
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
     const saved = vi.mocked(repository.commit).mock.calls.at(-1)![0];
     expect(saved.entries.find(e => e.measurementId === 'm1')?.rows[0].multiplier).toBe(7);
     expect(saved.entries.find(e => e.measurementId === 'm2')?.rows[0].multiplier).toBe(3);
@@ -597,24 +600,78 @@ describe('Tela própria de Medição', () => {
     const detectors = screen.getByRole('spinbutton', { name: 'Quantidade de Detectores' });
     fireEvent.change(plates, { target: { value: '3' } });
     fireEvent.blur(plates);
-    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole('status')).toHaveTextContent(/Sincronizando|Aguardando nuvem/);
+    expect(repository.commit).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent(/Aguardando nuvem/);
 
     // Navigation and the next local edit must not wait for the first HTTP reply.
     fireEvent.click(detectors);
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
     expect(screen.getByText('Detalhe de quantitativos · 1ª medição')).toBeVisible();
     fireEvent.change(detectors, { target: { value: '5' } });
     fireEvent.blur(detectors);
     expect(detectors).toHaveValue(5);
     expect(repository.commit).toHaveBeenCalledTimes(1);
+    fireEvent.click(plates);
 
     await act(async () => confirmations.shift()!());
     await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
     await act(async () => confirmations.shift()!());
-    await waitFor(() => expect(screen.getByText('Confirmado')).toBeVisible());
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
     const saved = vi.mocked(repository.commit).mock.calls.at(-1)![0];
     expect(saved.entries.find(e => e.serviceId === 's')?.rows[0].multiplier).toBe(3);
     expect(saved.entries.find(e => e.serviceId === 's2')?.rows[0].multiplier).toBe(5);
+  });
+  it('agrupa A, B, C, D e comentário da mesma tarefa em uma operação após trocar de tarefa', async () => {
+    const { w, repository } = fixture();
+    w.services.push({ ...w.services[0], id: 's2', item: '1.2', description: 'Detectores' });
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByLabelText('Quantidade de Placas'));
+    const changes = [
+      ['Unidades da linha 1', '1'],
+      ['Medida da linha 1', '2'],
+      ['Largura da linha 1', '3'],
+      ['Altura da linha 1', '4'],
+      ['Comentário da linha 1', 'Levantamento conferido'],
+    ];
+    for (const [label, value] of changes) {
+      const input = screen.getByLabelText(label);
+      fireEvent.change(input, { target: { value } });
+      fireEvent.blur(input);
+      expect(repository.commit).not.toHaveBeenCalled();
+    }
+    expect(screen.getByLabelText('Quantidade de Placas')).toHaveValue(24);
+    fireEvent.click(screen.getByLabelText('Quantidade de Detectores'));
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+    const saved = vi.mocked(repository.commit).mock.calls[0][0];
+    const row = saved.entries.find(entry => entry.measurementId === 'm1' && entry.serviceId === 's')?.rows[0];
+    expect(row).toMatchObject({ multiplier: 1, measuredQuantity: 2, dimensionC: 3, dimensionD: 4, comment: 'Levantamento conferido' });
+    expect(saved.audit).toHaveLength(1);
+    expect(saved.audit[0].affected).toEqual([{ measurementId: 'm1', serviceId: 's' }]);
+    expect(saved.services.map(service => service.contracted)).toEqual([100, 100]);
+  });
+  it('mantém uma única operação local recuperável e confirma na nuvem após dois segundos sem edição', async () => {
+    const { repository } = fixture();
+    repository.savedLabel = 'Salvo na nuvem';
+    repository.stage = vi.fn(async () => undefined);
+    repository.remoteRevision = vi.fn(async () => 0);
+    repository.watch = (_notice, connection) => { connection(true); return vi.fn(); };
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByLabelText('Quantidade de Placas'));
+    const units = screen.getByLabelText('Unidades da linha 1');
+    fireEvent.change(units, { target: { value: '2' } }); fireEvent.blur(units);
+    const comment = screen.getByLabelText('Comentário da linha 1');
+    fireEvent.change(comment, { target: { value: 'Conferido' } }); fireEvent.blur(comment);
+    expect(repository.commit).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent('Aguardando envio à nuvem');
+    expect(screen.getByRole('status')).toHaveTextContent('Tempo real ativo');
+    await waitFor(() => expect(repository.stage).toHaveBeenCalledTimes(2));
+    const stages = vi.mocked(repository.stage).mock.calls;
+    expect(stages[0][0].audit.at(-1)?.id).toBe(stages[1][0].audit.at(-1)?.id);
+    expect(stages[1][0].entries[0].rows[0]).toMatchObject({ multiplier: 2, comment: 'Conferido' });
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo e conferido na nuvem'));
+    expect(screen.getByRole('status')).toHaveTextContent(/Confirmado \d{2}:\d{2} · Obra p/);
+    expect(repository.commit).toHaveBeenCalledTimes(1);
   });
   it('confirma boletim, detalhe e nova medição em sequência mesmo quando o primeiro salvamento demora', async () => {
     const { w, repository } = fixture();
@@ -651,10 +708,11 @@ describe('Tela própria de Medição', () => {
     render(<MeasurementWorkspace repository={repository} actor={actor}/>);
     const quantity = await screen.findByLabelText('Quantidade de Placas');
     fireEvent.change(quantity, { target: { value: '3' } }); fireEvent.blur(quantity);
-    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+    expect(repository.commit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Boletim de Medição para Pagamento/ }));
     const art = screen.getByLabelText('Nº da ART');
     fireEvent.change(art, { target: { value: 'ART após fila' } }); fireEvent.blur(art);
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole('button', { name: 'Nova medição' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Criar medição' }));
     expect(repository.commit).toHaveBeenCalledTimes(1);
@@ -674,7 +732,7 @@ describe('Tela própria de Medição', () => {
     render(<MeasurementWorkspace repository={repository} actor={actor}/>);
     const input = await screen.findByLabelText('Quantidade de Placas');
     fireEvent.change(input, { target: { value: '3' } }); fireEvent.blur(input);
-    await screen.findByText('Precisa resolver conflito');
+    await screen.findByText('Precisa resolver conflito', {}, { timeout: 3000 });
     expect(screen.getByLabelText('Medição selecionada')).toBeEnabled();
     expect(screen.getByTestId('monthly-value')).toHaveTextContent('37,50');
     expect(screen.getByRole('button', { name: 'Tentar salvar' })).toBeVisible();

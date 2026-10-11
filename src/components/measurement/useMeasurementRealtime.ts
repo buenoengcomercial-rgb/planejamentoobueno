@@ -15,6 +15,7 @@ export function useMeasurementRealtime(options: Options) {
   const latest = useRef(options); latest.current = options;
   const resume = useRef<() => void>(() => undefined);
   const [connected, setConnected] = useState(false), [pending, setPending] = useState(false), [failed, setFailed] = useState(false);
+  const [lastCheckedAt, setLastCheckedAt] = useState<string | null>(null);
   useEffect(() => {
     const { repository } = latest.current;
     if (!repository.watch || !repository.remoteRevision) return;
@@ -48,7 +49,7 @@ export function useMeasurementRealtime(options: Options) {
     const check = async () => {
       if (disposed || checking || document.visibilityState === 'hidden') return;
       checking = true;
-      try { const revision = await repository.remoteRevision!(); if (!disposed) { setFailed(false); notice(revision); } }
+      try { const revision = await repository.remoteRevision!(); if (!disposed) { setFailed(false); setLastCheckedAt(new Date().toISOString()); notice(revision); } }
       catch { if (!disposed) setFailed(true); }
       finally { checking = false; }
     };
@@ -72,5 +73,5 @@ export function useMeasurementRealtime(options: Options) {
     };
   }, [options.repository]);
   useEffect(() => { resume.current(); });
-  return { connected, pending, failed, available: !!options.repository.watch };
+  return { connected, pending, failed, lastCheckedAt, available: !!options.repository.watch };
 }
