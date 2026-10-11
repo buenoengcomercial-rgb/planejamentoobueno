@@ -3,7 +3,7 @@ import { FileCheck2, Plus } from 'lucide-react';
 import ProductionQuantityDetails from '@/components/ProductionQuantityDetails';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { addMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, editMeasuredBulletin, entryFor, fiscalSubmissionCurrent, isPeriodLocked, monthlyLines, newMeasuredRow, pasteMeasuredRow, sourceFields, transactMeasurement, undoMeasuredOperation, freezeMeasuredPeriod, type Destination, type MeasurementActor, type MeasurementClipboard, type MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
-import type { MeasurementRepository, WorkspaceDraft } from '@/lib/measurementWorkspaceStore';
+import { MeasurementCommitRejectedError, type MeasurementRepository, type WorkspaceDraft } from '@/lib/measurementWorkspaceStore';
 import type { IncorporationBackup } from '@/lib/measurementIncorporation';
 import { prepareIncorporation, incorporateApprovedAdditive } from '@/lib/measurementIncorporation';
 import type { Additive, Project } from '@/types/project';
@@ -27,7 +27,7 @@ import { nextMeasurementPeriod } from '@/lib/measurementPeriodSequence';
 import { fiscalReviewIssuesForWorkspace } from '@/lib/measurementFiscalReview';
 import { collapsedMeasurementGroups, rememberCollapsedMeasurementGroups, rememberMeasurement, selectedMeasurement } from '@/lib/measurementSelection';
 import MeasurementLifecycleDialog, { type LifecycleSelection } from './MeasurementLifecycleDialog';
-import { periodDeletionBlock } from '@/lib/measurementLifecycle';
+import { periodDeletionBlock, periodRestorationBlock } from '@/lib/measurementLifecycle';
 import { useMeasurementRealtime } from './useMeasurementRealtime';
 import SaveStatusIndicator, { type SaveStatus } from '@/components/SaveStatusIndicator';
 const button = 'inline-flex h-8 items-center gap-1.5 rounded border border-slate-200 bg-white px-2.5 text-xs hover:bg-slate-50 disabled:opacity-40';
@@ -118,6 +118,8 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const latestCaptureDraft = useRef<TakeoffDraft | null>(null);
   const pendingOperation = useRef<Promise<boolean>>(Promise.resolve(true));
   const uncertainCommit = useRef<Workspace | null>(null);
+  const uncertainAfter = useRef<{ operationId: string; callback: () => void } | null>(null);
+  const uncertainCommandKey = useRef<string | null>(null);
   const lastSaveFailure = useRef('');
   const recoveryRef = useRef(recovery);
   recoveryRef.current = recovery;
@@ -146,6 +148,8 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const writingDrafts = useRef(0);
   const closingCapture = useRef(false);
   const [loading, setLoading] = useState(true);
+  const commandInFlightRef = useRef<string | null>(null);
+  const [commandInFlight, setCommandInFlight] = useState<string | null>(null);
   const [collapsedPreference, setCollapsedPreference] = useState<{ scope: string; groups: Set<string> } | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [search, setSearch] = useState(''), [chapterFilter, setChapterFilter] = useState('all');
@@ -241,14 +245,14 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     });
   };
   useEffect(() => {
-    const warn = (e: BeforeUnloadEvent) => { if (bufferedDetail.current || detailQueue.current.length || failedTaskEdits.current.size || draftChanges.current.size || latestCaptureDraft.current || busy.current || localStagePending.current || localStageFailed.current || writingDrafts.current || failedDraftWrites.current.size || failedCaptureDraft.current) { e.preventDefault(); e.returnValue = ''; } };
+    const warn = (e: BeforeUnloadEvent) => { if (bufferedDetail.current || detailQueue.current.length || failedTaskEdits.current.size || draftChanges.current.size || latestCaptureDraft.current || busy.current || localStagePending.current || localStageFailed.current || writingDrafts.current || failedDraftWrites.current.size || failedCaptureDraft.current || uncertainCommit.current) { e.preventDefault(); e.returnValue = ''; } };
     window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn);
   }, []);
   const persist = useCallback(async (candidate: Workspace): Promise<boolean> => {
     if (!current.current || busy.current) return false;
     if (candidate === current.current) return true;
     const base = current.current; busy.current = true; setSaving(true); setError(''); setStatus('Sincronizando'); lastSaveFailure.current = '';
-    let confirmed = false;
+    let resumeQueue = false;
     try {
       const saved = await repository.commit(candidate, base.revision);
       if (!await confirmedCommitResponse(repository, candidate, saved)) throw new Error('Resposta de salvamento inválida.');
@@ -262,12 +266,40 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       setStatus('Confirmado');
       if (repository.savedLabel === 'Salvo na nuvem') setConfirmedAt(new Date().toISOString());
       uncertainCommit.current = null;
-      confirmed = true;
+      resumeQueue = true;
       return true;
-    } catch (cause) { uncertainCommit.current = candidate; lastSaveFailure.current = cause instanceof Error ? cause.message : String(cause); setError(lastSaveFailure.current); setStatus('Precisa resolver conflito'); setRecovery(true); return false; }
+    } catch (cause) {
+      lastSaveFailure.current = cause instanceof Error ? cause.message : String(cause);
+      if (cause instanceof MeasurementCommitRejectedError) {
+        // A server-side rejection cannot become a pending operation: its ID
+        // will never appear in the cloud. Keep the last confirmed state usable.
+        uncertainCommit.current = null;
+        uncertainAfter.current = null;
+        setRecovery(false);
+        setError(`${lastSaveFailure.current} Esta operação não foi gravada na nuvem.`);
+        setStatus('Falha no salvamento');
+        try {
+          const latest = await repository.load();
+          if (latest && !repository.loadedOffline?.()) {
+            adopt(latest);
+            setActive(previous => {
+              if (latest.periods.some(period => period.id === previous)) return previous;
+              const remaining = latest.periods.at(-1)?.id ?? '';
+              if (remaining) rememberMeasurement(actor.id, latest.projectId, remaining);
+              return remaining;
+            });
+          }
+        } catch { /* The prior confirmed view remains available for another try. */ }
+        resumeQueue = true;
+        return false;
+      }
+      uncertainCommit.current = candidate;
+      setError(`${lastSaveFailure.current} A alteração ainda está somente nesta página; não feche nem recarregue até conferir a nuvem.`);
+      setStatus('Precisa resolver conflito'); setRecovery(true); return false;
+    }
     finally {
       busy.current = false; setSaving(false);
-      if (confirmed && detailQueue.current.length && current.current) {
+      if (resumeQueue && detailQueue.current.length && current.current) {
         try {
           detailQueue.current[0].candidate = undefined;
           let preview = current.current;
@@ -285,32 +317,83 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const apply = (edit: (w: Workspace) => Workspace, after?: () => void): boolean => {
     if (!current.current) return false;
     if (!flushBufferedDetailRef.current()) return false;
+    // New cloud-only edits never consume legacy browser operations from other
+    // tasks. Those records remain visible for separate, explicit recovery.
+    const relevantPending = async () => repository.savedLabel !== 'Salvo na nuvem' && !!await repository.pending();
     if (busy.current || recovery || detailQueue.current.length) {
       pendingOperation.current = pendingOperation.current.catch(() => false).then(async () => {
         for (let attempt = 0; attempt < 16; attempt++) {
           await detailDrain.current.catch(() => false);
-          if (recovery || detailQueue.current.length || await repository.pending()) {
+          if (recovery || detailQueue.current.length || await relevantPending()) {
             if (!await retryPendingSave()) return false;
           }
           if (busy.current || detailQueue.current.length) {
             await detailDrain.current.catch(() => false);
             continue;
           }
-          if (await repository.pending() || !current.current) break;
+          if (await relevantPending() || !current.current) break;
           if (busy.current || detailQueue.current.length) continue;
           try {
-            const ok = await persist(edit(current.current));
+            const candidate = edit(current.current);
+            const ok = await persist(candidate);
             if (ok) after?.();
+            else if (after && uncertainCommit.current?.audit.at(-1)?.id === candidate.audit.at(-1)?.id)
+              uncertainAfter.current = { operationId: candidate.audit.at(-1)!.id, callback: after };
             if (ok || !busy.current) return ok;
           } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); return false; }
         }
-        setError('Não foi possível confirmar a alteração. O rascunho permanece neste navegador.');
+        setError(repository.savedLabel === 'Salvo na nuvem'
+          ? 'Não foi possível confirmar a alteração. Ela permanece somente nesta página; não feche nem recarregue.'
+          : 'Não foi possível confirmar a alteração. Confira os lançamentos guardados neste navegador.');
         return false;
       });
       return true;
     }
-    try { const candidate = edit(current.current); pendingOperation.current = persist(candidate).then(ok => { if (ok) after?.(); return ok; }); return true; }
+    try { const candidate = edit(current.current); pendingOperation.current = persist(candidate).then(ok => {
+      if (ok) after?.();
+      else if (after && uncertainCommit.current?.audit.at(-1)?.id === candidate.audit.at(-1)?.id)
+        uncertainAfter.current = { operationId: candidate.audit.at(-1)!.id, callback: after };
+      return ok;
+    }); return true; }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); return false; }
+  };
+  const beginCommand = (key: string): boolean => {
+    if (commandInFlightRef.current) return false;
+    commandInFlightRef.current = key; setCommandInFlight(key);
+    return true;
+  };
+  const finishCommand = (key: string) => {
+    if (commandInFlightRef.current !== key) return;
+    commandInFlightRef.current = null; setCommandInFlight(null);
+  };
+  const queueCommand = (key: string, edit: (w: Workspace) => Workspace, after?: () => void, started = false): boolean => {
+    if (!started && !beginCommand(key)) return false;
+    let commandOperationId: string | undefined;
+    if (!apply(w => {
+      const candidate = edit(w);
+      commandOperationId = candidate.audit.at(-1)?.id;
+      return candidate;
+    }, after)) { finishCommand(key); return false; }
+    const result = pendingOperation.current;
+    void result.then(() => {
+      // A previous task save may still be uncertain when this command could
+      // not run. Only keep the command locked for its own submitted operation.
+      if (commandOperationId && uncertainCommit.current?.audit.at(-1)?.id === commandOperationId)
+        uncertainCommandKey.current = key;
+      else finishCommand(key);
+    }, () => finishCommand(key));
+    return true;
+  };
+  const finishUncertainCommand = (operationId: string) => {
+    const pending = uncertainAfter.current;
+    if (!pending || pending.operationId !== operationId) return;
+    uncertainAfter.current = null;
+    try { pending.callback(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    if (uncertainCommandKey.current) {
+      finishCommand(uncertainCommandKey.current);
+      uncertainCommandKey.current = null;
+    }
   };
   const drainDetailQueue = async (): Promise<boolean> => {
     if (busy.current || !detailQueue.current.length) return false;
@@ -697,12 +780,15 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const retryPendingSave = async (): Promise<boolean> => {
     if (busy.current || recoveryAction.current || !current.current) return false;
     recoveryAction.current = true;
+    let latest: Workspace | null = null;
     try {
       const previousRevision = current.current.revision;
-      let latest = await repository.load();
+      latest = await repository.load();
       if (!latest) throw new Error('Não foi possível conferir a medição salva na nuvem.');
       if (repository.loadedOffline?.()) {
-        setError('Sem conexão com a nuvem. Os lançamentos locais permanecem guardados e serão enviados ao reconectar.');
+        setError(repository.savedLabel === 'Salvo na nuvem'
+          ? 'Sem conexão com a nuvem. A alteração não confirmada está somente nesta página; não feche nem recarregue.'
+          : 'Sem conexão com a nuvem. Os lançamentos locais permanecem guardados e serão enviados ao reconectar.');
         setStatus('Aguardando nuvem');
         return false;
       }
@@ -748,7 +834,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         if (repository.savedLabel === 'Salvo na nuvem') setConfirmedAt(new Date().toISOString());
         return true;
       }
-      const pending = await repository.pending();
+      const pending = repository.savedLabel === 'Salvo na nuvem' ? null : await repository.pending();
       if (pending) {
         const operationId = pending.candidate.audit.at(-1)?.id;
         if (operationId && latest.audit.some(event => event.id === operationId)) {
@@ -793,6 +879,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         detailPreview.current = detailQueue.current.length ? preview : null;
         setWorkspace(displayWithFailedTasks(rebaseBufferedDetailRef.current(preview)));
         uncertainCommit.current = null;
+        if (priorConfirmed && priorId) finishUncertainCommand(priorId);
         setRecovery(false); setError('');
         if (detailQueue.current.length) { detailDrain.current = drainDetailQueue(); return await detailDrain.current; }
         else { setStatus('Confirmado'); if (repository.savedLabel === 'Salvo na nuvem') setConfirmedAt(new Date().toISOString()); }
@@ -801,9 +888,22 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       const unresolved = uncertainCommit.current;
       if (!pending && unresolved) {
         const operationId = unresolved.audit.at(-1)?.id;
-        if (!operationId || !(latest.audit.some(event => event.id === operationId)
-          || await repository.confirmedOperation?.(operationId, unresolved.revision) === true)) {
-          throw new Error('Não foi possível confirmar o último salvamento. O rascunho permanece neste navegador.');
+        const confirmed = !!operationId && (latest.audit.some(event => event.id === operationId)
+          || await repository.confirmedOperation?.(operationId, unresolved.revision) === true);
+        if (!confirmed) {
+          if (repository.savedLabel === 'Salvo na nuvem' && latest.revision === unresolved.revision - 1) {
+            // Retry exactly the same immutable operation ID. A response may
+            // have been lost even though the first request reached PostgreSQL.
+            const saved = await repository.commit(unresolved, latest.revision);
+            if (!await confirmedCommitResponse(repository, unresolved, saved)) throw new Error('A nuvem não confirmou esta operação. Mantenha a página aberta.');
+            latest = saved;
+          } else if (repository.savedLabel === 'Salvo na nuvem' && latest.revision >= unresolved.revision) {
+            throw new MeasurementCommitRejectedError('Outra alteração foi confirmada na nuvem e o recibo desta operação não consta nela. Confira os dados e tente novamente.');
+          } else {
+            throw new Error(repository.savedLabel === 'Salvo na nuvem'
+              ? 'Ainda não foi possível confirmar a operação. A alteração está somente nesta página; não feche nem recarregue.'
+              : 'Não foi possível confirmar o último salvamento local.');
+          }
         }
       }
       adopt(latest);
@@ -816,8 +916,28 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       });
       setRecovery(false); setError(''); setStatus('Confirmado');
       if (repository.savedLabel === 'Salvo na nuvem') setConfirmedAt(new Date().toISOString());
+      if (unresolved?.audit.at(-1)?.id) finishUncertainCommand(unresolved.audit.at(-1)!.id);
       return true;
-    } catch (cause) { lastSaveFailure.current = cause instanceof Error ? cause.message : String(cause); setError(lastSaveFailure.current); setStatus('Precisa resolver conflito'); return false; }
+    } catch (cause) {
+      lastSaveFailure.current = cause instanceof Error ? cause.message : String(cause);
+      if (cause instanceof MeasurementCommitRejectedError) {
+        uncertainCommit.current = null; uncertainAfter.current = null;
+        if (uncertainCommandKey.current) { finishCommand(uncertainCommandKey.current); uncertainCommandKey.current = null; }
+        if (latest && !repository.loadedOffline?.()) {
+          adopt(latest);
+          setActive(previous => {
+            if (latest.periods.some(period => period.id === previous)) return previous;
+            const remaining = latest.periods.at(-1)?.id ?? '';
+            if (remaining) rememberMeasurement(actor.id, latest.projectId, remaining);
+            return remaining;
+          });
+        }
+        setRecovery(false); setStatus('Falha no salvamento');
+        setError(`${lastSaveFailure.current} Esta operação não foi gravada na nuvem.`);
+        return false;
+      }
+      setError(lastSaveFailure.current); setStatus('Precisa resolver conflito'); return false;
+    }
     finally { recoveryAction.current = false; }
   };
   retryPendingSaveRef.current = retryPendingSave;
@@ -846,10 +966,10 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     }
     await Promise.allSettled(draftWrites.current.values());
     const legacyPending = repository.savedLabel === 'Salvo na nuvem' ? null : await repository.pending();
-    if (busy.current || detailQueue.current.length || legacyPending) {
+    if (busy.current || detailQueue.current.length || legacyPending || uncertainCommit.current) {
       if (!await retryPendingSave()) return false;
     }
-    if (busy.current || detailQueue.current.length || repository.savedLabel !== 'Salvo na nuvem' && await repository.pending()) {
+    if (busy.current || detailQueue.current.length || uncertainCommit.current || repository.savedLabel !== 'Salvo na nuvem' && await repository.pending()) {
       setError('Não foi possível confirmar os lançamentos desta medição na nuvem.');
       return false;
     }
@@ -913,7 +1033,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const fiscalPending = saving || recovery || detailQueue.current.length > 0 || !!bufferedDetail.current || failedVisible.length > 0 || hasFiscalDrafts;
   const deletionBlock = period ? periodDeletionBlock(workspace, period) : 'Selecione uma medição.';
   const lastDeleted = [...workspace.audit].reverse().find(event => event.lifecycle?.kind === 'delete'
-    && !workspace.periods.some(existing => existing.id === event.lifecycle!.measurementId));
+    && !periodRestorationBlock(workspace, event.id));
   const locked = !actor.canEdit || !period || isPeriodLocked(period);
   const quantityLocked = locked;
   const lines = calculatedLines;
@@ -933,6 +1053,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     || draftChanges.current.size > 0 || writingDrafts.current > 0;
   const cloudStatus: SaveStatus = repository.loadedOffline?.() ? 'offline'
     : recovery || status === 'Precisa resolver conflito' ? 'conflict'
+      : status === 'Falha no salvamento' ? 'error'
       : localPending && !saving ? 'pending'
         : saving ? 'saving'
           : realtime.pending ? 'updating'
@@ -947,19 +1068,19 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         selectPeriod(e.target.value); setExpanded(null); setError('');
       }}>{workspace.periods.map(p => <option key={p.id} value={p.id}>{p.number}ª medição</option>)}</select>
         <span className="text-xs text-muted-foreground">{period && `${fmtDateBR(period.startDate)} a ${fmtDateBR(period.endDate)}`}</span><span className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[10px]">{period && states[period.status]}</span>
-        <button className={button} disabled={!actor.canEdit} onClick={() => setPeriodOpen(true)}><Plus className="h-3.5 w-3.5"/>Nova medição</button>
-        <button className={button} disabled={!actor.canEdit || !!deletionBlock} title={deletionBlock ?? 'Excluir a última medição'} onClick={() => { setError(''); setLifecycle({ kind: 'delete', id: active }); }}>Excluir medição</button>
-        {lastDeleted && <button className={button} disabled={!actor.canEdit} onClick={() => { setError(''); setLifecycle({ kind: 'restore', id: lastDeleted.id }); }}>Restaurar medição excluída</button>}
+        <button className={button} disabled={!actor.canEdit || !!commandInFlight} onClick={() => setPeriodOpen(true)}><Plus className="h-3.5 w-3.5"/>Nova medição</button>
+        <button className={button} disabled={!actor.canEdit || !!deletionBlock || !!commandInFlight} title={deletionBlock ?? 'Excluir a última medição'} onClick={() => { setError(''); setLifecycle({ kind: 'delete', id: active }); }}>Excluir medição</button>
+        {lastDeleted && <button className={button} disabled={!actor.canEdit || !!commandInFlight} onClick={() => { setError(''); setLifecycle({ kind: 'restore', id: lastDeleted.id }); }}>Restaurar medição excluída</button>}
 
         {approvedAdditives.filter(a => ['aprovado', 'contratado', 'aditivo_contratado'].includes(a.status ?? '') && !a.editUnlocked).map(additive => <button key={additive.id} className={button} disabled={!!locked} onClick={() => apply(w => { const result = incorporateApprovedAdditive(w, actor, additive, period!.number); if (result.warnings.length) setError(result.warnings.join(' ')); return result.workspace; })}>Incorporar novos serviços · {additive.name}</button>)}
-        <button className={`${button} ml-auto`} disabled={locked || !actor.canReview || fiscalCurrent && !fiscalPending} title={fiscalCurrent && !fiscalPending ? 'Nenhuma alteração desde o último envio à fiscalização' : undefined} onClick={() => { setError(''); setFiscalOpen(true); }}><FileCheck2 className="h-3.5 w-3.5"/>{period?.status === 'in_review' ? 'Reenviar para fiscalização' : 'Enviar para fiscalização'}</button>
-        {period?.status === 'in_review' && <button className={button} disabled={locked || !actor.canReview || fiscalPending} title={fiscalPending ? 'Confirme todos os lançamentos desta medição na nuvem antes da aprovação' : undefined} onClick={() => { setError(''); setLifecycle({ kind: 'approve', id: active }); }}>Aprovado pela fiscalização</button>}
+        <button className={`${button} ml-auto`} disabled={locked || !actor.canReview || !!commandInFlight || fiscalCurrent && !fiscalPending} title={fiscalCurrent && !fiscalPending ? 'Nenhuma alteração desde o último envio à fiscalização' : undefined} onClick={() => { setError(''); setFiscalOpen(true); }}><FileCheck2 className="h-3.5 w-3.5"/>{period?.status === 'in_review' ? 'Reenviar para fiscalização' : 'Enviar para fiscalização'}</button>
+        {period?.status === 'in_review' && <button className={button} disabled={locked || !actor.canReview || !!commandInFlight || fiscalPending} title={fiscalPending ? 'Confirme todos os lançamentos desta medição na nuvem antes da aprovação' : undefined} onClick={() => { setError(''); setLifecycle({ kind: 'approve', id: active }); }}>Aprovado pela fiscalização</button>}
       </div>
     </section>
     {error && <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
     {failedVisible.length > 0 && <div role="status" className="flex flex-wrap items-center gap-2 px-2 text-[11px] text-muted-foreground">{failedVisible.map(([key, failed]) => <button key={key} className="underline" onClick={() => void retryFailedTask(key)}>Reenviar {workspace.services.find(service => service.id === failed.serviceId)?.item ?? 'tarefa'}</button>)}</div>}
-    {lifecycle && <MeasurementLifecycleDialog key={`${lifecycle.kind}:${lifecycle.id}`} selection={lifecycle} workspace={workspace} actor={actor} busy={saving} error={error}
-      hasDraft={drafts.some(d => d.measurementId === lifecycle.id)} onClose={() => setLifecycle(null)} onConfirm={(edit, id) => { if (lifecycle.kind === 'approve' && fiscalPending) { setError('Aguarde a confirmação dos lançamentos na nuvem antes da aprovação.'); return; } apply(edit, () => {
+    {lifecycle && <MeasurementLifecycleDialog key={`${lifecycle.kind}:${lifecycle.id}`} selection={lifecycle} workspace={workspace} actor={actor} busy={saving || !!commandInFlight} error={error}
+      hasDraft={drafts.some(d => d.measurementId === lifecycle.id)} onClose={() => setLifecycle(null)} onConfirm={(edit, id) => { if (lifecycle.kind === 'approve' && fiscalPending) { setError('Aguarde a confirmação dos lançamentos na nuvem antes da aprovação.'); return; } queueCommand(`${lifecycle.kind}:${id}`, edit, () => {
         setLifecycle(null); setExpanded(null); setClipboard(null);
         selectPeriod(current.current!.periods.some(p => p.id === id) ? id : current.current!.periods.at(-1)!.id);
       }); }}/>}
@@ -1046,12 +1167,12 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         } catch (e) { setError(String(e)); return false; } }}/></Suspense>}
       {error && <p role="alert" className="text-xs text-red-700">{error}</p>}
     </DialogContent></Dialog>
-    <Dialog open={fiscalOpen} onOpenChange={open => { if (!busy.current) setFiscalOpen(open); }}><DialogContent>
+     <Dialog open={fiscalOpen} onOpenChange={setFiscalOpen}><DialogContent>
       <DialogTitle>{fiscalErrors.length ? 'Não é possível enviar para fiscalização' : fiscalWarnings.length ? 'Esta medição possui avisos antes do envio' : `${period?.status === 'in_review' ? 'Reenviar' : 'Enviar'} ${period?.number}ª medição para fiscalização?`}</DialogTitle>
       <DialogDescription>Período {period && `${fmtDateBR(period.startDate)} a ${fmtDateBR(period.endDate)}`}. Os quantitativos poderão ser corrigidos durante a análise; somente a aprovação fiscal bloqueará a medição.</DialogDescription>
       {fiscalErrors.length > 0 && <div role="alert" className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-800"><strong>Erros bloqueantes ({fiscalErrors.length}):</strong><ul className="mt-1 list-disc pl-5">{fiscalErrors.map(issue => <li key={issue.code}>{issue.message}</li>)}</ul></div>}
       {fiscalWarnings.length > 0 && <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900"><strong>Avisos ({fiscalWarnings.length}):</strong><ul className="mt-1 list-disc pl-5">{fiscalWarnings.map(issue => <li key={issue.code}>{issue.message}</li>)}</ul>{!fiscalErrors.length && <p className="mt-2">Ao confirmar, você envia a medição mesmo com estes avisos.</p>}</div>}
-      <div className="flex justify-end gap-2"><button className={button} disabled={saving} onClick={() => setFiscalOpen(false)}>Cancelar</button><button className={button} disabled={!period || fiscalCurrent && !hasFiscalDrafts && !recovery && !fiscalPending || fiscalErrors.length > 0 && !fiscalPending} onClick={() => { void (async () => {
+       <div className="flex justify-end gap-2"><button className={button} onClick={() => setFiscalOpen(false)}>{commandInFlight ? 'Fechar janela (gravação continua)' : 'Cancelar'}</button><button className={button} disabled={!!commandInFlight || !period || fiscalCurrent && !hasFiscalDrafts && !recovery && !fiscalPending || fiscalErrors.length > 0 && !fiscalPending} onClick={() => { const commandKey = `fiscal:${active}`; if (!beginCommand(commandKey)) return; void (async () => { let queued = false; try {
         if (!await flushConfirmedEdits() || !current.current) return;
         if (repository.savedLabel === 'Salvo na nuvem') {
           for (const [key, failed] of [...failedTaskEdits.current]) if (failed.measurementId === active) await retryFailedTask(key);
@@ -1066,11 +1187,11 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         const issues = fiscalReviewIssuesForWorkspace(current.current, active);
         if (issues.some(issue => issue.level === 'error')) { setError(issues.filter(issue => issue.level === 'error').map(issue => issue.message).join(' ')); return; }
         if (fiscalSubmissionCurrent(current.current, active)) { setError('Esta medição já foi enviada sem novas alterações.'); return; }
-        apply(w => freezeMeasuredPeriod(w, actor, active), () => setFiscalOpen(false));
-      })().catch(cause => setError(cause instanceof Error ? cause.message : String(cause))); }}>Confirmar envio</button></div>
+         queued = queueCommand(commandKey, w => freezeMeasuredPeriod(w, actor, active), () => setFiscalOpen(false), true);
+       } finally { if (!queued) finishCommand(commandKey); } })().catch(cause => setError(cause instanceof Error ? cause.message : String(cause))); }}>Confirmar envio</button></div>
       {error && <p role="alert" className="text-red-700">{error}</p>}
     </DialogContent></Dialog>
-    <Dialog open={periodOpen} onOpenChange={setPeriodOpen}><DialogContent><DialogTitle>Nova medição</DialogTitle><DialogDescription>O próximo período começa no dia seguinte ao encerramento anterior e inclui 30 dias corridos.</DialogDescription>{nextPeriod ? <div className="rounded border bg-slate-50 p-3 text-sm"><strong>{nextPeriod.number}ª medição</strong><p>{fmtDateBR(nextPeriod.startDate)} a {fmtDateBR(nextPeriod.endDate)}</p></div> : <p>Configure a primeira medição antes de criar a próxima.</p>}<div className="flex justify-end gap-2"><button className={button} onClick={() => setPeriodOpen(false)}>Cancelar</button><button className={button} disabled={!actor.canEdit || !nextPeriod} onClick={() => apply(w => addMeasuredPeriod(w, actor), () => { setPeriodOpen(false); selectPeriod(current.current!.periods.at(-1)!.id); setExpanded(null); })}>Criar medição</button></div>{error && <p role="alert" className="text-red-700">{error}</p>}</DialogContent></Dialog>
+     <Dialog open={periodOpen} onOpenChange={setPeriodOpen}><DialogContent><DialogTitle>Nova medição</DialogTitle><DialogDescription>O próximo período começa no dia seguinte ao encerramento anterior e inclui 30 dias corridos.</DialogDescription>{nextPeriod ? <div className="rounded border bg-slate-50 p-3 text-sm"><strong>{nextPeriod.number}ª medição</strong><p>{fmtDateBR(nextPeriod.startDate)} a {fmtDateBR(nextPeriod.endDate)}</p></div> : <p>Configure a primeira medição antes de criar a próxima.</p>}<div className="flex justify-end gap-2"><button className={button} onClick={() => setPeriodOpen(false)}>{commandInFlight ? 'Fechar janela (gravação continua)' : 'Cancelar'}</button><button className={button} disabled={!actor.canEdit || !nextPeriod || !!commandInFlight} onClick={() => queueCommand('period:create', w => addMeasuredPeriod(w, actor), () => { setPeriodOpen(false); selectPeriod(current.current!.periods.at(-1)!.id); setExpanded(null); })}>Criar medição</button></div>{error && <p role="alert" className="text-red-700">{error}</p>}</DialogContent></Dialog>
 
   </main>;
 }
