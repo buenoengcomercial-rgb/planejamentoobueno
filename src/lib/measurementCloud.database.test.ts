@@ -4,10 +4,11 @@ import { readFile } from 'node:fs/promises';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation, incorporateApprovedAdditive } from './measurementIncorporation';
-import { approveMeasuredPeriod, editMeasuredRow, editMeasuredBulletin, deleteMeasuredRow, entryFor, newMeasuredRow, pasteMeasuredRow, freezeMeasuredPeriod, captureMeasurement, monthlyLines, addMeasuredPeriod, fiscalSubmissionCurrent, type MeasurementWorkspace } from './measurementWorkspace';
+import { approveMeasuredPeriod, editMeasuredRow, editMeasuredBulletin, deleteMeasuredRow, entryFor, newMeasuredRow, pasteMeasuredRow, freezeMeasuredPeriod, captureMeasurement, monthlyLines, addMeasuredPeriod, fiscalSubmissionCurrent, transactMeasurement, type MeasurementWorkspace } from './measurementWorkspace';
 import { encodeMeasurementWorkspace } from './measurementCloudCodec';
 import { measurementEntryPatch } from './measurementEntryPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
+import { measurementDeletionPatch } from './measurementDeletionPatch';
 import { deleteMeasuredPeriod, restoreMeasuredPeriod } from './measurementLifecycle';
 const projectId='00000000-0000-4000-8000-000000000001', userId='00000000-0000-4000-8000-000000000002', planId='00000000-0000-4000-8000-000000000003';
 const actor={id:userId,name:'Teste',canEdit:true,canReview:true};
@@ -18,6 +19,8 @@ async function commit(w:MeasurementWorkspace,revision=w.revision-1) { return (aw
 async function currentDataHash() { return (await db.query<{hash:string}>('SELECT md5(load_measurement_workspace($1)::text) hash',[projectId])).rows[0].hash; }
 async function compactHistory(revision:number,hash?:string) { return db.query<{value:{revision:number;auditEventsBefore:number;auditEventsAfter:number;eventRowsDeleted:number;compactReceiptsAdded:number}}>(
  'SELECT compact_measurement_history($1,$2,$3) value',[projectId,revision,hash??await currentDataHash()]); }
+async function compactQuantityHistory(revision:number,hash?:string) { return db.query<{value:{revision:number;auditEventsBefore:number;auditEventsAfter:number;quantityEventsRemoved:number;fiscalMarkersKept:number;eventRowsDeleted:number;compactReceiptsAdded:number}}>(
+ 'SELECT compact_measurement_quantity_history($1,$2,$3) value',[projectId,revision,hash??await currentDataHash()]); }
 beforeAll(async()=>{
  db=new PGlite();
  await db.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE SCHEMA auth; CREATE SCHEMA storage;
@@ -53,11 +56,83 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011010000_measurement_capture_delta.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011150000_measurement_excess_warning.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011170000_measurement_capture_targeted_commit.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261011180000_measurement_row_deletion_patch.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261011190000_measurement_quantity_history_compaction.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
 afterAll(async()=>{await db.close();});
 describe('transação da Medição na nuvem',()=>{
+  it('limpa edições de quantidade sem apagar envio fiscal, ciclo de medição ou gestão de desenhos',async()=>{
+   const edited=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('historical'),multiplier:2});
+   const sent=freezeMeasuredPeriod(edited,actor,'m1');
+   const reopened=transactMeasurement(sent,actor,'Reabrir 1ª medição',draft=>{
+     draft.periods[0].status='draft'; draft.periods[0].frozen=undefined;
+   });
+   const extra=addMeasuredPeriod(reopened,actor);
+   const deleted=deleteMeasuredPeriod(extra,actor,extra.periods.at(-1)!.id,'Período de teste');
+   const withDrawing=transactMeasurement(deleted,actor,'Gerir desenhos',draft=>{ draft.plans[0].name='Planta revisada'; });
+   await seed(withDrawing);
+   const before=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+   const keep=before.audit.filter(event=>event.action!=='Editar detalhe');
+   await expect(compactQuantityHistory(before.revision,'hash errado')).rejects.toThrow('backup conferido');
+   const result=(await compactQuantityHistory(before.revision)).rows[0].value;
+   expect(result).toMatchObject({revision:before.revision+1,quantityEventsRemoved:1,auditEventsAfter:keep.length});
+   const after=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+   expect(after.audit).toEqual(keep);
+   expect({...after,revision:before.revision,audit:before.audit}).toEqual(before);
+   expect(after.audit.map(event=>event.action)).toContain('Enviar para fiscalização');
+   expect(after.audit.map(event=>event.action)).toContain('Reabrir 1ª medição');
+   expect(after.audit.map(event=>event.action)).toContain('Excluir medição (recuperável)');
+   expect(after.audit.map(event=>event.action)).toContain('Gerir desenhos');
+   const restored=restoreMeasuredPeriod(after,actor,after.audit.find(event=>event.lifecycle?.kind==='delete')!.id,'Recuperar período');
+   expect(restored.periods).toHaveLength(extra.periods.length);
+  });
+  it('conserva marcador fiscal mínimo e recibos ao compactar edições confirmadas',async()=>{
+   await seed();
+   const first=await commit(editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('r'),multiplier:2}));
+   const sent=await commit(freezeMeasuredPeriod(first,actor,'m1'));
+   const dirty=await commit(editMeasuredRow(sent,actor,'m1','signs',{...newMeasuredRow('r'),multiplier:3}));
+   expect(fiscalSubmissionCurrent(dirty,'m1')).toBe(false);
+   const result=(await compactQuantityHistory(dirty.revision)).rows[0].value;
+   expect(result).toMatchObject({revision:dirty.revision+1,quantityEventsRemoved:2,
+     fiscalMarkersKept:1,eventRowsDeleted:3,compactReceiptsAdded:3});
+   const after=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+   expect(after.audit.map(event=>event.action)).toEqual(['Enviar para fiscalização','Alteração fiscal posterior ao envio']);
+   expect(after.entries).toEqual(dirty.entries);
+   expect(fiscalSubmissionCurrent(after,'m1')).toBe(false);
+   expect((await db.query('SELECT * FROM measurement_workspace_events WHERE project_id=$1',[projectId])).rows).toHaveLength(0);
+   expect((await db.query('SELECT * FROM measurement_workspace_compacted_receipts WHERE project_id=$1',[projectId])).rows).toHaveLength(3);
+   const next=editMeasuredRow(after,actor,'m2','signs',{...newMeasuredRow('next'),multiplier:1});
+   await db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,after.revision,JSON.stringify(measurementEntryPatch(after,next))]);
+   expect((await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value.entries).toEqual(next.entries);
+  });
+  it('remove histórico de captura sem apagar a marcação ou a quantidade atual',async()=>{
+   const ready=editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('capture-history'));
+   const mark={id:'capture-history-mark',name:'Contagem',kind:'count' as const,page:1,
+     points:[{x:1,y:1},{x:2,y:2}],projectId,measurementId:'m1',serviceId:'signs'};
+   const captured=captureMeasurement(ready,actor,
+     {measurementId:'m1',serviceId:'signs',rowId:'capture-history',field:'multiplier'},
+     {...ready.plans[0],measures:[mark]},mark);
+   await seed(captured);
+   const before=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+   const result=(await compactQuantityHistory(before.revision)).rows[0].value;
+   expect(result.quantityEventsRemoved).toBe(2);
+   const after=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+   expect(after.audit).toEqual([]);
+   expect(after.plans).toEqual(before.plans);
+   expect(after.entries).toEqual(before.entries);
+   expect(entryFor(after,'m1','signs').rows[0].multiplier).toBe(2);
+  });
+  it('não compacta quantidades com revisão antiga ou sem perfil proprietário',async()=>{
+   await seed();
+   const edited=await commit(editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('owner-only'),multiplier:4}));
+   await expect(compactQuantityHistory(base.revision)).rejects.toThrow('mudou');
+   await db.exec("SET ROLE authenticated; SET test.role='engineer'");
+   await expect(compactQuantityHistory(edited.revision)).rejects.toThrow('proprietário');
+   await db.exec('RESET ROLE');
+   expect((await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value.entries).toEqual(edited.entries);
+  });
  it('compacta eventos antigos sem perder quantitativos, períodos, snapshot fiscal ou próximo salvamento',async()=>{
   await seed();
   const first=await commit(editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('r'),multiplier:2}));
@@ -730,6 +805,72 @@ describe('transação da Medição na nuvem',()=>{
   expect(w.plans[0].measures.map(mark=>mark.id)).toEqual(['mark-19','mark-22']);
   expect(w.entries.find(entry=>entry.measurementId==='m1'&&entry.serviceId==='signs')?.rows.map(row=>row.multiplier)).toEqual([19,22]);
   expect(w.entries.find(entry=>entry.measurementId==='m1'&&entry.serviceId==='signs')?.rows.reduce((total,row)=>total+row.multiplier,0)).toBe(41);
+ });
+ it('exclui duas linhas capturadas e suas marcas em uma só revisão sem tocar em outras tarefas',async()=>{
+  await seed(); let w=await commit(editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('first')));
+  w=await commit(editMeasuredRow(w,actor,'m1','signs',newMeasuredRow('second')));
+  w.plans[0].file=base.plans[0].file;
+  for(const [id,rowId,count] of [['mark-19','first',19],['mark-22','second',22]] as const){
+   const mark={id,name:id,kind:'count' as const,page:1,
+    points:Array.from({length:count},(_,i)=>({x:i,y:1})),projectId,measurementId:'m1',serviceId:'signs'};
+   const next=captureMeasurement(w,actor,{measurementId:'m1',serviceId:'signs',rowId,field:'multiplier'},
+    {...w.plans[0],measures:[...w.plans[0].measures,mark]},mark);
+   await db.query('SELECT patch_measurement_capture($1,$2,$3)',
+    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(measurementCapturePatch(w,next)!))]);
+   w=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+   w.plans[0].file=base.plans[0].file;
+  }
+  const unaffected=entryFor(w,'m1','detectors');
+  const once=deleteMeasuredRow(w,actor,'m1','signs','first');
+  const twice=deleteMeasuredRow(once,actor,'m1','signs','second');
+  const combined={...twice,revision:w.revision+1,audit:[...w.audit,{
+   ...twice.audit.at(-1)!,id:crypto.randomUUID(),before:[entryFor(w,'m1','signs')],
+   after:[entryFor(twice,'m1','signs')],beforePlans:w.plans,afterPlans:twice.plans,
+  }]};
+  const patch=measurementDeletionPatch(w,combined);
+  expect(patch).toBeTruthy();
+  expect(patch?.plans).toHaveLength(1);
+  expect(patch?.plans[0].measures).toHaveLength(0);
+  const receipt=(await db.query<{value:{revision:number;patch:unknown}}>('SELECT patch_measurement_row_deletion($1,$2,$3) value',
+   [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows[0].value;
+  expect(receipt).toMatchObject({revision:combined.revision,patch:encodeMeasurementWorkspace(patch)});
+  const loaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(loaded).toEqual(JSON.parse(wire(combined)));
+  expect(entryFor(loaded,'m1','signs').rows).toEqual([]);
+  expect(entryFor(loaded,'m1','detectors')).toEqual(unaffected);
+  expect((await db.query('SELECT patch_measurement_row_deletion($1,$2,$3)',
+   [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows).toHaveLength(1);
+ });
+ it('exclui uma linha com capturas A e B em plantas diferentes sem alterar outros lançamentos',async()=>{
+  const otherPlanId='00000000-0000-4000-8000-000000000004';
+  const otherPath=`${projectId}/${otherPlanId}/drawing.png`;
+  await db.query('INSERT INTO storage.objects(bucket_id,name) VALUES($1,$2)', ['plan-takeoff',otherPath]);
+  await db.query('INSERT INTO takeoff_plans(id,project_id,file_path) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+   [otherPlanId,projectId,otherPath]);
+  const secondPlan={...structuredClone(base.plans[0]),id:otherPlanId,storagePath:otherPath,measures:[]};
+  let w={...base,plans:[base.plans[0],secondPlan]};
+  await seed(w);
+  w=await commit(editMeasuredRow(w,actor,'m1','signs',newMeasuredRow('both')));
+  for(const [drawingId,field,id] of [[planId,'multiplier','mark-a'],[otherPlanId,'measuredQuantity','mark-b']] as const){
+   const plan=w.plans.find(value=>value.id===drawingId)!;
+   const mark={id,name:id,kind:'count' as const,page:1,points:[{x:1,y:1},{x:2,y:2}],
+    projectId,measurementId:'m1',serviceId:'signs'};
+   const next=captureMeasurement(w,actor,{measurementId:'m1',serviceId:'signs',rowId:'both',field},
+    {...plan,measures:[mark]},mark);
+   await db.query('SELECT patch_measurement_capture($1,$2,$3)',
+    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(measurementCapturePatch(w,next)!))]);
+   w=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  }
+  const otherEntry=entryFor(w,'m1','detectors');
+  const deleted=deleteMeasuredRow(w,actor,'m1','signs','both');
+  const patch=measurementDeletionPatch(w,deleted);
+  expect(patch?.plans.map(plan=>plan.id).sort()).toEqual([planId,otherPlanId].sort());
+  await db.query('SELECT patch_measurement_row_deletion($1,$2,$3)',
+   [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))]);
+  const loaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(loaded.plans.every(plan=>plan.measures.length===0)).toBe(true);
+  expect(entryFor(loaded,'m1','signs').rows).toEqual([]);
+  expect(entryFor(loaded,'m1','detectors')).toEqual(otherEntry);
  });
  it('captura DXF excedente permanece atômica e impede envio fiscal até correção',async()=>{
   await seed(); const ready=await commit(editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('excess-capture')));

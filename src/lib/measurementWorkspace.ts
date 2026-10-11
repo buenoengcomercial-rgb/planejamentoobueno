@@ -284,10 +284,10 @@ export function deleteMeasuredRow(w: MeasurementWorkspace, actor: MeasurementAct
   return transactMeasurement(w, actor, 'Excluir linha / desvincular referência', next => {
     const e = entryFor(next, mid, sid); putEntry(next, { ...e, rows: e.rows.filter(r => r.id !== rid) });
     // Markings used elsewhere remain intact. Unreferenced marks are recoverable in the audit.
-    const used = new Set(next.entries.flatMap(e => e.rows.flatMap(r => sourceFields.flatMap(f => r[f] ? [r[f]!.measureId] : []))));
+    const used = new Set(next.entries.flatMap(e => e.rows.flatMap(r => sourceFields.flatMap(f => r[f] ? [`${r[f]!.planId}:${r[f]!.measureId}`] : []))));
     const deleted = e.rows.find(r => r.id === rid);
-    const ids = new Set(deleted ? sourceFields.flatMap(f => deleted[f] ? [deleted[f]!.measureId] : []) : []);
-    next.plans = next.plans.map(p => ({ ...p, measures: p.measures.filter(m => !ids.has(m.id) || used.has(m.id)) }));
+    const ids = new Set(deleted ? sourceFields.flatMap(f => deleted[f] ? [`${deleted[f]!.planId}:${deleted[f]!.measureId}`] : []) : []);
+    next.plans = next.plans.map(p => ({ ...p, measures: p.measures.filter(m => !ids.has(`${p.id}:${m.id}`) || used.has(`${p.id}:${m.id}`)) }));
   });
 }
 export function pasteMeasuredRow(w: MeasurementWorkspace, actor: MeasurementActor, mid: string, sid: string, clip: MeasurementClipboard) {

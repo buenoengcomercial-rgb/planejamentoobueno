@@ -2,9 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation } from './measurementIncorporation';
-import { captureMeasurement, editMeasuredRow, newMeasuredRow, type MeasurementWorkspace } from './measurementWorkspace';
+import { captureMeasurement, deleteMeasuredRow, editMeasuredRow, newMeasuredRow, type MeasurementWorkspace } from './measurementWorkspace';
 import { measurementEntryPatch } from './measurementEntryPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
+import { measurementDeletionPatch } from './measurementDeletionPatch';
 import { encodeMeasurementWorkspace, decodeMeasurementWorkspace } from './measurementCloudCodec';
 import { cloudMeasurementRepository } from './measurementCloudRepository';
 import type { PendingMeasurementSave, StoredMeasurementPending, WorkspaceDraft } from './measurementWorkspaceStore';
@@ -132,6 +133,26 @@ describe('Medição somente nuvem', () => {
     expect(await repo.commit(next, ready.revision)).toEqual(next);
     expect(mocks.rpc).toHaveBeenLastCalledWith('patch_measurement_capture', { p_project_id: base.projectId, p_expected_revision: ready.revision, p_patch: encodeMeasurementWorkspace(patch) });
     expect(mocks.stored).toEqual([]);
+  });
+
+  it('exclui linha vinculada à planta pelo patch pontual, sem enviar a base inteira', async () => {
+    const base = await fixture(true); mocks.download.mockResolvedValue({ data: base.plans[0].file, error: null });
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId }); loaded(base); await repo.load();
+    const row = newMeasuredRow('captured-row'); const ready = editMeasuredRow(base, actor, 'm1', 'signs', row);
+    patchSaved(base, ready); await repo.commit(ready, base.revision);
+    const mark = { id: 'captured-mark', name: 'Placas', kind: 'count' as const, page: 1, points: [{ x: 1, y: 1 }], projectId: base.projectId, measurementId: 'm1', serviceId: 'signs' };
+    const captured = captureMeasurement(ready, actor, { measurementId: 'm1', serviceId: 'signs', rowId: row.id, field: 'multiplier' }, { ...ready.plans[0], measures: [mark] }, mark);
+    const capturePatch = measurementCapturePatch(ready, captured)!;
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: captured.revision, patch: encodeMeasurementWorkspace(capturePatch) }, error: null });
+    await repo.commit(captured, ready.revision);
+    const deleted = deleteMeasuredRow(captured, actor, 'm1', 'signs', row.id);
+    const deletionPatch = measurementDeletionPatch(captured, deleted)!;
+    expect(deletionPatch).toBeTruthy();
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: deleted.revision, patch: encodeMeasurementWorkspace(deletionPatch) }, error: null });
+    expect(await repo.commit(deleted, captured.revision)).toEqual(deleted);
+    expect(mocks.rpc).toHaveBeenLastCalledWith('patch_measurement_row_deletion', {
+      p_project_id: base.projectId, p_expected_revision: captured.revision, p_patch: encodeMeasurementWorkspace(deletionPatch),
+    });
   });
 
   it('descarta apenas o registro legado da tarefa 4.3.2 na primeira medição', async () => {
