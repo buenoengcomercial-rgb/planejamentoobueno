@@ -306,6 +306,9 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         draft.plans = next;
       });
       if (!await persist(candidate)) throw new Error('Planta não salva.');
+      // The cloud may add a storage path to the uploaded file. Reuse the
+      // confirmed catalog when another drawing is selected in this dialog.
+      return structuredClone(current.current?.plans ?? next);
     },
   }), [actor, persist, repository.savedLabel]);
   const draftKey = (mid: string, sid: string, rid: string) => JSON.stringify([mid, sid, rid]);
