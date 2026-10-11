@@ -346,6 +346,27 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           throw new MeasurementCommitRejectedError(error.message);
         throw new Error(`${error.message}. A resposta da nuvem é incerta; confira esta operação antes de sair.`);
       }
+      if (lifecyclePatch && (data as { replayed?: unknown } | null)?.replayed === true) {
+        // An idempotent receipt proves the original operation, but its revision
+        // may precede newer cloud edits. Reload only on replay; a new commit
+        // remains a single RPC and never adopts an old receipt as the UI state.
+        const receipt = data as { projectId?: string; revision?: number; currentRevision?: number;
+          patch?: { operationId?: string } };
+        if (receipt.projectId !== scope.projectId || receipt.revision !== next.revision
+          || receipt.patch?.operationId !== operationId || !Number.isSafeInteger(receipt.currentRevision)
+          || receipt.currentRevision! < receipt.revision) {
+          throw new Error('O recibo repetido da Medição está incompleto. Confira a revisão na nuvem antes de continuar.');
+        }
+        const latest = await loadRemote();
+        if (!latest || loadedOffline || latest.revision < receipt.currentRevision!) {
+          throw new Error('A operação foi confirmada, mas a versão mais recente não pôde ser carregada. Mantenha esta página aberta.');
+        }
+        if (!latest.audit.some(event => event.id === operationId)
+          && await compactedReceiptRevision(operationId) !== next.revision) {
+          throw new Error('O recibo repetido não foi encontrado na versão atual da Medição. Confira esta operação antes de continuar.');
+        }
+        return latest;
+      }
       let saved: MeasurementWorkspace;
       if (lifecyclePatch) {
         const applied = applyMeasurementLifecycleReceipt(confirmed!, next, lifecyclePatch, data, scope.userId);

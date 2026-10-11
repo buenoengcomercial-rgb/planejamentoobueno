@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   rpc: vi.fn(), from: vi.fn(), download: vi.fn(), upload: vi.fn(),
   cached: null as MeasurementWorkspace | null,
   drafts: [] as WorkspaceDraft[], stored: [] as StoredMeasurementPending[],
-  revision: 0, eventRevision: null as number | null, missingVersion: false,
+  revision: 0, eventRevision: null as number | null, compactedRevision: null as number | null, missingVersion: false,
 }));
 vi.mock('@/integrations/supabase/client', () => ({ supabase: {
   rpc: mocks.rpc, from: mocks.from,
@@ -57,9 +57,12 @@ function patchSaved(base: MeasurementWorkspace, next: MeasurementWorkspace) {
 }
 beforeEach(() => {
   vi.clearAllMocks(); mocks.cached = null; mocks.drafts = []; mocks.stored = [];
-  mocks.revision = 0; mocks.eventRevision = null; mocks.missingVersion = false;
+  mocks.revision = 0; mocks.eventRevision = null; mocks.compactedRevision = null; mocks.missingVersion = false;
   mocks.from.mockImplementation((table: string) => ({ select: () => ({ eq: () => ({
-    eq: () => ({ maybeSingle: async () => ({ data: table === 'measurement_workspace_events' && mocks.eventRevision !== null ? { revision: mocks.eventRevision } : null, error: null }) }),
+    eq: () => ({ maybeSingle: async () => ({ data: table === 'measurement_workspace_events' && mocks.eventRevision !== null
+      ? { revision: mocks.eventRevision }
+      : table === 'measurement_workspace_compacted_receipts' && mocks.compactedRevision !== null
+        ? { revision: mocks.compactedRevision, actor_id: actor.id } : null, error: null }) }),
     maybeSingle: async () => ({ data: table === 'measurement_workspace_versions' && !mocks.missingVersion ? { revision: mocks.revision } : null, error: null }),
   }) }) }));
 });
@@ -210,6 +213,51 @@ describe('Medição somente nuvem', () => {
       expect(saved.entries).toEqual(next.entries);
       base = saved;
     }
+    expect(mocks.rpc).toHaveBeenCalledTimes(commands.length + 1);
+  });
+
+  it('recarrega a nuvem após recibo repetido de ciclo de vida que precede outra revisão', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = addMeasuredPeriod(base, actor);
+    const advanced = addMeasuredPeriod(next, actor);
+    const operationId = next.audit.at(-1)!.id;
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: next.revision,
+      replayed: true, currentRevision: advanced.revision, patch: { operationId } }, error: null });
+    loaded(advanced);
+    expect(await repo.commit(next, base.revision)).toEqual(advanced);
+    expect(await repo.confirmedOperation!(operationId, next.revision)).toBe(true);
+    expect(mocks.rpc.mock.calls.map(call => call[0])).toEqual([
+      'load_measurement_workspace', 'commit_measurement_lifecycle', 'load_measurement_workspace',
+    ]);
+  });
+
+  it('recarrega até recibo compactado da revisão corrente e comprova a operação compactada', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = addMeasuredPeriod(base, actor);
+    const operationId = next.audit.at(-1)!.id;
+    const compacted = { ...next, audit: base.audit };
+    mocks.compactedRevision = next.revision;
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: next.revision,
+      replayed: true, currentRevision: next.revision, patch: { kind: 'compacted_receipt', operationId } }, error: null });
+    loaded(compacted);
+    expect(await repo.commit(next, base.revision)).toEqual(compacted);
+    expect(mocks.rpc.mock.calls.map(call => call[0])).toEqual([
+      'load_measurement_workspace', 'commit_measurement_lifecycle', 'load_measurement_workspace',
+    ]);
+    expect(await repo.confirmedOperation!(operationId, next.revision)).toBe(true);
+  });
+
+  it('não trata recibo repetido como confirmação se a recarga ainda estiver defasada', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = addMeasuredPeriod(base, actor);
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: next.revision,
+      replayed: true, currentRevision: next.revision + 1,
+      patch: { operationId: next.audit.at(-1)!.id } }, error: null });
+    loaded(next);
+    await expect(repo.commit(next, base.revision)).rejects.toThrow('versão mais recente não pôde ser carregada');
   });
 
   it('não recorre ao commit integral quando um comando de ciclo de vida contém outra alteração', async () => {
