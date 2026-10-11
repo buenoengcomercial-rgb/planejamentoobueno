@@ -1,5 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
-import { measurementRepository, type MeasurementRepository, type PendingMeasurementSave, type StoredMeasurementPending } from './measurementWorkspaceStore';
+import { MeasurementCommitRejectedError, measurementRepository, type MeasurementRepository, type PendingMeasurementSave, type StoredMeasurementPending } from './measurementWorkspaceStore';
 import { decodeMeasurementWorkspace, encodeMeasurementWorkspace } from './measurementCloudCodec';
 import { TAKEOFF_BUCKET } from './planTakeoffCloud';
 import { measurementEntryPatch } from './measurementEntryPatch';
@@ -97,9 +97,10 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     // write reached the cloud; a missing table/network response proves nothing.
     const { data, error } = await supabase.from('measurement_workspace_compacted_receipts' as never)
       .select('revision,actor_id').eq('project_id', scope.projectId).eq('operation_id', operationId).maybeSingle();
+    if (error) throw new Error(`Não foi possível conferir o recibo da Medição: ${error.message}`);
     const receipt = data as { revision?: number; actor_id?: string } | null;
     const revision = Number(receipt?.revision);
-    return !error && receipt?.actor_id === scope.userId && Number.isSafeInteger(revision) && revision >= 0 ? revision : null;
+    return receipt?.actor_id === scope.userId && Number.isSafeInteger(revision) && revision >= 0 ? revision : null;
   };
   const queued = async (knownRemote?: MeasurementWorkspace | null): Promise<PendingMeasurementSave[]> => {
     const remote = knownRemote ?? await loadRemote();
@@ -258,7 +259,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     initialize: async () => { throw new Error('Esta obra ainda precisa da incorporação conferida dos dados da nuvem.'); },
     commit: async (candidate, baseRevision) => {
       const operationId = candidate.audit.at(-1)?.id;
-      if (!operationId || candidate.projectId !== scope.projectId || candidate.revision !== baseRevision + 1) throw new Error('Operação de Medição inválida.');
+      if (!operationId || candidate.projectId !== scope.projectId || candidate.revision !== baseRevision + 1) throw new MeasurementCommitRejectedError('Operação de Medição inválida.');
       // The caller keeps an unconfirmed candidate in memory until cloud acknowledgement.
       const latestEvent = candidate.audit.at(-1);
       const needsPlanPaths = candidate.plans.some(plan => !plan.storagePath)
@@ -271,7 +272,14 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           const extension = plan.kind === 'image' ? 'image' : plan.kind;
           plan.storagePath = `${scope.projectId}/${plan.id}/${operationId}.${extension}`;
           const { error } = await supabase.storage.from(TAKEOFF_BUCKET).upload(plan.storagePath, plan.file, { upsert: false, contentType: plan.file.type || 'application/octet-stream' });
-          if (error && !['409', 'Duplicate'].includes(String(error.statusCode ?? error.name))) throw new Error(`Planta não enviada: ${error.message}`);
+          if (error && !['409', 'Duplicate'].includes(String(error.statusCode ?? error.name))) {
+            const message = `Planta não enviada: ${error.message}`;
+            const status = Number(error.statusCode);
+            // A 5xx/transport failure can arrive after Storage wrote the file.
+            // Retry the same immutable path; 409 on that retry is a receipt.
+            if ([400, 401, 403, 404, 413, 415, 422].includes(status)) throw new MeasurementCommitRejectedError(message);
+            throw new Error(`${message}. O resultado do envio é incerto; tente novamente.`);
+          }
           if (!error) files.set(plan.storagePath, Promise.resolve(plan.file));
         }
       }
@@ -318,9 +326,15 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           return latest;
         }
         if (remoteRevision === baseRevision && savedRevision === null) ({ data, error } = await send());
-        else throw new Error('A Medição mudou durante a gravação. Confira esta tarefa antes de tentar novamente.');
+        else throw new MeasurementCommitRejectedError('A Medição mudou durante a gravação. O recibo desta operação não consta na nuvem.');
       }
-      if (error) throw new Error(error.message);
+      if (error) {
+        // Only known PostgreSQL rollback/validation codes prove non-commit.
+        // Proxy/PostgREST/HTTP failures may be delivered after a successful write.
+        if (['P0001', 'P0002', '42501', '23502', '23503', '23505', '23514', '22003', '22P02'].includes(String(error.code)))
+          throw new MeasurementCommitRejectedError(error.message);
+        throw new Error(`${error.message}. A resposta da nuvem é incerta; confira esta operação antes de sair.`);
+      }
       let saved: MeasurementWorkspace;
       if (patch || deletionPatch || capturePatch) {
         const receipt = data as { projectId?: string; revision?: number; patch?: unknown } | null;

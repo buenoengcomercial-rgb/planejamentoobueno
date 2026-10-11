@@ -12,6 +12,18 @@ export function periodDeletionBlock(w: MeasurementWorkspace, p: MeasuredPeriod):
   if (p.originalSnapshot) return 'Medição incorporada do histórico: preserve o período e corrija os detalhes antes da aprovação.';
   return null;
 }
+export function periodRestorationBlock(w: MeasurementWorkspace, auditId: string): string | null {
+  const source = w.audit.find(event => event.id === auditId);
+  if (source?.lifecycle?.kind !== 'delete') return 'Exclusão não encontrada no histórico.';
+  const id = source.lifecycle.measurementId;
+  const period = source.beforePeriods?.find(candidate => candidate.id === id);
+  const latest = [...w.audit].reverse().find(event => event.lifecycle?.measurementId === id);
+  const dates = nextMeasurementPeriod(w.periods);
+  if (!period || latest?.id !== auditId || w.periods.some(candidate => candidate.id === id)
+    || !dates || dates.number !== period.number || dates.startDate !== period.startDate || dates.endDate !== period.endDate)
+    return 'Restauração conflita com a sequência atual. Exclua primeiro a medição que ocupa esse período.';
+  return null;
+}
 function finish(before: MeasurementWorkspace, next: MeasurementWorkspace, actor: MeasurementActor, lifecycle: NonNullable<MeasurementAudit['lifecycle']>, action: string) {
   const oldEntries = before.entries.filter(e => e.measurementId === lifecycle.measurementId);
   const newEntries = next.entries.filter(e => e.measurementId === lifecycle.measurementId);
@@ -33,12 +45,10 @@ export function deleteMeasuredPeriod(w: MeasurementWorkspace, actor: Measurement
 }
 export function restoreMeasuredPeriod(w: MeasurementWorkspace, actor: MeasurementActor, auditId: string, reason: string) {
   authorize(actor, reason);
-  const source = w.audit.find(a => a.id === auditId);
-  if (source?.lifecycle?.kind !== 'delete') throw new Error('Exclusão não encontrada no histórico.');
-  const id = source.lifecycle.measurementId, period = source.beforePeriods?.find(p => p.id === id);
-  const latest = [...w.audit].reverse().find(a => a.lifecycle?.measurementId === id);
-  const dates = nextMeasurementPeriod(w.periods);
-  if (!period || latest?.id !== auditId || w.periods.some(p => p.id === id) || !dates || dates.number !== period.number || dates.startDate !== period.startDate || dates.endDate !== period.endDate) throw new Error('Restauração conflita com a sequência atual. Exclua primeiro a medição que ocupa esse período.');
+  const blocked = periodRestorationBlock(w, auditId);
+  if (blocked) throw new Error(blocked);
+  const source = w.audit.find(a => a.id === auditId)!;
+  const id = source.lifecycle!.measurementId, period = source.beforePeriods!.find(p => p.id === id)!;
   const next = structuredClone(w); next.periods.push(structuredClone(period)); next.entries.push(...structuredClone(source.before));
   // Validate restored quantities against the current contract and locked occurrences.
   // This candidate is only a validation probe; the lifecycle event is the sole write.

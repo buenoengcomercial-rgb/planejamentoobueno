@@ -6,6 +6,8 @@ import type { MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspa
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { addMeasuredPeriod, captureMeasurement, freezeMeasuredPeriod, newMeasuredRow } from '@/lib/measurementWorkspace';
 import { deleteMeasuredPeriod } from '@/lib/measurementLifecycle';
+import { MeasurementCommitRejectedError } from '@/lib/measurementWorkspaceStore';
+import { selectedMeasurement } from '@/lib/measurementSelection';
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
@@ -18,7 +20,7 @@ function fixture() {
 describe('Tela própria de Medição', () => {
   it('permite excluir duas linhas de planta rapidamente sem agrupar as marcas em edição genérica', async () => {
     const { w, repository } = fixture();
-    w.plans = [{ ...measurementFixture().plans[0], projectId: w.projectId, measures: [] }];
+    w.plans = [{ ...measurementFixture().plans[0], measures: [] }];
     w.entries = [{ projectId: w.projectId, measurementId: 'm1', serviceId: 's', rows: [newMeasuredRow('first'), newMeasuredRow('second')] }];
     let loaded = w;
     for (const [rowId, count] of [['first', 19], ['second', 22]] as const) {
@@ -51,7 +53,7 @@ describe('Tela própria de Medição', () => {
   it('preserva duas exclusões da mesma tarefa após falha da primeira e salva outra tarefa', async () => {
     const { w, repository } = fixture();
     w.services.push({ ...w.services[0], id: 'other', item: '1.2', description: 'Extintores' });
-    w.plans = [{ ...measurementFixture().plans[0], projectId: w.projectId, measures: [] }];
+    w.plans = [{ ...measurementFixture().plans[0], measures: [] }];
     w.entries = [{ projectId: w.projectId, measurementId: 'm1', serviceId: 's', rows: [newMeasuredRow('first'), newMeasuredRow('second')] }];
     let remote = w;
     for (const [rowId, count] of [['first', 19], ['second', 22]] as const) {
@@ -93,7 +95,7 @@ describe('Tela própria de Medição', () => {
   it('reexecuta as exclusões pendentes antes de aceitar uma nova edição na tarefa falha', async () => {
     const { w, repository } = fixture();
     w.services.push({ ...w.services[0], id: 'other', item: '1.2', description: 'Extintores' });
-    w.plans = [{ ...measurementFixture().plans[0], projectId: w.projectId, measures: [] }];
+    w.plans = [{ ...measurementFixture().plans[0], measures: [] }];
     w.entries = [{ projectId: w.projectId, measurementId: 'm1', serviceId: 's', rows: [newMeasuredRow('first'), newMeasuredRow('second')] }];
     let remote = w;
     for (const [rowId, count] of [['first', 19], ['second', 22]] as const) {
@@ -303,6 +305,11 @@ describe('Tela própria de Medição', () => {
   });
   it('recupera exclusão pendente e seleciona uma medição que ainda existe', async () => {
     const { w, repository } = fixture();
+    w.periods = [
+      { id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' },
+      { id: 'm2', number: 2, startDate: '2026-09-30', endDate: '2026-10-29', status: 'draft' },
+      { id: 'm3', number: 3, startDate: '2026-10-30', endDate: '2026-11-28', status: 'draft' },
+    ];
     const view = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
     fireEvent.change(await screen.findByLabelText('Medição selecionada'), { target: { value: 'm3' } });
     view.unmount();
@@ -454,7 +461,7 @@ describe('Tela própria de Medição', () => {
     const view = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
     const field = await screen.findByLabelText('Objeto');
     fireEvent.change(field, { target: { value: 'Escopo pendente' } }); fireEvent.blur(field);
-    await screen.findByText('Precisa resolver conflito');
+    await screen.findByRole('button', { name: 'Tentar salvar' });
     expect(repository.clearDraft).not.toHaveBeenCalled();
     expect(field).toHaveValue('Escopo pendente');
     vi.mocked(repository.drafts).mockResolvedValue([{ projectId: 'p', measurementId: 'm1', serviceId: '__bulletin__', rowId: 'contractObject', changes: { value: 'Escopo pendente' } }]);
@@ -832,6 +839,27 @@ describe('Tela própria de Medição', () => {
     expect(saved.entries[0].rows[0].multiplier).toBe(3);
     expect(saved.periods[0].bulletin?.contract.artNumber).toBe('ART confirmada');
   });
+  it('pendência legada de outra tarefa não impede criação após salvar o boletim na nuvem', async () => {
+    const { w, repository } = fixture();
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+    vi.mocked(repository.pending).mockResolvedValue({ baseRevision: 0, candidate: w });
+    let confirmFirst!: () => void;
+    vi.mocked(repository.commit).mockImplementationOnce(candidate => new Promise(resolve => {
+      confirmFirst = () => resolve(candidate);
+    })).mockImplementation(async candidate => candidate);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByRole('button', { name: /Boletim de Medição para Pagamento/ }));
+    const art = screen.getByLabelText('Nº da ART');
+    fireEvent.change(art, { target: { value: 'ART conferida' } }); fireEvent.blur(art);
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Nova medição' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Criar medição' }));
+    await act(async () => confirmFirst());
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(repository.commit).mock.calls[1][0].periods).toHaveLength(2);
+    expect(repository.pending).not.toHaveBeenCalled();
+  });
   it('serializa detalhe, boletim e criação de medição sem perder nenhuma alteração', async () => {
     const { w, repository } = fixture();
     w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
@@ -868,6 +896,195 @@ describe('Tela própria de Medição', () => {
     expect(screen.getByLabelText('Medição selecionada')).toBeEnabled();
     expect(screen.getByTestId('monthly-value')).toHaveTextContent('37,50');
     expect(screen.getByRole('button', { name: 'Tentar salvar' })).toBeVisible();
+  });
+
+  it('rejeição definitiva não prende a criação seguinte nem permite clique duplo', async () => {
+    const { w, repository } = fixture();
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+    let remote = w; let rejectFirst!: () => void;
+    vi.mocked(repository.load).mockImplementation(async () => remote);
+    vi.mocked(repository.commit).mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectFirst = () => reject(new MeasurementCommitRejectedError('Conflito: a nuvem rejeitou a revisão antiga.'));
+    })).mockImplementation(async candidate => { remote = candidate; return candidate; });
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Nova medição' }));
+    const dialog = screen.getByRole('dialog');
+    const create = within(dialog).getByRole('button', { name: 'Criar medição' });
+    fireEvent.click(create);
+    fireEvent.click(create);
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+    expect(create).toBeDisabled();
+    await act(async () => rejectFirst());
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Conflito');
+    expect(screen.queryByText('Tentar salvar')).not.toBeInTheDocument();
+    expect(document.querySelector('[role="status"]')).toHaveTextContent('Falha na sincronização');
+    expect(create).toBeEnabled();
+    fireEvent.click(create);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(remote.periods).toHaveLength(2);
+    expect(repository.commit).toHaveBeenCalledTimes(2);
+  });
+
+  it('salvamento incerto anterior não prende Nova medição quando o comando nem foi enviado', async () => {
+    const { w, repository } = fixture();
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+    vi.mocked(repository.load).mockResolvedValue(w);
+    vi.mocked(repository.commit).mockRejectedValue(new Error('Sem conexão'));
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const field = await screen.findByLabelText('Objeto');
+    fireEvent.change(field, { target: { value: 'Escopo pendente' } }); fireEvent.blur(field);
+    await screen.findByRole('button', { name: 'Tentar salvar' });
+    fireEvent.click(screen.getByRole('button', { name: 'Nova medição' }));
+    const create = within(screen.getByRole('dialog')).getByRole('button', { name: 'Criar medição' });
+    fireEvent.click(create);
+    await waitFor(() => expect(create).toBeEnabled());
+    expect(vi.mocked(repository.commit).mock.calls.every(([candidate]) => candidate.periods.length === 1)).toBe(true);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancelar' }));
+    expect(screen.getByRole('button', { name: 'Nova medição' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Tentar salvar' })).toBeVisible();
+  });
+
+  it('reconcilia criação já confirmada após resposta incerta e fecha o diálogo uma única vez', async () => {
+    const { w, repository } = fixture();
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+    let remote = w;
+    vi.mocked(repository.load).mockImplementation(async () => remote);
+    vi.mocked(repository.commit).mockImplementationOnce(async candidate => {
+      remote = candidate;
+      throw new Error('Resposta de rede perdida');
+    });
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Nova medição' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Criar medição' }));
+    // The automatic receipt check can finish before the manual retry appears.
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByLabelText('Medição selecionada')).toHaveValue(remote.periods[1].id);
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+  });
+  it('rejeição definitiva do envio mantém rascunho e permite reenviar sem trava', async () => {
+    const { w, repository } = fixture();
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'r', location: '', comment: '', formula: 'STANDARD', multiplier: 1, measuredQuantity: 0 }] }];
+    repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+    let remote = w;
+    vi.mocked(repository.load).mockImplementation(async () => remote);
+    vi.mocked(repository.commit).mockRejectedValueOnce(new MeasurementCommitRejectedError('Conflito definitivo no envio.'))
+      .mockImplementation(async candidate => { remote = candidate; return candidate; });
+    render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canReview: true }}/>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Enviar para fiscalização' }));
+    const dialog = screen.getByRole('dialog');
+    const confirm = within(dialog).getByRole('button', { name: 'Confirmar envio' });
+    fireEvent.click(confirm);
+    await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent('Conflito definitivo'));
+    expect(remote.periods[0].status).toBe('draft');
+    expect(screen.queryByRole('button', { name: 'Tentar salvar' })).not.toBeInTheDocument();
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(remote.periods[0].status).toBe('in_review');
+    expect(repository.commit).toHaveBeenCalledTimes(2);
+  });
+  it('confirma envio com resposta perdida sem duplicar o evento fiscal', async () => {
+    const { w, repository } = fixture();
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ id: 'r', location: '', comment: '', formula: 'STANDARD', multiplier: 1, measuredQuantity: 0 }] }];
+    repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+    let remote = w;
+    vi.mocked(repository.load).mockImplementation(async () => remote);
+    vi.mocked(repository.commit).mockImplementationOnce(async candidate => { remote = candidate; throw new Error('Resposta perdida'); });
+    render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canReview: true }}/>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Enviar para fiscalização' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Confirmar envio' }));
+    // A background reconciliation may consume the uncertain state immediately.
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(remote.periods[0].status).toBe('in_review');
+    expect(remote.audit.filter(event => event.action.includes('fiscal'))).toHaveLength(1);
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+  });
+  it('não oferece restaurar período excluído quando outro ocupa o mesmo número', async () => {
+    const { w, repository } = fixture();
+    w.periods = [
+      { id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' },
+      { id: 'm2', number: 2, startDate: '2026-09-30', endDate: '2026-10-29', status: 'draft' },
+    ];
+    const deleted = deleteMeasuredPeriod(w, actor, 'm2', 'Medição de teste');
+    const replaced = addMeasuredPeriod(deleted, actor);
+    vi.mocked(repository.load).mockResolvedValue(replaced);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    await screen.findByRole('button', { name: 'Nova medição' });
+    expect(screen.queryByRole('button', { name: 'Restaurar medição excluída' })).not.toBeInTheDocument();
+  });
+  it('ao rejeitar exclusão concorrente seleciona período ainda existente e atualiza preferência', async () => {
+    const { w, repository } = fixture();
+    repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+    const remote = deleteMeasuredPeriod(w, actor, 'm3', 'Removida em outro aparelho');
+    vi.mocked(repository.load).mockResolvedValueOnce(w).mockResolvedValue(remote);
+    vi.mocked(repository.commit).mockRejectedValueOnce(new MeasurementCommitRejectedError('Conflito de revisão.'));
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.change(await screen.findByLabelText('Medição selecionada'), { target: { value: 'm3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Excluir medição' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Motivo da operação'), { target: { value: 'Exclusão concorrente' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Excluir medição' }));
+    await waitFor(() => expect(screen.getByLabelText('Medição selecionada')).toHaveValue('m2'));
+    expect(selectedMeasurement(actor.id, w.projectId, remote.periods)).toBe('m2');
+    expect(document.querySelector('[role="status"]')).toHaveTextContent('Falha na sincronização');
+  });
+  it('permite fechar o diálogo sem cancelar a criação em andamento ou duplicar comando', async () => {
+    const { w, repository } = fixture();
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+    let finish!: () => void;
+    vi.mocked(repository.commit).mockImplementation(candidate => new Promise(resolve => { finish = () => resolve(candidate); }));
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Nova medição' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Criar medição' }));
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Fechar janela (gravação continua)' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Nova medição' })).toBeDisabled();
+    await act(async () => finish());
+    await waitFor(() => expect(screen.getByLabelText('Medição selecionada')).toHaveValue(vi.mocked(repository.commit).mock.calls[0][0].periods[1].id));
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+  });
+  it('mantém operação incerta quando revisão avança mas a consulta de recibo falha', async () => {
+    const { w, repository } = fixture();
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+    const remote = addMeasuredPeriod(w, actor);
+    vi.mocked(repository.load).mockResolvedValueOnce(w).mockResolvedValue(remote);
+    repository.confirmedOperation = vi.fn(async () => { throw new Error('Consulta de recibo indisponível'); });
+    vi.mocked(repository.commit).mockRejectedValueOnce(new Error('Resposta de rede perdida'));
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Nova medição' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Criar medição' }));
+    await waitFor(() => expect(repository.confirmedOperation).toHaveBeenCalled());
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Fechar janela (gravação continua)' }));
+    expect(screen.getByRole('button', { name: 'Nova medição' })).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('Atualização em outro aparelho');
+    const unload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+  });
+  it('libera nova tentativa quando revisão avança e ausência do recibo é confiável', async () => {
+    const { w, repository } = fixture();
+    w.periods = [{ id: 'm1', number: 1, startDate: '2026-08-24', endDate: '2026-09-29', status: 'draft' }];
+    repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+    const remote = addMeasuredPeriod(w, actor);
+    vi.mocked(repository.load).mockResolvedValueOnce(w).mockResolvedValue(remote);
+    repository.confirmedOperation = vi.fn(async () => false);
+    vi.mocked(repository.commit).mockRejectedValueOnce(new Error('Resposta de rede perdida'));
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Nova medição' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Criar medição' }));
+    await waitFor(() => expect(repository.confirmedOperation).toHaveBeenCalled());
+    await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Criar medição' })).toBeEnabled());
+    expect(document.querySelector('[role="status"]')).toHaveTextContent('Falha na sincronização');
+    expect(screen.queryByText('Tentar salvar')).not.toBeInTheDocument();
   });
   it('perfil de consulta não permite editar ou criar período', async () => {
     const { repository } = fixture(); render(<MeasurementWorkspace repository={repository} actor={{ ...actor, canEdit: false }}/>);

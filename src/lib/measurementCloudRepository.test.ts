@@ -2,12 +2,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation } from './measurementIncorporation';
-import { captureMeasurement, deleteMeasuredRow, editMeasuredRow, newMeasuredRow, type MeasurementWorkspace } from './measurementWorkspace';
+import { addMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, newMeasuredRow, type MeasurementWorkspace } from './measurementWorkspace';
 import { measurementEntryPatch } from './measurementEntryPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
 import { measurementDeletionPatch } from './measurementDeletionPatch';
 import { encodeMeasurementWorkspace, decodeMeasurementWorkspace } from './measurementCloudCodec';
 import { cloudMeasurementRepository } from './measurementCloudRepository';
+import { MeasurementCommitRejectedError } from './measurementWorkspaceStore';
 import type { PendingMeasurementSave, StoredMeasurementPending, WorkspaceDraft } from './measurementWorkspaceStore';
 
 const mocks = vi.hoisted(() => ({
@@ -20,7 +21,10 @@ vi.mock('@/integrations/supabase/client', () => ({ supabase: {
   rpc: mocks.rpc, from: mocks.from,
   storage: { from: () => ({ download: mocks.download, upload: mocks.upload }) },
 } }));
-vi.mock('./measurementWorkspaceStore', () => ({ measurementRepository: () => ({
+vi.mock('./measurementWorkspaceStore', () => ({ MeasurementCommitRejectedError: class MeasurementCommitRejectedError extends Error {
+  readonly definitive = true;
+  constructor(message: string) { super(message); this.name = 'MeasurementCommitRejectedError'; }
+}, measurementRepository: () => ({
   load: async () => mocks.cached,
   cacheSnapshot: async (w: MeasurementWorkspace) => { mocks.cached = structuredClone(w); },
   drafts: async () => structuredClone(mocks.drafts),
@@ -119,6 +123,56 @@ describe('Medição somente nuvem', () => {
     mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
     await expect(repo.commit(next, base.revision)).rejects.toThrow('Não foi possível conferir a revisão');
     expect(mocks.stored).toEqual([]);
+  });
+
+  it('classifica conflito confirmado pelo servidor como rejeição definitiva', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 7 });
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: 'P0002', message: 'Conflito: outro computador alterou a Medição.' } });
+    await expect(repo.commit(next, base.revision)).rejects.toBeInstanceOf(MeasurementCommitRejectedError);
+    expect(mocks.rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it('mantém resultado incerto para erro de gateway/PostgREST sem prova de rollback', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 7 });
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: 'PGRST000', status: 502, message: 'Bad Gateway' } });
+    await expect(repo.commit(next, base.revision)).rejects.not.toBeInstanceOf(MeasurementCommitRejectedError);
+    expect(mocks.rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it('mantém candidato incerto quando upload da planta retorna timeout', async () => {
+    const base = await fixture(true); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    mocks.download.mockResolvedValue({ data: base.plans[0].file, error: null });
+    loaded(base); await repo.load();
+    const next = addMeasuredPeriod(base, actor);
+    next.plans[0].storagePath = undefined;
+    mocks.upload.mockResolvedValueOnce({ data: null, error: { statusCode: '504', message: 'Gateway timeout' } });
+    await expect(repo.commit(next, base.revision)).rejects.not.toBeInstanceOf(MeasurementCommitRejectedError);
+    expect(mocks.upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('não transforma falha da consulta do recibo em ausência comprovada', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    const advanced = addMeasuredPeriod(base, actor);
+    loaded(advanced); await repo.load();
+    mocks.from.mockImplementation((table: string) => ({ select: () => ({ eq: () => ({ eq: () => ({ maybeSingle: async () => ({
+      data: null, error: table === 'measurement_workspace_compacted_receipts' ? { message: 'Recibo indisponível' } : null,
+    }) }) }) }) }));
+    await expect(repo.confirmedOperation!(base.audit.at(-1)?.id ?? 'unknown', advanced.revision)).rejects.toThrow('Recibo indisponível');
+  });
+
+  it('reconhece criação de período confirmada mesmo quando a resposta se perde', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = addMeasuredPeriod(base, actor);
+    mocks.revision = next.revision; mocks.eventRevision = next.revision;
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
+    expect(await repo.commit(next, base.revision)).toEqual(next);
+    expect(mocks.rpc.mock.calls.at(-1)?.[0]).toBe('commit_measurement_workspace');
+    expect(mocks.rpc).toHaveBeenCalledTimes(2);
   });
 
   it('captura grava marcação e célula em um único patch', async () => {

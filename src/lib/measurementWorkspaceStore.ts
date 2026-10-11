@@ -15,6 +15,11 @@ export interface PendingMeasurementCaptureSave {
 }
 export type PendingMeasurementDeltaSave = PendingMeasurementEntrySave | PendingMeasurementCaptureSave;
 export type StoredMeasurementPending = PendingMeasurementSave | PendingMeasurementDeltaSave;
+/** The server rejected this operation before committing it. No acknowledgement is outstanding. */
+export class MeasurementCommitRejectedError extends Error {
+  readonly definitive = true;
+  constructor(message: string) { super(message); this.name = 'MeasurementCommitRejectedError'; }
+}
 const pendingOperationId = (pending: StoredMeasurementPending) => 'operationId' in pending
   ? pending.operationId : pending.candidate.audit.at(-1)?.id;
 export interface MeasurementRepository {
