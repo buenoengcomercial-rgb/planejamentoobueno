@@ -52,6 +52,7 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011000000_measurement_history_fiscal_marker.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011010000_measurement_capture_delta.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011150000_measurement_excess_warning.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261011170000_measurement_capture_targeted_commit.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -710,6 +711,25 @@ describe('transação da Medição na nuvem',()=>{
     [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(tampered))])).rejects.toThrow();
   expect(await currentDataHash()).not.toBe(before);
   expect((await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value).toEqual(loaded);
+ });
+ it('duas capturas consecutivas preservam as duas marcações e os totais após recarga',async()=>{
+  await seed(); let w=await commit(editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('first')));
+  w=await commit(editMeasuredRow(w,actor,'m1','signs',newMeasuredRow('second')));
+  w.plans[0].file=base.plans[0].file;
+  for (const [id,rowId,count] of [['mark-19','first',19],['mark-22','second',22]] as const) {
+   const mark={id,name:id,kind:'count' as const,page:1,
+    points:Array.from({length:count},(_,i)=>({x:i,y:1})),projectId,measurementId:'m1',serviceId:'signs'};
+   const next=captureMeasurement(w,actor,{measurementId:'m1',serviceId:'signs',rowId,field:'multiplier'},
+    {...w.plans[0],measures:[...w.plans[0].measures,mark]},mark);
+   const patch=measurementCapturePatch(w,next)!;
+   await db.query('SELECT patch_measurement_capture($1,$2,$3)',
+    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))]);
+   w=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+   w.plans[0].file=base.plans[0].file;
+  }
+  expect(w.plans[0].measures.map(mark=>mark.id)).toEqual(['mark-19','mark-22']);
+  expect(w.entries.find(entry=>entry.measurementId==='m1'&&entry.serviceId==='signs')?.rows.map(row=>row.multiplier)).toEqual([19,22]);
+  expect(w.entries.find(entry=>entry.measurementId==='m1'&&entry.serviceId==='signs')?.rows.reduce((total,row)=>total+row.multiplier,0)).toBe(41);
  });
  it('captura DXF excedente permanece atômica e impede envio fiscal até correção',async()=>{
   await seed(); const ready=await commit(editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('excess-capture')));

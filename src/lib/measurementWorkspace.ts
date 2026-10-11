@@ -328,9 +328,15 @@ export function captureMeasurement(w: MeasurementWorkspace, actor: MeasurementAc
     assertDestination(next, measurementId, serviceId, actor);
     const plan = next.plans.find(p => p.id === nextPlan.id);
     if (!plan) throw new Error('Planta não cadastrada.');
-    next.plans = next.plans.map(p => p.id === nextPlan.id ? structuredClone(nextPlan) : p);
+    // The takeoff dialog can hold an older copy of the drawing while another
+    // capture is being confirmed. Apply only this mark so an earlier mark is
+    // never removed from the plan while its cell still refers to it.
+    const mergedPlan = structuredClone(plan);
+    mergedPlan.measures = mergedPlan.measures.filter(measure => measure.id !== mark.id);
+    if (!remove) mergedPlan.measures.push(structuredClone(mark));
+    next.plans = next.plans.map(p => p.id === nextPlan.id ? mergedPlan : p);
     const references = next.entries.flatMap(e => e.rows.flatMap(r => sourceFields.flatMap(f => r[f]?.measureId === mark.id ? [{ e, r, f }] : [])));
-    const value = remove ? 0 : quantity(mark.kind, mark.points, nextPlan.scales[mark.page] ?? null, mark.heightMeters);
+    const value = remove ? 0 : quantity(mark.kind, mark.points, mergedPlan.scales[mark.page] ?? null, mark.heightMeters);
     if (value === null) throw new Error('Geometria insuficiente.');
     if (!references.length && !remove) {
       if (mark.projectId !== next.projectId || mark.measurementId !== measurementId || mark.serviceId !== serviceId) throw new Error('Captura pertence a outro serviço ou medição.');
@@ -341,7 +347,7 @@ export function captureMeasurement(w: MeasurementWorkspace, actor: MeasurementAc
     for (const ref of references) {
       const field = (['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD'] as const)[sourceFields.indexOf(ref.f)];
       const r = withDetailValue(ref.r, field, value);
-      r[ref.f] = remove ? undefined : { planId: nextPlan.id, planName: nextPlan.name, floor: nextPlan.floor, page: mark.page, measureId: mark.id, measureName: mark.name, kind: mark.kind, resultUnit: measureUnit(mark.kind, nextPlan.scales[mark.page] ?? null), heightMeters: mark.heightMeters, points: structuredClone(mark.points) };
+      r[ref.f] = remove ? undefined : { planId: mergedPlan.id, planName: mergedPlan.name, floor: mergedPlan.floor, page: mark.page, measureId: mark.id, measureName: mark.name, kind: mark.kind, resultUnit: measureUnit(mark.kind, mergedPlan.scales[mark.page] ?? null), heightMeters: mark.heightMeters, points: structuredClone(mark.points) };
       propagate(next, entryFor(next, ref.e.measurementId, ref.e.serviceId), { ...ref.r, ...r });
     }
   });
