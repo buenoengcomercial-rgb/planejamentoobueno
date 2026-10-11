@@ -20,12 +20,13 @@ export async function loadMeasurementPeriodHeaders(projectId: string): Promise<M
     p_project_id: projectId,
   } as never);
   if (error) throw new Error(`Não foi possível consultar os períodos da Medição: ${error.message}`);
-  if (data === null) return null;
-  if (!Array.isArray(data)) throw new Error('Períodos da Medição incompletos.');
+  const raw: unknown = data;
+  if (raw === null) return null;
+  if (!Array.isArray(raw)) throw new Error('Períodos da Medição incompletos.');
 
   const ids = new Set<string>();
   const numbers = new Set<number>();
-  const periods = data.map((value): MeasurementPeriodHeader => {
+  const periods = raw.map((value): MeasurementPeriodHeader => {
     const item = value && typeof value === 'object' ? value as Record<string, unknown> : {};
     const { id, number, startDate, endDate, status } = item;
     if (typeof id !== 'string' || !id || !Number.isSafeInteger(number) || (number as number) < 1
@@ -36,7 +37,7 @@ export async function loadMeasurementPeriodHeaders(projectId: string): Promise<M
     }
     ids.add(id);
     numbers.add(number as number);
-    return { id, number: number as number, startDate, endDate, ...(status ? { status } : {}) };
+    return { id, number: number as number, startDate, endDate, ...(typeof status === 'string' && status ? { status } : {}) };
   });
   return periods.sort((a, b) => a.number - b.number);
 }

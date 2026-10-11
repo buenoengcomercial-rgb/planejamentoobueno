@@ -144,6 +144,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         const entries = preview.entries.map(entry => replacements.get(key(entry)) ?? entry);
         entries.push(...patch.entries.filter(entry => !previous.has(key(entry))));
         if (stored.format === 'capture-patch-v1') {
+          const patch = stored.patch;
           const original = preview.plans.find(plan => plan.id === patch.plan.id);
           if (!original || !original.storagePath || original.storagePath !== patch.plan.storagePath
             || patch.event.beforePlans || patch.event.afterPlans) throw new Error('Planta da captura local em conflito com a base confirmada.');
@@ -302,8 +303,9 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           .select('revision').eq('project_id', scope.projectId).maybeSingle();
         const remoteRevision = Number((version.data as { revision?: number } | null)?.revision);
         if (event.error || version.error || !version.data || !Number.isSafeInteger(remoteRevision)) throw new Error(`${error.message}. Não foi possível conferir a revisão; mantenha esta página aberta.`);
-        const savedRevision = event.data
-          ? Number((event.data as { revision?: number }).revision)
+        const eventData = event.data as { revision?: number } | null;
+        const savedRevision = eventData
+          ? Number(eventData.revision)
           : remoteRevision >= next.revision ? await compactedReceiptRevision(operationId) : null;
         if (savedRevision === next.revision && remoteRevision >= next.revision) {
           const latest = remoteRevision === next.revision ? next : await loadRemote();

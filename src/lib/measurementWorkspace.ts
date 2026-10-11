@@ -100,7 +100,14 @@ export function fiscalSubmissionCurrent(w: MeasurementWorkspace, id: string): bo
     || event.bulletinChange?.measurementId === id || !!event.beforePlans || !!event.afterPlans
     || !!event.beforeServices || !!event.afterServices
     || (!!event.beforePeriods && !sameData(event.beforePeriods.find(p => p.id === id), event.afterPeriods?.find(p => p.id === id)));
-  const index = w.audit.findLastIndex(event => event.action === 'Enviar para fiscalização' && event.afterPeriods?.some(p => p.id === id && p.status === 'in_review'));
+  let index = -1;
+  for (let i = w.audit.length - 1; i >= 0; i--) {
+    const event = w.audit[i];
+    if (event.action === 'Enviar para fiscalização' && event.afterPeriods?.some(p => p.id === id && p.status === 'in_review')) {
+      index = i;
+      break;
+    }
+  }
   if (index < 0) {
     // An already-submitted legacy period can be incorporated without a new
     // workspace send event. Imported prices may differ from today's contract;

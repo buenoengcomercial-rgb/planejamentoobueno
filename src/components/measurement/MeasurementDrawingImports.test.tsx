@@ -11,7 +11,8 @@ vi.mock('@/components/planTakeoff/PlanTakeoff', () => ({ default: function MockP
   return <><button onClick={() => { void (async () => {
     let catalog = await repository.load();
     const first: TakeoffPlan = { id: 'floor-0', name: '0º ANDAR.dxf', floor: '0º andar', kind: 'dxf', file: new Blob(['0']), scales: { 1: 1 }, measures: [], chapterId: 'c' };
-    catalog = await repository.save([...catalog, first], catalog) ?? [...catalog, first];
+    const confirmed = await repository.save([...catalog, first], catalog);
+    catalog = Array.isArray(confirmed) ? confirmed : [...catalog, first];
     const second: TakeoffPlan = { ...first, id: 'floor-1', name: '1º ANDAR.dxf', floor: '1º andar', file: new Blob(['1']) };
     await repository.save([...catalog, second], catalog);
   })().catch(cause => setFailure(cause instanceof Error ? cause.message : String(cause))); }}>Importar duas plantas</button>{failure && <p role="alert">{failure}</p>}</>;

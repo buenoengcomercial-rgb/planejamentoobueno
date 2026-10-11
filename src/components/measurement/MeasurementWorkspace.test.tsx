@@ -613,7 +613,7 @@ describe('Tela própria de Medição', () => {
   it('permite alternar tarefas durante salvamentos lentos e confirma cada quantitativo em ordem', async () => {
     const { w, repository } = fixture();
     w.services.push({ ...w.services[0], id: 's2', item: '1.2', description: 'Detectores' });
-    const confirmations: Array<(saved: Workspace) => void> = [];
+    const confirmations: Array<() => void> = [];
     vi.mocked(repository.commit).mockImplementation(candidate => new Promise(resolve => {
       confirmations.push(() => resolve(candidate));
     }));
@@ -635,9 +635,9 @@ describe('Tela própria de Medição', () => {
     expect(repository.commit).toHaveBeenCalledTimes(1);
     fireEvent.click(plates);
 
-    await act(async () => confirmations.shift()!());
+    await act(async () => confirmations.shift()?.());
     await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
-    await act(async () => confirmations.shift()!());
+    await act(async () => confirmations.shift()?.());
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
     const saved = vi.mocked(repository.commit).mock.calls.at(-1)![0];
     expect(saved.entries.find(e => e.serviceId === 's')?.rows[0].multiplier).toBe(3);

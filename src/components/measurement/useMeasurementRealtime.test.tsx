@@ -11,7 +11,13 @@ function fixture() {
   let notice!: (revision: number) => void, connection!: (connected: boolean) => void;
   let allowed = true;
   const stop = vi.fn(), load = vi.fn(), remoteRevision = vi.fn(async () => 1);
-  const repository = { load, remoteRevision, watch: (n: typeof notice, c: typeof connection) => { notice = n; connection = c; return stop; } } as MeasurementRepository;
+  const repository: MeasurementRepository = {
+    load, remoteRevision, watch: (n, c) => { notice = n; connection = c; return stop; },
+    initialize: vi.fn(), commit: vi.fn(), pending: vi.fn(async () => null),
+    pendingSaves: vi.fn(async () => []), archivePending: vi.fn(async () => undefined),
+    drafts: vi.fn(async () => []), writeDraft: vi.fn(async () => undefined),
+    clearDraft: vi.fn(async () => undefined), backup: vi.fn(async () => null),
+  };
   const onRefresh = vi.fn();
   const hook = renderHook(() => {
     const [revision, setRevision] = useState(1);

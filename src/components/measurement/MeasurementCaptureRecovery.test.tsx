@@ -54,7 +54,7 @@ describe('saída segura do levantamento na Medição', () => {
   it('abre a célula após a escrita local mesmo com a nuvem ainda pendente', async () => {
     const { repository } = setup(true);
     let releaseLocal!: () => void;
-    repository.stage = vi.fn(() => new Promise(resolve => { releaseLocal = resolve; }));
+    repository.stage = vi.fn(() => new Promise<void>(resolve => { releaseLocal = resolve; }));
     vi.mocked(repository.commit).mockImplementationOnce(() => new Promise(() => undefined));
     fireEvent.click(await screen.findByLabelText('Quantidade de Placas'));
     openPlanCell('A');

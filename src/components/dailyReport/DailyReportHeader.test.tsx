@@ -40,7 +40,7 @@ describe('DailyReportHeader', () => {
     render(
       <DailyReportHeader
         {...baseProps}
-        activePeriod={{ id: 'measurement-1', label: 'Medição 1', startDate: '2026-09-01', endDate: '2026-09-30' }}
+        activePeriod={{ id: 'measurement-1', number: 1, label: 'Medição 1', startDate: '2026-09-01', endDate: '2026-09-30' }}
         setSelectedDate={setSelectedDate}
       />,
     );

@@ -104,7 +104,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
     try {
       const previous = lastCommittedPlans.current;
       const confirmed = repository ? await repository.save(next, previous) : (await saveTakeoffs(storageKey, next, previous), undefined);
-      const savedPlans = confirmed ?? next;
+      const savedPlans = Array.isArray(confirmed) ? confirmed : next;
       if (undo) history.current.pop(); else history.current = [...history.current.slice(-19), previous];
       lastCommittedPlans.current = savedPlans;
       setPlans(savedPlans);
