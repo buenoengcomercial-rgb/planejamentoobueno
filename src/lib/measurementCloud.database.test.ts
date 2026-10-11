@@ -7,6 +7,7 @@ import { createIncorporationBackup, prepareIncorporation, incorporateApprovedAdd
 import { approveMeasuredPeriod, editMeasuredRow, editMeasuredBulletin, deleteMeasuredRow, entryFor, newMeasuredRow, pasteMeasuredRow, freezeMeasuredPeriod, captureMeasurement, monthlyLines, addMeasuredPeriod, fiscalSubmissionCurrent, type MeasurementWorkspace } from './measurementWorkspace';
 import { encodeMeasurementWorkspace } from './measurementCloudCodec';
 import { measurementEntryPatch } from './measurementEntryPatch';
+import { measurementCapturePatch } from './measurementCapturePatch';
 import { deleteMeasuredPeriod, restoreMeasuredPeriod } from './measurementLifecycle';
 const projectId='00000000-0000-4000-8000-000000000001', userId='00000000-0000-4000-8000-000000000002', planId='00000000-0000-4000-8000-000000000003';
 const actor={id:userId,name:'Teste',canEdit:true,canReview:true};
@@ -49,6 +50,7 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010225000_measurement_fiscal_lines_linear.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010235000_measurement_history_compaction.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011000000_measurement_history_fiscal_marker.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261011010000_measurement_capture_delta.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -677,5 +679,32 @@ describe('transação da Medição na nuvem',()=>{
   await expect(commit(bad)).rejects.toThrow('divergentes');
   expect((await commit(next)).entries.at(-1)!.rows[0].multiplier).toBe(3);
   await expect(db.exec(`UPDATE takeoff_plans SET deleted_at=now() WHERE id='${planId}'`)).rejects.toThrow('vinculada');
+ });
+ it('captura pontual envia apenas planta e lançamento alterados, com confirmação idempotente',async()=>{
+  await seed(); const w=await commit(editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('capture-delta')));
+  w.plans[0].file=base.plans[0].file;
+  const mark={id:'delta-mark',name:'Placas',kind:'count' as const,page:1,points:[{x:1,y:1},{x:3,y:4}],projectId,
+    measurementId:'m1',serviceId:'signs'};
+  const next=captureMeasurement(w,actor,{measurementId:'m1',serviceId:'signs',rowId:'capture-delta',field:'multiplier'},
+    {...w.plans[0],measures:[mark]},mark);
+  const patch=measurementCapturePatch(w,next);
+  expect(patch).toBeTruthy();
+  expect(patch?.event.beforePlans).toBeUndefined();
+  expect(JSON.stringify(encodeMeasurementWorkspace(patch)).length).toBeLessThan(JSON.stringify(encodeMeasurementWorkspace(next)).length);
+  const before=await currentDataHash();
+  const receipt=(await db.query<{value:{revision:number;patch:unknown}}>('SELECT patch_measurement_capture($1,$2,$3) value',
+    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows[0].value;
+  expect(receipt).toMatchObject({revision:next.revision,patch:encodeMeasurementWorkspace(patch)});
+  const loaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(loaded).toEqual(JSON.parse(wire(next)));
+  expect((await db.query('SELECT patch_measurement_capture($1,$2,$3)',
+    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows).toHaveLength(1);
+  expect((await db.query<{count:number}>('SELECT count(*)::int count FROM measurement_workspace_events')).rows[0].count).toBe(2);
+  const tampered=structuredClone(patch!);
+  tampered.plan.measures[0].points.push({x:8,y:8});
+  await expect(db.query('SELECT patch_measurement_capture($1,$2,$3)',
+    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(tampered))])).rejects.toThrow();
+  expect(await currentDataHash()).not.toBe(before);
+  expect((await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value).toEqual(loaded);
  });
 });

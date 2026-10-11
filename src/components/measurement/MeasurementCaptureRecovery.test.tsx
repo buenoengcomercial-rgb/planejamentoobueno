@@ -51,21 +51,25 @@ describe('saída segura do levantamento na Medição', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Fechar página' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
-  it('só abre uma nova célula depois da confirmação da linha e não abre se a gravação falhar', async () => {
+  it('abre a célula após a escrita local mesmo com a nuvem ainda pendente', async () => {
     const { repository } = setup(true);
-    let confirm!: (candidate: Workspace) => void;
-    vi.mocked(repository.commit).mockImplementationOnce(() => new Promise(resolve => { confirm = resolve; }));
+    let releaseLocal!: () => void;
+    repository.stage = vi.fn(() => new Promise(resolve => { releaseLocal = resolve; }));
+    vi.mocked(repository.commit).mockImplementationOnce(() => new Promise(() => undefined));
     fireEvent.click(await screen.findByLabelText('Quantidade de Placas'));
     openPlanCell('A');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    await act(async () => confirm(vi.mocked(repository.commit).mock.calls[0][0]));
+    await waitFor(() => expect(repository.stage).toHaveBeenCalledTimes(1));
+    await act(async () => releaseLocal());
     expect(await screen.findByRole('dialog')).toHaveTextContent('Linha 1, coluna A');
+    expect(repository.commit).toHaveBeenCalledTimes(1);
   });
-  it('falha ao criar a linha mantém rascunho e não abre uma célula inexistente', async () => {
-    const { repository } = setup(true); vi.mocked(repository.commit).mockRejectedValue(new Error('Sem conexão'));
+  it('falha na escrita local mantém rascunho e não abre uma célula inexistente', async () => {
+    const { repository } = setup(true);
+    repository.stage = vi.fn(async () => { throw new Error('Disco indisponível'); });
     fireEvent.click(await screen.findByLabelText('Quantidade de Placas'));
     openPlanCell('A');
-    await screen.findByText('Sem conexão'); expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await screen.findByText('Precisa resolver conflito'); expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(repository.clearDraft).not.toHaveBeenCalled();
   });
 });

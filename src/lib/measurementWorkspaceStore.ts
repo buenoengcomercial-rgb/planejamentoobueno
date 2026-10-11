@@ -1,22 +1,37 @@
 import type { MeasuredEntry, MeasurementAudit, MeasurementWorkspace } from './measurementWorkspace';
+import type { MeasurementCapturePatch } from './measurementCapturePatch';
 import { prepareIncorporation, verifyIncorporationBackup, type IncorporationBackup } from './measurementIncorporation';
 
 export interface WorkspaceDraft { projectId: string; measurementId: string; serviceId: string; rowId: string; changes: Record<string, unknown> }
-export interface PendingMeasurementSave { baseRevision: number; candidate: MeasurementWorkspace; archivedAt?: string; compact?: PendingMeasurementEntrySave }
+export interface PendingMeasurementSave { baseRevision: number; candidate: MeasurementWorkspace; archivedAt?: string; compact?: PendingMeasurementDeltaSave }
 export interface PendingMeasurementEntrySave {
   format: 'entry-patch-v1'; projectId: string; baseRevision: number; operationId: string;
   patch: { entries: MeasuredEntry[]; event: MeasurementAudit }; archivedAt?: string;
 }
-export type StoredMeasurementPending = PendingMeasurementSave | PendingMeasurementEntrySave;
+export interface PendingMeasurementCaptureSave {
+  format: 'capture-patch-v1'; projectId: string; baseRevision: number; operationId: string;
+  patch: Omit<MeasurementCapturePatch, 'plan'> & { plan: Omit<MeasurementCapturePatch['plan'], 'file'> };
+  archivedAt?: string;
+}
+export type PendingMeasurementDeltaSave = PendingMeasurementEntrySave | PendingMeasurementCaptureSave;
+export type StoredMeasurementPending = PendingMeasurementSave | PendingMeasurementDeltaSave;
 const pendingOperationId = (pending: StoredMeasurementPending) => 'operationId' in pending
   ? pending.operationId : pending.candidate.audit.at(-1)?.id;
 export interface MeasurementRepository {
   savedLabel?: string;
+  loadedOffline?(): boolean;
   remoteRevision?(): Promise<number>;
   confirmedOperation?(operationId: string, revision: number): Promise<boolean>;
   watch?(onRevision: (revision: number) => void, onConnection: (connected: boolean) => void): () => void;
   preservePending?(pending: PendingMeasurementSave): Promise<void>;
   preserveEntryPending?(pending: PendingMeasurementEntrySave): Promise<void>;
+  preserveCapturePending?(pending: PendingMeasurementCaptureSave): Promise<void>;
+  /** Persist an operation before the editor may rely on its optimistic value. */
+  stage?(candidate: MeasurementWorkspace, base: MeasurementWorkspace): Promise<void>;
+  /** Last confirmed cloud snapshot for reopening an offline browser. */
+  cacheSnapshot?(workspace: MeasurementWorkspace): Promise<void>;
+  /** Unconfirmed operations in their original order, ready to resume after reload. */
+  queued?(confirmed?: MeasurementWorkspace | null): Promise<PendingMeasurementSave[]>;
   removeEntryPending?(operationId: string): Promise<void>;
   storedPendingSaves?(): Promise<StoredMeasurementPending[]>;
   removePending?(operationId: string): Promise<void>;
@@ -62,16 +77,20 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
   };
   return {
     preservePending: pending => update<StoredMeasurementPending[]>('pending', rows => [...(rows ?? []).filter(p => pendingOperationId(p) !== pendingOperationId(pending)), pending]),
-    preserveEntryPending: pending => update<PendingMeasurementEntrySave[]>('pending_entry_patches', rows => [...(rows ?? []).filter(p => p.operationId !== pending.operationId), pending]),
-    removeEntryPending: operationId => update<PendingMeasurementEntrySave[]>('pending_entry_patches', rows => (rows ?? []).filter(p => p.operationId !== operationId)),
+    preserveEntryPending: pending => update<PendingMeasurementDeltaSave[]>('pending_entry_patches', rows => [...(rows ?? []).filter(p => p.operationId !== pending.operationId), pending]),
+    preserveCapturePending: pending => update<PendingMeasurementDeltaSave[]>('pending_entry_patches', rows => [...(rows ?? []).filter(p => p.operationId !== pending.operationId), pending]),
+    stage: (candidate, base) => update<StoredMeasurementPending[]>('pending', rows => [...(rows ?? []).filter(p => pendingOperationId(p) !== candidate.audit.at(-1)?.id), { baseRevision: base.revision, candidate }]),
+    cacheSnapshot: workspace => update<MeasurementWorkspace>('workspaces', current =>
+      current && current.revision > workspace.revision ? current : workspace),
+    removeEntryPending: operationId => update<PendingMeasurementDeltaSave[]>('pending_entry_patches', rows => (rows ?? []).filter(p => p.operationId !== operationId)),
     storedPendingSaves: async () => {
-      const [legacy, compact] = await Promise.all([read<StoredMeasurementPending[]>('pending'), read<PendingMeasurementEntrySave[]>('pending_entry_patches')]);
-      return [...(legacy ?? []), ...(compact ?? [])];
+      const [legacy, compact] = await Promise.all([read<StoredMeasurementPending[]>('pending'), read<PendingMeasurementDeltaSave[]>('pending_entry_patches')]);
+      return [...(legacy ?? []), ...(compact ?? [])].sort((a, b) => a.baseRevision - b.baseRevision);
     },
     removePending: async operationId => {
       await Promise.all([
         update<StoredMeasurementPending[]>('pending', rows => (rows ?? []).filter(p => pendingOperationId(p) !== operationId)),
-        update<PendingMeasurementEntrySave[]>('pending_entry_patches', rows => (rows ?? []).filter(p => p.operationId !== operationId)),
+        update<PendingMeasurementDeltaSave[]>('pending_entry_patches', rows => (rows ?? []).filter(p => p.operationId !== operationId)),
       ]);
     },
     load: async () => {
@@ -82,11 +101,12 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
     backup: () => read<IncorporationBackup>('backups'),
     pending: async () => (await read<StoredMeasurementPending[]>('pending'))?.find((p): p is PendingMeasurementSave => !p.archivedAt && 'candidate' in p) ?? null,
     pendingSaves: async () => (await read<StoredMeasurementPending[]>('pending') ?? []).filter((p): p is PendingMeasurementSave => 'candidate' in p),
+    queued: async () => (await read<StoredMeasurementPending[]>('pending') ?? []).filter((p): p is PendingMeasurementSave => !p.archivedAt && 'candidate' in p).sort((a, b) => a.baseRevision - b.baseRevision),
     archivePending: async operationId => {
       const archivedAt = new Date().toISOString();
       await Promise.all([
         update<StoredMeasurementPending[]>('pending', rows => (rows ?? []).map(p => pendingOperationId(p) === operationId ? { ...p, archivedAt } : p)),
-        update<PendingMeasurementEntrySave[]>('pending_entry_patches', rows => (rows ?? []).map(p => p.operationId === operationId ? { ...p, archivedAt } : p)),
+        update<PendingMeasurementDeltaSave[]>('pending_entry_patches', rows => (rows ?? []).map(p => p.operationId === operationId ? { ...p, archivedAt } : p)),
       ]);
     },
     drafts: async () => await read<WorkspaceDraft[]>('drafts') ?? [],
