@@ -21,7 +21,9 @@ BEGIN
   RETURN jsonb_set(p_patch,'{event}',v_event);
 END; $$;
 REVOKE ALL ON FUNCTION public.measurement_lifecycle_hydrate_patch(jsonb)
-  FROM PUBLIC,anon,authenticated;
+  FROM PUBLIC,anon;
+-- materialize_measurement_workspace is SECURITY INVOKER and replays for viewers.
+GRANT EXECUTE ON FUNCTION public.measurement_lifecycle_hydrate_patch(jsonb) TO authenticated;
 
 CREATE OR REPLACE FUNCTION public.materialize_measurement_workspace(p_project_id uuid)
 RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path='' AS $$

@@ -80,6 +80,11 @@ describe('transação da Medição na nuvem',()=>{
     expect(materialized.entries).toEqual(base.entries);
     expect((materialized.audit.at(-1) as DeltaAudit)?.periodDelta?.kind).toBe('create');
     expect(materialized.audit.at(-1)?.beforePeriods).toBeUndefined();
+    await db.exec("SET ROLE authenticated; SET test.role='viewer'");
+    const viewerWorkspace=(await db.query<{value:MeasurementWorkspace}>(
+      'SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(viewerWorkspace.periods).toEqual(materialized.periods);
+    await db.exec("RESET ROLE; SET test.role='owner'");
     const headers=async()=>(await db.query<{value:Array<{id:string;number:number;startDate:string;endDate:string;status:string}>}>(
       'SELECT list_measurement_period_headers($1) value',[projectId])).rows[0].value;
     expect((await headers()).at(-1)).toMatchObject({id,number:created.periods.at(-1)!.number,
