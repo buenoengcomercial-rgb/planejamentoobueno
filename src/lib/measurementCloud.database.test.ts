@@ -51,6 +51,7 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010210000_measurement_entry_delta.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010220000_measurement_entry_projection.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010225000_measurement_fiscal_lines_linear.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261011200000_measurement_fiscal_lines_single_pass.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261010235000_measurement_history_compaction.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011000000_measurement_history_fiscal_marker.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011010000_measurement_capture_delta.sql',import.meta.url),'utf8'));
@@ -438,6 +439,23 @@ describe('transação da Medição na nuvem',()=>{
    expect(modern).toEqual(legacy);
   }
   await db.exec(await readFile(new URL('../../supabase/migrations/20261010225000_measurement_fiscal_lines_linear.sql',import.meta.url),'utf8'));
+  const previousLines=(await db.query<{value:unknown}>('SELECT measurement_fiscal_lines($1,$2) value',
+   [wire(fiscal),JSON.stringify(fiscal.periods.find(period=>period.id==='m1'))])).rows[0].value;
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261011200000_measurement_fiscal_lines_single_pass.sql',import.meta.url),'utf8'));
+  const singlePassLines=(await db.query<{value:unknown}>('SELECT measurement_fiscal_lines($1,$2) value',
+   [wire(fiscal),JSON.stringify(fiscal.periods.find(period=>period.id==='m1'))])).rows[0].value;
+  expect(singlePassLines).toEqual(previousLines);
+  // An approved prior period must use its frozen snapshot, not later edits to
+  // the historical detail rows, when calculating the next period's balance.
+  const approvedPrior=approveMeasuredPeriod(fiscal,actor,'m1');
+  const divergentPrior=structuredClone(approvedPrior);
+  const oldEntry=divergentPrior.entries.find(entry=>entry.measurementId==='m1' && entry.serviceId==='signs');
+  if(oldEntry) oldEntry.rows=[];
+  const nextPeriod=divergentPrior.periods.find(p=>p.id==='m2')!;
+  const frozenReference=(await db.query<{value:unknown}>('SELECT measurement_fiscal_lines_legacy($1,$2) value',
+   [wire(divergentPrior),JSON.stringify(nextPeriod)])).rows[0].value;
+  expect((await db.query<{value:unknown}>('SELECT measurement_fiscal_lines($1,$2) value',
+   [wire(divergentPrior),JSON.stringify(nextPeriod)])).rows[0].value).toEqual(frozenReference);
   await db.exec('SET ROLE authenticated');
   expect((await db.query<{value:unknown}>('SELECT measurement_fiscal_lines($1,$2) value',
    [wire(fiscal),JSON.stringify(fiscal.periods.find(p=>p.id==='m1'))])).rows[0].value).toEqual(fiscal.periods.find(p=>p.id==='m1')?.frozen);
@@ -456,6 +474,73 @@ describe('transação da Medição na nuvem',()=>{
   expect((await db.query<{data:unknown}>('SELECT load_measurement_workspace($1) data',[projectId])).rows[0].data)
    .toEqual(JSON.parse(wire(fiscal)));
  },180000);
+ it('pré-agrega 57 entradas em três períodos e cinco plantas sem mudar as linhas fiscais',async()=>{
+  const services=[...base.services,...Array.from({length:402-base.services.length},(_,index)=>({
+   ...base.services[0],id:`many-${index}`,item:`${index+2000}`,description:`Serviço ${index}`,
+   availableFromNumber:1,
+  }))];
+  const periods:MeasurementWorkspace['periods']=[
+   structuredClone(base.periods.find(p=>p.id==='m1')!),
+   structuredClone(base.periods.find(p=>p.id==='m2')!),{
+   ...structuredClone(base.periods.find(p=>p.id==='m2')!),id:'m3',number:3,
+   startDate:'2026-10-30',endDate:'2026-11-28',status:'draft' as const,
+  }];
+  const entries=Array.from({length:57},(_,index)=>{
+   const measurementId=index<25?'m1':index<45?'m2':'m3';
+   const service=services[index<25?index:index<45?index-25:index-45];
+   const row={...newMeasuredRow(`many-row-${index}`),multiplier:1,measuredQuantity:index+1};
+   const rows=index%7===0?[row,{...newMeasuredRow(`many-row-extra-${index}`),multiplier:1,measuredQuantity:0.5}]:[row];
+   return {projectId:base.projectId,measurementId,serviceId:service.id,rows};
+  });
+  const plans=Array.from({length:5},(_,index)=>({
+   ...base.plans[0],id:`many-plan-${index}`,name:`Planta ${index}`,
+  }));
+  const sample={...base,services,periods,entries,plans} as MeasurementWorkspace;
+  periods[0].status='approved';
+  periods[0].frozen=monthlyLines(sample,'m1');
+  periods[1].status='in_review';
+  periods[1].frozen=monthlyLines(sample,'m2');
+  // In review is editable: the next period must use the changed detail, not
+  // the older proposal stored in frozen.
+  entries.find(entry=>entry.measurementId==='m2')!.rows[0].measuredQuantity=80;
+  const target=periods[2];
+  expect(entries).toHaveLength(57);
+  expect(plans).toHaveLength(5);
+  const firstPeriod=periods[0];
+  const missingServiceId={...sample,entries:[...sample.entries,
+   {...structuredClone(sample.entries[0]),serviceId:undefined}]};
+  const missingServiceIdWire=JSON.stringify(encodeMeasurementWorkspace(missingServiceId));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261010225000_measurement_fiscal_lines_linear.sql',import.meta.url),'utf8'));
+  const oldFirst=(await db.query<{value:unknown}>('SELECT measurement_fiscal_lines($1,$2) value',
+   [wire(sample),JSON.stringify(firstPeriod)])).rows[0].value;
+  const oldMalformed=(await db.query<{value:unknown}>('SELECT measurement_fiscal_lines($1,$2) value',
+   [missingServiceIdWire,JSON.stringify(target)])).rows[0].value;
+  const oldStarted=performance.now();
+  const oldResult=(await db.query<{value:unknown}>('SELECT measurement_fiscal_lines($1,$2) value',
+   [wire(sample),JSON.stringify(target)])).rows[0].value;
+  const oldMs=performance.now()-oldStarted;
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261011200000_measurement_fiscal_lines_single_pass.sql',import.meta.url),'utf8'));
+  const newStarted=performance.now();
+  const newResult=(await db.query<{value:unknown}>('SELECT measurement_fiscal_lines($1,$2) value',
+   [wire(sample),JSON.stringify(target)])).rows[0].value;
+  console.info(`measurement fiscal 402 services, 57 entries, 5 plans: previous ${oldMs.toFixed(1)} ms, single-pass ${(performance.now()-newStarted).toFixed(1)} ms`);
+  const newFirst=(await db.query<{value:unknown}>('SELECT measurement_fiscal_lines($1,$2) value',
+   [wire(sample),JSON.stringify(firstPeriod)])).rows[0].value;
+  const newMalformed=(await db.query<{value:unknown}>('SELECT measurement_fiscal_lines($1,$2) value',
+   [missingServiceIdWire,JSON.stringify(target)])).rows[0].value;
+  expect(newResult).toEqual(oldResult);
+  expect(newFirst).toEqual(oldFirst);
+  expect(newMalformed).toEqual(oldMalformed);
+  const fiscalLines=newResult as Array<{service:{id:string};qty:number;prior:number}>;
+  expect(fiscalLines.find(line=>line.service.id===services[4].id)?.qty).toBe(50.5);
+  expect(fiscalLines.find(line=>line.service.id===services[0].id)?.prior)
+   .toBe(monthlyLines(sample,'m3').find(line=>line.service.id===services[0].id)?.prior);
+  // Two detail rows are summed; a second entry object with the same
+  // service/period is invalid and must still be rejected by the server.
+  const duplicateEntry={...sample,entries:[...sample.entries,structuredClone(sample.entries[0])]};
+  await expect(db.query('SELECT validate_measurement_workspace($1,$2)',
+   [wire(sample),wire(duplicateEntry)])).rejects.toThrow('Lançamento duplicado');
+ });
  it('migração repetida reconstrói a projeção de um delta v1 pendente sem mudar dados',async()=>{
   await seed();
   const first=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('legacy-delta'),multiplier:3});
