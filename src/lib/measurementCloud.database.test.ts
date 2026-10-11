@@ -1,21 +1,24 @@
 // @vitest-environment node
 import { PGlite } from '@electric-sql/pglite';
 import { readFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation, incorporateApprovedAdditive } from './measurementIncorporation';
-import { approveMeasuredPeriod, editMeasuredRow, editMeasuredBulletin, deleteMeasuredRow, entryFor, newMeasuredRow, pasteMeasuredRow, freezeMeasuredPeriod, captureMeasurement, monthlyLines, addMeasuredPeriod, fiscalSubmissionCurrent, transactMeasurement, type MeasurementWorkspace } from './measurementWorkspace';
+import { approveMeasuredPeriod, editMeasuredRow, editMeasuredBulletin, deleteMeasuredRow, entryFor, newMeasuredRow, pasteMeasuredRow, freezeMeasuredPeriod, captureMeasurement, monthlyLines, addMeasuredPeriod, fiscalSubmissionCurrent, transactMeasurement, type MeasurementWorkspace, type MeasuredPeriod } from './measurementWorkspace';
 import { encodeMeasurementWorkspace } from './measurementCloudCodec';
 import { measurementEntryPatch } from './measurementEntryPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
 import { measurementDeletionPatch } from './measurementDeletionPatch';
 import { deleteMeasuredPeriod, restoreMeasuredPeriod } from './measurementLifecycle';
 const projectId='00000000-0000-4000-8000-000000000001', userId='00000000-0000-4000-8000-000000000002', planId='00000000-0000-4000-8000-000000000003';
+type DeltaAudit = MeasurementWorkspace['audit'][number] & {periodDelta?: {kind:string;periodId:string;afterPeriod?:MeasuredPeriod}};
 const actor={id:userId,name:'Teste',canEdit:true,canReview:true};
 let db:PGlite, base:MeasurementWorkspace;
 const wire=(w:MeasurementWorkspace)=>JSON.stringify(encodeMeasurementWorkspace(w));
 async function seed(w=base) { await db.exec("RESET ROLE; SET test.role='owner'"); await db.query('DELETE FROM measurement_workspace_events'); await db.query('DELETE FROM measurement_workspaces'); await db.query('INSERT INTO measurement_workspaces(project_id,revision,data) VALUES($1,$2,$3)',[projectId,w.revision,wire(w)]); }
 async function commit(w:MeasurementWorkspace,revision=w.revision-1) { return (await db.query<{value:MeasurementWorkspace}>('SELECT commit_measurement_workspace($1,$2,$3) value',[projectId,revision,wire(w)])).rows[0].value; }
+async function commitLifecycle(revision:number,patch:Record<string,unknown>) { return (await db.query<{value:{projectId:string;revision:number;replayed?:boolean;currentRevision?:number;patch:{kind:string;periodId:string;period:unknown;entries:unknown[];event:MeasurementWorkspace['audit'][number]}}}>('SELECT commit_measurement_lifecycle($1,$2,$3) value',[projectId,revision,JSON.stringify(patch)])).rows[0].value; }
 async function currentDataHash() { return (await db.query<{hash:string}>('SELECT md5(load_measurement_workspace($1)::text) hash',[projectId])).rows[0].hash; }
 async function compactHistory(revision:number,hash?:string) { return db.query<{value:{revision:number;auditEventsBefore:number;auditEventsAfter:number;eventRowsDeleted:number;compactReceiptsAdded:number}}>(
  'SELECT compact_measurement_history($1,$2,$3) value',[projectId,revision,hash??await currentDataHash()]); }
@@ -59,11 +62,279 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011170000_measurement_capture_targeted_commit.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011180000_measurement_row_deletion_patch.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011190000_measurement_quantity_history_compaction.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261011210000_measurement_lifecycle_delta.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
 afterAll(async()=>{await db.close();});
 describe('transação da Medição na nuvem',()=>{
+  it('cria, exclui e restaura período por deltas idempotentes sem alterar os lançamentos anteriores',async()=>{
+    await seed();
+    const created=addMeasuredPeriod(base,actor), id=created.periods.at(-1)!.id, createEvent=created.audit.at(-1)!;
+    const createPatch={kind:'create',operationId:createEvent.id,at:createEvent.at,actorName:actor.name,periodId:id,period:created.periods.at(-1)};
+    const first=await commitLifecycle(base.revision,createPatch);
+    expect(first.revision).toBe(base.revision+1);
+    expect(await commitLifecycle(base.revision,createPatch)).toMatchObject({
+      replayed:true,currentRevision:first.revision,revision:first.revision,
+      patch:{event:{id:createEvent.id}},
+    });
+    let materialized=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(materialized.periods).toHaveLength(base.periods.length+1);
+    expect(materialized.entries).toEqual(base.entries);
+    expect((materialized.audit.at(-1) as DeltaAudit)?.periodDelta?.kind).toBe('create');
+    expect(materialized.audit.at(-1)?.beforePeriods).toBeUndefined();
+    await db.exec("SET ROLE authenticated; SET test.role='viewer'");
+    const viewerWorkspace=(await db.query<{value:MeasurementWorkspace}>(
+      'SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(viewerWorkspace.periods).toEqual(materialized.periods);
+    await db.exec("RESET ROLE; SET test.role='owner'");
+    const headers=async()=>(await db.query<{value:Array<{id:string;number:number;startDate:string;endDate:string;status:string}>}>(
+      'SELECT list_measurement_period_headers($1) value',[projectId])).rows[0].value;
+    expect((await headers()).at(-1)).toMatchObject({id,number:created.periods.at(-1)!.number,
+      startDate:created.periods.at(-1)!.startDate,endDate:created.periods.at(-1)!.endDate,status:'draft'});
+    const removePatch={kind:'delete',operationId:crypto.randomUUID(),at:new Date().toISOString(),actorName:actor.name,periodId:id,reason:'Teste reversível'};
+    const removed=await commitLifecycle(first.revision,removePatch);
+    expect(removed.patch.period).toBeNull();
+    expect(removed.patch.entries).toEqual([]);
+    expect((await db.query<{value:{patch:{event:{before:unknown[]}}}}>(
+      'SELECT after_data value FROM measurement_workspace_events WHERE operation_id=$1',
+      [removePatch.operationId])).rows[0].value.patch.event.before).toEqual([]);
+    expect((await commitLifecycle(first.revision,removePatch)).revision).toBe(removed.revision);
+    expect(await commitLifecycle(base.revision,createPatch)).toMatchObject({
+      replayed:true,currentRevision:removed.revision,revision:first.revision,
+    });
+    materialized=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(materialized.periods).toHaveLength(base.periods.length);
+    expect(materialized.entries).toEqual(base.entries);
+    expect((await headers()).find(period=>period.id===id)).toBeUndefined();
+    const restorePatch={kind:'restore',operationId:crypto.randomUUID(),at:new Date().toISOString(),actorName:actor.name,periodId:id,sourceAuditId:removed.patch.event.id,reason:'Restaurar teste'};
+    const restored=await commitLifecycle(removed.revision,restorePatch);
+    expect(restored.patch.period).toEqual(created.periods.at(-1));
+    materialized=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(materialized.periods).toEqual(created.periods);
+    expect(materialized.entries).toEqual(base.entries);
+    expect((await headers()).at(-1)?.id).toBe(id);
+    const state=(await db.query<{ok:boolean}>('SELECT state_hash=md5(jsonb_build_object(\'services\',services,\'periods\',periods,\'plans\',plans,\'entries\',entries,\'coreHash\',core_hash,\'auditDigest\',audit_digest)::text) ok FROM measurement_workspace_entry_state WHERE project_id=$1',[projectId])).rows[0];
+    expect(state.ok).toBe(true);
+    await expect(commitLifecycle(base.revision,{...createPatch,operationId:crypto.randomUUID()})).rejects.toThrow('Conflito');
+  });
+  it('remove e recupera somente as entradas da medição excluída',async()=>{
+    await seed();
+    const created=addMeasuredPeriod(base,actor), id=created.periods.at(-1)!.id, ev=created.audit.at(-1)!;
+    const first=await commitLifecycle(base.revision,{kind:'create',operationId:ev.id,at:ev.at,actorName:actor.name,periodId:id,period:created.periods.at(-1)});
+    const current=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
+    const edited=editMeasuredRow(current,actor,id,current.services[0].id,{...newMeasuredRow(),multiplier:1});
+    await commit(edited);
+    const before=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
+    const removePatch={kind:'delete',operationId:crypto.randomUUID(),at:new Date().toISOString(),actorName:actor.name,periodId:id,reason:'Teste com lançamento'};
+    const removed=await commitLifecycle(before.revision,removePatch);
+    expect(removed.patch.entries).toEqual(before.entries.filter(e=>e.measurementId===id));
+    const afterDelete=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(afterDelete.entries).toEqual(base.entries);
+    const restored=await commitLifecycle(removed.revision,{kind:'restore',operationId:crypto.randomUUID(),at:new Date().toISOString(),actorName:actor.name,periodId:id,sourceAuditId:removed.patch.event.id,reason:'Recuperar lançamento'});
+    expect(restored.patch.entries).toEqual(before.entries.filter(e=>e.measurementId===id));
+    const afterRestore=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(afterRestore.entries).toEqual(before.entries);
+    expect(afterRestore.periods).toEqual(before.periods);
+    expect(first.revision+3).toBe(restored.revision);
+  });
+  it('exclui e restaura a última medição em análise sem tocar nas medições anteriores',async()=>{
+    await seed();
+    const created=addMeasuredPeriod(base,actor), id=created.periods.at(-1)!.id, event=created.audit.at(-1)!;
+    await commitLifecycle(base.revision,{kind:'create',operationId:event.id,at:event.at,
+      actorName:actor.name,periodId:id,period:created.periods.at(-1)});
+    let current=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    const edited=editMeasuredRow(current,actor,id,current.services[0].id,{...newMeasuredRow('third-period'),multiplier:1});
+    await db.query('SELECT patch_measurement_entries($1,$2,$3)',[
+      projectId,current.revision,JSON.stringify(measurementEntryPatch(current,edited))]);
+    current=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    const sent=freezeMeasuredPeriod(current,actor,id), fiscal=sent.audit.at(-1)!;
+    await commitLifecycle(current.revision,{kind:'submit',operationId:fiscal.id,at:fiscal.at,
+      actorName:actor.name,periodId:id,period:sent.periods.at(-1)});
+    current=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(current.periods.at(-1)?.status).toBe('in_review');
+    const beforePrior=current.periods.slice(0,-1), entriesPrior=current.entries.filter(e=>e.measurementId!==id);
+    const removed=await commitLifecycle(current.revision,{kind:'delete',operationId:crypto.randomUUID(),
+      at:new Date().toISOString(),actorName:actor.name,periodId:id,reason:'Excluir período de teste'});
+    current=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(current.periods).toEqual(beforePrior);
+    expect(current.entries).toEqual(entriesPrior);
+    await commitLifecycle(current.revision,{kind:'restore',operationId:crypto.randomUUID(),
+      at:new Date().toISOString(),actorName:actor.name,periodId:id,
+      sourceAuditId:removed.patch.event.id,reason:'Restaurar período de teste'});
+    current=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(current.periods.at(-1)).toEqual(sent.periods.at(-1));
+    expect(current.periods.slice(0,-1)).toEqual(beforePrior);
+    expect(current.entries.filter(e=>e.measurementId===id)).toEqual(edited.entries.filter(e=>e.measurementId===id));
+  });
+  it('restaura lançamento excluído depois da compactação sem depender dos eventos antigos',async()=>{
+    await seed();
+    const created=addMeasuredPeriod(base,actor), id=created.periods.at(-1)!.id, event=created.audit.at(-1)!;
+    const createPatch={kind:'create',operationId:event.id,at:event.at,
+      actorName:actor.name,periodId:id,period:created.periods.at(-1)};
+    await commitLifecycle(base.revision,createPatch);
+    const current=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    const edited=editMeasuredRow(current,actor,id,current.services[0].id,{...newMeasuredRow('archived-entry'),multiplier:1});
+    await db.query('SELECT patch_measurement_entries($1,$2,$3)',[
+      projectId,current.revision,JSON.stringify(measurementEntryPatch(current,edited))]);
+    const removed=await commitLifecycle(edited.revision,{kind:'delete',operationId:crypto.randomUUID(),
+      at:new Date().toISOString(),actorName:actor.name,periodId:id,reason:'Arquivar e compactar'});
+    const compacted=(await compactQuantityHistory(removed.revision)).rows[0].value;
+    expect(compacted.quantityEventsRemoved).toBe(1);
+    expect((await db.query('SELECT * FROM measurement_workspace_events')).rows).toHaveLength(0);
+    expect(await commitLifecycle(base.revision,createPatch)).toMatchObject({
+      replayed:true,currentRevision:compacted.revision,revision:base.revision+1,
+      patch:{kind:'compacted_receipt',operationId:event.id},
+    });
+    const restored=await commitLifecycle(compacted.revision,{kind:'restore',operationId:crypto.randomUUID(),
+      at:new Date().toISOString(),actorName:actor.name,periodId:id,
+      sourceAuditId:removed.patch.event.id,reason:'Recuperar lançamento'});
+    expect(restored.patch.entries).toEqual(edited.entries.filter(entry=>entry.measurementId===id));
+    const after=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(after.entries).toEqual(edited.entries);
+    expect(after.periods).toEqual(created.periods);
+  });
+  it('reproduz deltas intercalados de período e quantitativo sem mudar a primeira medição',async()=>{
+    await seed();
+    const created=addMeasuredPeriod(base,actor), id=created.periods.at(-1)!.id, ev=created.audit.at(-1)!;
+    const first=await commitLifecycle(base.revision,{kind:'create',operationId:ev.id,at:ev.at,actorName:actor.name,periodId:id,period:created.periods.at(-1)});
+    let materialized=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
+    const edited=editMeasuredRow(materialized,actor,id,materialized.services[0].id,{...newMeasuredRow(),multiplier:1});
+    const entryPatch=measurementEntryPatch(materialized,edited)!;
+    await db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,first.revision,JSON.stringify(entryPatch)]);
+    materialized=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(materialized.entries).toEqual(edited.entries);
+    const removePatch={kind:'delete',operationId:crypto.randomUUID(),at:new Date().toISOString(),actorName:actor.name,periodId:id,reason:'Remover período testado'};
+    const removed=await commitLifecycle(materialized.revision,removePatch);
+    materialized=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(materialized.entries).toEqual(base.entries);
+    expect(materialized.periods).toEqual(base.periods);
+    expect(materialized.audit.at(-1)?.id).toBe(removed.patch.event.id);
+    const restored=await commitLifecycle(removed.revision,{kind:'restore',operationId:crypto.randomUUID(),at:new Date().toISOString(),actorName:actor.name,periodId:id,sourceAuditId:removed.patch.event.id,reason:'Restaurar período testado'});
+    materialized=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(materialized.entries).toEqual(edited.entries);
+    expect(materialized.periods).toEqual(created.periods);
+    expect(restored.revision).toBe(base.revision+4);
+  });
+  it('envia e aprova por delta fiscal sem replicar os 402 snapshots no audit',async()=>{
+    await seed();
+    const sent=freezeMeasuredPeriod(base,actor,base.periods[0].id), source=sent.audit.at(-1)!;
+    const submitPatch={kind:'submit',operationId:source.id,at:source.at,actorName:actor.name,
+      periodId:base.periods[0].id,period:sent.periods[0]};
+    const submitted=await commitLifecycle(base.revision,submitPatch);
+    expect(submitted.patch.event.action).toBe('Enviar para fiscalização');
+    expect((submitted.patch.event as DeltaAudit).periodDelta).toMatchObject({kind:'submit',periodId:base.periods[0].id});
+    expect((submitted.patch.event as DeltaAudit).periodDelta?.afterPeriod?.frozen).toEqual(sent.periods[0].frozen);
+    const storedFiscal=(await db.query<{value:{patch:{event:DeltaAudit;period:MeasuredPeriod}}}>(
+      'SELECT after_data value FROM measurement_workspace_events WHERE operation_id=$1',
+      [submitPatch.operationId])).rows[0].value;
+    expect(storedFiscal.patch.period.frozen).toEqual(sent.periods[0].frozen);
+    expect(storedFiscal.patch.event.periodDelta?.afterPeriod).toBeUndefined();
+    expect((await commitLifecycle(base.revision,submitPatch)).patch.event).toEqual(submitted.patch.event);
+    expect(submitted.patch.event.beforePeriods).toBeUndefined();
+    expect(submitted.patch.event.afterPeriods).toBeUndefined();
+    let materialized=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(materialized.periods[0].status).toBe('in_review');
+    expect(materialized.periods[0].frozen).toEqual(sent.periods[0].frozen);
+    expect(materialized.entries).toEqual(base.entries);
+    expect((await db.query<{value:Array<{status:string}>}>('SELECT list_measurement_period_headers($1) value',[projectId])).rows[0].value[0].status).toBe('in_review');
+    const approved=approveMeasuredPeriod(materialized,actor,base.periods[0].id), approval=approved.audit.at(-1)!;
+    const approvePatch={kind:'approve',operationId:approval.id,at:approval.at,actorName:actor.name,
+      periodId:base.periods[0].id,period:approved.periods[0]};
+    const saved=await commitLifecycle(submitted.revision,approvePatch);
+    expect(saved.patch.event.action).toBe('Aprovado pela fiscalização');
+    materialized=(await db.query<{value:MeasurementWorkspace}>('SELECT materialize_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(materialized.periods[0].status).toBe('approved');
+    expect(materialized.periods[0].frozen).toEqual(approved.periods[0].frozen);
+    expect(materialized.entries).toEqual(base.entries);
+    expect((await db.query<{value:Array<{status:string}>}>('SELECT list_measurement_period_headers($1) value',[projectId])).rows[0].value[0].status).toBe('approved');
+    expect((await commitLifecycle(submitted.revision,approvePatch)).revision).toBe(saved.revision);
+    await expect(commitLifecycle(saved.revision,{...approvePatch,operationId:crypto.randomUUID()})).rejects.toThrow('Transição fiscal');
+  });
+  it('rollback fiscal rejeita snapshot adulterado e não bloqueia correção de outra medição',async()=>{
+    await seed();
+    const sent=freezeMeasuredPeriod(base,actor,base.periods[0].id), event=sent.audit.at(-1)!;
+    const tampered=structuredClone(sent.periods[0]); tampered.frozen![0].qty+=1;
+    const invalid={kind:'submit',operationId:event.id,at:event.at,actorName:actor.name,
+      periodId:base.periods[0].id,period:tampered};
+    await expect(commitLifecycle(base.revision,invalid)).rejects.toThrow('Quantidade divergente');
+    expect((await db.query<{revision:number}>('SELECT revision FROM measurement_workspaces WHERE project_id=$1',[projectId])).rows[0].revision).toBe(base.revision);
+    const valid={...invalid,operationId:crypto.randomUUID(),period:sent.periods[0]};
+    const saved=await commitLifecycle(base.revision,valid);
+    expect(saved.revision).toBe(base.revision+1);
+  });
+  it('compactação reconhece envio fiscal por delta e conserva o snapshot e marcador de edição posterior',async()=>{
+    await seed();
+    const edited=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('fiscal-delta'),multiplier:1});
+    await db.query('SELECT patch_measurement_entries($1,$2,$3)',[
+      projectId,base.revision,JSON.stringify(measurementEntryPatch(base,edited))]);
+    const sent=freezeMeasuredPeriod(edited,actor,'m1'), audit=sent.audit.at(-1)!;
+    const submitted=await commitLifecycle(edited.revision,{kind:'submit',operationId:audit.id,at:audit.at,
+      actorName:actor.name,periodId:'m1',period:sent.periods[0]});
+    const current=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    const dirty=editMeasuredRow(current,actor,'m1','signs',{...entryFor(current,'m1','signs').rows.at(-1)!,multiplier:2});
+    await db.query('SELECT patch_measurement_entries($1,$2,$3)',[
+      projectId,current.revision,JSON.stringify(measurementEntryPatch(current,dirty))]);
+    const before=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    const result=(await compactQuantityHistory(before.revision)).rows[0].value;
+    expect(result).toMatchObject({quantityEventsRemoved:2,fiscalMarkersKept:1,eventRowsDeleted:3});
+    const after=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(after.entries).toEqual(before.entries);
+    expect(after.audit.map(event=>event.action)).toEqual(['Enviar para fiscalização','Alteração fiscal posterior ao envio']);
+    expect((after.audit[0] as DeltaAudit).periodDelta?.afterPeriod?.frozen).toEqual(sent.periods[0].frozen);
+    expect(after.audit[1].affected).toContainEqual({measurementId:'m1',serviceId:'__fiscal_state__'});
+    expect((await db.query('SELECT * FROM measurement_workspace_events WHERE project_id=$1',[projectId])).rows).toHaveLength(0);
+    expect(submitted.revision).toBe(edited.revision+1);
+  });
+  it('compactação geral mantém decisões e snapshots fiscais de envio e aprovação por delta',async()=>{
+    await seed();
+    const sent=freezeMeasuredPeriod(base,actor,'m1'), submitAudit=sent.audit.at(-1)!;
+    await commitLifecycle(base.revision,{kind:'submit',operationId:submitAudit.id,at:submitAudit.at,
+      actorName:actor.name,periodId:'m1',period:sent.periods[0]});
+    const current=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    const approved=approveMeasuredPeriod(current,actor,'m1'), approvalAudit=approved.audit.at(-1)!;
+    await commitLifecycle(current.revision,{kind:'approve',operationId:approvalAudit.id,at:approvalAudit.at,
+      actorName:actor.name,periodId:'m1',period:approved.periods[0]});
+    const before=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    const result=(await compactHistory(before.revision)).rows[0].value;
+    expect(result).toMatchObject({eventRowsDeleted:2,auditEventsAfter:2});
+    const after=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(after.audit.map(event=>event.action)).toEqual(['Enviar para fiscalização','Aprovado pela fiscalização']);
+    expect((after.audit[0] as DeltaAudit).periodDelta?.afterPeriod?.frozen).toEqual(sent.periods[0].frozen);
+    expect((after.audit[1] as DeltaAudit).periodDelta?.afterPeriod?.frozen).toEqual(approved.periods[0].frozen);
+    expect(after.periods[0]).toEqual(approved.periods[0]);
+    expect(after.entries).toEqual(base.entries);
+  });
+  it('ciclo pontual não duplica o audit grande em cada revisão',async()=>{
+    const manyServices=Array.from({length:57},(_,index)=>({
+      ...base.services[0],id:`lifecycle-stress-${index}`,item:`9.${index}`,
+      description:`Serviço de estresse ${index}`,availableFromNumber:1,
+    }));
+    const large={...base,services:[...base.services,...manyServices],
+      entries:[...base.entries,...manyServices.map(service=>({projectId,measurementId:'m1',serviceId:service.id,rows:[]}))],
+      audit:[...base.audit,{id:crypto.randomUUID(),at:new Date().toISOString(),
+        actor:{id:userId,name:'Teste'},action:'Base anterior',affected:[],before:[],after:[],
+        note:randomBytes(3_300_000).toString('base64')}]} as MeasurementWorkspace;
+    expect(wire(large).length).toBeGreaterThan(4_400_000);
+    await seed(large);
+    const created=addMeasuredPeriod(large,actor), period=created.periods.at(-1)!, event=created.audit.at(-1)!;
+    const started=performance.now();
+    const first=await commitLifecycle(large.revision,{kind:'create',operationId:event.id,at:event.at,
+      actorName:actor.name,periodId:period.id,period});
+    const createMs=performance.now()-started;
+    const deleted=await commitLifecycle(first.revision,{kind:'delete',operationId:crypto.randomUUID(),
+      at:new Date().toISOString(),actorName:actor.name,periodId:period.id,reason:'Período de teste'});
+    const totalMs=performance.now()-started;
+    const eventSizes=(await db.query<{bytes:number}>(
+      'SELECT pg_column_size(before_data)+pg_column_size(after_data) bytes FROM measurement_workspace_events ORDER BY revision')).rows.map(row=>Number(row.bytes));
+    console.info(`measurement lifecycle, 4.4 MB audit + 57 entries: create ${createMs.toFixed(1)} ms, create/delete ${totalMs.toFixed(1)} ms, event bytes ${eventSizes.join(',')}`);
+    expect(eventSizes).toHaveLength(2);
+    expect(eventSizes.every(bytes=>bytes<50_000)).toBe(true);
+    expect(deleted.patch.entries).toEqual([]);
+    const after=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(after.entries).toEqual(large.entries);
+    expect(after.periods).toEqual(large.periods);
+  },60000);
   it('limpa edições de quantidade sem apagar envio fiscal, ciclo de medição ou gestão de desenhos',async()=>{
    const edited=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('historical'),multiplier:2});
    const sent=freezeMeasuredPeriod(edited,actor,'m1');

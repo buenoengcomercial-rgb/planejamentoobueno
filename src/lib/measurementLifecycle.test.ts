@@ -39,6 +39,25 @@ describe('Revisão e exclusão recuperável de medições', () => {
     expect(resent.periods[0].frozen![0].qty).toBe(220);
     expect(sent.periods[0].frozen![0].qty).toBe(221);
   });
+  it('reconhece envio e restauração depois que o servidor compacta a auditoria', async () => {
+    const sent = freezeMeasuredPeriod(await setup(), actor, 'm1');
+    const compact = structuredClone(sent);
+    const event = compact.audit.at(-1)!;
+    delete event.beforePeriods; delete event.afterPeriods;
+    event.periodDelta = { kind: 'submit', periodId: 'm1', beforeStatus: 'draft', afterStatus: 'in_review' };
+    expect(fiscalSubmissionCurrent(compact, 'm1')).toBe(true);
+    const changed = editMeasuredRow(compact, actor, 'm1', 'detectors', { ...entryFor(compact, 'm1', 'detectors').rows[0], multiplier: 220 });
+    expect(fiscalSubmissionCurrent(changed, 'm1')).toBe(false);
+
+    const created = addMeasuredPeriod(compact, actor);
+    const deleted = deleteMeasuredPeriod(created, actor, created.periods.at(-1)!.id, 'Período de teste');
+    const deletion = deleted.audit.at(-1)!;
+    const removedPeriod = deletion.beforePeriods!.at(-1)!;
+    delete deletion.beforePeriods; delete deletion.afterPeriods;
+    deletion.periodDelta = { kind: 'delete', periodId: removedPeriod.id, beforePeriod: removedPeriod };
+    const restored = restoreMeasuredPeriod(deleted, actor, deletion.id, 'Recuperar teste');
+    expect(restored.periods.at(-1)).toEqual(removedPeriod);
+  });
   it('permite corrigir durante a análise, preserva envio e congela somente ao aprovar', async () => {
     const original = await setup(), sent = freezeMeasuredPeriod(original, actor, 'm1');
     const sentEvent = structuredClone(sent.audit.at(-1));

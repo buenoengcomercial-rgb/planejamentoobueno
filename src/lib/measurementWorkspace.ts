@@ -30,6 +30,9 @@ export interface MonthlyLine {
 }
 export interface MeasurementAudit {
   lifecycle?: { kind: 'delete' | 'restore'; measurementId: string; reason: string; sourceAuditId?: string };
+  /** Compact server-confirmed lifecycle evidence; legacy events retain beforePeriods/afterPeriods. */
+  periodDelta?: { kind: 'create' | 'delete' | 'restore' | 'submit' | 'approve'; periodId: string;
+    beforePeriod?: MeasuredPeriod; afterPeriod?: MeasuredPeriod; beforeStatus?: MeasurementStatus; afterStatus?: MeasurementStatus };
   id: string; at: string; actor: { id: string; name: string }; action: string;
   affected: { measurementId: string; serviceId: string }[];
   before: MeasuredEntry[]; after: MeasuredEntry[];
@@ -99,11 +102,14 @@ export function fiscalSubmissionCurrent(w: MeasurementWorkspace, id: string): bo
   const changedAfter = (event: MeasurementAudit) => event.affected.some(target => target.measurementId === id)
     || event.bulletinChange?.measurementId === id || !!event.beforePlans || !!event.afterPlans
     || !!event.beforeServices || !!event.afterServices
+    || event.periodDelta?.periodId === id
     || (!!event.beforePeriods && !sameData(event.beforePeriods.find(p => p.id === id), event.afterPeriods?.find(p => p.id === id)));
   let index = -1;
   for (let i = w.audit.length - 1; i >= 0; i--) {
     const event = w.audit[i];
-    if (event.action === 'Enviar para fiscalização' && event.afterPeriods?.some(p => p.id === id && p.status === 'in_review')) {
+    if (event.action === 'Enviar para fiscalização' && (event.periodDelta?.kind === 'submit'
+      && event.periodDelta.periodId === id && event.periodDelta.afterStatus === 'in_review'
+      || event.afterPeriods?.some(p => p.id === id && p.status === 'in_review'))) {
       index = i;
       break;
     }
@@ -121,10 +127,11 @@ export function fiscalSubmissionCurrent(w: MeasurementWorkspace, id: string): bo
       && quantities.every(line => Math.abs(line.qty - (importedQuantities.get(line.service.id) ?? Number.NaN)) <= 1e-8)
       && !w.audit.some(changedAfter);
   }
-  const sent = w.audit[index].afterPeriods!.find(p => p.id === id)!;
-  if (sent.startDate !== period.startDate || sent.endDate !== period.endDate
-    || !sameData(sent.bulletin, measurementBulletin(w, id))
-    || !sameData(sent.frozen, monthlyLines(w, id))) return false;
+  const sent = w.audit[index].afterPeriods?.find(p => p.id === id);
+  if (!sent && !w.audit[index].periodDelta) return false;
+  if (sent && (sent.startDate !== period.startDate || sent.endDate !== period.endDate
+    || !sameData(sent.bulletin, measurementBulletin(w, id)))) return false;
+  if (!sameData(period.bulletin, measurementBulletin(w, id)) || !sameData(period.frozen, monthlyLines(w, id))) return false;
   return !w.audit.slice(index + 1).some(changedAfter);
 }
 
@@ -391,7 +398,7 @@ export function undoMeasuredOperation(w: MeasurementWorkspace, actor: Measuremen
     return next;
   }
   return transactMeasurement(w, actor, `Restaurar ${audit.id}`, next => {
-    if (audit.beforePeriods || audit.beforeServices) throw new Error('Mudanças de período, contratuais ou fiscais exigem revisão específica.');
+    if (audit.beforePeriods || audit.periodDelta || audit.beforeServices) throw new Error('Mudanças de período, contratuais ou fiscais exigem revisão específica.');
     for (const after of audit.after) if (json(entryFor(next, after.measurementId, after.serviceId)) !== json(after)) throw new Error('Há edição posterior. A restauração foi bloqueada.');
     if (audit.afterPlans && json(next.plans) !== json(audit.afterPlans)) throw new Error('Há alteração posterior na planta.');
     audit.before.forEach(e => putEntry(next, structuredClone(e)));

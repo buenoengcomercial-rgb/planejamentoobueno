@@ -2,7 +2,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation } from './measurementIncorporation';
-import { addMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, newMeasuredRow, type MeasurementWorkspace } from './measurementWorkspace';
+import { addMeasuredPeriod, approveMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, freezeMeasuredPeriod, newMeasuredRow, transactMeasurement, type MeasurementWorkspace } from './measurementWorkspace';
+import { deleteMeasuredPeriod, restoreMeasuredPeriod } from './measurementLifecycle';
 import { measurementEntryPatch } from './measurementEntryPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
 import { measurementDeletionPatch } from './measurementDeletionPatch';
@@ -15,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   rpc: vi.fn(), from: vi.fn(), download: vi.fn(), upload: vi.fn(),
   cached: null as MeasurementWorkspace | null,
   drafts: [] as WorkspaceDraft[], stored: [] as StoredMeasurementPending[],
-  revision: 0, eventRevision: null as number | null, missingVersion: false,
+  revision: 0, eventRevision: null as number | null, compactedRevision: null as number | null, missingVersion: false,
 }));
 vi.mock('@/integrations/supabase/client', () => ({ supabase: {
   rpc: mocks.rpc, from: mocks.from,
@@ -56,9 +57,12 @@ function patchSaved(base: MeasurementWorkspace, next: MeasurementWorkspace) {
 }
 beforeEach(() => {
   vi.clearAllMocks(); mocks.cached = null; mocks.drafts = []; mocks.stored = [];
-  mocks.revision = 0; mocks.eventRevision = null; mocks.missingVersion = false;
+  mocks.revision = 0; mocks.eventRevision = null; mocks.compactedRevision = null; mocks.missingVersion = false;
   mocks.from.mockImplementation((table: string) => ({ select: () => ({ eq: () => ({
-    eq: () => ({ maybeSingle: async () => ({ data: table === 'measurement_workspace_events' && mocks.eventRevision !== null ? { revision: mocks.eventRevision } : null, error: null }) }),
+    eq: () => ({ maybeSingle: async () => ({ data: table === 'measurement_workspace_events' && mocks.eventRevision !== null
+      ? { revision: mocks.eventRevision }
+      : table === 'measurement_workspace_compacted_receipts' && mocks.compactedRevision !== null
+        ? { revision: mocks.compactedRevision, actor_id: actor.id } : null, error: null }) }),
     maybeSingle: async () => ({ data: table === 'measurement_workspace_versions' && !mocks.missingVersion ? { revision: mocks.revision } : null, error: null }),
   }) }) }));
 });
@@ -147,8 +151,7 @@ describe('Medição somente nuvem', () => {
     const base = await fixture(true); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     mocks.download.mockResolvedValue({ data: base.plans[0].file, error: null });
     loaded(base); await repo.load();
-    const next = addMeasuredPeriod(base, actor);
-    next.plans[0].storagePath = undefined;
+    const next = transactMeasurement(base, actor, 'Atualizar planta', draft => { draft.plans[0].storagePath = undefined; });
     mocks.upload.mockResolvedValueOnce({ data: null, error: { statusCode: '504', message: 'Gateway timeout' } });
     await expect(repo.commit(next, base.revision)).rejects.not.toBeInstanceOf(MeasurementCommitRejectedError);
     expect(mocks.upload).toHaveBeenCalledTimes(1);
@@ -169,10 +172,101 @@ describe('Medição somente nuvem', () => {
     loaded(base); await repo.load();
     const next = addMeasuredPeriod(base, actor);
     mocks.revision = next.revision; mocks.eventRevision = next.revision;
-    mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } })
+      .mockResolvedValueOnce({ data: encodeMeasurementWorkspace(next), error: null });
     expect(await repo.commit(next, base.revision)).toEqual(next);
-    expect(mocks.rpc.mock.calls.at(-1)?.[0]).toBe('commit_measurement_workspace');
-    expect(mocks.rpc).toHaveBeenCalledTimes(2);
+    expect(mocks.rpc.mock.calls.at(1)?.[0]).toBe('commit_measurement_lifecycle');
+    expect(mocks.rpc).toHaveBeenCalledTimes(3);
+  });
+
+  it('envia apenas o delta dos cinco comandos de ciclo de vida e usa o evento canônico confirmado', async () => {
+    let base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const commands = [
+      (w: MeasurementWorkspace) => addMeasuredPeriod(w, actor),
+      (w: MeasurementWorkspace) => deleteMeasuredPeriod(w, actor, w.periods.at(-1)!.id, 'Teste de exclusão'),
+      (w: MeasurementWorkspace) => restoreMeasuredPeriod(w, actor, w.audit.at(-1)!.id, 'Teste de restauração'),
+      (w: MeasurementWorkspace) => freezeMeasuredPeriod(w, { ...actor, canReview: true }, 'm1'),
+      (w: MeasurementWorkspace) => approveMeasuredPeriod(w, { ...actor, canReview: true }, 'm1'),
+    ] as const;
+    for (const [index, command] of commands.entries()) {
+      const next = command(base);
+      const event = next.audit.at(-1)!;
+      const kinds = ['create', 'delete', 'restore', 'submit', 'approve'];
+      const target = index === 0 || index === 2 ? next.periods.at(-1)! : index === 1 ? base.periods.at(-1)! : next.periods[0];
+      const canonicalEvent = { ...event, beforePeriods: undefined, afterPeriods: undefined,
+        periodDelta: { kind: kinds[index], periodId: target.id,
+          ...(index === 1 ? { beforePeriod: target } : index === 0 || index === 2 ? { afterPeriod: target } : { beforeStatus: base.periods[0].status, afterStatus: target.status }) } };
+      const entries = index === 1 ? base.entries.filter(e => e.measurementId === target.id)
+        : index === 2 ? next.entries.filter(e => e.measurementId === target.id) : [];
+      mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: next.revision,
+        patch: { kind: kinds[index], operationId: event.id, periodId: target.id,
+          period: index === 1 ? null : target, entries, event: canonicalEvent } }, error: null });
+      const saved = await repo.commit(next, base.revision);
+      expect(mocks.rpc.mock.calls.at(-1)?.[0]).toBe('commit_measurement_lifecycle');
+      const request = mocks.rpc.mock.calls.at(-1)?.[1] as { p_patch: Record<string, unknown> };
+      expect(request.p_patch).toMatchObject({ kind: kinds[index], operationId: event.id, periodId: target.id });
+      expect(request.p_patch).not.toHaveProperty('beforePeriods');
+      expect(JSON.stringify(request.p_patch).length).toBeLessThan(JSON.stringify(next).length / 2);
+      expect(saved.audit.at(-1)).toEqual(canonicalEvent);
+      expect(saved.periods).toEqual(next.periods);
+      expect(saved.entries).toEqual(next.entries);
+      base = saved;
+    }
+    expect(mocks.rpc).toHaveBeenCalledTimes(commands.length + 1);
+  });
+
+  it('recarrega a nuvem após recibo repetido de ciclo de vida que precede outra revisão', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = addMeasuredPeriod(base, actor);
+    const advanced = addMeasuredPeriod(next, actor);
+    const operationId = next.audit.at(-1)!.id;
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: next.revision,
+      replayed: true, currentRevision: advanced.revision, patch: { operationId } }, error: null });
+    loaded(advanced);
+    expect(await repo.commit(next, base.revision)).toEqual(advanced);
+    expect(await repo.confirmedOperation!(operationId, next.revision)).toBe(true);
+    expect(mocks.rpc.mock.calls.map(call => call[0])).toEqual([
+      'load_measurement_workspace', 'commit_measurement_lifecycle', 'load_measurement_workspace',
+    ]);
+  });
+
+  it('recarrega até recibo compactado da revisão corrente e comprova a operação compactada', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = addMeasuredPeriod(base, actor);
+    const operationId = next.audit.at(-1)!.id;
+    const compacted = { ...next, audit: base.audit };
+    mocks.compactedRevision = next.revision;
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: next.revision,
+      replayed: true, currentRevision: next.revision, patch: { kind: 'compacted_receipt', operationId } }, error: null });
+    loaded(compacted);
+    expect(await repo.commit(next, base.revision)).toEqual(compacted);
+    expect(mocks.rpc.mock.calls.map(call => call[0])).toEqual([
+      'load_measurement_workspace', 'commit_measurement_lifecycle', 'load_measurement_workspace',
+    ]);
+    expect(await repo.confirmedOperation!(operationId, next.revision)).toBe(true);
+  });
+
+  it('não trata recibo repetido como confirmação se a recarga ainda estiver defasada', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = addMeasuredPeriod(base, actor);
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: next.revision,
+      replayed: true, currentRevision: next.revision + 1,
+      patch: { operationId: next.audit.at(-1)!.id } }, error: null });
+    loaded(next);
+    await expect(repo.commit(next, base.revision)).rejects.toThrow('versão mais recente não pôde ser carregada');
+  });
+
+  it('não recorre ao commit integral quando um comando de ciclo de vida contém outra alteração', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const mixed = addMeasuredPeriod(base, actor);
+    mixed.entries[0].rows[0].multiplier += 1;
+    await expect(repo.commit(mixed, base.revision)).rejects.toBeInstanceOf(MeasurementCommitRejectedError);
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
   });
 
   it('captura grava marcação e célula em um único patch', async () => {

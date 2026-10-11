@@ -11,7 +11,7 @@ export default function MeasurementLifecycleDialog({ selection, workspace, actor
   const [reason, setReason] = useState('');
   const source = selection.kind === 'restore' ? workspace.audit.find(a => a.id === selection.id) : null;
   const id = source?.lifecycle?.measurementId ?? selection.id;
-  const period = selection.kind === 'restore' ? source?.beforePeriods?.find(p => p.id === id) : workspace.periods.find(p => p.id === id);
+  const period = selection.kind === 'restore' ? source?.periodDelta?.beforePeriod ?? source?.beforePeriods?.find(p => p.id === id) : workspace.periods.find(p => p.id === id);
   const blocked = !period ? 'Medição não encontrada.' : hasDraft ? 'Há rascunhos deste período. Finalize ou recupere os campos antes de continuar.' : selection.kind === 'delete' ? periodDeletionBlock(workspace, period) : selection.kind === 'restore' ? periodRestorationBlock(workspace, selection.id) : selection.kind === 'approve' ? period.status !== 'in_review' ? 'Envie a medição para análise antes de registrar a aprovação.' : null : null;
   const count = workspace.entries.filter(e => e.measurementId === id).length;
   return <Dialog open onOpenChange={open => { if (!open) onClose(); }}><DialogContent>

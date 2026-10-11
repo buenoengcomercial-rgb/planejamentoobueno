@@ -16,7 +16,7 @@ export function periodRestorationBlock(w: MeasurementWorkspace, auditId: string)
   const source = w.audit.find(event => event.id === auditId);
   if (source?.lifecycle?.kind !== 'delete') return 'Exclusão não encontrada no histórico.';
   const id = source.lifecycle.measurementId;
-  const period = source.beforePeriods?.find(candidate => candidate.id === id);
+  const period = source.periodDelta?.beforePeriod ?? source.beforePeriods?.find(candidate => candidate.id === id);
   const latest = [...w.audit].reverse().find(event => event.lifecycle?.measurementId === id);
   const dates = nextMeasurementPeriod(w.periods);
   if (!period || latest?.id !== auditId || w.periods.some(candidate => candidate.id === id)
@@ -48,7 +48,9 @@ export function restoreMeasuredPeriod(w: MeasurementWorkspace, actor: Measuremen
   const blocked = periodRestorationBlock(w, auditId);
   if (blocked) throw new Error(blocked);
   const source = w.audit.find(a => a.id === auditId)!;
-  const id = source.lifecycle!.measurementId, period = source.beforePeriods!.find(p => p.id === id)!;
+  const id = source.lifecycle!.measurementId,
+    period = source.periodDelta?.beforePeriod ?? source.beforePeriods?.find(p => p.id === id);
+  if (!period) throw new Error('Período excluído não encontrado para restaurar.');
   const next = structuredClone(w); next.periods.push(structuredClone(period)); next.entries.push(...structuredClone(source.before));
   // Validate restored quantities against the current contract and locked occurrences.
   // This candidate is only a validation probe; the lifecycle event is the sole write.
