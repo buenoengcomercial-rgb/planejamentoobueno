@@ -175,6 +175,18 @@ describe('teste independente de levantamento', () => {
     expect(screen.queryByText('As plantas mudaram. Reabra o visualizador.')).not.toBeInTheDocument();
     expect(screen.getByRole('dialog', { name: 'Gestão de desenhos' })).toBeInTheDocument();
   });
+  it('interrompe o lote quando uma planta falha, sem tratar a seguinte como cadastrada', async () => {
+    const save = vi.fn(async () => { throw new Error('Arquivo da planta não confirmado na nuvem'); });
+    const repository: TakeoffRepository = { storage: 'cloud', load: async () => [], save };
+    render(<PlanTakeoff storageKey="obra" readOnly={false} embedded chapterId="building-1" repository={repository} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Gerenciar plantas' }));
+    fireEvent.change(screen.getByLabelText('Selecionar plantas'), { target: { files: [
+      new File(['3'], 'PPCIP - 3º ANDAR.dxf'), new File(['4'], 'PPCIP - 4º ANDAR.dxf'),
+    ] } });
+    expect(await screen.findByText(/Cadastro interrompido em PPCIP - 3º ANDAR.dxf/)).toBeVisible();
+    expect(screen.getAllByText('Arquivo da planta não confirmado na nuvem').length).toBeGreaterThan(0);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
   it('apaga planta sem marcações e preserva outra planta do capítulo', async () => {
     const other = { ...example, id: 'outro', name: 'Cobertura' };
     vi.mocked(readTakeoffs).mockResolvedValueOnce([example, other]);
