@@ -282,6 +282,53 @@ export type Database = {
         }
         Relationships: []
       }
+      execution_history_recovery: {
+        Row: {
+          after_data: Json | null
+          before_data: Json | null
+          id: number
+          occurred_at: string
+          operation: string
+          project_id: string
+          record_id: string
+          table_name: string
+          transaction_id: number
+          user_id: string
+        }
+        Insert: {
+          after_data?: Json | null
+          before_data?: Json | null
+          id?: never
+          occurred_at?: string
+          operation: string
+          project_id: string
+          record_id: string
+          table_name: string
+          transaction_id?: number
+          user_id?: string
+        }
+        Update: {
+          after_data?: Json | null
+          before_data?: Json | null
+          id?: never
+          occurred_at?: string
+          operation?: string
+          project_id?: string
+          record_id?: string
+          table_name?: string
+          transaction_id?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "execution_history_recovery_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       material_comparisons: {
         Row: {
           created_at: string
@@ -344,6 +391,210 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      measurement_workspace_backups: {
+        Row: {
+          created_at: string
+          manifest: Json
+          project_id: string
+          source: Json
+        }
+        Insert: {
+          created_at?: string
+          manifest: Json
+          project_id: string
+          source: Json
+        }
+        Update: {
+          created_at?: string
+          manifest?: Json
+          project_id?: string
+          source?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "measurement_workspace_backups_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      measurement_workspace_compacted_receipts: {
+        Row: {
+          actor_id: string
+          compacted_at: string
+          operation_id: string
+          project_id: string
+          request_hash: string
+          revision: number
+        }
+        Insert: {
+          actor_id: string
+          compacted_at?: string
+          operation_id: string
+          project_id: string
+          request_hash: string
+          revision: number
+        }
+        Update: {
+          actor_id?: string
+          compacted_at?: string
+          operation_id?: string
+          project_id?: string
+          request_hash?: string
+          revision?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "measurement_workspace_compacted_receipts_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "measurement_workspaces"
+            referencedColumns: ["project_id"]
+          },
+        ]
+      }
+      measurement_workspace_entry_state: {
+        Row: {
+          audit_digest: string
+          core_hash: string
+          entries: Json
+          periods: Json
+          plans: Json
+          project_id: string
+          revision: number
+          services: Json
+          state_hash: string
+        }
+        Insert: {
+          audit_digest: string
+          core_hash: string
+          entries: Json
+          periods: Json
+          plans: Json
+          project_id: string
+          revision: number
+          services: Json
+          state_hash: string
+        }
+        Update: {
+          audit_digest?: string
+          core_hash?: string
+          entries?: Json
+          periods?: Json
+          plans?: Json
+          project_id?: string
+          revision?: number
+          services?: Json
+          state_hash?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "measurement_workspace_entry_state_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "measurement_workspaces"
+            referencedColumns: ["project_id"]
+          },
+        ]
+      }
+      measurement_workspace_events: {
+        Row: {
+          actor_id: string
+          after_data: Json
+          before_data: Json
+          created_at: string
+          operation_id: string
+          project_id: string
+          request_hash: string
+          revision: number
+        }
+        Insert: {
+          actor_id: string
+          after_data: Json
+          before_data: Json
+          created_at?: string
+          operation_id: string
+          project_id: string
+          request_hash: string
+          revision: number
+        }
+        Update: {
+          actor_id?: string
+          after_data?: Json
+          before_data?: Json
+          created_at?: string
+          operation_id?: string
+          project_id?: string
+          request_hash?: string
+          revision?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "measurement_workspace_events_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "measurement_workspaces"
+            referencedColumns: ["project_id"]
+          },
+        ]
+      }
+      measurement_workspace_versions: {
+        Row: {
+          project_id: string
+          revision: number
+        }
+        Insert: {
+          project_id: string
+          revision: number
+        }
+        Update: {
+          project_id?: string
+          revision?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "measurement_workspace_versions_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "measurement_workspaces"
+            referencedColumns: ["project_id"]
+          },
+        ]
+      }
+      measurement_workspaces: {
+        Row: {
+          data: Json
+          project_id: string
+          revision: number
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          data: Json
+          project_id: string
+          revision: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          data?: Json
+          project_id?: string
+          revision?: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "measurement_workspaces_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       measurements: {
         Row: {
@@ -451,6 +702,63 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      production_capture_receipts: {
+        Row: {
+          capture_id: string
+          created_by: string
+          deleted_logs: Json
+          logs: Json
+          measures: Json
+          plan_id: string
+          project_id: string
+          project_updated_at: string
+          request_hash: string
+          revision: number
+          scales: Json
+        }
+        Insert: {
+          capture_id: string
+          created_by?: string
+          deleted_logs: Json
+          logs: Json
+          measures: Json
+          plan_id: string
+          project_id: string
+          project_updated_at: string
+          request_hash: string
+          revision: number
+          scales: Json
+        }
+        Update: {
+          capture_id?: string
+          created_by?: string
+          deleted_logs?: Json
+          logs?: Json
+          measures?: Json
+          plan_id?: string
+          project_id?: string
+          project_updated_at?: string
+          request_hash?: string
+          revision?: number
+          scales?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "production_capture_receipts_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "takeoff_plans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "production_capture_receipts_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       profiles: {
         Row: {
@@ -754,6 +1062,20 @@ export type Database = {
             referencedRelation: "projects"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "task_daily_logs_same_project_task"
+            columns: ["project_id", "task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["project_id", "id"]
+          },
+          {
+            foreignKeyName: "task_daily_logs_task_identity_fk"
+            columns: ["project_id", "task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["project_id", "id"]
+          },
         ]
       }
       tasks: {
@@ -1005,8 +1327,51 @@ export type Database = {
         }
         Returns: undefined
       }
+      capture_geometry_value: {
+        Args: { p_measure: Json; p_scale: number }
+        Returns: number
+      }
+      check_production_deletions: {
+        Args: {
+          p_expected_updated_at: string
+          p_logs_delete: Json
+          p_project_id: string
+          p_tasks_delete: Json
+        }
+        Returns: boolean
+      }
       check_warehouse_withdrawal_availability: {
         Args: { p_items: Json; p_project_id: string }
+        Returns: Json
+      }
+      commit_measurement_workspace: {
+        Args: {
+          p_candidate: Json
+          p_expected_revision: number
+          p_project_id: string
+        }
+        Returns: Json
+      }
+      commit_production_capture: {
+        Args: {
+          p_audit_insert: Json
+          p_capture_id?: string
+          p_chapters_delete: Json
+          p_chapters_upsert: Json
+          p_data: Json
+          p_expected_updated_at: string
+          p_logs_delete: Json
+          p_logs_upsert: Json
+          p_measures: Json
+          p_name: string
+          p_organization_id: string
+          p_plan_id: string
+          p_plan_revision: number
+          p_project_id: string
+          p_scales: Json
+          p_tasks_delete: Json
+          p_tasks_upsert: Json
+        }
         Returns: Json
       }
       commit_warehouse_adjustment: {
@@ -1096,6 +1461,14 @@ export type Database = {
         }
         Returns: Json
       }
+      compact_measurement_history: {
+        Args: {
+          p_expected_data_md5: string
+          p_expected_revision: number
+          p_project_id: string
+        }
+        Returns: Json
+      }
       duplicate_project: {
         Args: {
           p_new_name: string
@@ -1104,6 +1477,7 @@ export type Database = {
         }
         Returns: string
       }
+      execution_detail_partial: { Args: { p_detail: Json }; Returns: number }
       get_user_org_id: { Args: { _user_id: string }; Returns: string }
       has_org_role: {
         Args: {
@@ -1117,6 +1491,10 @@ export type Database = {
         Args: { _org_id: string; _user_id: string }
         Returns: boolean
       }
+      list_measurement_period_headers: {
+        Args: { p_project_id: string }
+        Returns: Json
+      }
       list_organization_storage_objects: {
         Args: { _organization_id: string }
         Returns: {
@@ -1124,6 +1502,65 @@ export type Database = {
           owner_id: string
           size: number
         }[]
+      }
+      load_measurement_workspace: {
+        Args: { p_project_id: string }
+        Returns: Json
+      }
+      materialize_measurement_workspace: {
+        Args: { p_project_id: string }
+        Returns: Json
+      }
+      measurement_detail_quantity: { Args: { rows: Json }; Returns: number }
+      measurement_fiscal_line_rows: {
+        Args: { period: Json; w: Json }
+        Returns: Json[]
+      }
+      measurement_fiscal_lines: {
+        Args: { period: Json; w: Json }
+        Returns: Json
+      }
+      measurement_geometry_quantity: {
+        Args: { mark: Json; scale: number }
+        Returns: number
+      }
+      measurement_money: { Args: { v: number }; Returns: number }
+      measurement_workspace_audit_digest: {
+        Args: { p_audit: Json }
+        Returns: string
+      }
+      measurement_workspace_candidate_proof: {
+        Args: { p_candidate: Json }
+        Returns: string
+      }
+      patch_measurement_capture: {
+        Args: {
+          p_expected_revision: number
+          p_patch: Json
+          p_project_id: string
+        }
+        Returns: Json
+      }
+      patch_measurement_entries: {
+        Args: {
+          p_expected_revision: number
+          p_patch: Json
+          p_project_id: string
+        }
+        Returns: Json
+      }
+      save_additive_planning_domain: {
+        Args: {
+          p_audit_insert: Json
+          p_changes: Json
+          p_data: Json
+          p_domain: string
+          p_expected_updated_at: string
+          p_name: string
+          p_organization_id: string
+          p_project_id: string
+        }
+        Returns: string
       }
       save_normalized_domain: {
         Args: {
@@ -1135,6 +1572,23 @@ export type Database = {
           p_name: string
           p_organization_id: string
           p_project_id: string
+        }
+        Returns: string
+      }
+      save_planning_domain: {
+        Args: {
+          p_audit_insert: Json
+          p_chapters_delete: Json
+          p_chapters_upsert: Json
+          p_data: Json
+          p_expected_updated_at: string
+          p_logs_delete: Json
+          p_logs_upsert: Json
+          p_name: string
+          p_organization_id: string
+          p_project_id: string
+          p_tasks_delete: Json
+          p_tasks_upsert: Json
         }
         Returns: string
       }
@@ -1156,6 +1610,34 @@ export type Database = {
         Returns: string
       }
       strip_task_logs: { Args: { node: Json }; Returns: Json }
+      sync_measurement_workspace_entry_state: {
+        Args: { p_data: Json; p_project_id: string; p_revision: number }
+        Returns: undefined
+      }
+      validate_capture_bindings: {
+        Args: { p_plan_id: string; p_project_id: string }
+        Returns: undefined
+      }
+      validate_measurement_catalog: {
+        Args: { candidate: Json; old: Json }
+        Returns: undefined
+      }
+      validate_measurement_lifecycle: {
+        Args: { candidate: Json; old: Json }
+        Returns: undefined
+      }
+      validate_measurement_workspace: {
+        Args: { candidate: Json; old: Json }
+        Returns: undefined
+      }
+      validate_measurement_workspace_core: {
+        Args: { candidate: Json; old: Json }
+        Returns: undefined
+      }
+      validate_planning_metadata: {
+        Args: { p_data: Json; p_project_id: string }
+        Returns: undefined
+      }
     }
     Enums: {
       member_status: "active" | "invited" | "blocked"
