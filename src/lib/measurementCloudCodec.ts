@@ -3,7 +3,7 @@ import type { TakeoffPlan } from './planTakeoff';
 
 export type CloudPlan = Omit<TakeoffPlan, 'file'> & { fileBytes: number; fileType: string };
 /** Blobs never enter JSON. The immutable private Storage object is the source. */
-export function encodeMeasurementWorkspace(workspace: MeasurementWorkspace): unknown {
+export function encodeMeasurementWorkspace(workspace: unknown): unknown {
   return JSON.parse(JSON.stringify(workspace, (_key, value) => value instanceof Blob ? undefined : value));
 }
 export async function decodeMeasurementWorkspace(
