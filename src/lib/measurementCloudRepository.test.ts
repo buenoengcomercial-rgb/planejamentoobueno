@@ -2,28 +2,120 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation } from './measurementIncorporation';
-import { editMeasuredRow, newMeasuredRow, addMeasuredPeriod, freezeMeasuredPeriod } from './measurementWorkspace';
+import { editMeasuredRow, newMeasuredRow, addMeasuredPeriod, freezeMeasuredPeriod, captureMeasurement } from './measurementWorkspace';
 import { measurementEntryPatch } from './measurementEntryPatch';
+import { measurementCapturePatch } from './measurementCapturePatch';
 import { encodeMeasurementWorkspace, decodeMeasurementWorkspace } from './measurementCloudCodec';
 import { cloudMeasurementRepository } from './measurementCloudRepository';
-import type { PendingMeasurementEntrySave, PendingMeasurementSave, StoredMeasurementPending } from './measurementWorkspaceStore';
-const mocks=vi.hoisted(()=>({rpc:vi.fn(),from:vi.fn(),download:vi.fn(),upload:vi.fn(),pending:null as PendingMeasurementSave|null,compact:null as PendingMeasurementEntrySave|null,stored:[] as StoredMeasurementPending[],eventRevision:null as number|null,remoteRevision:0,missingVersion:false,cleanupError:false,cleanupGate:null as Promise<void>|null,receipts:{} as Record<string,{revision:number;actor_id:string}>}));
+import type { PendingMeasurementEntrySave, PendingMeasurementCaptureSave, PendingMeasurementSave, StoredMeasurementPending } from './measurementWorkspaceStore';
+const mocks=vi.hoisted(()=>({rpc:vi.fn(),from:vi.fn(),download:vi.fn(),upload:vi.fn(),pending:null as PendingMeasurementSave|null,compact:null as PendingMeasurementEntrySave|null,stored:[] as StoredMeasurementPending[],cached:null as import('./measurementWorkspace').MeasurementWorkspace|null,eventRevision:null as number|null,remoteRevision:0,missingVersion:false,cleanupError:false,cleanupGate:null as Promise<void>|null,receipts:{} as Record<string,{revision:number;actor_id:string}>}));
 vi.mock('@/integrations/supabase/client',()=>({supabase:{rpc:mocks.rpc,from:mocks.from,storage:{from:()=>({download:mocks.download,upload:mocks.upload})}}}));
 vi.mock('./measurementWorkspaceStore',()=>({measurementRepository:()=>({
+ load:async()=>mocks.cached,
+ cacheSnapshot:async(workspace:import('./measurementWorkspace').MeasurementWorkspace)=>{if(!mocks.cached||mocks.cached.revision<=workspace.revision)mocks.cached=structuredClone(workspace);},
  preservePending:async(p:PendingMeasurementSave)=>{mocks.pending=structuredClone(p);mocks.stored=[...mocks.stored.filter(row=>!('candidate' in row)||row.candidate.audit.at(-1)?.id!==p.candidate.audit.at(-1)?.id),p];},
  preserveEntryPending:async(p:PendingMeasurementEntrySave)=>{mocks.compact=structuredClone(p);mocks.stored=[...mocks.stored.filter(row=>!('operationId' in row&&row.operationId===p.operationId)),p];},
+ preserveCapturePending:async(p:PendingMeasurementCaptureSave)=>{mocks.stored=[...mocks.stored.filter(row=>!('operationId' in row&&row.operationId===p.operationId)),structuredClone(p)];},
  storedPendingSaves:async()=>structuredClone(mocks.stored),
  removeEntryPending:async(operationId:string)=>{mocks.compact=null;mocks.stored=mocks.stored.filter(row=>!('operationId' in row&&row.operationId===operationId));},
-  removePending:async(operationId:string)=>{if(mocks.cleanupGate)await mocks.cleanupGate;if(mocks.cleanupError)throw new Error('IndexedDB indisponível');mocks.pending=null;mocks.compact=null;mocks.stored=mocks.stored.filter(row=>('operationId' in row?row.operationId:row.candidate.audit.at(-1)?.id)!==operationId);},
+  removePending:async(operationId:string)=>{if(mocks.cleanupGate)await mocks.cleanupGate;if(mocks.cleanupError)throw new Error('IndexedDB indisponível');if(mocks.pending?.candidate.audit.at(-1)?.id===operationId)mocks.pending=null;if(mocks.compact?.operationId===operationId)mocks.compact=null;mocks.stored=mocks.stored.filter(row=>('operationId' in row?row.operationId:row.candidate.audit.at(-1)?.id)!==operationId);},
  archivePending:async(operationId:string)=>{mocks.stored=mocks.stored.map(row=>('operationId' in row?row.operationId:row.candidate.audit.at(-1)?.id)===operationId?{...row,archivedAt:'2026-10-10'}:row);},
  })}));
-beforeEach(()=>{vi.clearAllMocks();mocks.pending=null;mocks.compact=null;mocks.stored=[];mocks.eventRevision=null;mocks.remoteRevision=0;mocks.missingVersion=false;mocks.cleanupError=false;mocks.cleanupGate=null;mocks.receipts={};
+beforeEach(()=>{vi.clearAllMocks();mocks.pending=null;mocks.compact=null;mocks.stored=[];mocks.cached=null;mocks.eventRevision=null;mocks.remoteRevision=0;mocks.missingVersion=false;mocks.cleanupError=false;mocks.cleanupGate=null;mocks.receipts={};
   mocks.from.mockImplementation((table:string)=>({select:()=>({eq:()=>({
     eq:(_column:string,operationId:string)=>({maybeSingle:async()=>({data:table==='measurement_workspace_compacted_receipts'?mocks.receipts[operationId]??null:mocks.eventRevision===null?null:{revision:mocks.eventRevision},error:null})}),
    maybeSingle:async()=>({data:table==='measurement_workspace_versions'&&!mocks.missingVersion?{revision:mocks.remoteRevision}:null,error:null}),
  })})}));
 });
 describe('confirmação cloud e recuperação',()=>{
+ it('reabre sem rede a última base confirmada e os lançamentos ainda na fila',async()=>{
+  const f=measurementFixture(); f.plans=[];
+  const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
+  const next=editMeasuredRow(base,{id:'user',name:'Teste',canEdit:true},'m1','signs',{...newMeasuredRow('offline-row'),multiplier:7});
+  const editor=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(base),error:null});
+  await editor.load(); await editor.stage!(next,base);
+  const reopened=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValueOnce({data:null,error:{message:'Sem conexão'}});
+  const offline=await reopened.load();
+  expect(reopened.loadedOffline?.()).toBe(true);
+  expect(offline?.revision).toBe(base.revision);
+  expect((await reopened.queued!(offline))[0].candidate.entries).toEqual(next.entries);
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(base),error:null});
+  expect((await reopened.load())?.revision).toBe(base.revision);
+  expect(reopened.loadedOffline?.()).toBe(false);
+ });
+ it('envia captura como delta atômico em vez do workspace inteiro',async()=>{
+  const f=measurementFixture();
+  const base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
+  base.plans[0].storagePath=`${base.projectId}/${base.plans[0].id}/drawing.png`;
+  mocks.download.mockResolvedValue({data:base.plans[0].file,error:null});
+  const repo=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(base),error:null}); await repo.load();
+  const actor={id:'user',name:'Teste',canEdit:true};
+  const row=newMeasuredRow('capture-row');
+  const ready=editMeasuredRow(base,actor,'m1','signs',row);
+  const readyPatch=measurementEntryPatch(base,ready)!;
+  mocks.rpc.mockResolvedValueOnce({data:{projectId:base.projectId,revision:ready.revision,patch:readyPatch},error:null});
+  await repo.commit(ready,base.revision);
+  const mark={id:'mark',name:'Placas',kind:'count' as const,page:1,points:[{x:1,y:1}],projectId:base.projectId,
+    measurementId:'m1',serviceId:'signs'};
+  const next=captureMeasurement(ready,actor,{measurementId:'m1',serviceId:'signs',rowId:row.id,field:'multiplier'},
+    {...ready.plans[0],measures:[mark]},mark);
+  const patch=measurementCapturePatch(ready,next)!;
+  expect(patch).toBeTruthy();
+  await repo.stage!(next,ready);
+  expect(mocks.stored[0]).toMatchObject({format:'capture-patch-v1',operationId:next.audit.at(-1)?.id});
+  expect(JSON.stringify(mocks.stored[0]).length).toBeLessThan(JSON.stringify(encodeMeasurementWorkspace(next)).length);
+  const reopened=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(ready),error:null}); await reopened.load();
+  expect((await reopened.queued!(ready))[0].candidate.entries).toEqual(next.entries);
+  mocks.rpc.mockResolvedValueOnce({data:{projectId:base.projectId,revision:next.revision,patch:encodeMeasurementWorkspace(patch)},error:null});
+  expect(await repo.commit(next,ready.revision)).toEqual(next);
+  expect(mocks.rpc).toHaveBeenLastCalledWith('patch_measurement_capture',{
+    p_project_id:base.projectId,p_expected_revision:ready.revision,p_patch:encodeMeasurementWorkspace(patch),
+  });
+ });
+ it('guarda três edições pontuais antes da rede e retoma a fila após fechar a página',async()=>{
+  const f=measurementFixture(); f.plans=[];
+  const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
+  const actor={id:'user',name:'Teste',canEdit:true};
+  const first=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('r1'),multiplier:1});
+  const second=editMeasuredRow(first,actor,'m1','repeaters',{...newMeasuredRow('r2'),multiplier:2});
+  const third=editMeasuredRow(second,actor,'m1','signs',{...newMeasuredRow('r3'),multiplier:3});
+  const editor=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(base),error:null}); await editor.load();
+  await editor.stage!(first,base); await editor.stage!(second,first); await editor.stage!(third,second);
+  expect(mocks.rpc).toHaveBeenCalledTimes(1);
+  expect(mocks.stored.map(row=>('operationId' in row?row.operationId:row.candidate.audit.at(-1)?.id))).toEqual(
+   [first,second,third].map(workspace=>workspace.audit.at(-1)?.id));
+  expect(mocks.stored.every(row=>'format' in row&&row.format==='entry-patch-v1')).toBe(true);
+  const reopened=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(base),error:null});
+  const remote=await reopened.load();
+  expect((await reopened.queued!(remote)).map(row=>row.candidate.entries)).toEqual([first.entries,second.entries,third.entries]);
+  for(const [previous,next] of [[base,first],[first,second],[second,third]] as const){
+   const patch=measurementEntryPatch(previous,next)!;
+   mocks.rpc.mockResolvedValueOnce({data:{projectId:base.projectId,revision:next.revision,patch},error:null});
+   expect((await reopened.commit(next,previous.revision)).revision).toBe(next.revision);
+  }
+  await vi.waitFor(()=>expect(mocks.stored).toHaveLength(0));
+  const final=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(third),error:null});
+  expect(await final.queued!(await final.load())).toEqual([]);
+ });
+ it('não reaplica silenciosamente uma edição local sobre alteração concorrente',async()=>{
+  const f=measurementFixture(); f.plans=[];
+  const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
+  const actor={id:'user',name:'Teste',canEdit:true};
+  const local=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('local'),multiplier:2});
+  const remote=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('remote'),multiplier:3});
+  const repo=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
+  await repo.stage!(local,base);
+  expect(mocks.stored).toHaveLength(1);
+  await expect(repo.queued!(remote)).rejects.toThrow('outro computador');
+  expect(mocks.stored).toHaveLength(1);
+ });
  it('envia somente os lançamentos afetados, conserva a base e exige recibo íntegro',async()=>{
   const f=measurementFixture(); f.plans=[]; const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
   const repo=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
@@ -71,7 +163,7 @@ describe('confirmação cloud e recuperação',()=>{
   mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(base),error:null});
   await expect(repo.commit(next,0)).rejects.toThrow('não confirmou'); expect(mocks.pending).not.toBeNull();
   mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(next),error:null});
-  expect((await repo.commit(next,0)).revision).toBe(1); expect(mocks.pending).toBeNull();
+  expect((await repo.commit(next,0)).revision).toBe(1); await vi.waitFor(()=>expect(mocks.pending).toBeNull());
  });
  it('timeout após commit é conciliado pelo ID da operação sem criar nova auditoria',async()=>{
   const f=measurementFixture(); f.plans=[]; const base=prepareIncorporation(await createIncorporationBackup(f.project,[],[])).candidate;
@@ -81,7 +173,7 @@ describe('confirmação cloud e recuperação',()=>{
   mocks.eventRevision=next.revision; mocks.remoteRevision=next.revision;
   mocks.rpc.mockResolvedValueOnce({data:null,error:{code:'57014',message:'canceling statement due to statement timeout'}});
   expect(await repo.commit(next,base.revision)).toEqual(next);
-  expect(mocks.rpc).toHaveBeenCalledTimes(2); expect(mocks.pending).toBeNull();
+  expect(mocks.rpc).toHaveBeenCalledTimes(2); await vi.waitFor(()=>expect(mocks.pending).toBeNull());
   expect(mocks.from).toHaveBeenCalledWith('measurement_workspace_events');
  });
  it('timeout abortado repete o mesmo patch uma vez; revisão concorrente mantém rascunho',async()=>{
@@ -267,7 +359,7 @@ describe('confirmação cloud e recuperação',()=>{
   const patch=measurementEntryPatch(base,next)!;
   mocks.rpc.mockResolvedValueOnce({data:{projectId:base.projectId,revision:next.revision,patch},error:null});
   await repo.commit(legacy!.candidate,legacy!.baseRevision);
-  expect(mocks.stored.map(row=>('operationId' in row?row.operationId:row.candidate.audit.at(-1)?.id))).toEqual(['other-operation']);
+  await vi.waitFor(()=>expect(mocks.stored.map(row=>('operationId' in row?row.operationId:row.candidate.audit.at(-1)?.id))).toEqual(['other-operation']));
   expect(await repo.pending()).toBeNull();
   const reloaded=cloudMeasurementRepository({userId:'user',projectId:base.projectId});
   mocks.rpc.mockResolvedValueOnce({data:encodeMeasurementWorkspace(next),error:null});

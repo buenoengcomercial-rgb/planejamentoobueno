@@ -19,6 +19,63 @@ function setup(size = 402) {
   return { repository, saved: () => w, drafts: () => drafts };
 }
 
+it('retoma três tarefas guardadas localmente sem esperar a primeira resposta cloud', async () => {
+  const { repository } = setup(3);
+  let cloud = (await repository.load())!;
+  vi.mocked(repository.load).mockImplementation(async () => cloud);
+  const staged: Array<{ baseRevision: number; candidate: Workspace }> = [];
+  repository.stage = vi.fn(async (candidate, base) => {
+    staged.push({ baseRevision: base.revision, candidate });
+  });
+  repository.queued = vi.fn(async () => staged.slice());
+  vi.mocked(repository.commit).mockImplementationOnce(() => new Promise(() => undefined))
+    .mockImplementation(async candidate => {
+      cloud = candidate;
+      staged.splice(staged.findIndex(row => row.candidate.audit.at(-1)?.id === candidate.audit.at(-1)?.id), 1);
+      return candidate;
+    });
+  const first = render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  await screen.findByLabelText('Quantidade de Serviço 0');
+  for (const [index, value] of [[0, '1'], [1, '2'], [2, '3']] as const) {
+    const cell = screen.getByLabelText(`Quantidade de Serviço ${index}`);
+    fireEvent.change(cell, { target: { value } }); fireEvent.blur(cell);
+  }
+  await waitFor(() => expect(staged).toHaveLength(3));
+  expect(screen.getByRole('button', { name: /Enviar para fiscalização/ })).toBeDisabled();
+  await waitFor(() => {
+    const leave = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(leave);
+    expect(leave.defaultPrevented).toBe(false);
+  });
+  first.unmount();
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  for (const [index, value] of [[0, 1], [1, 2], [2, 3]] as const)
+    expect(await screen.findByLabelText(`Quantidade de Serviço ${index}`)).toHaveValue(value);
+  await waitFor(() => expect(staged).toHaveLength(0));
+  expect(screen.getByRole('status')).toHaveTextContent('Confirmado');
+});
+
+it('troca de tarefa após a escrita local sem aguardar a resposta da nuvem', async () => {
+  const { repository } = setup(2);
+  let releaseLocal!: () => void;
+  repository.stage = vi.fn(() => new Promise<void>(resolve => { releaseLocal = resolve; }));
+  vi.mocked(repository.commit).mockImplementation(() => new Promise(() => undefined));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  const first = await screen.findByLabelText('Quantidade de Serviço 0');
+  fireEvent.change(first, { target: { value: '4' } }); fireEvent.blur(first);
+  const second = screen.getByLabelText('Quantidade de Serviço 1');
+  fireEvent.click(second);
+  await waitFor(() => expect(repository.stage).toHaveBeenCalledTimes(1));
+  expect(second).toHaveAttribute('aria-expanded', 'false');
+  expect(repository.commit).not.toHaveBeenCalled();
+  const started = performance.now();
+  await act(async () => releaseLocal());
+  await waitFor(() => expect(second).toHaveAttribute('aria-expanded', 'true'));
+  console.info(JSON.stringify({ localStageToTaskSwitchMs: Math.round(performance.now() - started) }));
+  expect(repository.commit).toHaveBeenCalledTimes(1);
+  expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(4);
+});
+
 it('permite a tarefa seguinte enquanto a primeira salva e inicia o boletim recolhido após recarga', async () => {
   const { repository } = setup(2);
   let confirm!: (candidate: Workspace) => void;
@@ -34,6 +91,7 @@ it('permite a tarefa seguinte enquanto a primeira salva e inicia o boletim recol
   fireEvent.click(next);
   expect(screen.getByLabelText('Unidades da linha 1')).toHaveValue(0);
   expect(screen.getByLabelText('Quantidade de Serviço 1')).toHaveAttribute('aria-expanded', 'true');
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
   await act(async () => confirm(vi.mocked(repository.commit).mock.calls[0][0]));
   await waitFor(() => expect(screen.getByLabelText('Quantidade de Serviço 1')).toBeEnabled());
   fireEvent.click(screen.getByLabelText('Quantidade de Serviço 1'));
@@ -69,6 +127,7 @@ it('mede edição com a base completa de 402 serviços e confirmação atrasada'
   expect(immediatelyUpdated).toBe(true);
   const next = screen.getByLabelText('Quantidade de Serviço 1');
   act(() => next.focus()); fireEvent.change(next, { target: { value: '2' } });
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
   await act(async () => confirm(vi.mocked(repository.commit).mock.calls[0][0]));
   await waitFor(() => expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(12345));
   // The first RPC may finish while the operator is typing into another task.
@@ -95,7 +154,7 @@ it('atualiza imediatamente e salva A/B em sequência sem bloquear foco ou apagar
   expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(1);
   act(() => b.focus()); fireEvent.change(b, { target: { value: '2' } }); fireEvent.blur(b);
   expect(b).toBeEnabled(); expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(2);
-  expect(repository.commit).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
   await act(async () => confirmations.shift()!());
   await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
   expect(screen.getByLabelText('Medida da linha 1')).toBe(b);
@@ -104,7 +163,7 @@ it('atualiza imediatamente e salva A/B em sequência sem bloquear foco ou apagar
   expect(repository.clearDraft).not.toHaveBeenCalled();
   await act(async () => confirmations.shift()!());
   await waitFor(() => expect(repository.clearDraft).toHaveBeenCalledTimes(1));
-  expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador');
+  expect(screen.getByRole('status')).toHaveTextContent('Confirmado');
 });
 
 it('fila A→B→C: timeout na primeira tarefa, continua editando e confirma cada tarefa uma vez após retry', async () => {
@@ -122,13 +181,13 @@ it('fila A→B→C: timeout na primeira tarefa, continua editando e confirma cad
     fireEvent.focus(cell); fireEvent.change(cell, { target: { value } }); fireEvent.blur(cell);
     expect(screen.getByLabelText(`Quantidade de Serviço ${index}`)).toHaveValue(Number(value));
   }
-  expect(repository.commit).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
   await act(async () => failFirst(new Error('canceling statement due to statement timeout')));
-  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Não salvo'));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Precisa resolver conflito'));
   expect(drafts().map(d => d.serviceId).sort()).toEqual(['s0', 's1', 's2']);
   expect(screen.getByLabelText('Quantidade de Serviço 2')).toHaveValue(3);
   await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(4));
-  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Confirmado'));
   const calls = vi.mocked(repository.commit).mock.calls;
   expect(calls[0][0].audit.at(-1)?.id).toBe(calls[1][0].audit.at(-1)?.id);
   expect(calls.slice(1).map(([candidate]) => candidate.audit.length)).toEqual([1, 2, 3]);
@@ -152,9 +211,12 @@ it('A→B→C recarregado antes da resposta mantém os três rascunhos recuperá
   await waitFor(() => expect(drafts()).toHaveLength(3));
   expect(repository.commit).toHaveBeenCalledTimes(1);
   pending = { baseRevision: 0, candidate: vi.mocked(repository.commit).mock.calls[0][0] };
-  const leave = new Event('beforeunload', { cancelable: true });
-  window.dispatchEvent(leave);
-  expect(leave.defaultPrevented).toBe(true);
+  // A durable local queue permits closing while the cloud is still pending.
+  await waitFor(() => {
+    const leave = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(leave);
+    expect(leave.defaultPrevented).toBe(false);
+  });
   first.unmount();
   vi.mocked(repository.commit).mockImplementation(async candidate => {
     const current = saved();
@@ -168,7 +230,7 @@ it('A→B→C recarregado antes da resposta mantém os três rascunhos recuperá
   await screen.findByLabelText('Quantidade de Serviço 0');
   fireEvent.click(screen.getByText('Rascunhos locais (3)'));
   expect(screen.getByText(/Próxima tarefa: 1.1 — Serviço 0/)).toBeVisible();
-  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Confirmado'));
   for (const remaining of [2, 1, 0]) {
     fireEvent.click(screen.getByRole('button', { name: 'Recuperar rascunho' }));
     await waitFor(() => expect(drafts()).toHaveLength(remaining));
@@ -193,8 +255,9 @@ it('mantém todos os campos em rascunho se a primeira confirmação falhar e nã
     fireEvent.focus(input); fireEvent.change(input, { target: { value } }); fireEvent.blur(input);
   }
   expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(12);
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
   await act(async () => fail(new Error('Sem conexão')));
-  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Não salvo'));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Precisa resolver conflito'));
   expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(12);
   expect(drafts()[0].changes).toMatchObject({ multiplier: '3', measuredQuantity: '4' });
   expect(repository.commit).toHaveBeenCalledTimes(1); expect(repository.clearDraft).not.toHaveBeenCalled();
@@ -213,6 +276,7 @@ it('preserva os mesmos inputs ao confirmar comentário de uma nova linha e segui
   expect(screen.getByLabelText('Unidades da linha 1')).toBe(a); expect(a).toBeEnabled();
   fireEvent.focus(a); fireEvent.change(a, { target: { value: '1' } }); fireEvent.blur(a);
   const b = screen.getByLabelText('Medida da linha 1'); act(() => b.focus()); fireEvent.change(b, { target: { value: '2' } });
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
   await act(async () => confirm(vi.mocked(repository.commit).mock.calls[0][0]));
   await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
   expect(b).toHaveFocus(); expect(b).toHaveValue(2);
@@ -230,7 +294,7 @@ it('aceita a revisão materializada mais recente após recibo e continua salvand
   fireEvent.click(await screen.findByLabelText('Quantidade de Serviço 0'));
   const a = screen.getByLabelText('Unidades da linha 1');
   fireEvent.change(a, { target: { value: '2' } }); fireEvent.blur(a);
-  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Confirmado'));
   expect(repository.confirmedOperation).toHaveBeenCalledWith(vi.mocked(repository.commit).mock.calls[0][0].audit.at(-1)?.id, 1);
   fireEvent.change(a, { target: { value: '3' } }); fireEvent.blur(a);
   await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
@@ -261,7 +325,7 @@ it('confirma criação de medição com resposta perdida e rebate a célula segu
   expect(baseRevision).toBe(1);
   expect(rebased.periods).toHaveLength(2);
   expect(rebased.entries[0].rows[0].multiplier).toBe(2);
-  await waitFor(() => expect(document.querySelector('main [role="status"]')).toHaveTextContent('Salvo neste navegador'));
+  await waitFor(() => expect(document.querySelector('main [role="status"]')).toHaveTextContent('Confirmado'));
   expect(remote.entries[0].rows[0].multiplier).toBe(2);
 });
 
@@ -284,7 +348,7 @@ it('não rebate célula sobre alteração concorrente da mesma entrada após res
   fireEvent.change(cell, { target: { value: '2' } }); fireEvent.blur(cell);
   remote = { ...remote, revision: remote.revision + 1, entries: [{ ...remote.entries[0], rows: [{ ...remote.entries[0].rows[0], multiplier: 7 }] }] };
   await act(async () => loseResponse(new Error('Resposta perdida após confirmar na nuvem')));
-  await waitFor(() => expect(document.querySelector('main [role="status"]')).toHaveTextContent('Não salvo'));
+  await waitFor(() => expect(document.querySelector('main [role="status"]')).toHaveTextContent('Precisa resolver conflito'));
   expect(repository.commit).toHaveBeenCalledTimes(1);
   expect(remote.entries[0].rows[0].multiplier).toBe(7);
   expect(drafts()).toHaveLength(1);
@@ -299,7 +363,7 @@ it('não declara salvo um período quando a resposta falha sem operação confir
   fireEvent.click(screen.getByRole('button', { name: 'Nova medição' }));
   fireEvent.click(screen.getByRole('button', { name: 'Criar medição' }));
   await waitFor(() => expect(repository.load).toHaveBeenCalledTimes(2));
-  expect(document.querySelector('main [role="status"]')).toHaveTextContent('Não salvo');
+  expect(document.querySelector('main [role="status"]')).toHaveTextContent('Precisa resolver conflito');
   expect(repository.commit).toHaveBeenCalledTimes(1);
 });
 
@@ -311,7 +375,7 @@ it('abre o levantamento depois de recuperar uma falha anterior sem bloquear pelo
   const a = screen.getByLabelText('Unidades da linha 1');
   fireEvent.change(a, { target: { value: '2' } }); fireEvent.blur(a);
   await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
-  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Confirmado'));
   fireEvent.focus(screen.getByLabelText('Unidades da linha 1'));
   fireEvent.click(screen.getByRole('button', { name: 'Planta DXF' }));
   expect(await screen.findByText('Visualizador de teste')).toBeVisible();
@@ -338,9 +402,10 @@ it('recupera comentário e quantidade da mesma nova linha após falha, sem dupli
   fireEvent.change(comment, { target: { value: 'Térreo' } }); fireEvent.blur(comment);
   const a = screen.getByLabelText('Unidades da linha 1');
   fireEvent.change(a, { target: { value: '3' } }); fireEvent.blur(a);
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
   const originalId = vi.mocked(repository.commit).mock.calls[0][0].entries[0].rows[0].id;
   await act(async () => fail(new Error('Sem conexão')));
-  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo neste navegador'));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Confirmado'));
   await waitFor(() => expect(repository.clearDraft).toHaveBeenCalledTimes(2));
   expect(saved().entries[0].rows).toHaveLength(1);
   expect(saved().entries[0].rows[0]).toMatchObject({ id: originalId, comment: 'Térreo', multiplier: 3 });
