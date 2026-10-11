@@ -11,6 +11,7 @@ import { resolveAnalyticComposition } from '@/lib/analyticLinks';
 import { AnalyticView, type MeasurementDetailSelection } from './MeasurementDetailFooter';
 import { withDetailValue } from '@/lib/productionQuantityDetails';
 import type { TakeoffPlan, TakeoffMeasure, TakeoffRepository, TakeoffDraft } from '@/lib/planTakeoff';
+import { reconcileDrawingCatalog } from '@/lib/measurementDrawingCatalog';
 import { exportMonthlyMeasurement } from '@/lib/measurementMonthlyExport';
 import { fmtBRL, fmtDateBR } from './measurementFormat';
 const PlanTakeoff = lazy(() => import('@/components/planTakeoff/PlanTakeoff'));
@@ -448,10 +449,11 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     load: async () => structuredClone((detailPreview.current ?? current.current)?.plans ?? []),
     save: async (next, previous) => {
       const w = current.current; if (!w || busy.current || detailQueue.current.length || recoveryRef.current) throw new Error('Há um salvamento pendente na Medição. Confirme-o antes de cadastrar outra planta.');
-      if (JSON.stringify(w.plans) !== JSON.stringify(previous)) throw new Error('As plantas mudaram. Reabra o visualizador.');
+      const reconciled = reconcileDrawingCatalog(w.plans, previous, next);
+      if (reconciled === w.plans) return structuredClone(w.plans);
       const candidate = transactMeasurement(w, actor, 'Gerir desenhos', draft => {
-        for (const p of w.plans) if (!next.some(n => n.id === p.id) && p.measures.length) throw new Error('Desenho com quantitativos vinculados não pode ser apagado.');
-        draft.plans = next;
+        for (const p of w.plans) if (!reconciled.some(n => n.id === p.id) && p.measures.length) throw new Error('Desenho com quantitativos vinculados não pode ser apagado.');
+        draft.plans = reconciled;
       });
       if (!await persist(candidate)) {
         const firstFailure = lastSaveFailure.current;
@@ -459,7 +461,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         // lost after upload or commit; creating a new plan would risk a duplicate.
         if (repository.savedLabel === 'Salvo na nuvem' && await retryPendingSaveRef.current()) {
           const confirmed = current.current?.plans;
-          if (confirmed && next.every(plan => confirmed.some(saved => saved.id === plan.id))) return structuredClone(confirmed);
+          if (confirmed && reconciled.every(plan => confirmed.some(saved => saved.id === plan.id))) return structuredClone(confirmed);
         }
         const cause = firstFailure || lastSaveFailure.current || 'a nuvem não confirmou o cadastro.';
         const followUp = lastSaveFailure.current && lastSaveFailure.current !== cause ? ` Nova conferência: ${lastSaveFailure.current}` : '';
