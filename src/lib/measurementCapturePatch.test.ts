@@ -78,4 +78,30 @@ describe('captura DXF compacta', () => {
     expect(updated.plans[0].measures[0].points).toEqual(updatedMark.points);
     expect(updated.entries[1]).not.toBe(first.entries[1]);
   });
+
+  it('gera patch pequeno quando a primeira captura cria a entrada da tarefa na base confirmada', () => {
+    const base = workspace();
+    base.entries = base.entries.filter(entry => entry.serviceId !== 'target');
+    const blank = { projectId: base.projectId, measurementId: 'period', serviceId: 'target', rows: [newMeasuredRow('row-1')] };
+    const staged = { ...base, entries: [...base.entries, blank] };
+    const captured = captureMeasurement(staged, actor,
+      { measurementId: 'period', serviceId: 'target', rowId: 'row-1', field: 'measuredQuantity' },
+      base.plans[0], mark('first-mark'));
+    const event = { ...captured.audit.at(-1)!,
+      before: [{ projectId: base.projectId, measurementId: 'period', serviceId: 'target', rows: [] }],
+    };
+    const candidate = { ...captured, audit: [...base.audit, event] };
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+      const patch = measurementCapturePatch(base, candidate);
+      expect(patch?.entries).toHaveLength(1);
+      expect(patch?.entries[0].rows[0].measuredQuantity).toBe(1);
+      expect(patch?.event.before[0].rows).toEqual([]);
+      expect(patch?.plan.measures.map(measure => measure.id)).toEqual(['first-mark']);
+      expect(stringify.mock.calls.some(([value]) => value === base || value === candidate
+        || value === base.audit || value === candidate.audit || value === base.plans || value === candidate.plans)).toBe(false);
+    } finally { stringify.mockRestore(); }
+    expect(base.entries).toHaveLength(1);
+    expect(base.plans[0].measures).toEqual([]);
+  });
 });
