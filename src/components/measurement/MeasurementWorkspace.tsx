@@ -8,7 +8,7 @@ import type { IncorporationBackup } from '@/lib/measurementIncorporation';
 import { prepareIncorporation, incorporateApprovedAdditive } from '@/lib/measurementIncorporation';
 import type { Additive, Project } from '@/types/project';
 import { resolveAnalyticComposition } from '@/lib/analyticLinks';
-import { detailTotal } from '@/lib/productionQuantityDetails';
+import { detailTotal, isBlankDetailRow } from '@/lib/productionQuantityDetails';
 import { AnalyticView, type MeasurementDetailSelection } from './MeasurementDetailFooter';
 import type { TakeoffPlan, TakeoffMeasure, TakeoffRepository, TakeoffDraft } from '@/lib/planTakeoff';
 import { reconcileDrawingCatalog } from '@/lib/measurementDrawingCatalog';
@@ -81,6 +81,29 @@ interface FailedTaskEdit {
   serviceId: string;
   message: string;
 }
+/** Keep consecutive DXF captures below the clicked cell without overwriting
+ * an existing quantity. Reuse the immediate next row only if it is empty. */
+function nextCaptureRow(workspace: Workspace, target: Destination, preferredRowId?: string): Destination {
+  const entry = entryFor(workspace, target.measurementId, target.serviceId);
+  const index = entry.rows.findIndex(row => row.id === target.rowId);
+  if (index < 0) throw new Error('A linha de captura não está disponível. Confira o lançamento pendente desta tarefa.');
+  const available = (row: Workspace['entries'][number]['rows'][number]) => isBlankDetailRow(row)
+    && (!row.formula || row.formula === 'STANDARD') && !row.sharedRecordId && !row.origin;
+  const following = entry.rows[index + 1];
+  if (preferredRowId) {
+    const preferred = entry.rows.find(row => row.id === preferredRowId);
+    if (preferred) {
+      if (!available(preferred)) throw new Error('A próxima linha da captura foi alterada. Confira esta tarefa antes de continuar.');
+      return { ...target, rowId: preferred.id };
+    }
+  } else if (following && available(following)) return { ...target, rowId: following.id };
+  const row = newMeasuredRow(preferredRowId);
+  entry.rows.splice(index + 1, 0, row);
+  const audit = workspace.audit.at(-1)!;
+  audit.after = audit.after.map(after => after.measurementId === entry.measurementId && after.serviceId === entry.serviceId
+    ? structuredClone(entry) : after);
+  return { ...target, rowId: row.id };
+}
 /** Several validated cell edits become one auditable task operation. */
 function coalesceTaskEdits(base: Workspace, edits: DetailEdit[], actor: MeasurementActor, operationId: string, createdAt: string): Workspace {
   const final = edits.reduce((state, edit) => edit(state), base);
@@ -130,6 +153,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const automaticRecoveryAttempted = useRef(false);
   const detailQueue = useRef<DetailOperation[]>([]);
   const failedTaskEdits = useRef(new Map<string, FailedTaskEdit>());
+  const captureOpenRequest = useRef(0);
   const [, markFailedTaskChange] = useState(0);
   const latestLocalStage = useRef<Promise<void>>(Promise.resolve());
   const localStagePending = useRef(0);
@@ -727,27 +751,25 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     finally { closingCapture.current = false; }
   };
   const capture = async (_plan: TakeoffPlan, mark: TakeoffMeasure, _result: number, nextPlan?: TakeoffPlan, remove = false) => {
-    const target = destinationRef.current, w = detailPreview.current ?? current.current; if (!target || !w || !nextPlan) return false;
+    const target = destinationRef.current;
+    if (!target || !nextPlan) return false;
+    // A failed capture can leave the next row visible only in the failed task.
+    // Rebase that task before resolving its destination ID in the workspace.
+    if (failedTaskEdits.current.has(`${target.measurementId}:${target.serviceId}`)
+      && !resumeFailedTaskEdit(target.serviceId)) return false;
+    const w = detailPreview.current ?? current.current;
+    if (!w) return false;
     try {
       const wasLinked = w.entries.some(e => e.rows.some(r => sourceFields.some(f => r[f]?.measureId === mark.id)));
       const candidate = captureMeasurement(w, actor, target, nextPlan, mark, remove);
-      // Next empty row is part of this same capture transaction, not a second write.
-      let nextTarget = target;
-      if (!remove && !wasLinked) {
-        const e = entryFor(candidate, target.measurementId, target.serviceId); const row = newMeasuredRow(); e.rows.push(row);
-        const audit = candidate.audit.at(-1)!; audit.after = audit.after.map(a => a.measurementId === e.measurementId && a.serviceId === e.serviceId ? structuredClone(e) : a);
-        nextTarget = { ...target, rowId: row.id };
-      }
+      // The next row and the mark belong to the same atomic operation.
+      const nextTarget = !remove && !wasLinked ? nextCaptureRow(candidate, target) : target;
       const event = candidate.audit.at(-1)!;
       const edit: DetailEdit = base => {
         if (base === w) return candidate;
         const rebased = captureMeasurement(base, actor, target, nextPlan, mark, remove);
-        if (!remove && !wasLinked) {
-          const entry = entryFor(rebased, target.measurementId, target.serviceId);
-          const newRow = entryFor(candidate, target.measurementId, target.serviceId).rows.at(-1)!;
-          if (!entry.rows.some(row => row.id === newRow.id)) entry.rows.push(structuredClone(newRow));
-          rebased.audit.at(-1)!.after = rebased.audit.at(-1)!.after.map(after => after.measurementId === entry.measurementId && after.serviceId === entry.serviceId ? structuredClone(entry) : after);
-        }
+        if (rebased === base) return base;
+        if (!remove && !wasLinked) nextCaptureRow(rebased, target, nextTarget.rowId);
         rebased.audit.at(-1)!.id = event.id;
         rebased.audit.at(-1)!.at = event.at;
         return rebased;
@@ -1145,10 +1167,18 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
               ? flushBufferedDetail() && applyDetail(w => deleteMeasuredRow(w, actor, active, s.id, id))
               : apply(w => deleteMeasuredRow(w, actor, active, s.id, id))}
             onOpenPlan={(rowId, field) => { void (async () => {
+              const request = ++captureOpenRequest.current;
               if (!flushBufferedDetail() || !resumeFailedTaskEdit(s.id)) return;
               try { await Promise.all(detailQueue.current.map(operation => operation.durable)); }
               catch { setError('A linha ainda não foi guardada neste navegador. Confira o salvamento antes de abrir a planta.'); return; }
-              const visible = detailPreview.current ?? current.current;
+              if (request !== captureOpenRequest.current) return;
+              let visible = detailPreview.current ?? current.current;
+              // The creation of a new row may fail while we await its local
+              // stage. Recover that task before opening the drawing on its ID.
+              if (!visible || !entryFor(visible, active, s.id).rows.some(r => r.id === rowId)) {
+                if (failedTaskEdits.current.has(`${active}:${s.id}`) && resumeFailedTaskEdit(s.id))
+                  visible = detailPreview.current ?? current.current;
+              }
               if (!visible || !entryFor(visible, active, s.id).rows.some(r => r.id === rowId)) { setError('A linha não está disponível. Confira o detalhe antes de abrir a planta.'); return; }
               const d = { measurementId: active, serviceId: s.id, rowId, field }; latestCaptureDraft.current = captureDraftFor(d) ?? null; destinationRef.current = d; setDestination(d);
             })(); }}
