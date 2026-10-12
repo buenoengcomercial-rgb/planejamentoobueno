@@ -1,10 +1,75 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { ProductionQuantityDetail } from '@/types/project';
 import { makeQuantityClipboard } from '@/lib/productionQuantityReferences';
 import ProductionQuantityDetails from './ProductionQuantityDetails';
 
 describe('barra do detalhe de quantitativos', () => {
+  it('navega entre comentário, fórmula e A–D com as setas e confirma com Enter sem alterar o Tab', async () => {
+    const rows: ProductionQuantityDetail[] = [
+      { id: 'first', location: '', comment: 'Térreo', formula: 'STANDARD', multiplier: 1, measuredQuantity: 2, dimensionC: 0, dimensionD: 0 },
+      { id: 'second', location: '', comment: 'Pavimento', formula: 'STANDARD', multiplier: 3, measuredQuantity: 4, dimensionC: 0, dimensionD: 0 },
+    ];
+    const onEdit = vi.fn(() => true);
+    render(<ProductionQuantityDetails rows={rows} unit="UND" dailyQuantity={10} applied readOnly={false} keyboardNavigation onCreate={vi.fn()} onEdit={onEdit} onDelete={vi.fn()} onOpenPlan={vi.fn()} onApply={vi.fn()} />);
+
+    const a1 = screen.getByRole('spinbutton', { name: 'Unidades da linha 1' });
+    const a2 = screen.getByRole('spinbutton', { name: 'Unidades da linha 2' });
+    const b2 = screen.getByRole('spinbutton', { name: 'Medida da linha 2' });
+    act(() => a1.focus());
+    fireEvent.keyDown(a1, { key: 'ArrowUp' });
+    expect(a1).toHaveFocus();
+    fireEvent.keyDown(a1, { key: 'ArrowDown' });
+    expect(a2).toHaveFocus();
+    fireEvent.keyDown(a2, { key: 'ArrowRight' });
+    expect(b2).toHaveFocus();
+    fireEvent.keyDown(b2, { key: 'ArrowLeft' });
+    expect(a2).toHaveFocus();
+    const d2 = screen.getByRole('spinbutton', { name: 'Altura da linha 2' });
+    act(() => d2.focus());
+    fireEvent.keyDown(d2, { key: 'ArrowRight' });
+    expect(d2).toHaveFocus();
+    act(() => a2.focus());
+    fireEvent.keyDown(a2, { key: 'ArrowUp' });
+    expect(a1).toHaveFocus();
+
+    fireEvent.change(a1, { target: { value: '7' } });
+    fireEvent.keyDown(a1, { key: 'Enter' });
+    await waitFor(() => expect(a2).toHaveFocus());
+    expect(onEdit).toHaveBeenCalledWith('first', expect.objectContaining({ multiplier: 7 }));
+    expect(fireEvent.keyDown(screen.getByRole('spinbutton', { name: 'Medida da linha 1' }), { key: 'Tab' })).toBe(true);
+
+    const comment = screen.getByRole('textbox', { name: 'Comentário da linha 2' }) as HTMLInputElement;
+    act(() => comment.focus());
+    comment.setSelectionRange(2, 2);
+    fireEvent.keyDown(comment, { key: 'ArrowRight' });
+    expect(comment).toHaveFocus();
+    comment.setSelectionRange(comment.value.length, comment.value.length);
+    fireEvent.keyDown(comment, { key: 'ArrowRight' });
+    expect(screen.getByRole('combobox', { name: 'Fórmula da linha 2' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Fórmula da linha 2' }), { key: 'ArrowRight' });
+    expect(a2).toHaveFocus();
+  });
+
+  it.each(['Enter', 'ArrowDown'] as const)('cria a linha digitada antes de avançar com %s e continua na mesma coluna', async key => {
+    const onCreate = vi.fn((_changes: Partial<ProductionQuantityDetail>) => 'created');
+    function Example() {
+      const [rows, setRows] = useState<ProductionQuantityDetail[]>([]);
+      return <ProductionQuantityDetails rows={rows} unit="UND" dailyQuantity={rows.length} applied readOnly={false} keyboardNavigation onCreate={changes => { const id = onCreate(changes); setRows([{ id, location: '', comment: '', formula: 'STANDARD', multiplier: 0, measuredQuantity: 0, dimensionC: 0, dimensionD: 0, ...changes }]); return id; }} onEdit={vi.fn(() => true)} onDelete={vi.fn()} onOpenPlan={vi.fn()} onApply={vi.fn()} />;
+    }
+    render(<Example />);
+    const a = screen.getByRole('spinbutton', { name: 'Unidades da linha 1' });
+    act(() => a.focus());
+    fireEvent.change(a, { target: { value: '1' } });
+    await act(async () => { fireEvent.keyDown(a, { key }); });
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ multiplier: 1 }));
+    const next = screen.getByRole('spinbutton', { name: 'Unidades da linha 2' });
+    await waitFor(() => expect(next).toHaveFocus());
+    fireEvent.keyDown(next, { key: 'Enter' });
+    expect(next).toHaveFocus();
+    expect(onCreate).toHaveBeenCalledTimes(1);
+  });
   it('usa a célula selecionada para a planta e diferencia colar de colar referência', () => {
     const row: ProductionQuantityDetail = { id: 'row-29', location: '', comment: 'Placas', formula: 'STANDARD', multiplier: 0, measuredQuantity: 29, dimensionC: 0, dimensionD: 0 };
     const onCopy = vi.fn();
