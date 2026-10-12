@@ -37,6 +37,7 @@ export interface MeasurementAudit {
   affected: { measurementId: string; serviceId: string }[];
   before: MeasuredEntry[]; after: MeasuredEntry[];
   beforePlans?: TakeoffPlan[]; afterPlans?: TakeoffPlan[];
+  planDelta?: { kind: 'add' | 'update' | 'archive'; planId: string; beforePlan?: TakeoffPlan; afterPlan?: TakeoffPlan };
   beforePeriods?: MeasuredPeriod[]; afterPeriods?: MeasuredPeriod[];
   beforeServices?: MeasuredService[]; afterServices?: MeasuredService[];
   bulletinChange?: { measurementId: string; before: { number: number; bulletin: MeasuredBulletin }; after: { number: number; bulletin: MeasuredBulletin } };
@@ -100,7 +101,7 @@ export function fiscalSubmissionCurrent(w: MeasurementWorkspace, id: string): bo
   const period = w.periods.find(p => p.id === id);
   if (period?.status !== 'in_review') return false;
   const changedAfter = (event: MeasurementAudit) => event.affected.some(target => target.measurementId === id)
-    || event.bulletinChange?.measurementId === id || !!event.beforePlans || !!event.afterPlans
+    || event.bulletinChange?.measurementId === id || !!event.beforePlans || !!event.afterPlans || !!event.planDelta
     || !!event.beforeServices || !!event.afterServices
     || event.periodDelta?.periodId === id
     || (!!event.beforePeriods && !sameData(event.beforePeriods.find(p => p.id === id), event.afterPeriods?.find(p => p.id === id)));
@@ -450,6 +451,14 @@ export function undoMeasuredOperation(w: MeasurementWorkspace, actor: Measuremen
     if (audit.beforePeriods || audit.periodDelta || audit.beforeServices) throw new Error('Mudanças de período, contratuais ou fiscais exigem revisão específica.');
     for (const after of audit.after) if (json(entryFor(next, after.measurementId, after.serviceId)) !== json(after)) throw new Error('Há edição posterior. A restauração foi bloqueada.');
     if (audit.afterPlans && json(next.plans) !== json(audit.afterPlans)) throw new Error('Há alteração posterior na planta.');
+    if (audit.planDelta) {
+      const delta = audit.planDelta, currentPlan = next.plans.find(plan => plan.id === delta.planId);
+      if (!sameData(currentPlan, delta.afterPlan)) throw new Error('Há alteração posterior na planta.');
+      next.plans = delta.beforePlan
+        ? currentPlan ? next.plans.map(plan => plan.id === delta.planId ? structuredClone(delta.beforePlan!) : plan)
+          : [...next.plans, structuredClone(delta.beforePlan)]
+        : next.plans.filter(plan => plan.id !== delta.planId);
+    }
     audit.before.forEach(e => putEntry(next, structuredClone(e)));
     if (audit.beforePlans) next.plans = structuredClone(audit.beforePlans);
   });
