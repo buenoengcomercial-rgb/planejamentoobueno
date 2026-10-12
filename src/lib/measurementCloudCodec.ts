@@ -26,6 +26,8 @@ export async function decodeMeasurementWorkspace(
   for (const event of result.audit) {
     if (event.beforePlans) event.beforePlans = await hydrate(event.beforePlans);
     if (event.afterPlans) event.afterPlans = await hydrate(event.afterPlans);
+    if (event.planDelta?.beforePlan) event.planDelta.beforePlan = (await hydrate([event.planDelta.beforePlan]))[0];
+    if (event.planDelta?.afterPlan) event.planDelta.afterPlan = (await hydrate([event.planDelta.afterPlan]))[0];
   }
   return result;
 }

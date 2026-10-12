@@ -6,6 +6,7 @@ import { measurementEntryPatch } from './measurementEntryPatch';
 import { measurementDeletionPatch } from './measurementDeletionPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
 import { applyMeasurementLifecycleReceipt, measurementLifecyclePatch } from './measurementLifecyclePatch';
+import { applyMeasurementPlanCatalogReceipt, measurementPlanCatalogPatch } from './measurementPlanCatalogPatch';
 import type { MeasurementWorkspace } from './measurementWorkspace';
 
 /** Only confirmed snapshots are cached; new unconfirmed edits stay in memory. */
@@ -297,14 +298,19 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       }
       // Check a DXF operation before the generic entry fallback: that fallback
       // serializes the entire workspace merely to discover the plan changed.
-      const capturePatch = !lifecyclePatch && confirmed?.revision === baseRevision
+      const catalogPatch = !lifecyclePatch && confirmed?.revision === baseRevision
+        ? measurementPlanCatalogPatch(confirmed, next) : null;
+      const capturePatch = !lifecyclePatch && !catalogPatch && confirmed?.revision === baseRevision
         && ['Capturar / editar planta', 'Apagar captura'].includes(latestEvent?.action ?? '')
         ? measurementCapturePatch(confirmed, next) : null;
-      const patch = !lifecyclePatch && !capturePatch && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
-      const deletionPatch = !lifecyclePatch && !capturePatch && !patch && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null;
+      const patch = !lifecyclePatch && !catalogPatch && !capturePatch && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
+      const deletionPatch = !lifecyclePatch && !catalogPatch && !capturePatch && !patch && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null;
       const send = () => lifecyclePatch
         ? supabase.rpc('commit_measurement_lifecycle' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: encodeMeasurementWorkspace(lifecyclePatch),
+        } as never)
+        : catalogPatch ? supabase.rpc('patch_measurement_plan_catalog' as never, {
+          p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: encodeMeasurementWorkspace(catalogPatch),
         } as never)
         : patch
         ? supabase.rpc('patch_measurement_entries' as never, {
@@ -335,7 +341,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           ? Number(eventData.revision)
           : remoteRevision >= next.revision ? await compactedReceiptRevision(operationId) : null;
         if (savedRevision === next.revision && remoteRevision >= next.revision) {
-          const latest = lifecyclePatch || remoteRevision !== next.revision ? await loadRemote() : next;
+          const latest = lifecyclePatch || catalogPatch || remoteRevision !== next.revision ? await loadRemote() : next;
           if (!latest || latest.revision < remoteRevision) throw new Error('A operação foi confirmada, mas a versão mais recente não pôde ser carregada. Mantenha esta página aberta.');
           confirmed = latest;
           return latest;
@@ -350,7 +356,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           throw new MeasurementCommitRejectedError(error.message);
         throw new Error(`${error.message}. A resposta da nuvem é incerta; confira esta operação antes de sair.`);
       }
-      const compactPatch = patch ?? (deletionPatch || capturePatch ? encodeMeasurementWorkspace(deletionPatch ?? capturePatch) : null);
+      const compactPatch = patch ?? (deletionPatch || capturePatch || catalogPatch ? encodeMeasurementWorkspace(deletionPatch ?? capturePatch ?? catalogPatch) : null);
       const canonical = (value: unknown): string => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v)
         ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
       if ((lifecyclePatch || compactPatch) && (data as { replayed?: unknown } | null)?.replayed === true) {
@@ -384,6 +390,10 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       if (lifecyclePatch) {
         const applied = applyMeasurementLifecycleReceipt(confirmed!, next, lifecyclePatch, data, scope.userId);
         if (!applied) throw new Error('A nuvem não confirmou o ciclo da medição. Mantenha esta página aberta.');
+        saved = applied;
+      } else if (catalogPatch) {
+        const applied = applyMeasurementPlanCatalogReceipt(confirmed!, next, catalogPatch, data);
+        if (!applied) throw new Error('A nuvem não confirmou o cadastro da planta. Mantenha esta página aberta.');
         saved = applied;
       } else if (patch || deletionPatch || capturePatch) {
         const receipt = data as { projectId?: string; revision?: number; patch?: unknown } | null;

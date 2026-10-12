@@ -34,7 +34,7 @@ beforeAll(async()=>{
  GRANT SELECT ON projects TO authenticated;
  CREATE TABLE additives(project_id uuid,id text,data jsonb);
  CREATE TABLE storage.objects(bucket_id text,name text);
- CREATE TABLE takeoff_plans(id uuid PRIMARY KEY,project_id uuid,chapter_id text,building text,name text,floor text,kind text,file_path text,created_by uuid,deleted_at timestamptz);
+ CREATE TABLE takeoff_plans(id uuid PRIMARY KEY,project_id uuid,chapter_id text,building text,name text,floor text,kind text,file_path text,created_by uuid,deleted_at timestamptz,revision integer NOT NULL DEFAULT 1,scales jsonb NOT NULL DEFAULT '{}'::jsonb,measures jsonb NOT NULL DEFAULT '[]'::jsonb);
  INSERT INTO projects VALUES('${projectId}','${projectId}');
  INSERT INTO storage.objects VALUES('plan-takeoff','${projectId}/${planId}/drawing.png');
  INSERT INTO takeoff_plans(id,project_id,file_path) VALUES('${planId}','${projectId}','${projectId}/${planId}/drawing.png');`);
@@ -65,11 +65,130 @@ beforeAll(async()=>{
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011210000_measurement_lifecycle_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011220000_measurement_capture_projection_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011230000_measurement_deletion_projection_delta.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261012010000_measurement_plan_catalog_delta.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
 afterAll(async()=>{await db.close();});
 describe('transação da Medição na nuvem',()=>{
+  const catalogEvent=()=>({id:crypto.randomUUID(),at:new Date().toISOString(),actor,action:'Gerir desenhos',affected:[],before:[],after:[]});
+  const catalogPlan=async()=>{
+    const id=crypto.randomUUID(),storagePath=`${projectId}/${id}/planta.dwf`;
+    await db.query('INSERT INTO storage.objects(bucket_id,name) VALUES($1,$2)',['plan-takeoff',storagePath]);
+    return {id,name:`Planta ${id}.dwf`,floor:'1º andar',kind:'dwf' as const,scales:{},measures:[],
+      chapterId:base.services[0].chapterId,storagePath};
+  };
+  const catalogCommit=async(revision:number,patch:Record<string,unknown>)=>(await db.query<{
+    value:{projectId:string;revision:number;replayed?:boolean;currentRevision?:number;patch:unknown;event?:Record<string,unknown>}
+  }>('SELECT patch_measurement_plan_catalog($1,$2,$3) value',[projectId,revision,JSON.stringify(patch)])).rows[0].value;
+  const catalogLoad=async()=>(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  it('cadastra DWF por delta compacto sem materializar, validar ou regravar toda a Medição',async()=>{
+    const ready=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('before-catalog'),multiplier:1});
+    Object.assign(ready.audit[0],{legacyPayload:randomBytes(1_500_000).toString('hex')});
+    await seed(ready);
+    const legacyPlan=await catalogPlan();
+    const legacyCandidate=transactMeasurement(ready,actor,'Gerir desenhos',draft=>{
+      draft.plans.push({...legacyPlan,file:new Blob(['DWF test'])});
+    });
+    const legacyStart=performance.now();
+    await commit(legacyCandidate);
+    const legacyTime=performance.now()-legacyStart;
+    const legacyBytes=(await db.query<{size:number}>("SELECT octet_length(before_data::text)+octet_length(after_data::text) size FROM measurement_workspace_events WHERE operation_id=$1",[legacyCandidate.audit.at(-1)!.id])).rows[0].size;
+    await seed(ready);
+    const plan=await catalogPlan(),patch={kind:'add',planId:plan.id,plan,event:catalogEvent()};
+    const materializer=(await db.query<{definition:string}>("SELECT pg_get_functiondef('materialize_measurement_workspace(uuid)'::regprocedure) definition")).rows[0].definition;
+    const validator=(await db.query<{definition:string}>("SELECT pg_get_functiondef('validate_measurement_workspace(jsonb,jsonb)'::regprocedure) definition")).rows[0].definition;
+    await db.exec("CREATE OR REPLACE FUNCTION materialize_measurement_workspace(p_project_id uuid) RETURNS jsonb LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'full materialization'; END; $$; CREATE OR REPLACE FUNCTION validate_measurement_workspace(old jsonb,candidate jsonb) RETURNS void LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'full validation'; END; $$");
+    let receipt:Awaited<ReturnType<typeof catalogCommit>>;
+    const deltaStart=performance.now();
+    try { receipt=await catalogCommit(ready.revision,patch); }
+    finally { await db.exec(materializer); await db.exec(validator); }
+    const deltaTime=performance.now()-deltaStart;
+    const saved=await catalogLoad();
+    expect(receipt!.event).toMatchObject({planDelta:{kind:'add',planId:plan.id,afterPlan:plan}});
+    expect(saved.plans).toEqual([...JSON.parse(wire(ready)).plans,plan]);
+    expect(saved.entries).toEqual(ready.entries);
+    expect(saved.periods).toEqual(ready.periods);
+    expect(saved.services).toEqual(ready.services);
+    expect(saved.audit.at(-1)).toEqual(receipt!.event);
+    expect((await db.query<{data:unknown}>('SELECT data FROM measurement_workspaces')).rows[0].data).toEqual(JSON.parse(wire(ready)));
+    const bytes=(await db.query<{size:number}>("SELECT octet_length(before_data::text)+octet_length(after_data::text) size FROM measurement_workspace_events WHERE operation_id=$1",[patch.event.id])).rows[0].size;
+    expect(bytes).toBeLessThan(6000);
+    expect(bytes).toBeLessThan(legacyBytes/100);
+    console.log(`measurement drawing catalog, 3 MB audit: full ${legacyTime.toFixed(1)} ms/${legacyBytes} bytes, delta ${deltaTime.toFixed(1)} ms/${bytes} bytes (PGlite)`);
+  },20000);
+  it('altera metadados e arquiva planta sem marcas; repete operação sem duplicar e preserva arquivos',async()=>{
+    await seed();
+    const plan=await catalogPlan(),added={kind:'add',planId:plan.id,plan,event:catalogEvent()};
+    const first=await catalogCommit(base.revision,added);
+    expect(await catalogCommit(base.revision,added)).toMatchObject({replayed:true,revision:first.revision,currentRevision:first.revision});
+    const revised={...plan,name:`Nome revisado ${plan.id}.dwf`,floor:'Térreo'};
+    const changed={kind:'update',planId:plan.id,plan:revised,event:catalogEvent()};
+    const second=await catalogCommit(first.revision,changed);
+    expect((await catalogLoad()).plans.at(-1)).toEqual(revised);
+    expect((await db.query<{revision:number}>('SELECT revision FROM takeoff_plans WHERE id=$1',[plan.id])).rows[0].revision).toBe(2);
+    const archived={kind:'archive',planId:plan.id,event:catalogEvent()};
+    const third=await catalogCommit(second.revision,archived);
+    expect((await catalogLoad()).plans).toEqual(JSON.parse(wire(base)).plans);
+    expect((await catalogLoad()).entries).toEqual(base.entries);
+    expect((await db.query<{deleted_at:string;revision:number}>('SELECT deleted_at,revision FROM takeoff_plans WHERE id=$1',[plan.id])).rows[0]).toMatchObject({revision:3,deleted_at:expect.any(Date)});
+    expect((await db.query('SELECT * FROM storage.objects WHERE name=$1',[plan.storagePath])).rows).toHaveLength(1);
+    expect(await catalogCommit(second.revision,archived)).toMatchObject({replayed:true,revision:third.revision,currentRevision:third.revision});
+    const compacted=await compactHistory(third.revision);
+    expect(compacted.rows).toHaveLength(1);
+    expect(await catalogCommit(second.revision,archived)).toMatchObject({replayed:true,revision:third.revision});
+    expect((await catalogLoad()).entries).toEqual(base.entries);
+  });
+  it('recusa arquivo não confirmado, outro projeto, marcações embutidas e mudança de escala pelo catálogo',async()=>{
+    await seed();
+    const plan=await catalogPlan();
+    for(const invalid of [
+      {...plan,storagePath:`${projectId}/${plan.id}/ausente.dwf`},
+      {...plan,storagePath:`${userId}/${plan.id}/planta.dwf`},
+      {...plan,measures:[{id:'injected',name:'Contagem',page:1,kind:'count',points:[{x:1,y:1}]}]},
+    ]) await expect(catalogCommit(base.revision,{kind:'add',planId:plan.id,plan:invalid,event:catalogEvent()})).rejects.toThrow();
+    expect((await catalogLoad()).plans).toEqual(JSON.parse(wire(base)).plans);
+    const first=await catalogCommit(base.revision,{kind:'add',planId:plan.id,plan,event:catalogEvent()});
+    await expect(catalogCommit(first.revision,{kind:'update',planId:plan.id,plan:{...plan,scales:{1:2}},event:catalogEvent()})).rejects.toThrow('escala');
+    await expect(catalogCommit(first.revision,{kind:'update',planId:plan.id,plan:{...plan,storagePath:`${projectId}/${plan.id}/outra.dwf`},event:catalogEvent()})).rejects.toThrow('arquivo');
+    expect((await catalogLoad()).plans.at(-1)).toEqual(plan);
+  });
+  it('preserva captura atômica após importar; planta com quantitativos não pode ser arquivada',async()=>{
+    await seed();
+    const plan=await catalogPlan(),first=await catalogCommit(base.revision,{kind:'add',planId:plan.id,plan,event:catalogEvent()});
+    let loaded=await catalogLoad();
+    const entry=editMeasuredRow(loaded,actor,'m1','signs',newMeasuredRow('catalog-capture'));
+    await db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,first.revision,JSON.stringify(measurementEntryPatch(loaded,entry))]);
+    loaded=await catalogLoad();
+    const mark={id:crypto.randomUUID(),name:'Contagem DWF',kind:'count' as const,page:1,points:[{x:1,y:1},{x:2,y:2}],projectId,measurementId:'m1',serviceId:'signs'};
+    const captured=captureMeasurement(loaded,actor,{measurementId:'m1',serviceId:'signs',rowId:'catalog-capture',field:'multiplier'},
+      {...loaded.plans.find(p=>p.id===plan.id)!,measures:[mark]},mark);
+    const capturePatch=measurementCapturePatch(loaded,captured)!;
+    await db.query('SELECT patch_measurement_capture($1,$2,$3)',[projectId,loaded.revision,JSON.stringify(encodeMeasurementWorkspace(capturePatch))]);
+    loaded=await catalogLoad();
+    expect(entryFor(loaded,'m1','signs').rows.find(row=>row.id==='catalog-capture')?.multiplier).toBe(2);
+    await expect(catalogCommit(loaded.revision,{kind:'archive',planId:plan.id,event:catalogEvent()})).rejects.toThrow('quantitativos vinculados');
+    const nameUpdate={...loaded.plans.find(p=>p.id===plan.id)!,name:`DWF com captura ${plan.id}`};
+    const updated=await catalogCommit(loaded.revision,{kind:'update',planId:plan.id,plan:nameUpdate,event:catalogEvent()});
+    const after=await catalogLoad();
+    expect(after.revision).toBe(updated.revision);
+    expect(after.entries).toEqual(loaded.entries);
+    expect(after.plans.find(p=>p.id===plan.id)?.measures).toEqual([mark]);
+  });
+  it('protege permissões e revisões concorrentes e detecta adulteração do evento do catálogo',async()=>{
+    await seed(); const plan=await catalogPlan(),patch={kind:'add',planId:plan.id,plan,event:catalogEvent()};
+    await db.exec("SET ROLE authenticated; SET test.role='viewer'");
+    await expect(catalogCommit(base.revision,patch)).rejects.toThrow('perfil');
+    await db.exec("RESET ROLE; SET test.role='owner'");
+    const receipt=await catalogCommit(base.revision,patch);
+    await expect(catalogCommit(base.revision,{...patch,event:catalogEvent()})).rejects.toThrow('Conflito');
+    await expect(catalogCommit(base.revision,{...patch,plan:{...plan,floor:'2º andar'}})).rejects.toThrow('conteúdo diferente');
+    await db.exec('BEGIN');
+    await db.query("UPDATE measurement_workspace_events SET before_data=jsonb_set(before_data,'{plan}','{}'::jsonb) WHERE operation_id=$1",[patch.event.id]);
+    await expect(catalogLoad()).rejects.toThrow('Histórico da Medição divergente');
+    await db.exec('ROLLBACK');
+    expect((await catalogLoad()).revision).toBe(receipt.revision);
+  });
   it('cria, exclui e restaura período por deltas idempotentes sem alterar os lançamentos anteriores',async()=>{
     await seed();
     const created=addMeasuredPeriod(base,actor), id=created.periods.at(-1)!.id, createEvent=created.audit.at(-1)!;
@@ -841,6 +960,7 @@ describe('transação da Medição na nuvem',()=>{
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011210000_measurement_lifecycle_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011220000_measurement_capture_projection_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011230000_measurement_deletion_projection_delta.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261012010000_measurement_plan_catalog_delta.sql',import.meta.url),'utf8'));
  });
  it('bloqueia projeção adulterada e não expõe seu acesso direto ao cliente',async()=>{
   await seed();

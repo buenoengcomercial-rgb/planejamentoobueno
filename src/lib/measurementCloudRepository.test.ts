@@ -7,6 +7,7 @@ import { deleteMeasuredPeriod, restoreMeasuredPeriod } from './measurementLifecy
 import { measurementEntryPatch } from './measurementEntryPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
 import { measurementDeletionPatch } from './measurementDeletionPatch';
+import { measurementPlanCatalogPatch } from './measurementPlanCatalogPatch';
 import { encodeMeasurementWorkspace, decodeMeasurementWorkspace } from './measurementCloudCodec';
 import { cloudMeasurementRepository } from './measurementCloudRepository';
 import { MeasurementCommitRejectedError } from './measurementWorkspaceStore';
@@ -68,6 +69,29 @@ beforeEach(() => {
 });
 
 describe('Medição somente nuvem', () => {
+  it('cadastra DWF pelo delta de catálogo sem regravar a Medição inteira', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = transactMeasurement(base, actor, 'Gerir desenhos', draft => { draft.plans.push({
+      id: 'p-dwf', name: 'Model.dwf', floor: '1º', kind: 'dwf', file: new Blob(['dwf']), scales: {}, measures: [],
+    }); });
+    const operationId = next.audit.at(-1)!.id;
+    const path = `${base.projectId}/p-dwf/${operationId}.dwf`;
+    const expected = structuredClone(next);
+    expected.plans[0].storagePath = path; expected.audit.at(-1)!.afterPlans![0].storagePath = path;
+    const patch = measurementPlanCatalogPatch(base, expected)!;
+    const event = { ...patch.event, planDelta: { kind: patch.kind, planId: 'p-dwf', afterPlan: expected.plans[0] } };
+    mocks.upload.mockResolvedValueOnce({ error: null });
+    mocks.rpc.mockResolvedValueOnce({ data: encodeMeasurementWorkspace({ projectId: base.projectId, revision: expected.revision, patch, event }), error: null });
+    const saved = await repo.commit(next, base.revision);
+    expect(saved.entries).toEqual(base.entries);
+    expect(saved.audit.at(-1)?.planDelta?.afterPlan?.storagePath).toBe(path);
+    expect(mocks.rpc).toHaveBeenLastCalledWith('patch_measurement_plan_catalog', {
+      p_project_id: base.projectId, p_expected_revision: base.revision, p_patch: encodeMeasurementWorkspace(patch),
+    });
+    expect(mocks.rpc.mock.calls.some(call => call[0] === 'commit_measurement_workspace')).toBe(false);
+    expect(mocks.stored).toEqual([]);
+  });
   it('não persiste novos rascunhos nem operações pendentes no navegador', async () => {
     const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     loaded(base); await repo.load();
