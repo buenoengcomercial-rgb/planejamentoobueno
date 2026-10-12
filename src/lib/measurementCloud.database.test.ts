@@ -63,6 +63,8 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011180000_measurement_row_deletion_patch.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011190000_measurement_quantity_history_compaction.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011210000_measurement_lifecycle_delta.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261011220000_measurement_capture_projection_delta.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261011230000_measurement_deletion_projection_delta.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -834,6 +836,11 @@ describe('transação da Medição na nuvem',()=>{
   const second=editMeasuredRow(first,actor,'m1','signs',{...newMeasuredRow('legacy-delta'),multiplier:4});
   await db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,first.revision,JSON.stringify(measurementEntryPatch(first,second))]);
   expect((await db.query<{data:unknown}>('SELECT load_measurement_workspace($1) data',[projectId])).rows[0].data).toEqual(JSON.parse(wire(second)));
+  // This test intentionally replays an older migration. Restore the current
+  // materializer and projection before later capture tests use the same PGlite.
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261011210000_measurement_lifecycle_delta.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261011220000_measurement_capture_projection_delta.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261011230000_measurement_deletion_projection_delta.sql',import.meta.url),'utf8'));
  });
  it('bloqueia projeção adulterada e não expõe seu acesso direto ao cliente',async()=>{
   await seed();
@@ -1127,14 +1134,32 @@ describe('transação da Medição na nuvem',()=>{
   expect(patch).toBeTruthy();
   expect(patch?.event.beforePlans).toBeUndefined();
   expect(JSON.stringify(encodeMeasurementWorkspace(patch)).length).toBeLessThan(JSON.stringify(encodeMeasurementWorkspace(next)).length);
+  const unrelated=structuredClone(patch!);
+  unrelated.event.id=crypto.randomUUID();
+  unrelated.entries[0].rows[0].formula='A*B';
+  unrelated.event.after=structuredClone(unrelated.entries);
+  await expect(db.query('SELECT patch_measurement_capture($1,$2,$3)',
+    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(unrelated))]))
+    .rejects.toThrow('não vinculada à marcação');
   const before=await currentDataHash();
   const receipt=(await db.query<{value:{revision:number;patch:unknown}}>('SELECT patch_measurement_capture($1,$2,$3) value',
     [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows[0].value;
   expect(receipt).toMatchObject({revision:next.revision,patch:encodeMeasurementWorkspace(patch)});
+  const compactEvent=(await db.query<{before_data:{kind:string};after_data:{kind:string}}>(
+    'SELECT before_data,after_data FROM measurement_workspace_events WHERE operation_id=$1',
+    [next.audit.at(-1)!.id])).rows[0];
+  expect(compactEvent.before_data.kind).toBe('capture_patch_v1');
+  expect(compactEvent.after_data.kind).toBe('capture_patch_v1');
+  expect(JSON.stringify(compactEvent).length).toBeLessThan(JSON.stringify(encodeMeasurementWorkspace(next)).length);
+  expect((await db.query<{revision:number}>(
+    'SELECT (data->>\'revision\')::int revision FROM measurement_workspaces WHERE project_id=$1',
+    [projectId])).rows[0].revision).toBe(w.revision);
   const loaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
   expect(loaded).toEqual(JSON.parse(wire(next)));
-  expect((await db.query('SELECT patch_measurement_capture($1,$2,$3)',
-    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows).toHaveLength(1);
+  const liveRetry=(await db.query<{value:{revision:number;replayed:boolean;currentRevision:number}}>(
+    'SELECT patch_measurement_capture($1,$2,$3) value',
+    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows[0].value;
+  expect(liveRetry).toMatchObject({revision:next.revision,replayed:true,currentRevision:next.revision});
   expect((await db.query<{count:number}>('SELECT count(*)::int count FROM measurement_workspace_events')).rows[0].count).toBe(2);
   const tampered=structuredClone(patch!);
   tampered.plan.measures[0].points.push({x:8,y:8});
@@ -1142,6 +1167,60 @@ describe('transação da Medição na nuvem',()=>{
     [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(tampered))])).rejects.toThrow();
   expect(await currentDataHash()).not.toBe(before);
   expect((await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value).toEqual(loaded);
+  await compactHistory(loaded.revision);
+  const compactedRetry=(await db.query<{value:{revision:number;replayed:boolean;currentRevision:number}}>(
+    'SELECT patch_measurement_capture($1,$2,$3) value',
+    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows[0].value;
+  expect(compactedRetry).toMatchObject({revision:next.revision,replayed:true,
+    currentRevision:loaded.revision+1});
+  expect((await db.query<{count:number}>(
+    'SELECT count(*)::int count FROM measurement_workspace_events')).rows[0].count).toBe(0);
+ });
+ it('captura 4, 5 e 11 UN com próxima linha vazia sem alterar os 2 UN já salvos',async()=>{
+  await seed();
+  let w=await commit(editMeasuredRow(base,actor,'m1','signs',
+    {...newMeasuredRow('cloud-2'),multiplier:2}));
+  w=await commit(editMeasuredRow(w,actor,'m1','signs',newMeasuredRow('capture-4')));
+  w.plans[0].file=base.plans[0].file;
+  for(const [count,rowId,nextRowId,comment] of [
+    [4,'capture-4','capture-5','Térreo'],
+    [5,'capture-5-new',null,'1º andar'],
+    [11,'capture-11','next-empty','2º andar'],
+  ] as const){
+    const mark={id:`capture-mark-${count}`,name:'Contagem',kind:'count' as const,page:1,
+      points:Array.from({length:count},(_,i)=>({x:i,y:1})),projectId,
+      measurementId:'m1',serviceId:'signs'};
+    const captureBase=count===4 ? w : structuredClone(w);
+    if(count!==4) entryFor(captureBase,'m1','signs').rows.push(newMeasuredRow(rowId));
+    const candidate=captureMeasurement(captureBase,actor,{measurementId:'m1',serviceId:'signs',rowId,
+      field:'multiplier'}, {...w.plans[0],measures:[...w.plans[0].measures,mark]},mark);
+    const entry=entryFor(candidate,'m1','signs');
+    entry.rows.find(row=>row.id===rowId)!.comment=comment;
+    if(nextRowId) entry.rows.splice(entry.rows.findIndex(row=>row.id===rowId)+1,0,newMeasuredRow(nextRowId));
+    candidate.audit.at(-1)!.before=[structuredClone(entryFor(w,'m1','signs'))];
+    candidate.audit.at(-1)!.after=[structuredClone(entry)];
+    const patch=measurementCapturePatch(w,candidate)!;
+    expect(patch).toBeTruthy();
+    if(count===4){
+      const changedOtherRow=structuredClone(patch);
+      changedOtherRow.event.id=crypto.randomUUID();
+      changedOtherRow.entries[0].rows[0].comment='Alteração indevida dos 2 UN';
+      changedOtherRow.event.after=structuredClone(changedOtherRow.entries);
+      await expect(db.query('SELECT patch_measurement_capture($1,$2,$3)',[
+        projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(changedOtherRow))]))
+        .rejects.toThrow('não vinculada à marcação');
+    }
+    await db.query('SELECT patch_measurement_capture($1,$2,$3)',[
+      projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))]);
+    w=(await db.query<{value:MeasurementWorkspace}>(
+      'SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(w).toEqual(JSON.parse(wire(candidate)));
+    w.plans[0].file=base.plans[0].file;
+  }
+  const rows=entryFor(w,'m1','signs').rows;
+  expect(rows.map(row=>row.multiplier)).toEqual([2,4,0,5,11,0]);
+  expect(rows.reduce((sum,row)=>sum+row.multiplier,0)).toBe(22);
+  expect(w.plans[0].measures).toHaveLength(3);
  });
  it('duas capturas consecutivas preservam as duas marcações e os totais após recarga',async()=>{
   await seed(); let w=await commit(editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('first')));
@@ -1161,6 +1240,86 @@ describe('transação da Medição na nuvem',()=>{
   expect(w.plans[0].measures.map(mark=>mark.id)).toEqual(['mark-19','mark-22']);
   expect(w.entries.find(entry=>entry.measurementId==='m1'&&entry.serviceId==='signs')?.rows.map(row=>row.multiplier)).toEqual([19,22]);
   expect(w.entries.find(entry=>entry.measurementId==='m1'&&entry.serviceId==='signs')?.rows.reduce((total,row)=>total+row.multiplier,0)).toBe(41);
+ });
+ it('captura mantém fator neutro e respeita período posterior aprovado sem bloquear análise fiscal',async()=>{
+  const ready=structuredClone(editMeasuredRow(base,actor,'m1','signs',{
+    ...newMeasuredRow('formula-row'),formula:'A*B'}));
+  ready.periods.find(period=>period.id==='m2')!.status='in_review';
+  await seed(ready);
+  ready.plans[0].file=base.plans[0].file;
+  const mark={id:'formula-mark',name:'Contagem',kind:'count' as const,page:1,
+    points:[{x:1,y:1},{x:2,y:2}],projectId,measurementId:'m1',serviceId:'signs'};
+  const next=captureMeasurement(ready,actor,{measurementId:'m1',serviceId:'signs',
+    rowId:'formula-row',field:'measuredQuantity'},
+    {...ready.plans[0],measures:[mark]},mark);
+  const patch=measurementCapturePatch(ready,next)!;
+  await db.query('SELECT patch_measurement_capture($1,$2,$3)',[
+    projectId,ready.revision,JSON.stringify(encodeMeasurementWorkspace(patch))]);
+  const loaded=(await db.query<{value:MeasurementWorkspace}>(
+    'SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(entryFor(loaded,'m1','signs').rows[0]).toMatchObject({
+    multiplier:1,measuredQuantity:2,neutralFactors:['multiplier']});
+  const approved=structuredClone(ready);
+  approved.periods.find(period=>period.id==='m2')!.status='approved';
+  await seed(approved);
+  await expect(db.query('SELECT patch_measurement_capture($1,$2,$3)',[
+    projectId,ready.revision,JSON.stringify(encodeMeasurementWorkspace(patch))]))
+    .rejects.toThrow('já aprovada pela fiscalização');
+ });
+ it('captura com auditoria legada de 7 MB não replica o checkpoint nem os dados de outras tarefas',async()=>{
+  const ready=editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('large-audit'));
+  Object.assign(ready.audit[0],{legacyPayload:'x'.repeat(7_000_000)});
+  await seed(ready);
+  ready.plans[0].file=base.plans[0].file;
+  const otherEntry=entryFor(ready,'m1','detectors');
+  const mark={id:'large-audit-mark',name:'Contagem',kind:'count' as const,page:1,
+    points:[{x:1,y:1}],projectId,measurementId:'m1',serviceId:'signs'};
+  const next=captureMeasurement(ready,actor,{measurementId:'m1',serviceId:'signs',
+    rowId:'large-audit',field:'multiplier'},
+    {...ready.plans[0],measures:[mark]},mark);
+  const patch=measurementCapturePatch(ready,next)!;
+  const started=performance.now();
+  await db.query('SELECT patch_measurement_capture($1,$2,$3)',[
+    projectId,ready.revision,JSON.stringify(encodeMeasurementWorkspace(patch))]);
+  const elapsed=performance.now()-started;
+  const receipt=(await db.query<{bytes:number}>(
+    'SELECT pg_column_size(before_data)+pg_column_size(after_data) bytes FROM measurement_workspace_events WHERE operation_id=$1',
+    [patch.event.id])).rows[0];
+  expect(receipt.bytes).toBeLessThan(100_000);
+  const checkpoint=(await db.query<{revision:number}>(
+    'SELECT (data->>\'revision\')::int revision FROM measurement_workspaces WHERE project_id=$1',
+    [projectId])).rows[0];
+  expect(checkpoint.revision).toBe(ready.revision);
+  const loaded=(await db.query<{value:MeasurementWorkspace}>(
+    'SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(loaded).toEqual(JSON.parse(wire(next)));
+  expect(entryFor(loaded,'m1','detectors')).toEqual(otherEntry);
+  const proof=(await db.query<{same:boolean}>(
+    `SELECT public.measurement_workspace_candidate_proof(public.load_measurement_workspace($1))=
+      md5(core_hash||':'||md5(entries::text)||':'||audit_digest||':'||revision::text) same
+      FROM measurement_workspace_entry_state WHERE project_id=$1`,[projectId])).rows[0];
+  expect(proof.same).toBe(true);
+  const following=editMeasuredRow(loaded,actor,'m1','detectors',
+    {...newMeasuredRow('after-capture'),multiplier:1});
+  await db.query('SELECT patch_measurement_entries($1,$2,$3)',[
+    projectId,loaded.revision,JSON.stringify(encodeMeasurementWorkspace(measurementEntryPatch(loaded,following)))]);
+  expect((await db.query<{value:MeasurementWorkspace}>(
+    'SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value).toEqual(JSON.parse(wire(following)));
+  const deleted=deleteMeasuredRow(following,actor,'m1','signs','large-audit');
+  const deletionPatch=measurementDeletionPatch(following,deleted)!;
+  const deletionStarted=performance.now();
+  await db.query('SELECT patch_measurement_row_deletion($1,$2,$3)',[
+    projectId,following.revision,JSON.stringify(encodeMeasurementWorkspace(deletionPatch))]);
+  const deletionElapsed=performance.now()-deletionStarted;
+  const deletionReceipt=(await db.query<{bytes:number}>(
+    'SELECT pg_column_size(before_data)+pg_column_size(after_data) bytes FROM measurement_workspace_events WHERE operation_id=$1',
+    [deletionPatch.event.id])).rows[0];
+  expect(deletionReceipt.bytes).toBeLessThan(100_000);
+  const afterDelete=(await db.query<{value:MeasurementWorkspace}>(
+    'SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(afterDelete).toEqual(JSON.parse(wire(deleted)));
+  expect(entryFor(afterDelete,'m1','detectors')).toEqual(entryFor(following,'m1','detectors'));
+  console.info(`measurement 7 MB audit: capture ${elapsed.toFixed(1)} ms/${receipt.bytes} bytes, deletion ${deletionElapsed.toFixed(1)} ms/${deletionReceipt.bytes} bytes`);
  });
  it('exclui duas linhas capturadas e suas marcas em uma só revisão sem tocar em outras tarefas',async()=>{
   await seed(); let w=await commit(editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('first')));
@@ -1190,10 +1349,21 @@ describe('transação da Medição na nuvem',()=>{
   const receipt=(await db.query<{value:{revision:number;patch:unknown}}>('SELECT patch_measurement_row_deletion($1,$2,$3) value',
    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows[0].value;
   expect(receipt).toMatchObject({revision:combined.revision,patch:encodeMeasurementWorkspace(patch)});
+  const compactDeletion=(await db.query<{before_data:{kind:string};after_data:{kind:string}}>(
+    'SELECT before_data,after_data FROM measurement_workspace_events WHERE operation_id=$1',
+    [patch?.event.id])).rows[0];
+  expect(compactDeletion.before_data.kind).toBe('deletion_patch_v1');
+  expect(compactDeletion.after_data.kind).toBe('deletion_patch_v1');
   const loaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
   expect(loaded).toEqual(JSON.parse(wire(combined)));
   expect(entryFor(loaded,'m1','signs').rows).toEqual([]);
   expect(entryFor(loaded,'m1','detectors')).toEqual(unaffected);
+  await compactHistory(loaded.revision);
+  const deletionRetry=(await db.query<{value:{revision:number;replayed:boolean;currentRevision:number}}>(
+    'SELECT patch_measurement_row_deletion($1,$2,$3) value',
+    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows[0].value;
+  expect(deletionRetry).toMatchObject({revision:combined.revision,replayed:true,
+    currentRevision:loaded.revision+1});
   expect((await db.query('SELECT patch_measurement_row_deletion($1,$2,$3)',
    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows).toHaveLength(1);
  });

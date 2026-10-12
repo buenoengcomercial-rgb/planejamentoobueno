@@ -17,6 +17,39 @@ export function measurementCapturePatch(base: MeasurementWorkspace, next: Measur
   const event = next.audit.at(-1);
   if (!event || !['Capturar / editar planta', 'Apagar captura'].includes(event.action)
     || !event.beforePlans || !event.afterPlans || !event.affected.length) return null;
+  // A fresh capture shares every untouched collection with its confirmed
+  // base. Verify those identities and only serialize the affected entry; a
+  // full workspace JSON round trip would pause the browser on every point.
+  if (next.schema === base.schema && next.projectName === base.projectName && next.backupId === base.backupId
+    && next.contract === base.contract && next.services === base.services && next.periods === base.periods
+    && next.importedKeys === base.importedKeys && event.beforePlans === base.plans && event.afterPlans === next.plans
+    && base.audit.every((previous, index) => next.audit[index] === previous)
+    && (next.entries.length === base.entries.length || next.entries.length === base.entries.length + 1)
+    && event.affected.length === 1
+    && event.before.length === 1 && event.after.length === 1) {
+    const changedPlanIndexes = next.plans.flatMap((plan, index) => plan === base.plans[index] ? [] : [index]);
+    const changedEntryIndexes = next.entries.flatMap((entry, index) => entry === base.entries[index] ? [] : [index]);
+    if (changedPlanIndexes.length === 1 && changedEntryIndexes.length === 1) {
+      const planIndex = changedPlanIndexes[0], entryIndex = changedEntryIndexes[0];
+      const plan = next.plans[planIndex], oldPlan = base.plans[planIndex];
+      const entry = next.entries[entryIndex];
+      const addedEntry = entryIndex === base.entries.length;
+      const oldEntry = base.entries[entryIndex] ?? {
+        projectId: base.projectId, measurementId: entry.measurementId, serviceId: entry.serviceId, rows: [],
+      };
+      const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+      if (plan.id === oldPlan.id && entry.measurementId === oldEntry.measurementId
+        && entry.serviceId === oldEntry.serviceId
+        && entry.projectId === base.projectId
+        && (!addedEntry || !base.entries.some(previous => previous.measurementId === entry.measurementId && previous.serviceId === entry.serviceId))
+        && event.affected[0].measurementId === entry.measurementId
+        && event.affected[0].serviceId === entry.serviceId
+        && same(event.before[0], oldEntry) && same(event.after[0], entry)) {
+        const { beforePlans: _beforePlans, afterPlans: _afterPlans, ...compactEvent } = event;
+        return { plan, entries: [entry], event: compactEvent };
+      }
+    }
+  }
   const encodedBase = encodeMeasurementWorkspace(base) as MeasurementWorkspace;
   const encodedNext = encodeMeasurementWorkspace(next) as MeasurementWorkspace;
   const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);

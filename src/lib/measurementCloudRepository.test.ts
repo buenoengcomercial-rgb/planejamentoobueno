@@ -94,6 +94,45 @@ describe('Medição somente nuvem', () => {
     expect(mocks.stored).toEqual([]);
   });
 
+  it('recarrega a versão atual após recibo repetido de lançamento pontual', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('saved-row'), multiplier: 3 });
+    const advanced = editMeasuredRow(next, actor, 'm1', 'detectors', { ...newMeasuredRow('later-row'), multiplier: 2 });
+    const patch = measurementEntryPatch(base, next)!;
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: next.revision,
+      replayed: true, currentRevision: advanced.revision, patch }, error: null });
+    loaded(advanced);
+    expect(await repo.commit(next, base.revision)).toEqual(advanced);
+    expect(await repo.confirmedOperation!(next.audit.at(-1)!.id, next.revision)).toBe(true);
+    expect(mocks.rpc.mock.calls.map(call => call[0])).toEqual([
+      'load_measurement_workspace', 'patch_measurement_entries', 'load_measurement_workspace',
+    ]);
+  });
+
+  it('recusa recibo repetido pontual com conteúdo diferente da operação enviada', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('saved-row'), multiplier: 3 });
+    const patch = measurementEntryPatch(base, next)!;
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: next.revision,
+      replayed: true, currentRevision: next.revision,
+      patch: { ...patch, entries: [{ ...patch.entries[0], rows: [] }] } }, error: null });
+    await expect(repo.commit(next, base.revision)).rejects.toThrow('recibo repetido');
+    expect(mocks.rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it('não aceita marcador compactado sem operação na auditoria ou recibo persistido', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('saved-row'), multiplier: 3 });
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: next.revision,
+      replayed: true, currentRevision: next.revision,
+      patch: { kind: 'compacted_receipt', operationId: next.audit.at(-1)!.id } }, error: null });
+    loaded({ ...next, audit: base.audit });
+    await expect(repo.commit(next, base.revision)).rejects.toThrow('recibo repetido não foi encontrado');
+  });
+
   it('repete o mesmo patch após timeout sem confirmação e não duplica a auditoria', async () => {
     const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     loaded(base); await repo.load();
@@ -283,6 +322,48 @@ describe('Medição somente nuvem', () => {
     expect(mocks.stored).toEqual([]);
   });
 
+  it('recarrega a nuvem após replay de captura sem perder outra tarefa posterior', async () => {
+    const base = await fixture(true); mocks.download.mockResolvedValue({ data: base.plans[0].file, error: null });
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId }); loaded(base); await repo.load();
+    const row = newMeasuredRow('captured-row'); const ready = editMeasuredRow(base, actor, 'm1', 'signs', row);
+    patchSaved(base, ready); await repo.commit(ready, base.revision);
+    const mark = { id: 'captured-mark', name: 'Placas', kind: 'count' as const, page: 1,
+      points: [{ x: 1, y: 1 }], projectId: base.projectId, measurementId: 'm1', serviceId: 'signs' };
+    const captured = captureMeasurement(ready, actor,
+      { measurementId: 'm1', serviceId: 'signs', rowId: row.id, field: 'multiplier' }, ready.plans[0], mark);
+    const advanced = editMeasuredRow(captured, actor, 'm1', 'detectors', { ...newMeasuredRow('other-row'), multiplier: 2 });
+    const patch = encodeMeasurementWorkspace(measurementCapturePatch(ready, captured)!);
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: captured.revision,
+      replayed: true, currentRevision: advanced.revision, patch }, error: null });
+    loaded(advanced);
+    const saved = await repo.commit(captured, ready.revision);
+    expect(saved.revision).toBe(advanced.revision);
+    expect(saved.entries.find(entry => entry.serviceId === 'detectors')?.rows.some(r => r.id === 'other-row')).toBe(true);
+    expect(saved.plans[0].measures.some(measure => measure.id === mark.id)).toBe(true);
+    expect(mocks.rpc.mock.calls.map(call => call[0])).toEqual([
+      'load_measurement_workspace', 'patch_measurement_entries', 'patch_measurement_capture', 'load_measurement_workspace',
+    ]);
+  });
+
+  it('confere recibo compactado da captura mesmo após limpeza da auditoria antiga', async () => {
+    const base = await fixture(true); mocks.download.mockResolvedValue({ data: base.plans[0].file, error: null });
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId }); loaded(base); await repo.load();
+    const row = newMeasuredRow('captured-row'); const ready = editMeasuredRow(base, actor, 'm1', 'signs', row);
+    patchSaved(base, ready); await repo.commit(ready, base.revision);
+    const mark = { id: 'captured-mark', name: 'Placas', kind: 'count' as const, page: 1,
+      points: [{ x: 1, y: 1 }], projectId: base.projectId, measurementId: 'm1', serviceId: 'signs' };
+    const captured = captureMeasurement(ready, actor,
+      { measurementId: 'm1', serviceId: 'signs', rowId: row.id, field: 'multiplier' }, ready.plans[0], mark);
+    const compacted = { ...captured, audit: ready.audit };
+    mocks.compactedRevision = captured.revision;
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: captured.revision,
+      replayed: true, currentRevision: captured.revision,
+      patch: { kind: 'compacted_receipt', operationId: captured.audit.at(-1)!.id } }, error: null });
+    loaded(compacted);
+    expect((await repo.commit(captured, ready.revision)).revision).toBe(captured.revision);
+    expect(await repo.confirmedOperation!(captured.audit.at(-1)!.id, captured.revision)).toBe(true);
+  });
+
   it('exclui linha vinculada à planta pelo patch pontual, sem enviar a base inteira', async () => {
     const base = await fixture(true); mocks.download.mockResolvedValue({ data: base.plans[0].file, error: null });
     const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId }); loaded(base); await repo.load();
@@ -301,6 +382,30 @@ describe('Medição somente nuvem', () => {
     expect(mocks.rpc).toHaveBeenLastCalledWith('patch_measurement_row_deletion', {
       p_project_id: base.projectId, p_expected_revision: captured.revision, p_patch: encodeMeasurementWorkspace(deletionPatch),
     });
+  });
+
+  it('recarrega a revisão posterior ao repetir exclusão pontual de linha vinculada', async () => {
+    const base = await fixture(true); mocks.download.mockResolvedValue({ data: base.plans[0].file, error: null });
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId }); loaded(base); await repo.load();
+    const row = newMeasuredRow('captured-row'); const ready = editMeasuredRow(base, actor, 'm1', 'signs', row);
+    patchSaved(base, ready); await repo.commit(ready, base.revision);
+    const mark = { id: 'captured-mark', name: 'Placas', kind: 'count' as const, page: 1,
+      points: [{ x: 1, y: 1 }], projectId: base.projectId, measurementId: 'm1', serviceId: 'signs' };
+    const captured = captureMeasurement(ready, actor,
+      { measurementId: 'm1', serviceId: 'signs', rowId: row.id, field: 'multiplier' }, ready.plans[0], mark);
+    const capturePatch = encodeMeasurementWorkspace(measurementCapturePatch(ready, captured)!);
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: captured.revision, patch: capturePatch }, error: null });
+    await repo.commit(captured, ready.revision);
+    const deleted = deleteMeasuredRow(captured, actor, 'm1', 'signs', row.id);
+    const advanced = editMeasuredRow(deleted, actor, 'm1', 'detectors', { ...newMeasuredRow('later-row'), multiplier: 5 });
+    const patch = encodeMeasurementWorkspace(measurementDeletionPatch(captured, deleted)!);
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: deleted.revision,
+      replayed: true, currentRevision: advanced.revision, patch }, error: null });
+    loaded(advanced);
+    const saved = await repo.commit(deleted, captured.revision);
+    expect(saved.revision).toBe(advanced.revision);
+    expect(saved.entries.find(entry => entry.serviceId === 'signs')?.rows.some(r => r.id === row.id)).toBe(false);
+    expect(saved.entries.find(entry => entry.serviceId === 'detectors')?.rows.some(r => r.id === 'later-row')).toBe(true);
   });
 
   it('descarta apenas o registro legado da tarefa 4.3.2 na primeira medição', async () => {
