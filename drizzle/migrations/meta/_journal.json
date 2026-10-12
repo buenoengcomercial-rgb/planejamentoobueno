@@ -29,6 +29,13 @@
       "when": 1791769238818,
       "tag": "0003_measurement_capture_projection_delta",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791769318202,
+      "tag": "0004_measurement_deletion_projection_delta",
+      "breakpoints": true
     }
   ]
 }
