@@ -40,7 +40,7 @@ describe('barra do detalhe de quantitativos', () => {
     expect(onEdit).toHaveBeenCalledWith('first', expect.objectContaining({ multiplier: 7 }));
     expect(fireEvent.keyDown(screen.getByRole('spinbutton', { name: 'Medida da linha 1' }), { key: 'Tab' })).toBe(true);
 
-    const comment = screen.getByRole('textbox', { name: 'Comentário da linha 2' });
+    const comment = screen.getByRole('textbox', { name: 'Comentário da linha 2' }) as HTMLInputElement;
     act(() => comment.focus());
     comment.setSelectionRange(2, 2);
     fireEvent.keyDown(comment, { key: 'ArrowRight' });

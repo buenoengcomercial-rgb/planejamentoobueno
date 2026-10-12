@@ -111,7 +111,7 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
     : {};
 
   const navigateCell = (event: KeyboardEvent<HTMLInputElement | HTMLSelectElement>, index: number, column: number) => {
-    if (!keyboardNavigation || readOnly || event.isComposing || event.ctrlKey || event.altKey || event.metaKey) return false;
+    if (!keyboardNavigation || readOnly || event.nativeEvent.isComposing || event.ctrlKey || event.altKey || event.metaKey) return false;
     const key = event.key;
     if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter'].includes(key)) return false;
     if (event.shiftKey && key.startsWith('Arrow')) return false;
