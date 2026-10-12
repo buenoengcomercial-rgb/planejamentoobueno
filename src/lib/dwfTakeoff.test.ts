@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Blob as NodeBlob } from 'node:buffer';
 import { PageRenderer } from 'dwf-viewer';
 import type { LoadedDwfDocument } from 'dwf-viewer';
-import { dwfSheets, openDwfSheets } from './dwfTakeoff';
+import { dwfSheets, openDwfSheets, rebaseDwfGeometry } from './dwfTakeoff';
 
 const ascii = (value: string) => Array.from(new TextEncoder().encode(value));
 const integer = (value: number, size: 2 | 4) => {
@@ -12,6 +12,7 @@ const integer = (value: number, size: 2 | 4) => {
   return Array.from(bytes);
 };
 const point16 = (x: number, y: number) => [...integer(x, 2), ...integer(y, 2)];
+const binaryString = (value: string) => [0x7b, ...integer(value.length, 4), ...Array.from(value).flatMap(character => integer(character.charCodeAt(0), 2)), 0x7d];
 
 /** A stored ZIP W2D resource exercises the actual package loader and decoder. */
 function dwfFile(stream: number[], includeManifest = false): Blob {
@@ -162,5 +163,98 @@ describe('folhas DWF', () => {
     await expect(openDwfSheets(dwfFile([
       ...ascii('(W2D V06.01)'), ...origin, ...line, 0x8d, 1, ...point16(1, 1),
     ]))).rejects.toThrow('decodificada parcialmente');
+  });
+
+  it('abre coordenadas WHIP próximas de 2 bilhões sem arredondar os segmentos do Canvas', async () => {
+    const largeOrigin = [0x4f, ...integer(2_147_000_000, 4), ...integer(2_146_000_000, 4)];
+    const document = await openDwfSheets(dwfFile([...header, ...largeOrigin, ...line]));
+    const page = document.pageData[0];
+    if (page.kind !== 'w2d-text') throw new Error('Expected W2D vectors');
+    expect(page.bounds).toEqual({ minX: 0, minY: 0, maxX: 3, maxY: 4 });
+    expect(page.primitives[0]).toMatchObject({ type: 'polyline', points: [0, 0, 3, 4] });
+    expect(Math.fround(2_147_000_002)).toBe(Math.fround(2_147_000_005));
+    expect(Math.fround(0)).not.toBe(Math.fround(3));
+  });
+
+  it('rebaseia todos os tipos vetoriais preservando cores, curvas e texto rotacionado', () => {
+    const x = 2_147_000_000, y = 2_146_000_000;
+    const source = { pageData: [{ name: 'Model', kind: 'w2d-text', width: 100, height: 200, bounds: { minX: x, minY: y, maxX: x + 100, maxY: y + 200 }, diagnostics: [], primitives: [
+      { type: 'polyline', points: [x + 10, y + 20, x + 11, y + 22], stroke: '#ff0000', lineWidth: 2 },
+      { type: 'polygon', points: [x + 1, y + 2, x + 3, y + 4, x + 5, y + 6], fill: '#00ff00' },
+      { type: 'rect', x: x + 7, y: y + 8, width: 9, height: 10, fill: '#abcdef', obraplannerPolymarker: true },
+      { type: 'text', x: 11, y: 12, size: 14, text: 'Rotacionado', fill: '#ff0000', matrix: { a: 0, b: 1, c: -1, d: 0, e: x + 30, f: y + 40 } },
+      { type: 'path', stroke: '#112233', commands: [
+        { type: 'M', x: x + 1, y: y + 2 },
+        { type: 'C', x: x + 3, y: y + 4, x1: x + 5, y1: y + 6, x2: x + 7, y2: y + 8 },
+        { type: 'Q', x: x + 9, y: y + 10, x1: x + 11, y1: y + 12 },
+        { type: 'A', x: x + 13, y: y + 14, rx: 3, ry: 4, rotation: 45, largeArc: false, sweep: true },
+        { type: 'Z' },
+      ] },
+    ] }] } as unknown as LoadedDwfDocument;
+    const page = rebaseDwfGeometry(source).pageData[0];
+    if (page.kind !== 'w2d-text') throw new Error('Expected W2D vectors');
+    expect(page.bounds).toEqual({ minX: 0, minY: 0, maxX: 100, maxY: 200 });
+    expect(page.primitives).toEqual([
+      { type: 'polyline', points: [10, 20, 11, 22], stroke: '#ff0000', lineWidth: 2 },
+      { type: 'polygon', points: [1, 2, 3, 4, 5, 6], fill: '#00ff00' },
+      { type: 'rect', x: 7, y: 8, width: 9, height: 10, fill: '#abcdef', obraplannerPolymarker: true },
+      { type: 'text', x: 0, y: 0, size: 14, text: 'Rotacionado', fill: '#ff0000', matrix: { a: 0, b: 1, c: -1, d: 0, e: 18, f: 51 } },
+      { type: 'path', stroke: '#112233', commands: [
+        { type: 'M', x: 1, y: 2 },
+        { type: 'C', x: 3, y: 4, x1: 5, y1: 6, x2: 7, y2: 8 },
+        { type: 'Q', x: 9, y: 10, x1: 11, y1: 12 },
+        { type: 'A', x: 13, y: 14, rx: 3, ry: 4, rotation: 45, largeArc: false, sweep: true },
+        { type: 'Z' },
+      ] },
+    ]);
+    const originalPage = source.pageData[0];
+    if (originalPage.kind !== 'w2d-text') throw new Error('Expected W2D vectors');
+    expect(originalPage.primitives[0]).toMatchObject({ points: [x + 10, y + 20, x + 11, y + 22] });
+    expect(originalPage.bounds?.minX).toBe(x);
+  });
+
+  it('preserva a paleta indexada WHIP V6.00 e a cor RGBA explícita', async () => {
+    const stream = [...header, ...origin];
+    for (const index of [190, 195, 45, 15, 248, 220]) stream.push(0x63, index, ...line);
+    stream.push(0x03, 34, 56, 78, 128, ...line);
+    const page = (await openDwfSheets(dwfFile(stream))).pageData[0];
+    if (page.kind !== 'w2d-text') throw new Error('Expected W2D vectors');
+    expect(page.primitives.map(primitive => primitive.stroke)).toEqual([
+      'rgb(255, 0, 0)', 'rgb(255, 0, 255)', 'rgb(0, 255, 255)', 'rgb(0, 0, 255)', 'rgb(128, 128, 128)', 'rgb(255, 255, 0)', `rgba(34, 56, 78, ${128 / 255})`,
+    ]);
+  });
+
+  it('lê nome Unicode binário cujo comprimento coincide com aspas sem engolir os vetores', async () => {
+    const page = (await openDwfSheets(dwfFile([
+      ...header, ...ascii('(SourceFilename '), ...binaryString('F'.repeat(39)), ...ascii(')(Title Model)'), ...origin, ...line,
+    ]))).pageData[0];
+    if (page.kind !== 'w2d-text') throw new Error('Expected W2D vectors');
+    expect(page.primitives).toHaveLength(1);
+    expect(page.primitives[0]).toMatchObject({ type: 'polyline', points: [102, 203, 105, 207] });
+    expect(page.diagnostics.some(diagnostic => diagnostic.message.includes('(5 opcodes)'))).toBe(true);
+  });
+
+  it('aplica ColorMap ASCII e binário sem substituir uma cor true-color explícita', async () => {
+    const mapColors = [2, 11, 22, 33, 255, 44, 55, 66, 128];
+    const maps = [
+      ascii('(ColorMap 2 11,22,33,255 44,55,66,128)'),
+      [0x7b, ...integer(12, 4), ...integer(1, 2), ...mapColors, 0x7d],
+    ];
+    for (const map of maps) {
+      const page = (await openDwfSheets(dwfFile([
+        ...header, ...origin, ...map, 0x63, 1, ...line, 0x03, 55, 221, 0, 255, ...line,
+      ]))).pageData[0];
+      if (page.kind !== 'w2d-text') throw new Error('Expected W2D vectors');
+      expect(page.primitives.map(primitive => primitive.stroke)).toEqual([`rgba(44, 55, 66, ${128 / 255})`, 'rgba(55, 221, 0, 1)']);
+    }
+  });
+
+  it('lê os 256 registros de ColorMap binário com contagem zero', async () => {
+    const colors = Array.from({ length: 256 }, (_, index) => [index, 255 - index, index % 127, 255]).flat();
+    const page = (await openDwfSheets(dwfFile([
+      ...header, ...origin, 0x7b, ...integer(1028, 4), ...integer(1, 2), 0, ...colors, 0x7d, 0x63, 255, ...line,
+    ]))).pageData[0];
+    if (page.kind !== 'w2d-text') throw new Error('Expected W2D vectors');
+    expect(page.primitives[0].stroke).toBe('rgba(255, 0, 1, 1)');
   });
 });
