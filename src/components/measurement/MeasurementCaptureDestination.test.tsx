@@ -116,4 +116,23 @@ describe('destino da captura DXF na Medição', () => {
     expect(confirmed().entries[0].rows.map(row => row.measuredQuantity)).toEqual([1, 1, 0, 2]);
     expect(confirmed().entries[0].rows.at(-1)?.source?.measureId).toBe('remote-mark');
   });
+
+  it('não substitui a mesma célula quando outra sessão já confirmou uma marca nela', async () => {
+    const { open, repository, confirmed, replaceConfirmed } = setup([newMeasuredRow('first')]);
+    await open();
+    const base = confirmed();
+    const otherMark: TakeoffMeasure = { id: 'remote-mark', name: 'Outra sessão', kind: 'count', page: 1,
+      points: [{ x: 10, y: 1 }, { x: 20, y: 1 }], projectId: 'p', measurementId: 'm', serviceId: 's' };
+    replaceConfirmed(captureMeasurement(base, actor,
+      { measurementId: 'm', serviceId: 's', rowId: 'first', field: 'measuredQuantity' },
+      { ...base.plans[0], measures: [otherMark] }, otherMark));
+    vi.mocked(repository.commit).mockRejectedValueOnce(new Error('Conflito: outra sessão alterou a medição'));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar DXF na coluna B' }));
+    await screen.findByText('Reenviar 1.1');
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar DXF na coluna B' }));
+    await waitFor(() => expect(screen.getAllByText(/A célula escolhida mudou em outro computador/).length).toBeGreaterThan(0));
+    expect(confirmed().plans[0].measures.map(mark => mark.id)).toEqual(['remote-mark']);
+    expect(confirmed().entries[0].rows[0].measuredQuantity).toBe(2);
+    expect(confirmed().entries[0].rows[0].source?.measureId).toBe('remote-mark');
+  });
 });

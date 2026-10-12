@@ -104,6 +104,13 @@ function nextCaptureRow(workspace: Workspace, target: Destination, preferredRowI
     ? structuredClone(entry) : after);
   return { ...target, rowId: row.id };
 }
+function captureCellFingerprint(workspace: Workspace, target: Destination): string {
+  const row = entryFor(workspace, target.measurementId, target.serviceId).rows.find(value => value.id === target.rowId);
+  if (!row) return 'missing';
+  const source = row[sourceFields[['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD'].indexOf(target.field)]];
+  return JSON.stringify([row[target.field] ?? 0, source ? [source.planId, source.measureId, source.page,
+    source.kind, source.heightMeters, source.points.map(point => [point.x, point.y])] : null]);
+}
 /** Several validated cell edits become one auditable task operation. */
 function coalesceTaskEdits(base: Workspace, edits: DetailEdit[], actor: MeasurementActor, operationId: string, createdAt: string): Workspace {
   const final = edits.reduce((state, edit) => edit(state), base);
@@ -767,6 +774,9 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       const event = candidate.audit.at(-1)!;
       const edit: DetailEdit = base => {
         if (base === w) return candidate;
+        const actualCell = captureCellFingerprint(base, target);
+        if (actualCell !== captureCellFingerprint(w, target) && actualCell !== captureCellFingerprint(candidate, target))
+          throw new Error('A célula escolhida mudou em outro computador. Confira este quantitativo antes de repetir a captura.');
         const rebased = captureMeasurement(base, actor, target, nextPlan, mark, remove);
         if (rebased === base) return base;
         if (!remove && !wasLinked) nextCaptureRow(rebased, target, nextTarget.rowId);
