@@ -305,7 +305,8 @@ BEGIN
       OR receipt.request_hash IS DISTINCT FROM md5(p_patch::text) THEN
       RAISE EXCEPTION 'Identificador de operação reutilizado com conteúdo diferente';
     END IF;
-    RETURN jsonb_build_object('projectId',p_project_id,'revision',receipt.revision,'patch',p_patch);
+    RETURN jsonb_build_object('projectId',p_project_id,'revision',receipt.revision,
+      'replayed',true,'currentRevision',current_revision,'patch',p_patch);
   END IF;
   SELECT * INTO compacted FROM public.measurement_workspace_compacted_receipts
     WHERE project_id=p_project_id AND operation_id=op;
@@ -315,7 +316,8 @@ BEGIN
       OR compacted.request_hash IS DISTINCT FROM md5(p_patch::text) THEN
       RAISE EXCEPTION 'Identificador de operação reutilizado com conteúdo diferente';
     END IF;
-    RETURN jsonb_build_object('projectId',p_project_id,'revision',compacted.revision,'patch',p_patch);
+    RETURN jsonb_build_object('projectId',p_project_id,'revision',compacted.revision,
+      'replayed',true,'currentRevision',current_revision,'patch',p_patch);
   END IF;
   IF current_revision IS DISTINCT FROM p_expected_revision THEN
     RAISE EXCEPTION 'Conflito: outro computador alterou a Medição' USING ERRCODE='P0002';

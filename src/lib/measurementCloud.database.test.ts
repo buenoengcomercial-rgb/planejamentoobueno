@@ -1136,7 +1136,7 @@ describe('transação da Medição na nuvem',()=>{
   expect(JSON.stringify(encodeMeasurementWorkspace(patch)).length).toBeLessThan(JSON.stringify(encodeMeasurementWorkspace(next)).length);
   const unrelated=structuredClone(patch!);
   unrelated.event.id=crypto.randomUUID();
-  unrelated.entries[0].rows[0].comment='Comentário alterado indevidamente';
+  unrelated.entries[0].rows[0].formula='A*B';
   unrelated.event.after=structuredClone(unrelated.entries);
   await expect(db.query('SELECT patch_measurement_capture($1,$2,$3)',
     [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(unrelated))]))
@@ -1156,8 +1156,10 @@ describe('transação da Medição na nuvem',()=>{
     [projectId])).rows[0].revision).toBe(w.revision);
   const loaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
   expect(loaded).toEqual(JSON.parse(wire(next)));
-  expect((await db.query('SELECT patch_measurement_capture($1,$2,$3)',
-    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows).toHaveLength(1);
+  const liveRetry=(await db.query<{value:{revision:number;replayed:boolean;currentRevision:number}}>(
+    'SELECT patch_measurement_capture($1,$2,$3) value',
+    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows[0].value;
+  expect(liveRetry).toMatchObject({revision:next.revision,replayed:true,currentRevision:next.revision});
   expect((await db.query<{count:number}>('SELECT count(*)::int count FROM measurement_workspace_events')).rows[0].count).toBe(2);
   const tampered=structuredClone(patch!);
   tampered.plan.measures[0].points.push({x:8,y:8});
@@ -1166,12 +1168,59 @@ describe('transação da Medição na nuvem',()=>{
   expect(await currentDataHash()).not.toBe(before);
   expect((await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value).toEqual(loaded);
   await compactHistory(loaded.revision);
-  const compactedRetry=(await db.query<{value:{revision:number}}>(
+  const compactedRetry=(await db.query<{value:{revision:number;replayed:boolean;currentRevision:number}}>(
     'SELECT patch_measurement_capture($1,$2,$3) value',
     [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows[0].value;
-  expect(compactedRetry.revision).toBe(next.revision);
+  expect(compactedRetry).toMatchObject({revision:next.revision,replayed:true,
+    currentRevision:loaded.revision+1});
   expect((await db.query<{count:number}>(
     'SELECT count(*)::int count FROM measurement_workspace_events')).rows[0].count).toBe(0);
+ });
+ it('captura 4, 5 e 11 UN com próxima linha vazia sem alterar os 2 UN já salvos',async()=>{
+  await seed();
+  let w=await commit(editMeasuredRow(base,actor,'m1','signs',
+    {...newMeasuredRow('cloud-2'),multiplier:2}));
+  w=await commit(editMeasuredRow(w,actor,'m1','signs',newMeasuredRow('capture-4')));
+  w.plans[0].file=base.plans[0].file;
+  for(const [count,rowId,nextRowId,comment] of [
+    [4,'capture-4','capture-5','Térreo'],
+    [5,'capture-5-new',null,'1º andar'],
+    [11,'capture-11','next-empty','2º andar'],
+  ] as const){
+    const mark={id:`capture-mark-${count}`,name:'Contagem',kind:'count' as const,page:1,
+      points:Array.from({length:count},(_,i)=>({x:i,y:1})),projectId,
+      measurementId:'m1',serviceId:'signs'};
+    const captureBase=count===4 ? w : structuredClone(w);
+    if(count!==4) entryFor(captureBase,'m1','signs').rows.push(newMeasuredRow(rowId));
+    const candidate=captureMeasurement(captureBase,actor,{measurementId:'m1',serviceId:'signs',rowId,
+      field:'multiplier'}, {...w.plans[0],measures:[...w.plans[0].measures,mark]},mark);
+    const entry=entryFor(candidate,'m1','signs');
+    entry.rows.find(row=>row.id===rowId)!.comment=comment;
+    if(nextRowId) entry.rows.splice(entry.rows.findIndex(row=>row.id===rowId)+1,0,newMeasuredRow(nextRowId));
+    candidate.audit.at(-1)!.before=[structuredClone(entryFor(w,'m1','signs'))];
+    candidate.audit.at(-1)!.after=[structuredClone(entry)];
+    const patch=measurementCapturePatch(w,candidate)!;
+    expect(patch).toBeTruthy();
+    if(count===4){
+      const changedOtherRow=structuredClone(patch);
+      changedOtherRow.event.id=crypto.randomUUID();
+      changedOtherRow.entries[0].rows[0].comment='Alteração indevida dos 2 UN';
+      changedOtherRow.event.after=structuredClone(changedOtherRow.entries);
+      await expect(db.query('SELECT patch_measurement_capture($1,$2,$3)',[
+        projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(changedOtherRow))]))
+        .rejects.toThrow('não vinculada à marcação');
+    }
+    await db.query('SELECT patch_measurement_capture($1,$2,$3)',[
+      projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))]);
+    w=(await db.query<{value:MeasurementWorkspace}>(
+      'SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(w).toEqual(JSON.parse(wire(candidate)));
+    w.plans[0].file=base.plans[0].file;
+  }
+  const rows=entryFor(w,'m1','signs').rows;
+  expect(rows.map(row=>row.multiplier)).toEqual([2,4,0,5,11,0]);
+  expect(rows.reduce((sum,row)=>sum+row.multiplier,0)).toBe(22);
+  expect(w.plans[0].measures).toHaveLength(3);
  });
  it('duas capturas consecutivas preservam as duas marcações e os totais após recarga',async()=>{
   await seed(); let w=await commit(editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('first')));
@@ -1310,10 +1359,11 @@ describe('transação da Medição na nuvem',()=>{
   expect(entryFor(loaded,'m1','signs').rows).toEqual([]);
   expect(entryFor(loaded,'m1','detectors')).toEqual(unaffected);
   await compactHistory(loaded.revision);
-  const deletionRetry=(await db.query<{value:{revision:number}}>(
+  const deletionRetry=(await db.query<{value:{revision:number;replayed:boolean;currentRevision:number}}>(
     'SELECT patch_measurement_row_deletion($1,$2,$3) value',
     [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows[0].value;
-  expect(deletionRetry.revision).toBe(combined.revision);
+  expect(deletionRetry).toMatchObject({revision:combined.revision,replayed:true,
+    currentRevision:loaded.revision+1});
   expect((await db.query('SELECT patch_measurement_row_deletion($1,$2,$3)',
    [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows).toHaveLength(1);
  });

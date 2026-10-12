@@ -235,7 +235,9 @@ DECLARE
   op text:=p_patch->'event'->>'id'; entry_key text; field_name text; cell_name text;
   changed_mark_id text; source_field text; cell_field text; neutral_cell text;
   plan_index integer; entry_index integer; changed_marks integer:=0;
-  row_index integer; matched_source boolean; matched_row boolean:=false;
+  row_index integer; old_row_index integer; old_row_count integer;
+  inserted_rows integer; inserted_blanks integer; matched_source boolean;
+  matched_row boolean:=false;
   old_quantity numeric; quantity numeric;
 BEGIN
   SELECT organization_id INTO org FROM public.projects WHERE id=p_project_id;
@@ -270,7 +272,8 @@ BEGIN
       OR receipt.request_hash IS DISTINCT FROM md5(p_patch::text) THEN
       RAISE EXCEPTION 'Identificador de operação reutilizado com conteúdo diferente';
     END IF;
-    RETURN jsonb_build_object('projectId',p_project_id,'revision',receipt.revision,'patch',p_patch);
+    RETURN jsonb_build_object('projectId',p_project_id,'revision',receipt.revision,
+      'replayed',true,'currentRevision',current_revision,'patch',p_patch);
   END IF;
   SELECT * INTO compacted FROM public.measurement_workspace_compacted_receipts
     WHERE project_id=p_project_id AND operation_id=op;
@@ -280,7 +283,8 @@ BEGIN
       OR compacted.request_hash IS DISTINCT FROM md5(p_patch::text) THEN
       RAISE EXCEPTION 'Identificador de operação reutilizado com conteúdo diferente';
     END IF;
-    RETURN jsonb_build_object('projectId',p_project_id,'revision',compacted.revision,'patch',p_patch);
+    RETURN jsonb_build_object('projectId',p_project_id,'revision',compacted.revision,
+      'replayed',true,'currentRevision',current_revision,'patch',p_patch);
   END IF;
   IF current_revision IS DISTINCT FROM p_expected_revision THEN
     RAISE EXCEPTION 'Conflito: outro computador alterou a Medição' USING ERRCODE='P0002';
@@ -362,20 +366,82 @@ BEGIN
       FROM jsonb_array_elements(entries) WITH ORDINALITY
       WHERE value->>'measurementId'=entry_value->>'measurementId'
         AND value->>'serviceId'=entry_value->>'serviceId';
-    IF prior_entry IS NULL OR (prior_entry-'rows') IS DISTINCT FROM (entry_value-'rows')
-      OR jsonb_array_length(prior_entry->'rows') IS DISTINCT FROM
-        jsonb_array_length(entry_value->'rows') THEN
-      RAISE EXCEPTION 'Captura deve editar apenas células da tarefa existente';
+    IF prior_entry IS NULL THEN
+      prior_entry:=jsonb_build_object('projectId',p_project_id,
+        'measurementId',entry_value->>'measurementId',
+        'serviceId',entry_value->>'serviceId','rows','[]'::jsonb);
+      existed:=existed||'false'::jsonb;
+    ELSE
+      existed:=existed||'true'::jsonb;
+    END IF;
+    IF (prior_entry-'rows') IS DISTINCT FROM (entry_value-'rows') THEN
+      RAISE EXCEPTION 'Captura alterou outra tarefa';
     END IF;
     IF prior_entry IS NOT DISTINCT FROM entry_value THEN
       RAISE EXCEPTION 'Captura sem alteração de quantitativo';
     END IF;
+    old_row_count:=jsonb_array_length(prior_entry->'rows');
+    old_row_index:=0;
+    inserted_rows:=0;
+    inserted_blanks:=0;
     FOR row_value,row_index IN SELECT value,ordinality::integer-1
       FROM jsonb_array_elements(entry_value->'rows') WITH ORDINALITY LOOP
-      prior_row:=prior_entry->'rows'->row_index;
-      IF prior_row->>'id' IS DISTINCT FROM row_value->>'id' THEN
-        RAISE EXCEPTION 'Captura alterou linhas de outra tarefa';
+      prior_row:=prior_entry->'rows'->old_row_index;
+      IF prior_row IS NULL OR prior_row->>'id' IS DISTINCT FROM row_value->>'id' THEN
+        -- The client may insert the just-captured row and reserve one empty
+        -- row for the next right-click. Existing rows must retain their order.
+        IF coalesce(row_value->>'id','')='' OR EXISTS(
+          SELECT 1 FROM jsonb_array_elements(prior_entry->'rows') old_row
+          WHERE old_row.value->>'id'=row_value->>'id') THEN
+          RAISE EXCEPTION 'Captura alterou linhas de outra tarefa';
+        END IF;
+        inserted_rows:=inserted_rows+1;
+        IF inserted_rows>2 THEN RAISE EXCEPTION 'Captura acrescentou linhas demais'; END IF;
+        new_remainder:=row_value-ARRAY['id','comment','location','formula',
+          'neutralFactor','neutralFactors'];
+        matched_source:=false;
+        FOREACH source_field IN ARRAY ARRAY['multiplierSource','source','dimensionCSource','dimensionDSource'] LOOP
+          new_source:=row_value->source_field;
+          IF new_source->>'planId'=plan_value->>'id'
+            AND new_source->>'measureId'=changed_mark_id THEN
+            matched_source:=true;
+            cell_field:=CASE source_field WHEN 'multiplierSource' THEN 'multiplier'
+              WHEN 'source' THEN 'measuredQuantity' WHEN 'dimensionCSource' THEN 'dimensionC'
+              ELSE 'dimensionD' END;
+            IF row_value->>cell_field IS NULL THEN
+              RAISE EXCEPTION 'Quantidade da captura ausente';
+            END IF;
+            new_remainder:=new_remainder-source_field-cell_field;
+          END IF;
+        END LOOP;
+        FOREACH neutral_cell IN ARRAY ARRAY['multiplier','measuredQuantity','dimensionC','dimensionD'] LOOP
+          IF new_remainder ? neutral_cell THEN
+            IF coalesce((row_value->>neutral_cell)::numeric,0)<>0
+              AND NOT (row_value->>'formula' IN ('A*B','A*B*C','A*B*C*D')
+                AND (row_value->>neutral_cell)::numeric=1
+                AND coalesce(row_value->'neutralFactors','[]'::jsonb) @>
+                  jsonb_build_array(neutral_cell)) THEN
+              RAISE EXCEPTION 'Captura alterou fator não vinculado à marcação';
+            END IF;
+            new_remainder:=new_remainder-neutral_cell;
+          END IF;
+        END LOOP;
+        IF new_remainder IS DISTINCT FROM '{}'::jsonb THEN
+          RAISE EXCEPTION 'Captura alterou célula não vinculada à marcação';
+        END IF;
+        IF matched_source THEN
+          matched_row:=true;
+        ELSE
+          inserted_blanks:=inserted_blanks+1;
+          IF inserted_blanks>1 OR coalesce(row_value->>'comment','')<>''
+            OR coalesce(row_value->>'location','')<>''
+            OR row_value->>'formula' IS DISTINCT FROM 'STANDARD' THEN
+            RAISE EXCEPTION 'Próxima linha da captura não está vazia';
+          END IF;
+        END IF;
+        CONTINUE;
       END IF;
+      old_row_index:=old_row_index+1;
       IF prior_row IS NOT DISTINCT FROM row_value THEN CONTINUE; END IF;
       prior_remainder:=prior_row;
       new_remainder:=row_value;
@@ -391,6 +457,9 @@ BEGIN
           cell_field:=CASE source_field WHEN 'multiplierSource' THEN 'multiplier'
             WHEN 'source' THEN 'measuredQuantity' WHEN 'dimensionCSource' THEN 'dimensionC'
             ELSE 'dimensionD' END;
+          IF row_value->>cell_field IS NULL THEN
+            RAISE EXCEPTION 'Quantidade da captura ausente';
+          END IF;
           IF (new_source IS NULL OR new_source='null'::jsonb)
             AND (row_value->>cell_field)::numeric IS DISTINCT FROM 0 THEN
             RAISE EXCEPTION 'Quantidade da captura removida deve ser zero';
@@ -416,13 +485,23 @@ BEGIN
       END LOOP;
       prior_remainder:=prior_remainder-'neutralFactor'-'neutralFactors';
       new_remainder:=new_remainder-'neutralFactor'-'neutralFactors';
+      IF matched_source THEN
+        prior_remainder:=prior_remainder-'comment'-'location';
+        new_remainder:=new_remainder-'comment'-'location';
+      END IF;
       IF NOT matched_source OR prior_remainder IS DISTINCT FROM new_remainder THEN
         RAISE EXCEPTION 'Captura alterou célula não vinculada à marcação';
       END IF;
       matched_row:=true;
     END LOOP;
-    existed:=existed||'true'::jsonb;
-    entries:=jsonb_set(entries,ARRAY[entry_index::text],entry_value);
+    IF old_row_index<>old_row_count OR inserted_rows>1 AND inserted_blanks<>1 THEN
+      RAISE EXCEPTION 'Captura alterou linhas de outra tarefa';
+    END IF;
+    IF entry_index IS NULL THEN
+      entries:=entries||jsonb_build_array(entry_value);
+    ELSE
+      entries:=jsonb_set(entries,ARRAY[entry_index::text],entry_value);
+    END IF;
     old_quantity:=public.measurement_detail_quantity(prior_entry->'rows');
     quantity:=public.measurement_detail_quantity(entry_value->'rows');
     IF old_quantity IS DISTINCT FROM quantity AND EXISTS(
