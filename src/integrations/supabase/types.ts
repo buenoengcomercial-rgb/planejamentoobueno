@@ -1575,6 +1575,14 @@ export type Database = {
         }
         Returns: Json
       }
+      patch_measurement_plan_catalog: {
+        Args: {
+          p_expected_revision: number
+          p_patch: Json
+          p_project_id: string
+        }
+        Returns: Json
+      }
       patch_measurement_row_deletion: {
         Args: {
           p_expected_revision: number
