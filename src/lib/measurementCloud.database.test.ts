@@ -63,6 +63,7 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011180000_measurement_row_deletion_patch.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261011190000_measurement_quantity_history_compaction.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011210000_measurement_lifecycle_delta.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261011220000_measurement_capture_projection_delta.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -834,6 +835,10 @@ describe('transação da Medição na nuvem',()=>{
   const second=editMeasuredRow(first,actor,'m1','signs',{...newMeasuredRow('legacy-delta'),multiplier:4});
   await db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,first.revision,JSON.stringify(measurementEntryPatch(first,second))]);
   expect((await db.query<{data:unknown}>('SELECT load_measurement_workspace($1) data',[projectId])).rows[0].data).toEqual(JSON.parse(wire(second)));
+  // This test intentionally replays an older migration. Restore the current
+  // materializer and projection before later capture tests use the same PGlite.
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261011210000_measurement_lifecycle_delta.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261011220000_measurement_capture_projection_delta.sql',import.meta.url),'utf8'));
  });
  it('bloqueia projeção adulterada e não expõe seu acesso direto ao cliente',async()=>{
   await seed();
@@ -1131,6 +1136,15 @@ describe('transação da Medição na nuvem',()=>{
   const receipt=(await db.query<{value:{revision:number;patch:unknown}}>('SELECT patch_measurement_capture($1,$2,$3) value',
     [projectId,w.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows[0].value;
   expect(receipt).toMatchObject({revision:next.revision,patch:encodeMeasurementWorkspace(patch)});
+  const compactEvent=(await db.query<{before_data:{kind:string};after_data:{kind:string}}>(
+    'SELECT before_data,after_data FROM measurement_workspace_events WHERE operation_id=$1',
+    [next.audit.at(-1)!.id])).rows[0];
+  expect(compactEvent.before_data.kind).toBe('capture_patch_v1');
+  expect(compactEvent.after_data.kind).toBe('capture_patch_v1');
+  expect(JSON.stringify(compactEvent).length).toBeLessThan(JSON.stringify(encodeMeasurementWorkspace(next)).length);
+  expect((await db.query<{revision:number}>(
+    'SELECT (data->>\'revision\')::int revision FROM measurement_workspaces WHERE project_id=$1',
+    [projectId])).rows[0].revision).toBe(w.revision);
   const loaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
   expect(loaded).toEqual(JSON.parse(wire(next)));
   expect((await db.query('SELECT patch_measurement_capture($1,$2,$3)',
@@ -1161,6 +1175,47 @@ describe('transação da Medição na nuvem',()=>{
   expect(w.plans[0].measures.map(mark=>mark.id)).toEqual(['mark-19','mark-22']);
   expect(w.entries.find(entry=>entry.measurementId==='m1'&&entry.serviceId==='signs')?.rows.map(row=>row.multiplier)).toEqual([19,22]);
   expect(w.entries.find(entry=>entry.measurementId==='m1'&&entry.serviceId==='signs')?.rows.reduce((total,row)=>total+row.multiplier,0)).toBe(41);
+ });
+ it('captura com auditoria legada de 7 MB não replica o checkpoint nem os dados de outras tarefas',async()=>{
+  const ready=editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('large-audit'));
+  Object.assign(ready.audit[0],{legacyPayload:'x'.repeat(7_000_000)});
+  await seed(ready);
+  ready.plans[0].file=base.plans[0].file;
+  const otherEntry=entryFor(ready,'m1','detectors');
+  const mark={id:'large-audit-mark',name:'Contagem',kind:'count' as const,page:1,
+    points:[{x:1,y:1}],projectId,measurementId:'m1',serviceId:'signs'};
+  const next=captureMeasurement(ready,actor,{measurementId:'m1',serviceId:'signs',
+    rowId:'large-audit',field:'multiplier'},
+    {...ready.plans[0],measures:[mark]},mark);
+  const patch=measurementCapturePatch(ready,next)!;
+  const started=performance.now();
+  await db.query('SELECT patch_measurement_capture($1,$2,$3)',[
+    projectId,ready.revision,JSON.stringify(encodeMeasurementWorkspace(patch))]);
+  const elapsed=performance.now()-started;
+  const receipt=(await db.query<{bytes:number}>(
+    'SELECT pg_column_size(before_data)+pg_column_size(after_data) bytes FROM measurement_workspace_events WHERE operation_id=$1',
+    [patch.event.id])).rows[0];
+  expect(receipt.bytes).toBeLessThan(100_000);
+  const checkpoint=(await db.query<{revision:number}>(
+    'SELECT (data->>\'revision\')::int revision FROM measurement_workspaces WHERE project_id=$1',
+    [projectId])).rows[0];
+  expect(checkpoint.revision).toBe(ready.revision);
+  const loaded=(await db.query<{value:MeasurementWorkspace}>(
+    'SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(loaded).toEqual(JSON.parse(wire(next)));
+  expect(entryFor(loaded,'m1','detectors')).toEqual(otherEntry);
+  const proof=(await db.query<{same:boolean}>(
+    `SELECT public.measurement_workspace_candidate_proof(public.load_measurement_workspace($1))=
+      md5(core_hash||':'||md5(entries::text)||':'||audit_digest||':'||revision::text) same
+      FROM measurement_workspace_entry_state WHERE project_id=$1`,[projectId])).rows[0];
+  expect(proof.same).toBe(true);
+  const following=editMeasuredRow(loaded,actor,'m1','detectors',
+    {...newMeasuredRow('after-capture'),multiplier:1});
+  await db.query('SELECT patch_measurement_entries($1,$2,$3)',[
+    projectId,loaded.revision,JSON.stringify(encodeMeasurementWorkspace(measurementEntryPatch(loaded,following)))]);
+  expect((await db.query<{value:MeasurementWorkspace}>(
+    'SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value).toEqual(JSON.parse(wire(following)));
+  console.info(`measurement capture 7 MB audit: ${elapsed.toFixed(1)} ms, receipt ${receipt.bytes} bytes`);
  });
  it('exclui duas linhas capturadas e suas marcas em uma só revisão sem tocar em outras tarefas',async()=>{
   await seed(); let w=await commit(editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('first')));
