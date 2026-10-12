@@ -1,7 +1,7 @@
 import type { ProductionQuantityDetail } from '@/types/project';
 import { canChangeDetailFormula, detailFormula, detailPartial, detailTotal, formulasForUnit, formulaFields, isBlankDetailRow, withDetailFormula, withDetailValue, type DetailField, type DetailFormula } from '@/lib/productionQuantityDetails';
 import type { QuantityClipboard, QuantityClipboardMode } from '@/lib/productionQuantityReferences';
-import { useLayoutEffect, useRef, useState, type InputHTMLAttributes } from 'react';
+import { useLayoutEffect, useRef, useState, type InputHTMLAttributes, type KeyboardEvent } from 'react';
 import { ClipboardPaste, Copy, FileSearch2, Link2, Scissors, Trash2 } from 'lucide-react';
 
 interface Props {
@@ -25,10 +25,13 @@ interface Props {
   onPaste?: (afterRowId?: string) => void;
   sharedTaskNames?: (recordId: string) => string[];
   onOpenHistory?: (recordId: string) => void;
+  /** Spreadsheet navigation is opt-in for the independent Medição workspace. */
+  keyboardNavigation?: boolean;
 }
 
 const fmt = (value: number) => value.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
 const formulaLabel: Record<DetailFormula, string> = { STANDARD: 'Padrão', 'A*B': 'A × B', 'A*B*C': 'A × B × C', 'A*B*C*D': 'A × B × C × D' };
+const navColumn: Record<DetailField, number> = { multiplier: 2, measuredQuantity: 3, dimensionC: 4, dimensionD: 5 };
 const blankRow: ProductionQuantityDetail = { id: '__new__', location: '', comment: '', formula: 'STANDARD', multiplier: 0, measuredQuantity: 0, dimensionC: 0, dimensionD: 0 };
 
 /** Keep the native draft and focus intact when another cell is confirmed. */
@@ -49,12 +52,14 @@ function formulaMeaning(formula: DetailFormula, unit: string): string {
   return `A uds. · B ${measure} (${unit})`;
 }
 
-export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, applied, readOnly, periodMode = false, onCreate, onEdit, onDelete, onOpenPlan, onApply, canOpenPlan = false, clipboard, onCopy, onPaste, sharedTaskNames, onOpenHistory, onDraftChange, referenceLabel = 'Tarefas', heading = 'Detalhe de quantitativos' }: Props) {
+export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, applied, readOnly, periodMode = false, onCreate, onEdit, onDelete, onOpenPlan, onApply, canOpenPlan = false, clipboard, onCopy, onPaste, sharedTaskNames, onOpenHistory, onDraftChange, referenceLabel = 'Tarefas', heading = 'Detalhe de quantitativos', keyboardNavigation = false }: Props) {
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [selectedField, setSelectedField] = useState<DetailField | null>(null);
   const [linkedInfo, setLinkedInfo] = useState<string | null>(null);
   const rowKeys = useRef(new Map<string, string>());
   const newKey = useRef(0);
+  const detailGrid = useRef<HTMLElement>(null);
+  const pendingFocus = useRef<{ row: number; column: number } | null>(null);
   const createRow = (changes: Partial<ProductionQuantityDetail>) => {
     const id = onCreate(changes);
     if (id) { rowKeys.current.set(id, `new-${newKey.current++}`); setSelectedRowId(id); }
@@ -62,6 +67,15 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
   };
   const total = detailTotal(rows);
   const displayRows = !readOnly && (rows.length === 0 || !isBlankDetailRow(rows[rows.length - 1])) ? [...rows, blankRow] : rows;
+  useLayoutEffect(() => {
+    const pending = pendingFocus.current;
+    if (!pending) return;
+    const target = detailGrid.current?.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-detail-nav-row="${pending.row}"][data-detail-nav-col="${pending.column}"]`);
+    if (target && !target.disabled) {
+      pendingFocus.current = null;
+      target.focus();
+    }
+  });
   const formulas = formulasForUnit(unit);
   const sameFormula = rows.length === 0 ? 'STANDARD' : rows.every(row => detailFormula(row) === detailFormula(rows[0])) ? detailFormula(rows[0]) : null;
   const normalizedUnit = unit.trim().toLowerCase().replace(/²/g, '2').replace(/³/g, '3');
@@ -92,10 +106,59 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
     return id !== null;
   };
 
+  const navCell = (index: number, column: number) => keyboardNavigation
+    ? { 'data-detail-nav-row': index, 'data-detail-nav-col': column }
+    : {};
+
+  const navigateCell = (event: KeyboardEvent<HTMLInputElement | HTMLSelectElement>, index: number, column: number) => {
+    if (!keyboardNavigation || readOnly || event.isComposing || event.ctrlKey || event.altKey || event.metaKey) return false;
+    const key = event.key;
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter'].includes(key)) return false;
+    if (event.shiftKey && key.startsWith('Arrow')) return false;
+    if ((key === 'ArrowLeft' || key === 'ArrowRight') && event.currentTarget instanceof HTMLInputElement && event.currentTarget.type === 'text') {
+      const input = event.currentTarget;
+      const caret = key === 'ArrowLeft' ? 0 : input.value.length;
+      if (input.selectionStart !== caret || input.selectionEnd !== caret) return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    let nextRow = index;
+    let nextColumn = column;
+    if (key === 'ArrowUp' || key === 'Enter' && event.shiftKey) nextRow -= 1;
+    if (key === 'ArrowDown' || key === 'Enter' && !event.shiftKey) nextRow += 1;
+    if (key === 'ArrowLeft') nextColumn -= 1;
+    if (key === 'ArrowRight') nextColumn += 1;
+    if (nextRow < 0 || nextColumn < 0 || nextColumn > 5) return true;
+    if (nextRow >= displayRows.length && key !== 'Enter' && key !== 'ArrowDown') return true;
+    const selector = `[data-detail-nav-row="${nextRow}"][data-detail-nav-col="${nextColumn}"]`;
+    const existing = detailGrid.current?.querySelector<HTMLInputElement | HTMLSelectElement>(selector);
+    if (nextRow < displayRows.length && (!existing || existing.disabled)) return true;
+
+    if (existing) {
+      // Moving focus fires blur first, confirming the current cell synchronously.
+      existing.focus();
+      return true;
+    }
+
+    // The last virtual row can create a new blank row on blur. Keep focus if
+    // nothing was entered; otherwise resolve the new destination after render.
+    if (!event.currentTarget.value.trim() || event.currentTarget.value === '0') return true;
+    pendingFocus.current = { row: nextRow, column: nextColumn };
+    event.currentTarget.blur();
+    queueMicrotask(() => {
+      if (!pendingFocus.current) return;
+      const target = detailGrid.current?.querySelector<HTMLInputElement | HTMLSelectElement>(selector);
+      if (target && !target.disabled) { pendingFocus.current = null; target.focus(); }
+    });
+    setTimeout(() => { if (pendingFocus.current?.row === nextRow && pendingFocus.current.column === nextColumn) pendingFocus.current = null; }, 100);
+    return true;
+  };
+
   const textField = (row: ProductionQuantityDetail, index: number) => (
-    <DetailInput aria-label={`Comentário da linha ${index + 1}`} storedValue={row.comment} onChange={event => onDraftChange?.(row.id, { comment: event.target.value })}
+    <DetailInput aria-label={`Comentário da linha ${index + 1}`} {...navCell(index, 0)} storedValue={row.comment} onChange={event => onDraftChange?.(row.id, { comment: event.target.value })}
       disabled={readOnly} onFocus={() => setSelectedRowId(row.id)} onBlur={event => { if (event.target.value !== row.comment && !saveRow(row, { comment: event.target.value })) event.target.value = row.comment; }}
-      onKeyDown={event => { if (event.key === 'Escape') { event.currentTarget.value = row.comment; onDraftChange?.(row.id, { comment: row.comment }); } if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur(); }}
+      onKeyDown={event => { if (navigateCell(event, index, 0)) return; if (event.key === 'Escape') { event.currentTarget.value = row.comment; onDraftChange?.(row.id, { comment: row.comment }); } if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur(); }}
       className="h-5 w-full min-w-0 border border-slate-300 bg-white px-1 text-[11px] focus:border-sky-500 focus:outline-none disabled:bg-slate-50" />
   );
 
@@ -108,7 +171,7 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
     const drawingUnit = source?.resultUnit?.startsWith('u.d.') ? source.resultUnit : null;
     const shownValue = Number((row[key] ?? 0).toFixed(4));
     return <div className="flex items-center justify-end gap-0.5 whitespace-nowrap">
-      <DetailInput aria-label={`${label} da linha ${index + 1}`} type="number" inputMode="decimal" min="0" step="any" storedValue={shownValue} placeholder="0" onChange={event => { event.currentTarget.dataset.edited = 'true'; onDraftChange?.(row.id, { [key]: event.target.value }); }}
+      <DetailInput aria-label={`${label} da linha ${index + 1}`} {...navCell(index, navColumn[key])} type="number" inputMode="decimal" min="0" step="any" storedValue={shownValue} placeholder="0" onChange={event => { event.currentTarget.dataset.edited = 'true'; onDraftChange?.(row.id, { [key]: event.target.value }); }}
         title={activeInFormula ? `Coluna ${column} participa de ${formulaLabel[detailFormula(row)]}` : `Coluna ${column} fora de ${formulaLabel[detailFormula(row)]}: o valor fica registrado, mas não altera o parcial`}
         disabled={readOnly} onFocus={event => { if (event.currentTarget.value === '0') event.currentTarget.value = ''; else event.currentTarget.select(); setSelectedRowId(row.id); setSelectedField(key); }} onBlur={event => {
           const value = Number(event.target.value.replace(',', '.'));
@@ -124,7 +187,7 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
           }
           delete event.currentTarget.dataset.edited;
         }}
-        onKeyDown={event => { if (event.key === 'ArrowUp' || event.key === 'ArrowDown') event.preventDefault(); else if (event.key === 'Escape') { event.currentTarget.value = String(shownValue); onDraftChange?.(row.id, { [key]: shownValue }); event.currentTarget.blur(); } else if (event.key === 'Enter') event.currentTarget.blur(); }}
+        onKeyDown={event => { if (navigateCell(event, index, navColumn[key])) return; if (event.key === 'ArrowUp' || event.key === 'ArrowDown') event.preventDefault(); else if (event.key === 'Escape') { event.currentTarget.value = String(shownValue); onDraftChange?.(row.id, { [key]: shownValue }); event.currentTarget.blur(); } else if (event.key === 'Enter') event.currentTarget.blur(); }}
         onWheel={event => event.currentTarget.blur()}
         className="no-spinner h-5 w-full min-w-0 border border-slate-300 bg-white px-1 text-right text-[11px] tabular-nums focus:border-sky-500 focus:outline-none disabled:bg-slate-50" />
       {drawingUnit && <span title="Valor em unidades do desenho; a planta não tem escala em metros definida" className="text-[9px] font-medium text-amber-800">{drawingUnit}</span>}
@@ -132,7 +195,7 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
     </div>;
   };
 
-  return <section aria-label="Detalhe de quantitativo" className="ml-2 overflow-hidden border border-slate-300 bg-white text-slate-800 sm:ml-8">
+  return <section ref={detailGrid} aria-label="Detalhe de quantitativo" className="ml-2 overflow-hidden border border-slate-300 bg-white text-slate-800 sm:ml-8">
     <div className="flex min-h-6 flex-wrap items-center justify-between gap-x-2 border-b border-slate-300 bg-slate-100 px-2 py-0.5">
       <strong className="text-[11px]">{heading}</strong>
       <span className="text-[11px] text-slate-600">{periodMode ? `Total registrado no período: ${fmt(dailyQuantity)} ${unit}` : <>Dia: {fmt(dailyQuantity)} {unit} · Subtotal: {fmt(total)} {unit} {rows.length > 0 && <strong className={applied ? 'text-green-700' : 'text-amber-700'}>· {applied ? 'Aplicado ao dia' : 'Pendente de aplicação'}</strong>}</>}</span>
@@ -159,7 +222,7 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
         <tbody>{displayRows.map((row, index) => { const rowFormulas = formulas.includes(detailFormula(row)) ? formulas : [detailFormula(row), ...formulas]; const blank = index === displayRows.length - 1 && isBlankDetailRow(row); const sources = (['multiplierSource', 'source', 'dimensionCSource', 'dimensionDSource'] as const).flatMap((key, sourceIndex) => row[key] ? [`${'ABCD'[sourceIndex]}: ${row[key]!.planName} · página ${row[key]!.page} · ${row[key]!.measureName} · ${row[key]!.points.length} ponto(s)`] : []); const peers = row.sharedRecordId ? sharedTaskNames?.(row.sharedRecordId) ?? [] : []; return <tr key={row.id === blankRow.id ? `new-${newKey.current}` : rowKeys.current.get(row.id) ?? row.id} onClick={() => setSelectedRowId(row.id)} className={`cursor-pointer border-b border-slate-200 align-top hover:bg-slate-50 ${selectedRowId === row.id ? 'bg-sky-50' : 'bg-white'}`}>
           <td className="border-r border-slate-200 px-0.5 py-0.5"><div className="flex items-center justify-between gap-0.5"><span title={row.location ? `Local registrado anteriormente: ${row.location}` : blank ? 'Nova linha' : `Linha ${index + 1}`} className="min-w-3 text-center tabular-nums text-slate-600">{blank ? '' : index + 1}</span>{!readOnly && row.id !== blankRow.id && !blank && <button type="button" tabIndex={-1} onClick={() => onDelete(row.id)} aria-label={`Excluir linha ${index + 1}`} title="Excluir linha" className="flex h-5 w-4 shrink-0 items-center justify-center text-red-700 hover:bg-red-50"><Trash2 className="h-3 w-3" /></button>}</div></td>
           <td className="border-r border-slate-200 px-1 py-0.5"><div className="flex items-center gap-1">{textField(row, index)}{sources.length > 0 && <span role="img" aria-label={`Origem na planta da linha ${index + 1}`} title={sources.join('\n')} className="shrink-0 text-slate-500"><Link2 className="h-3 w-3" /></span>}{row.sharedRecordId && <button type="button" tabIndex={-1} aria-label={`Vinculado: ${peers.join(', ')}`} title={`Vinculado a: ${peers.join(', ')}`} onClick={event => { event.stopPropagation(); setLinkedInfo(linkedInfo === row.sharedRecordId ? null : row.sharedRecordId!); }} className="shrink-0 border border-sky-300 bg-sky-50 px-1 text-[9px] text-sky-800">Vinculado</button>}</div>{row.sharedRecordId && linkedInfo === row.sharedRecordId && <div className="mt-0.5 text-[10px] text-slate-600">{referenceLabel}: {peers.join(' · ')}{onOpenHistory && <button type="button" tabIndex={-1} className="ml-2 text-sky-700 underline" onClick={event => { event.stopPropagation(); onOpenHistory(row.sharedRecordId!); }}>Histórico</button>}</div>}</td>
-          <td className="border-r border-slate-200 px-0.5 py-0.5"><select aria-label={`Fórmula da linha ${index + 1}`} title={formulaMeaning(detailFormula(row), unit)} value={detailFormula(row)} disabled={readOnly || rowFormulas.length === 1} onChange={event => { if (!saveRow(row, withDetailFormula(row, event.target.value as DetailFormula))) event.target.value = detailFormula(row); }} className="h-5 w-full border border-slate-300 bg-white px-0.5 text-[11px] disabled:bg-slate-50">{rowFormulas.map(formula => <option key={formula} value={formula} disabled={!canChangeDetailFormula(row, formula, unit)}>{formulaLabel[formula]}</option>)}</select></td>
+          <td className="border-r border-slate-200 px-0.5 py-0.5"><select aria-label={`Fórmula da linha ${index + 1}`} {...navCell(index, 1)} title={formulaMeaning(detailFormula(row), unit)} value={detailFormula(row)} disabled={readOnly || rowFormulas.length === 1} onFocus={keyboardNavigation ? () => { setSelectedRowId(row.id); setSelectedField(null); } : undefined} onKeyDown={keyboardNavigation ? event => { navigateCell(event, index, 1); } : undefined} onChange={event => { if (!saveRow(row, withDetailFormula(row, event.target.value as DetailFormula))) event.target.value = detailFormula(row); }} className="h-5 w-full border border-slate-300 bg-white px-0.5 text-[11px] disabled:bg-slate-50">{rowFormulas.map(formula => <option key={formula} value={formula} disabled={!canChangeDetailFormula(row, formula, unit)}>{formulaLabel[formula]}</option>)}</select></td>
           <td className="border-r border-slate-200 px-0.5 py-0.5 text-right">{numberField(row, index, 'multiplier')}</td><td className="border-r border-slate-200 px-0.5 py-0.5 text-right">{numberField(row, index, 'measuredQuantity')}</td>
           <td className="border-r border-slate-200 px-0.5 py-0.5 text-right">{numberField(row, index, 'dimensionC')}</td><td className="border-r border-slate-200 px-0.5 py-0.5 text-right">{numberField(row, index, 'dimensionD')}</td>
           <td className="border-r border-slate-200 px-1 py-1 text-right tabular-nums">{fmt(detailPartial(row))}</td><td className="bg-slate-50 px-1 py-1 text-right tabular-nums">{fmt(subtotals[index] ?? total)}</td>
