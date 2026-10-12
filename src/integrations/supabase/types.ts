@@ -461,6 +461,8 @@ export type Database = {
           audit_digest: string
           core_hash: string
           entries: Json
+          period_details: Json | null
+          period_details_hash: string | null
           periods: Json
           plans: Json
           project_id: string
@@ -472,6 +474,8 @@ export type Database = {
           audit_digest: string
           core_hash: string
           entries: Json
+          period_details?: Json | null
+          period_details_hash?: string | null
           periods: Json
           plans: Json
           project_id: string
@@ -483,6 +487,8 @@ export type Database = {
           audit_digest?: string
           core_hash?: string
           entries?: Json
+          period_details?: Json | null
+          period_details_hash?: string | null
           periods?: Json
           plans?: Json
           project_id?: string
@@ -1344,6 +1350,14 @@ export type Database = {
         Args: { p_items: Json; p_project_id: string }
         Returns: Json
       }
+      commit_measurement_lifecycle: {
+        Args: {
+          p_expected_revision: number
+          p_patch: Json
+          p_project_id: string
+        }
+        Returns: Json
+      }
       commit_measurement_workspace: {
         Args: {
           p_candidate: Json
@@ -1469,6 +1483,14 @@ export type Database = {
         }
         Returns: Json
       }
+      compact_measurement_quantity_history: {
+        Args: {
+          p_expected_data_md5: string
+          p_expected_revision: number
+          p_project_id: string
+        }
+        Returns: Json
+      }
       duplicate_project: {
         Args: {
           p_new_name: string
@@ -1524,6 +1546,10 @@ export type Database = {
         Args: { mark: Json; scale: number }
         Returns: number
       }
+      measurement_lifecycle_hydrate_patch: {
+        Args: { p_patch: Json }
+        Returns: Json
+      }
       measurement_money: { Args: { v: number }; Returns: number }
       measurement_workspace_audit_digest: {
         Args: { p_audit: Json }
@@ -1542,6 +1568,14 @@ export type Database = {
         Returns: Json
       }
       patch_measurement_entries: {
+        Args: {
+          p_expected_revision: number
+          p_patch: Json
+          p_project_id: string
+        }
+        Returns: Json
+      }
+      patch_measurement_row_deletion: {
         Args: {
           p_expected_revision: number
           p_patch: Json
