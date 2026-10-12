@@ -350,14 +350,23 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           throw new MeasurementCommitRejectedError(error.message);
         throw new Error(`${error.message}. A resposta da nuvem é incerta; confira esta operação antes de sair.`);
       }
-      if (lifecyclePatch && (data as { replayed?: unknown } | null)?.replayed === true) {
+      const compactPatch = patch ?? (deletionPatch || capturePatch ? encodeMeasurementWorkspace(deletionPatch ?? capturePatch) : null);
+      const canonical = (value: unknown): string => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v)
+        ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+      if ((lifecyclePatch || compactPatch) && (data as { replayed?: unknown } | null)?.replayed === true) {
         // An idempotent receipt proves the original operation, but its revision
         // may precede newer cloud edits. Reload only on replay; a new commit
         // remains a single RPC and never adopts an old receipt as the UI state.
         const receipt = data as { projectId?: string; revision?: number; currentRevision?: number;
-          patch?: { operationId?: string } };
+          patch?: { kind?: string; operationId?: string; event?: { id?: string } } };
+        const receiptPatch = receipt.patch;
+        const patchMatches = lifecyclePatch
+          ? receiptPatch?.operationId === operationId
+          : receiptPatch?.kind === 'compacted_receipt'
+            ? receiptPatch.operationId === operationId
+            : receiptPatch?.event?.id === operationId && canonical(receiptPatch) === canonical(compactPatch);
         if (receipt.projectId !== scope.projectId || receipt.revision !== next.revision
-          || receipt.patch?.operationId !== operationId || !Number.isSafeInteger(receipt.currentRevision)
+          || !patchMatches || !Number.isSafeInteger(receipt.currentRevision)
           || receipt.currentRevision! < receipt.revision) {
           throw new Error('O recibo repetido da Medição está incompleto. Confira a revisão na nuvem antes de continuar.');
         }
@@ -378,11 +387,9 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         saved = applied;
       } else if (patch || deletionPatch || capturePatch) {
         const receipt = data as { projectId?: string; revision?: number; patch?: unknown } | null;
-        const expected = patch ?? encodeMeasurementWorkspace(deletionPatch ?? capturePatch);
-        if (receipt?.projectId !== scope.projectId || receipt.revision !== next.revision || JSON.stringify(receipt.patch) !== JSON.stringify(expected)) {
-          // JSONB key order is not significant; compare using the canonical encoder below.
-          const canonical = (value: unknown): string => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
-          if (receipt?.projectId !== scope.projectId || receipt?.revision !== next.revision || canonical(receipt.patch) !== canonical(expected)) throw new Error('A nuvem não confirmou esta operação. Mantenha esta página aberta.');
+        if (receipt?.projectId !== scope.projectId || receipt.revision !== next.revision || JSON.stringify(receipt.patch) !== JSON.stringify(compactPatch)) {
+          // JSONB key order is not significant; compare the canonical payload.
+          if (receipt?.projectId !== scope.projectId || receipt?.revision !== next.revision || canonical(receipt.patch) !== canonical(compactPatch)) throw new Error('A nuvem não confirmou esta operação. Mantenha esta página aberta.');
         }
         saved = next;
       } else saved = await read(data);
