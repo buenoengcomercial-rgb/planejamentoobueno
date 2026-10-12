@@ -340,6 +340,7 @@ BEGIN
   plans:=jsonb_set(base->'plans',ARRAY[plan_index::text],plan_value);
   entries:=base->'entries';
   FOR entry_value IN SELECT value FROM jsonb_array_elements(p_patch->'entries') LOOP
+    matched_row:=false;
     IF jsonb_typeof(entry_value) IS DISTINCT FROM 'object'
       OR entry_value->>'projectId' IS DISTINCT FROM p_project_id::text
       OR coalesce(entry_value->>'measurementId','')=''
@@ -494,7 +495,8 @@ BEGIN
       END IF;
       matched_row:=true;
     END LOOP;
-    IF old_row_index<>old_row_count OR inserted_rows>1 AND inserted_blanks<>1 THEN
+    IF NOT matched_row OR old_row_index<>old_row_count
+      OR inserted_rows>1 AND inserted_blanks<>1 THEN
       RAISE EXCEPTION 'Captura alterou linhas de outra tarefa';
     END IF;
     IF entry_index IS NULL THEN
@@ -519,9 +521,6 @@ BEGIN
     affected:=affected||jsonb_build_array(jsonb_build_object(
       'measurementId',entry_value->>'measurementId','serviceId',entry_value->>'serviceId'));
   END LOOP;
-  IF NOT matched_row THEN
-    RAISE EXCEPTION 'Captura sem célula vinculada à marcação';
-  END IF;
   IF event_value->'before' IS DISTINCT FROM before_entries
     OR event_value->'after' IS DISTINCT FROM p_patch->'entries'
     OR event_value->'affected' IS DISTINCT FROM affected THEN
