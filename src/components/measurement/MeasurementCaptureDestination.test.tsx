@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import MeasurementWorkspace from './MeasurementWorkspace';
 import { captureMeasurement, newMeasuredRow, type MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
+import { measurementCapturePatch } from '@/lib/measurementCapturePatch';
 import type { MeasurementRepository } from '@/lib/measurementWorkspaceStore';
 import type { TakeoffMeasure, TakeoffPlan } from '@/lib/planTakeoff';
 
@@ -37,10 +38,20 @@ function setup(rows: Workspace['entries'][number]['rows']) {
     audit: [], importedKeys: [], backupId: 'b',
   };
   let confirmed = initial;
+  const capturePatches: Array<ReturnType<typeof measurementCapturePatch>> = [];
   const repository: MeasurementRepository = {
     savedLabel: 'Salvo na nuvem',
     load: vi.fn(async () => confirmed), initialize: vi.fn(async () => confirmed),
-    commit: vi.fn(async next => { confirmed = next; return next; }),
+    commit: vi.fn(async next => {
+      if (next.audit.at(-1)?.action === 'Capturar / editar planta') capturePatches.push(measurementCapturePatch(confirmed, next));
+      // The Cloud codec rehydrates snapshot files after each commit. Mirror that
+      // round trip so the following capture sees the same audit shape.
+      confirmed = structuredClone(next);
+      for (const event of confirmed.audit) {
+        for (const plan of [...event.beforePlans ?? [], ...event.afterPlans ?? []]) plan.file ??= new Blob();
+      }
+      return confirmed;
+    }),
     pending: vi.fn(async () => null), pendingSaves: vi.fn(async () => []), archivePending: vi.fn(async () => undefined),
     drafts: vi.fn(async () => []), writeDraft: vi.fn(async () => undefined), clearDraft: vi.fn(async () => undefined),
     backup: vi.fn(async () => null),
@@ -52,12 +63,12 @@ function setup(rows: Workspace['entries'][number]['rows']) {
     fireEvent.click(screen.getByRole('button', { name: 'Planta DXF' }));
     await screen.findByRole('button', { name: 'Confirmar DXF na coluna B' });
   };
-  return { repository, open, confirmed: () => confirmed, replaceConfirmed: (next: Workspace) => { confirmed = next; } };
+  return { repository, open, confirmed: () => confirmed, replaceConfirmed: (next: Workspace) => { confirmed = next; }, capturePatches };
 }
 
 describe('destino da captura DXF na Medição', () => {
   it('usa a célula escolhida e a linha imediatamente abaixo sem sobrescrever outra linha', async () => {
-    const { open, confirmed } = setup([newMeasuredRow('first'), newMeasuredRow('next'), { ...newMeasuredRow('occupied'), measuredQuantity: 9 }]);
+    const { open, confirmed, capturePatches } = setup([newMeasuredRow('first'), newMeasuredRow('next'), { ...newMeasuredRow('occupied'), measuredQuantity: 9 }]);
     await open();
     fireEvent.click(screen.getByRole('button', { name: 'Confirmar DXF na coluna B' }));
     await screen.findByText(/Linha 2, coluna B/);
@@ -69,6 +80,8 @@ describe('destino da captura DXF na Medição', () => {
     expect(rows.map(row => row.measuredQuantity)).toEqual([1, 1, 0, 9]);
     expect(rows[0].source?.measureId).toBe('mark-1');
     expect(rows[1].source?.measureId).toBe('mark-2');
+    expect(capturePatches).toHaveLength(2);
+    expect(capturePatches.every(Boolean)).toBe(true);
   });
 
   it('recupera a primeira marca após falha da nuvem antes de captar na linha seguinte', async () => {
