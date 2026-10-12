@@ -295,9 +295,13 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         const paths = new Map(next.plans.map(p => [p.id, p.storagePath]));
         for (const event of next.audit) for (const plans of [event.beforePlans, event.afterPlans]) for (const p of plans ?? []) p.storagePath ??= paths.get(p.id);
       }
-      const patch = !lifecyclePatch && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
-      const deletionPatch = !lifecyclePatch && !patch && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null;
-      const capturePatch = !lifecyclePatch && !patch && !deletionPatch && confirmed?.revision === baseRevision ? measurementCapturePatch(confirmed, next) : null;
+      // Check a DXF operation before the generic entry fallback: that fallback
+      // serializes the entire workspace merely to discover the plan changed.
+      const capturePatch = !lifecyclePatch && confirmed?.revision === baseRevision
+        && ['Capturar / editar planta', 'Apagar captura'].includes(latestEvent?.action ?? '')
+        ? measurementCapturePatch(confirmed, next) : null;
+      const patch = !lifecyclePatch && !capturePatch && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
+      const deletionPatch = !lifecyclePatch && !capturePatch && !patch && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null;
       const send = () => lifecyclePatch
         ? supabase.rpc('commit_measurement_lifecycle' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: encodeMeasurementWorkspace(lifecyclePatch),

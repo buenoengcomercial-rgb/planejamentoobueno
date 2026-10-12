@@ -329,7 +329,56 @@ export function pasteMeasuredRow(w: MeasurementWorkspace, actor: MeasurementActo
     const destination = entryFor(next, mid, sid); putEntry(next, { ...destination, rows: [...destination.rows, row] });
   });
 }
+/** A new, independent DXF mark changes one cell and one drawing. Keep the
+ * large immutable history by reference; shared/updated marks still use the
+ * full transaction and all of its cross-entry checks below. */
+function captureIndependentMark(w: MeasurementWorkspace, actor: MeasurementActor, destination: Destination,
+  nextPlan: TakeoffPlan, mark: TakeoffMeasure): MeasurementWorkspace | null {
+  const { measurementId, serviceId, rowId, field } = destination;
+  const planIndex = w.plans.findIndex(plan => plan.id === nextPlan.id);
+  const entryIndex = w.entries.findIndex(entry => entry.measurementId === measurementId && entry.serviceId === serviceId);
+  const plan = w.plans[planIndex], entry = w.entries[entryIndex];
+  const rowIndex = entry?.rows.findIndex(row => row.id === rowId) ?? -1;
+  const row = entry?.rows[rowIndex];
+  const source = sourceField(field);
+  if (!plan || !row || row.sharedRecordId || row[source]
+    || w.plans.some(other => other.measures.some(existing => existing.id === mark.id))
+    || w.entries.some(other => other.rows.some(existing => sourceFields.some(key => existing[key]?.measureId === mark.id)))) return null;
+  assertDestination(w, measurementId, serviceId, actor);
+  if (mark.projectId !== w.projectId || mark.measurementId !== measurementId || mark.serviceId !== serviceId)
+    throw new Error('Captura pertence a outro serviço ou medição.');
+  const scale = plan.scales[mark.page] ?? null;
+  const value = quantity(mark.kind, mark.points, scale, mark.heightMeters);
+  if (value === null) throw new Error('Geometria insuficiente.');
+  if (!Number.isFinite(value) || value < 0) throw new Error('Quantidade inválida.');
+  const updatedRow: MeasuredRow = {
+    ...row, ...withDetailValue(row, field, value),
+    [source]: { planId: plan.id, planName: plan.name, floor: plan.floor, page: mark.page,
+      measureId: mark.id, measureName: mark.name, kind: mark.kind, resultUnit: measureUnit(mark.kind, scale),
+      heightMeters: mark.heightMeters, points: structuredClone(mark.points) },
+  };
+  const updatedEntry = { ...entry, rows: entry.rows.map((prior, index) => index === rowIndex ? updatedRow : prior) };
+  const period = w.periods.find(item => item.id === measurementId)!;
+  if (entryQuantity(w, measurementId, serviceId) !== detailTotal(updatedEntry.rows)) {
+    const laterFiscal = w.periods.find(item => item.number > period.number && isPeriodLocked(item));
+    if (laterFiscal) throw new Error(`Alteração bloqueada: afetaria o acumulado da ${laterFiscal.number}ª medição já aprovada pela fiscalização.`);
+  }
+  const entries = w.entries.map((prior, index) => index === entryIndex ? updatedEntry : prior);
+  const plans = w.plans.map((prior, index) => index === planIndex
+    ? { ...plan, measures: [...plan.measures, structuredClone(mark)] } : prior);
+  const event: MeasurementAudit = {
+    id: crypto.randomUUID(), at: new Date().toISOString(), actor: { id: actor.id, name: actor.name },
+    action: 'Capturar / editar planta', affected: [{ measurementId, serviceId }],
+    before: [structuredClone(entry)], after: [structuredClone(updatedEntry)],
+    beforePlans: w.plans, afterPlans: plans,
+  };
+  return { ...w, revision: w.revision + 1, entries, plans, audit: [...w.audit, event] };
+}
 export function captureMeasurement(w: MeasurementWorkspace, actor: MeasurementActor, destination: Destination, nextPlan: TakeoffPlan, mark: TakeoffMeasure, remove = false) {
+  if (!remove) {
+    const quick = captureIndependentMark(w, actor, destination, nextPlan, mark);
+    if (quick) return quick;
+  }
   return transactMeasurement(w, actor, remove ? 'Apagar captura' : 'Capturar / editar planta', next => {
     const { measurementId, serviceId, rowId, field } = destination;
     assertDestination(next, measurementId, serviceId, actor);
