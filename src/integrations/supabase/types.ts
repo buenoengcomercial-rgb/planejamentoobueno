@@ -1350,6 +1350,10 @@ export type Database = {
         Args: { p_items: Json; p_project_id: string }
         Returns: Json
       }
+      checkpoint_measurement_workspace: {
+        Args: { p_project_id: string }
+        Returns: boolean
+      }
       commit_measurement_lifecycle: {
         Args: {
           p_expected_revision: number
