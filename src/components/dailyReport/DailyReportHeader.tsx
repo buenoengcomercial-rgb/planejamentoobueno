@@ -26,7 +26,7 @@ export function DailyReportHeader({
   handlePrintPeriod,
 }: DailyReportHeaderProps) {
   return (
-    <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3">
         <div className="w-11 h-11 rounded-lg bg-primary/10 flex items-center justify-center">
           <NotebookPen className="w-5 h-5 text-primary" />
@@ -61,6 +61,8 @@ export function DailyReportHeader({
             className="min-w-0 bg-transparent text-base focus:outline-none sm:text-sm"
           />
         </div>
+      </div>
+      <div aria-label="Exportação do Diário" className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
         <Button onClick={handlePrintDay} variant="outline" size="sm" className="h-11 text-sm sm:h-10" title="Exporta apenas a data selecionada">
           <Printer className="w-4 h-4 mr-1.5" /> PDF do dia
         </Button>
