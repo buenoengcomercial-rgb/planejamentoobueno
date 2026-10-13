@@ -1,5 +1,7 @@
 # Proteção dos dados e desempenho
 
+- [x] Corrigir a referência de permissões do Diário; edição, foto e conclusão confirmadas após recarregar em obra temporária autenticada, removida ao final. Os 40 diários e 782 fotos existentes foram preservados.
+
 - [x] Restringir Desfazer a campos/registros da operação, com conflito e auditoria.
 - [x] Bloquear exclusões operacionais involuntárias na interface e gravação; impedir exclusão quando há áreas não conferidas.
 - [x] Preservar e recuperar rascunhos rejeitados do Diário.

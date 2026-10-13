@@ -43,6 +43,13 @@
       "when": 1791899199911,
       "tag": "0005_measurement_workspace_checkpoint",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791901940705,
+      "tag": "0006_restore_private_role_check_compatibility",
+      "breakpoints": true
     }
   ]
 }
