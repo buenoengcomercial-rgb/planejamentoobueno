@@ -1,5 +1,7 @@
 # Architecture rules
 
+- Period daily-report PDFs read all confirmed reports using paginated inclusive date queries before rendering; partial page state must not omit saved diaries.
+
 - Legacy private role checks delegate to the canonical public membership helper through a non-public compatibility function; this preserves trigger checks without duplicating authorization rules.
 
 - Undo stores record/field deltas and compares expected values before reversal; whole-project restoration is forbidden because it overwrites later edits in other areas.

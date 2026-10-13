@@ -1,6 +1,7 @@
 # Proteção dos dados e desempenho
 
 - [ ] Separar os botões PDF do dia e PDF da medição do aviso de salvamento e verificar os cliques no Diário.
+- [ ] Exportar todos os diários preenchidos confirmados na nuvem no intervalo inclusivo da medição selecionada, sem incluir dias vazios.
 
 - [x] Corrigir a referência de permissões do Diário; edição, foto e conclusão confirmadas após recarregar em obra temporária autenticada, removida ao final. Os 40 diários e 782 fotos existentes foram preservados.
 
