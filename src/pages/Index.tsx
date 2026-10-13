@@ -3426,7 +3426,7 @@ export default function Index() {
       </div>
 
       <main ref={mainScrollRef} className="relative min-h-screen min-w-0 flex-1 overflow-x-clip overflow-y-auto pt-14 lg:pt-0">
-        <div className="absolute top-3 right-4 z-20">
+        <div className={safeCurrentView === 'dailyReport' ? 'flex justify-end px-4 pt-3' : 'absolute top-3 right-4 z-20'}>
           <SaveStatusIndicator status={Object.keys(dailyReportSaveErrors).length && saveStatus !== 'saving' ? 'error' : saveStatus} confirmedAt={lastCloudConfirmedAt} lastCheckedAt={lastRemoteCheckAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} pendingRemoteAreas={pendingRemoteAreas} partialSyncPending={partialSyncIssue?.projectId === rawProject.id} partialSyncDraftProtected={partialSyncIssue?.draftProtected} syncRetrying={partialSyncRetrying} />
         </div>
         {partialSyncIssue?.projectId === rawProject.id && (

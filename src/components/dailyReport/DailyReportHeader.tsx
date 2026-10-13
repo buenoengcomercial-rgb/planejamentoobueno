@@ -58,7 +58,7 @@ export function DailyReportHeader({
         </Select>
         {activePeriod && periodDates.length > 0 ? (
           <Select value={selectedDate} onValueChange={setSelectedDate}>
-            <SelectTrigger className="h-11 w-full text-base sm:h-10 sm:w-[180px] sm:text-sm">
+            <SelectTrigger aria-label="Data do Diário" className="h-11 w-full text-base sm:h-10 sm:w-[180px] sm:text-sm">
               <SelectValue placeholder="Data" />
             </SelectTrigger>
             <SelectContent className="max-h-[260px]">

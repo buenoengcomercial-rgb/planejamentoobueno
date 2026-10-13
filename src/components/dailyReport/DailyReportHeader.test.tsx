@@ -38,14 +38,21 @@ describe('DailyReportHeader', () => {
   });
 
   it('não transforma o PDF da medição na ação principal do Diário', () => {
+    const handlePrintPeriod = vi.fn();
     render(
       <DailyReportHeader
         {...baseProps}
         activePeriod={{ id: 'measurement-1', label: 'Medição 1', startDate: '2026-09-01', endDate: '2026-09-30' }}
         periodDates={['2026-09-13']}
+        handlePrintPeriod={handlePrintPeriod}
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'PDF da medição' })).toHaveClass('border', 'bg-background');
+    const printPeriod = screen.getByRole('button', { name: 'PDF da medição' });
+    expect(printPeriod).toHaveClass('border', 'bg-background');
+    expect(printPeriod).toBeEnabled();
+    expect(screen.getByRole('combobox', { name: 'Data do Diário' })).toBeEnabled();
+    fireEvent.click(printPeriod);
+    expect(handlePrintPeriod).toHaveBeenCalledOnce();
   });
 });
