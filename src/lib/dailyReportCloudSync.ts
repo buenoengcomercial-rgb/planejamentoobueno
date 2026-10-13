@@ -114,6 +114,25 @@ async function loadDailyReport(projectId: string, date: string): Promise<DailyRe
   return { id: data.id, data: data.data as unknown as DailyReport, updated_at: data.updated_at };
 }
 
+/** Read every confirmed report in an inclusive period, without modifying drafts. */
+export async function loadDailyReportsForPeriod(projectId: string, startDate: string, endDate: string): Promise<DailyReport[]> {
+  const reports: DailyReport[] = [];
+  const pageSize = 100;
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase.from('daily_reports')
+      .select('data, report_date')
+      .eq('project_id', projectId)
+      .gte('report_date', startDate)
+      .lte('report_date', endDate)
+      .order('report_date').order('id')
+      .range(offset, offset + pageSize - 1);
+    if (error) throw error;
+    if (!data) throw new Error('Não foi possível conferir os diários na nuvem.');
+    reports.push(...data.map(row => ({ ...(row.data as unknown as DailyReport), date: row.report_date })));
+    if (data.length < pageSize) return reports;
+  }
+}
+
 /**
  * Salva somente o Diário alterado. A versão da linha é a barreira de
  * concorrência: alterações em campos distintos são combinadas e, no mesmo

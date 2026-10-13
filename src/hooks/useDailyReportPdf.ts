@@ -6,7 +6,8 @@ import type {
   Project,
   TeamDefinition,
 } from '@/types/project';
-import { summarizeDailyReportsForPeriod } from '@/lib/dailyReportSummary';
+import { isDailyReportEmpty, summarizeDailyReportsForPeriod } from '@/lib/dailyReportSummary';
+import { loadDailyReportsForPeriod } from '@/lib/dailyReportCloudSync';
 import { loadCompanyLogoForPdf } from '@/lib/companyBranding';
 import { resolvePhotoUrl } from '@/lib/photoUrl';
 import {
@@ -141,6 +142,20 @@ export function useDailyReportPdf(args: UseDailyReportPdfArgs) {
    * - mode='period': todos os dias do período da medição filtrada (ou da data atual, como fallback).
    */
   const generatePDF = useCallback(async (mode: 'day' | 'period') => {
+    if (mode === 'period' && !activePeriod) {
+      toast.error('Selecione uma medição para exportar os diários.');
+      return;
+    }
+    const project = mode === 'period' && activePeriod
+      ? { ...args.project, dailyReports: await loadDailyReportsForPeriod(args.project.id, activePeriod.startDate, activePeriod.endDate) }
+      : args.project;
+    const filledDates = [...new Set((project.dailyReports || [])
+      .filter(report => !isDailyReportEmpty(report))
+      .map(report => report.date))].sort();
+    if (mode === 'period' && filledDates.length === 0) {
+      toast.info('Não há diários preenchidos no período desta medição.');
+      return;
+    }
     // Silencia warning de função não usada no PDF atual (mantido para futura paridade).
     void fetchAsDataURL;
     const { jsPDF, autoTable } = await loadPdfDeps();
@@ -158,8 +173,8 @@ export function useDailyReportPdf(args: UseDailyReportPdfArgs) {
     const safeName = projectName.replace(/[^a-z0-9]+/gi, '_') || 'Obra';
     const safeSelectedDate = selectedDate || todayISO();
 
-    if (mode === 'period' && activePeriod && periodDates.length > 0) {
-      dates = periodDates;
+    if (mode === 'period' && activePeriod) {
+      dates = filledDates;
       const isDraft = activePeriod.status === 'draft' || activePeriod.id === 'draft';
       scopeTitle = isDraft
         ? 'DIÁRIO DE OBRA — MEDIÇÃO EM PREPARAÇÃO'
@@ -226,8 +241,8 @@ export function useDailyReportPdf(args: UseDailyReportPdfArgs) {
     // ───── Resumo geral do período ─────
     const periodSum = summarizeDailyReportsForPeriod(
       project,
-      dates[0],
-      dates[dates.length - 1],
+      mode === 'period' && activePeriod ? activePeriod.startDate : dates[0],
+      mode === 'period' && activePeriod ? activePeriod.endDate : dates[dates.length - 1],
     );
 
     // Totaliza as ocorrências do período para o resumo executivo.
@@ -598,7 +613,7 @@ export function useDailyReportPdf(args: UseDailyReportPdfArgs) {
       await generatePDF('period');
     } catch (e) {
       console.error('Erro ao gerar PDF do período (Diário de Obra)', e);
-      toast.error('Falha ao gerar PDF do período. Verifique o console para detalhes.');
+      toast.error('Não foi possível conferir e exportar todos os diários da medição. Tente novamente com conexão.');
     }
   }, [generatePDF]);
 
