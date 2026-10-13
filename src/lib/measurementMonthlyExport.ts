@@ -32,11 +32,8 @@ export function monthlyExportRows(w: MeasurementWorkspace, id: string): (string 
 export async function exportMonthlyMeasurement(w: MeasurementWorkspace, id: string, format: 'xlsx' | 'pdf', options: MonthlyPdfOptions = {}) {
   const p = w.periods.find(p => p.id === id)!;
   if (format === 'xlsx') {
-    const XLSX = await import('xlsx');
-    const book = XLSX.utils.book_new(); const sheet = XLSX.utils.aoa_to_sheet(monthlyExportRows(w, id));
-    sheet['!cols'] = [{ wch: 10 }, { wch: 75 }, { wch: 7 }, ...Array.from({ length: 9 }, () => ({ wch: 18 }))];
-    for (const key of Object.keys(sheet)) if (sheet[key]?.t === 'n') sheet[key].z = '#,##0.00';
-    XLSX.utils.book_append_sheet(book, sheet, 'Medição mensal'); XLSX.writeFile(book, `medicao-${p.number}.xlsx`); return;
+    const { saveMonthlyMeasurementExcel } = await import('./measurementMonthlyExcel');
+    await saveMonthlyMeasurementExcel(w, id, options); return;
   }
   const { buildMonthlyMeasurementPdf } = await import('./measurementMonthlyPdf');
   const doc = await buildMonthlyMeasurementPdf(w, id, options);
