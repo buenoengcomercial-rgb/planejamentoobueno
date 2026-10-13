@@ -28,7 +28,10 @@ export function useMeasurementRealtime(options: Options) {
     const refresh = async () => {
       const state = latest.current;
       if (disposed || state.revision === undefined || reading) return;
-      if (wanted <= state.revision) { setPending(false); return; }
+      // A page opened from the browser copy must re-read the cloud even when
+      // the revision matches, otherwise it stays marked as offline.
+      const offlineBase = !!repository.loadedOffline?.();
+      if (wanted <= state.revision && !offlineBase) { setPending(false); return; }
       setPending(true);
       if (!state.canRefresh()) return;
       reading = true;
@@ -39,9 +42,11 @@ export function useMeasurementRealtime(options: Options) {
         if (disposed) return;
         const now = latest.current;
         // Editing or committing can start while the complete cloud read is pending.
-        if (!remote || remote.projectId !== state.projectId || remote.revision <= baseRevision) throw new Error('Atualização não confirmada');
-        if (now.revision === baseRevision && now.canRefresh() && remote && remote.revision > baseRevision) now.onRefresh(remote);
+        if (!remote || remote.projectId !== state.projectId || repository.loadedOffline?.()
+          || remote.revision < baseRevision || (remote.revision === baseRevision && !offlineBase)) throw new Error('Atualização não confirmada');
+        if (now.revision === baseRevision && now.canRefresh()) now.onRefresh(remote);
         succeeded = true; setFailed(false);
+        if (wanted <= remote.revision) setPending(false);
       } catch { if (!disposed) setFailed(true); }
       finally { reading = false; if (!disposed && succeeded && latest.current.revision !== baseRevision) schedule(); }
     };
@@ -63,7 +68,7 @@ export function useMeasurementRealtime(options: Options) {
     const offline = () => { live = false; setConnected(false); };
     resume.current = schedule;
     // Only a small revision check is polled when the socket is disconnected.
-    const fallback = setInterval(() => { if (!live || wanted > (latest.current.revision ?? -1)) { void check(); schedule(); } }, 15000);
+    const fallback = setInterval(() => { if (!live || wanted > (latest.current.revision ?? -1) || repository.loadedOffline?.()) { void check(); schedule(); } }, 15000);
     window.addEventListener('focus', focus); window.addEventListener('online', focus); window.addEventListener('offline', offline);
     document.addEventListener('visibilitychange', visible); document.addEventListener('focusout', schedule);
     return () => {
