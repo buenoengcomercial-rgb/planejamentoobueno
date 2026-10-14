@@ -333,7 +333,10 @@ it('não rebate célula sobre alteração concorrente da mesma entrada após res
   fireEvent.change(cell, { target: { value: '2' } }); fireEvent.blur(cell);
   remote = { ...remote, revision: remote.revision + 1, entries: [{ ...remote.entries[0], rows: [{ ...remote.entries[0].rows[0], multiplier: 7 }] }] };
   await act(async () => loseResponse(new Error('Resposta perdida após confirmar na nuvem')));
-  await waitFor(() => expect(document.querySelector('main [role="status"]')).toHaveTextContent('Precisa resolver conflito'));
+  // Wait for recovery to inspect the newer cloud state, rather than merely
+  // accepting the initial lost-response warning before the automatic retry.
+  await screen.findAllByText('A medição mudou em outro computador. Os lançamentos locais permanecem preservados para conferência.');
+  expect(document.querySelector('main [role="status"]')).toHaveTextContent('Precisa resolver conflito');
   expect(repository.commit).toHaveBeenCalledTimes(1);
   expect(remote.entries[0].rows[0].multiplier).toBe(7);
   expect(drafts()).toHaveLength(1);

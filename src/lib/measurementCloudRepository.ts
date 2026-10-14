@@ -1,6 +1,7 @@
 import { supabase } from '@/integrations/supabase/client';
-import { MeasurementCommitRejectedError, measurementRepository, type MeasurementRepository, type PendingMeasurementSave, type StoredMeasurementPending } from './measurementWorkspaceStore';
-import { decodeMeasurementWorkspace, encodeMeasurementWorkspace } from './measurementCloudCodec';
+import { MeasurementCommitRejectedError, measurementRepository, type MeasurementLoadState, type MeasurementRepository, type PendingMeasurementSave, type StoredMeasurementPending } from './measurementWorkspaceStore';
+import { assertMeasurementPlanPath, decodeMeasurementWorkspace, encodeMeasurementWorkspace } from './measurementCloudCodec';
+import { withReadDeadline } from './readDeadline';
 import { TAKEOFF_BUCKET } from './planTakeoffCloud';
 import { measurementEntryPatch } from './measurementEntryPatch';
 import { measurementDeletionPatch } from './measurementDeletionPatch';
@@ -15,6 +16,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
   let confirmed: MeasurementWorkspace | null = null;
   let loading: Promise<MeasurementWorkspace | null> | null = null;
   let loadedOffline = false, cachedRevision = -1;
+  let state: MeasurementLoadState = { source: 'none', checking: false };
   let cacheChain: Promise<void> = Promise.resolve();
   const checkpoint = (workspace: MeasurementWorkspace, operationId?: string) => {
     const task = cacheChain.catch(() => undefined).then(async () => {
@@ -28,35 +30,89 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     void task.catch(() => undefined);
     return task;
   };
-  // Storage objects are immutable and keyed by operation. Reuse their bytes,
-  // including historic/deleted drawings, until this repository is disposed.
+  // Storage objects are immutable. Catalog reads never resolve these files.
   const files = new Map<string, Promise<Blob>>();
-  const read = async (raw: unknown) => decodeMeasurementWorkspace(raw, scope.projectId, async path => {
-    if (!files.has(path)) files.set(path, (async () => {
-      const { data, error } = await supabase.storage.from(TAKEOFF_BUCKET).download(path);
-      if (error || !data) throw new Error(`Não foi possível recuperar a planta: ${error?.message ?? path}`);
-      return data;
-    })());
-    try { return await files.get(path)!; }
-    catch (error) { files.delete(path); throw error; }
-  });
+  const fileSizes = new Map<string, number>();
+  const forgetFile = (path: string) => { files.delete(path); fileSizes.delete(path); };
+  const trimFiles = () => {
+    let bytes = [...fileSizes.values()].reduce((sum, size) => sum + size, 0);
+    while (files.size > 32 || bytes > 128 * 1024 * 1024 && files.size > 1) {
+      const path = files.keys().next().value!;
+      bytes -= fileSizes.get(path) ?? 0;
+      forgetFile(path);
+    }
+  };
+  const rememberFile = (path: string, promise: Promise<Blob>) => {
+    files.delete(path);
+    files.set(path, promise);
+    trimFiles();
+  };
+  const read = (raw: unknown) => decodeMeasurementWorkspace(raw, scope.projectId);
+  const classifyReadError = (error: unknown): NonNullable<MeasurementLoadState['error']> => {
+    const details = error as { code?: string; status?: number; statusCode?: number; message?: string };
+    const message = details?.message || 'Não foi possível consultar a Medição na nuvem.';
+    const code = String(details?.code ?? ''), status = Number(details?.status ?? details?.statusCode);
+    const kind = code === '42501' || [401, 403].includes(status) ? 'authorization'
+      : /57014|timeout|demorou para responder|canceling statement/i.test(`${code} ${message}`) ? 'timeout'
+        : typeof navigator !== 'undefined' && navigator.onLine === false ? 'network' : 'service';
+    return { kind, message };
+  };
+  const resolvePlanFile = async (planId: string, path: string): Promise<Blob> => {
+    assertMeasurementPlanPath(scope.projectId, planId, path);
+    const isCurrent = () => confirmed?.plans.some(plan => plan.id === planId && plan.storagePath === path);
+    if (!isCurrent()) throw new Error('A planta mudou. Reabra o catálogo antes de carregar o arquivo.');
+    let promise = files.get(path);
+    if (!promise) {
+      promise = (async () => {
+        const cached = await withReadDeadline(local.load(), 5000).catch(() => null);
+        const saved = cached?.plans.find(plan => plan.id === planId && plan.storagePath === path)?.file;
+        if (saved instanceof Blob && saved.size) return saved;
+        const { data, error } = await withReadDeadline(supabase.storage.from(TAKEOFF_BUCKET).download(path), 900_000);
+        if (error || !(data instanceof Blob) || !data.size) throw new Error(`Não foi possível recuperar a planta: ${error?.message ?? 'arquivo indisponível'}`);
+        // Durable file cache is optional; quota failure cannot turn a successful read into an error.
+        cacheChain = cacheChain.catch(() => undefined).then(() => local.cachePlanFile?.(planId, path, data));
+        void cacheChain.catch(() => undefined);
+        return data;
+      })();
+      rememberFile(path, promise);
+    } else rememberFile(path, promise);
+    try {
+      const file = await promise;
+      if (!isCurrent()) throw new Error('A planta mudou durante o carregamento.');
+      if (files.get(path) === promise) { fileSizes.set(path, file.size); trimFiles(); }
+      return file;
+    } catch (error) {
+      if (files.get(path) === promise) forgetFile(path);
+      throw error;
+    }
+  };
   const loadRemote = () => {
     if (loading) return loading;
+    state = { ...state, checking: true };
     loading = (async () => {
-      const { data, error } = await supabase.rpc('load_measurement_workspace' as never, { p_project_id: scope.projectId } as never);
-      if (error) {
-        const cached = await local.load();
-        if (!cached) throw new Error(`Medição não carregada: ${error.message}`);
+      try {
+        const { data, error } = await withReadDeadline(supabase.rpc('load_measurement_workspace' as never, { p_project_id: scope.projectId } as never));
+        if (error) throw error;
+        const next = data ? await read(data) : null;
+        if (confirmed && (!next || next.revision < confirmed.revision)) {
+          throw new Error('A consulta devolveu uma revisão anterior à base já confirmada. Tente conferir novamente.');
+        }
+        confirmed = next;
+        loadedOffline = false;
+        state = { source: 'cloud', checking: false };
+        if (confirmed) void checkpoint(confirmed);
+        return confirmed;
+      } catch (error) {
+        const failure = classifyReadError(error);
+        const cached = confirmed ?? await withReadDeadline(local.load(), 5000).catch(() => null);
+        state = { source: cached ? 'cache' : 'none', checking: false, error: failure };
+        if (!cached) throw new Error(`Medição não carregada: ${failure.message}`);
         confirmed = cached;
         cachedRevision = Math.max(cachedRevision, cached.revision);
         loadedOffline = true;
         return cached;
       }
-      confirmed = data ? await read(data) : null;
-      loadedOffline = false;
-      if (confirmed) void checkpoint(confirmed);
-      return confirmed;
-    })().finally(() => { loading = null; });
+    })().finally(() => { loading = null; state = { ...state, checking: false }; });
     return loading;
   };
   const restorePending = async (stored: StoredMeasurementPending): Promise<PendingMeasurementSave> => {
@@ -166,6 +222,8 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     ...local,
     savedLabel: 'Salvo na nuvem',
     loadedOffline: () => loadedOffline,
+    loadState: () => ({ ...state, error: state.error ? { ...state.error } : undefined }),
+    resolvePlanFile,
     stage: undefined,
     // New cloud edits stay in memory until sent. Legacy records remain readable
     // only for a one-time, explicitly scoped review; no new local drafts exist.
@@ -226,7 +284,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         || await compactedReceiptRevision(operationId) === revision;
     },
     remoteRevision: async () => {
-      const { data, error } = await supabase.from('measurement_workspace_versions' as never).select('revision').eq('project_id', scope.projectId).maybeSingle();
+      const { data, error } = await withReadDeadline(supabase.from('measurement_workspace_versions' as never).select('revision').eq('project_id', scope.projectId).maybeSingle());
       const revision = Number((data as { revision?: number } | null)?.revision);
       if (error || !data || !Number.isSafeInteger(revision) || revision < 0) throw new Error('Não foi possível conferir a atualização da Medição.');
       return revision;
@@ -268,6 +326,9 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         || [latestEvent?.beforePlans, latestEvent?.afterPlans]
           .some(plans => plans?.some(plan => !plan.storagePath));
       const next = needsPlanPaths ? structuredClone(candidate) : candidate;
+      if (next.plans.some(plan => !plan.storagePath && (!(plan.file instanceof Blob) || !plan.file.size))) {
+        throw new MeasurementCommitRejectedError('Uma planta nova precisa de um arquivo completo antes do envio.');
+      }
       // Lifecycle commands are period-only operations. Detect them before the
       // generic entry-patch fallback, which serializes the entire workspace.
       const lifecyclePatch = !needsPlanPaths && confirmed?.revision === baseRevision
@@ -277,6 +338,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       if (isLifecycleCommand && !lifecyclePatch) throw new MeasurementCommitRejectedError('O ciclo da medição contém outras alterações ou uma revisão desatualizada. Confira a medição antes de repetir.');
       for (const plan of next.plans) {
         if (!plan.storagePath) {
+          if (!(plan.file instanceof Blob) || !plan.file.size) throw new MeasurementCommitRejectedError('Arquivo da planta indisponível para envio.');
           const extension = plan.kind === 'image' ? 'image' : plan.kind;
           plan.storagePath = `${scope.projectId}/${plan.id}/${operationId}.${extension}`;
           const { error } = await supabase.storage.from(TAKEOFF_BUCKET).upload(plan.storagePath, plan.file, { upsert: false, contentType: plan.file.type || 'application/octet-stream' });
@@ -288,7 +350,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
             if ([400, 401, 403, 404, 413, 415, 422].includes(status)) throw new MeasurementCommitRejectedError(message);
             throw new Error(`${message}. O resultado do envio é incerto; tente novamente.`);
           }
-          if (!error) files.set(plan.storagePath, Promise.resolve(plan.file));
+          if (!error) rememberFile(plan.storagePath, Promise.resolve(plan.file));
         }
       }
       // History shares the same immutable file identities; geometry remains transactional.
@@ -344,6 +406,8 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           const latest = lifecyclePatch || catalogPatch || remoteRevision !== next.revision ? await loadRemote() : next;
           if (!latest || latest.revision < remoteRevision) throw new Error('A operação foi confirmada, mas a versão mais recente não pôde ser carregada. Mantenha esta página aberta.');
           confirmed = latest;
+          loadedOffline = false;
+          state = { source: 'cloud', checking: !!loading };
           return latest;
         }
         if (remoteRevision === baseRevision && savedRevision === null) ({ data, error } = await send());
@@ -405,6 +469,8 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       } else saved = await read(data);
       if (saved.revision !== next.revision || saved.audit.at(-1)?.id !== operationId) throw new Error('A nuvem não confirmou esta operação. Mantenha esta página aberta.');
       confirmed = saved;
+      loadedOffline = false;
+      state = { source: 'cloud', checking: !!loading };
       return saved;
     },
   };

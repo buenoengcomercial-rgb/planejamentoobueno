@@ -39,4 +39,16 @@ describe('SaveStatusIndicator', () => {
     expect(screen.getByText('Sincronização parcial — tentando novamente')).toBeInTheDocument();
     expect(screen.getByText('Atualizado · Tempo real ativo')).toBeInTheDocument();
   });
+  it('diferencia uma cópia local e falha de consulta da conectividade do navegador', () => {
+    const { rerender } = render(<SaveStatusIndicator status="idle" cloudReadStatus="cached" live/>);
+    expect(screen.getByText('Cópia local · aguardando conferência')).toBeVisible();
+    expect(screen.queryByText('Sem internet')).not.toBeInTheDocument();
+    expect(screen.queryByText('Atualizado · Tempo real ativo')).not.toBeInTheDocument();
+    rerender(<SaveStatusIndicator status="error" cloudReadStatus="failed" live/>);
+    expect(screen.getByText('Falha ao consultar a nuvem')).toBeVisible();
+    expect(screen.getByText('Última leitura não confirmada')).toBeVisible();
+    expect(screen.queryByText('Atualizado · Tempo real ativo')).not.toBeInTheDocument();
+    rerender(<SaveStatusIndicator status="updating" cloudReadStatus="checking"/>);
+    expect(screen.getByText('Conferindo a Medição na nuvem…')).toBeVisible();
+  });
 });

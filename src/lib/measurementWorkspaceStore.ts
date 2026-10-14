@@ -1,6 +1,7 @@
 import type { MeasuredEntry, MeasurementAudit, MeasurementWorkspace } from './measurementWorkspace';
 import type { MeasurementCapturePatch } from './measurementCapturePatch';
 import { prepareIncorporation, verifyIncorporationBackup, type IncorporationBackup } from './measurementIncorporation';
+import { measurementCatalogPlans } from './measurementCloudCodec';
 
 export interface WorkspaceDraft { projectId: string; measurementId: string; serviceId: string; rowId: string; changes: Record<string, unknown> }
 export interface PendingMeasurementSave { baseRevision: number; candidate: MeasurementWorkspace; archivedAt?: string; compact?: PendingMeasurementDeltaSave }
@@ -22,9 +23,17 @@ export class MeasurementCommitRejectedError extends Error {
 }
 const pendingOperationId = (pending: StoredMeasurementPending) => 'operationId' in pending
   ? pending.operationId : pending.candidate.audit.at(-1)?.id;
+export interface MeasurementLoadState {
+  source: 'cloud' | 'cache' | 'none';
+  checking: boolean;
+  error?: { kind: 'network' | 'service' | 'authorization' | 'timeout'; message: string };
+}
 export interface MeasurementRepository {
   savedLabel?: string;
   loadedOffline?(): boolean;
+  loadState?(): MeasurementLoadState;
+  /** Resolves only the immutable object linked to the requested catalog entry. */
+  resolvePlanFile?(planId: string, storagePath: string): Promise<Blob>;
   remoteRevision?(): Promise<number>;
   confirmedOperation?(operationId: string, revision: number): Promise<boolean>;
   watch?(onRevision: (revision: number) => void, onConnection: (connected: boolean) => void): () => void;
@@ -35,6 +44,8 @@ export interface MeasurementRepository {
   stage?(candidate: MeasurementWorkspace, base: MeasurementWorkspace): Promise<void>;
   /** Last confirmed cloud snapshot for reopening an offline browser. */
   cacheSnapshot?(workspace: MeasurementWorkspace): Promise<void>;
+  /** Local cache only; the confirmed revision and operational records do not change. */
+  cachePlanFile?(planId: string, storagePath: string, file: Blob): Promise<void>;
   /** Unconfirmed operations in their original order, ready to resume after reload. */
   queued?(confirmed?: MeasurementWorkspace | null): Promise<PendingMeasurementSave[]>;
   removeEntryPending?(operationId: string): Promise<void>;
@@ -54,6 +65,23 @@ export interface MeasurementRepository {
   writeDraft(draft: WorkspaceDraft): Promise<void>;
   clearDraft(measurementId: string, serviceId: string, rowId?: string): Promise<void>;
   backup(): Promise<IncorporationBackup | null>;
+}
+
+function retainCachedPlanFiles(workspace: MeasurementWorkspace, previous: MeasurementWorkspace | null): MeasurementWorkspace {
+  if (!previous) return workspace;
+  const files = new Map<string, Blob>();
+  for (const plan of measurementCatalogPlans(previous)) {
+    if (plan.storagePath && plan.file instanceof Blob && plan.file.size > 0) {
+      files.set(JSON.stringify([plan.id, plan.storagePath]), plan.file);
+    }
+  }
+  if (!files.size) return workspace;
+  const merged = structuredClone(workspace);
+  for (const plan of measurementCatalogPlans(merged)) {
+    const file = plan.storagePath ? files.get(JSON.stringify([plan.id, plan.storagePath])) : undefined;
+    if (!(plan.file instanceof Blob && plan.file.size > 0) && file) plan.file = file;
+  }
+  return merged;
 }
 
 /** Independent database; Project persistence and its undo cannot address these stores.
@@ -90,7 +118,20 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
     preserveCapturePending: pending => update<PendingMeasurementDeltaSave[]>('pending_entry_patches', rows => [...(rows ?? []).filter(p => p.operationId !== pending.operationId), pending]),
     stage: (candidate, base) => update<StoredMeasurementPending[]>('pending', rows => [...(rows ?? []).filter(p => pendingOperationId(p) !== candidate.audit.at(-1)?.id), { baseRevision: base.revision, candidate }]),
     cacheSnapshot: workspace => update<MeasurementWorkspace>('workspaces', current =>
-      current && current.revision > workspace.revision ? current : workspace),
+      current && current.revision > workspace.revision ? current : retainCachedPlanFiles(workspace, current)),
+    cachePlanFile: (planId, storagePath, file) => {
+      if (!(file instanceof Blob) || file.size === 0) return Promise.reject(new Error('Arquivo vazio não pode substituir uma planta confirmada.'));
+      return update<MeasurementWorkspace>('workspaces', current => {
+        if (!current || current.projectId !== scope.projectId) throw new Error('A base local da Medição ainda não foi confirmada.');
+        const matching = measurementCatalogPlans(current).filter(plan => plan.id === planId && plan.storagePath === storagePath);
+        if (!matching.length) throw new Error('Arquivo não corresponde à versão da planta no catálogo local.');
+        const cached = structuredClone(current);
+        for (const plan of measurementCatalogPlans(cached)) {
+          if (plan.id === planId && plan.storagePath === storagePath) plan.file = file;
+        }
+        return cached;
+      });
+    },
     removeEntryPending: operationId => update<PendingMeasurementDeltaSave[]>('pending_entry_patches', rows => (rows ?? []).filter(p => p.operationId !== operationId)),
     storedPendingSaves: async () => {
       const [legacy, compact] = await Promise.all([read<StoredMeasurementPending[]>('pending'), read<PendingMeasurementDeltaSave[]>('pending_entry_patches')]);

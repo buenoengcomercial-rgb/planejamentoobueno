@@ -1,10 +1,10 @@
 import type { MeasuredEntry, MeasurementAudit, MeasurementWorkspace } from './measurementWorkspace';
 import { sourceFields } from './measurementWorkspace';
-import type { TakeoffPlan } from './planTakeoff';
+import type { TakeoffCatalogPlan } from './planTakeoff';
 import { encodeMeasurementWorkspace } from './measurementCloudCodec';
 
 export interface MeasurementDeletionPatch {
-  plans: TakeoffPlan[];
+  plans: TakeoffCatalogPlan[];
   entries: MeasuredEntry[];
   event: MeasurementAudit;
 }
@@ -44,7 +44,7 @@ export function measurementDeletionPatch(base: MeasurementWorkspace, next: Measu
     row[field] ? [key(row[field]!.planId, row[field]!.measureId)] : [])));
   const used = new Set(candidate.entries.flatMap(entry => entry.rows.flatMap(row => sourceFields.flatMap(field =>
     row[field] ? [key(row[field]!.planId, row[field]!.measureId)] : []))));
-  const changedPlans: TakeoffPlan[] = [];
+  const changedPlans: TakeoffCatalogPlan[] = [];
   const removedMarks = new Set<string>();
   for (let index = 0; index < candidate.plans.length; index++) {
     const plan = candidate.plans[index], oldPlan = previous.plans[index];

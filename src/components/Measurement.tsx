@@ -1,6 +1,7 @@
 import { lazy, Suspense, useMemo, useState, useEffect, useRef, type MouseEvent } from 'react';
 import { cloudMeasurementRepository } from '@/lib/measurementCloudRepository';
 import { supabase } from '@/integrations/supabase/client';
+import { withReadDeadline } from '@/lib/readDeadline';
 import { useOrganization } from '@/hooks/useOrganization';
 import type { MeasurementWorkspaceProps } from './measurement/MeasurementWorkspace';
 const IndependentMeasurement = lazy(() => import('./measurement/MeasurementWorkspace'));
@@ -85,11 +86,18 @@ function CloudMeasurement(props: MeasurementProps) {
     let alive = true;
     const version = confirmation.current.version;
     setFailure('');
-    void supabase.from('measurement_workspaces' as never).select('project_id').eq('project_id', props.project.id).maybeSingle().then(({ data, error }) => {
-      if (!alive) return;
-      if (error) setFailure('Não foi possível confirmar a base da Medição na nuvem. Tente novamente; nenhum lançamento foi alterado.');
-      else setVerified({ version, enabled: !!data });
-    });
+    void (async () => {
+      try {
+        const { data, error } = await withReadDeadline(supabase.from('measurement_workspaces' as never)
+          .select('project_id').eq('project_id', props.project.id).maybeSingle());
+        if (!alive || confirmation.current.version !== version) return;
+        if (error) throw error;
+        setVerified({ version, enabled: !!data });
+      } catch {
+        if (alive && confirmation.current.version === version)
+          setFailure('Não foi possível confirmar a base da Medição na nuvem. Tente novamente; nenhum lançamento foi alterado.');
+      }
+    })();
     return () => { alive = false; };
   }, [props.project.id, props.independentConfirmed, retry]);
   if (failure) return <div role="alert" className="rounded border p-4 text-sm">{failure} <button onClick={() => setRetry(n => n + 1)} className="underline">Tentar novamente</button></div>;

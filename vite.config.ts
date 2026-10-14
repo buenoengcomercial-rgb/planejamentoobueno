@@ -12,7 +12,9 @@ function buildRevision() {
   catch {
     // Lovable/CI may provide a source archive without Git metadata.
     const hash = createHash('sha256');
-    for (const file of ['src/pages/Index.tsx','src/lib/projectSync.ts','src/hooks/useAuth.tsx','src/hooks/useOrganization.tsx','src/workers/weeklyRoutine.worker.ts']) hash.update(readFileSync(path.resolve(__dirname,file)));
+    for (const file of ['src/pages/Index.tsx','src/lib/projectSync.ts','src/hooks/useAuth.tsx','src/hooks/useOrganization.tsx','src/workers/weeklyRoutine.worker.ts',
+      'src/lib/measurementCloudCodec.ts','src/lib/measurementCloudRepository.ts','src/components/measurement/MeasurementWorkspace.tsx',
+      'src/components/measurement/useMeasurementRealtime.ts','src/components/planTakeoff/PlanTakeoff.tsx']) hash.update(readFileSync(path.resolve(__dirname,file)));
     return `source-${hash.digest('hex').slice(0,12)}`;
   }
 }
