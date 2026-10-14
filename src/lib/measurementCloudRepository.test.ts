@@ -1,8 +1,8 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation } from './measurementIncorporation';
-import { addMeasuredPeriod, approveMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, freezeMeasuredPeriod, newMeasuredRow, transactMeasurement, type MeasurementWorkspace } from './measurementWorkspace';
+import { addMeasuredPeriod, approveMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, freezeMeasuredPeriod, monthlyLines, newMeasuredRow, transactMeasurement, undoMeasuredOperation, type MeasurementWorkspace } from './measurementWorkspace';
 import { deleteMeasuredPeriod, restoreMeasuredPeriod } from './measurementLifecycle';
 import { measurementEntryPatch } from './measurementEntryPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
@@ -58,6 +58,7 @@ function patchSaved(base: MeasurementWorkspace, next: MeasurementWorkspace) {
 }
 beforeEach(() => {
   vi.clearAllMocks(); mocks.cached = null; mocks.drafts = []; mocks.stored = [];
+  mocks.download.mockReset(); mocks.upload.mockReset();
   mocks.revision = 0; mocks.eventRevision = null; mocks.compactedRevision = null; mocks.missingVersion = false;
   mocks.from.mockImplementation((table: string) => ({ select: () => ({ eq: () => ({
     eq: () => ({ maybeSingle: async () => ({ data: table === 'measurement_workspace_events' && mocks.eventRevision !== null
@@ -66,6 +67,373 @@ beforeEach(() => {
         ? { revision: mocks.compactedRevision, actor_id: actor.id } : null, error: null }) }),
     maybeSingle: async () => ({ data: table === 'measurement_workspace_versions' && !mocks.missingVersion ? { revision: mocks.revision } : null, error: null }),
   }) }) }));
+});
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+describe('Abertura da Medição com plantas sob demanda', () => {
+  it('carrega quantidades e todo o histórico sem baixar plantas atuais ou históricas', async () => {
+    const base = await fixture(true);
+    const historical = { ...base.plans[0], id: 'archived-plan', name: 'Histórico.dxf', kind: 'dxf' as const,
+      storagePath: `${base.projectId}/archived-plan/old.dxf` };
+    base.audit.push({ id: 'old-drawing-event', at: '2026-10-12T10:00:00Z', actor, action: 'Gerir desenhos',
+      affected: [], before: [], after: [], beforePlans: [historical], afterPlans: base.plans,
+      planDelta: { kind: 'archive', planId: historical.id, beforePlan: historical } });
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base);
+    const remote = await repo.load();
+    expect(encodeMeasurementWorkspace(remote)).toEqual(encodeMeasurementWorkspace(base));
+    expect(remote?.plans[0].file).toBeUndefined();
+    expect(remote?.audit.at(-1)?.beforePlans?.[0].file).toBeUndefined();
+    expect(remote?.audit.at(-1)?.planDelta?.beforePlan?.file).toBeUndefined();
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.upload).not.toHaveBeenCalled();
+    expect(mocks.rpc.mock.calls.map(call => call[0])).toEqual(['load_measurement_workspace']);
+    expect(repo.loadState!()).toMatchObject({ source: 'cloud', checking: false });
+    expect(repo.loadState!().error).toBeUndefined();
+  });
+
+  it('baixa somente a planta selecionada e reutiliza o caminho imutável entre aberturas', async () => {
+    const base = await fixture(true);
+    base.plans.push({ ...base.plans[0], id: 'other-plan', name: 'Outra.dxf', kind: 'dxf',
+      storagePath: `${base.projectId}/other-plan/other.dxf` });
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const file = new Blob(['arquivo DXF selecionado']);
+    let complete!: (value: { data: Blob; error: null }) => void;
+    mocks.download.mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+    const selected = base.plans[0];
+    const first = repo.resolvePlanFile!(selected.id, selected.storagePath!);
+    const concurrent = repo.resolvePlanFile!(selected.id, selected.storagePath!);
+    await Promise.resolve();
+    complete({ data: file, error: null });
+    expect(await first).toBe(file); expect(await concurrent).toBe(file);
+    expect(await repo.resolvePlanFile!(selected.id, selected.storagePath!)).toBe(file);
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    expect(mocks.download).toHaveBeenCalledWith(selected.storagePath);
+    expect(mocks.upload).not.toHaveBeenCalled();
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it('arquivo indisponível não impede cálculo, desfazer e exclusão de uma linha vinculada', async () => {
+    const base = await fixture(true);
+    const row = newMeasuredRow('linked-row');
+    const ready = editMeasuredRow(base, actor, 'm1', 'signs', row);
+    const mark = { id: 'linked-mark', name: 'Placas', kind: 'count' as const, page: 1,
+      points: [{ x: 1, y: 1 }, { x: 2, y: 2 }], projectId: base.projectId, measurementId: 'm1', serviceId: 'signs' };
+    const captured = captureMeasurement(ready, actor,
+      { measurementId: 'm1', serviceId: 'signs', rowId: row.id, field: 'multiplier' }, ready.plans[0], mark);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(captured); const remote = (await repo.load())!;
+    const before = monthlyLines(remote, 'm1');
+    mocks.download.mockResolvedValueOnce({ data: null, error: { statusCode: '404', message: 'Arquivo não encontrado' } });
+    await expect(repo.resolvePlanFile!(remote.plans[0].id, remote.plans[0].storagePath!)).rejects.toThrow();
+    expect(monthlyLines(remote, 'm1')).toEqual(before);
+    const deleted = deleteMeasuredRow(remote, actor, 'm1', 'signs', row.id);
+    expect(deleted.entries.find(entry => entry.serviceId === 'signs')?.rows).toEqual([]);
+    expect(deleted.plans[0].measures).toEqual([]);
+    const restored = undoMeasuredOperation(deleted, actor, deleted.audit.at(-1)!.id);
+    expect(monthlyLines(restored, 'm1')).toEqual(before);
+    expect(restored.plans[0].measures).toEqual(remote.plans[0].measures);
+    expect(mocks.upload).not.toHaveBeenCalled();
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it('uma falha de arquivo permite repetir o download sem gravar nenhum dado', async () => {
+    const base = await fixture(true);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const selected = base.plans[0], file = new Blob(['drawing']);
+    mocks.download.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce({ data: file, error: null });
+    await expect(repo.resolvePlanFile!(selected.id, selected.storagePath!)).rejects.toThrow();
+    expect(await repo.resolvePlanFile!(selected.id, selected.storagePath!)).toBe(file);
+    expect(mocks.download).toHaveBeenCalledTimes(2);
+    expect(mocks.upload).not.toHaveBeenCalled();
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it('limita o cache de arquivos e volta a buscar um caminho removido sem alterar o catálogo', async () => {
+    const base = await fixture(true);
+    base.plans = Array.from({ length: 33 }, (_, index) => ({ ...base.plans[0], id: `drawing-${index}`,
+      name: `Drawing ${index}.dxf`, kind: 'dxf', storagePath: `${base.projectId}/drawing-${index}/source.dxf` }));
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); const remote = (await repo.load())!;
+    mocks.download.mockResolvedValue({ data: new Blob(['drawing']), error: null });
+    for (const plan of remote.plans) await repo.resolvePlanFile!(plan.id, plan.storagePath!);
+    expect(mocks.download).toHaveBeenCalledTimes(33);
+    await repo.resolvePlanFile!(remote.plans[0].id, remote.plans[0].storagePath!);
+    expect(mocks.download).toHaveBeenCalledTimes(34);
+    expect(encodeMeasurementWorkspace(remote)).toEqual(encodeMeasurementWorkspace(base));
+    expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it('descarrega arquivos antigos ao ultrapassar o limite de bytes do cache', async () => {
+    const base = await fixture(true);
+    base.plans.push({ ...base.plans[0], id: 'second-large-plan', name: 'Grande.dxf', kind: 'dxf',
+      storagePath: `${base.projectId}/second-large-plan/large.dxf` });
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); const remote = (await repo.load())!;
+    const large = new Blob(['drawing']);
+    // Exercise accounting without allocating hundreds of MB in a unit test.
+    Object.defineProperty(large, 'size', { value: 70 * 1024 * 1024 });
+    mocks.download.mockResolvedValue({ data: large, error: null });
+    for (const plan of remote.plans) await repo.resolvePlanFile!(plan.id, plan.storagePath!);
+    expect(mocks.download).toHaveBeenCalledTimes(2);
+    await repo.resolvePlanFile!(remote.plans[0].id, remote.plans[0].storagePath!);
+    expect(mocks.download).toHaveBeenCalledTimes(3);
+    expect(mocks.upload).not.toHaveBeenCalled();
+  });
+
+  it('uma única planta acima do orçamento continua disponível com seu Blob completo', async () => {
+    const base = await fixture(true);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); const remote = (await repo.load())!;
+    const large = new Blob(['arquivo completo']);
+    Object.defineProperty(large, 'size', { value: 150 * 1024 * 1024 });
+    mocks.download.mockResolvedValue({ data: large, error: null });
+    const plan = remote.plans[0];
+    expect(await repo.resolvePlanFile!(plan.id, plan.storagePath!)).toBe(large);
+    expect(await repo.resolvePlanFile!(plan.id, plan.storagePath!)).toBe(large);
+    expect(await large.text()).toBe('arquivo completo');
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    expect(mocks.upload).not.toHaveBeenCalled();
+  });
+
+  it('recusa identificação desconhecida, caminho de outra obra e revisão antiga do arquivo', async () => {
+    const base = await fixture(true);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const selected = base.plans[0], previousPath = selected.storagePath!;
+    await expect(repo.resolvePlanFile!('unknown', previousPath)).rejects.toThrow();
+    await expect(repo.resolvePlanFile!(selected.id, `other-project/${selected.id}/drawing.png`)).rejects.toThrow();
+    const changed = structuredClone(base); changed.revision++;
+    changed.plans[0].storagePath = `${base.projectId}/${selected.id}/new.dxf`;
+    loaded(changed); await repo.load();
+    await expect(repo.resolvePlanFile!(selected.id, previousPath)).rejects.toThrow();
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.upload).not.toHaveBeenCalled();
+  });
+
+  it('descarta bytes atrasados quando a versão da planta muda durante o download', async () => {
+    const base = await fixture(true);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    let complete!: (value: { data: Blob; error: null }) => void;
+    mocks.download.mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+    const plan = base.plans[0];
+    const pending = repo.resolvePlanFile!(plan.id, plan.storagePath!);
+    const rejected = expect(pending).rejects.toThrow('mudou');
+    await Promise.resolve();
+    const changed = structuredClone(base); changed.revision++;
+    changed.plans[0].storagePath = `${base.projectId}/${plan.id}/new.dxf`;
+    loaded(changed); await repo.load();
+    complete({ data: new Blob(['arquivo da versão anterior']), error: null });
+    await rejected;
+    await expect(repo.resolvePlanFile!(plan.id, plan.storagePath!)).rejects.toThrow();
+    expect(mocks.download).toHaveBeenCalledTimes(1);
+    expect(mocks.upload).not.toHaveBeenCalled();
+    expect(repo.loadState!()).toMatchObject({ source: 'cloud', checking: false });
+  });
+
+  it('grava edição numérica com metadados completos sem baixar ou reenviar arquivos', async () => {
+    const base = await fixture(true);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); const remote = (await repo.load())!;
+    const next = editMeasuredRow(remote, actor, 'm1', 'signs', { ...newMeasuredRow('numeric-row'), multiplier: 7 });
+    const patch = patchSaved(remote, next);
+    expect(await repo.commit(next, remote.revision)).toEqual(next);
+    expect(mocks.rpc).toHaveBeenLastCalledWith('patch_measurement_entries', {
+      p_project_id: base.projectId, p_expected_revision: base.revision, p_patch: patch,
+    });
+    expect(mocks.download).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled();
+  });
+
+  it('recusa importação sem Blob real antes de enviar arquivo ou chamar uma gravação', async () => {
+    const base = await fixture();
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = transactMeasurement(base, actor, 'Gerir desenhos', draft => {
+      draft.plans.push({ id: 'invalid-import', name: 'Inválido.dxf', kind: 'dxf', floor: 'Térreo',
+        scales: {}, measures: [], file: {} as Blob });
+    });
+    await expect(repo.commit(next, base.revision)).rejects.toBeInstanceOf(MeasurementCommitRejectedError);
+    expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [{ code: '57014', message: 'canceling statement due to statement timeout' }, 'timeout'],
+    [{ code: 'PGRST000', status: 502, message: 'Bad Gateway' }, 'service'],
+    [{ code: '42501', message: 'permission denied' }, 'authorization'],
+    [{ message: 'Failed to fetch' }, 'service'],
+  ] as const)('qualifica o erro da nuvem com cache confirmado: %s', async (error, kind) => {
+    vi.stubGlobal('navigator', { onLine: true });
+    const base = await fixture(true); mocks.cached = structuredClone(base);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    mocks.rpc.mockResolvedValueOnce({ data: null, error });
+    const cached = await repo.load();
+    expect(encodeMeasurementWorkspace(cached)).toEqual(encodeMeasurementWorkspace(base));
+    expect(repo.loadState!()).toMatchObject({ source: 'cache', checking: false, error: { kind } });
+    expect(repo.loadedOffline!()).toBe(true);
+    expect(mocks.download).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled();
+  });
+
+  it('um download grande não recebe o prazo curto da leitura da base', async () => {
+    vi.useFakeTimers();
+    const base = await fixture(true);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    let complete!: (value: { data: Blob; error: null }) => void;
+    mocks.download.mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+    const pending = repo.resolvePlanFile!(base.plans[0].id, base.plans[0].storagePath!);
+    let settled = false; void pending.then(() => { settled = true; }, () => { settled = true; });
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(settled).toBe(false);
+    const file = new Blob(['large drawing']); complete({ data: file, error: null });
+    expect(await pending).toBe(file);
+  });
+
+  it('uma leitura de arquivo que nunca responde termina e permite nova tentativa', async () => {
+    vi.useFakeTimers();
+    const base = await fixture(true);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    mocks.download.mockReturnValueOnce(new Promise(() => undefined));
+    const plan = base.plans[0];
+    const pending = repo.resolvePlanFile!(plan.id, plan.storagePath!);
+    const rejected = expect(pending).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(900_001);
+    await rejected;
+    const file = new Blob(['retry']); mocks.download.mockResolvedValueOnce({ data: file, error: null });
+    expect(await repo.resolvePlanFile!(plan.id, plan.storagePath!)).toBe(file);
+    expect(mocks.download).toHaveBeenCalledTimes(2);
+    expect(mocks.upload).not.toHaveBeenCalled();
+  });
+
+  it('limita a espera da base e conserva o cache com erro de timeout sem dizer que a rede caiu', async () => {
+    vi.useFakeTimers(); vi.stubGlobal('navigator', { onLine: true });
+    const base = await fixture(true); mocks.cached = structuredClone(base);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    mocks.rpc.mockReturnValueOnce(new Promise(() => undefined));
+    const loading = repo.load();
+    expect(repo.loadState!()).toMatchObject({ source: 'none', checking: true });
+    await vi.advanceTimersByTimeAsync(30_001);
+    expect(encodeMeasurementWorkspace(await loading)).toEqual(encodeMeasurementWorkspace(base));
+    expect(repo.loadState!()).toMatchObject({ source: 'cache', checking: false, error: { kind: 'timeout' } });
+    expect(mocks.download).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled();
+  });
+
+  it('uma resposta da base que chega após timeout não substitui a conferência posterior', async () => {
+    vi.useFakeTimers();
+    const base = await fixture(true); mocks.cached = structuredClone(base);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    let complete!: (value: { data: unknown; error: null }) => void;
+    mocks.rpc.mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+    const delayed = repo.load();
+    await vi.advanceTimersByTimeAsync(30_001);
+    expect(encodeMeasurementWorkspace(await delayed)).toEqual(encodeMeasurementWorkspace(base));
+    const latest = structuredClone(base); latest.revision++;
+    latest.plans[0].storagePath = `${base.projectId}/${base.plans[0].id}/latest.dxf`;
+    loaded(latest); expect(encodeMeasurementWorkspace(await repo.load())).toEqual(encodeMeasurementWorkspace(latest));
+    complete({ data: encodeMeasurementWorkspace(base), error: null });
+    await Promise.resolve();
+    expect(repo.loadState!()).toMatchObject({ source: 'cloud', checking: false });
+    expect(repo.loadState!().error).toBeUndefined();
+    await expect(repo.resolvePlanFile!(base.plans[0].id, base.plans[0].storagePath!)).rejects.toThrow();
+    expect(mocks.download).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled();
+  });
+
+  it.each(['older', 'missing'] as const)('uma leitura %s iniciada antes do salvamento conserva a operação confirmada', async response => {
+    const base = await fixture();
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    let complete!: (value: { data: unknown; error: null }) => void;
+    mocks.rpc.mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+    const delayed = repo.load();
+    const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('confirmed-row'), multiplier: 9 });
+    patchSaved(base, next);
+    expect(await repo.commit(next, base.revision)).toEqual(next);
+    complete({ data: response === 'older' ? encodeMeasurementWorkspace(base) : null, error: null });
+    expect(await delayed).toEqual(next);
+    expect(await repo.confirmedOperation!(next.audit.at(-1)!.id, next.revision)).toBe(true);
+    expect(repo.loadState!()).toMatchObject({ source: 'cache', checking: false, error: { kind: 'service' } });
+    expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.download).not.toHaveBeenCalled();
+  });
+
+  it('uma gravação com recibo válido encerra o estado de erro da cópia local', async () => {
+    const base = await fixture(); mocks.cached = structuredClone(base);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
+    const cached = (await repo.load())!;
+    expect(repo.loadState!()).toMatchObject({ source: 'cache', error: { kind: 'timeout' } });
+    expect(repo.loadedOffline!()).toBe(true);
+    const next = editMeasuredRow(cached, actor, 'm1', 'signs', { ...newMeasuredRow('confirmed-row'), multiplier: 9 });
+    patchSaved(cached, next);
+    expect(await repo.commit(next, cached.revision)).toEqual(next);
+    expect(repo.loadedOffline!()).toBe(false);
+    expect(repo.loadState!()).toMatchObject({ source: 'cloud', checking: false });
+    expect(repo.loadState!().error).toBeUndefined();
+    expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.download).not.toHaveBeenCalled();
+  });
+
+  it('um recibo comprovado após timeout de gravação também confirma a nuvem e limpa o erro do cache', async () => {
+    const base = await fixture(); mocks.cached = structuredClone(base);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
+    const cached = (await repo.load())!;
+    const next = editMeasuredRow(cached, actor, 'm1', 'signs', { ...newMeasuredRow('confirmed-timeout-row'), multiplier: 9 });
+    mocks.revision = next.revision; mocks.eventRevision = next.revision;
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
+    expect(await repo.commit(next, cached.revision)).toEqual(next);
+    expect(await repo.confirmedOperation!(next.audit.at(-1)!.id, next.revision)).toBe(true);
+    expect(repo.loadedOffline!()).toBe(false);
+    expect(repo.loadState!()).toMatchObject({ source: 'cloud', checking: false });
+    expect(repo.loadState!().error).toBeUndefined();
+    expect(mocks.rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it('uma leitura posterior bem-sucedida confirma a nuvem e limpa o erro do cache', async () => {
+    const base = await fixture(); mocks.cached = structuredClone(base);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
+    await repo.load();
+    expect(repo.loadState!()).toMatchObject({ source: 'cache', error: { kind: 'timeout' } });
+    const latest = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('remote-row'), multiplier: 8 });
+    loaded(latest);
+    expect(await repo.load()).toEqual(latest);
+    expect(repo.loadState!()).toMatchObject({ source: 'cloud', checking: false });
+    expect(repo.loadState!().error).toBeUndefined();
+    expect(repo.loadedOffline!()).toBe(false);
+  });
+
+  it('falha de transporte rejeitada também termina a conferência e conserva apenas a base confirmada', async () => {
+    const base = await fixture(); mocks.cached = structuredClone(base);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    mocks.rpc.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    expect(await repo.load()).toEqual(base);
+    expect(repo.loadState!()).toMatchObject({ source: 'cache', checking: false, error: { kind: 'service' } });
+    expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.download).not.toHaveBeenCalled();
+  });
+
+  it('classifica como sem rede quando o navegador confirma estar offline', async () => {
+    vi.stubGlobal('navigator', { onLine: false });
+    const base = await fixture(); mocks.cached = structuredClone(base);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    mocks.rpc.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    expect(await repo.load()).toEqual(base);
+    expect(repo.loadState!()).toMatchObject({ source: 'cache', checking: false, error: { kind: 'network' } });
+    expect(mocks.upload).not.toHaveBeenCalled(); expect(mocks.download).not.toHaveBeenCalled();
+  });
+
+  it('erro sem cache não deixa a conferência pendente nem cria uma base vazia', async () => {
+    const base = await fixture();
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
+    await expect(repo.load()).rejects.toThrow();
+    expect(repo.loadState!()).toMatchObject({ source: 'none', checking: false, error: { kind: 'timeout' } });
+    expect(mocks.cached).toBeNull();
+    expect(mocks.download).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled();
+  });
 });
 
 describe('Medição somente nuvem', () => {

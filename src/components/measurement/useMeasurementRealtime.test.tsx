@@ -25,7 +25,7 @@ function fixture() {
       canRefresh: () => allowed, onRefresh: next => { onRefresh(next); setRevision(next.revision); } }) };
   });
   const flush = async () => { await act(async () => { await vi.advanceTimersByTimeAsync(350); }); };
-  return { hook, load, remoteRevision, stop, onRefresh, flush, notice: (r: number) => notice(r), connect: (c = true) => connection(c), allow: (v: boolean) => { allowed = v; } };
+  return { hook, repository, load, remoteRevision, stop, onRefresh, flush, notice: (r: number) => notice(r), connect: (c = true) => connection(c), allow: (v: boolean) => { allowed = v; } };
 }
 const remote = (revision: number) => ({ projectId: 'p', revision } as MeasurementWorkspace);
 describe('tempo real próprio da Medição', () => {
@@ -71,5 +71,44 @@ describe('tempo real próprio da Medição', () => {
     expect(f.onRefresh).not.toHaveBeenCalled();
     f.load.mockResolvedValueOnce(remote(2)); act(() => document.dispatchEvent(new Event('focusout'))); await f.flush();
     expect(f.hook.result.current.revision).toBe(2);
+  });
+  it('encerra a indicação de atualização na falha e aguarda nova tentativa em vez de criar um loop', async () => {
+    const f = fixture(); f.load.mockRejectedValue(new Error('O serviço de Medição falhou'));
+    act(() => f.notice(2)); await f.flush();
+    expect(f.hook.result.current).toMatchObject({ failed: true, pending: false, checking: false, failure: 'O serviço de Medição falhou' });
+    await f.flush(); await f.flush(); expect(f.load).toHaveBeenCalledTimes(1);
+    f.load.mockResolvedValue(remote(2)); f.remoteRevision.mockResolvedValue(2);
+    act(() => f.hook.result.current.retry()); await f.flush();
+    expect(f.hook.result.current).toMatchObject({ revision: 2, failed: false, pending: false });
+  });
+  it('limita a leitura suspensa e ignora sua resposta tardia sem sobrescrever a base', async () => {
+    const f = fixture(); let complete!: (value: MeasurementWorkspace) => void;
+    f.load.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    act(() => f.notice(2)); await f.flush(); expect(f.hook.result.current.checking).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_001); });
+    expect(f.hook.result.current).toMatchObject({ revision: 1, failed: true, pending: false, checking: false });
+    await act(async () => complete(remote(2)));
+    expect(f.onRefresh).not.toHaveBeenCalled();
+    f.load.mockResolvedValue(remote(2)); f.remoteRevision.mockResolvedValue(2);
+    act(() => f.hook.result.current.retry()); await f.flush();
+    expect(f.hook.result.current).toMatchObject({ revision: 2, failed: false });
+  });
+  it('confere novamente uma cópia local mesmo sem avanço da revisão', async () => {
+    const f = fixture(); let cached = true;
+    f.repository.loadedOffline = () => cached;
+    f.load.mockImplementation(async () => { cached = false; return remote(1); });
+    act(() => f.connect()); await f.flush();
+    expect(f.load).toHaveBeenCalledOnce(); expect(f.onRefresh).toHaveBeenCalledOnce();
+    expect(f.hook.result.current.failed).toBe(false);
+  });
+  it('aguarda a recuperação limitada pelo repository sem impor outro prazo que descarte o fallback', async () => {
+    const f = fixture(); let complete!: (workspace: MeasurementWorkspace) => void;
+    f.repository.loadState = () => ({ source: 'cloud', checking: true });
+    f.load.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    act(() => f.notice(2)); await f.flush();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_001); });
+    expect(f.hook.result.current).toMatchObject({ revision: 1, failed: false, checking: true });
+    await act(async () => complete(remote(2)));
+    expect(f.hook.result.current).toMatchObject({ revision: 2, failed: false, pending: false, checking: false });
   });
 });

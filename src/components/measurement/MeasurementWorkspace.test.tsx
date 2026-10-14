@@ -9,7 +9,7 @@ import { deleteMeasuredPeriod } from '@/lib/measurementLifecycle';
 import { MeasurementCommitRejectedError } from '@/lib/measurementWorkspaceStore';
 import { selectedMeasurement } from '@/lib/measurementSelection';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 beforeEach(() => localStorage.clear());
 const actor = { id: 'u', name: 'Engenheiro', canEdit: true };
 function fixture() {
@@ -18,6 +18,60 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('mostra cópia local após falha do servidor sem afirmar falta de internet e permite nova conferência', async () => {
+    const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem';
+    let cached = true;
+    repository.loadedOffline = () => cached;
+    repository.loadState = () => cached ? { source: 'cache', checking: false, error: { kind: 'timeout', message: 'A consulta demorou para responder.' } }
+      : { source: 'cloud', checking: false };
+    vi.mocked(repository.load).mockImplementationOnce(async () => w).mockImplementation(async () => { cached = false; return w; });
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    expect(await screen.findByText('Falha ao consultar a nuvem')).toBeVisible();
+    expect(screen.getByText('Cópia local preservada.')).toBeVisible();
+    expect(screen.queryByText('Sem internet')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar consultar novamente' }));
+    expect(await screen.findByText('Salvo e conferido na nuvem')).toBeVisible();
+    expect(repository.commit).not.toHaveBeenCalled();
+  });
+  it('mostra Sem internet somente quando o navegador informa desconexão', async () => {
+    const { repository } = fixture(); repository.savedLabel = 'Salvo na nuvem';
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    expect(await screen.findByText('Sem internet')).toBeVisible();
+    expect(repository.commit).not.toHaveBeenCalled();
+  });
+  it('consome falha da conferência de revisão e não afirma tempo real atualizado por apenas conectar o socket', async () => {
+    const { repository } = fixture(); repository.savedLabel = 'Salvo na nuvem';
+    repository.watch = (_notice, connected) => { connected(true); return vi.fn(); };
+    repository.remoteRevision = vi.fn(async () => { throw new Error('A versão da Medição não pôde ser conferida.'); });
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    expect(await screen.findByText('Falha ao consultar a nuvem')).toBeVisible();
+    expect(screen.queryByText('Atualizado · Tempo real ativo')).not.toBeInTheDocument();
+    expect(screen.queryByText('Sem internet')).not.toBeInTheDocument();
+    expect(repository.commit).not.toHaveBeenCalled();
+  });
+  it('oferece recuperação quando a leitura inicial nunca responde e ignora conclusão atrasada', async () => {
+    vi.useFakeTimers(); const { w, repository } = fixture(); let complete!: (workspace: Workspace) => void;
+    vi.mocked(repository.load).mockImplementationOnce(() => new Promise(resolve => { complete = resolve; })).mockResolvedValue(w);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_001); });
+    expect(screen.getByRole('heading', { name: 'Não foi possível carregar a Medição' })).toBeVisible();
+    await act(async () => complete(w));
+    expect(screen.queryByRole('heading', { name: 'Planilha de medição (1 itens)' })).not.toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Tentar carregar novamente' })); });
+    expect(screen.getByRole('heading', { name: 'Planilha de medição (1 itens)' })).toBeVisible();
+    expect(repository.commit).not.toHaveBeenCalled();
+  });
+  it('a manutenção local preexistente não segura a abertura nem recebe timeout de escrita', async () => {
+    const { repository } = fixture(); repository.savedLabel = 'Salvo na nuvem';
+    let complete!: () => void;
+    repository.discardLegacyTask = vi.fn(() => new Promise<{ removed: number; remaining: string[] }>(resolve => { complete = () => resolve({ removed: 0, remaining: [] }); }));
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    expect(await screen.findByRole('heading', { name: 'Planilha de medição (1 itens)' })).toBeVisible();
+    expect(repository.discardLegacyTask).toHaveBeenCalledExactlyOnceWith(expect.any(Object), '4.3.2');
+    await act(async () => complete());
+    expect(repository.commit).not.toHaveBeenCalled();
+  });
   it('permite excluir duas linhas de planta rapidamente sem agrupar as marcas em edição genérica', async () => {
     const { w, repository } = fixture();
     w.plans = [{ ...measurementFixture().plans[0], measures: [] }];

@@ -1,4 +1,4 @@
-import type { TakeoffPlan } from './planTakeoff';
+import type { TakeoffCatalogPlan } from './planTakeoff';
 
 const comparable = (value: unknown) => JSON.stringify(value, (_key, item) => {
   if (item instanceof Blob) return undefined;
@@ -10,7 +10,7 @@ const comparable = (value: unknown) => JSON.stringify(value, (_key, item) => {
 });
 
 /** Rebase only a pure new-drawing addition on the latest confirmed catalog. */
-export function reconcileDrawingCatalog(current: TakeoffPlan[], previous: TakeoffPlan[], next: TakeoffPlan[]): TakeoffPlan[] {
+export function reconcileDrawingCatalog(current: TakeoffCatalogPlan[], previous: TakeoffCatalogPlan[], next: TakeoffCatalogPlan[]): TakeoffCatalogPlan[] {
   const previousIds = new Set(previous.map(plan => plan.id));
   const added = next.filter(plan => !previousIds.has(plan.id));
   const pureAddition = added.length === 1 && next.length === previous.length + 1

@@ -1,11 +1,11 @@
 import type { MeasurementAudit, MeasurementWorkspace } from './measurementWorkspace';
-import type { TakeoffPlan } from './planTakeoff';
+import type { TakeoffCatalogPlan } from './planTakeoff';
 import { encodeMeasurementWorkspace } from './measurementCloudCodec';
 
 export interface MeasurementPlanCatalogPatch {
   kind: 'add' | 'update' | 'archive';
   planId: string;
-  plan?: TakeoffPlan;
+  plan?: TakeoffCatalogPlan;
   event: MeasurementAudit;
 }
 export const catalogValue = (value: unknown): string => JSON.stringify(value, (_key, item) => {
@@ -35,7 +35,7 @@ export function measurementPlanCatalogPatch(base: MeasurementWorkspace, next: Me
   if (kind === 'archive' && previous!.measures.length || kind === 'add' && plan!.measures.length) return null;
   if (previous && plan) {
     const metadata = new Set(['name', 'floor', 'chapterId', 'building']);
-    const rest = (value: TakeoffPlan) => Object.fromEntries(Object.entries(value).filter(([key]) => !metadata.has(key)));
+    const rest = (value: TakeoffCatalogPlan) => Object.fromEntries(Object.entries(value).filter(([key]) => !metadata.has(key)));
     if (catalogValue(rest(previous)) !== catalogValue(rest(plan))) return null;
   }
   const { beforePlans: _beforePlans, afterPlans: _afterPlans, ...compactEvent } = event;

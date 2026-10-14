@@ -3,8 +3,8 @@ import { archiveCloudPlan, cloudRowToPlan, cloudTakeoffScope, insertCloudPlan, r
 export interface Point { x: number; y: number }
 export type MeasureKind = 'count' | 'length' | 'linearLength' | 'circlePerimeter' | 'area' | 'rectangleArea' | 'circleArea' | 'verticalArea' | 'polygonVolume';
 export interface TakeoffMeasure { id: string; name: string; kind: MeasureKind; page: number; points: Point[]; heightMeters?: number; taskId?: string; logId?: string; projectId?: string; measurementId?: string; serviceId?: string }
-export interface TakeoffPlan {
-  id: string; name: string; floor: string; kind: 'pdf' | 'image' | 'dxf' | 'dwf'; file: Blob;
+export interface TakeoffPlanMetadata {
+  id: string; name: string; floor: string; kind: 'pdf' | 'image' | 'dxf' | 'dwf';
   scales: Record<number, number>; measures: TakeoffMeasure[];
   /** Capítulo principal que representa o prédio. Ausente em plantas locais antigas. */
   chapterId?: string;
@@ -13,8 +13,19 @@ export interface TakeoffPlan {
   storagePath?: string;
   cloudRevision?: number;
 }
+/** Production, imports and complete backups retain an actual file. */
+export interface TakeoffPlan extends TakeoffPlanMetadata { file: Blob }
+/** A confirmed private file reference is distinct from a loaded file. */
+export interface RemoteTakeoffPlan extends TakeoffPlanMetadata { storagePath: string; file?: undefined }
+export type TakeoffCatalogPlan = TakeoffPlan | RemoteTakeoffPlan;
 export type TakeoffContext = { taskId: string; logId: string; projectId?: never; measurementId?: never; serviceId?: never } | { projectId: string; measurementId: string; serviceId: string; taskId?: never; logId?: never };
-export interface TakeoffRepository { storage?: 'cloud' | 'local'; load(): Promise<TakeoffPlan[]>; save(next: TakeoffPlan[], previous: TakeoffPlan[]): Promise<TakeoffPlan[] | void> }
+export interface TakeoffRepository<TPlan extends TakeoffCatalogPlan = TakeoffPlan> {
+  storage?: 'cloud' | 'local';
+  load(): Promise<TPlan[]>;
+  save(next: TPlan[], previous: TPlan[]): Promise<TPlan[] | void>;
+  /** Read only. Resolving a file cannot save metadata or alter quantities. */
+  resolveFile?(plan: TPlan): Promise<Blob>;
+}
 /** The filename is the label; a recognizable floor is optional metadata. */
 export function floorFromPlanFilename(filename: string): string {
   const name = filename.replace(/\.[^.]+$/, '');

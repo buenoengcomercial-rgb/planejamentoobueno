@@ -10,7 +10,7 @@ import type { Additive, Project } from '@/types/project';
 import { resolveAnalyticComposition } from '@/lib/analyticLinks';
 import { detailTotal, isBlankDetailRow } from '@/lib/productionQuantityDetails';
 import { AnalyticView, type MeasurementDetailSelection } from './MeasurementDetailFooter';
-import type { TakeoffPlan, TakeoffMeasure, TakeoffRepository, TakeoffDraft } from '@/lib/planTakeoff';
+import type { TakeoffCatalogPlan, TakeoffMeasure, TakeoffRepository, TakeoffDraft } from '@/lib/planTakeoff';
 import { reconcileDrawingCatalog } from '@/lib/measurementDrawingCatalog';
 import { exportMonthlyMeasurement } from '@/lib/measurementMonthlyExport';
 import { fmtBRL, fmtDateBR } from './measurementFormat';
@@ -30,6 +30,7 @@ import MeasurementLifecycleDialog, { type LifecycleSelection } from './Measureme
 import { periodDeletionBlock, periodRestorationBlock } from '@/lib/measurementLifecycle';
 import { useMeasurementRealtime } from './useMeasurementRealtime';
 import SaveStatusIndicator, { type SaveStatus } from '@/components/SaveStatusIndicator';
+import { withReadDeadline } from '@/lib/readDeadline';
 const button = 'inline-flex h-8 items-center gap-1.5 rounded border border-slate-200 bg-white px-2.5 text-xs hover:bg-slate-50 disabled:opacity-40';
 
 /** Real workspace UI, with an explicitly injected persistence boundary. No Project setter. */
@@ -137,6 +138,12 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const [saving, setSaving] = useState(false), busy = useRef(false);
   const [error, setError] = useState(''), [status, setStatus] = useState('Carregando…');
   const [confirmedAt, setConfirmedAt] = useState<string | null>(null);
+  const [online, setOnline] = useState(() => navigator.onLine);
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine);
+    window.addEventListener('online', update); window.addEventListener('offline', update);
+    return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update); };
+  }, []);
   const [destination, setDestination] = useState<Destination | null>(null), destinationRef = useRef<Destination | null>(null);
   const [clipboard, setClipboard] = useState<MeasurementClipboard | null>(null);
   const [periodOpen, setPeriodOpen] = useState(false), [fiscalOpen, setFiscalOpen] = useState(false);
@@ -227,7 +234,10 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   });
   useEffect(() => {
     let alive = true;
-    void Promise.all([repository.load(), repository.drafts()]).then(async ([w, d]) => {
+    const initialRead = Promise.all([repository.load(), repository.drafts()]);
+    // The cloud repository bounds its read and then recovers its confirmed cache.
+    // A second deadline at the same instant would discard that safe fallback.
+    void (repository.loadState ? initialRead : withReadDeadline(initialRead)).then(async ([w, d]) => {
       if (!alive) return;
       let queued: Awaited<ReturnType<NonNullable<typeof repository.queued>>> = [];
       let pendingError = '';
@@ -236,8 +246,10 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       if (!alive) return;
       if (w) {
         if (repository.savedLabel === 'Salvo na nuvem' && !repository.loadedOffline?.() && repository.discardLegacyTask) {
-          try { const legacy = await repository.discardLegacyTask(w, '4.3.2'); if (alive) setLegacyRemaining(legacy.remaining); }
-          catch (cause) { if (alive) setError(`Não foi possível conferir o registro antigo 4.3.2: ${cause instanceof Error ? cause.message : String(cause)}`); }
+          // This previously authorized local maintenance is independent of the
+          // confirmed sheet. Await its writes, without holding the opening UI.
+          void repository.discardLegacyTask(w, '4.3.2').then(legacy => { if (alive) setLegacyRemaining(legacy.remaining); })
+            .catch(cause => { if (alive) setError(`Não foi possível conferir o registro antigo 4.3.2: ${cause instanceof Error ? cause.message : String(cause)}`); });
         }
         current.current = w;
         if (queued.length) {
@@ -650,9 +662,13 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       setStatus('Precisa resolver conflito');
     });
   };
-  const planRepository = useMemo<TakeoffRepository>(() => ({
+  const planRepository = useMemo<TakeoffRepository<TakeoffCatalogPlan>>(() => ({
     storage: repository.savedLabel === 'Salvo na nuvem' ? 'cloud' : 'local',
     load: async () => structuredClone((detailPreview.current ?? current.current)?.plans ?? []),
+    resolveFile: repository.resolvePlanFile ? plan => {
+      if (!plan.storagePath) throw new Error('Arquivo da planta sem vínculo confirmado com a nuvem.');
+      return repository.resolvePlanFile!(plan.id, plan.storagePath);
+    } : undefined,
     save: async (next, previous) => {
       const w = current.current; if (!w || busy.current || detailQueue.current.length || recoveryRef.current) throw new Error('Há um salvamento pendente na Medição. Confirme-o antes de cadastrar outra planta.');
       const reconciled = reconcileDrawingCatalog(w.plans, previous, next);
@@ -677,7 +693,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       // confirmed catalog when another drawing is selected in this dialog.
       return structuredClone(current.current?.plans ?? next);
     },
-  }), [actor, persist, repository.savedLabel]);
+  }), [actor, persist, repository]);
   const draftKey = (mid: string, sid: string, rid: string) => JSON.stringify([mid, sid, rid]);
   const hasPendingFiscalDraft = (measurementId: string) => drafts.some(d => d.measurementId === measurementId && !(d.serviceId === bulletinDraftKey && d.rowId === 'number'))
     || [...draftChanges.current.keys()].some(key => key.startsWith(`[${JSON.stringify(measurementId)},`));
@@ -757,7 +773,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     } catch (cause) { setError(`A captura ainda não foi guardada neste navegador: ${cause instanceof Error ? cause.message : String(cause)}`); }
     finally { closingCapture.current = false; }
   };
-  const capture = async (_plan: TakeoffPlan, mark: TakeoffMeasure, _result: number, nextPlan?: TakeoffPlan, remove = false) => {
+  const capture = async (_plan: TakeoffCatalogPlan, mark: TakeoffMeasure, _result: number, nextPlan?: TakeoffCatalogPlan, remove = false) => {
     const target = destinationRef.current;
     if (!target || !nextPlan) return false;
     // A failed capture can leave the next row visible only in the failed task.
@@ -938,6 +954,9 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
           }
         }
       }
+      if (unresolved && bufferedDetail.current && latest.revision > previousRevision && !sameCommittedCore(latest, unresolved)) {
+        throw new Error('A medição mudou em outro computador. Os lançamentos locais permanecem preservados para conferência.');
+      }
       adopt(latest);
       uncertainCommit.current = null;
       setActive(previous => {
@@ -949,6 +968,14 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       setRecovery(false); setError(''); setStatus('Confirmado');
       if (repository.savedLabel === 'Salvo na nuvem') setConfirmedAt(new Date().toISOString());
       if (unresolved?.audit.at(-1)?.id) finishUncertainCommand(unresolved.audit.at(-1)!.id);
+      // Completing a confirmed command can switch the period and flush the
+      // buffered cell. A recursive retry is still locked by recoveryAction;
+      // drain that newly queued cell here against the confirmed revision.
+      if (detailQueue.current.length) {
+        detailDrain.current = drainDetailQueueRef.current();
+        pendingOperation.current = detailDrain.current;
+        return await detailDrain.current;
+      }
       return true;
     } catch (cause) {
       lastSaveFailure.current = cause instanceof Error ? cause.message : String(cause);
@@ -1083,18 +1110,28 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const nextPeriod = nextMeasurementPeriod(workspace.periods);
   const localPending = !!bufferedDetail.current || localStagePending.current > 0 || localStageFailed.current || detailQueue.current.length > 0 || failedTaskEdits.current.size > 0 || drafts.length > 0
     || draftChanges.current.size > 0 || writingDrafts.current > 0;
-  const cloudStatus: SaveStatus = repository.loadedOffline?.() ? 'offline'
+  const readState = repository.loadState?.();
+  const cachedBase = readState?.source === 'cache' || !readState && !!repository.loadedOffline?.();
+  const readFailed = realtime.failed || !!readState?.error;
+  const cloudStatus: SaveStatus = !online ? 'offline'
     : recovery || status === 'Precisa resolver conflito' ? 'conflict'
       : status === 'Falha no salvamento' ? 'error'
       : localPending && !saving ? 'pending'
         : saving ? 'saving'
-          : realtime.pending ? 'updating'
+          : readFailed ? 'error'
+            : realtime.pending ? 'updating'
             : confirmedAt ? 'saved' : 'idle';
+  const cloudReadStatus = online && !recovery && status !== 'Precisa resolver conflito' && status !== 'Falha no salvamento' && !localPending && !saving
+    ? realtime.checking || readState?.checking ? 'checking' as const
+      : readFailed ? 'failed' as const
+        : cachedBase ? 'cached' as const : undefined
+    : undefined;
+  const cloudReadFailure = readState?.error?.message || realtime.failure;
   const pageHeader = <>
     <MeasurementHeader compact onExportXLSX={() => { void (async () => { if (await flushConfirmedEdits() && current.current) await exportMonthlyMeasurement(current.current, active, 'xlsx', { forecastTotal: forecast?.value ?? null }); })().catch(e => setError(e.message)); }} onPrint={() => { void (async () => { if (await flushConfirmedEdits() && current.current) await exportMonthlyMeasurement(current.current, active, 'pdf', { forecastTotal: forecast?.value ?? null }); })().catch(e => setError(e.message)); }} showHistory={false} onOpenHistory={() => undefined}/>
     <section className="rounded border border-border bg-card p-2">
       <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"><strong>{workspace.projectName}</strong><div className="flex flex-wrap items-center gap-4"><span>Valor desta medição: <strong data-testid="monthly-value">{period ? fmtBRL(allTotals.period) : '—'}</strong></span><div className="flex flex-col items-end">{repository.savedLabel === 'Salvo na nuvem'
-        ? <div role="status"><SaveStatusIndicator status={cloudStatus} confirmedAt={confirmedAt} lastCheckedAt={realtime.lastCheckedAt} projectId={workspace.projectId} live={realtime.connected}/></div>
+        ? <div role="status"><SaveStatusIndicator status={cloudStatus} cloudReadStatus={cloudReadStatus} confirmedAt={confirmedAt} lastCheckedAt={realtime.lastCheckedAt} projectId={workspace.projectId} live={online && !readFailed && !cachedBase && realtime.connected}/>{online && (readFailed || cachedBase) && !saving && <div className="mt-1 text-[10px] text-amber-800">{cachedBase && <span>Cópia local preservada. </span>}{cloudReadFailure && <span>{cloudReadFailure} </span>}<button disabled={localPending || recovery || realtime.checking} className="underline disabled:opacity-50" onClick={() => realtime.available ? realtime.retry() : (setLoading(true), setLoadAttempt(attempt => attempt + 1))}>Tentar consultar novamente</button></div>}</div>
         : <span role="status" className={recovery || saving || status !== 'Confirmado' ? 'text-amber-700' : 'text-emerald-700'}>{status === 'Confirmado' ? 'Salvo neste navegador' : status}</span>}{recovery && <button className="text-[10px] text-amber-800 underline" onClick={() => void retryPendingSave()}>Tentar salvar</button>}</div></div></div>
       <div className="flex flex-wrap items-center gap-2"><label className="text-[11px] font-semibold uppercase text-muted-foreground" htmlFor="measurement-period">Medições</label><select id="measurement-period" aria-label="Medição selecionada" value={active} className="h-8 rounded-md border border-primary bg-primary px-2.5 text-xs font-medium text-primary-foreground" disabled={!!destination} onChange={e => {
         selectPeriod(e.target.value); setExpanded(null); setError('');

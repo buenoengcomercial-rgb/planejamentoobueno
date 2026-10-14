@@ -1,9 +1,10 @@
 import { confirmAtomicTakeoffCache } from '@/lib/planTakeoff';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Box, Check, ChevronDown, ChevronUp, Circle, CircleDot, Crosshair, FileUp, Layers3, List, Magnet, Maximize2, MousePointer2, Move, Palette, Plus, Route, Ruler, Settings2, Shapes, Square, Trash2, Undo2, X, ZoomIn, ZoomOut, Scan, RotateCcw, Eye, Hash } from 'lucide-react';
-import { calibration, fixedPointCount, floorFromPlanFilename, measureCategory, measureUnit, MEASURE_KINDS, minimumPoints, measuresForContext, quantity, readTakeoffs, requiresHeight, saveTakeoffs, TAKEOFF_CATALOG_UPDATED, type MeasureKind, type Point, type TakeoffContext, type TakeoffMeasure, type TakeoffPlan, type TakeoffRepository, type TakeoffDraft } from '@/lib/planTakeoff';
+import { calibration, fixedPointCount, floorFromPlanFilename, measureCategory, measureUnit, MEASURE_KINDS, minimumPoints, measuresForContext, quantity, readTakeoffs, requiresHeight, saveTakeoffs, TAKEOFF_CATALOG_UPDATED, type MeasureKind, type Point, type TakeoffContext, type TakeoffMeasure, type TakeoffPlan, type TakeoffCatalogPlan, type TakeoffRepository, type TakeoffDraft } from '@/lib/planTakeoff';
+import { withReadDeadline } from '@/lib/readDeadline';
 import { openDwfSheets, type DwfSheet } from '@/lib/dwfTakeoff';
 import { type CaptureKind } from '@/lib/dxfSnap';
 import { readCapturePreferences, saveCapturePreferences } from '@/lib/takeoffCapturePreferences';
@@ -15,9 +16,25 @@ import PlanCanvas, { type CanvasBackground, type CanvasEditMode, type PlanCanvas
 const labels: Record<MeasureKind, string> = { count: 'Contagem', linearLength: 'Comprimento linear', length: 'Comprimento poligonal', circlePerimeter: 'Perímetro circular', rectangleArea: 'Superfície retangular', area: 'Superfície poligonal', circleArea: 'Superfície circular', verticalArea: 'Superfície vertical', polygonVolume: 'Volume de planta poligonal' };
 const toolIcons = { count: CircleDot, linearLength: Ruler, length: Route, circlePerimeter: Circle, rectangleArea: Square, area: Shapes, circleArea: CircleDot, verticalArea: Maximize2, polygonVolume: Box };
 const format = (value: number | null) => value === null ? '—' : value.toLocaleString('pt-BR', { maximumFractionDigits: 3 });
-export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpdateMeasure, onDeleteMeasure, onRestoreMeasure, onRecalibrate, executedMeasureIds = [], linkedMeasureIds = [], protectedMeasureIds = [], focusMeasure, embedded = false, allowedKinds = MEASURE_KINDS, destinationColumn, chapterId, measureContext, repository, initialDraft, onDraftChange, deferredCloudConfirmation = false, externalSaveStatus }: { storageKey: string; readOnly: boolean; onUseMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onUpdateMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, result: number, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onDeleteMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onRestoreMeasure?: (plan: TakeoffPlan, measure: TakeoffMeasure, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; onRecalibrate?: (plan: TakeoffPlan, page: number, scale: number | null, nextPlan?: TakeoffPlan) => boolean | void | Promise<boolean | void>; executedMeasureIds?: string[]; linkedMeasureIds?: string[]; protectedMeasureIds?: string[]; focusMeasure?: { planId: string; page: number; measureId: string }; embedded?: boolean; allowedKinds?: MeasureKind[]; destinationColumn?: string; chapterId?: string; measureContext?: TakeoffContext; repository?: TakeoffRepository; initialDraft?: TakeoffDraft; onDraftChange?: (draft: TakeoffDraft | null) => void; deferredCloudConfirmation?: boolean; externalSaveStatus?: string }) {
+/** The legacy reader supplies every file. A metadata-only catalog must use its
+ * injected repository, so it can never accidentally upload a placeholder. */
+function loadedCatalog(plans: TakeoffCatalogPlan[]): TakeoffPlan[] {
+  if (plans.some(plan => !(plan.file instanceof Blob))) throw new Error('O arquivo da planta não está disponível para esta gravação.');
+  return plans as TakeoffPlan[];
+}
+interface PlanTakeoffProps<TPlan extends TakeoffCatalogPlan = TakeoffPlan> { storageKey: string; readOnly: boolean; onUseMeasure?: (plan: TPlan, measure: TakeoffMeasure, result: number, nextPlan?: TPlan) => boolean | void | Promise<boolean | void>; onUpdateMeasure?: (plan: TPlan, measure: TakeoffMeasure, result: number, nextPlan?: TPlan) => boolean | void | Promise<boolean | void>; onDeleteMeasure?: (plan: TPlan, measure: TakeoffMeasure, nextPlan?: TPlan) => boolean | void | Promise<boolean | void>; onRestoreMeasure?: (plan: TPlan, measure: TakeoffMeasure, nextPlan?: TPlan) => boolean | void | Promise<boolean | void>; onRecalibrate?: (plan: TPlan, page: number, scale: number | null, nextPlan?: TPlan) => boolean | void | Promise<boolean | void>; executedMeasureIds?: string[]; linkedMeasureIds?: string[]; protectedMeasureIds?: string[]; focusMeasure?: { planId: string; page: number; measureId: string }; embedded?: boolean; allowedKinds?: MeasureKind[]; destinationColumn?: string; chapterId?: string; measureContext?: TakeoffContext; repository?: TakeoffRepository<TPlan>; initialDraft?: TakeoffDraft; onDraftChange?: (draft: TakeoffDraft | null) => void; deferredCloudConfirmation?: boolean; externalSaveStatus?: string }
+/** An injected catalog can contain private references. The legacy entry point
+ * guarantees loaded files, including when React.lazy infers these props. */
+type PlanTakeoffInput = (PlanTakeoffProps<TakeoffPlan> & { repository?: undefined })
+  | (PlanTakeoffProps<TakeoffCatalogPlan> & { repository: TakeoffRepository<TakeoffCatalogPlan> });
+export default function PlanTakeoff(props: PlanTakeoffInput) {
+  const { storageKey, readOnly, onUseMeasure, onUpdateMeasure, onDeleteMeasure, onRestoreMeasure, onRecalibrate, executedMeasureIds = [], linkedMeasureIds = [], protectedMeasureIds = [], focusMeasure, embedded = false, allowedKinds = MEASURE_KINDS, destinationColumn, chapterId, measureContext, repository, initialDraft, onDraftChange, deferredCloudConfirmation = false, externalSaveStatus } = props as PlanTakeoffProps<TakeoffCatalogPlan>;
   const isCloud = repository?.storage === 'cloud' || !!cloudTakeoffScope(storageKey);
-  const [plans, setPlans] = useState<TakeoffPlan[]>([]);
+  const [plans, setPlans] = useState<TakeoffCatalogPlan[]>([]);
+  const [catalogOwner, setCatalogOwner] = useState<{ key: string; repository: typeof repository } | null>(null);
+  const [activeFile, setActiveFile] = useState<{ identity: string; owner: typeof repository; file?: Blob; status: 'loading' | 'ready' | 'error' | 'cancelled'; message?: string } | null>(null);
+  const [fileAttempt, setFileAttempt] = useState(0);
+  const fileRequest = useRef(0);
   const [active, setActive] = useState('');
   const [page, setPage] = useState(initialDraft?.page ?? 1);
   const recoveredDraft = useRef(initialDraft);
@@ -57,15 +74,24 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   const focusPlanId = focusMeasure?.planId;
   const focusPage = focusMeasure?.page;
   const focusMeasureId = focusMeasure?.measureId;
-  const history = useRef<TakeoffPlan[][]>([]);
-  const lastCommittedPlans = useRef<TakeoffPlan[]>([]);
+  const history = useRef<TakeoffCatalogPlan[][]>([]);
+  const lastCommittedPlans = useRef<TakeoffCatalogPlan[]>([]);
   const deletedLinkedIds = useRef(new Set<string>());
   const busy = useRef(false);
   const finishing = useRef(false);
   const canvas = useRef<PlanCanvasHandle>(null);
   const receiveLayers = useCallback((names: string[], invisible: string[]) => { setCanvasLayers(names); setHiddenLayers(invisible); }, []);
-  const availablePlans = chapterId ? plans.filter(plan => plan.chapterId === chapterId) : plans;
+  const catalogCurrent = catalogOwner?.key === storageKey && catalogOwner.repository === repository;
+  const availablePlans = !catalogCurrent ? [] : chapterId ? plans.filter(plan => plan.chapterId === chapterId) : plans;
   const plan = availablePlans.find(p => p.id === active);
+  const fileIdentity = JSON.stringify([storageKey, plan?.id, plan?.storagePath]);
+  const latestFileIdentity = useRef(fileIdentity); latestFileIdentity.current = fileIdentity;
+  const canvasPlan = useMemo<TakeoffPlan | undefined>(() => {
+    if (!plan) return undefined;
+    if (plan.file instanceof Blob) return plan as TakeoffPlan;
+    return activeFile?.owner === repository && activeFile?.identity === fileIdentity && activeFile.status === 'ready' && activeFile.file instanceof Blob
+      ? { ...plan, file: activeFile.file } : undefined;
+  }, [plan, activeFile, fileIdentity, repository]);
   const visibleMeasures = embedded && !measureContext ? [] : measuresForContext(plan?.measures ?? [], measureContext, linkedMeasureIds)
     .filter(measure => !measureContext?.measurementId || linkedMeasureIds.includes(measure.id));
   const removableOrphan = (measure: TakeoffMeasure) => !measure.taskId && !measure.logId && !measure.measurementId && !protectedMeasureIds.includes(measure.id) && !linkedMeasureIds.includes(measure.id);
@@ -73,7 +99,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   const scale = plan?.scales[page] ?? null;
   const destinationHint = destinationColumn ? `Coluna ${destinationColumn}: qualquer ferramenta pode preencher esta célula. Sem escala, o resultado usa unidades do desenho.` : '';
   const locked = readOnly || !ready || saving;
-  const drawable = canvasReady && !!plan && !hiddenPlans.includes(plan.id);
+  const drawable = canvasReady && !!canvasPlan && !hiddenPlans.includes(canvasPlan.id);
   const previewPoints = tool && tool !== 'calibrate' && tool !== 'count' && cursor && draft.length && (!fixedPointCount(tool) || draft.length < 2)
     ? [...draft, cursor] : draft;
   const draftResult = tool && tool !== 'calibrate' && previewPoints.length >= minimumPoints(tool)
@@ -89,21 +115,47 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
   }, [draft.length]);
   useEffect(() => {
     let alive = true;
+    setReady(false);
     void (repository ? repository.load() : readTakeoffs(storageKey, { migrateLocal: !readOnly })).then(data => {
-      if (!alive) return; const available = chapterId ? data.filter(plan => plan.chapterId === chapterId) : data; lastCommittedPlans.current = data; setPlans(data); setActive(available.some(plan => plan.id === recoveredDraft.current?.planId) ? recoveredDraft.current!.planId : available.some(plan => plan.id === focusPlanId) ? focusPlanId! : available[0]?.id ?? ''); setPage(recoveredDraft.current?.page ?? focusPage ?? 1); setSelected(focusMeasureId ?? ''); setReady(true); setStatus(isCloud ? 'Plantas na nuvem' : 'Plantas neste navegador');
+      if (!alive) return; const available = chapterId ? data.filter(plan => plan.chapterId === chapterId) : data; lastCommittedPlans.current = data; setPlans(data); setCatalogOwner({ key: storageKey, repository }); setActive(available.some(plan => plan.id === recoveredDraft.current?.planId) ? recoveredDraft.current!.planId : available.some(plan => plan.id === focusPlanId) ? focusPlanId! : available[0]?.id ?? ''); setPage(recoveredDraft.current?.page ?? focusPage ?? 1); setSelected(focusMeasureId ?? ''); setReady(true); setStatus(isCloud ? 'Plantas na nuvem' : 'Plantas neste navegador');
     }).catch(cause => { if (alive) setError(cause instanceof Error ? cause.message : 'Não foi possível acessar as plantas na nuvem. A cópia local foi preservada.'); });
     return () => { alive = false; };
   }, [storageKey, focusPlanId, focusPage, focusMeasureId, chapterId, readOnly, isCloud, repository]);
   useEffect(() => {
+    const request = ++fileRequest.current;
+    if (!ready || !catalogCurrent || !plan || plan.file instanceof Blob) return;
+    let alive = true;
+    const selectedPlan = plan;
+    const identity = fileIdentity;
+    setCanvasReady(false);
+    setActiveFile({ identity, owner: repository, status: 'loading' });
+    // A large private drawing can take minutes on a mobile connection. The
+    // numeric workspace is already available; only this viewer awaits bytes.
+    const read = repository?.resolveFile
+      ? Promise.resolve().then(() => repository.resolveFile!(selectedPlan))
+      : Promise.reject(new Error('Não foi possível acessar o arquivo desta planta.'));
+    void withReadDeadline(read, 900_000).then(file => {
+      if (!alive || fileRequest.current !== request || latestFileIdentity.current !== identity) return;
+      if (!(file instanceof Blob) || !file.size) throw new Error('O arquivo da planta está vazio ou inválido.');
+      setActiveFile({ identity, owner: repository, file, status: 'ready' });
+    }).catch(cause => {
+      if (alive && fileRequest.current === request && latestFileIdentity.current === identity)
+        setActiveFile({ identity, owner: repository, status: 'error', message: cause instanceof Error ? cause.message : 'Não foi possível carregar a planta.' });
+    });
+    return () => { alive = false; };
+  // Geometry changes do not download the same immutable file again.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, catalogCurrent, storageKey, plan?.id, plan?.storagePath, plan?.file, repository, fileIdentity, fileAttempt]);
+  useEffect(() => {
     if (!ready || !onDraftChange) return;
     onDraftChange(plan && tool && draft.length ? { planId: plan.id, page, kind: tool, points: draft, name: draftName, heightMeters, ...(tool === 'calibrate' ? { distance } : {}) } : null);
   }, [ready, plan, tool, page, draft, draftName, heightMeters, distance, onDraftChange]);
-  async function commit(next: TakeoffPlan[], undo = false) {
+  async function commit(next: TakeoffCatalogPlan[], undo = false) {
     if (locked || busy.current) return false;
     busy.current = true; setSaving(true); setError(''); setStatus('Salvando…');
     try {
       const previous = lastCommittedPlans.current;
-      const confirmed = repository ? await repository.save(next, previous) : (await saveTakeoffs(storageKey, next, previous), undefined);
+      const confirmed = repository ? await repository.save(next, previous) : (await saveTakeoffs(storageKey, loadedCatalog(next), loadedCatalog(previous)), undefined);
       const savedPlans = Array.isArray(confirmed) ? confirmed : next;
       if (undo) history.current.pop(); else history.current = [...history.current.slice(-19), previous];
       lastCommittedPlans.current = savedPlans;
@@ -114,7 +166,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Não foi possível salvar na nuvem. O traçado atual foi preservado para tentar novamente.'); setStatus('Alteração não salva'); return false; }
     finally { busy.current = false; setSaving(false); }
   }
-  async function captureCommit(nextPlan: TakeoffPlan, apply: (next: TakeoffPlan) => boolean | void | Promise<boolean | void>, undo = false) {
+  async function captureCommit(nextPlan: TakeoffCatalogPlan, apply: (next: TakeoffCatalogPlan) => boolean | void | Promise<boolean | void>, undo = false) {
     if (locked || busy.current) return false;
     if ((!isCloud && !repository) || !embedded) {
       if (!await commit(plans.map(p => p.id === nextPlan.id ? nextPlan : p), undo)) return false;
@@ -128,7 +180,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
       const next = previous.map(p => p.id === nextPlan.id ? nextPlan : p);
       if (undo) history.current.pop(); else history.current = [...history.current.slice(-19), previous];
       lastCommittedPlans.current = next; setPlans(next);
-      if (!repository) await confirmAtomicTakeoffCache(storageKey, next);
+      if (!repository) await confirmAtomicTakeoffCache(storageKey, loadedCatalog(next));
       window.dispatchEvent(new CustomEvent(TAKEOFF_CATALOG_UPDATED, { detail: storageKey }));
       setStatus(deferredCloudConfirmation ? 'Aguardando nuvem' : isCloud ? 'Planta e quantitativo confirmados na nuvem' : 'Planta e quantitativo salvos no navegador'); return true;
     } catch (cause) {
@@ -136,7 +188,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
       setStatus('Alteração não salva'); return false;
     } finally { busy.current = false; setSaving(false); }
   }
-  const update = (next: TakeoffPlan) => commit(plans.map(p => p.id === next.id ? next : p));
+  const update = (next: TakeoffCatalogPlan) => commit(plans.map(p => p.id === next.id ? next : p));
   const reset = () => { setTool(null); setDraft([]); setDraftName(''); setPendingScale(undefined); };
   async function importFile(file?: File, importFloor = '') {
     if (!file || locked) return;
@@ -281,7 +333,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
       if (before && after && linkedMeasureIds.includes(id) && !onUpdateMeasure) { setError('Não foi possível atualizar a célula vinculada.'); return; }
       if (!before && after && linkedMeasureIds.includes(id) && !onDeleteMeasure) { setError('Não foi possível desfazer o lançamento vinculado.'); return; }
       if (before && !after && deletedLinkedIds.current.has(id) && !onRestoreMeasure) { setError('Não foi possível restaurar a célula vinculada.'); return; }
-      const restore = (next: TakeoffPlan) => scalePage && onRecalibrate
+      const restore = (next: TakeoffCatalogPlan) => scalePage && onRecalibrate
         ? onRecalibrate(plan, scalePage, oldPlan.scales[scalePage] ?? null, next)
         : before && after && linkedMeasureIds.includes(id)
           ? onUpdateMeasure?.(plan, before, quantity(before.kind, before.points, oldPlan.scales[before.page] ?? null, before.heightMeters) ?? 0, next)
@@ -394,7 +446,7 @@ export default function PlanTakeoff({ storageKey, readOnly, onUseMeasure, onUpda
           <Button size="sm" variant="ghost" className="h-7 rounded-none text-xs" disabled={!draft.length} onClick={() => setDraft(d => d.slice(0, -1))}><Undo2 className="h-3.5 w-3.5" />Retirar último ponto</Button>
         </div>}
          {pendingScale !== undefined && <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-slate-900"><p>Nova escala: {pendingScale.toLocaleString('pt-BR', { maximumSignificantDigits: 8 })} m por unidade do desenho. A escala pertence à prancha; os lançamentos vinculados serão validados antes da atualização.</p>{visibleMeasures.filter(m => m.page === page && m.kind !== 'count').map(m => <p key={m.id}>{m.name}: {format(quantity(m.kind, m.points, scale, m.heightMeters))} {measureUnit(m.kind, scale)} → {format(quantity(m.kind, m.points, pendingScale, m.heightMeters))} {measureUnit(m.kind, pendingScale)}</p>)}<Button size="sm" disabled={locked} onClick={() => { void confirmScale(); }}>Confirmar escala</Button> <Button size="sm" variant="outline" onClick={() => setPendingScale(undefined)}>Voltar</Button></div>}
-        <PlanCanvas ref={canvas} plan={{ ...plan, measures: visibleMeasures }} page={page} draft={draft} draftKind={tool} drawing={!!tool && !locked && drawable} selected={selected} readOnly={locked} executedMeasureIds={executedMeasureIds} onPages={setPages} onSheets={setSheetInfo} onReady={setCanvasReady} onCursor={setCursor} onLayers={receiveLayers} onCaptureAvailable={setAvailableCaptures} background={background} ortho={ortho} capturesEnabled={capturesEnabled && plan.kind === 'dxf'} trackingEnabled={trackingEnabled} captureKinds={captureKinds.filter(kind => availableCaptures.includes(kind))} editMode={editMode} visible={!hiddenPlans.includes(plan.id)} onFinish={() => { void finish(); }} onPoint={addDraftPoint} showMeasureValues={showMeasureValues} showHatching={showHatching} onViewHistory={setCanPreviousView} onSelect={setSelected} onMove={(id, index, point) => { void moveMeasurePoint(id, index, point); }} onDeleteMeasure={id => { void removeMeasure(id); }} onAddPoint={(id, point) => { void addMeasurePoint(id, point); }} onDeletePoint={(id, index) => { void deleteMeasurePoint(id, index); }} />
+        {canvasPlan ? <PlanCanvas ref={canvas} plan={{ ...canvasPlan, measures: visibleMeasures }} page={page} draft={draft} draftKind={tool} drawing={!!tool && !locked && drawable} selected={selected} readOnly={locked} executedMeasureIds={executedMeasureIds} onPages={setPages} onSheets={setSheetInfo} onReady={setCanvasReady} onCursor={setCursor} onLayers={receiveLayers} onCaptureAvailable={setAvailableCaptures} background={background} ortho={ortho} capturesEnabled={capturesEnabled && plan.kind === 'dxf'} trackingEnabled={trackingEnabled} captureKinds={captureKinds.filter(kind => availableCaptures.includes(kind))} editMode={editMode} visible={!hiddenPlans.includes(plan.id)} onFinish={() => { void finish(); }} onPoint={addDraftPoint} showMeasureValues={showMeasureValues} showHatching={showHatching} onViewHistory={setCanPreviousView} onSelect={setSelected} onMove={(id, index, point) => { void moveMeasurePoint(id, index, point); }} onDeleteMeasure={id => { void removeMeasure(id); }} onAddPoint={(id, point) => { void addMeasurePoint(id, point); }} onDeletePoint={(id, index) => { void deleteMeasurePoint(id, index); }} /> : <div className="flex min-h-64 flex-col items-center justify-center gap-3 border border-slate-300 bg-white p-4 text-center text-sm" aria-label="Arquivo da planta"><p role={activeFile?.identity === fileIdentity && activeFile.status === 'error' ? 'alert' : 'status'}>{activeFile?.identity === fileIdentity && activeFile.status === 'error' ? activeFile.message : activeFile?.identity === fileIdentity && activeFile.status === 'cancelled' ? 'Carregamento da planta cancelado.' : 'Carregando somente a planta selecionada…'}</p>{activeFile?.identity === fileIdentity && activeFile.status === 'loading' ? <Button variant="outline" size="sm" aria-label="Cancelar carregamento da planta" onClick={() => { ++fileRequest.current; setActiveFile({ identity: fileIdentity, owner: repository, status: 'cancelled' }); }}>Cancelar carregamento</Button> : <Button variant="outline" size="sm" aria-label="Tentar carregar planta" onClick={() => setFileAttempt(value => value + 1)}>Tentar novamente</Button>}</div>}
         <div role="status" className="flex min-h-7 items-center gap-2 border border-slate-300 bg-[#e9ecef] px-2 text-xs text-slate-700"><strong>{tool === 'calibrate' ? 'Calibração' : tool ? labels[tool] : editMode === 'pan' ? 'Deslocamento' : editMode === 'zoomWindow' ? 'Zoom por janela' : editMode === 'deleteMeasure' ? 'Apagar medida' : editMode === 'addPoint' ? 'Adicionar ponto' : editMode === 'deletePoint' ? 'Apagar ponto' : editMode === 'movePoint' ? 'Mover ponto' : 'Seleção'}</strong><span className="border-l border-slate-400 pl-2">{!drawable ? 'Aguarde a renderização ou mostre uma prancha compatível.' : tool === 'calibrate' ? 'Marque dois pontos e informe a distância conhecida.' : tool ? fixedPointCount(tool) ? 'Clique em dois pontos; o segundo conclui. Botão central desloca e a roda controla o zoom.' : 'Clique para marcar; botão direito conclui, botão central desloca e a roda amplia ou reduz.' : editMode === 'addPoint' ? 'Selecione uma medida e clique onde deseja inserir o ponto.' : editMode === 'deletePoint' ? 'Clique no ponto que deseja remover.' : editMode === 'movePoint' ? 'Clique no vértice e na nova posição, ou arraste. Escape cancela o movimento.' : editMode === 'zoomWindow' ? 'Clique em dois cantos para enquadrar a região; Escape cancela.' : editMode === 'deleteMeasure' ? 'Clique na marcação que deseja excluir; o subtotal será validado.' : embedded ? selectedMeasure ? `Marcação ${selectedMeasure.name} selecionada; use o resultado na barra superior.` : 'Clique numa marcação existente para usá-la na célula, ou inicie uma nova contagem.' : 'Arraste ou segure o botão central para deslocar; use a roda do mouse para zoom.'}</span></div>
         {!embedded && <section className="min-w-0 overflow-hidden border border-slate-300 bg-white" aria-label="Detalhe dos levantamentos">
           <button className="flex w-full items-center gap-2 border-b border-slate-300 bg-[#e9ecef] px-2 py-1 text-left text-xs font-semibold hover:bg-slate-100" onClick={() => setShowDetails(v => !v)} aria-expanded={showDetails}>{showDetails ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}Detalhe dos levantamentos <span className="ml-auto text-xs font-normal">{plan.measures.length} {plan.measures.length === 1 ? 'registro' : 'registros'}</span></button>

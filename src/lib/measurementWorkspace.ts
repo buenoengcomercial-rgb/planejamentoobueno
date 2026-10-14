@@ -1,5 +1,5 @@
 import type { ProductionQuantityDetail, MeasurementStatus, SavedMeasurement, ContractInfo } from '@/types/project';
-import type { TakeoffPlan, TakeoffMeasure } from './planTakeoff';
+import type { TakeoffCatalogPlan, TakeoffMeasure } from './planTakeoff';
 import { measureUnit, quantity } from './planTakeoff';
 import { detailTotal, withDetailValue, type DetailField } from './productionQuantityDetails';
 import { calculateMeasurementLine } from './measurementCalculations';
@@ -36,8 +36,8 @@ export interface MeasurementAudit {
   id: string; at: string; actor: { id: string; name: string }; action: string;
   affected: { measurementId: string; serviceId: string }[];
   before: MeasuredEntry[]; after: MeasuredEntry[];
-  beforePlans?: TakeoffPlan[]; afterPlans?: TakeoffPlan[];
-  planDelta?: { kind: 'add' | 'update' | 'archive'; planId: string; beforePlan?: TakeoffPlan; afterPlan?: TakeoffPlan };
+  beforePlans?: TakeoffCatalogPlan[]; afterPlans?: TakeoffCatalogPlan[];
+  planDelta?: { kind: 'add' | 'update' | 'archive'; planId: string; beforePlan?: TakeoffCatalogPlan; afterPlan?: TakeoffCatalogPlan };
   beforePeriods?: MeasuredPeriod[]; afterPeriods?: MeasuredPeriod[];
   beforeServices?: MeasuredService[]; afterServices?: MeasuredService[];
   bulletinChange?: { measurementId: string; before: { number: number; bulletin: MeasuredBulletin }; after: { number: number; bulletin: MeasuredBulletin } };
@@ -45,7 +45,7 @@ export interface MeasurementAudit {
 export interface MeasurementWorkspace {
   schema: 1; projectId: string; projectName: string; revision: number;
   contract?: ContractInfo; services: MeasuredService[]; periods: MeasuredPeriod[];
-  entries: MeasuredEntry[]; plans: TakeoffPlan[]; audit: MeasurementAudit[];
+  entries: MeasuredEntry[]; plans: TakeoffCatalogPlan[]; audit: MeasurementAudit[];
   importedKeys: string[]; backupId: string;
 }
 export interface MeasurementActor { id: string; name: string; canEdit: boolean; canReview?: boolean }
@@ -334,7 +334,7 @@ export function pasteMeasuredRow(w: MeasurementWorkspace, actor: MeasurementActo
  * large immutable history by reference; shared/updated marks still use the
  * full transaction and all of its cross-entry checks below. */
 function captureIndependentMark(w: MeasurementWorkspace, actor: MeasurementActor, destination: Destination,
-  nextPlan: TakeoffPlan, mark: TakeoffMeasure): MeasurementWorkspace | null {
+  nextPlan: TakeoffCatalogPlan, mark: TakeoffMeasure): MeasurementWorkspace | null {
   const { measurementId, serviceId, rowId, field } = destination;
   const planIndex = w.plans.findIndex(plan => plan.id === nextPlan.id);
   const entryIndex = w.entries.findIndex(entry => entry.measurementId === measurementId && entry.serviceId === serviceId);
@@ -375,7 +375,7 @@ function captureIndependentMark(w: MeasurementWorkspace, actor: MeasurementActor
   };
   return { ...w, revision: w.revision + 1, entries, plans, audit: [...w.audit, event] };
 }
-export function captureMeasurement(w: MeasurementWorkspace, actor: MeasurementActor, destination: Destination, nextPlan: TakeoffPlan, mark: TakeoffMeasure, remove = false) {
+export function captureMeasurement(w: MeasurementWorkspace, actor: MeasurementActor, destination: Destination, nextPlan: TakeoffCatalogPlan, mark: TakeoffMeasure, remove = false) {
   if (!remove) {
     const quick = captureIndependentMark(w, actor, destination, nextPlan, mark);
     if (quick) return quick;

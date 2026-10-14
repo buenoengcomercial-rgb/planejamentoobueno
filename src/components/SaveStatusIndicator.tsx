@@ -17,6 +17,7 @@ interface Props {
   partialSyncPending?: boolean;
   partialSyncDraftProtected?: boolean;
   syncRetrying?: boolean;
+  cloudReadStatus?: 'checking' | 'cached' | 'failed';
 }
 
 function timeLabel(value?: string | null) {
@@ -26,7 +27,7 @@ function timeLabel(value?: string | null) {
   return parsed.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
-export default function SaveStatusIndicator({ status, className, confirmedAt, lastCheckedAt, projectId, live, remoteUpdateAt, pendingRemoteAreas = [], partialSyncPending = false, partialSyncDraftProtected = false, syncRetrying = false }: Props) {
+export default function SaveStatusIndicator({ status, className, confirmedAt, lastCheckedAt, projectId, live, remoteUpdateAt, pendingRemoteAreas = [], partialSyncPending = false, partialSyncDraftProtected = false, syncRetrying = false, cloudReadStatus }: Props) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (live) return;
@@ -43,13 +44,18 @@ export default function SaveStatusIndicator({ status, className, confirmedAt, la
     offline: { icon: WifiOff, text: 'Sem internet', color: 'text-warning' },
     error:  { icon: CloudOff, text: 'Falha na sincronização', color: 'text-destructive' },
   } as const;
+  const readMap = {
+    checking: { icon: Loader2, text: 'Conferindo a Medição na nuvem…', color: 'text-muted-foreground', spin: true },
+    cached: { icon: Cloud, text: 'Cópia local · aguardando conferência', color: 'text-warning' },
+    failed: { icon: CloudOff, text: 'Falha ao consultar a nuvem', color: 'text-destructive' },
+  } as const;
   const cfg = partialSyncPending
     ? { icon: syncRetrying ? Loader2 : TriangleAlert,
         text: syncRetrying ? 'Sincronização parcial — tentando novamente'
           : partialSyncDraftProtected ? 'Sincronização parcial — cópia local protegida'
             : 'Sincronização parcial — mantenha esta página aberta',
         color: 'text-warning', spin: syncRetrying }
-    : map[status];
+    : cloudReadStatus ? readMap[cloudReadStatus] : map[status];
   const Icon = cfg.icon;
   const confirmed = timeLabel(confirmedAt);
   const remoteUpdated = timeLabel(remoteUpdateAt);
@@ -57,7 +63,10 @@ export default function SaveStatusIndicator({ status, className, confirmedAt, la
   const elapsed = Number.isFinite(lastCheckAge) && lastCheckAge >= 0
     ? lastCheckAge < 60_000 ? 'há menos de 1 min' : `há ${Math.floor(lastCheckAge / 60_000)} min`
     : null;
-  const liveLabel = live ? 'Atualizado · Tempo real ativo'
+  const liveLabel = cloudReadStatus === 'failed' ? 'Última leitura não confirmada'
+    : cloudReadStatus === 'cached' ? 'Confira a versão da nuvem antes de lançar alterações'
+      : cloudReadStatus === 'checking' ? 'Consulta em andamento'
+        : live ? 'Atualizado · Tempo real ativo'
     : lastCheckAge < 30_000 ? 'Reconectando · dados conferidos recentemente'
       : `Dados podem estar desatualizados${elapsed ? ` · última conferência ${elapsed}` : ''}`;
   const shortProjectId = projectId?.slice(0, 8);

@@ -3,10 +3,10 @@ import { FilePlus2, FolderOpen, Link2, Trash2, X } from 'lucide-react';
 import { Content, Close } from '@radix-ui/react-dialog';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogPortal, DialogOverlay, DialogDescription, DialogTitle } from '@/components/ui/dialog';
-import type { TakeoffMeasure, TakeoffPlan } from '@/lib/planTakeoff';
+import type { TakeoffMeasure, TakeoffCatalogPlan } from '@/lib/planTakeoff';
 
 interface Props {
-  plans: TakeoffPlan[]; legacyPlans: TakeoffPlan[]; activeId: string; hiddenIds: string[];
+  plans: TakeoffCatalogPlan[]; legacyPlans: TakeoffCatalogPlan[]; activeId: string; hiddenIds: string[];
   readOnly: boolean; locked: boolean; error: string;
   onClose: () => void; onAccept: (id: string, hiddenIds: string[]) => void;
   onImport: (file: File, floor: string) => Promise<string | undefined>;

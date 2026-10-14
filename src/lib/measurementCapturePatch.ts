@@ -1,9 +1,9 @@
 import type { MeasuredEntry, MeasurementAudit, MeasurementWorkspace } from './measurementWorkspace';
-import type { TakeoffPlan } from './planTakeoff';
+import type { TakeoffCatalogPlan } from './planTakeoff';
 import { encodeMeasurementWorkspace } from './measurementCloudCodec';
 
 export interface MeasurementCapturePatch {
-  plan: TakeoffPlan;
+  plan: TakeoffCatalogPlan;
   entries: MeasuredEntry[];
   event: MeasurementAudit;
 }
