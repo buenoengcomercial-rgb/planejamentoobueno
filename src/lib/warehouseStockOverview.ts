@@ -68,7 +68,7 @@ export function computeWarehouseStockOverviewRows(project: Project, includeArchi
   const suggestions = suggestMaterialsFromProject(project).filter(suggestion => !suggestion.warning);
   const suggestionsByKey = new Map(suggestions.map(suggestion => [suggestion.key, suggestion] as const));
   const fiscalKeys = new Set((project.warehouse?.movements ?? [])
-    .filter(movement => movement.type === 'entrada' && (movement.fiscalNoteId || movement.invoiceNumber?.trim()))
+    .filter(movement => movement.type === 'entrada' && !movement.reversedById && (movement.fiscalNoteId || movement.invoiceNumber?.trim()))
     .map(movement => movement.itemKey));
 
   const physical = physicalRows.filter(row => fiscalKeys.has(row.key)).map(row => {

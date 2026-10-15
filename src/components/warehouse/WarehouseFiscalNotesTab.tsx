@@ -32,7 +32,9 @@ import {
   readFileAsDataURL,
   reconcileArchivedFiscalNoteStock,
   confirmFiscalNotePackagingConversion,
+  correctFiscalMaterialLink,
   reviewArchivedFiscalNoteStock,
+  reviewFiscalMaterialLinks,
   reviewFiscalNotePackagingConversions,
   reviewPostedFiscalNoteCosts,
   replacePostedFiscalNote,
@@ -520,6 +522,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')), [project.materialComparisons]);
   const archivedStockReview = useMemo(() => reviewArchivedFiscalNoteStock(project), [project]);
   const packagingConversionReviews = useMemo(() => reviewFiscalNotePackagingConversions(project), [project]);
+  const materialLinkIssues = useMemo(() => reviewFiscalMaterialLinks(project), [project]);
   const selectedPackagingCorrection = useMemo(() => packagingCorrection
     ? reviewFiscalNotePackagingConversions(project, packagingCorrection.manual ? packagingCorrection : undefined, packagingCorrectionUnit)
       .find(review => review.noteId === packagingCorrection.noteId && review.itemId === packagingCorrection.itemId)
@@ -988,6 +991,25 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     }
   };
 
+  const correctHistoricalMaterialLinks = async () => {
+    let current = project;
+    let corrected = 0;
+    try {
+      setProcessing(true);
+      for (const original of materialLinkIssues.filter(issue => !issue.blockers.length)) {
+        const issue = reviewFiscalMaterialLinks(current).find(row => row.noteId === original.noteId && row.noteItemId === original.noteItemId);
+        if (!issue || issue.blockers.length) continue;
+        current = await commitReceipt(correctFiscalMaterialLink(current, issue.noteId, issue.noteItemId, auditActor));
+        corrected += 1;
+      }
+      toast.success(`${corrected} vínculo(s) de entrada corrigido(s) na nuvem.`);
+    } catch (error) {
+      toast.error(`Após ${corrected} correção(ões): ${(error as Error).message}`);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const openPackagingCorrection = (review: (typeof packagingConversionReviews)[number]) => {
     setPackagingCorrection({ noteId: review.noteId, itemId: review.itemId });
     setPackagingCorrectionFactor(review.fiscalQuantity > 0 ? review.suggestedStockQuantity / review.fiscalQuantity : 1);
@@ -1091,6 +1113,21 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
         <section className="rounded-lg border border-warning/40 bg-warning/10 p-4">
           <div className="flex items-start gap-3"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" /><div><h3 className="font-semibold">Conversões antigas para conferência</h3><p className="text-sm text-muted-foreground">Essas notas foram lançadas sem converter embalagem ou apresentação de fornecedor em quantidade física. Nenhum saldo será alterado sem sua confirmação.</p></div></div>
           <div className="mt-3 space-y-2">{packagingConversionReviews.map(review => <div key={`${review.noteId}-${review.itemId}`} className="flex flex-col gap-2 rounded-md border bg-background/80 p-3 text-sm sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><strong>{review.description}</strong><div className="text-muted-foreground">NF {review.invoiceNumber || '—'} · {decimal(review.currentStockQuantity)} {review.fiscalUnit} → {decimal(review.suggestedStockQuantity)} {review.suggestedStockUnit}</div>{review.dependentMovementCount > 0 && <div className="mt-1 text-xs text-muted-foreground">{review.dependentMovementCount} retirada(s), devolução(ões) ou ajuste(s) antigo(s) serão convertidos junto.</div>}{review.blockers.map(blocker => <div key={blocker} className="mt-1 text-xs text-warning">{blocker}</div>)}</div>{review.canCorrect && <Button className="min-h-11" disabled={processing} onClick={() => openPackagingCorrection(review)}>Editar conversão</Button>}</div>)}</div>
+        </section>
+      )}
+
+      {group === 'posted' && materialLinkIssues.length > 0 && (
+        <section className="rounded-lg border border-warning/40 bg-warning/10 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div><h3 className="font-semibold">Entradas vinculadas a outro material ({materialLinkIssues.length})</h3>
+              <p className="text-sm text-muted-foreground">Conferência por descrição e unidade. A correção preserva a nota e os movimentos antigos para auditoria; retiradas existentes não são transferidas.</p></div>
+            {materialLinkIssues.some(issue => !issue.blockers.length) && canEditPosted && <Button disabled={processing} onClick={() => void correctHistoricalMaterialLinks()}>{processing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Corrigir vínculos seguros</Button>}
+          </div>
+          <div className="mt-3 max-h-96 space-y-2 overflow-y-auto">{materialLinkIssues.map(issue => <div key={`${issue.noteId}:${issue.noteItemId}`} className="rounded-md border bg-background p-3 text-sm">
+            <strong>NF {issue.invoiceNumber || issue.noteId} · {issue.description}</strong>
+            <div className="text-muted-foreground">{decimal(issue.quantity)} {issue.unit} · Atual: {issue.currentDescription} · Destino: {issue.targetItemKey ? 'material existente com descrição idêntica' : 'novo material na aba Materiais'}</div>
+            {issue.blockers.length > 0 && <div className="mt-1 text-warning">Revisar: {issue.blockers.join(' ')}</div>}
+          </div>)}</div>
         </section>
       )}
 

@@ -10,12 +10,14 @@ import {
   checkFiscalNoteCancellation,
   classifyFiscalDocumentText,
   computeWarehouseRows,
+  correctFiscalMaterialLink,
   correctPostedFiscalMaterialDescription,
   createRequisition,
   deliverRequisition,
   emptyWarehouse,
   ensureWarehouse,
   findFiscalNoteDuplicate,
+  getMaterialPurchaseHistory,
   normalizeFiscalNoteNumber,
   reconcileFiscalNoteDuplicates,
   fiscalItemConversionFactor,
@@ -31,9 +33,11 @@ import {
   confirmFiscalNotePackagingConversion,
   reviewFiscalNotePackagingConversions,
   reviewArchivedFiscalNoteStock,
+  reviewFiscalMaterialLinks,
   reviewPostedFiscalNoteCosts,
   replacePostedFiscalNote,
   updateFiscalItemPurchaseGroup,
+  suggestFiscalNoteItemLinks,
   suggestFiscalItemStockConversion,
   upsertWarehouseSupplierPresentation,
 } from './warehouse';
@@ -316,6 +320,74 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(second.warehouse!.items[0].purchasedQuantity).toBe(4);
     expect(second.warehouse!.items[0].unitPrice).toBe(60);
     expect(second.warehouse!.movements.filter(movement => movement.type === 'entrada').map(movement => movement.unitPrice)).toEqual([50, 60]);
+  });
+
+  it('separa códigos iguais com descrições ou unidades distintas e reúne só identidades normalizadas', () => {
+    const first = approveFiscalNote(withNote(note({ items: [{ ...note().items[0], description: 'Placa PVC1 - PORTA', unit: 'Un' }] })), 'nf-1');
+    const second = note({ id: 'nf-2', invoiceNumber: '101', items: [{ ...note().items[0], id: 'item-2', description: 'Placa PVC1 - CO2', unit: 'Un' }] });
+    const suggested = suggestFiscalNoteItemLinks(first, second.items, second.supplierCnpj);
+    expect(suggested[0].itemKey).toBeUndefined();
+    const posted = approveFiscalNote({ ...first, warehouse: { ...first.warehouse!, fiscalNotes: [...first.warehouse!.fiscalNotes, second] } }, 'nf-2');
+    expect(posted.warehouse!.items).toHaveLength(2);
+    expect(posted.warehouse!.movements[0].itemKey).not.toBe(posted.warehouse!.movements[1].itemKey);
+
+    const third = note({ id: 'nf-3', invoiceNumber: '102', items: [{ ...note().items[0], id: 'item-3', description: ' PLÁCA  PVC1 - co2 ', unit: 'un' }] });
+    const grouped = approveFiscalNote({ ...posted, warehouse: { ...posted.warehouse!, fiscalNotes: [...posted.warehouse!.fiscalNotes, third] } }, 'nf-3');
+    expect(grouped.warehouse!.items).toHaveLength(2);
+    expect(grouped.warehouse!.movements[2].itemKey).toBe(grouped.warehouse!.movements[1].itemKey);
+
+    const fourth = note({ id: 'nf-4', invoiceNumber: '103', items: [{ ...note().items[0], id: 'item-4', description: 'Placa PVC1 - CO2', unit: 'CX' }] });
+    const differentUnit = approveFiscalNote({ ...grouped, warehouse: { ...grouped.warehouse!, fiscalNotes: [...grouped.warehouse!.fiscalNotes, fourth] } }, 'nf-4');
+    expect(differentUnit.warehouse!.items).toHaveLength(3);
+  });
+
+  it('bloqueia lançamento quando duas linhas têm a mesma descrição e unidade', () => {
+    const first = approveFiscalNote(withNote(note()), 'nf-1');
+    first.warehouse!.items.push({ key: 'duplicate', description: 'Cimento CP II', unit: 'SC', manualItem: true });
+    const second = note({ id: 'nf-2', invoiceNumber: '101' });
+    first.warehouse!.fiscalNotes.push(second);
+    expect(suggestFiscalNoteItemLinks(first, second.items)[0].itemKey).toBeUndefined();
+    expect(() => approveFiscalNote(first, 'nf-2')).toThrow(/mais de um material/i);
+    expect(first.warehouse!.movements).toHaveLength(1);
+  });
+
+  it('separa entrada histórica errada com estorno e mantém as retiradas no material antigo', () => {
+    const first = approveFiscalNote(withNote(note({ items: [{ ...note().items[0], description: 'Placa PVC2 - HIDRANTE', quantity: 200, totalPrice: 100 }] })), 'nf-1');
+    const oldKey = first.warehouse!.items[0].key;
+    const second = note({ id: 'nf-2', status: 'aprovada', invoiceNumber: '013819',
+      items: [{ ...note().items[0], id: 'item-2', description: 'Placa PVC2 - CO2', quantity: 193, totalPrice: 100, itemKey: oldKey }] });
+    first.warehouse!.fiscalNotes.push(second);
+    first.warehouse!.items[0].purchasedQuantity = 393;
+    first.warehouse!.movements.push({ id: 'wrong-entry', type: 'entrada', date: '2026-09-28', createdAt: '2026-10-14T12:00:00.000Z',
+      itemKey: oldKey, itemCode: 'MAT-01', itemDescription: 'Placa PVC2 - CO2', itemUnit: 'SC', quantity: 193,
+      fiscalNoteId: 'nf-2', fiscalNoteItemId: 'item-2', invoiceNumber: '013819' });
+    first.warehouse!.movements.push({ id: 'withdrawal', type: 'retirada', date: '2026-10-15', createdAt: '2026-10-15T12:00:00.000Z',
+      itemKey: oldKey, itemDescription: 'Placa PVC2 - HIDRANTE', itemUnit: 'SC', quantity: 5 });
+    expect(reviewFiscalMaterialLinks(first)).toMatchObject([{ noteId: 'nf-2', blockers: [] }]);
+    const corrected = correctFiscalMaterialLink(first, 'nf-2', 'item-2', 'Proprietário');
+    const newKey = corrected.warehouse!.fiscalNotes.find(row => row.id === 'nf-2')!.items[0].itemKey!;
+    expect(newKey).not.toBe(oldKey);
+    expect(corrected.warehouse!.movements.find(row => row.id === 'withdrawal')!.itemKey).toBe(oldKey);
+    expect(corrected.warehouse!.movements.find(row => row.id === 'wrong-entry')!.reversedById).toBeTruthy();
+    expect(computeWarehouseRows(corrected, { includeManual: true }).find(row => row.key === newKey)?.received).toBe(193);
+    expect(getMaterialPurchaseHistory(corrected, oldKey).some(row => row.invoiceNumber === '013819')).toBe(false);
+    expect(getMaterialPurchaseHistory(corrected, newKey).some(row => row.invoiceNumber === '013819')).toBe(true);
+    expect(correctFiscalMaterialLink(corrected, 'nf-2', 'item-2')).toBe(corrected);
+  });
+
+  it('não corrige entrada histórica se a retirada deixaria saldo negativo', () => {
+    const project = approveFiscalNote(withNote(note({ items: [{ ...note().items[0], description: 'Placa PVC2 - HIDRANTE', quantity: 5 }] })), 'nf-1');
+    const oldKey = project.warehouse!.items[0].key;
+    project.warehouse!.fiscalNotes.push(note({ id: 'nf-2', status: 'aprovada', invoiceNumber: '013819',
+      items: [{ ...note().items[0], id: 'item-2', description: 'Placa PVC2 - CO2', itemKey: oldKey, quantity: 10 }] }));
+    project.warehouse!.movements.push({ id: 'wrong-entry', type: 'entrada', date: '2026-09-28', createdAt: '2026-10-14T12:00:00.000Z',
+      itemKey: oldKey, itemDescription: 'Placa PVC2 - CO2', itemUnit: 'SC', quantity: 10,
+      fiscalNoteId: 'nf-2', fiscalNoteItemId: 'item-2' });
+    project.warehouse!.movements.push({ id: 'withdrawal', type: 'retirada', date: '2026-10-15', createdAt: '2026-10-15T12:00:00.000Z',
+      itemKey: oldKey, itemDescription: 'Placa PVC2 - HIDRANTE', itemUnit: 'SC', quantity: 6 });
+    expect(reviewFiscalMaterialLinks(project)[0].blockers).toContain('A separação deixaria o material antigo com saldo negativo.');
+    expect(() => correctFiscalMaterialLink(project, 'nf-2', 'item-2')).toThrow(/saldo negativo/i);
+    expect(project.warehouse!.movements).toHaveLength(3);
   });
 
   it('cancela com estorno auditável e oculta material criado só pela nota', () => {
