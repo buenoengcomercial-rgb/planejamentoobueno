@@ -999,9 +999,10 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
       for (const original of materialLinkIssues.filter(issue => !issue.blockers.length)) {
         const issue = reviewFiscalMaterialLinks(current).find(row => row.noteId === original.noteId && row.noteItemId === original.noteItemId);
         if (!issue || issue.blockers.length) continue;
-        current = await commitReceipt(correctFiscalMaterialLink(current, issue.noteId, issue.noteItemId, auditActor));
+        current = correctFiscalMaterialLink(current, issue.noteId, issue.noteItemId, auditActor);
         corrected += 1;
       }
+      if (corrected) await commitReceipt(current);
       toast.success(`${corrected} vínculo(s) de entrada corrigido(s) na nuvem.`);
     } catch (error) {
       toast.error(`Após ${corrected} correção(ões): ${(error as Error).message}`);
