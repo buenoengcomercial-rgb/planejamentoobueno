@@ -111,7 +111,13 @@ export function normalizeWarehouseReceiverName(value?: string) {
 }
 
 function fiscalItemLookup(item: Pick<WarehouseFiscalNoteItem, 'description' | 'unit' | 'stockUnit'>) {
-  return `${normalizeLookup(item.description)}|${normalizeLookup(item.stockUnit || item.unit || 'UN')}`;
+  return `${normalizeFiscalMaterialText(item.description)}|${normalizeFiscalMaterialText(item.stockUnit || item.unit || 'UN')}`;
+}
+
+/** Identidade física: o código da NF não identifica um material da obra. */
+function normalizeFiscalMaterialText(value?: string) {
+  return (value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ').trim().toLocaleLowerCase('pt-BR');
 }
 
 function normalizeProductCode(value?: string) {
@@ -2559,17 +2565,14 @@ function mapWarehouseRows(project: Project) {
   const rows = computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true });
   const rowsByKey = new Map(rows.map(row => [row.key, row] as const));
   const itemKeyByLookup = new Map<string, string[]>();
-  const itemKeyByCode = new Map<string, string[]>();
   const pushCandidate = (map: Map<string, string[]>, key: string, itemKey: string) => {
     const list = map.get(key) ?? [];
     if (!list.includes(itemKey)) map.set(key, [...list, itemKey]);
   };
   for (const row of rows) {
     pushCandidate(itemKeyByLookup, fiscalItemLookup({ description: row.description, unit: row.unit }), row.key);
-    const code = normalizeProductCode(row.code);
-    if (code) pushCandidate(itemKeyByCode, code, row.key);
   }
-  return { rows, rowsByKey, itemKeyByLookup, itemKeyByCode };
+  return { rows, rowsByKey, itemKeyByLookup };
 }
 
 export function linkFiscalNoteItemsToMaterials(
@@ -2578,7 +2581,7 @@ export function linkFiscalNoteItemsToMaterials(
 ): { project: Project; items: WarehouseFiscalNoteItem[] } {
   let p = ensureWarehouse(project);
   const wh = p.warehouse!;
-  const { rowsByKey, itemKeyByLookup, itemKeyByCode } = mapWarehouseRows(p);
+  const { rowsByKey, itemKeyByLookup } = mapWarehouseRows(p);
   const itemsConfig = [...wh.items];
   let changed = false;
 
@@ -2586,13 +2589,9 @@ export function linkFiscalNoteItemsToMaterials(
     const description = item.description.trim();
     const unit = fiscalItemStockUnit(item);
     const productCode = item.productCode?.trim() || undefined;
-    const productCodeKey = normalizeProductCode(productCode);
     const lookup = fiscalItemLookup({ description, unit });
-    const candidates = [
-      item.itemKey && rowsByKey.has(item.itemKey) ? item.itemKey : undefined,
-      ...(productCodeKey ? itemKeyByCode.get(productCodeKey) ?? [] : []),
-      ...(itemKeyByLookup.get(lookup) ?? []),
-    ].filter((key): key is string => !!key);
+    const candidates = itemKeyByLookup.get(lookup) ?? [];
+    if (candidates.length > 1) throw new Error(`Há mais de um material com a descrição e unidade de ${description}. Confira o cadastro antes de lançar.`);
     const itemKey = candidates[0];
 
     if (!itemKey && description) {
@@ -2630,7 +2629,6 @@ export function linkFiscalNoteItemsToMaterials(
         valuationIncomplete: false,
       });
       itemKeyByLookup.set(lookup, [...(itemKeyByLookup.get(lookup) ?? []), newItemKey]);
-      if (productCodeKey) itemKeyByCode.set(productCodeKey, [...(itemKeyByCode.get(productCodeKey) ?? []), newItemKey]);
       changed = true;
       return {
         ...item,
@@ -3383,7 +3381,7 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
   const linked = linkFiscalNoteItemsToMaterials(p, noteForPosting.items);
   p = linked.project;
   const wh = p.warehouse!;
-  const { rowsByKey, itemKeyByLookup, itemKeyByCode } = mapWarehouseRows(p);
+  const { rowsByKey, itemKeyByLookup } = mapWarehouseRows(p);
 
   let itemsConfig = [...wh.items];
   const movements = [...wh.movements];
@@ -3394,19 +3392,14 @@ export function approveFiscalNote(project: Project, noteId: string, actor?: Ware
     const globalUnitPrice = fiscalItemGlobalUnitPrice(item, allocationNote);
     const globalTotalPrice = fiscalItemGlobalTotal(item, allocationNote);
     const productCode = item.productCode?.trim() || undefined;
-    const productCodeKey = normalizeProductCode(productCode);
     const lookup = fiscalItemLookup({ description: item.description, unit: item.unit, stockUnit: unit });
-    const candidates = [
-      item.itemKey && rowsByKey.has(item.itemKey) ? item.itemKey : undefined,
-      ...(productCodeKey ? itemKeyByCode.get(productCodeKey) ?? [] : []),
-      ...(itemKeyByLookup.get(lookup) ?? []),
-    ].filter((key): key is string => !!key);
+    const candidates = itemKeyByLookup.get(lookup) ?? [];
+    if (candidates.length > 1) throw new Error(`Há mais de um material com a descrição e unidade de ${item.description}. Confira o cadastro antes de lançar.`);
     let itemKey = candidates[0];
 
     if (!itemKey) {
       itemKey = `warehouse-nf|${uid()}`;
       itemKeyByLookup.set(lookup, [...(itemKeyByLookup.get(lookup) ?? []), itemKey]);
-      if (productCodeKey) itemKeyByCode.set(productCodeKey, [...(itemKeyByCode.get(productCodeKey) ?? []), itemKey]);
       itemsConfig.push({
         key: itemKey,
         code: productCode,
@@ -4845,7 +4838,7 @@ export function getMaterialPurchaseHistory(project: Project, itemKey: string): M
     if (n.invoiceNumber) notesByNumber.set(n.invoiceNumber.trim(), n);
   }
   return (wh.movements ?? [])
-    .filter(m => m.itemKey === itemKey && (m.type === 'entrada' || m.type === 'devolucao' || m.type === 'ajuste_positivo'))
+    .filter(m => m.itemKey === itemKey && !m.reversedById && (m.type === 'entrada' || m.type === 'devolucao' || m.type === 'ajuste_positivo'))
     .map(m => {
       const linkedNote = m.invoiceNumber ? notesByNumber.get(m.invoiceNumber.trim()) : undefined;
       const unitPrice = m.unitPrice ?? linkedNote?.items.find(i => i.itemKey === itemKey)?.unitPrice;
@@ -4865,84 +4858,150 @@ export function getMaterialPurchaseHistory(project: Project, itemKey: string): M
     .sort((a, b) => (a.date < b.date ? 1 : -1));
 }
 
+export interface FiscalMaterialLinkIssue {
+  noteId: string;
+  noteItemId: string;
+  invoiceNumber?: string;
+  description: string;
+  unit: string;
+  quantity: number;
+  currentItemKey: string;
+  currentDescription: string;
+  targetItemKey?: string;
+  blockers: string[];
+}
+
+/** Levantamento somente leitura dos itens lançados sob outra identidade física. */
+export function reviewFiscalMaterialLinks(project: Project): FiscalMaterialLinkIssue[] {
+  const wh = project.warehouse;
+  if (!wh) return [];
+  const rows = computeWarehouseRows(project, { includeManual: true, includeArchived: true });
+  const rowsByKey = new Map(rows.map(row => [row.key, row] as const));
+  const result: FiscalMaterialLinkIssue[] = [];
+  for (const note of wh.fiscalNotes ?? []) {
+    if (note.status !== 'aprovada') continue;
+    for (const item of note.items) {
+      const entries = wh.movements.filter(movement => movement.fiscalNoteId === note.id
+        && movement.fiscalNoteItemId === item.id && movement.type === 'entrada' && !movement.reversedById);
+      if (!entries.length) continue;
+      const entry = entries[0];
+      const current = rowsByKey.get(entry.itemKey);
+      const sourceConfig = wh.items.find(config => config.key === entry.itemKey);
+      const identity = fiscalItemLookup(item);
+      if (current && fiscalItemLookup({ description: current.description, unit: current.unit }) === identity) continue;
+      const candidates = rows.filter(row => row.key !== entry.itemKey
+        && fiscalItemLookup({ description: row.description, unit: row.unit }) === identity);
+      const blockers: string[] = [];
+      if (entries.length !== 1 || item.itemKey !== entry.itemKey) blockers.push('Vínculo ou movimento da nota ambíguo.');
+      if (!current) blockers.push('Material de origem não localizado.');
+      if (!sourceConfig || Number(sourceConfig.purchasedQuantity || 0) < entry.quantity) {
+        blockers.push('Quantidade comprada do material antigo precisa ser conciliada.');
+      }
+      if (candidates.length > 1) blockers.push('Mais de um material de destino com a mesma descrição e unidade.');
+      if (candidates[0]?.archived) blockers.push('Material de destino arquivado.');
+      if (balanceFor(wh, entry.itemKey) < entry.quantity) blockers.push('A separação deixaria o material antigo com saldo negativo.');
+      result.push({ noteId: note.id, noteItemId: item.id, invoiceNumber: note.invoiceNumber,
+        description: item.description, unit: fiscalItemStockUnit(item), quantity: entry.quantity,
+        currentItemKey: entry.itemKey, currentDescription: current?.description ?? entry.itemDescription,
+        targetItemKey: candidates.length === 1 ? candidates[0].key : undefined, blockers });
+    }
+  }
+  return result;
+}
+
+/** Uma correção por transação: estorna a entrada antiga e lança no material certo. */
+export function correctFiscalMaterialLink(project: Project, noteId: string, noteItemId: string, actor?: WarehouseActorInput): Project {
+  const p = ensureWarehouse(project);
+  const issue = reviewFiscalMaterialLinks(p).find(row => row.noteId === noteId && row.noteItemId === noteItemId);
+  if (!issue) return p; // repetição após confirmação não duplica o estoque
+  if (issue.blockers.length) throw new Error(issue.blockers.join(' '));
+  const wh = p.warehouse!;
+  const note = wh.fiscalNotes.find(row => row.id === noteId)!;
+  const item = note.items.find(row => row.id === noteItemId)!;
+  const entry = wh.movements.find(row => row.fiscalNoteId === noteId && row.fiscalNoteItemId === noteItemId
+    && row.type === 'entrada' && !row.reversedById)!;
+  const timestamp = nowISO();
+  const auditActor = normalizeWarehouseActor(actor);
+  const destinationKey = issue.targetItemKey ?? `warehouse-nf|${uid()}`;
+  const reversalId = uid();
+  const replacementId = uid();
+  const correctedEntry: WarehouseMovement = {
+    ...entry, id: replacementId, createdAt: timestamp, createdBy: auditActor,
+    updatedAt: undefined, updatedBy: undefined, reversedById: undefined,
+    itemKey: destinationKey, itemCode: item.productCode?.trim() || undefined,
+    itemDescription: item.description.trim(), itemUnit: issue.unit,
+    notes: `Entrada da NF ${note.invoiceNumber || note.id} corrigida do movimento ${entry.id}.`,
+  };
+  const reversal: WarehouseMovement = {
+    id: reversalId, createdAt: timestamp, createdBy: auditActor, type: 'estorno', date: todayISO(),
+    itemKey: entry.itemKey, itemCode: entry.itemCode, itemDescription: entry.itemDescription,
+    itemUnit: entry.itemUnit, quantity: entry.quantity, unitPrice: entry.unitPrice,
+    fiscalNoteId: noteId, fiscalNoteItemId: noteItemId, invoiceNumber: note.invoiceNumber,
+    reversesId: entry.id, notes: `Correção de vínculo da NF ${note.invoiceNumber || note.id}.`,
+  };
+  const items = wh.items.map(config => {
+    if (config.key === entry.itemKey) return { ...config,
+      purchasedQuantity: trunc2(Number(config.purchasedQuantity || 0) - entry.quantity) };
+    if (config.key === destinationKey) return { ...config,
+      purchasedQuantity: trunc2(Number(config.purchasedQuantity || 0) + entry.quantity) };
+    return config;
+  });
+  if (!issue.targetItemKey) items.push({ key: destinationKey, code: item.productCode?.trim() || undefined,
+    description: item.description.trim(), unit: issue.unit, manualItem: true, purchasedQuantity: entry.quantity,
+    plannedQuantity: 0, purchaseGroupId: item.purchaseGroupId, unitPrice: entry.unitPrice });
+  const fiscalNotes = wh.fiscalNotes.map(row => row.id !== noteId ? row : {
+    ...row, updatedAt: timestamp, updatedBy: auditActor ?? row.updatedBy,
+    items: row.items.map(current => current.id !== noteItemId ? current : { ...current, itemKey: destinationKey,
+      linkStatus: 'vinculado' as const, linkSource: 'manual' as const, linkConfidence: 1 }),
+  });
+  const movements = [...wh.movements.map(row => row.id === entry.id
+    ? { ...row, reversedById: reversalId, updatedAt: timestamp, updatedBy: auditActor } : row), reversal, correctedEntry];
+  const updated = setWh(p, { items, fiscalNotes, movements });
+  return logToProject(updated, {
+    entityType: 'warehouse_fiscal_note', entityId: noteId, action: 'updated',
+    title: `Vínculo de material da NF ${note.invoiceNumber || noteId} corrigido`,
+    description: `${item.description}: entrada de ${entry.quantity} ${issue.unit} separada de ${issue.currentDescription}.`,
+    userId: auditActor?.userId, userName: auditActor?.userName, userEmail: auditActor?.userEmail,
+    before: { noteItemId, itemKey: entry.itemKey, movementId: entry.id },
+    after: { noteItemId, itemKey: destinationKey, movementId: replacementId },
+    metadata: { operation: 'warehouse_fiscal_material_link_correction', reversalId },
+  });
+}
+
 /**
  * Sugere vínculo de material para itens da NF SEM mutar a lista de materiais
  * do almoxarifado. Usado em upload/conferência — só persiste no aprovar.
- * Prioridades: (1) código do produto exato no almoxarifado;
- * (2) código de produto usado em NF anterior do MESMO fornecedor;
- * (3) descrição + unidade já vista em NF anterior do mesmo fornecedor;
- * (4) similaridade da descrição em materiais existentes.
+ * Reutiliza somente uma descrição e unidade de estoque idênticas após
+ * normalização. Códigos da NF são próprios do fornecedor e não identificam
+ * o material físico da obra.
  */
 export function suggestFiscalNoteItemLinks(
   project: Project,
   items: WarehouseFiscalNoteItem[],
-  supplierCnpj?: string,
+  _supplierCnpj?: string,
 ): WarehouseFiscalNoteItem[] {
-  const wh = project.warehouse;
   const rows = computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true });
   const rowsByKey = new Map(rows.map(r => [r.key, r] as const));
-  const byCode = new Map<string, string>();
-  const byLookup = new Map<string, string>();
+  const byLookup = new Map<string, string[]>();
   for (const r of rows) {
-    const c = normalizeProductCode(r.code);
-    if (c && !byCode.has(c)) byCode.set(c, r.key);
-    byLookup.set(fiscalItemLookup({ description: r.description, unit: r.unit }), r.key);
-  }
-
-  // Histórico do mesmo fornecedor (apenas notas aprovadas)
-  const cnpjDigits = (supplierCnpj ?? '').replace(/\D/g, '');
-  const supplierHistory = new Map<string, string>(); // productCode/lookup -> itemKey
-  if (cnpjDigits && wh) {
-    for (const n of wh.fiscalNotes ?? []) {
-      if (n.status !== 'aprovada') continue;
-      if ((n.supplierCnpj ?? '').replace(/\D/g, '') !== cnpjDigits) continue;
-      for (const it of n.items) {
-        if (!it.itemKey || !rowsByKey.has(it.itemKey)) continue;
-        const c = normalizeProductCode(it.productCode);
-        if (c) supplierHistory.set('c:' + c, it.itemKey);
-        supplierHistory.set('l:' + fiscalItemLookup({ description: it.description, unit: it.unit, stockUnit: it.stockUnit }), it.itemKey);
-      }
-    }
+    const lookup = fiscalItemLookup({ description: r.description, unit: r.unit });
+    byLookup.set(lookup, [...(byLookup.get(lookup) ?? []), r.key]);
   }
 
   return items.map(item => {
-    if (item.itemKey && rowsByKey.has(item.itemKey) && item.linkStatus === 'vinculado') {
+    const lookup = fiscalItemLookup(item);
+    if (item.itemKey && rowsByKey.has(item.itemKey)
+      && fiscalItemLookup({ description: rowsByKey.get(item.itemKey)!.description, unit: rowsByKey.get(item.itemKey)!.unit }) === lookup
+      && item.linkStatus === 'vinculado') {
       return item;
     }
     const productCode = item.productCode?.trim() || undefined;
-    const codeKey = normalizeProductCode(productCode);
-    const lookup = fiscalItemLookup({ description: item.description, unit: item.unit, stockUnit: item.stockUnit });
-    let suggested: string | undefined;
-    let linkSource: WarehouseFiscalNoteItem['linkSource'];
-    let linkConfidence = 0;
-    if (codeKey) {
-      suggested = byCode.get(codeKey);
-      if (suggested) { linkSource = 'codigo'; linkConfidence = 1; }
+    const matches = byLookup.get(lookup) ?? [];
+    if (matches.length === 1) {
+      return { ...item, productCode, itemKey: matches[0], linkStatus: 'auto' as FiscalItemLinkStatus, linkSource: 'descricao' as const, linkConfidence: 1 };
     }
-    if (!suggested && codeKey) {
-      suggested = supplierHistory.get('c:' + codeKey);
-      if (suggested) { linkSource = 'fornecedor'; linkConfidence = 0.98; }
-    }
-    if (!suggested) {
-      suggested = supplierHistory.get('l:' + lookup);
-      if (suggested) { linkSource = 'fornecedor'; linkConfidence = 0.96; }
-    }
-    if (!suggested) {
-      suggested = byLookup.get(lookup);
-      if (suggested) { linkSource = 'descricao'; linkConfidence = 0.95; }
-    }
-    if (!suggested) {
-      const match = findMaterialMatch(project, item.description, fiscalItemStockUnit(item), productCode);
-      if (match && match.score >= 0.6) {
-        suggested = match.key;
-        linkSource = 'similaridade';
-        linkConfidence = match.score;
-      }
-    }
-    if (suggested) {
-      return { ...item, productCode, itemKey: suggested, linkStatus: 'auto' as FiscalItemLinkStatus, linkSource, linkConfidence };
-    }
-    return { ...item, productCode, itemKey: undefined, linkStatus: 'pendente' as FiscalItemLinkStatus, linkSource: 'novo' as const, linkConfidence: 1 };
+    return { ...item, productCode, itemKey: undefined, linkStatus: 'pendente' as FiscalItemLinkStatus,
+      linkSource: matches.length ? undefined : 'novo' as const, linkConfidence: matches.length ? 0 : 1 };
   });
 }
 
