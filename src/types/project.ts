@@ -967,7 +967,7 @@ export interface WarehouseItemConfig {
   unit: string;
   /** Item criado diretamente no almoxarifado, sem alterar orçamento/lista de material. */
   manualItem?: boolean;
-  /** Agrupamento visual confirmado pelo usuário; não move nem mistura lançamentos. */
+  /** Equivalência física manual, usada na tabela e na conferência fiscal; preserva os movimentos individuais. */
   groupedWithKey?: string;
   minStock?: number;
   plannedQuantity?: number;

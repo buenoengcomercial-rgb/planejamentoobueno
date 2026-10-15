@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project, WarehouseFiscalNote } from '@/types/project';
-import { computeWarehouseRows, emptyWarehouse } from '@/lib/warehouse';
+import { computeWarehouseRows, emptyWarehouse, groupWarehouseMaterials, ungroupWarehouseMaterial } from '@/lib/warehouse';
 import WarehouseFiscalNotesTab from './WarehouseFiscalNotesTab';
 import { indikaItems } from '@/test/fixtures/indikaFiscalNote';
 
@@ -183,6 +183,25 @@ describe('WarehouseFiscalNotesTab - validação manual antes do lançamento', ()
     expect(screen.getAllByText(/Incluído por:/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Alice/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Bruno/i).length).toBeGreaterThan(0);
+  });
+
+  it('reavalia o aviso da Entrada ao agrupar e desagrupar em Materiais', () => {
+    const project = projectWithPostedNote();
+    const key = project.warehouse!.items[0].key;
+    project.warehouse!.items[0].description = 'Fita adesiva antiga';
+    project.warehouse!.items.push({ key: 'principal', description: 'Fita adesiva nova', unit: 'UN', manualItem: true });
+    project.warehouse!.movements.push({ id: 'entry-1', createdAt: '2026-08-15T10:00:00Z', date: '2026-08-15',
+      type: 'entrada', itemKey: key, itemDescription: 'FITA CREPE 24MM X 50M', itemUnit: 'UN', quantity: 2,
+      fiscalNoteId: 'posted-note', fiscalNoteItemId: 'posted-item' });
+    const onProjectChange = vi.fn();
+    const { rerender } = render(<WarehouseFiscalNotesTab project={project} onProjectChange={onProjectChange} canManage />);
+    expect(screen.getByText('Entradas vinculadas a outro material (1)')).toBeInTheDocument();
+    const grouped = groupWarehouseMaterials(project, key, 'principal');
+    rerender(<WarehouseFiscalNotesTab project={grouped} onProjectChange={onProjectChange} canManage />);
+    expect(screen.queryByText(/Entradas vinculadas a outro material/)).not.toBeInTheDocument();
+    rerender(<WarehouseFiscalNotesTab project={ungroupWarehouseMaterial(grouped, key)} onProjectChange={onProjectChange} canManage />);
+    expect(screen.getByText('Entradas vinculadas a outro material (1)')).toBeInTheDocument();
+    expect(onProjectChange).not.toHaveBeenCalled();
   });
 
   it('ordena as entradas pelos cabeçalhos e mantém o número estável', () => {

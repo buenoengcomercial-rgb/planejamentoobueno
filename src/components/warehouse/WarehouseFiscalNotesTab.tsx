@@ -1137,7 +1137,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
         <section className="rounded-lg border border-warning/40 bg-warning/10 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div><h3 className="font-semibold">Entradas vinculadas a outro material ({materialLinkIssues.length})</h3>
-              <p className="text-sm text-muted-foreground">Conferência por descrição e unidade. A correção preserva a nota e os movimentos antigos para auditoria; retiradas existentes não são transferidas.</p></div>
+              <p className="text-sm text-muted-foreground">Conferência por descrição e unidade, considerando os agrupamentos confirmados em Materiais. A correção preserva a nota e os movimentos antigos para auditoria; retiradas existentes não são transferidas.</p></div>
             {materialLinkIssues.some(issue => !issue.blockers.length) && canEditPosted && <Button disabled={processing} onClick={() => void correctHistoricalMaterialLinks()}>{processing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Corrigir vínculos seguros</Button>}
           </div>
           <div className="mt-3 max-h-96 space-y-2 overflow-y-auto">{materialLinkIssues.map(issue => <div key={`${issue.noteId}:${issue.noteItemId}`} className="rounded-md border bg-background p-3 text-sm">
