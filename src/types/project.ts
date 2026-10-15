@@ -967,6 +967,8 @@ export interface WarehouseItemConfig {
   unit: string;
   /** Item criado diretamente no almoxarifado, sem alterar orçamento/lista de material. */
   manualItem?: boolean;
+  /** Agrupamento visual confirmado pelo usuário; não move nem mistura lançamentos. */
+  groupedWithKey?: string;
   minStock?: number;
   plannedQuantity?: number;
   purchasedQuantity?: number;
@@ -1164,6 +1166,14 @@ export interface WarehouseFiscalNoteItem {
   /** Origem da sugestão automática exibida na conferência. */
   linkSource?: 'codigo' | 'fornecedor' | 'descricao' | 'similaridade' | 'manual' | 'novo';
   linkConfidence?: number;
+  /** Equivalência física conferida manualmente para este vínculo e identidade fiscal. */
+  materialEquivalence?: {
+    itemKey: string;
+    description: string;
+    unit: string;
+    confirmedAt: string;
+    confirmedBy?: WarehouseAuditActor;
+  };
   /** Confiança da IA na leitura deste item (0-1). */
   confidence?: number;
   /** Página de origem na leitura multipágina; não altera o dado fiscal. */

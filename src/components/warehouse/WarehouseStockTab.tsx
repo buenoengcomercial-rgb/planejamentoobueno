@@ -4,11 +4,13 @@ import type { MaterialCostClass, Project, WarehouseAuditActor, WarehouseSupplier
 import {
   computeWarehouseRows,
   getMaterialPurchaseHistory,
+  groupWarehouseMaterials,
   hardDeleteWarehouseItem,
   removeWarehouseItem,
   unlinkWarehouseProjectMaterial,
   upsertItemConfig,
   upsertWarehouseProjectMaterialLink,
+  ungroupWarehouseMaterial,
   archiveWarehouseSupplierPresentation,
   upsertWarehouseSupplierPresentation,
 } from '@/lib/warehouse';
@@ -107,6 +109,10 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
   const [historyFor, setHistoryFor] = useState<{ key: string; description: string } | null>(null);
   const [linkFor, setLinkFor] = useState<string | null>(null);
   const [presentationFor, setPresentationFor] = useState<string | null>(null);
+  const [groupOpen, setGroupOpen] = useState(false);
+  const [groupSource, setGroupSource] = useState('');
+  const [groupTarget, setGroupTarget] = useState('');
+  const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const rows = useMemo(
     () => computeWarehouseStockOverviewRows(project, showArchived),
     [project, showArchived],
@@ -142,6 +148,19 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
         || a.description.localeCompare(b.description, 'pt-BR');
     });
   }, [classFilter, linkFilter, lowOnly, purchaseGroupFilter, rows, search, sort, zeroOnly]);
+  const materialGroups = useMemo(() => {
+    const byKey = new Map(rows.map(row => [row.key, row] as const));
+    return (project.warehouse?.items ?? []).flatMap(item => {
+      const source = byKey.get(item.key);
+      const target = item.groupedWithKey ? byKey.get(item.groupedWithKey) : undefined;
+      return source && target ? [{ source, target }] : [];
+    });
+  }, [project.warehouse?.items, rows]);
+  const visibleGroups = materialGroups.filter(group => filtered.some(row => row.key === group.source.key || row.key === group.target.key));
+  const collapsedKeys = new Set(visibleGroups.filter(group => !expandedGroups.includes(group.source.key))
+    .flatMap(group => [group.source.key, group.target.key]));
+  const visibleRows = filtered.filter(row => !collapsedKeys.has(row.key));
+  const groupableRows = rows.filter(row => row.isPhysicalStock && !row.archived);
 
   const sortBy = (key: StockSortKey) => setSort(current => current.key === key
     ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' }
@@ -182,6 +201,15 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
       catch (error) { toast.error((error as Error).message); }
     },
   );
+  const saveGroup = async () => {
+    try {
+      await commitCatalog(groupWarehouseMaterials(project, groupSource, groupTarget, auditActor));
+      setGroupOpen(false);
+      setGroupSource('');
+      setGroupTarget('');
+      toast.success('Materiais agrupados para consulta; movimentos individuais preservados.');
+    } catch (error) { toast.error((error as Error).message); }
+  };
 
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
@@ -201,6 +229,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
         <Button size="sm" variant={zeroOnly ? 'secondary' : 'outline'} aria-pressed={zeroOnly} className="min-h-11 text-xs" onClick={() => setZeroOnly(value => !value)}>Saldo zerado</Button>
           <span className="mr-auto text-xs text-muted-foreground">Ordenado por <strong className="font-semibold text-foreground">{stockSortLabel[sort.key]}</strong> · {filtered.length} item(ns)</span>
         <Button size="sm" variant={showAllColumns ? 'secondary' : 'outline'} className="hidden min-h-11 text-xs md:inline-flex" aria-pressed={showAllColumns} onClick={() => setShowAllColumns(value => !value)}>{showAllColumns ? 'Visão resumida' : 'Todas as colunas'}</Button>
+        {canDelete && <Button size="sm" variant="outline" className="min-h-11 text-xs" onClick={() => setGroupOpen(true)}>Agrupar materiais</Button>}
         {onNewEntry && <Button size="sm" variant="outline" className="min-h-11 text-xs" onClick={onNewEntry}><Plus className="w-3.5 h-3.5 mr-1" />Nova entrada</Button>}
         <Button size="sm" variant="outline" className="min-h-11 text-xs" onClick={() => setPresentationFor(filtered.find(row => row.isPhysicalStock)?.key ?? rows.find(row => row.isPhysicalStock)?.key ?? null)} disabled={!rows.some(row => row.isPhysicalStock)}><PackagePlus className="mr-1 h-3.5 w-3.5" />Apresentações por fornecedor</Button>
         {archivedCount > 0 && (
@@ -211,9 +240,10 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
         )}
         </div>
       </div>
+      {visibleGroups.length > 0 && <div className="space-y-2 border-b p-3">{visibleGroups.map(group => <div key={group.source.key} className="rounded-lg border border-primary/25 bg-primary/5 p-3 text-sm"><div className="flex flex-wrap items-center gap-2"><button type="button" className="min-w-0 flex-1 text-left font-semibold" onClick={() => setExpandedGroups(current => current.includes(group.source.key) ? current.filter(key => key !== group.source.key) : [...current, group.source.key])} aria-expanded={expandedGroups.includes(group.source.key)}>{expandedGroups.includes(group.source.key) ? '▾' : '▸'} {group.target.description} + {group.source.description}</button><span className="font-mono font-bold">Saldo conjunto: {(group.target.balance + group.source.balance).toLocaleString('pt-BR')} {group.target.unit}</span>{canDelete && <Button size="sm" variant="outline" onClick={() => void commitCatalog(ungroupWarehouseMaterial(project, group.source.key, auditActor)).then(() => toast.success('Agrupamento desfeito.')).catch(error => toast.error((error as Error).message))}>Desagrupar</Button>}</div><p className="mt-1 text-xs text-muted-foreground">2 cadastros vinculados para consulta. Notas, retiradas e saldos de cada cadastro continuam separados; expanda para ver as linhas.</p></div>)}</div>}
       <div className="max-h-[calc(100dvh-300px)] overflow-auto">
         <div className="space-y-4 p-2 md:hidden">{orderedClasses.map(costClass => {
-          const classRows = filtered.filter(row => row.costClass === costClass);
+          const classRows = visibleRows.filter(row => row.costClass === costClass);
           return classRows.length > 0 && <section key={costClass} className="space-y-2"><div className="flex items-center gap-2 px-1 text-sm font-bold"><StockClassBadge costClass={costClass} /><span>{classRows.length} item(ns)</span></div>{classRows.map(row => <StockMobileCard key={row.key} row={row} canArchive={canArchive} onClassChange={setClassification} onLink={() => setLinkFor(row.key)} onHistory={() => setHistoryFor({ key: row.key, description: row.description })} onArchive={() => handleArchiveItem(row.key, row.description)} />)}</section>;
         })}</div>
         <table className={`warehouse-stock-table hidden w-full table-fixed text-sm md:table ${showAllColumns ? 'min-w-[1900px]' : 'warehouse-stock-summary'}`}>
@@ -265,7 +295,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
           </thead>
           <tbody>
             {orderedClasses.map(costClass => {
-              const classRows = filtered.filter(row => row.costClass === costClass);
+              const classRows = visibleRows.filter(row => row.costClass === costClass);
               return <Fragment key={costClass}>{classRows.length > 0 && <tr data-testid="stock-class-group" className="border-t bg-muted/70"><td colSpan={18 + Number(canArchive) + Number(canDelete)} className="p-2"><div className="flex items-center gap-2"><StockClassBadge costClass={costClass} /><span className="text-xs font-semibold text-muted-foreground">{classRows.length} item(ns)</span></div></td></tr>}{classRows.map(r => (
               <tr key={r.key} data-testid="stock-material-row" className={`border-t border-border hover:bg-muted/30 ${r.withdrawn > 0 ? 'bg-primary/5' : ''} ${r.underMin ? 'bg-destructive/5' : ''} ${!r.isPhysicalStock ? 'bg-muted/20' : ''}`}>
                 <td className="p-1.5 font-mono text-[10px] text-muted-foreground truncate">{r.code || '—'}</td>
@@ -312,7 +342,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
               </tr>
             ))}</Fragment>;
             })}
-            {filtered.length === 0 && (
+            {visibleRows.length === 0 && visibleGroups.length === 0 && (
               <tr><td colSpan={18 + Number(canArchive) + Number(canDelete)} className="p-8 text-center text-muted-foreground italic">Nenhum item encontrado.</td></tr>
             )}
           </tbody>
@@ -331,6 +361,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
       />
       <SupplierPresentationDialog project={project} rows={rows} itemKey={presentationFor} onSelectKey={setPresentationFor} auditActor={auditActor} onCommitProject={commitCatalog} onClose={() => setPresentationFor(null)} />
       <PurchaseHistoryDialog project={project} target={historyFor} onClose={() => setHistoryFor(null)} />
+      <Dialog open={groupOpen} onOpenChange={setGroupOpen}><DialogContent><DialogHeader><DialogTitle>Agrupar materiais para consulta</DialogTitle><DialogDescription>Escolha dois cadastros que representam o mesmo material físico. O painel mostrará o saldo conjunto, mas as notas e retiradas de cada cadastro continuarão separadas e auditáveis.</DialogDescription></DialogHeader><div className="space-y-3"><label className="block text-sm font-medium">Material a incluir no grupo<select className="mt-1 min-h-11 w-full rounded border bg-background px-2" value={groupSource} onChange={event => setGroupSource(event.target.value)}><option value="">Selecione</option>{groupableRows.map(row => <option key={row.key} value={row.key}>{row.description} · {row.unit}</option>)}</select></label><label className="block text-sm font-medium">Material principal<select className="mt-1 min-h-11 w-full rounded border bg-background px-2" value={groupTarget} onChange={event => setGroupTarget(event.target.value)}><option value="">Selecione</option>{groupableRows.filter(row => row.key !== groupSource).map(row => <option key={row.key} value={row.key}>{row.description} · {row.unit}</option>)}</select></label><p className="text-xs text-muted-foreground">A confirmação de equivalência dos itens da NF é feita na aba Entrada. Agrupar esta visualização não remove alertas fiscais automaticamente.</p></div><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setGroupOpen(false)}>Cancelar</Button><Button disabled={!groupSource || !groupTarget || groupSource === groupTarget} onClick={() => void saveGroup()}>Agrupar</Button></div></DialogContent></Dialog>
       {confirmDialog}
     </div>
   );

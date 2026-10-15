@@ -4889,6 +4889,11 @@ export function reviewFiscalMaterialLinks(project: Project): FiscalMaterialLinkI
       const sourceConfig = wh.items.find(config => config.key === entry.itemKey);
       const identity = fiscalItemLookup(item);
       if (current && fiscalItemLookup({ description: current.description, unit: current.unit }) === identity) continue;
+      const approval = item.materialEquivalence;
+      if (current && approval?.itemKey === entry.itemKey
+        && fiscalItemLookup({ description: approval.description, unit: approval.unit }) === identity
+        && normalizeFiscalMaterialText(approval.unit) === normalizeFiscalMaterialText(entry.itemUnit)
+        && normalizeFiscalMaterialText(approval.unit) === normalizeFiscalMaterialText(current.unit)) continue;
       const candidates = rows.filter(row => row.key !== entry.itemKey
         && fiscalItemLookup({ description: row.description, unit: row.unit }) === identity);
       const blockers: string[] = [];
@@ -4907,6 +4912,85 @@ export function reviewFiscalMaterialLinks(project: Project): FiscalMaterialLinkI
     }
   }
   return result;
+}
+
+/** Confirma um vínculo físico deliberado, sem alterar a NF ou os movimentos. */
+export function confirmFiscalMaterialEquivalence(project: Project, noteId: string, noteItemId: string, actor?: WarehouseActorInput): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const issue = reviewFiscalMaterialLinks(p).find(row => row.noteId === noteId && row.noteItemId === noteItemId);
+  if (!issue) return p;
+  const note = wh.fiscalNotes?.find(row => row.id === noteId);
+  const item = note?.items.find(row => row.id === noteItemId);
+  const entry = wh.movements.find(row => row.fiscalNoteId === noteId && row.fiscalNoteItemId === noteItemId
+    && row.type === 'entrada' && !row.reversedById);
+  if (!note || !item || !entry || !wh.items.some(config => config.key === entry.itemKey)
+    || item.itemKey !== entry.itemKey || issue.blockers.some(blocker => blocker.includes('ambíguo'))) {
+    throw new Error('O vínculo da entrada está ambíguo; revise a nota antes de confirmar equivalência.');
+  }
+  if (normalizeFiscalMaterialText(issue.unit) !== normalizeFiscalMaterialText(entry.itemUnit)
+    || normalizeFiscalMaterialText(issue.unit) !== normalizeFiscalMaterialText(wh.items.find(config => config.key === entry.itemKey)?.unit)) {
+    throw new Error('Unidades diferentes não podem ser declaradas equivalentes.');
+  }
+  const timestamp = nowISO();
+  const auditActor = normalizeWarehouseActor(actor);
+  const fiscalNotes = wh.fiscalNotes!.map(row => row.id !== noteId ? row : {
+    ...row, updatedAt: timestamp, updatedBy: auditActor ?? row.updatedBy,
+    items: row.items.map(current => current.id !== noteItemId ? current : {
+      ...current, materialEquivalence: { itemKey: entry.itemKey, description: current.description,
+        unit: issue.unit, confirmedAt: timestamp, confirmedBy: auditActor },
+    }),
+  });
+  return logToProject(setWh(p, { fiscalNotes }), {
+    entityType: 'warehouse_fiscal_note', entityId: noteId, action: 'updated',
+    title: `Equivalência de material da NF ${note.invoiceNumber || noteId} confirmada`,
+    description: `${item.description} foi conferido como ${issue.currentDescription}; movimentos e saldos preservados.`,
+    userId: auditActor?.userId, userName: auditActor?.userName, userEmail: auditActor?.userEmail,
+    before: { noteItemId, itemKey: entry.itemKey, materialEquivalence: item.materialEquivalence },
+    after: { noteItemId, itemKey: entry.itemKey, materialEquivalence: fiscalNotes.find(row => row.id === noteId)?.items.find(row => row.id === noteItemId)?.materialEquivalence },
+    metadata: { operation: 'warehouse_fiscal_material_equivalence' },
+  });
+}
+
+/** Agrupa a apresentação de dois cadastros sem reatribuir o histórico de estoque. */
+export function groupWarehouseMaterials(project: Project, sourceKey: string, targetKey: string, actor?: WarehouseActorInput): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  if (sourceKey === targetKey) throw new Error('Selecione dois materiais distintos.');
+  const source = wh.items.find(item => item.key === sourceKey);
+  const target = wh.items.find(item => item.key === targetKey);
+  if (!source || !target || source.archivedAt || target.archivedAt) throw new Error('Selecione materiais ativos.');
+  if (normalizeFiscalMaterialText(source.unit) !== normalizeFiscalMaterialText(target.unit)) throw new Error('As unidades dos materiais precisam coincidir.');
+  if (target.groupedWithKey || source.groupedWithKey || wh.items.some(item => item.groupedWithKey === sourceKey || item.groupedWithKey === targetKey)) {
+    throw new Error('Desfaça o agrupamento atual antes de reagrupar este material.');
+  }
+  const auditActor = normalizeWarehouseActor(actor);
+  const items = wh.items.map(item => item.key === sourceKey ? { ...item, groupedWithKey: targetKey } : item);
+  return logToProject(setWh(p, { items }), {
+    entityType: 'warehouse_item', entityId: sourceKey, action: 'updated',
+    title: 'Materiais agrupados para consulta',
+    description: `${source.description} agrupado com ${target.description}; saldos e movimentos individuais preservados.`,
+    userId: auditActor?.userId, userName: auditActor?.userName, userEmail: auditActor?.userEmail,
+    before: { sourceKey, groupedWithKey: source.groupedWithKey }, after: { sourceKey, groupedWithKey: targetKey },
+    metadata: { operation: 'warehouse_material_group' },
+  });
+}
+
+export function ungroupWarehouseMaterial(project: Project, sourceKey: string, actor?: WarehouseActorInput): Project {
+  const p = ensureWarehouse(project);
+  const wh = p.warehouse!;
+  const source = wh.items.find(item => item.key === sourceKey);
+  if (!source?.groupedWithKey) return p;
+  const auditActor = normalizeWarehouseActor(actor);
+  const items = wh.items.map(item => item.key === sourceKey ? { ...item, groupedWithKey: undefined } : item);
+  return logToProject(setWh(p, { items }), {
+    entityType: 'warehouse_item', entityId: sourceKey, action: 'updated',
+    title: 'Agrupamento de materiais desfeito',
+    description: `${source.description} voltou a ser exibido separadamente.`,
+    userId: auditActor?.userId, userName: auditActor?.userName, userEmail: auditActor?.userEmail,
+    before: { sourceKey, groupedWithKey: source.groupedWithKey }, after: { sourceKey },
+    metadata: { operation: 'warehouse_material_ungroup' },
+  });
 }
 
 /** Uma correção por transação: estorna a entrada antiga e lança no material certo. */

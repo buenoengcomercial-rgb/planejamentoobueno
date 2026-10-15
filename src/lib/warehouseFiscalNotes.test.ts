@@ -31,6 +31,9 @@ import {
   isStockFiscalDocument,
   reconcileArchivedFiscalNoteStock,
   confirmFiscalNotePackagingConversion,
+  confirmFiscalMaterialEquivalence,
+  groupWarehouseMaterials,
+  ungroupWarehouseMaterial,
   reviewFiscalNotePackagingConversions,
   reviewArchivedFiscalNoteStock,
   reviewFiscalMaterialLinks,
@@ -388,6 +391,44 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(reviewFiscalMaterialLinks(project)[0].blockers).toContain('A separação deixaria o material antigo com saldo negativo.');
     expect(() => correctFiscalMaterialLink(project, 'nf-2', 'item-2')).toThrow(/saldo negativo/i);
     expect(project.warehouse!.movements).toHaveLength(3);
+  });
+
+  it('confirma equivalência bloqueada por retirada sem mover estoque e mantém o vínculo auditável', () => {
+    const project = approveFiscalNote(withNote(note({ items: [{ ...note().items[0], description: 'Curva macho fêmea', quantity: 8 }] })), 'nf-1');
+    const key = project.warehouse!.items[0].key;
+    project.warehouse!.fiscalNotes.push(note({ id: 'nf-2', status: 'aprovada', invoiceNumber: '1319381',
+      items: [{ ...note().items[0], id: 'item-2', description: 'Curva macho/fêmea 90°', itemKey: key, quantity: 6 }] }));
+    project.warehouse!.movements.push({ id: 'entry-2', type: 'entrada', date: '2026-10-15', createdAt: '2026-10-15T10:00:00Z',
+      itemKey: key, itemDescription: 'Curva macho/fêmea 90°', itemUnit: 'SC', quantity: 6,
+      fiscalNoteId: 'nf-2', fiscalNoteItemId: 'item-2' });
+    project.warehouse!.movements.push({ id: 'withdrawal', type: 'retirada', date: '2026-10-15', createdAt: '2026-10-15T11:00:00Z',
+      itemKey: key, itemDescription: 'Curva macho fêmea', itemUnit: 'SC', quantity: 10 });
+    expect(reviewFiscalMaterialLinks(project)[0].blockers).toContain('A separação deixaria o material antigo com saldo negativo.');
+    const beforeMovements = structuredClone(project.warehouse!.movements);
+    const confirmed = confirmFiscalMaterialEquivalence(project, 'nf-2', 'item-2', 'Proprietário');
+    expect(reviewFiscalMaterialLinks(confirmed)).toEqual([]);
+    expect(confirmed.warehouse!.movements).toEqual(beforeMovements);
+    expect(confirmed.warehouse!.fiscalNotes[1].items[0].materialEquivalence).toMatchObject({ itemKey: key, description: 'Curva macho/fêmea 90°' });
+    expect(confirmFiscalMaterialEquivalence(confirmed, 'nf-2', 'item-2')).toBe(confirmed);
+    confirmed.warehouse!.fiscalNotes[1].items[0].description = 'Outro material';
+    expect(reviewFiscalMaterialLinks(confirmed)).toHaveLength(1);
+  });
+
+  it('agrupa somente unidades iguais e mantém saldos e notas de cada cadastro separados', () => {
+    const project = baseProject();
+    project.warehouse!.items = [{ key: 'generic', description: 'Curva macho fêmea', unit: 'UN' },
+      { key: 'remadi', description: 'Curva macho/fêmea 90° Remadi', unit: 'UN' }];
+    project.warehouse!.movements = [{ id: 'a', type: 'entrada', itemKey: 'generic', itemDescription: 'Curva macho fêmea', itemUnit: 'UN', quantity: 8, date: '2026-10-15', createdAt: '2026-10-15T10:00:00Z' },
+      { id: 'b', type: 'retirada', itemKey: 'generic', itemDescription: 'Curva macho fêmea', itemUnit: 'UN', quantity: 4, date: '2026-10-15', createdAt: '2026-10-15T11:00:00Z' },
+      { id: 'c', type: 'entrada', itemKey: 'remadi', itemDescription: 'Curva macho/fêmea 90° Remadi', itemUnit: 'UN', quantity: 2, date: '2026-10-15', createdAt: '2026-10-15T12:00:00Z' }];
+    const grouped = groupWarehouseMaterials(project, 'remadi', 'generic', 'Proprietário');
+    expect(grouped.warehouse!.items[1].groupedWithKey).toBe('generic');
+    expect(grouped.warehouse!.movements).toEqual(project.warehouse!.movements);
+    expect(computeWarehouseRows(grouped, { includeManual: true }).map(row => row.balance).sort()).toEqual([2, 4]);
+    expect(() => groupWarehouseMaterials(grouped, 'generic', 'remadi')).toThrow(/agrupamento atual/i);
+    expect(ungroupWarehouseMaterial(grouped, 'remadi').warehouse!.items[1].groupedWithKey).toBeUndefined();
+    project.warehouse!.items[1].unit = 'PC';
+    expect(() => groupWarehouseMaterials(project, 'remadi', 'generic')).toThrow(/unidades/i);
   });
 
   it('cancela com estorno auditável e oculta material criado só pela nota', () => {

@@ -32,6 +32,7 @@ import {
   readFileAsDataURL,
   reconcileArchivedFiscalNoteStock,
   confirmFiscalNotePackagingConversion,
+  confirmFiscalMaterialEquivalence,
   correctFiscalMaterialLink,
   reviewArchivedFiscalNoteStock,
   reviewFiscalMaterialLinks,
@@ -500,6 +501,7 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const [packagingCorrectionFactor, setPackagingCorrectionFactor] = useState<number | undefined>(undefined);
   const [packagingCorrectionUnit, setPackagingCorrectionUnit] = useState('PC');
   const [descriptionCorrection, setDescriptionCorrection] = useState<{ noteId: string; itemId: string; expectedDescription: string; description: string } | null>(null);
+  const [equivalenceFor, setEquivalenceFor] = useState<{ noteId: string; noteItemId: string } | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<WarehouseAttachment | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -1011,6 +1013,20 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
     }
   };
 
+  const confirmMaterialEquivalence = async () => {
+    if (!equivalenceFor) return;
+    try {
+      setProcessing(true);
+      await commitReceipt(confirmFiscalMaterialEquivalence(project, equivalenceFor.noteId, equivalenceFor.noteItemId, auditActor));
+      setEquivalenceFor(null);
+      toast.success('Equivalência confirmada e registrada na auditoria. Saldos preservados.');
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const openPackagingCorrection = (review: (typeof packagingConversionReviews)[number]) => {
     setPackagingCorrection({ noteId: review.noteId, itemId: review.itemId });
     setPackagingCorrectionFactor(review.fiscalQuantity > 0 ? review.suggestedStockQuantity / review.fiscalQuantity : 1);
@@ -1128,9 +1144,17 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
             <strong>NF {issue.invoiceNumber || issue.noteId} · {issue.description}</strong>
             <div className="text-muted-foreground">{decimal(issue.quantity)} {issue.unit} · Atual: {issue.currentDescription} · Destino: {issue.targetItemKey ? 'material existente com descrição idêntica' : 'novo material na aba Materiais'}</div>
             {issue.blockers.length > 0 && <div className="mt-1 text-warning">Revisar: {issue.blockers.join(' ')}</div>}
+            {canEditPosted && <Button type="button" size="sm" variant="outline" className="mt-2 min-h-11" disabled={processing} onClick={() => setEquivalenceFor({ noteId: issue.noteId, noteItemId: issue.noteItemId })}>Confirmar mesmo material físico</Button>}
           </div>)}</div>
         </section>
       )}
+
+      <Dialog open={!!equivalenceFor} onOpenChange={open => !open && setEquivalenceFor(null)}>
+        <DialogContent><DialogHeader><DialogTitle>Confirmar equivalência física?</DialogTitle><DialogDescription>Confirme somente após verificar que o item da nota e o material atual são o mesmo produto e têm a mesma unidade. A descrição da nota, as retiradas e os movimentos existentes permanecem auditáveis. Essa confirmação remove o alerta deste item, sem alterar o saldo.</DialogDescription></DialogHeader>
+          <div className="rounded border p-3 text-sm">{materialLinkIssues.filter(issue => issue.noteId === equivalenceFor?.noteId && issue.noteItemId === equivalenceFor?.noteItemId).map(issue => <div key={issue.noteItemId}><strong>NF {issue.invoiceNumber}: {issue.description}</strong><div>Material atual: {issue.currentDescription}</div><div>{decimal(issue.quantity)} {issue.unit}</div></div>)}</div>
+          <DialogFooter><Button variant="outline" onClick={() => setEquivalenceFor(null)}>Cancelar</Button><Button disabled={processing} onClick={() => void confirmMaterialEquivalence()}>Confirmar equivalência</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {group === 'archived' && archivedStockReview.issues.length > 0 && (
         <div className="flex flex-col gap-3 rounded-lg border border-warning/40 bg-warning/10 p-4 sm:flex-row sm:items-center">
