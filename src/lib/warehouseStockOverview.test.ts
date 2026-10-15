@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Project } from '@/types/project';
-import { emptyWarehouse } from '@/lib/warehouse';
+import { emptyWarehouse, ungroupWarehouseMaterial } from '@/lib/warehouse';
 import { setMaterialCostClass } from '@/lib/materialComparisons';
 import { computeWarehouseStockOverviewRows } from './warehouseStockOverview';
 
@@ -18,6 +18,42 @@ function projectWithPlanning(): Project {
 }
 
 describe('computeWarehouseStockOverviewRows', () => {
+  it('unifica curvas na linha do destino com totais e custo ponderado sem alterar o livro', () => {
+    const project = projectWithPlanning();
+    project.warehouse!.items = [
+      { key: 'old', description: 'Curva antiga', unit: 'UN', manualItem: true, groupedWithKey: 'remadi', minStock: 500 },
+      { key: 'remadi', description: 'Curva Remadi', unit: 'UN', manualItem: true, minStock: 2 },
+    ];
+    project.warehouse!.materialLinks = [];
+    const entry = project.warehouse!.movements[0];
+    project.warehouse!.movements = [
+      { ...entry, id: 'old-entry', itemKey: 'old', itemDescription: 'Curva antiga', itemUnit: 'UN', quantity: 8, unitPrice: 10 },
+      { ...entry, id: 'old-withdrawal', type: 'retirada', itemKey: 'old', itemDescription: 'Curva antiga', itemUnit: 'UN', quantity: 4, unitPrice: 10 },
+      { ...entry, id: 'remadi-entry', itemKey: 'remadi', itemDescription: 'Curva Remadi', itemUnit: 'UN', quantity: 2, unitPrice: 20 },
+    ];
+    const original = structuredClone(project);
+    const rows = computeWarehouseStockOverviewRows(project);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ key: 'remadi', description: 'Curva Remadi', received: 10, withdrawn: 4,
+      balance: 6, inventoryValue: 80, averageUnitCost: 13.33, minStock: 2, groupMemberKeys: ['remadi', 'old'] });
+    expect(rows[0].searchText).toContain('Curva antiga');
+    expect(project).toEqual(original);
+    const separate = computeWarehouseStockOverviewRows(ungroupWarehouseMaterial(project, 'old'));
+    expect(separate.map(row => row.balance).sort()).toEqual([2, 4]);
+    delete project.warehouse!.movements[0].unitPrice;
+    expect(computeWarehouseStockOverviewRows(project)[0]).toMatchObject({ valuationIncomplete: true, averageUnitCost: undefined });
+  });
+
+  it('deduplica planejamento e usa classificação e mínimo do material principal', () => {
+    const project = projectWithPlanning();
+    project.warehouse!.items.push({ key: 'duplicate', description: 'Outro nome do cabo', unit: 'M', manualItem: true, groupedWithKey: 'physical-cable', minStock: 999 });
+    project.warehouse!.materialLinks.push({ ...project.warehouse!.materialLinks[0], id: 'duplicate-link', warehouseItemKey: 'duplicate', conversionFactor: 2 });
+    project.warehouse!.movements.push({ ...project.warehouse!.movements[0], id: 'duplicate-entry', itemKey: 'duplicate', quantity: 5 });
+    expect(computeWarehouseStockOverviewRows(project)[0]).toMatchObject({ planned: 100, contracted: 100,
+      automaticMinStock: 30, effectiveMinStock: 40, received: 40, balance: 40, costClass: 'material', underMin: false });
+    expect(computeWarehouseStockOverviewRows(project)[0].projectLinks).toHaveLength(1);
+  });
+
   it('combina estoque físico vinculado com contratado, aditivo e limite efetivo de 30%', () => {
     const rows = computeWarehouseStockOverviewRows(projectWithPlanning());
     const cable = rows.find(row => row.key === 'physical-cable')!;

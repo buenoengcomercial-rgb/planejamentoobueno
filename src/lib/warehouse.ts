@@ -4819,6 +4819,8 @@ export function unlinkWarehouseProjectMaterial(
 /** Histórico de compras de um material a partir dos movimentos de entrada da obra. */
 export interface MaterialPurchaseHistoryEntry {
   movementId: string;
+  itemKey: string;
+  itemDescription: string;
   date: string;
   invoiceNumber?: string;
   supplierName?: string;
@@ -4830,22 +4832,31 @@ export interface MaterialPurchaseHistoryEntry {
   noteId?: string;
 }
 
-export function getMaterialPurchaseHistory(project: Project, itemKey: string): MaterialPurchaseHistoryEntry[] {
+export function getMaterialPurchaseHistory(project: Project, itemKey: string | readonly string[]): MaterialPurchaseHistoryEntry[] {
   const wh = project.warehouse;
   if (!wh) return [];
+  const itemKeys = new Set(typeof itemKey === 'string' ? [itemKey] : itemKey);
+  const notesById = new Map((wh.fiscalNotes ?? []).map(note => [note.id, note]));
   const notesByNumber = new Map<string, WarehouseFiscalNote>();
   for (const n of wh.fiscalNotes ?? []) {
     if (n.invoiceNumber) notesByNumber.set(n.invoiceNumber.trim(), n);
   }
   return (wh.movements ?? [])
-    .filter(m => m.itemKey === itemKey && !m.reversedById && (m.type === 'entrada' || m.type === 'devolucao' || m.type === 'ajuste_positivo'))
+    .filter(m => itemKeys.has(m.itemKey) && !m.reversedById && (m.type === 'entrada' || m.type === 'devolucao' || m.type === 'ajuste_positivo'))
     .map(m => {
-      const linkedNote = m.invoiceNumber ? notesByNumber.get(m.invoiceNumber.trim()) : undefined;
-      const unitPrice = m.unitPrice ?? linkedNote?.items.find(i => i.itemKey === itemKey)?.unitPrice;
+      const linkedNote = (m.fiscalNoteId ? notesById.get(m.fiscalNoteId) : undefined)
+        ?? (m.invoiceNumber ? notesByNumber.get(m.invoiceNumber.trim()) : undefined);
+      const noteItem = m.fiscalNoteItemId
+        ? linkedNote?.items.find(item => item.id === m.fiscalNoteItemId)
+        : linkedNote?.items.find(item => item.itemKey === m.itemKey);
+      // Em apresentações convertidas, o preço da unidade fiscal não é o preço físico.
+      const unitPrice = m.unitPrice ?? (noteItem?.unit === m.itemUnit && noteItem.quantity === m.quantity ? noteItem.unitPrice : undefined);
       return {
         movementId: m.id,
+        itemKey: m.itemKey,
+        itemDescription: m.itemDescription,
         date: m.date,
-        invoiceNumber: m.invoiceNumber,
+        invoiceNumber: m.invoiceNumber ?? linkedNote?.invoiceNumber,
         supplierName: linkedNote?.supplierName,
         quantity: m.quantity,
         unit: m.itemUnit,
@@ -4855,7 +4866,7 @@ export function getMaterialPurchaseHistory(project: Project, itemKey: string): M
         noteId: linkedNote?.id,
       };
     })
-    .sort((a, b) => (a.date < b.date ? 1 : -1));
+    .sort((a, b) => b.date.localeCompare(a.date) || a.movementId.localeCompare(b.movementId));
 }
 
 export interface FiscalMaterialLinkIssue {

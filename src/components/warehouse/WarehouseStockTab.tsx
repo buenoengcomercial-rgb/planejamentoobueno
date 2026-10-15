@@ -2,7 +2,6 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { ElementType } from 'react';
 import type { MaterialCostClass, Project, WarehouseAuditActor, WarehouseSupplierPresentation } from '@/types/project';
 import {
-  computeWarehouseRows,
   getMaterialPurchaseHistory,
   groupWarehouseMaterials,
   hardDeleteWarehouseItem,
@@ -107,17 +106,20 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
   const [lowOnly, setLowOnly] = useState(false);
   const [zeroOnly, setZeroOnly] = useState(false);
   const [sort, setSort] = useState<StockSort>({ key: 'withdrawn', direction: 'desc' });
-  const [historyFor, setHistoryFor] = useState<{ key: string; description: string } | null>(null);
+  const [historyFor, setHistoryFor] = useState<{ key: string; description: string; memberKeys?: string[] } | null>(null);
   const [linkFor, setLinkFor] = useState<string | null>(null);
   const [presentationFor, setPresentationFor] = useState<string | null>(null);
   const [groupOpen, setGroupOpen] = useState(false);
   const [groupSource, setGroupSource] = useState('');
   const [groupTarget, setGroupTarget] = useState('');
   const [groupSearch, setGroupSearch] = useState('');
-  const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const rows = useMemo(
     () => computeWarehouseStockOverviewRows(project, showArchived),
     [project, showArchived],
+  );
+  const presentationRows = useMemo(
+    () => presentationFor ? computeWarehouseStockOverviewRows(project, showArchived, false) : [],
+    [project, showArchived, presentationFor],
   );
   const commitCatalog = async (next: Project) => {
     if (onCommitWarehouseScoped) return onCommitWarehouseScoped(next, 'catalog');
@@ -130,11 +132,11 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')), [project.materialComparisons]);
   const projectMaterials = useMemo(() => suggestMaterialsFromProject(project).filter(material => material.quantity > 0), [project]);
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const matchingRows = rows.filter(r => (!q || r.description.toLowerCase().includes(q) || (r.code ?? '').toLowerCase().includes(q))
+    const q = normalizeMaterialSearch(search);
+    const matchingRows = rows.filter(r => (!q || normalizeMaterialSearch(r.searchText ?? `${r.description} ${r.code ?? ''}`).includes(q))
       && (linkFilter === 'all' || r.linkStatus === linkFilter)
       && (classFilter === 'all' || r.costClass === classFilter)
-      && (purchaseGroupFilter === 'all' || r.purchaseGroupId === purchaseGroupFilter)
+      && (purchaseGroupFilter === 'all' || (r.purchaseGroupIds ?? [r.purchaseGroupId]).includes(purchaseGroupFilter))
       && (!lowOnly || r.underMin)
       && (!zeroOnly || r.balance === 0));
     return matchingRows.sort((a, b) => {
@@ -150,19 +152,8 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
         || a.description.localeCompare(b.description, 'pt-BR');
     });
   }, [classFilter, linkFilter, lowOnly, purchaseGroupFilter, rows, search, sort, zeroOnly]);
-  const materialGroups = useMemo(() => {
-    const byKey = new Map(rows.map(row => [row.key, row] as const));
-    return (project.warehouse?.items ?? []).flatMap(item => {
-      const source = byKey.get(item.key);
-      const target = item.groupedWithKey ? byKey.get(item.groupedWithKey) : undefined;
-      return source && target ? [{ source, target }] : [];
-    });
-  }, [project.warehouse?.items, rows]);
-  const visibleGroups = materialGroups.filter(group => filtered.some(row => row.key === group.source.key || row.key === group.target.key));
-  const collapsedKeys = new Set(visibleGroups.filter(group => !expandedGroups.includes(group.source.key))
-    .flatMap(group => [group.source.key, group.target.key]));
-  const visibleRows = filtered.filter(row => !collapsedKeys.has(row.key));
-  const groupableRows = useMemo(() => rows.filter(row => row.isPhysicalStock && !row.archived)
+  const visibleRows = filtered;
+  const groupableRows = useMemo(() => rows.filter(row => row.isPhysicalStock && !row.archived && !row.groupMemberKeys)
     .sort((left, right) => left.description.localeCompare(right.description, 'pt-BR', { numeric: true })), [rows]);
   const selectedGroupSource = groupableRows.find(row => row.key === groupSource);
   const groupCandidates = groupableRows.filter(row => row.key !== groupSource
@@ -218,6 +209,14 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
       toast.success('Materiais agrupados para consulta; movimentos individuais preservados.');
     } catch (error) { toast.error((error as Error).message); }
   };
+  const ungroup = async (row: WarehouseStockOverviewRow) => {
+    try {
+      let next = project;
+      for (const key of row.groupMemberKeys ?? []) if (key !== row.key) next = ungroupWarehouseMaterial(next, key);
+      await commitCatalog(next);
+      toast.success('Agrupamento desfeito.');
+    } catch (error) { toast.error((error as Error).message); }
+  };
   const openGroupFor = (key: string) => {
     setGroupSource(key);
     setGroupTarget('');
@@ -253,11 +252,10 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
         )}
         </div>
       </div>
-      {visibleGroups.length > 0 && <div className="space-y-2 border-b p-3">{visibleGroups.map(group => <div key={group.source.key} className="rounded-lg border border-primary/25 bg-primary/5 p-3 text-sm"><div className="flex flex-wrap items-center gap-2"><button type="button" className="min-w-0 flex-1 text-left font-semibold" onClick={() => setExpandedGroups(current => current.includes(group.source.key) ? current.filter(key => key !== group.source.key) : [...current, group.source.key])} aria-expanded={expandedGroups.includes(group.source.key)}>{expandedGroups.includes(group.source.key) ? '▾' : '▸'} {group.target.description} + {group.source.description}</button><span className="font-mono font-bold">Saldo conjunto: {(group.target.balance + group.source.balance).toLocaleString('pt-BR')} {group.target.unit}</span>{canDelete && <Button size="sm" variant="outline" onClick={() => void commitCatalog(ungroupWarehouseMaterial(project, group.source.key)).then(() => toast.success('Agrupamento desfeito.')).catch(error => toast.error((error as Error).message))}>Desagrupar</Button>}</div><p className="mt-1 text-xs text-muted-foreground">2 cadastros vinculados para consulta. Notas, retiradas e saldos de cada cadastro continuam separados; expanda para ver as linhas.</p></div>)}</div>}
       <div className="max-h-[calc(100dvh-300px)] overflow-auto">
         <div className="space-y-4 p-2 md:hidden">{orderedClasses.map(costClass => {
           const classRows = visibleRows.filter(row => row.costClass === costClass);
-          return classRows.length > 0 && <section key={costClass} className="space-y-2"><div className="flex items-center gap-2 px-1 text-sm font-bold"><StockClassBadge costClass={costClass} /><span>{classRows.length} item(ns)</span></div>{classRows.map(row => <StockMobileCard key={row.key} row={row} canArchive={canArchive} canGroup={canDelete} onClassChange={setClassification} onLink={() => setLinkFor(row.key)} onGroup={() => openGroupFor(row.key)} onHistory={() => setHistoryFor({ key: row.key, description: row.description })} onArchive={() => handleArchiveItem(row.key, row.description)} />)}</section>;
+          return classRows.length > 0 && <section key={costClass} className="space-y-2"><div className="flex items-center gap-2 px-1 text-sm font-bold"><StockClassBadge costClass={costClass} /><span>{classRows.length} item(ns)</span></div>{classRows.map(row => <StockMobileCard key={row.key} row={row} canArchive={canArchive && !row.groupMemberKeys} canGroup={canDelete} onClassChange={setClassification} onLink={() => setLinkFor(row.key)} onGroup={() => row.groupMemberKeys ? void ungroup(row) : openGroupFor(row.key)} onHistory={() => setHistoryFor({ key: row.key, description: row.description, memberKeys: row.groupMemberKeys })} onArchive={() => handleArchiveItem(row.key, row.description)} />)}</section>;
         })}</div>
         <table className={`warehouse-stock-table hidden w-full table-fixed text-sm md:table ${showAllColumns ? 'min-w-[1900px]' : 'warehouse-stock-summary'}`}>
           <colgroup>
@@ -329,14 +327,14 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
                 </td>
                 <td className="p-1.5 text-[10px] text-muted-foreground">{r.lastMovementDate ?? '—'}</td>
                 <td className="p-1.5 text-right font-mono text-[11px]">{r.valuationIncomplete || r.averageUnitCost == null ? 'Cálculo incompleto' : r.averageUnitCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
-                <td className="p-1.5">{r.isPhysicalStock ? <div className="flex items-center gap-1"><div className="min-w-0 flex-1"><StockLinkButton row={r} onClick={() => setLinkFor(r.key)} /></div>{canDelete && <Button size="sm" variant="outline" className="h-8 shrink-0 px-2 text-xs" onClick={() => openGroupFor(r.key)}>Agrupar</Button>}</div> : <span className="block rounded border border-dashed px-2 py-1.5 text-center text-[10px] text-muted-foreground">Sem estoque físico</span>}</td>
+                <td className="p-1.5">{r.isPhysicalStock ? <div className="flex items-center gap-1"><div className="min-w-0 flex-1"><StockLinkButton row={r} onClick={() => setLinkFor(r.key)} /></div>{canDelete && <Button size="sm" variant="outline" className="h-8 shrink-0 px-2 text-xs" onClick={() => r.groupMemberKeys ? void ungroup(r) : openGroupFor(r.key)}>{r.groupMemberKeys ? 'Desagrupar' : 'Agrupar'}</Button>}</div> : <span className="block rounded border border-dashed px-2 py-1.5 text-center text-[10px] text-muted-foreground">Sem estoque físico</span>}</td>
                 <td className="p-1.5 text-center">
                   {r.isPhysicalStock && <Button size="icon" variant="ghost" className="h-7 w-7" title="Histórico de compras"
-                    onClick={() => setHistoryFor({ key: r.key, description: r.description })}>
+                    onClick={() => setHistoryFor({ key: r.key, description: r.description, memberKeys: r.groupMemberKeys })}>
                     <History className="w-3.5 h-3.5" />
                   </Button>}
                 </td>
-                {canArchive && <td className="p-1.5 text-center">{r.isPhysicalStock &&
+                {canArchive && <td className="p-1.5 text-center">{r.isPhysicalStock && !r.groupMemberKeys &&
                   <Button
                     size="icon"
                     variant="ghost"
@@ -347,7 +345,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
                     <Archive className="w-3.5 h-3.5" />
                   </Button>
                 }</td>}
-                {canDelete && <td className="p-1.5 text-center">{r.isPhysicalStock &&
+                {canDelete && <td className="p-1.5 text-center">{r.isPhysicalStock && !r.groupMemberKeys &&
                   <Button size="icon" variant="destructive" className="h-7 w-7" title="Excluir material definitivamente" onClick={() => handleDeleteItem(r.key, r.description)}>
                     <X className="w-3.5 h-3.5" />
                   </Button>
@@ -355,7 +353,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
               </tr>
             ))}</Fragment>;
             })}
-            {visibleRows.length === 0 && visibleGroups.length === 0 && (
+            {visibleRows.length === 0 && (
               <tr><td colSpan={18 + Number(canArchive) + Number(canDelete)} className="p-8 text-center text-muted-foreground italic">Nenhum item encontrado.</td></tr>
             )}
           </tbody>
@@ -372,7 +370,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
         onCommitProject={commitCatalog}
         onClose={() => setLinkFor(null)}
       />
-      <SupplierPresentationDialog project={project} rows={rows} itemKey={presentationFor} onSelectKey={setPresentationFor} auditActor={auditActor} onCommitProject={commitCatalog} onClose={() => setPresentationFor(null)} />
+      <SupplierPresentationDialog project={project} rows={presentationRows} itemKey={presentationFor} onSelectKey={setPresentationFor} auditActor={auditActor} onCommitProject={commitCatalog} onClose={() => setPresentationFor(null)} />
       <PurchaseHistoryDialog project={project} target={historyFor} onClose={() => setHistoryFor(null)} />
       <Dialog open={groupOpen} onOpenChange={setGroupOpen}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>Agrupar materiais para consulta</DialogTitle><DialogDescription>O material da linha já está selecionado. Busque somente o outro cadastro do mesmo material físico; notas, retiradas e saldos individuais permanecem preservados.</DialogDescription></DialogHeader><div className="space-y-3"><div className="rounded border bg-muted/40 p-3 text-sm"><span className="block text-xs text-muted-foreground">Material selecionado</span><strong>{selectedGroupSource?.description}</strong><span className="ml-2 text-muted-foreground">{selectedGroupSource?.unit}</span></div><label className="block text-sm font-medium">Buscar outro material<Input autoFocus className="mt-1 min-h-11" aria-label="Buscar material para agrupar" placeholder="Digite o nome ou código do material..." value={groupSearch} onChange={event => { setGroupSearch(event.target.value); setGroupTarget(''); }} /></label><div className="max-h-64 space-y-1 overflow-y-auto rounded border p-1" role="listbox" aria-label="Materiais encontrados">{groupCandidates.map(row => <button key={row.key} type="button" role="option" aria-selected={groupTarget === row.key} className={`flex min-h-11 w-full items-center justify-between gap-2 rounded px-3 py-2 text-left text-sm hover:bg-muted ${groupTarget === row.key ? 'bg-primary/10 font-semibold text-primary' : ''}`} onClick={() => setGroupTarget(row.key)}><span>{row.description}</span><span className="shrink-0 text-xs text-muted-foreground">{row.unit}</span></button>)}{!groupCandidates.length && <p className="p-3 text-sm text-muted-foreground">Nenhum material com a mesma unidade encontrado.</p>}</div><p className="text-xs text-muted-foreground">A lista está em ordem alfabética. Confirme equivalências dos itens da NF na aba Entrada; este agrupamento visual não remove alertas fiscais.</p></div><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setGroupOpen(false)}>Cancelar</Button><Button disabled={!groupTarget} onClick={() => void saveGroup()}>Agrupar</Button></div></DialogContent></Dialog>
       {confirmDialog}
@@ -390,7 +388,7 @@ function StockMobileCard({ row, canArchive, canGroup, onClassChange, onLink, onG
   onHistory: () => void;
   onArchive: () => void;
 }) {
-  return <article className={`space-y-3 rounded-xl border p-3 shadow-sm ${row.underMin ? 'border-destructive/50 bg-destructive/5' : row.isPhysicalStock ? 'border-primary/25 bg-primary/5' : 'bg-muted/25'}`}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</div><div className="font-bold leading-snug">{row.description}</div></div><WarehouseStatusBadge label={row.isPhysicalStock ? (row.underMin ? 'Estoque baixo' : 'Estoque físico') : 'Planejamento'} tone={row.underMin ? 'danger' : row.isPhysicalStock ? 'success' : 'neutral'} /></div><label className="block"><span className="mb-1 block text-xs font-semibold text-muted-foreground">Classificação</span><StockClassSelect row={row} onChange={onClassChange} mobile /></label><dl className="grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Contratado</dt><dd className="font-semibold">{row.contracted.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Acréscimo do aditivo</dt><dd className="font-semibold text-primary">+{row.additive.toLocaleString('pt-BR')} {row.unit}</dd></div><div className="rounded bg-primary/5 p-2"><dt className="text-xs text-muted-foreground">Planejado total</dt><dd className="font-semibold">{row.planned.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.isPhysicalStock ? <><div><dt className="text-xs text-muted-foreground">Saldo disponível</dt><dd className={`font-bold ${row.underMin ? 'text-destructive' : 'text-primary'}`}>{row.balance.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Já retirado</dt><dd>{row.withdrawn.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.costClass === 'material' && <div><dt className="text-xs text-muted-foreground">Estoque baixo</dt><dd className={row.underMin ? 'font-bold text-destructive' : ''}>{row.effectiveMinStock?.toLocaleString('pt-BR') ?? '—'} {row.unit}</dd></div>}</> : <div className="col-span-2 rounded-lg bg-muted/60 p-2 text-xs text-muted-foreground">Sem estoque físico: aguarda compra, nota fiscal ou cadastro no almoxarifado.</div>}</dl>{row.isPhysicalStock && <div className="grid grid-cols-2 gap-2"><StockLinkButton row={row} onClick={onLink} mobile />{canGroup && <Button variant="outline" className="min-h-11" onClick={onGroup}>Agrupar</Button>}<Button variant="outline" className="min-h-11" onClick={onHistory}><History className="h-4 w-4" /><span>Histórico</span></Button>{canArchive && <Button variant="outline" className="min-h-11 text-destructive" onClick={onArchive}><Archive className="h-4 w-4" /><span>Arquivar</span></Button>}</div>}</article>;
+  return <article className={`space-y-3 rounded-xl border p-3 shadow-sm ${row.underMin ? 'border-destructive/50 bg-destructive/5' : row.isPhysicalStock ? 'border-primary/25 bg-primary/5' : 'bg-muted/25'}`}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</div><div className="font-bold leading-snug">{row.description}</div></div><WarehouseStatusBadge label={row.isPhysicalStock ? (row.underMin ? 'Estoque baixo' : 'Estoque físico') : 'Planejamento'} tone={row.underMin ? 'danger' : row.isPhysicalStock ? 'success' : 'neutral'} /></div><label className="block"><span className="mb-1 block text-xs font-semibold text-muted-foreground">Classificação</span><StockClassSelect row={row} onChange={onClassChange} mobile /></label><dl className="grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Contratado</dt><dd className="font-semibold">{row.contracted.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Acréscimo do aditivo</dt><dd className="font-semibold text-primary">+{row.additive.toLocaleString('pt-BR')} {row.unit}</dd></div><div className="rounded bg-primary/5 p-2"><dt className="text-xs text-muted-foreground">Planejado total</dt><dd className="font-semibold">{row.planned.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.isPhysicalStock ? <><div><dt className="text-xs text-muted-foreground">Saldo disponível</dt><dd className={`font-bold ${row.underMin ? 'text-destructive' : 'text-primary'}`}>{row.balance.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Já retirado</dt><dd>{row.withdrawn.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.costClass === 'material' && <div><dt className="text-xs text-muted-foreground">Estoque baixo</dt><dd className={row.underMin ? 'font-bold text-destructive' : ''}>{row.effectiveMinStock?.toLocaleString('pt-BR') ?? '—'} {row.unit}</dd></div>}</> : <div className="col-span-2 rounded-lg bg-muted/60 p-2 text-xs text-muted-foreground">Sem estoque físico: aguarda compra, nota fiscal ou cadastro no almoxarifado.</div>}</dl>{row.isPhysicalStock && <div className="grid grid-cols-2 gap-2"><StockLinkButton row={row} onClick={onLink} mobile />{canGroup && <Button variant="outline" className="min-h-11" onClick={onGroup}>{row.groupMemberKeys ? 'Desagrupar' : 'Agrupar'}</Button>}<Button variant="outline" className="min-h-11" onClick={onHistory}><History className="h-4 w-4" /><span>Histórico</span></Button>{canArchive && <Button variant="outline" className="min-h-11 text-destructive" onClick={onArchive}><Archive className="h-4 w-4" /><span>Arquivar</span></Button>}</div>}</article>;
 }
 
 function SupplierPresentationDialog({ project, rows, itemKey, onSelectKey, auditActor, onCommitProject, onClose }: {
@@ -456,7 +454,7 @@ function MaterialLinkDialog({ project, itemKey, projectMaterials, auditActor, ca
   onCommitProject: (project: Project) => Promise<Project>;
   onClose: () => void;
 }) {
-  const row = useMemo(() => itemKey ? computeWarehouseRows(project, { includeManual: true, includeArchived: true }).find(candidate => candidate.key === itemKey) : undefined, [itemKey, project]);
+  const row = useMemo(() => itemKey ? computeWarehouseStockOverviewRows(project, true).find(candidate => candidate.key === itemKey) : undefined, [itemKey, project]);
   const [projectMaterialKey, setProjectMaterialKey] = useState('');
   const [projectMaterialOpen, setProjectMaterialOpen] = useState(false);
   const [conversionFactor, setConversionFactor] = useState('1');
@@ -465,6 +463,7 @@ function MaterialLinkDialog({ project, itemKey, projectMaterials, auditActor, ca
 
   const addLink = async () => {
     if (!row || !selectedMaterial) return toast.error('Selecione um insumo previsto.');
+    if (row.projectLinks.some(link => link.projectMaterialKey === selectedMaterial.key)) return toast.error('Este insumo já está vinculado ao material.');
     const factor = Number(conversionFactor.replace(',', '.'));
     try {
       const next = upsertWarehouseProjectMaterialLink(project, {
@@ -501,11 +500,19 @@ function MaterialLinkDialog({ project, itemKey, projectMaterials, auditActor, ca
     } catch (error) { toast.error((error as Error).message); }
   };
 
-  const onProjectChange = (next: Project) => {
+  const removeLink = (projectMaterialKey: string) => {
+    if (!row) return;
+    const keys = new Set(row.groupMemberKeys ?? [row.key]);
+    let next = project;
+    for (const link of project.warehouse?.materialLinks ?? []) {
+      if (keys.has(link.warehouseItemKey) && link.projectMaterialKey === projectMaterialKey) {
+        next = unlinkWarehouseProjectMaterial(next, link.id, auditActor);
+      }
+    }
     void onCommitProject(next).catch(error => toast.error((error as Error).message));
   };
 
-  return <Dialog open={!!itemKey} onOpenChange={open => !open && onClose()}><DialogContent className="warehouse-ui max-w-3xl"><DialogHeader><DialogTitle>Revisar vínculos do material</DialogTitle><DialogDescription>{row?.description} · Um material físico pode representar mais de um insumo previsto.</DialogDescription></DialogHeader>{row && <div className="space-y-4"><div className="grid gap-3 rounded-md border p-3 md:grid-cols-[1fr_130px_auto]"><div className="min-w-0"><label className="mb-1 block text-xs font-semibold">Insumo previsto</label><Popover open={projectMaterialOpen} onOpenChange={setProjectMaterialOpen}><PopoverTrigger asChild><Button variant="outline" role="combobox" aria-expanded={projectMaterialOpen} aria-label="Selecionar insumo previsto" className="min-h-11 w-full justify-between px-3 font-normal"><span className={cn('truncate text-left', !selectedMaterial && 'text-muted-foreground')}>{selectedMaterial?.description || 'Pesquisar insumo previsto'}</span><ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" /></Button></PopoverTrigger><PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] p-0"><Command><CommandInput placeholder="Digite uma palavra-chave..." /><CommandList><CommandEmpty>Nenhum insumo previsto encontrado.</CommandEmpty><CommandGroup>{projectMaterials.map(material => <CommandItem key={material.key} value={`${material.description} ${material.unit}`} onSelect={() => { setProjectMaterialKey(material.key); setConversionFactor(material.unit.trim().toLowerCase() === row.unit.trim().toLowerCase() ? '1' : ''); setProjectMaterialOpen(false); }} className="min-h-11 gap-2"><Check className={cn('h-4 w-4 shrink-0', projectMaterialKey === material.key ? 'opacity-100' : 'opacity-0')} /><span className="min-w-0 flex-1"><span className="block whitespace-normal leading-snug">{material.description}</span><span className="block text-xs text-muted-foreground">Previsto: {material.quantity.toLocaleString('pt-BR')} {material.unit}</span></span></CommandItem>)}</CommandGroup></CommandList></Command></PopoverContent></Popover></div><div><label className="mb-1 block text-xs font-semibold">Conversão</label><Input className="min-h-11 text-center" value={conversionFactor} onChange={event => setConversionFactor(event.target.value)} placeholder="Fator" /></div><Button className="min-h-11 self-end" onClick={addLink}><Link2 className="mr-2 h-4 w-4" />Vincular</Button></div><div><h4 className="mb-2 text-sm font-semibold">Vínculos confirmados</h4>{row.projectLinks.map(link => <div key={link.id} className="flex min-h-11 items-center gap-2 border-t py-2"><span className="min-w-0 flex-1 text-sm">{link.projectMaterialDescription} ({link.projectMaterialUnit})</span><span className="text-xs text-muted-foreground">fator {link.conversionFactor}</span>{canUnlink && <Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => onProjectChange(unlinkWarehouseProjectMaterial(project, link.id, auditActor))} aria-label={`Desvincular ${link.projectMaterialDescription}`}><Unlink className="h-4 w-4" /></Button>}</div>)}{!row.projectLinks.length && <div className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">Nenhum vínculo confirmado.</div>}</div>{!row.projectLinks.length && <div className="rounded-md border border-warning/30 bg-warning/5 p-3"><label className="mb-1 block text-xs font-semibold">Ou classifique como material não previsto</label><div className="flex gap-2"><Input className="min-h-11" value={unplannedReason} onChange={event => setUnplannedReason(event.target.value)} placeholder="Justificativa obrigatória" /><Button variant="outline" className="min-h-11" onClick={markUnplanned}>Confirmar</Button></div></div>}</div>}<div className="flex justify-end"><Button variant="outline" onClick={onClose}>Fechar</Button></div></DialogContent></Dialog>;
+  return <Dialog open={!!itemKey} onOpenChange={open => !open && onClose()}><DialogContent className="warehouse-ui max-w-3xl"><DialogHeader><DialogTitle>Revisar vínculos do material</DialogTitle><DialogDescription>{row?.description} · Um material físico pode representar mais de um insumo previsto.</DialogDescription></DialogHeader>{row && <div className="space-y-4"><div className="grid gap-3 rounded-md border p-3 md:grid-cols-[1fr_130px_auto]"><div className="min-w-0"><label className="mb-1 block text-xs font-semibold">Insumo previsto</label><Popover open={projectMaterialOpen} onOpenChange={setProjectMaterialOpen}><PopoverTrigger asChild><Button variant="outline" role="combobox" aria-expanded={projectMaterialOpen} aria-label="Selecionar insumo previsto" className="min-h-11 w-full justify-between px-3 font-normal"><span className={cn('truncate text-left', !selectedMaterial && 'text-muted-foreground')}>{selectedMaterial?.description || 'Pesquisar insumo previsto'}</span><ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" /></Button></PopoverTrigger><PopoverContent align="start" className="w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] p-0"><Command><CommandInput placeholder="Digite uma palavra-chave..." /><CommandList><CommandEmpty>Nenhum insumo previsto encontrado.</CommandEmpty><CommandGroup>{projectMaterials.map(material => <CommandItem key={material.key} value={`${material.description} ${material.unit}`} onSelect={() => { setProjectMaterialKey(material.key); setConversionFactor(material.unit.trim().toLowerCase() === row.unit.trim().toLowerCase() ? '1' : ''); setProjectMaterialOpen(false); }} className="min-h-11 gap-2"><Check className={cn('h-4 w-4 shrink-0', projectMaterialKey === material.key ? 'opacity-100' : 'opacity-0')} /><span className="min-w-0 flex-1"><span className="block whitespace-normal leading-snug">{material.description}</span><span className="block text-xs text-muted-foreground">Previsto: {material.quantity.toLocaleString('pt-BR')} {material.unit}</span></span></CommandItem>)}</CommandGroup></CommandList></Command></PopoverContent></Popover></div><div><label className="mb-1 block text-xs font-semibold">Conversão</label><Input className="min-h-11 text-center" value={conversionFactor} onChange={event => setConversionFactor(event.target.value)} placeholder="Fator" /></div><Button className="min-h-11 self-end" onClick={addLink}><Link2 className="mr-2 h-4 w-4" />Vincular</Button></div><div><h4 className="mb-2 text-sm font-semibold">Vínculos confirmados</h4>{row.projectLinks.map(link => <div key={link.id} className="flex min-h-11 items-center gap-2 border-t py-2"><span className="min-w-0 flex-1 text-sm">{link.projectMaterialDescription} ({link.projectMaterialUnit})</span><span className="text-xs text-muted-foreground">fator {link.conversionFactor}</span>{canUnlink && <Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => removeLink(link.projectMaterialKey)} aria-label={`Desvincular ${link.projectMaterialDescription}`}><Unlink className="h-4 w-4" /></Button>}</div>)}{!row.projectLinks.length && <div className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">Nenhum vínculo confirmado.</div>}</div>{!row.projectLinks.length && <div className="rounded-md border border-warning/30 bg-warning/5 p-3"><label className="mb-1 block text-xs font-semibold">Ou classifique como material não previsto</label><div className="flex gap-2"><Input className="min-h-11" value={unplannedReason} onChange={event => setUnplannedReason(event.target.value)} placeholder="Justificativa obrigatória" /><Button variant="outline" className="min-h-11" onClick={markUnplanned}>Confirmar</Button></div></div>}</div>}<div className="flex justify-end"><Button variant="outline" onClick={onClose}>Fechar</Button></div></DialogContent></Dialog>;
 }
 
 function moneyBR(value?: number) {
@@ -513,8 +520,13 @@ function moneyBR(value?: number) {
   return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
-function PurchaseHistoryDialog({ project, target, onClose }: { project: Project; target: { key: string; description: string } | null; onClose: () => void }) {
-  const history = useMemo(() => (target ? getMaterialPurchaseHistory(project, target.key) : []), [project, target]);
+function PurchaseHistoryDialog({ project, target, onClose }: { project: Project; target: { key: string; description: string; memberKeys?: string[] } | null; onClose: () => void }) {
+  const history = useMemo(() => (target ? getMaterialPurchaseHistory(project, target.memberKeys ?? target.key) : []), [project, target]);
+
+  const totalQuantity = history.reduce((total, entry) => total + entry.quantity, 0);
+  const totalValue = history.reduce((total, entry) => total + (entry.totalPrice ?? 0), 0);
+  const valueIncomplete = history.some(entry => entry.totalPrice == null);
+  const grouped = (target?.memberKeys?.length ?? 0) > 1;
 
   const openAttachment = async (att: NonNullable<ReturnType<typeof getMaterialPurchaseHistory>[number]['attachment']>) => {
     try {
@@ -539,13 +551,14 @@ function PurchaseHistoryDialog({ project, target, onClose }: { project: Project;
           <DialogTitle>Histórico de compras</DialogTitle>
           <DialogDescription>{target?.description}</DialogDescription>
         </DialogHeader>
-        <div className="bg-card border border-border rounded-md overflow-hidden">
-          <table className="w-full text-xs">
+        <div className="min-w-0 overflow-x-auto rounded-md border border-border bg-card">
+          <table className={`w-full text-xs ${grouped ? 'min-w-[640px]' : ''}`}>
             <thead className="bg-muted text-muted-foreground">
               <tr>
                 <th className="p-2 text-left">Data</th>
                 <th className="p-2 text-left">Nota</th>
                 <th className="p-2 text-left">Fornecedor</th>
+                {grouped && <th className="p-2 text-left">Material de origem</th>}
                 <th className="p-2 text-right">Qtd</th>
                 <th className="p-2 text-right">V. Unit</th>
                 <th className="p-2 text-right">Total</th>
@@ -558,9 +571,10 @@ function PurchaseHistoryDialog({ project, target, onClose }: { project: Project;
                   <td className="p-2">{h.date ? h.date.split('-').reverse().join('/') : '—'}</td>
                   <td className="p-2 font-mono">{h.invoiceNumber || '—'}</td>
                   <td className="p-2">{h.supplierName || '—'}</td>
+                  {grouped && <td className="p-2">{h.itemDescription}</td>}
                   <td className="p-2 text-right tabular-nums">{h.quantity.toLocaleString('pt-BR')} {h.unit ?? ''}</td>
-                  <td className="p-2 text-right tabular-nums">{moneyBR(h.unitPrice)}</td>
-                  <td className="p-2 text-right tabular-nums font-semibold">{moneyBR(h.totalPrice)}</td>
+                  <td className="p-2 text-right tabular-nums">{h.unitPrice == null ? 'Não informado' : moneyBR(h.unitPrice)}</td>
+                  <td className="p-2 text-right tabular-nums font-semibold">{h.totalPrice == null ? 'Não informado' : moneyBR(h.totalPrice)}</td>
                   <td className="p-2 text-center">
                     {h.attachment ? (
                       <div className="flex items-center justify-center gap-1">
@@ -578,9 +592,16 @@ function PurchaseHistoryDialog({ project, target, onClose }: { project: Project;
                 </tr>
               ))}
               {history.length === 0 && (
-                <tr><td colSpan={7} className="p-6 text-center text-muted-foreground italic">Sem compras registradas para este material.</td></tr>
+                <tr><td colSpan={grouped ? 8 : 7} className="p-6 text-center text-muted-foreground italic">Sem compras registradas para este material.</td></tr>
               )}
             </tbody>
+            {history.length > 0 && <tfoot className="border-t bg-muted/50 font-semibold"><tr>
+              <td colSpan={grouped ? 4 : 3} className="p-2">Total</td>
+              <td className="p-2 text-right tabular-nums">{totalQuantity.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} {history[0]?.unit}</td>
+              <td />
+              <td className="p-2 text-right tabular-nums">{valueIncomplete ? 'Cálculo incompleto' : moneyBR(totalValue)}</td>
+              <td />
+            </tr></tfoot>}
           </table>
         </div>
       </DialogContent>
