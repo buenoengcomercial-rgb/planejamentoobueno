@@ -431,6 +431,48 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     expect(() => groupWarehouseMaterials(project, 'remadi', 'generic')).toThrow(/unidades/i);
   });
 
+  it.each([false, true])('reconhece equivalência nas entradas dos dois lados do agrupamento (invertido: %s)', reversed => {
+    const project = approveFiscalNote(withNote(note({ items: [{ ...note().items[0], description: 'Curva macho fêmea', quantity: 8 }] })), 'nf-1');
+    const key = project.warehouse!.items[0].key;
+    project.warehouse!.items.push({ key: 'remadi', description: 'Curva macho/fêmea 90° Remadi', unit: 'SC', manualItem: true });
+    project.warehouse!.fiscalNotes.push(note({ id: 'nf-2', status: 'aprovada', invoiceNumber: '1319381',
+      items: [{ ...note().items[0], id: 'item-2', description: 'Curva macho/fêmea 90° Segurimax', itemKey: key, quantity: 6 }] }));
+    project.warehouse!.movements.push({ id: 'entry-2', type: 'entrada', date: '2026-10-15', createdAt: '2026-10-15T10:00:00Z',
+      itemKey: key, itemDescription: 'Curva macho/fêmea 90° Segurimax', itemUnit: 'SC', quantity: 6,
+      fiscalNoteId: 'nf-2', fiscalNoteItemId: 'item-2' });
+    project.warehouse!.movements.push({ id: 'withdrawal', type: 'retirada', date: '2026-10-15', createdAt: '2026-10-15T11:00:00Z',
+      itemKey: key, itemDescription: 'Curva macho fêmea', itemUnit: 'SC', quantity: 10 });
+    expect(reviewFiscalMaterialLinks(project)).toMatchObject([{ noteId: 'nf-2' }]);
+    const normalizedBefore = ensureWarehouse(project);
+    const grouped = groupWarehouseMaterials(normalizedBefore, reversed ? 'remadi' : key, reversed ? key : 'remadi');
+    expect(reviewFiscalMaterialLinks(grouped)).toEqual([]);
+    expect(grouped.warehouse!.movements).toEqual(project.warehouse!.movements);
+    expect(grouped.warehouse!.fiscalNotes).toEqual(normalizedBefore.warehouse!.fiscalNotes);
+    expect(reviewFiscalMaterialLinks(ungroupWarehouseMaterial(grouped, reversed ? 'remadi' : key))).toMatchObject([{ noteId: 'nf-2' }]);
+
+    const wrongNoteUnit = structuredClone(grouped);
+    wrongNoteUnit.warehouse!.fiscalNotes[1].items[0].stockUnit = 'PC';
+    expect(reviewFiscalMaterialLinks(wrongNoteUnit)).toMatchObject([{ noteId: 'nf-2' }]);
+    const wrongMovementUnit = structuredClone(grouped);
+    wrongMovementUnit.warehouse!.movements.find(row => row.id === 'entry-2')!.itemUnit = 'PC';
+    expect(reviewFiscalMaterialLinks(wrongMovementUnit)).toMatchObject([{ noteId: 'nf-2' }]);
+    const ambiguous = structuredClone(grouped);
+    ambiguous.warehouse!.movements.push({ ...ambiguous.warehouse!.movements.find(row => row.id === 'entry-2')!, id: 'duplicate-entry' });
+    expect(reviewFiscalMaterialLinks(ambiguous)[0].blockers).toContain('Vínculo ou movimento da nota ambíguo.');
+    const archived = structuredClone(grouped);
+    archived.warehouse!.items.find(row => row.key === 'remadi')!.archivedAt = '2026-10-16';
+    expect(reviewFiscalMaterialLinks(archived)).toMatchObject([{ noteId: 'nf-2' }]);
+    const differentGroupUnit = structuredClone(grouped);
+    differentGroupUnit.warehouse!.items.find(row => row.key === 'remadi')!.unit = 'PC';
+    expect(reviewFiscalMaterialLinks(differentGroupUnit)).toMatchObject([{ noteId: 'nf-2' }]);
+    grouped.warehouse!.items.push({ key: 'unrelated', description: 'Serra antiga', unit: 'SC', manualItem: true });
+    grouped.warehouse!.fiscalNotes.push(note({ id: 'nf-3', status: 'aprovada',
+      items: [{ ...note().items[0], id: 'item-3', description: 'Serra Worker', itemKey: 'unrelated', quantity: 1 }] }));
+    grouped.warehouse!.movements.push({ ...grouped.warehouse!.movements.find(row => row.id === 'entry-2')!,
+      id: 'unrelated-entry', itemKey: 'unrelated', fiscalNoteId: 'nf-3', fiscalNoteItemId: 'item-3', quantity: 1 });
+    expect(reviewFiscalMaterialLinks(grouped)).toMatchObject([{ noteId: 'nf-3' }]);
+  });
+
   it('cancela com estorno auditável e oculta material criado só pela nota', () => {
     const approved = approveFiscalNote(withNote(note()), 'nf-1', 'operador@teste');
     const result = cancelFiscalNote(approved, 'nf-1', { reason: 'Documento lançado indevidamente', actor: 'admin@teste' });

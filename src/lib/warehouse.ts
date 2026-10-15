@@ -4888,6 +4888,21 @@ export function reviewFiscalMaterialLinks(project: Project): FiscalMaterialLinkI
   if (!wh) return [];
   const rows = computeWarehouseRows(project, { includeManual: true, includeArchived: true });
   const rowsByKey = new Map(rows.map(row => [row.key, row] as const));
+  const configsByKey = new Map(wh.items.map(item => [item.key, item] as const));
+  const groupSourceCounts = new Map<string, number>();
+  for (const item of wh.items) if (item.groupedWithKey) {
+    groupSourceCounts.set(item.groupedWithKey, (groupSourceCounts.get(item.groupedWithKey) ?? 0) + 1);
+  }
+  const groupedUnits = new Map<string, string>();
+  for (const source of wh.items) {
+    const target = source.groupedWithKey ? configsByKey.get(source.groupedWithKey) : undefined;
+    if (!target || source.key === target.key || source.archivedAt || target.archivedAt
+      || target.groupedWithKey || groupSourceCounts.has(source.key) || groupSourceCounts.get(target.key) !== 1) continue;
+    const unit = normalizeFiscalMaterialText(source.unit);
+    if (!unit || unit !== normalizeFiscalMaterialText(target.unit)) continue;
+    groupedUnits.set(source.key, unit);
+    groupedUnits.set(target.key, unit);
+  }
   const result: FiscalMaterialLinkIssue[] = [];
   for (const note of wh.fiscalNotes ?? []) {
     if (note.status !== 'aprovada') continue;
@@ -4905,6 +4920,13 @@ export function reviewFiscalMaterialLinks(project: Project): FiscalMaterialLinkI
         && fiscalItemLookup({ description: approval.description, unit: approval.unit }) === identity
         && normalizeFiscalMaterialText(approval.unit) === normalizeFiscalMaterialText(entry.itemUnit)
         && normalizeFiscalMaterialText(approval.unit) === normalizeFiscalMaterialText(current.unit)) continue;
+      // Agrupar é a confirmação manual de que os cadastros e suas entradas
+      // representam o mesmo produto. A equivalência vale enquanto o par existir.
+      const groupedUnit = groupedUnits.get(entry.itemKey);
+      if (current && groupedUnit && entries.length === 1 && item.itemKey === entry.itemKey
+        && normalizeFiscalMaterialText(fiscalItemStockUnit(item)) === groupedUnit
+        && normalizeFiscalMaterialText(entry.itemUnit) === groupedUnit
+        && normalizeFiscalMaterialText(current.unit) === groupedUnit) continue;
       const candidates = rows.filter(row => row.key !== entry.itemKey
         && fiscalItemLookup({ description: row.description, unit: row.unit }) === identity);
       const blockers: string[] = [];
