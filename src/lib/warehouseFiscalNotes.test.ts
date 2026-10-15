@@ -421,7 +421,7 @@ describe('fluxo de documentos fiscais do almoxarifado', () => {
     project.warehouse!.movements = [{ id: 'a', type: 'entrada', itemKey: 'generic', itemDescription: 'Curva macho fêmea', itemUnit: 'UN', quantity: 8, date: '2026-10-15', createdAt: '2026-10-15T10:00:00Z' },
       { id: 'b', type: 'retirada', itemKey: 'generic', itemDescription: 'Curva macho fêmea', itemUnit: 'UN', quantity: 4, date: '2026-10-15', createdAt: '2026-10-15T11:00:00Z' },
       { id: 'c', type: 'entrada', itemKey: 'remadi', itemDescription: 'Curva macho/fêmea 90° Remadi', itemUnit: 'UN', quantity: 2, date: '2026-10-15', createdAt: '2026-10-15T12:00:00Z' }];
-    const grouped = groupWarehouseMaterials(project, 'remadi', 'generic', 'Proprietário');
+    const grouped = groupWarehouseMaterials(project, 'remadi', 'generic');
     expect(grouped.warehouse!.items[1].groupedWithKey).toBe('generic');
     expect(grouped.warehouse!.movements).toEqual(project.warehouse!.movements);
     expect(computeWarehouseRows(grouped, { includeManual: true }).map(row => row.balance).sort()).toEqual([2, 4]);

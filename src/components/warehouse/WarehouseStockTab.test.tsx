@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
-import { emptyWarehouse } from '@/lib/warehouse';
+import { emptyWarehouse, getMaterialPurchaseHistory } from '@/lib/warehouse';
 import { setMaterialCostClass } from '@/lib/materialComparisons';
 import WarehouseStockTab from './WarehouseStockTab';
 
@@ -77,7 +77,72 @@ function projectWithWithdrawals(): Project {
   return project;
 }
 
+function projectWithGroupedCurves(): Project {
+  const project = projectWithPurchaseHistory();
+  const original = project.warehouse!.movements[0];
+  project.warehouse!.items = [
+    { key: 'old', description: 'Curva antiga', unit: 'UN', manualItem: true, groupedWithKey: 'remadi' },
+    { key: 'remadi', description: 'Curva Remadi', unit: 'UN', manualItem: true },
+  ];
+  project.warehouse!.movements = [
+    { ...original, id: 'old-entry', itemKey: 'old', itemDescription: 'Curva antiga', quantity: 8, unitPrice: 10 },
+    { ...original, id: 'withdrawal', type: 'retirada', itemKey: 'old', itemDescription: 'Curva antiga', quantity: 4, unitPrice: 10 },
+    { ...original, id: 'new-entry', itemKey: 'remadi', itemDescription: 'Curva Remadi', quantity: 2, unitPrice: 20, date: '2026-08-18' },
+    { ...original, id: 'reversed', itemKey: 'old', itemDescription: 'Curva antiga', quantity: 100, reversedById: 'reversal' },
+  ];
+  return project;
+}
+
 describe('WarehouseStockTab - documentos no histórico', () => {
+  it('mantém o agrupamento na tabela e mostra as origens somente no histórico conjunto', async () => {
+    const project = projectWithGroupedCurves();
+    const onProjectChange = vi.fn();
+    const { container, rerender } = render(<WarehouseStockTab project={project} onProjectChange={onProjectChange} canDelete />);
+    const rows = container.querySelectorAll('[data-testid="stock-material-row"]');
+    expect(rows).toHaveLength(1);
+    const row = rows[0] as HTMLElement;
+    expect(within(row).getByText('Curva Remadi')).toBeInTheDocument();
+    expect(screen.queryByText('Curva antiga')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Saldo conjunto/)).not.toBeInTheDocument();
+    const cells = within(row).getAllByRole('cell');
+    expect(cells[8]).toHaveTextContent('10');
+    expect(cells[9]).toHaveTextContent('4');
+    expect(cells[12]).toHaveTextContent('6');
+    expect(within(row).queryByTitle('Arquivar e ocultar material')).not.toBeInTheDocument();
+    expect(within(row).queryByTitle('Excluir material definitivamente')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('Buscar insumo por descrição ou código...'), { target: { value: 'curva antiga' } });
+    expect(container.querySelectorAll('[data-testid="stock-material-row"]')).toHaveLength(1);
+    fireEvent.click(within(row).getByTitle('Histórico de compras'));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Material de origem')).toBeInTheDocument();
+    expect(within(dialog).getByText('Curva antiga')).toBeInTheDocument();
+    expect(within(dialog).getByText('10 UN')).toBeInTheDocument();
+    expect(within(dialog).getByText(/120,00/)).toBeInTheDocument();
+    expect(within(dialog).getAllByRole('button', { name: 'Visualizar NF' })).toHaveLength(2);
+    expect(within(dialog).queryByText('100 UN')).not.toBeInTheDocument();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    fireEvent.click(within(row).getByRole('button', { name: 'Desagrupar' }));
+    await waitFor(() => expect(onProjectChange).toHaveBeenCalledOnce());
+    const separate = onProjectChange.mock.calls[0][0] as Project;
+    expect(separate.warehouse!.movements).toEqual(project.warehouse!.movements);
+    rerender(<WarehouseStockTab project={separate} onProjectChange={onProjectChange} canDelete />);
+    fireEvent.change(screen.getByPlaceholderText('Buscar insumo por descrição ou código...'), { target: { value: '' } });
+    expect(container.querySelectorAll('[data-testid="stock-material-row"]')).toHaveLength(2);
+  });
+
+  it('consulta múltiplas chaves sem duplicar compras e sinaliza custos ausentes', () => {
+    const project = projectWithGroupedCurves();
+    const history = getMaterialPurchaseHistory(project, ['old', 'remadi', 'old']);
+    expect(history.map(entry => entry.movementId)).toEqual(['new-entry', 'old-entry']);
+    expect(history.reduce((sum, entry) => sum + entry.quantity, 0)).toBe(10);
+    delete project.warehouse!.movements[0].unitPrice;
+    const { container } = render(<WarehouseStockTab project={project} onProjectChange={vi.fn()} />);
+    const row = container.querySelector('[data-testid="stock-material-row"]') as HTMLElement;
+    fireEvent.click(within(row).getByTitle('Histórico de compras'));
+    expect(within(screen.getByRole('dialog')).getByText('Cálculo incompleto')).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getAllByText('Não informado')).toHaveLength(2);
+  });
+
   it('encaminha novos materiais à entrada fiscal em vez de criar item avulso', () => {
     const onNewEntry = vi.fn();
     const onProjectChange = vi.fn();
