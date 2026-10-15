@@ -287,7 +287,7 @@
 .warehouse-stock-summary :is(th, td):nth-child(13),
 .warehouse-stock-summary :is(th, td):nth-child(14) { width: 6%; }
 .warehouse-stock-summary :is(th, td):nth-child(14) { width: 90px; }
-.warehouse-stock-summary :is(th, td):nth-child(17) { width: 108px; }
+.warehouse-stock-summary :is(th, td):nth-child(17) { width: 210px; }
 .warehouse-stock-summary :is(th, td):nth-child(n+18) { width: 42px; }
 .warehouse-stock-table tbody td { padding: 0.75rem 0.5rem; }
 .warehouse-stock-summary th { overflow-wrap: normal; word-break: normal; }
@@ -297,7 +297,7 @@
 .warehouse-stock-table td:nth-child(3) select { min-height: 30px; height: 30px; font-size: 11px; }
 .warehouse-stock-table td:nth-child(14) input { min-height: 32px; height: 32px; font-size: 12px; }
 @media (min-width: 768px) {
-  .warehouse-stock-summary { min-width: 1100px; }
+  .warehouse-stock-summary { min-width: 1210px; }
 }
 .warehouse-stock-table tbody tr:nth-child(even) { background-color: hsl(var(--muted) / 0.35); }
 .warehouse-stock-table tbody tr:hover { background-color: hsl(var(--primary) / 0.08); }

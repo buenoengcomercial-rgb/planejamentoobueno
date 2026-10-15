@@ -163,6 +163,25 @@ describe('WarehouseStockTab - documentos no histórico', () => {
     expect(screen.getByText('Excluir', { selector: 'span' })).toBeInTheDocument();
   });
 
+  it('abre o agrupamento pela linha e pesquisa apenas o outro material em ordem alfabética', () => {
+    const project = projectWithWithdrawals();
+    project.warehouse!.items[0].description = 'Curva de origem';
+    project.warehouse!.items[1].description = 'Zeta curva';
+    project.warehouse!.items[2].description = 'Água curva';
+    const { container } = render(<WarehouseStockTab project={project} onProjectChange={vi.fn()} canDelete />);
+    const sourceRow = Array.from(container.querySelectorAll('[data-testid="stock-material-row"]'))
+      .find(row => row.textContent?.includes('Curva de origem'))!;
+    fireEvent.click(within(sourceRow as HTMLElement).getByRole('button', { name: 'Agrupar' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Curva de origem')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('combobox', { name: 'Material a incluir no grupo' })).not.toBeInTheDocument();
+    const options = within(within(dialog).getByRole('listbox')).getAllByRole('option');
+    expect(options.map(option => option.textContent)).toEqual(['Água curvaUN', 'Zeta curvaUN']);
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Buscar material para agrupar' }), { target: { value: 'zeta' } });
+    expect(within(dialog).getAllByRole('option')).toHaveLength(1);
+    expect(within(dialog).getByRole('option', { name: /Zeta curva/ })).toBeInTheDocument();
+  });
+
   it('prioriza materiais já retirados, pela maior quantidade retirada', () => {
     const { container } = render(<WarehouseStockTab project={projectWithWithdrawals()} onProjectChange={vi.fn()} />);
 
