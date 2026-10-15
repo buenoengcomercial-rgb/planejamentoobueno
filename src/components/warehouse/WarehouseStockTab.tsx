@@ -44,6 +44,7 @@ type StockSortKey = 'code' | 'description' | 'costClass' | 'unit' | 'contracted'
 type StockSort = { key: StockSortKey; direction: 'asc' | 'desc' };
 const stockSortLabel: Record<StockSortKey, string> = { code: 'código', description: 'descrição', costClass: 'classificação', unit: 'unidade', contracted: 'contratado', planned: 'planejado total', additive: 'acréscimo do aditivo', purchased: 'comprado', received: 'recebido', withdrawn: 'retirado', returned: 'devolvido', losses: 'perdas', balance: 'saldo', effectiveMinStock: 'estoque baixo', lastMovementDate: 'último movimento', averageUnitCost: 'custo médio', linkStatus: 'vínculo' };
 const numericStockSortKeys: StockSortKey[] = ['contracted', 'planned', 'additive', 'purchased', 'received', 'withdrawn', 'returned', 'losses', 'balance', 'effectiveMinStock', 'averageUnitCost'];
+const normalizeMaterialSearch = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').replace(/\s+/g, ' ').trim();
 
 function StockClassBadge({ costClass }: { costClass: MaterialCostClass }) {
   const Icon = stockClassIcon[costClass];
@@ -112,6 +113,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
   const [groupOpen, setGroupOpen] = useState(false);
   const [groupSource, setGroupSource] = useState('');
   const [groupTarget, setGroupTarget] = useState('');
+  const [groupSearch, setGroupSearch] = useState('');
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const rows = useMemo(
     () => computeWarehouseStockOverviewRows(project, showArchived),
@@ -160,7 +162,13 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
   const collapsedKeys = new Set(visibleGroups.filter(group => !expandedGroups.includes(group.source.key))
     .flatMap(group => [group.source.key, group.target.key]));
   const visibleRows = filtered.filter(row => !collapsedKeys.has(row.key));
-  const groupableRows = rows.filter(row => row.isPhysicalStock && !row.archived);
+  const groupableRows = useMemo(() => rows.filter(row => row.isPhysicalStock && !row.archived)
+    .sort((left, right) => left.description.localeCompare(right.description, 'pt-BR', { numeric: true })), [rows]);
+  const selectedGroupSource = groupableRows.find(row => row.key === groupSource);
+  const groupCandidates = groupableRows.filter(row => row.key !== groupSource
+    && row.unit.trim().toLocaleLowerCase('pt-BR') === selectedGroupSource?.unit.trim().toLocaleLowerCase('pt-BR')
+    && !project.warehouse?.items.some(item => (item.key === row.key && item.groupedWithKey) || item.groupedWithKey === row.key)
+    && normalizeMaterialSearch(`${row.description} ${row.code ?? ''}`).includes(normalizeMaterialSearch(groupSearch)));
 
   const sortBy = (key: StockSortKey) => setSort(current => current.key === key
     ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' }
@@ -210,6 +218,12 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
       toast.success('Materiais agrupados para consulta; movimentos individuais preservados.');
     } catch (error) { toast.error((error as Error).message); }
   };
+  const openGroupFor = (key: string) => {
+    setGroupSource(key);
+    setGroupTarget('');
+    setGroupSearch('');
+    setGroupOpen(true);
+  };
 
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
@@ -229,7 +243,6 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
         <Button size="sm" variant={zeroOnly ? 'secondary' : 'outline'} aria-pressed={zeroOnly} className="min-h-11 text-xs" onClick={() => setZeroOnly(value => !value)}>Saldo zerado</Button>
           <span className="mr-auto text-xs text-muted-foreground">Ordenado por <strong className="font-semibold text-foreground">{stockSortLabel[sort.key]}</strong> · {filtered.length} item(ns)</span>
         <Button size="sm" variant={showAllColumns ? 'secondary' : 'outline'} className="hidden min-h-11 text-xs md:inline-flex" aria-pressed={showAllColumns} onClick={() => setShowAllColumns(value => !value)}>{showAllColumns ? 'Visão resumida' : 'Todas as colunas'}</Button>
-        {canDelete && <Button size="sm" variant="outline" className="min-h-11 text-xs" onClick={() => setGroupOpen(true)}>Agrupar materiais</Button>}
         {onNewEntry && <Button size="sm" variant="outline" className="min-h-11 text-xs" onClick={onNewEntry}><Plus className="w-3.5 h-3.5 mr-1" />Nova entrada</Button>}
         <Button size="sm" variant="outline" className="min-h-11 text-xs" onClick={() => setPresentationFor(filtered.find(row => row.isPhysicalStock)?.key ?? rows.find(row => row.isPhysicalStock)?.key ?? null)} disabled={!rows.some(row => row.isPhysicalStock)}><PackagePlus className="mr-1 h-3.5 w-3.5" />Apresentações por fornecedor</Button>
         {archivedCount > 0 && (
@@ -244,7 +257,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
       <div className="max-h-[calc(100dvh-300px)] overflow-auto">
         <div className="space-y-4 p-2 md:hidden">{orderedClasses.map(costClass => {
           const classRows = visibleRows.filter(row => row.costClass === costClass);
-          return classRows.length > 0 && <section key={costClass} className="space-y-2"><div className="flex items-center gap-2 px-1 text-sm font-bold"><StockClassBadge costClass={costClass} /><span>{classRows.length} item(ns)</span></div>{classRows.map(row => <StockMobileCard key={row.key} row={row} canArchive={canArchive} onClassChange={setClassification} onLink={() => setLinkFor(row.key)} onHistory={() => setHistoryFor({ key: row.key, description: row.description })} onArchive={() => handleArchiveItem(row.key, row.description)} />)}</section>;
+          return classRows.length > 0 && <section key={costClass} className="space-y-2"><div className="flex items-center gap-2 px-1 text-sm font-bold"><StockClassBadge costClass={costClass} /><span>{classRows.length} item(ns)</span></div>{classRows.map(row => <StockMobileCard key={row.key} row={row} canArchive={canArchive} canGroup={canDelete} onClassChange={setClassification} onLink={() => setLinkFor(row.key)} onGroup={() => openGroupFor(row.key)} onHistory={() => setHistoryFor({ key: row.key, description: row.description })} onArchive={() => handleArchiveItem(row.key, row.description)} />)}</section>;
         })}</div>
         <table className={`warehouse-stock-table hidden w-full table-fixed text-sm md:table ${showAllColumns ? 'min-w-[1900px]' : 'warehouse-stock-summary'}`}>
           <colgroup>
@@ -265,7 +278,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
             <col className="w-24" />
             <col className="w-24" />
             <col className="w-28" />
-            <col className="w-36" />
+            <col className="w-52" />
             {canArchive && <col className="w-12" />}
             {canDelete && <col className="w-12" />}
           </colgroup>
@@ -316,7 +329,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
                 </td>
                 <td className="p-1.5 text-[10px] text-muted-foreground">{r.lastMovementDate ?? '—'}</td>
                 <td className="p-1.5 text-right font-mono text-[11px]">{r.valuationIncomplete || r.averageUnitCost == null ? 'Cálculo incompleto' : r.averageUnitCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
-                <td className="p-1.5">{r.isPhysicalStock ? <StockLinkButton row={r} onClick={() => setLinkFor(r.key)} /> : <span className="block rounded border border-dashed px-2 py-1.5 text-center text-[10px] text-muted-foreground">Sem estoque físico</span>}</td>
+                <td className="p-1.5">{r.isPhysicalStock ? <div className="flex items-center gap-1"><div className="min-w-0 flex-1"><StockLinkButton row={r} onClick={() => setLinkFor(r.key)} /></div>{canDelete && <Button size="sm" variant="outline" className="h-8 shrink-0 px-2 text-xs" onClick={() => openGroupFor(r.key)}>Agrupar</Button>}</div> : <span className="block rounded border border-dashed px-2 py-1.5 text-center text-[10px] text-muted-foreground">Sem estoque físico</span>}</td>
                 <td className="p-1.5 text-center">
                   {r.isPhysicalStock && <Button size="icon" variant="ghost" className="h-7 w-7" title="Histórico de compras"
                     onClick={() => setHistoryFor({ key: r.key, description: r.description })}>
@@ -361,21 +374,23 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
       />
       <SupplierPresentationDialog project={project} rows={rows} itemKey={presentationFor} onSelectKey={setPresentationFor} auditActor={auditActor} onCommitProject={commitCatalog} onClose={() => setPresentationFor(null)} />
       <PurchaseHistoryDialog project={project} target={historyFor} onClose={() => setHistoryFor(null)} />
-      <Dialog open={groupOpen} onOpenChange={setGroupOpen}><DialogContent><DialogHeader><DialogTitle>Agrupar materiais para consulta</DialogTitle><DialogDescription>Escolha dois cadastros que representam o mesmo material físico. O painel mostrará o saldo conjunto, mas as notas e retiradas de cada cadastro continuarão separadas e auditáveis.</DialogDescription></DialogHeader><div className="space-y-3"><label className="block text-sm font-medium">Material a incluir no grupo<select className="mt-1 min-h-11 w-full rounded border bg-background px-2" value={groupSource} onChange={event => setGroupSource(event.target.value)}><option value="">Selecione</option>{groupableRows.map(row => <option key={row.key} value={row.key}>{row.description} · {row.unit}</option>)}</select></label><label className="block text-sm font-medium">Material principal<select className="mt-1 min-h-11 w-full rounded border bg-background px-2" value={groupTarget} onChange={event => setGroupTarget(event.target.value)}><option value="">Selecione</option>{groupableRows.filter(row => row.key !== groupSource).map(row => <option key={row.key} value={row.key}>{row.description} · {row.unit}</option>)}</select></label><p className="text-xs text-muted-foreground">A confirmação de equivalência dos itens da NF é feita na aba Entrada. Agrupar esta visualização não remove alertas fiscais automaticamente.</p></div><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setGroupOpen(false)}>Cancelar</Button><Button disabled={!groupSource || !groupTarget || groupSource === groupTarget} onClick={() => void saveGroup()}>Agrupar</Button></div></DialogContent></Dialog>
+      <Dialog open={groupOpen} onOpenChange={setGroupOpen}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>Agrupar materiais para consulta</DialogTitle><DialogDescription>O material da linha já está selecionado. Busque somente o outro cadastro do mesmo material físico; notas, retiradas e saldos individuais permanecem preservados.</DialogDescription></DialogHeader><div className="space-y-3"><div className="rounded border bg-muted/40 p-3 text-sm"><span className="block text-xs text-muted-foreground">Material selecionado</span><strong>{selectedGroupSource?.description}</strong><span className="ml-2 text-muted-foreground">{selectedGroupSource?.unit}</span></div><label className="block text-sm font-medium">Buscar outro material<Input autoFocus className="mt-1 min-h-11" aria-label="Buscar material para agrupar" placeholder="Digite o nome ou código do material..." value={groupSearch} onChange={event => { setGroupSearch(event.target.value); setGroupTarget(''); }} /></label><div className="max-h-64 space-y-1 overflow-y-auto rounded border p-1" role="listbox" aria-label="Materiais encontrados">{groupCandidates.map(row => <button key={row.key} type="button" role="option" aria-selected={groupTarget === row.key} className={`flex min-h-11 w-full items-center justify-between gap-2 rounded px-3 py-2 text-left text-sm hover:bg-muted ${groupTarget === row.key ? 'bg-primary/10 font-semibold text-primary' : ''}`} onClick={() => setGroupTarget(row.key)}><span>{row.description}</span><span className="shrink-0 text-xs text-muted-foreground">{row.unit}</span></button>)}{!groupCandidates.length && <p className="p-3 text-sm text-muted-foreground">Nenhum material com a mesma unidade encontrado.</p>}</div><p className="text-xs text-muted-foreground">A lista está em ordem alfabética. Confirme equivalências dos itens da NF na aba Entrada; este agrupamento visual não remove alertas fiscais.</p></div><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setGroupOpen(false)}>Cancelar</Button><Button disabled={!groupTarget} onClick={() => void saveGroup()}>Agrupar</Button></div></DialogContent></Dialog>
       {confirmDialog}
     </div>
   );
 }
 
-function StockMobileCard({ row, canArchive, onClassChange, onLink, onHistory, onArchive }: {
+function StockMobileCard({ row, canArchive, canGroup, onClassChange, onLink, onGroup, onHistory, onArchive }: {
   row: WarehouseStockOverviewRow;
   canArchive: boolean;
+  canGroup: boolean;
   onClassChange: (row: WarehouseStockOverviewRow, costClass: MaterialCostClass) => void;
   onLink: () => void;
+  onGroup: () => void;
   onHistory: () => void;
   onArchive: () => void;
 }) {
-  return <article className={`space-y-3 rounded-xl border p-3 shadow-sm ${row.underMin ? 'border-destructive/50 bg-destructive/5' : row.isPhysicalStock ? 'border-primary/25 bg-primary/5' : 'bg-muted/25'}`}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</div><div className="font-bold leading-snug">{row.description}</div></div><WarehouseStatusBadge label={row.isPhysicalStock ? (row.underMin ? 'Estoque baixo' : 'Estoque físico') : 'Planejamento'} tone={row.underMin ? 'danger' : row.isPhysicalStock ? 'success' : 'neutral'} /></div><label className="block"><span className="mb-1 block text-xs font-semibold text-muted-foreground">Classificação</span><StockClassSelect row={row} onChange={onClassChange} mobile /></label><dl className="grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Contratado</dt><dd className="font-semibold">{row.contracted.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Acréscimo do aditivo</dt><dd className="font-semibold text-primary">+{row.additive.toLocaleString('pt-BR')} {row.unit}</dd></div><div className="rounded bg-primary/5 p-2"><dt className="text-xs text-muted-foreground">Planejado total</dt><dd className="font-semibold">{row.planned.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.isPhysicalStock ? <><div><dt className="text-xs text-muted-foreground">Saldo disponível</dt><dd className={`font-bold ${row.underMin ? 'text-destructive' : 'text-primary'}`}>{row.balance.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Já retirado</dt><dd>{row.withdrawn.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.costClass === 'material' && <div><dt className="text-xs text-muted-foreground">Estoque baixo</dt><dd className={row.underMin ? 'font-bold text-destructive' : ''}>{row.effectiveMinStock?.toLocaleString('pt-BR') ?? '—'} {row.unit}</dd></div>}</> : <div className="col-span-2 rounded-lg bg-muted/60 p-2 text-xs text-muted-foreground">Sem estoque físico: aguarda compra, nota fiscal ou cadastro no almoxarifado.</div>}</dl>{row.isPhysicalStock && <div className={`grid gap-2 ${canArchive ? 'grid-cols-3' : 'grid-cols-2'}`}><StockLinkButton row={row} onClick={onLink} mobile /><Button variant="outline" className="min-h-11" onClick={onHistory}><History className="h-4 w-4" /><span>Histórico</span></Button>{canArchive && <Button variant="outline" className="min-h-11 text-destructive" onClick={onArchive}><Archive className="h-4 w-4" /><span>Arquivar</span></Button>}</div>}</article>;
+  return <article className={`space-y-3 rounded-xl border p-3 shadow-sm ${row.underMin ? 'border-destructive/50 bg-destructive/5' : row.isPhysicalStock ? 'border-primary/25 bg-primary/5' : 'bg-muted/25'}`}><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="text-xs font-medium text-muted-foreground">{row.code || 'Sem código'} · {row.unit}</div><div className="font-bold leading-snug">{row.description}</div></div><WarehouseStatusBadge label={row.isPhysicalStock ? (row.underMin ? 'Estoque baixo' : 'Estoque físico') : 'Planejamento'} tone={row.underMin ? 'danger' : row.isPhysicalStock ? 'success' : 'neutral'} /></div><label className="block"><span className="mb-1 block text-xs font-semibold text-muted-foreground">Classificação</span><StockClassSelect row={row} onChange={onClassChange} mobile /></label><dl className="grid grid-cols-2 gap-2 text-sm"><div><dt className="text-xs text-muted-foreground">Contratado</dt><dd className="font-semibold">{row.contracted.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Acréscimo do aditivo</dt><dd className="font-semibold text-primary">+{row.additive.toLocaleString('pt-BR')} {row.unit}</dd></div><div className="rounded bg-primary/5 p-2"><dt className="text-xs text-muted-foreground">Planejado total</dt><dd className="font-semibold">{row.planned.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.isPhysicalStock ? <><div><dt className="text-xs text-muted-foreground">Saldo disponível</dt><dd className={`font-bold ${row.underMin ? 'text-destructive' : 'text-primary'}`}>{row.balance.toLocaleString('pt-BR')} {row.unit}</dd></div><div><dt className="text-xs text-muted-foreground">Já retirado</dt><dd>{row.withdrawn.toLocaleString('pt-BR')} {row.unit}</dd></div>{row.costClass === 'material' && <div><dt className="text-xs text-muted-foreground">Estoque baixo</dt><dd className={row.underMin ? 'font-bold text-destructive' : ''}>{row.effectiveMinStock?.toLocaleString('pt-BR') ?? '—'} {row.unit}</dd></div>}</> : <div className="col-span-2 rounded-lg bg-muted/60 p-2 text-xs text-muted-foreground">Sem estoque físico: aguarda compra, nota fiscal ou cadastro no almoxarifado.</div>}</dl>{row.isPhysicalStock && <div className="grid grid-cols-2 gap-2"><StockLinkButton row={row} onClick={onLink} mobile />{canGroup && <Button variant="outline" className="min-h-11" onClick={onGroup}>Agrupar</Button>}<Button variant="outline" className="min-h-11" onClick={onHistory}><History className="h-4 w-4" /><span>Histórico</span></Button>{canArchive && <Button variant="outline" className="min-h-11 text-destructive" onClick={onArchive}><Archive className="h-4 w-4" /><span>Arquivar</span></Button>}</div>}</article>;
 }
 
 function SupplierPresentationDialog({ project, rows, itemKey, onSelectKey, auditActor, onCommitProject, onClose }: {
