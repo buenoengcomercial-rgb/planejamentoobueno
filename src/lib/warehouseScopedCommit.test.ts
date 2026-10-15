@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuditLog, Project, WarehouseMovement, WarehouseRequisition } from '@/types/project';
-import { emptyWarehouse } from '@/lib/warehouse';
+import { emptyWarehouse, groupWarehouseMaterials, ungroupWarehouseMaterial } from '@/lib/warehouse';
 import {
   commitWarehouseScopedOperation,
   mergeWarehouseScopedCommit,
@@ -94,6 +94,32 @@ describe('transações específicas do Almoxarifado', () => {
     expect(first.operationKey).toMatch(/^catalog:/);
     expect(retry.operationKey).toBe(first.operationKey);
     expect(rpcMock.mock.calls[0][1].p_operation_key).toBe(rpcMock.mock.calls[1][1].p_operation_key);
+  });
+
+  it('agrupa e desagrupa pelo cadastro sem enviar auditoria proibida pela RPC', async () => {
+    const before = baseProject();
+    before.warehouse!.items = [
+      { key: 'curva-antiga', description: 'CURVA MACHO FEMEA 2.1/2', unit: 'UN' },
+      { key: 'curva-remadi', description: 'CURVA MACHO/FEMEA 2.1/2 90 LINHA INCENDIO REMADI', unit: 'UN' },
+    ];
+    const grouped = groupWarehouseMaterials(before, 'curva-antiga', 'curva-remadi');
+    rpcMock.mockResolvedValueOnce(rpcResult(grouped));
+
+    const saved = await commitWarehouseScopedOperation(before, grouped, 3, '', 'catalog');
+
+    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_catalog');
+    expect(rpcMock.mock.calls[0][1].p_changes).toMatchObject({
+      state: { items: { expected: before.warehouse!.items, next: grouped.warehouse!.items } },
+      movements: { upserts: [], deletes: [] },
+      audits: [],
+    });
+    expect(saved.project.auditLogs).toContainEqual(serverAudit);
+
+    const ungrouped = ungroupWarehouseMaterial(saved.project, 'curva-antiga');
+    rpcMock.mockResolvedValueOnce(rpcResult(ungrouped));
+    await commitWarehouseScopedOperation(saved.project, ungrouped, 4, '', 'catalog');
+    expect(rpcMock.mock.calls[1][1].p_changes.audits).toEqual([]);
+    expect(ungrouped.warehouse!.items[0].groupedWithKey).toBeUndefined();
   });
 
   it('envia somente o ajuste de inventário e sua auditoria', async () => {

@@ -4953,7 +4953,7 @@ export function confirmFiscalMaterialEquivalence(project: Project, noteId: strin
 }
 
 /** Agrupa a apresentação de dois cadastros sem reatribuir o histórico de estoque. */
-export function groupWarehouseMaterials(project: Project, sourceKey: string, targetKey: string, actor?: WarehouseActorInput): Project {
+export function groupWarehouseMaterials(project: Project, sourceKey: string, targetKey: string): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
   if (sourceKey === targetKey) throw new Error('Selecione dois materiais distintos.');
@@ -4964,33 +4964,18 @@ export function groupWarehouseMaterials(project: Project, sourceKey: string, tar
   if (target.groupedWithKey || source.groupedWithKey || wh.items.some(item => item.groupedWithKey === sourceKey || item.groupedWithKey === targetKey)) {
     throw new Error('Desfaça o agrupamento atual antes de reagrupar este material.');
   }
-  const auditActor = normalizeWarehouseActor(actor);
   const items = wh.items.map(item => item.key === sourceKey ? { ...item, groupedWithKey: targetKey } : item);
-  return logToProject(setWh(p, { items }), {
-    entityType: 'warehouse_item', entityId: sourceKey, action: 'updated',
-    title: 'Materiais agrupados para consulta',
-    description: `${source.description} agrupado com ${target.description}; saldos e movimentos individuais preservados.`,
-    userId: auditActor?.userId, userName: auditActor?.userName, userEmail: auditActor?.userEmail,
-    before: { sourceKey, groupedWithKey: source.groupedWithKey }, after: { sourceKey, groupedWithKey: targetKey },
-    metadata: { operation: 'warehouse_material_group' },
-  });
+  // O domínio catalog rejeita auditorias do cliente e grava sua própria auditoria na RPC.
+  return setWh(p, { items });
 }
 
-export function ungroupWarehouseMaterial(project: Project, sourceKey: string, actor?: WarehouseActorInput): Project {
+export function ungroupWarehouseMaterial(project: Project, sourceKey: string): Project {
   const p = ensureWarehouse(project);
   const wh = p.warehouse!;
   const source = wh.items.find(item => item.key === sourceKey);
   if (!source?.groupedWithKey) return p;
-  const auditActor = normalizeWarehouseActor(actor);
   const items = wh.items.map(item => item.key === sourceKey ? { ...item, groupedWithKey: undefined } : item);
-  return logToProject(setWh(p, { items }), {
-    entityType: 'warehouse_item', entityId: sourceKey, action: 'updated',
-    title: 'Agrupamento de materiais desfeito',
-    description: `${source.description} voltou a ser exibido separadamente.`,
-    userId: auditActor?.userId, userName: auditActor?.userName, userEmail: auditActor?.userEmail,
-    before: { sourceKey, groupedWithKey: source.groupedWithKey }, after: { sourceKey },
-    metadata: { operation: 'warehouse_material_ungroup' },
-  });
+  return setWh(p, { items });
 }
 
 /** Uma correção por transação: estorna a entrada antiga e lança no material certo. */

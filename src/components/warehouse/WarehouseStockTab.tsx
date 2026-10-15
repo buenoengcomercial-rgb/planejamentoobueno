@@ -211,7 +211,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
   );
   const saveGroup = async () => {
     try {
-      await commitCatalog(groupWarehouseMaterials(project, groupSource, groupTarget, auditActor));
+      await commitCatalog(groupWarehouseMaterials(project, groupSource, groupTarget));
       setGroupOpen(false);
       setGroupSource('');
       setGroupTarget('');
@@ -253,7 +253,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
         )}
         </div>
       </div>
-      {visibleGroups.length > 0 && <div className="space-y-2 border-b p-3">{visibleGroups.map(group => <div key={group.source.key} className="rounded-lg border border-primary/25 bg-primary/5 p-3 text-sm"><div className="flex flex-wrap items-center gap-2"><button type="button" className="min-w-0 flex-1 text-left font-semibold" onClick={() => setExpandedGroups(current => current.includes(group.source.key) ? current.filter(key => key !== group.source.key) : [...current, group.source.key])} aria-expanded={expandedGroups.includes(group.source.key)}>{expandedGroups.includes(group.source.key) ? '▾' : '▸'} {group.target.description} + {group.source.description}</button><span className="font-mono font-bold">Saldo conjunto: {(group.target.balance + group.source.balance).toLocaleString('pt-BR')} {group.target.unit}</span>{canDelete && <Button size="sm" variant="outline" onClick={() => void commitCatalog(ungroupWarehouseMaterial(project, group.source.key, auditActor)).then(() => toast.success('Agrupamento desfeito.')).catch(error => toast.error((error as Error).message))}>Desagrupar</Button>}</div><p className="mt-1 text-xs text-muted-foreground">2 cadastros vinculados para consulta. Notas, retiradas e saldos de cada cadastro continuam separados; expanda para ver as linhas.</p></div>)}</div>}
+      {visibleGroups.length > 0 && <div className="space-y-2 border-b p-3">{visibleGroups.map(group => <div key={group.source.key} className="rounded-lg border border-primary/25 bg-primary/5 p-3 text-sm"><div className="flex flex-wrap items-center gap-2"><button type="button" className="min-w-0 flex-1 text-left font-semibold" onClick={() => setExpandedGroups(current => current.includes(group.source.key) ? current.filter(key => key !== group.source.key) : [...current, group.source.key])} aria-expanded={expandedGroups.includes(group.source.key)}>{expandedGroups.includes(group.source.key) ? '▾' : '▸'} {group.target.description} + {group.source.description}</button><span className="font-mono font-bold">Saldo conjunto: {(group.target.balance + group.source.balance).toLocaleString('pt-BR')} {group.target.unit}</span>{canDelete && <Button size="sm" variant="outline" onClick={() => void commitCatalog(ungroupWarehouseMaterial(project, group.source.key)).then(() => toast.success('Agrupamento desfeito.')).catch(error => toast.error((error as Error).message))}>Desagrupar</Button>}</div><p className="mt-1 text-xs text-muted-foreground">2 cadastros vinculados para consulta. Notas, retiradas e saldos de cada cadastro continuam separados; expanda para ver as linhas.</p></div>)}</div>}
       <div className="max-h-[calc(100dvh-300px)] overflow-auto">
         <div className="space-y-4 p-2 md:hidden">{orderedClasses.map(costClass => {
           const classRows = visibleRows.filter(row => row.costClass === costClass);
