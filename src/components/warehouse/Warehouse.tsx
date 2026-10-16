@@ -78,7 +78,7 @@ interface Props {
     operation: WarehouseCloudOperation,
   ) => Promise<WarehouseCloudCommitResult>;
   onRunCriticalCloudWarehouseOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
-  onCommitWarehouseScoped?: (next: Project, domain: WarehouseScopedDomain) => Promise<Project>;
+  onCommitWarehouseScoped?: (next: Project, domain: WarehouseScopedDomain, expectedBase?: Project) => Promise<Project>;
   canManageFiscalNotes?: boolean;
   canReviewFiscalCosts?: boolean;
   canViewPanel?: boolean;

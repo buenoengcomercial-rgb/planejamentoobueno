@@ -9,8 +9,9 @@ import { measurementCapturePatch } from './measurementCapturePatch';
 import { applyMeasurementLifecycleReceipt, measurementLifecyclePatch } from './measurementLifecyclePatch';
 import { applyMeasurementPlanCatalogReceipt, measurementPlanCatalogPatch } from './measurementPlanCatalogPatch';
 import type { MeasurementWorkspace } from './measurementWorkspace';
+import { measurementConcurrentCommand, measurementCommandKey, type MeasurementConcurrentCommand } from './measurementConcurrentCommand';
 
-/** Only confirmed snapshots are cached; new unconfirmed edits stay in memory. */
+/** Confirmed snapshots and pending operations are stored separately. */
 export function cloudMeasurementRepository(scope: { userId: string; projectId: string }): MeasurementRepository {
   const local = measurementRepository({ ...scope, userId: `cloud:${scope.userId}`, environment: 'isolated' });
   let confirmed: MeasurementWorkspace | null = null;
@@ -167,7 +168,9 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     // Keep the compact operation until its confirmed snapshot is durable too.
     // A tab closed between cloud acknowledgement and this checkpoint can still
     // reconstruct the same operation while offline.
-    void checkpoint(workspace, operationId);
+    void checkpoint(workspace, operationId).then(() => {
+      localStorage.removeItem(measurementCommandKey(scope.userId, scope.projectId, operationId));
+    }).catch(() => undefined);
   };
   const compactedReceiptRevision = async (operationId: string): Promise<number | null> => {
     // Older operation payloads may have been compacted after a verified
@@ -190,8 +193,14 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       const operationId = 'operationId' in stored ? stored.operationId : stored.candidate.audit.at(-1)?.id;
       if (!operationId) throw new Error('Há um lançamento local sem identificação. Confira o rascunho.');
       if (stored.baseRevision < remote.revision) {
+        const receiptRevision = await compactedReceiptRevision(operationId);
         const applied = remote.audit.some(event => event.id === operationId)
-          || await compactedReceiptRevision(operationId) === stored.baseRevision + 1;
+          || receiptRevision !== null && receiptRevision >= stored.baseRevision + 1 && receiptRevision <= remote.revision;
+        if (!applied && (('format' in stored && stored.format === 'entry-patch-v1')
+          || localStorage.getItem(measurementCommandKey(scope.userId, scope.projectId, operationId)))) {
+          pending.push(await restorePending(stored));
+          continue;
+        }
         if (!applied) throw new Error('A Medição mudou em outro computador. O lançamento local foi preservado para resolver o conflito.');
         discardConfirmedPending(operationId, remote);
         continue;
@@ -241,16 +250,24 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
   return {
     ...local,
     savedLabel: 'Salvo na nuvem',
+    concurrentEntries: true,
     loadedOffline: () => loadedOffline,
     loadState: () => ({ ...state, error: state.error ? { ...state.error } : undefined }),
     resolvePlanFile,
-    stage: undefined,
-    // New cloud edits stay in memory until sent. Legacy records remain readable
-    // only for a one-time, explicitly scoped review; no new local drafts exist.
-    drafts: async () => [],
+    stage: async (candidate, base) => {
+      const patch = measurementEntryPatch(base, candidate);
+      if (patch) await local.preserveEntryPending!({ format: 'entry-patch-v1', projectId: scope.projectId,
+        baseRevision: base.revision, operationId: patch.event.id, patch });
+      else {
+        const command = measurementConcurrentCommand(base, candidate);
+        if (command) localStorage.setItem(measurementCommandKey(scope.userId, scope.projectId, candidate.audit.at(-1)!.id), JSON.stringify(command));
+        await local.stage!(candidate, base);
+      }
+    },
+    drafts: local.drafts,
     legacyDrafts: local.drafts,
-    writeDraft: async () => undefined,
-    clearDraft: async () => undefined,
+    writeDraft: local.writeDraft,
+    clearDraft: local.clearDraft,
     discardLegacyTask: async (workspace, item) => {
       if (loadedOffline || !confirmed || confirmed.revision !== workspace.revision) throw new Error('Confira a base da nuvem antes de limpar registros locais antigos.');
       const service = workspace.services.find(value => value.item === item);
@@ -288,8 +305,9 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         if (row.archivedAt) continue;
         const operationId = 'operationId' in row ? row.operationId : row.candidate.audit.at(-1)?.id;
         if (operationId && remote && remote.revision >= row.baseRevision + 1) {
+          const receiptRevision = await compactedReceiptRevision(operationId);
           const applied = remote.audit.some(event => event.id === operationId)
-            || await compactedReceiptRevision(operationId) === row.baseRevision + 1;
+            || receiptRevision !== null && receiptRevision >= row.baseRevision + 1 && receiptRevision <= remote.revision;
           if (applied) { discardConfirmedPending(operationId, remote); continue; }
         }
         return restorePending(row);
@@ -347,6 +365,9 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         || [latestEvent?.beforePlans, latestEvent?.afterPlans]
           .some(plans => plans?.some(plan => !plan.storagePath));
       const next = needsPlanPaths ? structuredClone(candidate) : candidate;
+      const commandKey = measurementCommandKey(scope.userId, scope.projectId, operationId);
+      const stagedCommand = localStorage.getItem(commandKey);
+      const command: MeasurementConcurrentCommand | null = stagedCommand ? JSON.parse(stagedCommand) : null;
       if (next.plans.some(plan => !plan.storagePath && (!(plan.file instanceof Blob) || !plan.file.size))) {
         throw new MeasurementCommitRejectedError('Uma planta nova precisa de um arquivo completo antes do envio.');
       }
@@ -356,7 +377,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         ? measurementLifecyclePatch(confirmed, next) : null;
       const isLifecycleCommand = !!latestEvent && (['Criar medição', 'Enviar para fiscalização', 'Aprovado pela fiscalização'].includes(latestEvent.action)
         || latestEvent.lifecycle?.kind === 'delete' || latestEvent.lifecycle?.kind === 'restore');
-      if (isLifecycleCommand && !lifecyclePatch) throw new MeasurementCommitRejectedError('O ciclo da medição contém outras alterações ou uma revisão desatualizada. Confira a medição antes de repetir.');
+      if (isLifecycleCommand && !lifecyclePatch && !command) throw new MeasurementCommitRejectedError('O ciclo da medição contém outras alterações ou uma revisão desatualizada. Confira a medição antes de repetir.');
       for (const plan of next.plans) {
         if (!plan.storagePath) {
           if (!(plan.file instanceof Blob) || !plan.file.size) throw new MeasurementCommitRejectedError('Arquivo da planta indisponível para envio.');
@@ -379,6 +400,36 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         const paths = new Map(next.plans.map(p => [p.id, p.storagePath]));
         for (const event of next.audit) for (const plans of [event.beforePlans, event.afterPlans]) for (const p of plans ?? []) p.storagePath ??= paths.get(p.id);
       }
+      if (command) {
+        // Uploaded objects use the operation's immutable path. Persist that
+        // path before sending so a transport retry repeats the exact command.
+        const patch = command.patch as { plan?: { id: string; storagePath?: string } };
+        if (patch.plan && !patch.plan.storagePath) {
+          patch.plan.storagePath = next.plans.find(plan => plan.id === patch.plan!.id)?.storagePath;
+          localStorage.setItem(commandKey, JSON.stringify(command));
+        }
+        const { data, error } = await supabase.rpc('commit_measurement_command_v2' as never, {
+          p_project_id: scope.projectId, p_expected_revision: baseRevision, p_command: command,
+        } as never);
+        if (error) {
+          if (['P0001','P0002','42501','22023','23502','23503','23505','23514'].includes(String(error.code)))
+            throw new MeasurementCommitRejectedError(error.message);
+          throw new Error(`${error.message}. A tentativa está preservada para conferir a confirmação.`);
+        }
+        const receipt = data as { projectId?: string; operationId?: string; revision?: number; currentRevision?: number } | null;
+        if (receipt?.projectId !== scope.projectId || receipt.operationId !== operationId
+          || !Number.isSafeInteger(receipt.revision) || receipt.revision! < baseRevision + 1) {
+          throw new Error('Recibo da Medição incompleto. A tentativa continua preservada.');
+        }
+        const saved = await loadRemote();
+        if (!saved || loadedOffline || saved.revision < (receipt.currentRevision ?? receipt.revision!)
+          || !saved.audit.some(event => event.id === operationId)
+            && await compactedReceiptRevision(operationId) !== receipt.revision) {
+          throw new Error('Confirmação recebida; falta conferir os dados atuais. A tentativa continua preservada.');
+        }
+        discardConfirmedPending(operationId, saved);
+        return saved;
+      }
       // Check a DXF operation before the generic entry fallback: that fallback
       // serializes the entire workspace merely to discover the plan changed.
       const catalogPatch = !lifecyclePatch && confirmed?.revision === baseRevision
@@ -386,7 +437,13 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       const capturePatch = !lifecyclePatch && !catalogPatch && confirmed?.revision === baseRevision
         && ['Capturar / editar planta', 'Apagar captura'].includes(latestEvent?.action ?? '')
         ? measurementCapturePatch(confirmed, next) : null;
-      const patch = !lifecyclePatch && !catalogPatch && !capturePatch && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
+      let patch = !lifecyclePatch && !catalogPatch && !capturePatch && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
+      if (!patch && !lifecyclePatch && !catalogPatch && !capturePatch) {
+        const stored = (await local.storedPendingSaves!()).find(value => 'format' in value && value.format === 'entry-patch-v1'
+          && value.operationId === operationId && value.baseRevision === baseRevision);
+        if (stored && 'format' in stored && stored.format === 'entry-patch-v1'
+          && JSON.stringify(stored.patch.event) === JSON.stringify(latestEvent)) patch = stored.patch;
+      }
       const deletionPatch = !lifecyclePatch && !catalogPatch && !capturePatch && !patch && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null;
       const send = () => lifecyclePatch
         ? supabase.rpc('commit_measurement_lifecycle' as never, {
@@ -429,6 +486,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           confirmed = latest;
           loadedOffline = false;
           state = { source: 'cloud', checking: !!loading };
+          discardConfirmedPending(operationId, latest);
           return latest;
         }
         if (remoteRevision === baseRevision && savedRevision === null) ({ data, error } = await send());
@@ -456,6 +514,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
             && await compactedReceiptRevision(operationId) !== receipt.revision) {
           throw new Error('A operação foi confirmada, mas a versão reconciliada não pôde ser conferida. Mantenha esta página aberta.');
         }
+        discardConfirmedPending(operationId, latest);
         return latest;
       }
       if ((lifecyclePatch || compactPatch) && (data as { replayed?: unknown } | null)?.replayed === true) {
@@ -483,6 +542,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           && await compactedReceiptRevision(operationId) !== next.revision) {
           throw new Error('O recibo repetido não foi encontrado na versão atual da Medição. Confira esta operação antes de continuar.');
         }
+        discardConfirmedPending(operationId, latest);
         return latest;
       }
       let saved: MeasurementWorkspace;
@@ -506,6 +566,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       confirmed = saved;
       loadedOffline = false;
       state = { source: 'cloud', checking: !!loading };
+      discardConfirmedPending(operationId, saved);
       return saved;
     },
   };

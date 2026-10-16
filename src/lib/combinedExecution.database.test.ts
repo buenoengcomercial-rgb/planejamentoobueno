@@ -52,11 +52,30 @@ beforeEach(async () => {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${migration}`, import.meta.url), 'utf8'));
   }
   await db.exec(await readFile(new URL('../../supabase/audits/execution_protection_preflight.sql',import.meta.url),'utf8'));
+  await db.exec(`CREATE FUNCTION public.has_org_role(uuid,uuid,public.org_role[]) RETURNS boolean LANGUAGE sql AS $$ SELECT true $$;`);
+  for (const migration of ['20261016120000_concurrent_field_merge.sql','20261016122000_concurrent_project_domains.sql']) {
+    await db.exec(await readFile(new URL(`../../supabase/migrations/${migration}`,import.meta.url),'utf8'));
+  }
 }, 20000);
 afterEach(async () => { await db.close(); });
 
 const log = (id: string, qty: number, number = 1) => ({ id, task_id: 't', log_date: null, data: { id, date: '', plannedQuantity: 0, actualQuantity: qty, measurementPeriod: { number, startDate: `2026-${number + 9}-01`, endDate: `2026-${number + 9}-${number === 2 ? 30 : 31}` } } });
 describe('proteções combinadas com a versão atual do Lovable',()=>{
+ it('capturas independentes preservam marcas e recibo após outra gravação',async()=>{
+  const send=async(id:string)=>{
+   const mark={id:`mark-${id}`,taskId:'t',logId:id,kind:'count',page:1,points:[{x:1,y:2}]};
+   const data={...log(id,1).data,quantityDetailsAppliedTotal:1,quantityDetails:[{id:`row-${id}`,multiplier:1,measuredQuantity:1,source:{planId:plan,measureId:mark.id,kind:'count',page:1,points:mark.points}}]};
+   return {domain:'production',changes:[{table:'task_daily_logs',upserts:[{id,expected:null,row:{...log(id,1),data}}],deletes:[]}],audits:audit(id,'created'),
+    capture:{planId:plan,captureId:crypto.randomUUID(),expected:{measures:[],scales:{}},next:{measures:[mark],scales:{'1':1}}}};
+  };
+  const first=await send('first'),second=await send('second');
+  const commit=async(id:string,request:unknown)=>(await db.query<{value:{capture:{measures:unknown[]};replayed:boolean}}>('select commit_project_fields($1,$2,$3,$4) value',[project,org,id,json(request)])).rows[0].value;
+  await commit('first',first); await commit('second',second);
+  expect(await snapshot()).toHaveLength(2);
+  const replay=await commit('first',first);
+  expect(replay.replayed).toBe(true); expect(replay.capture.measures).toHaveLength(2);
+  expect(await snapshot()).toHaveLength(2);
+ });
  it('edita 29 para 30 e preserva histórico com as duas proteções',async()=>{
   await save([log('l1',29)]); await save([log('l1',30)],[],audit('l1','updated'));
   expect((await snapshot())[0].data.actualQuantity).toBe(30);

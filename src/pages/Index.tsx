@@ -1,4 +1,10 @@
 import { readCaptureDraft, writeCaptureDraft } from '@/lib/productionCaptureDraft';
+import { ProjectFieldConflictError, preserveProjectFieldConflict, projectOperationFingerprint } from '@/lib/projectFieldCommit';
+import { mergeConcurrentFields } from '@/lib/concurrentFields';
+import ProjectOperationConflicts from '@/components/ProjectOperationConflicts';
+import { warehouseEditBaseline } from '@/lib/warehouseEditBaseline';
+import WarehouseOperationRecovery from '@/components/WarehouseOperationRecovery';
+import { acknowledgeWarehouseOutbox } from '@/lib/warehouseOperationOutbox';
 import type { ProductionCaptureChange } from '@/lib/planTakeoff';
 import { syncProductionAtomically, stripNormalizedCollections } from '@/lib/projectSync';
 import { applyProjectOperation, auditProjectReversal } from '@/lib/projectOperations';
@@ -1100,9 +1106,54 @@ export default function Index() {
         // Limite as tentativas para não manter um autosave concorrente em loop.
         for (let attempt = 0; ; attempt += 1) {
           try {
-            updatedAt = await upsertCloudProject(effectiveProject, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined);
+            const submitted = effectiveProject;
+            updatedAt = await upsertCloudProject(effectiveProject, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined, accepted => {
+              effectiveProject = accepted;
+              effectiveJson = serializeProject(accepted);
+              const current = rawProjectRef.current;
+              if (!current || current.id !== accepted.id) return;
+              const mergedMetadata = mergeProjectMetadataFields(submitted, current, accepted);
+              const merged = mergedMetadata && mergeProjectRecordsThreeWay(submitted, mergedMetadata, accepted,
+                getLoadedProjectCollections(accepted.id).filter(key => !key.startsWith('warehouse')));
+              if (merged) {
+                rawProjectRef.current = merged;
+                if (serializeProject(merged) === effectiveJson) skipNextAutoSaveRef.current = true;
+                setRawProject(merged);
+              }
+            });
             break;
           } catch (error) {
+            if (error instanceof ProjectFieldConflictError) {
+              const latest = rawProjectRef.current;
+              if (!latest || latest.id !== effectiveProject.id) throw error;
+              // Preserve the rejected operation and any typing that continued
+              // during its request before replacing its confirmed records.
+              preserveProjectFieldConflict(error, latest, effectiveProject);
+              const domainCollections: Record<string, ProjectCollectionKey[]> = {
+                production: ['eapChapters', 'tasks', 'taskDailyLogs', 'auditLogs'],
+                measurement: ['measurements', 'auditLogs'], additive: ['additives', 'budgetItems', 'analyticCompositions', 'materialPriceHistory', 'auditLogs'],
+                materials: ['budgetItems', 'materialComparisons', 'analyticCompositions', 'materialPriceHistory', 'auditLogs'],
+                costs: ['subcontracts', 'auditLogs'], metadata: [],
+              };
+              const collections = getLoadedProjectCollections(effectiveProject.id).filter(key => domainCollections[error.request.domain]?.includes(key));
+              const record = await loadCloudProjectRecord(effectiveProject.id, { collections, strict: true, deferSnapshot: true });
+              if (!record || rawProjectRef.current?.id !== latest.id) throw error;
+              const remote = mergeHydratedProjectCollections(mergeProjectMetadata(effectiveProject, record.project), record.project, collections);
+              const merged = mergeConcurrentFields(effectiveProject, rawProjectRef.current, remote);
+              // The full latest attempt is retained above even when a newer
+              // local edit collided during the read.
+              preserveProjectFieldConflict(error, rawProjectRef.current, effectiveProject);
+              confirmCloudProjectRecord(record);
+              effectiveProject = remote;
+              effectiveJson = serializeProject(remote);
+              updatedAt = record.updatedAt;
+              rawProjectRef.current = merged.value;
+              skipNextAutoSaveRef.current = serializeProject(merged.value) === effectiveJson;
+              setRawProject(merged.value);
+              if (skipNextAutoSaveRef.current) clearLocalProjectCollections(remote.id);
+              toast.error('Esta operação teve conflito. A primeira confirmação foi mantida e sua tentativa está disponível em “Operações em conflito”.');
+              break;
+            }
             if (attempt < 3 && error instanceof CloudProjectConflictError) {
               const knownRemoteCollections = [
                 ...(pendingRealtimeCollectionsRef.current.get(effectiveProject.id) ?? []),
@@ -1766,7 +1817,7 @@ export default function Index() {
       const localChangedDuringRequest = serializeProject(latestLocal) !== localJsonAtRequest;
       if (hasLocalCollectionConflict(current.id, requiredProjectCollections)) {
         discardCloudProjectRecord(record);
-        await handleCloudConflict(latestLocal);
+        markRemoteCollections(current.id, requiredProjectCollections);
         return;
       }
       confirmCloudProjectRecord(record);
@@ -1800,7 +1851,7 @@ export default function Index() {
     } finally {
       remoteCheckInFlightRef.current = false;
     }
-  }, [clearRemoteCollections, handleCloudConflict, hasLocalCollectionConflict, markRemoteCollections, orgId, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
+  }, [clearRemoteCollections, hasLocalCollectionConflict, markRemoteCollections, orgId, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
 
   const refreshProjectFromRealtime = useCallback(async (sources: readonly string[] = []) => {
     const current = rawProjectRef.current;
@@ -1846,7 +1897,8 @@ export default function Index() {
     if ((metadataOnly && localMetadataDirtyRef.current.has(current.id))
       || (requestCollections.length > 0 && hasLocalCollectionConflict(current.id, requestCollections))) {
       markRemoteCollections(current.id, requestCollections);
-      await handleCloudConflict(current);
+      // A notification is not a rejected write. Keep the original expected
+      // fields until the transaction can resolve this operation on the server.
       return;
     }
 
@@ -1888,7 +1940,7 @@ export default function Index() {
         || activeDataScopeKeyRef.current !== dataScopeAtRequest;
       if (localChangedDuringRequest && hasLocalCollectionConflict(current.id, requestCollections)) {
         discardCloudProjectRecord(record);
-        await handleCloudConflict(localAfterRequest);
+        markRemoteCollections(current.id, requestCollections);
         return;
       }
       confirmCloudProjectRecord(record);
@@ -1924,7 +1976,7 @@ export default function Index() {
     } finally {
       remoteCheckInFlightRef.current = false;
     }
-  }, [clearRemoteCollections, handleCloudConflict, hasLocalCollectionConflict, markRemoteCollections, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
+  }, [clearRemoteCollections, hasLocalCollectionConflict, markRemoteCollections, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
 
   const refreshDailyReportFromRealtime = useCallback((incoming: DailyReport) => {
     const current = rawProjectRef.current;
@@ -2568,17 +2620,18 @@ export default function Index() {
     await writeCaptureDraft(draftKey, { before: previous, candidate: next, change, savedAt: new Date().toISOString() });
     setSaveStatus('saving');
     try {
+      let accepted = next;
       const confirmedAt = await syncProductionAtomically(next, stripNormalizedCollections(next), orgId, currentProjectUpdatedAtRef.current!, change, async args => {
         change.rpcArgs = args;
         await writeCaptureDraft(draftKey, { before: previous, candidate: next, change, savedAt: new Date().toISOString() });
-      });
+      }, { actorId: user.id, onConfirmed: value => { accepted = value; } });
       if (!confirmedAt) throw new Error('A captura não confirmou a transação. Os registros anteriores foram preservados.');
       currentProjectUpdatedAtRef.current = confirmedAt;
       setCurrentProjectUpdatedAt(confirmedAt);
       setLastCloudConfirmedAt(confirmedAt);
-      lastSavedProjectJsonRef.current = serializeProject(next);
+      lastSavedProjectJsonRef.current = serializeProject(accepted);
       skipNextAutoSaveRef.current = true;
-      rawProjectRef.current = next; setRawProject(next);
+      rawProjectRef.current = accepted; setRawProject(accepted);
       discardProjectDraft(next.id); setSaveStatus('saved');
       await writeCaptureDraft(draftKey, null).catch(() => toast.message('Captura salva; o aviso de rascunho será reconciliado na próxima abertura.'));
     } catch (error) {
@@ -2645,6 +2698,17 @@ export default function Index() {
     const active = rawProjectRef.current;
     if (!active || active.id !== confirmation.project.id) {
       throw new Error('A retirada foi confirmada, mas outra obra está aberta. Reabra a obra para conferir o histórico.');
+    }
+    if ((lastObservedWarehouseVersionRef.current ?? -1) > confirmation.warehouseVersion) {
+      const version = await getCloudProjectVersion(active.id);
+      const refreshed = version && await refreshRemoteCollectionsInBackground(active, WAREHOUSE_REMOTE_SYNC_COLLECTIONS, version);
+      if (!refreshed || version?.warehouseVersion == null || !version.warehouseUpdatedAt) {
+        throw new Error('A retirada foi confirmada, mas outra operação chegou depois. Confira a tentativa pendente para atualizar a tela.');
+      }
+      confirmation.project = refreshed;
+      confirmation.projectUpdatedAt = version.updatedAt;
+      confirmation.warehouseUpdatedAt = version.warehouseUpdatedAt;
+      confirmation.warehouseVersion = version.warehouseVersion;
     }
 
     // A resposta da RPC do Almoxarifado é a confirmação oficial da retirada,
@@ -2750,7 +2814,7 @@ export default function Index() {
       };
       void reconcileDailyMirror();
     }
-  }, [clearLocalProjectCollections, discardProjectDraft, mergeConfirmedDailyReportIntoPartialSync, scheduleProjectDraft]);
+  }, [clearLocalProjectCollections, discardProjectDraft, mergeConfirmedDailyReportIntoPartialSync, scheduleProjectDraft, refreshRemoteCollectionsInBackground]);
 
   const commitWarehouseRequisitionNow = useCallback((
     before: Project,
@@ -2770,8 +2834,9 @@ export default function Index() {
       if (rawProjectRef.current?.id !== before.id) {
         throw new Error('A obra aberta mudou antes da confirmação. Nenhuma nova operação foi iniciada.');
       }
-      const confirmation = await commitWarehouseOperation(before, after, operation);
+      const confirmation = await commitWarehouseOperation(before, after, operation, user?.id);
       await applyWarehouseCloudConfirmation(confirmation);
+      acknowledgeWarehouseOutbox(user?.id, before.id, operation.operationKey);
       return confirmation;
     })();
     warehouseOperationInFlightRef.current = request;
@@ -2783,7 +2848,7 @@ export default function Index() {
         warehouseLockedRouteRef.current = null;
       }
     });
-  }, [applyWarehouseCloudConfirmation, prepareWarehouseCloudOperation]);
+  }, [applyWarehouseCloudConfirmation, prepareWarehouseCloudOperation, user?.id]);
 
   const runCriticalWarehouseClientOperation = useCallback(<T,>(
     operation: () => Promise<T>,
@@ -2808,9 +2873,10 @@ export default function Index() {
     });
   }, []);
 
-  const commitWarehouseScopedNow = useCallback((next: Project, domain: WarehouseScopedDomain): Promise<Project> => {
+  const commitWarehouseScopedNow = useCallback((next: Project, domain: WarehouseScopedDomain, expectedBase?: Project): Promise<Project> => {
     // Capture the form's baseline before preparation can hydrate newer remote values.
-    const submittedBase = project ?? rawProjectRef.current;
+    const currentBase = project ?? rawProjectRef.current;
+    const submittedBase = expectedBase && currentBase ? warehouseEditBaseline(expectedBase, currentBase, next) : currentBase;
     if (navigationInFlightRef.current) {
       return Promise.reject(new Error('A navegação já foi iniciada. Aguarde a próxima tela abrir antes de registrar a operação.'));
     }
@@ -2857,6 +2923,7 @@ export default function Index() {
           currentWarehouseVersionRef.current,
           '',
           domain,
+          user?.id,
         );
       } catch (error) {
         setSaveStatus(navigator.onLine ? 'error' : 'offline');
@@ -2868,6 +2935,16 @@ export default function Index() {
           ? { ...meta, updatedAt: result.projectUpdatedAt }
           : meta));
         return result.project;
+      }
+      if ((lastObservedWarehouseVersionRef.current ?? -1) > result.warehouseVersion) {
+        const active = rawProjectRef.current;
+        const version = await getCloudProjectVersion(active.id);
+        const refreshed = version && await refreshRemoteCollectionsInBackground(active, WAREHOUSE_REMOTE_SYNC_COLLECTIONS, version);
+        if (!refreshed || version?.warehouseVersion == null || !version.warehouseUpdatedAt) {
+          throw new Error('A operação foi confirmada, mas há uma versão posterior. Confira a tentativa pendente para atualizar a tela.');
+        }
+        result.project = refreshed; result.projectUpdatedAt = version.updatedAt;
+        result.warehouseUpdatedAt = version.warehouseUpdatedAt; result.warehouseVersion = version.warehouseVersion;
       }
 
       const parseSavedBaseline = () => {
@@ -2906,6 +2983,7 @@ export default function Index() {
         rawProjectRef.current = applied;
         return applied;
       });
+      acknowledgeWarehouseOutbox(user?.id, before.id, result.operationKey);
       return applied;
     })();
     warehouseScopedOperationInFlightRef.current = request;
@@ -2917,7 +2995,7 @@ export default function Index() {
         warehouseLockedRouteRef.current = null;
       }
     });
-  }, [discardProjectDraft, prepareWarehouseCloudOperation, project, scheduleProjectDraft]);
+  }, [discardProjectDraft, prepareWarehouseCloudOperation, project, scheduleProjectDraft, refreshRemoteCollectionsInBackground, user?.id]);
 
   /**
    * A manutenção de anexos é exclusiva do Proprietário e nunca delega ao
@@ -3117,11 +3195,11 @@ export default function Index() {
     toast.success('Obra criada e planilha importada com sucesso.');
   };
 
-  const handleRenameProject = async (id: string, newName: string) => {
+  const handleRenameProject = async (id: string, newName: string, expectedName: string) => {
     if (!orgId || !editor) { toast.error('Sem permissão para renomear.'); return; }
     try {
       await runProtectedNavigation(async () => {
-        const updated = await renameCloudProject(id, newName, orgId);
+        const updated = await renameCloudProject(id, newName, orgId, expectedName);
         if (updated) {
           if (rawProjectRef.current?.id === id) {
             confirmCloudProjectRecord(updated);
@@ -3133,8 +3211,10 @@ export default function Index() {
         const list = await refreshCloudList();
         setUndoVersion(v => v + 1);
       });
-    } catch {
-      toast.error('Erro ao renomear');
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Erro ao renomear');
+      return false;
     }
   };
 
@@ -3519,6 +3599,41 @@ export default function Index() {
       </div>
 
       <main ref={mainScrollRef} className="relative min-h-screen min-w-0 flex-1 overflow-x-clip overflow-y-auto pt-14 lg:pt-0">
+        {user?.id && orgId && <ProjectOperationConflicts actorId={user.id} projectId={project.id} organizationId={orgId} onRecovered={async (_receipt, operation) => {
+          const current = rawProjectRef.current;
+          if (!current || current.id !== project.id) throw new Error('Reabra a obra da tentativa.');
+          const draft = readStoredProjectDraft(current.id);
+          const matchesDraft = !!draft && !!operation.candidateHash && await projectOperationFingerprint(draft.project) === operation.candidateHash;
+          const collections = getLoadedProjectCollections(current.id);
+          const record = await loadCloudProjectRecord(current.id, { collections, strict: true, deferSnapshot: true });
+          if (!record || rawProjectRef.current?.id !== current.id) throw new Error('A versão confirmada ainda não pôde ser carregada.');
+          if (matchesDraft) {
+            discardProjectDraft(current.id);
+            conflictingDraftRef.current = null; conflictDetectedRef.current = false;
+            setDraftConflictProjectId(null);
+            confirmCloudProjectRecord(record);
+            replaceProjectWithoutAutoSave(record.project, record.updatedAt, false, false, record.warehouseVersion);
+          } else {
+            const baseline = lastSavedProjectJsonRef.current ? JSON.parse(lastSavedProjectJsonRef.current) as Project : current;
+            const remote = mergeHydratedProjectCollections(mergeProjectMetadata(baseline, record.project), record.project, collections);
+            const merged = mergeConcurrentFields(baseline, rawProjectRef.current, remote);
+            if (merged.conflicts.length) { discardCloudProjectRecord(record); throw new Error('A gravação foi confirmada. Há uma edição mais recente nesta tela; preserve-a antes de recarregar.'); }
+            confirmCloudProjectRecord(record);
+            lastSavedProjectJsonRef.current = serializeProject(remote);
+            currentProjectUpdatedAtRef.current = record.updatedAt;
+            setCurrentProjectUpdatedAt(record.updatedAt);
+            skipNextAutoSaveRef.current = serializeProject(merged.value) === lastSavedProjectJsonRef.current;
+            rawProjectRef.current = merged.value; setRawProject(merged.value);
+          }
+        }} />}
+        {user?.id && <WarehouseOperationRecovery actorId={user.id} projectId={project.id} onConfirmed={async () => {
+          const current = rawProjectRef.current;
+          if (!current || current.id !== project.id) throw new Error('Reabra a obra da tentativa.');
+          const version = await getCloudProjectVersion(current.id);
+          if (!version || !await refreshRemoteCollectionsInBackground(current, WAREHOUSE_REMOTE_SYNC_COLLECTIONS, version)) {
+            throw new Error('A operação foi conferida, mas a atualização da tela ainda está pendente. Tente conferir novamente.');
+          }
+        }} />}
         {(currentView !== 'measurement' || independentMeasurementProjectId !== rawProject.id || !['idle', 'saved'].includes(saveStatus) || Object.keys(dailyReportSaveErrors).length > 0 || partialSyncIssue?.projectId === rawProject.id) && <div className="absolute top-3 right-4 z-20">
           {currentView === 'measurement' && independentMeasurementProjectId === rawProject.id && <span className="block text-right text-[10px] text-muted-foreground">Outras áreas da obra</span>}
           <SaveStatusIndicator status={Object.keys(dailyReportSaveErrors).length && saveStatus !== 'saving' ? 'error' : saveStatus} confirmedAt={lastCloudConfirmedAt} lastCheckedAt={lastRemoteCheckAt} projectId={rawProject.id} live={realtimeConnected} remoteUpdateAt={remoteUpdateAt} pendingRemoteAreas={pendingRemoteAreas} partialSyncPending={partialSyncIssue?.projectId === rawProject.id} partialSyncDraftProtected={partialSyncIssue?.draftProtected} syncRetrying={partialSyncRetrying} />

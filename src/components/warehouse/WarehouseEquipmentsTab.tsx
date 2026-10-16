@@ -1,3 +1,4 @@
+import { useWarehouseEditBase } from '@/hooks/useWarehouseEditBase';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type { Equipment, Project, WarehouseAttachment, WarehouseAuditActor, WarehouseEquipmentGroup } from '@/types/project';
 import { Button } from '@/components/ui/button';
@@ -27,7 +28,7 @@ import { WarehouseEmptyState, WarehouseField, WarehouseSectionHeader, WarehouseS
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { WarehouseScopedDomain } from '@/lib/warehouseScopedCommit';
 
-interface Props { project: Project; onProjectChange: (next: Project) => void; onCommitWarehouseScoped?: (next: Project, domain: WarehouseScopedDomain) => Promise<Project>; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; canManageGroups?: boolean; canEdit?: boolean; }
+interface Props { project: Project; onProjectChange: (next: Project) => void; onCommitWarehouseScoped?: (next: Project, domain: WarehouseScopedDomain, expectedBase?: Project) => Promise<Project>; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; canManageGroups?: boolean; canEdit?: boolean; }
 
 interface EquipmentForm {
   description: string;
@@ -135,8 +136,13 @@ export default function WarehouseEquipmentsTab({ project, onProjectChange, onCom
   const hasRegistrationDraft = photos.length > 0 || [form.description, form.brand, form.model, form.serial, form.patrimony, form.category, form.notes]
     .some(value => value.trim().length > 0);
 
+  const editBase = useWarehouseEditBase(project, editingEquipment?.id || (groupDialogOpen ? 'group' : registrationOpen ? 'registration' : null));
   const commitEquipment = async (next: Project, domain: WarehouseScopedDomain = 'catalog') => {
-    if (onCommitWarehouseScoped) return onCommitWarehouseScoped(next, domain);
+    if (onCommitWarehouseScoped) {
+      const accepted = await onCommitWarehouseScoped(next, domain, editBase.project);
+      editBase.confirmed(accepted);
+      return accepted;
+    }
     if (import.meta.env.MODE === 'test') { onProjectChange(next); return next; }
     throw new Error('A transação segura de equipamentos ainda não está disponível. Nada foi gravado.');
   };

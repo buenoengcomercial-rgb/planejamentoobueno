@@ -134,4 +134,74 @@ await test('completed diary cannot be edited/deleted directly; engineer conclude
   await db.exec("UPDATE public.daily_reports SET data=data - ARRAY['concludedAt','concludedBy'] WHERE id='report'");
   assert.equal((await db.query("SELECT data->>'observations' AS content FROM public.daily_reports WHERE id='report'")).rows[0].content,'Texto fictício');
 });
+await db.exec(`RESET ROLE; CREATE ROLE service_role;
+  CREATE FUNCTION public.has_org_role(u uuid,o uuid,r public.org_role[]) RETURNS boolean LANGUAGE sql STABLE
+    AS $$ SELECT app_private.has_org_role(u,o,r) $$;`);
+await db.exec(await migration('20261009140000_protect_execution_history'));
+await db.exec(await migration('20261010015000_combined_execution_writer'));
+await db.exec("CREATE TABLE takeoff_plans(id uuid PRIMARY KEY,project_id uuid,measures jsonb,scales jsonb,revision integer,deleted_at timestamptz)");
+await db.exec(await migration('20261016120000_concurrent_field_merge'));
+await db.exec(await migration('20261016122000_concurrent_project_domains'));
+await db.exec('SET ROLE authenticated');
+const fieldCommit = async (id, request) => (await db.query('SELECT public.commit_project_fields($1,$2,$3,$4) result',
+  [projectId,orgId,id,JSON.stringify(request)])).rows[0].result;
+const taskRequest = (before, next) => ({domain:'production', changes:[{table:'tasks',
+  upserts:[{id:before.id,expected:before,row:next}],deletes:[]}],audits:[]});
+const readTask = async () => (await db.query(`SELECT to_jsonb(t)-ARRAY['project_id','created_by'] row
+  FROM tasks t WHERE id='rollback'`)).rows[0].row;
+await test('field transaction preserves independent fields, first confirmation, and replay after a later edit',async()=>{
+  const base=await readTask();
+  const first=taskRequest(base,{...base,name:'Primeiro',data:{name:'Primeiro'}});
+  await fieldCommit('first',first);
+  await fieldCommit('independent',taskRequest(base,{...base,duration_days:8,data:{duration:8}}));
+  assert.equal((await readTask()).name,'Primeiro');
+  assert.equal((await readTask()).duration_days,8);
+  const count=(await db.query('SELECT count(*) n FROM project_operation_receipts')).rows[0].n;
+  const replay=await fieldCommit('first',first);
+  assert.equal(replay.replayed,true);
+  assert.equal(replay.changes[0].upserts[0].duration_days,8);
+  assert.equal((await db.query('SELECT count(*) n FROM project_operation_receipts')).rows[0].n,count);
+  await rejected(()=>fieldCommit('collision',taskRequest(base,{...base,name:'Perdedor'})),/Conflito/);
+  await assert.rejects(fieldCommit('first',taskRequest(base,{...base,name:'Forjado'})),/reutilizado/);
+});
+await test('duplicate tables and records cannot disguise unconfirmed mutations',async()=>{
+  const base=await readTask();
+  const request=taskRequest(base,{...base,name:'Duplicado'});
+  await rejected(()=>fieldCommit('duplicate-table',{...request,changes:[...request.changes,...request.changes]}),/Tabela repetida/);
+  const batch=request.changes[0];
+  await rejected(()=>fieldCommit('duplicate-row',{...request,changes:[{...batch,upserts:[...batch.upserts,...batch.upserts]}]}),/Registro repetido/);
+  await rejected(()=>fieldCommit('delete-and-update',{...request,changes:[{...batch,deletes:[{id:base.id,expected:base}]}]}),/Registro repetido/);
+  assert.deepEqual(await readTask(),base);
+});
+await test('combined commands keep dependent domains atomic and replay their current records',async()=>{
+  const base=await readTask();
+  const combined={domain:'combined',changes:[],audits:[],operations:[taskRequest(base,{...base,name:'Composta'}),
+    {domain:'metadata',changes:[],audits:[],metadata:{expected:{},next:{collaborationNote:'confirmada'}}}]};
+  await fieldCommit('combined',combined);
+  assert.equal((await readTask()).name,'Composta');
+  const after=await readTask();
+  const rejectedCombined={domain:'combined',changes:[],audits:[],operations:[taskRequest(after,{...after,name:'Reverter tudo'}),
+    {domain:'metadata',changes:[],audits:[],metadata:{expected:{},next:{collaborationNote:'conflito'}}}]};
+  await rejected(()=>fieldCommit('combined-conflict',rejectedCombined),/Conflito/);
+  assert.equal((await readTask()).name,'Composta');
+  assert.equal((await fieldCommit('combined',combined)).replayed,true);
+});
+await test('metadata fields merge independently and warehouse mutation remains outside general writer',async()=>{
+  const base=(await db.query('SELECT data_json FROM projects WHERE id=$1',[projectId])).rows[0].data_json;
+  const request=next=>({domain:'metadata',metadata:{expected:base,next},changes:[],audits:[]});
+  await fieldCommit('meta-a',request({...base,address:'A'}));
+  await fieldCommit('meta-b',request({...base,description:'B'}));
+  const metadata=(await db.query('SELECT data_json FROM projects WHERE id=$1',[projectId])).rows[0].data_json;
+  assert.equal(metadata.address,'A'); assert.equal(metadata.description,'B');
+  await rejected(()=>fieldCommit('meta-conflict',request({...base,address:'C'})),/Conflito/);
+  await rejected(()=>fieldCommit('warehouse-forbidden',request({...base,warehouse:{items:[]}})),/Almoxarifado/);
+});
+await test('invoker writer preserves authorization on new requests and receipts',async()=>{
+  const base=await readTask();
+  await db.exec("SELECT set_config('test.org_role','field_user',false)");
+  await assert.rejects(fieldCommit('not-allowed',taskRequest(base,{...base,name:'Forbidden'})),/autorizada/);
+  await assert.rejects(db.query('INSERT INTO project_operation_receipts(project_id,actor_id,operation_id,request) VALUES($1,$2,$3,$4)',
+    [projectId,userId,'forged','{}']),/row-level security/);
+  await db.exec("SELECT set_config('test.org_role','owner',false)");
+});
 await db.close();

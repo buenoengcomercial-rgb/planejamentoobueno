@@ -1,4 +1,5 @@
 import { assertNoUnsafeCriticalCollectionChanges } from '@/lib/projectSync';
+import { commitProjectFields, ProjectFieldConflictError } from '@/lib/projectFieldCommit';
 import { withReadDeadline } from '@/lib/readDeadline';
 import { supabase } from '@/integrations/supabase/client';
 import { Project } from '@/types/project';
@@ -12,6 +13,7 @@ import {
   syncCollectionsToCloud,
   syncProductionAtomically,
   syncNormalizedDomainAtomically,
+  syncProjectMetadataAtomically,
   clearCloudSnapshot,
   setCloudSnapshot,
   buildContractImportPayload,
@@ -214,9 +216,12 @@ async function getCurrentUserId(): Promise<string | undefined> {
   }
 }
 
-export async function upsertCloudProject(project: Project, organizationId: string, expectedUpdatedAt?: string): Promise<string> {
+export async function upsertCloudProject(project: Project, organizationId: string, expectedUpdatedAt?: string,
+  onConfirmed?: (project: Project) => void): Promise<string> {
   assertProjectDeletionSafety(project);
-  try { await verifyProductionDeletions(project, expectedUpdatedAt); }
+  // The field transaction performs deletion checks under its own row lock.
+  // A legacy timestamp preflight would reject unrelated concurrent edits.
+  try { if (!onConfirmed) await verifyProductionDeletions(project, expectedUpdatedAt); }
   catch (error) {
     if ((error as { code?: string })?.code === 'P0002') throw new CloudProjectConflictError();
     throw error;
@@ -233,11 +238,14 @@ export async function upsertCloudProject(project: Project, organizationId: strin
     // fotografia necessária ao diff foi invalidada.
     assertProjectSnapshotAvailable(project.id);
     try {
-      const productionUpdatedAt = await syncProductionAtomically(project, slim, organizationId, expectedUpdatedAt);
+      const concurrent = onConfirmed ? { actorId: userId ?? '', onConfirmed } : undefined;
+      const productionUpdatedAt = await syncProductionAtomically(project, slim, organizationId, expectedUpdatedAt, undefined, undefined, concurrent);
       if (productionUpdatedAt) return productionUpdatedAt;
-      const domainUpdatedAt = await syncNormalizedDomainAtomically(project, slim, organizationId, expectedUpdatedAt);
+      const domainUpdatedAt = await syncNormalizedDomainAtomically(project, slim, organizationId, expectedUpdatedAt, concurrent);
       if (domainUpdatedAt) return domainUpdatedAt;
+      if (concurrent) return await syncProjectMetadataAtomically(project, organizationId, concurrent);
     } catch (error) {
+      if (error instanceof ProjectFieldConflictError) throw error;
       if ((error as { code?: string })?.code === 'P0002') throw new CloudProjectConflictError();
       throw error;
     }
@@ -355,25 +363,19 @@ export async function createCloudProject(name: string, organizationId: string, b
   return seed;
 }
 
-export async function renameCloudProject(id: string, newName: string, organizationId: string): Promise<CloudProjectRecord | null> {
+export async function renameCloudProject(id: string, newName: string, organizationId: string, expectedName: string): Promise<CloudProjectRecord | null> {
   const record = await loadCloudProjectRecord(id, { strict: true, deferSnapshot: true });
   if (!record) return null;
   try {
-    // Renomear não precisa regravar nenhuma coleção normalizada. A trava
-    // otimista evita sobrescrever até mesmo o nome alterado em outro aparelho.
-    const { data, error } = await supabase
-      .from('projects')
-      .update({ name: newName })
-      .eq('id', id)
-      .eq('organization_id', organizationId)
-      .eq('updated_at', record.updatedAt)
-      .select('updated_at')
-      .maybeSingle();
-    if (error) throw error;
-    if (!data) throw new CloudProjectConflictError();
-    record.project = { ...record.project, name: newName };
-    record.updatedAt = data.updated_at;
-    return record;
+    const actorId = await getCurrentUserId();
+    let accepted: CloudProjectRecord | null = null;
+    await commitProjectFields(id, organizationId, actorId ?? '', { domain: 'metadata', changes: [], audits: [],
+      metadata: { expected: { name: expectedName }, next: { name: newName } } }, async () => {
+      accepted = await loadCloudProjectRecord(id, { strict: true, deferSnapshot: true });
+      if (!accepted) throw new Error('Nome confirmado; falta conferir a obra atualizada.');
+    });
+    discardCloudProjectRecord(record);
+    return accepted;
   } catch (error) {
     discardCloudProjectRecord(record);
     throw error;

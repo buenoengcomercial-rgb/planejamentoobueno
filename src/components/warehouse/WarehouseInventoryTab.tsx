@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Project, WarehouseAuditActor, WarehouseInventorySession } from '@/types/project';
 import {
   applyInventorySession,
@@ -24,7 +24,7 @@ import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
-  onCommitWarehouseScoped?: (next: Project, domain: 'inventory') => Promise<Project>;
+  onCommitWarehouseScoped?: (next: Project, domain: 'inventory', expectedBase?: Project) => Promise<Project>;
   auditActor?: WarehouseAuditActor;
   canApprove?: boolean;
   canDelete?: boolean;
@@ -58,6 +58,7 @@ export default function WarehouseInventoryTab({ project, onProjectChange, onComm
     return stockRows.filter(row => normalizeInventorySearch([row.code, row.description, row.unit].filter(Boolean).join(' ')).includes(query)).slice(0, 20);
   }, [spotSearch, stockRows]);
   const [countDrafts, setCountDrafts] = useState<Record<string, string>>({});
+  const countBases = useRef(new Map<string, Project>());
   const [lineSearch, setLineSearch] = useState('');
   const [linePage, setLinePage] = useState(1);
   const [saving, setSaving] = useState(false);
@@ -78,8 +79,10 @@ export default function WarehouseInventoryTab({ project, onProjectChange, onComm
     if (linePage > linePageCount) setLinePage(linePageCount);
   }, [linePage, linePageCount]);
 
-  const commitInventory = async (next: Project) => {
-    if (onCommitWarehouseScoped) return onCommitWarehouseScoped(next, 'inventory');
+  const commitInventory = async (next: Project, expectedBase = project) => {
+    if (onCommitWarehouseScoped) {
+      return onCommitWarehouseScoped(next, 'inventory', expectedBase);
+    }
     if (import.meta.env.MODE === 'test') { onProjectChange(next); return next; }
     throw new Error('A transação segura de inventário ainda não está disponível. Nada foi gravado.');
   };
@@ -155,6 +158,8 @@ export default function WarehouseInventoryTab({ project, onProjectChange, onComm
   const countKey = (sessionId: string, itemKey: string) => `${sessionId}:${itemKey}`;
   const countValue = (sessionId: string, itemKey: string, saved?: number) => countDrafts[countKey(sessionId, itemKey)] ?? saved ?? '';
   const updateCountDraft = (sessionId: string, itemKey: string, value: string) => {
+    const key = countKey(sessionId, itemKey);
+    if (!countBases.current.has(key)) countBases.current.set(key, project);
     setCountDrafts(current => ({ ...current, [countKey(sessionId, itemKey)]: value }));
   };
   const saveCount = async (sessionId: string, itemKey: string, saved?: number) => {
@@ -163,13 +168,15 @@ export default function WarehouseInventoryTab({ project, onProjectChange, onComm
     const raw = countDrafts[key];
     const value = raw === '' ? undefined : Number(raw);
     if (value === saved || (value == null && saved == null)) {
+      countBases.current.delete(key);
       setCountDrafts(current => { const next = { ...current }; delete next[key]; return next; });
       return;
     }
     try {
       setSaving(true);
       const next = setInventoryCount(project, sessionId, itemKey, value, auditActor);
-      await commitInventory(next);
+      await commitInventory(next, countBases.current.get(key) ?? project);
+      countBases.current.delete(key);
       setCountDrafts(current => { const nextDrafts = { ...current }; delete nextDrafts[key]; return nextDrafts; });
     } catch (error) {
       toast.error((error as Error).message);

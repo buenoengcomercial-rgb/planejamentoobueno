@@ -35,6 +35,11 @@ vi.mock('./measurementWorkspaceStore', () => ({ MeasurementCommitRejectedError: 
     mocks.drafts = mocks.drafts.filter(d => d.measurementId !== mid || d.serviceId !== sid || rid !== undefined && d.rowId !== rid);
   },
   storedPendingSaves: async () => structuredClone(mocks.stored),
+  stage: async (candidate: MeasurementWorkspace, base: MeasurementWorkspace) => { mocks.stored.push({ baseRevision: base.revision, candidate }); },
+  preserveEntryPending: async (pending: StoredMeasurementPending) => {
+    const id = 'operationId' in pending ? pending.operationId : pending.candidate.audit.at(-1)?.id;
+    mocks.stored = mocks.stored.filter(row => ('operationId' in row ? row.operationId : row.candidate.audit.at(-1)?.id) !== id).concat(pending);
+  },
   removePending: async (id: string) => { mocks.stored = mocks.stored.filter(row => ('operationId' in row ? row.operationId : row.candidate.audit.at(-1)?.id) !== id); },
   archivePending: async () => undefined,
   pending: async () => null,
@@ -57,6 +62,9 @@ function patchSaved(base: MeasurementWorkspace, next: MeasurementWorkspace) {
   return patch;
 }
 beforeEach(() => {
+  const storage = new Map<string, string>();
+  vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) });
   vi.clearAllMocks(); mocks.rpc.mockReset(); mocks.cached = null; mocks.drafts = []; mocks.stored = [];
   mocks.download.mockReset(); mocks.upload.mockReset();
   mocks.revision = 0; mocks.eventRevision = null; mocks.compactedRevision = null; mocks.missingVersion = false;
@@ -71,6 +79,23 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('Abertura da Medição com plantas sob demanda', () => {
+  it('repete o comando de planta preservado após perda de resposta e revisão remota nova', async () => {
+    const base = await fixture(true); loaded(base);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    await repo.load();
+    const next = transactMeasurement(base, actor, 'Gerir desenhos', draft => { draft.plans[0].name = 'Nome local'; });
+    await repo.stage!(next, base);
+    mocks.rpc.mockResolvedValueOnce({ error: { message: 'Failed to fetch' } });
+    await expect(repo.commit(next, base.revision)).rejects.toThrow('preservada');
+    const sent = mocks.rpc.mock.calls.at(-1)!;
+    expect(sent[0]).toBe('commit_measurement_command_v2');
+    const remote = { ...next, revision: next.revision + 2 };
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, operationId: next.audit.at(-1)!.id,
+      revision: next.revision, currentRevision: remote.revision, replayed: true } });
+    mocks.rpc.mockResolvedValueOnce({ data: encodeMeasurementWorkspace(remote) });
+    expect((await repo.commit(next, base.revision)).revision).toBe(remote.revision);
+    expect(mocks.rpc.mock.calls.at(-2)).toEqual(sent);
+  });
   it('reabre a revisão confirmada com histórico completo sem baixar a base ou arquivos', async () => {
     const base = await fixture(true);
     mocks.cached = structuredClone(base); mocks.revision = base.revision;
@@ -478,17 +503,20 @@ describe('Medição somente nuvem', () => {
     expect(mocks.rpc.mock.calls.some(call => call[0] === 'commit_measurement_workspace')).toBe(false);
     expect(mocks.stored).toEqual([]);
   });
-  it('não persiste novos rascunhos nem operações pendentes no navegador', async () => {
+  it('preserva rascunho e operação com identidade estável após falha de rede', async () => {
     const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     loaded(base); await repo.load();
-    expect(repo.stage).toBeUndefined();
+    expect(repo.stage).toBeDefined();
     await repo.writeDraft({ projectId: base.projectId, measurementId: 'm1', serviceId: 'signs', rowId: 'r', changes: { multiplier: 3 } });
-    expect(await repo.drafts()).toEqual([]); expect(mocks.drafts).toEqual([]);
+    expect(await repo.drafts()).toHaveLength(1);
     const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 3 });
+    await repo.stage!(next, base);
+    await repo.stage!(next, base);
     mocks.rpc.mockResolvedValueOnce({ data: null, error: { message: 'Sem conexão' } });
     await expect(repo.commit(next, base.revision)).rejects.toThrow('Sem conexão');
-    expect(mocks.stored).toEqual([]);
-    expect(await repo.pending()).toBeNull();
+    expect(mocks.stored).toHaveLength(1);
+    expect(mocks.stored[0]).toMatchObject({ format: 'entry-patch-v1', operationId: next.audit.at(-1)!.id, baseRevision: base.revision });
+    expect((await repo.pending())?.candidate.entries).toEqual(next.entries);
   });
 
   it('adota a revisão reconciliada com outras tarefas após confirmação v2', async () => {
@@ -847,7 +875,7 @@ describe('Medição somente nuvem', () => {
     expect(result.removed).toBe(2); expect(result.remaining).toContain(other.item);
     expect(mocks.drafts).toHaveLength(1); expect(mocks.drafts[0].serviceId).toBe(other.id);
     expect(mocks.stored).toEqual([]);
-    expect(await repo.drafts()).toEqual([]);
+    expect(await repo.drafts()).toHaveLength(1);
   });
 
   it('carrega 1.200 entradas completas e recusa uma resposta parcial', async () => {

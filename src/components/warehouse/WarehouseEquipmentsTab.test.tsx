@@ -292,6 +292,24 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     });
   });
 
+  it('mantém a base vista ao abrir o formulário depois de uma atualização remota', async () => {
+    const initial = projectWithEquipment();
+    const onCommit = vi.fn(async (next: Project) => next);
+    const view = render(<WarehouseEquipmentsTab project={initial} onProjectChange={vi.fn()} onCommitWarehouseScoped={onCommit} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Editar' }));
+    const input = within(screen.getByRole('dialog')).getByLabelText('Descrição');
+    fireEvent.change(input, { target: { value: 'Tentativa local' } });
+    const remote = { ...initial, warehouse: { ...initial.warehouse!, equipments: [
+      { ...initial.warehouse!.equipments[0], description: 'Primeira confirmação' },
+    ] } };
+    view.rerender(<WarehouseEquipmentsTab project={remote} onProjectChange={vi.fn()} onCommitWarehouseScoped={onCommit} />);
+    expect(input).toHaveValue('Tentativa local');
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Salvar alterações' }));
+    await waitFor(() => expect(onCommit).toHaveBeenCalledTimes(1));
+    expect(onCommit.mock.calls[0][0].warehouse!.equipments[0].description).toBe('Tentativa local');
+    expect((onCommit.mock.calls[0] as unknown as [Project,string,Project])[2].warehouse!.equipments[0].description).toBe('Furadeira de impacto');
+  });
+
   it('mostra até três miniaturas e troca a foto principal sem recortar', () => {
     render(<WarehouseEquipmentsTab project={projectWithEquipment([
       { dataUrl: 'data:image/png;base64,Zm90bzE=' },

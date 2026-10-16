@@ -240,12 +240,12 @@ export async function updateMemberStatus(memberId: string, status: MemberStatus,
 }
 
 /** Atualiza o nome operacional do membro e a identidade usada nos próximos registros de auditoria. */
-export async function updateMemberName(organizationId: string, userId: string, name: string): Promise<void> {
+export async function updateMemberName(organizationId: string, userId: string, name: string, expectedName: string | null): Promise<void> {
   const cleanName = name.trim();
   if (!cleanName) throw new Error('Informe o nome do usuário');
-  const { data, error } = await supabase.functions.invoke('admin-update-member-name', {
-    body: { organization_id: organizationId, user_id: userId, name: cleanName },
-  });
+  const { data, error } = await supabase.rpc('update_member_name_v2' as never, {
+    p_organization_id: organizationId, p_user_id: userId, p_name: cleanName, p_expected_name: expectedName,
+  } as never);
   if (error || !(data as { ok?: boolean } | null)?.ok) {
     throw new Error((data as { error?: string } | null)?.error || error?.message || 'Não foi possível atualizar o nome');
   }

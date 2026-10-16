@@ -45,7 +45,7 @@ interface AppSidebarProps {
   onToggleCollapse: () => void;
   onSwitchProject: (id: string) => void;
   onCreateProject: () => void | Promise<void>;
-  onRenameProject: (id: string, newName: string) => void;
+  onRenameProject: (id: string, newName: string, expectedName: string) => void | boolean | Promise<void | boolean>;
   onDuplicateProject: (id: string) => void;
   onDeleteProject: (id: string, password: string) => boolean | Promise<boolean>;
   onImportedProject?: (id: string) => void;
@@ -113,6 +113,8 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
   const [showProjects, setShowProjects] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const originalName = useRef('');
+  const renameBusy = useRef(false);
   const [editingName, setEditingName] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletePassword, setDeletePassword] = useState('');
@@ -141,6 +143,7 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
   }, [editingId]);
 
   const startEdit = (p: ProjectMeta) => {
+    originalName.current = p.name;
     setEditingId(p.id);
     setEditingName(p.name);
   };
@@ -150,15 +153,20 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
     setEditingName('');
   };
 
-  const saveEdit = () => {
+  const saveEdit = async () => {
+    if (renameBusy.current) return;
     const name = editingName.trim();
     if (!name || !editingId) {
       cancelEdit();
       return;
     }
-    onRenameProject(editingId, name);
-    setProjects(prev => prev.map(p => p.id === editingId ? { ...p, name } : p));
-    cancelEdit();
+    renameBusy.current = true;
+    try {
+      const result = await onRenameProject(editingId, name, originalName.current);
+      if (result === false) return;
+      setProjects(prev => prev.map(p => p.id === editingId ? { ...p, name } : p));
+      cancelEdit();
+    } finally { renameBusy.current = false; }
   };
 
   const handleNewProject = async () => {

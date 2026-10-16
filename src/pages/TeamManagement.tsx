@@ -144,7 +144,7 @@ export default function TeamManagement() {
     if (name === (member.name ?? '').trim()) return;
     setNameSavingId(member.id);
     try {
-      await updateMemberName(orgId, member.userId, name);
+      await updateMemberName(orgId, member.userId, name, member.name ?? null);
       setMembers(current => current.map(item => item.id === member.id ? { ...item, name } : item));
       setNameDrafts(current => { const next = { ...current }; delete next[member.id]; return next; });
       toast.success('Nome atualizado. Os próximos registros usarão essa identificação.');

@@ -10,6 +10,7 @@ import { encodeMeasurementWorkspace } from './measurementCloudCodec';
 import { measurementEntryPatch } from './measurementEntryPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
 import { measurementDeletionPatch } from './measurementDeletionPatch';
+import { measurementConcurrentCommand } from './measurementConcurrentCommand';
 import { deleteMeasuredPeriod, restoreMeasuredPeriod } from './measurementLifecycle';
 const projectId='00000000-0000-4000-8000-000000000001', userId='00000000-0000-4000-8000-000000000002', planId='00000000-0000-4000-8000-000000000003';
 type DeltaAudit = MeasurementWorkspace['audit'][number] & {periodDelta?: {kind:string;periodId:string;afterPeriod?:MeasuredPeriod}};
@@ -68,14 +69,65 @@ beforeAll(async()=>{
   await db.exec(await readFile(new URL('../../supabase/migrations/20261012010000_measurement_plan_catalog_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261016020000_measurement_materialization_working_set.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261016120000_concurrent_field_merge.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261016124000_concurrent_measurement_commands.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
 afterAll(async()=>{await db.close();});
 describe('transação da Medição na nuvem',()=>{
+  const commandCommit=async(previous:MeasurementWorkspace,next:MeasurementWorkspace)=>(await db.query<{value:{revision:number;replayed?:boolean}}>(
+    'SELECT commit_measurement_command_v2($1,$2,$3) value',[projectId,previous.revision,JSON.stringify(measurementConcurrentCommand(previous,next))])).rows[0].value;
+  it('comando de planta preserva quantitativo concorrente e campos distintos do catálogo',async()=>{
+    await seed();
+    const quantity=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('command-independent'),multiplier:1});
+    await fieldCommit(base,quantity);
+    const name=transactMeasurement(base,actor,'Gerir desenhos',draft=>{draft.plans[0].name='Nome primeiro';});
+    const floor=transactMeasurement(base,actor,'Gerir desenhos',draft=>{draft.plans[0].floor='Pavimento independente';});
+    await commandCommit(base,name); await commandCommit(base,floor);
+    const saved=await catalogLoad();
+    expect(saved.plans[0]).toMatchObject({name:'Nome primeiro',floor:'Pavimento independente'});
+    expect(entryFor(saved,'m1','signs').rows.some(row=>row.id==='command-independent')).toBe(true);
+    const collision=transactMeasurement(base,actor,'Gerir desenhos',draft=>{draft.plans[0].name='Segundo';});
+    await expect(commandCommit(base,collision)).rejects.toThrow('Conflito');
+    expect((await commandCommit(base,name)).replayed).toBe(true);
+    expect((await catalogLoad()).audit.filter(event=>event.id===name.audit.at(-1)!.id)).toHaveLength(1);
+  });
   const fieldCommit=async (previous:MeasurementWorkspace, next:MeasurementWorkspace) =>
     (await db.query<{value:{revision:number;reconciled:boolean}}>('SELECT patch_measurement_entries_v2($1,$2,$3) value',
       [projectId,previous.revision,JSON.stringify(measurementEntryPatch(previous,next))])).rows[0].value;
+  it('ciclo fiscal ignora outro período mas recusa quantitativos alterados no período confirmado',async()=>{
+    await seed();
+    const submitted=freezeMeasuredPeriod(base,actor,'m1');
+    const other=editMeasuredRow(base,actor,'m2','signs',{...newMeasuredRow('other-period'),multiplier:1});
+    await fieldCommit(base,other);
+    await commandCommit(base,submitted);
+    expect((await catalogLoad()).periods.find(period=>period.id==='m1')?.status).toBe(submitted.periods.find(period=>period.id==='m1')?.status);
+    await seed();
+    const changed=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('same-period'),multiplier:1});
+    await fieldCommit(base,changed);
+    const secondSubmission=freezeMeasuredPeriod(base,actor,'m1');
+    await expect(commandCommit(base,secondSubmission)).rejects.toThrow('quantitativos');
+    expect((await catalogLoad()).periods.find(period=>period.id==='m1')?.status).toBe(base.periods.find(period=>period.id==='m1')?.status);
+  });
+  it('captura e exclusão vinculada convivem com tarefa independente sem restaurar marca apagada',async()=>{
+    const ready=editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('command-capture'));
+    await seed(ready);
+    const mark={id:'command-mark',name:'Contagem',kind:'count' as const,page:1,
+      points:[{x:1,y:1}],projectId,measurementId:'m1',serviceId:'signs'};
+    const captured=captureMeasurement(ready,actor,{measurementId:'m1',serviceId:'signs',rowId:'command-capture',field:'multiplier'},
+      {...ready.plans[0],measures:[...ready.plans[0].measures,mark]},mark);
+    await fieldCommit(ready,editMeasuredRow(ready,actor,'m1','repeaters',{...newMeasuredRow('capture-independent'),multiplier:1}));
+    await commandCommit(ready,captured);
+    const current=await catalogLoad();
+    const removed=deleteMeasuredRow(current,actor,'m1','signs','command-capture');
+    await commandCommit(current,removed);
+    expect((await catalogLoad()).plans[0].measures.some(value=>value.id===mark.id)).toBe(false);
+    expect(entryFor(await catalogLoad(),'m1','repeaters').rows.some(row=>row.id==='capture-independent')).toBe(true);
+    const edited=captureMeasurement(current,actor,{measurementId:'m1',serviceId:'signs',rowId:'command-capture',field:'multiplier'},
+      {...current.plans[0],measures:current.plans[0].measures.map(value=>value.id===mark.id?{...mark,points:[...mark.points,{x:2,y:2}]}:value)},
+      {...mark,points:[...mark.points,{x:2,y:2}]});
+    await expect(commandCommit(current,edited)).rejects.toThrow('Conflito');
+  });
   it('v2 aceita tarefas independentes de dois clientes e repete sem duplicar auditoria',async()=>{
     await seed();
     const first=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('concurrent-a'),multiplier:1});

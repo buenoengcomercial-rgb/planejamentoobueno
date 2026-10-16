@@ -29,6 +29,22 @@ function projectWithOpenInventory(count = 75): Project {
 }
 
 describe('WarehouseInventoryTab', () => {
+  it('mantém a base de outra contagem pendente após confirmar a primeira linha', async () => {
+    const project = projectWithOpenInventory(2);
+    const commit = vi.fn(async (next: Project, _domain: string, _base?: Project) => next);
+    const view = render(<WarehouseInventoryTab project={project} onProjectChange={vi.fn()} onCommitWarehouseScoped={commit} />);
+    const inputs = screen.getAllByRole('spinbutton');
+    // Desktop has one input per line; mobile duplicates the same records later.
+    fireEvent.change(inputs[0], { target: { value: '8' } });
+    fireEvent.change(inputs[1], { target: { value: '7' } });
+    fireEvent.blur(inputs[0]);
+    await waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+    const accepted = commit.mock.calls[0][0];
+    view.rerender(<WarehouseInventoryTab project={accepted} onProjectChange={vi.fn()} onCommitWarehouseScoped={commit} />);
+    fireEvent.blur(screen.getAllByRole('spinbutton')[1]);
+    await waitFor(() => expect(commit).toHaveBeenCalledTimes(2));
+    expect(commit.mock.calls[1][2]).toBe(project);
+  });
   it('pagina a contagem sem alterar o total e permite localizar qualquer material', () => {
     render(<WarehouseInventoryTab project={projectWithOpenInventory()} onProjectChange={vi.fn()} />);
 

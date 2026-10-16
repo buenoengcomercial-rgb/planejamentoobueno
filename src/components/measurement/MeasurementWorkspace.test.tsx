@@ -357,6 +357,35 @@ describe('Tela própria de Medição', () => {
     expect(repository.writeDraft).toHaveBeenCalledWith(expect.objectContaining({ changes: { multiplier: '3' } }));
     expect(screen.getByLabelText('Medição selecionada')).toBeEnabled();
   });
+  it('atualiza outra tarefa durante digitação sem trocar o valor esperado da edição local', async () => {
+    const { w, repository } = fixture(); let notice!: (revision: number) => void;
+    w.services.push({ ...w.services[0], id: 'other', item: '1.2', description: 'Detectores' });
+    repository.savedLabel = 'Salvo na nuvem';
+    repository.concurrentEntries = true;
+    repository.stage = vi.fn(async () => undefined);
+    repository.remoteRevision = vi.fn(async () => 0);
+    repository.watch = (callback, connected) => { notice = callback; connected(true); return vi.fn(); };
+    vi.mocked(repository.commit).mockRejectedValue(new MeasurementCommitRejectedError('Primeira confirmação preservada'));
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const input = await screen.findByLabelText('Quantidade de Placas');
+    act(() => input.focus()); fireEvent.change(input, { target: { value: '3' } });
+    const remote = { ...w, revision: 1, entries: [
+      { projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('confirmed'), multiplier: 7 }] },
+      { projectId: 'p', measurementId: 'm1', serviceId: 'other', rows: [{ ...newMeasuredRow('independent'), multiplier: 5 }] },
+    ] };
+    vi.mocked(repository.load).mockResolvedValue(remote);
+    act(() => notice(1));
+    await waitFor(() => expect(screen.getByLabelText('Quantidade de Detectores')).toHaveValue(5));
+    expect(input).toHaveFocus(); expect(input).toHaveValue(3);
+    expect(repository.commit).not.toHaveBeenCalled();
+    act(() => input.blur());
+    fireEvent.click(screen.getByLabelText('Quantidade de Detectores'));
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledOnce());
+    const [candidate, expectedRevision] = vi.mocked(repository.commit).mock.calls[0];
+    expect(expectedRevision).toBe(0);
+    expect(candidate.audit.at(-1)?.before[0].rows).toEqual([]);
+    expect(repository.clearDraft).not.toHaveBeenCalled();
+  });
   it('recupera exclusão pendente e seleciona uma medição que ainda existe', async () => {
     const { w, repository } = fixture();
     w.periods = [

@@ -17,18 +17,22 @@ beforeAll(async()=>{
     CREATE TABLE projects(id uuid PRIMARY KEY,organization_id uuid,data_json jsonb,warehouse_version bigint DEFAULT 0,
       warehouse_updated_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now());
     CREATE TABLE organization_members(organization_id uuid,user_id uuid,role org_role,status member_status);
-    CREATE TABLE warehouse_movements(id text PRIMARY KEY,project_id uuid,data jsonb,occurred_at date,created_by uuid);
+    CREATE TABLE warehouse_movements(id text PRIMARY KEY,project_id uuid,data jsonb,occurred_at date,created_by uuid,created_at timestamptz DEFAULT now());
+    CREATE TABLE warehouse_requisitions(id text PRIMARY KEY,project_id uuid,data jsonb,created_by uuid);
     CREATE TABLE warehouse_custody(id text PRIMARY KEY,project_id uuid,data jsonb,created_by uuid);
-    CREATE TABLE audit_logs(id text PRIMARY KEY,project_id uuid,entity_type text,entity_id text,action text,occurred_at timestamptz,user_id uuid,data jsonb);
+    CREATE TABLE audit_logs(id text PRIMARY KEY,project_id uuid,entity_type text,entity_id text,action text,occurred_at timestamptz,user_id uuid,data jsonb,created_at timestamptz DEFAULT now());
     INSERT INTO projects(id,organization_id,data_json) VALUES('${project}','${project}','{"warehouse":{"items":[]}}');
     INSERT INTO organization_members VALUES('${project}','${actor}','owner','active');`);
-  for (const file of ['20260912233000_scoped_warehouse_commits.sql','20261016120000_concurrent_field_merge.sql','20261016121000_concurrent_warehouse_fields.sql']) {
+  for (const file of ['20260912110000_atomic_warehouse_operations.sql','20260912213000_repair_warehouse_audit_payloads.sql',
+    '20260912230000_version_atomic_warehouse_operations.sql','20260929190000_warehouse_withdrawal_availability.sql',
+    '20260912233000_scoped_warehouse_commits.sql','20261016120000_concurrent_field_merge.sql','20261016121000_concurrent_warehouse_fields.sql',
+    '20261016123000_concurrent_requisition_receipts.sql']) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8'));
   }
 },20000);
 afterAll(async()=>db.close());
 beforeEach(async()=>{
-  await db.exec(`TRUNCATE warehouse_movements,warehouse_custody,audit_logs,warehouse_scoped_commits,app_private.concurrent_operation_receipts;
+  await db.exec(`TRUNCATE warehouse_movements,warehouse_requisitions,warehouse_operation_commits,warehouse_custody,audit_logs,warehouse_scoped_commits,app_private.concurrent_operation_receipts;
     UPDATE projects SET warehouse_version=0,data_json='{"warehouse":{"items":[{"key":"a","description":"A","unit":"un"},{"key":"b","description":"B","unit":"un"}]}}';
     UPDATE organization_members SET role='owner';`);
 });
@@ -80,7 +84,7 @@ it('recibo repetido depois de exclusão não ressuscita a cautela na interface',
   expect((await db.query<{n:number}>('SELECT count(*)::int n FROM audit_logs')).rows[0].n).toBe(2);
 });
 it('saldo é conferido sobre o livro atual e falha desfaz movimento e auditoria juntos',async()=>{
-  await db.query('INSERT INTO warehouse_movements VALUES($1,$2,$3,null,$4)', ['stock',project,JSON.stringify({id:'stock',itemKey:'a',type:'entrada',quantity:5}),actor]);
+  await db.query('INSERT INTO warehouse_movements(id,project_id,data,occurred_at,created_by) VALUES($1,$2,$3,null,$4)', ['stock',project,JSON.stringify({id:'stock',itemKey:'a',type:'entrada',quantity:5}),actor]);
   const loss=(id:string)=>changes({},[{id,expected:null,row:{id,itemKey:'a',type:'perda',quantity:4}}]);
   await commit('adjustment','loss1',loss('l1'));
   await expect(commit('adjustment','loss2',loss('l2'))).rejects.toThrow('WAREHOUSE_INSUFFICIENT_STOCK');
@@ -91,4 +95,23 @@ it('preserva as permissões e recusa campo de outro domínio',async()=>{
   await expect(commit('catalog','invalid',changes({requisitions:{expected:[],next:[]}}))).rejects.toThrow('WAREHOUSE_INVALID_SCOPE');
   await db.exec("UPDATE organization_members SET role='viewer'");
   await expect(commit('catalog','forbidden',catalog(item('a','A'),item('a','Outra')))).rejects.toThrow('WAREHOUSE_PERMISSION_DENIED');
+});
+
+it('duas retiradas da mesma fotografia disputam saldo sem baixar estoque negativo; repetir não duplica', async () => {
+  await db.query('INSERT INTO warehouse_movements(id,project_id,data,created_by) VALUES($1,$2,$3,$4)',
+    ['stock',project,JSON.stringify({id:'stock',itemKey:'a',type:'entrada',quantity:5}),actor]);
+  const request = (id: string) => ({ type:'delivery', requisitionId:id, expected:null,
+    requisition:{id,status:'entregue',deliveryIdempotencyKey:id,number:'TEMP'},
+    movements:[{id:`movement-${id}`,itemKey:'a',requisitionId:id,type:'retirada',originType:'withdrawal',quantity:4}],deletes:[],
+    audits:[{id:`audit-${id}`,entityId:id,entityType:'warehouse_requisition',action:'created',at:'2026-10-16T12:00:00Z',metadata:{operation:'requisition_delivery'}}] });
+  const delivery = (id:string) => db.query<{result:{requisition:{notes?:string}}}>(
+    'SELECT commit_warehouse_requisition_v2($1,$2,$3) result',[project,id,JSON.stringify(request(id))]);
+  const results = await Promise.allSettled([delivery('r1'),delivery('r2')]);
+  expect(results.filter(result=>result.status==='fulfilled')).toHaveLength(1);
+  expect(results.filter(result=>result.status==='rejected').map(result=>(result as PromiseRejectedResult).reason.message)).toEqual(['WAREHOUSE_INSUFFICIENT_STOCK']);
+  expect((await db.query<{n:number}>('SELECT count(*)::int n FROM warehouse_requisitions')).rows[0].n).toBe(1);
+  const id=(await db.query<{id:string}>('SELECT id FROM warehouse_requisitions')).rows[0].id;
+  await db.query('UPDATE warehouse_requisitions SET data=data||$1::jsonb WHERE id=$2',[JSON.stringify({notes:'Confirmado depois'}),id]);
+  expect((await delivery(id)).rows[0].result.requisition.notes).toBe('Confirmado depois');
+  expect((await db.query<{n:number}>('SELECT count(*)::int n FROM warehouse_movements')).rows[0].n).toBe(2);
 });

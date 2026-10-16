@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { stageWarehouseOperation, rejectWarehouseOperation } from './warehouseOperationOutbox';
 import { acknowledgeWarehouseScopedOperation } from '@/lib/projectSync';
 import { ensureWarehouse } from '@/lib/warehouse';
 import type {
@@ -254,6 +255,7 @@ export async function commitWarehouseScopedOperation(
   expectedWarehouseVersion: number,
   operationKey: string,
   forcedDomain?: WarehouseScopedDomain,
+  actorId?: string,
 ): Promise<WarehouseScopedCommitResult> {
   if (!navigator.onLine) throw new Error('Conecte-se à internet para salvar o Almoxarifado. Nenhuma alteração foi confirmada.');
   if (!Number.isSafeInteger(expectedWarehouseVersion) || expectedWarehouseVersion < 0) {
@@ -289,13 +291,18 @@ export async function commitWarehouseScopedOperation(
     fn: string,
     args: Record<string, unknown>,
   ) => Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;
-  const { data, error } = await rpc(RPC_BY_DOMAIN[domain], {
+  const args = {
     p_project_id: before.id,
     p_operation_key: confirmedOperationKey,
     p_expected_warehouse_version: expectedWarehouseVersion,
     p_changes: payload as unknown as Json,
-  });
-  if (error) throw scopedCommitError(error);
+  };
+  stageWarehouseOperation(actorId, before.id, confirmedOperationKey, RPC_BY_DOMAIN[domain], args);
+  const { data, error } = await rpc(RPC_BY_DOMAIN[domain], args);
+  if (error) {
+    rejectWarehouseOperation(actorId, before.id, confirmedOperationKey, error);
+    throw scopedCommitError(error);
+  }
 
   const result = (data ?? {}) as WarehouseScopedRpcResult;
   if (!result.committedAt || !result.projectUpdatedAt || !result.warehouseUpdatedAt || !Number.isSafeInteger(result.warehouseVersion)) {

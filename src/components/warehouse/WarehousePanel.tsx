@@ -17,7 +17,7 @@ import { toast } from 'sonner';
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
-  onCommitWarehouseScoped?: (next: Project, domain: 'receipt') => Promise<Project>;
+  onCommitWarehouseScoped?: (next: Project, domain: 'receipt', expectedBase?: Project) => Promise<Project>;
   auditActor?: WarehouseAuditActor;
 }
 

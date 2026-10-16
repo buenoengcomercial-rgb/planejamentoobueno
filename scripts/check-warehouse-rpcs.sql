@@ -3,6 +3,7 @@
 WITH required (rpc, signature) AS (
   VALUES
     ('check_warehouse_withdrawal_availability', 'public.check_warehouse_withdrawal_availability(uuid,jsonb)'),
+    ('commit_warehouse_requisition_v2', 'public.commit_warehouse_requisition_v2(uuid,text,jsonb)'),
     ('commit_warehouse_operation', 'public.commit_warehouse_operation(uuid,text,text,text,jsonb,jsonb,jsonb,jsonb,jsonb)'),
     ('commit_warehouse_supplement_correction', 'public.commit_warehouse_supplement_correction(uuid,text,text,text,jsonb,jsonb,jsonb,jsonb,jsonb)'),
     ('commit_warehouse_requisition_adjustment', 'public.commit_warehouse_requisition_adjustment(uuid,text,text,text,jsonb,jsonb,jsonb,jsonb,jsonb)'),
@@ -18,7 +19,7 @@ WITH required (rpc, signature) AS (
     COALESCE(has_function_privilege('anon', to_regprocedure(signature), 'EXECUTE'), false) AS anon_execute
   FROM required
 )
-SELECT count(*) = 9
+SELECT count(*) = 10
     AND bool_and(installed AND authenticated_execute AND NOT anon_execute) AS ready_to_publish,
   COALESCE(string_agg(rpc, ', ' ORDER BY rpc)
     FILTER (WHERE NOT installed OR NOT authenticated_execute OR anon_execute), '') AS blocked_rpcs,
