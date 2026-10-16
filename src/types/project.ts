@@ -519,6 +519,7 @@ export interface Subcontract {
   cancelledAt?: string;
   cancelledBy?: string;
   cancellationReason?: string;
+  lifecycleEvents?: Array<{ id: string; action: 'cancelled' | 'reactivated'; at: string; by?: string; reason: string }>;
   createdAt: string;
   createdBy?: string;
   updatedAt?: string;

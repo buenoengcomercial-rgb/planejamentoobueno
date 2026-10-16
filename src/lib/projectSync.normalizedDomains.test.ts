@@ -110,3 +110,14 @@ describe('transações por domínio normalizado', () => {
     expect(rpc).not.toHaveBeenCalled();
   });
 });
+
+it('reativação exige a RPC protegida sem substituir metadados e não avança snapshot na falha',async()=>{
+ setCloudSnapshot(base.id,base);
+ const costs={...base,subcontracts:[{...base.subcontracts![0],status:'contracted'}],auditLogs:[{id:'reactivated',entityType:'subcontract',entityId:'contract-1',action:'updated',at:'2026-10-16',title:'Reativação'}]} as Project;
+ const commit=()=>syncNormalizedDomainAtomically(costs,stripNormalizedCollections(costs),'org-1','v1',{subcontractReactivation:true});
+ rpc.mockResolvedValueOnce({data:null,error:{code:'P0002',message:'A obra mudou'}});
+ await expect(commit()).rejects.toMatchObject({code:'P0002'});
+ rpc.mockResolvedValueOnce({data:'v2',error:null});expect(await commit()).toBe('v2');
+ expect(rpc).toHaveBeenLastCalledWith('save_subcontract_reactivation',expect.objectContaining({p_domain:'costs',p_data:null,p_changes:[expect.objectContaining({table:'subcontracts',deletes:[]})]}));
+ expect(await commit()).toBeNull();expect(rpc).toHaveBeenCalledTimes(2);
+});

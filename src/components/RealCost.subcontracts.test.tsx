@@ -311,3 +311,25 @@ describe('SubcontractsTab', () => {
     confirm.mockRestore();
   });
 });
+
+it('mantém cancelados recolhidos no final, sem gravação, e libera suas atividades', () => {
+ const project=projectWithContract();
+ project.subcontracts=[{...project.subcontracts![0],id:'old',name:'Contrato anterior',status:'cancelled',cancelledAt:'2026-02-01',cancellationReason:'Encerrado'}, {...project.subcontracts![0],items:[]}];
+ const onProjectChange=vi.fn();
+ render(<SubcontractsTab project={project} analysis={analysis} canManage onProjectChange={onProjectChange} onCommitSubcontract={vi.fn()} />);
+ expect(screen.queryByText('Contrato anterior')).not.toBeInTheDocument();
+ const section=screen.getByRole('button',{name:'Contratos cancelados (1)'});
+ expect(section).toHaveAttribute('aria-expanded','false');
+ expect(screen.getByText('Pacote A').compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+ fireEvent.click(section);
+ expect(screen.getByText('Contrato cancelado')).toBeInTheDocument();expect(screen.getByText('Motivo: Encerrado')).toBeInTheDocument();
+ expect(screen.getByRole('button',{name:'Reativar contrato'})).toBeInTheDocument();
+ fireEvent.click(section);expect(screen.queryByText('Contrato anterior')).not.toBeInTheDocument();
+ fireEvent.click(screen.getByRole('button',{name:/novo pacote/i}));expect(screen.getByLabelText('Selecionar item 3.3.1')).toBeEnabled();expect(onProjectChange).not.toHaveBeenCalled();
+});
+it('oculta seção vazia e reativação para quem não gerencia contratos',()=>{
+ const project=projectWithContract();const view=render(<SubcontractsTab project={project} analysis={analysis} canManage={false} onProjectChange={vi.fn()} onCommitSubcontract={vi.fn()} />);
+ expect(screen.queryByRole('button',{name:/Contratos cancelados/})).not.toBeInTheDocument();
+ project.subcontracts![0].status='cancelled';view.rerender(<SubcontractsTab project={project} analysis={analysis} canManage={false} onProjectChange={vi.fn()} onCommitSubcontract={vi.fn()} />);
+ fireEvent.click(screen.getByRole('button',{name:'Contratos cancelados (1)'}));expect(screen.queryByRole('button',{name:'Reativar contrato'})).not.toBeInTheDocument();
+});

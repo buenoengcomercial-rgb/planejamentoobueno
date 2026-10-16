@@ -1,6 +1,6 @@
 import { readCaptureDraft, writeCaptureDraft } from '@/lib/productionCaptureDraft';
 import type { ProductionCaptureChange } from '@/lib/planTakeoff';
-import { syncProductionAtomically, stripNormalizedCollections } from '@/lib/projectSync';
+import { syncNormalizedDomainAtomically, syncProductionAtomically, stripNormalizedCollections } from '@/lib/projectSync';
 import { applyProjectOperation, auditProjectReversal } from '@/lib/projectOperations';
 import { scopeKey } from '@/lib/planTakeoff';
 import { OpeningError } from '@/components/OpeningError';
@@ -388,6 +388,7 @@ export default function Index() {
   const draftWriteTimerRef = useRef<number | null>(null);
   const pendingDraftRef = useRef<{ project: Project; baseUpdatedAt: string | null } | null>(null);
   const initialLoadRef = useRef(false);
+  const subcontractCommitBusyRef = useRef(false);
   const inFlightSaveRef = useRef<Promise<void> | null>(null);
   const warehouseClientOperationInFlightRef = useRef<Promise<unknown> | null>(null);
   const warehouseOperationInFlightRef = useRef<Promise<WarehouseCloudCommitResult> | null>(null);
@@ -2438,6 +2439,7 @@ export default function Index() {
         toast.error('A sincronização com a nuvem ainda não foi concluída. Recarregue a obra antes de editar.');
         return;
       }
+      if (subcontractCommitBusyRef.current) { toast.error('Aguarde a confirmação da reativação.'); return; }
       if (productionCaptureBusyRef.current) { toast.error('Aguarde a confirmação conjunta da planta e do quantitativo.'); return; }
       if (partialSyncPendingRef.current?.projectId === rawProjectRef.current?.id) {
         toast.error('A sincronização detalhada ainda está pendente. Aguarde a confirmação antes de fazer outra alteração.');
@@ -2489,6 +2491,51 @@ export default function Index() {
   const additiveSetter = useMemo(() => makeViewSetter('additive'), [makeViewSetter]);
   const additiveScheduleSetter = useMemo(() => makeViewSetter('additiveSchedule'), [makeViewSetter]);
   const realCostSetter = useMemo(() => makeViewSetter('realCost'), [makeViewSetter]);
+
+  const commitSubcontractNow = useCallback(async (candidate: Project, base: Project) => {
+    if (!user || !orgId || !canPersistProject || (role !== 'owner' && role !== 'admin') || !navigator.onLine) {
+      throw new Error('Conecte-se com um perfil autorizado para reativar o contrato.');
+    }
+    if (inFlightSaveRef.current) await inFlightSaveRef.current;
+    const current = rawProjectRef.current;
+    if (!current || current.id !== base.id || conflictDetectedRef.current || partialSyncPendingRef.current) {
+      throw new Error('A obra ou a sincronização mudou. Atualize a lista antes de confirmar.');
+    }
+    if (getMissingProjectCollections(current.id, ['subcontracts', 'budgetItems', 'analyticCompositions', 'additives']).length) {
+      throw new Error('Aguarde o carregamento completo dos contratos e composições.');
+    }
+    if (serializeProject(current) !== lastSavedProjectJsonRef.current) {
+      throw new Error('Aguarde a confirmação das alterações anteriores antes de reativar.');
+    }
+    if (subcontractCommitBusyRef.current) throw new Error('Uma reativação já está em andamento.');
+    const next = applyProjectOperation('realCost', current, base, { ...base, subcontracts: candidate.subcontracts, auditLogs: candidate.auditLogs });
+    if (saveTimerRef.current) { window.clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
+    subcontractCommitBusyRef.current = true;
+    setSaveStatus('saving');
+    const operation = (async () => {
+      try {
+        const confirmedAt = await syncNormalizedDomainAtomically(next, stripNormalizedCollections(next), orgId, currentProjectUpdatedAtRef.current!, { subcontractReactivation: true });
+        if (!confirmedAt) throw new Error('A transação de Custos não confirmou a gravação. Nenhuma reativação foi aplicada na tela.');
+        currentProjectUpdatedAtRef.current = confirmedAt;
+        setCurrentProjectUpdatedAt(confirmedAt); setLastCloudConfirmedAt(confirmedAt);
+        // Preserve local edits made while this transaction was awaiting the server.
+        const latest = rawProjectRef.current;
+        const merged = latest && latest.id === next.id ? applyProjectOperation('realCost', latest, current, next) : next;
+        lastSavedProjectJsonRef.current = serializeProject(next);
+        if (latest?.id === next.id) {
+          skipNextAutoSaveRef.current = serializeProject(merged) === serializeProject(next);
+          rawProjectRef.current = merged; setRawProject(merged);
+        }
+        setSaveStatus('saved');
+      } catch (error) {
+        setSaveStatus('error');
+        throw new Error(error instanceof Error ? error.message : (error as { message?: string })?.message || 'Falha na confirmação da nuvem. O formulário foi preservado.');
+      }
+    })();
+    inFlightSaveRef.current = operation;
+    try { await operation; } finally { subcontractCommitBusyRef.current = false; if (inFlightSaveRef.current === operation) inFlightSaveRef.current = null; }
+  }, [canPersistProject, orgId, role, user]);
+
   const materialsSetter = useMemo(() => makeViewSetter('materials'), [makeViewSetter]);
   const warehouseSetter = useMemo(() => makeViewSetter('warehouse'), [makeViewSetter]);
 
@@ -3397,7 +3444,7 @@ export default function Index() {
       case 'additiveSchedule':
         return <AdditiveSchedule project={project} onProjectChange={additiveScheduleSetter} canManageCalendar={role === 'owner' || role === 'admin'} auditActor={auditActor} undoButton={<UndoButton canUndo={canUndo('additiveSchedule')} onUndo={() => handleUndo('additiveSchedule')} />} />;
       case 'realCost':
-        return <RealCost project={project} onProjectChange={realCostSetter} canManageSubcontracts={role === 'owner' || role === 'admin'} canDeleteSubcontractHistory={role === 'owner'} auditActor={auditActor} />;
+        return <RealCost project={project} onProjectChange={realCostSetter} onCommitSubcontract={commitSubcontractNow} canManageSubcontracts={role === 'owner' || role === 'admin'} canDeleteSubcontractHistory={role === 'owner'} auditActor={auditActor} />;
       case 'materials':
         return <Materials project={project} onProjectChange={materialsSetter} onCommitWarehouseScoped={commitWarehouseScopedNow} auditActor={auditActor} />;
       case 'warehouse':
