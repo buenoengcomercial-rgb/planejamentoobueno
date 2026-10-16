@@ -649,7 +649,9 @@ describe('WarehouseRequisitionsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /expandir cautelas de 06\/09\/2026/i }));
     expect(screen.getByTestId('custody-history-row')).toHaveTextContent('TC-2026-0010');
     expect(screen.getByTestId('custody-history-row')).toHaveTextContent('06/09/2026');
-    expect(screen.getByTestId('custody-history-row')).toHaveTextContent('06/09/2026, 16:30');
+    const lastRecordedAt = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+      .format(new Date('2026-09-06T20:30:00.000Z'));
+    expect(screen.getByTestId('custody-history-row')).toHaveTextContent(lastRecordedAt);
     expect(screen.queryByText('TC-2026-0009')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /expandir cautelas de 05\/09\/2026/i }));
