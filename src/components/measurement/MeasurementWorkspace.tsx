@@ -33,6 +33,17 @@ import SaveStatusIndicator, { type SaveStatus } from '@/components/SaveStatusInd
 import { withReadDeadline } from '@/lib/readDeadline';
 const button = 'inline-flex h-8 items-center gap-1.5 rounded border border-slate-200 bg-white px-2.5 text-xs hover:bg-slate-50 disabled:opacity-40';
 
+/** A response can be lost after the row is committed but before its draft is cleared. */
+function confirmedRowDraft(workspace: Workspace, draft: WorkspaceDraft): boolean {
+  if (draft.projectId !== workspace.projectId) return false;
+  const rowId = draft.rowId === '__new__' ? draft.changes.createdRowId : draft.rowId;
+  if (typeof rowId !== 'string' || rowId.startsWith('__')) return false;
+  const row = workspace.entries.find(entry => entry.measurementId === draft.measurementId && entry.serviceId === draft.serviceId)?.rows.find(item => item.id === rowId);
+  const changes = Object.entries(draft.changes).filter(([key]) => key !== 'createdRowId');
+  return !!row && changes.length > 0 && changes.every(([key, value]) =>
+    Object.prototype.hasOwnProperty.call(row, key) && JSON.stringify(row[key as keyof typeof row]) === JSON.stringify(value));
+}
+
 /** Real workspace UI, with an explicitly injected persistence boundary. No Project setter. */
 export interface MeasurementForecast { number: number; startDate: string; endDate: string; value: number }
 export interface MeasurementWorkspaceProps { repository: MeasurementRepository; actor: MeasurementActor; incorporationBackup?: IncorporationBackup; approvedAdditives?: Additive[]; analyticProject?: Project; forecastByPeriod?: MeasurementForecast[] }
@@ -246,6 +257,17 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       try { queued = await repository.queued?.(w) ?? []; }
       catch (cause) { pendingError = cause instanceof Error ? cause.message : String(cause); }
       if (!alive) return;
+      const initialLoadState = repository.loadState?.();
+      if (w && repository.concurrentEntries && !repository.loadedOffline?.() && (!initialLoadState || initialLoadState.source === 'cloud' && !initialLoadState.error) && !queued.length && !pendingError) {
+        const remaining: WorkspaceDraft[] = [];
+        for (const draft of d) {
+          if (!confirmedRowDraft(w, draft)) { remaining.push(draft); continue; }
+          try { await repository.clearDraft(draft.measurementId, draft.serviceId, draft.rowId); }
+          catch (cause) { remaining.push(draft); pendingError = cause instanceof Error ? cause.message : String(cause); }
+        }
+        d = remaining;
+        if (!alive) return;
+      }
       if (w) {
         if (repository.savedLabel === 'Salvo na nuvem' && !repository.stage && !repository.loadedOffline?.() && repository.discardLegacyTask) {
           // This previously authorized local maintenance is independent of the
@@ -615,13 +637,13 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       return true;
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); return false; }
   };
-  const bufferDetail = (serviceId: string, edit: DetailEdit, after?: () => void): boolean => {
+  const bufferDetail = (serviceId: string, edit: DetailEdit, after?: () => void, rowId?: string): boolean => {
     if (!current.current || !resumeFailedTaskEdit(serviceId)) return false;
     if (bufferedDetail.current && (bufferedDetail.current.serviceId !== serviceId || bufferedDetail.current.measurementId !== active)
       && !flushBufferedDetail()) return false;
     const prior = bufferedDetail.current;
     const original = repository.concurrentEntries && [...draftBases.current].find(([key]) => {
-      const [mid, sid] = JSON.parse(key); return mid === active && sid === serviceId;
+      const [mid, sid, rid] = JSON.parse(key); return mid === active && sid === serviceId && (rowId === undefined || rid === rowId);
     })?.[1];
     const base = prior?.base ?? (original || null) ?? detailPreview.current ?? current.current;
     try {
@@ -1223,12 +1245,12 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
        renderQuantity={row => { const l = lineByTaskId.get(row.taskId)!; const s = l.service, e = entryByTaskId.get(s.id) ?? entryFor(workspace, active, s.id); return <input key={`${active}-${s.id}`} ref={input => { if (input && document.activeElement !== input && input.value !== String(l.qty)) input.value = String(l.qty); }} aria-label={`Quantidade de ${s.description}`} className="no-spinner h-6 w-full min-w-0 rounded border border-transparent bg-transparent px-1 text-right text-[11px] tabular-nums hover:border-primary/30 focus:border-primary disabled:bg-transparent" type="number" inputMode="decimal" min="0" step="any" title={`Clique para abrir o detalhe da ${period!.number}ª medição`} aria-expanded={expanded?.taskId === s.id && expanded.mode === 'quantity'} onClick={() => selectDetailAfterLocalSave({ taskId: s.id, mode: 'quantity' })} readOnly={quantityLocked || e.rows.length > 1 || e.rows.some(r => r.origin?.kind !== 'manual' || sourceFields.some(f => r[f]) || r.sharedRecordId || r.measuredQuantity || r.dimensionC || r.dimensionD)} defaultValue={l.qty} onChange={event => saveDraft(active, s.id, '__manual__', { multiplier: event.target.value })} onKeyDown={event => { if (['ArrowUp', 'ArrowDown'].includes(event.key)) event.preventDefault(); if (event.key === 'Enter') event.currentTarget.blur(); }} onWheel={event => event.currentTarget.blur()} onBlur={event => {
             const value = Number(event.currentTarget.value.replace(',', '.')); if (value === l.qty) { if (!busy.current && !recovery && !detailQueue.current.length) clearDraft(active, s.id, '__manual__'); return; }
             if (!Number.isFinite(value) || value < 0) { event.currentTarget.value = String(l.qty); return; }
-            const newRow = newMeasuredRow(); if (!bufferDetail(s.id, w => { const row = entryFor(w, active, s.id).rows[0] ?? newRow; return editMeasuredRow(w, actor, active, s.id, { ...newMeasuredRow(row.id), comment: row.comment || 'Quantidade informada', origin: row.origin ?? { kind: 'manual' }, multiplier: value }); }, clearCommittedDraft(active, s.id, '__manual__'))) event.currentTarget.value = String(l.qty);
+            const newRow = newMeasuredRow(); if (!bufferDetail(s.id, w => { const row = entryFor(w, active, s.id).rows[0] ?? newRow; return editMeasuredRow(w, actor, active, s.id, { ...newMeasuredRow(row.id), comment: row.comment || 'Quantidade informada', origin: row.origin ?? { kind: 'manual' }, multiplier: value }); }, clearCommittedDraft(active, s.id, '__manual__'), '__manual__')) event.currentTarget.value = String(l.qty);
           }}/>; }}
        renderDetail={row => { const l = lineByTaskId.get(row.taskId)!; const s = l.service, e = entryByTaskId.get(s.id) ?? entryFor(workspace, active, s.id); return <ProductionQuantityDetails key={`${active}-${s.id}`} heading={`Detalhe de quantitativos · ${period!.number}ª medição`} rows={e.rows} unit={s.unit} dailyQuantity={l.qty} applied readOnly={quantityLocked} periodMode keyboardNavigation referenceLabel="Serviços / medições" canOpenPlan onApply={() => undefined}
             onDraftChange={(rid, changes) => saveDraft(active, s.id, rid, changes)}
-            onCreate={changes => { const fresh = newMeasuredRow(); const row = { ...fresh, ...changes, id: fresh.id }; saveDraft(active, s.id, '__new__', { ...changes, createdRowId: fresh.id }); return bufferDetail(s.id, w => editMeasuredRow(w, actor, active, s.id, row), clearCommittedDraft(active, s.id, '__new__')) ? row.id : null; }}
-            onEdit={(id, changes) => bufferDetail(s.id, w => { const row = entryFor(w, active, s.id).rows.find(r => r.id === id); if (!row) throw new Error('Linha não encontrada.'); return editMeasuredRow(w, actor, active, s.id, { ...row, ...changes }); }, clearCommittedDraft(active, s.id, id))}
+            onCreate={changes => { const fresh = newMeasuredRow(); const row = { ...fresh, ...changes, id: fresh.id }; saveDraft(active, s.id, '__new__', { ...changes, createdRowId: fresh.id }); return bufferDetail(s.id, w => editMeasuredRow(w, actor, active, s.id, row), clearCommittedDraft(active, s.id, '__new__'), '__new__') ? row.id : null; }}
+            onEdit={(id, changes) => bufferDetail(s.id, w => { const row = entryFor(w, active, s.id).rows.find(r => r.id === id); if (!row) throw new Error('Linha não encontrada.'); return editMeasuredRow(w, actor, active, s.id, { ...row, ...changes }); }, clearCommittedDraft(active, s.id, id), id)}
             onDelete={id => repository.savedLabel === 'Salvo na nuvem'
               ? flushBufferedDetail() && applyDetail(w => deleteMeasuredRow(w, actor, active, s.id, id))
               : apply(w => deleteMeasuredRow(w, actor, active, s.id, id))}
