@@ -25,7 +25,7 @@ export default function WarehouseOperationRecovery({ actorId, projectId, onConfi
   };
   return <aside aria-label="Tentativas do Almoxarifado" className="m-3 rounded border border-amber-400 bg-amber-50 p-3 text-sm text-amber-950">
     <details><summary className="cursor-pointer font-medium">Tentativas preservadas do Almoxarifado ({rows.length})</summary>
-      <p className="my-2">Confira a operação antes de criar outra. A conferência reutiliza a tentativa original e não duplica os registros.</p>
+      <p className="my-2">Confira cada tentativa pendente antes de repeti-la. A conferência reutiliza sua identificação original e não duplica os registros.</p>
       {rows.map(row => <div key={row.id} className="my-2 border-t pt-2">
         <p>{row.conflict || 'A resposta do salvamento ainda precisa ser conferida.'}</p>
         {!row.conflict && <button className="mr-3 underline" disabled={busy} onClick={() => void retry(row)}>Conferir operação pendente</button>}
