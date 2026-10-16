@@ -1,4 +1,5 @@
-import { projectWriteOrigin } from '@/lib/projectOperations';
+import { inheritProjectWriteOrigin, projectWriteOrigin } from '@/lib/projectOperations';
+import { mergeConcurrentFields } from '@/lib/concurrentFields';
 import type { ProductionCaptureChange } from '@/lib/planTakeoff';
 import { withReadDeadline } from '@/lib/readDeadline';
 /**
@@ -340,6 +341,11 @@ export function hasProjectMetadataChanges(before: Project, after: Project): bool
   return !shallowEqualJSON(stripNormalizedCollections(before), stripNormalizedCollections(after));
 }
 
+export function mergeProjectMetadataFields(base: Project, local: Project, remote: Project): Project | null {
+  const merged = mergeConcurrentFields(stripNormalizedCollections(base), stripNormalizedCollections(local), stripNormalizedCollections(remote));
+  return merged.conflicts.length ? null : inheritProjectWriteOrigin(local, mergeProjectMetadata(local, merged.value));
+}
+
 /**
  * Aplica somente os campos guardados em `projects.data_json`, preservando as
  * coleções normalizadas que a tela atual já mantém em memória. Eventos da
@@ -371,7 +377,7 @@ export function mergeProjectMetadata(current: Project, incoming: Project): Proje
       custodyTerms: current.warehouse?.custodyTerms ?? [],
     };
   }
-  return next;
+  return inheritProjectWriteOrigin(current, next);
 }
 
 function mergeCloudSnapshot(
@@ -1021,10 +1027,10 @@ export function mergeHydratedProjectCollections(
     for (const phase of hydrated.phases ?? []) collectTaskLogs(phase.tasks ?? [], logsByTask);
     next.phases = (current.phases ?? []).map(phase => mapPhaseTasks(phase, logsByTask, true));
   }
-  return next;
+  return inheritProjectWriteOrigin(current, next);
 }
 
-function mergeRowsById<T>(baseline: Map<string, T>, local: Map<string, T>, remote: Map<string, T>): Map<string, T> | null {
+function mergeRowsById<T>(baseline: Map<string, T>, local: Map<string, T>, remote: Map<string, T>, mergeFields = true): Map<string, T> | null {
   const merged = new Map<string, T>();
   const ids = new Set([...baseline.keys(), ...remote.keys(), ...local.keys()]);
   for (const id of ids) {
@@ -1033,14 +1039,20 @@ function mergeRowsById<T>(baseline: Map<string, T>, local: Map<string, T>, remot
     const incoming = remote.get(id);
     const localChanged = !shallowEqualJSON(before, edited);
     const remoteChanged = !shallowEqualJSON(before, incoming);
-    if (localChanged && remoteChanged && !shallowEqualJSON(edited, incoming)) return null;
+    if (localChanged && remoteChanged && !shallowEqualJSON(edited, incoming)) {
+      if (!mergeFields) return null;
+      const result = mergeConcurrentFields(before, edited, incoming);
+      if (result.conflicts.length) return null;
+      if (result.value !== undefined) merged.set(id, result.value);
+      continue;
+    }
     const chosen = localChanged ? edited : incoming;
     if (chosen !== undefined) merged.set(id, chosen);
   }
   return merged;
 }
 
-/** Mescla alterações de IDs distintos; duas edições do mesmo registro exigem decisão humana. */
+/** Mescla IDs e campos independentes; colisões preservam o rascunho para aviso ao usuário. */
 export function mergeProjectRecordsThreeWay(
   baseline: Project,
   local: Project,
@@ -1063,12 +1075,13 @@ export function mergeProjectRecordsThreeWay(
       before[key] as Map<string, unknown>,
       edited[key] as Map<string, unknown>,
       incoming[key] as Map<string, unknown>,
+      !['auditLogs', 'stockMovements', 'materialPriceHistory'].includes(collection),
     );
     if (!rows) return null;
     mergedMaps.set(collection, rows);
   }
   const rows = <T,>(key: ProjectCollectionKey) => [...(mergedMaps.get(key)?.values() ?? [])] as T[];
-  const result = mergeHydratedProjectCollections(local, remote, collections);
+  const result = inheritProjectWriteOrigin(local, mergeHydratedProjectCollections(local, remote, collections));
   if (selected.has('dailyReports')) result.dailyReports = rows<DailyReport>('dailyReports');
   if (selected.has('measurements')) result.measurements = rows<SavedMeasurement>('measurements');
   if (selected.has('additives')) result.additives = rows<Additive>('additives');

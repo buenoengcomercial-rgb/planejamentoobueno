@@ -27,6 +27,7 @@ export default function TeamManagement() {
   const navigate = useNavigate();
 
   const [members, setMembers] = useState<OrgMember[]>([]);
+  const [memberAttempts, setMemberAttempts] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<OrgRole>('field_user');
@@ -107,19 +108,33 @@ export default function TeamManagement() {
   };
 
   const handleRoleChange = async (memberId: string, role: OrgRole) => {
+    const member = members.find(item => item.id === memberId);
+    if (!member) return;
     try {
-      await updateMemberRole(memberId, role);
+      await updateMemberRole(memberId, role, member.role);
+      setMemberAttempts(current => ({ ...current, [memberId]: '' }));
       toast.success('Função atualizada');
       void reload();
-    } catch { toast.error('Erro ao atualizar função'); }
+    } catch (error) {
+      const message = `${error instanceof Error ? error.message : 'Erro ao atualizar função' } Tentativa: ${ROLE_LABELS[role]}.`;
+      setMemberAttempts(current => ({ ...current, [memberId]: message }));
+      toast.error(message);
+    }
   };
 
   const handleStatusChange = async (memberId: string, status: MemberStatus) => {
+    const member = members.find(item => item.id === memberId);
+    if (!member) return;
     try {
-      await updateMemberStatus(memberId, status);
+      await updateMemberStatus(memberId, status, member.status);
+      setMemberAttempts(current => ({ ...current, [memberId]: '' }));
       toast.success('Status atualizado');
       void reload();
-    } catch { toast.error('Erro ao atualizar status'); }
+    } catch (error) {
+      const message = `${error instanceof Error ? error.message : 'Erro ao atualizar status'} Tentativa: ${STATUS_LABELS[status]}.`;
+      setMemberAttempts(current => ({ ...current, [memberId]: message }));
+      toast.error(message);
+    }
   };
 
   const handleNameSave = async (member: OrgMember) => {
@@ -339,6 +354,11 @@ export default function TeamManagement() {
         <Card>
           <CardHeader><CardTitle className="text-base">Equipe atual</CardTitle></CardHeader>
           <CardContent>
+            {Object.entries(memberAttempts).filter(([, message]) => message).map(([id, message]) => (
+              <p key={id} role="alert" className="mb-2 text-sm text-destructive">
+                {members.find(member => member.id === id)?.email}: {message}
+              </p>
+            ))}
             {loading ? (
               <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
             ) : members.length === 0 ? (

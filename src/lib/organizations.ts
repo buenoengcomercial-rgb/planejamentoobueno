@@ -221,20 +221,22 @@ export async function createMemberWithPassword(
   return { ok: false, reason: 'error', message: response?.error };
 }
 
-export async function updateMemberRole(memberId: string, role: OrgRole): Promise<void> {
-  const { error } = await supabase
+export async function updateMemberRole(memberId: string, role: OrgRole, expectedRole: OrgRole): Promise<void> {
+  const { data, error } = await supabase
     .from('organization_members')
     .update({ role })
-    .eq('id', memberId);
+    .eq('id', memberId).eq('role', expectedRole).select('id').maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error('A função mudou ou a gravação não foi autorizada. Foi mantida a primeira confirmação.');
 }
 
-export async function updateMemberStatus(memberId: string, status: MemberStatus): Promise<void> {
-  const { error } = await supabase
+export async function updateMemberStatus(memberId: string, status: MemberStatus, expectedStatus: MemberStatus): Promise<void> {
+  const { data, error } = await supabase
     .from('organization_members')
     .update({ status })
-    .eq('id', memberId);
+    .eq('id', memberId).eq('status', expectedStatus).select('id').maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error('O status mudou ou a gravação não foi autorizada. Foi mantida a primeira confirmação.');
 }
 
 /** Atualiza o nome operacional do membro e a identidade usada nos próximos registros de auditoria. */

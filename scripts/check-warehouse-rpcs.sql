@@ -6,11 +6,11 @@ WITH required (rpc, signature) AS (
     ('commit_warehouse_operation', 'public.commit_warehouse_operation(uuid,text,text,text,jsonb,jsonb,jsonb,jsonb,jsonb)'),
     ('commit_warehouse_supplement_correction', 'public.commit_warehouse_supplement_correction(uuid,text,text,text,jsonb,jsonb,jsonb,jsonb,jsonb)'),
     ('commit_warehouse_requisition_adjustment', 'public.commit_warehouse_requisition_adjustment(uuid,text,text,text,jsonb,jsonb,jsonb,jsonb,jsonb)'),
-    ('commit_warehouse_receipt', 'public.commit_warehouse_receipt(uuid,text,bigint,jsonb)'),
-    ('commit_warehouse_custody', 'public.commit_warehouse_custody(uuid,text,bigint,jsonb)'),
-    ('commit_warehouse_inventory', 'public.commit_warehouse_inventory(uuid,text,bigint,jsonb)'),
-    ('commit_warehouse_adjustment', 'public.commit_warehouse_adjustment(uuid,text,bigint,jsonb)'),
-    ('commit_warehouse_catalog', 'public.commit_warehouse_catalog(uuid,text,bigint,jsonb)')
+    ('commit_warehouse_receipt_v2', 'public.commit_warehouse_receipt_v2(uuid,text,bigint,jsonb)'),
+    ('commit_warehouse_custody_v2', 'public.commit_warehouse_custody_v2(uuid,text,bigint,jsonb)'),
+    ('commit_warehouse_inventory_v2', 'public.commit_warehouse_inventory_v2(uuid,text,bigint,jsonb)'),
+    ('commit_warehouse_adjustment_v2', 'public.commit_warehouse_adjustment_v2(uuid,text,bigint,jsonb)'),
+    ('commit_warehouse_catalog_v2', 'public.commit_warehouse_catalog_v2(uuid,text,bigint,jsonb)')
 ), checked AS (
   SELECT rpc,
     to_regprocedure(signature) IS NOT NULL AS installed,

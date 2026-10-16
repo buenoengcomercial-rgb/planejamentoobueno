@@ -67,11 +67,41 @@ beforeAll(async()=>{
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011230000_measurement_deletion_projection_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261012010000_measurement_plan_catalog_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261016020000_measurement_materialization_working_set.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261016120000_concurrent_field_merge.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
 afterAll(async()=>{await db.close();});
 describe('transação da Medição na nuvem',()=>{
+  const fieldCommit=async (previous:MeasurementWorkspace, next:MeasurementWorkspace) =>
+    (await db.query<{value:{revision:number;reconciled:boolean}}>('SELECT patch_measurement_entries_v2($1,$2,$3) value',
+      [projectId,previous.revision,JSON.stringify(measurementEntryPatch(previous,next))])).rows[0].value;
+  it('v2 aceita tarefas independentes de dois clientes e repete sem duplicar auditoria',async()=>{
+    await seed();
+    const first=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('concurrent-a'),multiplier:1});
+    const second=editMeasuredRow(base,actor,'m1','repeaters',{...newMeasuredRow('concurrent-b'),multiplier:1});
+    await fieldCommit(base,first);
+    const receipt=await fieldCommit(base,second);
+    expect(receipt).toMatchObject({revision:base.revision+2,reconciled:true});
+    expect(await fieldCommit(base,second)).toEqual(receipt);
+    const saved=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(entryFor(saved,'m1','signs').rows.some(r=>r.id==='concurrent-a')).toBe(true);
+    expect(entryFor(saved,'m1','repeaters').rows.some(r=>r.id==='concurrent-b')).toBe(true);
+    expect(saved.audit.filter(e=>e.id===second.audit.at(-1)!.id)).toHaveLength(1);
+  });
+  it('v2 combina campos distintos da mesma linha e mantém o primeiro no mesmo campo',async()=>{
+    const row={...newMeasuredRow('field-row'),multiplier:1,measuredQuantity:1};
+    const ready=editMeasuredRow(base,actor,'m1','signs',row); await seed(ready);
+    const first=editMeasuredRow(ready,actor,'m1','signs',{...row,multiplier:2});
+    const second=editMeasuredRow(ready,actor,'m1','signs',{...row,measuredQuantity:3});
+    await fieldCommit(ready,first); await fieldCommit(ready,second);
+    const collision=editMeasuredRow(ready,actor,'m1','signs',{...row,multiplier:4});
+    await expect(fieldCommit(ready,collision)).rejects.toThrow('Conflito no campo');
+    const saved=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(entryFor(saved,'m1','signs').rows.find(r=>r.id==='field-row')).toMatchObject({multiplier:2,measuredQuantity:3});
+    expect(saved.audit.some(e=>e.id===collision.audit.at(-1)!.id)).toBe(false);
+  });
+
   const catalogEvent=()=>({id:crypto.randomUUID(),at:new Date().toISOString(),actor,action:'Gerir desenhos',affected:[],before:[],after:[]});
   const catalogPlan=async()=>{
     const id=crypto.randomUUID(),storagePath=`${projectId}/${id}/planta.dwf`;

@@ -8,6 +8,34 @@ const base = (): DailyReport => ({
 });
 
 describe('mergeDailyReportVersions', () => {
+  it('não ressuscita anexo removido na nuvem durante edição de legenda', () => {
+    const initial = base();
+    const local = { ...initial, attachments: [{ id: 'photo-1', caption: 'Tentativa preservada' }] };
+    const remote = { ...initial, attachments: [] };
+    const result = mergeDailyReportVersions(initial, local, remote);
+    expect(result.report.attachments).toEqual([]);
+    expect(result.conflicts).toEqual(['attachments.photo-1']);
+    expect(local.attachments[0].caption).toBe('Tentativa preservada');
+  });
+
+  it('sinaliza inclusão concorrente com mesmo id e conteúdo diferente', () => {
+    const initial = { ...base(), attachments: [] };
+    const local = { ...initial, attachments: [{ id: 'photo-1', caption: 'Local' }] };
+    const remote = { ...initial, attachments: [{ id: 'photo-1', caption: 'Primeira' }] };
+    const result = mergeDailyReportVersions(initial, local, remote);
+    expect(result.report.attachments).toEqual(remote.attachments);
+    expect(result.conflicts).toEqual(['attachments.photo-1']);
+  });
+
+  it('mantém edição remota quando a remoção local chega depois', () => {
+    const initial = base();
+    const local = { ...initial, attachments: [] };
+    const remote = { ...initial, attachments: [{ id: 'photo-1', caption: 'Primeira' }] };
+    const result = mergeDailyReportVersions(initial, local, remote);
+    expect(result.report.attachments).toEqual(remote.attachments);
+    expect(result.conflicts).toEqual(['attachments.photo-1']);
+  });
+
   it('mescla uma legenda local com observação alterada remotamente', () => {
     const initial = base();
     const local = { ...initial, updatedAt: '2026-09-10T08:01:00.000Z', attachments: [{ id: 'photo-1', caption: 'Foto da instalação' }] };

@@ -1,6 +1,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import type { Database, Json } from '@/integrations/supabase/types';
 import type { TakeoffPlan } from './planTakeoff';
+import { mergeConcurrentFields } from './concurrentFields';
 
 export interface CloudTakeoffScope { organizationId: string; userId: string; projectId: string }
 type PlanRow = Database['public']['Tables']['takeoff_plans']['Row'];
@@ -79,14 +80,38 @@ export async function updateCloudPlan(scope: CloudTakeoffScope, plan: TakeoffPla
   if (!previous.cloudRevision || !previous.storagePath || plan.file !== previous.file) {
     throw new Error('O arquivo original da planta não pode ser substituído nesta edição.');
   }
-  const { data, error } = await supabase.from('takeoff_plans').update({
-    ...planFields(plan), revision: previous.cloudRevision + 1,
-  }).eq('project_id', scope.projectId).eq('id', plan.id).eq('revision', previous.cloudRevision)
-    .is('deleted_at', null).select('revision').maybeSingle();
-  if (error) throw cloudError(error, `Não foi possível atualizar ${plan.name}`);
-  if (!data) throw new Error('Esta planta foi alterada em outro computador. Reabra a planta antes de salvar; suas alterações atuais não foram enviadas.');
-  plan.storagePath = previous.storagePath;
-  plan.cloudRevision = data.revision;
+  const base = planFields(previous), proposed = planFields(plan);
+  let current = base, revision = previous.cloudRevision;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const merged = mergeConcurrentFields(base, proposed, current);
+    if (merged.conflicts.length) throw new Error(`Foi mantida a primeira alteração confirmada da planta (${merged.conflicts.join(', ')}). Sua tentativa permanece aberta.`);
+    const patch = Object.fromEntries(Object.entries(merged.value).filter(([key, value]) =>
+      JSON.stringify(value) !== JSON.stringify(current[key as keyof typeof current])));
+    if (Object.keys(patch).length) {
+      const { data, error } = await supabase.from('takeoff_plans').update({ ...patch, revision: revision + 1 })
+        .eq('project_id', scope.projectId).eq('id', plan.id).eq('revision', revision)
+        .is('deleted_at', null).select('revision').maybeSingle();
+      if (error) throw cloudError(error, `Não foi possível atualizar ${plan.name}`);
+      if (!data) {
+        const { data: remote, error: readError } = await supabase.from('takeoff_plans').select('*')
+          .eq('project_id', scope.projectId).eq('id', plan.id).is('deleted_at', null).maybeSingle();
+        if (readError) throw cloudError(readError, 'Não foi possível conferir a planta');
+        if (!remote || remote.file_path !== previous.storagePath || remote.revision === revision) {
+          throw new Error('A planta foi removida ou a gravação não foi autorizada. Sua tentativa permanece aberta.');
+        }
+        current = planFields(await cloudRowToPlan(remote, previous));
+        revision = remote.revision;
+        continue;
+      }
+      revision = data.revision;
+    }
+    Object.assign(plan, { name: merged.value.name, floor: merged.value.floor, kind: merged.value.kind,
+      chapterId: merged.value.chapter_id ?? undefined, building: merged.value.building ?? undefined,
+      scales: merged.value.scales, measures: merged.value.measures,
+      storagePath: previous.storagePath, cloudRevision: revision });
+    return;
+  }
+  throw new Error('A planta continua recebendo alterações. Sua tentativa permanece aberta; tente novamente.');
 }
 
 export async function archiveCloudPlan(scope: CloudTakeoffScope, plan: TakeoffPlan): Promise<void> {

@@ -300,8 +300,9 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     confirmedOperation: async (operationId, revision) => {
       const remote = confirmed ?? await loadRemote();
       if (!remote || remote.revision < revision) return false;
-      return remote.audit.some(event => event.id === operationId)
-        || await compactedReceiptRevision(operationId) === revision;
+      if (remote.audit.some(event => event.id === operationId)) return true;
+      const savedRevision = await compactedReceiptRevision(operationId);
+      return savedRevision !== null && savedRevision >= revision && savedRevision <= remote.revision;
     },
     remoteRevision: async () => {
       const { data, error } = await withReadDeadline(supabase.from('measurement_workspace_versions' as never).select('revision').eq('project_id', scope.projectId).maybeSingle());
@@ -395,7 +396,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: encodeMeasurementWorkspace(catalogPatch),
         } as never)
         : patch
-        ? supabase.rpc('patch_measurement_entries' as never, {
+        ? supabase.rpc('patch_measurement_entries_v2' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: patch,
         } as never)
         : deletionPatch ? supabase.rpc('patch_measurement_row_deletion' as never, {
@@ -422,7 +423,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         const savedRevision = eventData
           ? Number(eventData.revision)
           : remoteRevision >= next.revision ? await compactedReceiptRevision(operationId) : null;
-        if (savedRevision === next.revision && remoteRevision >= next.revision) {
+        if (savedRevision !== null && (savedRevision === next.revision || patch && savedRevision >= next.revision) && remoteRevision >= savedRevision) {
           const latest = lifecyclePatch || catalogPatch || remoteRevision !== next.revision ? await loadRemote() : next;
           if (!latest || latest.revision < remoteRevision) throw new Error('A operação foi confirmada, mas a versão mais recente não pôde ser carregada. Mantenha esta página aberta.');
           confirmed = latest;
@@ -443,6 +444,20 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       const compactPatch = patch ?? (deletionPatch || capturePatch || catalogPatch ? encodeMeasurementWorkspace(deletionPatch ?? capturePatch ?? catalogPatch) : null);
       const canonical = (value: unknown): string => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v)
         ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+      if (patch && (data as { reconciled?: boolean } | null)?.reconciled) {
+        const receipt = data as { projectId: string; revision: number; patch: unknown };
+        if (receipt.projectId !== scope.projectId || !Number.isSafeInteger(receipt.revision)
+          || receipt.revision < next.revision || canonical(receipt.patch) !== canonical(patch)) {
+          throw new Error('O recibo reconciliado da Medição está incompleto. Mantenha esta página aberta.');
+        }
+        const latest = await loadRemote();
+        if (!latest || loadedOffline || latest.revision < receipt.revision
+          || !latest.audit.some(event => event.id === operationId)
+            && await compactedReceiptRevision(operationId) !== receipt.revision) {
+          throw new Error('A operação foi confirmada, mas a versão reconciliada não pôde ser conferida. Mantenha esta página aberta.');
+        }
+        return latest;
+      }
       if ((lifecyclePatch || compactPatch) && (data as { replayed?: unknown } | null)?.replayed === true) {
         // An idempotent receipt proves the original operation, but its revision
         // may precede newer cloud edits. Reload only on replay; a new commit

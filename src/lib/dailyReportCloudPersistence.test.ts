@@ -32,7 +32,7 @@ beforeEach(() => { from.mockReset(); });
 describe('salvamento realista do Diário normalizado', () => {
   it('identifica 403/RLS ao criar sem repetir como concorrência', async () => {
     const writes = mockResponses(response(null), response(null, { code: '42501', message: 'new row violates row-level security policy' }));
-    await expect(saveOpenDailyReport('project', base, local)).rejects.toBeInstanceOf(DailyReportPermissionError);
+    await expect(saveOpenDailyReport('project', { ...base, observations: '' }, local)).rejects.toBeInstanceOf(DailyReportPermissionError);
     expect(writes).toEqual(['insert']);
     expect(from).toHaveBeenCalledTimes(2);
   });
@@ -50,7 +50,7 @@ describe('salvamento realista do Diário normalizado', () => {
   });
   it('confirma o dado devolvido pelo servidor depois de criar', async () => {
     const writes = mockResponses(response(null), response({ data: local }));
-    await expect(saveOpenDailyReport('project', base, local)).resolves.toEqual({ report: local, conflicts: [] });
+    await expect(saveOpenDailyReport('project', { ...base, observations: '' }, local)).resolves.toEqual({ report: local, conflicts: [] });
     expect(writes).toEqual(['insert']);
   });
   it('não tenta atualizar um Diário concluído', async () => {
@@ -70,5 +70,16 @@ describe('salvamento realista do Diário normalizado', () => {
     const writes = mockResponses(response(row(remote, 'v2')));
     await expect(saveOpenDailyReport('project', base, { ...base, observations: '' })).rejects.toThrow('mudou em outro aparelho');
     expect(writes).toEqual([]);
+  });
+  it('não recria um Diário removido antes de uma edição antiga chegar', async () => {
+    const writes = mockResponses(response(null));
+    await expect(saveOpenDailyReport('project', base, local)).resolves.toEqual({ report: null, conflicts: ['registro'] });
+    expect(writes).toEqual([]);
+    expect(local.observations).toBe('Texto novo');
+  });
+  it('não recria um Diário removido entre a leitura e o update condicional', async () => {
+    const writes = mockResponses(response(row()), response(null), response(null));
+    await expect(saveOpenDailyReport('project', base, local)).resolves.toEqual({ report: null, conflicts: ['registro'] });
+    expect(writes).toEqual(['update']);
   });
 });

@@ -8,6 +8,11 @@ export interface ProjectOperation { before: Project; after: Project }
 type Path = string[];
 const origins = new WeakMap<Project, string>();
 export const projectWriteOrigin = (project: Project) => origins.get(project);
+export function inheritProjectWriteOrigin(source: Project, target: Project): Project {
+  const origin = origins.get(source);
+  if (origin) origins.set(target, origin);
+  return target;
+}
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const keyed = (v: unknown): v is Array<Record<string, unknown> & { id: string }> =>

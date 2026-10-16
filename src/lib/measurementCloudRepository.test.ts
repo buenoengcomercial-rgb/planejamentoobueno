@@ -260,7 +260,7 @@ describe('Abertura da Medição com plantas sob demanda', () => {
     const next = editMeasuredRow(remote, actor, 'm1', 'signs', { ...newMeasuredRow('numeric-row'), multiplier: 7 });
     const patch = patchSaved(remote, next);
     expect(await repo.commit(next, remote.revision)).toEqual(next);
-    expect(mocks.rpc).toHaveBeenLastCalledWith('patch_measurement_entries', {
+    expect(mocks.rpc).toHaveBeenLastCalledWith('patch_measurement_entries_v2', {
       p_project_id: base.projectId, p_expected_revision: base.revision, p_patch: patch,
     });
     expect(mocks.download).not.toHaveBeenCalled(); expect(mocks.upload).not.toHaveBeenCalled();
@@ -491,13 +491,27 @@ describe('Medição somente nuvem', () => {
     expect(await repo.pending()).toBeNull();
   });
 
+  it('adota a revisão reconciliada com outras tarefas após confirmação v2', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 2 });
+    const remote = editMeasuredRow(next, actor, 'm1', 'repeaters', { ...newMeasuredRow('remote'), multiplier: 1 });
+    remote.audit = [];
+    mocks.compactedRevision = remote.revision;
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: remote.revision,
+      patch: measurementEntryPatch(base,next), reconciled: true }, error: null });
+    loaded(remote);
+    expect(await repo.commit(next,base.revision)).toEqual(remote);
+    expect(await repo.confirmedOperation!(next.audit.at(-1)!.id, next.revision)).toBe(true);
+  });
+
   it('envia somente a tarefa alterada e exige recibo íntegro', async () => {
     const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     loaded(base); await repo.load();
     const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 401 });
     const patch = patchSaved(base, next);
     expect(await repo.commit(next, base.revision)).toEqual(next);
-    expect(mocks.rpc).toHaveBeenLastCalledWith('patch_measurement_entries', { p_project_id: base.projectId, p_expected_revision: base.revision, p_patch: patch });
+    expect(mocks.rpc).toHaveBeenLastCalledWith('patch_measurement_entries_v2', { p_project_id: base.projectId, p_expected_revision: base.revision, p_patch: patch });
     const later = editMeasuredRow(next, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 402 });
     mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: later.revision, patch }, error: null });
     await expect(repo.commit(later, next.revision)).rejects.toThrow('não confirmou');
@@ -516,7 +530,7 @@ describe('Medição somente nuvem', () => {
     expect(await repo.commit(next, base.revision)).toEqual(advanced);
     expect(await repo.confirmedOperation!(next.audit.at(-1)!.id, next.revision)).toBe(true);
     expect(mocks.rpc.mock.calls.map(call => call[0])).toEqual([
-      'load_measurement_workspace', 'patch_measurement_entries', 'load_measurement_workspace',
+      'load_measurement_workspace', 'patch_measurement_entries_v2', 'load_measurement_workspace',
     ]);
   });
 
@@ -751,7 +765,7 @@ describe('Medição somente nuvem', () => {
     expect(saved.entries.find(entry => entry.serviceId === 'detectors')?.rows.some(r => r.id === 'other-row')).toBe(true);
     expect(saved.plans[0].measures.some(measure => measure.id === mark.id)).toBe(true);
     expect(mocks.rpc.mock.calls.map(call => call[0])).toEqual([
-      'load_measurement_workspace', 'patch_measurement_entries', 'patch_measurement_capture', 'load_measurement_workspace',
+      'load_measurement_workspace', 'patch_measurement_entries_v2', 'patch_measurement_capture', 'load_measurement_workspace',
     ]);
   });
 

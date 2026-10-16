@@ -121,6 +121,7 @@ import {
   mergeHydratedProjectCollections,
   mergeProjectRecordsThreeWay,
   mergeProjectMetadata,
+  mergeProjectMetadataFields,
   ProjectHydrationError,
   ProjectSnapshotUnavailableError,
 } from '@/lib/projectSync';
@@ -996,12 +997,14 @@ export default function Index() {
     }
     const remoteMetadataChanged = savedBaseline && hasProjectMetadataChanges(savedBaseline, record.project);
     if (remoteMetadataChanged) {
-      if (hasProjectMetadataChanges(savedBaseline, latest)) {
+      const currentMetadata = mergeProjectMetadataFields(savedBaseline, rebasedCurrent, record.project);
+      const retryMetadata = mergeProjectMetadataFields(savedBaseline, rebasedForRetry, record.project);
+      if (!currentMetadata || !retryMetadata) {
         discardCloudProjectRecord(record);
         return null;
       }
-      rebasedCurrent = mergeProjectMetadata(rebasedCurrent, record.project);
-      rebasedForRetry = mergeProjectMetadata(rebasedForRetry, record.project);
+      rebasedCurrent = currentMetadata;
+      rebasedForRetry = retryMetadata;
     }
     let rebasedSavedBaseline = rebasedCurrent;
     if (savedBaseline) {
@@ -1093,22 +1096,21 @@ export default function Index() {
       let updatedAt: string;
       let partialSync = false;
       try {
-        // Uma entrada/retirada concluída entre a edição local e o autosave
-        // atualiza a versão-pai da obra. Se for a única mudança externa,
-        // rebaseie o Almoxarifado e repita uma única vez sem interromper outro
-        // módulo. Qualquer outro conflito permanece explícito e protegido.
+        // Releia somente as coleções afetadas e concilie campos independentes.
+        // Limite as tentativas para não manter um autosave concorrente em loop.
         for (let attempt = 0; ; attempt += 1) {
           try {
             updatedAt = await upsertCloudProject(effectiveProject, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined);
             break;
           } catch (error) {
-            if (attempt === 0 && error instanceof CloudProjectConflictError) {
+            if (attempt < 3 && error instanceof CloudProjectConflictError) {
               const knownRemoteCollections = [
                 ...(pendingRealtimeCollectionsRef.current.get(effectiveProject.id) ?? []),
                 ...(remoteDirtyCollectionsRef.current.get(effectiveProject.id) ?? []),
               ];
               const rebased = await refreshRemoteWarehouseInBackground(effectiveProject)
-                ?? await refreshRemoteCollectionsInBackground(effectiveProject, knownRemoteCollections);
+                ?? await refreshRemoteCollectionsInBackground(effectiveProject,
+                  knownRemoteCollections.length ? knownRemoteCollections : getLoadedProjectCollections(effectiveProject.id));
               if (rebased) {
                 effectiveProject = rebased;
                 effectiveJson = serializeProject(rebased);
@@ -2623,7 +2625,7 @@ export default function Index() {
       if (rawProjectRef.current?.id !== active.id) {
         throw new Error('A obra aberta mudou durante a preparação. Reabra o Almoxarifado e tente novamente.');
       }
-      if (!remote || remote.updatedAt !== currentProjectUpdatedAtRef.current) {
+      if (!remote) {
         throw new Error('A versão do Almoxarifado mudou. Atualize a obra antes de continuar.');
       }
       if (remote.warehouseVersion == null) {
@@ -2807,6 +2809,8 @@ export default function Index() {
   }, []);
 
   const commitWarehouseScopedNow = useCallback((next: Project, domain: WarehouseScopedDomain): Promise<Project> => {
+    // Capture the form's baseline before preparation can hydrate newer remote values.
+    const submittedBase = project ?? rawProjectRef.current;
     if (navigationInFlightRef.current) {
       return Promise.reject(new Error('A navegação já foi iniciada. Aguarde a próxima tela abrir antes de registrar a operação.'));
     }
@@ -2818,14 +2822,14 @@ export default function Index() {
     const request = (async () => {
       await prepareWarehouseCloudOperation(domain);
 
-      const before = rawProjectRef.current;
-      if (!before || before.id !== next.id) throw new Error('A operação não pertence à obra aberta.');
+      const before = submittedBase;
+      if (!before || before.id !== next.id || rawProjectRef.current?.id !== before.id) throw new Error('A operação não pertence à obra aberta.');
       if (currentWarehouseVersionRef.current == null) {
         const remote = await getCloudProjectVersion(before.id);
         if (rawProjectRef.current?.id !== before.id) {
           throw new Error('A obra aberta mudou durante a preparação. Reabra o Almoxarifado e tente novamente.');
         }
-        if (!remote || remote.updatedAt !== currentProjectUpdatedAtRef.current) {
+        if (!remote) {
           throw new Error('A versão do Almoxarifado mudou. Atualize a obra antes de continuar.');
         }
         if (remote.warehouseVersion == null) {
@@ -2913,7 +2917,7 @@ export default function Index() {
         warehouseLockedRouteRef.current = null;
       }
     });
-  }, [discardProjectDraft, prepareWarehouseCloudOperation, scheduleProjectDraft]);
+  }, [discardProjectDraft, prepareWarehouseCloudOperation, project, scheduleProjectDraft]);
 
   /**
    * A manutenção de anexos é exclusiva do Proprietário e nunca delega ao
