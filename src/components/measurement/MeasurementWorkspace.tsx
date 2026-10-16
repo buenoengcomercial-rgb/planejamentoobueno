@@ -304,6 +304,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     const base = current.current; busy.current = true; setSaving(true); setError(''); setStatus('Sincronizando'); lastSaveFailure.current = '';
     let resumeQueue = false;
     try {
+      await repository.stage?.(candidate, base);
       const saved = await repository.commit(candidate, base.revision);
       if (!await confirmedCommitResponse(repository, candidate, saved)) throw new Error('Resposta de salvamento inválida.');
       adopt(saved);

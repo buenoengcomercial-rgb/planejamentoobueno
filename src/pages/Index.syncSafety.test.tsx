@@ -76,6 +76,7 @@ vi.mock('@/lib/cloudProjects', () => {
     CloudProjectPartialSyncError: MockCloudProjectPartialSyncError,
     listCloudProjects: mocks.listCloudProjects,
     loadCloudProjectRecord: mocks.loadCloudProjectRecord,
+    loadStableCloudProjectRecord: mocks.loadCloudProjectRecord,
     upsertCloudProject: mocks.upsertCloudProject,
     createCloudProject: vi.fn(),
     renameCloudProject: vi.fn(),

@@ -73,6 +73,7 @@ import { Button } from '@/components/ui/button';
 import {
   listCloudProjects,
   loadCloudProjectRecord,
+  loadStableCloudProjectRecord,
   upsertCloudProject,
   createCloudProject,
   renameCloudProject,
@@ -1571,7 +1572,7 @@ export default function Index() {
             preferredProjectId,
             projectCollectionsForView(initialView, initialWarehouseTab, independentMeasurement),
           );
-          const record = await withReadDeadline(loadCloudProjectRecord(preferredProjectId, {
+          const record = await withReadDeadline(loadStableCloudProjectRecord(preferredProjectId, {
             collections: initialCollections,
             strict: true,
             deferSnapshot: true,

@@ -31,3 +31,13 @@ it('recusa ressuscitar registro removido e não compara ordem de propriedades JS
 it('trata coordenadas sem identificador como um campo indivisível', () => {
   expect(mergeConcurrentFields([1,2],[3,2],[1,4])).toEqual({value:[1,4],conflicts:['/']});
 });
+
+
+it('mescla campos de registro sem disputar carimbo e autor gerados pela edição', () => {
+  const base={id:'eq',name:'A',notes:'',updatedAt:'t0',updatedBy:{userId:'original'}};
+  const local={...base,name:'B',updatedAt:'t2',updatedBy:{userId:'second'}};
+  const remote={...base,notes:'N',updatedAt:'t1',updatedBy:{userId:'first'}};
+  expect(mergeConcurrentFields(base,local,remote)).toEqual({value:{...local,notes:'N'},conflicts:[]});
+  expect(mergeConcurrentFields(base,{...local,notes:'Collision'},remote).conflicts).toEqual(['/notes']);
+  expect(mergeConcurrentFields({updatedAt:'a'},{updatedAt:'b'},{updatedAt:'c'}).conflicts).toEqual(['/updatedAt']);
+});

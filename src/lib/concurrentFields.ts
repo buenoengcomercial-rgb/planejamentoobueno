@@ -12,7 +12,12 @@ export function mergeConcurrentFields<T>(base: T, local: T, remote: T): { value:
     if (record(before) && record(proposed) && record(confirmed)) {
       return Object.fromEntries([...new Set([...Object.keys(before), ...Object.keys(proposed), ...Object.keys(confirmed)])]
         .flatMap(key => {
-          const value = merge(before[key], proposed[key], confirmed[key], `${path}/${key}`);
+          // These stamps describe the accepted edit, not an independently editable field.
+          const identified = ['id', 'key'].some(id => typeof before[id] === 'string'
+            && before[id] === proposed[id] && before[id] === confirmed[id]);
+          const value = identified && ['updatedAt', 'updatedBy'].includes(key)
+            ? (same(proposed[key], before[key]) ? confirmed[key] : proposed[key])
+            : merge(before[key], proposed[key], confirmed[key], `${path}/${key}`);
           return value === undefined ? [] : [[key, value]];
         }));
     }

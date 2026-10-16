@@ -26,7 +26,7 @@ beforeAll(async()=>{
   for (const file of ['20260912110000_atomic_warehouse_operations.sql','20260912213000_repair_warehouse_audit_payloads.sql',
     '20260912230000_version_atomic_warehouse_operations.sql','20260929190000_warehouse_withdrawal_availability.sql',
     '20260912233000_scoped_warehouse_commits.sql','20261016120000_concurrent_field_merge.sql','20261016121000_concurrent_warehouse_fields.sql',
-    '20261016123000_concurrent_requisition_receipts.sql']) {
+    '20261016123000_concurrent_requisition_receipts.sql','20261016130000_concurrent_audit_stamps.sql']) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8'));
   }
 },20000);
@@ -114,4 +114,18 @@ it('duas retiradas da mesma fotografia disputam saldo sem baixar estoque negativ
   await db.query('UPDATE warehouse_requisitions SET data=data||$1::jsonb WHERE id=$2',[JSON.stringify({notes:'Confirmado depois'}),id]);
   expect((await delivery(id)).rows[0].result.requisition.notes).toBe('Confirmado depois');
   expect((await db.query<{n:number}>('SELECT count(*)::int n FROM warehouse_movements')).rows[0].n).toBe(2);
+});
+
+
+it('não transforma horário e autor automáticos em conflito entre campos de equipamento', async () => {
+  const base = { id:'eq', name:'Makita', notes:'', updatedAt:'2026-10-16T12:00:00Z', updatedBy:{userId:'old',userName:'Old'} };
+  await db.query("UPDATE projects SET data_json=jsonb_set(data_json,'{warehouse,equipments}',$1)",[JSON.stringify([base])]);
+  const equipment = (row:unknown) => changes({equipments:{records:{identity:'id',upserts:[{id:'eq',expected:base,row}],deletes:[]}}});
+  const first={...base,notes:'Primeira',updatedAt:'2026-10-16T12:01:00Z',updatedBy:{userId:'owner',userName:'Owner'}};
+  const second={...base,name:'Outro nome',updatedAt:'2026-10-16T12:02:00Z',updatedBy:{userId:'operator',userName:'Operator'}};
+  await commit('catalog','equipment-first',equipment(first));
+  const result=await commit('catalog','equipment-independent',equipment(second));
+  expect(result.warehouseState).toMatchObject({equipments:[{...second,notes:'Primeira'}]});
+  await expect(commit('catalog','equipment-collision',equipment({...second,notes:'Segunda'}))).rejects.toThrow('Conflito no campo');
+  expect((await db.query<{n:number}>('SELECT count(*)::int n FROM audit_logs')).rows[0].n).toBe(2);
 });
