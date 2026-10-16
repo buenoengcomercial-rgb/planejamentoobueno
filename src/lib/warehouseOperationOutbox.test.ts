@@ -15,11 +15,17 @@ it('mantém identidade e campos esperados após recarga e só limpa após confer
   expect(rpc.mock.calls[1]).toEqual(rpc.mock.calls[0]);
   expect(warehousePendingOperations('a', 'p')).toEqual([]);
 });
-it('não confunde outra conta nem permite uma nova operação enquanto a resposta é incerta', () => {
+it('não confunde outra conta e preserva duas operações independentes com resposta incerta', () => {
   stageWarehouseOperation('a', 'p', 'op', 'commit_warehouse_catalog_v2', args);
   expect(warehousePendingOperations('b', 'p')).toEqual([]);
-  expect(() => stageWarehouseOperation('a', 'p', 'new', 'commit_warehouse_catalog_v2', { ...args, p_operation_key: 'new' })).toThrow('sem confirmação');
+  const requisition = { p_project_id: 'p', p_operation_key: 'new', p_request: { type: 'delivery', requisitionId: 'req-1' } };
+  stageWarehouseOperation('a', 'p', 'new', 'commit_warehouse_requisition_v2', requisition);
+  expect(warehousePendingOperations('a', 'p').map(row => row.id)).toEqual(['op', 'new']);
   rejectWarehouseOperation('a', 'p', 'op', { code: 'P0002', message: 'Primeiro valor preservado' });
-  expect(() => stageWarehouseOperation('a', 'p', 'new', 'commit_warehouse_catalog_v2', { ...args, p_operation_key: 'new' })).not.toThrow();
+  expect(() => stageWarehouseOperation('a', 'p', 'new', 'commit_warehouse_requisition_v2', requisition)).not.toThrow();
   expect(warehousePendingOperations('a', 'p')[0].conflict).toBe('Primeiro valor preservado');
+  expect(warehousePendingOperations('a', 'p')[1].conflict).toBeUndefined();
+  expect(() => stageWarehouseOperation('a', 'p', 'new', 'commit_warehouse_requisition_v2', {
+    ...requisition, p_request: { type: 'delivery', requisitionId: 'req-2' },
+  })).toThrow('outros valores');
 });

@@ -17,9 +17,9 @@ export function stageWarehouseOperation(actorId: string | undefined, projectId: 
     }
     return;
   }
-  if (warehousePendingOperations(actorId, projectId).some(row => !row.conflict)) {
-    throw new Error('Existe uma operação sem confirmação. Use “Conferir operação pendente” antes de iniciar outra.');
-  }
+  // Cada formulário mantém sua própria chave. Uma resposta incerta em outro
+  // registro não bloqueia novas operações; o servidor valida saldo e conflitos
+  // atomicamente, e o reenvio desta chave continua idempotente.
   localStorage.setItem(key, JSON.stringify({ id, rpc, args, at: new Date().toISOString() }));
   notify();
 }
