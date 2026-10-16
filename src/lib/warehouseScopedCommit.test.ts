@@ -68,7 +68,7 @@ describe('transações específicas do Almoxarifado', () => {
     const result = await commitWarehouseScopedOperation(before, after, 3, 'catalog:attempt-1', 'catalog');
 
     expect(rpcMock).toHaveBeenCalledTimes(1);
-    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_catalog');
+    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_catalog_v2');
     expect(rpcMock.mock.calls[0][1]).toMatchObject({
       p_project_id: 'project-1',
       p_operation_key: 'catalog:attempt-1',
@@ -81,6 +81,20 @@ describe('transações específicas do Almoxarifado', () => {
       },
     });
     expect(result).toMatchObject({ warehouseVersion: 4, affectedStateKeys: ['receivers'] });
+  });
+
+  it('envia apenas o registro de cadastro alterado, incluindo valores anteriores', async () => {
+    const before = baseProject();
+    before.warehouse!.items = [
+      { key: 'a', description: 'A', unit: 'un', purchasedQuantity: 0 },
+      { key: 'b', description: 'B', unit: 'un', purchasedQuantity: 0 },
+    ];
+    const after = { ...before, warehouse: { ...before.warehouse!, items: before.warehouse!.items.map(row =>
+      row.key === 'a' ? { ...row, description: 'Editada' } : row) } };
+    rpcMock.mockResolvedValue(rpcResult(after));
+    await commitWarehouseScopedOperation(before, after, 3, 'delta', 'catalog');
+    expect(rpcMock.mock.calls[0][1].p_changes.state.items).toEqual({records:{identity:'key',
+      upserts:[{id:'a',expected:before.warehouse!.items[0],row:after.warehouse.items[0]}],deletes:[]}});
   });
 
   it('reutiliza uma chave idempotente derivada da mesma alteração em nova tentativa', async () => {
@@ -107,9 +121,10 @@ describe('transações específicas do Almoxarifado', () => {
 
     const saved = await commitWarehouseScopedOperation(before, grouped, 3, '', 'catalog');
 
-    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_catalog');
+    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_catalog_v2');
     expect(rpcMock.mock.calls[0][1].p_changes).toMatchObject({
-      state: { items: { expected: before.warehouse!.items, next: grouped.warehouse!.items } },
+      state: { items: { records: { identity: 'key', upserts: [{ id: 'curva-antiga',
+        expected: before.warehouse!.items[0], row: grouped.warehouse!.items[0] }], deletes: [] } } },
       movements: { upserts: [], deletes: [] },
       audits: [],
     });
@@ -140,7 +155,7 @@ describe('transações específicas do Almoxarifado', () => {
 
     const result = await commitWarehouseScopedOperation(before, after, 3, 'inventory:attempt-1', 'inventory');
 
-    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_inventory');
+    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_inventory_v2');
     expect(rpcMock.mock.calls[0][1].p_changes.movements.upserts).toEqual([
       { id: movement.id, expected: null, row: movement },
     ]);

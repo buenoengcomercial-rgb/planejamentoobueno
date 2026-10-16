@@ -1,8 +1,21 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import AppSidebar from './AppSidebar';
 
 describe('AppSidebar para Almoxarife', () => {
+  it('renomeação em conflito mantém a tentativa e envia o nome visto ao abrir o campo', async () => {
+    const rename = vi.fn().mockResolvedValue(false);
+    render(<AppSidebar currentView="tasks" onViewChange={vi.fn()} projectName="Obra teste" collapsed={false}
+      onToggleCollapse={vi.fn()} onSwitchProject={vi.fn()} onCreateProject={vi.fn()} onRenameProject={rename}
+      onDuplicateProject={vi.fn()} onDeleteProject={vi.fn()} activeProjectId="project-1"
+      projectsList={[{ id:'project-1', name:'Obra teste', createdAt:'2026-08-19', updatedAt:'2026-08-19' }]} />);
+    fireEvent.click(screen.getByTitle('Renomear'));
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, {target:{value:'Tentativa'}});
+    fireEvent.click(screen.getByTitle('Salvar'));
+    await waitFor(()=>expect(rename).toHaveBeenCalledWith('project-1','Tentativa','Obra teste'));
+    expect(input).toHaveValue('Tentativa');
+  });
   it('mantém o acesso à planta dentro da Produção, sem aba independente', () => {
     render(
       <AppSidebar

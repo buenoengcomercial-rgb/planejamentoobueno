@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { stageWarehouseOperation, rejectWarehouseOperation } from './warehouseOperationOutbox';
 import { acknowledgeWarehouseScopedOperation } from '@/lib/projectSync';
 import { ensureWarehouse } from '@/lib/warehouse';
 import type {
@@ -14,11 +15,11 @@ type Json = import('@/integrations/supabase/types').Json;
 export type WarehouseScopedDomain = 'receipt' | 'custody' | 'inventory' | 'adjustment' | 'catalog';
 
 const RPC_BY_DOMAIN: Record<WarehouseScopedDomain, string> = {
-  receipt: 'commit_warehouse_receipt',
-  custody: 'commit_warehouse_custody',
-  inventory: 'commit_warehouse_inventory',
-  adjustment: 'commit_warehouse_adjustment',
-  catalog: 'commit_warehouse_catalog',
+  receipt: 'commit_warehouse_receipt_v2',
+  custody: 'commit_warehouse_custody_v2',
+  inventory: 'commit_warehouse_inventory_v2',
+  adjustment: 'commit_warehouse_adjustment_v2',
+  catalog: 'commit_warehouse_catalog_v2',
 };
 
 const NORMALIZED_WAREHOUSE_KEYS = new Set<keyof WarehouseState>(['movements', 'requisitions', 'custodyTerms']);
@@ -67,7 +68,9 @@ interface RowChanges<T> {
 }
 
 interface WarehouseScopedPayload {
-  state: Record<string, { expected: unknown; next: unknown }>;
+  state: Record<string, { expected: unknown; next: unknown } | {
+    records: RowChanges<Record<string, unknown>> & { identity: 'id' | 'key' };
+  }>;
   movements: RowChanges<WarehouseMovement>;
   custody: RowChanges<CustodyTerm>;
   audits: AuditLog[];
@@ -113,11 +116,39 @@ function rowChanges<T extends { id: string }>(before: T[], after: T[]): RowChang
 }
 
 function stateChanges(before: WarehouseState, after: WarehouseState) {
-  return Object.fromEntries(STATE_KEYS.flatMap(key => {
+  const changes: WarehouseScopedPayload['state'] = {};
+  for (const key of STATE_KEYS) {
     const previous = before[key];
     const next = after[key];
-    return same(previous, next) ? [] : [[key, { expected: previous ?? null, next: next ?? null }]];
-  }));
+    if (same(previous, next)) continue;
+    if (Array.isArray(previous) && Array.isArray(next)) {
+      const left = previous as unknown as Record<string, unknown>[];
+      const right = next as unknown as Record<string, unknown>[];
+      const identity = (['id', 'key'] as const).find(field => [...left, ...right].every(row =>
+        row && typeof row[field] === 'string' && row[field] !== '')
+        && new Set(left.map(row => row[field])).size === left.length
+        && new Set(right.map(row => row[field])).size === right.length);
+      if (identity) {
+        const prior = new Map(left.map(row => [row[identity], row]));
+        const current = new Map(right.map(row => [row[identity], row]));
+        const previousOrder = left.map(row => row[identity]).filter(id => current.has(id));
+        const nextOrder = right.map(row => row[identity]).filter(id => prior.has(id));
+        if (!same(previousOrder, nextOrder)) {
+          changes[key] = { expected: previous, next };
+          continue;
+        }
+        changes[key] = { records: { identity,
+          upserts: right.flatMap(row => same(prior.get(row[identity]), row) ? [] : [{
+            id: row[identity] as string, expected: prior.get(row[identity]) ?? null, row,
+          }]),
+          deletes: left.flatMap(row => current.has(row[identity]) ? [] : [{ id: row[identity] as string, expected: row }]),
+        } };
+        continue;
+      }
+    }
+    changes[key] = { expected: previous ?? null, next: next ?? null };
+  }
+  return changes;
 }
 
 function addedAudits(before: AuditLog[], after: AuditLog[]): AuditLog[] {
@@ -224,6 +255,7 @@ export async function commitWarehouseScopedOperation(
   expectedWarehouseVersion: number,
   operationKey: string,
   forcedDomain?: WarehouseScopedDomain,
+  actorId?: string,
 ): Promise<WarehouseScopedCommitResult> {
   if (!navigator.onLine) throw new Error('Conecte-se à internet para salvar o Almoxarifado. Nenhuma alteração foi confirmada.');
   if (!Number.isSafeInteger(expectedWarehouseVersion) || expectedWarehouseVersion < 0) {
@@ -259,13 +291,18 @@ export async function commitWarehouseScopedOperation(
     fn: string,
     args: Record<string, unknown>,
   ) => Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;
-  const { data, error } = await rpc(RPC_BY_DOMAIN[domain], {
+  const args = {
     p_project_id: before.id,
     p_operation_key: confirmedOperationKey,
     p_expected_warehouse_version: expectedWarehouseVersion,
     p_changes: payload as unknown as Json,
-  });
-  if (error) throw scopedCommitError(error);
+  };
+  stageWarehouseOperation(actorId, before.id, confirmedOperationKey, RPC_BY_DOMAIN[domain], args);
+  const { data, error } = await rpc(RPC_BY_DOMAIN[domain], args);
+  if (error) {
+    rejectWarehouseOperation(actorId, before.id, confirmedOperationKey, error);
+    throw scopedCommitError(error);
+  }
 
   const result = (data ?? {}) as WarehouseScopedRpcResult;
   if (!result.committedAt || !result.projectUpdatedAt || !result.warehouseUpdatedAt || !Number.isSafeInteger(result.warehouseVersion)) {

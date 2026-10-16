@@ -1,4 +1,6 @@
-import { projectWriteOrigin } from '@/lib/projectOperations';
+import { inheritProjectWriteOrigin, projectWriteOrigin } from '@/lib/projectOperations';
+import { mergeConcurrentFields } from '@/lib/concurrentFields';
+import { commitProjectFields, type ProjectFieldBatch, type ProjectFieldReceipt, type ProjectFieldRequest } from '@/lib/projectFieldCommit';
 import type { ProductionCaptureChange } from '@/lib/planTakeoff';
 import { withReadDeadline } from '@/lib/readDeadline';
 /**
@@ -340,6 +342,11 @@ export function hasProjectMetadataChanges(before: Project, after: Project): bool
   return !shallowEqualJSON(stripNormalizedCollections(before), stripNormalizedCollections(after));
 }
 
+export function mergeProjectMetadataFields(base: Project, local: Project, remote: Project): Project | null {
+  const merged = mergeConcurrentFields(stripNormalizedCollections(base), stripNormalizedCollections(local), stripNormalizedCollections(remote));
+  return merged.conflicts.length ? null : inheritProjectWriteOrigin(local, mergeProjectMetadata(local, merged.value));
+}
+
 /**
  * Aplica somente os campos guardados em `projects.data_json`, preservando as
  * coleções normalizadas que a tela atual já mantém em memória. Eventos da
@@ -371,7 +378,7 @@ export function mergeProjectMetadata(current: Project, incoming: Project): Proje
       custodyTerms: current.warehouse?.custodyTerms ?? [],
     };
   }
-  return next;
+  return inheritProjectWriteOrigin(current, next);
 }
 
 function mergeCloudSnapshot(
@@ -1021,10 +1028,10 @@ export function mergeHydratedProjectCollections(
     for (const phase of hydrated.phases ?? []) collectTaskLogs(phase.tasks ?? [], logsByTask);
     next.phases = (current.phases ?? []).map(phase => mapPhaseTasks(phase, logsByTask, true));
   }
-  return next;
+  return inheritProjectWriteOrigin(current, next);
 }
 
-function mergeRowsById<T>(baseline: Map<string, T>, local: Map<string, T>, remote: Map<string, T>): Map<string, T> | null {
+function mergeRowsById<T>(baseline: Map<string, T>, local: Map<string, T>, remote: Map<string, T>, mergeFields = true): Map<string, T> | null {
   const merged = new Map<string, T>();
   const ids = new Set([...baseline.keys(), ...remote.keys(), ...local.keys()]);
   for (const id of ids) {
@@ -1033,14 +1040,20 @@ function mergeRowsById<T>(baseline: Map<string, T>, local: Map<string, T>, remot
     const incoming = remote.get(id);
     const localChanged = !shallowEqualJSON(before, edited);
     const remoteChanged = !shallowEqualJSON(before, incoming);
-    if (localChanged && remoteChanged && !shallowEqualJSON(edited, incoming)) return null;
+    if (localChanged && remoteChanged && !shallowEqualJSON(edited, incoming)) {
+      if (!mergeFields) return null;
+      const result = mergeConcurrentFields(before, edited, incoming);
+      if (result.conflicts.length) return null;
+      if (result.value !== undefined) merged.set(id, result.value);
+      continue;
+    }
     const chosen = localChanged ? edited : incoming;
     if (chosen !== undefined) merged.set(id, chosen);
   }
   return merged;
 }
 
-/** Mescla alterações de IDs distintos; duas edições do mesmo registro exigem decisão humana. */
+/** Mescla IDs e campos independentes; colisões preservam o rascunho para aviso ao usuário. */
 export function mergeProjectRecordsThreeWay(
   baseline: Project,
   local: Project,
@@ -1063,12 +1076,13 @@ export function mergeProjectRecordsThreeWay(
       before[key] as Map<string, unknown>,
       edited[key] as Map<string, unknown>,
       incoming[key] as Map<string, unknown>,
+      !['auditLogs', 'stockMovements', 'materialPriceHistory'].includes(collection),
     );
     if (!rows) return null;
     mergedMaps.set(collection, rows);
   }
   const rows = <T,>(key: ProjectCollectionKey) => [...(mergedMaps.get(key)?.values() ?? [])] as T[];
-  const result = mergeHydratedProjectCollections(local, remote, collections);
+  const result = inheritProjectWriteOrigin(local, mergeHydratedProjectCollections(local, remote, collections));
   if (selected.has('dailyReports')) result.dailyReports = rows<DailyReport>('dailyReports');
   if (selected.has('measurements')) result.measurements = rows<SavedMeasurement>('measurements');
   if (selected.has('additives')) result.additives = rows<Additive>('additives');
@@ -1180,6 +1194,15 @@ function changedRows<T>(previous: Map<string, T>, current: Map<string, T>) {
   return { upserts, deletes };
 }
 
+function changedMetadataFields(before: Project | null, next: Project) {
+  const previous = (before ?? {}) as unknown as Record<string, unknown>;
+  const proposed = next as unknown as Record<string, unknown>;
+  const keys = [...new Set([...Object.keys(previous), ...Object.keys(proposed)])]
+    .filter(key => !shallowEqualJSON(previous[key], proposed[key]));
+  return { expected: Object.fromEntries(keys.filter(key => key in previous).map(key => [key, previous[key]])),
+    next: Object.fromEntries(keys.filter(key => key in proposed).map(key => [key, proposed[key]])) };
+}
+
 function assertProductionLogIntent(
   previous: Snapshot,
   next: Snapshot,
@@ -1270,6 +1293,7 @@ export async function syncProductionAtomically(
   expectedUpdatedAt: string,
   capture?: ProductionCaptureChange,
   onPrepared?: (args: Record<string, unknown>) => Promise<void>,
+  concurrent?: ConcurrentProjectSave,
 ): Promise<string | null> {
   assertProjectDeletionSafety(project);
   const previous = snapshots.get(project.id);
@@ -1304,7 +1328,41 @@ export async function syncProductionAtomically(
   const startedAt = Date.now();
   const recordCount = chapters.upserts.length + chapters.deletes.length + tasks.upserts.length
     + tasks.deletes.length + logs.upserts.length + logs.deletes.length + audit.upserts.length;
-  if (recordCount > 500 && !deleting) return null;
+  if (recordCount > 500 && !deleting && !concurrent) return null;
+  if (concurrent) {
+    const rows = <T,>(table: string, before: Map<string, T>, diff: ReturnType<typeof changedRows<T>>,
+      convert: (id: string, row: T) => Record<string, unknown>): ProjectFieldBatch => ({ table,
+      upserts: diff.upserts.map(({ id, row }) => ({ id, row: convert(id, row),
+        expected: before.has(id) ? convert(id, before.get(id)!) : null })),
+      deletes: diff.deletes.map(id => ({ id, expected: convert(id, before.get(id)!) })),
+    });
+    let request: ProjectFieldRequest = { domain: 'production',
+      ...(projectWriteOrigin(project) === 'gantt' ? { origin: 'gantt' } : {}),
+      ...(metadataChanged ? { metadata: changedMetadataFields(previous.projectData, slim) } : {}),
+      changes: [rows('eap_chapters', previous.chapters, chapters, (id, row) => ({ id, ...row })),
+        rows('tasks', previous.tasks, tasks, (id, row) => ({ id, ...row })),
+        rows('task_daily_logs', previous.taskLogs, logs, (id, row) => ({ id, task_id: row.taskId,
+          log_date: row.log.measurementPeriod ? null : row.log.date, data: row.log }))],
+      audits: audit.upserts.map(({ id, row }) => ({ id, data: row })),
+    };
+    if (capture) {
+      request = capture.recovering && capture.rpcArgs?.p_field_request
+        ? capture.rpcArgs.p_field_request as ProjectFieldRequest
+        : { ...request, capture: { planId: capture.before.id, captureId: capture.captureId,
+          expected: { measures: capture.before.measures, scales: capture.before.scales },
+          next: { measures: capture.after.measures, scales: capture.after.scales } } };
+      await onPrepared?.({ p_field_request: request });
+      return saveConcurrentProject(project, organizationId, request, { ...concurrent, onReceipt: receipt => {
+        if (!receipt.capture || receipt.capture.planId !== capture.before.id || !Number.isSafeInteger(receipt.capture.revision)) {
+          throw new Error('A nuvem não confirmou a planta. A tentativa continua preservada.');
+        }
+        capture.after.measures = receipt.capture.measures as typeof capture.after.measures;
+        capture.after.scales = receipt.capture.scales as typeof capture.after.scales;
+        capture.after.cloudRevision = receipt.capture.revision;
+      } }, previous.loadedCollections);
+    }
+    return saveConcurrentProject(project, organizationId, request, concurrent, previous.loadedCollections);
+  }
   const args = capture?.recovering && capture.rpcArgs ? capture.rpcArgs : {
     p_project_id: project.id,
     p_organization_id: organizationId,
@@ -1346,6 +1404,139 @@ export async function syncProductionAtomically(
 }
 
 type NormalizedDomain = 'measurement' | 'additive' | 'materials' | 'costs';
+export interface ConcurrentProjectSave {
+  actorId: string;
+  onReceipt?: (receipt: ProjectFieldReceipt) => void;
+  onConfirmed: (project: Project) => void;
+}
+
+/** Apply only returned records; untouched rows retain their object identities. */
+export function applyProjectFieldReceipt(project: Project, receipt: ProjectFieldReceipt): Project {
+  let result = mergeProjectMetadata(project, receipt.metadata as Project);
+  const batches = new Map(receipt.changes.map(batch => [batch.table, batch]));
+  const replace = <T extends { id: string }>(table: string, current: T[]): T[] => {
+    const batch = batches.get(table);
+    if (!batch || !batch.upserts.length && !batch.deletes.length) return current;
+    const deleted = new Set(batch.deletes), rows = new Map(batch.upserts.map(row => [String(row.id), row.data as T]));
+    const updated = current.flatMap(row => deleted.has(row.id) ? [] : [rows.get(row.id) ?? row]);
+    const ids = new Set(updated.map(row => row.id));
+    for (const [id, row] of rows) if (!ids.has(id)) updated.push(row);
+    return updated;
+  };
+  result = { ...result, measurements: replace('measurements', project.measurements ?? []),
+    additives: replace('additives', project.additives ?? []), budgetItems: replace('budget_items', project.budgetItems ?? []),
+    materialComparisons: replace('material_comparisons', project.materialComparisons ?? []),
+    analyticCompositions: replace('analytic_compositions', project.analyticCompositions ?? []),
+    materialPriceHistory: replace('material_price_history', project.materialPriceHistory ?? []),
+    subcontracts: replace('subcontracts', project.subcontracts ?? []) };
+  if (['eap_chapters', 'tasks', 'task_daily_logs'].some(table => batches.has(table))) {
+    const originalTasks = new Map<string, Task>();
+    const remember = (tasks: Task[]) => tasks.forEach(task => { originalTasks.set(task.id, task); remember(task.children ?? []); });
+    project.phases.forEach(phase => remember(phase.tasks));
+    const snapshot = buildSnapshot(project, ['eapChapters', 'tasks', 'taskDailyLogs']);
+    for (const [table, map] of [['eap_chapters', snapshot.chapters], ['tasks', snapshot.tasks]] as const) {
+      const batch = batches.get(table);
+      if (!batch) continue;
+      batch.deletes.forEach(id => map.delete(id));
+      for (const row of batch.upserts) (map as Map<string, unknown>).set(String(row.id), row);
+    }
+    const logs = batches.get('task_daily_logs');
+    logs?.deletes.forEach(id => snapshot.taskLogs.delete(id));
+    logs?.upserts.forEach(row => snapshot.taskLogs.set(String(row.id), { taskId: String(row.task_id), log: row.data as DailyProductionLog }));
+    const children = (parentId: string | null, chapterId: string, ancestors = new Set<string>()): Task[] => [...snapshot.tasks]
+      .filter(([, row]) => row.chapter_id === chapterId && row.parent_task_id === parentId)
+      .sort((a, b) => a[1].order_index - b[1].order_index).map(([id, row]) => {
+        if (ancestors.has(id)) throw new Error('A nuvem retornou uma hierarquia inválida.');
+        const descendants = children(id, chapterId, new Set(ancestors).add(id));
+        const task = { ...(row.data as Task), id,
+          dailyLogs: [...snapshot.taskLogs.values()].filter(log => log.taskId === id).map(log => log.log) };
+        if (descendants.length) task.children = descendants; else delete task.children;
+        const original = originalTasks.get(id);
+        return original && shallowEqualJSON(original, task) ? original : task;
+      });
+    result.phases = [...snapshot.chapters].sort((a, b) => a[1].order_index - b[1].order_index).map(([id, row]) => {
+      const phase = { ...(row.data as Phase), id, order: row.order_index, parentId: row.parent_id ?? undefined, tasks: children(null, id) };
+      const original = project.phases.find(value => value.id === id);
+      return original && shallowEqualJSON(original, phase) ? original : phase;
+    });
+  }
+  return inheritProjectWriteOrigin(project, result);
+}
+
+async function saveConcurrentProject(project: Project, organizationId: string, request: ProjectFieldRequest,
+  options: ConcurrentProjectSave, loaded: Set<ProjectCollectionKey>): Promise<string> {
+  const receipt = await commitProjectFields(project.id, organizationId, options.actorId, request, received => {
+    options.onReceipt?.(received);
+    const accepted = applyProjectFieldReceipt(project, received);
+    snapshots.set(project.id, buildSnapshot(accepted, [...loaded]));
+    options.onConfirmed(accepted);
+  }, project);
+  return receipt.updatedAt;
+}
+
+export async function syncProjectMetadataAtomically(project: Project, organizationId: string, options: ConcurrentProjectSave): Promise<string> {
+  const before = snapshots.get(project.id);
+  if (!before?.projectData) throw new ProjectSnapshotUnavailableError();
+  const after = buildSaveSnapshot(project, before);
+  let changed = false;
+  for (const key of Object.values(SNAPSHOT_MAP_BY_COLLECTION)) {
+    const diff = changedRows(before[key] as Map<string, unknown>, after[key] as Map<string, unknown>);
+    if (diff.upserts.length || diff.deletes.length) changed = true;
+  }
+  if (changed) return syncCombinedFields(project, organizationId, options, before, after);
+  return saveConcurrentProject(project, organizationId, { domain: 'metadata', changes: [], audits: [],
+    metadata: changedMetadataFields(before.projectData, stripNormalizedCollections(project)) }, options, before.loadedCollections);
+}
+
+async function syncCombinedFields(project: Project, organizationId: string, options: ConcurrentProjectSave,
+  before: ReturnType<typeof buildSnapshot>, after: ReturnType<typeof buildSnapshot>): Promise<string> {
+  if (['gantt','additiveSchedule'].includes(projectWriteOrigin(project) ?? '')) throw new Error('Confirme a alteração de planejamento antes de operar outra área.');
+  const operations = new Map<string, ProjectFieldRequest>();
+  const operation = (domain: string) => {
+    if (!operations.has(domain)) operations.set(domain, { domain, changes: [], audits: [] });
+    return operations.get(domain)!;
+  };
+  const logs = changedRows(before.taskLogs, after.taskLogs), audits = changedRows(before.auditLogs, after.auditLogs);
+  assertProductionLogIntent(before, after, logs, audits);
+  if (audits.deletes.length || audits.upserts.some(({ id }) => before.auditLogs.has(id))) throw new Error('O histórico confirmado não pode ser substituído.');
+  const additive = changedRows(before.additives, after.additives);
+  for (const collection of new Set<ProjectCollectionKey>([...before.loadedCollections, 'auditLogs'])) {
+    if (collection === 'auditLogs') continue;
+    const key = SNAPSHOT_MAP_BY_COLLECTION[collection];
+    const diff = changedRows(before[key] as Map<string, unknown>, after[key] as Map<string, unknown>);
+    if (!diff.upserts.length && !diff.deletes.length) continue;
+    const productionTable = ({ eapChapters: 'eap_chapters', tasks: 'tasks', taskDailyLogs: 'task_daily_logs' } as Partial<Record<ProjectCollectionKey, string>>)[collection];
+    const normalized = collection as DomainCollection;
+    const table = productionTable ?? DOMAIN_TABLES[normalized];
+    if (!table) throw new Error('Esta área exige uma operação própria. A tentativa foi preservada.');
+    const domain = productionTable ? 'production' : normalized === 'measurements' ? 'measurement'
+      : normalized === 'subcontracts' ? 'costs' : normalized === 'additives' || (additive.upserts.length + additive.deletes.length > 0 && normalized !== 'materialComparisons') ? 'additive' : 'materials';
+    const convert = (id: string, value: unknown): Record<string, unknown> => {
+      if (collection === 'taskDailyLogs') {
+        const row = value as { taskId: string; log: DailyProductionLog };
+        return { id, task_id: row.taskId, log_date: row.log.measurementPeriod ? null : row.log.date, data: row.log };
+      }
+      return productionTable ? { id, ...(value as Record<string, unknown>) } : domainRow(normalized, id, value);
+    };
+    operation(domain).changes.push({ table,
+      upserts: diff.upserts.map(({ id, row }) => ({ id, row: convert(id, row), expected: before[key].has(id) ? convert(id, before[key].get(id)) : null })),
+      deletes: diff.deletes.map(id => ({ id, expected: convert(id, before[key].get(id)) })),
+    });
+  }
+  for (const { id, row } of audits.upserts) {
+    const domain = row.entityType === 'task' ? 'production' : row.entityType === 'measurement' ? 'measurement'
+      : row.entityType === 'additive' ? 'additive' : row.entityType === 'subcontract' ? 'costs'
+        : row.entityType === 'project' ? (operations.has('production') ? 'production' : 'materials') : null;
+    if (!domain) throw new Error('A auditoria exige a operação específica da área.');
+    operation(domain).audits.push({ id, data: row });
+  }
+  if (operations.has('measurement')) assertMeasurementIntent(before, changedRows(before.measurements, after.measurements), audits);
+  operation('metadata').metadata = changedMetadataFields(before.projectData, stripNormalizedCollections(project));
+  const order = ['production','additive','materials','measurement','costs','metadata'];
+  return saveConcurrentProject(project, organizationId, { domain: 'combined', changes: [], audits: [],
+    operations: order.flatMap(domain => operations.has(domain) ? [operations.get(domain)!] : []) }, options, before.loadedCollections);
+}
+
 type DomainCollection = 'measurements' | 'additives' | 'budgetItems' | 'materialComparisons'
   | 'analyticCompositions' | 'materialPriceHistory' | 'subcontracts';
 
@@ -1386,6 +1577,7 @@ function domainRow(collection: DomainCollection, id: string, value: unknown): Re
 /** Confirma Medição, Aditivo, Materiais ou Custos sem salvar outras coleções. */
 export async function syncNormalizedDomainAtomically(
   project: Project, slim: Project, organizationId: string, expectedUpdatedAt: string,
+  concurrent?: ConcurrentProjectSave,
 ): Promise<string | null> {
   assertProjectDeletionSafety(project);
   const previous = snapshots.get(project.id);
@@ -1420,9 +1612,24 @@ export async function syncNormalizedDomainAtomically(
   });
   const recordCount = batches.reduce((sum, batch) => sum + batch.upserts.length + batch.deletes.length, 0)
     + (audit?.upserts.length ?? 0);
-  if ((recordCount === 0 && shallowEqualJSON(previous.projectData, slim)) || recordCount > 500) return null;
+  if ((recordCount === 0 && shallowEqualJSON(previous.projectData, slim)) || (recordCount > 500 && !concurrent)) return null;
 
   if (domain === 'measurement') assertMeasurementIntent(previous, changedRows(previous.measurements, next.measurements), changedRows(previous.auditLogs, next.auditLogs));
+  if (concurrent) {
+    return saveConcurrentProject(project, organizationId, { domain,
+      ...(projectWriteOrigin(project) === 'additiveSchedule' ? { origin: 'additiveSchedule' } : {}),
+      ...(!shallowEqualJSON(previous.projectData, slim) ? { metadata: changedMetadataFields(previous.projectData, slim) } : {}),
+      changes: DOMAIN_COLLECTIONS[domain].flatMap(collection => {
+        const diff = changes.get(collection);
+        const before = previous[SNAPSHOT_MAP_BY_COLLECTION[collection]] as Map<string, unknown>;
+        return diff ? [{ table: DOMAIN_TABLES[collection],
+          upserts: diff.upserts.map(({ id, row }) => ({ id, row: domainRow(collection, id, row),
+            expected: before.has(id) ? domainRow(collection, id, before.get(id)) : null })),
+          deletes: diff.deletes.map(id => ({ id, expected: domainRow(collection, id, before.get(id)) })),
+        }] : [];
+      }), audits: (audit?.upserts ?? []).map(({ id, row }) => ({ id, data: row })),
+    }, concurrent, previous.loadedCollections);
+  }
   const startedAt = Date.now();
   const { data, error } = await supabase.rpc((projectWriteOrigin(project) === 'additiveSchedule' ? 'save_additive_planning_domain' : 'save_normalized_domain') as never, {
     p_project_id: project.id, p_organization_id: organizationId, p_expected_updated_at: expectedUpdatedAt,

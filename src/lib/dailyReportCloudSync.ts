@@ -55,13 +55,19 @@ function mergeValue(base: unknown, local: unknown, remote: unknown, path: string
       const before = baseById.get(id);
       const localItem = localById.get(id);
       const remoteItem = remoteById.get(id);
-      if (!before) return [remoteItem ?? localItem];
+      if (!before) {
+        if (remoteItem && localItem && !same(remoteItem, localItem)) conflicts.push(`${path}.${id}`);
+        return [remoteItem ?? localItem];
+      }
       if (!localItem) {
         if (!remoteItem || same(remoteItem, before)) return [];
         conflicts.push(`${path}.${id}`);
         return [remoteItem];
       }
-      if (!remoteItem) return [localItem];
+      if (!remoteItem) {
+        if (!same(localItem, before)) conflicts.push(`${path}.${id}`);
+        return [];
+      }
       return [mergeValue(before, localItem, remoteItem, `${path}.${id}`, conflicts)];
     });
   }
@@ -144,11 +150,13 @@ export async function saveOpenDailyReport(
   local: DailyReport,
 ): Promise<DailyReportSaveResult> {
   let remote = await loadDailyReport(projectId, local.date);
+  let previouslyPresent = !!remote || !isDailyReportEmpty(base);
   const allConflicts: string[] = [];
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     if (!remote) {
       if (isDailyReportEmpty(local)) return { report: null, conflicts: allConflicts };
+      if (previouslyPresent) return { report: null, conflicts: [...allConflicts, 'registro'] };
       const { data, error } = await supabase
         .from('daily_reports')
         .insert({ id: local.id, project_id: projectId, report_date: local.date, data: local as unknown as Json })
@@ -159,6 +167,7 @@ export async function saveOpenDailyReport(
       remote = await loadDailyReport(projectId, local.date);
       if (!remote) throw error ?? new Error('Não foi possível criar o Diário.');
     }
+    previouslyPresent = true;
 
     // Uma reabertura explícita parte de uma versão-base já concluída. O banco
     // valida que apenas o Proprietário pode executá-la.

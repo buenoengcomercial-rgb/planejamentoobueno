@@ -6,6 +6,7 @@ import type { AppView, DailyReport, Project } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
 import { supabase } from '@/integrations/supabase/client';
 import { registerPendingForm } from '@/lib/pendingFormNavigation';
+import { ProjectFieldConflictError, pendingProjectFieldOperations } from '@/lib/projectFieldCommit';
 import {
   projectDraftKey,
   readStoredProjectDraft,
@@ -498,7 +499,7 @@ describe('segurança de sincronização da página da obra', () => {
     renderIndex();
     expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
-    await waitFor(() => expect(mocks.upsertCloudProject).toHaveBeenCalledWith(expect.objectContaining({ auditLogs: expect.arrayContaining([oldLog, newLog]) }), 'org-1', expect.anything()));
+    await waitFor(() => expect(mocks.upsertCloudProject).toHaveBeenCalledWith(expect.objectContaining({ auditLogs: expect.arrayContaining([oldLog, newLog]) }), 'org-1', expect.anything(), expect.any(Function)));
   });
   it('oferece retry após falha inicial sem apagar dados nem salvar automaticamente', async () => {
     mocks.loadCloudProjectRecord.mockRejectedValueOnce(new Error('Servidor indisponível'));
@@ -716,8 +717,28 @@ describe('segurança de sincronização da página da obra', () => {
       }),
       'org-1',
       'cloud-v2',
+      expect.any(Function),
     );
     expect(readStoredProjectDraft(local.id)).toBeNull();
+  });
+
+  it('conflito de campo preserva a operação e mantém a área disponível sem descarte da obra', async () => {
+    renderIndex();
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+    const request = { domain: 'metadata', changes: [], audits: [], metadata: { expected: { name: 'Obra' }, next: { name: 'Tentativa' } } };
+    localStorage.setItem('obraplanner:field-operations:owner-1:project-1:op', JSON.stringify({ operationId: 'op', request }));
+    mocks.upsertCloudProject.mockRejectedValueOnce(new ProjectFieldConflictError('owner-1', 'project-1', 'op', request, 'Conflito no nome'));
+    mocks.loadCloudProjectRecord.mockResolvedValue(cloudRecord({ ...makeProject(), name: 'Primeira confirmação' }, 'cloud-v3'));
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar projeto' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+    expect(screen.getByTestId('project-name')).toHaveTextContent('Primeira confirmação');
+    expect(screen.queryByText('Conflito de cópia local')).not.toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'Operações em conflito' })).toBeInTheDocument();
+    expect(pendingProjectFieldOperations('owner-1', 'project-1')[0].conflict?.attemptedProject).toMatchObject({ name: 'Alteração geral pendente' });
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar projeto' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+    expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(2);
   });
 
   it('preserva como conflito um rascunho recuperável antigo sem escopo de coleções', async () => {

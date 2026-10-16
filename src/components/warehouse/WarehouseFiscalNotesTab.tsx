@@ -1,3 +1,4 @@
+import { useWarehouseEditBase } from '@/hooks/useWarehouseEditBase';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Project,
@@ -93,7 +94,7 @@ interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
   onCommitProject?: (next: Project) => Promise<void>;
-  onCommitWarehouseScoped?: (next: Project, domain: 'receipt') => Promise<Project>;
+  onCommitWarehouseScoped?: (next: Project, domain: 'receipt', expectedBase?: Project) => Promise<Project>;
   canManage?: boolean;
   canReviewCosts?: boolean;
   canEditPosted?: boolean;
@@ -508,8 +509,13 @@ export default function WarehouseFiscalNotesTab({ project, onProjectChange, onCo
   const fileRef = useRef<HTMLInputElement>(null);
   const archivedLegacyDraftIdsRef = useRef(new Set<string>());
 
+  const editBase = useWarehouseEditBase(project, selected?.id || (uploadOpen || packagingCorrection || descriptionCorrection || equivalenceFor ? 'editing' : null));
   const commitReceipt = async (next: Project) => {
-    if (onCommitWarehouseScoped) return onCommitWarehouseScoped(next, 'receipt');
+    if (onCommitWarehouseScoped) {
+      const accepted = await onCommitWarehouseScoped(next, 'receipt', editBase.project);
+      editBase.confirmed(accepted);
+      return accepted;
+    }
     if (import.meta.env.MODE === 'test') {
       if (onCommitProject) await onCommitProject(next);
       else onProjectChange(next);

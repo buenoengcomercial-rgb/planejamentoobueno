@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { stageWarehouseOperation, rejectWarehouseOperation } from './warehouseOperationOutbox';
 import type {
   AuditLog,
   Project,
@@ -30,6 +31,8 @@ export interface WarehouseCloudOperation {
 interface WarehouseOperationResult {
   requisition?: WarehouseRequisition | null;
   movements?: WarehouseMovement[];
+  deletedMovementIds?: string[];
+  movementsComplete?: boolean;
   auditLogs?: AuditLog[];
   committedAt?: string;
   projectUpdatedAt?: string;
@@ -260,6 +263,7 @@ export async function commitWarehouseOperation(
   before: Project,
   after: Project,
   operation: WarehouseCloudOperation,
+  actorId?: string,
 ): Promise<WarehouseCloudCommitResult> {
   if (!navigator.onLine) {
     throw new Error('Conecte-se à internet para confirmar a operação. Nenhuma baixa foi realizada.');
@@ -287,25 +291,20 @@ export async function commitWarehouseOperation(
     fn: string,
     args: Record<string, unknown>,
   ) => Promise<{ data: unknown; error: { code?: string; message?: string; details?: string } | null }>;
-  const rpcName = operation.type === 'supplement_correction'
-    ? 'commit_warehouse_supplement_correction'
-    : operation.type === 'correction' || operation.type === 'cancellation'
-      ? 'commit_warehouse_requisition_adjustment'
-      : 'commit_warehouse_operation';
-  const { data, error } = await rpc(rpcName, {
+  const args = {
     p_project_id: before.id,
     p_operation_key: operation.operationKey,
-    p_requisition_id: operation.requisitionId,
-    ...(operation.type === 'supplement_correction'
-      ? { p_supplement_id: operation.supplementId }
-      : { p_operation_type: operation.type }),
-    p_expected_requisition: expectedRequisition as unknown as Json,
-    p_requisition: nextRequisition as unknown as Json,
-    p_upsert_movements: movementUpserts as unknown as Json,
-    p_delete_movement_ids: movementDeletes as unknown as Json,
-    p_audit_logs: auditUpserts as unknown as Json,
-  });
-  if (error) throw warehouseCommitError(error, operation.type);
+    p_request: { type: operation.type, requisitionId: operation.requisitionId,
+      ...(operation.supplementId ? { supplementId: operation.supplementId } : {}),
+      expected: expectedRequisition, requisition: nextRequisition,
+      movements: movementUpserts, deletes: movementDeletes, audits: auditUpserts } as unknown as Json,
+  };
+  stageWarehouseOperation(actorId, before.id, operation.operationKey, 'commit_warehouse_requisition_v2', args);
+  const { data, error } = await rpc('commit_warehouse_requisition_v2', args);
+  if (error) {
+    rejectWarehouseOperation(actorId, before.id, operation.operationKey, error);
+    throw warehouseCommitError(error, operation.type);
+  }
 
   const result = (data ?? {}) as WarehouseOperationResult;
   if (
@@ -323,6 +322,13 @@ export async function commitWarehouseOperation(
 
   const returnedMovementById = new Map((result.movements ?? []).map(row => [row.id, row]));
   const returnedAuditById = new Map((result.auditLogs ?? []).map(row => [row.id, row]));
+  const deleted = new Set(result.deletedMovementIds ?? []);
+  if (result.movementsComplete) warehouse.movements.forEach(row => {
+    if (row.requisitionId === operation.requisitionId && !returnedMovementById.has(row.id)) deleted.add(row.id);
+  });
+  const movements = warehouse.movements.filter(row => !deleted.has(row.id)).map(row => returnedMovementById.get(row.id) ?? row);
+  const existingMovements = new Set(movements.map(row => row.id));
+  (result.movements ?? []).forEach(row => { if (!existingMovements.has(row.id)) movements.push(row); });
   confirmed = {
     ...confirmed,
     warehouse: {
@@ -330,7 +336,7 @@ export async function commitWarehouseOperation(
       requisitions: canonicalRequisition
         ? warehouse.requisitions.map(row => row.id === operation.requisitionId ? canonicalRequisition : row)
         : warehouse.requisitions.filter(row => row.id !== operation.requisitionId),
-      movements: warehouse.movements.map(row => returnedMovementById.get(row.id) ?? row),
+      movements,
     },
     auditLogs: (confirmed.auditLogs ?? []).map(row => returnedAuditById.get(row.id) ?? row),
   };
@@ -338,6 +344,7 @@ export async function commitWarehouseOperation(
   const affectedMovementIds = Array.from(new Set([
     ...movementUpserts.map(row => row.id),
     ...movementDeletes,
+    ...deleted,
     ...(result.movements ?? []).map(row => row.id),
   ]));
   const affectedAuditIds = Array.from(new Set([

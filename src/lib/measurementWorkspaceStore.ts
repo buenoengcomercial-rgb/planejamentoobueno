@@ -3,7 +3,7 @@ import type { MeasurementCapturePatch } from './measurementCapturePatch';
 import { prepareIncorporation, verifyIncorporationBackup, type IncorporationBackup } from './measurementIncorporation';
 import { measurementCatalogPlans } from './measurementCloudCodec';
 
-export interface WorkspaceDraft { projectId: string; measurementId: string; serviceId: string; rowId: string; changes: Record<string, unknown> }
+export interface WorkspaceDraft { projectId: string; measurementId: string; serviceId: string; rowId: string; changes: Record<string, unknown>; baseRevision?: number; expectedEntry?: MeasuredEntry }
 export interface PendingMeasurementSave { baseRevision: number; candidate: MeasurementWorkspace; archivedAt?: string; compact?: PendingMeasurementDeltaSave }
 export interface PendingMeasurementEntrySave {
   format: 'entry-patch-v1'; projectId: string; baseRevision: number; operationId: string;
@@ -29,6 +29,7 @@ export interface MeasurementLoadState {
   error?: { kind: 'network' | 'service' | 'authorization' | 'timeout'; message: string };
 }
 export interface MeasurementRepository {
+  concurrentEntries?: boolean;
   savedLabel?: string;
   loadedOffline?(): boolean;
   loadState?(): MeasurementLoadState;

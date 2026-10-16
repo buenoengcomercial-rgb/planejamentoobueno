@@ -221,29 +221,31 @@ export async function createMemberWithPassword(
   return { ok: false, reason: 'error', message: response?.error };
 }
 
-export async function updateMemberRole(memberId: string, role: OrgRole): Promise<void> {
-  const { error } = await supabase
+export async function updateMemberRole(memberId: string, role: OrgRole, expectedRole: OrgRole): Promise<void> {
+  const { data, error } = await supabase
     .from('organization_members')
     .update({ role })
-    .eq('id', memberId);
+    .eq('id', memberId).eq('role', expectedRole).select('id').maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error('A função mudou ou a gravação não foi autorizada. Foi mantida a primeira confirmação.');
 }
 
-export async function updateMemberStatus(memberId: string, status: MemberStatus): Promise<void> {
-  const { error } = await supabase
+export async function updateMemberStatus(memberId: string, status: MemberStatus, expectedStatus: MemberStatus): Promise<void> {
+  const { data, error } = await supabase
     .from('organization_members')
     .update({ status })
-    .eq('id', memberId);
+    .eq('id', memberId).eq('status', expectedStatus).select('id').maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error('O status mudou ou a gravação não foi autorizada. Foi mantida a primeira confirmação.');
 }
 
 /** Atualiza o nome operacional do membro e a identidade usada nos próximos registros de auditoria. */
-export async function updateMemberName(organizationId: string, userId: string, name: string): Promise<void> {
+export async function updateMemberName(organizationId: string, userId: string, name: string, expectedName: string | null): Promise<void> {
   const cleanName = name.trim();
   if (!cleanName) throw new Error('Informe o nome do usuário');
-  const { data, error } = await supabase.functions.invoke('admin-update-member-name', {
-    body: { organization_id: organizationId, user_id: userId, name: cleanName },
-  });
+  const { data, error } = await supabase.rpc('update_member_name_v2' as never, {
+    p_organization_id: organizationId, p_user_id: userId, p_name: cleanName, p_expected_name: expectedName,
+  } as never);
   if (error || !(data as { ok?: boolean } | null)?.ok) {
     throw new Error((data as { error?: string } | null)?.error || error?.message || 'Não foi possível atualizar o nome');
   }

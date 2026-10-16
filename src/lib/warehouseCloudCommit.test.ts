@@ -74,15 +74,14 @@ describe('confirmação transacional do Almoxarifado', () => {
 
     expect(rpcMock).toHaveBeenCalledTimes(1);
     expect(rpcMock.mock.contexts[0]).toBe(supabaseMock);
-    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_operation');
+    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_requisition_v2');
     expect(rpcMock.mock.calls[0][1]).toMatchObject({
       p_project_id: 'project-1',
       p_operation_key: 'attempt-1',
-      p_operation_type: 'delivery',
-      p_expected_requisition: null,
+      p_request: { type: 'delivery', expected: null },
     });
-    expect(rpcMock.mock.calls[0][1].p_upsert_movements).toHaveLength(1);
-    expect(rpcMock.mock.calls[0][1].p_audit_logs).toHaveLength(1);
+    expect(rpcMock.mock.calls[0][1].p_request.movements).toHaveLength(1);
+    expect(rpcMock.mock.calls[0][1].p_request.audits).toHaveLength(1);
     expect(confirmed.project.warehouse!.requisitions[0].number).toBe('REQ-2026-0116');
     expect(confirmed.project.dailyReports?.[0].observations).toContain('REQ-2026-0116');
     expect(confirmed).toMatchObject({ warehouseVersion: 7, projectUpdatedAt: '2026-09-12T14:00:00.100Z' });
@@ -154,7 +153,7 @@ describe('confirmação transacional do Almoxarifado', () => {
       type: 'delivery', requisitionId: provisional.requisitionId, operationKey: 'attempt-legacy-audit',
     });
 
-    expect(rpcMock.mock.calls[0][1].p_audit_logs).toEqual([newAudit]);
+    expect(rpcMock.mock.calls[0][1].p_request.audits).toEqual([newAudit]);
     expect(confirmed.project.auditLogs).toHaveLength(3);
     expect(confirmed.project.warehouse!.movements.filter(row => row.requisitionId === requisition.id)).toHaveLength(1);
   });
@@ -225,8 +224,8 @@ describe('confirmação transacional do Almoxarifado', () => {
     await commitWarehouseOperation(delivered.project, corrected, {
       type: 'correction', requisitionId: requisition.id, operationKey: 'correction-1',
     });
-    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_requisition_adjustment');
-    expect(rpcMock.mock.calls[0][1]).toMatchObject({ p_operation_type: 'correction', p_delete_movement_ids: [] });
+    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_requisition_v2');
+    expect(rpcMock.mock.calls[0][1]).toMatchObject({ p_request: { type: 'correction', deletes: [] } });
 
     const cancelled = cancelDeliveredRequisition(corrected, requisition.id, {
       reason: 'Retirada não entregue', materialsConfirmedInWarehouse: true, idempotencyKey: 'cancellation-1',
@@ -246,9 +245,9 @@ describe('confirmação transacional do Almoxarifado', () => {
     await commitWarehouseOperation(corrected, cancelled, {
       type: 'cancellation', requisitionId: requisition.id, operationKey: 'cancellation-1',
     });
-    expect(rpcMock.mock.calls[1][0]).toBe('commit_warehouse_requisition_adjustment');
-    expect(rpcMock.mock.calls[1][1]).toMatchObject({ p_operation_type: 'cancellation', p_delete_movement_ids: [] });
-    expect(rpcMock.mock.calls[1][1].p_upsert_movements).toEqual([
+    expect(rpcMock.mock.calls[1][0]).toBe('commit_warehouse_requisition_v2');
+    expect(rpcMock.mock.calls[1][1]).toMatchObject({ p_request: { type: 'cancellation', deletes: [] } });
+    expect(rpcMock.mock.calls[1][1].p_request.movements).toEqual([
       expect.objectContaining({ type: 'devolucao', originType: 'cancellation' }),
     ]);
   });
@@ -296,16 +295,15 @@ describe('confirmação transacional do Almoxarifado', () => {
       operationKey: 'supplement-correction-1',
     });
 
-    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_supplement_correction');
+    expect(rpcMock.mock.calls[0][0]).toBe('commit_warehouse_requisition_v2');
     expect(rpcMock.mock.calls[0][1]).toMatchObject({
       p_project_id: 'project-1',
       p_operation_key: 'supplement-correction-1',
-      p_requisition_id: delivered.requisitionId,
-      p_supplement_id: complemented.supplementId,
+      p_request: { type: 'supplement_correction', requisitionId: delivered.requisitionId, supplementId: complemented.supplementId },
     });
-    expect(rpcMock.mock.calls[0][1]).not.toHaveProperty('p_operation_type');
-    expect(rpcMock.mock.calls[0][1].p_audit_logs).toEqual([correctionAudit]);
-    expect(rpcMock.mock.calls[0][1].p_upsert_movements).toHaveLength(3);
+    expect(rpcMock.mock.calls[0][1].p_request.type).toBe('supplement_correction');
+    expect(rpcMock.mock.calls[0][1].p_request.audits).toEqual([correctionAudit]);
+    expect(rpcMock.mock.calls[0][1].p_request.movements).toHaveLength(3);
     expect(confirmed.project.warehouse!.requisitions.find(row => row.id === delivered.requisitionId)?.supplements?.[0].items[0].quantity).toBe(1);
   });
 

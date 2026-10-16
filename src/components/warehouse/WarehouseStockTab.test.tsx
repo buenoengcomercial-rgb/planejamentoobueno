@@ -169,6 +169,25 @@ describe('WarehouseStockTab - documentos no histórico', () => {
     expect(onProjectChange.mock.calls[0][0].warehouse.items.find((row: { key: string }) => row.key === item.key).minStock).toBe(1800);
   });
 
+  it('preserva digitação e base do mínimo enquanto outro usuário atualiza o mesmo campo', () => {
+    const original = projectWithPurchaseHistory();
+    original.warehouse!.items[0].minStock = 1701;
+    const project = setMaterialCostClass(original, original.warehouse!.items[0], 'material');
+    const commit = vi.fn(async (next: Project, _domain: string, _base?: Project) => next);
+    const view = render(<WarehouseStockTab project={project} onProjectChange={vi.fn()} onCommitWarehouseScoped={commit} />);
+    const input = screen.getByRole('spinbutton', { name: 'Estoque mínimo de Material de teste' });
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '1800' } });
+    const remote = structuredClone(project);
+    remote.warehouse!.items[0].minStock = 1900;
+    view.rerender(<WarehouseStockTab project={remote} onProjectChange={vi.fn()} onCommitWarehouseScoped={commit} />);
+    expect(screen.getByRole('spinbutton', { name: 'Estoque mínimo de Material de teste' })).toBe(input);
+    expect(input).toHaveValue(1800);
+    fireEvent.blur(input);
+    expect(commit.mock.calls[0][2]).toBe(project);
+    expect(commit.mock.calls[0][0].warehouse!.items[0].minStock).toBe(1800);
+  });
+
   beforeAll(() => {
     vi.stubGlobal('ResizeObserver', class {
       observe() {}

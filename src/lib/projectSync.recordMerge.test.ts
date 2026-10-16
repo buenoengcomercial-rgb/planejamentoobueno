@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Project } from '@/types/project';
-import { hasProjectMetadataChanges, mergeProjectRecordsThreeWay } from '@/lib/projectSync';
+import { hasProjectMetadataChanges, mergeProjectMetadataFields, mergeProjectRecordsThreeWay } from '@/lib/projectSync';
+import { applyProjectOperation, projectWriteOrigin } from '@/lib/projectOperations';
 
 const base = {
   id: 'project-1', name: 'Obra',
@@ -18,6 +19,20 @@ const base = {
 } as Project;
 
 describe('mesclagem segura por registro', () => {
+  it('mantém a origem de planejamento após incorporar dados remotos', () => {
+    const local = applyProjectOperation('gantt', base, base, { ...base, startDate: '2026-10-16' });
+    const remote = { ...base, name: 'Nome remoto' };
+    const merged = mergeProjectMetadataFields(base, local, remote)!;
+    expect(merged).toMatchObject({ name: 'Nome remoto', startDate: '2026-10-16' });
+    expect(projectWriteOrigin(merged)).toBe('gantt');
+    expect(projectWriteOrigin(mergeProjectRecordsThreeWay(base, merged, remote, ['additives'])!)).toBe('gantt');
+  });
+  it('combina campos distintos do mesmo registro', () => {
+    const local = { ...base, additives: [{ ...base.additives![0], name: 'Nome local' }, base.additives![1]] };
+    const remote = { ...base, additives: [{ ...base.additives![0], importedAt: '2026-10-16' }, base.additives![1]] };
+    expect(mergeProjectRecordsThreeWay(base, local, remote, ['additives'])?.additives?.[0])
+      .toMatchObject({name:'Nome local',importedAt:'2026-10-16'});
+  });
   it('não confunde a ordem das propriedades JSON com alteração dos metadados', () => {
     const sameMetadata = { ...base, additives: [...base.additives!] };
     expect(hasProjectMetadataChanges(base, sameMetadata)).toBe(false);

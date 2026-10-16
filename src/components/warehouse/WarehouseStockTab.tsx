@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { useWarehouseEditBase } from '@/hooks/useWarehouseEditBase';
 import type { ElementType } from 'react';
 import type { MaterialCostClass, Project, WarehouseAuditActor, WarehouseSupplierPresentation } from '@/types/project';
 import {
@@ -28,7 +29,7 @@ import { toast } from 'sonner';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { WarehouseSectionHeader, WarehouseStatusBadge } from './WarehouseVisual';
 
-interface Props { onNewEntry?: () => void; project: Project; onProjectChange: (next: Project) => void; onCommitWarehouseScoped?: (next: Project, domain: 'catalog') => Promise<Project>; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; }
+interface Props { onNewEntry?: () => void; project: Project; onProjectChange: (next: Project) => void; onCommitWarehouseScoped?: (next: Project, domain: 'catalog', expectedBase?: Project) => Promise<Project>; auditActor?: WarehouseAuditActor; canArchive?: boolean; canDelete?: boolean; }
 
 const stockClassLabel: Record<MaterialCostClass, string> = { ...MATERIAL_COST_CLASS_LABEL, unclassified: 'Diversos' };
 const stockClassIcon: Record<MaterialCostClass, ElementType> = { material: BrickWall, labor: HardHat, equipment: Truck, unclassified: CircleSlash };
@@ -73,22 +74,26 @@ function StockLinkButton({ row, onClick, mobile = false }: { row: WarehouseStock
   return <Button size="sm" variant="outline" title={label} className={`${mobile ? 'min-h-11 w-full text-sm' : 'h-8 min-h-8 w-full px-2 text-xs'} justify-center gap-1.5 ${tone}`} onClick={onClick} aria-label={label}><Link2 className="h-3.5 w-3.5 shrink-0" /><span>{linked ? `Vínculos (${row.projectLinks.length})` : 'Vincular'}</span></Button>;
 }
 
-function StockMinimumInput({ row, onCommit }: { row: WarehouseStockOverviewRow; onCommit: (value: number) => void }) {
+function StockMinimumInput({ row, project, onCommit }: { row: WarehouseStockOverviewRow; project: Project; onCommit: (value: number, expectedBase: Project) => void }) {
   const effective = row.effectiveMinStock ?? 0;
+  const [draft, setDraft] = useState<string | null>(null);
+  const expected = useRef(project);
   const automatic = row.automaticMinStock ?? 0;
   const manualWins = row.minStock != null && row.minStock >= automatic;
   return <div className="space-y-1 text-center">
-    <input key={`${effective}:${row.minStock}`} type="number" min="0" step="any" defaultValue={effective}
+    <input type="number" min="0" step="any" value={draft ?? effective}
+      onFocus={() => { expected.current = project; setDraft(String(effective)); }}
+      onChange={event => setDraft(event.currentTarget.value)}
       aria-label={`Estoque mínimo de ${row.description}`}
       title="Limite do alerta. Usa o maior entre 30% do planejado e o mínimo manual. Apague para voltar ao automático."
       className="h-8 w-full rounded border border-border bg-background px-1 text-center text-xs tabular-nums"
       onBlur={event => {
         const raw = event.currentTarget.value;
-        if (raw !== '' && Number(raw) === effective) return;
+        if (raw !== '' && Number(raw) === effective) { setDraft(null); return; }
         const value = raw === '' ? NaN : Number(raw);
-        if (Number.isFinite(value) && value < 0) { event.currentTarget.value = String(effective); return; }
-        onCommit(value);
-        event.currentTarget.value = String(Math.max(Number.isFinite(value) ? value : 0, automatic));
+        if (Number.isFinite(value) && value < 0) { setDraft(null); return; }
+        onCommit(value, expected.current);
+        setDraft(null);
         if (Number.isFinite(value) && value < automatic) toast.info('O alerta mantém o mínimo automático de 30% do planejado.');
       }} />
     <span className="block whitespace-nowrap text-[10px] text-muted-foreground">{manualWins ? 'Manual' : automatic > 0 ? 'Auto · 30%' : 'Sem mínimo'}</span>
@@ -121,8 +126,13 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
     () => presentationFor ? computeWarehouseStockOverviewRows(project, showArchived, false) : [],
     [project, showArchived, presentationFor],
   );
-  const commitCatalog = async (next: Project) => {
-    if (onCommitWarehouseScoped) return onCommitWarehouseScoped(next, 'catalog');
+  const editBase = useWarehouseEditBase(project, linkFor ?? presentationFor ?? groupOpen);
+  const commitCatalog = async (next: Project, expectedBase = editBase.project) => {
+    if (onCommitWarehouseScoped) {
+      const accepted = await onCommitWarehouseScoped(next, 'catalog', expectedBase);
+      editBase.confirmed(accepted);
+      return accepted;
+    }
     if (import.meta.env.MODE === 'test') { onProjectChange(next); return next; }
     throw new Error('A transação segura de cadastro ainda não está disponível. Nada foi gravado.');
   };
@@ -166,8 +176,8 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
     : { key, direction: numericStockSortKeys.includes(key) ? 'desc' : 'asc' });
   const orderedClasses = sort.key === 'costClass' && sort.direction === 'desc' ? [...stockClassOrder].reverse() : stockClassOrder;
 
-  const setMin = (key: string, code: string | undefined, description: string, unit: string, min: number) => {
-    void commitCatalog(upsertItemConfig(project, { key, code, description, unit, minStock: Number.isFinite(min) ? min : undefined }))
+  const setMin = (key: string, code: string | undefined, description: string, unit: string, min: number, expectedBase: Project) => {
+    void commitCatalog(upsertItemConfig(project, { key, code, description, unit, minStock: Number.isFinite(min) ? min : undefined }), expectedBase)
       .catch(error => toast.error((error as Error).message));
   };
 
@@ -323,7 +333,7 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
                 <td className="p-1.5 text-right font-mono tabular-nums text-destructive">{r.losses.toLocaleString('pt-BR')}</td>
                 <td className={`p-1.5 text-right font-mono tabular-nums font-bold bg-primary/5 ${r.balance < 0 ? 'text-destructive' : r.underMin ? 'text-warning' : 'text-primary'}`}>{r.balance.toLocaleString('pt-BR')}</td>
                 <td className="p-1.5 bg-warning/5">
-                  {r.isPhysicalStock && r.costClass === 'material' ? <StockMinimumInput row={r} onCommit={value => setMin(r.key, r.code, r.description, r.unit, value)} /> : <span className="text-[10px] text-muted-foreground">Não se aplica</span>}
+                  {r.isPhysicalStock && r.costClass === 'material' ? <StockMinimumInput row={r} project={project} onCommit={(value, expectedBase) => setMin(r.key, r.code, r.description, r.unit, value, expectedBase)} /> : <span className="text-[10px] text-muted-foreground">Não se aplica</span>}
                 </td>
                 <td className="p-1.5 text-[10px] text-muted-foreground">{r.lastMovementDate ?? '—'}</td>
                 <td className="p-1.5 text-right font-mono text-[11px]">{r.valuationIncomplete || r.averageUnitCost == null ? 'Cálculo incompleto' : r.averageUnitCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
@@ -416,7 +426,12 @@ function SupplierPresentationDialog({ project, rows, itemKey, onSelectKey, audit
     setContent(String(rule?.contentPerFiscalUnit ?? 1));
     setStockUnit(rule?.stockUnit ?? row?.unit ?? 'PC');
   };
-  useEffect(() => { reset(null); }, [row?.key]);
+  const initialUnit = useRef(row?.unit);
+  initialUnit.current = row?.unit;
+  useEffect(() => {
+    setEditing(null); setSupplierName(''); setSupplierCnpj(''); setProductCode(''); setContent('1');
+    setStockUnit(initialUnit.current ?? 'PC');
+  }, [row?.key]);
   const save = async () => {
     if (!row) return;
     try {

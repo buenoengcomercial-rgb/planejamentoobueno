@@ -117,8 +117,10 @@ describe('atomic warehouse operation migration', () => {
       'src/lib/warehouseScopedCommit.ts',
       'src/lib/warehouseAvailability.ts',
     ].map(path => readFileSync(resolve(process.cwd(), path), 'utf8')).join('\n');
-    const called = [...new Set([...callers.matchAll(/'((?:check|commit)_warehouse_[a-z_]+)'/g)].map(match => match[1]))].sort();
-    const required = [...deploymentGateSql.matchAll(/\('((?:check|commit)_warehouse_[a-z_]+)',\s*'public\./g)]
+    const wrapper = readFileSync(resolve(process.cwd(), 'supabase/migrations/20261016123000_concurrent_requisition_receipts.sql'), 'utf8');
+    const called = [...new Set([...callers.matchAll(/'((?:check|commit)_warehouse_[a-z0-9_]+)'/g),
+      ...wrapper.matchAll(/public\.(commit_warehouse_[a-z0-9_]+)\(/g)].map(match => match[1]))].sort();
+    const required = [...deploymentGateSql.matchAll(/\('((?:check|commit)_warehouse_[a-z0-9_]+)',\s*'public\./g)]
       .map(match => match[1]).sort();
 
     expect(required).toEqual(called);

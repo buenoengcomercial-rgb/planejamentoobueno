@@ -1,3 +1,4 @@
+import { useWarehouseEditBase } from '@/hooks/useWarehouseEditBase';
 import { Fragment, useMemo, useRef, useState } from 'react';
 import type {
   CustodyEquipmentStatus,
@@ -54,7 +55,7 @@ import {
 interface Props {
   project: Project;
   onProjectChange: (next: Project) => void;
-  onCommitWarehouseScoped?: (next: Project, domain: 'custody') => Promise<Project>;
+  onCommitWarehouseScoped?: (next: Project, domain: 'custody', expectedBase?: Project) => Promise<Project>;
   auditActor?: WarehouseAuditActor;
   canDelete?: boolean;
 }
@@ -232,8 +233,13 @@ export default function WarehouseCustodyTab({ project, onProjectChange, onCommit
   const [returnPhotos, setReturnPhotos] = useState<File[]>([]);
   const [returning, setReturning] = useState(false);
 
+  const editBase = useWarehouseEditBase(project, open || !!returnTarget);
   const commitCustody = async (next: Project) => {
-    if (onCommitWarehouseScoped) return onCommitWarehouseScoped(next, 'custody');
+    if (onCommitWarehouseScoped) {
+      const accepted = await onCommitWarehouseScoped(next, 'custody', editBase.project);
+      editBase.confirmed(accepted);
+      return accepted;
+    }
     if (import.meta.env.MODE === 'test') { onProjectChange(next); return next; }
     throw new Error('A transação segura de cautela ainda não está disponível. Nada foi gravado.');
   };

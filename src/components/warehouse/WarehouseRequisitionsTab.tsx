@@ -65,7 +65,7 @@ interface Props {
   ) => Promise<WarehouseCloudCommitResult>;
   /** Mantém upload, transação e confirmação sob a mesma trava de navegação. */
   onRunCriticalCloudOperation?: <T>(operation: () => Promise<T>) => Promise<T>;
-  onCommitWarehouseScoped?: (next: Project, domain: WarehouseScopedDomain) => Promise<Project>;
+  onCommitWarehouseScoped?: (next: Project, domain: WarehouseScopedDomain, expectedBase?: Project) => Promise<Project>;
   auditActor?: WarehouseAuditActor;
   canDelete?: boolean;
   /** Correção auditada da retirada original; exclusão física continua separada. */
