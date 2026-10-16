@@ -1208,3 +1208,39 @@ it('does not send a lifecycle command when durable staging fails', async () => {
   expect(await within(screen.getByRole('dialog')).findByRole('alert')).toHaveTextContent('Local storage unavailable');
   expect(repository.commit).not.toHaveBeenCalled();
 });
+
+it('does not reuse a recovered new-row draft baseline when editing a confirmed row', async () => {
+  const { w, repository } = fixture();
+  repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+  repository.stage = vi.fn(async () => undefined);
+  w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('confirmed-row'), comment: 'Confirmed' }] }];
+  vi.mocked(repository.drafts).mockResolvedValue([{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: '__new__',
+    changes: { comment: 'Different unfinished attempt', createdRowId: 'another-row' }, baseRevision: 0,
+    expectedEntry: { projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [] } }]);
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  fireEvent.click(await screen.findByRole('spinbutton', { name: 'Quantidade de Placas' }));
+  const comment = screen.getByRole('textbox', { name: 'Comentário da linha 1' });
+  fireEvent.change(comment, { target: { value: 'New edit' } }); fireEvent.blur(comment);
+  fireEvent.change(screen.getByRole('combobox', { name: 'Medição selecionada' }), { target: { value: 'm2' } });
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(repository.commit).mock.calls[0][0].entries[0].rows[0].comment).toBe('New edit');
+  expect(repository.clearDraft).not.toHaveBeenCalledWith('m1', 's', '__new__');
+  expect(screen.queryByText('Linha não encontrada.')).not.toBeInTheDocument();
+});
+
+it.each([false, true])('reconciles acknowledged row drafts only after a cloud read (offline=%s)', async offline => {
+  const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+  repository.stage = vi.fn(async () => undefined); repository.loadedOffline = () => offline;
+  w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('confirmed-row'), comment: 'Confirmed' }] }];
+  vi.mocked(repository.drafts).mockResolvedValue([{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: '__new__',
+    changes: { comment: 'Confirmed', createdRowId: 'confirmed-row' }, baseRevision: 0,
+    expectedEntry: { projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [] } }]);
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  await screen.findByRole('spinbutton', { name: 'Quantidade de Placas' });
+  if (offline) expect(repository.clearDraft).not.toHaveBeenCalled();
+  else {
+    await waitFor(() => expect(repository.clearDraft).toHaveBeenCalledWith('m1', 's', '__new__'));
+    expect(screen.getByText('Salvo e conferido na nuvem')).toBeVisible();
+  }
+  expect(repository.commit).not.toHaveBeenCalled();
+});
