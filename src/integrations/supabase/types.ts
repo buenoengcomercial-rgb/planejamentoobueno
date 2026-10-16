@@ -1595,6 +1595,15 @@ export type Database = {
         }
         Returns: Json
       }
+      prepare_storage_cleanup: {
+        Args: {
+          p_action: string
+          p_actor_id: string
+          p_organization_id: string
+          p_path: string
+        }
+        Returns: Json
+      }
       save_additive_planning_domain: {
         Args: {
           p_audit_insert: Json
@@ -1654,6 +1663,10 @@ export type Database = {
           p_tasks_upsert: Json
         }
         Returns: string
+      }
+      storage_maintenance_objects: {
+        Args: { p_organization_id: string }
+        Returns: Json
       }
       strip_task_logs: { Args: { node: Json }; Returns: Json }
       sync_measurement_workspace_entry_state: {
