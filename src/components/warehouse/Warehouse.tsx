@@ -2,7 +2,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import type { Project, WarehouseAuditActor } from '@/types/project';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, Warehouse as WarehouseIcon, ReceiptText, ClipboardCheck, HardDriveDownload } from 'lucide-react';
-import { ensureWarehouse, panelSummary } from '@/lib/warehouse';
+import { ensureWarehouse } from '@/lib/warehouse';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { scheduleIdlePreload } from '@/lib/idlePreload';
 import './warehouse-visual.css';
@@ -130,9 +130,6 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
     }
   }, [project.id, tab]);
   useEffect(() => scheduleIdlePreload(NEXT_WAREHOUSE_TAB_PRELOAD[tab]), [tab]);
-  // O resumo exige várias coleções de todo o Almoxarifado. Fora do Painel,
-  // não deixe esses indicadores bloquearem a subaba operacional escolhida.
-  const summary = useMemo(() => tab === 'painel' ? panelSummary(ensured) : null, [ensured, tab]);
   const regularTabs = canViewPanel
     ? WAREHOUSE_TABS
     : WAREHOUSE_TABS.filter(item => item.value !== 'painel');
@@ -164,15 +161,6 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
           <h2 className="text-xl font-extrabold sm:text-2xl">Estoque e Almoxarifado</h2>
           <p className="mt-1 text-sm font-medium text-muted-foreground">Escolha uma área para consultar ou registrar uma operação.</p>
           </div>
-        </div>
-        <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
-          {summary && (
-            <span className="text-xs text-muted-foreground">
-              Abaixo do mínimo: <strong className="text-destructive">{summary.underMinCount}</strong>
-              <span className="mx-1.5">·</span>
-              Termos abertos: <strong className="text-foreground">{summary.openCustodyCount}</strong>
-            </span>
-          )}
         </div>
       </div>
 

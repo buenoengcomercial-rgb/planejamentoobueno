@@ -1,6 +1,3 @@
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-
-type JsPdfInstance = import('jspdf').jsPDF;
 
 export type AttachmentOptimizationProfile = 'field-photo' | 'fiscal-document';
 
@@ -62,51 +59,22 @@ export async function optimizeImageAttachment(file: File, profile: AttachmentOpt
     context.drawImage(decoded.source, 0, 0, width, height);
     const blob = await canvasBlob(canvas, settings.quality);
     if (!blob.size) throw new Error('A compactação não gerou uma imagem válida.');
-    return new File([blob], jpegName(file.name), { type: 'image/jpeg', lastModified: file.lastModified });
+    return blob.size < file.size ? new File([blob], jpegName(file.name), { type: 'image/jpeg', lastModified: file.lastModified }) : file;
   } finally {
     decoded?.release();
   }
 }
 
-/** Renderiza PDFs fiscais em páginas JPEG A4 para remover dados redundantes.
- * Se a versão resultante for maior, o PDF original já é a alternativa mais leve. */
+/** Preserve the original PDF bytes, text, signatures and embedded evidence.
+ * Raster previews must never replace the authoritative fiscal document. */
 export async function optimizeFiscalPdf(file: File): Promise<File> {
   if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) throw new Error('Selecione um PDF válido.');
-  const [{ jsPDF }, pdfjs] = await Promise.all([import('jspdf'), import('pdfjs-dist')]);
-  pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-  const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
-  try {
-    let output: JsPdfInstance | undefined;
-    for (let number = 1; number <= pdf.numPages; number += 1) {
-      const page = await pdf.getPage(number);
-      const natural = page.getViewport({ scale: 1 });
-      const scale = Math.min(2.5, Math.max(1, PROFILES['fiscal-document'].maxSide / natural.width));
-      const viewport = page.getViewport({ scale });
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.ceil(viewport.width);
-      canvas.height = Math.ceil(viewport.height);
-      const context = canvas.getContext('2d');
-      if (!context) throw new Error('Canvas indisponível para processar o PDF.');
-      await page.render({ canvas, canvasContext: context, viewport } as Parameters<typeof page.render>[0]).promise;
-      const widthPt = 595.28;
-      const heightPt = widthPt * (canvas.height / canvas.width);
-      const orientation = widthPt > heightPt ? 'landscape' : 'portrait';
-      if (!output) output = new jsPDF({ orientation, unit: 'pt', format: [widthPt, heightPt], compress: true });
-      else output.addPage([widthPt, heightPt], orientation);
-      output.addImage(canvas.toDataURL('image/jpeg', PROFILES['fiscal-document'].quality), 'JPEG', 0, 0, widthPt, heightPt, undefined, 'MEDIUM');
-    }
-    if (!output) throw new Error('O PDF não possui páginas.');
-    const result = new File([output.output('blob')], `${file.name.replace(/\.pdf$/i, '') || 'nota-fiscal'}-otimizada.pdf`, { type: 'application/pdf', lastModified: file.lastModified });
-    return result.size < file.size ? result : file;
-  } finally {
-    await pdf.destroy();
-  }
+  return file;
 }
 
 export async function optimizeStorageAttachment(file: File, kind?: 'nf' | 'foto' | 'recibo' | 'termo' | 'outro'): Promise<File> {
   if (file.type.startsWith('image/')) return optimizeImageAttachment(file, kind === 'nf' ? 'fiscal-document' : 'field-photo');
-  // Comprovantes em PDF também são documentos de auditoria: reduzimos o arquivo
-  // preservando leitura de data, favorecido, valor e identificação bancária.
+  // Documentos fiscais e comprovantes mantêm os bytes originais para auditoria.
   if ((kind === 'nf' || kind === 'recibo') && (file.type === 'application/pdf' || /\.pdf$/i.test(file.name))) return optimizeFiscalPdf(file);
   return file;
 }

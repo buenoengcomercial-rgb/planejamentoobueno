@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
   hasAdditiveUserWork,
@@ -280,7 +280,8 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     }
   }, [active, onProjectChange, logAdd]);
 
-  useEffect(() => {
+  const reconcileCatalog = useCallback(() => {
+    if (isLocked) return;
     const additiveId = active?.id;
     if (!additiveId) return;
     const makeInputId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
@@ -327,7 +328,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
       }
       return nextProject;
     });
-  }, [active?.id, onProjectChange, project.additiveCompositionCatalog, auditUser]);
+  }, [active?.id, isLocked, onProjectChange, auditUser]);
 
   const handleReorderComposition = useCallback((compId: string, requestedItem: string) => {
     if (!active || isLocked) return;
@@ -1234,6 +1235,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
   };
 
   return {
+    reconcileCatalog,
     updateAdditive,
     updateComposition,
     handleReorderComposition,

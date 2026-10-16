@@ -175,6 +175,8 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
             onUpdateAdditive={actions.updateAdditive}
           />
 
+          {!isLocked && <div className="flex justify-end"><Button variant="outline" size="sm" title="Reconcilia o catálogo e as composições editáveis da obra; aditivos bloqueados permanecem preservados" onClick={actions.reconcileCatalog}>Conferir e reconciliar catálogo</Button></div>}
+
           <AdditiveFilters
             search={search}
             setSearch={setSearch}

@@ -1,5 +1,5 @@
 import { Card } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
+import { CommitOnBlurInput } from '@/components/dailyReport/CommitOnBlurField';
 import { Badge } from '@/components/ui/badge';
 import { CheckCircle2, AlertTriangle } from 'lucide-react';
 import type { Additive as AdditiveModel } from '@/types/project';
@@ -59,12 +59,14 @@ export default function AdditiveTotalsBlock({ active, totals, isLocked, onChange
         <div className="flex flex-wrap items-end gap-4 text-xs">
           <div>
             <div className="text-[11px] text-muted-foreground">Limite (%)</div>
-            <Input
+            <CommitOnBlurInput
               type="number" step="0.5" min={0}
-              value={active.aditivoLimitPercent ?? 50}
+              key={active.id}
+              value={String(active.aditivoLimitPercent ?? 50)}
               disabled={isLocked}
-              onChange={e => {
-                const v = Number(e.target.value);
+              onCommit={value => {
+                if (!value.trim()) return;
+                const v = Number(value);
                 if (!Number.isFinite(v) || v < 0) return;
                 onChangeLimit(v);
               }}

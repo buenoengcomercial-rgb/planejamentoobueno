@@ -636,7 +636,7 @@ async function optionalQuery<T>(
 // foram conferidos. Em caso de falha, o chamador conserva a fotografia anterior.
 const VERIFIED_PAGE_SIZE = 500;
 export async function loadVerifiedRows<T extends { id: string }>(
-  query: (afterId?: string) => PromiseLike<CountedQueryResult<T>>,
+  query: (afterId?: string, head?: boolean) => PromiseLike<CountedQueryResult<T>>,
 ): Promise<QueryResult<T>> {
   try {
     const rows: T[] = [];
@@ -662,13 +662,15 @@ export async function loadVerifiedRows<T extends { id: string }>(
         }
         ids.add(row.id);
         rows.push(row);
+        lastId = row.id;
       }
       if (rows.length > expectedCount) throw new Error('A consulta retornou mais registros que a contagem confirmada.');
-      if (page.length < VERIFIED_PAGE_SIZE) break;
+      if (rows.length === expectedCount) break;
+      if (!page.length) throw new Error('A consulta devolveu uma coleção parcial.');
       lastId = page[page.length - 1].id;
     }
     if (rows.length !== expectedCount) throw new Error('A consulta devolveu uma coleção parcial.');
-    const check = await query(undefined);
+    const check = await query(undefined, true);
     if (check.error || check.count !== expectedCount) throw new Error('A coleção mudou antes da confirmação da carga.');
     return { data: rows, error: null };
   } catch (error) {
@@ -743,38 +745,78 @@ export async function hydrateProjectFromCloud(
   const wants = new Set(requested);
   const [movRes, reqRes, custRes, drRes, logsRes, measRes, addRes, audRes, stkRes, phRes, biRes, mcRes, acRes, subRes, chRes, tkRes] = await Promise.all([
     optionalQuery<DataRow>(wants.has('warehouseMovements'), () => loadWarehouseMovementRows(projectId)),
-    optionalQuery<DataRow>(wants.has('warehouseRequisitions'), () => supabase.from('warehouse_requisitions').select('id, data').eq('project_id', projectId)),
-    optionalQuery<DataRow>(wants.has('warehouseCustody'), () => supabase.from('warehouse_custody').select('id, data').eq('project_id', projectId)),
-    optionalQuery<DataRow>(wants.has('dailyReports'), () => supabase.from('daily_reports').select('id, data').eq('project_id', projectId)),
-    optionalQuery<TaskLogDataRow>(wants.has('taskDailyLogs'), () => loadVerifiedRows(lastId => {
-      const query = supabase.from('task_daily_logs').select('id, task_id, data', { count: 'exact' })
+    optionalQuery<DataRow>(wants.has('warehouseRequisitions'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('warehouse_requisitions').select('id, data', { count: 'exact', head })
         .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
       return lastId ? query.gt('id', lastId) : query;
     })),
-    optionalQuery<DataRow>(wants.has('measurements'), () => loadVerifiedRows(lastId => {
-      const query = supabase.from('measurements').select('id, data', { count: 'exact' })
+    optionalQuery<DataRow>(wants.has('warehouseCustody'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('warehouse_custody').select('id, data', { count: 'exact', head })
         .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
       return lastId ? query.gt('id', lastId) : query;
     })),
-    optionalQuery<DataRow>(wants.has('additives'), () => supabase.from('additives').select('id, data').eq('project_id', projectId)),
-    optionalQuery<DataRow>(wants.has('auditLogs'), () => loadVerifiedRows(lastId => {
-      const query = supabase.from('audit_logs').select('id, data', { count: 'exact' })
+    optionalQuery<DataRow>(wants.has('dailyReports'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('daily_reports').select('id, data', { count: 'exact', head })
         .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
       return lastId ? query.gt('id', lastId) : query;
     })),
-    optionalQuery<DataRow>(wants.has('stockMovements'), () => supabase.from('stock_movements').select('id, data').eq('project_id', projectId)),
-    optionalQuery<DataRow>(wants.has('materialPriceHistory'), () => supabase.from('material_price_history').select('id, data').eq('project_id', projectId)),
-    optionalQuery<DataRow>(wants.has('budgetItems'), () => supabase.from('budget_items').select('id, data').eq('project_id', projectId)),
-    optionalQuery<DataRow>(wants.has('materialComparisons'), () => supabase.from('material_comparisons').select('id, data').eq('project_id', projectId)),
-    optionalQuery<DataRow>(wants.has('analyticCompositions'), () => supabase.from('analytic_compositions').select('id, data').eq('project_id', projectId)),
-    optionalQuery<DataRow>(wants.has('subcontracts'), () => supabase.from('subcontracts').select('id, data').eq('project_id', projectId)),
-    optionalQuery<ChapterDataRow>(wants.has('eapChapters'), () => loadVerifiedRows(lastId => {
-      const query = supabase.from('eap_chapters').select('id, parent_id, order_index, data', { count: 'exact' })
+    optionalQuery<TaskLogDataRow>(wants.has('taskDailyLogs'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('task_daily_logs').select('id, task_id, data', { count: 'exact', head })
         .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
       return lastId ? query.gt('id', lastId) : query;
     })),
-    optionalQuery<TaskDataRow>(wants.has('tasks'), () => loadVerifiedRows(lastId => {
-      const query = supabase.from('tasks').select('id, chapter_id, parent_task_id, order_index, data', { count: 'exact' })
+    optionalQuery<DataRow>(wants.has('measurements'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('measurements').select('id, data', { count: 'exact', head })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
+    optionalQuery<DataRow>(wants.has('additives'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('additives').select('id, data', { count: 'exact', head })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
+    optionalQuery<DataRow>(wants.has('auditLogs'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('audit_logs').select('id, data', { count: 'exact', head })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
+    optionalQuery<DataRow>(wants.has('stockMovements'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('stock_movements').select('id, data', { count: 'exact', head })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
+    optionalQuery<DataRow>(wants.has('materialPriceHistory'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('material_price_history').select('id, data', { count: 'exact', head })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
+    optionalQuery<DataRow>(wants.has('budgetItems'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('budget_items').select('id, data', { count: 'exact', head })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
+    optionalQuery<DataRow>(wants.has('materialComparisons'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('material_comparisons').select('id, data', { count: 'exact', head })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
+    optionalQuery<DataRow>(wants.has('analyticCompositions'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('analytic_compositions').select('id, data', { count: 'exact', head })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
+    optionalQuery<DataRow>(wants.has('subcontracts'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('subcontracts').select('id, data', { count: 'exact', head })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
+    optionalQuery<ChapterDataRow>(wants.has('eapChapters'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('eap_chapters').select('id, parent_id, order_index, data', { count: 'exact', head })
+        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
+      return lastId ? query.gt('id', lastId) : query;
+    })),
+    optionalQuery<TaskDataRow>(wants.has('tasks'), () => loadVerifiedRows((lastId, head) => {
+      const query = supabase.from('tasks').select('id, chapter_id, parent_task_id, order_index, data', { count: 'exact', head })
         .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
       return lastId ? query.gt('id', lastId) : query;
     })),

@@ -91,6 +91,26 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     state = { ...state, checking: true };
     loading = (async () => {
       try {
+        // Reopening an unchanged workspace needs only the authorized revision read.
+        // The cached snapshot is complete (including audit); absent versions never
+        // authorize a cache as current. Failed reads keep the existing error state.
+        if (!confirmed) {
+          const cached = await withReadDeadline(local.load(), 5000).catch(() => null);
+          if (cached && cached.projectId === scope.projectId && cached.schema === 1
+            && ['services','periods','entries','plans','audit','importedKeys'].every(key => Array.isArray(cached[key as keyof MeasurementWorkspace]))) {
+            const version = await withReadDeadline(supabase.from('measurement_workspace_versions' as never)
+              .select('revision').eq('project_id', scope.projectId).maybeSingle());
+            if (version.error) throw version.error;
+            const revision = (version.data as { revision?: number } | null)?.revision;
+            if (Number.isSafeInteger(revision) && revision === cached.revision) {
+              confirmed = cached;
+              cachedRevision = cached.revision;
+              loadedOffline = false;
+              state = { source: 'cloud', checking: false };
+              return confirmed;
+            }
+          }
+        }
         const { data, error } = await withReadDeadline(supabase.rpc('load_measurement_workspace' as never, { p_project_id: scope.projectId } as never));
         if (error) throw error;
         const next = data ? await read(data) : null;

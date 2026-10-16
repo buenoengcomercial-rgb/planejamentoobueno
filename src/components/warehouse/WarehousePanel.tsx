@@ -54,11 +54,11 @@ function dateBR(value?: string) {
 
 export default function WarehousePanel({ project, onProjectChange, onCommitWarehouseScoped, auditActor }: Props) {
   const [selectedMonthKey, setSelectedMonthKey] = useState<string | null>(null);
-  const s = useMemo(() => panelSummary(project), [project]);
   const rows = useMemo(
     () => computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true }),
     [project],
   );
+  const s = useMemo(() => panelSummary(project, rows), [project, rows]);
   const usageByChapter = useMemo(() => computeWarehouseUsageByChapter(project), [project]);
   const monthlyCosts = useMemo(() => computeWarehouseMonthlyCosts(project), [project]);
   const wh = ensureWarehouse(project).warehouse!;
