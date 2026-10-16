@@ -13,6 +13,15 @@ describe('carregamento contado e paginado', () => {
     expect(result.error).toBeNull(); expect(result.data).toEqual(rows);
     expect(cursors).toEqual([undefined,'00499','00999',undefined]);
   });
+  it('aceita limite menor do servidor e usa somente HEAD na conferência final', async () => {
+    let heads = 0;
+    const result = await loadVerifiedRows(async (after,head) => {
+      const remaining = rows.filter(row => !after || row.id > after);
+      if (head) heads++;
+      return {data:head ? null : remaining.slice(0,100),count:remaining.length,error:null};
+    });
+    expect(result.error).toBeNull(); expect(result.data).toEqual(rows); expect(heads).toBe(1);
+  });
   it('recusa a resposta truncada de 1.000/1.200', async () => {
     const result = await loadVerifiedRows(async () => ({ data:rows.slice(0,1000), count:1200, error:null }));
     expect(result.data).toBeNull(); expect(result.error).toBeTruthy();

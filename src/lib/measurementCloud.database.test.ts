@@ -66,6 +66,7 @@ beforeAll(async()=>{
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011220000_measurement_capture_projection_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011230000_measurement_deletion_projection_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261012010000_measurement_plan_catalog_delta.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261016020000_measurement_materialization_working_set.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -961,6 +962,7 @@ describe('transação da Medição na nuvem',()=>{
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011220000_measurement_capture_projection_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011230000_measurement_deletion_projection_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261012010000_measurement_plan_catalog_delta.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261016020000_measurement_materialization_working_set.sql',import.meta.url),'utf8'));
  });
  it('bloqueia projeção adulterada e não expõe seu acesso direto ao cliente',async()=>{
   await seed();
@@ -1386,6 +1388,32 @@ describe('transação da Medição na nuvem',()=>{
     projectId,ready.revision,JSON.stringify(encodeMeasurementWorkspace(patch))]))
     .rejects.toThrow('já aprovada pela fiscalização');
  });
+ it('materializa o mesmo histórico de 7 MB com as validações anteriores e mede a leitura',async()=>{
+  const original=(await readFile(new URL('../../supabase/migrations/20261012010000_measurement_plan_catalog_delta.sql',import.meta.url),'utf8'))
+    .split('CREATE OR REPLACE FUNCTION public.patch_measurement_plan_catalog')[0]
+    .replace(/public\.materialize_measurement_workspace/g,'public.legacy_materialize_measurement_workspace');
+  await db.exec(original);
+  const ready=editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('read-audit'));
+  Object.assign(ready.audit[0],{legacyPayload:'x'.repeat(7_000_000)});
+  await seed(ready);
+  let next=ready;
+  for(let i=0;i<2;i++) {
+    const candidate=editMeasuredRow(next,actor,'m1','signs',{...newMeasuredRow('read-audit'),multiplier:i+2});
+    await db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,next.revision,JSON.stringify(measurementEntryPatch(next,candidate))]);
+    next=candidate;
+  }
+  const times:Record<string,number[]>={legacy:[],current:[]};
+  let expected:unknown;
+  for(let round=0;round<4;round++) for(const kind of round%2?['current','legacy']:['legacy','current']) {
+    const fn=kind==='legacy'?'legacy_materialize_measurement_workspace':'materialize_measurement_workspace';
+    const started=performance.now();
+    const result=(await db.query<{hash:string}>(`SELECT md5(${fn}($1)::text) hash`,[projectId])).rows[0].hash;
+    times[kind].push(performance.now()-started);
+    expected??=result; expect(result).toBe(expected);
+  }
+  console.info('isolated materialization 7 MB / two deltas (ms):',JSON.stringify(times));
+  expect((await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value).toEqual(JSON.parse(wire(next)));
+ },20000);
  it('captura com auditoria legada de 7 MB não replica o checkpoint nem os dados de outras tarefas',async()=>{
   const ready=editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('large-audit'));
   Object.assign(ready.audit[0],{legacyPayload:'x'.repeat(7_000_000)});

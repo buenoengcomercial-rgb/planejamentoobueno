@@ -2828,8 +2828,7 @@ export interface WarehouseMonthlyCostEntry {
   fallbackFromIssueDate: boolean;
 }
 
-export function panelSummary(project: Project): WarehousePanelSummary {
-  const rows = computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true });
+export function panelSummary(project: Project, rows = computeWarehouseRows(project, { materialOnly: true, confirmedOnly: true, includeManual: true })): WarehousePanelSummary {
   const wh = (ensureWarehouse(project).warehouse)!;
   let totalPlanned = 0, totalPurchased = 0, totalReceived = 0, totalWithdrawn = 0, totalLosses = 0, totalBalance = 0, totalToPurchase = 0;
   let underMin = 0, divergence = 0;

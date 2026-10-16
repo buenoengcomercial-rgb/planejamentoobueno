@@ -57,7 +57,7 @@ function patchSaved(base: MeasurementWorkspace, next: MeasurementWorkspace) {
   return patch;
 }
 beforeEach(() => {
-  vi.clearAllMocks(); mocks.cached = null; mocks.drafts = []; mocks.stored = [];
+  vi.clearAllMocks(); mocks.rpc.mockReset(); mocks.cached = null; mocks.drafts = []; mocks.stored = [];
   mocks.download.mockReset(); mocks.upload.mockReset();
   mocks.revision = 0; mocks.eventRevision = null; mocks.compactedRevision = null; mocks.missingVersion = false;
   mocks.from.mockImplementation((table: string) => ({ select: () => ({ eq: () => ({
@@ -71,6 +71,24 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('Abertura da Medição com plantas sob demanda', () => {
+  it('reabre a revisão confirmada com histórico completo sem baixar a base ou arquivos', async () => {
+    const base = await fixture(true);
+    mocks.cached = structuredClone(base); mocks.revision = base.revision;
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    expect(await repo.load()).toEqual(base);
+    expect(repo.loadState!()).toMatchObject({source: 'cloud', checking: false});
+    expect(mocks.rpc).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.upload).not.toHaveBeenCalled();
+  });
+  it('uma versão ausente não confirma o cache como atual', async () => {
+    const base = await fixture(); mocks.cached = structuredClone(base); mocks.missingVersion = true;
+    mocks.rpc.mockResolvedValueOnce({data:null,error:{code:'42501',message:'denied'}});
+    const repo = cloudMeasurementRepository({userId:actor.id,projectId:base.projectId});
+    expect(await repo.load()).toEqual(base);
+    expect(repo.loadState!()).toMatchObject({source:'cache',error:{kind:'authorization'}});
+  });
+
   it('carrega quantidades e todo o histórico sem baixar plantas atuais ou históricas', async () => {
     const base = await fixture(true);
     const historical = { ...base.plans[0], id: 'archived-plan', name: 'Histórico.dxf', kind: 'dxf' as const,
@@ -268,7 +286,7 @@ describe('Abertura da Medição com plantas sob demanda', () => {
     [{ message: 'Failed to fetch' }, 'service'],
   ] as const)('qualifica o erro da nuvem com cache confirmado: %s', async (error, kind) => {
     vi.stubGlobal('navigator', { onLine: true });
-    const base = await fixture(true); mocks.cached = structuredClone(base);
+    const base = await fixture(true); mocks.cached = structuredClone(base); mocks.revision = base.revision + 1;
     const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     mocks.rpc.mockResolvedValueOnce({ data: null, error });
     const cached = await repo.load();
@@ -312,7 +330,7 @@ describe('Abertura da Medição com plantas sob demanda', () => {
 
   it('limita a espera da base e conserva o cache com erro de timeout sem dizer que a rede caiu', async () => {
     vi.useFakeTimers(); vi.stubGlobal('navigator', { onLine: true });
-    const base = await fixture(true); mocks.cached = structuredClone(base);
+    const base = await fixture(true); mocks.cached = structuredClone(base); mocks.revision = base.revision + 1;
     const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     mocks.rpc.mockReturnValueOnce(new Promise(() => undefined));
     const loading = repo.load();
@@ -325,7 +343,7 @@ describe('Abertura da Medição com plantas sob demanda', () => {
 
   it('uma resposta da base que chega após timeout não substitui a conferência posterior', async () => {
     vi.useFakeTimers();
-    const base = await fixture(true); mocks.cached = structuredClone(base);
+    const base = await fixture(true); mocks.cached = structuredClone(base); mocks.revision = base.revision + 1;
     const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     let complete!: (value: { data: unknown; error: null }) => void;
     mocks.rpc.mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
@@ -361,7 +379,7 @@ describe('Abertura da Medição com plantas sob demanda', () => {
   });
 
   it('uma gravação com recibo válido encerra o estado de erro da cópia local', async () => {
-    const base = await fixture(); mocks.cached = structuredClone(base);
+    const base = await fixture(); mocks.cached = structuredClone(base); mocks.revision = base.revision + 1;
     const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
     const cached = (await repo.load())!;
@@ -377,7 +395,7 @@ describe('Abertura da Medição com plantas sob demanda', () => {
   });
 
   it('um recibo comprovado após timeout de gravação também confirma a nuvem e limpa o erro do cache', async () => {
-    const base = await fixture(); mocks.cached = structuredClone(base);
+    const base = await fixture(); mocks.cached = structuredClone(base); mocks.revision = base.revision + 1;
     const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
     const cached = (await repo.load())!;
@@ -393,7 +411,7 @@ describe('Abertura da Medição com plantas sob demanda', () => {
   });
 
   it('uma leitura posterior bem-sucedida confirma a nuvem e limpa o erro do cache', async () => {
-    const base = await fixture(); mocks.cached = structuredClone(base);
+    const base = await fixture(); mocks.cached = structuredClone(base); mocks.revision = base.revision + 1;
     const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
     await repo.load();
@@ -407,7 +425,7 @@ describe('Abertura da Medição com plantas sob demanda', () => {
   });
 
   it('falha de transporte rejeitada também termina a conferência e conserva apenas a base confirmada', async () => {
-    const base = await fixture(); mocks.cached = structuredClone(base);
+    const base = await fixture(); mocks.cached = structuredClone(base); mocks.revision = base.revision + 1;
     const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     mocks.rpc.mockRejectedValueOnce(new TypeError('Failed to fetch'));
     expect(await repo.load()).toEqual(base);
@@ -417,7 +435,7 @@ describe('Abertura da Medição com plantas sob demanda', () => {
 
   it('classifica como sem rede quando o navegador confirma estar offline', async () => {
     vi.stubGlobal('navigator', { onLine: false });
-    const base = await fixture(); mocks.cached = structuredClone(base);
+    const base = await fixture(); mocks.cached = structuredClone(base); mocks.revision = base.revision + 1;
     const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     mocks.rpc.mockRejectedValueOnce(new TypeError('Failed to fetch'));
     expect(await repo.load()).toEqual(base);

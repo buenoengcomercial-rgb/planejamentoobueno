@@ -299,18 +299,6 @@ export async function migrateAttachment(project: Project, attachment: Migratable
     optimizedAt: new Date().toISOString(),
     optimizationVersion: ATTACHMENT_OPTIMIZATION_VERSION,
   };
-  try {
-    const next = replaceAttachment(project, attachment, replacement) as Project;
-    return { project: next, originalBytes: original.size, storedBytes: optimized.size, oldPath: attachment.storagePath, newPath: path };
-  } catch (error) {
-    await supabase.storage.from(BUCKET).remove([path]);
-    throw error;
-  }
-}
-
-
-export async function deletePreviousAttachment(path?: string): Promise<void> {
-  if (!path) return;
-  const { error } = await supabase.storage.from(BUCKET).remove([path]);
-  if (error) throw error;
+  const next = replaceAttachment(project, attachment, replacement) as Project;
+  return { project: next, originalBytes: original.size, storedBytes: optimized.size, oldPath: attachment.storagePath, newPath: path };
 }

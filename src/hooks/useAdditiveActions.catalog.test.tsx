@@ -31,6 +31,16 @@ function additiveWith(compositions: AdditiveComposition[]): Additive {
 }
 
 describe('useAdditiveActions catálogo atual da obra', () => {
+  it('não grava ao abrir nem permite reconciliação quando o aditivo está bloqueado', () => {
+    const additive={...additiveWith([target]),status:'aprovado'} as Additive;
+    const project={id:'p',phases:[],additives:[additive]} as unknown as Project;
+    const onProjectChange=vi.fn();
+    const state={active:additive,activeId:additive.id,isLocked:true} as unknown as AdditiveStateApi;
+    const {result}=renderHook(()=>useAdditiveActions({project,onProjectChange,state}));
+    expect(onProjectChange).not.toHaveBeenCalled();
+    act(()=>result.current.reconcileCatalog());
+    expect(onProjectChange).not.toHaveBeenCalled();
+  });
   it('restaura pelo estado atual mesmo quando a propriedade renderizada está atrasada', () => {
     const additive = additiveWith([target]);
     const staleProject = {
@@ -69,7 +79,7 @@ describe('useAdditiveActions catálogo atual da obra', () => {
     expect(currentProject.additiveCompositionCatalog).toHaveLength(1);
   });
 
-  it('repara automaticamente uma linha existente que ficou somente com o código', () => {
+  it('repara por ação explícita uma linha existente que ficou somente com o código', () => {
     const incomplete = { ...target, code: 'PINT02' };
     const additive = additiveWith([incomplete]);
     const templateSource = { ...source, code: 'PINT_02', description: 'PINTURA DE IDENTIFICAÇÃO' };
@@ -85,7 +95,9 @@ describe('useAdditiveActions catálogo atual da obra', () => {
     });
     const state = { active: additive, activeId: additive.id, isLocked: false } as unknown as AdditiveStateApi;
 
-    renderHook(() => useAdditiveActions({ project: staleProject, onProjectChange, state }));
+    const { result } = renderHook(() => useAdditiveActions({ project: staleProject, onProjectChange, state }));
+    expect(onProjectChange).not.toHaveBeenCalled();
+    act(() => result.current.reconcileCatalog());
 
     const restored = currentProject.additives?.[0].compositions[0];
     expect(restored).toMatchObject({
@@ -117,7 +129,9 @@ describe('useAdditiveActions catálogo atual da obra', () => {
     });
     const state = { active: additive, activeId: additive.id, isLocked: false } as unknown as AdditiveStateApi;
 
-    renderHook(() => useAdditiveActions({ project: staleProject, onProjectChange, state }));
+    const { result } = renderHook(() => useAdditiveActions({ project: staleProject, onProjectChange, state }));
+    expect(onProjectChange).not.toHaveBeenCalled();
+    act(() => result.current.reconcileCatalog());
 
     const restored = currentProject.additives?.[0].compositions[0];
     expect(restored).toMatchObject({
