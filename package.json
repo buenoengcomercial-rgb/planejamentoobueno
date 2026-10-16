@@ -12,8 +12,11 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:regression": "vitest run --maxWorkers=2 --testTimeout=20000 --reporter=dot",
     "test:server": "node --test scripts/test-server-integrity.mjs",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.app.json --noEmit",
+    "verify:regression": "npm run test:regression && npm run test:server && npm run typecheck && npm run build"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

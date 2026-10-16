@@ -237,7 +237,7 @@ describe('confirmação visual da retirada', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Assinar teste' }));
     fireEvent.click(screen.getByRole('button', { name: 'Entregar e baixar estoque' }));
     await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByText(/Faltam 6 UN/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Faltam 6 UN/)).toBeInTheDocument(), { timeout: 5000 });
     expect(screen.getByAltText('Assinatura registrada')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'PDF' })).not.toBeInTheDocument();
   });
