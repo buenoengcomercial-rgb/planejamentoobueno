@@ -1386,6 +1386,7 @@ function domainRow(collection: DomainCollection, id: string, value: unknown): Re
 /** Confirma Medição, Aditivo, Materiais ou Custos sem salvar outras coleções. */
 export async function syncNormalizedDomainAtomically(
   project: Project, slim: Project, organizationId: string, expectedUpdatedAt: string,
+  options?: { subcontractReactivation?: boolean },
 ): Promise<string | null> {
   assertProjectDeletionSafety(project);
   const previous = snapshots.get(project.id);
@@ -1424,10 +1425,10 @@ export async function syncNormalizedDomainAtomically(
 
   if (domain === 'measurement') assertMeasurementIntent(previous, changedRows(previous.measurements, next.measurements), changedRows(previous.auditLogs, next.auditLogs));
   const startedAt = Date.now();
-  const { data, error } = await supabase.rpc((projectWriteOrigin(project) === 'additiveSchedule' ? 'save_additive_planning_domain' : 'save_normalized_domain') as never, {
+  const { data, error } = await supabase.rpc((options?.subcontractReactivation ? 'save_subcontract_reactivation' : projectWriteOrigin(project) === 'additiveSchedule' ? 'save_additive_planning_domain' : 'save_normalized_domain') as never, {
     p_project_id: project.id, p_organization_id: organizationId, p_expected_updated_at: expectedUpdatedAt,
     p_domain: domain, p_name: slim.name,
-    p_data: shallowEqualJSON(previous.projectData, slim) ? null : slim as unknown as Json,
+    p_data: options?.subcontractReactivation || shallowEqualJSON(previous.projectData, slim) ? null : slim as unknown as Json,
     p_changes: batches as unknown as Json,
     p_audit_insert: (audit?.upserts ?? []).map(({ id, row }) => ({ id, data: row })) as unknown as Json,
   } as never);
