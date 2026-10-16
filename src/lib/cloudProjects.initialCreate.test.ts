@@ -61,6 +61,7 @@ import {
   createCloudProject,
   loadCloudProject,
   loadCloudProjectRecord,
+  loadStableCloudProjectRecord,
   upsertCloudProject,
 } from '@/lib/cloudProjects';
 
@@ -108,6 +109,27 @@ describe('criação inicial segura da obra', () => {
     await expect(loadCloudProjectRecord('p',{strict:true})).rejects.toBeInstanceOf(CloudProjectConflictError);
     expect(mocks.discardHydratedProjectCollections).toHaveBeenCalled();
     expect(mocks.confirmHydratedProjectCollections).not.toHaveBeenCalled();
+  });
+
+  it('retries an opening revision race and adopts only the stable read', async () => {
+    const response=(version:string)=>queryBuilder({data:{id:'p',name:'Obra',data_json:{phases:[]},updated_at:version},error:null});
+    mocks.from.mockReturnValueOnce(response('v1')).mockReturnValueOnce(response('v2'))
+      .mockReturnValue(response('v2'));
+    const record=await loadStableCloudProjectRecord('p',{strict:true});
+    expect(record?.updatedAt).toBe('v2');
+    expect(mocks.discardHydratedProjectCollections).toHaveBeenCalledTimes(1);
+    expect(mocks.confirmHydratedProjectCollections).not.toHaveBeenCalled();
+    confirmCloudProjectRecord(record!);
+    expect(mocks.confirmHydratedProjectCollections).toHaveBeenCalledTimes(1);
+  });
+  it('bounds concurrent rereads and never retries permission failures', async () => {
+    let n=0;
+    mocks.from.mockImplementation(()=>queryBuilder({data:{id:'p',name:'Obra',data_json:{phases:[]},updated_at:`v${n++}`},error:null}));
+    await expect(loadStableCloudProjectRecord('p')).rejects.toBeInstanceOf(CloudProjectConflictError);
+    expect(mocks.from).toHaveBeenCalledTimes(6);
+    mocks.from.mockClear().mockReturnValue(queryBuilder({data:null,error:{code:'42501',message:'denied'}}));
+    await expect(loadStableCloudProjectRecord('p')).rejects.toMatchObject({code:'42501'});
+    expect(mocks.from).toHaveBeenCalledTimes(1);
   });
 
   it('mantém o conflito otimista da transação de outro domínio', async () => {

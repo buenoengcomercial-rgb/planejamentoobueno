@@ -1180,3 +1180,31 @@ describe('Tela própria de Medição', () => {
     expect(repository.commit).not.toHaveBeenCalled();
   });
 });
+
+
+it('stages lifecycle commands durably before sending', async () => {
+  const {w,repository}=fixture(); repository.savedLabel='Salvo na nuvem';
+  w.periods=[{id:'m1',number:1,startDate:'2026-08-24',endDate:'2026-09-29',status:'draft'}];
+  let complete!:()=>void;
+  repository.stage=vi.fn(()=>new Promise<void>(resolve=>{complete=resolve;}));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  fireEvent.click(await screen.findByRole('button',{name:/^Nova medi/}));
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button',{name:/^Criar medi/}));
+  await waitFor(()=>expect(repository.stage).toHaveBeenCalledTimes(1));
+  expect(repository.commit).not.toHaveBeenCalled();
+  const staged=vi.mocked(repository.stage).mock.calls[0];
+  expect(staged[0].periods).toHaveLength(2); expect(staged[1]).toBe(w);
+  await act(async()=>complete());
+  await waitFor(()=>expect(repository.commit).toHaveBeenCalledWith(staged[0],w.revision));
+});
+
+it('does not send a lifecycle command when durable staging fails', async () => {
+  const {w,repository}=fixture(); repository.savedLabel='Salvo na nuvem';
+  w.periods=[{id:'m1',number:1,startDate:'2026-08-24',endDate:'2026-09-29',status:'draft'}];
+  repository.stage=vi.fn(async()=>{throw new Error('Local storage unavailable');});
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  fireEvent.click(await screen.findByRole('button',{name:/^Nova medi/}));
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button',{name:/^Criar medi/}));
+  expect(await within(screen.getByRole('dialog')).findByRole('alert')).toHaveTextContent('Local storage unavailable');
+  expect(repository.commit).not.toHaveBeenCalled();
+});

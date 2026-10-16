@@ -207,6 +207,16 @@ export async function loadCloudProjectRecord(
   return record;
 }
 
+/** A read race is safe to retry: each rejected hydration has already been discarded. */
+export async function loadStableCloudProjectRecord(id: string, options: CloudProjectLoadOptions = {}): Promise<CloudProjectRecord | null> {
+  for (let attempt = 0; ; attempt++) {
+    try { return await loadCloudProjectRecord(id, options); }
+    catch (error) {
+      if (!(error instanceof CloudProjectConflictError) || attempt >= 2) throw error;
+    }
+  }
+}
+
 async function getCurrentUserId(): Promise<string | undefined> {
   try {
     const { data } = await supabase.auth.getUser();
