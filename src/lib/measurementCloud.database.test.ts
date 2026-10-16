@@ -68,6 +68,7 @@ beforeAll(async()=>{
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011230000_measurement_deletion_projection_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261012010000_measurement_plan_catalog_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261016020000_measurement_materialization_working_set.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261016131000_measurement_history_assembly.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261016120000_concurrent_field_merge.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261016124000_concurrent_measurement_commands.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
@@ -1045,6 +1046,7 @@ describe('transação da Medição na nuvem',()=>{
   await db.exec(await readFile(new URL('../../supabase/migrations/20261011230000_measurement_deletion_projection_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261012010000_measurement_plan_catalog_delta.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261016020000_measurement_materialization_working_set.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261016131000_measurement_history_assembly.sql',import.meta.url),'utf8'));
  });
  it('bloqueia projeção adulterada e não expõe seu acesso direto ao cliente',async()=>{
   await seed();
@@ -1643,3 +1645,21 @@ describe('transação da Medição na nuvem',()=>{
   await expect(commit(freezeMeasuredPeriod(excess,actor,'m1'))).rejects.toThrow('Ultrapassou o limite contratado');
  });
 });
+
+
+it('assembles a structured audit without the nested-expression replay cost', async()=>{
+  const ready=editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('structured-audit'));
+  const event=ready.audit[0];
+  ready.audit=Array.from({length:300},(_,i)=>({...event,id:`historical-${i}`,
+    before:Array.from({length:40},(_,j)=>({projectId,measurementId:'m1',serviceId:`old-${j}`,rows:[{...newMeasuredRow(`row-${j}`),comment:'historical detail '.repeat(20)}]})),
+    after:[]}));
+  await seed(ready);
+  const next=editMeasuredRow(ready,actor,'m1','signs',{...newMeasuredRow('structured-audit'),multiplier:2});
+  await db.query('SELECT patch_measurement_entries($1,$2,$3)',[projectId,ready.revision,JSON.stringify(measurementEntryPatch(ready,next))]);
+  const start=performance.now();
+  const result=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  const elapsed=performance.now()-start;
+  expect(result).toEqual(JSON.parse(wire(next)));
+  console.info('structured audit read milliseconds',elapsed);
+  // Runtime budgets are checked on PostgreSQL: PGlite uses a different planner.
+},30000);
