@@ -29,4 +29,28 @@ describe('isolamento dos módulos e desfazer', () => {
     const candidate = structuredClone(base); candidate.phases[0].tasks[0].dailyLogs = [{ id: 'fake', date: '', actualQuantity: 99, plannedQuantity: 0 }]; candidate.measurements![0].items[0].qtyProposed = 0;
     expect(applyProjectOperation('additiveSchedule', base, base, candidate)).toEqual(base);
   });
+  it('Medição e Almoxarifado não substituem coleções um do outro por fotografia parcial', () => {
+    const current = {
+      ...base,
+      warehouse: { movements: [{ id: 'entrada-1', quantity: 8 }] },
+    } as unknown as Project;
+    const partialMeasurement = { ...current, warehouse: { movements: [] }, measurements: [] } as unknown as Project;
+    const savedMeasurement = applyProjectOperation('measurement', current, current, partialMeasurement);
+    expect(savedMeasurement.warehouse).toEqual(current.warehouse);
+    expect(savedMeasurement.measurements).toEqual([]);
+
+    const partialWarehouse = { ...current, warehouse: { movements: [{ id: 'entrada-2', quantity: 3 }] }, measurements: [] } as unknown as Project;
+    const savedWarehouse = applyProjectOperation('warehouse', current, current, partialWarehouse);
+    expect(savedWarehouse.measurements).toEqual(current.measurements);
+    expect(savedWarehouse.warehouse?.movements).toEqual([{ id: 'entrada-2', quantity: 3 }]);
+  });
+  it('mantém a publicação auditada da retirada no Diário durante a migração de domínio', () => {
+    const current = { ...base, dailyReports: [] } as unknown as Project;
+    const report = { id: 'daily-1', date: '2026-10-20', requisitionIds: ['req-1'] };
+    const next = applyProjectOperation('warehouse', current, current, {
+      ...current,
+      dailyReports: [report],
+    } as unknown as Project);
+    expect(next.dailyReports).toEqual([report]);
+  });
 });
