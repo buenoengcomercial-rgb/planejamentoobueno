@@ -20,7 +20,9 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
 ## Coordenação comum
 
 - `Index.tsx` continua compondo a obra e conserva as referências compartilhadas
-  com a conciliação. O agendamento, retry e tratamento inicial do autosave geral
+  com a conciliação. A seleção e carga inicial da obra, incluindo permissões,
+  rascunho pendente e detecção da Medição independente, ficam em
+  `domains/sync/projectBootstrap.ts`. O agendamento, retry e tratamento inicial do autosave geral
   estão em `domains/sync/useProjectAutoSave.ts`, sem depender da aba visível. O
   canal Realtime está em `domains/sync/projectRealtimeChannel.ts`; rota e sessão
   visual estão em `lib/appUiSession.ts`.
