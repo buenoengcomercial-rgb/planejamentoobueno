@@ -36,6 +36,10 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
   `domains/sync/areaHydration.ts`. Ela mantém o grupo de produção em edição fora
   da carga, confere a versão antes e depois da leitura e descarta uma resposta
   de aba obsoleta antes de alterar a obra em memória.
+- `domains/sync/useProjectCollectionTracker.ts` mantém por obra as coleções
+  modificadas localmente, avisos remotos, eventos Realtime pendentes e cargas
+  em andamento. A troca de obra limpa somente os marcadores das duas obras
+  envolvidas; um aviso do Almoxarifado não vira conflito local do Cronograma.
 - `lib/projectOperations.ts` impede que Medição e Almoxarifado substituam a coleção
   um do outro durante a conciliação. A publicação de uma requisição no Diário
   continua autorizada temporariamente para manter o fluxo existente.
@@ -52,7 +56,7 @@ Contagem da cópia de trabalho em 20/10/2026 (linhas físicas):
 | Arquivo | Linhas | Recorte funcional seguinte |
 | --- | ---: | --- |
 | `lib/warehouse.ts` | 5.100 | Separar nota fiscal, requisição/devolução, inventário, cautela e projeções de estoque, mantendo a API pública. |
-| `pages/Index.tsx` | 3.559 | Extrair bootstrap da obra e orquestração das consultas remotas. Sessão visual, canal Realtime, agendamento do autosave, mesclagem da resposta e indicador já saíram. |
+| `pages/Index.tsx` | 3.250 | Extrair orquestração das consultas remotas. Bootstrap, hidratação por área, marcadores de coleções, sessão visual, canal Realtime, agendamento do autosave, mesclagem da resposta e indicador já saíram. |
 | `components/GanttChart.tsx` | 3.087 | Separar estado de filtros, grade temporal, edição de barras, calendário e comandos. |
 | `lib/projectSync.ts` | 2.009 | Separar hidratação, snapshots e comandos normalizados por domínio. |
 | `components/TaskList.tsx` | 1.692 | Separar lista visual, edição de produção e lançamento de quantitativos. |

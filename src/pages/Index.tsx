@@ -19,6 +19,7 @@ import UndoButton from '@/components/UndoButton';
 import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import { subscribeProjectRealtime } from '@/domains/sync/projectRealtimeChannel';
 import { useProjectAutoSave } from '@/domains/sync/useProjectAutoSave';
+import { useProjectCollectionTracker } from '@/domains/sync/useProjectCollectionTracker';
 import { confirmAreaHydration, hydrateAreaCollections, planAreaHydration } from '@/domains/sync/areaHydration';
 import { includePendingDraftCollections, loadInitialProject } from '@/domains/sync/projectBootstrap';
 import { planRealtimeProjectRefresh, reconcileRemoteProjectSnapshot } from '@/domains/sync/remoteProjectReconciliation';
@@ -120,7 +121,6 @@ import type {
 import {
   confirmProjectCollectionsSnapshot,
   discardHydratedProjectCollections,
-  getChangedProjectCollections,
   hasProjectMetadataChanges,
   getLoadedProjectCollections,
   getMissingProjectCollections,
@@ -137,7 +137,6 @@ import {
   WORK_START_COLLECTIONS,
   hasRemoteWarehouseVersionAdvance,
   normalizeProjectCollections,
-  projectAreasForCollections,
   projectCollectionsForRealtimeTable,
   projectCollectionsForView,
   readWarehouseTab,
@@ -234,8 +233,6 @@ export default function Index() {
   const [lastCloudConfirmedAt, setLastCloudConfirmedAt] = useState<string | null>(null);
   const [lastRemoteCheckAt, setLastRemoteCheckAt] = useState<string | null>(null);
   const [remoteUpdateAt, setRemoteUpdateAt] = useState<string | null>(null);
-  const [pendingRemoteAreas, setPendingRemoteAreas] = useState<string[]>([]);
-  const [remoteDirtyRevision, setRemoteDirtyRevision] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [dailyReportInitialDate, setDailyReportInitialDate] = useState<string | undefined>(undefined);
@@ -341,14 +338,17 @@ export default function Index() {
   // próxima operação crítica a reler a versão antes de gravar.
   const lastObservedWarehouseVersionRef = useRef<number | null>(null);
   const realtimeConnectedRef = useRef(false);
-  const remoteDirtyCollectionsRef = useRef<Map<string, Set<ProjectCollectionKey>>>(new Map());
-  const backgroundRefreshingCollectionsRef = useRef<Map<string, Set<ProjectCollectionKey>>>(new Map());
   // Mantém a origem detalhada do evento enquanto o debounce/autosave está em
   // curso. Não é estado de UI: impede que uma área em edição pareça incompleta
   // antes de sabermos se ela precisa de rebase ou de conflito explícito.
-  const pendingRealtimeCollectionsRef = useRef<Map<string, Set<ProjectCollectionKey>>>(new Map());
-  const localDirtyCollectionsRef = useRef<Map<string, Set<ProjectCollectionKey>>>(new Map());
-  const localMetadataDirtyRef = useRef<Set<string>>(new Set());
+  const {
+    pendingRemoteAreas, remoteDirtyRevision,
+    remoteDirtyCollectionsRef, backgroundRefreshingCollectionsRef, pendingRealtimeCollectionsRef,
+    localDirtyCollectionsRef, localMetadataDirtyRef,
+    markRemoteCollections: markTrackedRemoteCollections, clearRemoteCollections,
+    clearPendingRealtimeCollections, markLocalProjectChanges, clearLocalProjectCollections,
+    hasLocalCollectionConflict, resetProjectScopes, notifyRemoteDirtyChange,
+  } = useProjectCollectionTracker();
   const dataLoadSequenceRef = useRef(0);
   const projectOpenSequenceRef = useRef(0);
   const activeDataScopeKeyRef = useRef('');
@@ -490,65 +490,11 @@ export default function Index() {
   const collectionsToHydrate = areaHydration.collections;
   const currentViewDataReady = areaHydration.ready;
 
-  const refreshPendingRemoteAreas = useCallback((projectId: string) => {
-    const dirty = [...(remoteDirtyCollectionsRef.current.get(projectId) ?? [])];
-    setPendingRemoteAreas(projectAreasForCollections(dirty));
-  }, []);
-
   const markRemoteCollections = useCallback((projectId: string, collections: readonly ProjectCollectionKey[]) => {
-    const normalized = normalizeProjectCollections(collections);
-    if (normalized.length === 0) return;
-    const dirty = remoteDirtyCollectionsRef.current.get(projectId) ?? new Set<ProjectCollectionKey>();
-    normalized.forEach(collection => dirty.add(collection));
-    remoteDirtyCollectionsRef.current.set(projectId, dirty);
-    refreshPendingRemoteAreas(projectId);
-    setRemoteDirtyRevision(revision => revision + 1);
+    if (normalizeProjectCollections(collections).length === 0) return;
+    markTrackedRemoteCollections(projectId, collections);
     setRemoteUpdateAt(new Date().toISOString());
-  }, [refreshPendingRemoteAreas]);
-
-  const clearRemoteCollections = useCallback((projectId: string, collections: readonly ProjectCollectionKey[]) => {
-    const dirty = remoteDirtyCollectionsRef.current.get(projectId);
-    if (!dirty) return;
-    normalizeProjectCollections(collections).forEach(collection => dirty.delete(collection));
-    if (dirty.size === 0) remoteDirtyCollectionsRef.current.delete(projectId);
-    refreshPendingRemoteAreas(projectId);
-    setRemoteDirtyRevision(revision => revision + 1);
-  }, [refreshPendingRemoteAreas]);
-
-  const clearPendingRealtimeCollections = useCallback((projectId: string, collections: readonly ProjectCollectionKey[]) => {
-    const pending = pendingRealtimeCollectionsRef.current.get(projectId);
-    if (!pending) return;
-    normalizeProjectCollections(collections).forEach(collection => pending.delete(collection));
-    if (pending.size === 0) pendingRealtimeCollectionsRef.current.delete(projectId);
-  }, []);
-
-  const markLocalProjectChanges = useCallback((before: Project, after: Project) => {
-    const changed = getChangedProjectCollections(before, after);
-    if (changed.length > 0) {
-      const dirty = localDirtyCollectionsRef.current.get(after.id) ?? new Set<ProjectCollectionKey>();
-      changed.forEach(collection => dirty.add(collection));
-      localDirtyCollectionsRef.current.set(after.id, dirty);
-    }
-    if (hasProjectMetadataChanges(before, after)) localMetadataDirtyRef.current.add(after.id);
-  }, []);
-
-  const clearLocalProjectCollections = useCallback((projectId: string, collections?: readonly ProjectCollectionKey[]) => {
-    if (!collections) {
-      localDirtyCollectionsRef.current.delete(projectId);
-      localMetadataDirtyRef.current.delete(projectId);
-      return;
-    }
-    const dirty = localDirtyCollectionsRef.current.get(projectId);
-    if (!dirty) return;
-    normalizeProjectCollections(collections).forEach(collection => dirty.delete(collection));
-    if (dirty.size === 0) localDirtyCollectionsRef.current.delete(projectId);
-  }, []);
-
-  const hasLocalCollectionConflict = useCallback((projectId: string, collections: readonly ProjectCollectionKey[]) => {
-    const local = localDirtyCollectionsRef.current.get(projectId);
-    if (!local) return false;
-    return normalizeProjectCollections(collections).some(collection => local.has(collection));
-  }, []);
+  }, [markTrackedRemoteCollections]);
 
   const synchronizeLoadedProjectSchedule = useCallback((candidate: Project) => (
     getMissingProjectCollections(candidate.id, WORK_START_COLLECTIONS).length === 0
@@ -708,18 +654,7 @@ export default function Index() {
     if (rawProjectRef.current?.id !== projectToLoad?.id) {
       setLastRemoteCheckAt(null);
       setDailyReportSaveErrors({});
-      remoteDirtyCollectionsRef.current.delete(rawProjectRef.current?.id ?? '');
-      remoteDirtyCollectionsRef.current.delete(projectToLoad?.id ?? '');
-      backgroundRefreshingCollectionsRef.current.delete(rawProjectRef.current?.id ?? '');
-      backgroundRefreshingCollectionsRef.current.delete(projectToLoad?.id ?? '');
-      pendingRealtimeCollectionsRef.current.delete(rawProjectRef.current?.id ?? '');
-      pendingRealtimeCollectionsRef.current.delete(projectToLoad?.id ?? '');
-      localDirtyCollectionsRef.current.delete(rawProjectRef.current?.id ?? '');
-      localDirtyCollectionsRef.current.delete(projectToLoad?.id ?? '');
-      localMetadataDirtyRef.current.delete(rawProjectRef.current?.id ?? '');
-      localMetadataDirtyRef.current.delete(projectToLoad?.id ?? '');
-      setPendingRemoteAreas([]);
-      setRemoteDirtyRevision(revision => revision + 1);
+      resetProjectScopes(rawProjectRef.current?.id ?? null, projectToLoad?.id ?? null);
       currentWarehouseVersionRef.current = warehouseVersion ?? null;
       lastObservedWarehouseVersionRef.current = warehouseVersion ?? null;
       partialSyncPendingRef.current = null;
@@ -835,7 +770,7 @@ export default function Index() {
     else if (recoverablePartialDraft) setSaveStatus('error');
     else if (recoverableLocalDraft) setSaveStatus('saving');
     else setSaveStatus('saved');
-  }, [discardProjectDraft]);
+  }, [discardProjectDraft, resetProjectScopes]);
 
   /**
    * Rebaseia exclusivamente coleções identificadas pelo evento remoto. Isso
@@ -948,9 +883,9 @@ export default function Index() {
       if (active?.size === 0) backgroundRefreshingCollectionsRef.current.delete(current.id);
       // Se a atualização falhar, o marcador pendente aciona uma nova leitura
       // sem desmontar a tela que já possui dados.
-      setRemoteDirtyRevision(revision => revision + 1);
+      notifyRemoteDirtyChange();
     }
-  }, [clearPendingRealtimeCollections, clearRemoteCollections, hasLocalCollectionConflict, markRemoteCollections]);
+  }, [backgroundRefreshingCollectionsRef, clearPendingRealtimeCollections, clearRemoteCollections, hasLocalCollectionConflict, markRemoteCollections, notifyRemoteDirtyChange]);
 
   /**
    * Operações atômicas do Almoxarifado também avançam `projects.updated_at`.
@@ -1167,7 +1102,7 @@ export default function Index() {
     } finally {
       if (inFlightSaveRef.current === request) inFlightSaveRef.current = null;
     }
-  }, [clearLocalProjectCollections, discardProjectDraft, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, writeProtectedProjectDraft]);
+  }, [clearLocalProjectCollections, discardProjectDraft, pendingRealtimeCollectionsRef, remoteDirtyCollectionsRef, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, writeProtectedProjectDraft]);
 
   const handleCloudConflict = useCallback(async (localProject: Project) => {
     conflictDetectedRef.current = true;
@@ -1652,7 +1587,7 @@ export default function Index() {
     } finally {
       remoteCheckInFlightRef.current = false;
     }
-  }, [clearRemoteCollections, hasLocalCollectionConflict, markRemoteCollections, orgId, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
+  }, [clearRemoteCollections, hasLocalCollectionConflict, markRemoteCollections, orgId, pendingRealtimeCollectionsRef, remoteDirtyCollectionsRef, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
 
   const refreshProjectFromRealtime = useCallback(async (sources: readonly string[] = []) => {
     const current = rawProjectRef.current;
@@ -1762,7 +1697,7 @@ export default function Index() {
     } finally {
       remoteCheckInFlightRef.current = false;
     }
-  }, [clearRemoteCollections, hasLocalCollectionConflict, markRemoteCollections, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
+  }, [clearRemoteCollections, hasLocalCollectionConflict, localMetadataDirtyRef, markRemoteCollections, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
 
   const refreshDailyReportFromRealtime = useCallback((incoming: DailyReport) => {
     const current = rawProjectRef.current;
@@ -1895,7 +1830,7 @@ export default function Index() {
         realtimeRefreshTimerRef.current = null;
       }
     };
-  }, [bootLoading, rawProject?.id]);
+  }, [bootLoading, pendingRealtimeCollectionsRef, rawProject?.id]);
 
   useEffect(() => {
     if (!rawProject?.id || bootLoading) return;
