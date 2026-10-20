@@ -1147,9 +1147,12 @@ export function correctDeliveredRequisition(
   }
 
   for (const item of requested.values()) {
-    const valuation = warehouseValuationForItem(p.warehouse!, item.itemKey);
+    const valuation = warehouseValuationForItem({ ...wh, movements: correctedMovements }, item.itemKey);
     const movementId = uid();
-    const unitCostSnapshot = valuation.averageUnitCost;
+    // A correction preserves a confirmed price for the same material. Newly
+    // selected materials use the ledger after reversing the original delivery.
+    const unitCostSnapshot = requisition.items.find(original => original.itemKey === item.itemKey)?.unitCostSnapshot
+      ?? valuation.averageUnitCost;
     const movement: WarehouseMovement = {
       id: movementId,
       createdAt: timestamp,
@@ -1621,7 +1624,8 @@ export function correctRequisitionSupplement(
 
   const correctedItems: WarehouseRequisitionItem[] = [];
   for (const item of requested.values()) {
-    const unitCostSnapshot = warehouseValuationForItem(wh, item.itemKey).averageUnitCost;
+    const unitCostSnapshot = supplement.items.find(original => original.itemKey === item.itemKey)?.unitCostSnapshot
+      ?? warehouseValuationForItem({ ...wh, movements }, item.itemKey).averageUnitCost;
     const movementId = uid();
     movements.push({
       id: movementId,

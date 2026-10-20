@@ -164,6 +164,7 @@ it('executa entrega, aumento e redução de original e complemento com saldo neg
   let next = correctDeliveredRequisition(state, state.warehouse!.requisitions[0].id, { items: [material(20)], reason: 'Aumento', idempotencyKey: 'increase' }, auditActor);
   state = await writeRequisition(state, next, 'correction', 'increase');
   expect(await signedBalance()).toBe('-10');
+  expect(state.warehouse!.requisitions[0].items[0].unitCostSnapshot).toBe(2);
   next = correctDeliveredRequisition(state, state.warehouse!.requisitions[0].id, { items: [material(12)], reason: 'Redução', idempotencyKey: 'reduce' }, auditActor);
   state = await writeRequisition(state, next, 'correction', 'reduce');
   expect(await signedBalance()).toBe('-2');
