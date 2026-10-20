@@ -68,6 +68,20 @@ describe('WarehouseRequisitionsTab', () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
   });
 
+  it('lista materiais ativos com saldo zero e negativo para novas retiradas', () => {
+    const project = projectWithMaterials(2);
+    project.warehouse!.movements[0].quantity = 0;
+    project.warehouse!.movements[1].type = 'retirada';
+    render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Nova retirada/i }));
+    const list = screen.getByLabelText('Materiais disponíveis');
+    expect(within(list).getAllByRole('button')).toHaveLength(2);
+    expect(within(list).getByText('Saldo 0')).toBeInTheDocument();
+    expect(within(list).getByText('Saldo -10')).toBeInTheDocument();
+    fireEvent.click(within(list).getByRole('button', { name: /Válvula/ }));
+    expect(screen.getByText(/Saldo previsto negativo: -11 UN/)).toBeInTheDocument();
+  });
+
   it('abre retirada e cautela em janelas separadas do histórico', () => {
     const project = projectWithMaterials(1);
     render(<WarehouseRequisitionsTab project={project} onProjectChange={vi.fn()} />);
@@ -192,10 +206,30 @@ describe('WarehouseRequisitionsTab', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Ações da retirada' });
     expect(within(dialog).getByText('REQ-2026-0001')).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Editar retirada' })).toBeInTheDocument();
-    expect(within(dialog).queryByRole('button', { name: 'Salvar edição' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Salvar edição da retirada' })).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Editar retirada' }));
-    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Salvar edição' })).toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Salvar edição da retirada' })).toBeInTheDocument());
     expect(onOpenRequisitionHandled).toHaveBeenCalled();
+  });
+
+  it('preserva a edição e oculta complemento quando chegam atualizações da obra e da própria requisição', async () => {
+    const project = projectWithMaterials(1);
+    project.warehouse!.requisitions = [{ id: 'req-draft', number: 'REQ-2026-0002', date: '2026-10-20', status: 'entregue',
+      chapterId: 'chapter-1', receiverName: 'João', createdAt: '2026-10-20T10:00:00Z',
+      items: [{ itemKey: 'material-0', description: 'Material disponível 0', unit: 'UN', quantity: 2 }] }];
+    const props = { onProjectChange: vi.fn(), canEdit: true, canSupplement: true, openRequisitionId: 'req-draft' };
+    const { rerender } = render(<WarehouseRequisitionsTab project={project} {...props} />);
+    const dialog = await screen.findByRole('dialog', { name: 'Ações da retirada' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Editar retirada' }));
+    fireEvent.change(within(dialog).getByRole('spinbutton'), { target: { value: '25' } });
+    fireEvent.change(within(dialog).getByPlaceholderText('Explique o que foi ajustado'), { target: { value: 'Corrigir contagem' } });
+    expect(within(dialog).queryByRole('button', { name: 'Confirmar complemento' })).not.toBeInTheDocument();
+    const updated = { ...project, name: 'Nome atualizado', warehouse: { ...project.warehouse!, requisitions: project.warehouse!.requisitions.map(req => ({ ...req, notes: 'Nota concorrente' })) } };
+    rerender(<WarehouseRequisitionsTab project={updated} {...props} />);
+    expect(within(dialog).getByRole('spinbutton')).toHaveValue(25);
+    expect(within(dialog).getByPlaceholderText('Explique o que foi ajustado')).toHaveValue('Corrigir contagem');
+    expect(within(dialog).getByRole('button', { name: 'Salvar edição da retirada' })).toBeInTheDocument();
+    expect(within(dialog).getByText('Saldo negativo permitido.')).toBeInTheDocument();
   });
 
   it('abre apenas a consulta quando o usuário não pode corrigir retiradas', async () => {
@@ -210,7 +244,7 @@ describe('WarehouseRequisitionsTab', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'Ações da retirada' });
     expect(within(dialog).getByText('REQ-2026-0001')).toBeInTheDocument();
-    expect(within(dialog).queryByRole('button', { name: 'Salvar edição' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Salvar edição da retirada' })).not.toBeInTheDocument();
   });
 
   it('destaca a borda da requisição aberta e recua seu detalhe', () => {

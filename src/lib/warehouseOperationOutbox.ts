@@ -24,7 +24,7 @@ export function stageWarehouseOperation(actorId: string | undefined, projectId: 
   notify();
 }
 export function rejectWarehouseOperation(actorId: string | undefined, projectId: string, id: string, error: { code?: string; message?: string }) {
-  if (!actorId || !['P0001', 'P0002', '42501', '22023', '23503', '23505', '23514'].includes(error.code ?? '')) return;
+  if (!actorId || !['P0001', 'P0002', '42501', '22023', '23503', '23505', '23514', 'PGRST202'].includes(error.code ?? '')) return;
   const key = `${prefix(actorId, projectId)}${id}`, stored = localStorage.getItem(key);
   if (stored) localStorage.setItem(key, JSON.stringify({ ...JSON.parse(stored), conflict: error.message || 'Operação recusada' }));
   notify();
@@ -46,4 +46,25 @@ export async function retryWarehouseOutbox(actorId: string, projectId: string, o
   if (!receipt?.committedAt || !receipt.projectUpdatedAt || !Number.isSafeInteger(receipt.warehouseVersion)) throw new Error('A confirmação ainda não pôde ser conferida.');
   await onConfirmed();
   acknowledgeWarehouseOutbox(actorId, projectId, operation.id);
+}
+
+/** Resolve only uncertain attempts for this requisition; keep rejected history intact. */
+export async function resolveWarehouseRequisitionPending(actorId: string, projectId: string,
+  requisitionId: string, currentKey: string, onConfirmed: () => Promise<void>): Promise<boolean> {
+  const pending = warehousePendingOperations(actorId, projectId).filter(operation => {
+    const request = operation.args.p_request as { requisitionId?: string } | undefined;
+    return !operation.conflict && operation.id !== currentKey
+      && operation.rpc === 'commit_warehouse_requisition_v2' && request?.requisitionId === requisitionId;
+  }).sort((a, b) => a.at.localeCompare(b.at));
+  let confirmed = false;
+  for (const operation of pending) {
+    try {
+      await retryWarehouseOutbox(actorId, projectId, operation, onConfirmed);
+      confirmed = true;
+    } catch (error) {
+      // A recorded refusal is final. Network uncertainty must still be resolved.
+      if (!warehousePendingOperations(actorId, projectId).find(row => row.id === operation.id)?.conflict) throw error;
+    }
+  }
+  return confirmed;
 }

@@ -142,16 +142,28 @@ describe('operação integrada do almoxarifado', () => {
     expect(repeated.project.warehouse!.movements.filter(movement => movement.type === 'retirada')).toHaveLength(1);
   });
 
-  it('bloqueia retirada sem evidência e quantidade superior ao saldo', () => {
+  it('permite retirada acima do saldo e mantém a assinatura obrigatória', () => {
     const stocked = withStock();
-    expect(() => createAndDeliverRequisition(stocked, {
+    const delivered = createAndDeliverRequisition(stocked, {
       date: '2026-08-17', chapterId: 'chapter-1', teamId: 'alpha', receiverName: 'Recebedor', signatureReceiver: 'assinatura', deliveryAttachments: [photo],
       items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 21 }],
-    }, { actor })).toThrow(/maior que o saldo/i);
+    }, { actor });
+    expect(computeWarehouseRows(delivered.project, { includeManual: true })[0].balance).toBe(-1);
     expect(() => createAndDeliverRequisition(stocked, {
       date: '2026-08-17', chapterId: 'chapter-1', teamId: 'alpha', receiverName: 'Recebedor',
       items: [{ itemKey: 'material-1', description: 'Cimento', unit: 'SC', quantity: 1 }],
     }, { actor })).toThrow(/assinatura/i);
+  });
+
+  it('preserva déficit na avaliação e consome entradas posteriores antes de criar estoque', () => {
+    const state = emptyWarehouse();
+    state.movements = [
+      { id: 'a', createdAt: '2026-10-20T01:00:00Z', date: '2026-10-20', type: 'entrada', itemKey: 'm', itemDescription: 'Material', itemUnit: 'UN', quantity: 10, unitPrice: 2 },
+      { id: 'b', createdAt: '2026-10-20T02:00:00Z', date: '2026-10-20', type: 'retirada', itemKey: 'm', itemDescription: 'Material', itemUnit: 'UN', quantity: 15, costSnapshot: 2 },
+    ];
+    expect(warehouseValuationForItem(state, 'm')).toMatchObject({ quantity: -5, inventoryValue: 0, consumedCost: 30 });
+    state.movements.push({ id: 'c', createdAt: '2026-10-20T03:00:00Z', date: '2026-10-20', type: 'entrada', itemKey: 'm', itemDescription: 'Material', itemUnit: 'UN', quantity: 8, unitPrice: 4 });
+    expect(warehouseValuationForItem(state, 'm')).toMatchObject({ quantity: 3, inventoryValue: 12, consumedCost: 30, averageUnitCost: 4 });
   });
 
   it('permite retirada sem equipe, sem fotografia e preserva assinatura e baixa', () => {

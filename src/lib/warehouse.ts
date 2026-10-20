@@ -635,17 +635,16 @@ export function warehouseValuationForItem(
     if (sign > 0) {
       const price = movement.costSnapshot ?? movement.unitPrice ?? currentAverage;
       if (price == null || !Number.isFinite(price)) incomplete = true;
-      inventoryValue += qty * (price ?? 0);
+      inventoryValue += Math.max(0, qty + Math.min(0, quantity)) * (Number.isFinite(price) ? price! : 0);
       quantity += qty;
     } else {
       const price = movement.costSnapshot ?? currentAverage ?? movement.unitPrice;
       if (price == null || !Number.isFinite(price)) incomplete = true;
-      const appliedQty = Math.min(quantity, qty);
-      inventoryValue -= appliedQty * (price ?? 0);
+      const appliedQty = Math.min(Math.max(0, quantity), qty);
+      inventoryValue -= appliedQty * (Number.isFinite(price) ? price! : 0);
       quantity -= qty;
-      if (movement.type === 'retirada') consumedCost += qty * (price ?? 0);
+      if (movement.type === 'retirada') consumedCost += qty * (Number.isFinite(price) ? price! : 0);
       if (quantity <= 0) {
-        quantity = Math.max(0, quantity);
         inventoryValue = 0;
       }
     }
@@ -1095,13 +1094,6 @@ export function correctDeliveredRequisition(
     requested.set(item.itemKey, { ...item, quantity });
   }
 
-  const originalByKey = new Map<string, number>();
-  for (const item of requisition.items) originalByKey.set(item.itemKey, (originalByKey.get(item.itemKey) ?? 0) + Number(item.quantity || 0));
-  const availableByKey = new Map(computeWarehouseRows(p, { includeManual: true }).map(row => [row.key, row.balance + (originalByKey.get(row.key) ?? 0)]));
-  for (const item of requested.values()) {
-    if (item.quantity > (availableByKey.get(item.itemKey) ?? 0)) throw new Error(`${item.description}: quantidade maior que o saldo disponível para correção.`);
-  }
-
   const timestamp = nowISO();
   const auditActor = normalizeWarehouseActor(actor);
   const originalMovements = wh.movements.filter(movement => movement.type === 'retirada'
@@ -1336,11 +1328,7 @@ export function deliverRequisition(
   if (!req.signatureReceiver) throw new Error('A assinatura de quem recebeu é obrigatória.');
   if (!req.items.length) throw new Error('Adicione ao menos um material à retirada.');
   for (const item of req.items) {
-    if (!item.itemKey || !(Number(item.quantity) > 0)) throw new Error('Todos os materiais devem ter quantidade positiva.');
-    const available = balanceFor(wh, item.itemKey);
-    if (item.quantity > available) {
-      throw new Error(`${item.description}: quantidade solicitada (${item.quantity}) maior que o saldo disponível (${available}).`);
-    }
+    if (!item.itemKey || !Number.isFinite(Number(item.quantity)) || !(Number(item.quantity) > 0)) throw new Error('Todos os materiais devem ter quantidade positiva.');
   }
   const newItems: WarehouseRequisitionItem[] = [];
   for (const it of req.items) {
@@ -1476,11 +1464,6 @@ export function addRequisitionSupplement(
     if (requested.has(item.itemKey)) throw new Error('Cada material deve aparecer uma única vez no complemento.');
     requested.set(item.itemKey, { ...item, quantity });
   }
-  const availableByKey = new Map(computeWarehouseRows(p, { includeManual: true }).map(row => [row.key, row.balance]));
-  for (const item of requested.values()) {
-    if (item.quantity > (availableByKey.get(item.itemKey) ?? 0)) throw new Error(`${item.description}: quantidade maior que o saldo disponível.`);
-  }
-
   const supplementId = uid();
   const createdAt = nowISO();
   const auditActor = normalizeWarehouseActor(actor);
@@ -1592,18 +1575,6 @@ export function correctRequisitionSupplement(
   ));
   if (supplement.items.length && !activeMovements.length) {
     throw new Error('Os movimentos deste complemento não foram localizados. Atualize o Almoxarifado antes de corrigir.');
-  }
-
-  const originalByKey = new Map<string, number>();
-  for (const movement of activeMovements) {
-    originalByKey.set(movement.itemKey, trunc2((originalByKey.get(movement.itemKey) ?? 0) + Number(movement.quantity || 0)));
-  }
-  const availableByKey = new Map(computeWarehouseRows(p, { includeManual: true })
-    .map(row => [row.key, trunc2(row.balance + (originalByKey.get(row.key) ?? 0))] as const));
-  for (const item of requested.values()) {
-    if (item.quantity > (availableByKey.get(item.itemKey) ?? 0)) {
-      throw new Error(`${item.description}: quantidade maior que o saldo disponível para correção.`);
-    }
   }
 
   const timestamp = nowISO();
@@ -3627,7 +3598,7 @@ export function reviewPostedFiscalNoteCosts(
       const average = quantity > 0 ? inventoryValue / quantity : undefined;
       if (sign > 0) {
         const price = movement.unitPrice ?? movement.costSnapshot ?? average ?? 0;
-        inventoryValue += movementQuantity * price;
+        inventoryValue += Math.max(0, movementQuantity + Math.min(0, quantity)) * price;
         quantity += movementQuantity;
         if (entryIds.has(movement.id)) revalueFollowing = true;
         continue;
@@ -3644,11 +3615,10 @@ export function reviewPostedFiscalNoteCosts(
         });
         changedMovementIds.add(movement.id);
       }
-      const appliedQuantity = Math.min(quantity, movementQuantity);
+      const appliedQuantity = Math.min(Math.max(0, quantity), movementQuantity);
       inventoryValue -= appliedQuantity * (price ?? 0);
       quantity -= movementQuantity;
       if (quantity <= 0) {
-        quantity = Math.max(0, quantity);
         inventoryValue = 0;
       }
     }

@@ -102,6 +102,12 @@ function operationAuditRows(
   ));
 }
 
+/** A server refusal is final; a transport error may hide a committed operation. */
+export function isWarehouseDefinitiveRejection(error: unknown): boolean {
+  return error instanceof WarehouseInsufficientStockError
+    || Boolean((error as { definitiveRejection?: boolean } | null)?.definitiveRejection);
+}
+
 export class WarehouseInsufficientStockError extends Error {
   constructor(public readonly items: Array<{ itemKey: string; requested: number; available: number }>) {
     super('O saldo mudou antes da confirmação. Revise os materiais destacados; nenhuma retirada foi gravada.');
@@ -303,7 +309,11 @@ export async function commitWarehouseOperation(
   const { data, error } = await rpc('commit_warehouse_requisition_v2', args);
   if (error) {
     rejectWarehouseOperation(actorId, before.id, operation.operationKey, error);
-    throw warehouseCommitError(error, operation.type);
+    const failure = warehouseCommitError(error, operation.type);
+    if (['P0001', 'P0002', '42501', '22023', '23503', '23505', '23514', 'PGRST202'].includes(error.code ?? '')) {
+      Object.assign(failure, { definitiveRejection: true });
+    }
+    throw failure;
   }
 
   const result = (data ?? {}) as WarehouseOperationResult;
