@@ -10,7 +10,6 @@ import { syncProductionAtomically, stripNormalizedCollections } from '@/lib/proj
 import { applyProjectOperation, auditProjectReversal } from '@/lib/projectOperations';
 import { scopeKey } from '@/lib/planTakeoff';
 import { OpeningError } from '@/components/OpeningError';
-import { withReadDeadline } from '@/lib/readDeadline';
 import { useState, useMemo, useEffect, useDeferredValue, useCallback, useRef, Suspense } from 'react';
 import { flushSync } from 'react-dom';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -20,6 +19,7 @@ import UndoButton from '@/components/UndoButton';
 import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import { subscribeProjectRealtime } from '@/domains/sync/projectRealtimeChannel';
 import { useProjectAutoSave } from '@/domains/sync/useProjectAutoSave';
+import { includePendingDraftCollections, loadInitialProject } from '@/domains/sync/projectBootstrap';
 import { planRealtimeProjectRefresh, reconcileRemoteProjectSnapshot } from '@/domains/sync/remoteProjectReconciliation';
 import ProjectHeaderSyncStatus from '@/domains/sync/ProjectHeaderSyncStatus';
 import MigrationDialog from '@/components/MigrationDialog';
@@ -79,13 +79,10 @@ import {
   loadCloudProjectRecord,
   loadStableCloudProjectRecord,
   upsertCloudProject,
-  createCloudProject,
   renameCloudProject,
   duplicateCloudProject,
   deleteCloudProject,
   deleteCloudProjectAsOwner,
-  generateUniqueCloudName,
-  getSampleSeed,
   CloudProjectConflictError,
   CloudProjectPartialSyncError,
   CloudProjectMeta,
@@ -153,16 +150,6 @@ import {
 const UNDO_LIMIT = 20;
 const LOCAL_DRAFT_DEBOUNCE_MS = 900;
 const REMOTE_VERSION_POLL_MS = 15000;
-
-function includePendingDraftCollections(
-  projectId: string,
-  requested: readonly ProjectCollectionKey[],
-): ProjectCollectionKey[] {
-  const stored = readStoredProjectDraft(projectId);
-  if (!stored?.loadedCollections?.length) return [...requested];
-  const pending = PROJECT_COLLECTION_KEYS.filter(key => key !== 'auditLogs' && stored.loadedCollections?.includes(key));
-  return [...new Set([...requested, ...pending])];
-}
 
 type WarehousePrepareScope = WarehouseScopedDomain | 'requisition';
 const WAREHOUSE_OPERATION_COLLECTIONS: Record<WarehousePrepareScope, readonly ProjectCollectionKey[]> = {
@@ -1466,60 +1453,33 @@ export default function Index() {
       setBootLoading(true);
       setBootError(null);
       try {
-        let list = await withReadDeadline(refreshCloudList());
+        const result = await loadInitialProject({
+          orgId, creator, role,
+          routeProjectId: initialRouteProjectIdRef.current,
+          initialView: initialViewRef.current,
+          fallbackView: restrictedFallbackView,
+          canViewWarehousePanel,
+          refreshCloudList,
+          isCancelled: () => cancelled,
+          onAreaSelected: (view, tab) => {
+            setWarehouseTab(tab);
+            const routeCode = view === 'tasks' ? Promise.all([loadDailyProductionWorkspace(), loadTaskList()])
+              : view === 'dailyReport' ? loadDailyReport() : null;
+            void routeCode?.catch(() => undefined);
+          },
+        });
         if (cancelled) return;
-        if (list.length === 0 && creator) {
-          const name = await generateUniqueCloudName('Minha primeira obra');
-          const created = await createCloudProject(name, orgId, getSampleSeed());
-          if (cancelled) return;
-          list = await refreshCloudList();
-          replaceProjectWithoutAutoSave(created, list.find(p => p.id === created.id)?.updatedAt ?? null);
-        } else if (list.length > 0) {
-          const rememberedProjectId = readAppUiSession()?.projectId;
-          const preferredProjectId = [initialRouteProjectIdRef.current, rememberedProjectId, list[0].id]
-            .find(id => !!id && list.some(projectMeta => projectMeta.id === id)) ?? list[0].id;
-          await withReadDeadline(preloadIndexedDbProjectDraft(preferredProjectId));
-          if (cancelled) return;
-          const initialWarehouseTab = readWarehouseTab(preferredProjectId, canViewWarehousePanel, role === 'owner');
-          setWarehouseTab(initialWarehouseTab);
-          const initialView = role && !canAccessAppView(role, initialViewRef.current)
-            ? restrictedFallbackView
-            : initialViewRef.current;
-          // Confirm the independent sheet before choosing the initial Project
-          // collections. Its 5 MB audit is loaded by its own repository, while
-          // unrelated daily logs and schedule rows wait for their own tabs.
-          let independentMeasurement = false;
-          if (initialView === 'measurement') {
-            const { data, error } = await supabase.from('measurement_workspaces' as never)
-              .select('project_id').eq('project_id', preferredProjectId).maybeSingle();
-            if (cancelled) return;
-            independentMeasurement = !error && !!data;
-          }
-          const routeCode = initialView === 'tasks' ? Promise.all([loadDailyProductionWorkspace(), loadTaskList()])
-            : initialView === 'dailyReport' ? loadDailyReport() : null;
-          void routeCode?.catch(() => undefined);
-          const initialCollections = includePendingDraftCollections(
-            preferredProjectId,
-            projectCollectionsForView(initialView, initialWarehouseTab, independentMeasurement),
-          );
-          const record = await withReadDeadline(loadStableCloudProjectRecord(preferredProjectId, {
-            collections: initialCollections,
-            strict: true,
-            deferSnapshot: true,
-          }));
-          if (cancelled) {
-            if (record) discardCloudProjectRecord(record);
-            return;
-          }
-          if (!record) throw new Error('A obra não foi encontrada. Tente novamente ou confira o acesso com a administração.');
-          confirmCloudProjectRecord(record);
+        if (!result) return;
+        if (result.kind === 'created') {
+          replaceProjectWithoutAutoSave(result.project, result.updatedAt);
+        } else {
+          confirmCloudProjectRecord(result.record);
           // An existence check alone is not an opened project. Publish the
           // confirmation only after its matching Project record is adopted.
-          setIndependentMeasurementProjectId(independentMeasurement ? preferredProjectId : null);
+          setIndependentMeasurementProjectId(result.independentMeasurement ? result.record.project.id : null);
           // Opening an area never runs warehouse maintenance or downloads its history.
-          replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, true, record.warehouseVersion);
-        } else {
-          throw new Error('Não há obras disponíveis para sua conta. Confira com a administração da empresa.');
+          replaceProjectWithoutAutoSave(result.record.project, result.record.updatedAt,
+            result.record.repairApplied, true, result.record.warehouseVersion);
         }
         initialLoadRef.current = true;
       } catch (e) {
