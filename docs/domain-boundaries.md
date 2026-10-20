@@ -32,6 +32,10 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
   confirma uma edição local ainda pendente. A apresentação do aviso geral está
   em `domains/sync/ProjectHeaderSyncStatus.tsx`; na Medição independente, falhas
   de outras áreas são identificadas como tais.
+- A carga sob demanda ao entrar em outra área está em
+  `domains/sync/areaHydration.ts`. Ela mantém o grupo de produção em edição fora
+  da carga, confere a versão antes e depois da leitura e descarta uma resposta
+  de aba obsoleta antes de alterar a obra em memória.
 - `lib/projectOperations.ts` impede que Medição e Almoxarifado substituam a coleção
   um do outro durante a conciliação. A publicação de uma requisição no Diário
   continua autorizada temporariamente para manter o fluxo existente.

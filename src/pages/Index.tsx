@@ -19,6 +19,7 @@ import UndoButton from '@/components/UndoButton';
 import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import { subscribeProjectRealtime } from '@/domains/sync/projectRealtimeChannel';
 import { useProjectAutoSave } from '@/domains/sync/useProjectAutoSave';
+import { confirmAreaHydration, hydrateAreaCollections, planAreaHydration } from '@/domains/sync/areaHydration';
 import { includePendingDraftCollections, loadInitialProject } from '@/domains/sync/projectBootstrap';
 import { planRealtimeProjectRefresh, reconcileRemoteProjectSnapshot } from '@/domains/sync/remoteProjectReconciliation';
 import ProjectHeaderSyncStatus from '@/domains/sync/ProjectHeaderSyncStatus';
@@ -117,15 +118,12 @@ import type {
   WarehouseScopedDomain,
 } from '@/lib/warehouseScopedCommit';
 import {
-  confirmHydratedProjectCollections,
   confirmProjectCollectionsSnapshot,
   discardHydratedProjectCollections,
-  getHydratedProjectCollections,
   getChangedProjectCollections,
   hasProjectMetadataChanges,
   getLoadedProjectCollections,
   getMissingProjectCollections,
-  hydrateProjectFromCloud,
   mergeHydratedProjectCollections,
   mergeProjectRecordsThreeWay,
   mergeProjectMetadata,
@@ -480,25 +478,17 @@ export default function Index() {
   // até o usuário entrar na área correspondente; então a hidratação normal
   // busca somente aquele domínio e mantém filtros, formulários e scroll.
   void remoteDirtyRevision;
-  const staleCurrentViewCollections = rawProject
-    ? requiredProjectCollections.filter(collection => remoteDirtyCollectionsRef.current.get(rawProject.id)?.has(collection))
-    : [];
-  const missingProjectCollections = rawProject
-    ? getMissingProjectCollections(rawProject.id, requiredProjectCollections)
-    : requiredProjectCollections;
-  const backgroundRefreshing = rawProject
-    ? backgroundRefreshingCollectionsRef.current.get(rawProject.id)
-    : undefined;
-  const locallyDirty = localDirtyCollectionsRef.current.get(rawProject?.id ?? '');
-  const productionLocallyDirty = ['taskDailyLogs', 'eapChapters', 'tasks']
-    .some(collection => locallyDirty?.has(collection as ProjectCollectionKey));
-  const collectionsToHydrate = normalizeProjectCollections([
-    ...missingProjectCollections,
-    ...staleCurrentViewCollections,
-  ]).filter(collection => !backgroundRefreshing?.has(collection)
-    && !locallyDirty?.has(collection)
-    && !(productionLocallyDirty && ['taskDailyLogs', 'eapChapters', 'tasks'].includes(collection)));
-  const currentViewDataReady = !!rawProject && missingProjectCollections.length === 0;
+  const areaHydration = planAreaHydration(
+    rawProject?.id ?? null,
+    requiredProjectCollections,
+    rawProject ? remoteDirtyCollectionsRef.current.get(rawProject.id) : undefined,
+    rawProject ? backgroundRefreshingCollectionsRef.current.get(rawProject.id) : undefined,
+    localDirtyCollectionsRef.current.get(rawProject?.id ?? ''),
+  );
+  const staleCurrentViewCollections = areaHydration.stale;
+  const missingProjectCollections = areaHydration.missing;
+  const collectionsToHydrate = areaHydration.collections;
+  const currentViewDataReady = areaHydration.ready;
 
   const refreshPendingRemoteAreas = useCallback((projectId: string) => {
     const dirty = [...(remoteDirtyCollectionsRef.current.get(projectId) ?? [])];
@@ -1509,59 +1499,23 @@ export default function Index() {
         if (!(await flushPendingSave())) throw new Error('A alteração pendente precisa ser salva antes de abrir outra área.');
         const source = rawProjectRef.current;
         if (!source || source.id !== projectId) return;
-        const beforeLoad = await getCloudProjectVersion(projectId);
-        if (!beforeLoad) throw new Error('A versão da obra não pôde ser conferida.');
-        const hydrated = await hydrateProjectFromCloud(source, {
+        const hydrated = await hydrateAreaCollections({
+          projectId,
           collections: requestCollections,
-          strict: true,
+          source,
+          currentProject: () => rawProjectRef.current,
+          savedProjectJson: () => lastSavedProjectJsonRef.current,
+          isCurrent: () => !productionCaptureBusyRef.current && dataLoadSequenceRef.current === sequence,
         });
-        const afterLoad = await getCloudProjectVersion(projectId);
-        if (!afterLoad || afterLoad.updatedAt !== beforeLoad.updatedAt) {
-          discardHydratedProjectCollections(hydrated);
-          throw new Error('A obra mudou durante o carregamento. Atualize a área antes de editar.');
-        }
-        if (productionCaptureBusyRef.current || dataLoadSequenceRef.current !== sequence) {
-          discardHydratedProjectCollections(hydrated);
-          return;
-        }
-        const latest = rawProjectRef.current;
-        if (!latest || latest.id !== projectId) {
-          discardHydratedProjectCollections(hydrated);
-          return;
-        }
-        const cloudMerged = mergeHydratedProjectCollections(latest, hydrated, requestCollections);
-        let savedCloudMerged = cloudMerged;
-        if (lastSavedProjectJsonRef.current) {
-          try {
-            const saved = JSON.parse(lastSavedProjectJsonRef.current) as Project;
-            savedCloudMerged = mergeHydratedProjectCollections(saved, hydrated, requestCollections);
-          } catch {
-            savedCloudMerged = cloudMerged;
-          }
-        }
-        lastSavedProjectJsonRef.current = serializeProject(savedCloudMerged);
-
-        // O reparo depende de três coleções e, antes, só era executado na
-        // primeira abertura. Execute-o também quando a última dependência
-        // chegar sob demanda, mantendo a diferença para o autosave persistir.
-        const loaded = new Set([
-          ...getLoadedProjectCollections(projectId),
-          ...getHydratedProjectCollections(hydrated),
-        ]);
-        const canRepairAnalyticLinks = loaded.has('budgetItems')
-          && loaded.has('analyticCompositions')
-          && loaded.has('additives');
-        const repaired = canRepairAnalyticLinks
-          ? repairProjectAnalyticLinks(cloudMerged)
-          : { project: cloudMerged, changed: false };
-        const merged = repaired.project;
-        confirmHydratedProjectCollections(hydrated);
+        if (!hydrated) return;
+        lastSavedProjectJsonRef.current = hydrated.savedProjectJson;
+        confirmAreaHydration(hydrated);
         clearRemoteCollections(projectId, requestCollections);
-        skipNextAutoSaveRef.current = !repaired.changed;
-        rawProjectRef.current = merged;
-        setRawProject(merged);
-        if (repaired.changed) {
-          scheduleProjectDraft(merged, currentProjectUpdatedAtRef.current);
+        skipNextAutoSaveRef.current = !hydrated.repaired;
+        rawProjectRef.current = hydrated.project;
+        setRawProject(hydrated.project);
+        if (hydrated.repaired) {
+          scheduleProjectDraft(hydrated.project, currentProjectUpdatedAtRef.current);
           setSaveStatus('saving');
         }
       } catch (error) {
