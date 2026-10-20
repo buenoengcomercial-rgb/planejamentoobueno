@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { resolveObraConfig } from '@/lib/obraConfig';
+import { readAdditiveViewPreferences, writeAdditiveViewPreferences } from '@/lib/projectViewPreferences';
 import AdditiveScheduleFinancialForecast from '@/components/additiveSchedule/AdditiveScheduleFinancialForecast';
 import { buildAdditiveScheduleForecast } from '@/lib/additiveScheduleForecast';
 import {
@@ -28,7 +29,6 @@ import {
   resolveAdditiveScheduleState,
   releaseAdditiveScheduleDependencyForTask,
   setAdditiveScheduleDependencyBlock,
-  setAdditiveScheduleCollapsedPhaseIds,
   setAdditiveScheduleDependentTask,
   settleAdditiveScheduleDraft,
   syncAdditiveScheduleDraft,
@@ -83,6 +83,18 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton,
   const [blockerIds, setBlockerIds] = useState<string[]>([]);
   const [blockerNote, setBlockerNote] = useState('');
   const active = additives.find(additive => additive.id === activeId) ?? preferred;
+  const visualKey = `${project.id}:${active?.id ?? ''}`;
+  const [collapsedPreference, setCollapsedPreference] = useState<{ key: string; ids: string[] }>(() => ({
+    key: visualKey,
+    ids: active?.id
+      ? readAdditiveViewPreferences(project.id, active.id, active.uiState).scheduleCollapsedPhaseIds ?? []
+      : [],
+  }));
+  const scheduleCollapsedPhaseIds = collapsedPreference.key === visualKey
+    ? collapsedPreference.ids
+    : active?.id
+      ? readAdditiveViewPreferences(project.id, active.id, active.uiState).scheduleCollapsedPhaseIds ?? []
+      : [];
   const obraConfig = useMemo(() => resolveObraConfig(project), [project]);
 
   useEffect(() => {
@@ -242,10 +254,11 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton,
           title="Cronograma do Aditivo"
           subtitle={isArchived ? 'Versão histórica somente para leitura' : 'Planejamento preliminar físico-financeiro'}
           suspensionMap={suspensions}
-          collapsedPhaseIds={active.uiState?.scheduleCollapsedPhaseIds ?? []}
-          onCollapsedPhaseIdsChange={phaseIds => onProjectChange(previous => (
-            setAdditiveScheduleCollapsedPhaseIds(previous, active.id, phaseIds)
-          ))}
+          collapsedPhaseIds={scheduleCollapsedPhaseIds}
+          onCollapsedPhaseIdsChange={phaseIds => {
+            writeAdditiveViewPreferences(project.id, active.id, { scheduleCollapsedPhaseIds: phaseIds }, active.uiState);
+            setCollapsedPreference({ key: visualKey, ids: phaseIds });
+          }}
           onToggleSuspension={isArchived ? undefined : (taskId, checked) => {
             if (checked) openBlockDialog(taskId);
             else if (suspensions[taskId]?.kind === 'dependency') {

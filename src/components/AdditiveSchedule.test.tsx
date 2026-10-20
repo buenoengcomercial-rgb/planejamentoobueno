@@ -47,6 +47,21 @@ const baseProject: Project = {
 describe('AdditiveSchedule - composições bloqueadoras', () => {
   beforeEach(() => localStorage.clear());
 
+  it('recolher capítulo do cronograma do aditivo não grava a obra', () => {
+    const project = syncAdditiveScheduleDraft(baseProject, additive.id, '2026-08-14T12:00:00.000Z');
+    const onProjectChange = vi.fn();
+    const view = render(<AdditiveSchedule project={project} onProjectChange={onProjectChange} />);
+    onProjectChange.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: /ABRIGO, TUBULAÇÕES E CONEXÕES/i }));
+
+    expect(onProjectChange).not.toHaveBeenCalled();
+    expect(project.additives?.[0].uiState?.scheduleCollapsedPhaseIds).toBeUndefined();
+    view.unmount();
+    render(<AdditiveSchedule project={project} onProjectChange={onProjectChange} />);
+    expect(screen.queryByTestId('gantt-bar-door-task')).not.toBeInTheDocument();
+  });
+
   it('lista itens novos antes dos contratados, salva ambos e restaura a seleção', () => {
     const project = syncAdditiveScheduleDraft(baseProject, additive.id, '2026-08-14T12:00:00.000Z');
     const onProjectChange = vi.fn();

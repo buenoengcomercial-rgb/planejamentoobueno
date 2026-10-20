@@ -42,6 +42,7 @@ import {
 import { getWorkStartDate } from '@/lib/workStartDate';
 import TaskRescheduleDialog from '@/components/TaskRescheduleDialog';
 import { approveRescheduleRequest, rejectRescheduleRequest, submitRescheduleRequest } from '@/lib/taskRescheduling';
+import { readGanttCollapsedPhases, writeGanttCollapsedPhases } from '@/lib/projectViewPreferences';
 
 interface GanttChartProps {
   project: Project;
@@ -120,7 +121,6 @@ export default function GanttChart({
     } catch {
       // O cronograma continua funcional quando o armazenamento local está indisponível.
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
   // Persiste a cada mudança
   useEffect(() => {
@@ -128,9 +128,9 @@ export default function GanttChart({
       // Preferência visual não é crítica para a operação.
     }
   }, [viewMode, viewModeStorageKey]);
-  // Estado de capítulos minimizados — inicializa com a persistência do projeto.
+  // Recolhimento é preferência do navegador, não uma edição da obra.
   const [collapsedPhases, setCollapsedPhases] = useState<Set<string>>(
-    () => new Set(controlledCollapsedPhaseIds ?? project.uiState?.ganttCollapsedPhaseIds ?? [])
+    () => new Set(controlledCollapsedPhaseIds ?? readGanttCollapsedPhases(project))
   );
   const [showCriticalOnly, setShowCriticalOnly] = useState(false);
   const [showZeroSuppressed, setShowZeroSuppressed] = useState(false);
@@ -166,33 +166,21 @@ export default function GanttChart({
 
   // Synchronize controlled state when switching projects/additives.
   useEffect(() => {
-    const incoming = controlledCollapsedPhaseIds ?? project.uiState?.ganttCollapsedPhaseIds ?? [];
+    const incoming = controlledCollapsedPhaseIds ?? readGanttCollapsedPhases(project);
     setCollapsedPhases(current => {
       const now = [...current].sort();
       const next = [...incoming].sort();
       const same = now.length === next.length && now.every((id, index) => id === next[index]);
       return same ? current : new Set(incoming);
     });
-  }, [controlledCollapsedPhaseIds, project.id]);
+  }, [controlledCollapsedPhaseIds, project]);
 
-  // Persiste no projeto/aditivo sempre que o conjunto de minimizados mudar.
-  useEffect(() => {
-    const now = [...collapsedPhases].sort();
-    const persisted = controlledCollapsedPhaseIds ?? project.uiState?.ganttCollapsedPhaseIds ?? [];
-    const prev = [...persisted].sort();
-    const same = now.length === prev.length && now.every((id, i) => id === prev[i]);
-    if (same) return;
-    if (onCollapsedPhaseIdsChange) {
-      onCollapsedPhaseIdsChange(now);
-      return;
-    }
-    if (!onProjectChange) return;
-    onProjectChange({
-      ...project,
-      uiState: { ...(project.uiState ?? {}), ganttCollapsedPhaseIds: now },
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collapsedPhases]);
+  const changeCollapsedPhases = (next: Set<string>) => {
+    setCollapsedPhases(next);
+    const ids = [...next].sort();
+    if (onCollapsedPhaseIdsChange) onCollapsedPhaseIdsChange(ids);
+    else writeGanttCollapsedPhases(project.id, ids);
+  };
 
   // Drag state
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
@@ -489,15 +477,11 @@ export default function GanttChart({
   };
 
   const togglePhase = (id: string) => {
-    setCollapsedPhases(prev => {
-      const n = new Set(prev);
-      // Apenas alterna o próprio capítulo/subcapítulo.
-      // O estado individual dos subcapítulos é preservado — quando o pai
-      // for re-expandido, cada filho mantém o estado em que foi deixado.
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
+    const next = new Set(collapsedPhases);
+    // O estado individual dos subcapítulos é preservado ao alternar o pai.
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    changeCollapsedPhases(next);
   };
 
   const taskNumbering = useMemo(() => {
@@ -1454,14 +1438,14 @@ export default function GanttChart({
             <div className="ml-auto flex items-center gap-1">
               <button
                 type="button"
-                onClick={() => setCollapsedPhases(new Set())}
+                onClick={() => changeCollapsedPhases(new Set())}
                 className="h-8 rounded-md border border-border bg-background px-2.5 font-medium text-muted-foreground hover:text-foreground"
               >
                 Expandir tudo
               </button>
               <button
                 type="button"
-                onClick={() => setCollapsedPhases(new Set(allPhases.map(phase => phase.id)))}
+                onClick={() => changeCollapsedPhases(new Set(allPhases.map(phase => phase.id)))}
                 className="h-8 rounded-md border border-border bg-background px-2.5 font-medium text-muted-foreground hover:text-foreground"
               >
                 Recolher tudo

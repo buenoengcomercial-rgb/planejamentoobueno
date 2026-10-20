@@ -372,6 +372,15 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     expect(screen.queryByTestId('gantt-bar-child-task')).not.toBeInTheDocument();
   });
 
+  it('recolher capítulo do cronograma oficial não grava a obra', () => {
+    const onProjectChange = vi.fn();
+    render(<GanttChart project={{ ...project, id: 'gantt-visual-only' }} onProjectChange={onProjectChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Capítulo/i }));
+
+    expect(onProjectChange).not.toHaveBeenCalled();
+  });
+
   it.each(['official', 'additive-preview'] as const)(
     'salva a dependência e a data recalculada em uma única atualização no contexto %s',
     context => {
