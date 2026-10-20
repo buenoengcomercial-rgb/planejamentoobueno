@@ -840,6 +840,38 @@ export type Database = {
           },
         ]
       }
+      project_operation_receipts: {
+        Row: {
+          actor_id: string
+          created_at: string
+          operation_id: string
+          project_id: string
+          request: Json
+        }
+        Insert: {
+          actor_id: string
+          created_at?: string
+          operation_id: string
+          project_id: string
+          request: Json
+        }
+        Update: {
+          actor_id?: string
+          created_at?: string
+          operation_id?: string
+          project_id?: string
+          request?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_operation_receipts_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       projects: {
         Row: {
           created_at: string
@@ -1354,6 +1386,14 @@ export type Database = {
         Args: { p_project_id: string }
         Returns: boolean
       }
+      commit_measurement_command_v2: {
+        Args: {
+          p_command: Json
+          p_expected_revision: number
+          p_project_id: string
+        }
+        Returns: Json
+      }
       commit_measurement_lifecycle: {
         Args: {
           p_expected_revision: number
@@ -1392,7 +1432,25 @@ export type Database = {
         }
         Returns: Json
       }
+      commit_project_fields: {
+        Args: {
+          p_operation_id: string
+          p_organization_id: string
+          p_project_id: string
+          p_request: Json
+        }
+        Returns: Json
+      }
       commit_warehouse_adjustment: {
+        Args: {
+          p_changes: Json
+          p_expected_warehouse_version: number
+          p_operation_key: string
+          p_project_id: string
+        }
+        Returns: Json
+      }
+      commit_warehouse_adjustment_v2: {
         Args: {
           p_changes: Json
           p_expected_warehouse_version: number
@@ -1410,6 +1468,15 @@ export type Database = {
         }
         Returns: Json
       }
+      commit_warehouse_catalog_v2: {
+        Args: {
+          p_changes: Json
+          p_expected_warehouse_version: number
+          p_operation_key: string
+          p_project_id: string
+        }
+        Returns: Json
+      }
       commit_warehouse_custody: {
         Args: {
           p_changes: Json
@@ -1419,7 +1486,25 @@ export type Database = {
         }
         Returns: Json
       }
+      commit_warehouse_custody_v2: {
+        Args: {
+          p_changes: Json
+          p_expected_warehouse_version: number
+          p_operation_key: string
+          p_project_id: string
+        }
+        Returns: Json
+      }
       commit_warehouse_inventory: {
+        Args: {
+          p_changes: Json
+          p_expected_warehouse_version: number
+          p_operation_key: string
+          p_project_id: string
+        }
+        Returns: Json
+      }
+      commit_warehouse_inventory_v2: {
         Args: {
           p_changes: Json
           p_expected_warehouse_version: number
@@ -1451,6 +1536,15 @@ export type Database = {
         }
         Returns: Json
       }
+      commit_warehouse_receipt_v2: {
+        Args: {
+          p_changes: Json
+          p_expected_warehouse_version: number
+          p_operation_key: string
+          p_project_id: string
+        }
+        Returns: Json
+      }
       commit_warehouse_requisition_adjustment: {
         Args: {
           p_audit_logs?: Json
@@ -1463,6 +1557,10 @@ export type Database = {
           p_requisition_id: string
           p_upsert_movements?: Json
         }
+        Returns: Json
+      }
+      commit_warehouse_requisition_v2: {
+        Args: { p_operation_key: string; p_project_id: string; p_request: Json }
         Returns: Json
       }
       commit_warehouse_supplement_correction: {
@@ -1563,6 +1661,10 @@ export type Database = {
         Args: { p_candidate: Json }
         Returns: string
       }
+      merge_concurrent_fields: {
+        Args: { p_base: Json; p_current: Json; p_next: Json; p_path: string }
+        Returns: Json
+      }
       patch_measurement_capture: {
         Args: {
           p_expected_revision: number
@@ -1572,6 +1674,14 @@ export type Database = {
         Returns: Json
       }
       patch_measurement_entries: {
+        Args: {
+          p_expected_revision: number
+          p_patch: Json
+          p_project_id: string
+        }
+        Returns: Json
+      }
+      patch_measurement_entries_v2: {
         Args: {
           p_expected_revision: number
           p_patch: Json
@@ -1672,6 +1782,15 @@ export type Database = {
       sync_measurement_workspace_entry_state: {
         Args: { p_data: Json; p_project_id: string; p_revision: number }
         Returns: undefined
+      }
+      update_member_name_v2: {
+        Args: {
+          p_expected_name: string
+          p_name: string
+          p_organization_id: string
+          p_user_id: string
+        }
+        Returns: Json
       }
       validate_capture_bindings: {
         Args: { p_plan_id: string; p_project_id: string }
