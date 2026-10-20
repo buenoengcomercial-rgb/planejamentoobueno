@@ -202,7 +202,8 @@ describe('confirmação visual da retirada', () => {
     expect(onProjectChange).not.toHaveBeenCalled();
   });
 
-  it('mostra no item o saldo concorrente e conserva assinatura e quantidade', async () => {
+  it('informa saldo negativo sem bloquear a gravação e conserva evidências até confirmar', async () => {
+    commitMock.mockRejectedValue(new Error('Failed to fetch'));
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     Element.prototype.scrollIntoView = vi.fn();
     availabilityMock.mockImplementation((_projectId: string, items: Array<{ itemKey: string; quantity: number }>) => Promise.resolve({
@@ -217,8 +218,8 @@ describe('confirmação visual da retirada', () => {
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Quantidade de Placa de sinalização' }), { target: { value: '8' } });
     fireEvent.click(screen.getByRole('button', { name: 'Assinar teste' }));
     fireEvent.click(screen.getByRole('button', { name: 'Entregar e baixar estoque' }));
-    await waitFor(() => expect(screen.getByText(/Faltam 6 UN/)).toBeInTheDocument());
-    expect(commitMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByText(/Saldo previsto negativo: -6 UN/)).toBeInTheDocument());
+    expect(commitMock).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('spinbutton', { name: 'Quantidade de Placa de sinalização' })).toHaveValue(8);
     expect(screen.getByAltText('Assinatura registrada')).toBeInTheDocument();
   });
@@ -237,7 +238,7 @@ describe('confirmação visual da retirada', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Assinar teste' }));
     fireEvent.click(screen.getByRole('button', { name: 'Entregar e baixar estoque' }));
     await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByText(/Faltam 6 UN/)).toBeInTheDocument(), { timeout: 5000 });
+    await waitFor(() => expect(screen.getByText(/Saldo previsto negativo: -6 UN/)).toBeInTheDocument(), { timeout: 5000 });
     expect(screen.getByAltText('Assinatura registrada')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'PDF' })).not.toBeInTheDocument();
   });

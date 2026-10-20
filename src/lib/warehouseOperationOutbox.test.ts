@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { stageWarehouseOperation, warehousePendingOperations, retryWarehouseOutbox, rejectWarehouseOperation } from './warehouseOperationOutbox';
+import { resolveWarehouseRequisitionPending, stageWarehouseOperation, warehousePendingOperations, retryWarehouseOutbox, rejectWarehouseOperation } from './warehouseOperationOutbox';
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock('@/integrations/supabase/client', () => ({ supabase: { rpc } }));
 const args = { p_project_id: 'p', p_operation_key: 'op', p_changes: { state: { items: { records: { upserts: [{ id: 'a', expected: null, row: { id: 'a' } }] } } } } };
@@ -28,4 +28,24 @@ it('não confunde outra conta e preserva duas operações independentes com resp
   expect(() => stageWarehouseOperation('a', 'p', 'new', 'commit_warehouse_requisition_v2', {
     ...requisition, p_request: { type: 'delivery', requisitionId: 'req-2' },
   })).toThrow('outros valores');
+});
+
+it('resolve automaticamente somente pendências da mesma requisição e mantém recusas antigas', async () => {
+  for (const [id, requisitionId] of [['same','r1'],['other','r2'],['refused','r1']]) {
+    stageWarehouseOperation('a','p',id,'commit_warehouse_requisition_v2',{ p_project_id:'p', p_operation_key:id, p_request:{requisitionId} });
+  }
+  rejectWarehouseOperation('a','p','refused',{code:'P0001',message:'Refused'});
+  rpc.mockResolvedValue({ data: { committedAt:'now', projectUpdatedAt:'v3', warehouseVersion:3 } });
+  const refresh = vi.fn(async () => undefined);
+  expect(await resolveWarehouseRequisitionPending('a','p','r1','new',refresh)).toBe(true);
+  expect(rpc).toHaveBeenCalledTimes(1);
+  expect(rpc.mock.calls[0][1].p_operation_key).toBe('same');
+  expect(refresh).toHaveBeenCalledTimes(1);
+  expect(warehousePendingOperations('a','p').map(row => row.id)).toEqual(['other','refused']);
+});
+it('não inicia nova edição se uma pendência do registro ainda tiver resposta incerta', async () => {
+  stageWarehouseOperation('a','p','old','commit_warehouse_requisition_v2',{p_project_id:'p',p_operation_key:'old',p_request:{requisitionId:'r'}});
+  rpc.mockRejectedValue(new Error('Failed to fetch'));
+  await expect(resolveWarehouseRequisitionPending('a','p','r','new',async()=>undefined)).rejects.toThrow('Failed to fetch');
+  expect(warehousePendingOperations('a','p')[0].id).toBe('old');
 });

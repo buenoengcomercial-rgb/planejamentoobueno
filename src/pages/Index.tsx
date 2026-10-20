@@ -4,7 +4,7 @@ import { mergeConcurrentFields } from '@/lib/concurrentFields';
 import ProjectOperationConflicts from '@/components/ProjectOperationConflicts';
 import { warehouseEditBaseline } from '@/lib/warehouseEditBaseline';
 import WarehouseOperationRecovery from '@/components/WarehouseOperationRecovery';
-import { acknowledgeWarehouseOutbox } from '@/lib/warehouseOperationOutbox';
+import { acknowledgeWarehouseOutbox, resolveWarehouseRequisitionPending } from '@/lib/warehouseOperationOutbox';
 import type { ProductionCaptureChange } from '@/lib/planTakeoff';
 import { syncProductionAtomically, stripNormalizedCollections } from '@/lib/projectSync';
 import { applyProjectOperation, auditProjectReversal } from '@/lib/projectOperations';
@@ -2835,6 +2835,17 @@ export default function Index() {
       if (rawProjectRef.current?.id !== before.id) {
         throw new Error('A obra aberta mudou antes da confirmação. Nenhuma nova operação foi iniciada.');
       }
+      if (user?.id && await resolveWarehouseRequisitionPending(user.id, before.id, operation.requisitionId, operation.operationKey, async () => {
+        const current = rawProjectRef.current;
+        const version = current && await getCloudProjectVersion(current.id);
+        if (!current || !version || !await refreshRemoteCollectionsInBackground(current, WAREHOUSE_REMOTE_SYNC_COLLECTIONS, version)) {
+          throw new Error('A tentativa anterior foi confirmada; aguarde a atualização da obra antes de continuar.');
+        }
+      })) {
+        throw Object.assign(new Error('A tentativa anterior desta retirada foi confirmada. Sua edição foi preservada; revise e salve novamente.'), {
+          definitiveRejection: true, confirmedProject: rawProjectRef.current,
+        });
+      }
       const confirmation = await commitWarehouseOperation(before, after, operation, user?.id);
       await applyWarehouseCloudConfirmation(confirmation);
       acknowledgeWarehouseOutbox(user?.id, before.id, operation.operationKey);
@@ -2849,7 +2860,7 @@ export default function Index() {
         warehouseLockedRouteRef.current = null;
       }
     });
-  }, [applyWarehouseCloudConfirmation, prepareWarehouseCloudOperation, user?.id]);
+  }, [applyWarehouseCloudConfirmation, prepareWarehouseCloudOperation, refreshRemoteCollectionsInBackground, user?.id]);
 
   const runCriticalWarehouseClientOperation = useCallback(<T,>(
     operation: () => Promise<T>,
