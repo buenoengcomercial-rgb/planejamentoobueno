@@ -19,7 +19,24 @@ const keyed = (v: unknown): v is Array<Record<string, unknown> & { id: string }>
   Array.isArray(v) && v.every(row => object(row) && typeof row.id === 'string');
 const planningTaskFields = new Set(['startDate', 'duration', 'endDate', 'dependencies', 'dependencyDetails', 'team', 'teamId', 'teamIds', 'crewId', 'employees', 'plannedDailyProduction', 'dailyProduction', 'rup', 'baseline', 'lag', 'lead', 'calendarId', 'workDays', 'isMilestone', 'resourceIds', 'scheduleOrder', 'ganttOrder', 'durationMode', 'isManual', 'manualDuration','operationalReschedule']);
 
+// A tela pode receber uma fotografia parcial da obra. Ela nunca ganha poder de
+// substituir a coleção de outro domínio por ausência ou dados desatualizados.
+const collectionEditors: Record<string, readonly string[]> = {
+  warehouse: ['warehouse'],
+  measurements: ['measurement'],
+  measurementDraft: ['measurement'],
+  contractInfo: ['measurement'],
+  // A entrega de uma requisição ainda publica o vínculo auditado no Diário.
+  // Essa escrita cruzada sai daqui quando o comando de publicação for migrado.
+  dailyReports: ['dailyReport', 'warehouse'],
+  subcontracts: ['realCost'],
+  additives: ['additive', 'additiveSchedule', 'gantt'],
+  materialComparisons: ['materials'],
+};
+
 function allowed(view: string, path: Path): boolean {
+  const editors = collectionEditors[path[0]];
+  if (editors && !editors.includes(view)) return false;
   if (view === 'gantt' || view === 'additiveSchedule') {
     if (path[0] === 'phases') {
       const taskIndex = path.lastIndexOf('tasks');

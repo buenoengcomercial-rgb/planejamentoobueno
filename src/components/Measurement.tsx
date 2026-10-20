@@ -1,10 +1,11 @@
-import { lazy, Suspense, useMemo, useState, useEffect, useRef, type MouseEvent } from 'react';
+import { lazy, memo, Suspense, useMemo, useState, useEffect, useRef, type MouseEvent } from 'react';
 import { cloudMeasurementRepository } from '@/lib/measurementCloudRepository';
 import { supabase } from '@/integrations/supabase/client';
 import { withReadDeadline } from '@/lib/readDeadline';
 import { useOrganization } from '@/hooks/useOrganization';
 import type { MeasurementWorkspaceProps } from './measurement/MeasurementWorkspace';
 const IndependentMeasurement = lazy(() => import('./measurement/MeasurementWorkspace'));
+const StableIndependentMeasurement = memo(IndependentMeasurement);
 
 import { Project } from '@/types/project';
 import {
@@ -57,7 +58,11 @@ interface MeasurementProps {
 
 // ───────────────────────── Componente principal ─────────────────────────
 export default function Measurement(props: MeasurementProps) {
-  if (props.independentWorkspace) return <Suspense fallback={<p>Carregando Medição…</p>}><IndependentMeasurement {...props.independentWorkspace} analyticProject={props.project}/></Suspense>;
+  const analyticProject = useMemo(() => ({
+    budgetItems: props.project.budgetItems,
+    analyticCompositions: props.project.analyticCompositions,
+  }), [props.project.budgetItems, props.project.analyticCompositions]);
+  if (props.independentWorkspace) return <Suspense fallback={<p>Carregando Medição…</p>}><StableIndependentMeasurement {...props.independentWorkspace} analyticProject={analyticProject}/></Suspense>;
   return <CloudMeasurement key={props.project.id} {...props}/>;
 }
 
@@ -78,7 +83,13 @@ function CloudMeasurement(props: MeasurementProps) {
   const onIndependentReady = props.onIndependentReady;
   useEffect(() => { if (enabled) onIndependentReady?.(props.project.id); }, [enabled, props.project.id, onIndependentReady]);
   const editor = ['owner', 'admin', 'engineer'].includes(membership?.role ?? '');
-  const actor = useMemo(() => ({ id: user?.id ?? '', name: user?.user_metadata?.name ?? user?.email ?? '', canEdit: editor, canReview: editor }), [user, editor]);
+  const actorId = user?.id ?? '';
+  const actorName = user?.user_metadata?.name ?? user?.email ?? '';
+  const actor = useMemo(() => ({ id: actorId, name: actorName, canEdit: editor, canReview: editor }), [actorId, actorName, editor]);
+  const analyticProject = useMemo(() => ({
+    budgetItems: props.project.budgetItems,
+    analyticCompositions: props.project.analyticCompositions,
+  }), [props.project.budgetItems, props.project.analyticCompositions]);
   useEffect(() => {
     // Index confirmed this same project during boot. Repeating the check here
     // adds a serial network roundtrip before the sheet can even start loading.
@@ -102,7 +113,7 @@ function CloudMeasurement(props: MeasurementProps) {
   }, [props.project.id, props.independentConfirmed, retry]);
   if (failure) return <div role="alert" className="rounded border p-4 text-sm">{failure} <button onClick={() => setRetry(n => n + 1)} className="underline">Tentar novamente</button></div>;
   if (enabled === null || !repository) return <p className="p-6">Conferindo a Medição na nuvem…</p>;
-  return enabled ? <Suspense fallback={<p>Carregando Medição…</p>}><IndependentMeasurement repository={repository} actor={actor} analyticProject={props.project} approvedAdditives={props.project.additives}/></Suspense> : <LegacyMeasurement {...props}/>;
+  return enabled ? <Suspense fallback={<p>Carregando Medição…</p>}><StableIndependentMeasurement repository={repository} actor={actor} analyticProject={analyticProject} approvedAdditives={props.project.additives}/></Suspense> : <LegacyMeasurement {...props}/>;
 }
 
 function LegacyMeasurement({ project, onProjectChange, undoButton, onOpenDailyReport }: MeasurementProps) {

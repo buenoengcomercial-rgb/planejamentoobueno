@@ -1,5 +1,7 @@
 import type { AdditiveComposition, BudgetItem, Project } from '@/types/project';
 
+export type AnalyticProject = Pick<Project, 'budgetItems' | 'analyticCompositions'>;
+
 export const ANALYTIC_LINK_SCHEMA_VERSION = 2 as const;
 
 export type AnalyticResolutionSource = 'own' | 'base_id' | 'task' | 'item_code' | 'none';
@@ -58,7 +60,7 @@ function uniqueMatch(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-function budgetForReference(project: Project, reference: AnalyticReference): BudgetItem | undefined {
+function budgetForReference(project: AnalyticProject, reference: AnalyticReference): BudgetItem | undefined {
   const budgets = project.budgetItems ?? [];
   if (reference.baseBudgetItemId) {
     const direct = budgets.find(item => item.id === reference.baseBudgetItemId);
@@ -83,7 +85,7 @@ function budgetForReference(project: Project, reference: AnalyticReference): Bud
  * pertencendo a linha contratual/aditiva recebida pelo modulo consumidor.
  */
 export function resolveAnalyticComposition(
-  project: Project,
+  project: AnalyticProject,
   reference: AnalyticReference | undefined,
 ): AnalyticResolution {
   if (!reference) return { source: 'none', inherited: false };

@@ -6,8 +6,8 @@ import { addMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredR
 import { MeasurementCommitRejectedError, type MeasurementRepository, type WorkspaceDraft } from '@/lib/measurementWorkspaceStore';
 import type { IncorporationBackup } from '@/lib/measurementIncorporation';
 import { prepareIncorporation, incorporateApprovedAdditive } from '@/lib/measurementIncorporation';
-import type { Additive, Project } from '@/types/project';
-import { resolveAnalyticComposition } from '@/lib/analyticLinks';
+import type { Additive } from '@/types/project';
+import { resolveAnalyticComposition, type AnalyticProject } from '@/lib/analyticLinks';
 import { detailTotal, isBlankDetailRow } from '@/lib/productionQuantityDetails';
 import { AnalyticView, type MeasurementDetailSelection } from './MeasurementDetailFooter';
 import type { TakeoffCatalogPlan, TakeoffMeasure, TakeoffRepository, TakeoffDraft } from '@/lib/planTakeoff';
@@ -46,7 +46,7 @@ function confirmedRowDraft(workspace: Workspace, draft: WorkspaceDraft): boolean
 
 /** Real workspace UI, with an explicitly injected persistence boundary. No Project setter. */
 export interface MeasurementForecast { number: number; startDate: string; endDate: string; value: number }
-export interface MeasurementWorkspaceProps { repository: MeasurementRepository; actor: MeasurementActor; incorporationBackup?: IncorporationBackup; approvedAdditives?: Additive[]; analyticProject?: Project; forecastByPeriod?: MeasurementForecast[] }
+export interface MeasurementWorkspaceProps { repository: MeasurementRepository; actor: MeasurementActor; incorporationBackup?: IncorporationBackup; approvedAdditives?: Additive[]; analyticProject?: AnalyticProject; forecastByPeriod?: MeasurementForecast[] }
 async function confirmedCommitResponse(repository: MeasurementRepository, candidate: Workspace, saved: Workspace): Promise<boolean> {
   if (saved.projectId !== candidate.projectId || saved.revision < candidate.revision) return false;
   if (saved.revision === candidate.revision) return true;
