@@ -2,13 +2,16 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 
-const mocks = vi.hoisted(() => ({ from: vi.fn(), repository: vi.fn() }));
+const mocks = vi.hoisted(() => ({ from: vi.fn(), repository: vi.fn(), workspaceRender: vi.fn() }));
 
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ user: { id: 'owner-1', email: 'owner@example.com', user_metadata: {} } }) }));
 vi.mock('@/hooks/useOrganization', () => ({ useOrganization: () => ({ membership: { role: 'owner' } }) }));
 vi.mock('@/integrations/supabase/client', () => ({ supabase: { from: mocks.from } }));
 vi.mock('@/lib/measurementCloudRepository', () => ({ cloudMeasurementRepository: mocks.repository }));
-vi.mock('@/components/measurement/MeasurementWorkspace', () => ({ default: () => <p>Planilha incorporada</p> }));
+vi.mock('@/components/measurement/MeasurementWorkspace', () => ({ default: () => {
+  mocks.workspaceRender();
+  return <p>Planilha incorporada</p>;
+} }));
 
 import Measurement from './Measurement';
 
@@ -17,6 +20,7 @@ const project = { id: 'project-1', name: 'Obra de teste' } as Project;
 beforeEach(() => {
   mocks.from.mockReset();
   mocks.repository.mockReset().mockReturnValue({ savedLabel: 'Salvo na nuvem' });
+  mocks.workspaceRender.mockReset();
 });
 afterEach(() => vi.useRealTimers());
 
@@ -25,6 +29,19 @@ describe('abertura da Medição incorporada', () => {
     render(<Measurement project={project} independentConfirmed onProjectChange={vi.fn()} />);
     expect(await screen.findByText('Planilha incorporada')).toBeInTheDocument();
     expect(mocks.from).not.toHaveBeenCalled();
+  });
+
+  it('não renderiza novamente a planilha incorporada por uma mudança exclusiva do Almoxarifado', async () => {
+    const onProjectChange = vi.fn();
+    const { rerender } = render(<Measurement project={project} independentConfirmed onProjectChange={onProjectChange} />);
+    expect(await screen.findByText('Planilha incorporada')).toBeInTheDocument();
+    expect(mocks.workspaceRender).toHaveBeenCalledTimes(1);
+
+    rerender(<Measurement project={{ ...project, warehouse: { movements: [] } } as Project} independentConfirmed onProjectChange={onProjectChange} />);
+    expect(mocks.workspaceRender).toHaveBeenCalledTimes(1);
+
+    rerender(<Measurement project={{ ...project, analyticCompositions: [] }} independentConfirmed onProjectChange={onProjectChange} />);
+    expect(mocks.workspaceRender).toHaveBeenCalledTimes(2);
   });
 
   it('confere a existência na nuvem ao entrar pela navegação sem confirmação prévia', async () => {

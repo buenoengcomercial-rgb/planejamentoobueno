@@ -227,8 +227,11 @@ vi.mock('@/components/DailyProductionWorkspace', async () => {
 });
 
 vi.mock('@/components/SaveStatusIndicator', () => ({
-  default: ({ confirmedAt }: { confirmedAt?: string | null }) => (
-    <output data-testid="cloud-confirmed-at">{confirmedAt ?? 'none'}</output>
+  default: ({ confirmedAt, status }: { confirmedAt?: string | null; status: string }) => (
+    <div>
+      <output data-testid="cloud-confirmed-at">{confirmedAt ?? 'none'}</output>
+      <output data-testid="cloud-save-status">{status}</output>
+    </div>
   ),
 }));
 vi.mock('@/components/MigrationDialog', () => ({ default: () => null }));
@@ -242,11 +245,36 @@ vi.mock('@/components/Dashboard', () => ({ default: () => null }));
 vi.mock('@/components/OperationalManagementRoutine', () => ({ default: () => null }));
 vi.mock('@/components/OperationalGanttChart', () => ({ default: () => null }));
 vi.mock('@/components/Measurement', async () => {
-  const { createElement } = await import('react');
+  const { createElement, useState } = await import('react');
+  const QuantitativeDraft = () => {
+    const [value, setValue] = useState('');
+    return createElement('input', {
+      'aria-label': 'Quantitativo em edição na Medição',
+      value,
+      onChange: (event: { target: { value: string } }) => setValue(event.target.value),
+    });
+  };
   return {
-    default: ({ onOpenDailyReport, independentConfirmed }: { onOpenDailyReport?: (dateISO: string, filter?: string) => void; independentConfirmed?: boolean }) => createElement(
+    default: ({ project, onProjectChange, onOpenDailyReport, independentConfirmed }: {
+      project: Project;
+      onProjectChange: (project: Project) => void;
+      onOpenDailyReport?: (dateISO: string, filter?: string) => void;
+      independentConfirmed?: boolean;
+    }) => createElement(
       'div', null,
       createElement('output', { 'data-testid': 'independent-measurement-confirmed' }, String(!!independentConfirmed)),
+      createElement(QuantitativeDraft),
+      !independentConfirmed && createElement('button', {
+        type: 'button',
+        onClick: () => onProjectChange({
+          ...project,
+          measurements: [{ id: 'medicao-local', number: 1, startDate: '2026-10-01', endDate: '2026-10-20',
+            issueDate: '2026-10-20', status: 'draft', bdiPercent: 0,
+            items: [{ item: '1', phaseId: 'phase-1', phaseChain: '1', taskId: 'task-1', description: 'Serviço',
+              unit: 'un', itemCode: 'item-1', priceBank: 'SINAPI', qtyContracted: 20,
+              unitPriceNoBDI: 1, unitPriceWithBDI: 1, qtyProposed: 18.75, qtyPriorAccum: 0 }] }],
+        }),
+      }, 'Alterar quantitativo legado'),
       createElement('button', { type: 'button', onClick: () => onOpenDailyReport?.('2026-08-24', 'draft') }, 'Abrir Diário pela Medição de teste'),
     ),
   };
@@ -490,6 +518,49 @@ describe('segurança de sincronização da página da obra', () => {
     }));
   });
 
+  it('mantém o quantitativo em edição na Medição independente após movimentação remota no Almoxarifado', async () => {
+    mocks.independentMeasurementExists = true;
+    const remote = {
+      ...makeProject(),
+      warehouse: {
+        ...emptyWarehouse(),
+        fiscalDuplicateReconciliationVersion: 1,
+        movements: [{
+          id: 'movimento-kennedy', type: 'entrada', date: '2026-10-20',
+          createdAt: '2026-10-20T10:00:00.000Z', itemKey: 'item-1',
+          itemDescription: 'Material', itemUnit: 'un', quantity: 1,
+        }],
+      },
+    } as Project;
+    let advanced = false;
+    mocks.loadCloudProjectRecord.mockImplementation(async () => advanced
+      ? { ...cloudRecord(remote, 'cloud-v3'), warehouseVersion: 2 }
+      : cloudRecord(makeProject()));
+    mocks.getCloudProjectVersion.mockImplementation(async () => {
+      advanced = true;
+      return { id: 'project-1', updatedAt: 'cloud-v3', warehouseVersion: 2, warehouseUpdatedAt: 'cloud-v3' };
+    });
+
+    renderIndex('medicao');
+    expect(await screen.findByTestId('independent-measurement-confirmed')).toHaveTextContent('true');
+    const draft = screen.getByRole('textbox', { name: 'Quantitativo em edição na Medição' });
+    fireEvent.change(draft, { target: { value: '18,75' } });
+    const warehouseRealtime = mocks.realtimeHandlers.find(handler => handler.table === 'warehouse_movements');
+    expect(warehouseRealtime).toBeDefined();
+    vi.useFakeTimers();
+    act(() => warehouseRealtime?.callback({ new: { id: 'movimento-kennedy', updated_at: 'cloud-v3' } }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_200); });
+
+    expect(screen.getByRole('textbox', { name: 'Quantitativo em edição na Medição' })).toBe(draft);
+    expect(draft).toHaveValue('18,75');
+    expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('cloud-save-status')).not.toBeInTheDocument();
+    expect(screen.queryByText('Conflito de cópia local')).not.toBeInTheDocument();
+    expect(mocks.toastError).not.toHaveBeenCalled();
+  });
+
   it('recupera auditoria offline parcial sem substituir histórico da nuvem no retry', async () => {
     const oldLog = { id: 'old-audit', entityType: 'task', entityId: 'task-1', action: 'updated', at: '2026-10-08', title: 'Anterior' } as const;
     const newLog = { ...oldLog, id: 'new-audit', at: '2026-10-09', title: 'Nova alteração' };
@@ -647,6 +718,21 @@ describe('segurança de sincronização da página da obra', () => {
     } finally {
       unregister();
     }
+  });
+
+  it('continua a gravação pendente de outra área ao navegar para Medição e Diário', async () => {
+    renderIndex('producao');
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar projeto' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Medição de teste' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+    expect(mocks.upsertCloudProject).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Alteração geral pendente' }),
+      'org-1', 'cloud-v2', expect.any(Function),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Diário de teste' }));
+    expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -951,6 +1037,68 @@ describe('segurança de sincronização da página da obra', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it('rebaseia movimentação do Almoxarifado sem perder o quantitativo da Medição legada', async () => {
+    const remote = { ...makeProject(), warehouse: {
+      ...emptyWarehouse(), fiscalDuplicateReconciliationVersion: 1,
+      movements: [{ id: 'remote-1', type: 'entrada', date: '2026-10-20',
+        createdAt: '2026-10-20T10:00:00.000Z', itemKey: 'item-1',
+        itemDescription: 'Material', itemUnit: 'un', quantity: 1 }],
+    } } as Project;
+    let advanced = false;
+    mocks.loadCloudProjectRecord.mockImplementation(async () => advanced
+      ? { ...cloudRecord(remote, 'cloud-v3'), warehouseVersion: 2 }
+      : cloudRecord(makeProject(), 'cloud-v2'));
+    mocks.getCloudProjectVersion.mockResolvedValue({
+      id: 'project-1', updatedAt: 'cloud-v3', warehouseVersion: 2, warehouseUpdatedAt: 'cloud-v3',
+    });
+    mocks.upsertCloudProject
+      .mockImplementationOnce(async () => { advanced = true; throw new CloudProjectConflictError(); })
+      .mockResolvedValueOnce('cloud-v4');
+
+    renderIndex('medicao');
+    expect(await screen.findByTestId('independent-measurement-confirmed')).toHaveTextContent('false');
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar quantitativo legado' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+
+    expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(2);
+    expect(mocks.upsertCloudProject.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+      measurements: [expect.objectContaining({ items: [expect.objectContaining({ qtyProposed: 18.75 })] })],
+      warehouse: expect.objectContaining({ movements: [expect.objectContaining({ id: 'remote-1' })] }),
+    }));
+    expect(screen.queryByText('Conflito de cópia local')).not.toBeInTheDocument();
+  });
+
+  it('não anuncia confirmação do Aditivo pendente quando chega uma atualização do Almoxarifado', async () => {
+    const remote = { ...makeProject(), warehouse: {
+      ...emptyWarehouse(), fiscalDuplicateReconciliationVersion: 1,
+      movements: [{ id: 'remote-1', type: 'entrada', date: '2026-10-20',
+        createdAt: '2026-10-20T10:00:00.000Z', itemKey: 'item-1',
+        itemDescription: 'Material', itemUnit: 'un', quantity: 1 }],
+    } } as Project;
+    let advanced = false;
+    mocks.loadCloudProjectRecord.mockImplementation(async () => advanced
+      ? { ...cloudRecord(remote, 'cloud-v3'), warehouseVersion: 2 }
+      : cloudRecord(makeProject(), 'cloud-v2'));
+    mocks.getCloudProjectVersion.mockImplementation(async () => {
+      advanced = true;
+      return { id: 'project-1', updatedAt: 'cloud-v3', warehouseVersion: 2, warehouseUpdatedAt: 'cloud-v3' };
+    });
+
+    renderIndex('aditivo');
+    expect(await screen.findByTestId('additive-workspace')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar Aditivo local' }));
+    expect(screen.getByTestId('cloud-confirmed-at')).toHaveTextContent('cloud-v2');
+    const warehouseRealtime = mocks.realtimeHandlers.find(handler => handler.table === 'warehouse_movements');
+    vi.useFakeTimers();
+    act(() => warehouseRealtime?.callback({ new: { id: 'remote-1', updated_at: 'cloud-v3' } }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_200); });
+
+    expect(screen.getByTestId('additive-count')).toHaveTextContent('1');
+    expect(screen.getByTestId('cloud-confirmed-at')).toHaveTextContent('cloud-v2');
+    expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
+  });
+
   it('rebaseia uma alteração remota do Diário ao salvar o Aditivo sem abrir conflito', async () => {
     const remoteDailyProject = {
       ...makeProject(),
@@ -1028,6 +1176,7 @@ describe('segurança de sincronização da página da obra', () => {
 
     expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(1);
     expect(screen.getByText('Conflito de cópia local')).toBeInTheDocument();
+    expect(screen.getByTestId('cloud-save-status')).toHaveTextContent('conflict');
   });
 
   it('reconcilia registros diferentes no mesmo Aditivo sem perder a edição local', async () => {
