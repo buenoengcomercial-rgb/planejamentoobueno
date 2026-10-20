@@ -1,14 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Project, Additive as AdditiveModel, AdditiveStatus, AdditiveUiState } from '@/types/project';
+import { readAdditiveViewPreferences, writeAdditiveViewPreferences } from '@/lib/projectViewPreferences';
 
-interface Options {
-  /** Quando fornecido, persiste o estado visual (collapsed/expanded/showAnalytic) dentro do aditivo ativo. */
-  onProjectChange?: (next: Project | ((prev: Project) => Project)) => void;
-}
-
-export function useAdditiveState(project: Project, opts: Options = {}) {
-  const { onProjectChange } = opts;
-  const additives = project.additives ?? [];
+export function useAdditiveState(project: Project) {
+  const additives = useMemo(() => project.additives ?? [], [project.additives]);
   const [activeId, setActiveId] = useState<string | null>(additives[0]?.id ?? null);
   const active = useMemo<AdditiveModel | null>(
     () => additives.find(a => a.id === activeId) ?? additives[0] ?? null,
@@ -18,37 +13,31 @@ export function useAdditiveState(project: Project, opts: Options = {}) {
   const [search, setSearch] = useState('');
   const [bankFilter, setBankFilter] = useState<string>('all');
 
-  // ----- Estado visual persistido (por aditivo) -----
-  const initialUi = active?.uiState;
+  // Preferências visuais são locais ao navegador e nunca geram autosave da obra.
+  const initialUi = active?.id
+    ? readAdditiveViewPreferences(project.id, active.id, active.uiState)
+    : undefined;
   const [showAnalytic, setShowAnalyticState] = useState<boolean>(initialUi?.showAnalytic ?? true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set(initialUi?.expandedCompositionIds ?? []));
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set(initialUi?.collapsedGroupIds ?? []));
 
   // Recarrega o estado visual quando muda o aditivo ativo (cada aditivo tem seu próprio estado).
-  const lastLoadedIdRef = useRef<string | null>(active?.id ?? null);
+  const lastLoadedIdRef = useRef(`${project.id}:${active?.id ?? ''}`);
   useEffect(() => {
-    const id = active?.id ?? null;
-    if (id === lastLoadedIdRef.current) return;
-    lastLoadedIdRef.current = id;
-    const ui = active?.uiState;
+    const key = `${project.id}:${active?.id ?? ''}`;
+    if (key === lastLoadedIdRef.current) return;
+    lastLoadedIdRef.current = key;
+    const ui = active?.id
+      ? readAdditiveViewPreferences(project.id, active.id, active.uiState)
+      : undefined;
     setShowAnalyticState(ui?.showAnalytic ?? true);
     setExpanded(new Set(ui?.expandedCompositionIds ?? []));
     setCollapsed(new Set(ui?.collapsedGroupIds ?? []));
-  }, [active?.id, active?.uiState]);
+  }, [project.id, active?.id, active?.uiState]);
 
   const persistUi = useCallback((patch: Partial<AdditiveUiState>) => {
-    if (!onProjectChange) return;
-    const id = active?.id;
-    if (!id) return;
-    onProjectChange(prev => ({
-      ...prev,
-      additives: (prev.additives ?? []).map(a =>
-        a.id === id
-          ? { ...a, uiState: { ...(a.uiState ?? {}), ...patch } }
-          : a,
-      ),
-    }));
-  }, [onProjectChange, active?.id]);
+    if (active?.id) writeAdditiveViewPreferences(project.id, active.id, patch, active.uiState);
+  }, [project.id, active?.id, active?.uiState]);
 
   const setShowAnalytic: typeof setShowAnalyticState = useCallback((value) => {
     setShowAnalyticState(prev => {
