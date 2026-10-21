@@ -17,7 +17,7 @@ import { AppView, DailyReport, Project, WarehouseRequisition } from '@/types/pro
 import AppSidebar from '@/components/AppSidebar';
 import UndoButton from '@/components/UndoButton';
 import type { SaveStatus } from '@/components/SaveStatusIndicator';
-import { subscribeProjectRealtime } from '@/domains/sync/projectRealtimeChannel';
+import { subscribeProjectRemoteSignals } from '@/domains/sync/projectRemoteSignals';
 import { useProjectAutoSave } from '@/domains/sync/useProjectAutoSave';
 import { useProjectCollectionTracker } from '@/domains/sync/useProjectCollectionTracker';
 import { confirmAreaHydration, hydrateAreaCollections, planAreaHydration } from '@/domains/sync/areaHydration';
@@ -137,7 +137,6 @@ import {
   WORK_START_COLLECTIONS,
   hasRemoteWarehouseVersionAdvance,
   normalizeProjectCollections,
-  projectCollectionsForRealtimeTable,
   projectCollectionsForView,
   readWarehouseTab,
   type ProjectCollectionKey,
@@ -1766,56 +1765,15 @@ export default function Index() {
   useEffect(() => {
     const projectId = rawProject?.id;
     if (!projectId || bootLoading) return;
-    const queueRefresh = (payload?: { new?: Record<string, unknown> | null; old?: Record<string, unknown> | null }, source?: string) => {
-      if (source === 'daily_reports') {
-        const incoming = payload?.new?.data as DailyReport | undefined;
-        if (incoming?.date) {
-          refreshDailyReportFromRealtimeRef.current(incoming);
-          return;
-        }
-      }
-      const rowId = typeof payload?.new?.id === 'string'
-        ? payload.new.id
-        : typeof payload?.old?.id === 'string'
-          ? payload.old.id
-          : null;
-      if (source && rowId) {
-        const key = `${source}:${rowId}`;
-        const expiresAt = ownWarehouseRealtimeRowsRef.current.get(key);
-        if (expiresAt && expiresAt > Date.now()) {
-          ownWarehouseRealtimeRowsRef.current.delete(key);
-          return;
-        }
-        if (expiresAt) ownWarehouseRealtimeRowsRef.current.delete(key);
-      }
-      // Ignora o eco da própria gravação (mesma versão que já está carregada aqui).
-      const remoteUpdatedAt = typeof payload?.new?.updated_at === 'string' ? payload.new.updated_at : null;
-      if (remoteUpdatedAt && remoteUpdatedAt === currentProjectUpdatedAtRef.current) return;
-      // O eco da própria gravação é descartado pela versão confirmada acima.
-      // Uma janela baseada só no relógio poderia esconder a edição de outro
-      // usuário feita logo após o nosso salvamento enquanto o canal segue ativo.
-      if (source) {
-        const affectedCollections = projectCollectionsForRealtimeTable(source);
-        // Registra imediatamente a área que chegou pelo realtime. Se o
-        // autosave terminar antes do debounce, ele ainda sabe quais coleções
-        // remotas pode rebasear sem tocar na edição local de outro módulo.
-        if (affectedCollections.length > 0) {
-          const pending = pendingRealtimeCollectionsRef.current.get(projectId) ?? new Set<ProjectCollectionKey>();
-          affectedCollections.forEach(collection => pending.add(collection));
-          pendingRealtimeCollectionsRef.current.set(projectId, pending);
-        }
-        pendingRealtimeSourcesRef.current.add(source);
-      }
-      if (realtimeRefreshTimerRef.current) window.clearTimeout(realtimeRefreshTimerRef.current);
-      realtimeRefreshTimerRef.current = window.setTimeout(() => {
-        const sources = [...pendingRealtimeSourcesRef.current];
-        pendingRealtimeSourcesRef.current.clear();
-        void refreshProjectFromRealtimeRef.current(sources);
-      }, 1200);
-    };
-    const unsubscribe = subscribeProjectRealtime({
+    return subscribeProjectRemoteSignals({
       projectId,
-      onRow: queueRefresh,
+      timerRef: realtimeRefreshTimerRef,
+      sourcesRef: pendingRealtimeSourcesRef,
+      ownRowsRef: ownWarehouseRealtimeRowsRef,
+      pendingCollectionsRef: pendingRealtimeCollectionsRef,
+      currentUpdatedAt: () => currentProjectUpdatedAtRef.current,
+      onDailyReport: report => refreshDailyReportFromRealtimeRef.current(report),
+      onRefresh: sources => { void refreshProjectFromRealtimeRef.current(sources); },
       onConnected: () => { void checkRemoteProjectVersionRef.current(); },
       onConnectionChange: connected => {
         realtimeConnectedRef.current = connected;
@@ -1823,13 +1781,6 @@ export default function Index() {
       },
       isConnected: () => realtimeConnectedRef.current,
     });
-    return () => {
-      unsubscribe();
-      if (realtimeRefreshTimerRef.current) {
-        window.clearTimeout(realtimeRefreshTimerRef.current);
-        realtimeRefreshTimerRef.current = null;
-      }
-    };
   }, [bootLoading, pendingRealtimeCollectionsRef, rawProject?.id]);
 
   useEffect(() => {

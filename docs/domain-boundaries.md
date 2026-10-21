@@ -40,6 +40,10 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
   modificadas localmente, avisos remotos, eventos Realtime pendentes e cargas
   em andamento. A troca de obra limpa somente os marcadores das duas obras
   envolvidas; um aviso do Almoxarifado não vira conflito local do Cronograma.
+- `domains/sync/projectRemoteSignals.ts` despacha eventos do canal por obra:
+  ignora ecos da própria gravação, envia eventos do Diário ao fluxo da data e
+  agrupa as demais tabelas sem perder a origem da coleção. Ao sair da obra,
+  cancela a leitura agendada e limpa as origens ainda não processadas.
 - `lib/projectOperations.ts` impede que Medição e Almoxarifado substituam a coleção
   um do outro durante a conciliação. A publicação de uma requisição no Diário
   continua autorizada temporariamente para manter o fluxo existente.
@@ -51,12 +55,12 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
 
 ## Arquivos extensos e próximos recortes
 
-Contagem da cópia de trabalho em 20/10/2026 (linhas físicas):
+Contagem da cópia de trabalho em 21/10/2026 (linhas físicas):
 
 | Arquivo | Linhas | Recorte funcional seguinte |
 | --- | ---: | --- |
 | `lib/warehouse.ts` | 5.100 | Separar nota fiscal, requisição/devolução, inventário, cautela e projeções de estoque, mantendo a API pública. |
-| `pages/Index.tsx` | 3.250 | Extrair orquestração das consultas remotas. Bootstrap, hidratação por área, marcadores de coleções, sessão visual, canal Realtime, agendamento do autosave, mesclagem da resposta e indicador já saíram. |
+| `pages/Index.tsx` | 3.201 | Extrair verificação periódica de versão e conciliação remota. Bootstrap, hidratação por área, marcadores e despacho Realtime, sessão visual, agendamento do autosave, mesclagem da resposta e indicador já saíram. |
 | `components/GanttChart.tsx` | 3.087 | Separar estado de filtros, grade temporal, edição de barras, calendário e comandos. |
 | `lib/projectSync.ts` | 2.009 | Separar hidratação, snapshots e comandos normalizados por domínio. |
 | `components/TaskList.tsx` | 1.692 | Separar lista visual, edição de produção e lançamento de quantitativos. |
@@ -71,12 +75,11 @@ Cronograma conserva a árvore calculada após uma mudança exclusiva do estoque.
 
 ## Validação ainda necessária
 
-O caso relatado com Kennedy precisa da identificação da obra, horário e modo de
-Medição usado. As simulações locais cobrem a Medição independente durante a
-alteração remota do Almoxarifado, sem gravação geral indevida ou perda do campo
-em edição, e o rebase do quantitativo legado após conflito de versão. A
-reprodução no Lovable operacional deve usar dados reversíveis e conferir
-o status exibido, a revisão da Medição e a confirmação após recarga.
+As simulações locais cobrem a Medição independente durante uma alteração remota
+do Almoxarifado, sem gravação geral indevida ou perda do campo em edição, e o
+rebase do quantitativo legado após conflito de versão. A validação operacional
+com dois usuários ainda deve usar dados reversíveis e conferir status, revisão
+da Medição e confirmação após recarga.
 
 A retirada do espelho do Almoxarifado de `projects.data_json` requer migração
 separada, após mapear leitores publicados e políticas no banco. Remover apenas a
