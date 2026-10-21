@@ -18,6 +18,7 @@ import AppSidebar from '@/components/AppSidebar';
 import UndoButton from '@/components/UndoButton';
 import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import { subscribeProjectRemoteSignals } from '@/domains/sync/projectRemoteSignals';
+import { subscribeProjectVersionMonitor } from '@/domains/sync/projectVersionMonitor';
 import { useProjectAutoSave } from '@/domains/sync/useProjectAutoSave';
 import { useProjectCollectionTracker } from '@/domains/sync/useProjectCollectionTracker';
 import { confirmAreaHydration, hydrateAreaCollections, planAreaHydration } from '@/domains/sync/areaHydration';
@@ -145,7 +146,6 @@ import {
 
 const UNDO_LIMIT = 20;
 const LOCAL_DRAFT_DEBOUNCE_MS = 900;
-const REMOTE_VERSION_POLL_MS = 15000;
 
 type WarehousePrepareScope = WarehouseScopedDomain | 'requisition';
 const WAREHOUSE_OPERATION_COLLECTIONS: Record<WarehousePrepareScope, readonly ProjectCollectionKey[]> = {
@@ -1785,46 +1785,21 @@ export default function Index() {
 
   useEffect(() => {
     if (!rawProject?.id || bootLoading) return;
-    let checkTimer: number | null = null;
-    const checkNow = () => {
-      if (checkTimer !== null) return;
-      checkTimer = window.setTimeout(() => {
-        checkTimer = null;
-        void checkRemoteProjectVersionRef.current();
-      }, 200);
-    };
-    const handleOnline = () => {
-      setSaveStatus(conflictDetectedRef.current ? 'conflict' : 'updating');
-      const current = rawProjectRef.current;
-      if (current && saveRetryAttemptRef.current > 0 && !conflictDetectedRef.current
-        && partialSyncPendingRef.current?.projectId !== current.id
-        && serializeProject(current) !== lastSavedProjectJsonRef.current) {
-        saveRetryAttemptRef.current = 0;
-        setSaveRetryTick(value => value + 1);
-      }
-      checkNow();
-    };
-    const handleOffline = () => setSaveStatus('offline');
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') checkNow();
-    };
-    // O tempo real cobre a sessão conectada. Uma única consulta periódica
-    // substitui o fallback e o polling permanente enquanto ele está ativo.
-    const timer = window.setInterval(() => {
-      if (!realtimeConnectedRef.current) checkNow();
-    }, REMOTE_VERSION_POLL_MS);
-    window.addEventListener('focus', checkNow);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => {
-      window.clearInterval(timer);
-      if (checkTimer !== null) window.clearTimeout(checkTimer);
-      window.removeEventListener('focus', checkNow);
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-      document.removeEventListener('visibilitychange', handleVisibility);
-    };
+    return subscribeProjectVersionMonitor({
+      checkVersion: () => { void checkRemoteProjectVersionRef.current(); },
+      isRealtimeConnected: () => realtimeConnectedRef.current,
+      onOnline: () => {
+        setSaveStatus(conflictDetectedRef.current ? 'conflict' : 'updating');
+        const current = rawProjectRef.current;
+        if (current && saveRetryAttemptRef.current > 0 && !conflictDetectedRef.current
+          && partialSyncPendingRef.current?.projectId !== current.id
+          && serializeProject(current) !== lastSavedProjectJsonRef.current) {
+          saveRetryAttemptRef.current = 0;
+          setSaveRetryTick(value => value + 1);
+        }
+      },
+      onOffline: () => setSaveStatus('offline'),
+    });
   }, [bootLoading, rawProject?.id]);
 
   const protectLocalDraftBeforePageSleeps = useCallback(() => {
