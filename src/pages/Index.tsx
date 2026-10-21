@@ -18,6 +18,7 @@ import AppSidebar from '@/components/AppSidebar';
 import UndoButton from '@/components/UndoButton';
 import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import { subscribeProjectRemoteSignals } from '@/domains/sync/projectRemoteSignals';
+import { checkProjectRemoteVersion } from '@/domains/sync/projectRemoteVersionCheck';
 import { subscribeProjectVersionMonitor } from '@/domains/sync/projectVersionMonitor';
 import { useProjectAutoSave } from '@/domains/sync/useProjectAutoSave';
 import { useProjectCollectionTracker } from '@/domains/sync/useProjectCollectionTracker';
@@ -101,7 +102,6 @@ import {
   inspectProjectDraft,
   projectHasLocalChanges,
   readStoredProjectDraft,
-  resolveRemoteVersionAction,
   serializeProject,
   writeProjectDraft,
 } from '@/lib/cloudProjectDraftCore';
@@ -1491,101 +1491,39 @@ export default function Index() {
   });
 
   const checkRemoteProjectVersion = useCallback(async () => {
-    const current = rawProjectRef.current;
-    if (!current || !orgId || !initialLoadRef.current || document.visibilityState !== 'visible') return;
-    if (pendingDailyReportSavesRef.current > 0) return;
-    if (!navigator.onLine) {
-      setSaveStatus('offline');
-      return;
-    }
-    if (productionCaptureBusyRef.current || remoteCheckInFlightRef.current || conflictDetectedRef.current || saveTimerRef.current || inFlightSaveRef.current) return;
-
-    remoteCheckInFlightRef.current = true;
-    const dataScopeAtRequest = activeDataScopeKeyRef.current;
-    try {
-      if (partialSyncPendingRef.current?.projectId === current.id) {
-        // A verificação periódica é somente leitura. Uma falha parcial exige
-        // retry explícito para não regravar a linha principal a cada 15 s.
-        setSaveStatus(navigator.onLine ? 'error' : 'offline');
-        return;
-      }
-      const remoteVersion = await getCloudProjectVersion(current.id);
-      if (!remoteVersion) return;
-      const currentAfterVersionCheck = rawProjectRef.current;
-      if (!currentAfterVersionCheck
-        || currentAfterVersionCheck.id !== current.id
-        || activeDataScopeKeyRef.current !== dataScopeAtRequest
-        || conflictDetectedRef.current
-        || saveTimerRef.current
-        || inFlightSaveRef.current || productionCaptureBusyRef.current) return;
-      setLastRemoteCheckAt(new Date().toISOString());
-      if (await refreshRemoteWarehouseInBackground(currentAfterVersionCheck, remoteVersion)) return;
-      const knownRemoteCollections = [
-        ...(pendingRealtimeCollectionsRef.current.get(current.id) ?? []),
-        ...(remoteDirtyCollectionsRef.current.get(current.id) ?? []),
-      ];
-      if (await refreshRemoteCollectionsInBackground(
-        currentAfterVersionCheck,
-        knownRemoteCollections,
-        remoteVersion,
-      )) return;
-      const hasLocalChanges = projectHasLocalChanges(currentAfterVersionCheck, lastSavedProjectJsonRef.current);
-      const action = resolveRemoteVersionAction(remoteVersion.updatedAt, currentProjectUpdatedAtRef.current, hasLocalChanges);
-      if (action === 'current') {
-        currentWarehouseVersionRef.current = remoteVersion.warehouseVersion;
-        lastObservedWarehouseVersionRef.current = remoteVersion.warehouseVersion;
-        if (!hasLocalChanges) setSaveStatus('saved');
-        return;
-      }
-      if (action === 'conflict') {
-        // Sem um evento de tabela não há como atribuir a mudança a uma
-        // coleção com segurança. Preserve a tela e deixe a próxima entrada na
-        // área buscar seu escopo; nunca substitua o projeto inteiro.
-        markRemoteCollections(current.id, requiredProjectCollections);
-        return;
-      }
-
-      setSaveStatus('updating');
-      const record = await loadCloudProjectRecord(current.id, {
-        collections: requiredProjectCollections,
-        strict: true,
-        deferSnapshot: true,
-      });
-      if (!record) throw new Error('A obra não foi encontrada na nuvem.');
-      const latestLocal = rawProjectRef.current;
-      if (productionCaptureBusyRef.current || !latestLocal || latestLocal.id !== current.id || activeDataScopeKeyRef.current !== dataScopeAtRequest) {
-        discardCloudProjectRecord(record);
-        return;
-      }
-      if (hasLocalCollectionConflict(current.id, requiredProjectCollections)) {
-        discardCloudProjectRecord(record);
-        markRemoteCollections(current.id, requiredProjectCollections);
-        return;
-      }
-      confirmCloudProjectRecord(record);
-      const reconciled = reconcileRemoteProjectSnapshot({
-        local: latestLocal,
-        remote: record.project,
-        savedProjectJson: lastSavedProjectJsonRef.current,
-        collections: requiredProjectCollections,
-      });
-      lastSavedProjectJsonRef.current = reconciled.confirmedBaselineJson;
-      currentProjectUpdatedAtRef.current = record.updatedAt;
-      currentWarehouseVersionRef.current = record.warehouseVersion;
-      lastObservedWarehouseVersionRef.current = record.warehouseVersion;
-      setCurrentProjectUpdatedAt(record.updatedAt);
-      if (!reconciled.hasPendingLocalChanges) setLastCloudConfirmedAt(record.updatedAt);
-      clearRemoteCollections(current.id, requiredProjectCollections);
-      skipNextAutoSaveRef.current = !reconciled.hasPendingLocalChanges;
-      rawProjectRef.current = reconciled.project;
-      setRawProject(reconciled.project);
-      setSaveStatus(reconciled.hasPendingLocalChanges ? 'saving' : 'saved');
-    } catch (error) {
-      console.warn('Falha ao conferir a versão da obra na nuvem.', error);
-      setSaveStatus(navigator.onLine ? 'error' : 'offline');
-    } finally {
-      remoteCheckInFlightRef.current = false;
-    }
+    await checkProjectRemoteVersion({
+      organizationId: orgId,
+      collections: requiredProjectCollections,
+      refs: {
+        project: rawProjectRef,
+        initialized: initialLoadRef,
+        pendingDailyReportSaves: pendingDailyReportSavesRef,
+        productionCaptureBusy: productionCaptureBusyRef,
+        checkInFlight: remoteCheckInFlightRef,
+        conflictDetected: conflictDetectedRef,
+        saveTimer: saveTimerRef,
+        inFlightSave: inFlightSaveRef,
+        partialSync: partialSyncPendingRef,
+        activeDataScopeKey: activeDataScopeKeyRef,
+        pendingRealtimeCollections: pendingRealtimeCollectionsRef,
+        remoteDirtyCollections: remoteDirtyCollectionsRef,
+        savedProjectJson: lastSavedProjectJsonRef,
+        projectUpdatedAt: currentProjectUpdatedAtRef,
+        warehouseVersion: currentWarehouseVersionRef,
+        observedWarehouseVersion: lastObservedWarehouseVersionRef,
+        skipNextAutoSave: skipNextAutoSaveRef,
+      },
+      refreshWarehouse: refreshRemoteWarehouseInBackground,
+      refreshCollections: refreshRemoteCollectionsInBackground,
+      hasLocalCollectionConflict,
+      markRemoteCollections,
+      clearRemoteCollections,
+      setSaveStatus,
+      setLastRemoteCheckAt,
+      setProjectUpdatedAt: setCurrentProjectUpdatedAt,
+      setLastCloudConfirmedAt,
+      setProject: setRawProject,
+    });
   }, [clearRemoteCollections, hasLocalCollectionConflict, markRemoteCollections, orgId, pendingRealtimeCollectionsRef, remoteDirtyCollectionsRef, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
 
   const refreshProjectFromRealtime = useCallback(async (sources: readonly string[] = []) => {
