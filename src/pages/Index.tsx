@@ -23,7 +23,7 @@ import { useProjectAutoSave } from '@/domains/sync/useProjectAutoSave';
 import { useProjectCollectionTracker } from '@/domains/sync/useProjectCollectionTracker';
 import { confirmAreaHydration, hydrateAreaCollections, planAreaHydration } from '@/domains/sync/areaHydration';
 import { includePendingDraftCollections, loadInitialProject } from '@/domains/sync/projectBootstrap';
-import { planRealtimeProjectRefresh, reconcileRemoteProjectSnapshot } from '@/domains/sync/remoteProjectReconciliation';
+import { useProjectRealtimeRefresh } from '@/domains/sync/useProjectRealtimeRefresh';
 import ProjectHeaderSyncStatus from '@/domains/sync/ProjectHeaderSyncStatus';
 import { useDailyReportRealtime } from '@/domains/dailyReport/useDailyReportRealtime';
 import { reportForDate, replaceReportForDate, replaceSavedDailyReport } from '@/domains/dailyReport/dailyReportProject';
@@ -1486,116 +1486,17 @@ export default function Index() {
     });
   }, [clearRemoteCollections, hasLocalCollectionConflict, markRemoteCollections, orgId, pendingRealtimeCollectionsRef, remoteDirtyCollectionsRef, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
 
-  const refreshProjectFromRealtime = useCallback(async (sources: readonly string[] = []) => {
-    const current = rawProjectRef.current;
-    if (!current || !initialLoadRef.current || remoteCheckInFlightRef.current) return;
-    if (conflictDetectedRef.current) {
-      setSaveStatus('conflict');
-      return;
-    }
-    if (partialSyncPendingRef.current?.projectId === current.id) {
-      setSaveStatus(navigator.onLine ? 'error' : 'offline');
-      return;
-    }
-    if (pendingDailyReportSavesRef.current > 0) {
-      if (realtimeRefreshTimerRef.current) window.clearTimeout(realtimeRefreshTimerRef.current);
-      realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(sources), 600);
-      return;
-    }
-    if (productionCaptureBusyRef.current || saveTimerRef.current || inFlightSaveRef.current) {
-      if (realtimeRefreshTimerRef.current) window.clearTimeout(realtimeRefreshTimerRef.current);
-      realtimeRefreshTimerRef.current = window.setTimeout(() => void refreshProjectFromRealtime(sources), 1200);
-      return;
-    }
-
-    const {
-      affectedCollections, metadataOnly, requestCollections, activeCollections, inactiveCollections,
-    } = planRealtimeProjectRefresh(sources, requiredProjectCollections);
-    if (affectedCollections.some(collection => WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection))) {
-      if (await refreshRemoteWarehouseInBackground(current)) return;
-    }
-    if (await refreshRemoteCollectionsInBackground(current, affectedCollections)) return;
-    // Sem tabela identificada, a consulta permanece limitada à área aberta.
-    if (inactiveCollections.length > 0) markRemoteCollections(current.id, inactiveCollections);
-    if ((metadataOnly && localMetadataDirtyRef.current.has(current.id))
-      || (requestCollections.length > 0 && hasLocalCollectionConflict(current.id, requestCollections))) {
-      markRemoteCollections(current.id, requestCollections);
-      // A notification is not a rejected write. Keep the original expected
-      // fields until the transaction can resolve this operation on the server.
-      return;
-    }
-
-    // Outra aba recebeu alteração: atualize somente o marcador e a versão
-    // otimista. Não faça download, não troque objetos locais e não mexa no UI.
-    if (requestCollections.length > 0 && activeCollections.length === 0) {
-      const remoteVersion = await getCloudProjectVersion(current.id).catch(() => null);
-      if (remoteVersion && rawProjectRef.current?.id === current.id) {
-        currentProjectUpdatedAtRef.current = remoteVersion.updatedAt;
-        currentWarehouseVersionRef.current = remoteVersion.warehouseVersion;
-        lastObservedWarehouseVersionRef.current = remoteVersion.warehouseVersion;
-        setCurrentProjectUpdatedAt(remoteVersion.updatedAt);
-        if (!projectHasLocalChanges(rawProjectRef.current, lastSavedProjectJsonRef.current)) {
-          setLastCloudConfirmedAt(remoteVersion.updatedAt);
-        }
-      }
-      return;
-    }
-
-    remoteCheckInFlightRef.current = true;
-    try {
-      const latestLocal = rawProjectRef.current;
-      if (!latestLocal || latestLocal.id !== current.id) return;
-      const localJsonAtRequest = serializeProject(latestLocal);
-      const updatedAtAtRequest = currentProjectUpdatedAtRef.current;
-      const dataScopeAtRequest = activeDataScopeKeyRef.current;
-
-      const record = await loadCloudProjectRecord(current.id, {
-        collections: requestCollections,
-        strict: true,
-        deferSnapshot: true,
-      });
-      if (!record) return;
-      const localAfterRequest = rawProjectRef.current;
-      if (productionCaptureBusyRef.current || !localAfterRequest || localAfterRequest.id !== current.id) {
-        discardCloudProjectRecord(record);
-        return;
-      }
-      const localChangedDuringRequest = serializeProject(localAfterRequest) !== localJsonAtRequest
-        || currentProjectUpdatedAtRef.current !== updatedAtAtRequest
-        || activeDataScopeKeyRef.current !== dataScopeAtRequest;
-      if (localChangedDuringRequest && hasLocalCollectionConflict(current.id, requestCollections)) {
-        discardCloudProjectRecord(record);
-        markRemoteCollections(current.id, requestCollections);
-        return;
-      }
-      confirmCloudProjectRecord(record);
-      const reconciled = reconcileRemoteProjectSnapshot({
-        local: localAfterRequest,
-        remote: record.project,
-        savedProjectJson: lastSavedProjectJsonRef.current,
-        collections: requestCollections,
-        metadataOnly,
-      });
-      lastSavedProjectJsonRef.current = reconciled.confirmedBaselineJson;
-      currentProjectUpdatedAtRef.current = record.updatedAt;
-      currentWarehouseVersionRef.current = record.warehouseVersion;
-      lastObservedWarehouseVersionRef.current = record.warehouseVersion;
-      setCurrentProjectUpdatedAt(record.updatedAt);
-      if (!reconciled.hasPendingLocalChanges) setLastCloudConfirmedAt(record.updatedAt);
-      clearRemoteCollections(current.id, requestCollections);
-      setRemoteUpdateAt(new Date().toISOString());
-      skipNextAutoSaveRef.current = !reconciled.hasPendingLocalChanges;
-      rawProjectRef.current = reconciled.project;
-      setRawProject(reconciled.project);
-      setSaveStatus(reconciled.hasPendingLocalChanges ? 'saving' : 'saved');
-    } catch (error) {
-      console.warn('Falha ao aplicar atualização em tempo real.', error);
-      setSaveStatus(navigator.onLine ? 'error' : 'offline');
-    } finally {
-      remoteCheckInFlightRef.current = false;
-    }
-  }, [clearRemoteCollections, hasLocalCollectionConflict, localMetadataDirtyRef, markRemoteCollections, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
-
+  const refreshProjectFromRealtime = useProjectRealtimeRefresh({
+    requiredProjectCollections, rawProjectRef, initialLoadRef, remoteCheckInFlightRef,
+    conflictDetectedRef, partialSyncPendingRef, pendingDailyReportSavesRef,
+    productionCaptureBusyRef, saveTimerRef, inFlightSaveRef, realtimeRefreshTimerRef,
+    localMetadataDirtyRef, currentProjectUpdatedAtRef, currentWarehouseVersionRef,
+    lastObservedWarehouseVersionRef, activeDataScopeKeyRef, lastSavedProjectJsonRef,
+    skipNextAutoSaveRef, refreshRemoteWarehouseInBackground,
+    refreshRemoteCollectionsInBackground, markRemoteCollections, clearRemoteCollections,
+    hasLocalCollectionConflict, setCurrentProjectUpdatedAt, setLastCloudConfirmedAt,
+    setRemoteUpdateAt, setRawProject, setSaveStatus,
+  });
   const refreshDailyReportFromRealtime = useDailyReportRealtime({
     projectId: rawProject?.id,
     activeView: safeCurrentView,
