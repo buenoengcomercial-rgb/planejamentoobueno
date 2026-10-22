@@ -14,7 +14,7 @@ import { flushSync } from 'react-dom';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AppView, DailyReport, Project, WarehouseRequisition } from '@/types/project';
 import AppSidebar from '@/components/AppSidebar';
-import UndoButton from '@/components/UndoButton';
+import ProjectAreaContent from '@/domains/navigation/ProjectAreaContent';
 import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import { subscribeProjectRemoteSignals } from '@/domains/sync/projectRemoteSignals';
 import { checkProjectRemoteVersion } from '@/domains/sync/projectRemoteVersionCheck';
@@ -33,7 +33,6 @@ import MigrationDialog from '@/components/MigrationDialog';
 import { Menu, X, Loader2, Building2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCalculatedProject } from '@/domains/schedule/useCalculatedProject';
-import { resolveObraConfig } from '@/lib/obraConfig';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 import { getPendingFormNames } from '@/lib/pendingFormNavigation';
 import { cloudRetryDelay, isTransientCloudError } from '@/lib/cloudRetry';
@@ -65,16 +64,6 @@ const loadRealCost = () => import('@/components/RealCost');
 const loadMaterials = () => import('@/components/Materials');
 const loadWarehouse = () => import('@/components/warehouse/Warehouse');
 
-const Dashboard = lazyWithReload(loadDashboard);
-const ManagementRoutine = lazyWithReload(loadManagementRoutine);
-const GanttChart = lazyWithReload(loadGanttChart);
-const Measurement = lazyWithReload(loadMeasurement);
-const DailyProductionWorkspace = lazyWithReload(loadDailyProductionWorkspace);
-const Additive = lazyWithReload(loadAdditive);
-const AdditiveSchedule = lazyWithReload(loadAdditiveSchedule);
-const RealCost = lazyWithReload(loadRealCost);
-const Materials = lazyWithReload(loadMaterials);
-const WarehouseView = lazyWithReload(loadWarehouse);
 const ImportSyntheticDialog = lazyWithReload(() => import('@/components/ImportSyntheticDialog'));
 const CloudDraftConflictDialog = lazyWithReload(() => import('@/components/CloudDraftConflictDialog'));
 import { useAuth } from '@/hooks/useAuth';
@@ -2150,195 +2139,6 @@ export default function Index() {
     );
   }
 
-  const productionRoutineNavigation = (active: 'production' | 'routine') => (
-    <div className="border-b border-border bg-card px-3 pt-3 sm:px-4 lg:px-5">
-      <div className="mx-auto flex max-w-[1800px] gap-1 rounded-lg bg-muted/50 p-1 sm:w-fit sm:mx-0">
-        <Button
-          type="button"
-          variant={active === 'production' ? 'default' : 'ghost'}
-          className="min-h-10 flex-1 sm:flex-none"
-          onClick={() => {
-            setProductionWorkspaceInitialTab('production');
-            setCurrentView('tasks');
-            navigate(`/obras/${project.id}/producao`);
-          }}
-        >
-          Produção
-        </Button>
-        <Button
-          type="button"
-          variant={active === 'routine' ? 'default' : 'ghost'}
-          className="min-h-10 flex-1 sm:flex-none"
-          onClick={() => {
-            setCurrentView('management');
-            navigate(`/obras/${project.id}/rotina?semana=${todayISO()}`);
-          }}
-        >
-          Rotina semanal
-        </Button>
-      </div>
-    </div>
-  );
-
-  const renderView = () => {
-    if (!currentViewDataReady && dataLoadError) {
-      return (
-        <div className="mx-auto flex min-h-[50vh] max-w-lg flex-col items-center justify-center gap-3 p-6 text-center" role="alert">
-          <p className="font-semibold">Não foi possível carregar esta área.</p>
-          <p className="text-sm text-muted-foreground">{dataLoadError}</p>
-          <Button type="button" variant="outline" onClick={() => setDataLoadRetry(value => value + 1)}>
-            Tentar novamente
-          </Button>
-        </div>
-      );
-    }
-    if (!currentViewDataReady && safeCurrentView !== 'warehouse') {
-      return (
-        <div className="flex min-h-[50vh] items-center justify-center gap-2 p-6 text-sm font-medium text-muted-foreground" role="status" aria-live="polite">
-          <Loader2 className="h-5 w-5 animate-spin" />
-          Carregando somente os dados desta área…
-        </div>
-      );
-    }
-    switch (safeCurrentView) {
-      case 'dashboard':
-        return <Dashboard project={project} undoButton={<UndoButton canUndo={canUndo('dashboard')} onUndo={() => handleUndo('dashboard')} />} />;
-      case 'management':
-        return (
-          <>
-            {productionRoutineNavigation('routine')}
-            <ManagementRoutine
-              project={project}
-              onProjectChange={managementSetter}
-              onOpenDailyReport={handleOpenDailyReport}
-              onOpenProduction={handleOpenProductionActivity}
-              readOnly={!editor}
-              canRequestReschedule={role === 'owner' || role === 'admin' || role === 'engineer'}
-              canApproveReschedule={role === 'owner' || role === 'admin'}
-              auditActor={auditActor}
-              initialWeek={new URLSearchParams(location.search).get('semana') || undefined}
-              onWeekChange={date => navigate(`/obras/${project.id}/rotina?semana=${date}`, { replace: true })}
-              undoButton={<UndoButton canUndo={canUndo('management')} onUndo={() => handleUndo('management')} />}
-            />
-          </>
-        );
-      case 'gantt':
-        return <GanttChart
-          project={project}
-          onProjectChange={ganttSetter}
-          readOnly={!editor}
-          canRequestReschedule={role === 'owner' || role === 'admin' || role === 'engineer'}
-          canApproveReschedule={role === 'owner' || role === 'admin'}
-          auditActor={auditActor}
-          calendarConfig={resolveObraConfig(project)}
-          canManageCalendar={role === 'owner' || role === 'admin'}
-          onCalendarConfigChange={config => ganttSetter(previous => logToProject({ ...previous, scheduleCalendar: config }, {
-            ...auditActor, entityType: 'project', entityId: previous.id, action: 'updated',
-            title: 'Calendário da obra atualizado',
-            description: `Calendário operacional atualizado; ${config.exceptions?.length ?? 0} exceção(ões) de expediente ativa(s).`,
-            before: previous.scheduleCalendar, after: config,
-          }))}
-          undoButton={<UndoButton canUndo={canUndo('gantt')} onUndo={() => handleUndo('gantt')} size="xs" />}
-        />;
-      case 'tasks':
-        return (
-          <>
-            {productionRoutineNavigation('production')}
-            <DailyProductionWorkspace
-              auditActor={auditActor}
-              takeoffStorageKey={user && orgId ? scopeKey(orgId, user.id, project.id) : undefined}
-              project={project}
-              initialTab={productionWorkspaceInitialTab}
-              onProductionChange={tasksSetter}
-              onCommitProductionCapture={commitProductionCapture}
-              onDailyReportChange={dailyReportSetter}
-              productionReadOnly={!editor}
-              dailyReportReadOnly={!dailyReportEditor}
-              dailyReportCanConclude={role === 'owner' || role === 'engineer'}
-              dailyReportCanReopen={role === 'owner'}
-              dailyReportCanClearDay={editor}
-              dailyReportPhotoUploaderName={auditActor.userName}
-              productionUndoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />}
-              dailyReportUndoButton={<UndoButton canUndo={canUndo('dailyReport')} onUndo={() => handleUndo('dailyReport')} />}
-              dailyReportInitialDate={dailyReportInitialDate}
-              dailyReportInitialFilter={dailyReportInitialFilter}
-              dailyReportNavKey={dailyReportNavKey}
-              productionFocusTaskId={new URLSearchParams(location.search).get('atividade') || undefined}
-              productionFocusDate={new URLSearchParams(location.search).get('data') || undefined}
-            />
-          </>
-        );
-      case 'measurement':
-        return <Measurement independentConfirmed={independentMeasurementProjectId === project.id} onIndependentReady={setIndependentMeasurementProjectId} project={project} onProjectChange={measurementSetter} undoButton={<UndoButton canUndo={canUndo('measurement')} onUndo={() => handleUndo('measurement')} />} onOpenDailyReport={handleOpenDailyReport} />;
-      case 'dailyReport':
-        return (
-          <DailyProductionWorkspace
-            auditActor={auditActor}
-            project={project}
-            initialTab="dailyReport"
-            onProductionChange={tasksSetter}
-            onDailyReportChange={dailyReportSetter}
-            productionReadOnly={!editor}
-            dailyReportReadOnly={!dailyReportEditor}
-            dailyReportCanConclude={role === 'owner' || role === 'engineer'}
-            dailyReportCanReopen={role === 'owner'}
-            dailyReportCanClearDay={editor}
-            dailyReportPhotoUploaderName={auditActor.userName}
-            productionUndoButton={<UndoButton canUndo={canUndo('tasks')} onUndo={() => handleUndo('tasks')} />}
-            dailyReportUndoButton={<UndoButton canUndo={canUndo('dailyReport')} onUndo={() => handleUndo('dailyReport')} />}
-            dailyReportInitialDate={dailyReportInitialDate}
-            dailyReportInitialFilter={dailyReportInitialFilter}
-            dailyReportNavKey={dailyReportNavKey}
-          />
-        );
-      case 'additive':
-        return <Additive project={project} onProjectChange={additiveSetter} canFormalize={role === 'owner' || role === 'admin'} undoButton={<UndoButton canUndo={canUndo('additive')} onUndo={() => handleUndo('additive')} />} />;
-      case 'additiveSchedule':
-        return <AdditiveSchedule project={project} onProjectChange={additiveScheduleSetter} canManageCalendar={role === 'owner' || role === 'admin'} auditActor={auditActor} undoButton={<UndoButton canUndo={canUndo('additiveSchedule')} onUndo={() => handleUndo('additiveSchedule')} />} />;
-      case 'realCost':
-        return <RealCost project={project} onProjectChange={realCostSetter} canManageSubcontracts={role === 'owner' || role === 'admin'} canDeleteSubcontractHistory={role === 'owner'} auditActor={auditActor} />;
-      case 'materials':
-        return <Materials project={project} onProjectChange={materialsSetter} onCommitWarehouseScoped={commitWarehouseScopedNow} auditActor={auditActor} />;
-      case 'warehouse':
-        return (
-          <WarehouseView
-            project={project}
-            onProjectChange={warehouseSetter}
-            onCommitProject={commitProjectNow}
-            onCloudWarehouseOperationConfirmed={applyWarehouseCloudConfirmation}
-            onPrepareCloudWarehouseOperation={prepareWarehouseRequisitionOperation}
-            onCommitCloudWarehouseOperation={commitWarehouseRequisitionNow}
-            onRunCriticalCloudWarehouseOperation={runCriticalWarehouseClientOperation}
-            onCommitWarehouseScoped={commitWarehouseScopedNow}
-            canManageFiscalNotes={warehouseEditor}
-            canReviewFiscalCosts={role === 'owner' || role === 'admin'}
-            canViewPanel={role !== 'warehouse_operator' && role !== 'engineer'}
-            canApproveInventory={role === 'owner' || role === 'admin'}
-            canArchiveWarehouseRecords={warehouseEditor}
-            canEditPostedWarehouseRecords={role === 'owner'}
-            canCorrectDeliveredRequisitions={warehouseEditor}
-            canSupplementRequisitions={warehouseEditor}
-            canCancelDeliveredRequisitions={warehouseEditor}
-            canDeleteWarehouseRecords={role === 'owner'}
-            canManageEquipmentGroups={role === 'owner' || role === 'warehouse_operator'}
-            canOptimizeStorage={role === 'owner'}
-            onCommitAttachmentMigration={commitAttachmentMigrationNow}
-            storageMaintenanceOrganizationId={orgId}
-            auditActor={auditActor}
-            activeTab={warehouseTab}
-            onActiveTabChange={(nextTab) => {
-              if (warehouseClientOperationInFlightRef.current || warehouseOperationInFlightRef.current || warehouseScopedOperationInFlightRef.current) {
-                toast.warning('Aguarde a confirmação da operação do Almoxarifado na nuvem.');
-                return;
-              }
-              setWarehouseTab(nextTab);
-            }}
-            isTabDataReady={currentViewDataReady}
-          />
-        );
-    }
-  };
-
   return (
     <div className="flex min-h-screen bg-background">
       <button
@@ -2500,7 +2300,67 @@ export default function Index() {
           {Object.entries(dailyReportDrafts).map(([date, draft]) => (
             <DailyReportDraftRecovery key={date} draft={draft} confirmed={reportForDate(rawProject, date)} message={dailyReportSaveErrors[date]} busy={dailyReportRecoveryBusy || saveStatus === 'saving'} onRetry={() => void recoverDailyReport(date, false)} onDiscard={() => void recoverDailyReport(date, true)} />
           ))}
-          {renderView()}
+          <ProjectAreaContent
+            project={project}
+            safeCurrentView={safeCurrentView}
+            currentViewDataReady={currentViewDataReady}
+            dataLoadError={dataLoadError}
+            onRetryDataLoad={() => setDataLoadRetry(value => value + 1)}
+            role={role}
+            editor={editor}
+            dailyReportEditor={dailyReportEditor}
+            warehouseEditor={warehouseEditor}
+            auditActor={auditActor}
+            orgId={orgId}
+            userId={user?.id}
+            locationSearch={location.search}
+            navigate={navigate}
+            onProductionNavigation={() => {
+              setProductionWorkspaceInitialTab('production');
+              setCurrentView('tasks');
+              navigate(`/obras/${project.id}/producao`);
+            }}
+            onRoutineNavigation={() => {
+              setCurrentView('management');
+              navigate(`/obras/${project.id}/rotina?semana=${todayISO()}`);
+            }}
+            productionWorkspaceInitialTab={productionWorkspaceInitialTab}
+            dailyReportInitialDate={dailyReportInitialDate}
+            dailyReportInitialFilter={dailyReportInitialFilter}
+            dailyReportNavKey={dailyReportNavKey}
+            independentMeasurementConfirmed={independentMeasurementProjectId === project.id}
+            onIndependentReady={setIndependentMeasurementProjectId}
+            onOpenDailyReport={handleOpenDailyReport}
+            onOpenProductionActivity={handleOpenProductionActivity}
+            canUndo={canUndo}
+            handleUndo={handleUndo}
+            managementSetter={managementSetter}
+            ganttSetter={ganttSetter}
+            tasksSetter={tasksSetter}
+            measurementSetter={measurementSetter}
+            dailyReportSetter={dailyReportSetter}
+            additiveSetter={additiveSetter}
+            additiveScheduleSetter={additiveScheduleSetter}
+            realCostSetter={realCostSetter}
+            materialsSetter={materialsSetter}
+            warehouseSetter={warehouseSetter}
+            commitProductionCapture={commitProductionCapture}
+            commitProjectNow={commitProjectNow}
+            applyWarehouseCloudConfirmation={applyWarehouseCloudConfirmation}
+            prepareWarehouseRequisitionOperation={prepareWarehouseRequisitionOperation}
+            commitWarehouseRequisitionNow={commitWarehouseRequisitionNow}
+            runCriticalWarehouseClientOperation={runCriticalWarehouseClientOperation}
+            commitWarehouseScopedNow={commitWarehouseScopedNow}
+            commitAttachmentMigrationNow={commitAttachmentMigrationNow}
+            warehouseTab={warehouseTab}
+            onWarehouseTabChange={nextTab => {
+              if (warehouseClientOperationInFlightRef.current || warehouseOperationInFlightRef.current || warehouseScopedOperationInFlightRef.current) {
+                toast.warning('Aguarde a confirmação da operação do Almoxarifado na nuvem.');
+                return;
+              }
+              setWarehouseTab(nextTab);
+            }}
+          />
         </Suspense>
       </main>
 
