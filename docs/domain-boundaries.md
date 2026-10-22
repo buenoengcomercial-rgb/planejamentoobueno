@@ -38,6 +38,10 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
   confirma uma edição local ainda pendente. A apresentação do aviso geral está
   em `domains/sync/ProjectHeaderSyncStatus.tsx`; na Medição independente, falhas
   de outras áreas são identificadas como tais.
+- A leitura e conciliação em segundo plano de coleções remotas ficam em
+  `domains/sync/remoteCollectionRefresh.ts`. O `Index.tsx` aplica o resultado
+  às referências e ao estado visível; uma resposta atrasada de outra obra ou
+  versão é descartada sem confirmar uma edição local pendente.
 - A carga sob demanda ao entrar em outra área está em
   `domains/sync/areaHydration.ts`. Ela mantém o grupo de produção em edição fora
   da carga, confere a versão antes e depois da leitura e descarta uma resposta
@@ -74,7 +78,7 @@ Contagem de referência em 21/10/2026; `Index.tsx` atualizado em 22/10/2026 (lin
 | Arquivo | Linhas | Recorte funcional seguinte |
 | --- | ---: | --- |
 | `lib/warehouse.ts` | 5.100 | Separar nota fiscal, requisição/devolução, inventário, cautela e projeções de estoque, mantendo a API pública. |
-| `pages/Index.tsx` | 2.559 | Prosseguir com a composição de telas e estados locais. Bootstrap, hidratação, Realtime, conciliação, tentativa de salvamento, ciclo de vida da obra e coordenação do Almoxarifado já saíram. |
+| `pages/Index.tsx` | 2.192 | Prosseguir com estado de edição e comandos por área. Bootstrap, hidratação, atualização remota por coleção, tentativa de salvamento, ciclo de vida da obra e coordenação do Almoxarifado já saíram. |
 | `components/GanttChart.tsx` | 3.087 | Separar estado de filtros, grade temporal, edição de barras, calendário e comandos. |
 | `lib/projectSync.ts` | 2.009 | Separar hidratação, snapshots e comandos normalizados por domínio. |
 | `components/TaskList.tsx` | 1.692 | Separar lista visual, edição de produção e lançamento de quantitativos. |
