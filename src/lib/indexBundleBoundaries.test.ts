@@ -16,8 +16,11 @@ describe('fronteiras leves do Index', () => {
 
   it('usa o núcleo leve do calendário sem importar a interface de configuração', () => {
     const index = source('src/pages/Index.tsx');
+    const areas = source('src/domains/navigation/ProjectAreaContent.tsx');
 
-    expect(index).toContain("from '@/lib/obraConfig'");
+    expect(index).toContain("from '@/domains/navigation/ProjectAreaContent'");
+    expect(areas).toContain("from '@/lib/obraConfig'");
     expect(index).not.toContain("from '@/components/ConfiguracaoObra'");
+    expect(areas).not.toContain("from '@/components/ConfiguracaoObra'");
   });
 });
