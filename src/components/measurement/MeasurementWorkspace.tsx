@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { FileCheck2, Plus } from 'lucide-react';
 import ProductionQuantityDetails from '@/components/ProductionQuantityDetails';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { addMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, editMeasuredBulletin, entryFor, fiscalSubmissionCurrent, isPeriodLocked, monthlyLines, newMeasuredRow, pasteMeasuredRow, sourceFields, transactMeasurement, undoMeasuredOperation, freezeMeasuredPeriod, type Destination, type MeasurementActor, type MeasurementClipboard, type MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
+import { addMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, editMeasuredBulletin, entryFor, fiscalSubmissionCurrent, isPeriodLocked, measurementBulletin, monthlyLines, newMeasuredRow, pasteMeasuredRow, sourceFields, transactMeasurement, undoMeasuredOperation, freezeMeasuredPeriod, type Destination, type MeasurementActor, type MeasurementClipboard, type MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
 import { MeasurementCommitRejectedError, type MeasurementRepository, type WorkspaceDraft } from '@/lib/measurementWorkspaceStore';
 import type { IncorporationBackup } from '@/lib/measurementIncorporation';
 import { prepareIncorporation, incorporateApprovedAdditive } from '@/lib/measurementIncorporation';
@@ -36,6 +36,22 @@ const button = 'inline-flex h-8 items-center gap-1.5 rounded border border-slate
 /** A response can be lost after the row is committed but before its draft is cleared. */
 function confirmedRowDraft(workspace: Workspace, draft: WorkspaceDraft): boolean {
   if (draft.projectId !== workspace.projectId) return false;
+  if (draft.serviceId === bulletinDraftKey) {
+    const period = workspace.periods.find(value => value.id === draft.measurementId);
+    if (!period || !Object.prototype.hasOwnProperty.call(draft.changes, 'value')) return false;
+    if (draft.rowId === 'number') return String(period.number) === String(draft.changes.value);
+    const bulletin = measurementBulletin(workspace, draft.measurementId);
+    const saved = draft.rowId === 'projectName' ? bulletin.projectName
+      : draft.rowId === 'bdiPercent' ? bulletin.contract.bdiPercent
+        : bulletin.contract[draft.rowId as keyof typeof bulletin.contract];
+    return saved !== undefined && String(saved) === String(draft.changes.value);
+  }
+  if (draft.rowId === '__manual__') {
+    const quantity = Number(draft.changes.multiplier);
+    if (!Number.isFinite(quantity) || quantity < 0) return false;
+    const rows = entryFor(workspace, draft.measurementId, draft.serviceId).rows;
+    return rows.length === 1 && rows[0].origin?.kind === 'manual' && rows[0].multiplier === quantity;
+  }
   const rowId = draft.rowId === '__new__' ? draft.changes.createdRowId : draft.rowId;
   if (typeof rowId !== 'string' || rowId.startsWith('__')) return false;
   const row = workspace.entries.find(entry => entry.measurementId === draft.measurementId && entry.serviceId === draft.serviceId)?.rows.find(item => item.id === rowId);
@@ -1195,6 +1211,17 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         selectPeriod(current.current!.periods.some(p => p.id === id) ? id : current.current!.periods.at(-1)!.id);
       }); }}/>}
     {legacyRemaining.length > 0 && <p role="status" className="border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">Há registros locais antigos de outras tarefas ({legacyRemaining.join(', ')}). Eles não foram apagados nem enviados automaticamente.</p>}
+    {repository.savedLabel === 'Salvo na nuvem' && drafts.length > 0 && <details className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
+      <summary className="cursor-pointer font-medium">{drafts.length} rascunho(s) local(is) da Medição aguardando conferência</summary>
+      <p className="mt-1">Estes dados permanecem neste navegador. Confira cada item antes de alterar ou fechar a página.</p>
+      <ul className="mt-1 list-disc pl-5">{drafts.map(draft => {
+        const service = workspace.services.find(value => value.id === draft.serviceId);
+        const periodNumber = workspace.periods.find(value => value.id === draft.measurementId)?.number;
+        return <li key={draftKey(draft.measurementId, draft.serviceId, draft.rowId)}>
+          {periodNumber ? `${periodNumber}ª medição · ` : ''}{service ? `${service.item} · ${service.description}` : draft.serviceId === bulletinDraftKey ? `Boletim · ${draft.rowId}` : 'Registro local'}
+        </li>;
+      })}</ul>
+    </details>}
     {period && <MeasurementBulletin key={active} workspace={workspace} measurementId={active} readOnly={!!locked} drafts={drafts}
       onDraft={async (field, value) => {
         draftChanges.current.set(draftKey(active, bulletinDraftKey, field), { value });
