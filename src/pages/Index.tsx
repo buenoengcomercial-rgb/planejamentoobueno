@@ -15,6 +15,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AppView, DailyReport, Project, WarehouseRequisition } from '@/types/project';
 import AppSidebar from '@/components/AppSidebar';
 import ProjectAreaContent from '@/domains/navigation/ProjectAreaContent';
+import { flushPendingProjectSave, navigateToProjectView, runProtectedProjectNavigation } from '@/domains/navigation/projectNavigationGuard';
 import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import { subscribeProjectRemoteSignals } from '@/domains/sync/projectRemoteSignals';
 import { checkProjectRemoteVersion } from '@/domains/sync/projectRemoteVersionCheck';
@@ -1168,114 +1169,17 @@ export default function Index() {
     });
   }, [appliedWorkStart, editor, measurementWorkStart, partialSyncIssue, rawProject?.id, scheduleProjectDraft, synchronizeLoadedProjectSchedule]);
 
-  const flushPendingSave = useCallback(async () => {
-    if (productionCaptureBusyRef.current) { toast.warning('Aguarde a confirmação conjunta da captura antes de sair desta área.'); return false; }
-    if (!user || !orgId || !rawProject || !initialLoadRef.current || !canPersistProject) return true;
-    if (conflictDetectedRef.current) {
-      setSaveStatus('conflict');
-      toast.warning('Resolva a divergência entre a cópia local e a nuvem antes de sair desta área.');
-      return false;
-    }
+  const flushPendingSave = useCallback(() => flushPendingProjectSave({
+    userId: user?.id, orgId, project: rawProject, initialLoadRef, canPersistProject,
+    productionCaptureBusyRef, conflictDetectedRef, warehouseClientOperationInFlightRef,
+    pendingDailyReportSavesRef, dailyReportSaveQueueRef, warehouseOperationInFlightRef,
+    warehouseScopedOperationInFlightRef, saveTimerRef, inFlightSaveRef, partialSyncPendingRef,
+    rawProjectRef, persistProject, handleCloudConflict, setSaveStatus,
+  }), [user?.id, orgId, rawProject, canPersistProject, persistProject, handleCloudConflict]);
 
-    // Uma retirada com fotos começa antes da RPC. Aguarde todo o fluxo do
-    // navegador (upload, transação e aplicação do Diário) antes de trocar a obra.
-    if (warehouseClientOperationInFlightRef.current) {
-      try {
-        await warehouseClientOperationInFlightRef.current;
-      } catch {
-        return false;
-      }
-      if (conflictDetectedRef.current) return false;
-    }
-
-    if (pendingDailyReportSavesRef.current > 0) {
-      try {
-        await dailyReportSaveQueueRef.current;
-      } catch {
-        return false;
-      }
-      if (conflictDetectedRef.current) return false;
-    }
-
-    if (warehouseOperationInFlightRef.current) {
-      try {
-        await warehouseOperationInFlightRef.current;
-      } catch {
-        return false;
-      }
-      if (conflictDetectedRef.current) return false;
-    }
-
-    if (warehouseScopedOperationInFlightRef.current) {
-      try {
-        await warehouseScopedOperationInFlightRef.current;
-      } catch {
-        return false;
-      }
-      if (conflictDetectedRef.current) return false;
-    }
-
-    if (saveTimerRef.current) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-      setSaveStatus('saving');
-      try {
-        await persistProject(rawProject, orgId);
-        return !conflictDetectedRef.current
-          && partialSyncPendingRef.current?.projectId !== rawProject.id;
-      } catch (e) {
-        console.warn(e);
-        if (e instanceof CloudProjectConflictError) {
-          await handleCloudConflict(rawProject);
-        } else {
-          setSaveStatus(navigator.onLine ? 'error' : 'offline');
-          toast.error('Erro ao salvar na nuvem. Sua alteração ficou apenas neste navegador.');
-        }
-        return false;
-      }
-    }
-
-    if (inFlightSaveRef.current) {
-      try {
-        await inFlightSaveRef.current;
-        return !conflictDetectedRef.current
-          && partialSyncPendingRef.current?.projectId !== rawProject.id;
-      } catch (e) {
-        if (e instanceof CloudProjectConflictError && rawProjectRef.current) {
-          await handleCloudConflict(rawProjectRef.current);
-        }
-        return false;
-      }
-    }
-
-    if (partialSyncPendingRef.current?.projectId === rawProject.id) {
-      setSaveStatus(navigator.onLine ? 'error' : 'offline');
-      toast.warning('Confirme a sincronização detalhada em “Tentar novamente” antes de sair desta área.');
-      return false;
-    }
-
-    return true;
-  }, [user, orgId, rawProject, canPersistProject, persistProject, handleCloudConflict]);
-
-  const runProtectedNavigation = useCallback(async <T,>(
-    action: () => Promise<T>,
-  ): Promise<T | undefined> => {
-    if (getPendingFormNames().length > 0) {
-      toast.warning('Conclua ou descarte o formulário em preenchimento antes de trocar de obra ou sair desta área.');
-      return undefined;
-    }
-    if (navigationInFlightRef.current) {
-      toast.warning('Aguarde a navegação atual terminar.');
-      return undefined;
-    }
-    navigationInFlightRef.current = true;
-    try {
-      if (!(await flushPendingSave())) return undefined;
-      return await action();
-    } finally {
-      navigationInFlightRef.current = false;
-    }
-  }, [flushPendingSave]);
+  const runProtectedNavigation = useCallback(<T,>(action: () => Promise<T>): Promise<T | undefined> => (
+    runProtectedProjectNavigation(navigationInFlightRef, flushPendingSave, action)
+  ), [flushPendingSave]);
 
   useEffect(() => {
     if (!user || !orgId) return;
@@ -2156,40 +2060,14 @@ export default function Index() {
       <div className={`fixed lg:sticky lg:top-0 lg:h-svh lg:self-start z-40 transition-transform lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <AppSidebar
           currentView={safeCurrentView === 'management' ? 'tasks' : safeCurrentView}
-          onViewChange={(v) => {
-            if (role && !canAccessAppView(role, v)) return;
-            if (warehouseClientOperationInFlightRef.current || warehouseOperationInFlightRef.current || warehouseScopedOperationInFlightRef.current) {
-              toast.warning('Aguarde a confirmação da operação do Almoxarifado na nuvem.');
-              return;
-            }
-            if (v === safeCurrentView) return;
-            flushSync(() => { flushPendingEditCommits(); });
-            const pendingDraft = pendingDraftRef.current;
-            if (pendingDraft && !conflictDetectedRef.current) {
-              cancelScheduledDraft(pendingDraft.project.id);
-              writeProtectedProjectDraft(pendingDraft.project, pendingDraft.baseUpdatedAt);
-            }
-            const switchView = () => {
-              if (v === 'tasks') setProductionWorkspaceInitialTab('production');
-              if (v === 'dailyReport') {
-                setProductionWorkspaceInitialTab('dailyReport');
-                setDailyReportInitialFilter(undefined);
-              }
-              setCurrentView(v);
-              setSidebarOpen(false);
-            };
-            const forms = getPendingFormNames();
-            if (forms.length > 0) {
-              confirmDiscardPendingForm({
-                title: 'Sair com formulário em preenchimento?',
-                description: `Os dados de ${forms.join(', ')} ainda não foram confirmados.`,
-                cancelLabel: 'Continuar preenchendo',
-                confirmLabel: 'Descartar e sair',
-              }, switchView);
-              return;
-            }
-            switchView();
-          }}
+          onViewChange={nextView => navigateToProjectView({
+            role, currentView: safeCurrentView,
+            warehouseClientOperationInFlightRef, warehouseOperationInFlightRef,
+            warehouseScopedOperationInFlightRef, pendingDraftRef, conflictDetectedRef,
+            cancelScheduledDraft, writeProtectedProjectDraft,
+            setProductionWorkspaceInitialTab, setDailyReportInitialFilter,
+            setCurrentView, setSidebarOpen, confirmDiscardPendingForm,
+          }, nextView)}
           projectName={project.name}
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(c => !c)}
