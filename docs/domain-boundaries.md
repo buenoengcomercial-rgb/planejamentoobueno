@@ -60,7 +60,7 @@ Contagem da cópia de trabalho em 21/10/2026 (linhas físicas):
 | Arquivo | Linhas | Recorte funcional seguinte |
 | --- | ---: | --- |
 | `lib/warehouse.ts` | 5.100 | Separar nota fiscal, requisição/devolução, inventário, cautela e projeções de estoque, mantendo a API pública. |
-| `pages/Index.tsx` | 3.201 | Extrair verificação periódica de versão e conciliação remota. Bootstrap, hidratação por área, marcadores e despacho Realtime, sessão visual, agendamento do autosave, mesclagem da resposta e indicador já saíram. |
+| `pages/Index.tsx` | 3.212 | Extrair a aplicação de atualizações gerais recebidas por Realtime. Bootstrap, hidratação por área, marcadores, despacho Realtime, verificação de versão, conciliação remota e recepção do Diário já saíram. |
 | `components/GanttChart.tsx` | 3.087 | Separar estado de filtros, grade temporal, edição de barras, calendário e comandos. |
 | `lib/projectSync.ts` | 2.009 | Separar hidratação, snapshots e comandos normalizados por domínio. |
 | `components/TaskList.tsx` | 1.692 | Separar lista visual, edição de produção e lançamento de quantitativos. |

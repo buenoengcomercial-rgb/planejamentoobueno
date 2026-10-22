@@ -26,6 +26,8 @@ import { confirmAreaHydration, hydrateAreaCollections, planAreaHydration } from 
 import { includePendingDraftCollections, loadInitialProject } from '@/domains/sync/projectBootstrap';
 import { planRealtimeProjectRefresh, reconcileRemoteProjectSnapshot } from '@/domains/sync/remoteProjectReconciliation';
 import ProjectHeaderSyncStatus from '@/domains/sync/ProjectHeaderSyncStatus';
+import { useDailyReportRealtime } from '@/domains/dailyReport/useDailyReportRealtime';
+import { reportForDate, replaceReportForDate, replaceSavedDailyReport } from '@/domains/dailyReport/dailyReportProject';
 import MigrationDialog from '@/components/MigrationDialog';
 import { Menu, X, Loader2, Building2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -177,24 +179,6 @@ const NEXT_VIEW_PRELOAD: Record<AppView, { view: AppView; load: () => Promise<un
 
 type UndoStacks = Record<AppView, UndoOperation[]>;
 
-function reportForDate(project: Project, date: string): DailyReport | undefined {
-  return (project.dailyReports ?? []).find(report => report.date === date);
-}
-
-function replaceReportForDate(project: Project, date: string, report: DailyReport | null): Project {
-  const withoutDate = (project.dailyReports ?? []).filter(item => item.date !== date);
-  return { ...project, dailyReports: report ? [...withoutDate, report] : withoutDate };
-}
-
-function replaceSavedDailyReport(serialized: string | null, date: string, report: DailyReport | null): string | null {
-  if (!serialized) return serialized;
-  try {
-    return serializeProject(replaceReportForDate(JSON.parse(serialized) as Project, date, report));
-  } catch {
-    return serialized;
-  }
-}
-
 function createDraftProject(name = ''): Project {
   const today = new Date().toISOString().split('T')[0];
   return {
@@ -317,8 +301,6 @@ export default function Index() {
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const dailyReportSaveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const pendingDailyReportSavesRef = useRef(0);
-  const pendingRealtimeDailyReportsRef = useRef<Map<string, { projectId: string; report: DailyReport }>>(new Map());
-  const realtimeDailyReportTimerRef = useRef<number | null>(null);
   const refreshDailyReportFromRealtimeRef = useRef<(incoming: DailyReport) => void>(() => undefined);
   const checkRemoteProjectVersionRef = useRef<() => Promise<void>>(async () => undefined);
   const refreshProjectFromRealtimeRef = useRef<(sources: readonly string[]) => Promise<void>>(async () => undefined);
@@ -1636,69 +1618,27 @@ export default function Index() {
     }
   }, [clearRemoteCollections, hasLocalCollectionConflict, localMetadataDirtyRef, markRemoteCollections, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, requiredProjectCollections]);
 
-  const refreshDailyReportFromRealtime = useCallback((incoming: DailyReport) => {
-    const current = rawProjectRef.current;
-    if (!current || !incoming.date) return;
-    if (conflictDetectedRef.current) return;
-    // Mesmo se a coleção tiver sido carregada para um cálculo auxiliar, uma
-    // alteração no Diário não deve remodelar outra tela aberta.
-    if (safeCurrentView !== 'dailyReport') {
-      markRemoteCollections(current.id, ['dailyReports']);
-      return;
-    }
-    if (pendingDailyReportSavesRef.current > 0 || saveTimerRef.current || inFlightSaveRef.current) {
-      pendingRealtimeDailyReportsRef.current.set(`${current.id}:${incoming.date}`, {
-        projectId: current.id,
-        report: incoming,
-      });
-      if (realtimeDailyReportTimerRef.current) window.clearTimeout(realtimeDailyReportTimerRef.current);
-      realtimeDailyReportTimerRef.current = window.setTimeout(() => {
-        realtimeDailyReportTimerRef.current = null;
-        const queued = [...pendingRealtimeDailyReportsRef.current.values()];
-        pendingRealtimeDailyReportsRef.current.clear();
-        queued.forEach(({ projectId, report }) => {
-          if (rawProjectRef.current?.id === projectId) {
-            refreshDailyReportFromRealtimeRef.current(report);
-          }
-        });
-      }, 1200);
-      return;
-    }
-    // Um evento isolado não representa a coleção completa. Se o Diário ainda
-    // não foi carregado nesta sessão, aguarde a hidratação normal da área.
-    if (getMissingProjectCollections(current.id, ['dailyReports']).length > 0) {
-      markRemoteCollections(current.id, ['dailyReports']);
-      return;
-    }
-    mergeConfirmedDailyReportIntoPartialSync(current.id, incoming.date, incoming);
-    const currentReport = reportForDate(current, incoming.date);
-    if (currentReport && JSON.stringify(currentReport) === JSON.stringify(incoming)) return;
-    const next = replaceReportForDate(current, incoming.date, incoming);
-    confirmProjectCollectionsSnapshot(next, ['dailyReports']);
-    skipNextAutoSaveRef.current = true;
-    rawProjectRef.current = next;
-    setRawProject(next);
-    lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, incoming.date, incoming);
-    setRemoteUpdateAt(new Date().toISOString());
-  }, [markRemoteCollections, mergeConfirmedDailyReportIntoPartialSync, safeCurrentView]);
+  const refreshDailyReportFromRealtime = useDailyReportRealtime({
+    projectId: rawProject?.id,
+    activeView: safeCurrentView,
+    project: rawProjectRef,
+    conflictDetected: conflictDetectedRef,
+    pendingSaves: pendingDailyReportSavesRef,
+    saveTimer: saveTimerRef,
+    inFlightSave: inFlightSaveRef,
+    skipNextAutoSave: skipNextAutoSaveRef,
+    savedProjectJson: lastSavedProjectJsonRef,
+    markRemoteCollections,
+    mergeIntoPartialSync: mergeConfirmedDailyReportIntoPartialSync,
+    setProject: setRawProject,
+    setRemoteUpdateAt,
+  });
 
   // A assinatura pertence à obra, enquanto os callbacks acompanham a aba
   // aberta. Referências atualizadas evitam desmontar o canal ao trocar de área.
   checkRemoteProjectVersionRef.current = checkRemoteProjectVersion;
   refreshProjectFromRealtimeRef.current = refreshProjectFromRealtime;
   refreshDailyReportFromRealtimeRef.current = refreshDailyReportFromRealtime;
-
-  useEffect(() => {
-    const pendingReports = pendingRealtimeDailyReportsRef.current;
-    if (realtimeDailyReportTimerRef.current) window.clearTimeout(realtimeDailyReportTimerRef.current);
-    realtimeDailyReportTimerRef.current = null;
-    pendingReports.clear();
-    return () => {
-      if (realtimeDailyReportTimerRef.current) window.clearTimeout(realtimeDailyReportTimerRef.current);
-      realtimeDailyReportTimerRef.current = null;
-      pendingReports.clear();
-    };
-  }, [rawProject?.id]);
 
   useEffect(() => {
     const projectId = rawProject?.id;
