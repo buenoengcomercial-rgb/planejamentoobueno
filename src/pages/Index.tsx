@@ -27,6 +27,7 @@ import { includePendingDraftCollections, loadInitialProject } from '@/domains/sy
 import { useProjectRealtimeRefresh } from '@/domains/sync/useProjectRealtimeRefresh';
 import { projectSaveAttempt } from '@/domains/sync/projectSaveAttempt';
 import { createProjectLifecycleHandlers } from '@/domains/sync/projectLifecycle';
+import { refreshRemoteProjectCollections, refreshRemoteWarehouseCollections, type RemoteCollectionRefreshContext } from '@/domains/sync/remoteCollectionRefresh';
 import ProjectHeaderSyncStatus from '@/domains/sync/ProjectHeaderSyncStatus';
 import { useDailyReportRealtime } from '@/domains/dailyReport/useDailyReportRealtime';
 import { reportForDate, replaceReportForDate, replaceSavedDailyReport } from '@/domains/dailyReport/dailyReportProject';
@@ -80,7 +81,6 @@ import {
   confirmCloudProjectRecord,
   discardCloudProjectRecord,
   getCloudProjectVersion,
-  type CloudProjectRecord,
   type CloudProjectVersion,
 } from '@/lib/cloudProjects';
 import {
@@ -102,7 +102,6 @@ import {
 import {
   confirmProjectCollectionsSnapshot,
   discardHydratedProjectCollections,
-  hasProjectMetadataChanges,
   getLoadedProjectCollections,
   getMissingProjectCollections,
   mergeHydratedProjectCollections,
@@ -116,7 +115,6 @@ import {
   PROJECT_COLLECTION_KEYS,
   WAREHOUSE_REMOTE_SYNC_COLLECTIONS,
   WORK_START_COLLECTIONS,
-  hasRemoteWarehouseVersionAdvance,
   normalizeProjectCollections,
   projectCollectionsForView,
   type ProjectCollectionKey,
@@ -704,149 +702,46 @@ export default function Index() {
     else setSaveStatus('saved');
   }, [discardProjectDraft, resetProjectScopes]);
 
-  /**
-   * Rebaseia exclusivamente coleções identificadas pelo evento remoto. Isso
-   * preserva o que está sendo editado em outra área e nunca transforma uma
-   * atualização de Diário, Aditivo, Custos ou Almoxarifado em cópia integral
-   * da obra. A coincidência com uma coleção local ainda exige conflito explícito.
-   */
-  const refreshRemoteCollectionsInBackground = useCallback(async (
+  const remoteRefreshContext = useMemo<RemoteCollectionRefreshContext>(() => ({
+    currentProject: () => rawProjectRef.current,
+    isBlocked: () => productionCaptureBusyRef.current || conflictDetectedRef.current,
+    savedProjectJson: () => lastSavedProjectJsonRef.current,
+    backgroundRefreshing: backgroundRefreshingCollectionsRef.current,
+    markRemoteCollections,
+    clearRemoteCollections,
+    clearPendingRealtimeCollections,
+    hasLocalCollectionConflict,
+    notifyRemoteDirtyChange,
+    apply: ({ record, project: rebasedCurrent, confirmedBaselineJson, hasPendingLocalChanges }) => {
+      lastSavedProjectJsonRef.current = confirmedBaselineJson;
+      currentProjectUpdatedAtRef.current = record.updatedAt;
+      currentWarehouseVersionRef.current = record.warehouseVersion;
+      lastObservedWarehouseVersionRef.current = record.warehouseVersion;
+      setCurrentProjectUpdatedAt(record.updatedAt);
+      setRemoteUpdateAt(new Date().toISOString());
+      // A pending local edit must still be saved after an unrelated remote update.
+      if (!hasPendingLocalChanges) setLastCloudConfirmedAt(record.updatedAt);
+      skipNextAutoSaveRef.current = !hasPendingLocalChanges;
+      rawProjectRef.current = rebasedCurrent;
+      setRawProject(rebasedCurrent);
+    },
+  }), [backgroundRefreshingCollectionsRef, clearPendingRealtimeCollections, clearRemoteCollections,
+    hasLocalCollectionConflict, markRemoteCollections, notifyRemoteDirtyChange]);
+
+  const refreshRemoteCollectionsInBackground = useCallback((
     projectToRebase: Project,
     collections: readonly ProjectCollectionKey[],
     knownRemoteVersion?: CloudProjectVersion,
-  ): Promise<Project | null> => {
-    const current = rawProjectRef.current;
-    if (productionCaptureBusyRef.current || !current || current.id !== projectToRebase.id || conflictDetectedRef.current) return null;
+  ) => refreshRemoteProjectCollections(
+    remoteRefreshContext, projectToRebase, collections, knownRemoteVersion,
+  ), [remoteRefreshContext]);
 
-    const requestedCollections = normalizeProjectCollections(collections).filter(collection =>
-      collection !== 'auditLogs' || getLoadedProjectCollections(current.id).includes('auditLogs'));
-    if (requestedCollections.length === 0) return null;
-
-    let remoteVersion = knownRemoteVersion;
-    try {
-      remoteVersion ??= await getCloudProjectVersion(current.id) ?? undefined;
-    } catch (error) {
-      console.warn('Não foi possível conferir a versão remota da área alterada.', error);
-      return null;
-    }
-    if (!remoteVersion) return null;
-
-    const refreshing = backgroundRefreshingCollectionsRef.current.get(current.id) ?? new Set<ProjectCollectionKey>();
-    requestedCollections.forEach(collection => refreshing.add(collection));
-    backgroundRefreshingCollectionsRef.current.set(current.id, refreshing);
-    markRemoteCollections(current.id, requestedCollections);
-    try {
-    let record: CloudProjectRecord;
-    try {
-      record = await loadCloudProjectRecord(current.id, {
-        collections: requestedCollections,
-        strict: true,
-        deferSnapshot: true,
-      });
-    } catch (error) {
-      console.warn('Não foi possível atualizar a área alterada em segundo plano.', error);
-      return null;
-    }
-    if (!record) return null;
-
-    const latest = rawProjectRef.current;
-    // A leitura só é adotada se ainda descreve exatamente a versão que foi
-    // classificada. Uma nova alteração remota volta ao fluxo normal do realtime.
-    if (productionCaptureBusyRef.current || !latest
-      || latest.id !== current.id
-      || record.updatedAt !== remoteVersion.updatedAt
-      || conflictDetectedRef.current) {
-      discardCloudProjectRecord(record);
-      return null;
-    }
-
-    const sameCollectionEdited = hasLocalCollectionConflict(current.id, requestedCollections);
-    let savedBaseline: Project | null = null;
-    if (lastSavedProjectJsonRef.current) {
-      try { savedBaseline = JSON.parse(lastSavedProjectJsonRef.current) as Project; } catch { /* preserve conflict */ }
-    }
-    let rebasedCurrent = sameCollectionEdited
-      ? savedBaseline && mergeProjectRecordsThreeWay(savedBaseline, latest, record.project, requestedCollections)
-      : mergeHydratedProjectCollections(latest, record.project, requestedCollections);
-    let rebasedForRetry = sameCollectionEdited
-      ? savedBaseline && mergeProjectRecordsThreeWay(savedBaseline, projectToRebase, record.project, requestedCollections)
-      : mergeHydratedProjectCollections(projectToRebase, record.project, requestedCollections);
-    if (!rebasedCurrent || !rebasedForRetry) {
-      discardCloudProjectRecord(record);
-      return null;
-    }
-    const remoteMetadataChanged = savedBaseline && hasProjectMetadataChanges(savedBaseline, record.project);
-    if (remoteMetadataChanged) {
-      const currentMetadata = mergeProjectMetadataFields(savedBaseline, rebasedCurrent, record.project);
-      const retryMetadata = mergeProjectMetadataFields(savedBaseline, rebasedForRetry, record.project);
-      if (!currentMetadata || !retryMetadata) {
-        discardCloudProjectRecord(record);
-        return null;
-      }
-      rebasedCurrent = currentMetadata;
-      rebasedForRetry = retryMetadata;
-    }
-    let rebasedSavedBaseline = rebasedCurrent;
-    if (savedBaseline) {
-      rebasedSavedBaseline = mergeHydratedProjectCollections(savedBaseline, record.project, requestedCollections);
-      if (remoteMetadataChanged) rebasedSavedBaseline = mergeProjectMetadata(rebasedSavedBaseline, record.project);
-    }
-
-    confirmCloudProjectRecord(record);
-    lastSavedProjectJsonRef.current = serializeProject(rebasedSavedBaseline);
-    currentProjectUpdatedAtRef.current = record.updatedAt;
-    currentWarehouseVersionRef.current = record.warehouseVersion;
-    lastObservedWarehouseVersionRef.current = record.warehouseVersion;
-    setCurrentProjectUpdatedAt(record.updatedAt);
-    setRemoteUpdateAt(new Date().toISOString());
-    clearRemoteCollections(current.id, requestedCollections);
-    clearPendingRealtimeCollections(current.id, requestedCollections);
-    // Se outra área tiver edição pendente, o autosave continua normalmente; se
-    // não houver, o rebase remoto não pode disparar uma gravação redundante.
-    const hasPendingLocalChanges = projectHasLocalChanges(rebasedCurrent, lastSavedProjectJsonRef.current);
-    if (!hasPendingLocalChanges) setLastCloudConfirmedAt(record.updatedAt);
-    skipNextAutoSaveRef.current = !hasPendingLocalChanges;
-    rawProjectRef.current = rebasedCurrent;
-    setRawProject(rebasedCurrent);
-    return rebasedForRetry;
-    } finally {
-      const active = backgroundRefreshingCollectionsRef.current.get(current.id);
-      requestedCollections.forEach(collection => active?.delete(collection));
-      if (active?.size === 0) backgroundRefreshingCollectionsRef.current.delete(current.id);
-      // Se a atualização falhar, o marcador pendente aciona uma nova leitura
-      // sem desmontar a tela que já possui dados.
-      notifyRemoteDirtyChange();
-    }
-  }, [backgroundRefreshingCollectionsRef, clearPendingRealtimeCollections, clearRemoteCollections, hasLocalCollectionConflict, markRemoteCollections, notifyRemoteDirtyChange]);
-
-  /**
-   * Operações atômicas do Almoxarifado também avançam `projects.updated_at`.
-   * A versão própria permite identificá-las com segurança até quando o evento
-   * detalhado chega depois da alteração da linha principal da obra.
-   */
-  const refreshRemoteWarehouseInBackground = useCallback(async (
+  const refreshRemoteWarehouseInBackground = useCallback((
     projectToRebase: Project,
     knownRemoteVersion?: CloudProjectVersion,
-  ): Promise<Project | null> => {
-    let remoteVersion = knownRemoteVersion;
-    try {
-      remoteVersion ??= await getCloudProjectVersion(projectToRebase.id) ?? undefined;
-    } catch (error) {
-      console.warn('Não foi possível conferir a versão remota do Almoxarifado.', error);
-      return null;
-    }
-    if (!remoteVersion || !hasRemoteWarehouseVersionAdvance(
-      lastObservedWarehouseVersionRef.current,
-      remoteVersion.warehouseVersion,
-    )) return null;
-
-    return refreshRemoteCollectionsInBackground(
-      projectToRebase,
-      WAREHOUSE_REMOTE_SYNC_COLLECTIONS,
-      remoteVersion,
-    );
-  }, [refreshRemoteCollectionsInBackground]);
-
+  ) => refreshRemoteWarehouseCollections(
+    remoteRefreshContext, projectToRebase, lastObservedWarehouseVersionRef.current, knownRemoteVersion,
+  ), [remoteRefreshContext]);
   const persistProject = useCallback(async (
     projectToSave: Project,
     projectOrgId: string,
