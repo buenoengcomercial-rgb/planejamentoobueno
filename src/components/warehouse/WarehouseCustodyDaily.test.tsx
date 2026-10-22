@@ -86,6 +86,7 @@ describe('movimentações diárias de cautelas', () => {
     render(<WarehouseCustodyTab project={makeProject()} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} />);
     fireEvent.change(screen.getByLabelText('Data das movimentações'), { target: { value: '2026-09-30' } });
     fireEvent.click(screen.getByRole('row', { name: 'Cautela TC-2026-0002' }));
+    fireEvent.click(screen.getByRole('row', { name: 'Cautela TC-2026-0002' }));
     switchView('Histórico completo');
     expect(screen.getByText('Histórico de cautelas')).toBeInTheDocument();
     expect(screen.getAllByTestId('custody-building-group')).toHaveLength(3);
