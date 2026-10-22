@@ -49,6 +49,9 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
   ignora ecos da própria gravação, envia eventos do Diário ao fluxo da data e
   agrupa as demais tabelas sem perder a origem da coleção. Ao sair da obra,
   cancela a leitura agendada e limpa as origens ainda não processadas.
+- `domains/sync/useProjectRealtimeRefresh.ts` aplica os sinais recebidos somente
+  às coleções afetadas. Uma área inativa recebe marcador e versão; leituras
+  tardias são descartadas quando encontram edição local na mesma coleção.
 - `lib/projectOperations.ts` impede que Medição e Almoxarifado substituam a coleção
   um do outro durante a conciliação. A publicação de uma requisição no Diário
   continua autorizada temporariamente para manter o fluxo existente.
@@ -65,7 +68,7 @@ Contagem da cópia de trabalho em 21/10/2026 (linhas físicas):
 | Arquivo | Linhas | Recorte funcional seguinte |
 | --- | ---: | --- |
 | `lib/warehouse.ts` | 5.100 | Separar nota fiscal, requisição/devolução, inventário, cautela e projeções de estoque, mantendo a API pública. |
-| `pages/Index.tsx` | 2.706 | Extrair a aplicação de atualizações gerais recebidas por Realtime. Bootstrap, hidratação por área, marcadores, despacho Realtime, verificação de versão, conciliação remota, recepção do Diário e coordenação do Almoxarifado já saíram. |
+| `pages/Index.tsx` | 2.612 | Prosseguir com a orquestração do salvamento geral e da navegação por entregas menores. Bootstrap, hidratação por área, marcadores, despacho e aplicação de Realtime, verificação de versão, conciliação remota, recepção do Diário e coordenação do Almoxarifado já saíram. |
 | `components/GanttChart.tsx` | 3.087 | Separar estado de filtros, grade temporal, edição de barras, calendário e comandos. |
 | `lib/projectSync.ts` | 2.009 | Separar hidratação, snapshots e comandos normalizados por domínio. |
 | `components/TaskList.tsx` | 1.692 | Separar lista visual, edição de produção e lançamento de quantitativos. |
