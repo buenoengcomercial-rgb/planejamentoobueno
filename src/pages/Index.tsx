@@ -2,9 +2,8 @@ import { readCaptureDraft, writeCaptureDraft } from '@/lib/productionCaptureDraf
 import { ProjectFieldConflictError, preserveProjectFieldConflict, projectOperationFingerprint } from '@/lib/projectFieldCommit';
 import { mergeConcurrentFields } from '@/lib/concurrentFields';
 import ProjectOperationConflicts from '@/components/ProjectOperationConflicts';
-import { warehouseEditBaseline } from '@/lib/warehouseEditBaseline';
 import WarehouseOperationRecovery from '@/components/WarehouseOperationRecovery';
-import { acknowledgeWarehouseOutbox, resolveWarehouseRequisitionPending } from '@/lib/warehouseOperationOutbox';
+import { useWarehouseOperationCoordinator } from '@/domains/warehouse/useWarehouseOperationCoordinator';
 import type { ProductionCaptureChange } from '@/lib/planTakeoff';
 import { syncProductionAtomically, stripNormalizedCollections } from '@/lib/projectSync';
 import { applyProjectOperation, auditProjectReversal } from '@/lib/projectOperations';
@@ -112,15 +111,8 @@ import type { ProjectMeta } from '@/lib/projectStorage';
 import { supabase } from '@/integrations/supabase/client';
 import { loadOpenDailyReport, saveOpenDailyReport } from '@/lib/dailyReportCloudSync';
 import {
-  commitWarehouseOperation,
-  mergeWarehouseCloudCommit,
   type WarehouseCloudCommitResult,
-  type WarehouseCloudOperation,
 } from '@/lib/warehouseCloudCommit';
-import type {
-  WarehouseScopedCommitResult,
-  WarehouseScopedDomain,
-} from '@/lib/warehouseScopedCommit';
 import {
   confirmProjectCollectionsSnapshot,
   discardHydratedProjectCollections,
@@ -149,20 +141,6 @@ import {
 const UNDO_LIMIT = 20;
 const LOCAL_DRAFT_DEBOUNCE_MS = 900;
 
-type WarehousePrepareScope = WarehouseScopedDomain | 'requisition';
-const WAREHOUSE_OPERATION_COLLECTIONS: Record<WarehousePrepareScope, readonly ProjectCollectionKey[]> = {
-  receipt: ['warehouseMovements', 'stockMovements'],
-  custody: ['warehouseMovements', 'stockMovements', 'warehouseCustody'],
-  inventory: ['warehouseMovements', 'stockMovements'],
-  adjustment: ['warehouseMovements', 'stockMovements'],
-  catalog: ['warehouseMovements', 'stockMovements'],
-  requisition: [
-    'warehouseMovements',
-    'warehouseRequisitions',
-    'stockMovements',
-    'dailyReports',
-  ],
-};
 const NEXT_VIEW_PRELOAD: Record<AppView, { view: AppView; load: () => Promise<unknown> }> = {
   dashboard: { view: 'management', load: loadManagementRoutine },
   management: { view: 'tasks', load: () => Promise.all([loadDailyProductionWorkspace(), loadTaskList()]) },
@@ -2098,373 +2076,22 @@ export default function Index() {
     } finally { productionCaptureBusyRef.current = false; }
   }, [editor, orgId, user, project, persistProject, discardProjectDraft]);
 
-  const prepareWarehouseCloudOperation = useCallback(async (scope: WarehousePrepareScope) => {
-    if (productionCaptureBusyRef.current) throw new Error('Aguarde a captura em andamento antes de salvar outra operação.');
-    if (!user || !orgId || !warehouseEditor) throw new Error('Você não tem permissão para salvar o Almoxarifado.');
-    if (conflictDetectedRef.current) throw new Error('Atualize a obra antes de salvar o Almoxarifado.');
-    const active = rawProjectRef.current;
-    if (!active) throw new Error('Nenhuma obra está aberta para registrar a operação.');
-    const missingWarehouseData = getMissingProjectCollections(
-      active.id,
-      WAREHOUSE_OPERATION_COLLECTIONS[scope],
-    );
-    if (missingWarehouseData.length > 0) {
-      throw new Error('Aguarde o carregamento dos dados do Almoxarifado antes de confirmar a operação.');
-    }
-
-    // Nunca deixe um autosave geral concorrer com a transação do estoque. Uma
-    // alteração anterior é confirmada primeiro; depois disso, somente a RPC
-    // específica pode escrever o Almoxarifado.
-    if (saveTimerRef.current) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-      const pending = rawProjectRef.current;
-      if (pending) await persistProject(pending, orgId);
-    }
-    if (inFlightSaveRef.current) await inFlightSaveRef.current;
-    if (rawProjectRef.current?.id !== active.id) {
-      throw new Error('A obra aberta mudou durante a preparação. Reabra o Almoxarifado e tente novamente.');
-    }
-    if (conflictDetectedRef.current) throw new Error('Atualize a obra antes de salvar o Almoxarifado.');
-    if (partialSyncPendingRef.current?.projectId === active.id) {
-      throw new Error('Confirme a sincronização detalhada em “Tentar novamente” antes de operar o Almoxarifado.');
-    }
-
-    if (currentWarehouseVersionRef.current == null) {
-      const remote = await getCloudProjectVersion(active.id);
-      if (rawProjectRef.current?.id !== active.id) {
-        throw new Error('A obra aberta mudou durante a preparação. Reabra o Almoxarifado e tente novamente.');
-      }
-      if (!remote) {
-        throw new Error('A versão do Almoxarifado mudou. Atualize a obra antes de continuar.');
-      }
-      if (remote.warehouseVersion == null) {
-        throw new Error('A atualização segura do Almoxarifado ainda não foi instalada no servidor. Nada foi gravado.');
-      }
-      currentWarehouseVersionRef.current = remote.warehouseVersion;
-      lastObservedWarehouseVersionRef.current = remote.warehouseVersion;
-    }
-  }, [orgId, persistProject, user, warehouseEditor]);
-
-  const prepareWarehouseRequisitionOperation = useCallback(
-    () => prepareWarehouseCloudOperation('requisition'),
-    [prepareWarehouseCloudOperation],
-  );
-
-  const applyWarehouseCloudConfirmation = useCallback(async (confirmation: WarehouseCloudCommitResult) => {
-    const active = rawProjectRef.current;
-    if (!active || active.id !== confirmation.project.id) {
-      throw new Error('A retirada foi confirmada, mas outra obra está aberta. Reabra a obra para conferir o histórico.');
-    }
-    if ((lastObservedWarehouseVersionRef.current ?? -1) > confirmation.warehouseVersion) {
-      const version = await getCloudProjectVersion(active.id);
-      const refreshed = version && await refreshRemoteCollectionsInBackground(active, WAREHOUSE_REMOTE_SYNC_COLLECTIONS, version);
-      if (!refreshed || version?.warehouseVersion == null || !version.warehouseUpdatedAt) {
-        throw new Error('A retirada foi confirmada, mas outra operação chegou depois. Confira a tentativa pendente para atualizar a tela.');
-      }
-      confirmation.project = refreshed;
-      confirmation.projectUpdatedAt = version.updatedAt;
-      confirmation.warehouseUpdatedAt = version.warehouseUpdatedAt;
-      confirmation.warehouseVersion = version.warehouseVersion;
-    }
-
-    // A resposta da RPC do Almoxarifado é a confirmação oficial da retirada,
-    // movimentos e auditoria. Um espelho legado no Diário jamais pode segurar
-    // este ponto nem transformar uma confirmação em aparente falha.
-    if (rawProjectRef.current?.id !== confirmation.project.id) {
-      setCloudList(previous => previous.map(meta => meta.id === confirmation.project.id
-        ? { ...meta, updatedAt: confirmation.projectUpdatedAt }
-        : meta));
-      throw new Error('A retirada foi salva na nuvem, mas outra obra está aberta. Reabra a obra original para conferi-la.');
-    }
-
-    const parseSavedBaseline = () => {
-      if (!lastSavedProjectJsonRef.current) return active;
-      try { return JSON.parse(lastSavedProjectJsonRef.current) as Project; }
-      catch { return active; }
-    };
-    const savedBaseline = mergeWarehouseCloudCommit(parseSavedBaseline(), confirmation);
-    const savedBaselineJson = serializeProject(savedBaseline);
-    lastSavedProjectJsonRef.current = savedBaselineJson;
-
-    const expiresAt = Date.now() + 10_000;
-    ownWarehouseRealtimeRowsRef.current.set(`warehouse_requisitions:${confirmation.acknowledgement.requisitionId}`, expiresAt);
-    confirmation.acknowledgement.movementIds.forEach(id => {
-      ownWarehouseRealtimeRowsRef.current.set(`warehouse_movements:${id}`, expiresAt);
-    });
-    confirmation.acknowledgement.auditLogIds.forEach(id => {
-      ownWarehouseRealtimeRowsRef.current.set(`audit_logs:${id}`, expiresAt);
-    });
-    currentWarehouseVersionRef.current = confirmation.warehouseVersion;
-    lastObservedWarehouseVersionRef.current = confirmation.warehouseVersion;
-    currentProjectUpdatedAtRef.current = confirmation.projectUpdatedAt;
-    setCurrentProjectUpdatedAt(confirmation.projectUpdatedAt);
-    setLastCloudConfirmedAt(confirmation.committedAt);
-    setCloudList(previous => previous.map(meta => meta.id === confirmation.project.id
-      ? { ...meta, updatedAt: confirmation.projectUpdatedAt }
-      : meta));
-
-    setRawProject(current => {
-      if (!current || current.id !== confirmation.project.id) return current;
-      const merged = mergeWarehouseCloudCommit(current, confirmation);
-      const fullyConfirmed = serializeProject(merged) === savedBaselineJson;
-      if (fullyConfirmed) {
-        if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-        discardProjectDraft(merged.id);
-        skipNextAutoSaveRef.current = true;
-        setSaveStatus('saved');
-      } else {
-        scheduleProjectDraft(merged, confirmation.projectUpdatedAt);
-        setSaveStatus('saving');
-      }
-      rawProjectRef.current = merged;
-      return merged;
-    });
-
-    // O Diário é uma projeção complementar de registros antigos. Ele é
-    // conciliado depois da confirmação, em fila própria, sem repetir a baixa
-    // nem travar o modal de retirada/correção se estiver indisponível.
-    const dailyChanges = confirmation.dailyReportChanges.filter(change => !!change.before || !!change.after);
-    if (dailyChanges.length > 0) {
-      const reconcileDailyMirror = async () => {
-        for (const change of dailyChanges) {
-          const reference = change.after ?? change.before!;
-          const emptyReport: DailyReport = {
-            id: reference.id,
-            date: reference.date,
-            teamsPresent: [],
-            equipment: [],
-            attachments: [],
-            createdAt: reference.createdAt,
-            updatedAt: reference.updatedAt,
-          };
-          const beforeReport = change.before ?? emptyReport;
-          const afterReport = change.after ?? emptyReport;
-          const request = dailyReportSaveQueueRef.current
-            .catch(() => undefined)
-            .then(() => saveOpenDailyReport(confirmation.project.id, beforeReport, afterReport));
-          dailyReportSaveQueueRef.current = request.then(() => undefined);
-          try {
-            const saved = await request;
-            mergeConfirmedDailyReportIntoPartialSync(confirmation.project.id, change.date, saved.report);
-            lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, change.date, saved.report);
-            clearLocalProjectCollections(confirmation.project.id, ['dailyReports']);
-            setRawProject(current => {
-              if (!current || current.id !== confirmation.project.id) return current;
-              const currentReport = reportForDate(current, change.date);
-              // Não sobrescreve uma edição de Diário feita após a retirada.
-              if (currentReport && JSON.stringify(currentReport) !== JSON.stringify(afterReport)) return current;
-              const next = replaceReportForDate(current, change.date, saved.report);
-              rawProjectRef.current = next;
-              return next;
-            });
-          } catch (error) {
-            console.warn('Retirada confirmada; falhou apenas a projeção complementar no Diário.', error);
-            setDailyReportSaveErrors(errors => ({
-              ...errors,
-              [change.date]: 'A retirada foi salva. O espelho deste Diário será reconciliado ao abrir a área.',
-            }));
-            toast.warning('Retirada salva na nuvem. O espelho do Diário será reconciliado separadamente.');
-          }
-        }
-      };
-      void reconcileDailyMirror();
-    }
-  }, [clearLocalProjectCollections, discardProjectDraft, mergeConfirmedDailyReportIntoPartialSync, scheduleProjectDraft, refreshRemoteCollectionsInBackground]);
-
-  const commitWarehouseRequisitionNow = useCallback((
-    before: Project,
-    after: Project,
-    operation: WarehouseCloudOperation,
-  ): Promise<WarehouseCloudCommitResult> => {
-    if (navigationInFlightRef.current && !warehouseClientOperationInFlightRef.current) {
-      return Promise.reject(new Error('A navegação já foi iniciada. Aguarde a próxima tela abrir antes de registrar a operação.'));
-    }
-    if (warehouseOperationInFlightRef.current) {
-      return Promise.reject(new Error('Aguarde a operação atual do Almoxarifado ser confirmada na nuvem.'));
-    }
-    const ownsRouteLock = !warehouseLockedRouteRef.current;
-    if (ownsRouteLock) warehouseLockedRouteRef.current = currentRouteRef.current;
-    const request = (async () => {
-      await prepareWarehouseCloudOperation('requisition');
-      if (rawProjectRef.current?.id !== before.id) {
-        throw new Error('A obra aberta mudou antes da confirmação. Nenhuma nova operação foi iniciada.');
-      }
-      if (user?.id && await resolveWarehouseRequisitionPending(user.id, before.id, operation.requisitionId, operation.operationKey, async () => {
-        const current = rawProjectRef.current;
-        const version = current && await getCloudProjectVersion(current.id);
-        if (!current || !version || !await refreshRemoteCollectionsInBackground(current, WAREHOUSE_REMOTE_SYNC_COLLECTIONS, version)) {
-          throw new Error('A tentativa anterior foi confirmada; aguarde a atualização da obra antes de continuar.');
-        }
-      })) {
-        throw Object.assign(new Error('A tentativa anterior desta retirada foi confirmada. Sua edição foi preservada; revise e salve novamente.'), {
-          definitiveRejection: true, confirmedProject: rawProjectRef.current,
-        });
-      }
-      const confirmation = await commitWarehouseOperation(before, after, operation, user?.id);
-      await applyWarehouseCloudConfirmation(confirmation);
-      acknowledgeWarehouseOutbox(user?.id, before.id, operation.operationKey);
-      return confirmation;
-    })();
-    warehouseOperationInFlightRef.current = request;
-    return request.finally(() => {
-      if (warehouseOperationInFlightRef.current === request) {
-        warehouseOperationInFlightRef.current = null;
-      }
-      if (ownsRouteLock && !warehouseClientOperationInFlightRef.current && !warehouseScopedOperationInFlightRef.current) {
-        warehouseLockedRouteRef.current = null;
-      }
-    });
-  }, [applyWarehouseCloudConfirmation, prepareWarehouseCloudOperation, refreshRemoteCollectionsInBackground, user?.id]);
-
-  const runCriticalWarehouseClientOperation = useCallback(<T,>(
-    operation: () => Promise<T>,
-  ): Promise<T> => {
-    if (navigationInFlightRef.current) {
-      return Promise.reject(new Error('A navegação já foi iniciada. Aguarde a próxima tela abrir antes de registrar a operação.'));
-    }
-    if (warehouseClientOperationInFlightRef.current) {
-      return Promise.reject(new Error('Aguarde a operação atual do Almoxarifado ser confirmada na nuvem.'));
-    }
-    const ownsRouteLock = !warehouseLockedRouteRef.current;
-    if (ownsRouteLock) warehouseLockedRouteRef.current = currentRouteRef.current;
-    const request = Promise.resolve().then(operation);
-    warehouseClientOperationInFlightRef.current = request;
-    return request.finally(() => {
-      if (warehouseClientOperationInFlightRef.current === request) {
-        warehouseClientOperationInFlightRef.current = null;
-      }
-      if (ownsRouteLock && !warehouseOperationInFlightRef.current && !warehouseScopedOperationInFlightRef.current) {
-        warehouseLockedRouteRef.current = null;
-      }
-    });
-  }, []);
-
-  const commitWarehouseScopedNow = useCallback((next: Project, domain: WarehouseScopedDomain, expectedBase?: Project): Promise<Project> => {
-    // Capture the form's baseline before preparation can hydrate newer remote values.
-    const currentBase = project ?? rawProjectRef.current;
-    const submittedBase = expectedBase && currentBase ? warehouseEditBaseline(expectedBase, currentBase, next) : currentBase;
-    if (navigationInFlightRef.current) {
-      return Promise.reject(new Error('A navegação já foi iniciada. Aguarde a próxima tela abrir antes de registrar a operação.'));
-    }
-    if (warehouseScopedOperationInFlightRef.current) {
-      return Promise.reject(new Error('Aguarde a operação atual do Almoxarifado ser confirmada na nuvem.'));
-    }
-    const ownsRouteLock = !warehouseLockedRouteRef.current;
-    if (ownsRouteLock) warehouseLockedRouteRef.current = currentRouteRef.current;
-    const request = (async () => {
-      await prepareWarehouseCloudOperation(domain);
-
-      const before = submittedBase;
-      if (!before || before.id !== next.id || rawProjectRef.current?.id !== before.id) throw new Error('A operação não pertence à obra aberta.');
-      if (currentWarehouseVersionRef.current == null) {
-        const remote = await getCloudProjectVersion(before.id);
-        if (rawProjectRef.current?.id !== before.id) {
-          throw new Error('A obra aberta mudou durante a preparação. Reabra o Almoxarifado e tente novamente.');
-        }
-        if (!remote) {
-          throw new Error('A versão do Almoxarifado mudou. Atualize a obra antes de continuar.');
-        }
-        if (remote.warehouseVersion == null) {
-          throw new Error('A atualização segura do Almoxarifado ainda não foi instalada no servidor. Nada foi gravado.');
-        }
-        currentWarehouseVersionRef.current = remote.warehouseVersion;
-        lastObservedWarehouseVersionRef.current = remote.warehouseVersion;
-      }
-
-      const scopedNext: Project = {
-        ...before,
-        warehouse: next.warehouse,
-        auditLogs: next.auditLogs,
-        stockMovements: next.stockMovements,
-        materialPriceHistory: next.materialPriceHistory,
-        dailyReports: next.dailyReports,
-      };
-      setSaveStatus('saving');
-      const { commitWarehouseScopedOperation, mergeWarehouseScopedCommit } = await import('@/lib/warehouseScopedCommit');
-      let result: WarehouseScopedCommitResult;
-      try {
-        result = await commitWarehouseScopedOperation(
-          before,
-          scopedNext,
-          currentWarehouseVersionRef.current,
-          '',
-          domain,
-          user?.id,
-        );
-      } catch (error) {
-        setSaveStatus(navigator.onLine ? 'error' : 'offline');
-        throw error;
-      }
-
-      if (rawProjectRef.current?.id !== result.project.id) {
-        setCloudList(previous => previous.map(meta => meta.id === result.project.id
-          ? { ...meta, updatedAt: result.projectUpdatedAt }
-          : meta));
-        return result.project;
-      }
-      if ((lastObservedWarehouseVersionRef.current ?? -1) > result.warehouseVersion) {
-        const active = rawProjectRef.current;
-        const version = await getCloudProjectVersion(active.id);
-        const refreshed = version && await refreshRemoteCollectionsInBackground(active, WAREHOUSE_REMOTE_SYNC_COLLECTIONS, version);
-        if (!refreshed || version?.warehouseVersion == null || !version.warehouseUpdatedAt) {
-          throw new Error('A operação foi confirmada, mas há uma versão posterior. Confira a tentativa pendente para atualizar a tela.');
-        }
-        result.project = refreshed; result.projectUpdatedAt = version.updatedAt;
-        result.warehouseUpdatedAt = version.warehouseUpdatedAt; result.warehouseVersion = version.warehouseVersion;
-      }
-
-      const parseSavedBaseline = () => {
-        if (!lastSavedProjectJsonRef.current) return before;
-        try { return JSON.parse(lastSavedProjectJsonRef.current) as Project; }
-        catch { return before; }
-      };
-      const savedBaseline = mergeWarehouseScopedCommit(parseSavedBaseline(), result);
-      const savedBaselineJson = serializeProject(savedBaseline);
-      lastSavedProjectJsonRef.current = savedBaselineJson;
-
-      const expiresAt = Date.now() + 10_000;
-      result.affectedMovementIds.forEach(id => ownWarehouseRealtimeRowsRef.current.set(`warehouse_movements:${id}`, expiresAt));
-      result.affectedCustodyIds.forEach(id => ownWarehouseRealtimeRowsRef.current.set(`warehouse_custody:${id}`, expiresAt));
-      result.affectedAuditIds.forEach(id => ownWarehouseRealtimeRowsRef.current.set(`audit_logs:${id}`, expiresAt));
-      currentWarehouseVersionRef.current = result.warehouseVersion;
-      lastObservedWarehouseVersionRef.current = result.warehouseVersion;
-      currentProjectUpdatedAtRef.current = result.projectUpdatedAt;
-      setCurrentProjectUpdatedAt(result.projectUpdatedAt);
-      setLastCloudConfirmedAt(result.committedAt);
-      setCloudList(previous => previous.map(meta => meta.id === result.project.id ? { ...meta, updatedAt: result.projectUpdatedAt } : meta));
-
-      let applied = result.project;
-      setRawProject(current => {
-        if (!current || current.id !== result.project.id) return current;
-        applied = mergeWarehouseScopedCommit(current, result);
-        const fullyConfirmed = serializeProject(applied) === savedBaselineJson;
-        if (fullyConfirmed) {
-          discardProjectDraft(applied.id);
-          skipNextAutoSaveRef.current = true;
-          setSaveStatus('saved');
-        } else {
-          scheduleProjectDraft(applied, result.projectUpdatedAt);
-          setSaveStatus('saving');
-        }
-        rawProjectRef.current = applied;
-        return applied;
-      });
-      acknowledgeWarehouseOutbox(user?.id, before.id, result.operationKey);
-      return applied;
-    })();
-    warehouseScopedOperationInFlightRef.current = request;
-    return request.finally(() => {
-      if (warehouseScopedOperationInFlightRef.current === request) {
-        warehouseScopedOperationInFlightRef.current = null;
-      }
-      if (ownsRouteLock && !warehouseClientOperationInFlightRef.current && !warehouseOperationInFlightRef.current) {
-        warehouseLockedRouteRef.current = null;
-      }
-    });
-  }, [discardProjectDraft, prepareWarehouseCloudOperation, project, scheduleProjectDraft, refreshRemoteCollectionsInBackground, user?.id]);
-
+  const {
+    prepareWarehouseCloudOperation, prepareWarehouseRequisitionOperation,
+    applyWarehouseCloudConfirmation, commitWarehouseRequisitionNow,
+    runCriticalWarehouseClientOperation, commitWarehouseScopedNow,
+  } = useWarehouseOperationCoordinator({
+    project, orgId, userId: user?.id, warehouseEditor, rawProjectRef, productionCaptureBusyRef,
+    conflictDetectedRef, saveTimerRef, inFlightSaveRef, partialSyncPendingRef,
+    currentWarehouseVersionRef, lastObservedWarehouseVersionRef, currentProjectUpdatedAtRef,
+    lastSavedProjectJsonRef, ownWarehouseRealtimeRowsRef, skipNextAutoSaveRef,
+    dailyReportSaveQueueRef, navigationInFlightRef, warehouseClientOperationInFlightRef,
+    warehouseOperationInFlightRef, warehouseScopedOperationInFlightRef, warehouseLockedRouteRef,
+    currentRouteRef, persistProject, refreshRemoteCollectionsInBackground, discardProjectDraft,
+    scheduleProjectDraft, mergeConfirmedDailyReportIntoPartialSync, clearLocalProjectCollections,
+    setRawProject, setCloudList, setCurrentProjectUpdatedAt, setLastCloudConfirmedAt,
+    setSaveStatus, setDailyReportSaveErrors,
+  });
   /**
    * A manutenção de anexos é exclusiva do Proprietário e nunca delega ao
    * autosave da obra. Cada referência é confirmada na coleção que a possui.
