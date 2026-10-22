@@ -25,6 +25,7 @@ import { confirmAreaHydration, hydrateAreaCollections, planAreaHydration } from 
 import { includePendingDraftCollections, loadInitialProject } from '@/domains/sync/projectBootstrap';
 import { useProjectRealtimeRefresh } from '@/domains/sync/useProjectRealtimeRefresh';
 import { projectSaveAttempt } from '@/domains/sync/projectSaveAttempt';
+import { createProjectLifecycleHandlers } from '@/domains/sync/projectLifecycle';
 import ProjectHeaderSyncStatus from '@/domains/sync/ProjectHeaderSyncStatus';
 import { useDailyReportRealtime } from '@/domains/dailyReport/useDailyReportRealtime';
 import { reportForDate, replaceReportForDate, replaceSavedDailyReport } from '@/domains/dailyReport/dailyReportProject';
@@ -84,11 +85,6 @@ import {
   listCloudProjects,
   loadCloudProjectRecord,
   loadStableCloudProjectRecord,
-  upsertCloudProject,
-  renameCloudProject,
-  duplicateCloudProject,
-  deleteCloudProject,
-  deleteCloudProjectAsOwner,
   CloudProjectConflictError,
   CloudProjectMeta,
   confirmCloudProjectRecord,
@@ -106,7 +102,7 @@ import {
   serializeProject,
   writeProjectDraft,
 } from '@/lib/cloudProjectDraftCore';
-import { preloadIndexedDbProjectDraft, supportsIndexedDbDrafts, writeIndexedDbProjectDraft } from '@/lib/cloudDraftIndexedDb';
+import { supportsIndexedDbDrafts, writeIndexedDbProjectDraft } from '@/lib/cloudDraftIndexedDb';
 import type { ProjectMeta } from '@/lib/projectStorage';
 import { supabase } from '@/integrations/supabase/client';
 import { loadOpenDailyReport, saveOpenDailyReport } from '@/lib/dailyReportCloudSync';
@@ -133,7 +129,6 @@ import {
   hasRemoteWarehouseVersionAdvance,
   normalizeProjectCollections,
   projectCollectionsForView,
-  readWarehouseTab,
   type ProjectCollectionKey,
   type WarehouseTab,
 } from '@/lib/projectDataScope';
@@ -156,18 +151,6 @@ const NEXT_VIEW_PRELOAD: Record<AppView, { view: AppView; load: () => Promise<un
 };
 
 type UndoStacks = Record<AppView, UndoOperation[]>;
-
-function createDraftProject(name = ''): Project {
-  const today = new Date().toISOString().split('T')[0];
-  return {
-    id: crypto.randomUUID(),
-    name,
-    startDate: today,
-    endDate: today,
-    phases: [],
-    totalBudget: 0,
-  };
-}
 
 export default function Index() {
   const { user, loading: authLoading, error: authError, reload: reloadAuth, signOut } = useAuth();
@@ -2084,169 +2067,30 @@ export default function Index() {
   const canUndo = (view: AppView) => view !== 'warehouse' && view !== 'dailyReport' && undoStacksRef.current[view].length > 0;
   void undoVersion;
 
-  const handleSwitchProject = async (id: string) => {
-    try {
-      await runProtectedNavigation(async () => {
-        const openSequence = ++projectOpenSequenceRef.current;
-        await preloadIndexedDbProjectDraft(id);
-        if (openSequence !== projectOpenSequenceRef.current) return;
-        const nextWarehouseTab = readWarehouseTab(id, canViewWarehousePanel, role === 'owner');
-        setWarehouseTab(nextWarehouseTab);
-        const record = await loadCloudProjectRecord(id, {
-          collections: includePendingDraftCollections(
-            id,
-            projectCollectionsForView(safeCurrentView, nextWarehouseTab),
-          ),
-          strict: true,
-          deferSnapshot: true,
-        });
-        if (openSequence !== projectOpenSequenceRef.current) {
-          if (record) discardCloudProjectRecord(record);
-          return;
-        }
-        if (record) {
-          confirmCloudProjectRecord(record);
-          replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, true, record.warehouseVersion);
-        }
-      });
-    } catch {
-      toast.error('Erro ao abrir obra');
-    }
-  };
-
-  const handleCreateProject = async (): Promise<void> => {
-    if (!orgId) return;
-    if (!creator) { toast.error('Sem permissão para criar obras.'); return; }
-    try {
-      await runProtectedNavigation(async () => {
-        setDraftProjectForImport(createDraftProject());
-        setCreateProjectDialogOpen(true);
-      });
-    } catch {
-      toast.error('Erro ao criar obra');
-    }
-  };
-
-  const handleCreateProjectFromImport = async (projectToCreate: Project) => {
-    if (!orgId) throw new Error('Empresa nao identificada para salvar a obra.');
-    if (!creator) throw new Error('Sem permissao para criar obras.');
-    const finalName = projectToCreate.name.trim();
-    if (!finalName) throw new Error('Informe o nome da obra.');
-    const exists = cloudList.some(p => p.name.trim().toLowerCase() === finalName.toLowerCase());
-    if (exists) throw new Error('Ja existe uma obra com este nome. Informe outro nome.');
-
-    const projectWithName = { ...projectToCreate, name: finalName };
-    const updatedAt = await upsertCloudProject(projectWithName, orgId);
-    const persisted = await loadCloudProjectRecord(projectWithName.id, {
-      strict: true,
-      deferSnapshot: true,
-    });
-    if (!persisted) throw new Error('A obra foi gravada, mas nao pode ser relida para validacao.');
-    const expectedTasks = (projectWithName.phases ?? []).reduce((sum, phase) => sum + (phase.tasks?.length ?? 0), 0);
-    const persistedTasks = (persisted.project.phases ?? []).reduce((sum, phase) => sum + (phase.tasks?.length ?? 0), 0);
-    const collectionsMatch =
-      (persisted.project.budgetItems?.length ?? 0) === (projectWithName.budgetItems?.length ?? 0)
-      && (persisted.project.analyticCompositions?.length ?? 0) === (projectWithName.analyticCompositions?.length ?? 0)
-      && (persisted.project.phases?.length ?? 0) === (projectWithName.phases?.length ?? 0)
-      && persistedTasks === expectedTasks;
-    if (!collectionsMatch) {
-      discardCloudProjectRecord(persisted);
-      await deleteCloudProject(projectWithName.id);
-      throw new Error('A estrutura importada nao foi confirmada no banco. A obra incompleta foi removida; tente novamente.');
-    }
-    const list = await refreshCloudList();
-    confirmCloudProjectRecord(persisted);
-    replaceProjectWithoutAutoSave(persisted.project, list.find(p => p.id === projectWithName.id)?.updatedAt ?? persisted.updatedAt ?? updatedAt, false, true, persisted.warehouseVersion);
-    undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
-    setUndoVersion(v => v + 1);
-    setCurrentView('dashboard');
-    setSidebarOpen(false);
-    setCreateProjectDialogOpen(false);
-    setDraftProjectForImport(null);
-    toast.success('Obra criada e planilha importada com sucesso.');
-  };
-
-  const handleRenameProject = async (id: string, newName: string, expectedName: string) => {
-    if (!orgId || !editor) { toast.error('Sem permissão para renomear.'); return; }
-    try {
-      await runProtectedNavigation(async () => {
-        const updated = await renameCloudProject(id, newName, orgId, expectedName);
-        if (updated) {
-          if (rawProjectRef.current?.id === id) {
-            confirmCloudProjectRecord(updated);
-            replaceProjectWithoutAutoSave(updated.project, updated.updatedAt, updated.repairApplied, true, updated.warehouseVersion);
-          } else {
-            discardCloudProjectRecord(updated);
-          }
-        }
-        const list = await refreshCloudList();
-        setUndoVersion(v => v + 1);
-      });
-      return true;
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Erro ao renomear');
-      return false;
-    }
-  };
-
-  const handleDuplicateProject = async (id: string) => {
-    if (!orgId || !creator) { toast.error('Sem permissão para duplicar.'); return; }
-    try {
-      await runProtectedNavigation(async () => {
-        const copy = await duplicateCloudProject(id, orgId);
-        if (copy) {
-          await refreshCloudList();
-          toast.success(`Obra duplicada: ${copy.name}`);
-          setUndoVersion(v => v + 1);
-        }
-      });
-    } catch {
-      toast.error('Erro ao duplicar');
-    }
-  };
-
-  const handleDeleteProject = async (id: string, password: string): Promise<boolean> => {
-    if (!remover) { toast.error('Somente o Proprietário pode excluir obras.'); return false; }
-    if (cloudList.length <= 1) {
-      toast.error('Não é possível excluir a única obra. Crie outra antes.');
-      return false;
-    }
-    try {
-      const deleted = await runProtectedNavigation(async () => {
-        await deleteCloudProjectAsOwner(id, password);
-        const list = await refreshCloudList();
-        if (rawProject && id === rawProject.id) {
-          const next = list[0];
-          if (next) {
-            await preloadIndexedDbProjectDraft(next.id);
-            const nextWarehouseTab = readWarehouseTab(next.id, canViewWarehousePanel, role === 'owner');
-            setWarehouseTab(nextWarehouseTab);
-            const record = await loadCloudProjectRecord(next.id, {
-              collections: includePendingDraftCollections(
-                next.id,
-                projectCollectionsForView(safeCurrentView, nextWarehouseTab),
-              ),
-              strict: true,
-              deferSnapshot: true,
-            });
-            if (record) {
-              confirmCloudProjectRecord(record);
-              replaceProjectWithoutAutoSave(record.project, record.updatedAt, record.repairApplied, true, record.warehouseVersion);
-              undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
-            }
-          }
-        }
-        toast.success('Obra excluída');
-        setUndoVersion(v => v + 1);
-        return true;
-      });
-      return deleted ?? false;
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Erro ao excluir a obra.');
-      return false;
-    }
-  };
-
+  const {
+    switchProject: handleSwitchProject,
+    createProject: handleCreateProject,
+    createProjectFromImport: handleCreateProjectFromImport,
+    renameProject: handleRenameProject,
+    duplicateProject: handleDuplicateProject,
+    deleteProject: handleDeleteProject,
+  } = createProjectLifecycleHandlers({
+    orgId, creator, editor, remover, cloudList, activeProjectId: rawProject?.id ?? null,
+    getActiveProjectId: () => rawProjectRef.current?.id ?? null,
+    safeCurrentView, canViewWarehousePanel, owner: role === 'owner', projectOpenSequenceRef,
+    runProtectedNavigation, refreshCloudList, replaceProjectWithoutAutoSave, setWarehouseTab,
+    showCreateDialog: draft => { setDraftProjectForImport(draft); setCreateProjectDialogOpen(true); },
+    finishImportedProject: () => {
+      setCurrentView('dashboard');
+      setSidebarOpen(false);
+      setCreateProjectDialogOpen(false);
+      setDraftProjectForImport(null);
+    },
+    resetUndo: () => {
+      undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
+    },
+    markUndoChanged: () => setUndoVersion(v => v + 1),
+  });
   const handleLogout = async () => {
     await runProtectedNavigation(async () => {
       await signOut();

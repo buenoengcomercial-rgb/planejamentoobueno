@@ -29,6 +29,9 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
   permanecem coordenados por `Index.tsx`. O canal Realtime está em
   `domains/sync/projectRealtimeChannel.ts`; rota e sessão
   visual estão em `lib/appUiSession.ts`.
+- Troca, criação/importação, renomeação, duplicação e exclusão de obras ficam em
+  `domains/sync/projectLifecycle.ts`. A barreira de navegação do `Index.tsx`
+  continua aguardando gravações pendentes antes de executar esses comandos.
 - A escolha das coleções atingidas e a mesclagem da resposta remota estão em
   `domains/sync/remoteProjectReconciliation.ts`. O estado e a última versão
   confirmada são conciliados separadamente: uma atualização de outra área não
@@ -66,12 +69,12 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
 
 ## Arquivos extensos e próximos recortes
 
-Contagem da cópia de trabalho em 21/10/2026 (linhas físicas):
+Contagem de referência em 21/10/2026; `Index.tsx` atualizado em 22/10/2026 (linhas físicas):
 
 | Arquivo | Linhas | Recorte funcional seguinte |
 | --- | ---: | --- |
 | `lib/warehouse.ts` | 5.100 | Separar nota fiscal, requisição/devolução, inventário, cautela e projeções de estoque, mantendo a API pública. |
-| `pages/Index.tsx` | 2.612 | Prosseguir com a orquestração do salvamento geral e da navegação por entregas menores. Bootstrap, hidratação por área, marcadores, despacho e aplicação de Realtime, verificação de versão, conciliação remota, recepção do Diário e coordenação do Almoxarifado já saíram. |
+| `pages/Index.tsx` | 2.559 | Prosseguir com a composição de telas e estados locais. Bootstrap, hidratação, Realtime, conciliação, tentativa de salvamento, ciclo de vida da obra e coordenação do Almoxarifado já saíram. |
 | `components/GanttChart.tsx` | 3.087 | Separar estado de filtros, grade temporal, edição de barras, calendário e comandos. |
 | `lib/projectSync.ts` | 2.009 | Separar hidratação, snapshots e comandos normalizados por domínio. |
 | `components/TaskList.tsx` | 1.692 | Separar lista visual, edição de produção e lançamento de quantitativos. |
