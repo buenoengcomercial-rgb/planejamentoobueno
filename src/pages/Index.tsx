@@ -1,5 +1,5 @@
 import { readCaptureDraft, writeCaptureDraft } from '@/lib/productionCaptureDraft';
-import { ProjectFieldConflictError, preserveProjectFieldConflict, projectOperationFingerprint } from '@/lib/projectFieldCommit';
+import { preserveProjectFieldConflict, projectOperationFingerprint } from '@/lib/projectFieldCommit';
 import { mergeConcurrentFields } from '@/lib/concurrentFields';
 import ProjectOperationConflicts from '@/components/ProjectOperationConflicts';
 import WarehouseOperationRecovery from '@/components/WarehouseOperationRecovery';
@@ -24,6 +24,7 @@ import { useProjectCollectionTracker } from '@/domains/sync/useProjectCollection
 import { confirmAreaHydration, hydrateAreaCollections, planAreaHydration } from '@/domains/sync/areaHydration';
 import { includePendingDraftCollections, loadInitialProject } from '@/domains/sync/projectBootstrap';
 import { useProjectRealtimeRefresh } from '@/domains/sync/useProjectRealtimeRefresh';
+import { projectSaveAttempt } from '@/domains/sync/projectSaveAttempt';
 import ProjectHeaderSyncStatus from '@/domains/sync/ProjectHeaderSyncStatus';
 import { useDailyReportRealtime } from '@/domains/dailyReport/useDailyReportRealtime';
 import { reportForDate, replaceReportForDate, replaceSavedDailyReport } from '@/domains/dailyReport/dailyReportProject';
@@ -89,7 +90,6 @@ import {
   deleteCloudProject,
   deleteCloudProjectAsOwner,
   CloudProjectConflictError,
-  CloudProjectPartialSyncError,
   CloudProjectMeta,
   confirmCloudProjectRecord,
   discardCloudProjectRecord,
@@ -899,88 +899,63 @@ export default function Index() {
       const pendingAtRequest = partialSyncPendingRef.current?.projectId === projectToPersist.id
         ? partialSyncPendingRef.current
         : pendingAtStart;
-      let effectiveProject = pendingAtRequest?.project ?? projectToPersist;
-      let effectiveJson = serializeProject(effectiveProject);
-      let updatedAt: string;
-      let partialSync = false;
-      try {
-        // Releia somente as coleções afetadas e concilie campos independentes.
-        // Limite as tentativas para não manter um autosave concorrente em loop.
-        for (let attempt = 0; ; attempt += 1) {
-          try {
-            const submitted = effectiveProject;
-            updatedAt = await upsertCloudProject(effectiveProject, projectOrgId, currentProjectUpdatedAtRef.current ?? undefined, accepted => {
-              effectiveProject = accepted;
-              effectiveJson = serializeProject(accepted);
-              const current = rawProjectRef.current;
-              if (!current || current.id !== accepted.id) return;
-              const mergedMetadata = mergeProjectMetadataFields(submitted, current, accepted);
-              const merged = mergedMetadata && mergeProjectRecordsThreeWay(submitted, mergedMetadata, accepted,
-                getLoadedProjectCollections(accepted.id).filter(key => !key.startsWith('warehouse')));
-              if (merged) {
-                rawProjectRef.current = merged;
-                if (serializeProject(merged) === effectiveJson) skipNextAutoSaveRef.current = true;
-                setRawProject(merged);
-              }
-            });
-            break;
-          } catch (error) {
-            if (error instanceof ProjectFieldConflictError) {
-              const latest = rawProjectRef.current;
-              if (!latest || latest.id !== effectiveProject.id) throw error;
-              // Preserve the rejected operation and any typing that continued
-              // during its request before replacing its confirmed records.
-              preserveProjectFieldConflict(error, latest, effectiveProject);
-              const domainCollections: Record<string, ProjectCollectionKey[]> = {
-                production: ['eapChapters', 'tasks', 'taskDailyLogs', 'auditLogs'],
-                measurement: ['measurements', 'auditLogs'], additive: ['additives', 'budgetItems', 'analyticCompositions', 'materialPriceHistory', 'auditLogs'],
-                materials: ['budgetItems', 'materialComparisons', 'analyticCompositions', 'materialPriceHistory', 'auditLogs'],
-                costs: ['subcontracts', 'auditLogs'], metadata: [],
-              };
-              const collections = getLoadedProjectCollections(effectiveProject.id).filter(key => domainCollections[error.request.domain]?.includes(key));
-              const record = await loadCloudProjectRecord(effectiveProject.id, { collections, strict: true, deferSnapshot: true });
-              if (!record || rawProjectRef.current?.id !== latest.id) throw error;
-              const remote = mergeHydratedProjectCollections(mergeProjectMetadata(effectiveProject, record.project), record.project, collections);
-              const merged = mergeConcurrentFields(effectiveProject, rawProjectRef.current, remote);
-              // The full latest attempt is retained above even when a newer
-              // local edit collided during the read.
-              preserveProjectFieldConflict(error, rawProjectRef.current, effectiveProject);
-              confirmCloudProjectRecord(record);
-              effectiveProject = remote;
-              effectiveJson = serializeProject(remote);
-              updatedAt = record.updatedAt;
-              rawProjectRef.current = merged.value;
-              skipNextAutoSaveRef.current = serializeProject(merged.value) === effectiveJson;
-              setRawProject(merged.value);
-              if (skipNextAutoSaveRef.current) clearLocalProjectCollections(remote.id);
-              toast.error('Esta operação teve conflito. A primeira confirmação foi mantida e sua tentativa está disponível em “Operações em conflito”.');
-              break;
-            }
-            if (attempt < 3 && error instanceof CloudProjectConflictError) {
-              const knownRemoteCollections = [
-                ...(pendingRealtimeCollectionsRef.current.get(effectiveProject.id) ?? []),
-                ...(remoteDirtyCollectionsRef.current.get(effectiveProject.id) ?? []),
-              ];
-              const rebased = await refreshRemoteWarehouseInBackground(effectiveProject)
-                ?? await refreshRemoteCollectionsInBackground(effectiveProject,
-                  knownRemoteCollections.length ? knownRemoteCollections : getLoadedProjectCollections(effectiveProject.id));
-              if (rebased) {
-                effectiveProject = rebased;
-                effectiveJson = serializeProject(rebased);
-                continue;
-              }
-            }
-            throw error;
+      const result = await projectSaveAttempt({
+        project: pendingAtRequest?.project ?? projectToPersist,
+        organizationId: projectOrgId,
+        expectedUpdatedAt: () => currentProjectUpdatedAtRef.current,
+        onAccepted: (submitted, accepted, acceptedJson) => {
+          const current = rawProjectRef.current;
+          if (!current || current.id !== accepted.id) return;
+          const mergedMetadata = mergeProjectMetadataFields(submitted, current, accepted);
+          const merged = mergedMetadata && mergeProjectRecordsThreeWay(submitted, mergedMetadata, accepted,
+            getLoadedProjectCollections(accepted.id).filter(key => !key.startsWith('warehouse')));
+          if (merged) {
+            rawProjectRef.current = merged;
+            if (serializeProject(merged) === acceptedJson) skipNextAutoSaveRef.current = true;
+            setRawProject(merged);
           }
-        }
-      } catch (error) {
-        if (error instanceof ProjectSnapshotUnavailableError) {
-          setDataLoadRetry(value => value + 1);
-          throw error;
-        }
-        if (!(error instanceof CloudProjectPartialSyncError)) throw error;
-        updatedAt = error.updatedAt;
-        partialSync = true;
+        },
+        onFieldConflict: async (error, attempted) => {
+          const latest = rawProjectRef.current;
+          if (!latest || latest.id !== attempted.id) throw error;
+          // Preserve the rejected operation and typing that continued during the request.
+          preserveProjectFieldConflict(error, latest, attempted);
+          const domainCollections: Record<string, ProjectCollectionKey[]> = {
+            production: ['eapChapters', 'tasks', 'taskDailyLogs', 'auditLogs'],
+            measurement: ['measurements', 'auditLogs'], additive: ['additives', 'budgetItems', 'analyticCompositions', 'materialPriceHistory', 'auditLogs'],
+            materials: ['budgetItems', 'materialComparisons', 'analyticCompositions', 'materialPriceHistory', 'auditLogs'],
+            costs: ['subcontracts', 'auditLogs'], metadata: [],
+          };
+          const collections = getLoadedProjectCollections(attempted.id).filter(key => domainCollections[error.request.domain]?.includes(key));
+          const record = await loadCloudProjectRecord(attempted.id, { collections, strict: true, deferSnapshot: true });
+          if (!record || rawProjectRef.current?.id !== latest.id) throw error;
+          const remote = mergeHydratedProjectCollections(mergeProjectMetadata(attempted, record.project), record.project, collections);
+          const merged = mergeConcurrentFields(attempted, rawProjectRef.current, remote);
+          preserveProjectFieldConflict(error, rawProjectRef.current, attempted);
+          confirmCloudProjectRecord(record);
+          rawProjectRef.current = merged.value;
+          skipNextAutoSaveRef.current = serializeProject(merged.value) === serializeProject(remote);
+          setRawProject(merged.value);
+          if (skipNextAutoSaveRef.current) clearLocalProjectCollections(remote.id);
+          toast.error('Esta operação teve conflito. A primeira confirmação foi mantida e sua tentativa está disponível em “Operações em conflito”.');
+          return { project: remote, updatedAt: record.updatedAt };
+        },
+        onVersionConflict: async attempted => {
+          const knownRemoteCollections = [
+            ...(pendingRealtimeCollectionsRef.current.get(attempted.id) ?? []),
+            ...(remoteDirtyCollectionsRef.current.get(attempted.id) ?? []),
+          ];
+          return await refreshRemoteWarehouseInBackground(attempted)
+            ?? await refreshRemoteCollectionsInBackground(attempted,
+              knownRemoteCollections.length ? knownRemoteCollections : getLoadedProjectCollections(attempted.id));
+        },
+      }).catch(error => {
+        if (error instanceof ProjectSnapshotUnavailableError) setDataLoadRetry(value => value + 1);
+        throw error;
+      });
+      const { project: effectiveProject, json: effectiveJson, updatedAt, partialSyncError } = result;
+      const partialSync = !!partialSyncError;
+      if (partialSyncError) {
         // A fotografia anterior permanece como base do retry idempotente. O
         // estado local e o rascunho não podem avançar como se as coleções
         // normalizadas também tivessem sido confirmadas.
@@ -993,13 +968,13 @@ export default function Index() {
         };
         const draft = writeProtectedProjectDraft(effectiveProject, updatedAt);
         const draftProtected = !!draft;
-        partialSyncRetryableRef.current = isTransientCloudError(error);
+        partialSyncRetryableRef.current = isTransientCloudError(partialSyncError);
         const pending = partialSyncPendingRef.current;
         if (pending?.projectId === effectiveProject.id) {
           partialSyncPendingRef.current = { ...pending, draftProtected };
         }
         setPartialSyncIssue({ projectId: effectiveProject.id, draftProtected });
-        console.warn('[cloudProjects] Sincronização detalhada pendente.', error.detail);
+        console.warn('[cloudProjects] Sincronização detalhada pendente.', partialSyncError.detail);
         if (draftProtected) {
           toast.warning('Parte da obra foi salva, mas a sincronização detalhada está pendente. A cópia local foi confirmada; use “Tentar novamente”.');
         } else {

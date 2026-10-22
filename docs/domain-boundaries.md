@@ -24,7 +24,10 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
   rascunho pendente e detecção da Medição independente, ficam em
   `domains/sync/projectBootstrap.ts`. O agendamento, retry e tratamento inicial do autosave geral
   estão em `domains/sync/useProjectAutoSave.ts`, sem depender da aba visível. O
-  canal Realtime está em `domains/sync/projectRealtimeChannel.ts`; rota e sessão
+  ciclo de tentativa, conciliação de versão e resultado parcial da gravação geral
+  está em `domains/sync/projectSaveAttempt.ts`; a fila, os rascunhos e os indicadores
+  permanecem coordenados por `Index.tsx`. O canal Realtime está em
+  `domains/sync/projectRealtimeChannel.ts`; rota e sessão
   visual estão em `lib/appUiSession.ts`.
 - A escolha das coleções atingidas e a mesclagem da resposta remota estão em
   `domains/sync/remoteProjectReconciliation.ts`. O estado e a última versão
