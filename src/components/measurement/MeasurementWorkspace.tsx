@@ -56,8 +56,16 @@ function confirmedRowDraft(workspace: Workspace, draft: WorkspaceDraft): boolean
   if (typeof rowId !== 'string' || rowId.startsWith('__')) return false;
   const row = workspace.entries.find(entry => entry.measurementId === draft.measurementId && entry.serviceId === draft.serviceId)?.rows.find(item => item.id === rowId);
   const changes = Object.entries(draft.changes).filter(([key]) => key !== 'createdRowId');
-  return !!row && changes.length > 0 && changes.every(([key, value]) =>
-    Object.prototype.hasOwnProperty.call(row, key) && JSON.stringify(row[key as keyof typeof row]) === JSON.stringify(value));
+  const numericFields = new Set(['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD']);
+  return !!row && changes.length > 0 && changes.every(([key, value]) => {
+    if (!Object.prototype.hasOwnProperty.call(row, key)) return false;
+    const saved = row[key as keyof typeof row];
+    if (numericFields.has(key) && typeof value === 'string' && value.trim() !== '') {
+      const number = Number(value.replace(',', '.'));
+      return Number.isFinite(number) && saved === number;
+    }
+    return JSON.stringify(saved) === JSON.stringify(value);
+  });
 }
 
 /** Real workspace UI, with an explicitly injected persistence boundary. No Project setter. */
@@ -1219,6 +1227,11 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         const periodNumber = workspace.periods.find(value => value.id === draft.measurementId)?.number;
         return <li key={draftKey(draft.measurementId, draft.serviceId, draft.rowId)}>
           {periodNumber ? `${periodNumber}ª medição · ` : ''}{service ? `${service.item} · ${service.description}` : draft.serviceId === bulletinDraftKey ? `Boletim · ${draft.rowId}` : 'Registro local'}
+          <div className="font-normal">Linha {draft.rowId.startsWith('__') ? 'de lançamento' : draft.rowId} · {Object.entries(draft.changes).filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value)).map(([field, value]) => {
+            const saved = draft.serviceId === bulletinDraftKey ? undefined
+              : entryFor(workspace, draft.measurementId, draft.serviceId).rows.find(row => row.id === draft.rowId || draft.rowId === '__manual__')?.[field as keyof ReturnType<typeof entryFor>['rows'][number]];
+            return <span key={field} className="mr-3">{field}: local {String(value)}{saved !== undefined ? ` · nuvem ${String(saved)}` : ''}</span>;
+          })}</div>
         </li>;
       })}</ul>
     </details>}
