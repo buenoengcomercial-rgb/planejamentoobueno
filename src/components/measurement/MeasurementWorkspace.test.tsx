@@ -48,6 +48,14 @@ describe('Tela própria de Medição', () => {
     expect(repository.clearDraft).not.toHaveBeenCalled();
     expect(repository.commit).not.toHaveBeenCalled();
   });
+  it('reconhece como confirmado um campo numérico salvo como texto no rascunho', async () => {
+    const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('r'), measuredQuantity: 4 }] }];
+    repository.drafts = vi.fn(async () => [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: 'r', changes: { measuredQuantity: '4' } }]);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    await waitFor(() => expect(repository.clearDraft).toHaveBeenCalledWith('m1', 's', 'r'));
+    expect(repository.commit).not.toHaveBeenCalled();
+  });
   it('mostra cópia local após falha do servidor sem afirmar falta de internet e permite nova conferência', async () => {
     const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem';
     let cached = true;

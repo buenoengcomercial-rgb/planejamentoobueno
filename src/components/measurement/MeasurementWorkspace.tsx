@@ -56,8 +56,16 @@ function confirmedRowDraft(workspace: Workspace, draft: WorkspaceDraft): boolean
   if (typeof rowId !== 'string' || rowId.startsWith('__')) return false;
   const row = workspace.entries.find(entry => entry.measurementId === draft.measurementId && entry.serviceId === draft.serviceId)?.rows.find(item => item.id === rowId);
   const changes = Object.entries(draft.changes).filter(([key]) => key !== 'createdRowId');
-  return !!row && changes.length > 0 && changes.every(([key, value]) =>
-    Object.prototype.hasOwnProperty.call(row, key) && JSON.stringify(row[key as keyof typeof row]) === JSON.stringify(value));
+  const numericFields = new Set(['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD']);
+  return !!row && changes.length > 0 && changes.every(([key, value]) => {
+    if (!Object.prototype.hasOwnProperty.call(row, key)) return false;
+    const saved = row[key as keyof typeof row];
+    if (numericFields.has(key) && typeof value === 'string' && value.trim() !== '') {
+      const number = Number(value.replace(',', '.'));
+      return Number.isFinite(number) && saved === number;
+    }
+    return JSON.stringify(saved) === JSON.stringify(value);
+  });
 }
 
 /** Real workspace UI, with an explicitly injected persistence boundary. No Project setter. */
