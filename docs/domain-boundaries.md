@@ -40,6 +40,11 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
   modificadas localmente, avisos remotos, eventos Realtime pendentes e cargas
   em andamento. A troca de obra limpa somente os marcadores das duas obras
   envolvidas; um aviso do Almoxarifado não vira conflito local do Cronograma.
+- `domains/warehouse/useWarehouseOperationCoordinator.ts` prepara e confirma
+  as transações do Almoxarifado, mantém as travas de operação e concilia a
+  projeção legada no Diário após a confirmação. Recebe as referências comuns
+  da obra por interface explícita; não muda as RPCs nem transfere a gravação
+  do estoque ao autosave geral.
 - `domains/sync/projectRemoteSignals.ts` despacha eventos do canal por obra:
   ignora ecos da própria gravação, envia eventos do Diário ao fluxo da data e
   agrupa as demais tabelas sem perder a origem da coleção. Ao sair da obra,
@@ -60,7 +65,7 @@ Contagem da cópia de trabalho em 21/10/2026 (linhas físicas):
 | Arquivo | Linhas | Recorte funcional seguinte |
 | --- | ---: | --- |
 | `lib/warehouse.ts` | 5.100 | Separar nota fiscal, requisição/devolução, inventário, cautela e projeções de estoque, mantendo a API pública. |
-| `pages/Index.tsx` | 3.212 | Extrair a aplicação de atualizações gerais recebidas por Realtime. Bootstrap, hidratação por área, marcadores, despacho Realtime, verificação de versão, conciliação remota e recepção do Diário já saíram. |
+| `pages/Index.tsx` | 2.706 | Extrair a aplicação de atualizações gerais recebidas por Realtime. Bootstrap, hidratação por área, marcadores, despacho Realtime, verificação de versão, conciliação remota, recepção do Diário e coordenação do Almoxarifado já saíram. |
 | `components/GanttChart.tsx` | 3.087 | Separar estado de filtros, grade temporal, edição de barras, calendário e comandos. |
 | `lib/projectSync.ts` | 2.009 | Separar hidratação, snapshots e comandos normalizados por domínio. |
 | `components/TaskList.tsx` | 1.692 | Separar lista visual, edição de produção e lançamento de quantitativos. |
