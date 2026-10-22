@@ -37,12 +37,14 @@ describe('Tela própria de Medição', () => {
     expect(screen.getByText('Aguardando envio à nuvem')).toBeVisible();
   });
   it('mostra qual rascunho não confirmado mantém o aviso após a recarga', async () => {
-    const { repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+    const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('r'), origin: { kind: 'manual' }, multiplier: 3 }] }];
     repository.drafts = vi.fn(async () => [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: '__manual__', changes: { multiplier: '7' } }]);
     render(<MeasurementWorkspace repository={repository} actor={actor}/>);
     const summary = await screen.findByText('1 rascunho(s) local(is) da Medição aguardando conferência');
     fireEvent.click(summary);
     expect(screen.getByText(/1ª medição · 1\.1 · Placas/)).toBeVisible();
+    expect(screen.getByText('multiplier: local 7 · nuvem 3')).toBeVisible();
     expect(repository.clearDraft).not.toHaveBeenCalled();
     expect(repository.commit).not.toHaveBeenCalled();
   });

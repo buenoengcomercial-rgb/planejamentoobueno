@@ -1219,6 +1219,11 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         const periodNumber = workspace.periods.find(value => value.id === draft.measurementId)?.number;
         return <li key={draftKey(draft.measurementId, draft.serviceId, draft.rowId)}>
           {periodNumber ? `${periodNumber}ª medição · ` : ''}{service ? `${service.item} · ${service.description}` : draft.serviceId === bulletinDraftKey ? `Boletim · ${draft.rowId}` : 'Registro local'}
+          <div className="font-normal">Linha {draft.rowId.startsWith('__') ? 'de lançamento' : draft.rowId} · {Object.entries(draft.changes).filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value)).map(([field, value]) => {
+            const saved = draft.serviceId === bulletinDraftKey ? undefined
+              : entryFor(workspace, draft.measurementId, draft.serviceId).rows.find(row => row.id === draft.rowId || draft.rowId === '__manual__')?.[field as keyof ReturnType<typeof entryFor>['rows'][number]];
+            return <span key={field} className="mr-3">{field}: local {String(value)}{saved !== undefined ? ` · nuvem ${String(saved)}` : ''}</span>;
+          })}</div>
         </li>;
       })}</ul>
     </details>}
