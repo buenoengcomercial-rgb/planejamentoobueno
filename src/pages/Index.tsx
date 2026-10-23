@@ -4,6 +4,7 @@ import { mergeConcurrentFields } from '@/lib/concurrentFields';
 import ProjectOperationConflicts from '@/components/ProjectOperationConflicts';
 import WarehouseOperationRecovery from '@/components/WarehouseOperationRecovery';
 import { useWarehouseOperationCoordinator } from '@/domains/warehouse/useWarehouseOperationCoordinator';
+import { createProjectViewSetter } from '@/domains/project/projectViewEditCommands';
 import type { ProductionCaptureChange } from '@/lib/planTakeoff';
 import { syncProductionAtomically, stripNormalizedCollections } from '@/lib/projectSync';
 import { applyProjectOperation, auditProjectReversal } from '@/lib/projectOperations';
@@ -1556,67 +1557,15 @@ export default function Index() {
     finally { setDailyReportRecoveryBusy(false); }
   };
 
-  const makeViewSetter = useCallback((view: AppView) => {
-    const renderedBase = project ?? rawProjectRef.current;
-    return (next: Project | ((prev: Project) => Project)) => {
-      const mayEditView = editor
-        || (view === 'dailyReport' && dailyReportEditor)
-        || (view === 'warehouse' && warehouseEditor);
-      if (!mayEditView) {
-        toast.error('Você não tem permissão para editar.');
-        return;
-      }
-      if (view === 'dailyReport' && !navigator.onLine) {
-        toast.error('Conecte-se à internet para editar o Diário de Obra.');
-        return;
-      }
-      if (conflictDetectedRef.current && view !== 'dailyReport') {
-        toast.error('A sincronização com a nuvem ainda não foi concluída. Recarregue a obra antes de editar.');
-        return;
-      }
-      if (productionCaptureBusyRef.current) { toast.error('Aguarde a confirmação conjunta da planta e do quantitativo.'); return; }
-      if (partialSyncPendingRef.current?.projectId === rawProjectRef.current?.id) {
-        toast.error('A sincronização detalhada ainda está pendente. Aguarde a confirmação antes de fazer outra alteração.');
-        return;
-      }
-      setRawProject(prev => {
-        if (!prev) return prev;
-        const candidate = typeof next === 'function' ? (next as (p: Project) => Project)(prev) : next;
-        let resolved: Project;
-        try {
-          resolved = role === 'warehouse_operator' && view === 'warehouse'
-            ? { ...prev, warehouse: candidate.warehouse }
-            : applyProjectOperation(view, prev, typeof next === 'function' ? prev : (renderedBase ?? prev), candidate);
-        } catch (error) {
-          toast.error(error instanceof Error ? error.message : 'A alteração conflita com o estado atual.');
-          return prev;
-        }
-        const synchronized = resolved;
-        if (synchronized === prev) return prev;
-        // Trava contra laço de atualização: objeto novo com conteúdo idêntico
-        // não gera novo estado (evitava o autosave reiniciar para sempre).
-        const synchronizedJson = serializeProject(synchronized);
-        if (synchronizedJson === serializeProject(prev)) return prev;
-        try { assertProductionDeletionSafe(productionDeletionState(prev), productionDeletionState(synchronized), prev); }
-        catch (error) { toast.error(error instanceof Error ? error.message : 'Exclusão bloqueada.'); return prev; }
-        markLocalProjectChanges(prev, synchronized);
-        const stack = undoStacksRef.current[view];
-        stack.push(createUndoOperation(prev, synchronized));
-        if (stack.length > UNDO_LIMIT) stack.shift();
-        rawProjectRef.current = synchronized;
-        if (view === 'dailyReport') {
-          saveDailyReportDirectly(prev, synchronized);
-        } else if (synchronizedJson !== lastSavedProjectJsonRef.current) {
-          scheduleProjectDraft(synchronized, currentProjectUpdatedAtRef.current);
-        } else {
-          discardProjectDraft(synchronized.id);
-        }
-        setUndoVersion(v => v + 1);
-        return synchronized;
-      });
-    };
-  }, [project, dailyReportEditor, discardProjectDraft, editor, markLocalProjectChanges, role, saveDailyReportDirectly, scheduleProjectDraft, warehouseEditor]);
-
+  const makeViewSetter = useCallback((view: AppView) => createProjectViewSetter(view, {
+    renderedBase: project ?? rawProjectRef.current,
+    editor, dailyReportEditor, warehouseEditor, role,
+    rawProjectRef, conflictDetectedRef, productionCaptureBusyRef, partialSyncPendingRef,
+    lastSavedProjectJsonRef, currentProjectUpdatedAtRef, undoStacksRef,
+    setRawProject, setUndoVersion, markLocalProjectChanges, saveDailyReportDirectly,
+    scheduleProjectDraft, discardProjectDraft,
+  }), [project, dailyReportEditor, discardProjectDraft, editor, markLocalProjectChanges,
+    role, saveDailyReportDirectly, scheduleProjectDraft, warehouseEditor]);
   const ganttSetter = useMemo(() => makeViewSetter('gantt'), [makeViewSetter]);
   const managementSetter = useMemo(() => makeViewSetter('management'), [makeViewSetter]);
   const tasksSetter = useMemo(() => makeViewSetter('tasks'), [makeViewSetter]);
