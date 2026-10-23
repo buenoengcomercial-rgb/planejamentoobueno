@@ -32,6 +32,7 @@ import { refreshRemoteProjectCollections, refreshRemoteWarehouseCollections, typ
 import ProjectHeaderSyncStatus from '@/domains/sync/ProjectHeaderSyncStatus';
 import { useDailyReportRealtime } from '@/domains/dailyReport/useDailyReportRealtime';
 import { reportForDate, replaceReportForDate, replaceSavedDailyReport } from '@/domains/dailyReport/dailyReportProject';
+import { saveDailyReportEdits, recoverDailyReportDraft, useDailyReportDraftLoading, type DailyReportSaveContext } from '@/domains/dailyReport/dailyReportSaveController';
 import MigrationDialog from '@/components/MigrationDialog';
 import { Menu, X, Loader2, Building2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -44,7 +45,7 @@ import { lazyWithReload } from '@/lib/lazyWithReload';
 import { scheduleIdlePreload } from '@/lib/idlePreload';
 import { applyUndoOperation, createUndoOperation, type UndoOperation } from '@/lib/operationUndo';
 import { auditUndoProductionDeletions, assertProductionDeletionSafe, productionDeletionState } from '@/lib/productionDeletionSafety';
-import { protectDailyReportDraft, readDailyReportDrafts, clearDailyReportDraft, type DailyReportDraft } from '@/lib/dailyReportDrafts';
+import type { DailyReportDraft } from '@/lib/dailyReportDrafts';
 import DailyReportDraftRecovery from '@/components/DailyReportDraftRecovery';
 import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
@@ -96,7 +97,7 @@ import {
 import { supportsIndexedDbDrafts, writeIndexedDbProjectDraft } from '@/lib/cloudDraftIndexedDb';
 import type { ProjectMeta } from '@/lib/projectStorage';
 import { supabase } from '@/integrations/supabase/client';
-import { loadOpenDailyReport, saveOpenDailyReport } from '@/lib/dailyReportCloudSync';
+import { saveOpenDailyReport } from '@/lib/dailyReportCloudSync';
 import {
   type WarehouseCloudCommitResult,
 } from '@/lib/warehouseCloudCommit';
@@ -1383,179 +1384,23 @@ export default function Index() {
     return scheduleIdlePreload(candidate.load);
   }, [bootLoading, idlePreloadProjectId, role, safeCurrentView]);
 
-  useEffect(() => {
-    let active = true;
-    setDailyReportDrafts({});
-    setDailyReportSaveErrors({});
-    dailyReportDraftsRef.current = {};
-    if (rawProject?.id && user?.id) {
-      void readDailyReportDrafts(rawProject.id, user.id).then(drafts => {
-        if (!active) return;
-        const merged = { ...drafts, ...dailyReportDraftsRef.current };
-        dailyReportDraftsRef.current = merged;
-        setDailyReportDrafts(merged);
-      }).catch(() => { if (active) toast.warning('Não foi possível consultar os rascunhos deste aparelho. Mantenha esta aba aberta até confirmar suas edições.'); });
-    }
-    return () => { active = false; };
-  }, [rawProject?.id, user?.id]);
+  useDailyReportDraftLoading(rawProject?.id, user?.id, dailyReportDraftsRef,
+    setDailyReportDrafts, setDailyReportSaveErrors);
 
+  const dailyReportSaveContext = useMemo<DailyReportSaveContext>(() => ({
+    actorId: user?.id, rawProjectRef, dailyReportDraftsRef, dailyReportSaveQueueRef,
+    pendingDailyReportSavesRef, lastSavedProjectJsonRef, currentProjectUpdatedAtRef,
+    conflictDetectedRef, partialSyncPendingRef, dailyReportRecoveryBusy,
+    setDailyReportRecoveryBusy, setDailyReportDrafts, setDailyReportSaveErrors,
+    setSaveStatus, setRawProject, mergeConfirmedDailyReportIntoPartialSync,
+    clearLocalProjectCollections, confirmDiscardPendingForm,
+  }), [user?.id, dailyReportRecoveryBusy, mergeConfirmedDailyReportIntoPartialSync,
+    clearLocalProjectCollections, confirmDiscardPendingForm]);
   const saveDailyReportDirectly = useCallback((before: Project, after: Project) => {
-    if (!user?.id) return;
-    const actorId = user.id;
-    const dates = new Set([
-      ...(before.dailyReports ?? []).map(report => report.date),
-      ...(after.dailyReports ?? []).map(report => report.date),
-    ]);
-    dates.forEach(date => {
-      const previous = reportForDate(before, date);
-      const local = reportForDate(after, date);
-      if (!local) return;
-      const base: DailyReport = previous ?? {
-        id: local.id,
-        date: local.date,
-        teamsPresent: [],
-        equipment: [],
-        attachments: [],
-        createdAt: local.createdAt,
-        updatedAt: local.updatedAt,
-      };
-      if (JSON.stringify(base) === JSON.stringify(local)) return;
-
-      pendingDailyReportSavesRef.current += 1;
-      setSaveStatus('saving');
-      const expectedLocal = local;
-      const recovery: DailyReportDraft = { revision: crypto.randomUUID(), base, local: expectedLocal };
-      dailyReportDraftsRef.current = { ...dailyReportDraftsRef.current, [date]: recovery };
-      setDailyReportDrafts(dailyReportDraftsRef.current);
-      // Start protecting immediately, before waiting for earlier cloud saves.
-      let draftProtected = true;
-      const protectedDraft = protectDailyReportDraft(after.id, actorId, recovery);
-      void protectedDraft.catch(() => undefined);
-      const request = dailyReportSaveQueueRef.current.catch(() => undefined).then(async () => {
-        await protectedDraft.catch(() => {
-          draftProtected = false;
-          if (rawProjectRef.current?.id !== after.id) return;
-          const message = 'A edição está somente nesta aba até a confirmação da nuvem. Baixe o rascunho antes de fechar se a gravação falhar.';
-          setDailyReportSaveErrors(errors => ({ ...errors, [date]: message }));
-          toast.warning(message);
-        });
-        const result = await saveOpenDailyReport(after.id, base, expectedLocal);
-        if (result.conflicts.length === 0) await clearDailyReportDraft(after.id, actorId, date, recovery.revision).catch(() => {
-          toast.warning('Diário confirmado na nuvem. A limpeza da cópia local ainda precisa ser repetida.');
-        });
-        if (result.conflicts.length === 0 && rawProjectRef.current?.id === after.id && dailyReportDraftsRef.current[date]?.revision === recovery.revision) {
-          const remaining = { ...dailyReportDraftsRef.current };
-          delete remaining[date];
-          dailyReportDraftsRef.current = remaining;
-          setDailyReportDrafts(remaining);
-        }
-        mergeConfirmedDailyReportIntoPartialSync(after.id, date, result.report);
-        if (result.conflicts.length === 0) setDailyReportSaveErrors(errors => {
-          const next = { ...errors };
-          delete next[date];
-          return next;
-        });
-        lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, date, result.report);
-        clearLocalProjectCollections(after.id, ['dailyReports']);
-        setRawProject(current => {
-          if (!current || current.id !== after.id) return current;
-          const currentReport = reportForDate(current, date);
-          // Uma edição mais recente já está na fila. Ela será conciliada contra
-          // a versão confirmada ao chegar sua vez; não a sobrescreva agora.
-          if (!currentReport || JSON.stringify(currentReport) !== JSON.stringify(expectedLocal)) return current;
-          const next = replaceReportForDate(current, date, result.report);
-          rawProjectRef.current = next;
-          return next;
-        });
-        if (result.conflicts.length > 0) {
-          setDailyReportSaveErrors(errors => ({ ...errors, [date]: 'Há campos divergentes. Compare a versão confirmada com o rascunho preservado.' }));
-          toast.warning('A legenda ou campo já havia sido alterado em outro aparelho. Foi mantida a primeira edição salva e o rascunho foi preservado.');
-        }
-      });
-      dailyReportSaveQueueRef.current = request;
-      void request.catch(async error => {
-        if (rawProjectRef.current?.id !== after.id) return;
-        console.warn('Falha ao salvar o Diário diretamente.', error);
-        const message = error instanceof Error ? error.message : 'Não foi possível salvar o Diário. Nenhuma alteração foi confirmada.';
-        setDailyReportSaveErrors(errors => ({ ...errors, [date]: draftProtected ? message : `${message} A cópia está somente nesta aba. Baixe o rascunho antes de fechar.` }));
-        setSaveStatus(navigator.onLine ? 'error' : 'offline');
-        // Uma falha da gravação do Diário não autoriza apagar os arquivos já
-        // recebidos pelo Storage: eles podem ser a única cópia das fotos.
-        const confirmed = await loadOpenDailyReport(after.id, date).catch(() => null);
-        lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, date, confirmed ?? base);
-        setRawProject(current => {
-          if (!current || current.id !== after.id) return current;
-          const currentReport = reportForDate(current, date);
-          if (!currentReport || JSON.stringify(currentReport) !== JSON.stringify(expectedLocal)) return current;
-          const next = replaceReportForDate(current, date, confirmed ?? base);
-          rawProjectRef.current = next;
-          return next;
-        });
-        toast.error(message);
-      }).finally(() => {
-        pendingDailyReportSavesRef.current = Math.max(0, pendingDailyReportSavesRef.current - 1);
-        if (pendingDailyReportSavesRef.current === 0) {
-          setSaveStatus(conflictDetectedRef.current
-            ? 'conflict'
-            : partialSyncPendingRef.current?.projectId === after.id
-              ? 'error'
-              : Object.keys(dailyReportDraftsRef.current).length > 0 ? 'error' : 'saved');
-        }
-      });
-    });
-  }, [clearLocalProjectCollections, mergeConfirmedDailyReportIntoPartialSync, user?.id]);
-
-  const recoverDailyReport = async (date: string, discard: boolean, discardConfirmed = false) => {
-    const current = rawProjectRef.current;
-    const draft = dailyReportDraftsRef.current[date];
-    if (!current || !draft || !user?.id || dailyReportRecoveryBusy || pendingDailyReportSavesRef.current > 0) return;
-    if (discard && !discardConfirmed) {
-      confirmDiscardPendingForm({ title: 'Descartar rascunho do Diário?', description: 'Somente a edição local pendente será descartada. O Diário confirmado e seus arquivos permanecem preservados.', confirmLabel: 'Descartar rascunho' }, () => void recoverDailyReport(date, true, true));
-      return;
-    }
-    setDailyReportRecoveryBusy(true);
-    try {
-      const confirmed = await loadOpenDailyReport(current.id, date);
-      if (rawProjectRef.current?.id !== current.id) return;
-      if (discard) {
-        await clearDailyReportDraft(current.id, user.id, date, draft.revision);
-        if (dailyReportDraftsRef.current[date]?.revision === draft.revision) {
-          const latest = rawProjectRef.current;
-          if (latest?.id === current.id) {
-            const next = replaceReportForDate(latest, date, confirmed);
-            rawProjectRef.current = next; setRawProject(next);
-          }
-          const next = { ...dailyReportDraftsRef.current }; delete next[date];
-          dailyReportDraftsRef.current = next; setDailyReportDrafts(next);
-          setDailyReportSaveErrors(errors => { const next = { ...errors }; delete next[date]; return next; });
-        }
-      } else {
-        const result = await saveOpenDailyReport(current.id, draft.base, draft.local);
-        if (rawProjectRef.current?.id !== current.id) return;
-        if (result.conflicts.length > 0) {
-          const latest = rawProjectRef.current;
-          if (latest?.id === current.id) {
-            const next = replaceReportForDate(latest, date, result.report);
-            rawProjectRef.current = next; setRawProject(next);
-          }
-          toast.warning('Há campos divergentes. A versão confirmada foi preservada; compare o rascunho antes de descartá-lo.');
-          return;
-        }
-        await clearDailyReportDraft(current.id, user.id, date, draft.revision);
-        const latest = rawProjectRef.current;
-        if (!latest || latest.id !== current.id) return;
-        if (dailyReportDraftsRef.current[date]?.revision !== draft.revision) return;
-        const next = replaceReportForDate(latest, date, result.report);
-        rawProjectRef.current = next; setRawProject(next);
-        lastSavedProjectJsonRef.current = replaceSavedDailyReport(lastSavedProjectJsonRef.current, date, result.report);
-        const remaining = { ...dailyReportDraftsRef.current }; delete remaining[date];
-        dailyReportDraftsRef.current = remaining; setDailyReportDrafts(remaining);
-        setDailyReportSaveErrors(errors => { const next = { ...errors }; delete next[date]; return next; });
-        toast.success('Diário confirmado.');
-      }
-    } catch (error) { toast.error(error instanceof Error ? error.message : 'Não foi possível recuperar o Diário.'); }
-    finally { setDailyReportRecoveryBusy(false); }
-  };
+    saveDailyReportEdits(before, after, dailyReportSaveContext);
+  }, [dailyReportSaveContext]);
+  const recoverDailyReport = (date: string, discard: boolean) =>
+    recoverDailyReportDraft(date, discard, dailyReportSaveContext);
 
   const makeViewSetter = useCallback((view: AppView) => createProjectViewSetter(view, {
     renderedBase: project ?? rawProjectRef.current,

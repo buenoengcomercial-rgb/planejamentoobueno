@@ -54,6 +54,10 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
   versão mais recente da obra, confere permissão e exclusão segura, registra
   Desfazer por delta e encaminha ao salvamento responsável. O Diário continua
   usando a gravação da data; uma alteração idêntica não reinicia o autosave.
+- `domains/dailyReport/dailyReportSaveController.ts` carrega os rascunhos do
+  usuário por obra, protege cada revisão antes do envio, serializa as gravações
+  do Diário e recupera ou descarta a cópia local após confirmação. O `Index.tsx`
+  fornece somente as referências comuns e apresenta o estado resultante.
 - `domains/warehouse/useWarehouseOperationCoordinator.ts` prepara e confirma
   as transações do Almoxarifado, mantém as travas de operação e concilia a
   projeção legada no Diário após a confirmação. Recebe as referências comuns
@@ -82,7 +86,7 @@ Contagem de referência em 21/10/2026; `Index.tsx` atualizado em 23/10/2026 (lin
 | Arquivo | Linhas | Recorte funcional seguinte |
 | --- | ---: | --- |
 | `lib/warehouse.ts` | 5.100 | Separar nota fiscal, requisição/devolução, inventário, cautela e projeções de estoque, mantendo a API pública. |
-| `pages/Index.tsx` | 2.141 | Prosseguir com Desfazer e comandos específicos por área. Bootstrap, hidratação, atualização remota por coleção, edição por aba, tentativa de salvamento, ciclo de vida da obra e coordenação do Almoxarifado já saíram. |
+| `pages/Index.tsx` | 1.986 | Prosseguir com Desfazer e comandos específicos por área. O salvamento e a recuperação de rascunhos do Diário agora ficam no domínio próprio. |
 | `components/GanttChart.tsx` | 3.087 | Separar estado de filtros, grade temporal, edição de barras, calendário e comandos. |
 | `lib/projectSync.ts` | 2.009 | Separar hidratação, snapshots e comandos normalizados por domínio. |
 | `components/TaskList.tsx` | 1.692 | Separar lista visual, edição de produção e lançamento de quantitativos. |
