@@ -3,7 +3,6 @@ import { getAllTasks } from '@/data/sampleProject';
 import { generateCurvaS, suggestOptimizations } from '@/lib/calculations';
 import { buildDashboardFinancialSummary } from '@/lib/dashboardFinancial';
 import { getChapterTree, getChapterTasks, getChapterNumbering } from '@/lib/chapters';
-import { motion } from 'framer-motion';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { ModulePageHeader } from './ModulePageHeader';
@@ -157,12 +156,10 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {cards.map((card, i) => (
-          <motion.div
+          <div
             key={card.label}
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.08 }}
-            className="bg-card rounded-xl p-5 border border-border shadow-sm"
+            style={{ animationDelay: `${i * 80}ms` }}
+            className="dashboard-enter bg-card rounded-xl p-5 border border-border shadow-sm"
           >
             <div className="flex items-center justify-between mb-3">
               <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">{card.label}</span>
@@ -170,7 +167,7 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
             </div>
             <p className="text-2xl font-bold text-foreground">{card.value}</p>
             {'hint' in card && Boolean(card.hint) && <p className="mt-1 text-[11px] text-muted-foreground">{String(card.hint)}</p>}
-          </motion.div>
+          </div>
         ))}
       </div>
 
@@ -195,7 +192,7 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
           <span className="text-sm font-semibold text-primary group-open:hidden">Ver detalhes</span>
           <span className="hidden text-sm font-semibold text-primary group-open:inline">Recolher</span>
         </summary>
-      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.18 }} className="border-t border-border p-5">
+      <div className="dashboard-enter border-t border-border p-5" style={{ animationDelay: '180ms' }}>
         <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
           <div>
             <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide">Custos da obra</h3>
@@ -256,7 +253,7 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
             {chartsReady ? <Suspense fallback={<ChartFallback className="h-[260px]" />}><DashboardCostChart data={costUsageChart} /></Suspense> : <ChartFallback className="h-[260px]" />}
           </div>
         </div>
-      </motion.div>
+      </div>
       </details>
 
       {chartsReady
@@ -264,7 +261,7 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
         : <><ChartFallback /><ChartFallback /></>}
 
       {optimizations.length > 0 && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6 }} className="bg-card rounded-xl p-5 border border-border shadow-sm">
+        <div className="dashboard-enter bg-card rounded-xl p-5 border border-border shadow-sm" style={{ animationDelay: '600ms' }}>
           <h3 className="text-sm font-semibold text-foreground mb-4 flex items-center gap-2">
             <Zap className="w-4 h-4 text-warning" />
             Sugestões de otimização (caminho crítico)
@@ -285,7 +282,7 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
               </div>
             ))}
           </div>
-        </motion.div>
+        </div>
       )}
     </div>
   );
