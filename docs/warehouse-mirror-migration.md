@@ -1,6 +1,6 @@
 # Migração do estado do Almoxarifado para fora de `projects`
 
-Levantamento do código em 24/10/2026. Este documento prepara uma migração; não altera o banco nem muda o fluxo operacional.
+Levantamento do código em 24/10/2026. A primeira entrega cria `warehouse_project_state` como projeção transitória, sem alterar os leitores e escritores operacionais. As etapas de troca de fonte continuam pendentes.
 
 ## Conclusão do inventário
 
@@ -25,8 +25,8 @@ Levantamento do código em 24/10/2026. Este documento prepara uma migração; n�
 
 ## Sequência proposta
 
-1. **Criar fonte própria para o estado ainda guardado no JSON.** Uma tabela por obra para o estado do Almoxarifado, com revisão própria, política de leitura e comandos `SECURITY DEFINER` que preservem papéis, validações, auditoria, idempotência e travas atuais. Definir nela apenas os campos que ainda não estão nas três tabelas normalizadas.
-2. **Migrar e conferir dados.** Copiar os campos de `data_json.warehouse` para a nova fonte, mantendo uma janela de compatibilidade. Comparar por obra contagens e conteúdo dos registros antes de escolher a nova fonte como leitura principal. Não descartar o JSON antigo nesta etapa.
+1. **Criar a projeção separada do estado ainda guardado no JSON.** A migração `20261024203000_warehouse_project_state_shadow.sql` cria uma tabela por obra com os campos não normalizados e a revisão atual. Um gatilho a mantém sincronizada na mesma transação do escritor existente. A tabela ainda não é a fonte oficial; não recebe escrita direta dos clientes. Comandos próprios com as garantias atuais virão antes da troca de fonte.
+2. **Conferir a cópia inicial.** A primeira migração já copia os campos de `data_json.warehouse` para a projeção e a mantém atualizada na mesma transação. Antes de escolher a nova fonte como leitura principal, comparar por obra contagens, versões e conteúdo dos registros na base operacional. Não descartar o JSON antigo nesta etapa.
 3. **Atualizar leituras e gravações.** `projectSync`, carga inicial, hidratação seletiva, RPCs V1/V2, reconciliação, manutenção de anexos e clientes legados devem passar pela nova fonte. Requisições e operações críticas continuam atômicas com livro de movimentos, cautelas e auditoria.
 4. **Separar a revisão.** Mover `warehouse_version` e `warehouse_updated_at` para a fonte do domínio e fazer o monitoramento observar essa revisão. Somente depois de eliminar todo `UPDATE projects` das transações exclusivas do estoque será possível deixar `projects.updated_at` estável nessas operações.
 5. **Desligar o espelho.** Após validar clientes publicados e recuperação de rascunhos, parar a dupla escrita, conservar backup reversível e então remover os leitores e gatilhos legados do JSON em uma migração própria.
