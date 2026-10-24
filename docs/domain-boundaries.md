@@ -27,8 +27,10 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
   ciclo de tentativa, conciliação de versão e resultado parcial da gravação geral
   está em `domains/sync/projectSaveAttempt.ts`; a fila, os rascunhos e os indicadores
   permanecem coordenados por `Index.tsx`. O canal Realtime está em
-  `domains/sync/projectRealtimeChannel.ts`; rota e sessão
-  visual estão em `lib/appUiSession.ts`.
+  `domains/sync/projectRealtimeChannel.ts`; as rotas e o formato da sessão
+  visual estão em `lib/appUiSession.ts`. O hook
+  `domains/navigation/useProjectUiSession.ts` salva e restaura aba e rolagem
+  por obra, sem acionar a persistência do projeto.
 - Troca, criação/importação, renomeação, duplicação e exclusão de obras ficam em
   `domains/sync/projectLifecycle.ts`. A barreira de navegação do `Index.tsx`
   continua aguardando gravações pendentes antes de executar esses comandos.
@@ -81,12 +83,12 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
 
 ## Arquivos extensos e próximos recortes
 
-Contagem de referência em 21/10/2026; `Index.tsx` atualizado em 23/10/2026 (linhas físicas):
+Contagem de referência em 21/10/2026; `Index.tsx` atualizado em 24/10/2026 (linhas físicas):
 
 | Arquivo | Linhas | Recorte funcional seguinte |
 | --- | ---: | --- |
 | `lib/warehouse.ts` | 5.100 | Separar nota fiscal, requisição/devolução, inventário, cautela e projeções de estoque, mantendo a API pública. |
-| `pages/Index.tsx` | 1.986 | Prosseguir com Desfazer e comandos específicos por área. O salvamento e a recuperação de rascunhos do Diário agora ficam no domínio próprio. |
+| `pages/Index.tsx` | 1.885 | Prosseguir com a coordenação da navegação e com os comandos específicos por área. A sessão visual e o salvamento do Diário ficam em seus próprios módulos. |
 | `components/GanttChart.tsx` | 3.087 | Separar estado de filtros, grade temporal, edição de barras, calendário e comandos. |
 | `lib/projectSync.ts` | 2.009 | Separar hidratação, snapshots e comandos normalizados por domínio. |
 | `components/TaskList.tsx` | 1.692 | Separar lista visual, edição de produção e lançamento de quantitativos. |
