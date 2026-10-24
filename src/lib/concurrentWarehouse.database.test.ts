@@ -30,7 +30,8 @@ beforeAll(async()=>{
     '20260912233000_scoped_warehouse_commits.sql','20261016120000_concurrent_field_merge.sql','20261016121000_concurrent_warehouse_fields.sql',
     '20261016123000_concurrent_requisition_receipts.sql','20261016130000_concurrent_audit_stamps.sql',
     '20260914120000_atomic_supplement_corrections.sql','20260916120000_operational_requisition_corrections_and_cancellations.sql',
-    '20261020090000_allow_negative_requisition_stock.sql']) {
+    '20261020090000_allow_negative_requisition_stock.sql',
+    '20261024203000_warehouse_project_state_shadow.sql']) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8'));
   }
 },20000);
@@ -47,6 +48,16 @@ async function commit(domain:string,key:string,payload:unknown) {
 }
 const item=(key:string,description:string,unit='un')=>({key,description,unit});
 const catalog=(before:unknown,after:unknown,id='a')=>changes({items:{records:{identity:'key',upserts:[{id,expected:before,row:after}],deletes:[]}}});
+
+it('mantém a projeção separada consistente após uma RPC de catálogo', async () => {
+  const confirmed = await commit('catalog', 'shadow-catalog', catalog(item('a', 'A'), item('a', 'Atualizado')));
+  const { rows } = await db.query<{ state_json: { items: unknown[] }; warehouse_version: number }>(
+    'SELECT state_json, warehouse_version FROM public.warehouse_project_state WHERE project_id = $1', [project],
+  );
+  expect(rows[0].state_json.items).toEqual([item('a', 'Atualizado'), item('b', 'B')]);
+  expect(rows[0].warehouse_version).toBe(confirmed.warehouseVersion);
+  expect(rows[0].state_json).not.toHaveProperty('movements');
+});
 
 it('mescla reordenação com campo independente e recusa ordens incompatíveis', async () => {
   const base = [item('a','A'),item('b','B'),item('c','C')];
