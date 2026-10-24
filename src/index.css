@@ -4,6 +4,23 @@
 @tailwind components;
 @tailwind utilities;
 
+@keyframes dashboard-enter {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes sidebar-indicator-enter {
+  from { opacity: 0; transform: scaleY(0.65); }
+  to { opacity: 1; transform: scaleY(1); }
+}
+
+.dashboard-enter { animation: dashboard-enter 300ms ease-out both; }
+.sidebar-active-indicator { animation: sidebar-indicator-enter 180ms ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-enter, .sidebar-active-indicator { animation: none; }
+}
+
 @layer utilities {
   /* Legibilidade mínima institucional: textos auxiliares não usam microfontes. */
   .text-\[8px\],

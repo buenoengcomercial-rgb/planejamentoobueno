@@ -1,6 +1,5 @@
 import { AppView } from '@/types/project';
 import { LayoutDashboard, GanttChart, ListTodo, ClipboardList, ChevronsLeft, ChevronsRight, FolderOpen, Plus, ChevronDown, ChevronRight, Pencil, Copy, Trash2, Check, X, MoreHorizontal, Download, Upload, FileDown, Building2, Users, NotebookPen, FilePlus2, CircleDollarSign, Package, Warehouse, CalendarClock, LogOut } from 'lucide-react';
-import { motion } from 'framer-motion';
 import { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { listProjects, ProjectMeta } from '@/lib/projectStorage';
@@ -575,11 +574,7 @@ export default function AppSidebar({ currentView, onViewChange, projectName, col
                       aria-current={isActive ? 'page' : undefined}
                     >
                       {isActive && (
-                        <motion.span
-                          layoutId="sidebar-active-indicator"
-                          className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-white"
-                          transition={{ type: 'spring', stiffness: 380, damping: 32 }}
-                        />
+                        <span aria-hidden="true" className="sidebar-active-indicator absolute inset-y-2 left-0 w-0.5 rounded-full bg-white" />
                       )}
                       <Icon className={`h-[18px] w-[18px] shrink-0 ${isActive ? 'text-white' : 'text-[hsl(var(--sidebar-fg))]/55 group-hover:text-white'}`} strokeWidth={isActive ? 2.2 : 1.8} />
                       {!collapsed && <span className="ml-3 min-w-0 flex-1 truncate text-sm font-medium">{label}</span>}
