@@ -25,6 +25,7 @@ import { checkProjectRemoteVersion } from '@/domains/sync/projectRemoteVersionCh
 import { subscribeProjectVersionMonitor } from '@/domains/sync/projectVersionMonitor';
 import { useProjectAutoSave } from '@/domains/sync/useProjectAutoSave';
 import { useProjectCollectionTracker } from '@/domains/sync/useProjectCollectionTracker';
+import { useProtectedProjectDrafts } from '@/domains/sync/useProtectedProjectDrafts';
 import { confirmAreaHydration, hydrateAreaCollections, planAreaHydration } from '@/domains/sync/areaHydration';
 import { includePendingDraftCollections, loadInitialProject } from '@/domains/sync/projectBootstrap';
 import { useProjectRealtimeRefresh } from '@/domains/sync/useProjectRealtimeRefresh';
@@ -88,15 +89,11 @@ import {
   type CloudProjectVersion,
 } from '@/lib/cloudProjects';
 import {
-  clearProjectDraft,
-  createProjectDraft,
   inspectProjectDraft,
   projectHasLocalChanges,
   readStoredProjectDraft,
   serializeProject,
-  writeProjectDraft,
 } from '@/lib/cloudProjectDraftCore';
-import { supportsIndexedDbDrafts, writeIndexedDbProjectDraft } from '@/lib/cloudDraftIndexedDb';
 import type { ProjectMeta } from '@/lib/projectStorage';
 import { supabase } from '@/integrations/supabase/client';
 import { saveOpenDailyReport } from '@/lib/dailyReportCloudSync';
@@ -124,8 +121,6 @@ import {
   type ProjectCollectionKey,
   type WarehouseTab,
 } from '@/lib/projectDataScope';
-
-const LOCAL_DRAFT_DEBOUNCE_MS = 900;
 
 const NEXT_VIEW_PRELOAD: Record<AppView, { view: AppView; load: () => Promise<unknown> }> = {
   dashboard: { view: 'management', load: loadManagementRoutine },
@@ -237,8 +232,6 @@ export default function Index() {
   const saveRetryProjectJsonRef = useRef<string | null>(null);
   const partialSyncRetryAttemptRef = useRef(0);
   const partialSyncRetryableRef = useRef(false);
-  const draftWriteTimerRef = useRef<number | null>(null);
-  const pendingDraftRef = useRef<{ project: Project; baseUpdatedAt: string | null } | null>(null);
   const initialLoadRef = useRef(false);
   const inFlightSaveRef = useRef<Promise<void> | null>(null);
   const warehouseClientOperationInFlightRef = useRef<Promise<unknown> | null>(null);
@@ -303,43 +296,13 @@ export default function Index() {
   const remover = role ? canDeleteProject(role) : false;
   const restrictedFallbackView: AppView = role ? getRestrictedFallbackView(role) : 'gantt';
 
-  const cancelScheduledDraft = useCallback((projectId?: string) => {
-    const pending = pendingDraftRef.current;
-    if (!pending || (projectId && pending.project.id !== projectId)) return;
-    if (draftWriteTimerRef.current) window.clearTimeout(draftWriteTimerRef.current);
-    draftWriteTimerRef.current = null;
-    pendingDraftRef.current = null;
-  }, []);
-
-  const writeProtectedProjectDraft = useCallback((project: Project, baseUpdatedAt: string | null) => {
-    const partial = partialSyncPendingRef.current?.projectId === project.id
-      ? partialSyncPendingRef.current
-      : null;
-    const loadedCollections = partial?.loadedCollections ?? getLoadedProjectCollections(project.id);
-    const stored = writeProjectDraft(project, baseUpdatedAt, undefined, partial ? {
-      pendingNormalizedSync: true,
-      loadedCollections,
-    } : { loadedCollections });
-    if (!stored && supportsIndexedDbDrafts()) {
-      const candidate = createProjectDraft(project, baseUpdatedAt, partial ? {
-        pendingNormalizedSync: true, loadedCollections,
-      } : { loadedCollections });
-      void writeIndexedDbProjectDraft(candidate).then(confirmed => {
-        if (!confirmed) return;
-        const current = partialSyncPendingRef.current;
-        if (current?.projectId === project.id && !current.draftProtected) {
-          partialSyncPendingRef.current = { ...current, draftProtected: true };
-          setPartialSyncIssue({ projectId: project.id, draftProtected: true });
-        }
-        if (conflictDetectedRef.current && rawProjectRef.current?.id === project.id) setSaveStatus('conflict');
-      });
-    }
-    if (partial && stored && !partial.draftProtected) {
-      partialSyncPendingRef.current = { ...partial, draftProtected: true };
-      setPartialSyncIssue({ projectId: project.id, draftProtected: true });
-    }
-    return stored;
-  }, []);
+  const {
+    pendingDraftRef, cancelScheduledDraft, writeProtectedProjectDraft,
+    scheduleProjectDraft, discardProjectDraft,
+  } = useProtectedProjectDrafts({
+    partialSyncPendingRef, conflictDetectedRef, rawProjectRef,
+    setPartialSyncIssue, setSaveStatus,
+  });
 
   const mergeConfirmedDailyReportIntoPartialSync = useCallback((
     projectId: string,
@@ -358,42 +321,6 @@ export default function Index() {
     }
   }, [writeProtectedProjectDraft]);
 
-  const scheduleProjectDraft = useCallback((nextProject: Project, baseUpdatedAt: string | null) => {
-    const pending = pendingDraftRef.current;
-    if (pending && pending.project.id !== nextProject.id) {
-      if (draftWriteTimerRef.current) window.clearTimeout(draftWriteTimerRef.current);
-      writeProtectedProjectDraft(pending.project, pending.baseUpdatedAt);
-    }
-    if (draftWriteTimerRef.current) window.clearTimeout(draftWriteTimerRef.current);
-    pendingDraftRef.current = { project: nextProject, baseUpdatedAt };
-    draftWriteTimerRef.current = window.setTimeout(() => {
-      const draft = pendingDraftRef.current;
-      draftWriteTimerRef.current = null;
-      pendingDraftRef.current = null;
-      if (draft) {
-        if (!supportsIndexedDbDrafts()) {
-          writeProtectedProjectDraft(draft.project, draft.baseUpdatedAt);
-          return;
-        }
-        const partial = partialSyncPendingRef.current?.projectId === draft.project.id
-          ? partialSyncPendingRef.current : null;
-        const candidate = createProjectDraft(draft.project, draft.baseUpdatedAt, {
-          pendingNormalizedSync: !!partial,
-          loadedCollections: partial?.loadedCollections ?? getLoadedProjectCollections(draft.project.id),
-        });
-        void writeIndexedDbProjectDraft(candidate).then(confirmed => {
-          if (!confirmed) writeProtectedProjectDraft(draft.project, draft.baseUpdatedAt);
-        });
-      }
-    }, LOCAL_DRAFT_DEBOUNCE_MS);
-  }, [writeProtectedProjectDraft]);
-
-  const discardProjectDraft = useCallback((projectId: string) => {
-    cancelScheduledDraft(projectId);
-    clearProjectDraft(projectId);
-  }, [cancelScheduledDraft]);
-
-  useEffect(() => () => cancelScheduledDraft(), [cancelScheduledDraft]);
   const safeCurrentView: AppView = role && !canAccessAppView(role, currentView) ? restrictedFallbackView : currentView;
   const allowedViews = role ? APP_VIEWS.filter(view => canAccessAppView(role, view)) : undefined;
   const requiredProjectCollections = useMemo(
