@@ -118,19 +118,22 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
     itensPendentes: row.pendingItemsCount,
   })), [costUsageRows]);
 
-  const chapterTree = useMemo(() => getChapterTree(project), [project]);
-  const chapterNumbering = useMemo(() => getChapterNumbering(project), [project]);
-  const phaseData = useMemo(() => chapterTree.map(node => {
-    const all = getChapterTasks(project, node.phase.id);
-    const progresso = all.length
-      ? Math.round(all.reduce((s, t) => s + t.percentComplete, 0) / all.length)
-      : 0;
-    const label = `${chapterNumbering.get(node.phase.id)} ${node.phase.name}`;
-    return {
-      name: label.length > 14 ? `${label.slice(0, 14)}...` : label,
-      progresso,
-    };
-  }), [chapterTree, chapterNumbering, project]);
+  const phaseData = useMemo(() => {
+    if (!chartsReady) return [];
+    const chapterTree = getChapterTree(project);
+    const chapterNumbering = getChapterNumbering(project);
+    return chapterTree.map(node => {
+      const all = getChapterTasks(project, node.phase.id);
+      const progresso = all.length
+        ? Math.round(all.reduce((s, t) => s + t.percentComplete, 0) / all.length)
+        : 0;
+      const label = `${chapterNumbering.get(node.phase.id)} ${node.phase.name}`;
+      return {
+        name: label.length > 14 ? `${label.slice(0, 14)}...` : label,
+        progresso,
+      };
+    });
+  }, [chartsReady, project]);
 
   const statusData = [
     { name: 'Concluido', value: completedTasks, color: 'hsl(152, 60%, 42%)' },
@@ -138,8 +141,8 @@ export default function Dashboard({ project, undoButton }: DashboardProps) {
     { name: 'Atrasado', value: delayedTasks, color: 'hsl(0, 72%, 51%)' },
   ].filter(d => d.value > 0);
 
-  const curvaS = generateCurvaS(project);
-  const optimizations = suggestOptimizations(project);
+  const curvaS = useMemo(() => chartsReady ? generateCurvaS(project) : [], [chartsReady, project]);
+  const optimizations = useMemo(() => suggestOptimizations(project), [project]);
 
   const cards = [
     { label: 'Progresso Geral', value: `${overallProgress}%`, icon: TrendingUp, color: 'text-primary' },
