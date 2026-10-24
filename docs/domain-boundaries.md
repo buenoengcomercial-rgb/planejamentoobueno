@@ -25,8 +25,11 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
   `domains/sync/projectBootstrap.ts`. O agendamento, retry e tratamento inicial do autosave geral
   estão em `domains/sync/useProjectAutoSave.ts`, sem depender da aba visível. O
   ciclo de tentativa, conciliação de versão e resultado parcial da gravação geral
-  está em `domains/sync/projectSaveAttempt.ts`; a fila, os rascunhos e os indicadores
-  permanecem coordenados por `Index.tsx`. O canal Realtime está em
+  está em `domains/sync/projectSaveAttempt.ts`; a fila, a recuperação de conflitos
+  e os indicadores permanecem coordenados por `Index.tsx`. O agendamento e a
+  proteção local de rascunhos gerais ficam em
+  `domains/sync/useProtectedProjectDrafts.ts`, inclusive o fallback do IndexedDB.
+  O canal Realtime está em
   `domains/sync/projectRealtimeChannel.ts`; as rotas e o formato da sessão
   visual estão em `lib/appUiSession.ts`. O hook
   `domains/navigation/useProjectUiSession.ts` salva e restaura aba e rolagem
@@ -90,7 +93,7 @@ Contagem de referência em 21/10/2026; `Index.tsx` atualizado em 24/10/2026 (lin
 | Arquivo | Linhas | Recorte funcional seguinte |
 | --- | ---: | --- |
 | `lib/warehouse.ts` | 5.100 | Separar nota fiscal, requisição/devolução, inventário, cautela e projeções de estoque, mantendo a API pública. |
-| `pages/Index.tsx` | 1.842 | Prosseguir com os comandos específicos por área e a recuperação de rascunhos gerais. Rota, sessão visual e salvamento do Diário ficam em seus próprios módulos. |
+| `pages/Index.tsx` | 1.769 | Prosseguir com os comandos específicos por área e a recuperação de conflitos gerais. Rota, sessão visual, agendamento de rascunhos e salvamento do Diário ficam em seus próprios módulos. |
 | `components/GanttChart.tsx` | 3.087 | Separar estado de filtros, grade temporal, edição de barras, calendário e comandos. |
 | `lib/projectSync.ts` | 2.009 | Separar hidratação, snapshots e comandos normalizados por domínio. |
 | `components/TaskList.tsx` | 1.692 | Separar lista visual, edição de produção e lançamento de quantitativos. |
