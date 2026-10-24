@@ -7,7 +7,7 @@ import { useWarehouseOperationCoordinator } from '@/domains/warehouse/useWarehou
 import { createProjectViewSetter } from '@/domains/project/projectViewEditCommands';
 import type { ProductionCaptureChange } from '@/lib/planTakeoff';
 import { syncProductionAtomically, stripNormalizedCollections } from '@/lib/projectSync';
-import { applyProjectOperation, auditProjectReversal } from '@/lib/projectOperations';
+import { applyProjectOperation } from '@/lib/projectOperations';
 import { scopeKey } from '@/lib/planTakeoff';
 import { OpeningError } from '@/components/OpeningError';
 import { useState, useMemo, useEffect, useDeferredValue, useCallback, useRef, Suspense } from 'react';
@@ -43,13 +43,13 @@ import { cloudRetryDelay, isTransientCloudError } from '@/lib/cloudRetry';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { scheduleIdlePreload } from '@/lib/idlePreload';
-import { applyUndoOperation, createUndoOperation, type UndoOperation } from '@/lib/operationUndo';
-import { auditUndoProductionDeletions, assertProductionDeletionSafe, productionDeletionState } from '@/lib/productionDeletionSafety';
+import { canUndoProjectChange, emptyUndoStacks, recordProjectUndo, undoProjectChange, type UndoStacks } from '@/domains/project/projectUndoController';
+import { assertProductionDeletionSafe, productionDeletionState } from '@/lib/productionDeletionSafety';
 import type { DailyReportDraft } from '@/lib/dailyReportDrafts';
 import DailyReportDraftRecovery from '@/components/DailyReportDraftRecovery';
 import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } from '@/lib/workStartDate';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
-import { logToProject, userInfoFromSupabaseUser } from '@/lib/audit';
+import { userInfoFromSupabaseUser } from '@/lib/audit';
 import { todayISO } from '@/lib/weeklyRoutine';
 import { APP_VIEWS, ROUTE_VIEW, VIEW_ROUTE, readAppUiSession, readInitialView, writeAppUiSession } from '@/lib/appUiSession';
 
@@ -123,7 +123,6 @@ import {
   type WarehouseTab,
 } from '@/lib/projectDataScope';
 
-const UNDO_LIMIT = 20;
 const LOCAL_DRAFT_DEBOUNCE_MS = 900;
 
 const NEXT_VIEW_PRELOAD: Record<AppView, { view: AppView; load: () => Promise<unknown> }> = {
@@ -139,8 +138,6 @@ const NEXT_VIEW_PRELOAD: Record<AppView, { view: AppView; load: () => Promise<un
   materials: { view: 'warehouse', load: loadWarehouse },
   warehouse: { view: 'materials', load: loadMaterials },
 };
-
-type UndoStacks = Record<AppView, UndoOperation[]>;
 
 export default function Index() {
   const { user, loading: authLoading, error: authError, reload: reloadAuth, signOut } = useAuth();
@@ -228,7 +225,7 @@ export default function Index() {
     });
   }, [navigate, openAfterPendingFormCheck]);
 
-  const undoStacksRef = useRef<UndoStacks>({ dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] });
+  const undoStacksRef = useRef<UndoStacks>(emptyUndoStacks());
   const [undoVersion, setUndoVersion] = useState(0);
   const rawProjectRef = useRef<Project | null>(null);
   const productionCaptureBusyRef = useRef(false);
@@ -1463,9 +1460,7 @@ export default function Index() {
 
     const previous = rawProjectRef.current;
     if (previous) {
-      const stack = undoStacksRef.current.warehouse;
-      stack.push(createUndoOperation(previous, synchronized));
-      if (stack.length > UNDO_LIMIT) stack.shift();
+      recordProjectUndo(undoStacksRef.current, 'warehouse', previous, synchronized);
     }
     skipNextAutoSaveRef.current = true;
     rawProjectRef.current = synchronized;
@@ -1614,39 +1609,15 @@ export default function Index() {
   }, [commitWarehouseScopedNow, prepareWarehouseCloudOperation, role, runCriticalWarehouseClientOperation]);
 
   const handleUndo = useCallback((view: AppView) => {
-    if (productionCaptureBusyRef.current) { toast.error('Aguarde a captura em andamento antes de desfazer.'); return; }
-    if (conflictDetectedRef.current) {
-      toast.error('Resolva a divergência entre a cópia local e a nuvem antes de desfazer.');
-      return;
-    }
-    if (partialSyncPendingRef.current?.projectId === rawProjectRef.current?.id) {
-      toast.error('A sincronização detalhada ainda está pendente. Confirme-a antes de desfazer.');
-      return;
-    }
-    const stack = undoStacksRef.current[view];
-    if (stack.length === 0) { toast.message('Nada para desfazer'); return; }
-    const operation = stack[stack.length - 1];
-    const current = rawProjectRef.current;
-    if (!operation || !current) return;
-    // Warehouse reversals must use their specialized audited operations.
-    if (view === 'warehouse' || view === 'dailyReport') {
-      toast.warning('Use a correção ou o cancelamento específico desta área para preservar o histórico.');
-      return;
-    }
-    try {
-      let next = auditUndoProductionDeletions(current, applyUndoOperation(current, operation), auditActor);
-      next = auditProjectReversal(current, next, auditActor);
-      next = logToProject(next, { ...auditActor, entityType: 'project', entityId: current.id, action: 'updated', title: 'Operação desfeita', metadata: { view, changedFields: operation.changes.map(change => change.path) } });
-      assertProductionDeletionSafe(productionDeletionState(current), productionDeletionState(next), current);
-      markLocalProjectChanges(current, next);
-      writeProtectedProjectDraft(next, currentProjectUpdatedAtRef.current);
-      stack.pop(); rawProjectRef.current = next; setRawProject(next);
-      setUndoVersion(v => v + 1);
-      toast.success('Alteração desfeita');
-    } catch (error) { toast.error(error instanceof Error ? error.message : 'Não foi possível desfazer com segurança.'); }
+    undoProjectChange(view, {
+      undoStacksRef, rawProjectRef, productionCaptureBusyRef, conflictDetectedRef,
+      partialSyncPendingRef, currentProjectUpdatedAtRef, auditActor,
+      markLocalProjectChanges, writeProtectedProjectDraft, setRawProject,
+      markUndoChanged: () => setUndoVersion(v => v + 1),
+    });
   }, [writeProtectedProjectDraft, auditActor, markLocalProjectChanges]);
 
-  const canUndo = (view: AppView) => view !== 'warehouse' && view !== 'dailyReport' && undoStacksRef.current[view].length > 0;
+  const canUndo = (view: AppView) => canUndoProjectChange(undoStacksRef.current, view);
   void undoVersion;
 
   const {
@@ -1669,7 +1640,7 @@ export default function Index() {
       setDraftProjectForImport(null);
     },
     resetUndo: () => {
-      undoStacksRef.current = { dashboard: [], management: [], gantt: [], tasks: [], measurement: [], dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [] };
+      undoStacksRef.current = emptyUndoStacks();
     },
     markUndoChanged: () => setUndoVersion(v => v + 1),
   });
