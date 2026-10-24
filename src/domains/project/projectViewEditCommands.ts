@@ -4,10 +4,8 @@ import type { AppView, Project } from '@/types/project';
 import type { OrgRole } from '@/lib/organizations';
 import { applyProjectOperation } from '@/lib/projectOperations';
 import { serializeProject } from '@/lib/cloudProjectDraftCore';
-import { createUndoOperation, type UndoOperation } from '@/lib/operationUndo';
+import { recordProjectUndo, type UndoStacks } from './projectUndoController';
 import { assertProductionDeletionSafe, productionDeletionState } from '@/lib/productionDeletionSafety';
-
-const UNDO_LIMIT = 20;
 
 export interface ProjectViewEditContext {
   /** The projection used by the rendered area before a concurrent update. */
@@ -22,7 +20,7 @@ export interface ProjectViewEditContext {
   partialSyncPendingRef: MutableRefObject<{ projectId: string } | null>;
   lastSavedProjectJsonRef: MutableRefObject<string | null>;
   currentProjectUpdatedAtRef: MutableRefObject<string | null>;
-  undoStacksRef: MutableRefObject<Record<AppView, UndoOperation[]>>;
+  undoStacksRef: MutableRefObject<UndoStacks>;
   setRawProject: Dispatch<SetStateAction<Project | null>>;
   setUndoVersion: Dispatch<SetStateAction<number>>;
   markLocalProjectChanges: (before: Project, after: Project) => void;
@@ -89,9 +87,7 @@ export function createProjectViewSetter(view: AppView, context: ProjectViewEditC
         return prev;
       }
       markLocalProjectChanges(prev, resolved);
-      const stack = undoStacksRef.current[view];
-      stack.push(createUndoOperation(prev, resolved));
-      if (stack.length > UNDO_LIMIT) stack.shift();
+      recordProjectUndo(undoStacksRef.current, view, prev, resolved);
       rawProjectRef.current = resolved;
       if (view === 'dailyReport') {
         saveDailyReportDirectly(prev, resolved);
