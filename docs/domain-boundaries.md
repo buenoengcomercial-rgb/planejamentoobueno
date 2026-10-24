@@ -30,7 +30,9 @@ recebida pela interface não autoriza a substituir as coleções dessas áreas.
   `domains/sync/projectRealtimeChannel.ts`; as rotas e o formato da sessão
   visual estão em `lib/appUiSession.ts`. O hook
   `domains/navigation/useProjectUiSession.ts` salva e restaura aba e rolagem
-  por obra, sem acionar a persistência do projeto.
+  por obra, sem acionar a persistência do projeto. A sincronização da URL com
+  a aba, os atalhos do Diário e a trava de retorno durante operações do
+  Almoxarifado ficam em `domains/navigation/useProjectRouteCoordinator.ts`.
 - Troca, criação/importação, renomeação, duplicação e exclusão de obras ficam em
   `domains/sync/projectLifecycle.ts`. A barreira de navegação do `Index.tsx`
   continua aguardando gravações pendentes antes de executar esses comandos.
@@ -88,7 +90,7 @@ Contagem de referência em 21/10/2026; `Index.tsx` atualizado em 24/10/2026 (lin
 | Arquivo | Linhas | Recorte funcional seguinte |
 | --- | ---: | --- |
 | `lib/warehouse.ts` | 5.100 | Separar nota fiscal, requisição/devolução, inventário, cautela e projeções de estoque, mantendo a API pública. |
-| `pages/Index.tsx` | 1.885 | Prosseguir com a coordenação da navegação e com os comandos específicos por área. A sessão visual e o salvamento do Diário ficam em seus próprios módulos. |
+| `pages/Index.tsx` | 1.842 | Prosseguir com os comandos específicos por área e a recuperação de rascunhos gerais. Rota, sessão visual e salvamento do Diário ficam em seus próprios módulos. |
 | `components/GanttChart.tsx` | 3.087 | Separar estado de filtros, grade temporal, edição de barras, calendário e comandos. |
 | `lib/projectSync.ts` | 2.009 | Separar hidratação, snapshots e comandos normalizados por domínio. |
 | `components/TaskList.tsx` | 1.692 | Separar lista visual, edição de produção e lançamento de quantitativos. |

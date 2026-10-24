@@ -17,6 +17,7 @@ import { AppView, DailyReport, Project, WarehouseRequisition } from '@/types/pro
 import AppSidebar from '@/components/AppSidebar';
 import ProjectAreaContent from '@/domains/navigation/ProjectAreaContent';
 import { useProjectUiSession } from '@/domains/navigation/useProjectUiSession';
+import { useProjectRouteCoordinator } from '@/domains/navigation/useProjectRouteCoordinator';
 import { flushPendingProjectSave, navigateToProjectView, runProtectedProjectNavigation } from '@/domains/navigation/projectNavigationGuard';
 import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import { subscribeProjectRemoteSignals } from '@/domains/sync/projectRemoteSignals';
@@ -52,7 +53,7 @@ import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } fr
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
 import { userInfoFromSupabaseUser } from '@/lib/audit';
 import { todayISO } from '@/lib/weeklyRoutine';
-import { APP_VIEWS, ROUTE_VIEW, VIEW_ROUTE, readAppUiSession, readInitialView } from '@/lib/appUiSession';
+import { APP_VIEWS, readAppUiSession, readInitialView } from '@/lib/appUiSession';
 
 // Lazy load: cada aba só baixa seu bundle quando aberta pela primeira vez.
 // Usa lazyWithReload para recuperar automaticamente de chunks obsoletos após deploy.
@@ -434,57 +435,13 @@ export default function Index() {
     if (!authLoading && !authError && !user) navigate('/auth', { replace: true });
   }, [authLoading, authError, user, navigate]);
 
-  useEffect(() => {
-    const requestedView = routeView ? ROUTE_VIEW[routeView] : undefined;
-    const routedView = requestedView && role && !canAccessAppView(role, requestedView)
-      ? restrictedFallbackView
-      : requestedView;
-    const lockedWarehouseRoute = warehouseLockedRouteRef.current;
-    const browserRoute = `${location.pathname}${location.search}`;
-    if (lockedWarehouseRoute && browserRoute !== lockedWarehouseRoute) {
-      navigate(lockedWarehouseRoute, { replace: true });
-      toast.warning('Aguarde a confirmação da operação do Almoxarifado na nuvem.');
-      return;
-    }
-    if (routedView) setCurrentView(previous => previous === routedView ? previous : routedView);
-    if (routedView === 'dailyReport') {
-      const date = new URLSearchParams(location.search).get('data') || undefined;
-      if (date) {
-        setDailyReportInitialDate(date);
-        setDailyReportNavKey(key => key + 1);
-      } else {
-        // Um acesso comum ao Diário não deve herdar o filtro de uma visita
-        // anterior feita pelo atalho da Medição.
-        setDailyReportInitialFilter(undefined);
-      }
-      setProductionWorkspaceInitialTab('dailyReport');
-    }
-  }, [routeView, location.pathname, location.search, navigate, role, restrictedFallbackView]);
-
-  useEffect(() => {
-    const restoreWarehouseRoute = () => {
-      const lockedWarehouseRoute = warehouseLockedRouteRef.current;
-      if (!lockedWarehouseRoute) return;
-      navigate(lockedWarehouseRoute, { replace: true });
-      toast.warning('Aguarde a confirmação da operação do Almoxarifado na nuvem.');
-    };
-    window.addEventListener('popstate', restoreWarehouseRoute);
-    return () => window.removeEventListener('popstate', restoreWarehouseRoute);
-  }, [navigate]);
-
-  useEffect(() => {
-    if (role && !canAccessAppView(role, currentView)) setCurrentView(restrictedFallbackView);
-  }, [currentView, restrictedFallbackView, role]);
-
-  useEffect(() => {
-    if (!rawProject?.id) return;
-    const route = `/obras/${rawProject.id}/${VIEW_ROUTE[safeCurrentView]}`;
-    const keepSearch = safeCurrentView === 'management'
-      || safeCurrentView === 'dailyReport'
-      || (safeCurrentView === 'tasks' && new URLSearchParams(location.search).has('atividade'));
-    const target = `${route}${keepSearch ? location.search : ''}`;
-    if (`${location.pathname}${location.search}` !== target) navigate(target, { replace: true });
-  }, [safeCurrentView, location.pathname, location.search, navigate, rawProject?.id]);
+  useProjectRouteCoordinator({
+    routeView, pathname: location.pathname, search: location.search, navigate,
+    role, restrictedFallbackView, currentView, safeCurrentView,
+    projectId: rawProject?.id ?? null, warehouseLockedRouteRef,
+    setCurrentView, setDailyReportInitialDate, setDailyReportInitialFilter,
+    setDailyReportNavKey, setProductionWorkspaceInitialTab,
+  });
 
   useProjectUiSession({
     projectId: rawProject?.id ?? null,
