@@ -16,6 +16,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AppView, DailyReport, Project, WarehouseRequisition } from '@/types/project';
 import AppSidebar from '@/components/AppSidebar';
 import ProjectAreaContent from '@/domains/navigation/ProjectAreaContent';
+import { useProjectUiSession } from '@/domains/navigation/useProjectUiSession';
 import { flushPendingProjectSave, navigateToProjectView, runProtectedProjectNavigation } from '@/domains/navigation/projectNavigationGuard';
 import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import { subscribeProjectRemoteSignals } from '@/domains/sync/projectRemoteSignals';
@@ -51,7 +52,7 @@ import { getMeasurementWorkStartDate, synchronizeProjectScheduleToWorkStart } fr
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
 import { userInfoFromSupabaseUser } from '@/lib/audit';
 import { todayISO } from '@/lib/weeklyRoutine';
-import { APP_VIEWS, ROUTE_VIEW, VIEW_ROUTE, readAppUiSession, readInitialView, writeAppUiSession } from '@/lib/appUiSession';
+import { APP_VIEWS, ROUTE_VIEW, VIEW_ROUTE, readAppUiSession, readInitialView } from '@/lib/appUiSession';
 
 // Lazy load: cada aba só baixa seu bundle quando aberta pela primeira vez.
 // Usa lazyWithReload para recuperar automaticamente de chunks obsoletos após deploy.
@@ -289,8 +290,6 @@ export default function Index() {
   } | null>(null);
   const [realtimeConnected, setRealtimeConnected] = useState(false);
   const mainScrollRef = useRef<HTMLElement | null>(null);
-  const restoredUiSessionRef = useRef<string | null>(null);
-  const uiSessionSaverReadyRef = useRef<string | null>(null);
 
   const orgId = membership?.organization.id;
   const role = membership?.role;
@@ -487,81 +486,10 @@ export default function Index() {
     if (`${location.pathname}${location.search}` !== target) navigate(target, { replace: true });
   }, [safeCurrentView, location.pathname, location.search, navigate, rawProject?.id]);
 
-  useEffect(() => {
-    if (!rawProject?.id) return;
-    if (uiSessionSaverReadyRef.current !== rawProject.id) {
-      uiSessionSaverReadyRef.current = rawProject.id;
-      return;
-    }
-
-    writeAppUiSession({
-      projectId: rawProject.id,
-      view: currentView,
-      mainScrollTop: mainScrollRef.current?.scrollTop ?? 0,
-      mainScrollLeft: mainScrollRef.current?.scrollLeft ?? 0,
-      windowScrollX: window.scrollX,
-      windowScrollY: window.scrollY,
-    });
-  }, [currentView, rawProject?.id]);
-
-  useEffect(() => {
-    const projectId = rawProject?.id;
-    if (!projectId) return;
-
-    let rafId = 0;
-    const persistScroll = () => {
-      if (rafId) return;
-      rafId = window.requestAnimationFrame(() => {
-        rafId = 0;
-        writeAppUiSession({
-          projectId,
-          view: currentView,
-          mainScrollTop: mainScrollRef.current?.scrollTop ?? 0,
-          mainScrollLeft: mainScrollRef.current?.scrollLeft ?? 0,
-          windowScrollX: window.scrollX,
-          windowScrollY: window.scrollY,
-        });
-      });
-    };
-
-    const main = mainScrollRef.current;
-    window.addEventListener('scroll', persistScroll, { passive: true });
-    main?.addEventListener('scroll', persistScroll, { passive: true });
-    return () => {
-      if (rafId) window.cancelAnimationFrame(rafId);
-      window.removeEventListener('scroll', persistScroll);
-      main?.removeEventListener('scroll', persistScroll);
-    };
-  }, [currentView, rawProject?.id]);
-
-  const restoreProjectId = rawProject?.id;
-  useEffect(() => {
-    if (bootLoading || !restoreProjectId) return;
-    const session = readAppUiSession();
-    if (!session || (session.projectId && session.projectId !== restoreProjectId)) return;
-    const restoreKey = `${restoreProjectId}:${session.view ?? 'none'}:${session.updatedAt}`;
-    if (restoredUiSessionRef.current === restoreKey) return;
-
-    if (!routeView && session.view && session.view !== currentView && (!role || canAccessAppView(role, session.view))) {
-      setCurrentView(session.view);
-      return;
-    }
-
-    restoredUiSessionRef.current = restoreKey;
-    // O preview pode remontar o iframe ao voltar de outro app. Esta restauração
-    // devolve a tela para o mesmo ponto visual sem buscar a obra de novo na nuvem.
-    window.requestAnimationFrame(() => {
-      if (typeof session.windowScrollX === 'number' || typeof session.windowScrollY === 'number') {
-        window.scrollTo(session.windowScrollX ?? 0, session.windowScrollY ?? 0);
-      }
-      if (mainScrollRef.current) {
-        mainScrollRef.current.scrollTo({
-          left: session.mainScrollLeft ?? 0,
-          top: session.mainScrollTop ?? 0,
-        });
-      }
-    });
-  }, [bootLoading, currentView, restoreProjectId, role, routeView]);
+  useProjectUiSession({
+    projectId: rawProject?.id ?? null,
+    currentView, setCurrentView, routeView, role, bootLoading, mainScrollRef,
+  });
 
   const refreshCloudList = useCallback(async (): Promise<CloudProjectMeta[]> => {
     const list = await listCloudProjects();
