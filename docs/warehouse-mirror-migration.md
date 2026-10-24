@@ -31,6 +31,24 @@ Levantamento do código em 24/10/2026. A primeira entrega cria `warehouse_projec
 4. **Separar a revisão.** Mover `warehouse_version` e `warehouse_updated_at` para a fonte do domínio e fazer o monitoramento observar essa revisão. Somente depois de eliminar todo `UPDATE projects` das transações exclusivas do estoque será possível deixar `projects.updated_at` estável nessas operações.
 5. **Desligar o espelho.** Após validar clientes publicados e recuperação de rascunhos, parar a dupla escrita, conservar backup reversível e então remover os leitores e gatilhos legados do JSON em uma migração própria.
 
+### Conferência da projeção na base operacional
+
+Executar com acesso administrativo depois de aplicar a primeira migração. O resultado deve ser `0` antes de trocar qualquer leitor. Esta consulta não altera dados:
+
+```sql
+SELECT count(*) AS projetos_divergentes
+FROM public.projects p
+LEFT JOIN public.warehouse_project_state s ON s.project_id = p.id
+WHERE s.project_id IS NULL
+   OR s.state_json IS DISTINCT FROM CASE
+     WHEN jsonb_typeof(p.data_json -> 'warehouse') = 'object'
+       THEN (p.data_json -> 'warehouse') - 'movements' - 'requisitions' - 'custodyTerms'
+     ELSE '{}'::jsonb
+   END
+   OR s.warehouse_version IS DISTINCT FROM p.warehouse_version
+   OR s.warehouse_updated_at IS DISTINCT FROM p.warehouse_updated_at;
+```
+
 ## Critérios antes de executar a migração
 
 - Requisição, entrada fiscal, inventário, cautela e ajuste confirmam saldo, anexos e auditoria juntos; repetição com a mesma chave não duplica a operação.
