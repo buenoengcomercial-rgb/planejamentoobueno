@@ -27,7 +27,7 @@ Levantamento do código em 24/10/2026. A primeira entrega cria `warehouse_projec
 
 1. **Criar a projeção separada do estado ainda guardado no JSON.** A migração `20261024203000_warehouse_project_state_shadow.sql` cria uma tabela por obra com os campos não normalizados e a revisão atual. Um gatilho a mantém sincronizada na mesma transação do escritor existente. A tabela ainda não é a fonte oficial; não recebe escrita direta dos clientes. Comandos próprios com as garantias atuais virão antes da troca de fonte.
 2. **Conferir a cópia inicial.** A primeira migração já copia os campos de `data_json.warehouse` para a projeção e a mantém atualizada na mesma transação. Antes de escolher a nova fonte como leitura principal, comparar por obra contagens, versões e conteúdo dos registros na base operacional. Não descartar o JSON antigo nesta etapa.
-3. **Atualizar leituras e gravações.** `projectSync`, carga inicial, hidratação seletiva, RPCs V1/V2, reconciliação, manutenção de anexos e clientes legados devem passar pela nova fonte. Requisições e operações críticas continuam atômicas com livro de movimentos, cautelas e auditoria.
+3. **Atualizar leituras e gravações.** A leitura seletiva do Almoxarifado passa a compor os cadastros da projeção `warehouse_project_state` com as coleções operacionais das tabelas próprias; ausência da tabela em ambientes antigos mantém a leitura do JSON. Falha de rede e revisão desencontrada interrompem a adoção do registro. Carga completa, demais consumidores de `projectSync`, RPCs V1/V2, reconciliação, manutenção de anexos e clientes legados ainda precisam passar pela nova fonte. Requisições e operações críticas continuam atômicas com livro de movimentos, cautelas e auditoria.
 4. **Separar a revisão.** Mover `warehouse_version` e `warehouse_updated_at` para a fonte do domínio e fazer o monitoramento observar essa revisão. Somente depois de eliminar todo `UPDATE projects` das transações exclusivas do estoque será possível deixar `projects.updated_at` estável nessas operações.
 5. **Desligar o espelho.** Após validar clientes publicados e recuperação de rascunhos, parar a dupla escrita, conservar backup reversível e então remover os leitores e gatilhos legados do JSON em uma migração própria.
 
@@ -58,3 +58,7 @@ WHERE s.project_id IS NULL
 - Testes locais de regressão e validação com dois usuários na versão publicada do Lovable usam lançamentos identificáveis e reversíveis, com conferência após recarga.
 
 Não remover a atribuição explícita de `updated_at` isoladamente: o gatilho `projects_set_updated_at` avança esse campo em qualquer `UPDATE projects`.
+
+### Leitura seletiva em transição
+
+A mudança do cliente só usa a projeção quando a hidratação solicitada contém coleções do Almoxarifado. A tabela ainda é atualizada a partir de `projects`, de modo que a leitura nova **não** elimina alterações em `projects.updated_at`. Antes de publicar o cliente em outro ambiente, instalar a migração `20261024203000`, recarregar o cache PostgREST e repetir a comparação acima. Confirmar também que o papel autenticado consegue consultar a projeção com a mesma visibilidade de `projects`. Uma consulta de rede malsucedida não pode ser tratada como tabela ausente.
