@@ -25,6 +25,7 @@ import {
 import type { ProjectCollectionKey } from '@/lib/projectDataScope';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
 import { prepareWarehouseTestReset } from '@/lib/warehouseReset';
+import { needsWarehouseProjectState, readWarehouseProjectState } from '@/lib/warehouseProjectState';
 
 export interface CloudProjectMeta {
   id: string;
@@ -175,12 +176,17 @@ export async function loadCloudProjectRecord(
   }
   if (!data) return null;
   const proj = (data.data_json ?? {}) as unknown as Project;
-  const base: Project = { ...proj, id: data.id, name: data.name };
+  let base: Project = { ...proj, id: data.id, name: data.name };
+  const shadow = needsWarehouseProjectState(options.collections)
+    ? await readWarehouseProjectState(base)
+    : null;
+  if (shadow) base = { ...base, warehouse: shadow.warehouse };
   // Hidrata apenas as coleções necessárias para a rota atual. Sem escopo
   // explícito, mantém o carregamento completo usado por importação e backup.
   const hydrated = await hydrateProjectFromCloud(base, options);
   const versionAfter = await getCloudProjectVersion(id);
-  if (!versionAfter || versionAfter.updatedAt !== data.updated_at) {
+  if (!versionAfter || versionAfter.updatedAt !== data.updated_at
+    || (shadow && versionAfter.warehouseVersion !== shadow.version)) {
     discardHydratedProjectCollections(hydrated);
     throw new CloudProjectConflictError();
   }
@@ -195,8 +201,8 @@ export async function loadCloudProjectRecord(
   const record: CloudProjectRecord = {
     project: repaired.project,
     updatedAt: data.updated_at,
-    warehouseVersion,
-    warehouseUpdatedAt,
+    warehouseVersion: shadow?.version ?? warehouseVersion,
+    warehouseUpdatedAt: shadow?.updatedAt ?? warehouseUpdatedAt,
     repairApplied: repaired.changed,
     loadedCollections,
   };

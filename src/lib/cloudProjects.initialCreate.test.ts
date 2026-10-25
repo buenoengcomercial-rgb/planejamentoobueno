@@ -166,6 +166,74 @@ describe('criação inicial segura da obra', () => {
     );
   });
 
+  it('lê os cadastros do Almoxarifado da projeção sem perder coleções operacionais', async () => {
+    mocks.from
+      .mockReturnValueOnce(queryBuilder({ data: {
+        id: 'p', name: 'Obra', updated_at: 'v1', warehouse_version: 4, warehouse_updated_at: 't1',
+        data_json: { warehouse: { items: [{ key: 'antigo' }], movements: [{ id: 'movimento-legado' }] } },
+      }, error: null }))
+      .mockReturnValueOnce(queryBuilder({ data: {
+        state_json: { items: [{ key: 'novo' }], fiscalNotes: [{ id: 'nota' }] },
+        warehouse_version: 4, warehouse_updated_at: 't1',
+      }, error: null }))
+      .mockReturnValueOnce(queryBuilder({ data: {
+        id: 'p', updated_at: 'v1', warehouse_version: 4, warehouse_updated_at: 't1',
+      }, error: null }));
+
+    const record = await loadCloudProjectRecord('p', { collections: ['warehouseMovements'] });
+
+    expect(record?.project.warehouse?.items).toEqual([{ key: 'novo' }]);
+    expect(record?.project.warehouse?.fiscalNotes).toEqual([{ id: 'nota' }]);
+    expect(record?.project.warehouse?.movements).toEqual([{ id: 'movimento-legado' }]);
+    expect(mocks.from.mock.calls.map(([table]) => table)).toEqual([
+      'projects', 'warehouse_project_state', 'projects',
+    ]);
+  });
+
+  it('não adota estado do Almoxarifado de uma revisão diferente', async () => {
+    mocks.from
+      .mockReturnValueOnce(queryBuilder({ data: {
+        id: 'p', name: 'Obra', updated_at: 'v1', warehouse_version: 4,
+        data_json: { warehouse: { items: [{ key: 'antigo' }] } },
+      }, error: null }))
+      .mockReturnValueOnce(queryBuilder({ data: {
+        state_json: { items: [{ key: 'novo' }] }, warehouse_version: 4, warehouse_updated_at: 't1',
+      }, error: null }))
+      .mockReturnValueOnce(queryBuilder({ data: {
+        id: 'p', updated_at: 'v1', warehouse_version: 5,
+      }, error: null }));
+
+    await expect(loadCloudProjectRecord('p', { collections: ['warehouseMovements'] }))
+      .rejects.toBeInstanceOf(CloudProjectConflictError);
+    expect(mocks.discardHydratedProjectCollections).toHaveBeenCalledOnce();
+  });
+
+  it('preserva a leitura legada quando a projeção ainda não existe', async () => {
+    mocks.from
+      .mockReturnValueOnce(queryBuilder({ data: {
+        id: 'p', name: 'Obra', updated_at: 'v1', warehouse_version: 4,
+        data_json: { warehouse: { items: [{ key: 'legado' }] } },
+      }, error: null }))
+      .mockReturnValueOnce(queryBuilder({ data: null, error: { code: '42P01', message: 'relation does not exist' } }))
+      .mockReturnValueOnce(queryBuilder({ data: { id: 'p', updated_at: 'v1', warehouse_version: 4 }, error: null }));
+
+    const record = await loadCloudProjectRecord('p', { collections: ['warehouseMovements'] });
+    expect(record?.project.warehouse?.items).toEqual([{ key: 'legado' }]);
+  });
+
+  it('não esconde falha de rede da projeção como confirmação do Almoxarifado', async () => {
+    mocks.from
+      .mockReturnValueOnce(queryBuilder({ data: {
+        id: 'p', name: 'Obra', updated_at: 'v1', warehouse_version: 4,
+        data_json: { warehouse: { items: [{ key: 'legado' }] } },
+      }, error: null }))
+      .mockReturnValueOnce(queryBuilder({ data: null, error: { code: 'PGRST002', message: 'schema cache indisponível' } }));
+
+    await expect(loadCloudProjectRecord('p', { collections: ['warehouseMovements'] }))
+      .rejects.toMatchObject({ code: 'PGRST002' });
+    expect(mocks.confirmHydratedProjectCollections).not.toHaveBeenCalled();
+  });
+
   it('descarta a hidratação na API auxiliar que devolve apenas Project', async () => {
     const query = queryBuilder({
       data: {
