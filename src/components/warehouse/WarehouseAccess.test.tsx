@@ -2,7 +2,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import { emptyWarehouse } from '@/lib/warehouse';
+import { readWarehouseProjectState } from '@/lib/warehouseProjectState';
 import Warehouse from './Warehouse';
+
+vi.mock('@/lib/warehouseProjectState', () => ({ readWarehouseProjectState: vi.fn() }));
 
 vi.mock('./WarehousePanel', () => ({ default: () => <div>Conteúdo do painel</div> }));
 vi.mock('./WarehouseStockTab', () => ({ default: () => <div>Conteúdo de materiais</div> }));
@@ -98,14 +101,20 @@ describe('controle de acesso do almoxarifado', () => {
     let confirmCommit!: (project: Project) => void;
     const onProjectChange = vi.fn();
     const onCommitWarehouseScoped = vi.fn((next: Project) => new Promise<Project>(resolve => { confirmCommit = resolve; }));
-    render(<Warehouse project={project} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} />);
+    const withPriorWithdrawal: Project = { ...project, warehouse: { ...project.warehouse!, requisitions: [{
+      id: 'req-marcos', number: 'REQ-2026-0001', date: '2026-10-16',
+      requesterName: 'MARCOS', receiverName: 'MARCOS', status: 'entregue',
+      items: [], createdAt: '2026-10-16T15:00:00.000Z',
+    }] } };
+    vi.mocked(readWarehouseProjectState).mockResolvedValue({ warehouse: withPriorWithdrawal.warehouse!, version: 3, updatedAt: '2026-10-16T15:00:00.000Z' });
+    render(<Warehouse project={withPriorWithdrawal} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} />);
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Nome do recebedor' }), { target: { value: 'Marcos' } });
     fireEvent.click(screen.getByRole('button', { name: 'Cadastrar' }));
-    expect(onCommitWarehouseScoped).toHaveBeenCalledWith(
+    await waitFor(() => expect(onCommitWarehouseScoped).toHaveBeenCalledWith(
       expect.objectContaining({ warehouse: expect.objectContaining({ receivers: [{ name: 'MARCOS' }] }) }),
-      'catalog', expect.any(Object),
-    );
+      'catalog', expect.objectContaining({ warehouse: expect.objectContaining({ receivers: [] }) }),
+    ));
     expect(onProjectChange).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Salvando...' })).toBeDisabled();
     confirmCommit(onCommitWarehouseScoped.mock.calls[0][0]);

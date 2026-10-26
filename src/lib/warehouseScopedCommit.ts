@@ -283,6 +283,14 @@ export async function commitWarehouseScopedOperation(
     custody: rowChanges(before.warehouse!.custodyTerms, after.warehouse!.custodyTerms),
     audits: addedAudits(before.auditLogs ?? [], after.auditLogs ?? []),
   };
+  // A lista exibida inclui nomes deduzidos das retiradas. Para cadastrar um
+  // recebedor, compare a coleção explícita recebida da projeção da nuvem;
+  // a normalização visual não pode transformar a inclusão em um no-op.
+  const explicitReceiversBefore = beforeProject.warehouse?.receivers ?? [];
+  const explicitReceiversAfter = afterProject.warehouse?.receivers ?? [];
+  if (!same(explicitReceiversBefore, explicitReceiversAfter)) {
+    payload.state.receivers = { expected: explicitReceiversBefore, next: explicitReceiversAfter };
+  }
   const domain = forcedDomain ?? inferDomain(payload);
   // A mesma alteração produz a mesma chave. Se a resposta da rede se perder,
   // repetir o formulário consulta o commit existente em vez de duplicá-lo.

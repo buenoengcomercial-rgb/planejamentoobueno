@@ -83,6 +83,26 @@ describe('transações específicas do Almoxarifado', () => {
     expect(result).toMatchObject({ warehouseVersion: 4, affectedStateKeys: ['receivers'] });
   });
 
+  it('grava um recebedor explícito mesmo quando ele já aparece em retirada confirmada', async () => {
+    const before = baseProject();
+    before.warehouse!.requisitions = [{
+      id: 'req-marcos', number: 'REQ-2026-0001', date: '2026-10-16',
+      requesterName: 'MARCOS', receiverName: 'MARCOS', status: 'entregue',
+      items: [], createdAt: '2026-10-16T15:00:00.000Z',
+    }];
+    const after: Project = { ...before, warehouse: {
+      ...before.warehouse!, receivers: [{ name: 'MARCOS' }],
+    } };
+    rpcMock.mockResolvedValue(rpcResult(after));
+
+    const result = await commitWarehouseScopedOperation(before, after, 3, '', 'catalog');
+
+    expect(rpcMock.mock.calls[0][1].p_changes.state.receivers).toEqual({
+      expected: [], next: [{ name: 'MARCOS' }],
+    });
+    expect(result.affectedStateKeys).toContain('receivers');
+  });
+
   it('envia apenas o registro de cadastro alterado, incluindo valores anteriores', async () => {
     const before = baseProject();
     before.warehouse!.items = [
