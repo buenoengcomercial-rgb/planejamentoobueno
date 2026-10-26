@@ -291,7 +291,9 @@ export default function Index() {
   const dailyReportEditor = role ? canEditDailyReport(role) : false;
   const warehouseEditor = role ? canEditWarehouse(role) : false;
   const canViewWarehousePanel = role !== 'warehouse_operator' && role !== 'engineer';
-  const canPersistProject = editor || dailyReportEditor || warehouseEditor;
+  // Warehouse operators commit through warehouse RPCs; the global project
+  // autosave cannot authorize or safely reconcile their stock changes.
+  const canPersistProject = editor || dailyReportEditor;
   const creator = role ? canCreateProject(role) : false;
   const remover = role ? canDeleteProject(role) : false;
   const restrictedFallbackView: AppView = role ? getRestrictedFallbackView(role) : 'gantt';

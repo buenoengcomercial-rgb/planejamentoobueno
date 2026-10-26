@@ -33,6 +33,11 @@ export function acknowledgeWarehouseOutbox(actorId: string | undefined, projectI
   if (!actorId) return;
   localStorage.removeItem(`${prefix(actorId, projectId)}${id}`); notify();
 }
+/** Explicitly archive one backed-up, obsolete attempt without replaying it. */
+export function archiveWarehouseOutbox(actorId: string, projectId: string, id: string) {
+  if (!warehousePendingOperations(actorId, projectId).some(row => row.id === id)) return;
+  localStorage.removeItem(`${prefix(actorId, projectId)}${id}`); notify();
+}
 export async function retryWarehouseOutbox(actorId: string, projectId: string, operation: WarehousePendingOperation,
   onConfirmed: () => Promise<void>) {
   const allowed = new Set(['commit_warehouse_requisition_v2','commit_warehouse_receipt_v2','commit_warehouse_custody_v2',

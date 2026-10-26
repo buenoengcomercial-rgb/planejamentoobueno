@@ -2,7 +2,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import type { Project, WarehouseAuditActor } from '@/types/project';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, Warehouse as WarehouseIcon, ReceiptText, ClipboardCheck, HardDriveDownload } from 'lucide-react';
-import { ensureWarehouse } from '@/lib/warehouse';
+import { ensureWarehouse, normalizeWarehouseReceiverName } from '@/lib/warehouse';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { scheduleIdlePreload } from '@/lib/idlePreload';
 import './warehouse-visual.css';
@@ -102,6 +102,8 @@ interface Props {
 export default function Warehouse({ project, onProjectChange, onCommitProject, onCloudWarehouseOperationConfirmed, onPrepareCloudWarehouseOperation, onCommitCloudWarehouseOperation, onRunCriticalCloudWarehouseOperation, onCommitWarehouseScoped, onCommitAttachmentMigration, storageMaintenanceOrganizationId, canManageFiscalNotes = true, canReviewFiscalCosts = true, canViewPanel = true, canApproveInventory = true, canArchiveWarehouseRecords = true, canEditPostedWarehouseRecords = false, canCorrectDeliveredRequisitions = false, canSupplementRequisitions = false, canCancelDeliveredRequisitions = false, canDeleteWarehouseRecords = false, canManageEquipmentGroups = true, canOptimizeStorage = false, auditActor, activeTab, onActiveTabChange, isTabDataReady = true }: Props) {
   const [internalTab, setInternalTab] = useState<WarehouseTab>(() => readWarehouseTab(project.id, canViewPanel, canOptimizeStorage));
   const [focusedRequisitionId, setFocusedRequisitionId] = useState<string | null>(null);
+  const [receiverName, setReceiverName] = useState('');
+  const [savingReceiver, setSavingReceiver] = useState(false);
   const tab = activeTab ?? internalTab;
   const setTab = useCallback((next: WarehouseTab) => {
     setInternalTab(next);
@@ -113,9 +115,30 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
   }, [setTab]);
   const handleOpenRequisitionHandled = useCallback(() => setFocusedRequisitionId(null), []);
   const ensured = useMemo(() => ensureWarehouse(project), [project]);
-  useEffect(() => {
-    if (ensured !== project) onProjectChange(ensured);
-  }, [ensured, project, onProjectChange]);
+  const registerReceiver = async () => {
+    const name = normalizeWarehouseReceiverName(receiverName);
+    if (!name) return;
+    if (ensured.warehouse!.receivers.some(receiver => receiver.name === name)) {
+      toast.info('Este recebedor já está cadastrado.');
+      return;
+    }
+    if (!onCommitWarehouseScoped) {
+      toast.error('A transação segura do Almoxarifado não está disponível. Nada foi gravado.');
+      return;
+    }
+    setSavingReceiver(true);
+    try {
+      await onCommitWarehouseScoped({ ...project, warehouse: {
+        ...project.warehouse!, receivers: [...(project.warehouse?.receivers ?? []), { name }],
+      } }, 'catalog', project);
+      setReceiverName('');
+      toast.success(`Recebedor ${name} confirmado na nuvem.`);
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setSavingReceiver(false);
+    }
+  };
   useEffect(() => {
     if (!canViewPanel && tab === 'painel') setTab('notas');
   }, [canViewPanel, setTab, tab]);
@@ -163,6 +186,13 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
           </div>
         </div>
       </div>
+
+      <form className="flex flex-wrap items-end gap-2 rounded-lg border bg-card p-3" onSubmit={event => { event.preventDefault(); void registerReceiver(); }}>
+        <label className="min-w-48 flex-1 text-xs font-semibold">Cadastrar recebedor
+          <input aria-label="Nome do recebedor" className="mt-1 min-h-10 w-full rounded border bg-background px-3 text-sm" value={receiverName} onChange={event => setReceiverName(event.target.value)} maxLength={120} />
+        </label>
+        <button type="submit" className="min-h-10 rounded bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50" disabled={!receiverName.trim() || savingReceiver || !isTabDataReady}>{savingReceiver ? 'Salvando...' : 'Cadastrar'}</button>
+      </form>
 
       <Tabs value={tab} onValueChange={value => setTab(value as WarehouseTab)} className="w-full">
         <div className="lg:hidden">

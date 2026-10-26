@@ -94,6 +94,14 @@ function projectWithGroupedCurves(): Project {
 }
 
 describe('WarehouseStockTab - documentos no histórico', () => {
+  it('grava a classificação por catálogo sem acionar o salvamento geral da obra', async () => {
+    const onProjectChange = vi.fn();
+    const commit = vi.fn(async (next: Project) => next);
+    render(<WarehouseStockTab project={projectWithPurchaseHistory()} onProjectChange={onProjectChange} onCommitWarehouseScoped={commit} />);
+    fireEvent.change(screen.getAllByRole('combobox', { name: 'Classificação de Material de teste' })[0], { target: { value: 'labor' } });
+    await waitFor(() => expect(commit).toHaveBeenCalledWith(expect.any(Object), 'catalog', expect.any(Object)));
+    expect(onProjectChange).not.toHaveBeenCalled();
+  });
   it('mantém o agrupamento na tabela e mostra as origens somente no histórico conjunto', async () => {
     const project = projectWithGroupedCurves();
     const onProjectChange = vi.fn();

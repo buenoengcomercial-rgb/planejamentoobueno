@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { commitProjectFields, pendingProjectFieldOperations, preserveProjectFieldConflict, ProjectFieldConflictError,
+import { archiveProjectFieldOperation, commitProjectFields, pendingProjectFieldOperations, preserveProjectFieldConflict, ProjectFieldConflictError,
   type PendingProjectFieldOperation, type ProjectFieldReceipt } from '@/lib/projectFieldCommit';
 
 export default function ProjectOperationConflicts({ actorId, projectId, organizationId, onRecovered }: {
@@ -9,6 +9,7 @@ export default function ProjectOperationConflicts({ actorId, projectId, organiza
   const [operations, setOperations] = useState<PendingProjectFieldOperation[]>([]);
   const [storageError, setStorageError] = useState(false);
   const [busy, setBusy] = useState(false), [message, setMessage] = useState('');
+  const [downloaded, setDownloaded] = useState<string[]>([]);
   useEffect(() => {
     const refresh = () => {
       try { setOperations(pendingProjectFieldOperations(actorId, projectId)); setStorageError(false); }
@@ -23,6 +24,7 @@ export default function ProjectOperationConflicts({ actorId, projectId, organiza
   const download = (operation: PendingProjectFieldOperation) => {
     const url = URL.createObjectURL(new Blob([JSON.stringify(operation, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = `tentativa-${operation.operationId}.json`; link.click();
+    setDownloaded(ids => [...ids, operation.operationId]);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   const retry = async (operation: PendingProjectFieldOperation) => {
@@ -45,6 +47,11 @@ export default function ProjectOperationConflicts({ actorId, projectId, organiza
         <p>{operation.conflict?.message || 'A resposta desta gravação ainda precisa ser conferida.'}</p>
         {!operation.conflict && <button disabled={busy} className="mr-3 underline" onClick={() => void retry(operation)}>Conferir salvamento pendente</button>}
         <button className="my-1 underline" onClick={() => download(operation)}>Baixar tentativa preservada</button>
+        <button className="ml-3 underline disabled:opacity-50" disabled={busy || !downloaded.includes(operation.operationId)} onClick={() => {
+          if (!window.confirm('Arquivar esta tentativa somente neste navegador? Confirme que o arquivo foi baixado e que os dados necessários já foram salvos na nuvem.')) return;
+          archiveProjectFieldOperation(actorId, projectId, operation.operationId);
+          setOperations(pendingProjectFieldOperations(actorId, projectId));
+        }}>Arquivar tentativa local</button>
       </div>)}
     </details>
   </aside>;

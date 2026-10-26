@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { resolveWarehouseRequisitionPending, stageWarehouseOperation, warehousePendingOperations, retryWarehouseOutbox, rejectWarehouseOperation } from './warehouseOperationOutbox';
+import { archiveWarehouseOutbox, resolveWarehouseRequisitionPending, stageWarehouseOperation, warehousePendingOperations, retryWarehouseOutbox, rejectWarehouseOperation } from './warehouseOperationOutbox';
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock('@/integrations/supabase/client', () => ({ supabase: { rpc } }));
 const args = { p_project_id: 'p', p_operation_key: 'op', p_changes: { state: { items: { records: { upserts: [{ id: 'a', expected: null, row: { id: 'a' } }] } } } } };
@@ -28,6 +28,13 @@ it('não confunde outra conta e preserva duas operações independentes com resp
   expect(() => stageWarehouseOperation('a', 'p', 'new', 'commit_warehouse_requisition_v2', {
     ...requisition, p_request: { type: 'delivery', requisitionId: 'req-2' },
   })).toThrow('outros valores');
+});
+it('arquiva somente o teste obsoleto selecionado sem repetir a RPC', () => {
+  stageWarehouseOperation('a', 'p', 'old-test', 'commit_warehouse_catalog_v2', { ...args, p_operation_key: 'old-test' });
+  stageWarehouseOperation('a', 'p', 'active', 'commit_warehouse_catalog_v2', { ...args, p_operation_key: 'active' });
+  archiveWarehouseOutbox('a', 'p', 'old-test');
+  expect(warehousePendingOperations('a', 'p').map(row => row.id)).toEqual(['active']);
+  expect(rpc).not.toHaveBeenCalled();
 });
 
 it('resolve automaticamente somente pendências da mesma requisição e mantém recusas antigas', async () => {

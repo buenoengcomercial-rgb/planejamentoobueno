@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { webcrypto } from 'node:crypto';
-import { commitProjectFields, pendingProjectFieldOperations, type ProjectFieldRequest } from './projectFieldCommit';
+import { archiveProjectFieldOperation, commitProjectFields, pendingProjectFieldOperations, type ProjectFieldRequest } from './projectFieldCommit';
 import { applyProjectFieldReceipt, setCloudSnapshot, stripNormalizedCollections, syncProductionAtomically, syncProjectMetadataAtomically } from './projectSync';
 import type { Project } from '@/types/project';
 const rpc = vi.hoisted(() => vi.fn());
@@ -29,6 +29,14 @@ it('conflito e recibo incompleto conservam a tentativa isolada por conta', async
   await expect(commitProjectFields('p', 'org', 'a', request)).rejects.toThrow('confirmou');
   expect(pendingProjectFieldOperations('a', 'p')).toHaveLength(1);
   expect(pendingProjectFieldOperations('b', 'p')).toEqual([]);
+});
+it('arquiva apenas a tentativa local escolhida sem reenviar uma operação recusada', async () => {
+  rpc.mockResolvedValue({ error: { code: '42501', message: 'Operação não autorizada' } });
+  await expect(commitProjectFields('p', 'org', 'a', request)).rejects.toMatchObject({ code: '42501' });
+  const [pending] = pendingProjectFieldOperations('a', 'p');
+  archiveProjectFieldOperation('a', 'p', pending.operationId);
+  expect(pendingProjectFieldOperations('a', 'p')).toEqual([]);
+  expect(rpc).toHaveBeenCalledTimes(1);
 });
 const project = { id: 'p', name: 'Obra', phases: [{ id: 'c', name: 'Capítulo', tasks: [
   { id: 't', name: 'Tarefa', duration: 2, dailyLogs: [] }, { id: 'other', name: 'Outra', dailyLogs: [] },
