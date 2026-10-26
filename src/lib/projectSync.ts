@@ -639,8 +639,8 @@ async function optionalQuery<T>(
 }
 
 // Uma resposta HTTP bem-sucedida pode conter só a primeira página do PostgREST.
-// Coleções operacionais só são adotadas quando a contagem exata e todos os IDs
-// foram conferidos. Em caso de falha, o chamador conserva a fotografia anterior.
+// As coleções que usam esta rotina só são adotadas quando a contagem exata e
+// todos os IDs foram conferidos. Em caso de falha, a fotografia anterior fica preservada.
 const VERIFIED_PAGE_SIZE = 500;
 export async function loadVerifiedRows<T extends { id: string }>(
   query: (afterId?: string, head?: boolean) => PromiseLike<CountedQueryResult<T>>,
@@ -685,9 +685,10 @@ export async function loadVerifiedRows<T extends { id: string }>(
   }
 }
 
-// O PostgREST limita a quantidade de linhas devolvidas por consulta. Saldo de
-// estoque exige o livro inteiro: uma página parcial pode mostrar saldo falso.
-const WAREHOUSE_MOVEMENT_PAGE_SIZE = 500;
+// O PostgREST limita as linhas por consulta. A página vazia e uma revisão
+// estável confirmam que o livro inteiro foi lido, sem COUNT(*) em cada página.
+const WAREHOUSE_PAGE_SIZE = 500;
+type WarehouseRowTable = 'warehouse_movements' | 'warehouse_requisitions' | 'warehouse_custody';
 
 async function warehouseLedgerVersion(projectId: string): Promise<number> {
   const result = await supabase.from('projects').select('warehouse_version').eq('id', projectId).maybeSingle();
@@ -697,37 +698,41 @@ async function warehouseLedgerVersion(projectId: string): Promise<number> {
   return result.data!.warehouse_version;
 }
 
-async function loadWarehouseMovementRows(projectId: string): Promise<QueryResult<DataRow>> {
+async function loadWarehouseRows(table: WarehouseRowTable, projectId: string): Promise<QueryResult<DataRow>> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const startVersion = await warehouseLedgerVersion(projectId);
       const rows: DataRow[] = [];
       let lastId: string | undefined;
-      let expectedCount: number | null = null;
       while (true) {
-        let query = supabase.from('warehouse_movements')
-          .select('id, data', rows.length ? undefined : { count: 'exact' })
+        let query = supabase.from(table)
+          .select('id, data')
           .eq('project_id', projectId)
           .order('id', { ascending: true })
-          .limit(WAREHOUSE_MOVEMENT_PAGE_SIZE);
+          .limit(WAREHOUSE_PAGE_SIZE);
         if (lastId) query = query.gt('id', lastId);
         const result = await query;
         if (result.error) return { data: null, error: result.error };
-        if (expectedCount === null) expectedCount = result.count;
-        const page = result.data ?? [];
-        rows.push(...page);
-        if (page.length < WAREHOUSE_MOVEMENT_PAGE_SIZE) break;
-        lastId = page[page.length - 1].id;
+        if (!Array.isArray(result.data)) throw new Error('A consulta devolveu uma coleção incompleta.');
+        const page = result.data;
+        if (!page.length) break;
+        for (const row of page) {
+          if (!row.id || (lastId && row.id <= lastId)) {
+            throw new Error('A paginação devolveu IDs repetidos ou fora de ordem.');
+          }
+          rows.push(row);
+          lastId = row.id;
+        }
       }
       const endVersion = await warehouseLedgerVersion(projectId);
-      if (startVersion === endVersion && expectedCount !== null && rows.length === expectedCount) {
+      if (startVersion === endVersion) {
         return { data: rows, error: null };
       }
     } catch (error) {
       return { data: null, error: error as Error };
     }
   }
-  return { data: null, error: new Error('O estoque mudou durante o carregamento. Atualize o Almoxarifado para tentar novamente.') };
+  return { data: null, error: new Error('O Almoxarifado mudou durante o carregamento. Atualize a área para tentar novamente.') };
 }
 
 export interface ProjectHydrationOptions {
@@ -751,17 +756,9 @@ export async function hydrateProjectFromCloud(
   const requested = normalizeProjectCollections(options.collections ?? PROJECT_COLLECTION_KEYS);
   const wants = new Set(requested);
   const [movRes, reqRes, custRes, drRes, logsRes, measRes, addRes, audRes, stkRes, phRes, biRes, mcRes, acRes, subRes, chRes, tkRes] = await Promise.all([
-    optionalQuery<DataRow>(wants.has('warehouseMovements'), () => loadWarehouseMovementRows(projectId)),
-    optionalQuery<DataRow>(wants.has('warehouseRequisitions'), () => loadVerifiedRows((lastId, head) => {
-      const query = supabase.from('warehouse_requisitions').select('id, data', { count: 'exact', head })
-        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
-      return lastId ? query.gt('id', lastId) : query;
-    })),
-    optionalQuery<DataRow>(wants.has('warehouseCustody'), () => loadVerifiedRows((lastId, head) => {
-      const query = supabase.from('warehouse_custody').select('id, data', { count: 'exact', head })
-        .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
-      return lastId ? query.gt('id', lastId) : query;
-    })),
+    optionalQuery<DataRow>(wants.has('warehouseMovements'), () => loadWarehouseRows('warehouse_movements', projectId)),
+    optionalQuery<DataRow>(wants.has('warehouseRequisitions'), () => loadWarehouseRows('warehouse_requisitions', projectId)),
+    optionalQuery<DataRow>(wants.has('warehouseCustody'), () => loadWarehouseRows('warehouse_custody', projectId)),
     optionalQuery<DataRow>(wants.has('dailyReports'), () => loadVerifiedRows((lastId, head) => {
       const query = supabase.from('daily_reports').select('id, data', { count: 'exact', head })
         .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
