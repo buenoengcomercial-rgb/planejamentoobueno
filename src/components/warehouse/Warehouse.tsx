@@ -3,6 +3,7 @@ import type { Project, WarehouseAuditActor } from '@/types/project';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LayoutDashboard, Boxes, ArrowLeftRight, ClipboardList, HardHat, ListChecks, Warehouse as WarehouseIcon, ReceiptText, ClipboardCheck, HardDriveDownload } from 'lucide-react';
 import { ensureWarehouse, normalizeWarehouseReceiverName } from '@/lib/warehouse';
+import { readWarehouseProjectState } from '@/lib/warehouseProjectState';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { scheduleIdlePreload } from '@/lib/idlePreload';
 import './warehouse-visual.css';
@@ -118,19 +119,24 @@ export default function Warehouse({ project, onProjectChange, onCommitProject, o
   const registerReceiver = async () => {
     const name = normalizeWarehouseReceiverName(receiverName);
     if (!name) return;
-    if (ensured.warehouse!.receivers.some(receiver => receiver.name === name)) {
-      toast.info('Este recebedor já está cadastrado.');
-      return;
-    }
     if (!onCommitWarehouseScoped) {
       toast.error('A transação segura do Almoxarifado não está disponível. Nada foi gravado.');
       return;
     }
     setSavingReceiver(true);
     try {
-      await onCommitWarehouseScoped({ ...project, warehouse: {
-        ...project.warehouse!, receivers: [...(project.warehouse?.receivers ?? []), { name }],
-      } }, 'catalog', project);
+      const remote = await readWarehouseProjectState(project);
+      if (!remote) throw new Error('O cadastro próprio do Almoxarifado ainda não está disponível na nuvem.');
+      const explicitReceivers = remote.warehouse.receivers ?? [];
+      if (explicitReceivers.some(receiver => receiver.name === name)) {
+        toast.info('Este recebedor já está confirmado no cadastro da nuvem.');
+        setReceiverName('');
+        return;
+      }
+      const base: Project = { ...project, warehouse: { ...project.warehouse!, receivers: explicitReceivers } };
+      await onCommitWarehouseScoped({ ...base, warehouse: {
+        ...base.warehouse!, receivers: [...explicitReceivers, { name }],
+      } }, 'catalog', base);
       setReceiverName('');
       toast.success(`Recebedor ${name} confirmado na nuvem.`);
     } catch (error) {
