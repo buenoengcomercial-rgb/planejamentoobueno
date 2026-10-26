@@ -201,7 +201,8 @@ export default function WarehouseStockTab({ onNewEntry, project, onProjectChange
     );
   };
   const setClassification = (row: WarehouseStockOverviewRow, costClass: MaterialCostClass) => {
-    onProjectChange(setMaterialCostClass(project, row.classificationSubject, costClass));
+    void commitCatalog(setMaterialCostClass(project, row.classificationSubject, costClass))
+      .catch(error => toast.error((error as Error).message));
   };
   const handleDeleteItem = (key: string, description: string) => confirm(
     { title: 'Excluir material definitivamente?', description: `O material ${description} será removido. Materiais com histórico exigem primeiro a correção do registro de origem.`, confirmLabel: 'Excluir definitivamente' },

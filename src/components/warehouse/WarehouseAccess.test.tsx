@@ -81,6 +81,37 @@ describe('controle de acesso do almoxarifado', () => {
     expect(mobileSelect).toHaveValue('notas');
   });
 
+  it('não inicia uma gravação geral ao normalizar dados antigos para exibição', async () => {
+    const onProjectChange = vi.fn();
+    const legacyProject = {
+      ...project,
+      warehouse: { ...emptyWarehouse(), valuationMethod: undefined },
+    } as unknown as Project;
+
+    render(<Warehouse project={legacyProject} onProjectChange={onProjectChange} canViewPanel={false} />);
+
+    expect(await screen.findByText('Conteúdo de entrada')).toBeInTheDocument();
+    expect(onProjectChange).not.toHaveBeenCalled();
+  });
+
+  it('cadastra recebedor somente pela transação de catálogo e aguarda confirmação', async () => {
+    let confirmCommit!: (project: Project) => void;
+    const onProjectChange = vi.fn();
+    const onCommitWarehouseScoped = vi.fn((next: Project) => new Promise<Project>(resolve => { confirmCommit = resolve; }));
+    render(<Warehouse project={project} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} />);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Nome do recebedor' }), { target: { value: 'Marcos' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cadastrar' }));
+    expect(onCommitWarehouseScoped).toHaveBeenCalledWith(
+      expect.objectContaining({ warehouse: expect.objectContaining({ receivers: [{ name: 'MARCOS' }] }) }),
+      'catalog', expect.any(Object),
+    );
+    expect(onProjectChange).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Salvando...' })).toBeDisabled();
+    confirmCommit(onCommitWarehouseScoped.mock.calls[0][0]);
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Nome do recebedor' })).toHaveValue(''));
+  });
+
   it('remove um Painel já aberto quando a permissão é retirada', async () => {
     const onProjectChange = vi.fn();
     const { rerender } = render(<Warehouse project={project} onProjectChange={onProjectChange} />);

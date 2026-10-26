@@ -50,6 +50,13 @@ export function pendingProjectFieldOperations(actorId: string, projectId: string
   return rows;
 }
 
+/** Removes only the named local attempt after the operator exports its backup. */
+export function archiveProjectFieldOperation(actorId: string, projectId: string, operationId: string) {
+  if (!pendingProjectFieldOperations(actorId, projectId).some(row => row.operationId === operationId)) return;
+  localStorage.removeItem(`${storageKey(actorId, projectId)}:${operationId}`);
+  window.dispatchEvent(new Event('obraplanner:operation-conflicts'));
+}
+
 function laterFieldEdits(before: unknown, after: unknown, path = ''): unknown[] {
   if (canonical(before) === canonical(after)) return [];
   if (Array.isArray(before) && Array.isArray(after)) {

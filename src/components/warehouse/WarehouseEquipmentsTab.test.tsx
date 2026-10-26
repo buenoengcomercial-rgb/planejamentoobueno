@@ -270,6 +270,16 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     expect(screen.getByRole('button', { name: 'Etiqueta QR' })).toBeInTheDocument();
   });
 
+  it('arquiva equipamento pelo catálogo sem gravar a obra inteira', async () => {
+    const onProjectChange = vi.fn();
+    const commit = vi.fn(async (next: Project) => next);
+    render(<WarehouseEquipmentsTab project={projectWithEquipment()} onProjectChange={onProjectChange} onCommitWarehouseScoped={commit} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Arquivar' }));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Arquivar' }));
+    await waitFor(() => expect(commit).toHaveBeenCalledWith(expect.any(Object), 'catalog', expect.any(Object)));
+    expect(onProjectChange).not.toHaveBeenCalled();
+  });
+
   it('reserva a organização de grupos aos perfis autorizados', () => {
     render(<WarehouseEquipmentsTab project={projectWithEquipment()} onProjectChange={vi.fn()} canManageGroups={false} />);
 

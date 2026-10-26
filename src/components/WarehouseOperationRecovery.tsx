@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { retryWarehouseOutbox, warehousePendingOperations, type WarehousePendingOperation } from '@/lib/warehouseOperationOutbox';
+import { archiveWarehouseOutbox, retryWarehouseOutbox, warehousePendingOperations, type WarehousePendingOperation } from '@/lib/warehouseOperationOutbox';
 export default function WarehouseOperationRecovery({ actorId, projectId, onConfirmed }: {
   actorId: string; projectId: string; onConfirmed: () => Promise<void>;
 }) {
   const [rows, setRows] = useState<WarehousePendingOperation[]>([]);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [downloaded, setDownloaded] = useState<string[]>([]);
   useEffect(() => {
     const refresh = () => { try { setRows(warehousePendingOperations(actorId, projectId)); }
       catch { setError('Não foi possível ler as tentativas preservadas. Mantenha este navegador aberto.'); } };
@@ -21,6 +22,7 @@ export default function WarehouseOperationRecovery({ actorId, projectId, onConfi
   const download = (row: WarehousePendingOperation) => {
     const url = URL.createObjectURL(new Blob([JSON.stringify(row, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = `almoxarifado-tentativa-${row.id}.json`; link.click();
+    setDownloaded(ids => [...ids, row.id]);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   return <aside aria-label="Tentativas do Almoxarifado" className="m-3 rounded border border-amber-400 bg-amber-50 p-3 text-sm text-amber-950">
@@ -30,6 +32,11 @@ export default function WarehouseOperationRecovery({ actorId, projectId, onConfi
         <p>{row.conflict || 'A resposta do salvamento ainda precisa ser conferida.'}</p>
         {!row.conflict && <button className="mr-3 underline" disabled={busy} onClick={() => void retry(row)}>Conferir operação pendente</button>}
         <button className="underline" onClick={() => download(row)}>Baixar tentativa</button>
+        <button className="ml-3 underline disabled:opacity-50" disabled={busy || !downloaded.includes(row.id)} onClick={() => {
+          if (!window.confirm('Arquivar esta tentativa somente neste navegador? Confirme que o arquivo foi baixado e que esta operação não deve ser reenviada.')) return;
+          archiveWarehouseOutbox(actorId, projectId, row.id);
+          setRows(warehousePendingOperations(actorId, projectId));
+        }}>Arquivar tentativa local</button>
       </div>)}
       {error && <p role="alert">{error}</p>}
     </details>
