@@ -87,6 +87,84 @@ beforeEach(() => {
 });
 
 describe('hidratação progressiva da obra', () => {
+  it.each([273, 501])('carrega %i requisições sem count=exact e só aceita a lista completa', async requisitionCount => {
+    const current = project(`warehouse-requisitions-uncounted-${requisitionCount}`);
+    clearCloudSnapshot(current.id);
+    const requisitions = Array.from({ length: requisitionCount }, (_, index) => ({
+      id: `req-${String(index).padStart(4, '0')}`,
+      data: { id: `req-${String(index).padStart(4, '0')}`, number: index + 1 },
+    }));
+    const selectedOptions: unknown[] = [];
+    const requestedAfter: Array<string | undefined> = [];
+    fromMock.mockImplementation((table: string) => {
+      if (table === 'projects') return {
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { warehouse_version: 8 }, error: null }) }) }),
+      };
+      expect(table).toBe('warehouse_requisitions');
+      let afterId: string | undefined;
+      const query = {
+        select: vi.fn((_columns: string, options?: unknown) => { selectedOptions.push(options); return query; }),
+        eq: vi.fn(), order: vi.fn(), limit: vi.fn(), gt: vi.fn((_field: string, value: string) => { afterId = value; return query; }),
+        then: (resolve: (result: MockQueryResult) => unknown) => {
+          requestedAfter.push(afterId);
+          return Promise.resolve(resolve({
+            data: requisitions.filter(row => !afterId || row.id > afterId).slice(0, 500),
+            error: null,
+          }));
+        },
+      };
+      for (const method of [query.eq, query.order, query.limit]) method.mockReturnValue(query);
+      return query;
+    });
+
+    const hydrated = await hydrateProjectFromCloud(current, {
+      collections: ['warehouseRequisitions'], strict: true,
+    });
+
+    expect(hydrated.warehouse?.requisitions).toHaveLength(requisitionCount);
+    expect(selectedOptions).toEqual(Array(requestedAfter.length).fill(undefined));
+    expect(requestedAfter).toEqual(requisitionCount === 273
+      ? [undefined, 'req-0272']
+      : [undefined, 'req-0499', 'req-0500']);
+    expect(getLoadedProjectCollections(current.id)).toEqual([]);
+    expect(getHydratedProjectCollections(hydrated)).toEqual(['warehouseRequisitions']);
+  });
+
+  it('bloqueia a área após timeout das requisições e permite uma nova leitura completa', async () => {
+    const current = project('warehouse-requisitions-timeout-retry');
+    clearCloudSnapshot(current.id);
+    let calls = 0;
+    fromMock.mockImplementation((table: string) => {
+      if (table === 'projects') return {
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { warehouse_version: 8 }, error: null }) }) }),
+      };
+      expect(table).toBe('warehouse_requisitions');
+      const query = {
+        select: vi.fn(), eq: vi.fn(), order: vi.fn(), limit: vi.fn(), gt: vi.fn(),
+        then: (resolve: (result: MockQueryResult) => unknown) => Promise.resolve(resolve(
+          ++calls === 1
+            ? { data: null, error: { message: '57014: canceling statement due to statement timeout' } }
+            : { data: [], error: null },
+        )),
+      };
+      for (const method of [query.select, query.eq, query.order, query.limit, query.gt]) method.mockReturnValue(query);
+      return query;
+    });
+
+    await expect(hydrateProjectFromCloud(current, {
+      collections: ['warehouseRequisitions'], strict: true,
+    })).rejects.toEqual(expect.objectContaining({
+      name: ProjectHydrationError.name, collections: ['warehouseRequisitions'],
+    }));
+    expect(getLoadedProjectCollections(current.id)).toEqual([]);
+
+    const retried = await hydrateProjectFromCloud(current, {
+      collections: ['warehouseRequisitions'], strict: true,
+    });
+    expect(retried.warehouse?.requisitions).toEqual([]);
+    expect(getHydratedProjectCollections(retried)).toEqual(['warehouseRequisitions']);
+  });
+
   it('persiste auditoria append-only sem carregar ou excluir histórico anterior', async () => {
     const current = project('append-only-history');
     clearCloudSnapshot(current.id);
@@ -147,8 +225,8 @@ describe('hidratação progressiva da obra', () => {
 
     expect(hydrated.warehouse?.movements).toHaveLength(movementCount);
     expect(requestedAfter).toEqual(movementCount === 501
-      ? [undefined, 'movement-0499']
-      : [undefined, 'movement-0499', 'movement-0999', 'movement-1499', 'movement-1999']);
+      ? [undefined, 'movement-0499', 'movement-0500']
+      : [undefined, 'movement-0499', 'movement-0999', 'movement-1499', 'movement-1999', 'movement-2000']);
     expect(getHydratedProjectCollections(hydrated)).toEqual(['warehouseMovements']);
   });
 
@@ -161,14 +239,15 @@ describe('hidratação progressiva da obra', () => {
       if (table === 'projects') return {
         select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { warehouse_version: ++versionReads === 1 ? 1 : 2 }, error: null }) }) }),
       };
+      let afterId: string | undefined;
       const query = {
-        select: vi.fn(), eq: vi.fn(), order: vi.fn(), limit: vi.fn(), gt: vi.fn(),
+        select: vi.fn(), eq: vi.fn(), order: vi.fn(), limit: vi.fn(), gt: vi.fn((_field: string, value: string) => { afterId = value; return query; }),
         then: (resolve: (result: MockQueryResult) => unknown) => Promise.resolve(resolve({
-          data: [{ id: 'movement-1', data: { id: 'movement-1', itemKey: 'material-1', quantity: ++ledgerReads } }],
+          data: afterId ? [] : [{ id: 'movement-1', data: { id: 'movement-1', itemKey: 'material-1', quantity: ++ledgerReads } }],
           error: null, count: 1,
         })),
       };
-      for (const method of [query.select, query.eq, query.order, query.limit, query.gt]) method.mockReturnValue(query);
+      for (const method of [query.select, query.eq, query.order, query.limit]) method.mockReturnValue(query);
       return query;
     });
     const hydrated = await hydrateProjectFromCloud(current, { collections: ['warehouseMovements'], strict: true });
@@ -188,7 +267,7 @@ describe('hidratação progressiva da obra', () => {
         select: vi.fn(), eq: vi.fn(), order: vi.fn(), limit: vi.fn(), gt: vi.fn(),
         then: (resolve: (result: MockQueryResult) => unknown) => Promise.resolve(resolve(
           ++calls === 1
-            ? { data: Array.from({ length: 500 }, (_, index) => ({ id: `m-${index}`, data: { id: `m-${index}` } })), error: null, count: 501 }
+            ? { data: Array.from({ length: 500 }, (_, index) => ({ id: `m-${String(index).padStart(3, '0')}`, data: { id: `m-${String(index).padStart(3, '0')}` } })), error: null, count: 501 }
             : { data: null, error: { message: 'falha na segunda página' } },
         )),
       };
