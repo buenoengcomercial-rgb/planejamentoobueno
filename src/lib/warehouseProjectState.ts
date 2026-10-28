@@ -13,7 +13,7 @@ export interface WarehouseProjectStateRead {
   updatedAt: string;
 }
 
-/** Lê a projeção somente nos fluxos que pedem coleções do Almoxarifado. */
+/** Lê a projeção nas áreas do estoque e na carga completa de uma obra com estoque. */
 export function needsWarehouseProjectState(collections?: readonly ProjectCollectionKey[]): boolean {
   return collections?.some(collection => WAREHOUSE_COLLECTIONS.has(collection)) ?? false;
 }
@@ -35,7 +35,9 @@ export async function readWarehouseProjectState(
     if (error.code === '42P01' || error.code === 'PGRST205') return null;
     throw error;
   }
-  if (!data) return null;
+  if (!data) {
+    throw new Error('Falta a projeção do Almoxarifado para esta obra. A edição foi preservada.');
+  }
   if (!data.state_json || typeof data.state_json !== 'object' || Array.isArray(data.state_json)
     || !Number.isSafeInteger(data.warehouse_version) || data.warehouse_version < 0) {
     throw new Error('Estado do Almoxarifado inválido na nuvem. A edição foi preservada.');
