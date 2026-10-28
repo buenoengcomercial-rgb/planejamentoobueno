@@ -913,35 +913,6 @@ export type Database = {
           },
         ]
       }
-      warehouse_project_state: {
-        Row: {
-          project_id: string
-          state_json: Json
-          warehouse_updated_at: string
-          warehouse_version: number
-        }
-        Insert: {
-          project_id: string
-          state_json?: Json
-          warehouse_updated_at?: string
-          warehouse_version?: number
-        }
-        Update: {
-          project_id?: string
-          state_json?: Json
-          warehouse_updated_at?: string
-          warehouse_version?: number
-        }
-        Relationships: [
-          {
-            foreignKeyName: "warehouse_project_state_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: true
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       stock_movements: {
         Row: {
           created_at: string
@@ -1302,6 +1273,35 @@ export type Database = {
             foreignKeyName: "warehouse_operation_commits_project_id_fkey"
             columns: ["project_id"]
             isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      warehouse_project_state: {
+        Row: {
+          project_id: string
+          state_json: Json
+          warehouse_updated_at: string
+          warehouse_version: number
+        }
+        Insert: {
+          project_id: string
+          state_json?: Json
+          warehouse_updated_at?: string
+          warehouse_version?: number
+        }
+        Update: {
+          project_id?: string
+          state_json?: Json
+          warehouse_updated_at?: string
+          warehouse_version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "warehouse_project_state_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
             referencedRelation: "projects"
             referencedColumns: ["id"]
           },
