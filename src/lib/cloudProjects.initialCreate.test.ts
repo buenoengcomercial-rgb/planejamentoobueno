@@ -190,6 +190,40 @@ describe('criação inicial segura da obra', () => {
     ]);
   });
 
+  it('usa a projeção também na carga completa da obra', async () => {
+    mocks.from
+      .mockReturnValueOnce(queryBuilder({ data: {
+        id: 'p', name: 'Obra', updated_at: 'v1', warehouse_version: 4, warehouse_updated_at: 't1',
+        data_json: { warehouse: { items: [{ key: 'antigo' }] } },
+      }, error: null }))
+      .mockReturnValueOnce(queryBuilder({ data: {
+        state_json: { items: [{ key: 'novo' }] }, warehouse_version: 4, warehouse_updated_at: 't1',
+      }, error: null }))
+      .mockReturnValueOnce(queryBuilder({ data: {
+        id: 'p', updated_at: 'v1', warehouse_version: 4, warehouse_updated_at: 't1',
+      }, error: null }));
+
+    const record = await loadCloudProjectRecord('p', { strict: true });
+
+    expect(record?.project.warehouse?.items).toEqual([{ key: 'novo' }]);
+    expect(mocks.from.mock.calls.map(([table]) => table)).toEqual([
+      'projects', 'warehouse_project_state', 'projects',
+    ]);
+  });
+
+  it('recusa carga completa quando a tabela de projeção existe mas falta a obra', async () => {
+    mocks.from
+      .mockReturnValueOnce(queryBuilder({ data: {
+        id: 'p', name: 'Obra', updated_at: 'v1', warehouse_version: 4,
+        data_json: { warehouse: { items: [{ key: 'antigo' }] } },
+      }, error: null }))
+      .mockReturnValueOnce(queryBuilder({ data: null, error: null }));
+
+    await expect(loadCloudProjectRecord('p', { strict: true }))
+      .rejects.toThrow('projeção do Almoxarifado');
+    expect(mocks.confirmHydratedProjectCollections).not.toHaveBeenCalled();
+  });
+
   it('não adota estado do Almoxarifado de uma revisão diferente', async () => {
     mocks.from
       .mockReturnValueOnce(queryBuilder({ data: {

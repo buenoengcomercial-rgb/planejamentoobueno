@@ -177,7 +177,8 @@ export async function loadCloudProjectRecord(
   if (!data) return null;
   const proj = (data.data_json ?? {}) as unknown as Project;
   let base: Project = { ...proj, id: data.id, name: data.name };
-  const shadow = needsWarehouseProjectState(options.collections)
+  const shadow = (needsWarehouseProjectState(options.collections)
+    || (options.collections === undefined && !!base.warehouse))
     ? await readWarehouseProjectState(base)
     : null;
   if (shadow) base = { ...base, warehouse: shadow.warehouse };
