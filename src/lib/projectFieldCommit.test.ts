@@ -46,6 +46,16 @@ it('conflito e recibo incompleto conservam a tentativa isolada por conta', async
   expect(pendingProjectFieldOperations('a', 'p')).toHaveLength(1);
   expect(pendingProjectFieldOperations('b', 'p')).toEqual([]);
 });
+it('reenvia a mesma tentativa após corrigir um falso conflito sem descartá-la', async () => {
+  rpc.mockResolvedValueOnce({ error: { code: 'P0002', message: 'Conflito no campo scheduleDraft/updatedAt' } });
+  await expect(commitProjectFields('p', 'org', 'a', request)).rejects.toMatchObject({ code: 'P0002' });
+  const [pending] = pendingProjectFieldOperations('a', 'p');
+  rpc.mockImplementationOnce(async (_name, args) => ({ data: { operationId: args.p_operation_id,
+    updatedAt: 'v3', metadata: { name: 'Depois' }, changes: [], replayed: false } }));
+  await commitProjectFields('p', 'org', 'a', pending.request);
+  expect(rpc.mock.calls[1][1]).toEqual(rpc.mock.calls[0][1]);
+  expect(pendingProjectFieldOperations('a', 'p')).toEqual([]);
+});
 it('arquiva apenas a tentativa local escolhida sem reenviar uma operação recusada', async () => {
   rpc.mockResolvedValue({ error: { code: '42501', message: 'Operação não autorizada' } });
   await expect(commitProjectFields('p', 'org', 'a', request)).rejects.toMatchObject({ code: '42501' });

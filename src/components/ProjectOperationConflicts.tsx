@@ -45,7 +45,9 @@ export default function ProjectOperationConflicts({ actorId, projectId, organiza
       {message && <p role="alert">{message}</p>}
       {operations.map(operation => <div key={operation.operationId} className="my-2 border-t pt-2">
         <p>{operation.conflict?.message || 'A resposta desta gravação ainda precisa ser conferida.'}</p>
-        {!operation.conflict && <button disabled={busy} className="mr-3 underline" onClick={() => void retry(operation)}>Conferir salvamento pendente</button>}
+        <button disabled={busy} className="mr-3 underline" onClick={() => void retry(operation)}>
+          {operation.conflict ? 'Tentar conciliar novamente' : 'Conferir salvamento pendente'}
+        </button>
         <button className="my-1 underline" onClick={() => download(operation)}>Baixar tentativa preservada</button>
         <button className="ml-3 underline disabled:opacity-50" disabled={busy || !downloaded.includes(operation.operationId)} onClick={() => {
           if (!window.confirm('Arquivar esta tentativa somente neste navegador? Confirme que o arquivo foi baixado e que os dados necessários já foram salvos na nuvem.')) return;
