@@ -72,6 +72,7 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261016120000_concurrent_field_merge.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261016124000_concurrent_measurement_commands.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261105010000_measurement_manual_unlink_targeted.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20261105090000_measurement_nondestructive_checkpoint.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -787,6 +788,39 @@ describe('transação da Medição na nuvem',()=>{
   expect(reloaded.entries).toEqual(next.entries);
   expect(reloaded.periods).toEqual(before.periods);
   expect((await db.query('SELECT * FROM measurement_workspace_events')).rows).toHaveLength(1);
+ });
+ it('consolida o replay sem apagar eventos, auditoria nem alterar a revisão',async()=>{
+  await seed();
+  let current=base;
+  for(let index=0;index<3;index++) {
+    const next=editMeasuredRow(current,actor,'m1','signs',{...newMeasuredRow('checkpoint-row'),multiplier:index+1});
+    await db.query('SELECT patch_measurement_entries_v2($1,$2,$3)',
+      [projectId,current.revision,JSON.stringify(measurementEntryPatch(current,next))]);
+    current=next;
+  }
+  const before=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  const hash=await currentDataHash();
+  await expect(db.query('SELECT checkpoint_measurement_workspace($1,$2,$3)',[projectId,current.revision-1,hash]))
+    .rejects.toThrow('mudou');
+  await expect(db.query('SELECT checkpoint_measurement_workspace($1,$2,$3)',[projectId,current.revision,'wrong']))
+    .rejects.toThrow('diverge');
+  await db.exec("SET ROLE authenticated; SET test.role='viewer'");
+  await expect(db.query('SELECT checkpoint_measurement_workspace($1,$2,$3)',[projectId,current.revision,hash]))
+    .rejects.toThrow('proprietário');
+  await db.exec("RESET ROLE; SET test.role='owner'");
+  const result=(await db.query<{value:{checkpointed:boolean;eventsPreserved:number;revision:number}}>(
+    'SELECT checkpoint_measurement_workspace($1,$2,$3) value',[projectId,current.revision,hash])).rows[0].value;
+  expect(result).toMatchObject({checkpointed:true,eventsPreserved:3,revision:current.revision});
+  const row=(await db.query<{revision:number;data:{revision:number}}>(
+    'SELECT revision,data FROM measurement_workspaces WHERE project_id=$1',[projectId])).rows[0];
+  expect(row.revision).toBe(current.revision);
+  expect(row.data.revision).toBe(current.revision);
+  expect((await db.query('SELECT * FROM measurement_workspace_events WHERE project_id=$1',[projectId])).rows).toHaveLength(3);
+  expect((await db.query('SELECT * FROM app_private.measurement_checkpoint_backups WHERE project_id=$1',[projectId])).rows).toHaveLength(1);
+  const after=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  expect(after).toEqual(before);
+  expect((await db.query<{value:{checkpointed:boolean}}>(
+    'SELECT checkpoint_measurement_workspace($1,$2,$3) value',[projectId,current.revision,hash])).rows[0].value.checkpointed).toBe(false);
  });
  it('publica somente a revisão confirmada na mesma transação, respeitando RLS e rollback',async()=>{
   await seed();
