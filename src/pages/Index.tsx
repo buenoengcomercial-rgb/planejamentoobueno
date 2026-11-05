@@ -43,6 +43,7 @@ import { useCalculatedProject } from '@/domains/schedule/useCalculatedProject';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
 import { getPendingFormNames } from '@/lib/pendingFormNavigation';
 import { cloudRetryDelay, isTransientCloudError } from '@/lib/cloudRetry';
+import { recordSyncDiagnostic } from '@/lib/syncDiagnostics';
 import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { lazyWithReload } from '@/lib/lazyWithReload';
 import { scheduleIdlePreload } from '@/lib/idlePreload';
@@ -954,15 +955,19 @@ export default function Index() {
     const projectId = rawProject.id;
     const requestCollections = [...collectionsToHydrate] as ProjectCollectionKey[];
     const sequence = ++dataLoadSequenceRef.current;
+    const diagnosticArea = safeCurrentView === 'additiveSchedule';
+    const startedAt = performance.now();
     setDataLoadError(null);
 
     void (async () => {
+      let outcome: 'confirmed' | 'failed' = 'failed';
+      let cancelled = false;
       try {
         // Evita que a troca de área cancele um autosave legítimo antes de
         // mesclar as coleções que ainda não estavam em memória.
         if (!(await flushPendingSave())) throw new Error('A alteração pendente precisa ser salva antes de abrir outra área.');
         const source = rawProjectRef.current;
-        if (!source || source.id !== projectId) return;
+        if (!source || source.id !== projectId) { cancelled = true; return; }
         const hydrated = await hydrateAreaCollections({
           projectId,
           collections: requestCollections,
@@ -971,7 +976,7 @@ export default function Index() {
           savedProjectJson: () => lastSavedProjectJsonRef.current,
           isCurrent: () => !productionCaptureBusyRef.current && dataLoadSequenceRef.current === sequence,
         });
-        if (!hydrated) return;
+        if (!hydrated) { cancelled = true; return; }
         lastSavedProjectJsonRef.current = hydrated.savedProjectJson;
         confirmAreaHydration(hydrated);
         clearRemoteCollections(projectId, requestCollections);
@@ -982,14 +987,18 @@ export default function Index() {
           scheduleProjectDraft(hydrated.project, currentProjectUpdatedAtRef.current);
           setSaveStatus('saving');
         }
+        outcome = 'confirmed';
       } catch (error) {
-        if (dataLoadSequenceRef.current !== sequence || rawProjectRef.current?.id !== projectId) return;
+        if (dataLoadSequenceRef.current !== sequence || rawProjectRef.current?.id !== projectId) { cancelled = true; return; }
         console.warn('[project-load] Falha ao carregar dados da área.', error);
         setDataLoadError(error instanceof ProjectHydrationError
           ? error.message
           : error instanceof Error
             ? error.message
             : 'Não foi possível carregar os dados desta área.');
+      } finally {
+        if (diagnosticArea && !cancelled) recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'load', outcome,
+          durationMs: performance.now() - startedAt, recordCount: requestCollections.length });
       }
     })();
   // A chave representa integralmente o escopo. A lista ausente é fotografada

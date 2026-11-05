@@ -3,6 +3,7 @@ import { webcrypto } from 'node:crypto';
 import { archiveProjectFieldOperation, commitProjectFields, pendingProjectFieldOperations, type ProjectFieldRequest } from './projectFieldCommit';
 import { applyProjectFieldReceipt, setCloudSnapshot, stripNormalizedCollections, syncProductionAtomically, syncProjectMetadataAtomically } from './projectSync';
 import type { Project } from '@/types/project';
+import { readSyncDiagnostics } from '@/lib/syncDiagnostics';
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock('@/integrations/supabase/client', () => ({ supabase: { rpc } }));
 const request: ProjectFieldRequest = { domain: 'metadata', changes: [], audits: [],
@@ -21,6 +22,21 @@ it('persiste antes do envio e repete exatamente a operação após perda de resp
   await commitProjectFields('project', 'org', 'actor', request);
   expect(rpc.mock.calls[1][1]).toEqual(sent);
   expect(pendingProjectFieldOperations('actor', 'project')).toEqual([]);
+});
+it('mede preparo, RPC e recibo do Aditivo sem registrar conteúdo da obra', async () => {
+  const additiveRequest: ProjectFieldRequest = { domain: 'additive', origin: 'additiveSchedule', changes: [], audits: [],
+    metadata: { expected: { name: 'Obra privada' }, next: { name: 'Obra privada' } } };
+  rpc.mockImplementation(async (_name, args) => ({ data: { operationId: args.p_operation_id,
+    updatedAt: 'v2', metadata: {}, changes: [], replayed: false } }));
+
+  await commitProjectFields('project-private', 'org', 'actor', additiveRequest);
+  const diagnostics = readSyncDiagnostics().slice(-3);
+  expect(diagnostics.map(entry => entry.operation)).toEqual(['prepare', 'rpc', 'receipt']);
+  expect(diagnostics.every(entry => entry.area === 'additiveSchedule' && entry.durationMs! >= 0)).toBe(true);
+  expect(diagnostics[0].requestBytes).toBeGreaterThan(0);
+  expect(diagnostics[1].responseBytes).toBeGreaterThan(0);
+  expect(JSON.stringify(diagnostics)).not.toContain('Obra privada');
+  expect(JSON.stringify(diagnostics)).not.toContain('project-private');
 });
 it('conflito e recibo incompleto conservam a tentativa isolada por conta', async () => {
   rpc.mockResolvedValueOnce({ error: { code: 'P0002', message: 'Conflito' } });

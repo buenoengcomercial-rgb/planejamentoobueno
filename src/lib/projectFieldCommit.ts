@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { recordSyncDiagnostic } from '@/lib/syncDiagnostics';
 
 export interface ProjectFieldBatch {
   table: string;
@@ -94,6 +95,8 @@ export function preserveProjectFieldConflict(error: ProjectFieldConflictError, a
 export async function commitProjectFields(projectId: string, organizationId: string, actorId: string,
   request: ProjectFieldRequest, accept?: (receipt: ProjectFieldReceipt) => void | Promise<void>, candidateProject?: unknown): Promise<ProjectFieldReceipt> {
   if (!actorId) throw new Error('Entre novamente antes de salvar.');
+  const additiveSchedule = request.origin === 'additiveSchedule';
+  const prepareStartedAt = performance.now();
   const key = storageKey(actorId, projectId), rows = pendingProjectFieldOperations(actorId, projectId);
   const serialized = canonical(request);
   const pending = rows.find(row => canonical(row.request) === serialized)
@@ -106,18 +109,37 @@ export async function commitProjectFields(projectId: string, organizationId: str
       throw new Error('Não foi possível preservar a tentativa neste navegador.');
     }
   }
+  if (additiveSchedule) recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'prepare', outcome: 'confirmed',
+    durationMs: performance.now() - prepareStartedAt,
+    requestBytes: new TextEncoder().encode(serialized).byteLength });
+  const rpcStartedAt = performance.now();
   const { data, error } = await supabase.rpc('commit_project_fields' as never, {
     p_project_id: projectId, p_organization_id: organizationId,
     p_operation_id: pending.operationId, p_request: pending.request,
   } as never);
+  if (additiveSchedule) recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'rpc',
+    outcome: error ? error.code === 'P0002' ? 'conflict' : 'failed' : 'confirmed',
+    durationMs: performance.now() - rpcStartedAt,
+    responseBytes: data ? new TextEncoder().encode(JSON.stringify(data)).byteLength : 0 });
   if (error?.code === 'P0002') throw new ProjectFieldConflictError(actorId, projectId, pending.operationId, request, error.message);
   if (error) throw error;
+  const receiptStartedAt = performance.now();
   const receipt = data as unknown as ProjectFieldReceipt;
   if (receipt?.operationId !== pending.operationId || !receipt.updatedAt
     || !receipt.metadata || !Array.isArray(receipt.changes)) {
+    if (additiveSchedule) recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'receipt', outcome: 'failed',
+      durationMs: performance.now() - receiptStartedAt });
     throw new Error('A nuvem não confirmou esta operação. A tentativa continua preservada.');
   }
-  await accept?.(receipt);
+  try {
+    await accept?.(receipt);
+  } catch (error) {
+    if (additiveSchedule) recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'receipt', outcome: 'failed',
+      durationMs: performance.now() - receiptStartedAt });
+    throw error;
+  }
+  if (additiveSchedule) recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'receipt', outcome: 'confirmed',
+    durationMs: performance.now() - receiptStartedAt });
   // Removal follows receipt validation, never an HTTP success alone.
   localStorage.removeItem(`${key}:${pending.operationId}`);
   window.dispatchEvent(new Event('obraplanner:operation-conflicts'));

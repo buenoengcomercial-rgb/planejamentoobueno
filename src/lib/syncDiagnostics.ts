@@ -1,13 +1,15 @@
 /** Diagnóstico local e limitado, sem IDs, nomes ou conteúdo da obra. */
 export interface SyncDiagnostic {
   at: string;
-  area: 'production' | 'measurement' | 'additive' | 'materials' | 'costs' | 'collections' | 'realtime';
-  operation: 'save' | 'reconnect' | 'channel';
+  area: 'production' | 'measurement' | 'additive' | 'additiveSchedule' | 'materials' | 'costs' | 'collections' | 'realtime';
+  operation: 'save' | 'reconnect' | 'channel' | 'load' | 'settle' | 'preview' | 'rows' | 'forecast' | 'dependency' | 'merge' | 'prepare' | 'rpc' | 'receipt';
   outcome: 'confirmed' | 'failed' | 'conflict' | 'connected' | 'disconnected';
   durationMs?: number;
   recordCount?: number;
   operationCount?: number;
   attempt?: number;
+  requestBytes?: number;
+  responseBytes?: number;
 }
 
 const KEY = 'obraplanner:sync-diagnostics:v1';
@@ -34,6 +36,8 @@ export function recordSyncDiagnostic(entry: Omit<SyncDiagnostic, 'at'>): void {
     ...(entry.recordCount === undefined ? {} : { recordCount: Math.max(0, Math.round(entry.recordCount)) }),
     ...(entry.operationCount === undefined ? {} : { operationCount: Math.max(0, Math.round(entry.operationCount)) }),
     ...(entry.attempt === undefined ? {} : { attempt: Math.max(0, Math.round(entry.attempt)) }),
+    ...(entry.requestBytes === undefined ? {} : { requestBytes: Math.max(0, Math.round(entry.requestBytes)) }),
+    ...(entry.responseBytes === undefined ? {} : { responseBytes: Math.max(0, Math.round(entry.responseBytes)) }),
   };
   events = [...events, event].slice(-MAX_EVENTS);
   try {
