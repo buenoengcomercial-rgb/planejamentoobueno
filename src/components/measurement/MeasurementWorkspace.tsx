@@ -202,6 +202,8 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const automaticRecoveryAttempted = useRef(false);
   const detailQueue = useRef<DetailOperation[]>([]);
   const failedTaskEdits = useRef(new Map<string, FailedTaskEdit>());
+  const retryingFailedTask = useRef<string | null>(null);
+  const [retryingFailedKey, setRetryingFailedKey] = useState<string | null>(null);
   const captureOpenRequest = useRef(0);
   const [, markFailedTaskChange] = useState(0);
   const latestLocalStage = useRef<Promise<void>>(Promise.resolve());
@@ -547,7 +549,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         }
       }
       setRecovery(false);
-      setStatus(failedTaskEdits.current.size ? 'Aguardando nuvem' : 'Confirmado');
+      setStatus(failedTaskEdits.current.size ? 'Falha no salvamento' : 'Confirmado');
       if (repository.savedLabel === 'Salvo na nuvem') setConfirmedAt(new Date().toISOString());
       return failedTaskEdits.current.size === 0;
     } catch (cause) {
@@ -1101,7 +1103,13 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   };
   const retryFailedTask = async (key: string): Promise<boolean> => {
     const failed = failedTaskEdits.current.get(key);
-    if (!failed || busy.current) return false;
+    if (!failed) return false;
+    if (busy.current || retryingFailedTask.current) {
+      setError('Aguarde a gravação em andamento antes de reenviar esta tarefa.');
+      return false;
+    }
+    retryingFailedTask.current = key;
+    setRetryingFailedKey(key);
     const affected = failed.operation.candidate?.audit.at(-1)?.affected ?? [];
     const groupKeys = affected.map(task => `${task.measurementId}:${task.serviceId}`);
     try {
@@ -1133,12 +1141,17 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       await detailDrain.current;
       return !failedTaskEdits.current.has(key);
     } catch (cause) {
+      setStatus('Falha no salvamento');
+      setError(cause instanceof Error ? cause.message : String(cause));
       for (const task of affected) failedTaskEdits.current.set(`${task.measurementId}:${task.serviceId}`, {
         ...failed, measurementId: task.measurementId, serviceId: task.serviceId,
         message: cause instanceof Error ? cause.message : String(cause),
       });
       markFailedTaskChange(value => value + 1);
       return false;
+    } finally {
+      retryingFailedTask.current = null;
+      setRetryingFailedKey(null);
     }
   };
   if (loading) return <p className="p-6">Carregando a base de Medição…</p>;
@@ -1212,7 +1225,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       </div>
     </section>
     {error && <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
-    {failedVisible.length > 0 && <div role="status" className="flex flex-wrap items-center gap-2 px-2 text-[11px] text-muted-foreground">{failedVisible.map(([key, failed]) => <button key={key} className="underline" onClick={() => void retryFailedTask(key)}>Reenviar {workspace.services.find(service => service.id === failed.serviceId)?.item ?? 'tarefa'}</button>)}</div>}
+    {failedVisible.length > 0 && <div role="status" className="flex flex-wrap gap-2 px-2 py-1 text-[11px] text-red-800">{failedVisible.map(([key, failed]) => <div key={key} className="flex flex-wrap items-center gap-1 rounded border border-red-200 bg-red-50 px-2 py-1"><button className="underline disabled:no-underline disabled:opacity-60" disabled={saving || retryingFailedKey !== null} onClick={() => void retryFailedTask(key)}>Reenviar {workspace.services.find(service => service.id === failed.serviceId)?.item ?? 'tarefa'}</button><span>· {failed.message}</span></div>)}{saving && <span className="self-center text-amber-800">Aguarde a gravação em andamento para reenviar.</span>}</div>}
     {lifecycle && <MeasurementLifecycleDialog key={`${lifecycle.kind}:${lifecycle.id}`} selection={lifecycle} workspace={workspace} actor={actor} busy={saving || !!commandInFlight} error={error}
       hasDraft={drafts.some(d => d.measurementId === lifecycle.id)} onClose={() => setLifecycle(null)} onConfirm={(edit, id) => { if (lifecycle.kind === 'approve' && fiscalPending) { setError('Aguarde a confirmação dos lançamentos na nuvem antes da aprovação.'); return; } queueCommand(`${lifecycle.kind}:${id}`, edit, () => {
         setLifecycle(null); setExpanded(null); setClipboard(null);

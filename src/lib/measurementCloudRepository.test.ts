@@ -79,6 +79,20 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('Abertura da Medição com plantas sob demanda', () => {
+  it('libera uma gravação sem resposta para conferência e reenvio sem perder a operação', async () => {
+    const base = await fixture(true); loaded(base);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    await repo.load();
+    const next = transactMeasurement(base, actor, 'Gerir desenhos', draft => { draft.plans[0].name = 'Nome local'; });
+    await repo.stage!(next, base);
+    mocks.rpc.mockImplementationOnce(() => new Promise(() => undefined));
+    vi.useFakeTimers();
+    const commit = repo.commit(next, base.revision);
+    const rejected = expect(commit).rejects.toThrow('Sem resposta da nuvem');
+    await vi.advanceTimersByTimeAsync(45_000);
+    await rejected;
+    expect((await repo.storedPendingSaves!()).length).toBe(1);
+  });
   it('repete o comando de planta preservado após perda de resposta e revisão remota nova', async () => {
     const base = await fixture(true); loaded(base);
     const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });

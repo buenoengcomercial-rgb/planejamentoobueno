@@ -11,6 +11,24 @@ import { applyMeasurementPlanCatalogReceipt, measurementPlanCatalogPatch } from 
 import type { MeasurementWorkspace } from './measurementWorkspace';
 import { measurementConcurrentCommand, measurementCommandKey, type MeasurementConcurrentCommand } from './measurementConcurrentCommand';
 
+const WRITE_RESPONSE_TIMEOUT_MS = 45_000;
+
+// A missing HTTP response is uncertain, not a failed commit. The caller keeps
+// the operation ID and confirms its receipt before submitting it again.
+async function withWriteResponseDeadline<T>(request: PromiseLike<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve(request),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Sem resposta da nuvem após 45 segundos. A operação foi preservada para conferência e reenvio.')), WRITE_RESPONSE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Confirmed snapshots and pending operations are stored separately. */
 export function cloudMeasurementRepository(scope: { userId: string; projectId: string }): MeasurementRepository {
   const local = measurementRepository({ ...scope, userId: `cloud:${scope.userId}`, environment: 'isolated' });
@@ -408,9 +426,9 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           patch.plan.storagePath = next.plans.find(plan => plan.id === patch.plan!.id)?.storagePath;
           localStorage.setItem(commandKey, JSON.stringify(command));
         }
-        const { data, error } = await supabase.rpc('commit_measurement_command_v2' as never, {
+        const { data, error } = await withWriteResponseDeadline(supabase.rpc('commit_measurement_command_v2' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_command: command,
-        } as never);
+        } as never));
         if (error) {
           if (['P0001','P0002','42501','22023','23502','23503','23505','23514'].includes(String(error.code)))
             throw new MeasurementCommitRejectedError(error.message);
@@ -465,7 +483,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         : supabase.rpc('commit_measurement_workspace' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_candidate: encodeMeasurementWorkspace(next),
         } as never);
-      let { data, error } = await send();
+      let { data, error } = await withWriteResponseDeadline(send());
       if (error && /57014|statement timeout|canceling statement|timeout|failed to fetch/i.test(`${error.code ?? ''} ${error.message}`)) {
         // A timeout may arrive after PostgreSQL committed. Check the immutable
         // operation ID before retrying the same candidate; never generate a new
@@ -489,7 +507,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           discardConfirmedPending(operationId, latest);
           return latest;
         }
-        if (remoteRevision === baseRevision && savedRevision === null) ({ data, error } = await send());
+        if (remoteRevision === baseRevision && savedRevision === null) ({ data, error } = await withWriteResponseDeadline(send()));
         else throw new MeasurementCommitRejectedError('A Medição mudou durante a gravação. O recibo desta operação não consta na nuvem.');
       }
       if (error) {
