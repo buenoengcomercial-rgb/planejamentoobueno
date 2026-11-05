@@ -762,7 +762,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const resolveLocalDraft = async (draft: WorkspaceDraft, choice: 'cloud' | 'local') => {
     const key = draftKey(draft.measurementId, draft.serviceId, draft.rowId);
     const latest = current.current;
-    if (!latest || resolvingDraft || !repository.concurrentEntries || repository.loadedOffline?.()) return;
+    if (!latest || resolvingDraft || !repository.concurrentEntries) return;
     if (busy.current || detailQueue.current.length || bufferedDetail.current || draftChanges.current.size) {
       setError('Aguarde os lançamentos em andamento antes de conferir o rascunho.'); return;
     }
@@ -785,7 +785,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     setResolvingDraft(key); setError('');
     try {
       // Recheck the confirmed sheet after confirmation; another editor may have changed it.
-      const remote = await repository.load();
+      const remote = await (repository.loadForDraftResolution?.() ?? repository.load());
       if (!remote || repository.loadedOffline?.()) throw new Error('Não foi possível conferir a versão atual da nuvem. O rascunho foi preservado.');
       const before = entryFor(latest, draft.measurementId, draft.serviceId);
       const now = entryFor(remote, draft.measurementId, draft.serviceId);
@@ -1282,7 +1282,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     <MeasurementHeader compact onExportXLSX={() => { void (async () => { if (await flushConfirmedEdits() && current.current) await exportMonthlyMeasurement(current.current, active, 'xlsx', { forecastTotal: forecast?.value ?? null }); })().catch(e => setError(e.message)); }} onPrint={() => { void (async () => { if (await flushConfirmedEdits() && current.current) await exportMonthlyMeasurement(current.current, active, 'pdf', { forecastTotal: forecast?.value ?? null }); })().catch(e => setError(e.message)); }} showHistory={false} onOpenHistory={() => undefined}/>
     <section className="rounded border border-border bg-card p-2">
       <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"><strong>{workspace.projectName}</strong><div className="flex flex-wrap items-center gap-4"><span>Valor desta medição: <strong data-testid="monthly-value">{period ? fmtBRL(allTotals.period) : '—'}</strong></span><div className="flex flex-col items-end">{repository.savedLabel === 'Salvo na nuvem'
-        ? <div role="status"><SaveStatusIndicator status={cloudStatus} cloudReadStatus={cloudReadStatus} confirmedAt={confirmedAt} lastCheckedAt={realtime.lastCheckedAt} projectId={workspace.projectId} live={online && !readFailed && !cachedBase && realtime.connected}/>{online && (readFailed || cachedBase) && !saving && <div className="mt-1 text-[10px] text-amber-800">{cachedBase && <span>Cópia local preservada. </span>}{cloudReadFailure && <span>{cloudReadFailure} </span>}<button disabled={localPending || recovery || realtime.checking} className="underline disabled:opacity-50" onClick={() => realtime.available ? realtime.retry() : (setLoading(true), setLoadAttempt(attempt => attempt + 1))}>Tentar consultar novamente</button></div>}</div>
+        ? <div role="status"><SaveStatusIndicator status={cloudStatus} cloudReadStatus={cloudReadStatus} confirmedAt={confirmedAt} lastCheckedAt={realtime.lastCheckedAt} projectId={workspace.projectId} live={online && !readFailed && !cachedBase && realtime.connected}/>{online && (readFailed || cachedBase) && !saving && <div className="mt-1 text-[10px] text-amber-800">{cachedBase && <span>Cópia local preservada. </span>}{cloudReadFailure && <span>{cloudReadFailure} </span>}<button disabled={recovery || realtime.checking || !!bufferedDetail.current || detailQueue.current.length > 0 || writingDrafts.current > 0} className="underline disabled:opacity-50" onClick={() => realtime.available ? realtime.retry() : (setLoading(true), setLoadAttempt(attempt => attempt + 1))}>Tentar consultar novamente</button></div>}</div>
         : <span role="status" className={recovery || saving || status !== 'Confirmado' ? 'text-amber-700' : 'text-emerald-700'}>{status === 'Confirmado' ? 'Salvo neste navegador' : status}</span>}{recovery && <button className="text-[10px] text-amber-800 underline" onClick={() => void retryPendingSave()}>Tentar salvar</button>}</div></div></div>
       <div className="flex flex-wrap items-center gap-2"><label className="text-[11px] font-semibold uppercase text-muted-foreground" htmlFor="measurement-period">Medições</label><select id="measurement-period" aria-label="Medição selecionada" value={active} className="h-8 rounded-md border border-primary bg-primary px-2.5 text-xs font-medium text-primary-foreground" disabled={!!destination} onChange={e => {
         selectPeriod(e.target.value); setExpanded(null); setError('');

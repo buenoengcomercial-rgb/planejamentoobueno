@@ -110,6 +110,21 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     state = { ...state, checking: true };
     loading = (async () => {
       try {
+        if (confirmed && loadedOffline) {
+          // A prior full read may have timed out after recovering a complete
+          // local snapshot. A matching server revision verifies that snapshot
+          // without repeating the expensive materialization just to resolve
+          // a field draft or clear a transient read error.
+          const version = await withReadDeadline(supabase.from('measurement_workspace_versions' as never)
+            .select('revision').eq('project_id', scope.projectId).maybeSingle());
+          if (version.error) throw version.error;
+          const revision = (version.data as { revision?: number } | null)?.revision;
+          if (Number.isSafeInteger(revision) && revision === confirmed.revision) {
+            loadedOffline = false;
+            state = { source: 'cloud', checking: false };
+            return confirmed;
+          }
+        }
         // Reopening an unchanged workspace needs only the authorized revision read.
         // The cached snapshot is complete (including audit); absent versions never
         // authorize a cache as current. Failed reads keep the existing error state.
@@ -373,6 +388,22 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       return () => { disposed = true; if (retry) clearTimeout(retry); void supabase.removeChannel(channel); };
     },
     load: loadRemote,
+    loadForDraftResolution: async () => {
+      if (!confirmed) return loadRemote();
+      // An explicit choice concerns one field. Reuse a complete confirmed
+      // snapshot when its revision is still current instead of reloading the
+      // multi-megabyte sheet before the first click can succeed.
+      const version = await withReadDeadline(supabase.from('measurement_workspace_versions' as never)
+        .select('revision').eq('project_id', scope.projectId).maybeSingle());
+      if (version.error) throw version.error;
+      const revision = (version.data as { revision?: number } | null)?.revision;
+      if (Number.isSafeInteger(revision) && revision === confirmed.revision) {
+        loadedOffline = false;
+        state = { source: 'cloud', checking: false };
+        return confirmed;
+      }
+      return loadRemote();
+    },
     initialize: async () => { throw new Error('Esta obra ainda precisa da incorporação conferida dos dados da nuvem.'); },
     commit: async (candidate, baseRevision) => {
       const operationId = candidate.audit.at(-1)?.id;
