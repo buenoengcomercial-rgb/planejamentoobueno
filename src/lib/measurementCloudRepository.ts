@@ -1,5 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
-import { MeasurementCommitRejectedError, measurementRepository, type MeasurementLoadState, type MeasurementRepository, type PendingMeasurementSave, type StoredMeasurementPending } from './measurementWorkspaceStore';
+import { MeasurementCommitRejectedError, measurementRepository, type MeasurementLoadState, type MeasurementRepository, type PendingMeasurementEntrySave, type PendingMeasurementSave, type StoredMeasurementPending } from './measurementWorkspaceStore';
 import { assertMeasurementPlanPath, decodeMeasurementWorkspace, encodeMeasurementWorkspace } from './measurementCloudCodec';
 import { withReadDeadline } from './readDeadline';
 import { TAKEOFF_BUCKET } from './planTakeoffCloud';
@@ -37,10 +37,18 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
   let loadedOffline = false, cachedRevision = -1;
   let state: MeasurementLoadState = { source: 'none', checking: false };
   let cacheChain: Promise<void> = Promise.resolve();
-  const checkpoint = (workspace: MeasurementWorkspace, operationId?: string) => {
+  const checkpoint = (workspace: MeasurementWorkspace, operationId?: string, entryPatch?: PendingMeasurementEntrySave['patch']) => {
     const task = cacheChain.catch(() => undefined).then(async () => {
       if (cachedRevision < workspace.revision) {
-        await local.cacheSnapshot!(workspace);
+        if (entryPatch && cachedRevision === workspace.revision - 1 && local.cacheEntryPatch) {
+          try {
+            const count = await local.cacheEntryPatch(workspace.revision, entryPatch);
+            // Bound replay and storage cost; one full checkpoint per 32 item edits.
+            if (count >= 32) await local.cacheSnapshot!(workspace);
+          } catch {
+            await local.cacheSnapshot!(workspace);
+          }
+        } else await local.cacheSnapshot!(workspace);
         cachedRevision = workspace.revision;
       }
       if (operationId) await local.removePending!(operationId);
@@ -197,11 +205,11 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     const candidate: MeasurementWorkspace = { ...base, revision: stored.baseRevision + 1, entries, audit: [...base.audit, stored.patch.event] };
     return { baseRevision: stored.baseRevision, candidate, archivedAt: stored.archivedAt, compact: stored };
   };
-  const discardConfirmedPending = (operationId: string, workspace: MeasurementWorkspace) => {
+  const discardConfirmedPending = (operationId: string, workspace: MeasurementWorkspace, entryPatch?: PendingMeasurementEntrySave['patch']) => {
     // Keep the compact operation until its confirmed snapshot is durable too.
     // A tab closed between cloud acknowledgement and this checkpoint can still
     // reconstruct the same operation while offline.
-    void checkpoint(workspace, operationId).then(() => {
+    void checkpoint(workspace, operationId, entryPatch).then(() => {
       localStorage.removeItem(measurementCommandKey(scope.userId, scope.projectId, operationId));
     }).catch(() => undefined);
   };
@@ -631,7 +639,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       confirmed = saved;
       loadedOffline = false;
       state = { source: 'cloud', checking: !!loading };
-      discardConfirmedPending(operationId, saved);
+      discardConfirmedPending(operationId, saved, patch ?? undefined);
       return saved;
     },
   };
