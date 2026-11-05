@@ -176,7 +176,7 @@ describe('Tela própria de Medição', () => {
     expect(repository.commit).toHaveBeenCalledTimes(2);
     expect(remote.entries.find(entry => entry.serviceId === 's')?.rows).toHaveLength(2);
     expect(screen.getByRole('spinbutton', { name: 'Quantidade de Placas' })).toHaveValue(0);
-    expect(screen.getByText('Aguardando envio à nuvem')).toBeVisible();
+    expect(screen.getByText('Falha na sincronização')).toBeVisible();
     expect(screen.queryByText('Salvo e conferido na nuvem')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Reenviar 1.1' }));
     await waitFor(() => expect(remote.entries.find(entry => entry.serviceId === 's')?.rows).toHaveLength(0));

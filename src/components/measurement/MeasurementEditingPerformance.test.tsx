@@ -406,6 +406,33 @@ it('falha de uma tarefa não bloqueia outra, e a repetição conserva os dois la
   expect(repository.commit).toHaveBeenCalledTimes(3);
 });
 
+it('mostra a causa de cada falha e mantém o item pendente até confirmação da nuvem', async () => {
+  const { repository, saved } = setup(2);
+  repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;
+  repository.drafts = vi.fn(async () => []);
+  repository.writeDraft = vi.fn(async () => undefined);
+  repository.clearDraft = vi.fn(async () => undefined);
+  vi.mocked(repository.commit)
+    .mockRejectedValueOnce(new Error('O servidor demorou para responder.'))
+    .mockRejectedValueOnce(new Error('O servidor demorou para responder.'));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  const quantity = await screen.findByLabelText('Quantidade de Serviço 0');
+  fireEvent.change(quantity, { target: { value: '3' } }); fireEvent.blur(quantity);
+  fireEvent.click(screen.getByLabelText('Quantidade de Serviço 1'));
+  const retry = await screen.findByRole('button', { name: 'Reenviar 1.1' });
+  expect(screen.getByText('Falha na sincronização')).toBeVisible();
+  expect(screen.getByText(/O servidor demorou para responder/)).toBeVisible();
+  fireEvent.click(retry);
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole('button', { name: 'Reenviar 1.1' })).toBeVisible();
+  expect(screen.getAllByText(/O servidor demorou para responder/).length).toBeGreaterThan(0);
+  expect(saved().entries[0].rows[0].multiplier).toBe(0);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Reenviar 1.1' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Reenviar 1.1' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Reenviar 1.1' })).not.toBeInTheDocument());
+  expect(saved().entries[0].rows[0].multiplier).toBe(3);
+});
+
 it('permite corrigir a própria tarefa após falha, sem painel bloqueante', async () => {
   const { repository, saved } = setup(2);
   repository.savedLabel = 'Salvo na nuvem'; repository.stage = undefined;

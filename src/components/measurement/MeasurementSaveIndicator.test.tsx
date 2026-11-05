@@ -46,12 +46,12 @@ it('mostra confirmação da nuvem quando a resposta da tarefa se perdeu mas a op
   fireEvent.click(screen.getByLabelText('Quantidade de Serviço 1'));
   const retry = await screen.findByRole('button', { name: 'Reenviar 1.1' });
   expect(retry).toBeVisible();
-  expect(screen.getByText('Aguardando envio à nuvem')).toBeVisible();
+  expect(screen.getByText('Falha na sincronização')).toBeVisible();
 
   fireEvent.click(retry);
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Reenviar 1.1' })).not.toBeInTheDocument());
   await waitFor(() => expect(screen.getByText('Salvo e conferido na nuvem')).toBeVisible());
-  expect(screen.queryByText('Aguardando envio à nuvem')).not.toBeInTheDocument();
+  expect(screen.queryByText('Falha na sincronização')).not.toBeInTheDocument();
   expect(repository.commit).toHaveBeenCalledTimes(1);
   expect(confirmed.entries[0].rows[0].multiplier).toBe(3);
 });
