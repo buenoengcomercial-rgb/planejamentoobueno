@@ -8,6 +8,8 @@ import { addMeasuredPeriod, captureMeasurement, freezeMeasuredPeriod, newMeasure
 import { deleteMeasuredPeriod } from '@/lib/measurementLifecycle';
 import { MeasurementCommitRejectedError } from '@/lib/measurementWorkspaceStore';
 import { selectedMeasurement } from '@/lib/measurementSelection';
+import { measurementDeletionPatch } from '@/lib/measurementDeletionPatch';
+import { encodeMeasurementWorkspace } from '@/lib/measurementCloudCodec';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 beforeEach(() => localStorage.clear());
@@ -78,6 +80,30 @@ describe('Tela própria de Medição', () => {
     await waitFor(() => expect(repository.clearDraft).toHaveBeenCalledWith('m1', 's', 'r'));
     expect(cloud.entries[0].rows[0].measuredQuantity).toBe(4);
     expect(screen.queryByText('1 rascunho(s) local(is) da Medição aguardando conferência')).not.toBeInTheDocument();
+  });
+  it('reconcilia quantidade local removendo a marca da planta no mesmo commit', async () => {
+    const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+    w.plans = [{ ...measurementFixture().plans[0], measures: [] }];
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [newMeasuredRow('r')] }];
+    const mark = { id: 'mark-r', name: 'Térreo', kind: 'count' as const, page: 1,
+      points: [{ x: 0, y: 0 }, { x: 1, y: 1 }], projectId: 'p', measurementId: 'm1', serviceId: 's' };
+    let cloud = encodeMeasurementWorkspace(captureMeasurement(w, actor, { measurementId: 'm1', serviceId: 's', rowId: 'r', field: 'measuredQuantity' },
+      { ...w.plans[0], measures: [mark] }, mark)) as Workspace;
+    const captured = cloud;
+    repository.load = vi.fn(async () => cloud);
+    repository.commit = vi.fn(async candidate => { cloud = candidate; return candidate; });
+    const drafts = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: 'r', changes: { measuredQuantity: '0' } }];
+    repository.drafts = vi.fn(async () => [...drafts]);
+    repository.clearDraft = vi.fn(async () => { drafts.splice(0, 1); });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByText('1 rascunho(s) local(is) da Medição aguardando conferência'));
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar valor local' }));
+    await waitFor(() => expect(repository.clearDraft).toHaveBeenCalledWith('m1', 's', 'r'));
+    expect(cloud.entries[0].rows[0].measuredQuantity).toBe(0);
+    expect(cloud.entries[0].rows[0].source).toBeUndefined();
+    expect(cloud.plans[0].measures).toHaveLength(0);
+    expect(measurementDeletionPatch(captured, cloud)).not.toBeNull();
   });
   it('preserva o rascunho quando o item mudou na nuvem durante a conferência', async () => {
     const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
