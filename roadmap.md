@@ -1,5 +1,7 @@
 # Proteção dos dados e desempenho
 
+- [ ] Corrigir tela em branco causada por identidade divergente do contexto de autenticação; testar atualização de módulos e abertura autenticada sem alterar dados.
+
 - [x] Separar os botões PDF do dia e PDF da medição do aviso de salvamento; ambos acessíveis no Diário autenticado.
 - [x] Exportar todos os diários preenchidos confirmados na nuvem no intervalo inclusivo da medição selecionada, sem incluir dias vazios; Medição Nº 1 verificada com 31 diários em PDF de 91 páginas.
 
