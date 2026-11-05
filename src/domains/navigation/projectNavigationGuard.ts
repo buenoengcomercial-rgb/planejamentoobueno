@@ -6,6 +6,7 @@ import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import { CloudProjectConflictError } from '@/lib/cloudProjects';
 import { getPendingFormNames } from '@/lib/pendingFormNavigation';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
+import { serializeProject } from '@/lib/cloudProjectDraftCore';
 import { canAccessAppView, type OrgRole } from '@/lib/organizations';
 
 type PendingProjectDraft = { project: Project; baseUpdatedAt: string | null };
@@ -27,6 +28,8 @@ export interface PendingSaveGuardContext {
   inFlightSaveRef: MutableRefObject<Promise<void> | null>;
   partialSyncPendingRef: MutableRefObject<{ projectId: string } | null>;
   rawProjectRef: MutableRefObject<Project | null>;
+  lastSavedProjectJsonRef: MutableRefObject<string | null>;
+  requireCloudConfirmation?: boolean;
   persistProject: (project: Project, orgId: string) => Promise<unknown>;
   handleCloudConflict: (project: Project) => Promise<void>;
   setSaveStatus: (status: SaveStatus) => void;
@@ -39,8 +42,35 @@ export async function flushPendingProjectSave(context: PendingSaveGuardContext):
     conflictDetectedRef, warehouseClientOperationInFlightRef, pendingDailyReportSavesRef,
     dailyReportSaveQueueRef, warehouseOperationInFlightRef, warehouseScopedOperationInFlightRef,
     saveTimerRef, inFlightSaveRef, partialSyncPendingRef, rawProjectRef,
+    lastSavedProjectJsonRef, requireCloudConfirmation,
     persistProject, handleCloudConflict, setSaveStatus,
   } = context;
+
+  const confirmLatestProject = async (): Promise<boolean> => {
+    if (conflictDetectedRef.current || partialSyncPendingRef.current?.projectId === project?.id) return false;
+    if (!requireCloudConfirmation || !project) return true;
+    const latest = rawProjectRef.current;
+    if (!latest || latest.id !== project.id) return false;
+    if (serializeProject(latest) === lastSavedProjectJsonRef.current) return true;
+    setSaveStatus('saving');
+    try {
+      await persistProject(latest, orgId!);
+      const current = rawProjectRef.current;
+      if (current?.id === project.id && serializeProject(current) === lastSavedProjectJsonRef.current
+        && !conflictDetectedRef.current && partialSyncPendingRef.current?.projectId !== project.id) return true;
+      setSaveStatus('pending');
+      toast.warning('A edição mais recente ainda não foi confirmada na nuvem. Tente sair novamente.');
+      return false;
+    } catch (error) {
+      console.warn(error);
+      if (error instanceof CloudProjectConflictError) await handleCloudConflict(latest);
+      else {
+        setSaveStatus(navigator.onLine ? 'error' : 'offline');
+        toast.error('Erro ao salvar na nuvem. Sua alteração ficou apenas neste navegador.');
+      }
+      return false;
+    }
+  };
 
   if (productionCaptureBusyRef.current) { toast.warning('Aguarde a confirmação conjunta da captura antes de sair desta área.'); return false; }
   if (!userId || !orgId || !project || !initialLoadRef.current || !canPersistProject) return true;
@@ -74,7 +104,7 @@ export async function flushPendingProjectSave(context: PendingSaveGuardContext):
     setSaveStatus('saving');
     try {
       await persistProject(project, orgId);
-      return !conflictDetectedRef.current && partialSyncPendingRef.current?.projectId !== project.id;
+      return confirmLatestProject();
     } catch (error) {
       console.warn(error);
       if (error instanceof CloudProjectConflictError) {
@@ -90,7 +120,7 @@ export async function flushPendingProjectSave(context: PendingSaveGuardContext):
   if (inFlightSaveRef.current) {
     try {
       await inFlightSaveRef.current;
-      return !conflictDetectedRef.current && partialSyncPendingRef.current?.projectId !== project.id;
+      return confirmLatestProject();
     } catch (error) {
       if (error instanceof CloudProjectConflictError && rawProjectRef.current) {
         await handleCloudConflict(rawProjectRef.current);
@@ -104,7 +134,7 @@ export async function flushPendingProjectSave(context: PendingSaveGuardContext):
     toast.warning('Confirme a sincronização detalhada em “Tentar novamente” antes de sair desta área.');
     return false;
   }
-  return true;
+  return confirmLatestProject();
 }
 
 export async function runProtectedProjectNavigation<T>(
@@ -135,6 +165,8 @@ export interface ProjectViewNavigationContext {
   warehouseClientOperationInFlightRef: MutableRefObject<Promise<unknown> | null>;
   warehouseOperationInFlightRef: MutableRefObject<Promise<unknown> | null>;
   warehouseScopedOperationInFlightRef: MutableRefObject<Promise<unknown> | null>;
+  navigationInFlightRef: MutableRefObject<boolean>;
+  flushPendingAdditiveSave: () => Promise<boolean>;
   pendingDraftRef: MutableRefObject<PendingProjectDraft | null>;
   conflictDetectedRef: MutableRefObject<boolean>;
   cancelScheduledDraft: (projectId: string) => void;
@@ -153,7 +185,8 @@ export interface ProjectViewNavigationContext {
 export function navigateToProjectView(context: ProjectViewNavigationContext, nextView: AppView): void {
   const {
     role, currentView, warehouseClientOperationInFlightRef, warehouseOperationInFlightRef,
-    warehouseScopedOperationInFlightRef, pendingDraftRef, conflictDetectedRef,
+    warehouseScopedOperationInFlightRef, navigationInFlightRef, flushPendingAdditiveSave,
+    pendingDraftRef, conflictDetectedRef,
     cancelScheduledDraft, writeProtectedProjectDraft, setProductionWorkspaceInitialTab,
     setDailyReportInitialFilter, setCurrentView, setSidebarOpen, confirmDiscardPendingForm,
   } = context;
@@ -178,6 +211,24 @@ export function navigateToProjectView(context: ProjectViewNavigationContext, nex
     setCurrentView(nextView);
     setSidebarOpen(false);
   };
+  const switchAfterSave = () => {
+    if (currentView !== 'additiveSchedule') { switchView(); return; }
+    if (navigationInFlightRef.current) {
+      toast.warning('Aguarde a confirmação do Cronograma do Aditivo antes de navegar.');
+      return;
+    }
+    navigationInFlightRef.current = true;
+    void (async () => {
+      try {
+        if (await flushPendingAdditiveSave()) switchView();
+      } catch (error) {
+        console.warn(error);
+        toast.error('Não foi possível confirmar o Cronograma do Aditivo na nuvem. A edição continua preservada.');
+      } finally {
+        navigationInFlightRef.current = false;
+      }
+    })();
+  };
   const forms = getPendingFormNames();
   if (forms.length > 0) {
     confirmDiscardPendingForm({
@@ -185,8 +236,8 @@ export function navigateToProjectView(context: ProjectViewNavigationContext, nex
       description: `Os dados de ${forms.join(', ')} ainda não foram confirmados.`,
       cancelLabel: 'Continuar preenchendo',
       confirmLabel: 'Descartar e sair',
-    }, switchView);
+    }, switchAfterSave);
     return;
   }
-  switchView();
+  switchAfterSave();
 }
