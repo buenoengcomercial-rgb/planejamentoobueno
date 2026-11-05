@@ -35,6 +35,7 @@ import {
   type AdditiveScheduleSuspensionMeta,
 } from '@/lib/additiveSchedule';
 import { exportAdditiveScheduleExcel, exportAdditiveSchedulePdf } from '@/lib/additiveScheduleReports';
+import { recordSyncDiagnostic } from '@/lib/syncDiagnostics';
 
 interface Props {
   project: Project;
@@ -43,6 +44,12 @@ interface Props {
   undoButton?: React.ReactNode;
   canManageCalendar?: boolean;
   auditActor?: AuditUserInfo;
+}
+
+function timed<T>(calculate: () => T): { value: T; durationMs: number } {
+  const startedAt = performance.now();
+  const value = calculate();
+  return { value, durationMs: performance.now() - startedAt };
 }
 
 function snapshotSuspensionMap(rows: AdditiveScheduleSnapshotRow[], additive: Additive): Record<string, AdditiveScheduleSuspensionMeta> {
@@ -87,7 +94,16 @@ export default function AdditiveSchedule({ project, onProjectChange, onSaveNow, 
   const saveNow = useCallback(async () => {
     if (!onSaveNow || savingNow) return;
     setSavingNow(true);
-    try { await onSaveNow(); } finally { setSavingNow(false); }
+    const startedAt = performance.now();
+    try {
+      const confirmed = await onSaveNow();
+      recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'save',
+        outcome: confirmed ? 'confirmed' : 'failed', durationMs: performance.now() - startedAt });
+    } catch (error) {
+      recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'save',
+        outcome: 'failed', durationMs: performance.now() - startedAt });
+      throw error;
+    } finally { setSavingNow(false); }
   }, [onSaveNow, savingNow]);
   const active = additives.find(additive => additive.id === activeId) ?? preferred;
   const visualKey = `${project.id}:${active?.id ?? ''}`;
@@ -110,12 +126,19 @@ export default function AdditiveSchedule({ project, onProjectChange, onSaveNow, 
 
   useEffect(() => {
     if (!active || (active.isContracted && !active.editUnlocked)) return;
+    const startedAt = performance.now();
+    let outcome: 'confirmed' | 'failed' = 'confirmed';
     try {
       const synced = syncAdditiveScheduleDraft(project, active.id);
       const next = settleAdditiveScheduleDraft(synced, active.id, obraConfig);
       if (next !== project) onProjectChange(next);
     } catch (error) {
+      outcome = 'failed';
       toast.error(error instanceof Error ? error.message : 'Não foi possível sincronizar o Cronograma do Aditivo.');
+    } finally {
+      recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'settle', outcome,
+        durationMs: performance.now() - startedAt,
+        recordCount: (active.scheduleDraft?.plannedTasks.length ?? 0) + (active.scheduleDraft?.contractedTaskPlans?.length ?? 0) });
     }
   }, [active, obraConfig, onProjectChange, project]);
 
@@ -132,19 +155,34 @@ export default function AdditiveSchedule({ project, onProjectChange, onSaveNow, 
 
   const isArchived = !!active?.isContracted && !active.editUnlocked;
   const latestSnapshot = useMemo(() => active?.scheduleSnapshots?.slice().sort((a, b) => b.version - a.version)[0], [active?.scheduleSnapshots]);
-  const preview = useMemo(() => {
+  const previewMeasurement = useMemo(() => timed(() => {
     if (!active) return null;
     if (isArchived) return latestSnapshot ? buildProjectFromScheduleSnapshot(project, latestSnapshot) : null;
     return active.scheduleDraft ? buildAdditiveSchedulePreviewProject(project, active, active.scheduleDraft, obraConfig) : null;
-  }, [active, isArchived, latestSnapshot, obraConfig, project]);
-  const rows = useMemo(() => {
+  }), [active, isArchived, latestSnapshot, obraConfig, project]);
+  const preview = previewMeasurement.value;
+  useEffect(() => {
+    if (active) recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'preview', outcome: 'confirmed',
+      durationMs: previewMeasurement.durationMs });
+  }, [active, previewMeasurement]);
+  const rowsMeasurement = useMemo(() => timed(() => {
     if (!active || !preview) return [];
     return isArchived && latestSnapshot ? latestSnapshot.rows : buildAdditiveScheduleRows(project, active, preview);
-  }, [active, isArchived, latestSnapshot, preview, project]);
-  const financialForecast = useMemo(
-    () => buildAdditiveScheduleForecast(rows, obraConfig.trabalhaSabado),
+  }), [active, isArchived, latestSnapshot, preview, project]);
+  const rows = rowsMeasurement.value;
+  useEffect(() => {
+    if (active && preview) recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'rows', outcome: 'confirmed',
+      durationMs: rowsMeasurement.durationMs, recordCount: rows.length });
+  }, [active, preview, rows, rowsMeasurement]);
+  const forecastMeasurement = useMemo(
+    () => timed(() => buildAdditiveScheduleForecast(rows, obraConfig.trabalhaSabado)),
     [obraConfig.trabalhaSabado, rows],
   );
+  const financialForecast = forecastMeasurement.value;
+  useEffect(() => {
+    if (active && preview) recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'forecast', outcome: 'confirmed',
+      durationMs: forecastMeasurement.durationMs, recordCount: rows.length });
+  }, [active, forecastMeasurement, preview, rows.length]);
   const suspensions = useMemo(() => {
     if (!active) return {};
     return isArchived && latestSnapshot ? snapshotSuspensionMap(latestSnapshot.rows, active) : buildPreviewSuspensionMap(project, active, preview ?? undefined);
@@ -267,9 +305,15 @@ export default function AdditiveSchedule({ project, onProjectChange, onSaveNow, 
         <GanttChart
           project={preview}
           onProjectChange={isArchived ? undefined : nextPreview => {
+            const startedAt = performance.now();
             try {
-              onProjectChange(mergeAdditiveSchedulePreviewChanges(project, active.id, preview, nextPreview));
+              const merged = mergeAdditiveSchedulePreviewChanges(project, active.id, preview, nextPreview);
+              recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'merge', outcome: 'confirmed',
+                durationMs: performance.now() - startedAt });
+              onProjectChange(merged);
             } catch (error) {
+              recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'merge', outcome: 'failed',
+                durationMs: performance.now() - startedAt });
               toast.error(error instanceof Error ? error.message : 'Não foi possível salvar o planejamento do aditivo.');
             }
           }}

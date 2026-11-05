@@ -43,6 +43,7 @@ import { getWorkStartDate } from '@/lib/workStartDate';
 import TaskRescheduleDialog from '@/components/TaskRescheduleDialog';
 import { approveRescheduleRequest, rejectRescheduleRequest, submitRescheduleRequest } from '@/lib/taskRescheduling';
 import { readGanttCollapsedPhases, writeGanttCollapsedPhases } from '@/lib/projectViewPreferences';
+import { recordSyncDiagnostic } from '@/lib/syncDiagnostics';
 
 interface GanttChartProps {
   project: Project;
@@ -866,6 +867,7 @@ export default function GanttChart({
     includeEditedTask = false,
   ) => {
     if (!onProjectChange) return;
+    const startedAt = performance.now();
     const allTasks = getAllTasks(projectToCommit);
     const result = includeEditedTask
       ? recalculateTaskAndSuccessors(allTasks, taskId, obraConfig)
@@ -873,12 +875,15 @@ export default function GanttChart({
     const updatedById = new Map(result.tasks.map(task => [task.id, task]));
     const nextProject = result.changed ? replaceProjectTasksById(projectToCommit, updatedById) : projectToCommit;
 
+    if (context === 'additive-preview') recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'dependency',
+      outcome: 'confirmed', durationMs: performance.now() - startedAt, recordCount: allTasks.length });
+
     onProjectChange(nextProject);
     if (result.changed) {
       const types = Array.from(result.adjustedTypes).join(', ');
       toast.info(`Datas ajustadas automaticamente por depend\u00eancia${types ? ` [${types}]` : ''}`);
     }
-  }, [obraConfig, onProjectChange]);
+  }, [context, obraConfig, onProjectChange]);
 
   const submitTaskReschedule = useCallback((request: Parameters<typeof submitRescheduleRequest>[1], approveNow: boolean) => {
     if (!onProjectChange) return;
