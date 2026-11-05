@@ -133,12 +133,12 @@ export default function AdditiveHeader({
             onClick={onContract}
             disabled={!!active.isContracted && !active.editUnlocked}
             title={active.isContracted
-              ? 'Aditivo já integrado — composições vinculadas a Tarefas, Cronograma, Medição e Diário.'
-              : 'Integra o aditivo ao projeto: cria/atualiza tarefas e quantidades contratuais.'}
+              ? 'Aditivo já contratado — cronograma próprio liberado e contrato-base preservado.'
+              : 'Contrata o aditivo e libera os serviços novos no cronograma próprio.'}
           >
             <CheckCircle2 className="w-4 h-4 mr-1" />
             {active.isContracted
-              ? active.editUnlocked ? 'Reintegrar ao projeto' : 'Integrado ao projeto'
+              ? active.editUnlocked ? 'Reintegrar ao projeto' : 'Aditivo contratado'
               : 'Integrar ao Projeto'}
           </Button>
         )}

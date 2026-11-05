@@ -42,10 +42,10 @@ export default function AdditiveApprovalBanner({
           <div className="text-muted-foreground">Reprovado — ajuste e reenvie para análise.</div>
         )}
         {status === 'aprovado' && (
-          <div className="text-emerald-700">Aprovado — pronto para integração. Clique em "Integrar ao Projeto" para vincular as composições às abas Tarefas, Cronograma, Medição e Diário de Obra.</div>
+          <div className="text-emerald-700">Aprovado — informe a vigência e clique em "Integrar ao Projeto" para liberar o Cronograma do Aditivo.</div>
         )}
         {status === 'aditivo_contratado' && !editUnlocked && (
-          <div className="text-primary">Integrado ao projeto — composições vinculadas às abas Tarefas, Cronograma, Medição e Diário de Obra.</div>
+          <div className="text-primary">Aditivo contratado — serviços novos liberados no seu cronograma; contrato-base preservado.</div>
         )}
         {status === 'aditivo_contratado' && editUnlocked && (
           <div className="text-amber-700">

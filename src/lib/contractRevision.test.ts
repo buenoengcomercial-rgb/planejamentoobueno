@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Additive, AdditiveComposition, Project } from '@/types/project';
 import { contractAdditive } from './additiveImport';
+import { contractAdditiveKeepingBase } from './additiveContractSeparation';
 
 const composition = (
   id: string,
@@ -100,6 +101,19 @@ describe('revisoes contratuais de aditivo', () => {
         additive('aditivo-1', '2026-08-01', composition('comp-1', 'task-1', 10, 2, 0)),
       ],
     };
+
+    const preservedBase = contractAdditiveKeepingBase(project, 'aditivo-1', 'Administrador');
+    expect(preservedBase.phases).toEqual(project.phases);
+    expect(preservedBase.budgetItems).toEqual(project.budgetItems);
+    expect(preservedBase.additives?.[0]).toMatchObject({ status: 'aditivo_contratado', isContracted: true });
+    expect(preservedBase.contractRevisions?.[0]).toMatchObject({ status: 'contracted', effectiveDate: '2026-08-01' });
+    const reintegrated = contractAdditiveKeepingBase({
+      ...preservedBase,
+      additives: preservedBase.additives?.map(item => ({ ...item, editUnlocked: true })),
+    }, 'aditivo-1', 'Administrador');
+    expect(reintegrated.phases).toEqual(project.phases);
+    expect(reintegrated.budgetItems).toEqual(project.budgetItems);
+    expect(reintegrated.contractRevisions).toHaveLength(2);
 
     const firstRevision = contractAdditive(project, 'aditivo-1', 'Administrador');
     expect(firstRevision.budgetItems?.[0]).toMatchObject({

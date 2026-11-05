@@ -8,6 +8,7 @@ import { createProjectViewSetter } from '@/domains/project/projectViewEditComman
 import type { ProductionCaptureChange } from '@/lib/planTakeoff';
 import { syncProductionAtomically, stripNormalizedCollections } from '@/lib/projectSync';
 import { applyProjectOperation } from '@/lib/projectOperations';
+import { matchesAdditiveCloudExpectation, type AdditiveCloudExpectation } from '@/lib/additiveCloudConfirmation';
 import { scopeKey } from '@/lib/planTakeoff';
 import { OpeningError } from '@/components/OpeningError';
 import { useState, useMemo, useEffect, useDeferredValue, useCallback, useRef, Suspense } from 'react';
@@ -891,17 +892,14 @@ export default function Index() {
     persistProject, handleCloudConflict, setSaveStatus,
   }), [user?.id, orgId, rawProject, canPersistProject, persistProject, handleCloudConflict]);
 
-  const saveAdditiveScheduleNow = useCallback(async (expectedApproval?: { additiveId: string; version: number }) => {
+  const saveAdditiveScheduleNow = useCallback(async (expectedApproval?: AdditiveCloudExpectation) => {
     flushPendingEditCommits();
     await new Promise<void>(resolve => window.setTimeout(resolve, 0));
     const confirmed = await flushPendingSave(true, true);
     if (!confirmed || !expectedApproval) return confirmed;
     const latest = rawProjectRef.current;
-    return Boolean(latest?.additives?.some(additive =>
-      additive.id === expectedApproval.additiveId
-      && additive.status === 'aprovado'
-      && additive.version === expectedApproval.version,
-    ) && serializeProject(latest) === lastSavedProjectJsonRef.current);
+    return matchesAdditiveCloudExpectation(latest, expectedApproval)
+      && serializeProject(latest) === lastSavedProjectJsonRef.current;
   }, [flushPendingSave]);
 
   const runProtectedNavigation = useCallback(<T,>(action: () => Promise<T>): Promise<T | undefined> => (
