@@ -120,6 +120,18 @@ describe('Abertura da Medição com plantas sob demanda', () => {
     expect(mocks.download).not.toHaveBeenCalled();
     expect(mocks.upload).not.toHaveBeenCalled();
   });
+  it('confere uma tentativa de reenvio pela revisão sem baixar a planilha inteira', async () => {
+    const base = await fixture(); loaded(base);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    expect(await repo.load()).toEqual(base);
+    expect(await repo.loadForRetry!()).toEqual(base);
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+    const next = { ...base, revision: base.revision + 1 };
+    loaded(next);
+    mocks.revision = next.revision;
+    expect((await repo.loadForRetry!())?.revision).toBe(next.revision);
+    expect(mocks.rpc).toHaveBeenCalledTimes(2);
+  });
   it('uma versão ausente não confirma o cache como atual', async () => {
     const base = await fixture(); mocks.cached = structuredClone(base); mocks.missingVersion = true;
     mocks.rpc.mockResolvedValueOnce({data:null,error:{code:'42501',message:'denied'}});

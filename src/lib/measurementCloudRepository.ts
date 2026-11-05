@@ -330,6 +330,15 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         workspace.services.find(value => value.id === id)?.item ?? id) };
     },
     queued,
+    loadForRetry: async () => {
+      if (!confirmed || loadedOffline) return loadRemote();
+      const { data, error } = await withReadDeadline(supabase.from('measurement_workspace_versions' as never)
+        .select('revision').eq('project_id', scope.projectId).maybeSingle());
+      if (error) throw error;
+      const revision = (data as { revision?: number } | null)?.revision;
+      if (Number.isSafeInteger(revision) && revision === confirmed.revision) return confirmed;
+      return loadRemote();
+    },
     pending: async () => {
       const rows = await local.storedPendingSaves!();
       if (!rows.some(row => !row.archivedAt)) return null;

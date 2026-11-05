@@ -53,6 +53,8 @@ export interface MeasurementRepository {
   storedPendingSaves?(): Promise<StoredMeasurementPending[]>;
   removePending?(operationId: string): Promise<void>;
   load(): Promise<MeasurementWorkspace | null>;
+  /** Refresh only when the server revision has advanced. */
+  loadForRetry?(): Promise<MeasurementWorkspace | null>;
   /** Verify a cached snapshot by its server revision before resolving a field draft. */
   loadForDraftResolution?(): Promise<MeasurementWorkspace | null>;
   initialize(backup: IncorporationBackup): Promise<MeasurementWorkspace>;
