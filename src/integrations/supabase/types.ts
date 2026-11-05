@@ -1688,6 +1688,10 @@ export type Database = {
         Returns: Json
       }
       measurement_money: { Args: { v: number }; Returns: number }
+      measurement_service_for_period: {
+        Args: { period_number: number; s: Json }
+        Returns: Json
+      }
       measurement_workspace_audit_digest: {
         Args: { p_audit: Json }
         Returns: string
