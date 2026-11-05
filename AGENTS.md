@@ -9,7 +9,7 @@
 - Failed daily-report edits use a user/project-scoped durable draft separate from confirmed cloud state; confirmation clears only the matching revision.
 - Performance changes require comparable measurements and preserve complete calculation inputs; unloaded collections must never be interpreted as empty.
 - Weekly routine reuses full task schedules only within one calculation call; call-local reuse avoids repeated daily work without retaining stale calendar or production results.
-- Measurement loads replay at most a short event tail: load_measurement_workspace checkpoints confirmed events into the base snapshot (verified against the entry-state projection) so reads stay under the statement timeout.
+- Measurement loads replay at most a short event tail: load_measurement_workspace checkpoints confirmed events into the base snapshot (verified against the entry-state projection) at a small lag, and base-update guards must accept a checkpoint that folds several valid confirmed changes at once; otherwise checkpoints silently fail and reads exceed the statement timeout.
 
 # Regression rule for code changes
 
