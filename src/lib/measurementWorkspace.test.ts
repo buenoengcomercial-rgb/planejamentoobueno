@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import { createIncorporationBackup, prepareIncorporation, verifyIncorporationBackup, incorporateApprovedAdditive } from './measurementIncorporation';
-import { addMeasuredPeriod, approveMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, entryFor, freezeMeasuredPeriod, monthlyLines, monthlyTotal, newMeasuredRow, pasteMeasuredRow, undoMeasuredOperation, type MeasurementActor, type MeasurementClipboard } from './measurementWorkspace';
+import { additiveQuantityExcesses, addMeasuredPeriod, approveMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, entryFor, freezeMeasuredPeriod, monthlyLines, monthlyTotal, newMeasuredRow, pasteMeasuredRow, undoMeasuredOperation, type MeasurementActor, type MeasurementClipboard } from './measurementWorkspace';
 import { withDetailValue } from './productionQuantityDetails';
 import { calculateMeasurementLine } from './measurementCalculations';
 import type { Additive } from '@/types/project';
@@ -186,6 +186,12 @@ describe('Medição independente', () => {
     const wrongTotal = structuredClone(additive);
     wrongTotal.approvalSnapshots![0].totals = { valorFinal: 1 };
     expect(() => incorporateApprovedAdditive(original, actor, wrongTotal, 3)).toThrow('diverge do Aditivo aprovado');
+    const overMeasured = editMeasuredRow(original, actor, 'm1', 'repeaters', { ...newMeasuredRow('prior'), multiplier: repeaters.contracted });
+    const flagged = incorporateApprovedAdditive(overMeasured, actor, additive, 3);
+    expect(flagged.warnings).toEqual([expect.stringContaining(`Item ${repeaters.item}:`)]);
+    expect(additiveQuantityExcesses(flagged.workspace, 'm3').map(line => line.service.id)).toEqual(['repeaters']);
+    expect(additiveQuantityExcesses(flagged.workspace, 'm1')).toEqual([]);
+    expect(entryFor(flagged.workspace, 'm1', 'repeaters')).toEqual(entryFor(overMeasured, 'm1', 'repeaters'));
   });
   it('inventário não trunca acima de mil registros', async () => {
     const f = measurementFixture(); f.project.phases[1].tasks[0].dailyLogs = Array.from({ length: 1200 }, (_, i) => ({ id: `l${i}`, date: '2026-09-21', actualQuantity: 0, plannedQuantity: 0 }));

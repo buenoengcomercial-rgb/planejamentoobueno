@@ -20,6 +20,19 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('sinaliza após recarga o excedente causado pelo aditivo sem alterar medições anteriores', async () => {
+    const { w, repository } = fixture();
+    w.services[0].contracted = 14;
+    w.services[0].additiveAdjustments = [{ additiveId: 'ad1', additiveVersion: 1, compositionId: 'c1', firstNumber: 3, net: -86 }];
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('prior'), multiplier: 16 }] }];
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const selection = await screen.findByRole('combobox', { name: 'Medição selecionada' });
+    expect(screen.queryByText(/Revisão fiscal: 1 item/)).not.toBeInTheDocument();
+    fireEvent.change(selection, { target: { value: 'm3' } });
+    expect(await screen.findByText(/Revisão fiscal: 1 item/)).toBeVisible();
+    expect(screen.getByText(/Item 1\.1: 16 UN medidos; 14 UN contratados/)).toBeVisible();
+    expect(w.entries[0].rows[0].multiplier).toBe(16);
+  });
   it('limpa apenas o rascunho de quantidade já confirmado na nuvem ao reabrir', async () => {
     const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
     w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('r'), origin: { kind: 'manual' }, multiplier: 4 }] }];

@@ -100,6 +100,12 @@ export function monthlyLines(w: MeasurementWorkspace, measurementId: string): Mo
   });
 }
 export const monthlyTotal = (w: MeasurementWorkspace, id: string) => sumMoney(monthlyLines(w, id).map(l => l.financial.totalPeriod));
+export function additiveQuantityExcesses(w: MeasurementWorkspace, id: string): MonthlyLine[] {
+  const number = w.periods.find(p => p.id === id)?.number;
+  if (number == null) return [];
+  return monthlyLines(w, id).filter(line => line.service.additiveAdjustments?.some(adjustment => adjustment.firstNumber <= number)
+    && line.accumulated > line.service.contracted + 1e-8);
+}
 
 /** A second send is useful only after the proposal or its evidence changed. */
 export function fiscalSubmissionCurrent(w: MeasurementWorkspace, id: string): boolean {

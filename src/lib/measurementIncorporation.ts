@@ -4,7 +4,7 @@ import { calculateMeasurementLine } from './measurementCalculations';
 import { calculateLineTotal, money2, sumMoney } from './financialEngine';
 import { computeAdditiveRow, resolveAdditivePricingRule } from './additiveImport';
 import { detailTotal, editableQuantityRows, isBlankDetailRow } from './productionQuantityDetails';
-import { entryFor, isPeriodLocked, monthlyLines, newMeasuredRow, sourceFields, transactMeasurement, type MeasuredService, type MeasurementActor, type MeasurementWorkspace } from './measurementWorkspace';
+import { additiveQuantityExcesses, entryFor, isPeriodLocked, monthlyLines, newMeasuredRow, sourceFields, transactMeasurement, type MeasuredService, type MeasurementActor, type MeasurementWorkspace } from './measurementWorkspace';
 
 export interface IncorporationIssue { code: string; sourceId: string; message: string }
 export interface Inventory {
@@ -193,5 +193,8 @@ export function incorporateApprovedAdditive(w: MeasurementWorkspace, actor: Meas
   if (typeof approvedValue === 'number' && Math.abs(contractedValue - approvedValue) > 0.01) {
     throw new Error(`Valor final da Medição (${contractedValue.toFixed(2)}) diverge do Aditivo aprovado (${approvedValue.toFixed(2)}). Confira preços e vínculos antes de incorporar.`);
   }
+  const periodId = next.periods.find(p => p.number === firstNumber)!.id;
+  warnings.push(...additiveQuantityExcesses(next, periodId).map(line =>
+    `Item ${line.service.item}: ${line.accumulated} ${line.service.unit} já medidos, acima das ${line.service.contracted} ${line.service.unit} contratadas após o aditivo. Revisão fiscal necessária.`));
   return { workspace: next, warnings, contractedValue };
 }
