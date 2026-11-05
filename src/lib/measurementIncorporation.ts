@@ -173,8 +173,11 @@ export function incorporateApprovedAdditive(w: MeasurementWorkspace, actor: Meas
       const net = Math.round((desiredNet - previousNet) * 100) / 100;
       if (service.contracted + net < 0) throw new Error(`${c.description}: supressão excede o quantitativo contratado.`);
       if (net) {
+        const pricing = computeAdditiveRow(c, snapshot.bdiPercent, snapshot.globalDiscountPercent, snapshot.pricingRuleVersion ?? resolveAdditivePricingRule(additive));
         service.contracted = Math.round((service.contracted + net) * 100) / 100;
-        (service.additiveAdjustments ??= []).push({ additiveId: additive.id, additiveVersion: snapshot.version, compositionId: c.id, firstNumber, net });
+        (service.additiveAdjustments ??= []).push({ additiveId: additive.id, additiveVersion: snapshot.version, compositionId: c.id, firstNumber, net,
+          valueDeltaWithBDI: sumMoney([pricing.valorAcrescido, -pricing.valorSuprimido]),
+          valueDeltaNoBDI: sumMoney([calculateLineTotal(service.priceNoBDI, pricing.qtdAcrescida), -calculateLineTotal(service.priceNoBDI, pricing.qtdSuprimida)]) });
         draft.importedKeys.push(key);
       }
     }
@@ -188,7 +191,12 @@ export function incorporateApprovedAdditive(w: MeasurementWorkspace, actor: Meas
     }
     draft.services.sort((a, b) => a.item.localeCompare(b.item, 'pt-BR', { numeric: true }));
   });
-  const contractedValue = sumMoney(next.services.map(s => calculateLineTotal(s.priceWithBDI, s.contracted)));
+  const contractedValue = sumMoney(next.services.map(s => {
+    const adjustments = s.additiveAdjustments ?? [];
+    return adjustments.length
+      ? sumMoney([calculateLineTotal(s.priceWithBDI, s.contracted - adjustments.reduce((sum, adjustment) => sum + adjustment.net, 0)), ...adjustments.map(adjustment => adjustment.valueDeltaWithBDI)])
+      : calculateLineTotal(s.priceWithBDI, s.contracted);
+  }));
   const approvedValue = (snapshot.totals as { valorFinal?: number } | null)?.valorFinal;
   if (typeof approvedValue === 'number' && Math.abs(contractedValue - approvedValue) > 0.01) {
     throw new Error(`Valor final da Medição (${contractedValue.toFixed(2)}) diverge do Aditivo aprovado (${approvedValue.toFixed(2)}). Confira preços e vínculos antes de incorporar.`);

@@ -5,6 +5,7 @@ import { createIncorporationBackup, prepareIncorporation, verifyIncorporationBac
 import { additiveQuantityExcesses, addMeasuredPeriod, approveMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, entryFor, freezeMeasuredPeriod, monthlyLines, monthlyTotal, newMeasuredRow, pasteMeasuredRow, undoMeasuredOperation, type MeasurementActor, type MeasurementClipboard } from './measurementWorkspace';
 import { withDetailValue } from './productionQuantityDetails';
 import { calculateMeasurementLine } from './measurementCalculations';
+import { calculateLineTotal, sumMoney } from './financialEngine';
 import type { Additive } from '@/types/project';
 import { measuresForContext } from './planTakeoff';
 import { monthlyExportRows } from './measurementMonthlyExport';
@@ -192,6 +193,25 @@ describe('Medição independente', () => {
     expect(additiveQuantityExcesses(flagged.workspace, 'm3').map(line => line.service.id)).toEqual(['repeaters']);
     expect(additiveQuantityExcesses(flagged.workspace, 'm1')).toEqual([]);
     expect(entryFor(flagged.workspace, 'm1', 'repeaters')).toEqual(entryFor(overMeasured, 'm1', 'repeaters'));
+  });
+  it('preserva os centavos aprovados quando o total do aditivo difere do produto da quantidade final', async () => {
+    const original = (await setup()).plan.candidate;
+    const service = original.services.find(s => s.id === 'signs')!;
+    service.contracted = 0.25;
+    service.priceNoBDI = 3.10;
+    service.priceWithBDI = 3.87;
+    const approved = sumMoney([...original.services.map(s => calculateLineTotal(s.priceWithBDI, s.contracted)), 0.96]);
+    const composition = { id: 'rounding', item: service.item, code: '', bank: '', description: service.description,
+      quantity: 0.25, unit: service.unit, unitPriceNoBDI: 3.10, unitPriceWithBDI: 3.87, total: 0.96,
+      inputs: [], baseTaskId: service.sourceTaskId, addedQuantity: 0.25, suppressedQuantity: 0 };
+    const additive: Additive = { id: 'ad-rounding', name: 'Aditivo', importedAt: '', compositions: [], status: 'aprovado', version: 1,
+      approvalSnapshots: [{ version: 1, approvedAt: '2026-11-05', bdiPercent: 25, globalDiscountPercent: 0,
+        totals: { valorFinal: approved }, issues: [], compositions: [composition] }] };
+    const next = incorporateApprovedAdditive(original, actor, additive, 3);
+    expect(next.contractedValue).toBe(approved);
+    expect(monthlyLines(next.workspace, 'm1').find(l => l.service.id === service.id)?.financial.totalContracted).toBe(0.96);
+    expect(monthlyLines(next.workspace, 'm3').find(l => l.service.id === service.id)?.financial.totalContracted).toBe(1.92);
+    expect(calculateLineTotal(3.87, 0.5)).toBe(1.93);
   });
   it('inventário não trunca acima de mil registros', async () => {
     const f = measurementFixture(); f.project.phases[1].tasks[0].dailyLogs = Array.from({ length: 1200 }, (_, i) => ({ id: `l${i}`, date: '2026-09-21', actualQuantity: 0, plannedQuantity: 0 }));

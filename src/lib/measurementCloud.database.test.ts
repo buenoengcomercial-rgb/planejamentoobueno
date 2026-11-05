@@ -1371,12 +1371,18 @@ describe('transação da Medição na nuvem',()=>{
   expect(monthlyLines(next,'m1').find(l=>l.service.id==='signs')?.service.contracted).toBe(original.contracted);
   const tampered=structuredClone(next); tampered.services.find(s=>s.id==='signs')!.contracted++;
   await expect(commit(tampered)).rejects.toThrow('Quantidade do aditivo');
+  const tamperedValue=structuredClone(next); tamperedValue.services.find(s=>s.id==='signs')!.additiveAdjustments![0].valueDeltaWithBDI++;
+  await expect(commit(tamperedValue)).rejects.toThrow('Quantidade do aditivo');
   const saved=await commit(next);
   expect(saved.services.find(s=>s.id==='signs')?.contracted).toBe(original.contracted+3);
   expect(monthlyLines(saved,'m2').find(l=>l.service.id==='signs')?.service.contracted).toBe(original.contracted);
   const fiscal=await db.query<{line:{service:{id:string;contracted:number}}}>('SELECT measurement_fiscal_line_rows($1::jsonb,$2::jsonb) AS line',
    [JSON.stringify(saved),JSON.stringify(saved.periods.find(p=>p.id==='m2'))]);
   expect(fiscal.rows.map(row=>row.line).find(line=>line.service.id==='signs').service.contracted).toBe(original.contracted);
+  const fiscalThird=await db.query<{line:{service:{id:string};financial:{totalContracted:number}}}>('SELECT measurement_fiscal_line_rows($1::jsonb,$2::jsonb) AS line',
+   [JSON.stringify(saved),JSON.stringify(saved.periods.find(p=>p.id==='m3'))]);
+  expect(fiscalThird.rows.map(row=>row.line).find(line=>line.service.id==='signs')?.financial.totalContracted)
+   .toBe(monthlyLines(saved,'m3').find(line=>line.service.id==='signs')?.financial.totalContracted);
  });
 
  it('confirma valores/histórico juntos, repete recibo e bloqueia revisão concorrente',async()=>{
